@@ -11,11 +11,11 @@ import {BeforeSwapDelta, toBeforeSwapDelta} from "v4-core/types/BeforeSwapDelta.
 import {BaseHook} from "v4-periphery/src/base/hooks/BaseHook.sol";
 import {BalanceDelta} from "v4-core/types/BalanceDelta.sol";
 
+import {LimitedERC20} from "./LimitedERC20.sol";
 import "forge-std/console.sol";
 
 // A CSMM is a pricing curve that follows the invariant `x + y = k`
 // instead of the invariant `x * y = k`
-
 
 contract CSMM is BaseHook, ERC20 {
     using CurrencySettler for Currency;
@@ -32,8 +32,7 @@ contract CSMM is BaseHook, ERC20 {
 
     constructor(
         IPoolManager _manager
-    ) BaseHook(_manager) ERC20("Liquidity Delta", "LD", 18) {
-    }
+    ) BaseHook(_manager) ERC20("Liquidity Delta", "LD", 18) {}
 
     function getHookPermissions()
         public
@@ -88,7 +87,6 @@ contract CSMM is BaseHook, ERC20 {
         bytes calldata data
     ) internal override returns (bytes memory) {
         CallbackData memory callbackData = abi.decode(data, (CallbackData));
-
 
         // There should be two tokens in the pool
         // one should be this token which is the hook contract
@@ -147,9 +145,56 @@ contract CSMM is BaseHook, ERC20 {
         IPoolManager.SwapParams calldata params,
         bytes memory hookData
     ) external override returns (bytes4, BeforeSwapDelta, uint24) {
-        uint256 amountInOutPositive = params.amountSpecified > 0
+        // check if it is a crypto => fiat swap or fiat => crypto swap
+        // i.e isFiatToCrypto if it is a zeroForOneSwap and the zero currency is this address of the LD(FIAT represented) token
+        // i.e isFiatToCrypto if it is a OneForZeroSwap and the one currency is this address of the LD(FIAT represented) token
+        bool isFiatToCrypto = params.zeroForOne
+            ? Currency.unwrap(key.currency0) == address(this)
+            : Currency.unwrap(key.currency1) == address(this);
+
+        // get the absolute value of the provided amount
+        int256 amountInOutPositive = params.amountSpecified > 0
+            ? int256(params.amountSpecified)
+            : int256(-params.amountSpecified);
+
+        uint256 aamountInOutPositive = params.amountSpecified > 0
             ? uint256(params.amountSpecified)
             : uint256(-params.amountSpecified);
+
+        (Currency fiat, Currency crypto) = Currency.unwrap(key.currency0) ==
+            address(this)
+            ? (key.currency0, key.currency1)
+            : (key.currency1, key.currency0);
+
+        // define the swap delta variable to be assigned depending on the direction of the swap
+        BeforeSwapDelta beforeSwapDelta;
+
+        if (isFiatToCrypto) {
+            crypto.settle(
+                poolManager,
+                address(this),
+                aamountInOutPositive,
+                true
+            );
+
+            // fiat to crypto swap
+            beforeSwapDelta = toBeforeSwapDelta(
+                int128(0),
+                int128(-amountInOutPositive)
+            );
+        }else{
+            beforeSwapDelta = toBeforeSwapDelta(
+                int128(amountInOutPositive),
+                int128(0)
+            );
+
+            crypto.take(
+                poolManager,
+                address(this),
+                aamountInOutPositive,
+                true
+            );
+        }
 
         // decode the hook data
         // (string memory currency, address recipient) = abi.decode(
@@ -163,28 +208,24 @@ contract CSMM is BaseHook, ERC20 {
 
         // TODO: Fee rebating and stuff and JIT liquidity pools
 
-        BeforeSwapDelta beforeSwapDelta = toBeforeSwapDelta(
-            int128(-params.amountSpecified),
-            int128(0) // Unspecified amount (output delta) = 0
-        );
-
         // if (params.zeroForOne) {
         //     // They will be sending Token 0 to the PM, creating a debit of Token 0 in the PM
         //     // We will take claim tokens for that Token 0 from the PM and keep it in the hook
         //     // and create an equivalent credit for that Token 0 since it is ours!
-        //     key.currency0.take(
-        //         poolManager,
-        //         address(this),
-        //         amountInOutPositive,
-        //         true
-        //     );
+        //     // we cannot take from the pm
+        //     // key.currency0.take(
+        //     //     poolManager,
+        //     //     address(this),
+        //     //     amountInOutPositive,
+        //     //     true
+        //     // );
         // } else {
-        //     key.currency1.take(
-        //         poolManager,
-        //         address(this),
-        //         amountInOutPositive,
-        //         true
-        //     );
+        //     // key.currency1.take(
+        //     //     poolManager,
+        //     //     address(this),
+        //     //     amountInOutPositive,
+        //     //     true
+        //     // );
         // }
 
         return (this.beforeSwap.selector, beforeSwapDelta, 0);
@@ -211,25 +252,6 @@ contract CSMM is BaseHook, ERC20 {
     //     );
     // }
 
-    // override some of the ERC20 token methods we want to modify
-    function transfer(
-        address recipient,
-        uint256 amount
-    ) public pure override returns (bool) {
-        revert CannotTransferVRL(recipient, amount);
-    }
-
-    // helper function to mint only to a particular address
-    // function mint(uint256 amount) private {
-    function mint(uint256 amount) private {
-        _mint(address(this), amount);
-    }
-
-    // helper function to mint only to a particular address
-    function burn(uint256 amount) private {
-        _burn(address(this), amount);
-    }
-
     // helper function to hash the currency
     function hashCurrency(
         string memory currency
@@ -239,9 +261,10 @@ contract CSMM is BaseHook, ERC20 {
 
     // helper function to get hook data
     function getHookData(
-        string calldata currency,
-        address recipient
+        bytes32 currencyHash,
+        bytes calldata signature,
+        address userAddress
     ) public pure returns (bytes memory) {
-        return abi.encode(currency, recipient);
+        return abi.encode(currencyHash, signature, userAddress);
     }
 }

@@ -2,10 +2,14 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.23;
 
+import "forge-std/Test.sol";
+
+
 contract VRLManagerStub {
 
     // define the unlocked/available balance of the user i.e user => currency => amount
-    mapping(address => mapping(bytes32 => uint256)) balanceOf; 
+    mapping(address => mapping(bytes32 => uint256)) public balanceOf; 
+    
     constructor() {
     }
 
@@ -24,6 +28,10 @@ contract VRLManagerStub {
         // create a deposit for the user to represent a VRL unlocked position for a particular currencyc
         // struct needs user and amount locked
         balanceOf[owner][currency] += amount;
+    }
+
+    function getUserCurrencyVRL(address owner, bytes32 currency) external view returns(uint256){
+        return balanceOf[owner][currency];
     }
 
     // /**

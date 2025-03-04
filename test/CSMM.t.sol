@@ -17,26 +17,38 @@ import {IERC20Minimal} from "v4-core/interfaces/external/IERC20Minimal.sol";
 import {MockERC20} from "solmate/src/test/utils/mocks/MockERC20.sol";
 import {Constants} from "@uniswap/v4-core/test/utils/Constants.sol";
 import {SortTokens} from "@uniswap/v4-core/test/utils/SortTokens.sol";
-// import stubs
-// import {SuretyStub} from "./mock/SuretyStub.sol";
-// import {LiquidityVerifierStub} from "./mock/LiquidityVerifierStub.sol";
+
+import {VRLManagerStub} from "./mock/VRLManagerStub.sol";
+import {LiquidityVerifierStub} from "./mock/LiquidityVerifierStub.sol";
 
 contract CSMMTest is Test, Deployers {
     using PoolIdLibrary for PoolId;
     using CurrencyLibrary for Currency;
 
+    // Define a couple of users
+    address user1 = address(0xD1798D6b74EF965d6A60f45E0036f44AEd3DfA1b);
+    address user2 = address(0x5678);
+
+    uint256 swapAmount = 1000000000000000000;
+    bytes user1signatureOfAmount = hex"efc3355fd0d1bb3fb121a6071dacba11a5abf8c1e802c58e5139a1767093c9a7643fe523de91b4e4423be84e8a73eddf8bc4024f709ad1e27dd19df59f6161161b";
+
     CSMM hookAndLDToken;
     MockERC20 stableToken;
 
-    // definen for the currencies
+    // define for the currencies
     Currency stableTokenCurrency;
     Currency hookAndLDTokenCurrency;
-    // SuretyStub suretyStub;
-    // LiquidityVerifierStub verifierStub;
+
+    // define the stub contracts
+    LiquidityVerifierStub liquidityVerifierStub;
+    VRLManagerStub vrlManager;
+
+    PoolSwapTest.TestSettings settings =
+        PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false});
 
     function deployStubs() public {
-        // verifierStub = new LiquidityVerifierStub();
-        // suretyStub = new SuretyStub(verifierStub);
+        vrlManager = new VRLManagerStub();
+        liquidityVerifierStub = new LiquidityVerifierStub(vrlManager);
     }
 
     function deployAndApproveTokens() public {
@@ -57,7 +69,10 @@ contract CSMMTest is Test, Deployers {
         stableToken = new MockERC20("Stable Test Token", "USDC", 18);
         stableTokenCurrency = Currency.wrap(address(stableToken));
 
-        // set amount to mint to each address
+        // mint some stable tokens for ourselves
+        stableToken.mint(address(this), stableTokenInitialsupply);
+
+        // set amount to approve for each address
         address[10] memory toApprove = [
             address(swapRouter),
             address(swapRouterNoChecks),
@@ -75,9 +90,6 @@ contract CSMMTest is Test, Deployers {
         for (uint256 i = 0; i < toApprove.length; i++) {
             stableToken.approve(toApprove[i], Constants.MAX_UINT256);
         }
-
-        // mint some stable tokens for ourselves
-        stableToken.mint(address(this), stableTokenInitialsupply);
 
         (currency0, currency1) = SortTokens.sort(
             MockERC20(Currency.unwrap(stableTokenCurrency)),
@@ -100,7 +112,7 @@ contract CSMMTest is Test, Deployers {
         );
 
         // Add some initial liquidity through the custom `addLiquidity` function
-        hookAndLDToken.addLiquidity(key, 1);
+        hookAndLDToken.addLiquidity(key, 1000 ether);
     }
 
     function test_erc20TokenParams() public view {
@@ -122,6 +134,34 @@ contract CSMMTest is Test, Deployers {
     }
 
     function test_depositfiat() public {
-        // first signal liquidity
+        // vm.prank(user1);
+        string memory mockNGNProof = "NGN-50000";
+        bytes32 fiatCurrency = keccak256(abi.encode("NGN"));
+        // first signal liquidity using the signal contract
+        liquidityVerifierStub.verifyAndSignal(mockNGNProof);
+        // then check if VRL is in the contract
+        uint256 userBalance = vrlManager.getUserCurrencyVRL(
+            user1,
+            fiatCurrency
+        );
+        // get balance before and after swap
+        uint256 preBalance = stableToken.balanceOf(address(this));
+        console.log(preBalance);
+        // then make a swap
+        swapRouter.swap(
+            key,
+            IPoolManager.SwapParams({
+                zeroForOne: true,
+                amountSpecified: -10 ether,
+                sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
+            }),
+            settings,
+            ZERO_BYTES
+        );
+
+        uint256 postBalance = stableToken.balanceOf(address(this));
+        console.log(postBalance);
+        // check if the user has recieved the funds
+        // implement FIAT -> USDC swap when theres a pending LD
     }
 }
