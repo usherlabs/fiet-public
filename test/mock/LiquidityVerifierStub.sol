@@ -6,7 +6,9 @@ import {VRLManagerStub} from "./VRLManagerStub.sol";
 contract LiquidityVerifierStub {
     VRLManagerStub vrlManager;
 
-    constructor(VRLManagerStub _vrlManager) {
+    constructor(
+        VRLManagerStub _vrlManager
+    ) {
         vrlManager = _vrlManager;
     }
 
