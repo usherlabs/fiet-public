@@ -384,7 +384,7 @@ contract CSMMTest is Test, Deployers {
         // increment block by approximate number of blocks per day
         // assume a day has passed and let rebate accrue
         uint256 currentBlock = block.number;
-        uint256 blockIncrement = 50000;
+        uint256 blockIncrement = 366000;
         vm.roll(currentBlock + blockIncrement);
 
         // Make another swap as another user using some part of ld left by user1's swap
@@ -419,6 +419,7 @@ contract CSMMTest is Test, Deployers {
             swapAmount2,
             rebate1e6
         );
+        console.log(expectedDebit);
         swapRouter.swap(
             key,
             // TODO: extract the zero for one variable to actually check the addresses rather than assuming the 0 token would be the fiat because of the way it is generated
@@ -453,14 +454,14 @@ contract CSMMTest is Test, Deployers {
         uint256 initialUSDC = 1000 * 1e6; // 1000 USDC initial reserves
         uint256 tauBps = 2000; // 20% threshold
 
-        uint256 dynamicFeeInPips = hookAndLDToken.calculateDynamicTresholdFee(
+        uint256 dynamicFee1e6 = hookAndLDToken.calculateDynamicTresholdFee(
             usdcAmount,
             currentUSDC,
             initialUSDC,
             tauBps
         );
 
-        assertEq(dynamicFeeInPips, 437500);
+        assertEq(dynamicFee1e6, 437500);
     }
 
     // validate JIT Pools use when there is not enough LD for a given fiat in the pool
