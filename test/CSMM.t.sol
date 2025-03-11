@@ -419,7 +419,7 @@ contract CSMMTest is Test, Deployers {
             swapAmount2,
             rebate1e6
         );
-        console.log(expectedDebit);
+
         swapRouter.swap(
             key,
             // TODO: extract the zero for one variable to actually check the addresses rather than assuming the 0 token would be the fiat because of the way it is generated

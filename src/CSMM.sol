@@ -73,6 +73,11 @@ contract CSMM is BaseHook, LimitedERC20 {
         owner = msg.sender;
     }
 
+    /**
+     * @notice Sets the reserve threshold for dynamic fee calculations.
+     * @dev Updates the reserveTresholdBPS value, restricted to the contract owner.
+     * @param _reserveTresholdBPS The new reserve threshold in basis points (bps).
+     */
     function setReserveTreshold(uint256 _reserveTresholdBPS) public onlyOwner {
         reserveTresholdBPS = _reserveTresholdBPS;
     }
@@ -195,7 +200,7 @@ contract CSMM is BaseHook, LimitedERC20 {
         return "";
     }
 
-    // // Swapping
+    // before swap hook
     function beforeSwap(
         address,
         PoolKey calldata key,
@@ -247,7 +252,15 @@ contract CSMM is BaseHook, LimitedERC20 {
         return (this.beforeSwap.selector, beforeSwapDelta, 0);
     }
 
-    // swap utility functions
+    /**
+     * @notice Handles fiat-to-crypto swap logic.
+     * @dev Processes the swap by withdrawing fiat liquidity, minting LD tokens, applying fees, and settling stablecoin output.
+     * @param user The address of the user initiating the swap.
+     * @param fiatCurrencyHash The hash of the fiat currency being swapped from.
+     * @param amountIn The amount of fiat (represented as LD tokens) input for the swap.
+     * @param stableCurrency The stablecoin currency (e.g., USDC) being swapped to.
+     * @return BeforeSwapDelta The delta specifying input/output adjustments for the swap, with 0 LD taken and stablecoin output.
+     */
     function _handleFiatToCryptoSwap(
         address user,
         bytes32 fiatCurrencyHash,
@@ -299,6 +312,15 @@ contract CSMM is BaseHook, LimitedERC20 {
             );
     }
 
+    /**
+     * @notice Handles crypto-to-fiat swap logic.
+     * @dev Processes the swap by validating liquidity, applying rebates and fees, burning LD tokens, and unlocking fiat liquidity.
+     * @param user The address of the user initiating the swap.
+     * @param fiatCurrencyHash The hash of the fiat currency being swapped to.
+     * @param amountIn The amount of stablecoin (e.g., USDC) input for the swap.
+     * @param stableCurrency The stablecoin currency being swapped from.
+     * @return BeforeSwapDelta The delta specifying input/output adjustments for the swap, with stablecoin input and 0 LD output.
+     */
     function _handleCryptoToFiatSwap(
         address user,
         bytes32 fiatCurrencyHash,
@@ -403,16 +425,27 @@ contract CSMM is BaseHook, LimitedERC20 {
         return baseAmount - feeAmount;
     }
 
-    // function handleCryptoToFiatSwap(uint256 amountIn, bytes32 currencyHash) {}
-
-    // helper function to hash the currency
+    /**
+     * @notice Generates a hash of a currency string.
+     * @dev Creates a unique identifier for a currency using keccak256 hashing.
+     * @param currency The string representation of the currency (e.g., "AUD", "USD").
+     * @return bytes32 The hashed value of the currency string.
+     */
     function hashCurrency(
         string memory currency
     ) public pure returns (bytes32) {
         return keccak256(abi.encode(currency));
     }
 
-    // helper function to get hook data
+    /**
+     * @notice Encodes hook data for swap verification.
+     * @dev Combines nonce, user address, fiat currency hash, and signature into a single bytes array for use in swap hooks.
+     * @param nonce A unique number to prevent replay attacks.
+     * @param userAddress The address of the user initiating the swap.
+     * @param fiatCurrencyHash The hash of the fiat currency involved in the swap.
+     * @param signature The cryptographic signature for verifying the swap data.
+     * @return bytes The encoded hook data as a bytes array.
+     */
     function encodeHookData(
         uint256 nonce,
         address userAddress,
@@ -422,7 +455,14 @@ contract CSMM is BaseHook, LimitedERC20 {
         return abi.encode(nonce, fiatCurrencyHash, signature, userAddress);
     }
 
-    // helper function to decode hook data and make sure the provided signature is valid across the nonce and amount
+    /**
+     * @notice Decodes and verifies hook data for a swap.
+     * @dev Extracts swap data from encoded bytes, validates the signature, and ensures it hasn’t been used before.
+     * @param encodedData The encoded hook data containing nonce, fiat currency hash, signature, and user address.
+     * @param amount The swap amount to verify against the signature.
+     * @return address The user address extracted from the decoded data.
+     * @return bytes32 The fiat currency hash extracted from the decoded data.
+     */
     function decodeAndVerifyHookData(
         bytes memory encodedData,
         uint256 amount
@@ -445,7 +485,13 @@ contract CSMM is BaseHook, LimitedERC20 {
         return (userAddress, fiatCurrencyHash);
     }
 
-    // helper to verify and parse hook data
+    /**
+     * @notice Generates a signature payload for verification.
+     * @dev Creates a hash of the nonce and amount using keccak256 for signature validation in swap hooks.
+     * @param nonce A unique number to prevent replay attacks.
+     * @param amount The swap amount to include in the payload.
+     * @return bytes32 The hashed payload for signature verification.
+     */
     function generateSignaturePayload(
         uint256 nonce,
         uint256 amount
@@ -458,6 +504,13 @@ contract CSMM is BaseHook, LimitedERC20 {
     // FIAT => USDC
     // 1. Base Fee: GLPs set for fiat-to-USDC (e.g., 0.1% on 100 AUD = 0.1 USDC).
     // 2. Threshold Fee: Quadratic if USDC < 20% (e.g., 0.25 USDC on 100 USDC at 15% reserves).
+    /**
+     * @notice Calculates the total fees for a fiat-to-USDC swap.
+     * @dev Combines base fee and dynamic threshold fee, adjusting the base fee based on net fees collected versus rebates paid.
+     * @param currencyHash The hash of the fiat currency involved in the swap.
+     * @param withdrawAmount The amount of USDC being withdrawn in the swap.
+     * @return uint256 The total fee in 1e6 scale, including base and dynamic threshold components.
+     */
     function getOnrampFees(
         bytes32 currencyHash,
         uint256 withdrawAmount
@@ -494,7 +547,12 @@ contract CSMM is BaseHook, LimitedERC20 {
         return baseFee + dynamicTresholdFee;
     }
 
-    // calculate the dynamic fees based on contract parameters
+    /**
+     * @notice Calculates the dynamic threshold fee for a fiat-to-USDC swap.
+     * @dev Delegates to the internal dynamic fee calculation using current contract state variables.
+     * @param withdrawAmount The amount of USDC being withdrawn in the swap.
+     * @return fee1e6 The dynamic threshold fee in 1e6 scale.
+     */
     function calculateHookDynamicTresholdFee(
         uint256 withdrawAmount
     ) public view returns (uint256 fee1e6) {
@@ -506,10 +564,16 @@ contract CSMM is BaseHook, LimitedERC20 {
                 reserveTresholdBPS
             );
     }
-    // Example dynamic fee function in 1e6 scale
 
-    // calculates the fees required to facilitate a swap
-    // returns fee scaled by 10e6
+    /**
+     * @notice Calculates the dynamic threshold fee based on reserve levels.
+     * @dev Applies a quadratic fee increase when USDC reserves fall below a threshold, returned in 1e6 scale.
+     * @param usdcAmount The amount of USDC being withdrawn in the swap.
+     * @param currentUSDC The current total supply of USDC in the pool.
+     * @param initialUSDC The initial USDC deposit used to set the reserve threshold.
+     * @param tauBps The reserve threshold in basis points (bps).
+     * @return fee1e6 The dynamic fee in 1e6 scale, ranging from 0 to 1,000,000.
+     */
     function calculateDynamicTresholdFee(
         uint256 usdcAmount,
         uint256 currentUSDC,
@@ -528,6 +592,13 @@ contract CSMM is BaseHook, LimitedERC20 {
         return fee1e6;
     }
 
+    /**
+     * @notice Calculates the total fees for a USDC-to-fiat swap.
+     * @dev Currently returns the volatility fee from VRLManager; rebates and additional fees are pending implementation.
+     * @param currencyHash The hash of the fiat currency involved in the swap.
+     * @param withdrawAmount The amount of USDC being swapped to fiat.
+     * @return uint256 The total fee in 1e6 scale, currently only the volatility fee.
+     */
     // USDC => FIAT
     // 3. Volatility Fee: On USDC-to-fiat for FX risk (e.g., 0.5 USDC on 100 USDC if AUD drops 5%).
     // 4. Priority Fee: Trader pays extra for JIT speed (e.g., 0.5 USDC on 100 USDC when LD = 0).
@@ -545,7 +616,12 @@ contract CSMM is BaseHook, LimitedERC20 {
         return volatilityFee1e6;
     }
 
-    // rebate parameters
+    /**
+     * @notice Calculates the rebate fee for a USDC-to-fiat swap.
+     * @dev Computes a time-based rebate fee in 1e6 scale, increasing with blocks elapsed since the last rebate, capped at 80%.
+     * @param currencyHash The hash of the fiat currency involved in the swap.
+     * @return uint256 The rebate fee in 1e6 scale, limited to MAX_REBATE (800,000).
+     */
     function calculateRebateFee(
         bytes32 currencyHash
     ) public view returns (uint256) {
