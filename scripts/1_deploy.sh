@@ -1,0 +1,79 @@
+#!/bin/bash
+
+# ------------- #
+# Configuration #
+# ------------- #
+
+# Load variables from .env file
+set -o allexport
+source scripts/.env
+set +o allexport
+
+
+# Helper constants
+FILE_KEY="deployed_contract_address"
+
+
+# -------------- #
+# Initial checks #
+# -------------- #
+
+# checks to make sure that the environment variables are set
+if [ -z "$PRIVATE_KEY" ] || [ -z "$ADDRESS" ]
+then
+    echo "You need to provide the PRIVATE_KEY and the ADDRESS of the deployer"
+    exit 0
+fi
+
+# ---------------------------------- #
+# Deployment of VRL Manager #
+# ---------------------------------- #
+echo ""
+echo "------------------------------ #"
+echo "Deploying VRL Manager contract #"
+echo "------------------------------ #"
+
+# Move to vrl manager folder
+cd stylus/vrl_manager
+
+# Deploy contract
+cargo stylus deploy -e $RPC_URL --private-key $PRIVATE_KEY --no-verify | sed 's/[^a-zA-Z0-9 ]//g' | grep 'deployed code' | grep -oP '0x[0-9a-fA-F]{40}' > $FILE_KEY
+
+# reset directory
+cd ../..
+
+
+# ---------------------------------- #
+# Deployment of Liquidity Verifier   #
+# ---------------------------------- #
+echo ""
+echo "------------------------------ #"
+echo "Deploying Liquidity Verifier   #"
+echo "------------------------------ #"
+
+# Move to liquidity verifier folder
+cd stylus/liquidity_verifier
+
+# deploy contract
+cargo stylus deploy -e $RPC_URL --private-key $PRIVATE_KEY --no-verify | sed 's/[^a-zA-Z0-9 ]//g' | grep 'deployed code' | grep -oP '0x[0-9a-fA-F]{40}' > $FILE_KEY
+
+# reset directory
+cd ../..
+
+
+# ---------------------------------- #
+# Deployment of FIET$ Token           #
+# ---------------------------------- #
+echo ""
+echo "------------------------------ #"
+echo "Deploying FIET$ Token          #"
+echo "------------------------------ #"
+
+# Move to liquidity verifier folder
+cd stylus/token
+
+# deploy contract
+cargo stylus deploy -e $RPC_URL --private-key $PRIVATE_KEY --no-verify | sed 's/[^a-zA-Z0-9 ]//g' | grep 'deployed code' | grep -oP '0x[0-9a-fA-F]{40}' > $FILE_KEY
+
+# reset directory
+cd ../..

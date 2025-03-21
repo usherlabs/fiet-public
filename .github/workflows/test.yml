@@ -24,20 +24,20 @@ jobs:
         uses: foundry-rs/foundry-toolchain@v1
 
       - name: Show Forge version
-        run: |
-          forge --version
+        run: forge --version
+        working-directory: solidity
 
       - name: Run Forge fmt
-        run: |
-          forge fmt --check
+        run: forge fmt --check
+        working-directory: solidity
         id: fmt
 
       - name: Run Forge build
-        run: |
-          forge build --sizes
+        run: forge build --sizes
+        working-directory: solidity
         id: build
 
       - name: Run Forge tests
-        run: |
-          forge test -vvv
+        run: forge test -vvv
+        working-directory: solidity
         id: test
