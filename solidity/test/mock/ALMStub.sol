@@ -38,8 +38,7 @@ contract ALMStub {
     mapping(bytes32 => mapping(address => uint256)) public fiatPool;
 
     // Stablecoin Pool Config: CURRENCYHASH -> POOLID/USER -> Config
-    mapping(bytes32 => mapping(address => PoolConfig))
-        public stablecoinPoolConfig;
+    mapping(bytes32 => mapping(address => PoolConfig)) public stablecoinPoolConfig;
 
     // Fiat Pool Config: CURRENCYHASH -> POOLID/USER -> Config
     mapping(bytes32 => mapping(address => PoolConfig)) public fiatPoolConfig;
@@ -66,7 +65,7 @@ contract ALMStub {
         swapRouter = ISwapRouter(_swapRouter);
         poolKey = _poolkey;
         hookUtils = ICSMMUtils(_hookUtils);
-    } 
+    }
 
     // provide liquidity for either fiat or usdc or both by providing an amount of each
     // should the staking happen here?
@@ -81,27 +80,20 @@ contract ALMStub {
 
         // if it is their first time adding liquidity
         // add then to the list of liquidity providers
-        if (
-            stablecoinPool[currencyHash][owner] == 0 &&
-            fiatPool[currencyHash][owner] == 0
-        ) {
+        if (stablecoinPool[currencyHash][owner] == 0 && fiatPool[currencyHash][owner] == 0) {
             rlpList[currencyHash].push(owner);
         }
 
         // update the state variables
         // update the crypto pool and its config
         stablecoinPool[currencyHash][owner] += stableCoinAmount;
-        stablecoinPoolConfig[currencyHash][owner] = PoolConfig({
-            feeTreshold: fiatFeeTreshold1e6,
-            blockNumber: block.number
-        });
+        stablecoinPoolConfig[currencyHash][owner] =
+            PoolConfig({feeTreshold: fiatFeeTreshold1e6, blockNumber: block.number});
 
         // update the fiat pool and its config
         fiatPool[currencyHash][owner] += fiatAmount;
-        stablecoinPoolConfig[currencyHash][owner] = PoolConfig({
-            feeTreshold: cryptoFeeTreshold1e6,
-            blockNumber: block.number
-        });
+        stablecoinPoolConfig[currencyHash][owner] =
+            PoolConfig({feeTreshold: cryptoFeeTreshold1e6, blockNumber: block.number});
 
         // move in both FIAT and stables into the ALM pool
         // check if there is enough vrl to take from what has been signalled
@@ -111,11 +103,7 @@ contract ALMStub {
             fiatAmount,
             false // do not lock the funds, just deduct itand return the delta
         );
-        bool success = stableToken.transferFrom(
-            owner,
-            address(this),
-            fiatAmount
-        );
+        bool success = stableToken.transferFrom(owner, address(this), fiatAmount);
 
         require(success);
     }
@@ -127,13 +115,11 @@ contract ALMStub {
         // perform a swap into the pool
         // first perform a swap into the pool of a specified amount
         // then focus on the conditions being
-        bytes memory hashSignature1 = hex"668d0b690fe23e83c9e716a034bcaa6cfbf4807fa6dcdbe652d86d5a7488b28b6c78ab1365c2b0373a8d1c3394c7fc3bd3247ef895ad7d11cf7a79796d7f1a371b";
+        bytes memory hashSignature1 =
+            hex"668d0b690fe23e83c9e716a034bcaa6cfbf4807fa6dcdbe652d86d5a7488b28b6c78ab1365c2b0373a8d1c3394c7fc3bd3247ef895ad7d11cf7a79796d7f1a371b";
         ISwapRouter.TestSettings memory settings = ISwapRouter.TestSettings({takeClaims: false, settleUsingBurn: false});
         bytes memory hookData = hookUtils.encodeHookData(
-            10,
-            0xD1798D6b74EF965d6A60f45E0036f44AEd3DfA1b,
-            hookUtils.hashCurrency("NGN"),
-            hashSignature1
+            10, 0xD1798D6b74EF965d6A60f45E0036f44AEd3DfA1b, hookUtils.hashCurrency("NGN"), hashSignature1
         );
         swapRouter.swap(
             poolKey,

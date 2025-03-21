@@ -22,9 +22,7 @@ interface ILiquidityVerifier {
      * @param input The input string to split
      * @return Two strings: the currency code and the amount
      */
-    function splitString(
-        string calldata input
-    ) external pure returns (string memory, string memory);
+    function splitString(string calldata input) external pure returns (string memory, string memory);
 
     /**
      * @notice Converts a string to its numerical representation, e.g., "100" -> 100

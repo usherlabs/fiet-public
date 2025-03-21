@@ -10,11 +10,7 @@ interface IVRLManager {
      * @param currency The currency being deposited
      * @param amount The amount being deposited
      */
-    function depositVerifiedFiat(
-        address owner,
-        bytes32 currency,
-        uint256 amount
-    ) external;
+    function depositVerifiedFiat(address owner, bytes32 currency, uint256 amount) external;
 
     /**
      * @notice Retrieves the VRL balance of a user for a specific currency
@@ -22,10 +18,7 @@ interface IVRLManager {
      * @param currency The currency hash to query
      * @return The amount of VRL for the specified currency
      */
-    function getUserCurrencyVRL(
-        address owner,
-        bytes32 currency
-    ) external view returns (uint256);
+    function getUserCurrencyVRL(address owner, bytes32 currency) external view returns (uint256);
 
     /**
      * @notice Withdraws VRL from a previously made deposit by the user
@@ -34,12 +27,7 @@ interface IVRLManager {
      * @param delta The amount of VRL to withdraw
      * @return The amount withdrawn
      */
-    function withdrawVRL(
-        address owner,
-        bytes32 currencyHash,
-        uint256 delta,
-        bool lock
-    ) external returns (uint256);
+    function withdrawVRL(address owner, bytes32 currencyHash, uint256 delta, bool lock) external returns (uint256);
 
     /**
      * @notice Moves delta from the LD to a user's balance record
@@ -49,11 +37,7 @@ interface IVRLManager {
      * @param currency The currency being deposited
      * @param delta The amount being deposited
      */
-    function unlockLiquidityDelta(
-        address owner,
-        bytes32 currency,
-        uint256 delta
-    ) external returns (uint256);
+    function unlockLiquidityDelta(address owner, bytes32 currency, uint256 delta) external returns (uint256);
 
     /**
      * @notice returns the volatility fee of a particular currency in e6

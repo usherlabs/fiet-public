@@ -33,15 +33,13 @@ contract CSMMTest is Test, Deployers {
     // define verified amounts and signature for user1
     uint256 swapAmount1 = 100;
     uint256 nonce = 100; // a randomly selected number to guarante a unique signature
-    bytes32 nonceAndAmountHash1 =
-        0x315f1cfc49ecfc87246f19e56dfaaa098cdb8a0d7e8b2461f3275d5f68fbde3c;
+    bytes32 nonceAndAmountHash1 = 0x315f1cfc49ecfc87246f19e56dfaaa098cdb8a0d7e8b2461f3275d5f68fbde3c;
     bytes hashSignature1 =
         hex"668d0b690fe23e83c9e716a034bcaa6cfbf4807fa6dcdbe652d86d5a7488b28b6c78ab1365c2b0373a8d1c3394c7fc3bd3247ef895ad7d11cf7a79796d7f1a371b";
 
     // define verified amounts and signature for user2
     uint256 swapAmount2 = 90;
-    bytes32 nonceAndAmountHash2 =
-        0xeda14cbefc6f96aaafddcf33ef1adf6ad0e14b05d4916862b26d6f49deb03cbf;
+    bytes32 nonceAndAmountHash2 = 0xeda14cbefc6f96aaafddcf33ef1adf6ad0e14b05d4916862b26d6f49deb03cbf;
     bytes hashSignature2 =
         hex"9602596965d7ba2824013bc5770593cd7cde8fe6244088e7eff9c45bf9233a6f416ff6bccbe18bb63f9b3dd8600f8c1c567766308e9ad267cfd3ee21b2df5e011b";
 
@@ -58,8 +56,8 @@ contract CSMMTest is Test, Deployers {
     GLPFeeConfigManagerStub glpFeeConfigManagerStub;
     // ALMStub alm;
 
-    PoolSwapTest.TestSettings settings =
-        PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false});
+    PoolSwapTest.TestSettings settings = PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false});
+
     function deployStubs() public {
         vrlManagerStub = new VRLManagerStub();
         glpFeeConfigManagerStub = new GLPFeeConfigManagerStub();
@@ -70,10 +68,8 @@ contract CSMMTest is Test, Deployers {
         // deploy the hook contract
         address hookAddress = address(
             uint160(
-                Hooks.AFTER_INITIALIZE_FLAG |
-                    Hooks.BEFORE_ADD_LIQUIDITY_FLAG |
-                    Hooks.BEFORE_SWAP_FLAG |
-                    Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG
+                Hooks.AFTER_INITIALIZE_FLAG | Hooks.BEFORE_ADD_LIQUIDITY_FLAG | Hooks.BEFORE_SWAP_FLAG
+                    | Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG
             )
         );
         deployCodeTo(
@@ -123,11 +119,7 @@ contract CSMMTest is Test, Deployers {
             // address(alm)
         ];
 
-        address[3] memory allUsers = [
-            address(user1),
-            address(user2),
-            address(this)
-        ];
+        address[3] memory allUsers = [address(user1), address(user2), address(this)];
 
         // loop and approve the right addresses to take our tokens
         for (uint256 i = 0; i < allUsers.length; i++) {
@@ -139,8 +131,7 @@ contract CSMMTest is Test, Deployers {
         }
 
         (currency0, currency1) = SortTokens.sort(
-            MockERC20(Currency.unwrap(stableTokenCurrency)),
-            MockERC20(Currency.unwrap(hookAndLDTokenCurrency))
+            MockERC20(Currency.unwrap(stableTokenCurrency)), MockERC20(Currency.unwrap(hookAndLDTokenCurrency))
         );
     }
 
@@ -149,14 +140,7 @@ contract CSMMTest is Test, Deployers {
         deployStubs();
         deployAndApproveTokens();
 
-        (key, ) = initPool(
-            currency0,
-            currency1,
-            hookAndLDToken,
-            3000,
-            SQRT_PRICE_1_1,
-            ZERO_BYTES
-        );
+        (key,) = initPool(currency0, currency1, hookAndLDToken, 3000, SQRT_PRICE_1_1, ZERO_BYTES);
     }
 
     // test erc20 token parameters
@@ -187,24 +171,13 @@ contract CSMMTest is Test, Deployers {
         // get balance before and after swap
         uint256 preBalance = stableToken.balanceOf(address(testUser));
 
-        bytes memory hookData = hookAndLDToken.encodeHookData(
-            nonce,
-            testUser,
-            fiatCurrencyHash,
-            hashSignature1
-        );
+        bytes memory hookData = hookAndLDToken.encodeHookData(nonce, testUser, fiatCurrencyHash, hashSignature1);
 
         // get the swap fee for this particular swap
-        uint256 swapFee = hookAndLDToken.getOnrampFees(
-            fiatCurrencyHash,
-            swapAmount1
-        );
+        uint256 swapFee = hookAndLDToken.getOnrampFees(fiatCurrencyHash, swapAmount1);
 
         // subtract the fees from the swap amount, this should be the amount i expected
-        uint256 expectedOutputAmount = hookAndLDToken.applyFees(
-            swapAmount1,
-            swapFee
-        );
+        uint256 expectedOutputAmount = hookAndLDToken.applyFees(swapAmount1, swapFee);
 
         // get the base fee from the GLP fee config manager and confirm we have the base fee and not the quadratic fee since we arent below treshold
         uint256 baseFee = glpFeeConfigManagerStub.getBaseFee(fiatCurrencyHash);
@@ -224,9 +197,7 @@ contract CSMMTest is Test, Deployers {
         );
 
         uint256 postBalance = stableToken.balanceOf(address(testUser));
-        uint256 LDHookBalance = hookAndLDToken.balanceOf(
-            address(hookAndLDToken)
-        );
+        uint256 LDHookBalance = hookAndLDToken.balanceOf(address(hookAndLDToken));
 
         // make sure the user's balance increases by the output amount
         assertEq(postBalance - preBalance, expectedOutputAmount);
@@ -250,12 +221,7 @@ contract CSMMTest is Test, Deployers {
         // get balance before and after swap
         uint256 preBalance = stableToken.balanceOf(address(testUser));
 
-        bytes memory hookData = hookAndLDToken.encodeHookData(
-            nonce,
-            testUser,
-            fiatCurrencyHash,
-            hashSignature1
-        );
+        bytes memory hookData = hookAndLDToken.encodeHookData(nonce, testUser, fiatCurrencyHash, hashSignature1);
 
         // then make a swap and expect an error because we didnt signal liquidity
         vm.expectRevert();
@@ -292,18 +258,10 @@ contract CSMMTest is Test, Deployers {
         // get balance before and after swap
         uint256 preBalance = stableToken.balanceOf(address(testUser));
 
-        bytes memory hookData = hookAndLDToken.encodeHookData(
-            nonce,
-            testUser,
-            fiatCurrencyHash,
-            hashSignature1
-        );
+        bytes memory hookData = hookAndLDToken.encodeHookData(nonce, testUser, fiatCurrencyHash, hashSignature1);
 
         // get the swap fee for this particular swap
-        uint256 swapFee = hookAndLDToken.getOnrampFees(
-            fiatCurrencyHash,
-            swapAmount1
-        );
+        uint256 swapFee = hookAndLDToken.getOnrampFees(fiatCurrencyHash, swapAmount1);
 
         // get the base fee from the GLP fee config manager and confirm we have the base fee and not the quadratic fee since we arent below treshold
         uint256 baseFee = glpFeeConfigManagerStub.getBaseFee(fiatCurrencyHash);
@@ -323,15 +281,10 @@ contract CSMMTest is Test, Deployers {
         );
 
         // subtract the fees from the swap amount, this should be the amount i expected
-        uint256 expectedOutputAmount = hookAndLDToken.applyFees(
-            swapAmount1,
-            swapFee
-        );
+        uint256 expectedOutputAmount = hookAndLDToken.applyFees(swapAmount1, swapFee);
 
         uint256 postBalance = stableToken.balanceOf(address(testUser));
-        uint256 LDHookBalance = hookAndLDToken.balanceOf(
-            address(hookAndLDToken)
-        );
+        uint256 LDHookBalance = hookAndLDToken.balanceOf(address(hookAndLDToken));
 
         uint256 hookUSDCBalance = hookAndLDToken.totalStableCoinSupply();
 
@@ -362,12 +315,7 @@ contract CSMMTest is Test, Deployers {
 
         // first signal some liquidity using the signal contract to deposit LD to swap
         liquidityVerifierStub.verifyAndSignal(mockNGNProof);
-        bytes memory hookData = hookAndLDToken.encodeHookData(
-            nonce,
-            testUser1,
-            fiatCurrencyHash,
-            hashSignature1
-        );
+        bytes memory hookData = hookAndLDToken.encodeHookData(nonce, testUser1, fiatCurrencyHash, hashSignature1);
         // then make a swap
         swapRouter.swap(
             key,
@@ -389,36 +337,19 @@ contract CSMMTest is Test, Deployers {
 
         // Make another swap as another user using some part of ld left by user1's swap
         vm.startPrank(user2);
-        uint256 fiatBalanceBefore = vrlManagerStub.balanceOf(
-            user2,
-            fiatCurrencyHash
-        );
-        bytes memory hookData2 = hookAndLDToken.encodeHookData(
-            nonce,
-            testUser2,
-            fiatCurrencyHash,
-            hashSignature2
-        );
+        uint256 fiatBalanceBefore = vrlManagerStub.balanceOf(user2, fiatCurrencyHash);
+        bytes memory hookData2 = hookAndLDToken.encodeHookData(nonce, testUser2, fiatCurrencyHash, hashSignature2);
         // get the swap fee for this particular swap
-        uint256 swapFee = hookAndLDToken.getOffRampFees(
-            fiatCurrencyHash,
-            swapAmount1
-        );
+        uint256 swapFee = hookAndLDToken.getOffRampFees(fiatCurrencyHash, swapAmount1);
 
         // // subtract the fees from the swap amount, this should be the amount i expected
-        uint256 expectedFiatAmount = hookAndLDToken.applyFees(
-            swapAmount2,
-            swapFee
-        );
+        uint256 expectedFiatAmount = hookAndLDToken.applyFees(swapAmount2, swapFee);
 
         // get crypto balance before
         uint256 cryptoBalanceBefore = stableToken.balanceOf(testUser2);
         // also get the rebate for this particular swap
         uint256 rebate1e6 = hookAndLDToken.calculateRebateFee(fiatCurrencyHash);
-        uint256 expectedDebit = hookAndLDToken.applyFees(
-            swapAmount2,
-            rebate1e6
-        );
+        uint256 expectedDebit = hookAndLDToken.applyFees(swapAmount2, rebate1e6);
 
         swapRouter.swap(
             key,
@@ -438,10 +369,7 @@ contract CSMMTest is Test, Deployers {
         // assert balance
         // VRL balance should increase by expectedFiatAmount
         // check for VRL balance in the VRLManager reduced
-        uint256 fiatBalanceAfter = vrlManagerStub.balanceOf(
-            user2,
-            fiatCurrencyHash
-        );
+        uint256 fiatBalanceAfter = vrlManagerStub.balanceOf(user2, fiatCurrencyHash);
         assertEq(fiatBalanceAfter - fiatBalanceBefore, expectedFiatAmount);
 
         vm.stopPrank();
@@ -454,12 +382,7 @@ contract CSMMTest is Test, Deployers {
         uint256 initialUSDC = 1000 * 1e6; // 1000 USDC initial reserves
         uint256 tauBps = 2000; // 20% threshold
 
-        uint256 dynamicFee1e6 = hookAndLDToken.calculateDynamicTresholdFee(
-            usdcAmount,
-            currentUSDC,
-            initialUSDC,
-            tauBps
-        );
+        uint256 dynamicFee1e6 = hookAndLDToken.calculateDynamicTresholdFee(usdcAmount, currentUSDC, initialUSDC, tauBps);
 
         assertEq(dynamicFee1e6, 437500);
     }

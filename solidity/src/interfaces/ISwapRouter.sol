@@ -5,7 +5,6 @@ import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
 import {BalanceDelta} from "v4-core/types/BalanceDelta.sol";
 import {PoolKey} from "v4-core/types/PoolKey.sol";
 
-
 interface ISwapRouter {
     struct TestSettings {
         bool takeClaims;

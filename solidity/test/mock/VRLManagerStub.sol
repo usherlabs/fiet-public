@@ -20,38 +20,23 @@ contract VRLManagerStub {
      * @param currency The currency being deposited
      * @param owner The owner of the deposit
      */
-    function depositVerifiedFiat(
-        address owner,
-        bytes32 currency,
-        uint256 amount
-    ) external {
+    function depositVerifiedFiat(address owner, bytes32 currency, uint256 amount) external {
         // create a deposit for the user to represent a VRL unlocked position for a particular currencyc
         // struct needs user and amount locked
         balanceOf[owner][currency] += amount;
     }
 
-    function getUserCurrencyVRL(
-        address owner,
-        bytes32 currency
-    ) external view returns (uint256) {
+    function getUserCurrencyVRL(address owner, bytes32 currency) external view returns (uint256) {
         return balanceOf[owner][currency];
     }
 
     // withdraw VRL from a previously made deposit by the user
-    function withdrawVRL(
-        address owner,
-        bytes32 currencyHash,
-        uint256 delta,
-        bool lock
-    ) public returns (uint256) {
+    function withdrawVRL(address owner, bytes32 currencyHash, uint256 delta, bool lock) public returns (uint256) {
         // this function should only be callable by the HOOK
         // require(msg.sender == hookContract, "INVALID_CALLER");
 
         // check if the provided owner has some VRL
-        require(
-            balanceOf[owner][currencyHash] >= delta,
-            "INSUFFICIENT_BALANCE"
-        );
+        require(balanceOf[owner][currencyHash] >= delta, "INSUFFICIENT_BALANCE");
 
         // if they have enough, move the requested amount into locked VRL ifi there is a locked option
         lockedVRL += lock ? delta : 0;
@@ -68,11 +53,7 @@ contract VRLManagerStub {
      * @param currency The currency being deposited
      * @param delta The amount being deposited
      */
-    function unlockLiquidityDelta(
-        address owner,
-        bytes32 currency,
-        uint256 delta
-    ) external returns (uint256) {
+    function unlockLiquidityDelta(address owner, bytes32 currency, uint256 delta) external returns (uint256) {
         // create a deposit for the user to represent a VRL unlocked position for a particular currencyc
         // struct needs user and amount locked
         lockedVRL -= delta;

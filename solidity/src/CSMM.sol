@@ -82,41 +82,33 @@ contract CSMM is BaseHook, LimitedERC20 {
         reserveTresholdBPS = _reserveTresholdBPS;
     }
 
-    function getHookPermissions()
-        public
-        pure
-        override
-        returns (Hooks.Permissions memory)
-    {
-        return
-            Hooks.Permissions({
-                beforeInitialize: false,
-                afterInitialize: true,
-                beforeAddLiquidity: true, // Don't allow adding liquidity normally
-                afterAddLiquidity: false,
-                beforeRemoveLiquidity: false,
-                afterRemoveLiquidity: false,
-                beforeSwap: true, // Override how swaps are done
-                afterSwap: false,
-                beforeDonate: false,
-                afterDonate: false,
-                beforeSwapReturnDelta: true, // Allow beforeSwap to return a custom delta
-                afterSwapReturnDelta: false,
-                afterAddLiquidityReturnDelta: false,
-                afterRemoveLiquidityReturnDelta: false
-            });
+    function getHookPermissions() public pure override returns (Hooks.Permissions memory) {
+        return Hooks.Permissions({
+            beforeInitialize: false,
+            afterInitialize: true,
+            beforeAddLiquidity: true, // Don't allow adding liquidity normally
+            afterAddLiquidity: false,
+            beforeRemoveLiquidity: false,
+            afterRemoveLiquidity: false,
+            beforeSwap: true, // Override how swaps are done
+            afterSwap: false,
+            beforeDonate: false,
+            afterDonate: false,
+            beforeSwapReturnDelta: true, // Allow beforeSwap to return a custom delta
+            afterSwapReturnDelta: false,
+            afterAddLiquidityReturnDelta: false,
+            afterRemoveLiquidityReturnDelta: false
+        });
     }
 
     // after initialize hook to store the two currencies of the hook
-    function afterInitialize(
-        address,
-        PoolKey calldata key,
-        uint160,
-        int24 tick,
-        bytes calldata
-    ) external override onlyByPoolManager returns (bytes4) {
-        address stableCurrencyAddress = Currency.unwrap(key.currency0) ==
-            address(this)
+    function afterInitialize(address, PoolKey calldata key, uint160, int24 tick, bytes calldata)
+        external
+        override
+        onlyByPoolManager
+        returns (bytes4)
+    {
+        address stableCurrencyAddress = Currency.unwrap(key.currency0) == address(this)
             ? Currency.unwrap(key.currency1)
             : Currency.unwrap(key.currency0);
 
@@ -125,32 +117,21 @@ contract CSMM is BaseHook, LimitedERC20 {
     }
 
     // Disable adding liquidity through the PM
-    function beforeAddLiquidity(
-        address,
-        PoolKey calldata,
-        IPoolManager.ModifyLiquidityParams calldata,
-        bytes calldata
-    ) external pure override returns (bytes4) {
+    function beforeAddLiquidity(address, PoolKey calldata, IPoolManager.ModifyLiquidityParams calldata, bytes calldata)
+        external
+        pure
+        override
+        returns (bytes4)
+    {
         revert AddLiquidityThroughHook();
     }
 
     // Custom add liquidity function
     function addLiquidity(PoolKey calldata key, uint256 amountEach) external {
-        poolManager.unlock(
-            abi.encode(
-                CallbackData(
-                    amountEach,
-                    key.currency0,
-                    key.currency1,
-                    msg.sender
-                )
-            )
-        );
+        poolManager.unlock(abi.encode(CallbackData(amountEach, key.currency0, key.currency1, msg.sender)));
     }
 
-    function _unlockCallback(
-        bytes calldata data
-    ) internal override returns (bytes memory) {
+    function _unlockCallback(bytes calldata data) internal override returns (bytes memory) {
         CallbackData memory callbackData = abi.decode(data, (CallbackData));
 
         // There should be two tokens in the pool
@@ -172,10 +153,8 @@ contract CSMM is BaseHook, LimitedERC20 {
 
         // we have two tokens in the pool, one which would have the hook's address(FIAT) and the other would be the stable currency
         // the stable currency is one where the address is not the same address as the one of the hook
-        Currency stableCurrency = Currency.unwrap(callbackData.currency0) ==
-            address(this)
-            ? callbackData.currency1
-            : callbackData.currency0;
+        Currency stableCurrency =
+            Currency.unwrap(callbackData.currency0) == address(this) ? callbackData.currency1 : callbackData.currency0;
 
         stableCurrency.settle(
             poolManager,
@@ -201,12 +180,11 @@ contract CSMM is BaseHook, LimitedERC20 {
     }
 
     // before swap hook
-    function beforeSwap(
-        address,
-        PoolKey calldata key,
-        IPoolManager.SwapParams calldata params,
-        bytes memory hookData
-    ) external override returns (bytes4, BeforeSwapDelta, uint24) {
+    function beforeSwap(address, PoolKey calldata key, IPoolManager.SwapParams calldata params, bytes memory hookData)
+        external
+        override
+        returns (bytes4, BeforeSwapDelta, uint24)
+    {
         // check if it is a crypto => fiat swap or fiat => crypto swap
         // i.e isFiatToCrypto if it is a zeroForOneSwap and the zero currency is this address of the LD(FIAT represented) token
         // i.e isFiatToCrypto if it is a OneForZeroSwap and the one currency is this address of the LD(FIAT represented) token
@@ -215,37 +193,25 @@ contract CSMM is BaseHook, LimitedERC20 {
             : Currency.unwrap(key.currency1) == address(this);
 
         // get the absolute value of the provided amount
-        int256 amountInOutPositive = params.amountSpecified > 0
-            ? int256(params.amountSpecified)
-            : int256(-params.amountSpecified);
+        int256 amountInOutPositive =
+            params.amountSpecified > 0 ? int256(params.amountSpecified) : int256(-params.amountSpecified);
 
-        (Currency fiat, Currency crypto) = Currency.unwrap(key.currency0) ==
-            address(this)
+        (Currency fiat, Currency crypto) = Currency.unwrap(key.currency0) == address(this)
             ? (key.currency0, key.currency1)
             : (key.currency1, key.currency0);
 
-        (
-            address userAddress,
-            bytes32 fiatCurrencyHash
-        ) = decodeAndVerifyHookData(hookData, uint256(amountInOutPositive));
+        (address userAddress, bytes32 fiatCurrencyHash) =
+            decodeAndVerifyHookData(hookData, uint256(amountInOutPositive));
 
         // define the swap delta variable to be assigned depending on the direction of the swap
         BeforeSwapDelta beforeSwapDelta;
 
         if (isFiatToCrypto) {
-            beforeSwapDelta = _handleFiatToCryptoSwap(
-                userAddress,
-                fiatCurrencyHash,
-                uint256(amountInOutPositive),
-                crypto
-            );
+            beforeSwapDelta =
+                _handleFiatToCryptoSwap(userAddress, fiatCurrencyHash, uint256(amountInOutPositive), crypto);
         } else {
-            beforeSwapDelta = _handleCryptoToFiatSwap(
-                userAddress,
-                fiatCurrencyHash,
-                uint256(amountInOutPositive),
-                crypto
-            );
+            beforeSwapDelta =
+                _handleCryptoToFiatSwap(userAddress, fiatCurrencyHash, uint256(amountInOutPositive), crypto);
         }
 
         // TODO: Fee rebating and stuff and JIT liquidity pools
@@ -261,12 +227,10 @@ contract CSMM is BaseHook, LimitedERC20 {
      * @param stableCurrency The stablecoin currency (e.g., USDC) being swapped to.
      * @return BeforeSwapDelta The delta specifying input/output adjustments for the swap, with 0 LD taken and stablecoin output.
      */
-    function _handleFiatToCryptoSwap(
-        address user,
-        bytes32 fiatCurrencyHash,
-        uint256 amountIn,
-        Currency stableCurrency
-    ) private returns (BeforeSwapDelta) {
+    function _handleFiatToCryptoSwap(address user, bytes32 fiatCurrencyHash, uint256 amountIn, Currency stableCurrency)
+        private
+        returns (BeforeSwapDelta)
+    {
         // if this is a fiat to crypto swap then they must have at least the amount they want to withdraw in the VRLManager contract
         // delta should be equal to the `amountIn`, just to make sure the vrlManager is in charge of the LD minted in the hook contract
         uint256 delta = vrlManager.withdrawVRL(
@@ -279,9 +243,9 @@ contract CSMM is BaseHook, LimitedERC20 {
         mint(delta);
 
         // get the fees
-        uint fee1e6 = getOnrampFees(fiatCurrencyHash, amountIn);
+        uint256 fee1e6 = getOnrampFees(fiatCurrencyHash, amountIn);
         // calculate the amout out
-        uint amountOut = applyFees(amountIn, fee1e6);
+        uint256 amountOut = applyFees(amountIn, fee1e6);
         uint256 feePaid = amountIn - amountOut;
         totalFeesCollected += feePaid;
 
@@ -303,13 +267,12 @@ contract CSMM is BaseHook, LimitedERC20 {
             uint256(amountOut),
             true // `burn` = `true` i.e. we're actually burning ERC-6909 Claim Tokens we minted('take') when we added liquidity
         );
-        return
-            toBeforeSwapDelta(
-                // take 0 LD(FIAT) tokens from the user since it cacnt be transferred anyway
-                int128(0),
-                // give them the amount requested for in stable coins
-                int128(-int256(amountOut))
-            );
+        return toBeforeSwapDelta(
+            // take 0 LD(FIAT) tokens from the user since it cacnt be transferred anyway
+            int128(0),
+            // give them the amount requested for in stable coins
+            int128(-int256(amountOut))
+        );
     }
 
     /**
@@ -321,12 +284,10 @@ contract CSMM is BaseHook, LimitedERC20 {
      * @param stableCurrency The stablecoin currency being swapped from.
      * @return BeforeSwapDelta The delta specifying input/output adjustments for the swap, with stablecoin input and 0 LD output.
      */
-    function _handleCryptoToFiatSwap(
-        address user,
-        bytes32 fiatCurrencyHash,
-        uint256 amountIn,
-        Currency stableCurrency
-    ) private returns (BeforeSwapDelta) {
+    function _handleCryptoToFiatSwap(address user, bytes32 fiatCurrencyHash, uint256 amountIn, Currency stableCurrency)
+        private
+        returns (BeforeSwapDelta)
+    {
         // validate availability of liquidity
         uint256 availableLiquidityForFiat = fiatDelta[fiatCurrencyHash];
         if (availableLiquidityForFiat < uint256(amountIn)) {
@@ -380,28 +341,21 @@ contract CSMM is BaseHook, LimitedERC20 {
         totalFeesCollected += feePaid;
 
         burn(uint256(fiatAmountOut));
-        vrlManager.unlockLiquidityDelta(
-            user,
-            fiatCurrencyHash,
-            uint256(fiatAmountOut)
-        );
+        vrlManager.unlockLiquidityDelta(user, fiatCurrencyHash, uint256(fiatAmountOut));
         totalStableCoinSupply += uint256(cryptoAmountToDeduct);
         // when we take a fiat out of the pool, restart the rebate block counter
         // fiatRebateLastBlock[fiatCurrencyHash] = 0;
         fiatDelta[fiatCurrencyHash] -= uint256(fiatAmountOut);
         // if there is still some fiat, then we reset the rebate counter
         // otherwise set rebate counter to 0
-        fiatRebateLastBlock[fiatCurrencyHash] = fiatDelta[fiatCurrencyHash] > 0
-            ? block.number
-            : 0;
+        fiatRebateLastBlock[fiatCurrencyHash] = fiatDelta[fiatCurrencyHash] > 0 ? block.number : 0;
 
-        return
-            toBeforeSwapDelta(
-                // take 'amountInOutPositive' of cryptoToken from the sender
-                int128(int256(amountIn)),
-                // give them 0 LD tokens back since it cannot be transferred anyways
-                int128(0)
-            );
+        return toBeforeSwapDelta(
+            // take 'amountInOutPositive' of cryptoToken from the sender
+            int128(int256(amountIn)),
+            // give them 0 LD tokens back since it cannot be transferred anyways
+            int128(0)
+        );
     }
 
     /**
@@ -411,10 +365,7 @@ contract CSMM is BaseHook, LimitedERC20 {
      * @param fee1e6 The fee percentage in 1e6 format (e.g., 100000 = 10%).
      * @return The final amount after deducting the fee.
      */
-    function applyFees(
-        uint256 baseAmount,
-        uint256 fee1e6
-    ) public pure returns (uint256) {
+    function applyFees(uint256 baseAmount, uint256 fee1e6) public pure returns (uint256) {
         // Ensure the fee percentage is non-negative
         if (fee1e6 == 0) return baseAmount;
 
@@ -431,9 +382,7 @@ contract CSMM is BaseHook, LimitedERC20 {
      * @param currency The string representation of the currency (e.g., "AUD", "USD").
      * @return bytes32 The hashed value of the currency string.
      */
-    function hashCurrency(
-        string memory currency
-    ) public pure returns (bytes32) {
+    function hashCurrency(string memory currency) public pure returns (bytes32) {
         return keccak256(abi.encode(currency));
     }
 
@@ -446,12 +395,11 @@ contract CSMM is BaseHook, LimitedERC20 {
      * @param signature The cryptographic signature for verifying the swap data.
      * @return bytes The encoded hook data as a bytes array.
      */
-    function encodeHookData(
-        uint256 nonce,
-        address userAddress,
-        bytes32 fiatCurrencyHash,
-        bytes calldata signature
-    ) public pure returns (bytes memory) {
+    function encodeHookData(uint256 nonce, address userAddress, bytes32 fiatCurrencyHash, bytes calldata signature)
+        public
+        pure
+        returns (bytes memory)
+    {
         return abi.encode(nonce, fiatCurrencyHash, signature, userAddress);
     }
 
@@ -463,23 +411,13 @@ contract CSMM is BaseHook, LimitedERC20 {
      * @return address The user address extracted from the decoded data.
      * @return bytes32 The fiat currency hash extracted from the decoded data.
      */
-    function decodeAndVerifyHookData(
-        bytes memory encodedData,
-        uint256 amount
-    ) public returns (address, bytes32) {
-        (
-            uint256 nonce,
-            bytes32 fiatCurrencyHash,
-            bytes memory signature,
-            address userAddress
-        ) = abi.decode(encodedData, (uint256, bytes32, bytes, address));
+    function decodeAndVerifyHookData(bytes memory encodedData, uint256 amount) public returns (address, bytes32) {
+        (uint256 nonce, bytes32 fiatCurrencyHash, bytes memory signature, address userAddress) =
+            abi.decode(encodedData, (uint256, bytes32, bytes, address));
         require(!usedSignatures[signature], "USED_SIGNATURE");
 
         bytes32 dataHash = generateSignaturePayload(nonce, amount);
-        require(
-            SignatureLib.verify(userAddress, dataHash, signature),
-            "INVALID_SIGNATURE"
-        );
+        require(SignatureLib.verify(userAddress, dataHash, signature), "INVALID_SIGNATURE");
         usedSignatures[signature] = true;
 
         return (userAddress, fiatCurrencyHash);
@@ -492,10 +430,7 @@ contract CSMM is BaseHook, LimitedERC20 {
      * @param amount The swap amount to include in the payload.
      * @return bytes32 The hashed payload for signature verification.
      */
-    function generateSignaturePayload(
-        uint256 nonce,
-        uint256 amount
-    ) public pure returns (bytes32) {
+    function generateSignaturePayload(uint256 nonce, uint256 amount) public pure returns (bytes32) {
         return keccak256(abi.encodePacked(nonce, amount));
     }
 
@@ -511,26 +446,20 @@ contract CSMM is BaseHook, LimitedERC20 {
      * @param withdrawAmount The amount of USDC being withdrawn in the swap.
      * @return uint256 The total fee in 1e6 scale, including base and dynamic threshold components.
      */
-    function getOnrampFees(
-        bytes32 currencyHash,
-        uint256 withdrawAmount
-    ) public returns (uint256) {
+    function getOnrampFees(bytes32 currencyHash, uint256 withdrawAmount) public returns (uint256) {
         // get base fee from external contract
         uint256 baseFee = feeConfigManager.getBaseFee(currencyHash);
         uint256 stableTokenDecimals = 10 ** stableToken.decimals();
-        uint256 decimalAdjustedRebaseBuffer = rebateBufferTreshold *
-            stableTokenDecimals;
+        uint256 decimalAdjustedRebaseBuffer = rebateBufferTreshold * stableTokenDecimals;
 
         // adjust the base fee based on net fees collected
 
         // Adjustment based on fees vs rebates
-        int256 netFeeBalance = int256(totalFeesCollected) -
-            int256(totalRebatesPaid);
+        int256 netFeeBalance = int256(totalFeesCollected) - int256(totalRebatesPaid);
         if (netFeeBalance < 0) {
             // scale the netfee down to a unit token by divinding by the decimal place
             // then add an extra fee per deficit balance
-            uint256 adjustment = (uint256(-netFeeBalance) /
-                stableTokenDecimals) * rebatePerUnitBalanceShort; // +10 per 1 USDC surplus
+            uint256 adjustment = (uint256(-netFeeBalance) / stableTokenDecimals) * rebatePerUnitBalanceShort; // +10 per 1 USDC surplus
             baseFee += adjustment;
         } else if (uint256(netFeeBalance) > decimalAdjustedRebaseBuffer) {
             // Reduce by 50% if we have recuperated our loses and fees + buffer > rebates
@@ -538,9 +467,7 @@ contract CSMM is BaseHook, LimitedERC20 {
         }
 
         // check if it has gotten below the treshold to apply treshold fee
-        uint256 dynamicTresholdFee = calculateHookDynamicTresholdFee(
-            withdrawAmount
-        );
+        uint256 dynamicTresholdFee = calculateHookDynamicTresholdFee(withdrawAmount);
 
         // for a FIAT -> USDC swap
         // total fee is baseFee + dynamic treshold fee
@@ -553,16 +480,10 @@ contract CSMM is BaseHook, LimitedERC20 {
      * @param withdrawAmount The amount of USDC being withdrawn in the swap.
      * @return fee1e6 The dynamic threshold fee in 1e6 scale.
      */
-    function calculateHookDynamicTresholdFee(
-        uint256 withdrawAmount
-    ) public view returns (uint256 fee1e6) {
-        return
-            calculateDynamicTresholdFee(
-                withdrawAmount,
-                totalStableCoinSupply,
-                initialStableCoinDeposit,
-                reserveTresholdBPS
-            );
+    function calculateHookDynamicTresholdFee(uint256 withdrawAmount) public view returns (uint256 fee1e6) {
+        return calculateDynamicTresholdFee(
+            withdrawAmount, totalStableCoinSupply, initialStableCoinDeposit, reserveTresholdBPS
+        );
     }
 
     /**
@@ -574,12 +495,11 @@ contract CSMM is BaseHook, LimitedERC20 {
      * @param tauBps The reserve threshold in basis points (bps).
      * @return fee1e6 The dynamic fee in 1e6 scale, ranging from 0 to 1,000,000.
      */
-    function calculateDynamicTresholdFee(
-        uint256 usdcAmount,
-        uint256 currentUSDC,
-        uint256 initialUSDC,
-        uint256 tauBps
-    ) public pure returns (uint256 fee1e6) {
+    function calculateDynamicTresholdFee(uint256 usdcAmount, uint256 currentUSDC, uint256 initialUSDC, uint256 tauBps)
+        public
+        pure
+        returns (uint256 fee1e6)
+    {
         uint256 postSwapUSDC = currentUSDC - usdcAmount;
         uint256 threshold = (tauBps * initialUSDC) / 10000; // tauBps still in bps
 
@@ -603,10 +523,7 @@ contract CSMM is BaseHook, LimitedERC20 {
     // 3. Volatility Fee: On USDC-to-fiat for FX risk (e.g., 0.5 USDC on 100 USDC if AUD drops 5%).
     // 4. Priority Fee: Trader pays extra for JIT speed (e.g., 0.5 USDC on 100 USDC when LD = 0).
     // 5. Rebate: Discount on USDC-to-fiat, max 80% of base (e.g., 0.08 USDC back on 100 USDC swap).
-    function getOffRampFees(
-        bytes32 currencyHash,
-        uint256 withdrawAmount
-    ) public returns (uint256) {
+    function getOffRampFees(bytes32 currencyHash, uint256 withdrawAmount) public returns (uint256) {
         if (withdrawAmount == 0) {
             revert CannotWithdrawZero();
         }
@@ -622,9 +539,7 @@ contract CSMM is BaseHook, LimitedERC20 {
      * @param currencyHash The hash of the fiat currency involved in the swap.
      * @return uint256 The rebate fee in 1e6 scale, limited to MAX_REBATE (800,000).
      */
-    function calculateRebateFee(
-        bytes32 currencyHash
-    ) public view returns (uint256) {
+    function calculateRebateFee(bytes32 currencyHash) public view returns (uint256) {
         // Start with base
         uint256 rebate1e6 = 0;
         uint256 decimals = 10 ** stableToken.decimals();

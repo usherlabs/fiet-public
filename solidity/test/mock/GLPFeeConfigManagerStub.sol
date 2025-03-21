@@ -13,7 +13,7 @@ contract GLPFeeConfigManagerStub {
      *      for a given currency scaled by 1e6
      * @param currencyHash The currency we want to get the fees for
      */
-    function getBaseFee(bytes32 currencyHash) external pure returns(uint256){
+    function getBaseFee(bytes32 currencyHash) external pure returns (uint256) {
         return 10000; //amounts to 1%
     }
 }

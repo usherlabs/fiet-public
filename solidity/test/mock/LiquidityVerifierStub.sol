@@ -6,9 +6,7 @@ import {VRLManagerStub} from "./VRLManagerStub.sol";
 contract LiquidityVerifierStub {
     VRLManagerStub vrlManager;
 
-    constructor(
-        VRLManagerStub _vrlManager
-    ) {
+    constructor(VRLManagerStub _vrlManager) {
         vrlManager = _vrlManager;
     }
 
@@ -21,9 +19,7 @@ contract LiquidityVerifierStub {
         address caller = msg.sender;
 
         // mock verification process that returns the currency and dollar denominated amount
-        (string memory currency, string memory stringAmount) = splitString(
-            proof
-        );
+        (string memory currency, string memory stringAmount) = splitString(proof);
         uint256 amount = parseString(stringAmount);
         bytes32 currencyHash = keccak256(abi.encode(currency));
 
@@ -33,27 +29,22 @@ contract LiquidityVerifierStub {
     }
 
     // Split a string into two parts i.e "NGN-50" => ["NGN", "50"]
-    function splitString(
-        string memory input
-    ) public pure returns (string memory, string memory) {
+    function splitString(string memory input) public pure returns (string memory, string memory) {
         // Convert string to bytes for easier manipulation
         bytes memory inputBytes = bytes(input);
         bytes memory part1 = new bytes(3); // For "NGN"
         bytes memory part2 = new bytes(inputBytes.length - 4); // For "xxx" (adjust length dynamically)
 
         // Check if the string has the expected format (at least 4 chars with a hyphen)
-        require(
-            inputBytes.length >= 4 && inputBytes[3] == "-",
-            "Invalid format"
-        );
+        require(inputBytes.length >= 4 && inputBytes[3] == "-", "Invalid format");
 
         // Extract currenccyCode (first 3 characters) e.g "NGN"
-        for (uint i = 0; i < 3; i++) {
+        for (uint256 i = 0; i < 3; i++) {
             part1[i] = inputBytes[i];
         }
 
         // Extract "xxx" (everything after the hyphen)
-        for (uint i = 4; i < inputBytes.length; i++) {
+        for (uint256 i = 4; i < inputBytes.length; i++) {
             part2[i - 4] = inputBytes[i];
         }
 

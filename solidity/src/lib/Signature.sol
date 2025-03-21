@@ -28,11 +28,7 @@ library SignatureLib {
      * @param signature The 65-byte signature (r, s, v) produced off-chain
      * @return bool True if the signature is valid (signer matches recovered address), false otherwise
      */
-    function verify(
-        address signer,
-        bytes32 message,
-        bytes memory signature
-    ) internal pure returns (bool) {
+    function verify(address signer, bytes32 message, bytes memory signature) internal pure returns (bool) {
         (bytes32 r, bytes32 s, uint8 v) = splitSignature(signature);
         bytes32 ethSignedMessageHash = getEthSignedMessageHash(message);
 
@@ -49,9 +45,7 @@ library SignatureLib {
      * @return s The second 32 bytes of the signature
      * @return v The recovery byte (27 or 28 typically)
      */
-    function splitSignature(
-        bytes memory sig
-    ) internal pure returns (bytes32 r, bytes32 s, uint8 v) {
+    function splitSignature(bytes memory sig) internal pure returns (bytes32 r, bytes32 s, uint8 v) {
         require(sig.length == 65, "invalid signature length");
 
         assembly {
@@ -77,18 +71,10 @@ library SignatureLib {
      * @param _messageHash The original message hash (keccak256) to be prefixed
      * @return bytes32 The Ethereum signed message hash ready for ecrecover
      */
-    function getEthSignedMessageHash(
-        bytes32 _messageHash
-    ) internal pure returns (bytes32) {
+    function getEthSignedMessageHash(bytes32 _messageHash) internal pure returns (bytes32) {
         // Signature is produced by signing a keccak256 hash with the format:
         // "\x19Ethereum Signed Message:\n" + len(msg) + msg
         // Here, we use a fixed length of 32 bytes for the message hash
-        return
-            keccak256(
-                abi.encodePacked(
-                    "\x19Ethereum Signed Message:\n32",
-                    _messageHash
-                )
-            );
+        return keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", _messageHash));
     }
 }

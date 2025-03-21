@@ -27,21 +27,14 @@ contract LimitedERC20 is ERC20 {
     /// @param name The name of the token
     /// @param symbol The symbol/ticker of the token
     /// @param decimals The number of decimal places for token amounts
-    constructor(
-        string memory name,
-        string memory symbol,
-        uint8 decimals
-    ) ERC20(name, symbol, decimals) {}
+    constructor(string memory name, string memory symbol, uint8 decimals) ERC20(name, symbol, decimals) {}
 
     /// @notice Transfers tokens to a specified address
     /// @dev Overrides ERC20.transfer with whitelist restriction
     /// @param to The recipient address (must be this contract)
     /// @param amount The amount of tokens to transfer
     /// @return bool indicating success of the transfer
-    function transfer(
-        address to,
-        uint256 amount
-    ) public virtual override onlyWhitelisted(to) returns (bool) {
+    function transfer(address to, uint256 amount) public virtual override onlyWhitelisted(to) returns (bool) {
         return super.transfer(to, amount);
     }
 
@@ -51,11 +44,13 @@ contract LimitedERC20 is ERC20 {
     /// @param to The recipient address (must be this contract)
     /// @param amount The amount of tokens to transfer
     /// @return bool indicating success of the transfer
-    function transferFrom(
-        address from,
-        address to,
-        uint256 amount
-    ) public virtual override onlyWhitelisted(to) returns (bool) {
+    function transferFrom(address from, address to, uint256 amount)
+        public
+        virtual
+        override
+        onlyWhitelisted(to)
+        returns (bool)
+    {
         return super.transferFrom(from, to, amount);
     }
 
