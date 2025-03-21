@@ -1,6 +1,7 @@
 # Compiler files
 cache/
 out/
+.forge-snapshots
 
 # Ignores development broadcast logs
 !/broadcast

@@ -9,11 +9,11 @@ env:
   FOUNDRY_PROFILE: ci
 
 jobs:
-  check:
+  solidity:
     strategy:
       fail-fast: true
 
-    name: Foundry project
+    name: Solidity Test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -41,3 +41,21 @@ jobs:
         run: forge test -vvv
         working-directory: solidity
         id: test
+
+  foundry:
+    strategy:
+      fail-fast: true
+
+    name: Run Cargo Tests
+    runs-on: ubuntu-latest
+
+    steps:
+        - name: Checkout repository
+          uses: actions/checkout@v4
+
+        - name: Install Rust
+          uses: dtolnay/rust-toolchain@stable
+
+        - name: Run tests for one
+          run: cargo test --lib
+          working-directory: stylus/fiet_stake
