@@ -102,16 +102,16 @@ impl FietStake {
         let stake_token_address = self.contracts.stake_token.get();
 
         // perform a transfer from
-        let token = IERC20::new(stake_token_address);
-        let response = token.transfer_from(&mut *self, sender, self_address, amount)?;
-
-        assert!(response);
-
         // update the balance of the user in the contract
         let existing_balance = self.balance_of.get(sender);
         self.balance_of
             .setter(sender)
             .set(existing_balance + amount);
+
+        let token = IERC20::new(stake_token_address);
+        let response = token.transfer_from(self, sender, self_address, amount)?;
+
+        assert!(response);
 
         return Ok(());
     }
@@ -246,12 +246,14 @@ impl FietStake {
 #[cfg(test)]
 mod test {
     use super::*;
+    use alloy_primitives::{address, B256};
+    use fiet_token::{FietToken, StylusTokenParams};
     use stylus_sdk::testing::*;
 
     #[test]
     fn test_can_initialize_staking_contract() {
         let vm = TestVM::default();
-        let mut contract = FietStake::from(&vm);
+        let mut stake_contract = FietStake::from(&vm);
 
         // define and mock several variables
         // set contracts to call as
@@ -259,10 +261,10 @@ mod test {
         let stake_token = sender_address.clone();
 
         // initialize the contract
-        contract.initialize(stake_token).unwrap();
+        stake_contract.initialize(stake_token).unwrap();
 
-        let owner = contract.owner.get();
-        let initialized = contract.initialized.get();
+        let owner = stake_contract.owner.get();
+        let initialized = stake_contract.initialized.get();
 
         assert!(initialized);
         assert_eq!(owner, sender_address);

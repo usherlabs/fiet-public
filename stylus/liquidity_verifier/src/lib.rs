@@ -91,6 +91,13 @@ impl LiquidityManager {
         currency: String,
         amount: U256,
     ) -> Result<(), Vec<u8>> {
+        let sender = self.vm().msg_sender();
+
+        // can only be called by owner
+        if sender != self.owner.get() {
+            return Err("CALLER IS NOT OWNER".into());
+        }
+
         let vrl_manager = IVRLManager::new(self.contracts.vrl_manager.get());
 
         let currency_hash = keccak(currency.as_bytes().to_vec());
