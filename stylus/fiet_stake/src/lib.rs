@@ -247,7 +247,6 @@ impl FietStake {
 mod test {
     use super::*;
     use alloy_primitives::{address, B256};
-    use fiet_token::{FietToken, StylusTokenParams};
     use stylus_sdk::testing::*;
 
     #[test]
