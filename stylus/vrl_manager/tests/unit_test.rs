@@ -11,15 +11,15 @@ mod test {
         let mut contract = VRLManager::from(&vm);
 
         // define and mock several variables
-        // set contracts to call as
         let sender_address = vm.msg_sender();
         let liquidity_verifier = sender_address.clone();
+        let delta_manager = sender_address.clone();
         let uniswap_hook = sender_address.clone();
         let decimals = U256::from(6);
 
         // initialize the contract
         contract
-            .initialize(liquidity_verifier, uniswap_hook, decimals)
+            .initialize(liquidity_verifier, delta_manager, uniswap_hook, decimals)
             .unwrap();
 
         let contract_decimals = contract.get_decimals();
@@ -34,13 +34,14 @@ mod test {
         let vm = TestVM::default();
         let mut contract = VRLManager::from(&vm);
 
-        let sender_address = vm.contract_address();
+        let sender_address = vm.msg_sender();
+        let delta_manager = vm.msg_sender();
         let decimals = U256::from(6);
 
         // initialize contract
         // set peripheral contract address to the sender so that we can call the restricted functions
         contract
-            .initialize(sender_address, sender_address, decimals)
+            .initialize(sender_address, delta_manager, sender_address, decimals)
             .unwrap();
 
         // Deposit some fiat into the contract
@@ -88,13 +89,15 @@ mod test {
         let vm = TestVM::default();
         let mut contract = VRLManager::from(&vm);
 
-        let sender_address = vm.contract_address();
+        let sender_address = vm.msg_sender();
+        let delta_manager = vm.msg_sender();
+
         let decimals = U256::from(6);
 
         // initialize contract
         // set peripheral contract address to the sender so that we can call the restricted functions
         contract
-            .initialize(sender_address, sender_address, decimals)
+            .initialize(sender_address, delta_manager, sender_address, decimals)
             .unwrap();
         // make a deposit
 
@@ -134,13 +137,14 @@ mod test {
         let vm = TestVM::default();
         let mut contract = VRLManager::from(&vm);
 
-        let sender_address = vm.contract_address();
+        let sender_address = vm.msg_sender();
+        let delta_manager = vm.msg_sender();
         let decimals = U256::from(6);
 
         // initialize contract
         // set peripheral contract address to the sender so that we can call the restricted functions
         contract
-            .initialize(sender_address, sender_address, decimals)
+            .initialize(sender_address, delta_manager, sender_address, decimals)
             .unwrap();
         // make a deposit
 

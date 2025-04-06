@@ -4,3 +4,9 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+alloy-primitives = { version = "=0.8.20", default-features = false, features = [
+    "tiny-keccak",
+] }
+alloy-sol-types = "=0.8.20"
+mini-alloc = "0.8.3"
+stylus-sdk = "0.8.3"

@@ -34,6 +34,7 @@ sol_storage! {
 
     pub struct Contracts{
         address liquidity_verifier;
+        address delta_manager;
         address uniswap_hook;
     }
 }
@@ -50,6 +51,7 @@ impl VRLManager {
     pub fn initialize(
         &mut self,
         liquidity_verifier: Address,
+        delta_manager: Address,
         uniswap_hook: Address,
         decimals: U256,
     ) -> Result<(), Vec<u8>> {
@@ -59,6 +61,7 @@ impl VRLManager {
         // set the addresses of the contracts to be called
         self.contracts.liquidity_verifier.set(liquidity_verifier);
         self.contracts.uniswap_hook.set(uniswap_hook);
+        self.contracts.delta_manager.set(delta_manager);
         self.decimals.set(decimals);
 
         // set the initialized value to be true to prevent another reinitialization
@@ -89,8 +92,8 @@ impl VRLManager {
         amount: U256,
     ) -> Result<(), Vec<u8>> {
         // this function can only be called by the liquidity verifier
-        if self.vm().msg_sender() == self.contracts.liquidity_verifier.get() {
-            return Err("Only liquidity verifier can call".into());
+        if self.vm().msg_sender() != self.contracts.liquidity_verifier.get() {
+            return Err("INVALID CALLER".into());
         }
         let mut owner_balances = self.balance_of.setter(owner);
         let mut owner_currency_balance = owner_balances.setter(currency_hash);
@@ -149,15 +152,19 @@ impl VRLManager {
         delta: U256,
     ) -> Result<U256, Vec<u8>> {
         let amount_locked = delta;
+        let sender = self.vm().msg_sender();
+
         // this function can only be called by the uniswap hook contract
-        if self.vm().msg_sender() == self.contracts.uniswap_hook.get() {
-            return Err("Only liquidity verifier can call".into());
+        if sender != self.contracts.uniswap_hook.get() {
+            return Err("INVALID CALLER".into());
         }
 
         // This function should only be callable by the hook when locking VRL
         let user_currency_balance = self.balance_of.get(owner).get(currency_hash);
 
-        assert!(user_currency_balance >= delta, "INSUFFICIENT_BALANCE");
+        if delta > user_currency_balance {
+            return Err("INSUFFICIENT_BALANCE".into());
+        };
         let new_user_currency_balance = user_currency_balance - delta;
 
         // update the locked VRL by delta
@@ -193,11 +200,18 @@ impl VRLManager {
         delta: U256,
     ) -> Result<U256, Vec<u8>> {
         // This function should only be callable by the hook when locking VRL
+        let sender = self.vm().msg_sender();
+
+        // this function can only be called by the uniswap hook contract
+        if sender != self.contracts.uniswap_hook.get() {
+            return Err("INVALID CALLER".into());
+        }
+
         let amount_unlocked = delta;
-        assert!(
-            self.locked_vrl.get() >= amount_unlocked,
-            "INSUFFICIENT_BALANCE"
-        );
+        let locked_vrl = self.locked_vrl.get();
+        if amount_unlocked > locked_vrl {
+            return Err("INSUFFICIENT_BALANCE".into());
+        };
 
         // calculate the user's new balance
         let new_user_currency_balance =
@@ -208,13 +222,46 @@ impl VRLManager {
         let mut user_balance_setter = user_balance_setter.setter(currency_hash);
 
         // update the locked VRL by delta
-        self.locked_vrl.set(self.locked_vrl.get() - amount_unlocked);
+        self.locked_vrl.set(locked_vrl - amount_unlocked);
 
         // update the balance of the owner
         user_balance_setter.set(new_user_currency_balance);
 
         // return the amount locked
         return Ok(amount_unlocked);
+    }
+
+    pub fn burn_vrl_for_delta(
+        &mut self,
+        owner: Address,
+        currency_hash: FixedBytes<32>,
+        delta: U256,
+    ) -> Result<U256, Vec<u8>> {
+        let burn_amount = delta;
+        let sender = self.vm().msg_sender();
+
+        // this function can only be called by the delta manager contract
+        // when exchanging vrl for delta, or expressing vrl as delta
+        if sender != self.contracts.delta_manager.get() {
+            return Err("INVALID CALLER".into());
+        }
+        let user_currency_balance = self.balance_of.get(owner).get(currency_hash);
+
+        if delta > user_currency_balance {
+            return Err("INSUFFICIENT_BALANCE".into());
+        };
+
+        let new_user_currency_balance = user_currency_balance - delta;
+
+        // update the locked VRL by delta
+        let mut user_balance_setter = self.balance_of.setter(owner);
+        let mut user_balance_setter = user_balance_setter.setter(currency_hash);
+
+        // update the balance of the owner
+        user_balance_setter.set(new_user_currency_balance);
+
+        // return the amount locked
+        return Ok(burn_amount);
     }
 
     /// Getter for decimal

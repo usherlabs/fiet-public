@@ -12,9 +12,12 @@ mod test {
         // set contracts to call as
         let sender_address = vm.msg_sender();
         let vrl_manager_address = sender_address.clone();
+        let delta_manager_address = sender_address.clone();
 
         // initialize the contract
-        contract.initialize(vrl_manager_address).unwrap();
+        contract
+            .initialize(vrl_manager_address, delta_manager_address)
+            .unwrap();
 
         let owner = contract.owner.get();
         let initialized = contract.initialized.get();
