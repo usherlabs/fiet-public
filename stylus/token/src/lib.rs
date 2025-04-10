@@ -70,8 +70,4 @@ impl FietToken {
         self.erc20.burn(self.vm().msg_sender(), value)?;
         Ok(())
     }
-
-    pub fn sample(&mut self) -> String{
-        return "work".to_string();
-    }
 }

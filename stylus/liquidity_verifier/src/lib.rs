@@ -1,13 +1,13 @@
-// SPDX-License-Identifier: MIT
-// Copyright (c) 2025, [Your Name or Organization]
-
 //! LiquidityManager - Signals Liquidity to VRLManager
 //!
 //! This contract signals verified liquidity to the `VRLManager` contract on Arbitrum Stylus.
 //! It is designed to work with a trusted authority or future ZK-proof integration, initializing
 //! with a `VRLManager` address and facilitating liquidity deposits.
 
-// Use this contract to signal some liquidity to the VRL manager
+// Use this contract to signal some liquidity to the VRL manager and some delta to the delta manager
+// It is responsible for injecting verified liquidity into the protocol
+// for every positive value added a negative value is assigned to maintain a zero sum
+// i.e during a deposit a positive value(VRL) goes to the user and the negative(delta) goes to the custodian
 
 #![cfg_attr(not(any(test, feature = "export-abi")), no_main)]
 extern crate alloc;

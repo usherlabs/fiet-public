@@ -27,10 +27,11 @@ sol_interface! {
     interface IERC20 {
         function transferFrom(address from, address to, uint256 value) external returns (bool);
         function transfer(address to, uint256 value) external returns (bool);
+        function balanceOf(address owner) external view returns (uint256);
     }
 
     interface IDeltaManager{
-        function getParticipantStatus(address owner) external returns (bool);
+        function isActiveParticipant(address owner) external returns (bool);
     }
 }
 
@@ -137,6 +138,18 @@ impl FietStake {
         return Ok(());
     }
 
+    /// Getter for the is_admin variable. returns the boolean value indicating if the provided address is an admin.
+    ///
+    /// # Arguments
+    /// * `admin_address` - The address we want to check the admin status of
+    ///
+    /// # Returns
+    /// * `Ok(())` on success.
+    /// * `Err(Vec<u8>)` if the caller is not the owner.
+    pub fn get_admin(&mut self, admin_address: Address) -> bool {
+        return self.is_admin.get(admin_address);
+    }
+
     /// Allows users to stake tokens into the contract.
     ///
     /// # Arguments
@@ -174,14 +187,14 @@ impl FietStake {
     /// * `Err(Vec<u8>)` if the amount is zero or the user has insufficient balance.
     pub fn unstake(&mut self, amount: U256) -> Result<(), Vec<u8>> {
         let sender = self.vm().msg_sender();
-        if amount < U256::from(0) {
+        if amount == U256::ZERO {
             return Err("INVALID STAKE AMOUNT".into());
         }
 
-        // can only unstake if participant delta is zero then deactivate the participant's delta
+        // can only unstake if participant is not active i.e if the delta is zero
         let delta_manager_address = self.contracts.delta_manager.get();
         let is_active =
-            IDeltaManager::new(delta_manager_address).get_participant_status(&mut *self, sender)?;
+            IDeltaManager::new(delta_manager_address).is_active_participant(&mut *self, sender)?;
 
         if is_active {
             return Err("PARTICIPANT STILL ACTIVE".into());
@@ -224,7 +237,7 @@ impl FietStake {
         let contract_address = self.vm().contract_address();
 
         // can only be called by admin
-        if self.is_admin.get(sender) {
+        if !self.is_admin.get(sender) {
             return Err("CALLER IS NOT ADMIN".into());
         }
 
@@ -232,7 +245,8 @@ impl FietStake {
         let user_stake = self.balance_of.get(owner);
 
         // get the amount from it to slash
-        let amount_to_slash = (user_stake * bps) / U256::from(10_000);
+        let amount_to_slash = self.get_slash_amount(bps);
+
         self.balance_of
             .setter(owner)
             .set(user_stake - amount_to_slash);
@@ -240,12 +254,27 @@ impl FietStake {
         // assign slashed amount to the contract
         let contract_balance = self.balance_of.get(contract_address);
         self.balance_of
-            .setter(owner)
+            .setter(contract_address)
             .set(contract_balance + amount_to_slash);
 
         return Ok(());
     }
 
+    /// Slashes a percentage of a user's staked balance.
+    /// This method offloads the computation of the bps value from target and delta amount
+    /// in order to reduce the size of the contract which calls it
+    ///
+    /// This function allows an admin to penalize a user by reducing their staked balance
+    /// based on the given `bps` (basis points). The slashed amount is added to the
+    /// contract's balance.
+    ///
+    /// # Arguments
+    /// * `owner` - The address of the user whose stake is being slashed.
+    /// * `bps` - The percentage (in basis points) of the user's stake to slash (1 bps = 0.01%).
+    ///
+    /// # Returns
+    /// * `Ok(())` if the slash is successful.
+    /// * `Err(Vec<u8>)` if the caller is not an admin.
     pub fn slash_by_amount(
         &mut self,
         owner: Address,
@@ -274,6 +303,7 @@ impl FietStake {
         let sender = self.vm().msg_sender();
         let contract_address = self.vm().contract_address();
         let stake_token_address = self.contracts.stake_token.get();
+        let token_contract = IERC20::new(stake_token_address);
 
         // can only be called by owner
         if sender != self.owner.get() {
@@ -281,7 +311,7 @@ impl FietStake {
         }
 
         // assert there is enough balance
-        let contract_balance = self.balance_of.get(contract_address);
+        let contract_balance = token_contract.balance_of(&mut *self, contract_address)?;
         if contract_balance < amount {
             return Err("INSUFFICIENT BALANCE".into());
         }
@@ -292,7 +322,7 @@ impl FietStake {
             .set(contract_balance - amount);
 
         // perform transfer operation and send to specified address
-        let valid = IERC20::new(stake_token_address).transfer(&mut *self, to, amount)?;
+        let valid = token_contract.transfer(&mut *self, to, amount)?;
         assert!(valid);
 
         return Ok(());
@@ -310,8 +340,19 @@ impl FietStake {
     }
 
     /// Gets the staked token registered in this contract
+    ///
+    /// # Returns
+    /// * The address of the staked token.
     pub fn get_staked_token(&mut self) -> Address {
         return self.contracts.stake_token.get();
+    }
+
+    /// Getter for the min stake amount
+    ///
+    /// # Returns
+    /// * The minimum stake allowed in this contract.
+    pub fn get_min_stake(&self) -> U256 {
+        return self.min_stake.get();
     }
 
     /// Returns is a particular address is sufficiently staked.
@@ -325,6 +366,15 @@ impl FietStake {
         return self.get_balance(owner) >= self.min_stake.get();
     }
 
+    /// Calculates the BPS to be slashed, the higher the target amount.
+    /// The higher the 'delta_amount(owed amount)' compared to the `target_amount(rfs_amount)` the higher the slash value.
+    /// it is worth noting that the BPS is relative to the minimum staked amount not the user's balance/
+    ///
+    /// # Arguments
+    /// * `owner` - The address whose balance is being queried.
+    ///
+    /// # Returns
+    /// * A boolean indicating if this user is sufficiently staked.
     pub fn get_slash_bps(&self, target_amount: U256, delta_amount: I256) -> Result<U256, Vec<u8>> {
         // at delta_amount == target_amount
         // the stake is slashed by 50%
@@ -335,6 +385,15 @@ impl FietStake {
         let slash_bps = (delta_amount / (delta_amount + target_amount)) * one_bps_fraction;
 
         return Ok(slash_bps);
+    }
+
+    pub fn get_slash_amount(&self, bps: U256) -> U256 {
+        let min_stake = self.min_stake.get();
+
+        // get the amount from it to slash
+        let amount_to_slash = (min_stake * bps) / U256::from(10_000);
+
+        return amount_to_slash;
     }
 }
 

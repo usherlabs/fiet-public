@@ -6,7 +6,7 @@
 
 # Load variables from .env file
 set -o allexport
-source scripts/.env
+source .env
 set +o allexport
 
 
@@ -17,6 +17,9 @@ FILE_KEY="deployed_contract_address"
 VRL_MANAGER_ADDRESS=$(cat "stylus/vrl_manager/$FILE_KEY")
 LIQUIDITY_VERIFIER_ADDRESS=$(cat "stylus/liquidity_verifier/$FILE_KEY")
 FIET_TOKEN_ADDRESS=$(cat "stylus/token/$FILE_KEY")
+FIET_STAKING_ADDRESS=$(cat "stylus/fiet_stake/$FILE_KEY")
+DELTA_MANAGER_ADDRESS=$(cat "stylus/delta_manager/$FILE_KEY")
+SETTLEMENT_MANAGER=$(cat "stylus/settlement_manager/$FILE_KEY")
 
 # -------------- #
 # Initial checks #
@@ -47,7 +50,7 @@ echo "------------------------------------ #"
 # define deployment variables
 UNI_HOOK_ADDRESS=$ADDRESS
 VRL_DECIMALS="6"
-cast send --rpc-url $RPC_URL --private-key $PRIVATE_KEY $VRL_MANAGER_ADDRESS "initialize(address, address, uint256)" "$LIQUIDITY_VERIFIER_ADDRESS" "$UNI_HOOK_ADDRESS" "$VRL_DECIMALS"
+cast send --rpc-url $RPC_URL --private-key $PRIVATE_KEY $VRL_MANAGER_ADDRESS "initialize(address, address, address, uint256)" "$LIQUIDITY_VERIFIER_ADDRESS" "$DELTA_MANAGER_ADDRESS" "$UNI_HOOK_ADDRESS" "$VRL_DECIMALS"
 
 
 # ----------------------------------------- #
@@ -58,7 +61,7 @@ echo "-------------------------------------------- #"
 echo "initialising Liquidity Verifier contract     #"
 echo "-------------------------------------------- #"
 
-cast send --rpc-url $RPC_URL --private-key $PRIVATE_KEY $LIQUIDITY_VERIFIER_ADDRESS "initialize(address)" "$VRL_MANAGER_ADDRESS"
+cast send --rpc-url $RPC_URL --private-key $PRIVATE_KEY $LIQUIDITY_VERIFIER_ADDRESS "initialize(address, address)" "$VRL_MANAGER_ADDRESS" "$DELTA_MANAGER_ADDRESS"
 
 
 # ----------------------------------------- #
@@ -70,3 +73,35 @@ echo "initialising Fiet Token contract             #"
 echo "-------------------------------------------- #"
 
 cast send --rpc-url $RPC_URL --private-key $PRIVATE_KEY $FIET_TOKEN_ADDRESS "initialize()"
+
+# ----------------------------------------- #
+# initialization of FIET Staking Contract     #
+# ----------------------------------------- #
+echo ""
+echo "-------------------------------------------- #"
+echo "initialising Fiet Staking contract           #"
+echo "-------------------------------------------- #"
+
+MIN_STAKE=1000000000000000000 #10e18
+cast send --rpc-url $RPC_URL --private-key $PRIVATE_KEY $FIET_STAKING_ADDRESS "initialize(address, address, address, uint256)" "$FIET_TOKEN_ADDRESS" "$DELTA_MANAGER_ADDRESS" "$SETTLEMENT_MANAGER" "$MIN_STAKE"
+
+# ------------------------------------------------ #
+# initialization of the Delta Manager Contract     #
+# ------------------------------------------------ #
+echo ""
+echo "-------------------------------------------- #"
+echo "initialising the Delta Manager Contract      #"
+echo "-------------------------------------------- #"
+
+cast send --rpc-url $RPC_URL --private-key $PRIVATE_KEY $DELTA_MANAGER_ADDRESS "initialize(address, address, address, address)" "$LIQUIDITY_VERIFIER_ADDRESS" "$FIET_STAKING_ADDRESS" "$VRL_MANAGER_ADDRESS" "$SETTLEMENT_MANAGER"
+
+# ------------------------------------------------ #
+# initialization of the Settlement Manager Contract     #
+# ------------------------------------------------ #
+echo ""
+echo "-------------------------------------------- #"
+echo "initialising the Settlement Manager Contract      #"
+echo "-------------------------------------------- #"
+
+TTL=84600
+cast send --rpc-url $RPC_URL --private-key $PRIVATE_KEY $SETTLEMENT_MANAGER "initialize(address, address, uint256)" "$DELTA_MANAGER_ADDRESS" "$FIET_STAKING_ADDRESS" "$TTL"

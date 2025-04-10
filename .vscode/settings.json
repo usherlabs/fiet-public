@@ -7,6 +7,7 @@
     "stylus/library/Cargo.toml",
     "stylus/fiet_stake/Cargo.toml",
     "stylus/delta_manager/Cargo.toml",
-    "stylus/settlement/Cargo.toml",
+    "stylus/settlement_manager/Cargo.toml",
+    "tests/integration/Cargo.toml"
   ]
 }
