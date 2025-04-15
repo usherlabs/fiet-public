@@ -1,7 +1,7 @@
 #![cfg_attr(not(any(test, feature = "export-abi")), no_main)]
 extern crate alloc;
 
-use alloy_primitives::{Address, I256};
+use alloy_primitives::{Address, U64};
 use stylus_sdk::{alloy_primitives::U256, prelude::*};
 
 sol_storage! {
@@ -32,6 +32,7 @@ sol_interface! {
 
     interface IDeltaManager{
         function isActiveParticipant(address owner) external returns (bool);
+        function deltaOfParticipant(address owner) external returns (int256);
     }
 }
 
@@ -40,50 +41,43 @@ impl FietStake {
     ///
     /// # Arguments
     /// * `amount` - The amount of tokens to stake.
+    /// * `owner` - The account to credit the staked tokens to.
     ///
     /// # Returns
     /// * `Ok(())` on success.
     /// * `Err(Vec<u8>)` if the amount is zero.
     pub fn _stake(&mut self, amount: U256, owner: Address) -> Result<(), Vec<u8>> {
         let sender = self.vm().msg_sender();
-        // validate none zero input amount
-        if amount < U256::from(0) {
+
+        // Validate non-zero input amount
+        if amount == U256::from(0) {
             return Err("INVALID STAKE AMOUNT".into());
         }
 
         let self_address = self.vm().contract_address();
         let stake_token_address = self.contracts.stake_token.get();
 
-        // perform a transfer from
-        // update the balance of the user in the contract
+        // Update internal balance
         let existing_balance = self.balance_of.get(owner);
         self.balance_of.setter(owner).set(existing_balance + amount);
 
-        // make sure the sender of the tokens can be debitted while we give the balance to the specified address
+        // Transfer tokens from the sender to this contract
         let token = IERC20::new(stake_token_address);
         let response = token.transfer_from(self, sender, self_address, amount)?;
 
         assert!(response);
 
-        return Ok(());
+        Ok(())
     }
 }
 
-impl FietStake {}
 
 #[public]
 impl FietStake {
-    /// Initializes the contract with the stake token address.
+    /// Initializes the contract with staking parameters.
     ///
-    /// Sets up the contract by storing the `stake_token` address and marking the contract as initialized.
-    /// Can only be called once, enforced by an assertion. The caller becomes the owner.
-    ///
-    /// # Arguments
-    /// * `stake_token` - The ERC20 token address to be used for staking.
-    ///
-    /// # Returns
-    /// * `Ok(())` on successful initialization.
-    /// * `Err(Vec<u8>)` if the contract is already initialized.
+    /// Sets up the contract with the staking token and managers. Can only be called once.
+    /// The caller becomes the owner and is granted admin rights, along with the settlement manager.
     pub fn initialize(
         &mut self,
         stake_token: Address,
@@ -92,308 +86,178 @@ impl FietStake {
         min_stake: U256,
     ) -> Result<(), Vec<u8>> {
         let sender = self.vm().msg_sender();
-        // make sure the contract is not initialized yet
-        if self.initialized.get() {
-            return Err("NOT INITIALIZED".into());
-        };
 
-        // initialize important variables
+        if self.initialized.get() {
+            return Err("ALREADY INITIALIZED".into());
+        }
+
         self.contracts.stake_token.set(stake_token);
         self.contracts.delta_manager.set(delta_manager);
         self.contracts.settlement_manager.set(settlement_manager);
-
-        // set the initialized value to be true to prevent another reinitialization
-        self.initialized.set(true);
-        // set the owner of the contract
-        self.owner.set(sender);
-        // set the owner as an admin
-        self.is_admin.setter(sender).set(true);
-        // set the settlement contract as an admin mainly so it can slash
-        self.is_admin.setter(settlement_manager).set(true);
-        // set the minimum stake required as an LP
         self.min_stake.set(min_stake);
 
-        return Ok(());
+        self.owner.set(sender);
+        self.is_admin.setter(sender).set(true);
+        self.is_admin.setter(settlement_manager).set(true);
+
+        self.initialized.set(true);
+
+        Ok(())
     }
 
-    /// Assigns or removes admin privileges for a given address.
-    ///
-    /// # Arguments
-    /// * `new_admin_address` - The address to be granted or revoked admin rights.
-    /// * `is_admin` - A boolean indicating whether the address should be an admin.
-    ///
-    /// # Returns
-    /// * `Ok(())` on success.
-    /// * `Err(Vec<u8>)` if the caller is not the owner.
+    /// Grants or revokes admin access to an address. Only callable by owner.
     pub fn set_admin(&mut self, new_admin_address: Address, is_admin: bool) -> Result<(), Vec<u8>> {
-        let sender = self.vm().msg_sender();
-
-        // can only be called by owner
-        if sender != self.owner.get() {
+        if self.vm().msg_sender() != self.owner.get() {
             return Err("CALLER IS NOT OWNER".into());
         }
 
         self.is_admin.setter(new_admin_address).set(is_admin);
-
-        return Ok(());
+        Ok(())
     }
 
-    /// Getter for the is_admin variable. returns the boolean value indicating if the provided address is an admin.
-    ///
-    /// # Arguments
-    /// * `admin_address` - The address we want to check the admin status of
-    ///
-    /// # Returns
-    /// * `Ok(())` on success.
-    /// * `Err(Vec<u8>)` if the caller is not the owner.
+    /// Checks if an address is an admin.
     pub fn get_admin(&mut self, admin_address: Address) -> bool {
-        return self.is_admin.get(admin_address);
+        self.is_admin.get(admin_address)
     }
 
-    /// Allows users to stake tokens into the contract.
-    ///
-    /// # Arguments
-    /// * `amount` - The amount of tokens to stake.
-    ///
-    /// # Returns
-    /// * `Ok(())` on success.
-    /// * `Err(Vec<u8>)` if the amount is zero.
+    /// Allows users to stake tokens.
     pub fn stake(&mut self, amount: U256) -> Result<(), Vec<u8>> {
-        // get the variables required to perform a stake
         let sender = self.vm().msg_sender();
-
-        return self._stake(amount, sender);
+        self._stake(amount, sender)
     }
 
-    /// Allows users to stake tokens into the contract on behalf of other users.
-    ///
-    /// # Arguments
-    /// * `amount` - The amount of tokens to stake.
-    ///
-    /// # Returns
-    /// * `Ok(())` on success.
-    /// * `Err(Vec<u8>)` if the amount is zero.
+    /// Stakes tokens on behalf of another address.
     pub fn stake_for(&mut self, owner: Address, amount: U256) -> Result<(), Vec<u8>> {
-        return self._stake(amount, owner);
+        self._stake(amount, owner)
     }
 
-    /// Allows users to unstake their tokens.
-    ///
-    /// # Arguments
-    /// * `amount` - The amount of tokens to unstake.
-    ///
-    /// # Returns
-    /// * `Ok(())` on success.
-    /// * `Err(Vec<u8>)` if the amount is zero or the user has insufficient balance.
+    /// Allows users to unstake tokens, only if they are inactive.
     pub fn unstake(&mut self, amount: U256) -> Result<(), Vec<u8>> {
         let sender = self.vm().msg_sender();
+
         if amount == U256::ZERO {
             return Err("INVALID STAKE AMOUNT".into());
         }
 
-        // can only unstake if participant is not active i.e if the delta is zero
-        let delta_manager_address = self.contracts.delta_manager.get();
-        let is_active =
-            IDeltaManager::new(delta_manager_address).is_active_participant(&mut *self, sender)?;
-
-        if is_active {
+        let delta_manager = IDeltaManager::new(self.contracts.delta_manager.get());
+        if delta_manager.is_active_participant(&mut *self, sender)? {
             return Err("PARTICIPANT STILL ACTIVE".into());
         }
 
-        // variables important to facilitate unstaking
-        let stake_token_address = self.contracts.stake_token.get();
-
-        // get the balance and make sure there is enough user balance
         let user_balance = self.balance_of.get(sender);
         if user_balance < amount {
             return Err("INSUFFICIENT BALANCE".into());
         }
 
-        // deduct from user balance
         self.balance_of.setter(sender).set(user_balance - amount);
 
-        // perform transfer operation
-        let valid = IERC20::new(stake_token_address).transfer(&mut *self, sender, amount)?;
-        assert!(valid);
+        let token = IERC20::new(self.contracts.stake_token.get());
+        let success = token.transfer(&mut *self, sender, amount)?;
+        assert!(success);
 
-        return Ok(());
+        Ok(())
     }
 
-    /// Slashes a percentage of a user's staked balance.
-    ///
-    /// This function allows an admin to penalize a user by reducing their staked balance
-    /// based on the given `bps` (basis points). The slashed amount is added to the
-    /// contract's balance.
-    ///
-    /// # Arguments
-    /// * `owner` - The address of the user whose stake is being slashed.
-    /// * `bps` - The percentage (in basis points) of the user's stake to slash (1 bps = 0.01%).
-    ///
-    /// # Returns
-    /// * `Ok(())` if the slash is successful.
-    /// * `Err(Vec<u8>)` if the caller is not an admin.
+    /// Slashes a percentage of a user’s stake (in bps). Only callable by admins.
     pub fn slash(&mut self, owner: Address, bps: U256) -> Result<(), Vec<u8>> {
-        let sender = self.vm().msg_sender();
-        let contract_address = self.vm().contract_address();
-
-        // can only be called by admin
-        if !self.is_admin.get(sender) {
+        if !self.is_admin.get(self.vm().msg_sender()) {
             return Err("CALLER IS NOT ADMIN".into());
         }
 
-        // get the user's total stake
         let user_stake = self.balance_of.get(owner);
+        let slash_amount = self.get_slash_amount(bps);
 
-        // get the amount from it to slash
-        let amount_to_slash = self.get_slash_amount(bps);
+        self.balance_of.setter(owner).set(user_stake - slash_amount);
 
-        self.balance_of
-            .setter(owner)
-            .set(user_stake - amount_to_slash);
-
-        // assign slashed amount to the contract
+        let contract_address = self.vm().contract_address();
         let contract_balance = self.balance_of.get(contract_address);
         self.balance_of
             .setter(contract_address)
-            .set(contract_balance + amount_to_slash);
+            .set(contract_balance + slash_amount);
 
-        return Ok(());
+        Ok(())
     }
 
-    /// Slashes a percentage of a user's staked balance.
-    /// This method offloads the computation of the bps value from target and delta amount
-    /// in order to reduce the size of the contract which calls it
-    ///
-    /// This function allows an admin to penalize a user by reducing their staked balance
-    /// based on the given `bps` (basis points). The slashed amount is added to the
-    /// contract's balance.
-    ///
-    /// # Arguments
-    /// * `owner` - The address of the user whose stake is being slashed.
-    /// * `bps` - The percentage (in basis points) of the user's stake to slash (1 bps = 0.01%).
-    ///
-    /// # Returns
-    /// * `Ok(())` if the slash is successful.
-    /// * `Err(Vec<u8>)` if the caller is not an admin.
+    /// Slashes a user’s stake by computing bps from a target amount and factor.
     pub fn slash_by_amount(
         &mut self,
         owner: Address,
         target_amount: U256,
-        delta_amount: I256,
+        slash_factor: U64,
     ) -> Result<(), Vec<u8>> {
-        let bps = self.get_slash_bps(target_amount, delta_amount)?;
-        return self.slash(owner, bps);
+        let bps = self.get_slash_bps(owner, target_amount, slash_factor)?;
+        self.slash(owner, bps)
     }
 
-    /// Withdraws slashed funds from the contract.
-    ///
-    /// This function allows the owner to withdraw a specified `amount` of slashed funds
-    /// from the contract balance and send them to the specified `to` address.
-    /// Ensures that only the owner can call this function and that there are
-    /// sufficient funds in the contract.
-    ///
-    /// # Arguments
-    /// * `amount` - The amount of tokens to withdraw.
-    /// * `to` - The address to send the withdrawn tokens to.
-    ///
-    /// # Returns
-    /// * `Ok(())` on successful withdrawal.
-    /// * `Err(Vec<u8>)` if the caller is not the owner.
+    /// Withdraws slashed tokens to a given address. Only callable by the owner.
     pub fn withdraw(&mut self, amount: U256, to: Address) -> Result<(), Vec<u8>> {
         let sender = self.vm().msg_sender();
-        let contract_address = self.vm().contract_address();
-        let stake_token_address = self.contracts.stake_token.get();
-        let token_contract = IERC20::new(stake_token_address);
-
-        // can only be called by owner
         if sender != self.owner.get() {
             return Err("CALLER IS NOT OWNER".into());
         }
 
-        // assert there is enough balance
-        let contract_balance = token_contract.balance_of(&mut *self, contract_address)?;
+        let token = IERC20::new(self.contracts.stake_token.get());
+        let contract_address = self.vm().contract_address();
+        let contract_balance = token.balance_of(&mut *self, contract_address)?;
+
         if contract_balance < amount {
             return Err("INSUFFICIENT BALANCE".into());
         }
 
-        // update user balance in storage
         self.balance_of
             .setter(contract_address)
             .set(contract_balance - amount);
 
-        // perform transfer operation and send to specified address
-        let valid = token_contract.transfer(&mut *self, to, amount)?;
-        assert!(valid);
+        let success = token.transfer(&mut *self, to, amount)?;
+        assert!(success);
 
-        return Ok(());
+        Ok(())
     }
 
-    /// Returns the balance of a given user.
-    ///
-    /// # Arguments
-    /// * `owner` - The address whose balance is being queried.
-    ///
-    /// # Returns
-    /// * The user's staked balance as `U256`.
+    /// Returns the staked balance of a user.
     pub fn get_balance(&mut self, owner: Address) -> U256 {
-        return self.balance_of.get(owner);
+        self.balance_of.get(owner)
     }
 
-    /// Gets the staked token registered in this contract
-    ///
-    /// # Returns
-    /// * The address of the staked token.
+    /// Returns the address of the staking token.
     pub fn get_staked_token(&mut self) -> Address {
-        return self.contracts.stake_token.get();
+        self.contracts.stake_token.get()
     }
 
-    /// Getter for the min stake amount
-    ///
-    /// # Returns
-    /// * The minimum stake allowed in this contract.
+    /// Returns the minimum required stake.
     pub fn get_min_stake(&self) -> U256 {
-        return self.min_stake.get();
+        self.min_stake.get()
     }
 
-    /// Returns is a particular address is sufficiently staked.
-    ///
-    /// # Arguments
-    /// * `owner` - The address whose balance is being queried.
-    ///
-    /// # Returns
-    /// * A boolean indicating if this user is sufficiently staked.
+    /// Returns true if the user meets or exceeds the min stake requirement.
     pub fn is_staked(&mut self, owner: Address) -> bool {
-        return self.get_balance(owner) >= self.min_stake.get();
+        self.get_balance(owner) >= self.min_stake.get()
     }
 
-    /// Calculates the BPS to be slashed, the higher the target amount.
-    /// The higher the 'delta_amount(owed amount)' compared to the `target_amount(rfs_amount)` the higher the slash value.
-    /// it is worth noting that the BPS is relative to the minimum staked amount not the user's balance/
-    ///
-    /// # Arguments
-    /// * `owner` - The address whose balance is being queried.
-    ///
-    /// # Returns
-    /// * A boolean indicating if this user is sufficiently staked.
-    pub fn get_slash_bps(&self, target_amount: U256, delta_amount: I256) -> Result<U256, Vec<u8>> {
-        // at delta_amount == target_amount
-        // the stake is slashed by 50%
-        // the smoothing factor can be used to decrease amount slashed
-        // i.e smoothing factor of 0.5 makes slash 25% when delta_amount = target_amount
-        let delta_amount: U256 = U256::try_from(delta_amount).unwrap();
-        let one_bps_fraction = U256::from(5000);
-        let slash_bps = (delta_amount / (delta_amount + target_amount)) * one_bps_fraction;
+    /// Calculates slash bps from delta and target amounts.
+    pub fn get_slash_bps(
+        &mut self,
+        owner: Address,
+        target_amount: U256,
+        slash_factor: U64,
+    ) -> Result<U256, Vec<u8>> {
+        let delta = IDeltaManager::new(self.contracts.delta_manager.get())
+            .delta_of_participant(&mut *self, owner)?;
 
-        return Ok(slash_bps);
+        let delta_abs = U256::try_from(delta.abs()).expect("INVALID_DELTA");
+
+        let smoothing = U256::from(4);
+        let max_bps = U256::from(10_000) / smoothing;
+        let base_bps = (delta_abs * max_bps) / (delta_abs + target_amount);
+
+        let extra_bps = U256::from(slash_factor) * U256::from(100);
+
+        Ok(base_bps + extra_bps)
     }
 
+    /// Computes the slash amount from a bps value.
     pub fn get_slash_amount(&self, bps: U256) -> U256 {
-        let min_stake = self.min_stake.get();
-
-        // get the amount from it to slash
-        let amount_to_slash = (min_stake * bps) / U256::from(10_000);
-
-        return amount_to_slash;
+        (self.min_stake.get() * bps) / U256::from(10_000)
     }
 }
 
