@@ -34,7 +34,7 @@ sol_storage! {
 // Define an interface for external function calls
 sol_interface! {
     interface IVRLManager  {
-        function depostVerifiedFiat(address owner, bytes32 currency_hash, uint256 amount) external;
+        function depositVerifiedFiat(address owner, bytes32 currency_hash, uint256 amount) external;
     }
 
     interface IDeltaManager {
@@ -62,7 +62,7 @@ impl LiquidityManager {
     ) -> Result<(), Vec<u8>> {
         // make sure the contract is initialized yet
         if self.initialized.get() {
-            return Err("NOT_INITIALIZED".into());
+            return Err("ALREADY_INITIALIZED".into());
         };
 
         // initialize important variables
@@ -77,24 +77,24 @@ impl LiquidityManager {
         return Ok(());
     }
 
-    /// Manually verifies a deposit and 'signals' liquidity to the `VRLManager`.
-    /// This method signals liquidity which is being self custodied
+    /// Manually verifies a deposit  to the `VRLManager`.
+    /// This method signals liquidity which is being held by a custodian
     ///
     /// Called by a trusted authority (future plans include ZK-proof support)
     /// to signal a deposit made to the custodian and a call is made to the
-    /// `VRLManager` contract to record the deposit.
+    /// `VRLManager` contract to record the deposit and to the deltamanager to record the deltas.
     ///
     /// # Arguments
-    /// * `lp_address` - The address of the liquidity provider.
-    /// * `currency` - A string representing the currency (e.g., "USD"), hashed to `bytes32`.
+    /// * `owner` - The recipient of the deposit.
+    /// * `custodian` - The custodian this deposit should go through.
+    /// * `currency` - A string representing the currency (e.g., "USD", "NGN").
     /// * `amount` - The amount of liquidity to signal, in `U256` units.
     ///
     /// # Returns
-    /// * `Ok(())` if the liquidity is successfully signaled.
-    /// * `Err(Vec<u8>)` if the external call to `VRLManager` fails.
+    /// * `Ok(())` if the deposit is successfully signaled.
+    /// * `Err(Vec<u8>)` if the external call fails.
     ///
     /// # Notes
-    /// - The `currency` is hashed using `keccak256` to match the `bytes32` expected by `VRLManager`.
     /// - Currently relies on a trusted authority; future versions may use ZK-proofs.
     pub fn manual_signal_deposit(
         &mut self,
@@ -122,7 +122,7 @@ impl LiquidityManager {
 
         let currency_hash = keccak(currency.as_bytes().to_vec());
         // make a call to the vrl manager to update the balance of VRL owned by the user making the deposit
-        vrl_manager.depost_verified_fiat(
+        vrl_manager.deposit_verified_fiat(
             &mut *self,
             owner,
             currency_hash,
@@ -146,9 +146,8 @@ impl LiquidityManager {
     /// to signal liquidity which is being held by a third party.
     ///
     /// # Arguments
-    /// * `owner` - The address of the liquidity owner.
-    /// * `custodian` - The custodian to which this deposit was made.
-    /// * `currency` - A string representing the currency (e.g., "USD"), hashed to `bytes32`.
+    /// * `lp_address` - The address of recipient of the liquidity signal.
+    /// * `currency` - A string representing the currency (e.g., "USD", "NGN"), hashed to `bytes32`.
     /// * `amount` - The amount of liquidity to signal, in `U256` units.
     ///
     /// # Returns
@@ -182,7 +181,7 @@ impl LiquidityManager {
 
         let currency_hash = keccak(currency.as_bytes().to_vec());
         // make a call to the vrl manager to update the balance of VRL owned by the user making the deposit
-        vrl_manager.depost_verified_fiat(
+        vrl_manager.deposit_verified_fiat(
             &mut *self,
             lp_address,
             currency_hash,
