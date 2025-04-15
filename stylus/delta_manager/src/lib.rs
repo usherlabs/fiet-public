@@ -13,15 +13,17 @@
 // - Restricting access via roles and external contract checks
 //
 // All delta changes are zero-sum: a positive delta for one participant implies
-// a negative delta for another, maintaining protocol balance.
+// a negative delta for another, maintaining protocol balance
+// Deltas are then maintained among participants and is distributed among users as VRL
+// ensuring that total_vrl_in_protocol_sum + total_delta_in_protocol_sum = 0
 
 // Allow `cargo stylus export-abi` to generate a main function.
 #![cfg_attr(not(any(test, feature = "export-abi")), no_main)]
 extern crate alloc;
 
 use alloy_primitives::{Address, FixedBytes, U256};
+use alloy_sol_types::sol;
 use fiet_library::{core::Role, traits::Hashable};
-
 /// Import items from the SDK. The prelude contains common traits and macros.
 use stylus_sdk::{alloy_primitives::I256, prelude::*};
 
@@ -51,15 +53,14 @@ sol_storage! {
     pub struct Participant {
         // a hash representing the role of this user
         bytes32 role_hash;
-        // the currency this participaht deals in
+        // the currency this participant is providing liquidity in
         bytes32 currency_hash;
         // track if this LP is active
         bool is_active;
         /// @notice Tracks the settlement delta for each address in the protocol.
         /// @dev A negative delta indicates the address owes the protocol (e.g., -50 means they owe 50 units).
         ///      A positive delta indicates the protocol owes the address (e.g., +50 means they are owed 50 units).
-        ///      Note: This mapping uses int256 as the key, which may be intended as a value in a reverse mapping.
-        ///      Example: If delta_of[-50] = "0x01", address "0x01" owes 50 units.
+        ///      Example: If delta_of[-50] = "0x01", address "0x01" owes 50 units. and could fill it by settling i.e burning VRL for delta
         int256 delta;
     }
 }
@@ -71,7 +72,15 @@ sol_interface! {
 
     interface IVRLManager  {
         function burnVrlForDelta(address owner, bytes32 currency_hash, uint256 delta) external returns (uint256);
+        function depositVerifiedFiat(address owner, bytes32 currency_hash, uint256 amount) external;
     }
+}
+
+sol! {
+    event RegisterParticipant(address indexed participant, bytes32 indexed currency_hash, bytes32 indexed role_hash);
+    event UnRegisterParticipant(address indexed participant);
+    event DeltaSettled(address indexed participant, uint256 amount);
+    event DeltaSignalled(address indexed participant, bytes32 indexed currency_hash, int256 delta);
 }
 
 impl DeltaManager {
@@ -88,7 +97,7 @@ impl DeltaManager {
     ///
     /// # Returns
     /// * `Ok(())` if the participant is successfully registered or already active.
-    /// * `Err(Vec<u8>)` is never returned from this function.
+    /// * `Err(Vec<u8>)` is not expected to occur under normal conditions.
     fn _register_participant(
         &mut self,
         address: Address,
@@ -112,14 +121,22 @@ impl DeltaManager {
         let mut existing_participants_for_currency = self.participants_of.setter(currency_hash);
         // push new participant to this array
         existing_participants_for_currency.push(address);
+        // log a new participant
+        log(
+            self.vm(),
+            RegisterParticipant {
+                participant: address,
+                currency_hash,
+                role_hash,
+            },
+        );
         Ok(())
     }
 
-    /// Settles a user's delta by burning VRL and updating protocol state.
+    /// Settles a user's delta by burning VRL and increasing the delta by a proportional amount.
     ///
     /// Interacts with the `VRLManager` to burn the user's VRL balance for the specified currency and amount.
     /// The returned delta value is added to the user's protocol delta, indicating how much is settled.
-    /// A positive delta reduces debt (user is owed less), while a negative delta increases debt.
     ///
     /// # Arguments
     /// * `amount` - The amount of VRL to burn for delta settlement.
@@ -128,35 +145,48 @@ impl DeltaManager {
     /// # Returns
     /// * `Ok(())` on successful settlement and delta update.
     /// * `Err(Vec<u8>)` if VRLManager throws an error (e.g., insufficient VRL).
-    fn _settle_delta(&mut self, amount: U256, user: Address) -> Result<(), Vec<u8>> {
+    fn _settle_delta(&mut self, user: Address, amount: U256) -> Result<(), Vec<u8>> {
         let currency_hash = self.delta_of.get(user).currency_hash.get();
         // burn vrl, error will be thrown if not enough vrl
-        let delta = IVRLManager::new(self.contracts.vrl_manager.get())
-            .burn_vrl_for_delta(&mut *self, user, currency_hash, amount)
-            .unwrap();
+        let delta = IVRLManager::new(self.contracts.vrl_manager.get()).burn_vrl_for_delta(
+            &mut *self,
+            user,
+            currency_hash,
+            amount,
+        )?;
 
-        // take some vrl and convert it to delta
+        // increment the delta by the amount burned
         let participant_getter = self.delta_of.get(user);
-        let particpant_old_delta = participant_getter.delta.get();
+        let participant_old_delta = participant_getter.delta.get();
 
         let mut participant_setter = self.delta_of.setter(user);
         participant_setter
             .delta
-            .set(particpant_old_delta + I256::unchecked_from(delta));
+            .set(participant_old_delta + I256::unchecked_from(delta));
 
+        log(
+            self.vm(),
+            DeltaSettled {
+                participant: user,
+                amount,
+            },
+        );
         return Ok(());
     }
 }
 
 #[public]
 impl DeltaManager {
-    /// Initializes the contract with the liquidity verifier address.
+    /// Initializes the contract.
     ///
-    /// Sets up the contract by storing the `liquidity_verifier` address and marking the contract as initialized.
+    /// Sets up the contract by storing the provided addresses and marking the contract as initialized.
     /// Can only be called once, enforced by an assertion. The caller becomes the owner.
     ///
     /// # Arguments
     /// * `liquidity_verifier` - The address of the liquidity_verifier who can only call certain methods.
+    /// * `stake_contract` - The address of the stake_contract who can only call certain methods.
+    /// * `vrl_manager` - The address of the vrl_manager who can only call certain methods.
+    /// * `settlement_manager` - The address of the settlement_manager who can only call certain methods.
     ///
     /// # Returns
     /// * `Ok(())` on successful initialization.
@@ -168,7 +198,8 @@ impl DeltaManager {
         vrl_manager: Address,
         settlement_manager: Address,
     ) -> Result<(), Vec<u8>> {
-        let sender = self.vm().msg_sender();
+        let caller = self.vm().msg_sender();
+
         // make sure the contract is not initialized yet
         if self.initialized.get() {
             return Err("ALREADY INITIALIZED".into());
@@ -183,7 +214,7 @@ impl DeltaManager {
         // set the initialized value to be true to prevent another reinitialization
         self.initialized.set(true);
         // set the owner of the contract
-        self.owner.set(sender);
+        self.owner.set(caller);
 
         return Ok(());
     }
@@ -219,13 +250,13 @@ impl DeltaManager {
         return Ok(());
     }
 
-    /// Registers the caller as a custodian participant.
+    /// Registers the caller as a custodian participant and set metadata.
     ///
     /// Validates that the caller is whitelisted as a custodian and registers them as an active
-    /// participant for the specified currency. Assigns the `Custodian` role and stores metadata.
+    /// participant for the specified currency.
     ///
     /// # Arguments
-    /// * `currency_hash` - A hashed identifier representing the currency the custodian supports.
+    /// * `currency_hash` - A keccack256 hashed identifier representing the currency the custodian supports.
     ///
     /// # Returns
     /// * `Ok(())` on successful registration.
@@ -283,10 +314,12 @@ impl DeltaManager {
         let sender = self.vm().msg_sender();
         let sender_delta = self.delta_of.get(sender).delta.get();
 
+        // confirm they do not have an outstanding delta
         if sender_delta != I256::ZERO {
             return Err("DELTA NOT SETTLED".into());
         }
 
+        // validate we are unregistering a previously active participant
         let is_already_active = self.delta_of.get(sender).is_active.get();
         if !is_already_active {
             return Ok(());
@@ -295,10 +328,11 @@ impl DeltaManager {
         // unregister the participant provided
         let mut participant_setter = self.delta_of.setter(sender);
 
+        // set the that the participant is no longer active
         participant_setter.is_active.set(false);
         let currency_hash = participant_setter.currency_hash.get();
 
-        // go through all the participants and remove the unregistering address from the list of addresses of participants
+        // go through all the participants and remove the address to be unregistered from the list of addresses of participants
         let mut existing_participants_for_currency = self.participants_of.setter(currency_hash);
         let num_participants = existing_participants_for_currency.len();
         for index in 0..num_participants {
@@ -320,6 +354,13 @@ impl DeltaManager {
                 break;
             }
         }
+
+        log(
+            self.vm(),
+            UnRegisterParticipant {
+                participant: sender,
+            },
+        );
 
         return Ok(());
     }
@@ -346,7 +387,9 @@ impl DeltaManager {
         // make sure that the caller is the liquidity signal contract
         // as that is the only input through which liquidity enters the protocol
         let sender = self.vm().msg_sender();
-        if sender != self.contracts.liquidity_verifier.get() {
+        if sender != self.contracts.liquidity_verifier.get()
+            && sender != self.contracts.vrl_manager.get()
+        {
             return Err("NOT AUTHORIZED".into());
         }
 
@@ -359,10 +402,18 @@ impl DeltaManager {
             return Err("INVALID CURRENCY HASH".into());
         }
 
-        let particpant_old_delta = participant_getter.delta.get();
+        let participant_old_delta = participant_getter.delta.get();
         let mut participant_setter = self.delta_of.setter(owner);
-        participant_setter.delta.set(particpant_old_delta + delta);
+        participant_setter.delta.set(participant_old_delta + delta);
 
+        log(
+            self.vm(),
+            DeltaSignalled {
+                participant: owner,
+                currency_hash,
+                delta,
+            },
+        );
         return Ok(delta);
     }
 
@@ -376,7 +427,7 @@ impl DeltaManager {
     ///
     /// # Returns
     /// * The current delta of the participant as an `I256` value.
-    pub fn delta_of_participant(&mut self, owner: Address) -> I256 {
+    pub fn delta_of_participant(&self, owner: Address) -> I256 {
         return self.delta_of.getter(owner).delta.get();
     }
 
@@ -431,7 +482,38 @@ impl DeltaManager {
         return vector;
     }
 
-    /// Settles the delta for a user, callable only by the settlement manager.
+    /// Retrieves a list of participants associated with a specific currency who have signalled liquidity and 'owe' the protocol.
+    ///
+    /// This function fetches all participants who are registered under the given `currency_hash` and have a negative delta.
+    /// It returns a vector of addresses of these participants for the purpose of knowing mandatory participants in a request for settlement.
+    ///
+    /// # Arguments
+    /// * `currency_hash` - The hash of the currency for which participants are being queried.
+    ///
+    /// # Returns
+    /// * A `Vec<Address>` containing the addresses of participants associated with the given `currency_hash`.
+    pub fn get_currency_signalled_participants(
+        &mut self,
+        currency_hash: FixedBytes<32>,
+    ) -> Vec<Address> {
+        let mut vector = vec![];
+        let currency_hash_participants = self.participants_of.get(currency_hash);
+
+        for num in 0..currency_hash_participants.len() {
+            let addr = currency_hash_participants.get(num).unwrap();
+            // get the delta of this participant
+            let participant_delta = self.delta_of_participant(addr);
+            // if it is less than zero and they are an LP then they owe the protocol
+            if participant_delta < I256::ZERO {
+                // push to array
+                vector.push(addr);
+            }
+        }
+
+        return vector;
+    }
+
+    /// Settles the delta on behalf of a user, callable only by the settlement manager.
     ///
     /// This function allows the settlement manager to settle the delta amount for a specific user.
     /// It ensures that only the authorized `settlement_manager` contract can invoke this function.
@@ -444,12 +526,12 @@ impl DeltaManager {
     /// * `Ok(())` if the delta was successfully settled.
     /// * `Err(Vec<u8>)` if the caller is not the authorized settlement manager.
     pub fn admin_settle_delta(&mut self, amount: U256, user: Address) -> Result<(), Vec<u8>> {
-        let caller = self.vm().msg_sender();
-        if caller != self.contracts.settlement_manager.get() {
-            return Err("INVALID CALLER".into());
+        let sender = self.vm().msg_sender();
+        if sender != self.contracts.settlement_manager.get() {
+            return Err("NOT AUTHORIZED".into());
         }
 
-        return self._settle_delta(amount, user);
+        return self._settle_delta(user, amount);
     }
 
     /// Settles the delta for the caller (user).
@@ -464,8 +546,58 @@ impl DeltaManager {
     /// * `Ok(())` if the delta was successfully settled for the caller.
     /// * `Err(Vec<u8>)` if an error occurs while settling the delta.
     pub fn user_settle_delta(&mut self, amount: U256) -> Result<(), Vec<u8>> {
-        let caller = self.vm().msg_sender();
+        let sender = self.vm().msg_sender();
 
-        return self._settle_delta(amount, caller);
+        return self._settle_delta(sender, amount);
+    }
+
+    /// A function that will convert the delta of an LP to VRL
+    ///
+    /// This function will create some VRL for the participant and reduce their delta by the same amount
+    ///
+    /// # Arguments
+    /// * `amount` - The amount to be settled, which will adjust the caller's delta.
+    ///
+    /// # Returns
+    /// * `Ok(())` if the delta was successfully settled for the caller.
+    /// * `Err(Vec<u8>)` if an error occurs while settling the delta.
+    pub fn delta_to_vrl(&mut self, amount: U256) -> Result<(), Vec<u8>> {
+        // increase their VRL i.e mint some VRL
+        let sender = self.vm().msg_sender();
+        let delta_amount = I256::try_from(amount).unwrap();
+
+        // take some delta, error will be thrown if not enough vrl
+        let participant_getter = self.delta_of.get(sender);
+        let participant_old_delta = participant_getter.delta.get();
+
+        // validate enough delta is owned by the sender
+        let new_delta = participant_old_delta - delta_amount;
+        if new_delta < I256::ZERO {
+            return Err("INSUFFICIENT DELTA".into());
+        }
+
+        // reduce the delta by the amount to be converted to VRL
+        let mut participant_setter = self.delta_of.setter(sender);
+        participant_setter.delta.set(new_delta);
+
+        let currency_hash = self.delta_of.get(sender).currency_hash.get();
+
+        // create vrl
+        IVRLManager::new(self.contracts.vrl_manager.get()).deposit_verified_fiat(
+            &mut *self,
+            sender,
+            currency_hash,
+            amount,
+        )?;
+
+        log(
+            self.vm(),
+            DeltaSignalled {
+                participant: sender,
+                currency_hash,
+                delta: delta_amount,
+            },
+        );
+        return Ok(());
     }
 }

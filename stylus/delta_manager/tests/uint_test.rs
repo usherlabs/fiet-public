@@ -10,11 +10,11 @@ mod test {
         let vm = TestVM::default();
         let mut contract = DeltaManager::from(&vm);
 
-        // define and mock several variables
+        // Mock initialization variables
         let sender_address = vm.msg_sender();
         let liquidity_verifier = sender_address.clone();
 
-        // initialize the contract
+        // Initialize the contract
         contract
             .initialize(
                 liquidity_verifier,
@@ -36,11 +36,11 @@ mod test {
         let vm = TestVM::default();
         let mut contract = DeltaManager::from(&vm);
 
-        // define and mock several variables for initialization
+        // Mock initialization variables
         let sender_address = vm.msg_sender();
         let liquidity_verifier = sender_address.clone();
-
         let custodian = address!("0xd8da6bf26964af9d7eed9e03e53415d37aa96045");
+
         contract
             .initialize(
                 liquidity_verifier,
@@ -50,16 +50,13 @@ mod test {
             )
             .unwrap();
 
-        // whitelist certain custodians
+        // Whitelist custodian
         contract.whitelist_custodian(custodian, true).unwrap();
-
-        // validate that the custodian is whitelisted
         let custodian_is_whitelisted = contract.is_custodian.get(custodian);
         assert!(custodian_is_whitelisted);
 
-        // blacklist the custodian and validate
+        // Blacklist the custodian
         contract.whitelist_custodian(custodian, false).unwrap();
-        // validate that the custodian is not whitelisted
         let custodian_is_whitelisted = contract.is_custodian.get(custodian);
         assert!(!custodian_is_whitelisted);
     }
@@ -71,7 +68,7 @@ mod test {
         vm.set_block_number(block_number);
         let mut contract = DeltaManager::from(&vm);
 
-        // define and mock several variables for initialization
+        // Mock initialization variables
         let sender_address = vm.msg_sender();
         let liquidity_verifier = sender_address.clone();
         let custodian = address!("0xd8da6bf26964af9d7eed9e03e53415d37aa96045");
@@ -86,16 +83,17 @@ mod test {
                 liquidity_verifier,
             )
             .unwrap();
-        // whitelist certain custodians
+
+        // Whitelist custodian
         contract.whitelist_custodian(custodian, true).unwrap();
 
-        // create a custodian by acting as the custodian
-        vm.set_sender(custodian); // act as the custodian making this call
+        // Register as a custodian (call made from custodian address)
+        vm.set_sender(custodian);
         contract
             .register_as_custodian(expected_currency_hash)
             .unwrap();
 
-        // validate that the participant exists
+        // Verify participant was registered
         let participant = contract.delta_of.getter(custodian);
         let role_hash = participant.role_hash.get();
         let currency_hash = participant.currency_hash.get();
@@ -111,7 +109,7 @@ mod test {
         vm.set_block_number(block_number);
         let mut contract = DeltaManager::from(&vm);
 
-        // define and mock several variables for initialization
+        // Mock initialization variables
         let sender_address = vm.msg_sender();
         let liquidity_verifier = sender_address.clone();
         let custodian = address!("0xd8da6bf26964af9d7eed9e03e53415d37aa96045");
@@ -125,11 +123,12 @@ mod test {
                 liquidity_verifier,
             )
             .unwrap();
-        // whitelist certain custodians
+
+        // Ensure custodian is blacklisted
         contract.whitelist_custodian(custodian, false).unwrap();
 
-        // create a custodian by acting as the custodian
-        vm.set_sender(custodian); // act as the custodian making this call
+        // Attempt to register as a custodian from a blacklisted address
+        vm.set_sender(custodian);
         assert!(contract
             .register_as_custodian(expected_currency_hash)
             .is_err());
@@ -142,7 +141,7 @@ mod test {
         vm.set_block_number(block_number);
         let mut contract = DeltaManager::from(&vm);
 
-        // define and mock several variables for initialization
+        // Mock initialization variables
         let sender_address = vm.msg_sender();
         let liquidity_verifier = sender_address.clone();
 
@@ -160,63 +159,55 @@ mod test {
                 liquidity_verifier,
             )
             .unwrap();
-        // whitelist certain custodians
+
+        // Whitelist all custodians
         contract.whitelist_custodian(custodian, true).unwrap();
-        contract
-            .whitelist_custodian(second_custodian, true)
-            .unwrap();
+        contract.whitelist_custodian(second_custodian, true).unwrap();
         contract.whitelist_custodian(third_custodian, true).unwrap();
 
-        // create a custodian by acting as the custodian
-        vm.set_sender(custodian); // act as the custodian making this call
+        // Register first custodian
+        vm.set_sender(custodian);
         contract
             .register_as_custodian(expected_currency_hash)
             .unwrap();
+        let mut participants = contract.participants_of.get(expected_currency_hash);
+        assert_eq!(participants.len(), 1);
+        assert_eq!(participants.get(0).unwrap(), custodian);
 
-        // get the participant details for this currency hash
-        let participants_for_currency = contract.participants_of.get(expected_currency_hash);
-        assert_eq!(participants_for_currency.len(), 1);
-        assert_eq!(participants_for_currency.get(0).unwrap(), custodian);
-
-        // mock another custodian being created
+        // Register second custodian
         vm.set_sender(second_custodian);
         contract
             .register_as_custodian(expected_currency_hash)
             .unwrap();
-        // get the participant details for this currency hash
-        let participants_for_currency = contract.participants_of.get(expected_currency_hash);
-        assert_eq!(participants_for_currency.len(), 2);
-        assert_eq!(participants_for_currency.get(1).unwrap(), second_custodian);
+        participants = contract.participants_of.get(expected_currency_hash);
+        assert_eq!(participants.len(), 2);
+        assert_eq!(participants.get(1).unwrap(), second_custodian);
 
-        // mock another custodian being created
+        // Register third custodian
         vm.set_sender(third_custodian);
         contract
             .register_as_custodian(expected_currency_hash)
             .unwrap();
-        // get the participant details for this currency hash
-        let participants_for_currency = contract.participants_of.get(expected_currency_hash);
-        assert_eq!(participants_for_currency.len(), 3);
-        assert_eq!(participants_for_currency.get(2).unwrap(), third_custodian);
+        participants = contract.participants_of.get(expected_currency_hash);
+        assert_eq!(participants.len(), 3);
+        assert_eq!(participants.get(2).unwrap(), third_custodian);
 
-        // remove the first custodian and watch the participants list shrink
+        // Remove first custodian
         vm.set_sender(custodian);
         contract.unregister_participant().unwrap();
-        // get the participant details for this currency hash
-        let participants_for_currency = contract.participants_of.get(expected_currency_hash);
-        assert_eq!(participants_for_currency.len(), 2);
+        participants = contract.participants_of.get(expected_currency_hash);
+        assert_eq!(participants.len(), 2);
 
-        // remove the last custodian and empty participants list
+        // Remove second custodian
         vm.set_sender(second_custodian);
         contract.unregister_participant().unwrap();
-        // get the participant details for this currency hash
-        let participants_for_currency = contract.participants_of.get(expected_currency_hash);
-        assert_eq!(participants_for_currency.len(), 1);
+        participants = contract.participants_of.get(expected_currency_hash);
+        assert_eq!(participants.len(), 1);
 
-        // remove the last custodian and empty participants list
+        // Remove last custodian, leaving the list empty
         vm.set_sender(third_custodian);
         contract.unregister_participant().unwrap();
-        // get the participant details for this currency hash
-        let participants_for_currency = contract.participants_of.get(expected_currency_hash);
-        assert_eq!(participants_for_currency.len(), 0);
+        participants = contract.participants_of.get(expected_currency_hash);
+        assert_eq!(participants.len(), 0);
     }
 }
