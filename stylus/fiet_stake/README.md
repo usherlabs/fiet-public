@@ -1,4 +1,4 @@
-# Delta Manager
+# FIET Stake
 
 
 ## Quick Start 

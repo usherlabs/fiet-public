@@ -9,7 +9,7 @@
 
 use std::fmt::Display;
 use alloy_primitives::FixedBytes;
-use stylus_sdk::{crypto::keccak, prelude::*};
+use stylus_sdk::crypto::keccak;
 
 
 /// An enum representing supported currencies.

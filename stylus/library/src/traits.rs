@@ -1,3 +1,4 @@
+// traits.rs
 use alloy_primitives::FixedBytes;
 use stylus_sdk::crypto::keccak;
 
