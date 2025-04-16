@@ -1,32 +1,5 @@
-# FietStake Contract
-
-The **FietStake** contract handles token staking for participants in the Fiet Protocol. It supports staking, unstaking, slashing, and admin-controlled withdrawals, with activity checks via the `DeltaManager`.
-
-## Overview
-
-- **Stake Tokens:** Users can stake ERC-20 tokens to participate.
-- **Unstake Restrictions:** Users can only unstake if inactive.
-- **Slashing:** Admins can slash stakers based on protocol deltas or custom logic.
-- **Withdrawals:** Contract owner can withdraw slashed tokens.
-- **Access Control:** Owner and admins manage sensitive operations.
-
-## Key Functions
-
-- `initialize(stake_token, delta_manager, settlement_manager, min_stake)`
-- `stake(amount)`
-- `stake_for(owner, amount)`
-- `unstake(amount)`
-- `slash(owner, bps)`
-- `slash_by_amount(owner, target_amount, slash_factor)`
-- `withdraw(amount, to)`
-- `set_admin(address, is_admin)`
-
-## Notes
-
-- Enforces minimum stake requirement.
-- Integrates with `DeltaManager` to validate user activity.
-- `initialize` can only be called once by the deployer.
-
+# $FIET Token
+ERC-20 token for FIET Protocol.
 
 ## Quick Start 
 

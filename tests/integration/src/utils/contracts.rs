@@ -87,10 +87,13 @@ abigen!(
 abigen!(
     ISettlement,
     r#"[
-        function initialize(address delta_manager, address stake_manager, uint256 ttl) external
+        function initialize(address delta_manager, address stake_manager, uint64 ttl) external
         function createRequestForSettlement(uint256 settle_amount) external
-        function bid(uint256 rfs_id, uint256 amount) external
+        function bid(uint64 rfs_id, uint256 amount) external
+        function settle(uint64 rfs_id) external
         function closeRequestForSettlement() external
+        function hoursElapsedSince(uint64 start_timestamp) external view returns (uint64)
+        function getActiveRfs(address owner) external view returns (uint64)
     ]"#
 );
 
@@ -98,11 +101,12 @@ abigen!(
     IVRLManager,
     r#"[
         function initialize(address liquidity_verifier, address delta_manager, address uniswap_hook, uint256 decimals) external
-        function depostVerifiedFiat(address owner, bytes32 currency_hash, uint256 amount) external
+        function depositVerifiedFiat(address owner, bytes32 currency_hash, uint256 amount) external
         function getUserCurrencyVrl(address owner, bytes32 currency_hash) external view returns (uint256)
         function lockVrl(address owner, bytes32 currency_hash, uint256 delta) external returns (uint256)
         function unlockVrl(address owner, bytes32 currency_hash, uint256 delta) external returns (uint256)
         function burnVrlForDelta(address owner, bytes32 currency_hash, uint256 delta) external returns (uint256)
+        function offramp(address custodian, bytes32 currency_hash, uint256 delta) external
         function getDecimals() external view returns (uint256)
         function getOwner() external view returns (address)
         function getLockedVrl() external view returns (uint256)
@@ -319,3 +323,23 @@ impl ContractsHelper {
 }
 
 type MiddlewareSignerType = SignerMiddleware<Provider<Http>, Wallet<SigningKey>>;
+
+#[cfg(test)]
+mod tests {
+    use crate::utils::config::Config;
+
+    use super::ContractsHelper;
+    use ethers::abi::AbiEncode;
+
+    #[tokio::test]
+    async fn test_keygen() {
+        let config = Config::from_env();
+        let helper = ContractsHelper::new(&config);
+        let key = helper.generate_funded_keypair(Some(1114157749_u64)).await;
+
+        let addr = key.public_key.encode_hex();
+        let expected_addr =
+            "0x00000000000000000000000025858b08541cbc24285717c2f8feab53080b1aec".to_string();
+        assert_eq!(addr, expected_addr);
+    }
+}

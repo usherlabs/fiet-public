@@ -147,7 +147,7 @@ impl LiquidityManager {
     ///
     /// # Arguments
     /// * `lp_address` - The address of recipient of the liquidity signal.
-    /// * `currency` - A string representing the currency (e.g., "USD", "NGN"), hashed to `bytes32`.
+    /// * `currency` - A string representing the currency (e.g., "USD", "NGN").
     /// * `amount` - The amount of liquidity to signal, in `U256` units.
     ///
     /// # Returns

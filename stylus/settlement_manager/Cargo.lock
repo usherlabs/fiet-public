@@ -1817,6 +1817,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "fiet-library"
+version = "0.1.0"
+dependencies = [
+ "alloy-primitives",
+ "alloy-sol-types",
+ "mini-alloc",
+ "stylus-sdk",
+]
+
+[[package]]
 name = "fiet-settlement"
 version = "0.1.11"
 dependencies = [
@@ -1824,7 +1834,7 @@ dependencies = [
  "alloy-sol-types",
  "dotenv",
  "ethers",
- "eyre",
+ "fiet-library",
  "hex",
  "mini-alloc",
  "stylus-sdk",

@@ -51,7 +51,7 @@ mod test {
         let new_amount = U256::from(5).pow(decimals);
 
         contract
-            .depost_verified_fiat(sender_address, currency_hash, amount)
+            .deposit_verified_fiat(sender_address, currency_hash, amount)
             .unwrap();
 
         // get the balance of this user and make sure it matches the initial deposit
@@ -62,7 +62,7 @@ mod test {
 
         // make another deposit for the same currency and make sure it reflects
         contract
-            .depost_verified_fiat(sender_address, currency_hash, new_amount)
+            .deposit_verified_fiat(sender_address, currency_hash, new_amount)
             .unwrap();
         // get the balance of this user and make sure it matches the deposit
         let user_balance = contract
@@ -74,7 +74,7 @@ mod test {
         let new_currency = Currency::AUD;
         let currency_hash = keccak(new_currency.to_string());
         contract
-            .depost_verified_fiat(sender_address, currency_hash, new_amount)
+            .deposit_verified_fiat(sender_address, currency_hash, new_amount)
             .unwrap();
 
         // get the balance of this user and make sure it matches the initial deposit
@@ -108,7 +108,7 @@ mod test {
         let lock_amount = U256::from(5).pow(decimals);
 
         contract
-            .depost_verified_fiat(sender_address, currency_hash, deposit_amount)
+            .deposit_verified_fiat(sender_address, currency_hash, deposit_amount)
             .unwrap();
 
         // lock VRL
@@ -157,7 +157,7 @@ mod test {
         let unlock_amount = U256::from(1).pow(decimals);
 
         contract
-            .depost_verified_fiat(sender_address, currency_hash, deposit_amount)
+            .deposit_verified_fiat(sender_address, currency_hash, deposit_amount)
             .unwrap();
 
         // lock VRL

@@ -1,31 +1,31 @@
-# FietStake Contract
+# VRL Manager
+# VRLManager Contract
 
-The **FietStake** contract handles token staking for participants in the Fiet Protocol. It supports staking, unstaking, slashing, and admin-controlled withdrawals, with activity checks via the `DeltaManager`.
+The **VRLManager** contract manages Verified Reserve Liquidity (VRL) within the Fiet Protocol. Written in Rust for Arbitrum Stylus, it handles fiat-backed liquidity balances, VRL locking/unlocking, and integration with protocol components like Uniswap hooks and the DeltaManager.
 
 ## Overview
 
-- **Stake Tokens:** Users can stake ERC-20 tokens to participate.
-- **Unstake Restrictions:** Users can only unstake if inactive.
-- **Slashing:** Admins can slash stakers based on protocol deltas or custom logic.
-- **Withdrawals:** Contract owner can withdraw slashed tokens.
-- **Access Control:** Owner and admins manage sensitive operations.
+- **Fiat Liquidity Management:** Manages per-user, per-currency VRL balances.
+- **Liquidity Locking:** Locks/unlocks VRL via Uniswap hook for swap guarantees.
+- **Delta Integration:** Burns VRL when settling deltas and during offramp operations.
+- **Access Control:** Only specific contracts can call sensitive functions (hook, verifier, delta manager).
 
 ## Key Functions
 
-- `initialize(stake_token, delta_manager, settlement_manager, min_stake)`
-- `stake(amount)`
-- `stake_for(owner, amount)`
-- `unstake(amount)`
-- `slash(owner, bps)`
-- `slash_by_amount(owner, target_amount, slash_factor)`
-- `withdraw(amount, to)`
-- `set_admin(address, is_admin)`
+- `initialize(verifier, delta_manager, uniswap_hook, decimals)`
+- `deposit_verified_fiat(owner, currency_hash, amount)`
+- `get_user_currency_vrl(owner, currency_hash)`
+- `lock_vrl(owner, currency_hash, delta)`
+- `unlock_vrl(owner, currency_hash, delta)`
+- `burn_vrl_for_delta(owner, currency_hash, delta)`
+- `offramp(custodian, currency_hash, delta)`
+- `get_decimals()`, `get_owner()`, `get_locked_vrl()`
 
 ## Notes
 
-- Enforces minimum stake requirement.
-- Integrates with `DeltaManager` to validate user activity.
-- `initialize` can only be called once by the deployer.
+- Currency identifiers are passed as `bytes32` hashes (`keccak256`).
+- All state changes emit appropriate events for transparency.
+- Designed for WASM deployment on Arbitrum Stylus.
 
 
 ## Quick Start 

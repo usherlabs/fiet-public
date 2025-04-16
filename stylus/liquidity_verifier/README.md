@@ -1,4 +1,25 @@
-# Liquidity Manager
+# LiquidityManager Contract
+
+The **LiquidityManager** contract is responsible for injecting verified fiat liquidity into the Fiet Protocol. It interacts with the `VRLManager` and `DeltaManager` contracts to maintain a zero-sum accounting system across participants in the protocol.
+
+## Responsibilities
+
+- **Signal Verified Liquidity:** Manually signals verified fiat deposits and liquidity reserves to the `VRLManager`, crediting the appropriate user with VRL tokens.
+- **Enforce Zero-Sum Deltas:** For every VRL credit, a matching negative delta is recorded via the `DeltaManager`, maintaining a net-zero balance across the system.
+- **Custodian and LP Accounting:** Assigns liabilities (negative deltas) to custodians or LPs depending on who receives the VRL credit.
+- **Access Control:** Only the contract owner (trusted authority) is allowed to signal liquidity. Future versions may incorporate ZK-proof verification for decentralized validation.
+- **Initialize External Integrations:** During deployment, the contract is initialized with addresses of the `VRLManager` and `DeltaManager` to enable cross-contract communication.
+
+## Key Functions
+
+- `initialize(vrl_manager_address, delta_manager_address)`: Sets up the contract with addresses of related components. Can only be called once.
+- `manual_signal_deposit(owner, custodian, currency, amount)`: Signals a verified fiat deposit from a custodian on behalf of a user.
+- `manual_signal_liquidity(lp_address, currency, amount)`: Signals LP-held verified reserves into the protocol.
+
+## Notes
+
+- All liquidity signals must be initiated by the owner, ensuring trust and accountability until decentralized validation is enabled.
+- Currency identifiers are hashed using `keccak256` to produce standardized `bytes32` currency codes.
 
 
 ## Quick Start 

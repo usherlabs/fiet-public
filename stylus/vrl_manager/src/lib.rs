@@ -1,6 +1,3 @@
-// SPDX-License-Identifier: MIT
-// Copyright (c) 2025, [Your Name or Organization]
-
 //! VRLManager - Fiat Liquidity Management for Fiet Protocol
 //!
 //! This contract, written in Rust for Arbitrum's Stylus framework, manages locked fiat liquidity
@@ -16,7 +13,7 @@
 #![cfg_attr(not(any(test, feature = "export-abi")), no_main)]
 extern crate alloc;
 
-use alloy_primitives::{Address, FixedBytes};
+use alloy_primitives::{Address, FixedBytes, I256};
 use alloy_sol_types::sol;
 use stylus_sdk::{alloy_primitives::U256, prelude::*};
 
@@ -43,6 +40,13 @@ sol_storage! {
 sol! {
     // define events to be emitted when funds are signalled into the protocol
     event Deposit(address indexed owner, bytes32 indexed currencyHash, uint256 value);
+    event OffRamp(address indexed owner, address indexed custodian, uint256 amount);
+}
+
+sol_interface! {
+    interface IDeltaManager {
+        function signalDelta(address owner, bytes32 currency_hash, int256 delta) external returns (int256);
+    }
 }
 
 #[public]
@@ -56,8 +60,9 @@ impl VRLManager {
         decimals: U256,
     ) -> Result<(), Vec<u8>> {
         // make sure the contract is not initialized yet
-        assert!(!self.initialized.get(), "NOT_INITIALIZED");
-
+        if self.initialized.get() {
+            return Err("CONTRACT ALREADY INITIALIZED".into());
+        }
         // set the addresses of the contracts to be called
         self.contracts.liquidity_verifier.set(liquidity_verifier);
         self.contracts.uniswap_hook.set(uniswap_hook);
@@ -85,14 +90,16 @@ impl VRLManager {
     ///
     /// # Requirements
     /// * Can only be called by the liquidity verifier.
-    pub fn depost_verified_fiat(
+    pub fn deposit_verified_fiat(
         &mut self,
         owner: Address,
         currency_hash: FixedBytes<32>,
         amount: U256,
     ) -> Result<(), Vec<u8>> {
         // this function can only be called by the liquidity verifier
-        if self.vm().msg_sender() != self.contracts.liquidity_verifier.get() {
+        if self.vm().msg_sender() != self.contracts.liquidity_verifier.get()
+            && self.vm().msg_sender() != self.contracts.delta_manager.get()
+        {
             return Err("INVALID CALLER".into());
         }
         let mut owner_balances = self.balance_of.setter(owner);
@@ -262,6 +269,47 @@ impl VRLManager {
 
         // return the amount locked
         return Ok(burn_amount);
+    }
+
+    pub fn offramp(
+        &mut self,
+        custodian: Address,
+        currency_hash: FixedBytes<32>,
+        delta: U256,
+    ) -> Result<(), Vec<u8>> {
+        let sender = self.vm().msg_sender();
+        // remove some vrl
+        let user_currency_balance = self.balance_of.get(sender).get(currency_hash);
+        if delta > user_currency_balance {
+            return Err("INVALID AMOUNT".into());
+        }
+
+        let new_user_currency_balance = user_currency_balance - delta;
+        let mut user_balance_setter = self.balance_of.setter(sender);
+        let mut user_balance_setter = user_balance_setter.setter(currency_hash);
+
+        // update the balance of the owner
+        user_balance_setter.set(new_user_currency_balance);
+
+        // update custodian with some delta
+        IDeltaManager::new(self.contracts.delta_manager.get()).signal_delta(
+            &mut *self,
+            custodian,
+            currency_hash,
+            I256::try_from(delta).unwrap(),
+        )?;
+
+        // emit event
+        log(
+            self.vm(),
+            OffRamp {
+                owner: sender,
+                custodian,
+                amount: delta,
+            },
+        );
+
+        return Ok(());
     }
 
     /// Getter for decimal

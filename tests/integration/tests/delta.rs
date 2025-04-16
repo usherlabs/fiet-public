@@ -1,6 +1,3 @@
-// SPDX-License-Identifier: MIT
-// Copyright (c) 2025, Usher Labs
-//
 // This module contains integration tests for the Fiet Protocol's participant and delta
 // management system, focusing on the creation and behavior of custodians, liquidity
 // providers (LPs), and user VRL balances within an Arbitrum Stylus-compatible environment.

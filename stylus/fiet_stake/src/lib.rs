@@ -1,3 +1,18 @@
+//! FietStake - FIET Staking and Verification for Fiet Protocol
+//!
+//! This contract handles the staking of FIET tokens by LPs and custodians to enable
+//! their participation in the Fiet Protocol. Deployed on Arbitrum Stylus, it integrates
+//! with DeltaManager to authorize roles based on stake levels.
+//
+// This contract is responsible for:
+// - Allowing participants to stake and unstake FIET tokens
+// - Verifying minimum stake requirements for LP and custodian registration
+// - Tracking staked balances per address
+// - Enforcing protocol integrity via economic commitment
+//
+// Staking ensures participants are economically aligned with protocol security.
+// DeltaManager checks this contract to validate registration eligibility.
+
 #![cfg_attr(not(any(test, feature = "export-abi")), no_main)]
 extern crate alloc;
 

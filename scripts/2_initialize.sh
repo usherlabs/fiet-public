@@ -21,6 +21,11 @@ FIET_STAKING_ADDRESS=$(cat "stylus/fiet_stake/$FILE_KEY")
 DELTA_MANAGER_ADDRESS=$(cat "stylus/delta_manager/$FILE_KEY")
 SETTLEMENT_MANAGER=$(cat "stylus/settlement_manager/$FILE_KEY")
 
+# For dev/testing purposes, this should be set to this value
+# as it is what is generated on the random wallet generator
+# using the seed  
+UNISWAP_HOOK_CONTRACT="0x25858b08541cbc24285717c2f8feab53080b1aec"
+
 # -------------- #
 # Initial checks #
 # -------------- #
@@ -48,7 +53,7 @@ echo "initialising VRL Manager contract    #"
 echo "------------------------------------ #"
 
 # define deployment variables
-UNI_HOOK_ADDRESS=$ADDRESS
+UNI_HOOK_ADDRESS=$UNISWAP_HOOK_CONTRACT
 VRL_DECIMALS="6"
 cast send --rpc-url $RPC_URL --private-key $PRIVATE_KEY $VRL_MANAGER_ADDRESS "initialize(address, address, address, uint256)" "$LIQUIDITY_VERIFIER_ADDRESS" "$DELTA_MANAGER_ADDRESS" "$UNI_HOOK_ADDRESS" "$VRL_DECIMALS"
 
@@ -103,5 +108,5 @@ echo "-------------------------------------------- #"
 echo "initialising the Settlement Manager Contract      #"
 echo "-------------------------------------------- #"
 
-TTL=84600
-cast send --rpc-url $RPC_URL --private-key $PRIVATE_KEY $SETTLEMENT_MANAGER "initialize(address, address, uint256)" "$DELTA_MANAGER_ADDRESS" "$FIET_STAKING_ADDRESS" "$TTL"
+TTL_IN_HOURS=24
+cast send --rpc-url $RPC_URL --private-key $PRIVATE_KEY $SETTLEMENT_MANAGER "initialize(address, address, uint64)" "$DELTA_MANAGER_ADDRESS" "$FIET_STAKING_ADDRESS" "$TTL_IN_HOURS"

@@ -1,32 +1,15 @@
-# FietStake Contract
+# Settlement Management
 
-The **FietStake** contract handles token staking for participants in the Fiet Protocol. It supports staking, unstaking, slashing, and admin-controlled withdrawals, with activity checks via the `DeltaManager`.
+The **Settlement Management Contract** coordinates off-chain fiat settlement between liquidity participants in the Fiet Protocol. It manages the full lifecycle of a *Request for Settlement* (RFS), including initiation, bidding, and closure of requests made.
 
-## Overview
+## Responsibilities
 
-- **Stake Tokens:** Users can stake ERC-20 tokens to participate.
-- **Unstake Restrictions:** Users can only unstake if inactive.
-- **Slashing:** Admins can slash stakers based on protocol deltas or custom logic.
-- **Withdrawals:** Contract owner can withdraw slashed tokens.
-- **Access Control:** Owner and admins manage sensitive operations.
-
-## Key Functions
-
-- `initialize(stake_token, delta_manager, settlement_manager, min_stake)`
-- `stake(amount)`
-- `stake_for(owner, amount)`
-- `unstake(amount)`
-- `slash(owner, bps)`
-- `slash_by_amount(owner, target_amount, slash_factor)`
-- `withdraw(amount, to)`
-- `set_admin(address, is_admin)`
-
-## Notes
-
-- Enforces minimum stake requirement.
-- Integrates with `DeltaManager` to validate user activity.
-- `initialize` can only be called once by the deployer.
-
+- **Initialization:** Configures key contract dependencies and TTL settings.
+- **RFS Creation:** Allows LPs or custodians to create a settlement request based on their delta position.
+- **Bidding Mechanism:** Enables participants with matching currency deltas to submit bids within a time-bound auction period.
+- **Settlement Execution:** Verifies winning bidders and settles their deltas by burning VRL tokens via the `DeltaManager`.
+- **Participant Slashing:** Penalizes participants who fail to bid or settle appropriately through `FietStake` based on configurable slash tiers.
+- **RFS Closure:** Finalizes the request and logs the result, ensuring no re-use of active RFS slots.
 
 ## Quick Start 
 
