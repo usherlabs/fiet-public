@@ -21,12 +21,12 @@ fiet-protocol/
 │   ├── liquidity_verifier/
 │   ├── settlement_manager/
 │   ├── token/
-│   └── vrl_manager
+│   └── vrl_manager/
 │
 ├── tests/integration/tests
-│   ├── delta.rs/
-│   ├── rfs.rs/
-│   └── stake.rs
+│                     ├── delta.rs
+│                     ├── rfs.rs
+│                     └── stake.rs
 │
 ├── .env
 ├── .env.sample
