@@ -17,6 +17,12 @@ interface IFietStake  {
 
     function stakeFor(address owner, uint256 amount) external;
 
+    function delegateStake(address new_delegatee) external;
+
+    function removeStakeDelegate() external;
+
+    function getEffectiveAccount(address owner) external view returns (address);
+
     function unstake(uint256 amount) external;
 
     function slash(address owner, uint256 bps) external;

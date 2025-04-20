@@ -17,6 +17,7 @@
 extern crate alloc;
 
 use alloy_primitives::{Address, U64};
+use alloy_sol_types::sol;
 use stylus_sdk::{alloy_primitives::U256, prelude::*};
 
 sol_storage! {
@@ -28,6 +29,9 @@ sol_storage! {
         uint256 min_stake;
         mapping(address => uint256) balance_of;
         mapping(address => bool) is_admin;
+        mapping(address => address) delegator_of;
+        mapping(address => address) delegatee_of;
+
         Contracts contracts;
     }
 
@@ -49,6 +53,12 @@ sol_interface! {
         function isActiveParticipant(address owner) external returns (bool);
         function deltaOfParticipant(address owner) external returns (int256);
     }
+}
+
+// Events for delegation actions
+sol! {
+    event Delegated(address indexed delegator, address indexed delegatee);
+    event DelegationRemoved(address indexed delegator, address indexed delegatee);
 }
 
 impl FietStake {
@@ -85,7 +95,6 @@ impl FietStake {
         Ok(())
     }
 }
-
 
 #[public]
 impl FietStake {
@@ -146,12 +155,88 @@ impl FietStake {
         self._stake(amount, owner)
     }
 
+    /// Delegate your stake to a provided address
+    pub fn delegate_stake(&mut self, new_delegatee: Address) -> Result<(), Vec<u8>> {
+        let sender = self.vm().msg_sender();
+
+        if new_delegatee == Address::ZERO || new_delegatee == sender {
+            return Err("INVALID DELEGATEE".into());
+        }
+
+        let current_delegatee = self.delegatee_of.get(sender);
+        if current_delegatee != Address::ZERO && current_delegatee != new_delegatee {
+            return Err("ALREADY DELEGATED".into());
+        }
+
+        self.delegator_of.setter(new_delegatee).set(sender);
+        self.delegatee_of.setter(sender).set(new_delegatee);
+
+        log(
+            self.vm(),
+            Delegated {
+                delegator: sender,
+                delegatee: new_delegatee,
+            },
+        );
+
+        Ok(())
+    }
+
+    /// Remove your delegate as a stake holder
+    pub fn remove_stake_delegate(&mut self) -> Result<(), Vec<u8>> {
+        let sender = self.vm().msg_sender();
+        let delegatee = self.delegatee_of.get(sender);
+
+        if delegatee == Address::ZERO {
+            return Err("NO DELEGATION".into());
+        }
+
+        let delta_manager = IDeltaManager::new(self.contracts.delta_manager.get());
+        if delta_manager.is_active_participant(&mut *self, delegatee)? {
+            return Err("DELEGATEE STILL ACTIVE".into());
+        }
+
+        self.delegator_of.setter(delegatee).set(Address::ZERO);
+        self.delegatee_of.setter(sender).set(Address::ZERO);
+
+        log(
+            self.vm(),
+            DelegationRemoved {
+                delegator: sender,
+                delegatee,
+            },
+        );
+
+        Ok(())
+    }
+
+    // if this account has a delegate.
+    // then return which account has the maximum stake among the two
+    pub fn get_effective_account(&self, owner: Address) -> Address {
+        // get user balance
+        let user_balance = self.balance_of.get(owner);
+        // get delegatee balance
+        let delegator = self.delegator_of.get(owner);
+        let delegator_balance = self.balance_of.get(delegator);
+        // return max of both
+        return if user_balance > delegator_balance {
+            owner
+        } else {
+            delegator
+        };
+    }
+
     /// Allows users to unstake tokens, only if they are inactive.
     pub fn unstake(&mut self, amount: U256) -> Result<(), Vec<u8>> {
         let sender = self.vm().msg_sender();
 
         if amount == U256::ZERO {
             return Err("INVALID STAKE AMOUNT".into());
+        }
+
+        let delegatee = self.delegatee_of.get(sender);
+        if delegatee != Address::ZERO {
+            return Err("REMOVE STAKE DELEGATE".into());
         }
 
         let delta_manager = IDeltaManager::new(self.contracts.delta_manager.get());
@@ -173,16 +258,18 @@ impl FietStake {
         Ok(())
     }
 
-    /// Slashes a percentage of a user’s stake (in bps). Only callable by admins.
+    /// Slashes a percentage of a user’s stake (in bps - fraction of minimum stake). Only callable by admins.
     pub fn slash(&mut self, owner: Address, bps: U256) -> Result<(), Vec<u8>> {
         if !self.is_admin.get(self.vm().msg_sender()) {
             return Err("CALLER IS NOT ADMIN".into());
         }
 
-        let user_stake = self.balance_of.get(owner);
+        let slashed_account = self.get_effective_account(owner);
+
+        let user_stake = self.balance_of.get(slashed_account);
         let slash_amount = self.get_slash_amount(bps);
 
-        self.balance_of.setter(owner).set(user_stake - slash_amount);
+        self.balance_of.setter(slashed_account).set(user_stake - slash_amount);
 
         let contract_address = self.vm().contract_address();
         let contract_balance = self.balance_of.get(contract_address);
@@ -246,7 +333,10 @@ impl FietStake {
 
     /// Returns true if the user meets or exceeds the min stake requirement.
     pub fn is_staked(&mut self, owner: Address) -> bool {
-        self.get_balance(owner) >= self.min_stake.get()
+        let staker = self.get_effective_account(owner);
+        // // get the balance and confirm it is over the minimum balance
+        let balance = self.get_balance(staker);
+        return balance >= self.min_stake.get();
     }
 
     /// Calculates slash bps from delta and target amounts.
