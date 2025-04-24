@@ -52,6 +52,7 @@ sol_interface! {
     interface IDeltaManager{
         function isActiveParticipant(address owner) external returns (bool);
         function deltaOfParticipant(address owner) external returns (int256);
+        function deactivateParticipant(address participant) external;
     }
 }
 
@@ -93,6 +94,25 @@ impl FietStake {
         assert!(response);
 
         Ok(())
+    }
+
+    // slash the balance of a specified owner by a specified amount
+    pub fn _slash_balance(&mut self, owner: Address, slash_amount: U256) -> Result<(), Vec<u8>> {
+        let user_stake = self.balance_of.get(owner);
+
+        if slash_amount > user_stake {
+            return Err("INSUFFICIENT AMOUNT".into());
+        }
+
+        self.balance_of.setter(owner).set(user_stake - slash_amount);
+
+        let contract_address = self.vm().contract_address();
+        let contract_balance = self.balance_of.get(contract_address);
+        self.balance_of
+            .setter(contract_address)
+            .set(contract_balance + slash_amount);
+
+        return Ok(());
     }
 }
 
@@ -210,20 +230,17 @@ impl FietStake {
         Ok(())
     }
 
-    // if this account has a delegate.
-    // then return which account has the maximum stake among the two
-    pub fn get_effective_account(&self, owner: Address) -> Address {
-        // get user balance
+    // Get the total(sum of) balances of a user and their delegator if any at all
+    pub fn get_effective_balance(&self, owner: Address) -> (U256, U256, U256) {
+        // get the user balance
         let user_balance = self.balance_of.get(owner);
-        // get delegatee balance
-        let delegator = self.delegator_of.get(owner);
-        let delegator_balance = self.balance_of.get(delegator);
-        // return max of both
-        return if user_balance > delegator_balance {
-            owner
-        } else {
-            delegator
-        };
+        // get the delegatee balance
+        let delegator_balance = self.balance_of.get(self.delegator_of.get(owner));
+        // get the total balance
+        let total_balance = user_balance + delegator_balance;
+
+        // return all balances
+        return (user_balance, delegator_balance, total_balance);
     }
 
     /// Allows users to unstake tokens, only if they are inactive.
@@ -264,19 +281,56 @@ impl FietStake {
             return Err("CALLER IS NOT ADMIN".into());
         }
 
-        let slashed_account = self.get_effective_account(owner);
-
-        let user_stake = self.balance_of.get(slashed_account);
         let slash_amount = self.get_slash_amount(bps);
+        let deduct_amount = slash_amount / U256::from(2);
+        let (user_balance, delegator_balance, total_user_balance) =
+            self.get_effective_balance(owner);
 
-        self.balance_of.setter(slashed_account).set(user_stake - slash_amount);
+        if slash_amount == U256::ZERO {
+            return Err("INVALID SLASH AMOUNT".into());
+        }
 
-        let contract_address = self.vm().contract_address();
-        let contract_balance = self.balance_of.get(contract_address);
-        self.balance_of
-            .setter(contract_address)
-            .set(contract_balance + slash_amount);
+        if slash_amount > total_user_balance {
+            return Err("INSUFFICIENT BALANCE TO SLASH".into());
+        }
 
+        let user = owner;
+        let delegator = self.delegator_of.get(user);
+
+        // `user_balance + delegator_balance >= slash_amount` from the condition above `slash_amount > total_user_balance`
+        // i.e if user_balance < slash_amount / 2 then delegator_balance >= slash_amount / 2
+        // i.e if delegator_balance < slash_amount / 2 then user_balance >= slash_amount / 2
+        // starting out we slash both user and delegator equally
+        let mut user_amount_to_slash = deduct_amount;
+        let mut delegator_amount_to_slash = deduct_amount;
+
+        // if the delegator balance is not up to half the slash amount then take all their balance
+        // and remove the rest from the user's balance
+        if delegator_balance < delegator_amount_to_slash && user_balance > user_amount_to_slash {
+            delegator_amount_to_slash = delegator_balance;
+
+            user_amount_to_slash = slash_amount - delegator_amount_to_slash;
+        }
+        // if the user balance is not up to half the slash amount then take all their balance
+        // and remove the rest from the delegator's balance
+        else {
+            user_amount_to_slash = user_balance;
+            delegator_amount_to_slash = slash_amount - user_amount_to_slash;
+        }
+
+        // slash the balances of both the main user and the delegator
+        // they should be slashed equally if it can
+        self._slash_balance(user, user_amount_to_slash)?;
+        self._slash_balance(delegator, delegator_amount_to_slash)?;
+
+        // get new effective balance
+        // check if it is less than the minimum stake
+        // and deactivate the participant if it is
+        let (_, _, total_effective_balance) = self.get_effective_balance(owner);
+        if total_effective_balance < self.min_stake.get() {
+            let delta_manager = IDeltaManager::new(self.contracts.delta_manager.get());
+            delta_manager.deactivate_participant(&mut *self, owner)?;
+        }
         Ok(())
     }
 
@@ -333,10 +387,8 @@ impl FietStake {
 
     /// Returns true if the user meets or exceeds the min stake requirement.
     pub fn is_staked(&mut self, owner: Address) -> bool {
-        let staker = self.get_effective_account(owner);
-        // // get the balance and confirm it is over the minimum balance
-        let balance = self.get_balance(staker);
-        return balance >= self.min_stake.get();
+        let (_, _, total_balance) = self.get_effective_balance(owner);
+        return total_balance >= self.min_stake.get();
     }
 
     /// Calculates slash bps from delta and target amounts.

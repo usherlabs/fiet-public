@@ -15,6 +15,8 @@ interface IDeltaManager  {
 
     function registerAsLp(bytes32 currency_hash) external;
 
+    function deactivateParticipant(address participant) external;
+
     function unregisterParticipant() external;
 
     function signalDelta(address owner, bytes32 currency_hash, int256 delta) external returns (int256);

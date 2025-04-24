@@ -133,6 +133,57 @@ impl DeltaManager {
         Ok(())
     }
 
+    /// Removes an existing active participant (LP or custodian) from the protocol.
+    ///
+    ///
+    /// # Arguments
+    /// * `participant` - The address of the participant to unregister.
+    ///
+    /// # Returns
+    /// * `Ok(())` if the participant is successfully registered or already active.
+    /// * `Err(Vec<u8>)` is not expected to occur under normal conditions.
+    fn _remove_participant(&mut self, participant: Address) -> Result<(), Vec<u8>> {
+        // unregister the participant provided
+        let mut participant_setter = self.delta_of.setter(participant);
+
+        // set the that the participant is no longer active
+        participant_setter.is_active.set(false);
+        participant_setter.delta.set(I256::ZERO);
+        let currency_hash = participant_setter.currency_hash.get();
+
+        // go through all the participants and remove the address to be unregistered from the list of addresses of participants
+        let mut existing_participants_for_currency = self.participants_of.setter(currency_hash);
+        let num_participants = existing_participants_for_currency.len();
+        for index in 0..num_participants {
+            let temp_address = existing_participants_for_currency
+                .get(index)
+                .unwrap_or_default();
+            // if we have found the index of the address to remove, we swap the position with the last and pop the array
+            if temp_address == participant {
+                let last_participant_for_currency = existing_participants_for_currency
+                    .get(num_participants - 1)
+                    .unwrap();
+                let mut index_setter = existing_participants_for_currency.setter(index).unwrap();
+                index_setter.set(last_participant_for_currency);
+
+                // now that we have moved the last item to the entry we want to delete, we can delete the last item as it has been duplicated
+                existing_participants_for_currency.erase_last();
+
+                // exit loop
+                break;
+            }
+        }
+
+        log(
+            self.vm(),
+            UnRegisterParticipant {
+                participant: participant,
+            },
+        );
+
+        return Ok(());
+    }
+
     /// Settles a user's delta by burning VRL and increasing the delta by a proportional amount.
     ///
     /// Interacts with the `VRLManager` to burn the user's VRL balance for the specified currency and amount.
@@ -302,6 +353,28 @@ impl DeltaManager {
         self._register_participant(sender, currency_hash, role_hash)
     }
 
+    /// Forcefully deactivate a participant.
+    ///
+    /// Usually used in the case that the user's stake has gone below the minimum stake.
+    ///
+    ///
+    /// # Returns
+    /// * `Ok(())` on successful deactivation.
+    /// * `Err(Vec<u8>)` if the caller has insufficient stake or other validation fails.
+    pub fn deactivate_participant(&mut self, participant: Address) -> Result<(), Vec<u8>> {
+        let sender = self.vm().msg_sender();
+        if sender != self.contracts.stake_contract.get() {
+            return Err("NOT AUTHORIZED".into());
+        }
+
+        // TODO: perform any clean up action before forcibly deactivating a participant
+        // TODO: perform any clean up action before forcibly deactivating a participant
+
+        // remove participant from active participant list
+        self._remove_participant(participant)?;
+        return Ok(());
+    }
+
     /// Unregisters the caller as a participant from the protocol.
     ///
     /// Validates that the participant's delta is settled (zero) before allowing unregistration.
@@ -325,42 +398,7 @@ impl DeltaManager {
             return Ok(());
         }
 
-        // unregister the participant provided
-        let mut participant_setter = self.delta_of.setter(sender);
-
-        // set the that the participant is no longer active
-        participant_setter.is_active.set(false);
-        let currency_hash = participant_setter.currency_hash.get();
-
-        // go through all the participants and remove the address to be unregistered from the list of addresses of participants
-        let mut existing_participants_for_currency = self.participants_of.setter(currency_hash);
-        let num_participants = existing_participants_for_currency.len();
-        for index in 0..num_participants {
-            let temp_address = existing_participants_for_currency
-                .get(index)
-                .unwrap_or_default();
-            // if we have found the index of the address to remove, we swap the position with the last and pop the array
-            if temp_address == sender {
-                let last_participant_for_currency = existing_participants_for_currency
-                    .get(num_participants - 1)
-                    .unwrap();
-                let mut index_setter = existing_participants_for_currency.setter(index).unwrap();
-                index_setter.set(last_participant_for_currency);
-
-                // now that we have moved the last item to the entry we want to delete, we can delete the last item as it has been duplicated
-                existing_participants_for_currency.erase_last();
-
-                // exit loop
-                break;
-            }
-        }
-
-        log(
-            self.vm(),
-            UnRegisterParticipant {
-                participant: sender,
-            },
-        );
+        self._remove_participant(sender)?;
 
         return Ok(());
     }

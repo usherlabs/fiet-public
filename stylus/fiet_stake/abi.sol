@@ -21,11 +21,13 @@ interface IFietStake  {
 
     function removeStakeDelegate() external;
 
-    function getEffectiveAccount(address owner) external view returns (address);
+    function getEffectiveBalance(address owner) external view returns (uint256, uint256, uint256);
 
     function unstake(uint256 amount) external;
 
     function slash(address owner, uint256 bps) external;
+
+    function slashBalance(address owner, uint256 slash_amount) external;
 
     function slashByAmount(address owner, uint256 target_amount, uint64 slash_factor) external;
 
