@@ -5,7 +5,7 @@
 // specifically interacting with an ERC-20 token contract and a staking contract deployed
 // on an Arbitrum Stylus-compatible environment. The tests verify core user flows:
 // staking tokens, unstaking tokens, and admin withdrawal of slashed tokens.
-// 
+//
 // Tests included:
 // 1. `test_user_can_stake_fiet`: Verifies a user can stake FIET tokens, including minting,
 //    approving the staking contract, staking half the minted amount, and checking balances.
@@ -13,7 +13,8 @@
 //    cycle of minting, staking, unstaking a portion, and validating balance updates.
 // 3. `test_admin_can_withdraw_slashed_tokens`: Confirms an admin can slash a user's staked
 //    tokens (10% via BPS) and withdraw the slashed amount to a recipient address.
-// 
+// 4. `test_user_can_delegate_fiet`: Delegate and undelegate fiet to a third party user
+//
 // The tests use the `ethers` crate for Ethereum interactions, `tokio` for async operations,
 // and a custom `stylus_integration_test::utils` module for configuration and contract helpers.
 // Each test follows a similar pattern:
@@ -21,11 +22,11 @@
 // 2. Initialize contract instances (token and staking contracts).
 // 3. Perform actions (mint, approve, stake, unstake, slash, withdraw).
 // 4. Verify state changes via assertions on balances and allowances.
-// 
+//
 // Key dependencies:
 // - `ethers::types::U256` for large integer handling (e.g., token amounts).
 // - `stylus_integration_test::utils` for test utilities (Config, ContractsHelper).
-// 
+//
 // Note: These tests assume a deployed environment with pre-configured contract addresses
 // and a deployer account with sufficient privileges.
 
@@ -251,5 +252,89 @@ mod test {
             recipient_balance_pre + expected_slash_amount,
             recipient_balance_post
         );
+    }
+
+    #[tokio::test]
+    async fn test_user_can_delegate_fiet() {
+        let config = Config::from_env();
+        let sender = config.public_key;
+
+        // get the token contracts
+        let contracts = ContractsHelper::new(&config);
+        let token_contract = contracts.get_erc20token_contract().await;
+        let stake_contract = contracts.get_stake_contract().await;
+
+        let fiet_stake_contract_address = hex_to_address(&config.deployed_contracts.fiet_stake);
+
+        //  verify the decimals
+        let token_decimals: u8 = token_contract.decimals().call().await.unwrap();
+        let expected_token_decimals = 18;
+        assert_eq!(token_decimals, expected_token_decimals);
+
+        let mint_amount = value_in_wei(10);
+        let old_balance = token_contract.balance_of(sender).call().await.unwrap();
+        // --------------------- mint some tokens for some users
+        let pending = token_contract.mint(mint_amount);
+        pending.send().await.unwrap().await.unwrap().unwrap();
+        // have user stake said token
+
+        // ---------------------- amount has been minted
+        let new_balance = token_contract.balance_of(sender).call().await.unwrap();
+        assert_eq!(mint_amount, new_balance - old_balance);
+
+        // ---------------------- approve staking contract
+        token_contract
+            .approve(fiet_stake_contract_address, U256::MAX)
+            .send()
+            .await
+            .unwrap()
+            .await
+            .unwrap();
+        let new_allowance = token_contract
+            .allowance(sender, fiet_stake_contract_address)
+            .call()
+            .await
+            .unwrap();
+        assert_eq!(new_allowance, U256::MAX);
+
+        // ---------------------- stake on the staking contract
+        let stake_amount = mint_amount / 2;
+        stake_contract.stake(stake_amount).send().await.unwrap();
+
+        // ----------------------- delegate stake to another user
+        let delegatee_user = contracts.generate_funded_keypair(Some(2223)).await;
+        stake_contract
+            .delegate_stake(delegatee_user.public_key)
+            .send()
+            .await
+            .unwrap()
+            .await
+            .unwrap()
+            .unwrap();
+        // ----------------------- validate this new user is staked by way of delegation
+        let is_staked = stake_contract
+            .is_staked(delegatee_user.public_key)
+            .call()
+            .await
+            .unwrap();
+        assert!(is_staked);
+
+        // ----------------------- undelegate the user
+        stake_contract
+            .remove_stake_delegate()
+            .send()
+            .await
+            .unwrap()
+            .await
+            .unwrap()
+            .unwrap();
+
+        // ----------------------- validate this new user is staked by way of delegation
+        let is_staked = stake_contract
+            .is_staked(delegatee_user.public_key)
+            .call()
+            .await
+            .unwrap();
+        assert!(!is_staked);
     }
 }

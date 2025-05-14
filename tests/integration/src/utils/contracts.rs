@@ -54,6 +54,9 @@ abigen!(
         function getSlashBps(uint256 target_amount, int256 delta_amount) external view returns (uint256)
         function getSlashAmount(uint256 bps) external view returns (uint256)
         function getMinStake() external view returns (uint256)
+        function delegateStake(address new_delegatee) external
+        function removeStakeDelegate() external
+        function getEffectiveAccount(address owner) external view returns (address)
     ]"#
 );
 
