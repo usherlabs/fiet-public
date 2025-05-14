@@ -12,7 +12,7 @@
 #![cfg_attr(not(any(test, feature = "export-abi")), no_main)]
 extern crate alloc;
 
-use alloy_primitives::{Address, I256};
+use alloy_primitives::{Address, FixedBytes, I256};
 /// Import items from the SDK. The prelude contains common traits and macros.
 use stylus_sdk::{alloy_primitives::U256, crypto::keccak, prelude::*};
 
@@ -39,6 +39,59 @@ sol_interface! {
 
     interface IDeltaManager {
         function signalDelta(address owner, bytes32 currency_hash, int256 delta) external returns (int256);
+    }
+}
+
+impl LiquidityManager {
+    /// Injects verified liquidity in the form of VRL into the protocol.
+    ///
+    /// Assigns some VRL to a user, while assigning the negative of the amount as the delta of the custodian.
+    ///
+    /// # Arguments
+    /// * `recipient` - The address of the recipient of the VRL tokens.
+    /// * `custodian` - The address of the custodian of the FIAT backing the liquidity.
+    /// * `currency_hash` - The hash of the currency of the FIAT.
+    /// * `amount` - The amount being deposited.
+    ///
+    /// # Returns
+    /// * `Ok(())` on successful initialization.
+    /// * `Err(Vec<u8>)` if the contract is already initialized (assertion failure).
+    fn inject_vrl_liquidity(
+        &mut self,
+        recipient: Address,
+        custodian: Address,
+        currency_hash: FixedBytes<32>,
+        amount: U256,
+    ) -> Result<(), Vec<u8>> {
+        // the net-delta has to be zero
+        // so we increase the VRL record for the owner by the signaled amount
+        // and we incur a negative delta for the Custodian to imply they 'owe' the protocol this amount signalled
+        // and should have the corresponding liquidity
+        // it is similar to lending them money at a 1:1 ratio
+        // TODO: we might apply fees here
+
+        let vrl_deposit_amount = amount;
+        let custodian_delta = -I256::unchecked_from(amount);
+
+        // assign some vrl to one recipient party
+        let vrl_manager = IVRLManager::new(self.contracts.vrl_manager.get());
+        // make a call to the vrl manager to update the balance of VRL owned by the user making the deposit
+        vrl_manager.deposit_verified_fiat(
+            &mut *self,
+            recipient,
+            currency_hash,
+            vrl_deposit_amount,
+        )?;
+
+        // assign the negative of that amount as a delta to the custodian as they owe the corresponding amount
+        // or back the available liquidity by holding the negative counterpart of it
+        IDeltaManager::new(self.contracts.delta_manager.get()).signal_delta(
+            &mut *self,
+            custodian,
+            currency_hash,
+            custodian_delta,
+        )?;
+        return Ok(());
     }
 }
 
@@ -104,40 +157,14 @@ impl LiquidityManager {
         amount: U256,
     ) -> Result<(), Vec<u8>> {
         let sender = self.vm().msg_sender();
-        // the net-delta has to be zero
-        // so we increase the VRL record for the owner by the signaled amount
-        // and we incur a negative delta for the Custodian to imply they 'owe' the protocol this amount signalled
-        // and should have the corresponding liquidity
-        // it is similar to lending them money at a 1:1 ratio
-        // TODO: we might apply fees here
-        let vrl_deposit_amount = amount;
-        let custodian_delta = -I256::unchecked_from(amount);
+        let currency_hash = keccak(currency.as_bytes().to_vec());
 
         // can only be called by owner
         if sender != self.owner.get() {
             return Err("CALLER IS NOT OWNER".into());
         }
 
-        let vrl_manager = IVRLManager::new(self.contracts.vrl_manager.get());
-
-        let currency_hash = keccak(currency.as_bytes().to_vec());
-        // make a call to the vrl manager to update the balance of VRL owned by the user making the deposit
-        vrl_manager.deposit_verified_fiat(
-            &mut *self,
-            owner,
-            currency_hash,
-            vrl_deposit_amount,
-        )?;
-
-        // notify the deltas contract by increasing the delta of the LP
-        // there is no need to increase the delta of the custodian
-        IDeltaManager::new(self.contracts.delta_manager.get()).signal_delta(
-            &mut *self,
-            custodian,
-            currency_hash,
-            custodian_delta,
-        )?;
-        Ok(())
+        return self.inject_vrl_liquidity(owner, custodian, currency_hash, amount);
     }
 
     /// Manually verifies liquidity reserves and signals liquidity.
@@ -161,41 +188,20 @@ impl LiquidityManager {
         &mut self,
         lp_address: Address,
         currency: String,
-        amount: U256
+        amount: U256,
     ) -> Result<(), Vec<u8>> {
-        let sender = self.vm().msg_sender();
         // the net-delta has to be zero
         // so we increase the VRL record for the LP by the signaled amount
         // and we incur a negative delta for the LP to imply they 'owe' the protocol this amount signalled
         // it is similar to lending them money at a 1:1 ratio
         // TODO: we might apply fees here
-        let vrl_deposit_amount = amount;
-        let lp_delta_amount = -I256::unchecked_from(amount);
 
+        let currency_hash = keccak(currency.as_bytes().to_vec());
         // can only be called by owner
-        if sender != self.owner.get() {
+        if self.vm().msg_sender() != self.owner.get() {
             return Err("CALLER IS NOT OWNER".into());
         }
 
-        let vrl_manager = IVRLManager::new(self.contracts.vrl_manager.get());
-
-        let currency_hash = keccak(currency.as_bytes().to_vec());
-        // make a call to the vrl manager to update the balance of VRL owned by the user making the deposit
-        vrl_manager.deposit_verified_fiat(
-            &mut *self,
-            lp_address,
-            currency_hash,
-            vrl_deposit_amount,
-        )?;
-
-        // notify the deltas contract by increasing the delta of the LP
-        // there is no need to increase the delta of the custodian
-        IDeltaManager::new(self.contracts.delta_manager.get()).signal_delta(
-            &mut *self,
-            lp_address,
-            currency_hash,
-            lp_delta_amount,
-        )?;
-        Ok(())
+        return self.inject_vrl_liquidity(lp_address, lp_address, currency_hash, amount);
     }
 }
