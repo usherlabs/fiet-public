@@ -10,551 +10,217 @@ import {Hooks} from "v4-core/libraries/Hooks.sol";
 import {BeforeSwapDelta, toBeforeSwapDelta} from "v4-core/types/BeforeSwapDelta.sol";
 import {BaseHook} from "v4-periphery/src/base/hooks/BaseHook.sol";
 import {BalanceDelta} from "v4-core/types/BalanceDelta.sol";
-import {IVRLManager} from "./interfaces/IVRLManager.sol";
-import {IGLPFeeManager} from "./interfaces/IGLPFeeManager.sol";
-import {LimitedERC20} from "./LimitedERC20.sol";
-import {SignatureLib} from "./lib/Signature.sol";
+import {IToken} from "./IToken.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "forge-std/console.sol";
 
-// A CSMM is a pricing curve that follows the invariant `x + y = k`
-
-contract CSMM is BaseHook, LimitedERC20 {
+contract CSMM is BaseHook {
     using CurrencySettler for Currency;
 
     error AddLiquidityThroughHook();
-    error InsufficientFiat();
-    error CannotWithdrawZero();
+
+    event HookSwap(
+        bytes32 indexed id, // v4 pool id
+        address indexed sender, // router of the swap
+        int128 amount0,
+        int128 amount1,
+        uint128 hookLPfeeAmount0,
+        uint128 hookLPfeeAmount1
+    );
+
+    event HookModifyLiquidity(
+        bytes32 indexed id, // v4 pool id
+        address indexed sender, // router address
+        int128 amount0,
+        int128 amount1
+    );
 
     struct CallbackData {
-        uint256 amountEach;
         Currency currency0;
         Currency currency1;
-        address sender;
     }
 
-    modifier onlyOwner() {
-        require(msg.sender == owner, "NOT_OWNER");
-        _;
-    }
-
-    ERC20 stableToken;
-
-    address owner;
-    uint256 public totalStableCoinSupply;
-    uint256 initialStableCoinDeposit;
-    uint256 reserveTresholdBPS;
-    uint256 totalFeesCollected; // Total fees in wei
-    uint256 totalRebatesPaid; // Total fees in wei
-
-    IVRLManager vrlManager;
-    IGLPFeeManager feeConfigManager;
-    mapping(bytes => bool) public usedSignatures;
-    mapping(bytes32 => uint256) public fiatDelta;
-    mapping(bytes32 => uint256) public fiatRebateLastBlock;
-
-    // rebate variables
-    // initial rebate fee for protocol. 0.01% in 1e6 scale
-    uint256 public constant MAX_REBATE = 800000; // maximum possible rebate should be 80% of inputamount
-
-    uint256 public rebatePerBlock = 10; // 0.001% per block
-    uint256 public rebatePerUnitBalanceShort = 10; // 0.001% extra unit stablecoin in the pool
-    uint256 public rebateBufferTreshold = 100; // if net fees are over 100 uints of stable token(e,g 100usdc) reduce base fee
+    // store pool identifiers for the core and proxy pool
+    PoolKey corePoolKey;
+    PoolKey proxyPoolKey;
 
     constructor(
-        IPoolManager _manager,
-        IVRLManager _vrlManager,
-        IGLPFeeManager _feeConfigManager,
-        uint256 _reserveTresholdBPS
-    ) BaseHook(_manager) LimitedERC20("Liquidity Delta", "LD", 18) {
-        vrlManager = _vrlManager;
-        reserveTresholdBPS = _reserveTresholdBPS;
-        feeConfigManager = _feeConfigManager;
-
-        owner = msg.sender;
+        IPoolManager poolManager,
+        PoolKey memory _corePoolKey
+    ) BaseHook(poolManager) {
+        corePoolKey = _corePoolKey;
     }
 
-    /**
-     * @notice Sets the reserve threshold for dynamic fee calculations.
-     * @dev Updates the reserveTresholdBPS value, restricted to the contract owner.
-     * @param _reserveTresholdBPS The new reserve threshold in basis points (bps).
-     */
-    function setReserveTreshold(uint256 _reserveTresholdBPS) public onlyOwner {
-        reserveTresholdBPS = _reserveTresholdBPS;
-    }
-
-    function getHookPermissions() public pure override returns (Hooks.Permissions memory) {
-        return Hooks.Permissions({
-            beforeInitialize: false,
-            afterInitialize: true,
-            beforeAddLiquidity: true, // Don't allow adding liquidity normally
-            afterAddLiquidity: false,
-            beforeRemoveLiquidity: false,
-            afterRemoveLiquidity: false,
-            beforeSwap: true, // Override how swaps are done
-            afterSwap: false,
-            beforeDonate: false,
-            afterDonate: false,
-            beforeSwapReturnDelta: true, // Allow beforeSwap to return a custom delta
-            afterSwapReturnDelta: false,
-            afterAddLiquidityReturnDelta: false,
-            afterRemoveLiquidityReturnDelta: false
-        });
-    }
-
-    // after initialize hook to store the two currencies of the hook
-    function afterInitialize(address, PoolKey calldata key, uint160, int24 tick, bytes calldata)
-        external
-        override
-        onlyByPoolManager
-        returns (bytes4)
-    {
-        address stableCurrencyAddress = Currency.unwrap(key.currency0) == address(this)
-            ? Currency.unwrap(key.currency1)
-            : Currency.unwrap(key.currency0);
-
-        stableToken = ERC20(stableCurrencyAddress);
-        return this.afterInitialize.selector;
-    }
-
-    // Disable adding liquidity through the PM
-    function beforeAddLiquidity(address, PoolKey calldata, IPoolManager.ModifyLiquidityParams calldata, bytes calldata)
-        external
+    function getHookPermissions()
+        public
         pure
         override
-        returns (bytes4)
+        returns (Hooks.Permissions memory)
     {
+        return
+            Hooks.Permissions({
+                beforeInitialize: true, // On initialization we shouls
+                afterInitialize: false,
+                beforeAddLiquidity: true, // Don't allow adding liquidity normally
+                afterAddLiquidity: false,
+                beforeRemoveLiquidity: false,
+                afterRemoveLiquidity: false,
+                beforeSwap: true, // Override how swaps are done
+                afterSwap: false,
+                beforeDonate: false,
+                afterDonate: false,
+                beforeSwapReturnDelta: true, // Allow beforeSwap to return a custom delta
+                afterSwapReturnDelta: false,
+                afterAddLiquidityReturnDelta: false,
+                afterRemoveLiquidityReturnDelta: false
+            });
+    }
+
+    function beforeInitialize(
+        address,
+        PoolKey calldata key,
+        uint160,
+        bytes calldata
+    ) external override returns (bytes4) {
+        proxyPoolKey = key;
+        return this.beforeInitialize.selector;
+    }
+
+    // Disable adding liquidity to the proxy pool
+    function beforeAddLiquidity(
+        address,
+        PoolKey calldata,
+        IPoolManager.ModifyLiquidityParams calldata,
+        bytes calldata
+    ) external pure override returns (bytes4) {
         revert AddLiquidityThroughHook();
     }
 
-    // Custom add liquidity function
-    function addLiquidity(PoolKey calldata key, uint256 amountEach) external {
-        poolManager.unlock(abi.encode(CallbackData(amountEach, key.currency0, key.currency1, msg.sender)));
-    }
+    // Before swap we make sure to provide enough delta
+    // to ensure that the user gets a debit of amount specified
+    // and we disable the core swap mechanism
+    // and proxy the swap through the core pool
+    function beforeSwap(
+        address,
+        PoolKey calldata key,
+        IPoolManager.SwapParams calldata params,
+        bytes calldata hookData
+    ) external override returns (bytes4, BeforeSwapDelta, uint24) {
+        // unwrap the output amount of the recieved token to get the underlying asset added to balance
+        Currency outputCurrency = params.zeroForOne
+            ? corePoolKey.currency1
+            : corePoolKey.currency0;
 
-    function _unlockCallback(bytes calldata data) internal override returns (bytes memory) {
-        CallbackData memory callbackData = abi.decode(data, (CallbackData));
+        IToken iOutToken = IToken(Currency.unwrap(outputCurrency));
+        iOutToken.checkForRFS();
 
-        // There should be two tokens in the pool
-        // one should be this token which is the hook contract
-        // and the other should be the token that will be used to inject liquidity
-        // We make a check to make sure we take the token that is not 'LD' i.e the stable coin deposited
+        address recipient = abi.decode(hookData, (address));
 
-        // Settle `amountEach` of stablecoin from the sender
-        // i.e. Create a debit of `amountEach` of the stable coin with the Pool Manager
+        uint256 amountInOutPositive = params.amountSpecified > 0
+            ? uint256(params.amountSpecified)
+            : uint256(-params.amountSpecified);
 
-        // Since we didn't go through the regular "modify liquidity" flow,
-        // the PM just has a debit of `amountEach` of the stable currency from us
-        // We can, in exchange, get back ERC-6909 claim tokens for `amountEach` of each currency
-        // to create a credit of `amountEach` of each currency to us
-        // that balances out the debit
 
-        // We will store those claim tokens with the hook, so when swaps take place
-        // liquidity from our CSMM can be used by minting/burning claim tokens the hook owns
-
-        // we have two tokens in the pool, one which would have the hook's address(FIAT) and the other would be the stable currency
-        // the stable currency is one where the address is not the same address as the one of the hook
-        Currency stableCurrency =
-            Currency.unwrap(callbackData.currency0) == address(this) ? callbackData.currency1 : callbackData.currency0;
-
-        stableCurrency.settle(
-            poolManager,
-            callbackData.sender,
-            callbackData.amountEach,
-            false // `burn` = `false` i.e. we're actually transferring tokens, not burning ERC-6909 Claim Tokens
+        // disable swap mechanism
+        BeforeSwapDelta beforeSwapDelta = toBeforeSwapDelta(
+            params.amountSpecified > 0
+            ? int128(0)
+            : int128(-params.amountSpecified),
+            params.amountSpecified > 0
+            ? int128(params.amountSpecified)
+            : int128(0)
         );
 
-        stableCurrency.take(
+        // take deposit from the pool manager
+        Currency takeCurrency = params.zeroForOne
+            ? key.currency0
+            : key.currency1;
+
+        takeCurrency.take(
             poolManager,
             address(this),
-            callbackData.amountEach,
-            true // true = mint claim tokens for the hook, equivalent to money we just deposited to the PM
+            amountInOutPositive,
+            true
         );
 
-        // if this is the first deposit, then set the variable
-        if (initialStableCoinDeposit == 0) {
-            initialStableCoinDeposit = callbackData.amountEach;
-        }
-        totalStableCoinSupply += callbackData.amountEach;
+        // wrap the provided token to use as input token or token specified
+        (, uint256 outputAmount) = swapAndSettleBalances(
+            corePoolKey,
+            params
+        );
 
-        return "";
-    }
+        // unwrap the response/provided token
+        // approve the iToken to take amount to be unwrapped from the hook
+        iOutToken.approve(address(iOutToken), outputAmount);
 
-    // before swap hook
-    function beforeSwap(address, PoolKey calldata key, IPoolManager.SwapParams calldata params, bytes memory hookData)
-        external
-        override
-        returns (bytes4, BeforeSwapDelta, uint24)
-    {
-        // check if it is a crypto => fiat swap or fiat => crypto swap
-        // i.e isFiatToCrypto if it is a zeroForOneSwap and the zero currency is this address of the LD(FIAT represented) token
-        // i.e isFiatToCrypto if it is a OneForZeroSwap and the one currency is this address of the LD(FIAT represented) token
-        bool isFiatToCrypto = params.zeroForOne
-            ? Currency.unwrap(key.currency0) == address(this)
-            : Currency.unwrap(key.currency1) == address(this);
+        // unwrap the tokens
+        address underlyingAsset = iOutToken.underlyingAsset();
+        IERC20(underlyingAsset).approve(address(iOutToken), outputAmount);
+        // this essentially transfers the underlying asset from the hook to the recipient
+        iOutToken.unwrap(recipient, outputAmount);
 
-        // get the absolute value of the provided amount
-        int256 amountInOutPositive =
-            params.amountSpecified > 0 ? int256(params.amountSpecified) : int256(-params.amountSpecified);
-
-        (Currency fiat, Currency crypto) = Currency.unwrap(key.currency0) == address(this)
-            ? (key.currency0, key.currency1)
-            : (key.currency1, key.currency0);
-
-        (address userAddress, bytes32 fiatCurrencyHash) =
-            decodeAndVerifyHookData(hookData, uint256(amountInOutPositive));
-
-        // define the swap delta variable to be assigned depending on the direction of the swap
-        BeforeSwapDelta beforeSwapDelta;
-
-        if (isFiatToCrypto) {
-            beforeSwapDelta =
-                _handleFiatToCryptoSwap(userAddress, fiatCurrencyHash, uint256(amountInOutPositive), crypto);
-        } else {
-            beforeSwapDelta =
-                _handleCryptoToFiatSwap(userAddress, fiatCurrencyHash, uint256(amountInOutPositive), crypto);
-        }
-
-        // TODO: Fee rebating and stuff and JIT liquidity pools
         return (this.beforeSwap.selector, beforeSwapDelta, 0);
     }
 
-    /**
-     * @notice Handles fiat-to-crypto swap logic.
-     * @dev Processes the swap by withdrawing fiat liquidity, minting LD tokens, applying fees, and settling stablecoin output.
-     * @param user The address of the user initiating the swap.
-     * @param fiatCurrencyHash The hash of the fiat currency being swapped from.
-     * @param amountIn The amount of fiat (represented as LD tokens) input for the swap.
-     * @param stableCurrency The stablecoin currency (e.g., USDC) being swapped to.
-     * @return BeforeSwapDelta The delta specifying input/output adjustments for the swap, with 0 LD taken and stablecoin output.
-     */
-    function _handleFiatToCryptoSwap(address user, bytes32 fiatCurrencyHash, uint256 amountIn, Currency stableCurrency)
-        private
-        returns (BeforeSwapDelta)
-    {
-        // if this is a fiat to crypto swap then they must have at least the amount they want to withdraw in the VRLManager contract
-        // delta should be equal to the `amountIn`, just to make sure the vrlManager is in charge of the LD minted in the hook contract
-        uint256 delta = vrlManager.withdrawVRL(
-            user,
-            fiatCurrencyHash,
-            uint256(amountIn),
-            true //should lock the VRL being withdrawn
-        );
-        // increase the supply of LD tokens in the hook by delta
-        mint(delta);
+    // use this helper to perform a swap and settle operation on the core pool
+    function swapAndSettleBalances(
+        PoolKey memory key,
+        IPoolManager.SwapParams memory params
+    ) internal returns (BalanceDelta, uint256) {
+        // Conduct the swap inside the Pool Manager
+        BalanceDelta delta = poolManager.swap(key, params, bytes(""));
+        uint256 outputAmount = 0;
 
-        // get the fees
-        uint256 fee1e6 = getOnrampFees(fiatCurrencyHash, amountIn);
-        // calculate the amout out
-        uint256 amountOut = applyFees(amountIn, fee1e6);
-        uint256 feePaid = amountIn - amountOut;
-        totalFeesCollected += feePaid;
-
-        // increment the fiat delta for this currency by the amount in
-        fiatDelta[fiatCurrencyHash] += uint256(amountIn);
-        // decrement the total stablecoin supply by the amount being disbursed out
-        totalStableCoinSupply -= uint256(amountOut);
-        // when we put a token in the pool start, set the block to accumulate rebates over time for that fiat deposit
-        // Only do this if the block has not been set prior so we do not override an uncollected rebate in progress
-        if (fiatRebateLastBlock[fiatCurrencyHash] == 0) {
-            fiatRebateLastBlock[fiatCurrencyHash] = block.timestamp;
-        }
-
-        // settle the pool manager with the amount of crypto we are giving them in the block above '-amountInOutPositive'
-        // in order to settle the deltas
-        stableCurrency.settle(
-            poolManager,
-            address(this),
-            uint256(amountOut),
-            true // `burn` = `true` i.e. we're actually burning ERC-6909 Claim Tokens we minted('take') when we added liquidity
-        );
-        return toBeforeSwapDelta(
-            // take 0 LD(FIAT) tokens from the user since it cacnt be transferred anyway
-            int128(0),
-            // give them the amount requested for in stable coins
-            int128(-int256(amountOut))
-        );
-    }
-
-    /**
-     * @notice Handles crypto-to-fiat swap logic.
-     * @dev Processes the swap by validating liquidity, applying rebates and fees, burning LD tokens, and unlocking fiat liquidity.
-     * @param user The address of the user initiating the swap.
-     * @param fiatCurrencyHash The hash of the fiat currency being swapped to.
-     * @param amountIn The amount of stablecoin (e.g., USDC) input for the swap.
-     * @param stableCurrency The stablecoin currency being swapped from.
-     * @return BeforeSwapDelta The delta specifying input/output adjustments for the swap, with stablecoin input and 0 LD output.
-     */
-    function _handleCryptoToFiatSwap(address user, bytes32 fiatCurrencyHash, uint256 amountIn, Currency stableCurrency)
-        private
-        returns (BeforeSwapDelta)
-    {
-        // validate availability of liquidity
-        uint256 availableLiquidityForFiat = fiatDelta[fiatCurrencyHash];
-        if (availableLiquidityForFiat < uint256(amountIn)) {
-            // check if there is a fee bost
-            bool isFeeBoost = false;
-            if (!isFeeBoost) {
-                revert InsufficientFiat();
+        // If we just did a zeroForOne swap
+        // We need to send Token 0 to PM, and receive Token 1 from PM
+        if (params.zeroForOne) {
+            // Negative Value => Money leaving user's wallet
+            // Promise Mint some tokens in order to settle with the pool manager
+            // Settle with PoolManager
+            if (delta.amount0() < 0) {
+                IToken(Currency.unwrap(corePoolKey.currency0)).custodianMint(
+                    uint256(int256(-delta.amount0()))
+                );
+                _settle(key.currency0, uint128(-delta.amount0()));
             }
-            // if there is call an external pool which would get some tokens into the pool
-            // then run some checks to be sure
-            // then proceed with the swap as usual
+
+            // Positive Value => Money coming into user's wallet
+            // Take from PM
+            if (delta.amount1() > 0) {
+                _take(key.currency1, uint128(delta.amount1()));
+                outputAmount = uint256(uint128(delta.amount1()));
+            }
+        } else {
+            if (delta.amount1() < 0) {
+                // Promise Mint some tokens in order to settle with the pool manager
+                // Settle with PoolManager
+                IToken(Currency.unwrap(corePoolKey.currency1)).custodianMint(
+                    uint256(int256(-delta.amount1()))
+                );
+                _settle(key.currency1, uint128(-delta.amount1()));
+            }
+
+            if (delta.amount0() > 0) {
+                _take(key.currency0, uint128(delta.amount0()));
+                outputAmount = uint256(uint128(delta.amount0()));
+            }
         }
 
-        // check if there is a rebate available for this currency
-        // if there is, apply it to the input amount and give a discount(rebate)
-        uint256 rebateFee1e6 = calculateRebateFee(fiatCurrencyHash);
-
-        // after application of rebates, this is the actual amount the user would be debited of
-        uint256 cryptoAmountToDeduct = applyFees(amountIn, rebateFee1e6);
-
-        // take the deposit of crypto made to the pool manager
-        stableCurrency.take(
-            poolManager,
-            address(this),
-            uint256(cryptoAmountToDeduct),
-            true // true = mint claim tokens for the hook, equivalent to money we just deposited to the PM
-        );
-
-        // send back the rebate amount to the user
-        // which is the the amountIn - amountToDebit
-        // it is basically a refund/discount
-        // if there are no rebates, it is zero
-        uint256 rebateAmount = amountIn - cryptoAmountToDeduct;
-        totalRebatesPaid += rebateAmount;
-        stableCurrency.take(
-            poolManager,
-            user,
-            uint256(rebateAmount),
-            false // false = do not mint claim tokens for the user, make an ERC20 transfer to them since we want to give them actual funds
-        );
-        // we do this two staged `take`
-        // because we need to `take` the equivalent of the amountIn to balance the deltas
-        // so we `take` some for the hook contract
-        // and we `take` the rebate/refund amount back to the user
-        // where they both sum up to the input amount
-
-        // calculate the fees then the amount out
-        uint256 fee1e6 = getOffRampFees(fiatCurrencyHash, amountIn);
-        uint256 fiatAmountOut = applyFees(amountIn, fee1e6);
-        uint256 feePaid = amountIn - fiatAmountOut;
-        totalFeesCollected += feePaid;
-
-        burn(uint256(fiatAmountOut));
-        vrlManager.unlockLiquidityDelta(user, fiatCurrencyHash, uint256(fiatAmountOut));
-        totalStableCoinSupply += uint256(cryptoAmountToDeduct);
-        // when we take a fiat out of the pool, restart the rebate block counter
-        // fiatRebateLastBlock[fiatCurrencyHash] = 0;
-        fiatDelta[fiatCurrencyHash] -= uint256(fiatAmountOut);
-        // if there is still some fiat, then we reset the rebate counter
-        // otherwise set rebate counter to 0
-        fiatRebateLastBlock[fiatCurrencyHash] = fiatDelta[fiatCurrencyHash] > 0 ? block.number : 0;
-
-        return toBeforeSwapDelta(
-            // take 'amountInOutPositive' of cryptoToken from the sender
-            int128(int256(amountIn)),
-            // give them 0 LD tokens back since it cannot be transferred anyways
-            int128(0)
-        );
+        return (delta, outputAmount);
     }
 
-    /**
-     * @notice Applies a fee to a given base amount.
-     * @dev This function calculates and deducts a fee from the base amount, where the fee is expressed in 1e6 scale.
-     * @param baseAmount The initial amount before applying fees.
-     * @param fee1e6 The fee percentage in 1e6 format (e.g., 100000 = 10%).
-     * @return The final amount after deducting the fee.
-     */
-    function applyFees(uint256 baseAmount, uint256 fee1e6) public pure returns (uint256) {
-        // Ensure the fee percentage is non-negative
-        if (fee1e6 == 0) return baseAmount;
 
-        // Calculate the fee amount
-        // fee1e6 is expressed in 1e6 scale, so we divide by 1e6 to get the actual percentage
-        uint256 feeAmount = (baseAmount * fee1e6) / 1e6;
-        // Subtract the fee from the base amount to get the final amount
-        return baseAmount - feeAmount;
+    // Helper function to transfer and settle a debt with the pool manager
+    function _settle(Currency currency, uint128 amount) internal {
+        // Transfer tokens to PM and let it know
+        poolManager.sync(currency);
+        currency.transfer(address(poolManager), amount);
+        poolManager.settle();
     }
 
-    /**
-     * @notice Generates a hash of a currency string.
-     * @dev Creates a unique identifier for a currency using keccak256 hashing.
-     * @param currency The string representation of the currency (e.g., "AUD", "USD").
-     * @return bytes32 The hashed value of the currency string.
-     */
-    function hashCurrency(string memory currency) public pure returns (bytes32) {
-        return keccak256(abi.encode(currency));
-    }
-
-    /**
-     * @notice Encodes hook data for swap verification.
-     * @dev Combines nonce, user address, fiat currency hash, and signature into a single bytes array for use in swap hooks.
-     * @param nonce A unique number to prevent replay attacks.
-     * @param userAddress The address of the user initiating the swap.
-     * @param fiatCurrencyHash The hash of the fiat currency involved in the swap.
-     * @param signature The cryptographic signature for verifying the swap data.
-     * @return bytes The encoded hook data as a bytes array.
-     */
-    function encodeHookData(uint256 nonce, address userAddress, bytes32 fiatCurrencyHash, bytes calldata signature)
-        public
-        pure
-        returns (bytes memory)
-    {
-        return abi.encode(nonce, fiatCurrencyHash, signature, userAddress);
-    }
-
-    /**
-     * @notice Decodes and verifies hook data for a swap.
-     * @dev Extracts swap data from encoded bytes, validates the signature, and ensures it hasn’t been used before.
-     * @param encodedData The encoded hook data containing nonce, fiat currency hash, signature, and user address.
-     * @param amount The swap amount to verify against the signature.
-     * @return address The user address extracted from the decoded data.
-     * @return bytes32 The fiat currency hash extracted from the decoded data.
-     */
-    function decodeAndVerifyHookData(bytes memory encodedData, uint256 amount) public returns (address, bytes32) {
-        (uint256 nonce, bytes32 fiatCurrencyHash, bytes memory signature, address userAddress) =
-            abi.decode(encodedData, (uint256, bytes32, bytes, address));
-        require(!usedSignatures[signature], "USED_SIGNATURE");
-
-        bytes32 dataHash = generateSignaturePayload(nonce, amount);
-        require(SignatureLib.verify(userAddress, dataHash, signature), "INVALID_SIGNATURE");
-        usedSignatures[signature] = true;
-
-        return (userAddress, fiatCurrencyHash);
-    }
-
-    /**
-     * @notice Generates a signature payload for verification.
-     * @dev Creates a hash of the nonce and amount using keccak256 for signature validation in swap hooks.
-     * @param nonce A unique number to prevent replay attacks.
-     * @param amount The swap amount to include in the payload.
-     * @return bytes32 The hashed payload for signature verification.
-     */
-    function generateSignaturePayload(uint256 nonce, uint256 amount) public pure returns (bytes32) {
-        return keccak256(abi.encodePacked(nonce, amount));
-    }
-
-    // Fiet Protocol Fees:
-    // Denominated in pips (one-hundredth bps) 5000pips => 0.5%
-    // FIAT => USDC
-    // 1. Base Fee: GLPs set for fiat-to-USDC (e.g., 0.1% on 100 AUD = 0.1 USDC).
-    // 2. Threshold Fee: Quadratic if USDC < 20% (e.g., 0.25 USDC on 100 USDC at 15% reserves).
-    /**
-     * @notice Calculates the total fees for a fiat-to-USDC swap.
-     * @dev Combines base fee and dynamic threshold fee, adjusting the base fee based on net fees collected versus rebates paid.
-     * @param currencyHash The hash of the fiat currency involved in the swap.
-     * @param withdrawAmount The amount of USDC being withdrawn in the swap.
-     * @return uint256 The total fee in 1e6 scale, including base and dynamic threshold components.
-     */
-    function getOnrampFees(bytes32 currencyHash, uint256 withdrawAmount) public returns (uint256) {
-        // get base fee from external contract
-        uint256 baseFee = feeConfigManager.getBaseFee(currencyHash);
-        uint256 stableTokenDecimals = 10 ** stableToken.decimals();
-        uint256 decimalAdjustedRebaseBuffer = rebateBufferTreshold * stableTokenDecimals;
-
-        // adjust the base fee based on net fees collected
-
-        // Adjustment based on fees vs rebates
-        int256 netFeeBalance = int256(totalFeesCollected) - int256(totalRebatesPaid);
-        if (netFeeBalance < 0) {
-            // scale the netfee down to a unit token by divinding by the decimal place
-            // then add an extra fee per deficit balance
-            uint256 adjustment = (uint256(-netFeeBalance) / stableTokenDecimals) * rebatePerUnitBalanceShort; // +10 per 1 USDC surplus
-            baseFee += adjustment;
-        } else if (uint256(netFeeBalance) > decimalAdjustedRebaseBuffer) {
-            // Reduce by 50% if we have recuperated our loses and fees + buffer > rebates
-            baseFee = baseFee / 2;
-        }
-
-        // check if it has gotten below the treshold to apply treshold fee
-        uint256 dynamicTresholdFee = calculateHookDynamicTresholdFee(withdrawAmount);
-
-        // for a FIAT -> USDC swap
-        // total fee is baseFee + dynamic treshold fee
-        return baseFee + dynamicTresholdFee;
-    }
-
-    /**
-     * @notice Calculates the dynamic threshold fee for a fiat-to-USDC swap.
-     * @dev Delegates to the internal dynamic fee calculation using current contract state variables.
-     * @param withdrawAmount The amount of USDC being withdrawn in the swap.
-     * @return fee1e6 The dynamic threshold fee in 1e6 scale.
-     */
-    function calculateHookDynamicTresholdFee(uint256 withdrawAmount) public view returns (uint256 fee1e6) {
-        return calculateDynamicTresholdFee(
-            withdrawAmount, totalStableCoinSupply, initialStableCoinDeposit, reserveTresholdBPS
-        );
-    }
-
-    /**
-     * @notice Calculates the dynamic threshold fee based on reserve levels.
-     * @dev Applies a quadratic fee increase when USDC reserves fall below a threshold, returned in 1e6 scale.
-     * @param usdcAmount The amount of USDC being withdrawn in the swap.
-     * @param currentUSDC The current total supply of USDC in the pool.
-     * @param initialUSDC The initial USDC deposit used to set the reserve threshold.
-     * @param tauBps The reserve threshold in basis points (bps).
-     * @return fee1e6 The dynamic fee in 1e6 scale, ranging from 0 to 1,000,000.
-     */
-    function calculateDynamicTresholdFee(uint256 usdcAmount, uint256 currentUSDC, uint256 initialUSDC, uint256 tauBps)
-        public
-        pure
-        returns (uint256 fee1e6)
-    {
-        uint256 postSwapUSDC = currentUSDC - usdcAmount;
-        uint256 threshold = (tauBps * initialUSDC) / 10000; // tauBps still in bps
-
-        if (postSwapUSDC > threshold) return 0;
-
-        uint256 xSquared = postSwapUSDC * postSwapUSDC;
-        uint256 thresholdSquared = threshold * threshold;
-        uint256 scaled = (xSquared * 1000000) / thresholdSquared;
-        fee1e6 = 1000000 - scaled; // Fee in 1e6 scale (e.g., 437500 => 0.4375)
-        return fee1e6;
-    }
-
-    /**
-     * @notice Calculates the total fees for a USDC-to-fiat swap.
-     * @dev Currently returns the volatility fee from VRLManager; rebates and additional fees are pending implementation.
-     * @param currencyHash The hash of the fiat currency involved in the swap.
-     * @param withdrawAmount The amount of USDC being swapped to fiat.
-     * @return uint256 The total fee in 1e6 scale, currently only the volatility fee.
-     */
-    // USDC => FIAT
-    // 3. Volatility Fee: On USDC-to-fiat for FX risk (e.g., 0.5 USDC on 100 USDC if AUD drops 5%).
-    // 4. Priority Fee: Trader pays extra for JIT speed (e.g., 0.5 USDC on 100 USDC when LD = 0).
-    // 5. Rebate: Discount on USDC-to-fiat, max 80% of base (e.g., 0.08 USDC back on 100 USDC swap).
-    function getOffRampFees(bytes32 currencyHash, uint256 withdrawAmount) public returns (uint256) {
-        if (withdrawAmount == 0) {
-            revert CannotWithdrawZero();
-        }
-        // volatility fee is gotten from the VRLManager in pips
-        uint256 volatilityFee1e6 = vrlManager.getVolatilityFee(currencyHash);
-        // calculate rebate based on time that has passed since last rebate and adjust it based on if fees > rebates
-        return volatilityFee1e6;
-    }
-
-    /**
-     * @notice Calculates the rebate fee for a USDC-to-fiat swap.
-     * @dev Computes a time-based rebate fee in 1e6 scale, increasing with blocks elapsed since the last rebate, capped at 80%.
-     * @param currencyHash The hash of the fiat currency involved in the swap.
-     * @return uint256 The rebate fee in 1e6 scale, limited to MAX_REBATE (800,000).
-     */
-    function calculateRebateFee(bytes32 currencyHash) public view returns (uint256) {
-        // Start with base
-        uint256 rebate1e6 = 0;
-        uint256 decimals = 10 ** stableToken.decimals();
-
-        // Adjustment based on block advancement
-        // the longer the time since last rebate
-        // rebate fee should increase since rebate for a given currency
-        // there will only be `lastRebateBlock` for a particular currency if it is still present in the pool
-        uint256 lastRebateBlock = fiatRebateLastBlock[currencyHash];
-        if (lastRebateBlock != 0) {
-            uint256 blocksElapsed = block.number - lastRebateBlock;
-            rebate1e6 += blocksElapsed * rebatePerBlock;
-        }
-
-        // cap the rebate growth to `MAX_REBATE` which is 80% to ensure rebate is never greater than input amount
-        return rebate1e6 > MAX_REBATE ? MAX_REBATE : rebate1e6;
+    // helper function to help take a particular currency from the pool manager
+    function _take(Currency currency, uint128 amount) internal {
+        // Take tokens out of PM to our hook contract
+        poolManager.take(currency, address(this), amount);
     }
 }
