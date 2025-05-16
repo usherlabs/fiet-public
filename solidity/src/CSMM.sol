@@ -19,8 +19,8 @@ contract CSMM is BaseHook {
 
     error AddLiquidityThroughHook();
 
+    // router of the swap
     event HookSwap( // v4 pool id
-        // router of the swap
         bytes32 indexed id,
         address indexed sender,
         int128 amount0,
