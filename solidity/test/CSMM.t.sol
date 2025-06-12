@@ -16,15 +16,15 @@ import {Constants} from "@uniswap/v4-core/test/utils/Constants.sol";
 import {IERC20Minimal} from "v4-core/interfaces/external/IERC20Minimal.sol";
 import {MockERC20} from "solmate/src/test/utils/mocks/MockERC20.sol";
 import {SortTokens} from "@uniswap/v4-core/test/utils/SortTokens.sol";
-import {CSMM} from "../src/CSMM.sol";
+import {ProxyPool} from "../src/ProxyPool.sol";
 import {IToken} from "../src/IToken.sol";
 import {MockRFS} from "./mock/rfs.sol";
 
-contract CSMMTest is Test, Deployers {
+contract ProxyPoolTest is Test, Deployers {
     using PoolIdLibrary for PoolId;
     using CurrencyLibrary for Currency;
 
-    CSMM hook;
+    ProxyPool hook;
     MockRFS rfs;
     // store the currencies
     Currency internal _currency0;
@@ -45,7 +45,13 @@ contract CSMMTest is Test, Deployers {
         address underlyingAsset,
         uint256 base_vts
     ) internal returns (Currency currency) {
-        IToken token = new IToken(name, symbol, underlyingAsset, address(rfs), base_vts);
+        IToken token = new IToken(
+            name,
+            symbol,
+            underlyingAsset,
+            address(rfs),
+            base_vts
+        );
 
         address[10] memory toApprove = [
             address(swapRouter),
@@ -65,7 +71,10 @@ contract CSMMTest is Test, Deployers {
         }
 
         // ! Make sure to approve the ITokens to take out 'underlyingAsset'
-        IERC20Minimal(underlyingAsset).approve(address(token), Constants.MAX_UINT256);
+        IERC20Minimal(underlyingAsset).approve(
+            address(token),
+            Constants.MAX_UINT256
+        );
         return Currency.wrap(address(token));
     }
 
@@ -78,39 +87,69 @@ contract CSMMTest is Test, Deployers {
         Currency _currencyB = deployMintAndApproveCurrency();
 
         Currency _currencyC = deployAndApproveITokens(
-            "Intents TOKEN0 Settlement Receipt", "iTOKEN0R", Currency.unwrap(_currencyA), baseVts
+            "Intents TOKEN0 Settlement Receipt",
+            "iTOKEN0R",
+            Currency.unwrap(_currencyA),
+            baseVts
         );
         Currency _currencyD = deployAndApproveITokens(
-            "Intents TOKEN1 Settlement Receipt", "ITOKEN1R", Currency.unwrap(_currencyB), baseVts
+            "Intents TOKEN1 Settlement Receipt",
+            "ITOKEN1R",
+            Currency.unwrap(_currencyB),
+            baseVts
         );
 
-        (_currency0, _currency1) =
-            SortTokens.sort(MockERC20(Currency.unwrap(_currencyA)), MockERC20(Currency.unwrap(_currencyB)));
+        (_currency0, _currency1) = SortTokens.sort(
+            MockERC20(Currency.unwrap(_currencyA)),
+            MockERC20(Currency.unwrap(_currencyB))
+        );
 
-        (_currency2, _currency3) =
-            SortTokens.sort(MockERC20(Currency.unwrap(_currencyC)), MockERC20(Currency.unwrap(_currencyD)));
+        (_currency2, _currency3) = SortTokens.sort(
+            MockERC20(Currency.unwrap(_currencyC)),
+            MockERC20(Currency.unwrap(_currencyD))
+        );
     }
 
     function deployCorePool() public {
         //  Deploy the pool without the hook
-        (corePoolKey,) = initPool(_currency2, _currency3, IHooks(address(0)), 3000, SQRT_PRICE_1_1, ZERO_BYTES);
+        (corePoolKey, ) = initPool(
+            _currency2,
+            _currency3,
+            IHooks(address(0)),
+            3000,
+            SQRT_PRICE_1_1,
+            ZERO_BYTES
+        );
     }
 
     function deployProxyPool() public {
         // Proxy pool needs hook not core pool
         address hookAddress = address(
             uint160(
-                Hooks.BEFORE_ADD_LIQUIDITY_FLAG | Hooks.BEFORE_SWAP_FLAG | Hooks.BEFORE_INITIALIZE_FLAG
-                    | Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG
+                Hooks.BEFORE_ADD_LIQUIDITY_FLAG |
+                    Hooks.BEFORE_SWAP_FLAG |
+                    Hooks.BEFORE_INITIALIZE_FLAG |
+                    Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG
             )
         );
 
         //  Deploy the hook contract
-        deployCodeTo("CSMM.sol", abi.encode(manager, corePoolKey), hookAddress);
-        hook = CSMM(hookAddress);
+        deployCodeTo(
+            "ProxyPool.sol",
+            abi.encode(manager, corePoolKey),
+            hookAddress
+        );
+        hook = ProxyPool(hookAddress);
 
         //  Deploy the pool with the hook
-        (proxyPoolKey,) = initPool(_currency0, _currency1, hook, 3000, SQRT_PRICE_1_1, ZERO_BYTES);
+        (proxyPoolKey, ) = initPool(
+            _currency0,
+            _currency1,
+            hook,
+            3000,
+            SQRT_PRICE_1_1,
+            ZERO_BYTES
+        );
     }
 
     function mintAndApproveHookToMintITokens() public {
@@ -160,7 +199,12 @@ contract CSMMTest is Test, Deployers {
     function test_canModifyLiquidityOfCoreHook() public {
         modifyLiquidityRouter.modifyLiquidity(
             corePoolKey,
-            IPoolManager.ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e18, salt: bytes32(0)}),
+            IPoolManager.ModifyLiquidityParams({
+                tickLower: -60,
+                tickUpper: 60,
+                liquidityDelta: 1e18,
+                salt: bytes32(0)
+            }),
             ZERO_BYTES
         );
     }
@@ -177,10 +221,14 @@ contract CSMMTest is Test, Deployers {
             ZERO_BYTES
         );
 
-        PoolSwapTest.TestSettings memory settings =
-            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false});
+        PoolSwapTest.TestSettings memory settings = PoolSwapTest.TestSettings({
+            takeClaims: false,
+            settleUsingBurn: false
+        });
 
-        uint256 selfBalanceOfTokenABefore = corePoolKey.currency0.balanceOfSelf();
+        uint256 selfBalanceOfTokenABefore = corePoolKey
+            .currency0
+            .balanceOfSelf();
 
         swapRouter.swap(
             corePoolKey,
@@ -193,7 +241,9 @@ contract CSMMTest is Test, Deployers {
             ZERO_BYTES
         );
 
-        uint256 selfBalanceOfTokenAAfter = corePoolKey.currency0.balanceOfSelf();
+        uint256 selfBalanceOfTokenAAfter = corePoolKey
+            .currency0
+            .balanceOfSelf();
 
         assertEq(selfBalanceOfTokenABefore - selfBalanceOfTokenAAfter, 1e18);
     }
@@ -212,11 +262,17 @@ contract CSMMTest is Test, Deployers {
         );
 
         // add some liquidity to the core pool since it is where swaps will actually take place and not the proxy pool
-        PoolSwapTest.TestSettings memory settings =
-            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false});
+        PoolSwapTest.TestSettings memory settings = PoolSwapTest.TestSettings({
+            takeClaims: false,
+            settleUsingBurn: false
+        });
 
-        uint256 selfBalanceOfTokenABefore = proxyPoolKey.currency0.balanceOfSelf();
-        uint256 selfBalanceOfTokenBBefore = proxyPoolKey.currency1.balanceOfSelf();
+        uint256 selfBalanceOfTokenABefore = proxyPoolKey
+            .currency0
+            .balanceOfSelf();
+        uint256 selfBalanceOfTokenBBefore = proxyPoolKey
+            .currency1
+            .balanceOfSelf();
 
         uint256 swapAmount = 100;
         swapRouter.swap(
@@ -230,10 +286,17 @@ contract CSMMTest is Test, Deployers {
             abi.encode(address(this))
         );
 
-        uint256 selfBalanceOfTokenAAfter = proxyPoolKey.currency0.balanceOfSelf();
-        uint256 selfBalanceOfTokenBAfter = proxyPoolKey.currency1.balanceOfSelf();
+        uint256 selfBalanceOfTokenAAfter = proxyPoolKey
+            .currency0
+            .balanceOfSelf();
+        uint256 selfBalanceOfTokenBAfter = proxyPoolKey
+            .currency1
+            .balanceOfSelf();
 
-        assertEq(selfBalanceOfTokenABefore - selfBalanceOfTokenAAfter, swapAmount);
+        assertEq(
+            selfBalanceOfTokenABefore - selfBalanceOfTokenAAfter,
+            swapAmount
+        );
         assert(selfBalanceOfTokenBAfter > selfBalanceOfTokenBBefore);
     }
 
@@ -251,11 +314,17 @@ contract CSMMTest is Test, Deployers {
         );
 
         // add some liquidity to the core pool since it is where swaps will actually take place and not the proxy pool
-        PoolSwapTest.TestSettings memory settings =
-            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false});
+        PoolSwapTest.TestSettings memory settings = PoolSwapTest.TestSettings({
+            takeClaims: false,
+            settleUsingBurn: false
+        });
 
-        uint256 selfBalanceOfTokenABefore = proxyPoolKey.currency0.balanceOfSelf();
-        uint256 selfBalanceOfTokenBBefore = proxyPoolKey.currency1.balanceOfSelf();
+        uint256 selfBalanceOfTokenABefore = proxyPoolKey
+            .currency0
+            .balanceOfSelf();
+        uint256 selfBalanceOfTokenBBefore = proxyPoolKey
+            .currency1
+            .balanceOfSelf();
 
         uint256 swapAmount = 100;
         swapRouter.swap(
@@ -269,10 +338,17 @@ contract CSMMTest is Test, Deployers {
             abi.encode(address(this))
         );
 
-        uint256 selfBalanceOfTokenAAfter = proxyPoolKey.currency0.balanceOfSelf();
-        uint256 selfBalanceOfTokenBAfter = proxyPoolKey.currency1.balanceOfSelf();
+        uint256 selfBalanceOfTokenAAfter = proxyPoolKey
+            .currency0
+            .balanceOfSelf();
+        uint256 selfBalanceOfTokenBAfter = proxyPoolKey
+            .currency1
+            .balanceOfSelf();
 
-        assertEq(selfBalanceOfTokenBBefore - selfBalanceOfTokenBAfter, swapAmount);
+        assertEq(
+            selfBalanceOfTokenBBefore - selfBalanceOfTokenBAfter,
+            swapAmount
+        );
         assert(selfBalanceOfTokenAAfter > selfBalanceOfTokenABefore);
     }
 
@@ -290,11 +366,17 @@ contract CSMMTest is Test, Deployers {
         );
 
         // add some liquidity to the core pool since it is where swaps will actually take place and not the proxy pool
-        PoolSwapTest.TestSettings memory settings =
-            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false});
+        PoolSwapTest.TestSettings memory settings = PoolSwapTest.TestSettings({
+            takeClaims: false,
+            settleUsingBurn: false
+        });
 
-        uint256 selfBalanceOfTokenABefore = proxyPoolKey.currency0.balanceOfSelf();
-        uint256 selfBalanceOfTokenBBefore = proxyPoolKey.currency1.balanceOfSelf();
+        uint256 selfBalanceOfTokenABefore = proxyPoolKey
+            .currency0
+            .balanceOfSelf();
+        uint256 selfBalanceOfTokenBBefore = proxyPoolKey
+            .currency1
+            .balanceOfSelf();
 
         uint256 swapAmount = 100;
         swapRouter.swap(
@@ -308,12 +390,19 @@ contract CSMMTest is Test, Deployers {
             abi.encode(address(this))
         );
 
-        uint256 selfBalanceOfTokenAAfter = proxyPoolKey.currency0.balanceOfSelf();
-        uint256 selfBalanceOfTokenBAfter = proxyPoolKey.currency1.balanceOfSelf();
+        uint256 selfBalanceOfTokenAAfter = proxyPoolKey
+            .currency0
+            .balanceOfSelf();
+        uint256 selfBalanceOfTokenBAfter = proxyPoolKey
+            .currency1
+            .balanceOfSelf();
 
         assert(selfBalanceOfTokenABefore > selfBalanceOfTokenAAfter);
 
-        assertEq(selfBalanceOfTokenBAfter, selfBalanceOfTokenBBefore + swapAmount);
+        assertEq(
+            selfBalanceOfTokenBAfter,
+            selfBalanceOfTokenBBefore + swapAmount
+        );
     }
 
     function test_swap_exactOutput_oneForZeroOnProxy() public {
@@ -330,11 +419,17 @@ contract CSMMTest is Test, Deployers {
         );
 
         // add some liquidity to the core pool since it is where swaps will actually take place and not the proxy pool
-        PoolSwapTest.TestSettings memory settings =
-            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false});
+        PoolSwapTest.TestSettings memory settings = PoolSwapTest.TestSettings({
+            takeClaims: false,
+            settleUsingBurn: false
+        });
 
-        uint256 selfBalanceOfTokenABefore = proxyPoolKey.currency0.balanceOfSelf();
-        uint256 selfBalanceOfTokenBBefore = proxyPoolKey.currency1.balanceOfSelf();
+        uint256 selfBalanceOfTokenABefore = proxyPoolKey
+            .currency0
+            .balanceOfSelf();
+        uint256 selfBalanceOfTokenBBefore = proxyPoolKey
+            .currency1
+            .balanceOfSelf();
 
         uint256 swapAmount = 100;
         swapRouter.swap(
@@ -348,11 +443,18 @@ contract CSMMTest is Test, Deployers {
             abi.encode(address(this))
         );
 
-        uint256 selfBalanceOfTokenAAfter = proxyPoolKey.currency0.balanceOfSelf();
-        uint256 selfBalanceOfTokenBAfter = proxyPoolKey.currency1.balanceOfSelf();
+        uint256 selfBalanceOfTokenAAfter = proxyPoolKey
+            .currency0
+            .balanceOfSelf();
+        uint256 selfBalanceOfTokenBAfter = proxyPoolKey
+            .currency1
+            .balanceOfSelf();
 
         assert(selfBalanceOfTokenBBefore > selfBalanceOfTokenBAfter);
 
-        assertEq(selfBalanceOfTokenAAfter, selfBalanceOfTokenABefore + swapAmount);
+        assertEq(
+            selfBalanceOfTokenAAfter,
+            selfBalanceOfTokenABefore + swapAmount
+        );
     }
 }

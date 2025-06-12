@@ -1,14 +1,14 @@
 //! VRLManager - Fiat Liquidity Management for Fiet Protocol
 //!
 //! This contract, written in Rust for Arbitrum's Stylus framework, manages locked fiat liquidity
-//! in the Fiet Protocol. It interacts with the CSMM contract and other peripheral contracts
+//! in the Fiet Protocol. It interacts with the ProxyPool contract and other peripheral contracts
 //! to facilitate fiat-to-crypto and crypto-to-fiat swaps, providing volatility fees and liquidity
 //! locking/unlocking functionality. Deployed as WebAssembly (WASM), it leverages Stylus's
 //! efficiency while maintaining EVM compatibility.
 //!
 //! Key Features:
 //! - Locks and unlocks fiat liquidity for RLPs.
-//! - Integrates with CSMM for Liquidity Delta (LD) token operations.
+//! - Integrates with ProxyPool for Liquidity Delta (LD) token operations.
 
 #![cfg_attr(not(any(test, feature = "export-abi")), no_main)]
 extern crate alloc;
