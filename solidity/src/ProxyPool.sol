@@ -20,8 +20,8 @@ contract ProxyPool is BaseHook {
     error AddLiquidityThroughHook();
 
     // router of the swap
+    // v4 pool id
     event HookSwap(
-        // v4 pool id
         bytes32 indexed id,
         address indexed sender,
         int128 amount0,
@@ -30,14 +30,9 @@ contract ProxyPool is BaseHook {
         uint128 hookLPfeeAmount1
     );
 
-    event HookModifyLiquidity(
-        // v4 pool id
-        // router address
-        bytes32 indexed id,
-        address indexed sender,
-        int128 amount0,
-        int128 amount1
-    );
+    // v4 pool id
+    // router address
+    event HookModifyLiquidity(bytes32 indexed id, address indexed sender, int128 amount0, int128 amount1);
 
     struct CallbackData {
         Currency currency0;
@@ -48,55 +43,45 @@ contract ProxyPool is BaseHook {
     PoolKey corePoolKey;
     PoolKey proxyPoolKey;
 
-    constructor(
-        IPoolManager poolManager,
-        PoolKey memory _corePoolKey
-    ) BaseHook(poolManager) {
+    constructor(IPoolManager poolManager, PoolKey memory _corePoolKey) BaseHook(poolManager) {
         corePoolKey = _corePoolKey;
     }
 
-    function getHookPermissions()
-        public
-        pure
-        override
-        returns (Hooks.Permissions memory)
-    {
-        return
-            Hooks.Permissions({
-                beforeInitialize: true, // On initialization we shouls
-                afterInitialize: false,
-                beforeAddLiquidity: true, // Don't allow adding liquidity normally
-                afterAddLiquidity: false,
-                beforeRemoveLiquidity: false,
-                afterRemoveLiquidity: false,
-                beforeSwap: true, // Override how swaps are done
-                afterSwap: false,
-                beforeDonate: false,
-                afterDonate: false,
-                beforeSwapReturnDelta: true, // Allow beforeSwap to return a custom delta
-                afterSwapReturnDelta: false,
-                afterAddLiquidityReturnDelta: false,
-                afterRemoveLiquidityReturnDelta: false
-            });
+    function getHookPermissions() public pure override returns (Hooks.Permissions memory) {
+        return Hooks.Permissions({
+            beforeInitialize: true, // On initialization we shouls
+            afterInitialize: false,
+            beforeAddLiquidity: true, // Don't allow adding liquidity normally
+            afterAddLiquidity: false,
+            beforeRemoveLiquidity: false,
+            afterRemoveLiquidity: false,
+            beforeSwap: true, // Override how swaps are done
+            afterSwap: false,
+            beforeDonate: false,
+            afterDonate: false,
+            beforeSwapReturnDelta: true, // Allow beforeSwap to return a custom delta
+            afterSwapReturnDelta: false,
+            afterAddLiquidityReturnDelta: false,
+            afterRemoveLiquidityReturnDelta: false
+        });
     }
 
-    function beforeInitialize(
-        address,
-        PoolKey calldata key,
-        uint160,
-        bytes calldata
-    ) external override returns (bytes4) {
+    function beforeInitialize(address, PoolKey calldata key, uint160, bytes calldata)
+        external
+        override
+        returns (bytes4)
+    {
         proxyPoolKey = key;
         return this.beforeInitialize.selector;
     }
 
     // Disable adding liquidity to the proxy pool
-    function beforeAddLiquidity(
-        address,
-        PoolKey calldata,
-        IPoolManager.ModifyLiquidityParams calldata,
-        bytes calldata
-    ) external pure override returns (bytes4) {
+    function beforeAddLiquidity(address, PoolKey calldata, IPoolManager.ModifyLiquidityParams calldata, bytes calldata)
+        external
+        pure
+        override
+        returns (bytes4)
+    {
         revert AddLiquidityThroughHook();
     }
 
@@ -104,47 +89,32 @@ contract ProxyPool is BaseHook {
     // to ensure that the user gets a debit of amount specified
     // and we disable the core swap mechanism
     // and proxy the swap through the core pool
-    function beforeSwap(
-        address,
-        PoolKey calldata key,
-        IPoolManager.SwapParams calldata params,
-        bytes calldata hookData
-    ) external override returns (bytes4, BeforeSwapDelta, uint24) {
+    function beforeSwap(address, PoolKey calldata key, IPoolManager.SwapParams calldata params, bytes calldata hookData)
+        external
+        override
+        returns (bytes4, BeforeSwapDelta, uint24)
+    {
         // unwrap the output amount of the recieved token to get the underlying asset added to balance
-        Currency outputCurrency = params.zeroForOne
-            ? corePoolKey.currency1
-            : corePoolKey.currency0;
+        Currency outputCurrency = params.zeroForOne ? corePoolKey.currency1 : corePoolKey.currency0;
 
         IToken iOutToken = IToken(Currency.unwrap(outputCurrency));
         iOutToken.checkForRFS();
 
         address recipient = abi.decode(hookData, (address));
 
-        uint256 amountInOutPositive = params.amountSpecified > 0
-            ? uint256(params.amountSpecified)
-            : uint256(-params.amountSpecified);
+        uint256 amountInOutPositive =
+            params.amountSpecified > 0 ? uint256(params.amountSpecified) : uint256(-params.amountSpecified);
 
         // disable swap mechanism
         BeforeSwapDelta beforeSwapDelta = toBeforeSwapDelta(
-            params.amountSpecified > 0
-                ? int128(0)
-                : int128(-params.amountSpecified),
-            params.amountSpecified > 0
-                ? int128(params.amountSpecified)
-                : int128(0)
+            params.amountSpecified > 0 ? int128(0) : int128(-params.amountSpecified),
+            params.amountSpecified > 0 ? int128(params.amountSpecified) : int128(0)
         );
 
         // take deposit from the pool manager
-        Currency takeCurrency = params.zeroForOne
-            ? key.currency0
-            : key.currency1;
+        Currency takeCurrency = params.zeroForOne ? key.currency0 : key.currency1;
 
-        takeCurrency.take(
-            poolManager,
-            address(this),
-            amountInOutPositive,
-            true
-        );
+        takeCurrency.take(poolManager, address(this), amountInOutPositive, true);
 
         // wrap the provided token to use as input token or token specified
         (, uint256 outputAmount) = swapAndSettleBalances(corePoolKey, params);
@@ -163,10 +133,10 @@ contract ProxyPool is BaseHook {
     }
 
     // use this helper to perform a swap and settle operation on the core pool
-    function swapAndSettleBalances(
-        PoolKey memory key,
-        IPoolManager.SwapParams memory params
-    ) internal returns (BalanceDelta, uint256) {
+    function swapAndSettleBalances(PoolKey memory key, IPoolManager.SwapParams memory params)
+        internal
+        returns (BalanceDelta, uint256)
+    {
         // Conduct the swap inside the Pool Manager
         BalanceDelta delta = poolManager.swap(key, params, bytes(""));
         uint256 outputAmount = 0;
@@ -178,9 +148,7 @@ contract ProxyPool is BaseHook {
             // Promise Mint some tokens in order to settle with the pool manager
             // Settle with PoolManager
             if (delta.amount0() < 0) {
-                IToken(Currency.unwrap(corePoolKey.currency0)).custodianMint(
-                    uint256(int256(-delta.amount0()))
-                );
+                IToken(Currency.unwrap(corePoolKey.currency0)).custodianMint(uint256(int256(-delta.amount0())));
                 _settle(key.currency0, uint128(-delta.amount0()));
             }
 
@@ -194,9 +162,7 @@ contract ProxyPool is BaseHook {
             if (delta.amount1() < 0) {
                 // Promise Mint some tokens in order to settle with the pool manager
                 // Settle with PoolManager
-                IToken(Currency.unwrap(corePoolKey.currency1)).custodianMint(
-                    uint256(int256(-delta.amount1()))
-                );
+                IToken(Currency.unwrap(corePoolKey.currency1)).custodianMint(uint256(int256(-delta.amount1())));
                 _settle(key.currency1, uint128(-delta.amount1()));
             }
 
