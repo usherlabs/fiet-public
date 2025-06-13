@@ -14,13 +14,14 @@ import {IToken} from "./IToken.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "forge-std/console.sol";
 
-contract CSMM is BaseHook {
+contract ProxyPool is BaseHook {
     using CurrencySettler for Currency;
 
     error AddLiquidityThroughHook();
 
     // router of the swap
-    event HookSwap( // v4 pool id
+    // v4 pool id
+    event HookSwap(
         bytes32 indexed id,
         address indexed sender,
         int128 amount0,
@@ -29,9 +30,9 @@ contract CSMM is BaseHook {
         uint128 hookLPfeeAmount1
     );
 
-    event HookModifyLiquidity( // v4 pool id
-        // router address
-    bytes32 indexed id, address indexed sender, int128 amount0, int128 amount1);
+    // v4 pool id
+    // router address
+    event HookModifyLiquidity(bytes32 indexed id, address indexed sender, int128 amount0, int128 amount1);
 
     struct CallbackData {
         Currency currency0;

@@ -6,7 +6,7 @@ license = "MIT OR Apache-2.0"
 homepage = "https://github.com/usherlabs/fiet-protocol"
 repository = "https://github.com/usherlabs/fiet-protocol"
 keywords = ["arbitrum", "ethereum", "stylus", "alloy"]
-description = "The Fiet Protocol's VRL Manager contract, built with Stylus on Arbitrum, manages verified fiat liquidity for Retail Liquidity Providers (RLPs). It facilitates locking and unlocking fiat liquidity, integrates with the CSMM contract for fiat-to-crypto swaps, and supports upgradability via proxy patterns. Designed for efficiency and EVM compatibility using Rust and WebAssembly."
+description = "The Fiet Protocol's VRL Manager contract, built with Stylus on Arbitrum, manages verified fiat liquidity for Retail Liquidity Providers (RLPs). It facilitates locking and unlocking fiat liquidity, integrates with the ProxyPool contract for fiat-to-crypto swaps, and supports upgradability via proxy patterns. Designed for efficiency and EVM compatibility using Rust and WebAssembly."
 
 
 [dependencies]

@@ -16,15 +16,15 @@ import {Constants} from "@uniswap/v4-core/test/utils/Constants.sol";
 import {IERC20Minimal} from "v4-core/interfaces/external/IERC20Minimal.sol";
 import {MockERC20} from "solmate/src/test/utils/mocks/MockERC20.sol";
 import {SortTokens} from "@uniswap/v4-core/test/utils/SortTokens.sol";
-import {CSMM} from "../src/CSMM.sol";
+import {ProxyPool} from "../src/ProxyPool.sol";
 import {IToken} from "../src/IToken.sol";
 import {MockRFS} from "./mock/rfs.sol";
 
-contract CSMMTest is Test, Deployers {
+contract ProxyPoolTest is Test, Deployers {
     using PoolIdLibrary for PoolId;
     using CurrencyLibrary for Currency;
 
-    CSMM hook;
+    ProxyPool hook;
     MockRFS rfs;
     // store the currencies
     Currency internal _currency0;
@@ -106,8 +106,8 @@ contract CSMMTest is Test, Deployers {
         );
 
         //  Deploy the hook contract
-        deployCodeTo("CSMM.sol", abi.encode(manager, corePoolKey), hookAddress);
-        hook = CSMM(hookAddress);
+        deployCodeTo("ProxyPool.sol", abi.encode(manager, corePoolKey), hookAddress);
+        hook = ProxyPool(hookAddress);
 
         //  Deploy the pool with the hook
         (proxyPoolKey,) = initPool(_currency0, _currency1, hook, 3000, SQRT_PRICE_1_1, ZERO_BYTES);
