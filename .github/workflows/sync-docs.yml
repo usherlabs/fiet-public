@@ -25,6 +25,7 @@ jobs:
           repository: rsoury/fiet-docs-mirror
           token: ${{ secrets.DOCS_MIRROR_REPO_TOKEN }}
           path: target-repo
+          ref: main
 
       - name: Sync docs folder
         run: |
