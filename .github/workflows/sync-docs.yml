@@ -1,0 +1,54 @@
+name: Sync Docs to Mirror Repository
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'docs/**'
+  workflow_dispatch:
+
+jobs:
+  sync-docs:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Checkout target repository
+        uses: actions/checkout@v4
+        with:
+          repository: rsoury/fiet-docs-mirror
+          token: ${{ secrets.DOCS_MIRROR_REPO_TOKEN }}
+          path: target-repo
+
+      - name: Sync docs folder
+        run: |
+          # Remove existing content in target repo (except .git)
+          cd target-repo
+          find . -mindepth 1 -not -path './.git*' -delete
+
+          # Copy docs folder content to target repo
+          cp -r ../docs/* .
+
+          # Add all files
+          git add .
+
+          # Check if there are changes to commit
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            # Configure git
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+
+            # Commit changes
+            git commit -m "Sync docs from fiet/protocol - $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+
+            # Push to target repository
+            git push origin main
+          fi
