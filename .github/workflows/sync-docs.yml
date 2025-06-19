@@ -19,13 +19,24 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Checkout target repository
-        uses: actions/checkout@v4
-        with:
-          repository: rsoury/fiet-docs-mirror
-          token: ${{ secrets.DOCS_MIRROR_REPO_TOKEN }}
-          path: target-repo
-          ref: main
+      - name: Create target repository if it doesn't exist
+        run: |
+          # Check if repository exists
+          if ! gh repo view rsoury/fiet-docs-mirror >/dev/null 2>&1; then
+            echo "Repository doesn't exist, creating it..."
+            gh repo create rsoury/fiet-docs-mirror --public --clone=false
+          else
+            echo "Repository already exists"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.DOCS_MIRROR_REPO_TOKEN }}
+
+      - name: Clone target repository
+        run: |
+          git clone https://x-access-token:${{ secrets.DOCS_MIRROR_REPO_TOKEN }}@github.com/rsoury/fiet-docs-mirror.git target-repo
+          cd target-repo
+          # Ensure we're on master branch
+          git checkout -b master 2>/dev/null || git checkout master
 
       - name: Sync docs folder
         run: |
@@ -51,5 +62,5 @@ jobs:
             git commit -m "Sync docs from fiet/protocol - $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
 
             # Push to target repository
-            git push origin main
+            git push origin master
           fi
