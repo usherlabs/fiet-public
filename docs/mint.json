@@ -65,8 +65,7 @@
     {
       "group": "Resources",
       "pages": [
-        "resources/ai-guide",
-        "resources/protocol-architecture",
+        "resources/diagrams",
         "resources/technical-specification",
         "resources/cryptography",
         "resources/glossary"

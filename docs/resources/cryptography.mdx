@@ -1,0 +1,55 @@
+---
+title: Cryptography
+---
+
+The Fiet Protocol leverages Verity, an advanced composable cryptographic infrastructure developed by Usher Labs, to enable secure and private verification of liquidity and settlement data. Fiet adopts the Verity zero-knowledge Transport Layer Security (zkTLS) stack to create a Prover of data flows — integrating sensitive financial data from traditional systems, such as centralised exchanges and banks, onto the blockchain without exposing private information.
+
+With Verity, the Prover is designed to:
+
+1. produce high-frequency MPC-TLS proofs
+2. that rollup into STARK-based zero-knowledge proofs, powered by RiscZero, then
+3. verify in a public replicated and verifiable compute environment, the Internet Computer, where,
+4. further public computation and state can be managed, before
+5. a succinct **Threshold-ECDSA Signature** over a hash of state allows for VRL verification and cross-chain state syndication
+
+This cryptography infrastructure ensures the integrity and transparency of on-chain processes while upholding stringent privacy standards, supporting critical Fiet operations.
+
+## Cryptographic Components
+
+The system encompasses several cryptographic technologies to support Fiet’s operations:
+
+- **zkTLS Proofs**: These zero-knowledge proofs, incorporating multi-party computation and STARK-based verification, securely validate data from trusted financial institutions, such as reserve liquidity amounts, while preserving confidentiality. They enable Fiet to confirm MM solvency and VRL commitments without disclosing sensitive account details.
+- **Merkle Trees**: Organise the VRL state within a verifiable compute environment, facilitating efficient validation of liquidity signals across Market Chains.
+- **Threshold-ECDSA Signatures**: Provide secure, decentralised signing of VRL state updates, enabling data portability and syndication to Market Chains for cross-chain verification.
+
+These components, unified under the Fiet Prover, powered by Verity, ensure Fiet’s ability to manage private data securely in a decentralised ecosystem.
+
+## Integration with Fiet Protocol
+
+The system integrates with key Fiet Protocol features:
+
+- **Verified Reserve Liquidity (VRL)**: zkTLS proofs verify off-chain liquidity (e.g., bank accounts, exchange wallets) for VRL commitments, allowing MMs to supply liquidity without immediate on-chain settlement.
+- **Value-to-Signal (VTS) Model**: Validate signalled versus settled liquidity, ensuring accurate VTS ratio calculations and settlement triggers.
+- **Settlements**: zkTLS proofs of settlement intent, enable MMs to extend grace periods during RfS processes, mitigating seizure risks.
+- **Custom Price Oracles**: Proofs of external price data feeds, maintaining market stability.
+
+This integration supports privacy-preserving verification, enhancing trust and efficiency across Fiet’s operations.
+
+## Security Guarantees
+
+Verity’s cryptographic infrastructure provides truth and security for Fiet Markets:
+
+- **Data Integrity**: zkTLS proofs and Merkle trees ensure financial data remains accurate and tamper-proof during verification.
+- **Privacy Protection**: Sensitive information is never exposed on-chain, complying with regulatory and institutional standards.
+- **Attack Resistance**: Threshold-ECDSA signatures and decentralised verification reduce single-point-of-failure risks, protecting against malicious actors.
+- **Auditability**: Cryptographic proofs enable transparent validation of protocol actions, maintaining user confidence.
+
+These guarantees ensure Fiet’s operations are secure, reliable, and compliant.
+
+## About Verity zkTLS
+
+For detailed technical specifications of Verity, explore the documentation [here](https://docs.verity.usher.so/).
+
+## About Usher Labs
+
+[Usher Labs](https://www.usher.so/) develops enterprise-grade data security and integration solutions for Web3 projects. The Verity infrastructure establishes verifiable data pipelines between traditional financial systems and blockchain environments, enabling Fiet to connect private data with decentralised ecosystems while ensuring trust, privacy, and compliance.
