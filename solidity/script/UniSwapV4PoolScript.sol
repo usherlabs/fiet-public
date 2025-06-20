@@ -12,6 +12,7 @@ import {Constants} from "@uniswap/v4-core/test/utils/Constants.sol";
 
 contract CorePoolScript is Script {
     using PoolIdLibrary for PoolKey;
+
     address constant POOL_MANAGER = 0xFB3e0C6F74eB1a21CC1Da29aeC80D2Dfe6C9a317;
     address lccTokenA = 0xd94c3C1BC47e0Bb528d912089C9cA6A457cfc320;
     address lccTokenB = 0x6c8537d89dd1C612AD0D7a9E48eEFFDBe9cB6A8e;
@@ -23,12 +24,8 @@ contract CorePoolScript is Script {
 
         // Create pool configuration
         PoolKey memory poolKey = PoolKey({
-            currency0: Currency.wrap(
-                lccTokenA < lccTokenB ? lccTokenA : lccTokenB
-            ), // Ensure token0 < token1
-            currency1: Currency.wrap(
-                lccTokenA < lccTokenB ? lccTokenB : lccTokenA
-            ),
+            currency0: Currency.wrap(lccTokenA < lccTokenB ? lccTokenA : lccTokenB), // Ensure token0 < token1
+            currency1: Currency.wrap(lccTokenA < lccTokenB ? lccTokenB : lccTokenA),
             fee: 0, // 0% fee
             tickSpacing: 1,
             hooks: IHooks(address(0))

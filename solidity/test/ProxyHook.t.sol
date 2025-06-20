@@ -19,6 +19,7 @@ import {SortTokens} from "@uniswap/v4-core/test/utils/SortTokens.sol";
 import {ProxyHook} from "../src/ProxyHook.sol";
 import {IToken} from "../src/IToken.sol";
 import {MockRFS} from "./mock/rfs.sol";
+import {ModifyLiquidityParams, SwapParams} from "v4-core/types/PoolOperation.sol";
 
 contract ProxyPoolTest is Test, Deployers {
     using PoolIdLibrary for PoolId;
@@ -99,7 +100,7 @@ contract ProxyPoolTest is Test, Deployers {
 
     function deployCorePool() public {
         //  Deploy the pool without the hook
-        (corePoolKey,) = initPool(_currency2, _currency3, IHooks(address(0)), 3000, SQRT_PRICE_1_1, ZERO_BYTES);
+        (corePoolKey,) = initPool(_currency2, _currency3, IHooks(address(0)), 3000, SQRT_PRICE_1_1);
     }
 
     function deployProxyPool() public {
@@ -116,7 +117,7 @@ contract ProxyPoolTest is Test, Deployers {
         hook = ProxyHook(hookAddress);
 
         //  Deploy the pool with the hook
-        (proxyPoolKey,) = initPool(_currency0, _currency1, hook, 3000, SQRT_PRICE_1_1, ZERO_BYTES);
+        (proxyPoolKey,) = initPool(_currency0, _currency1, hook, 3000, SQRT_PRICE_1_1);
     }
 
     function mintAndApproveHookToMintITokens() public {
@@ -153,12 +154,7 @@ contract ProxyPoolTest is Test, Deployers {
         vm.expectRevert();
         modifyLiquidityRouter.modifyLiquidity(
             proxyPoolKey,
-            IPoolManager.ModifyLiquidityParams({
-                tickLower: -60,
-                tickUpper: 60,
-                liquidityDelta: 1000e18,
-                salt: bytes32(0)
-            }),
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1000e18, salt: bytes32(0)}),
             ZERO_BYTES
         );
     }
@@ -166,7 +162,7 @@ contract ProxyPoolTest is Test, Deployers {
     function test_canModifyLiquidityOfCoreHook() public {
         modifyLiquidityRouter.modifyLiquidity(
             corePoolKey,
-            IPoolManager.ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e18, salt: bytes32(0)}),
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e18, salt: bytes32(0)}),
             ZERO_BYTES
         );
     }
@@ -174,12 +170,7 @@ contract ProxyPoolTest is Test, Deployers {
     function test_swap_exactInput_zeroForOneOnCore() public {
         modifyLiquidityRouter.modifyLiquidity(
             corePoolKey,
-            IPoolManager.ModifyLiquidityParams({
-                tickLower: -60,
-                tickUpper: 60,
-                liquidityDelta: 1000e18,
-                salt: bytes32(0)
-            }),
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1000e18, salt: bytes32(0)}),
             ZERO_BYTES
         );
 
@@ -190,11 +181,7 @@ contract ProxyPoolTest is Test, Deployers {
 
         swapRouter.swap(
             corePoolKey,
-            IPoolManager.SwapParams({
-                zeroForOne: true,
-                amountSpecified: -1e18,
-                sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
-            }),
+            SwapParams({zeroForOne: true, amountSpecified: -1e18, sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1}),
             settings,
             ZERO_BYTES
         );
@@ -208,12 +195,7 @@ contract ProxyPoolTest is Test, Deployers {
         // add some liquidity to the core pool since it is where swaps will actually take place and not the proxy pool
         modifyLiquidityRouter.modifyLiquidity(
             corePoolKey,
-            IPoolManager.ModifyLiquidityParams({
-                tickLower: -60,
-                tickUpper: 60,
-                liquidityDelta: 10000e18,
-                salt: bytes32(0)
-            }),
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 10000e18, salt: bytes32(0)}),
             ZERO_BYTES
         );
 
@@ -227,11 +209,7 @@ contract ProxyPoolTest is Test, Deployers {
         uint256 swapAmount = 100;
         swapRouter.swap(
             proxyPoolKey,
-            IPoolManager.SwapParams({
-                zeroForOne: true,
-                amountSpecified: -int256(swapAmount),
-                sqrtPriceLimitX96: ZERO_FOR_ONE_LIMIT
-            }),
+            SwapParams({zeroForOne: true, amountSpecified: -int256(swapAmount), sqrtPriceLimitX96: ZERO_FOR_ONE_LIMIT}),
             settings,
             abi.encode(address(this))
         );
@@ -247,12 +225,7 @@ contract ProxyPoolTest is Test, Deployers {
         // add some liquidity to the core pool since it is where swaps will actually take place and not the proxy pool
         modifyLiquidityRouter.modifyLiquidity(
             corePoolKey,
-            IPoolManager.ModifyLiquidityParams({
-                tickLower: -60,
-                tickUpper: 60,
-                liquidityDelta: 10000e18,
-                salt: bytes32(0)
-            }),
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 10000e18, salt: bytes32(0)}),
             ZERO_BYTES
         );
 
@@ -266,11 +239,7 @@ contract ProxyPoolTest is Test, Deployers {
         uint256 swapAmount = 100;
         swapRouter.swap(
             proxyPoolKey,
-            IPoolManager.SwapParams({
-                zeroForOne: false,
-                amountSpecified: -int256(swapAmount),
-                sqrtPriceLimitX96: ONE_FOR_ZERO_LIMIT
-            }),
+            SwapParams({zeroForOne: false, amountSpecified: -int256(swapAmount), sqrtPriceLimitX96: ONE_FOR_ZERO_LIMIT}),
             settings,
             abi.encode(address(this))
         );
@@ -286,12 +255,7 @@ contract ProxyPoolTest is Test, Deployers {
         // add some liquidity to the core pool since it is where swaps will actually take place and not the proxy pool
         modifyLiquidityRouter.modifyLiquidity(
             corePoolKey,
-            IPoolManager.ModifyLiquidityParams({
-                tickLower: -60,
-                tickUpper: 60,
-                liquidityDelta: 10000e18,
-                salt: bytes32(0)
-            }),
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 10000e18, salt: bytes32(0)}),
             ZERO_BYTES
         );
 
@@ -305,11 +269,7 @@ contract ProxyPoolTest is Test, Deployers {
         uint256 swapAmount = 100;
         swapRouter.swap(
             proxyPoolKey,
-            IPoolManager.SwapParams({
-                zeroForOne: true,
-                amountSpecified: int256(swapAmount),
-                sqrtPriceLimitX96: ZERO_FOR_ONE_LIMIT
-            }),
+            SwapParams({zeroForOne: true, amountSpecified: int256(swapAmount), sqrtPriceLimitX96: ZERO_FOR_ONE_LIMIT}),
             settings,
             abi.encode(address(this))
         );
@@ -326,12 +286,7 @@ contract ProxyPoolTest is Test, Deployers {
         // add some liquidity to the core pool since it is where swaps will actually take place and not the proxy pool
         modifyLiquidityRouter.modifyLiquidity(
             corePoolKey,
-            IPoolManager.ModifyLiquidityParams({
-                tickLower: -60,
-                tickUpper: 60,
-                liquidityDelta: 10000e18,
-                salt: bytes32(0)
-            }),
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 10000e18, salt: bytes32(0)}),
             ZERO_BYTES
         );
 
@@ -345,11 +300,7 @@ contract ProxyPoolTest is Test, Deployers {
         uint256 swapAmount = 100;
         swapRouter.swap(
             proxyPoolKey,
-            IPoolManager.SwapParams({
-                zeroForOne: false,
-                amountSpecified: int256(swapAmount),
-                sqrtPriceLimitX96: ONE_FOR_ZERO_LIMIT
-            }),
+            SwapParams({zeroForOne: false, amountSpecified: int256(swapAmount), sqrtPriceLimitX96: ONE_FOR_ZERO_LIMIT}),
             settings,
             abi.encode(address(this))
         );
