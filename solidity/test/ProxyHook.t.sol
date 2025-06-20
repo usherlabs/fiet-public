@@ -16,7 +16,7 @@ import {Constants} from "@uniswap/v4-core/test/utils/Constants.sol";
 import {IERC20Minimal} from "v4-core/interfaces/external/IERC20Minimal.sol";
 import {MockERC20} from "solmate/src/test/utils/mocks/MockERC20.sol";
 import {SortTokens} from "@uniswap/v4-core/test/utils/SortTokens.sol";
-import {ProxyPool} from "../src/ProxyPool.sol";
+import {ProxyHook} from "../src/ProxyHook.sol";
 import {IToken} from "../src/IToken.sol";
 import {MockRFS} from "./mock/rfs.sol";
 
@@ -24,7 +24,7 @@ contract ProxyPoolTest is Test, Deployers {
     using PoolIdLibrary for PoolId;
     using CurrencyLibrary for Currency;
 
-    ProxyPool hook;
+    ProxyHook hook;
     MockRFS rfs;
     // store the currencies
     Currency internal _currency0;
@@ -45,7 +45,13 @@ contract ProxyPoolTest is Test, Deployers {
         address underlyingAsset,
         uint256 base_vts
     ) internal returns (Currency currency) {
-        IToken token = new IToken(name, symbol, underlyingAsset, address(rfs), base_vts);
+        IToken token = new IToken(
+            name,
+            symbol,
+            underlyingAsset,
+            //address(rfs),
+            base_vts
+        );
 
         address[10] memory toApprove = [
             address(swapRouter),
@@ -106,8 +112,8 @@ contract ProxyPoolTest is Test, Deployers {
         );
 
         //  Deploy the hook contract
-        deployCodeTo("ProxyPool.sol", abi.encode(manager, corePoolKey), hookAddress);
-        hook = ProxyPool(hookAddress);
+        deployCodeTo("ProxyHook.sol", abi.encode(manager, corePoolKey), hookAddress);
+        hook = ProxyHook(hookAddress);
 
         //  Deploy the pool with the hook
         (proxyPoolKey,) = initPool(_currency0, _currency1, hook, 3000, SQRT_PRICE_1_1, ZERO_BYTES);

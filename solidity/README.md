@@ -1,18 +1,18 @@
 # Surety
-## Foundry
 
-**Foundry is a blazing fast, portable and modular toolkit for Ethereum application development written in Rust.**
+## Contract addresses
 
-Foundry consists of:
+### LCC tokens
+- Itoken USDC: [0xd94c3C1BC47e0Bb528d912089C9cA6A457cfc320](https://sepolia.arbiscan.io/address/0xd94c3C1BC47e0Bb528d912089C9cA6A457cfc320#code)
+- Itoken USDT: [0x6c8537d89dd1c612ad0d7a9e48eeffdbe9cb6a8e](https://sepolia.arbiscan.io/address/0x6c8537d89dd1c612ad0d7a9e48eeffdbe9cb6a8e#code)
+### Mock tokens
+USDT:[0x99729dD47ACdA1713171501250E57a36aDCE5D08](https://sepolia.arbiscan.io/address/0x99729dD47ACdA1713171501250E57a36aDCE5D08)
 
--   **Forge**: Ethereum testing framework (like Truffle, Hardhat and DappTools).
--   **Cast**: Swiss army knife for interacting with EVM smart contracts, sending transactions and getting chain data.
--   **Anvil**: Local Ethereum node, akin to Ganache, Hardhat Network.
--   **Chisel**: Fast, utilitarian, and verbose solidity REPL.
+### Uniswap V4 Core Pool LCC-USDC/LCC-USDT
 
-## Documentation
+### Uniswap V4 Proxy Pool USDC/USDT
 
-https://book.getfoundry.sh/
+### Uniswap V4 Proxy hook
 
 ## Usage
 
@@ -34,34 +34,4 @@ $ forge test
 $ forge fmt
 ```
 
-### Gas Snapshots
 
-```shell
-$ forge snapshot
-```
-
-### Anvil
-
-```shell
-$ anvil
-```
-
-### Deploy
-
-```shell
-$ forge script script/Counter.s.sol:CounterScript --rpc-url <your_rpc_url> --private-key <your_private_key>
-```
-
-### Cast
-
-```shell
-$ cast <subcommand>
-```
-
-### Help
-
-```shell
-$ forge --help
-$ anvil --help
-$ cast --help
-```

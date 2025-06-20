@@ -3,9 +3,7 @@ pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
-import {IRFS} from "./interfaces/IRFS.sol";
-
-import "forge-std/Test.sol";
+//import {IRFS} from "./interfaces/IRFS.sol";
 
 struct Custodian {
     address custodianAddress;
@@ -35,13 +33,14 @@ contract IToken is ERC20, Ownable {
         string memory _name,
         string memory _symbol,
         address _underlying_asset,
-        address _rfs_contract,
+        //address _rfs_contract,
+        // This needs to setup dynamically
         uint256 _base_vts_bps
     ) ERC20(_name, _symbol) Ownable(msg.sender) {
         require(_underlying_asset != address(0), "INVALID UNDERLYING ASSET");
         underlyingAsset = _underlying_asset;
         baseVtsBPS = _base_vts_bps;
-        rfsContract = _rfs_contract;
+        //rfsContract = _rfs_contract;
     }
 
     // checks if there is sufficient liquidity to unwrap a token
@@ -59,9 +58,15 @@ contract IToken is ERC20, Ownable {
     function checkForRFS() public validCustodian(msg.sender) {
         // check the base and treshold vts to see if the conditionns for rfs are met
         bool shouldRFS = false;
-        uint256 rfsAmount = 0;
+        //uint256 rfsAmount = 0;
+        // dead code
         if (shouldRFS) {
-            IRFS(rfsContract).triggerRfS(address(underlyingAsset), msg.sender, address(this), rfsAmount);
+            // IRFS(rfsContract).triggerRfS(
+            //     address(underlyingAsset),
+            //     msg.sender,
+            //     address(this),
+            //     rfsAmount
+            // );
         }
     }
 
@@ -114,7 +119,13 @@ contract IToken is ERC20, Ownable {
             // transfer some underlying tokens to the user
             underlying_asset_token.transferFrom(custodian, to, amount);
         } else {
-            IRFS(rfsContract).queueWithdrawal(to, msg.sender, address(this), amount);
+            // dead code: isSufficientLiquidity() hard coded to true
+            // IRFS(rfsContract).queueWithdrawal(
+            //     to,
+            //     msg.sender,
+            //     address(this),
+            //     amount
+            // );
         }
     }
 
