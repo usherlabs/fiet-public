@@ -6,7 +6,7 @@ import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {CurrencyLibrary, Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
-import {IHooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
+import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {HookMiner} from "@uniswap/v4-periphery/src/utils/HookMiner.sol";
 
 import {ProxyHook} from "../src/ProxyHook.sol";
@@ -25,6 +25,9 @@ contract ProxyHookScript is Script {
     address lccTokenB = 0x6c8537d89dd1C612AD0D7a9E48eEFFDBe9cB6A8e;
 
     function run() external {
+        uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
+        vm.startBroadcast(deployerPrivateKey);
+
         // Create pool configuration
         PoolKey memory poolKey = PoolKey({
             currency0: Currency.wrap(lccTokenA < lccTokenB ? lccTokenA : lccTokenB), // Ensure token0 < token1
@@ -37,13 +40,12 @@ contract ProxyHookScript is Script {
             Hooks.BEFORE_INITIALIZE_FLAG | Hooks.BEFORE_ADD_LIQUIDITY_FLAG | Hooks.BEFORE_SWAP_FLAG
                 | Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG
         );
-        bytes memory constructorArgs = abi.encode(POOL_MANAGER);
+        bytes memory constructorArgs = abi.encode(POOL_MANAGER, poolKey);
         (address hookAddress, bytes32 salt) = HookMiner.find(
             0x4e59b44847b379578588920cA78FbF26c0B4956C, flags, type(ProxyHook).creationCode, constructorArgs
         );
         console.log("Hook will be deployed to:", hookAddress);
         console.log("Salt:", vm.toString(salt));
-        vm.startBroadcast();
         proxyHook = new ProxyHook{salt: salt}(IPoolManager(POOL_MANAGER), poolKey);
         require(address(proxyHook) == hookAddress, "DeployHookScript: hook address mismatch");
         vm.stopBroadcast();
