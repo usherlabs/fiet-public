@@ -1,20 +1,21 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import {ERC20} from "solmate/src/tokens/ERC20.sol";
-import {IPoolManager} from "v4-core/interfaces/IPoolManager.sol";
-import {PoolKey} from "v4-core/types/PoolKey.sol";
-import {Currency} from "v4-core/types/Currency.sol";
+import {ERC20} from "@uniswap/v4-core/lib/solmate/src/tokens/ERC20.sol";
+import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {CurrencySettler} from "@uniswap/v4-core/test/utils/CurrencySettler.sol";
-import {Hooks} from "v4-core/libraries/Hooks.sol";
-import {BeforeSwapDelta, toBeforeSwapDelta} from "v4-core/types/BeforeSwapDelta.sol";
-import {BaseHook} from "v4-periphery/src/base/hooks/BaseHook.sol";
-import {BalanceDelta} from "v4-core/types/BalanceDelta.sol";
+import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
+import {BeforeSwapDelta, toBeforeSwapDelta} from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
+import {BaseHook} from "@uniswap/v4-periphery/src/utils/BaseHook.sol";
+import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {IToken} from "./IToken.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "forge-std/console.sol";
 
-contract ProxyPool is BaseHook {
+contract ProxyHook is BaseHook {
     using CurrencySettler for Currency;
 
     error AddLiquidityThroughHook();
@@ -66,19 +67,16 @@ contract ProxyPool is BaseHook {
         });
     }
 
-    function beforeInitialize(address, PoolKey calldata key, uint160, bytes calldata)
-        external
-        override
-        returns (bytes4)
-    {
+    function _beforeInitialize(address, PoolKey calldata key, uint160) internal virtual override returns (bytes4) {
         proxyPoolKey = key;
         return this.beforeInitialize.selector;
     }
 
     // Disable adding liquidity to the proxy pool
-    function beforeAddLiquidity(address, PoolKey calldata, IPoolManager.ModifyLiquidityParams calldata, bytes calldata)
-        external
+    function _beforeAddLiquidity(address, PoolKey calldata, ModifyLiquidityParams calldata, bytes calldata)
+        internal
         pure
+        virtual
         override
         returns (bytes4)
     {
@@ -89,8 +87,8 @@ contract ProxyPool is BaseHook {
     // to ensure that the user gets a debit of amount specified
     // and we disable the core swap mechanism
     // and proxy the swap through the core pool
-    function beforeSwap(address, PoolKey calldata key, IPoolManager.SwapParams calldata params, bytes calldata hookData)
-        external
+    function _beforeSwap(address, PoolKey calldata key, SwapParams calldata params, bytes calldata hookData)
+        internal
         override
         returns (bytes4, BeforeSwapDelta, uint24)
     {
@@ -98,7 +96,7 @@ contract ProxyPool is BaseHook {
         Currency outputCurrency = params.zeroForOne ? corePoolKey.currency1 : corePoolKey.currency0;
 
         IToken iOutToken = IToken(Currency.unwrap(outputCurrency));
-        iOutToken.checkForRFS();
+        //iOutToken.checkForRFS(); // dead code
 
         address recipient = abi.decode(hookData, (address));
 
@@ -133,7 +131,7 @@ contract ProxyPool is BaseHook {
     }
 
     // use this helper to perform a swap and settle operation on the core pool
-    function swapAndSettleBalances(PoolKey memory key, IPoolManager.SwapParams memory params)
+    function swapAndSettleBalances(PoolKey memory key, SwapParams memory params)
         internal
         returns (BalanceDelta, uint256)
     {

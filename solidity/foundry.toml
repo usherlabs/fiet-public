@@ -9,3 +9,8 @@ evm_version = "cancun"  # hard fork that enabled EIP-1153
 optimizer_runs = 800
 via_ir = false
 ffi = true
+
+[rpc_endpoints]
+sepolia = "${ARB_SEPOLIA_RPC_URL}"
+[etherscan]
+sepolia = { key = "${ETHERSCAN_API_KEY}" }
