@@ -9,14 +9,15 @@ import {CurrencyLibrary, Currency} from "@uniswap/v4-core/src/types/Currency.sol
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Constants} from "@uniswap/v4-core/test/utils/Constants.sol";
+import {SepoliaConstants} from "./constants.sol";
 
-address constant POOL_MANAGER = 0xFB3e0C6F74eB1a21CC1Da29aeC80D2Dfe6C9a317;
+address constant POOL_MANAGER = SepoliaConstants.POOL_MANAGER;
 
 contract CorePoolScript is Script {
     using PoolIdLibrary for PoolKey;
 
-    address tokenA = 0xd94c3C1BC47e0Bb528d912089C9cA6A457cfc320; // LCC USDC
-    address tokenB = 0x6c8537d89dd1C612AD0D7a9E48eEFFDBe9cB6A8e; // LCC USDT
+    address tokenA = SepoliaConstants.LCCtokenA;
+    address tokenB = SepoliaConstants.LCCtokenB;
 
     function run() external {
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
@@ -51,9 +52,9 @@ contract CorePoolScript is Script {
 contract ProxyPoolScript is Script {
     using PoolIdLibrary for PoolKey;
 
-    address tokenA = 0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d; // token USDC
-    address tokenB = 0x99729dD47ACdA1713171501250E57a36aDCE5D08; // token USDT
-    address proxyHook = 0xcf75b350696C9FfdE9D7A69FF10Fb65C57776888;
+    address tokenA = SepoliaConstants.TokenA; // token USDC
+    address tokenB = SepoliaConstants.TokenB; // token USDT
+    address proxyHook = SepoliaConstants.ProxyHook;
 
     function run() external {
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
