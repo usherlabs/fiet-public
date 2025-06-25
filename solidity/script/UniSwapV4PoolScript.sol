@@ -26,7 +26,7 @@ contract CorePoolScript is Script {
 
         // Create pool configuration
         PoolKey memory poolKey = PoolKey({
-            currency0: Currency.wrap(tokenA < tokenB ? tokenA : tokenB), // Ensure tokenA < tokenB
+            currency0: Currency.wrap(tokenA < tokenB ? tokenA : tokenB),
             currency1: Currency.wrap(tokenA < tokenB ? tokenB : tokenA),
             fee: 0, // 0% fee
             tickSpacing: 1,
@@ -52,8 +52,8 @@ contract CorePoolScript is Script {
 contract ProxyPoolScript is Script {
     using PoolIdLibrary for PoolKey;
 
-    address tokenA = SepoliaConstants.TokenA; // token USDC
-    address tokenB = SepoliaConstants.TokenB; // token USDT
+    address tokenA = SepoliaConstants.TokenA;
+    address tokenB = SepoliaConstants.TokenB;
     address proxyHook = SepoliaConstants.ProxyHook;
 
     function run() external {

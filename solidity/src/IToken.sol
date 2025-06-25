@@ -50,12 +50,9 @@ contract IToken is ERC20, Ownable {
     }
 
     // get the current vts of the pool
-    function vts(
-        address custodian
-    ) public view validCustodian(custodian) returns (uint256) {
+    function vts(address custodian) public view validCustodian(custodian) returns (uint256) {
         uint256 custodianTotalSupply = custodians[custodian].totalSupply;
-        return
-            IERC20(custodian).balanceOf(address(this)) / custodianTotalSupply;
+        return IERC20(custodian).balanceOf(address(this)) / custodianTotalSupply;
     }
 
     function checkForRFS() public view validCustodian(msg.sender) {
@@ -73,10 +70,7 @@ contract IToken is ERC20, Ownable {
         }
     }
 
-    function whitelistCustodian(
-        address custodian,
-        bool whitelist
-    ) public onlyOwner {
+    function whitelistCustodian(address custodian, bool whitelist) public onlyOwner {
         custodians[custodian].whitelisted = whitelist;
     }
 
@@ -96,38 +90,26 @@ contract IToken is ERC20, Ownable {
 
     // LP's are allowed to mint tokens for themselves using the base vts
     // while specifying a custodian which would be responsible for the liquidity
-    function wrap(
-        address custodian,
-        uint256 amount
-    ) public validCustodian(custodian) onlyLP(msg.sender) {
+    function wrap(address custodian, uint256 amount) public validCustodian(custodian) onlyLP(msg.sender) {
         uint256 fees = 0;
         address owner = msg.sender;
         uint256 custodyAmount = _getReserveAmount(amount);
 
         // mint some tokens
+        // TODO: if underlying token decimal is not 18, contracts mint the wrong amount. We have to converse to 18 decimal here.
         _mint(owner, amount);
         // transfer the equivalent of the underlying asset from the recipient
-        IERC20(underlyingAsset).transferFrom(
-            owner,
-            custodian,
-            custodyAmount - fees
-        );
+        IERC20(underlyingAsset).transferFrom(owner, custodian, custodyAmount - fees);
         // update the custodians total supply
         custodians[custodian].totalSupply += amount;
     }
 
     // unwrap some tokens
-    function unwrap(
-        address to,
-        uint256 amount
-    ) public validCustodian(msg.sender) {
+    function unwrap(address to, uint256 amount) public validCustodian(msg.sender) {
         address custodian = msg.sender;
         IERC20 underlying_asset_token = IERC20(underlyingAsset);
 
-        require(
-            amount > 0 && amount <= custodians[custodian].totalSupply,
-            "INVALID AMOUNT"
-        );
+        require(amount > 0 && amount <= custodians[custodian].totalSupply, "INVALID AMOUNT");
 
         if (isSufficientLiquidity()) {
             // and burn their tokens
@@ -148,25 +130,15 @@ contract IToken is ERC20, Ownable {
         }
     }
 
-    function _getReserveAmount(
-        uint256 amount
-    ) internal view returns (uint256 reserveAmount) {
+    function _getReserveAmount(uint256 amount) internal view returns (uint256 reserveAmount) {
         reserveAmount = (amount * baseVtsBPS) / 10_000;
     }
 
-    function _isRecipientWhitelisted(
-        address whitelisted
-    ) internal view returns (bool) {
-        return
-            custodians[whitelisted].whitelisted == true ||
-            liquidityProviders[whitelisted] == true;
+    function _isRecipientWhitelisted(address whitelisted) internal view returns (bool) {
+        return custodians[whitelisted].whitelisted == true || liquidityProviders[whitelisted] == true;
     }
 
-    function _update(
-        address from,
-        address to,
-        uint256 value
-    ) internal virtual override {
+    function _update(address from, address to, uint256 value) internal virtual override {
         // Allow minting and transferring only to whitelisted addresses
         if (to != address(0)) {
             require(_isRecipientWhitelisted(to), "Recipient not whitelisted");
