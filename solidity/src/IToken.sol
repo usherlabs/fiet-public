@@ -58,7 +58,7 @@ contract IToken is ERC20, Ownable {
             IERC20(custodian).balanceOf(address(this)) / custodianTotalSupply;
     }
 
-    function checkForRFS() public validCustodian(msg.sender) {
+    function checkForRFS() public view validCustodian(msg.sender) {
         // check the base and treshold vts to see if the conditionns for rfs are met
         bool shouldRFS = false;
         //uint256 rfsAmount = 0;

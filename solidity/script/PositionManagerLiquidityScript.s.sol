@@ -3,7 +3,10 @@ pragma solidity ^0.8.0;
 
 import {Script, console} from "forge-std/Script.sol";
 import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
+import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
+import {PositionInfo} from "@uniswap/v4-periphery/src/libraries/PositionInfoLibrary.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
@@ -14,9 +17,17 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {SortTokens} from "@uniswap/v4-core/test/utils/SortTokens.sol";
 import {MockERC20} from "@uniswap/v4-core/lib/solmate/src/test/utils/mocks/MockERC20.sol";
+import {LiquidityAmounts} from "@uniswap/v4-periphery/src/libraries/LiquidityAmounts.sol";
+import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
+import {IAllowanceTransfer} from "@uniswap/v4-periphery/lib/permit2/src/interfaces/IAllowanceTransfer.sol";
+
+import {IToken} from "../src/IToken.sol";
 import {SepoliaConstants} from "./constants.sol";
 
 contract PositionManagerLiquidityScript is Script {
+    using StateLibrary for IPoolManager;
+    using PoolIdLibrary for PoolKey;
+
     address constant POSITION_MANAGER = SepoliaConstants.POSITION_MANAGER; // V4 Position Manager on Arb Sepolia
     address constant POOL_MANAGER = SepoliaConstants.POOL_MANAGER; // V4 Pool Manager on Arb Sepolia
     address constant PROXY_HOOK = SepoliaConstants.ProxyHook;
@@ -30,10 +41,8 @@ contract PositionManagerLiquidityScript is Script {
     address constant UNDERLYING_TOKEN_B = SepoliaConstants.TokenB;
 
     // Liquidity parameters
-    uint256 constant AMOUNT_0_DESIRED = 10e6; // 10 tokens
-    uint256 constant AMOUNT_1_DESIRED = 10e18; // 10 tokens
-    uint256 constant AMOUNT_0_MIN = 9e6; // 1% slippage tolerance
-    uint256 constant AMOUNT_1_MIN = 9e18; // 1% slippage tolerance
+    uint256 constant AMOUNT_A_DESIRED = 1e18; // 10 tokens
+    uint256 constant AMOUNT_B_DESIRED = 1e6; // 10 tokens
 
     IPositionManager positionManager;
     IPoolManager poolManager;
@@ -42,23 +51,21 @@ contract PositionManagerLiquidityScript is Script {
 
     function run() external {
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
-        address deployer = vm.addr(deployerPrivateKey);
+
+        uint256 lpPrivateKey = vm.envUint("LP_PRIVATE_KEY");
+        address lpAddress = vm.addr(lpPrivateKey);
 
         positionManager = IPositionManager(POSITION_MANAGER);
         poolManager = IPoolManager(POOL_MANAGER);
 
-        console.log("POSITION MANAGER LIQUIDITY DEPLOYMENT");
-        console.log("Deployer:", deployer);
-        console.log("Position Manager:", POSITION_MANAGER);
-        console.log("Pool Manager:", POOL_MANAGER);
-        // Setup pool configurations
         setupPoolKeys();
 
         vm.startBroadcast(deployerPrivateKey);
+        lccWitelistLPAndCustodian(lpAddress);
+        vm.stopBroadcast();
 
-        // Check and approve tokens
-        //checkAndApproveTokens(deployer);
-
+        vm.startBroadcast(lpPrivateKey);
+        wrapToLccTokens(lpAddress);
         vm.stopBroadcast();
     }
 
@@ -90,48 +97,206 @@ contract PositionManagerLiquidityScript is Script {
             tickSpacing: 1,
             hooks: IHooks(PROXY_HOOK) // hook
         });
-
+        console.log(" ");
         console.log("Core Pool (receives liquidity):");
         console.log("Currency0:", Currency.unwrap(corePoolKey.currency0));
         console.log("Currency1:", Currency.unwrap(corePoolKey.currency1));
         console.log("Hooks:", address(corePoolKey.hooks));
-
+        console.log(" ");
         console.log("Proxy Pool (user interface):");
         console.log("Currency0:", Currency.unwrap(proxyPoolKey.currency0));
         console.log("Currency1:", Currency.unwrap(proxyPoolKey.currency1));
         console.log("Hooks:", address(proxyPoolKey.hooks));
+        console.log(" ");
     }
 
-    function checkAndApproveTokens(address user) internal {
-        console.log("Checking token balances and approving...");
+    function lccWitelistLPAndCustodian(address _address) internal {
+        IToken tokenA = IToken(Currency.unwrap(corePoolKey.currency0));
+        IToken tokenB = IToken(Currency.unwrap(corePoolKey.currency1));
 
-        // Check balances
-        uint256 balance0 = IERC20(Currency.unwrap(proxyPoolKey.currency0))
-            .balanceOf(user);
-        string memory balance0Name = IERC20Metadata(
-            Currency.unwrap(proxyPoolKey.currency0)
-        ).name();
-        uint256 balance1 = IERC20(Currency.unwrap(proxyPoolKey.currency1))
-            .balanceOf(user);
-        string memory balance1Name = IERC20Metadata(
-            Currency.unwrap(proxyPoolKey.currency1)
-        ).name();
-        console.log("Token0 balance:", balance0, balance0Name);
-        console.log("Token1 balance:", balance1, balance1Name);
+        // Approve liquidity providers
+        approveLccLP(_address, tokenA);
+        approveLccLP(_address, tokenB);
 
-        require(balance0 >= AMOUNT_0_DESIRED, "Insufficient token0 balance");
-        require(balance1 >= AMOUNT_1_DESIRED, "Insufficient token1 balance");
+        // Approve Hook
+        approveLccCustodian(PROXY_HOOK, tokenA);
+        approveLccCustodian(PROXY_HOOK, tokenB);
 
-        // Approve Position Manager to spend tokens
-        IERC20(Currency.unwrap(corePoolKey.currency0)).approve(
-            POSITION_MANAGER,
-            type(uint256).max
+        // Approve Pool manager
+        approveLccCustodian(POOL_MANAGER, tokenA);
+        approveLccCustodian(POOL_MANAGER, tokenB);
+
+        // Approve Position manager
+        approveLccCustodian(POSITION_MANAGER, tokenA);
+        approveLccCustodian(POSITION_MANAGER, tokenB);
+    }
+
+    function approveLccCustodian(address _address, IToken token) internal {
+        (, , bool whitelisted) = token.custodians(_address);
+        if (!whitelisted) {
+            token.whitelistCustodian(_address, true);
+        }
+    }
+
+    function approveLccLP(address _address, IToken token) internal {
+        bool isAllowed = token.liquidityProviders(_address);
+        if (!isAllowed) {
+            token.whitelistLP(_address, true);
+        }
+    }
+
+    function wrapToLccTokens(address user) internal {
+        IToken iTokenA = IToken(Currency.unwrap(corePoolKey.currency0));
+        IToken iTokenB = IToken(Currency.unwrap(corePoolKey.currency1));
+        (Currency currency0Proxy, Currency currency1Proxy) = SortTokens.sort(
+            MockERC20(UNDERLYING_TOKEN_A),
+            MockERC20(UNDERLYING_TOKEN_A)
         );
-        IERC20(Currency.unwrap(corePoolKey.currency1)).approve(
-            POSITION_MANAGER,
-            type(uint256).max
+        IERC20 tokenA = IERC20(Currency.unwrap(currency0Proxy));
+        IERC20 tokenB = IERC20(Currency.unwrap(currency1Proxy));
+        console.log("token a", address(iTokenA));
+        console.log("lcc token a", address(tokenA));
+        // Verify underlying asset mappings
+        require(
+            iTokenA.underlyingAsset() == UNDERLYING_TOKEN_A,
+            "IToken A underlying mismatch"
+        );
+        require(
+            iTokenB.underlyingAsset() == UNDERLYING_TOKEN_B,
+            "IToken B underlying mismatch"
+        );
+        uint256 currentWrappedA = iTokenA.balanceOf(user);
+        uint256 currentWrappedB = iTokenB.balanceOf(user);
+
+        console.log("Current wrapped balances:");
+        console.log("  Token A:", currentWrappedA);
+        console.log("  Token B:", currentWrappedB);
+        // check underlying token balance
+        uint256 underlyingTokenABalance = tokenA.balanceOf(user);
+        uint256 underlyingTokenBBalance = tokenB.balanceOf(user);
+
+        console.log("Underlying TokenA balance: ", underlyingTokenABalance);
+        console.log("Underlying TokenB balance: ", underlyingTokenBBalance);
+
+        if (currentWrappedA < AMOUNT_A_DESIRED) {
+            uint256 wrapAmountA = AMOUNT_A_DESIRED - currentWrappedA;
+            require(
+                underlyingTokenABalance >= wrapAmountA,
+                "Token A balance not enough"
+            );
+            checkAndApproveErc20(user, address(iTokenA), tokenA, wrapAmountA);
+            iTokenA.wrap(PROXY_HOOK, wrapAmountA);
+            console.log("Wrapped", wrapAmountA, "of token A");
+        } else {
+            console.log("Token A already has sufficient wrapped balance");
+        }
+        if (currentWrappedB < AMOUNT_B_DESIRED) {
+            uint256 wrapAmountB = AMOUNT_B_DESIRED - currentWrappedB;
+            require(
+                underlyingTokenBBalance >= wrapAmountB,
+                "Token B balance not enough"
+            );
+            checkAndApproveErc20(
+                user,
+                address(iTokenB),
+                tokenB,
+                AMOUNT_B_DESIRED
+            );
+            iTokenB.wrap(PROXY_HOOK, wrapAmountB);
+            console.log("Wrapped", wrapAmountB, "of token B");
+        } else {
+            console.log("Token B already has sufficient wrapped balance");
+        }
+    }
+
+    function checkAndApproveErc20(
+        address user,
+        address spender,
+        IERC20 token,
+        uint256 amount
+    ) internal {
+        console.log("Checking limit and approving");
+
+        uint256 approveLimit = token.allowance(user, spender);
+        console.log(approveLimit);
+        if (approveLimit < amount) {
+            token.approve(spender, type(uint256).max);
+        }
+        console.log("Finish checking limit and approving");
+    }
+
+    function mintPositionToCore(
+        address recipient
+    ) internal returns (uint256 tokenId) {
+        console.log("Minting position to core pool");
+
+        // Define tick range (full range for maximum liquidity)
+        int24 tickLower = -887220; // Min tick
+        int24 tickUpper = 887220; // Max tick
+        // Get current pool state for liquidity calculation
+        (uint160 sqrtPriceX96, , , ) = poolManager.getSlot0(corePoolKey.toId());
+
+        // Calculate liquidity amount from desired token amounts
+        uint128 liquidity = LiquidityAmounts.getLiquidityForAmounts(
+            sqrtPriceX96,
+            TickMath.getSqrtPriceAtTick(tickLower),
+            TickMath.getSqrtPriceAtTick(tickUpper),
+            AMOUNT_A_DESIRED,
+            AMOUNT_B_DESIRED
         );
 
-        console.log("Token approvals completed");
+        bytes memory actions = abi.encodePacked(
+            uint8(Actions.MINT_POSITION),
+            uint8(Actions.SETTLE_PAIR)
+        );
+        bytes[] memory params = new bytes[](2);
+
+        params[0] = abi.encode(
+            corePoolKey,
+            tickLower,
+            tickUpper,
+            liquidity,
+            AMOUNT_A_DESIRED,
+            AMOUNT_B_DESIRED,
+            recipient,
+            ""
+        );
+        params[1] = abi.encode(corePoolKey.currency0, corePoolKey.currency1);
+        // Get next token ID before minting
+        tokenId = positionManager.nextTokenId();
+        console.log("Next token ID:", tokenId);
+        // Execute the position minting
+        positionManager.modifyLiquidities(
+            abi.encode(actions, params),
+            block.timestamp + 100 // 1 minute deadline
+        );
+
+        console.log("Position minted successfully!");
+        console.log("Token ID:", tokenId);
+
+        return tokenId;
+    }
+
+    function verifyPosition(uint256 tokenId) internal view {
+        console.log("Position verification");
+
+        // Get position liquidity
+        uint128 liquidity = positionManager.getPositionLiquidity(tokenId);
+        console.log("Position liquidity:", liquidity);
+
+        // Get pool and position info
+        (PoolKey memory poolKey, PositionInfo positionInfo) = positionManager
+            .getPoolAndPositionInfo(tokenId);
+
+        console.log(
+            "Position pool currency0:",
+            Currency.unwrap(poolKey.currency0)
+        );
+        console.log(
+            "Position pool currency1:",
+            Currency.unwrap(poolKey.currency1)
+        );
+        console.log("Position tick lower:", positionInfo.tickLower());
+        console.log("Position tick upper:", positionInfo.tickUpper());
     }
 }
