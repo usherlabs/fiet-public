@@ -9,6 +9,8 @@ import {CurrencyLibrary, Currency} from "@uniswap/v4-core/src/types/Currency.sol
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Constants} from "@uniswap/v4-core/test/utils/Constants.sol";
+import {SortTokens} from "@uniswap/v4-core/test/utils/SortTokens.sol";
+import {MockERC20} from "@uniswap/v4-core/lib/solmate/src/test/utils/mocks/MockERC20.sol";
 import {SepoliaConstants} from "./constants.sol";
 
 address constant POOL_MANAGER = SepoliaConstants.POOL_MANAGER;
@@ -22,12 +24,15 @@ contract CorePoolScript is Script {
     function run() external {
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
         vm.startBroadcast(deployerPrivateKey);
-        console.log("Initializing USDT/USDC Pool on Sepolia");
-
+        console.log("Initializing LCC USDT/USDC Pool on Sepolia");
+        (Currency currencyA, Currency currencyB) = SortTokens.sort(
+            MockERC20(tokenA),
+            MockERC20(tokenB)
+        );
         // Create pool configuration
         PoolKey memory poolKey = PoolKey({
-            currency0: Currency.wrap(tokenA < tokenB ? tokenA : tokenB),
-            currency1: Currency.wrap(tokenA < tokenB ? tokenB : tokenA),
+            currency0: currencyA,
+            currency1: currencyB,
             fee: 0, // 0% fee
             tickSpacing: 1,
             hooks: IHooks(address(0))
@@ -60,11 +65,14 @@ contract ProxyPoolScript is Script {
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
         vm.startBroadcast(deployerPrivateKey);
         console.log("Initializing USDT/USDC proxy Pool on Sepolia");
-
+        (Currency currencyA, Currency currencyB) = SortTokens.sort(
+            MockERC20(tokenA),
+            MockERC20(tokenB)
+        );
         // Create pool configuration
         PoolKey memory poolKey = PoolKey({
-            currency0: Currency.wrap(tokenA < tokenB ? tokenA : tokenB), // Ensure tokenA < tokenB
-            currency1: Currency.wrap(tokenA < tokenB ? tokenB : tokenA),
+            currency0: currencyA,
+            currency1: currencyB,
             fee: 0, // 0% fee
             tickSpacing: 1,
             hooks: IHooks(proxyHook)
