@@ -25,10 +25,7 @@ contract CorePoolScript is Script {
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
         vm.startBroadcast(deployerPrivateKey);
         console.log("Initializing LCC USDT/USDC Pool on Sepolia");
-        (Currency currencyA, Currency currencyB) = SortTokens.sort(
-            MockERC20(tokenA),
-            MockERC20(tokenB)
-        );
+        (Currency currencyA, Currency currencyB) = SortTokens.sort(MockERC20(tokenA), MockERC20(tokenB));
         // Create pool configuration
         PoolKey memory poolKey = PoolKey({
             currency0: currencyA,
@@ -65,10 +62,7 @@ contract ProxyPoolScript is Script {
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
         vm.startBroadcast(deployerPrivateKey);
         console.log("Initializing USDT/USDC proxy Pool on Sepolia");
-        (Currency currencyA, Currency currencyB) = SortTokens.sort(
-            MockERC20(tokenA),
-            MockERC20(tokenB)
-        );
+        (Currency currencyA, Currency currencyB) = SortTokens.sort(MockERC20(tokenA), MockERC20(tokenB));
         // Create pool configuration
         PoolKey memory poolKey = PoolKey({
             currency0: currencyA,

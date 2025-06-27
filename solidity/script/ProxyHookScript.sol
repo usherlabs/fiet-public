@@ -29,10 +29,7 @@ contract ProxyHookScript is Script {
     function run() external {
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
         vm.startBroadcast(deployerPrivateKey);
-        (Currency currencyA, Currency currencyB) = SortTokens.sort(
-            MockERC20(lccTokenA),
-            MockERC20(lccTokenB)
-        );
+        (Currency currencyA, Currency currencyB) = SortTokens.sort(MockERC20(lccTokenA), MockERC20(lccTokenB));
         // Create pool configuration
         PoolKey memory poolKey = PoolKey({
             currency0: currencyA, // Ensure token0 < token1
@@ -42,31 +39,16 @@ contract ProxyHookScript is Script {
             hooks: IHooks(address(0))
         });
         uint160 flags = uint160(
-            Hooks.BEFORE_INITIALIZE_FLAG |
-                Hooks.BEFORE_ADD_LIQUIDITY_FLAG |
-                Hooks.BEFORE_SWAP_FLAG |
-                Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG
+            Hooks.BEFORE_INITIALIZE_FLAG | Hooks.BEFORE_ADD_LIQUIDITY_FLAG | Hooks.BEFORE_SWAP_FLAG
+                | Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG
         );
-        bytes memory constructorArgs = abi.encode(
-            SepoliaConstants.POOL_MANAGER,
-            poolKey
-        );
-        (address hookAddress, bytes32 salt) = HookMiner.find(
-            SepoliaConstants.DEPLOYER_CREATE2,
-            flags,
-            type(ProxyHook).creationCode,
-            constructorArgs
-        );
+        bytes memory constructorArgs = abi.encode(SepoliaConstants.POOL_MANAGER, poolKey);
+        (address hookAddress, bytes32 salt) =
+            HookMiner.find(SepoliaConstants.DEPLOYER_CREATE2, flags, type(ProxyHook).creationCode, constructorArgs);
         console.log("Hook will be deployed to:", hookAddress);
         console.log("Salt:", vm.toString(salt));
-        proxyHook = new ProxyHook{salt: salt}(
-            IPoolManager(SepoliaConstants.POOL_MANAGER),
-            poolKey
-        );
-        require(
-            address(proxyHook) == hookAddress,
-            "DeployHookScript: hook address mismatch"
-        );
+        proxyHook = new ProxyHook{salt: salt}(IPoolManager(SepoliaConstants.POOL_MANAGER), poolKey);
+        require(address(proxyHook) == hookAddress, "DeployHookScript: hook address mismatch");
         vm.stopBroadcast();
         console.log("Hook successfully deployed to:", address(proxyHook));
     }

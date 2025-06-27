@@ -16,29 +16,20 @@ contract ITokenTest is Test {
     address userOne = makeAddr("userOne");
     address userTwo = makeAddr("userTwo");
     uint8 decimals = 6;
-    uint256 amountToMint = 100 * 10 ** decimals;
+    uint256 amountToMint = 100 * 10 ** decimals; // 100 tokens
 
-    function deployAndApproveITokens(
-        string memory name,
-        string memory symbol,
-        address underlyingAsset,
-        uint256 base_vts
-    ) internal returns (IToken iToken) {
+    function deployITokens(string memory name, string memory symbol, address underlyingAsset, uint256 base_vts)
+        internal
+        returns (IToken iToken)
+    {
         iToken = new IToken(name, symbol, underlyingAsset, base_vts);
-
-        // Make sure to approve the ITokens to take out 'underlyingAsset'
-        IERC20Minimal(underlyingAsset).approve(
-            address(iToken),
-            Constants.MAX_UINT256
-        );
         return iToken;
     }
 
-    function deployAndMintUnderlyingAsset(
-        string memory name,
-        string memory symbol,
-        uint8 _decimals
-    ) internal returns (MockERC20) {
+    function deployAndMintUnderlyingAsset(string memory name, string memory symbol, uint8 _decimals)
+        internal
+        returns (MockERC20)
+    {
         token = new MockERC20(name, symbol, _decimals);
 
         // send `amountToMint` mock usdc to user one and two
@@ -56,18 +47,13 @@ contract ITokenTest is Test {
 
     function setUp() public {
         token = deployAndMintUnderlyingAsset("mock USDC", "mUSDC", decimals);
-        lccToken = deployAndApproveITokens(
-            "LCC USDC",
-            "LCCUSDC",
-            address(token),
-            10_000
-        );
+        lccToken = deployITokens("LCC USDC", "LCCUSDC", address(token), 10_000);
         iTokenWhitelist();
     }
 
-    function test_correctWhitelistAddresses() public view {
+    function test_correctDeployment() public view {
         // Check custodian privilage
-        (, , bool isAllowed) = lccToken.custodians(custodian);
+        (,, bool isAllowed) = lccToken.custodians(custodian);
         assertEq(isAllowed, true);
         // Check LP privilage - userOne
         bool isLpAllowed = lccToken.liquidityProviders(userOne);
@@ -90,9 +76,40 @@ contract ITokenTest is Test {
     }
 
     function test_wrapUnderlyingAssetToLccToken() public {
-        vm.prank(userOne);
-        uint256 amountToWrap = 1000000;
+        uint256 amountToWrap = 10_000_000; // 10 Mock USDC
+        uint256 tokenBalanceBefore = token.balanceOf(address(userOne));
+        assertEq(tokenBalanceBefore, amountToMint);
+        // Check userOne LCC mock balance. This should be Zero
+        uint256 lccBalanceBefore = lccToken.balanceOf(address(userOne));
+        assertEq(lccBalanceBefore, 0);
+        // Check custodian balance. Underlying asset should go to custodian upon wrap
+        uint256 custodianBalanceBefore = token.balanceOf(address(custodian));
+        assertEq(custodianBalanceBefore, 0);
+
+        vm.startPrank(userOne);
+        token.approve(address(lccToken), type(uint256).max);
         // Test wrap token - wrap
         lccToken.wrap(custodian, amountToWrap);
+        vm.stopPrank();
+
+        // Check lcc token balance after `wrap`
+        uint256 lccBalanceAfter = lccToken.balanceOf(address(userOne));
+        assertEq(lccBalanceAfter, amountToWrap);
+        // check underlying asset balance after `wrap`
+        uint256 tokenBalanceAfter = token.balanceOf(address(userOne));
+        assertEq(tokenBalanceAfter, tokenBalanceBefore - amountToWrap);
+        // Check custodian balance after. Underlying asset should go to custodian
+        uint256 custodianBalanceAfter = token.balanceOf(address(custodian));
+        assertEq(custodianBalanceAfter, amountToWrap);
+    }
+
+    function test_unWrapToUnderlyingAsset() public {
+        vm.skip(true);
+        test_wrapUnderlyingAssetToLccToken(); // performing wrap here
+        vm.startPrank(custodian);
+        uint256 amountToUnWrap = 5_000_000; // 5 mock USDC
+        // unwrap to underlying asset
+        lccToken.unwrap(userOne, amountToUnWrap);
+        vm.stopPrank();
     }
 }
