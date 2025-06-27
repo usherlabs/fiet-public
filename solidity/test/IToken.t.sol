@@ -105,6 +105,10 @@ contract ITokenTest is Test {
 
     function test_unWrapToUnderlyingAsset() public {
         vm.skip(true);
+        /**
+         * When unwrapping to underlying asset from user one this fails
+         * User should be able to wrap without restriction
+         */
         test_wrapUnderlyingAssetToLccToken(); // performing wrap here
         vm.startPrank(custodian);
         uint256 amountToUnWrap = 5_000_000; // 5 mock USDC

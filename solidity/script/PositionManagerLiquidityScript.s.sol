@@ -23,22 +23,24 @@ import {IAllowanceTransfer} from "@uniswap/v4-periphery/lib/permit2/src/interfac
 
 import {IToken} from "../src/IToken.sol";
 import {SepoliaConstants} from "./constants.sol";
+import {ScriptHelper} from "./deployments/ScriptHelper.s.sol";
+import {ProxyHook} from "../src/ProxyHook.sol";
 
-contract PositionManagerLiquidityScript is Script {
+contract PositionManagerLiquidityScript is ScriptHelper {
     using StateLibrary for IPoolManager;
     using PoolIdLibrary for PoolKey;
 
-    address constant POSITION_MANAGER = SepoliaConstants.POSITION_MANAGER; // V4 Position Manager on Arb Sepolia
-    address constant POOL_MANAGER = SepoliaConstants.POOL_MANAGER; // V4 Pool Manager on Arb Sepolia
-    address constant PROXY_HOOK = SepoliaConstants.ProxyHook;
+    // address positionManager; // V4 Position Manager on Arb Sepolia
+    // address poolManager; // V4 Pool Manager on Arb Sepolia
+    ProxyHook proxyHook;
 
     // Core pool tokens (intent tokens - WHERE LIQUIDITY GOES)
-    address constant LCC_TOKEN_A = SepoliaConstants.LCCtokenA;
-    address constant LCC_TOKEN_B = SepoliaConstants.LCCtokenB;
+    IToken lccUSDCToken;
+    IToken lccUSDTToken;
 
     // Proxy pool tokens (underlying tokens)
-    address constant UNDERLYING_TOKEN_A = SepoliaConstants.TokenA;
-    address constant UNDERLYING_TOKEN_B = SepoliaConstants.TokenB;
+    address usdcToken;
+    address usdtToken;
 
     // Liquidity parameters
     uint256 constant AMOUNT_A_DESIRED = 1e18; // 10 tokens
@@ -55,8 +57,16 @@ contract PositionManagerLiquidityScript is Script {
         uint256 lpPrivateKey = vm.envUint("LP_PRIVATE_KEY");
         address lpAddress = vm.addr(lpPrivateKey);
 
-        positionManager = IPositionManager(POSITION_MANAGER);
-        poolManager = IPoolManager(POOL_MANAGER);
+        positionManager = IPositionManager(positionManager);
+        poolManager = IPoolManager(poolManager);
+        // Core pool tokens
+        lccUSDCToken = IToken(readAddress("lccTokenUSDC"));
+        lccUSDTToken = IToken(readAddress("lccTokenUSDT"));
+        // Proxy pool tokens (underlying tokens)
+        usdcToken = readAddress("usdcToken");
+        usdtToken = readAddress("usdtToken");
+        // Proxy Hook
+        proxyHook = ProxyHook(readAddress("proxyHook"));
 
         setupPoolKeys();
 
@@ -74,7 +84,7 @@ contract PositionManagerLiquidityScript is Script {
 
         // Core pool: wrapped tokens, no hooks (this gets liquidity)
         (Currency currency0Core, Currency currency1Core) =
-            SortTokens.sort(MockERC20(LCC_TOKEN_A), MockERC20(LCC_TOKEN_B));
+            SortTokens.sort(MockERC20(address(lccUSDCToken)), MockERC20(address(lccUSDTToken)));
         corePoolKey = PoolKey({
             currency0: currency0Core,
             currency1: currency1Core,
@@ -84,14 +94,13 @@ contract PositionManagerLiquidityScript is Script {
         });
 
         // Proxy pool: underlying tokens, with hooks (users interact here)
-        (Currency currency0Proxy, Currency currency1Proxy) =
-            SortTokens.sort(MockERC20(UNDERLYING_TOKEN_A), MockERC20(UNDERLYING_TOKEN_B));
+        (Currency currency0Proxy, Currency currency1Proxy) = SortTokens.sort(MockERC20(usdcToken), MockERC20(usdtToken));
         proxyPoolKey = PoolKey({
             currency0: currency0Proxy,
             currency1: currency1Proxy,
             fee: 0,
             tickSpacing: 1,
-            hooks: IHooks(PROXY_HOOK) // hook
+            hooks: proxyHook // hook
         });
         console.log(" ");
         console.log("Core Pool (receives liquidity):");
@@ -107,24 +116,21 @@ contract PositionManagerLiquidityScript is Script {
     }
 
     function lccWitelistLPAndCustodian(address _address) internal {
-        IToken tokenA = IToken(Currency.unwrap(corePoolKey.currency0));
-        IToken tokenB = IToken(Currency.unwrap(corePoolKey.currency1));
-
         // Approve liquidity providers
-        approveLccLP(_address, tokenA);
-        approveLccLP(_address, tokenB);
+        approveLccLP(_address, lccUSDCToken);
+        approveLccLP(_address, lccUSDTToken);
 
         // Approve Hook
-        approveLccCustodian(PROXY_HOOK, tokenA);
-        approveLccCustodian(PROXY_HOOK, tokenB);
+        approveLccCustodian(address(proxyHook), lccUSDCToken);
+        approveLccCustodian(address(proxyHook), lccUSDTToken);
 
         // Approve Pool manager
-        approveLccCustodian(POOL_MANAGER, tokenA);
-        approveLccCustodian(POOL_MANAGER, tokenB);
+        approveLccCustodian(address(poolManager), lccUSDCToken);
+        approveLccCustodian(address(poolManager), lccUSDTToken);
 
         // Approve Position manager
-        approveLccCustodian(POSITION_MANAGER, tokenA);
-        approveLccCustodian(POSITION_MANAGER, tokenB);
+        approveLccCustodian(address(positionManager), lccUSDCToken);
+        approveLccCustodian(address(positionManager), lccUSDTToken);
     }
 
     function approveLccCustodian(address _address, IToken token) internal {
@@ -171,7 +177,7 @@ contract PositionManagerLiquidityScript is Script {
             uint256 wrapAmountA = AMOUNT_A_DESIRED - currentWrappedA;
             require(underlyingTokenABalance >= wrapAmountA, "Token A balance not enough");
             checkAndApproveErc20(user, address(iTokenA), tokenA, wrapAmountA);
-            iTokenA.wrap(PROXY_HOOK, wrapAmountA);
+            iTokenA.wrap(address(proxyHook), wrapAmountA);
             console.log("Wrapped", wrapAmountA, "of token A");
         } else {
             console.log("Token A already has sufficient wrapped balance");
@@ -180,8 +186,8 @@ contract PositionManagerLiquidityScript is Script {
             uint256 wrapAmountB = AMOUNT_B_DESIRED - currentWrappedB;
             require(underlyingTokenBBalance >= wrapAmountB, "Token B balance not enough");
             checkAndApproveErc20(user, address(iTokenB), tokenB, wrapAmountB);
-            checkAndApproveErc20(user, PROXY_HOOK, tokenB, wrapAmountB);
-            iTokenB.wrap(PROXY_HOOK, wrapAmountB);
+            checkAndApproveErc20(user, address(proxyHook), tokenB, wrapAmountB);
+            iTokenB.wrap(address(proxyHook), wrapAmountB);
             console.log("Wrapped", wrapAmountB, "of token B");
         } else {
             console.log("Token B already has sufficient wrapped balance");

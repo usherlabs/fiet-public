@@ -98,7 +98,6 @@ contract IToken is ERC20, Ownable {
     // LP's are allowed to mint tokens for themselves using the base vts
     // while specifying a custodian which would be responsible for the liquidity
     function wrap(address custodian, uint256 amount) public validCustodian(custodian) onlyLP(msg.sender) {
-        console.log("test");
         uint256 fees = 0;
         address owner = msg.sender;
         uint256 custodyAmount = _getReserveAmount(amount);

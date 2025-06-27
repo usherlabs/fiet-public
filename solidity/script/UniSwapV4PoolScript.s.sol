@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import {Script, console} from "forge-std/Script.sol";
+import {console} from "forge-std/Script.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Constants} from "@uniswap/v4-core/test/utils/Constants.sol";
 import {IHooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
@@ -12,20 +12,20 @@ import {Constants} from "@uniswap/v4-core/test/utils/Constants.sol";
 import {SortTokens} from "@uniswap/v4-core/test/utils/SortTokens.sol";
 import {MockERC20} from "@uniswap/v4-core/lib/solmate/src/test/utils/mocks/MockERC20.sol";
 import {SepoliaConstants} from "./constants.sol";
+import {ScriptHelper} from "./deployments/ScriptHelper.s.sol";
 
 address constant POOL_MANAGER = SepoliaConstants.POOL_MANAGER;
 
-contract CorePoolScript is Script {
+contract CorePoolScript is ScriptHelper {
     using PoolIdLibrary for PoolKey;
 
-    address tokenA = SepoliaConstants.LCCtokenA;
-    address tokenB = SepoliaConstants.LCCtokenB;
-
     function run() external {
-        uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
+        address lccTokenA = readAddress("lccTokenUSDT");
+        address lccTokenB = readAddress("lccTokenUSDC");
+        uint256 deployerPrivateKey = uint256(vm.envBytes32("PRIVATE_KEY"));
         vm.startBroadcast(deployerPrivateKey);
         console.log("Initializing LCC USDT/USDC Pool on Sepolia");
-        (Currency currencyA, Currency currencyB) = SortTokens.sort(MockERC20(tokenA), MockERC20(tokenB));
+        (Currency currencyA, Currency currencyB) = SortTokens.sort(MockERC20(lccTokenA), MockERC20(lccTokenB));
         // Create pool configuration
         PoolKey memory poolKey = PoolKey({
             currency0: currencyA,
@@ -42,6 +42,7 @@ contract CorePoolScript is Script {
             PoolId poolId = poolKey.toId();
             console.log("Pool initialized successfully!");
             console.log("Pool ID:", vm.toString(PoolId.unwrap(poolId)));
+            writeString("corePoolId", vm.toString(PoolId.unwrap(poolId)));
         } catch (bytes memory reason) {
             console.log("Failed to initialize pool:");
             console.log("Reason: {}", vm.toString(reason));
@@ -51,15 +52,14 @@ contract CorePoolScript is Script {
     }
 }
 
-contract ProxyPoolScript is Script {
+contract ProxyPoolScript is ScriptHelper {
     using PoolIdLibrary for PoolKey;
 
-    address tokenA = SepoliaConstants.TokenA;
-    address tokenB = SepoliaConstants.TokenB;
-    address proxyHook = SepoliaConstants.ProxyHook;
-
     function run() external {
-        uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
+        address tokenA = readAddress("usdtToken");
+        address tokenB = readAddress("usdcToken");
+        address proxyHook = readAddress("proxyHook");
+        uint256 deployerPrivateKey = uint256(vm.envBytes32("PRIVATE_KEY"));
         vm.startBroadcast(deployerPrivateKey);
         console.log("Initializing USDT/USDC proxy Pool on Sepolia");
         (Currency currencyA, Currency currencyB) = SortTokens.sort(MockERC20(tokenA), MockERC20(tokenB));
@@ -79,6 +79,7 @@ contract ProxyPoolScript is Script {
             PoolId poolId = poolKey.toId();
             console.log("Pool initialized successfully!");
             console.log("Pool ID:", vm.toString(PoolId.unwrap(poolId)));
+            writeString("proxyPoolId", vm.toString(PoolId.unwrap(poolId)));
         } catch (bytes memory reason) {
             console.log("Failed to initialize pool:");
             console.log("Reason: {}", vm.toString(reason));

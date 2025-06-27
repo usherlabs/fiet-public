@@ -137,7 +137,6 @@ contract ProxyPoolTest is Test, Deployers {
 
         itoken0.whitelistLP(address(manager), true);
         itoken1.whitelistLP(address(manager), true);
-
         itoken0.wrap(custodian, mintAmount);
         itoken1.wrap(custodian, mintAmount);
     }

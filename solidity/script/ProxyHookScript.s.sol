@@ -13,6 +13,7 @@ import {MockERC20} from "@uniswap/v4-core/lib/solmate/src/test/utils/mocks/MockE
 
 import {ProxyHook} from "../src/ProxyHook.sol";
 import {SepoliaConstants} from "./constants.sol";
+import {ScriptHelper} from "./deployments/ScriptHelper.s.sol";
 
 /**
  * To deploy proxy hook (e.g. for ETH/USDC), following pools need to be deployed first.
@@ -20,14 +21,13 @@ import {SepoliaConstants} from "./constants.sol";
  * - Proxy pool: Uniswap v4 pool with ERC20 standard token,
  * - Core pool: Uniswap v4 pool with non-compitable intent token.
  */
-contract ProxyHookScript is Script {
+contract ProxyHookScript is ScriptHelper {
     ProxyHook proxyHook;
 
-    address lccTokenA = SepoliaConstants.LCCtokenA;
-    address lccTokenB = SepoliaConstants.LCCtokenB;
-
     function run() external {
-        uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
+        address lccTokenA = readAddress("lccTokenUSDC");
+        address lccTokenB = readAddress("lccTokenUSDT");
+        uint256 deployerPrivateKey = uint256(vm.envBytes32("PRIVATE_KEY"));
         vm.startBroadcast(deployerPrivateKey);
         (Currency currencyA, Currency currencyB) = SortTokens.sort(MockERC20(lccTokenA), MockERC20(lccTokenB));
         // Create pool configuration
@@ -51,5 +51,6 @@ contract ProxyHookScript is Script {
         require(address(proxyHook) == hookAddress, "DeployHookScript: hook address mismatch");
         vm.stopBroadcast();
         console.log("Hook successfully deployed to:", address(proxyHook));
+        writeAddress("proxyHook", address(proxyHook));
     }
 }
