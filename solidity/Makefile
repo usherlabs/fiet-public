@@ -5,8 +5,8 @@ export
 MODE ?= live
 ANVIL_PORT=8545
 ANVIL_FORK_URL=http://localhost:$(ANVIL_PORT)
-RPC_URL=$(if $(filter $(MODE),local),$(ANVIL_FORK_URL),$(ARB_SEPOLIA_RPC_URL))
-VERIFY_FLAGS=$(if $(filter $(MODE),local),,--verify)
+RPC_URL=$(if $(filter $(MODE),LOCAL),$(ANVIL_FORK_URL),$(ARB_SEPOLIA_RPC_URL))
+VERIFY_FLAGS=$(if $(filter $(MODE),LOCAL),,--verify)
 ETHERSCAN_KEY=${ETHERSCAN_API_KEY}
 
 FORGE=forge
@@ -28,10 +28,6 @@ build:
 fork:
 	@echo "⛽ Starting anvil forked from Arbitrum Sepolia..."
 	anvil --fork-url $(ARB_SEPOLIA_RPC_URL) --port $(ANVIL_PORT)
-
-# === Clean ===
-build:
-	$(FORGE) clean
 
 # === USDC already deployed on Arbitrum Sepolia
 
