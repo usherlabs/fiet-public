@@ -27,7 +27,7 @@ build:
 # === Fork ===
 fork:
 	@echo "⛽ Starting anvil forked from Arbitrum Sepolia..."
-	anvil --fork-url $(ARB_SEPOLIA_RPC_URL) --port $(ANVIL_PORT)
+	anvil --fork-url $(ARB_SEPOLIA_RPC_URL) --port $(ANVIL_PORT)  --steps-tracing
 
 # === USDC already deployed on Arbitrum Sepolia
 
