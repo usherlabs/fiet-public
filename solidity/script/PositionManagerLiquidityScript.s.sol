@@ -22,6 +22,7 @@ import {IToken} from "../src/IToken.sol";
 import {SepoliaConstants} from "./constants.sol";
 import {ScriptHelper} from "./deployments/ScriptHelper.s.sol";
 import {ProxyHook} from "../src/ProxyHook.sol";
+import {CurrencySortHelper} from "./CurrencySortHelper.sol";
 
 contract PositionManagerLiquidityScript is ScriptHelper {
     using StateLibrary for IPoolManager;
@@ -82,10 +83,8 @@ contract PositionManagerLiquidityScript is ScriptHelper {
 
     function setupPoolKeys() internal {
         // Core pool: wrapped tokens, no hooks (this gets liquidity)
-        (Currency currency0Core, Currency currency1Core) = SortTokens.sort(
-            MockERC20(address(lccUSDCToken)),
-            MockERC20(address(lccUSDTToken))
-        );
+        (Currency currency0Core, Currency currency1Core) = CurrencySortHelper
+            .sortAddresses(address(lccUSDCToken), address(lccUSDTToken));
         corePoolKey = PoolKey({
             currency0: currency0Core,
             currency1: currency1Core,
@@ -95,10 +94,8 @@ contract PositionManagerLiquidityScript is ScriptHelper {
         });
 
         // Proxy pool: underlying tokens, with hooks (users interact here)
-        (Currency currency0Proxy, Currency currency1Proxy) = SortTokens.sort(
-            MockERC20(usdcToken),
-            MockERC20(usdtToken)
-        );
+        (Currency currency0Proxy, Currency currency1Proxy) = CurrencySortHelper
+            .sortAddresses(address(usdcToken), address(usdtToken));
         proxyPoolKey = PoolKey({
             currency0: currency0Proxy,
             currency1: currency1Proxy,
@@ -153,14 +150,12 @@ contract PositionManagerLiquidityScript is ScriptHelper {
     function wrapToLccTokens(address user) internal {
         console.log(" ");
         console.log("Wrapping tokens");
+        // Core tokens
         IToken iTokenA = IToken(Currency.unwrap(corePoolKey.currency0));
         IToken iTokenB = IToken(Currency.unwrap(corePoolKey.currency1));
-        (Currency currency0Proxy, Currency currency1Proxy) = SortTokens.sort(
-            MockERC20(Currency.unwrap(proxyPoolKey.currency0)),
-            MockERC20(Currency.unwrap(proxyPoolKey.currency1))
-        );
-        IERC20 tokenB = IERC20(Currency.unwrap(currency0Proxy));
-        IERC20 tokenA = IERC20(Currency.unwrap(currency1Proxy));
+        // Proxy tokens
+        IERC20 tokenA = IERC20(Currency.unwrap(proxyPoolKey.currency0));
+        IERC20 tokenB = IERC20(Currency.unwrap(proxyPoolKey.currency1));
 
         // Verify underlying asset mappings
         require(

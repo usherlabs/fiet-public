@@ -13,6 +13,7 @@ import {SortTokens} from "@uniswap/v4-core/test/utils/SortTokens.sol";
 import {MockERC20} from "@uniswap/v4-core/lib/solmate/src/test/utils/mocks/MockERC20.sol";
 import {SepoliaConstants} from "./constants.sol";
 import {ScriptHelper} from "./deployments/ScriptHelper.s.sol";
+import {CurrencySortHelper} from "./CurrencySortHelper.sol";
 
 address constant POOL_MANAGER = SepoliaConstants.POOL_MANAGER;
 
@@ -25,7 +26,8 @@ contract CorePoolScript is ScriptHelper {
         uint256 deployerPrivateKey = uint256(vm.envBytes32("PRIVATE_KEY"));
         vm.startBroadcast(deployerPrivateKey);
         console.log("Initializing LCC USDT/USDC Pool on Sepolia");
-        (Currency currencyA, Currency currencyB) = SortTokens.sort(MockERC20(lccTokenA), MockERC20(lccTokenB));
+        (Currency currencyA, Currency currencyB) = CurrencySortHelper
+            .sortAddresses(lccTokenA, lccTokenB);
         // Create pool configuration
         PoolKey memory poolKey = PoolKey({
             currency0: currencyA,
@@ -62,7 +64,8 @@ contract ProxyPoolScript is ScriptHelper {
         uint256 deployerPrivateKey = uint256(vm.envBytes32("PRIVATE_KEY"));
         vm.startBroadcast(deployerPrivateKey);
         console.log("Initializing USDT/USDC proxy Pool on Sepolia");
-        (Currency currencyA, Currency currencyB) = SortTokens.sort(MockERC20(tokenA), MockERC20(tokenB));
+        (Currency currencyA, Currency currencyB) = CurrencySortHelper
+            .sortAddresses(tokenA, tokenB);
         // Create pool configuration
         PoolKey memory poolKey = PoolKey({
             currency0: currencyA,

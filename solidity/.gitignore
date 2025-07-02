@@ -2,6 +2,7 @@
 cache/
 out/
 .forge-snapshots
+node_modules
 
 # Ignores development broadcast logs
 
