@@ -27,14 +27,11 @@ contract CorePoolScript is ScriptHelper {
 
         console.log("Initializing LCC USDT/USDC Pool on Sepolia");
 
-        (Currency currencyA, Currency currencyB) = CurrencySortHelper
-            .sortAddresses(lccTokenA, lccTokenB);
-        uint8 currencyADecimals = MockERC20(Currency.unwrap(currencyA))
-            .decimals();
+        (Currency currencyA, Currency currencyB) = CurrencySortHelper.sortAddresses(lccTokenA, lccTokenB);
+        uint8 currencyADecimals = MockERC20(Currency.unwrap(currencyA)).decimals();
         require(currencyADecimals == 18, "Unsupported decimals currency A");
 
-        uint8 currencyBDecimals = MockERC20(Currency.unwrap(currencyB))
-            .decimals();
+        uint8 currencyBDecimals = MockERC20(Currency.unwrap(currencyB)).decimals();
         require(currencyBDecimals == 18, "Unsupported decimals currency B");
 
         vm.startBroadcast(deployerPrivateKey);
@@ -75,15 +72,12 @@ contract ProxyPoolScript is ScriptHelper {
         uint256 deployerPrivateKey = uint256(vm.envBytes32("PRIVATE_KEY"));
         vm.startBroadcast(deployerPrivateKey);
         console.log("Initializing USDT/USDC proxy Pool on Sepolia");
-        (Currency currencyA, Currency currencyB) = CurrencySortHelper
-            .sortAddresses(tokenA, tokenB);
+        (Currency currencyA, Currency currencyB) = CurrencySortHelper.sortAddresses(tokenA, tokenB);
 
-        uint8 currencyADecimals = MockERC20(Currency.unwrap(currencyA))
-            .decimals();
+        uint8 currencyADecimals = MockERC20(Currency.unwrap(currencyA)).decimals();
         require(currencyADecimals == 18, "Unsupported decimals currency A");
 
-        uint8 currencyBDecimals = MockERC20(Currency.unwrap(currencyB))
-            .decimals();
+        uint8 currencyBDecimals = MockERC20(Currency.unwrap(currencyB)).decimals();
         require(currencyBDecimals == 18, "Unsupported decimals currency B");
 
         // Create pool configuration

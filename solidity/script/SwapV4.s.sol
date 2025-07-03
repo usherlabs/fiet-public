@@ -41,8 +41,7 @@ contract SwapV4 is ScriptHelper {
 
         uint256 userPrivateKey = uint256(vm.envBytes32("LP_PRIVATE_KEY"));
         address userAddress = vm.addr(userPrivateKey);
-        (Currency currencyA, Currency currencyB) = CurrencySortHelper
-            .sortAddresses(usdcToken, usdtToken);
+        (Currency currencyA, Currency currencyB) = CurrencySortHelper.sortAddresses(usdcToken, usdtToken);
         PoolKey memory poolKey = PoolKey({
             currency0: currencyA,
             currency1: currencyB,
@@ -50,20 +49,16 @@ contract SwapV4 is ScriptHelper {
             tickSpacing: 1,
             hooks: IHooks(hook)
         });
-        uint balanceBeforeCurrency1 = IERC20(Currency.unwrap(poolKey.currency1))
-            .balanceOf(userAddress);
-        uint balanceBeforeCurrency0 = IERC20(Currency.unwrap(poolKey.currency0))
-            .balanceOf(userAddress);
+        uint256 balanceBeforeCurrency1 = IERC20(Currency.unwrap(poolKey.currency1)).balanceOf(userAddress);
+        uint256 balanceBeforeCurrency0 = IERC20(Currency.unwrap(poolKey.currency0)).balanceOf(userAddress);
         vm.startBroadcast(userPrivateKey);
         approveTokenWithPermit2(usdcToken);
         approveTokenWithPermit2(usdtToken);
         swapExactInputSingle(poolKey, 10e18, 0, userAddress);
 
         vm.stopBroadcast();
-        uint balanceAfterCurrency1 = IERC20(Currency.unwrap(poolKey.currency1))
-            .balanceOf(userAddress);
-        uint balanceAfterCurrency0 = IERC20(Currency.unwrap(poolKey.currency0))
-            .balanceOf(userAddress);
+        uint256 balanceAfterCurrency1 = IERC20(Currency.unwrap(poolKey.currency1)).balanceOf(userAddress);
+        uint256 balanceAfterCurrency0 = IERC20(Currency.unwrap(poolKey.currency0)).balanceOf(userAddress);
         console.log(
             "Currency 0 balance Before: ",
             balanceBeforeCurrency0 / 1e18,
@@ -93,11 +88,8 @@ contract SwapV4 is ScriptHelper {
         bytes memory commands = abi.encodePacked(uint8(Commands.V4_SWAP));
 
         // Encode V4Router actions
-        bytes memory actions = abi.encodePacked(
-            uint8(Actions.SWAP_EXACT_IN_SINGLE),
-            uint8(Actions.SETTLE_ALL),
-            uint8(Actions.TAKE_ALL)
-        );
+        bytes memory actions =
+            abi.encodePacked(uint8(Actions.SWAP_EXACT_IN_SINGLE), uint8(Actions.SETTLE_ALL), uint8(Actions.TAKE_ALL));
 
         bytes[] memory params = new bytes[](3);
 

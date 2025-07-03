@@ -72,10 +72,7 @@ contract ProxyPoolTest is Test, Deployers {
         }
 
         // ! Make sure to approve the ITokens to take out 'underlyingAsset'
-        IERC20Minimal(underlyingAsset).approve(
-            address(token),
-            Constants.MAX_UINT256
-        );
+        IERC20Minimal(underlyingAsset).approve(address(token), Constants.MAX_UINT256);
         return Currency.wrap(address(token));
     }
 
@@ -88,67 +85,39 @@ contract ProxyPoolTest is Test, Deployers {
         Currency _currencyB = deployMintAndApproveCurrency();
 
         Currency _currencyC = deployAndApproveITokens(
-            "Intents TOKEN0 Settlement Receipt",
-            "iTOKEN0R",
-            Currency.unwrap(_currencyA),
-            baseVts
+            "Intents TOKEN0 Settlement Receipt", "iTOKEN0R", Currency.unwrap(_currencyA), baseVts
         );
         Currency _currencyD = deployAndApproveITokens(
-            "Intents TOKEN1 Settlement Receipt",
-            "ITOKEN1R",
-            Currency.unwrap(_currencyB),
-            baseVts
+            "Intents TOKEN1 Settlement Receipt", "ITOKEN1R", Currency.unwrap(_currencyB), baseVts
         );
 
-        (_currency0, _currency1) = CurrencySortHelper.sortAddresses(
-            Currency.unwrap(_currencyA),
-            Currency.unwrap(_currencyB)
-        );
+        (_currency0, _currency1) =
+            CurrencySortHelper.sortAddresses(Currency.unwrap(_currencyA), Currency.unwrap(_currencyB));
 
-        (_currency2, _currency3) = CurrencySortHelper.sortAddresses(
-            Currency.unwrap(_currencyC),
-            Currency.unwrap(_currencyD)
-        );
+        (_currency2, _currency3) =
+            CurrencySortHelper.sortAddresses(Currency.unwrap(_currencyC), Currency.unwrap(_currencyD));
     }
 
     function deployCorePool() public {
         //  Deploy the pool without the hook
-        (corePoolKey, ) = initPool(
-            _currency2,
-            _currency3,
-            IHooks(address(0)),
-            3000,
-            SQRT_PRICE_1_1
-        );
+        (corePoolKey,) = initPool(_currency2, _currency3, IHooks(address(0)), 3000, SQRT_PRICE_1_1);
     }
 
     function deployProxyPool() public {
         // Proxy pool needs hook not core pool
         address hookAddress = address(
             uint160(
-                Hooks.BEFORE_ADD_LIQUIDITY_FLAG |
-                    Hooks.BEFORE_SWAP_FLAG |
-                    Hooks.BEFORE_INITIALIZE_FLAG |
-                    Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG
+                Hooks.BEFORE_ADD_LIQUIDITY_FLAG | Hooks.BEFORE_SWAP_FLAG | Hooks.BEFORE_INITIALIZE_FLAG
+                    | Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG
             )
         );
 
         //  Deploy the hook contract
-        deployCodeTo(
-            "ProxyHook.sol",
-            abi.encode(manager, corePoolKey),
-            hookAddress
-        );
+        deployCodeTo("ProxyHook.sol", abi.encode(manager, corePoolKey), hookAddress);
         hook = ProxyHook(hookAddress);
 
         //  Deploy the pool with the hook
-        (proxyPoolKey, ) = initPool(
-            _currency0,
-            _currency1,
-            hook,
-            3000,
-            SQRT_PRICE_1_1
-        );
+        (proxyPoolKey,) = initPool(_currency0, _currency1, hook, 3000, SQRT_PRICE_1_1);
     }
 
     function mintAndApproveHookToMintITokens() public {
@@ -184,12 +153,7 @@ contract ProxyPoolTest is Test, Deployers {
         vm.expectRevert();
         modifyLiquidityRouter.modifyLiquidity(
             proxyPoolKey,
-            ModifyLiquidityParams({
-                tickLower: -60,
-                tickUpper: 60,
-                liquidityDelta: 1000e18,
-                salt: bytes32(0)
-            }),
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1000e18, salt: bytes32(0)}),
             ZERO_BYTES
         );
     }
@@ -197,12 +161,7 @@ contract ProxyPoolTest is Test, Deployers {
     function test_canModifyLiquidityOfCoreHook() public {
         modifyLiquidityRouter.modifyLiquidity(
             corePoolKey,
-            ModifyLiquidityParams({
-                tickLower: -60,
-                tickUpper: 60,
-                liquidityDelta: 1e18,
-                salt: bytes32(0)
-            }),
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e18, salt: bytes32(0)}),
             ZERO_BYTES
         );
     }
@@ -210,38 +169,23 @@ contract ProxyPoolTest is Test, Deployers {
     function test_swap_exactInput_zeroForOneOnCore() public {
         modifyLiquidityRouter.modifyLiquidity(
             corePoolKey,
-            ModifyLiquidityParams({
-                tickLower: -60,
-                tickUpper: 60,
-                liquidityDelta: 1000e18,
-                salt: bytes32(0)
-            }),
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1000e18, salt: bytes32(0)}),
             ZERO_BYTES
         );
 
-        PoolSwapTest.TestSettings memory settings = PoolSwapTest.TestSettings({
-            takeClaims: false,
-            settleUsingBurn: false
-        });
+        PoolSwapTest.TestSettings memory settings =
+            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false});
 
-        uint256 selfBalanceOfTokenABefore = corePoolKey
-            .currency0
-            .balanceOfSelf();
+        uint256 selfBalanceOfTokenABefore = corePoolKey.currency0.balanceOfSelf();
 
         swapRouter.swap(
             corePoolKey,
-            SwapParams({
-                zeroForOne: true,
-                amountSpecified: -1e18,
-                sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
-            }),
+            SwapParams({zeroForOne: true, amountSpecified: -1e18, sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1}),
             settings,
             ZERO_BYTES
         );
 
-        uint256 selfBalanceOfTokenAAfter = corePoolKey
-            .currency0
-            .balanceOfSelf();
+        uint256 selfBalanceOfTokenAAfter = corePoolKey.currency0.balanceOfSelf();
 
         assertEq(selfBalanceOfTokenABefore - selfBalanceOfTokenAAfter, 1e18);
     }
@@ -250,51 +194,29 @@ contract ProxyPoolTest is Test, Deployers {
         // add some liquidity to the core pool since it is where swaps will actually take place and not the proxy pool
         modifyLiquidityRouter.modifyLiquidity(
             corePoolKey,
-            ModifyLiquidityParams({
-                tickLower: -60,
-                tickUpper: 60,
-                liquidityDelta: 10000e18,
-                salt: bytes32(0)
-            }),
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 10000e18, salt: bytes32(0)}),
             ZERO_BYTES
         );
 
         // add some liquidity to the core pool since it is where swaps will actually take place and not the proxy pool
-        PoolSwapTest.TestSettings memory settings = PoolSwapTest.TestSettings({
-            takeClaims: false,
-            settleUsingBurn: false
-        });
+        PoolSwapTest.TestSettings memory settings =
+            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false});
 
-        uint256 selfBalanceOfTokenABefore = proxyPoolKey
-            .currency0
-            .balanceOfSelf();
-        uint256 selfBalanceOfTokenBBefore = proxyPoolKey
-            .currency1
-            .balanceOfSelf();
+        uint256 selfBalanceOfTokenABefore = proxyPoolKey.currency0.balanceOfSelf();
+        uint256 selfBalanceOfTokenBBefore = proxyPoolKey.currency1.balanceOfSelf();
 
         uint256 swapAmount = 100;
         swapRouter.swap(
             proxyPoolKey,
-            SwapParams({
-                zeroForOne: true,
-                amountSpecified: -int256(swapAmount),
-                sqrtPriceLimitX96: ZERO_FOR_ONE_LIMIT
-            }),
+            SwapParams({zeroForOne: true, amountSpecified: -int256(swapAmount), sqrtPriceLimitX96: ZERO_FOR_ONE_LIMIT}),
             settings,
             abi.encode(address(this))
         );
 
-        uint256 selfBalanceOfTokenAAfter = proxyPoolKey
-            .currency0
-            .balanceOfSelf();
-        uint256 selfBalanceOfTokenBAfter = proxyPoolKey
-            .currency1
-            .balanceOfSelf();
+        uint256 selfBalanceOfTokenAAfter = proxyPoolKey.currency0.balanceOfSelf();
+        uint256 selfBalanceOfTokenBAfter = proxyPoolKey.currency1.balanceOfSelf();
 
-        assertEq(
-            selfBalanceOfTokenABefore - selfBalanceOfTokenAAfter,
-            swapAmount
-        );
+        assertEq(selfBalanceOfTokenABefore - selfBalanceOfTokenAAfter, swapAmount);
         assert(selfBalanceOfTokenBAfter > selfBalanceOfTokenBBefore);
     }
 
@@ -302,51 +224,29 @@ contract ProxyPoolTest is Test, Deployers {
         // add some liquidity to the core pool since it is where swaps will actually take place and not the proxy pool
         modifyLiquidityRouter.modifyLiquidity(
             corePoolKey,
-            ModifyLiquidityParams({
-                tickLower: -60,
-                tickUpper: 60,
-                liquidityDelta: 10000e18,
-                salt: bytes32(0)
-            }),
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 10000e18, salt: bytes32(0)}),
             ZERO_BYTES
         );
 
         // add some liquidity to the core pool since it is where swaps will actually take place and not the proxy pool
-        PoolSwapTest.TestSettings memory settings = PoolSwapTest.TestSettings({
-            takeClaims: false,
-            settleUsingBurn: false
-        });
+        PoolSwapTest.TestSettings memory settings =
+            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false});
 
-        uint256 selfBalanceOfTokenABefore = proxyPoolKey
-            .currency0
-            .balanceOfSelf();
-        uint256 selfBalanceOfTokenBBefore = proxyPoolKey
-            .currency1
-            .balanceOfSelf();
+        uint256 selfBalanceOfTokenABefore = proxyPoolKey.currency0.balanceOfSelf();
+        uint256 selfBalanceOfTokenBBefore = proxyPoolKey.currency1.balanceOfSelf();
 
         uint256 swapAmount = 100;
         swapRouter.swap(
             proxyPoolKey,
-            SwapParams({
-                zeroForOne: false,
-                amountSpecified: -int256(swapAmount),
-                sqrtPriceLimitX96: ONE_FOR_ZERO_LIMIT
-            }),
+            SwapParams({zeroForOne: false, amountSpecified: -int256(swapAmount), sqrtPriceLimitX96: ONE_FOR_ZERO_LIMIT}),
             settings,
             abi.encode(address(this))
         );
 
-        uint256 selfBalanceOfTokenAAfter = proxyPoolKey
-            .currency0
-            .balanceOfSelf();
-        uint256 selfBalanceOfTokenBAfter = proxyPoolKey
-            .currency1
-            .balanceOfSelf();
+        uint256 selfBalanceOfTokenAAfter = proxyPoolKey.currency0.balanceOfSelf();
+        uint256 selfBalanceOfTokenBAfter = proxyPoolKey.currency1.balanceOfSelf();
 
-        assertEq(
-            selfBalanceOfTokenBBefore - selfBalanceOfTokenBAfter,
-            swapAmount
-        );
+        assertEq(selfBalanceOfTokenBBefore - selfBalanceOfTokenBAfter, swapAmount);
         assert(selfBalanceOfTokenAAfter > selfBalanceOfTokenABefore);
     }
 
@@ -354,105 +254,61 @@ contract ProxyPoolTest is Test, Deployers {
         // add some liquidity to the core pool since it is where swaps will actually take place and not the proxy pool
         modifyLiquidityRouter.modifyLiquidity(
             corePoolKey,
-            ModifyLiquidityParams({
-                tickLower: -60,
-                tickUpper: 60,
-                liquidityDelta: 10000e18,
-                salt: bytes32(0)
-            }),
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 10000e18, salt: bytes32(0)}),
             ZERO_BYTES
         );
 
         // add some liquidity to the core pool since it is where swaps will actually take place and not the proxy pool
-        PoolSwapTest.TestSettings memory settings = PoolSwapTest.TestSettings({
-            takeClaims: false,
-            settleUsingBurn: false
-        });
+        PoolSwapTest.TestSettings memory settings =
+            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false});
 
-        uint256 selfBalanceOfTokenABefore = proxyPoolKey
-            .currency0
-            .balanceOfSelf();
-        uint256 selfBalanceOfTokenBBefore = proxyPoolKey
-            .currency1
-            .balanceOfSelf();
+        uint256 selfBalanceOfTokenABefore = proxyPoolKey.currency0.balanceOfSelf();
+        uint256 selfBalanceOfTokenBBefore = proxyPoolKey.currency1.balanceOfSelf();
 
         uint256 swapAmount = 100;
         swapRouter.swap(
             proxyPoolKey,
-            SwapParams({
-                zeroForOne: true,
-                amountSpecified: int256(swapAmount),
-                sqrtPriceLimitX96: ZERO_FOR_ONE_LIMIT
-            }),
+            SwapParams({zeroForOne: true, amountSpecified: int256(swapAmount), sqrtPriceLimitX96: ZERO_FOR_ONE_LIMIT}),
             settings,
             abi.encode(address(this))
         );
 
-        uint256 selfBalanceOfTokenAAfter = proxyPoolKey
-            .currency0
-            .balanceOfSelf();
-        uint256 selfBalanceOfTokenBAfter = proxyPoolKey
-            .currency1
-            .balanceOfSelf();
+        uint256 selfBalanceOfTokenAAfter = proxyPoolKey.currency0.balanceOfSelf();
+        uint256 selfBalanceOfTokenBAfter = proxyPoolKey.currency1.balanceOfSelf();
 
         assert(selfBalanceOfTokenABefore > selfBalanceOfTokenAAfter);
 
-        assertEq(
-            selfBalanceOfTokenBAfter,
-            selfBalanceOfTokenBBefore + swapAmount
-        );
+        assertEq(selfBalanceOfTokenBAfter, selfBalanceOfTokenBBefore + swapAmount);
     }
 
     function test_swap_exactOutput_oneForZeroOnProxy() public {
         // add some liquidity to the core pool since it is where swaps will actually take place and not the proxy pool
         modifyLiquidityRouter.modifyLiquidity(
             corePoolKey,
-            ModifyLiquidityParams({
-                tickLower: -60,
-                tickUpper: 60,
-                liquidityDelta: 10000e18,
-                salt: bytes32(0)
-            }),
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 10000e18, salt: bytes32(0)}),
             ZERO_BYTES
         );
 
         // add some liquidity to the core pool since it is where swaps will actually take place and not the proxy pool
-        PoolSwapTest.TestSettings memory settings = PoolSwapTest.TestSettings({
-            takeClaims: false,
-            settleUsingBurn: false
-        });
+        PoolSwapTest.TestSettings memory settings =
+            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false});
 
-        uint256 selfBalanceOfTokenABefore = proxyPoolKey
-            .currency0
-            .balanceOfSelf();
-        uint256 selfBalanceOfTokenBBefore = proxyPoolKey
-            .currency1
-            .balanceOfSelf();
+        uint256 selfBalanceOfTokenABefore = proxyPoolKey.currency0.balanceOfSelf();
+        uint256 selfBalanceOfTokenBBefore = proxyPoolKey.currency1.balanceOfSelf();
 
         uint256 swapAmount = 100;
         swapRouter.swap(
             proxyPoolKey,
-            SwapParams({
-                zeroForOne: false,
-                amountSpecified: int256(swapAmount),
-                sqrtPriceLimitX96: ONE_FOR_ZERO_LIMIT
-            }),
+            SwapParams({zeroForOne: false, amountSpecified: int256(swapAmount), sqrtPriceLimitX96: ONE_FOR_ZERO_LIMIT}),
             settings,
             abi.encode(address(this))
         );
 
-        uint256 selfBalanceOfTokenAAfter = proxyPoolKey
-            .currency0
-            .balanceOfSelf();
-        uint256 selfBalanceOfTokenBAfter = proxyPoolKey
-            .currency1
-            .balanceOfSelf();
+        uint256 selfBalanceOfTokenAAfter = proxyPoolKey.currency0.balanceOfSelf();
+        uint256 selfBalanceOfTokenBAfter = proxyPoolKey.currency1.balanceOfSelf();
 
         assert(selfBalanceOfTokenBBefore > selfBalanceOfTokenBAfter);
 
-        assertEq(
-            selfBalanceOfTokenAAfter,
-            selfBalanceOfTokenABefore + swapAmount
-        );
+        assertEq(selfBalanceOfTokenAAfter, selfBalanceOfTokenABefore + swapAmount);
     }
 }
