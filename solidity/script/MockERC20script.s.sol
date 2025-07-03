@@ -18,7 +18,7 @@ contract Token is ERC20 {
 }
 
 /// Deploying mock USDT token
-contract TokenScript is ScriptHelper {
+contract TokenScriptUSDT is ScriptHelper {
     Token token;
 
     function run() external {
@@ -31,22 +31,34 @@ contract TokenScript is ScriptHelper {
     }
 }
 
+contract TokenScriptUSDC is ScriptHelper {
+    Token token;
+
+    function run() external {
+        uint256 deployerPrivateKey = uint256(vm.envBytes32("PRIVATE_KEY"));
+        vm.startBroadcast(deployerPrivateKey);
+        token = new Token("Mock USDC", "USDC", 100000 ether); // initial supply = 100,000 ether
+        vm.stopBroadcast();
+
+        writeAddress("usdcToken", address(token));
+    }
+}
+
 contract ITokenUSDTScript is ScriptHelper {
     IToken token;
 
     function run() external {
-        address underlyingAssetB = readAddress("usdtToken");
+        address underlyingAsset = readAddress("usdtToken");
         uint256 deployerPrivateKey = uint256(vm.envBytes32("PRIVATE_KEY"));
         vm.startBroadcast(deployerPrivateKey);
         token = new IToken(
             "Mock LCC USDT",
             "LCC USDT",
-            underlyingAssetB,
+            underlyingAsset,
             10_000
         ); // base = 100%
 
         vm.stopBroadcast();
-
         writeAddress("lccTokenUSDT", address(token));
     }
 }
@@ -55,17 +67,16 @@ contract ITokenUSDCScript is ScriptHelper {
     IToken token;
 
     function run() external {
-        address underlyingAssetA = 0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d; // sepolia USDC
+        address underlyingAsset = readAddress("usdcToken");
         uint256 deployerPrivateKey = uint256(vm.envBytes32("PRIVATE_KEY"));
         vm.startBroadcast(deployerPrivateKey);
         token = new IToken(
             "Mock LCC USDC",
             "LCC USDC",
-            underlyingAssetA,
+            underlyingAsset,
             10_000
         ); // base = 100%
         vm.stopBroadcast();
-        writeAddress("usdcToken", underlyingAssetA);
         writeAddress("lccTokenUSDC", address(token));
     }
 }

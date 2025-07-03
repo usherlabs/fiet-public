@@ -12,4 +12,5 @@ library SepoliaConstants {
     address constant PERMIT2 = 0x000000000022D473030F116dDEE9F6B43aC78BA3;
     address constant UNIVERSAL_ROUTER =
         0xeFd1D4bD4cf1e86Da286BB4CB1B8BcED9C10BA47;
+    address constant STATE_VIEW = 0x9D467FA9062b6e9B1a46E26007aD82db116c67cB;
 }

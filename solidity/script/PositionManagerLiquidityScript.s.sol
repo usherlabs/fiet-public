@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import {console} from "forge-std/Script.sol";
+import {console, VmSafe} from "forge-std/Script.sol";
 import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {PositionInfo} from "@uniswap/v4-periphery/src/libraries/PositionInfoLibrary.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {IStateView} from "@uniswap/v4-periphery/src/interfaces/IStateView.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
@@ -14,7 +15,6 @@ import {Actions} from "@uniswap/v4-periphery/src/libraries/Actions.sol";
 import {LiquidityAmounts} from "@uniswap/v4-periphery/src/libraries/LiquidityAmounts.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {SortTokens} from "@uniswap/v4-core/test/utils/SortTokens.sol";
 import {MockERC20} from "@uniswap/v4-core/lib/solmate/src/test/utils/mocks/MockERC20.sol";
 import {IPermit2} from "@uniswap/permit2/src/interfaces/IPermit2.sol";
 
@@ -39,8 +39,9 @@ contract PositionManagerLiquidityScript is ScriptHelper {
     address usdtToken;
 
     // Liquidity parameters
-    uint256 constant AMOUNT_A_DESIRED = 10e6; // 10 tokens
-    uint256 constant AMOUNT_B_DESIRED = 10e18; // 10 tokens
+    uint256 constant AMOUNT_DESIRED = 1000; // 20 tokens
+    uint256 amount0Desired;
+    uint256 amount1Desired;
 
     IPositionManager positionManager;
     IPoolManager poolManager;
@@ -67,9 +68,11 @@ contract PositionManagerLiquidityScript is ScriptHelper {
         proxyHook = ProxyHook(readAddress("proxyHook"));
 
         setupPoolKeys();
+        setupAmounts();
 
         vm.startBroadcast(deployerPrivateKey);
         lccWhitelistLPAndCustodian(lpAddress);
+        setAccounts(lpAddress);
         vm.stopBroadcast();
 
         vm.startBroadcast(lpPrivateKey);
@@ -115,6 +118,31 @@ contract PositionManagerLiquidityScript is ScriptHelper {
         console.log("Hooks:", address(proxyPoolKey.hooks));
     }
 
+    function setupAmounts() internal {
+        // Calculate amounts based on token decimals and ordering
+        address coreToken0 = Currency.unwrap(corePoolKey.currency0);
+        address coreToken1 = Currency.unwrap(corePoolKey.currency1);
+
+        IToken iToken0 = IToken(coreToken0);
+        IToken iToken1 = IToken(coreToken1);
+
+        // Calculate desired amounts with proper decimals
+        amount0Desired = AMOUNT_DESIRED * (10 ** iToken0.decimals());
+        amount1Desired = AMOUNT_DESIRED * (10 ** iToken1.decimals());
+
+        console.log("Token0:", coreToken0);
+        console.log("Token1:", coreToken1);
+        console.log("Decimals0:", iToken0.decimals());
+        console.log("Decimals1:", iToken1.decimals());
+        console.log("Amount0Desired:", amount0Desired);
+        console.log("Amount1Desired:", amount1Desired);
+    }
+
+    function setAccounts(address user) public {
+        IERC20(usdcToken).transfer(user, 10000 ether);
+        IERC20(usdtToken).transfer(user, 10000 ether);
+    }
+
     function lccWhitelistLPAndCustodian(address user) internal {
         // Approve liquidity providers
         approveLccLP(user, lccUSDCToken);
@@ -148,55 +176,57 @@ contract PositionManagerLiquidityScript is ScriptHelper {
     }
 
     function wrapToLccTokens(address user) internal {
-        console.log(" ");
-        console.log("Wrapping tokens");
-        // Core tokens
-        IToken iTokenA = IToken(Currency.unwrap(corePoolKey.currency0));
-        IToken iTokenB = IToken(Currency.unwrap(corePoolKey.currency1));
-        // Proxy tokens
-        IERC20 tokenA = IERC20(Currency.unwrap(proxyPoolKey.currency0));
-        IERC20 tokenB = IERC20(Currency.unwrap(proxyPoolKey.currency1));
+        // Cache storage reads
+        Currency core0 = corePoolKey.currency0;
+        Currency core1 = corePoolKey.currency1;
+        Currency proxy0 = proxyPoolKey.currency0;
+        Currency proxy1 = proxyPoolKey.currency1;
 
-        // Verify underlying asset mappings
-        require(
-            iTokenA.underlyingAsset() == address(tokenA),
-            "IToken A underlying mismatch"
-        );
-        require(
-            iTokenB.underlyingAsset() == address(tokenB),
-            "IToken B underlying mismatch"
-        );
-        uint256 currentWrappedA = iTokenA.balanceOf(user);
-        uint256 currentWrappedB = iTokenB.balanceOf(user);
+        address iTokenAddr0 = Currency.unwrap(core0);
+        address iTokenAddr1 = Currency.unwrap(core1);
+        address tokenAddr0 = Currency.unwrap(proxy0);
+        address tokenAddr1 = Currency.unwrap(proxy1);
 
-        console.log("Current wrapped balances:");
-        console.log("  Token A:", currentWrappedA);
-        console.log("  Token B:", currentWrappedB);
-        // check underlying token balance
-        uint256 underlyingTokenABalance = tokenA.balanceOf(user);
-        uint256 underlyingTokenBBalance = tokenB.balanceOf(user);
+        IToken iToken0 = IToken(iTokenAddr0);
+        IToken iToken1 = IToken(iTokenAddr1);
 
-        if (currentWrappedA < AMOUNT_A_DESIRED) {
-            uint256 wrapAmountA = AMOUNT_A_DESIRED - currentWrappedA;
-            require(
-                underlyingTokenABalance >= wrapAmountA,
-                "Token A balance not enough"
-            );
-
-            iTokenA.wrap(address(proxyHook), wrapAmountA);
+        // Quick mapping check
+        address underlying0 = iToken0.underlyingAsset();
+        address underlying1 = iToken1.underlyingAsset();
+        uint256 amount0;
+        uint256 amount1;
+        // Determine correct pairing
+        if (underlying0 == tokenAddr0 && underlying1 == tokenAddr1) {
+            amount0 = amount0Desired;
+            _wrapTokenOptimized(user, iToken0, IERC20(tokenAddr0), amount0);
+            amount1 = amount1Desired;
+            _wrapTokenOptimized(user, iToken1, IERC20(tokenAddr1), amount1);
+        } else if (underlying0 == tokenAddr1 && underlying1 == tokenAddr0) {
+            amount0 = amount0Desired;
+            _wrapTokenOptimized(user, iToken0, IERC20(tokenAddr1), amount0);
+            amount1 = amount1Desired;
+            _wrapTokenOptimized(user, iToken1, IERC20(tokenAddr0), amount1);
         } else {
-            console.log("Token A already has sufficient wrapped balance");
+            revert("Invalid token mapping configuration");
         }
-        if (currentWrappedB < AMOUNT_B_DESIRED) {
-            uint256 wrapAmountB = AMOUNT_B_DESIRED - currentWrappedB;
-            require(
-                underlyingTokenBBalance >= wrapAmountB,
-                "Token B balance not enough"
-            );
+    }
 
-            iTokenB.wrap(address(proxyHook), wrapAmountB);
-        } else {
-            console.log("Token B already has sufficient wrapped balance");
+    function _wrapTokenOptimized(
+        address user,
+        IToken iToken,
+        IERC20 underlying,
+        uint256 desired
+    ) internal {
+        uint256 current = iToken.balanceOf(user);
+        if (current < desired) {
+            uint256 needed = desired - current;
+            uint256 available = underlying.balanceOf(user);
+            string memory name = MockERC20(address(underlying)).name();
+            require(
+                available >= needed,
+                string(abi.encodePacked(name, " insufficient"))
+            );
+            iToken.wrap(address(proxyHook), needed);
         }
     }
 
@@ -217,8 +247,8 @@ contract PositionManagerLiquidityScript is ScriptHelper {
             sqrtPriceX96,
             TickMath.getSqrtPriceAtTick(tickLower),
             TickMath.getSqrtPriceAtTick(tickUpper),
-            AMOUNT_A_DESIRED,
-            AMOUNT_B_DESIRED
+            amount0Desired,
+            amount1Desired
         );
         console.log("liquidity: ", liquidity);
 
@@ -233,8 +263,8 @@ contract PositionManagerLiquidityScript is ScriptHelper {
             tickLower,
             tickUpper,
             liquidity,
-            AMOUNT_A_DESIRED,
-            AMOUNT_B_DESIRED,
+            amount0Desired,
+            amount1Desired,
             recipient,
             ""
         );
@@ -243,7 +273,7 @@ contract PositionManagerLiquidityScript is ScriptHelper {
         tokenId = positionManager.nextTokenId();
         console.log("Next token ID:", tokenId);
         uint256 deadline = block.timestamp + 300;
-
+        vm.recordLogs();
         // Execute the position minting
         positionManager.modifyLiquidities(
             abi.encode(actions, params),
@@ -251,8 +281,30 @@ contract PositionManagerLiquidityScript is ScriptHelper {
         );
 
         console.log("Position minted successfully!");
-        console.log("Token ID:", tokenId);
+        VmSafe.Log[] memory logs = vm.getRecordedLogs();
+        for (uint256 i = 0; i < logs.length; i++) {
+            VmSafe.Log memory log = logs[i];
 
+            if (
+                log.topics.length > 0 &&
+                log.topics[0] == keccak256("Transfer(address,address,uint256)")
+            ) {
+                address from = address(uint160(uint256(log.topics[1])));
+                address to = address(uint160(uint256(log.topics[2])));
+                address emitter = log.emitter;
+
+                if (log.data.length == 32) {
+                    uint256 value = abi.decode(log.data, (uint256));
+                    console.log("Transfer event");
+                    console.log("  From:", from);
+                    console.log("  To:", to);
+                    console.log("  Value:", value);
+                    console.log("  Emitter:", emitter);
+                } else {
+                    console.log("Malformed Transfer event: data length != 32");
+                }
+            }
+        }
         return tokenId;
     }
 
@@ -261,37 +313,37 @@ contract PositionManagerLiquidityScript is ScriptHelper {
             user,
             address(permit2),
             lccUSDCToken,
-            AMOUNT_A_DESIRED
+            amount0Desired
         );
         checkAndApproveErc20(
             user,
             address(permit2),
             lccUSDTToken,
-            AMOUNT_B_DESIRED
+            amount1Desired
         );
         checkAndApproveErc20(
             user,
             address(lccUSDCToken),
             IERC20(usdcToken),
-            AMOUNT_A_DESIRED
+            amount0Desired
         );
         checkAndApproveErc20(
             user,
             address(lccUSDTToken),
             IERC20(usdtToken),
-            AMOUNT_B_DESIRED
+            amount1Desired
         );
         checkAndApproveErc20(
             user,
             address(proxyHook),
             IERC20(usdcToken),
-            AMOUNT_A_DESIRED
+            amount0Desired
         );
         checkAndApproveErc20(
             user,
             address(proxyHook),
             IERC20(usdtToken),
-            AMOUNT_A_DESIRED
+            amount0Desired
         );
     }
 
@@ -326,11 +378,11 @@ contract PositionManagerLiquidityScript is ScriptHelper {
         console.log("  Token B:", permit2AllowanceB);
 
         require(
-            permit2AllowanceA >= AMOUNT_A_DESIRED,
+            permit2AllowanceA >= amount0Desired,
             "Insufficient ERC20 allowance to Permit2 for token A"
         );
         require(
-            permit2AllowanceB >= AMOUNT_B_DESIRED,
+            permit2AllowanceB >= amount1Desired,
             "Insufficient ERC20 allowance to Permit2 for token B"
         );
 
@@ -368,8 +420,8 @@ contract PositionManagerLiquidityScript is ScriptHelper {
         );
 
         uint256 requiredAmount = (address(token) == address(lccUSDCToken))
-            ? AMOUNT_A_DESIRED
-            : AMOUNT_B_DESIRED;
+            ? amount0Desired
+            : amount1Desired;
         if (expiration <= block.timestamp || amount < requiredAmount) {
             uint48 deadline = uint48(block.timestamp + 86400); // 24 hours from now
             uint160 allowanceAmount = type(uint160).max; // Max allowance

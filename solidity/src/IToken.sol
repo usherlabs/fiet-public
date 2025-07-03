@@ -144,6 +144,7 @@ contract IToken is ERC20, Ownable {
 
             // transfer some underlying tokens to the user
             underlying_asset_token.transferFrom(custodian, to, amount);
+            console.log("test4 ");
         } else {
             // dead code: isSufficientLiquidity() hard coded to true
             // IRFS(rfsContract).queueWithdrawal(

@@ -14,11 +14,13 @@ SCRIPT_DIR=script
 DEPLOYMENTS=$(SCRIPT_DIR)/deployments/deployments.json
 
 	
-.PHONY: all build clean fork \
+.PHONY: all build clean fork swap \
 	deploy-tokenB deploy-lccTokenA deploy-lccTokenB deploy-proxyHook deploy-corePool deploy-proxyPool \
 
 # === All ===
-all: build deploy-tokenB deploy-lccTokenB deploy-lccTokenA deploy-proxyHook deploy-corePool deploy-proxyPool
+all: deploy-tokenA deploy-tokenB deploy-lccTokenA deploy-lccTokenB deploy-proxyHook deploy-corePool deploy-proxyPool
+
+swap: deploy-position deploy-swap
 
 # === Build ===
 build:
@@ -29,11 +31,14 @@ fork:
 	@echo "⛽ Starting anvil forked from Arbitrum Sepolia..."
 	anvil --fork-url $(ARB_SEPOLIA_RPC_URL) --port $(ANVIL_PORT)  --steps-tracing
 
-# === USDC already deployed on Arbitrum Sepolia
-
 # === Individual deployments ===
+deploy-tokenA:
+	$(FORGE) script $(SCRIPT_DIR)/MockERC20script.s.sol:TokenScriptUSDT \
+		--rpc-url $(RPC_URL) \
+		--broadcast $(VERIFY_FLAGS) -vvv
+
 deploy-tokenB:
-	$(FORGE) script $(SCRIPT_DIR)/MockERC20script.s.sol:TokenScript \
+	$(FORGE) script $(SCRIPT_DIR)/MockERC20script.s.sol:TokenScriptUSDC \
 		--rpc-url $(RPC_URL) \
 		--broadcast $(VERIFY_FLAGS) -vvv
 
@@ -64,5 +69,15 @@ deploy-corePool:
 # === Proxy Pool: USDT/USDC ===
 deploy-proxyPool:
 	$(FORGE) script $(SCRIPT_DIR)/UniSwapV4PoolScript.s.sol:ProxyPoolScript \
+		--rpc-url $(RPC_URL) \
+		--broadcast -vvv
+
+deploy-position:
+	$(FORGE) script $(SCRIPT_DIR)/PositionManagerLiquidityScript.s.sol \
+		--rpc-url $(RPC_URL) \
+		--broadcast -vvv
+
+deploy-swap:
+	$(FORGE) script $(SCRIPT_DIR)/SwapV4.s.sol \
 		--rpc-url $(RPC_URL) \
 		--broadcast -vvv
