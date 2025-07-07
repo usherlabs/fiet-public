@@ -9,6 +9,7 @@ import {IV4Router} from "@uniswap/v4-periphery/src/interfaces/IV4Router.sol";
 import {Actions} from "@uniswap/v4-periphery/src/libraries/Actions.sol";
 import {IPermit2} from "@uniswap/permit2/src/interfaces/IPermit2.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
@@ -41,7 +42,8 @@ contract SwapV4 is ScriptHelper {
 
         uint256 userPrivateKey = uint256(vm.envBytes32("LP_PRIVATE_KEY"));
         address userAddress = vm.addr(userPrivateKey);
-        (Currency currencyA, Currency currencyB) = CurrencySortHelper.sortAddresses(usdcToken, usdtToken);
+        (Currency currencyA, Currency currencyB) = CurrencySortHelper
+            .sortAddresses(usdcToken, usdtToken);
         PoolKey memory poolKey = PoolKey({
             currency0: currencyA,
             currency1: currencyB,
@@ -49,24 +51,32 @@ contract SwapV4 is ScriptHelper {
             tickSpacing: 1,
             hooks: IHooks(hook)
         });
-        uint256 balanceBeforeCurrency1 = IERC20(Currency.unwrap(poolKey.currency1)).balanceOf(userAddress);
-        uint256 balanceBeforeCurrency0 = IERC20(Currency.unwrap(poolKey.currency0)).balanceOf(userAddress);
+        uint256 balanceBeforeCurrency1 = IERC20(
+            Currency.unwrap(poolKey.currency1)
+        ).balanceOf(userAddress);
+        uint256 balanceBeforeCurrency0 = IERC20(
+            Currency.unwrap(poolKey.currency0)
+        ).balanceOf(userAddress);
         vm.startBroadcast(userPrivateKey);
         approveTokenWithPermit2(usdcToken);
         approveTokenWithPermit2(usdtToken);
         swapExactInputSingle(poolKey, 10e18, 0, userAddress);
 
         vm.stopBroadcast();
-        uint256 balanceAfterCurrency1 = IERC20(Currency.unwrap(poolKey.currency1)).balanceOf(userAddress);
-        uint256 balanceAfterCurrency0 = IERC20(Currency.unwrap(poolKey.currency0)).balanceOf(userAddress);
+        uint256 balanceAfterCurrency1 = IERC20(
+            Currency.unwrap(poolKey.currency1)
+        ).balanceOf(userAddress);
+        uint256 balanceAfterCurrency0 = IERC20(
+            Currency.unwrap(poolKey.currency0)
+        ).balanceOf(userAddress);
         console.log(
-            "Currency 0 balance Before: ",
+            "user: Currency 0 balance Before: ",
             balanceBeforeCurrency0 / 1e18,
             "Balance After: ",
             balanceAfterCurrency0 / 1e18
         );
         console.log(
-            "Currency 1 balance Before: ",
+            "user: Currency 1 balance Before: ",
             balanceBeforeCurrency1 / 1e18,
             "Balance After: ",
             balanceAfterCurrency1 / 1e18
@@ -88,8 +98,11 @@ contract SwapV4 is ScriptHelper {
         bytes memory commands = abi.encodePacked(uint8(Commands.V4_SWAP));
 
         // Encode V4Router actions
-        bytes memory actions =
-            abi.encodePacked(uint8(Actions.SWAP_EXACT_IN_SINGLE), uint8(Actions.SETTLE_ALL), uint8(Actions.TAKE_ALL));
+        bytes memory actions = abi.encodePacked(
+            uint8(Actions.SWAP_EXACT_IN_SINGLE),
+            uint8(Actions.SETTLE_ALL),
+            uint8(Actions.TAKE_ALL)
+        );
 
         bytes[] memory params = new bytes[](3);
 
