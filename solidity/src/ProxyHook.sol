@@ -149,7 +149,7 @@ contract ProxyHook is BaseHook {
         Currency proxyInputCurrency;
         Currency proxyOutputCurrency;
 
-        bool zeroForOne_corePool;
+        bool zeroForOne_core;
 
         // Establish native -> lcc mapping
         if (params.zeroForOne) {
@@ -160,7 +160,7 @@ contract ProxyHook is BaseHook {
             coreOutputCurrency = tokenMapping[key.currency1];
 
             // Core Pool is zeroForOne if Proxy Pool is zeroForOne, AND Proxy token0 = Core token0
-            zeroForOne_corePool = coreInputCurrency == corePoolKey.currency0;
+            zeroForOne_core = coreInputCurrency == corePoolKey.currency0;
         } else {
             proxyInputCurrency = key.currency1;
             coreInputCurrency = tokenMapping[key.currency1];
@@ -169,7 +169,7 @@ contract ProxyHook is BaseHook {
             coreOutputCurrency = tokenMapping[key.currency0];
 
             // Core Pool is NOT zeroForOne if Proxy Pool is NOT zeroForOne, AND Proxy token1 = Core token1
-            zeroForOne_corePool = coreInputCurrency == corePoolKey.currency1;
+            zeroForOne_core = coreInputCurrency == corePoolKey.currency1;
         }
 
         console.log(
@@ -200,7 +200,7 @@ contract ProxyHook is BaseHook {
 
         // Calculate the correct sqrtPriceLimitX96 for the core pool
         uint160 sqrtPriceLimitX96_core = params.sqrtPriceLimitX96;
-        if (params.zeroForOne != zeroForOne_corePool) {
+        if (params.zeroForOne != zeroForOne_core) {
             if (sqrtPriceLimitX96_core == 0) {
                 // When a zeroForOne swap has a limit of 0, it is unbounded. The reciprocal is infinity.
                 // An unbounded oneForZero swap has a limit of type(uint160).max.
@@ -217,190 +217,116 @@ contract ProxyHook is BaseHook {
         BalanceDelta delta = poolManager.swap(
             corePoolKey,
             SwapParams({
-                zeroForOne: zeroForOne_corePool,
-                amountSpecified: params.zeroForOne == zeroForOne_corePool
+                zeroForOne: zeroForOne_core,
+                amountSpecified: params.zeroForOne == zeroForOne_core
                     ? params.amountSpecified
                     : -params.amountSpecified,
                 sqrtPriceLimitX96: sqrtPriceLimitX96_core
-                // amount0Min: params.zeroForOne == zeroForOne_corePool
-                //     ? params.amount0Min
-                //     : params.amount1Min,
-                // amount1Min: params.zeroForOne == zeroForOne_corePool
-                //     ? params.amount1Min
-                //     : params.amount0Min,
-                // recipient: address(this)
             }),
             bytes("")
         );
 
-        console.log("amount 0 delta: ", delta.amount0());
-        console.log("amount 1 delta: ", delta.amount1());
-        console.log(" ");
-        // If we just did a zeroForOne swap
-        // We need to send Token 0 to PM, and receive Token 1 from PM
+        // ? Liquidity is managed inside of the Proxy Hook
+        IToken lccToken0 = IToken(Currency.unwrap(tokenMapping[key.currency0]));
+        IToken lccToken1 = IToken(Currency.unwrap(tokenMapping[key.currency1]));
+
         if (params.zeroForOne) {
             // If user is selling Token 0 and buying Token 1
 
             // They will be sending Token 0 to the PM, creating a debit of Token 0 in the PM
-            // We will take claim tokens for that Token 0 from the PM and keep it in the hook
-            // and create an equivalent credit for that Token 0 since it is ours!
-            if (delta.amount0() < 0) {
-                // Minting lcc token - proxyPoolKey.currency0 to hook.
-                IToken(Currency.unwrap(coreInputCurrency)).custodianMint(
-                    uint256(int256(-delta.amount0()))
-                );
-                // We transfer above minted lcc tokens to PM.
-                // Now PM has 10 lcc tokens
-                _settle(coreInputCurrency, uint128(-delta.amount0()));
-            }
+            // We will take Token 0 from the PM and keep it in the hook
+            // Then settle Token 1 in return.
+            key.currency0.take(poolManager, address(this), dxInPositive, true);
 
-            // Positive Value => Money coming into user's wallet
-            // Take from PM
-            if (delta.amount1() > 0) {
-                _take(coreOutputCurrency, uint128(delta.amount1()));
-                outputAmount = uint256(uint128(delta.amount1()));
-            }
+            // If we're taking Token 0, then we're wrapping it into an LCC
+            lccToken0.custodianMint(uint256(int256(-delta.amount0())));
+
+            // We then need to settle Token 0 LCC to the PM
+            // No claims tokens here, because the Hook does not manage LCC tokens after they're settled back into the PM (Core Pool)
+            tokenMapping[key.currency0].settle(
+                poolManager,
+                address(this),
+                uint256(int256(-delta.amount0())),
+                false
+            );
+
+            // Now we need to receive LCC of Token 1 from Core Pool from the PM.
+            tokenMapping[key.currency1].take(
+                poolManager,
+                address(this),
+                uint256(int256(-delta.amount1())),
+                false
+            );
+
+            // Theoretically, we should unwrap LCC of Token 1 from the PM now... Hook should already house the underlying liquidity for the LCC ...
+            // Therefore all we need to do is burn the LCC tokens from the hook.
+            lccToken1.unwrap(
+                // address(this), // TODO: This is correct, however, for now:
+                address(poolManager), // TODO: TEMPORARY: burn it from the poolManager...
+                uint256(int256(-delta.amount1()))
+            );
+
+            // Finally, Trader will be receiving Token 1 from the PM, creating a credit of Token 1 in the PM
+            // We will burn claim tokens for Token 1 from the hook so PM can pay the user
+            // and create an equivalent debit for Token 1 since it is ours!
+
+            // TODO: As per bug detailed in https://github.com/usherlabs/fiet-protocol/blob/586d63bbef0847b78c251bffcf340f28f75f1dec/solidity/src/IToken.sol#L155
+            // We'll need to dynamically adjust the settlement here based on the amount of native token that can actually be settled...
+            key.currency1.settle(
+                poolManager,
+                address(this),
+                uint256(int256(-delta.amount0())),
+                true
+            );
         } else {
-            console.log("test 2");
-            if (delta.amount1() < 0) {
-                // Promise Mint some tokens in order to settle with the pool manager
-                // Settle with PoolManager
-                IToken(Currency.unwrap(corePoolKey.currency1)).custodianMint(
-                    uint256(int256(-delta.amount1()))
-                );
-                _settle(key.currency1, uint128(-delta.amount1()));
-            }
+            // If user is selling Token 1 and buying Token 0
+            key.currency1.take(poolManager, address(this), dxInPositive, true);
 
-            if (delta.amount0() > 0) {
-                _take(key.currency0, uint128(delta.amount0()));
-                outputAmount = uint256(uint128(delta.amount0()));
-            }
+            // If we're taking Token 0, then we're wrapping it into an LCC
+            lccToken1.custodianMint(uint256(int256(-delta.amount1())));
+
+            // We then need to settle Token 0 LCC to the PM
+            // No claims tokens here, because the Hook does not manage LCC tokens after they're settled back into the PM (Core Pool)
+            tokenMapping[key.currency1].settle(
+                poolManager,
+                address(this),
+                uint256(int256(-delta.amount1())),
+                false
+            );
+
+            // Now we need to receive LCC of Token 1 from Core Pool from the PM.
+            tokenMapping[key.currency0].take(
+                poolManager,
+                address(this),
+                uint256(int256(-delta.amount0())),
+                false
+            );
+
+            // Theoretically, we should unwrap LCC of Token 1 from the PM now... Hook should already house the underlying liquidity for the LCC ...
+            // Therefore all we need to do is burn the LCC tokens from the hook.
+            lccToken0.unwrap(
+                // address(this), // TODO: This is correct, however, for now:
+                address(poolManager), // TODO: TEMPORARY: burn it from the poolManager...
+                uint256(int256(-delta.amount0()))
+            );
+
+            // Finally, Trader will be receiving Token 1 from the PM, creating a credit of Token 1 in the PM
+            // We will burn claim tokens for Token 1 from the hook so PM can pay the user
+            // and create an equivalent debit for Token 1 since it is ours!
+            key.currency0.settle(
+                poolManager,
+                address(this),
+                uint256(int256(-delta.amount0())),
+                true
+            );
         }
 
-        console.log(" ");
-        IToken iOutToken = IToken(Currency.unwrap(coreOutputCurrency));
-
-        console.log("params.amountSpecified: ", params.amountSpecified);
-        console.log(
-            "beforeSwapDelta (specified): ",
-            BeforeSwapDeltaLibrary.getSpecifiedDelta(beforeSwapDelta)
-        );
-        console.log(
-            "beforeSwapDelta (unspecified): ",
-            BeforeSwapDeltaLibrary.getUnspecifiedDelta(beforeSwapDelta)
-        );
-        console.log("amountInOutPositive: ", amountInOutPositive);
-        // Update delta
-        // poolManager is in negative delta and this hook is in positive in case zeroforone == true
-        proxyInputCurrency.take(
-            poolManager,
-            address(this),
-            amountInOutPositive,
-            true
-        );
-
-        // poolManager is in negative delta and this hook is in positive in case zeroforone == true
-        // wrap the provided token to use as input token or token specified
-        // TODO: The parameters provided to the Core Pool might have a different zeroForOne than the Proxy Pool.
-        (, uint256 outputAmount) = swapAndSettleBalances(
-            corePoolKey,
-            params,
-            coreInputCurrency,
-            coreOutputCurrency
-        );
-
-        // unwrap the response/provided token
-        // approve the iToken to take amount to be unwrapped from the hook
-        iOutToken.approve(address(iOutToken), outputAmount);
-
-        // unwrap the tokens
-        address underlyingAsset = iOutToken.underlyingAsset();
-        IERC20(underlyingAsset).approve(address(iOutToken), outputAmount);
-        // this essentially transfers the underlying asset from the hook to the recipient
-        iOutToken.unwrap(recipient, outputAmount); // TODO: Should not exist.
-        _handleProxySettlement(
-            proxyInputCurrency,
-            uint128(amountInOutPositive)
-        );
-
-        // TODO: We should be returning the delta produced by the swap.
-        return (this.beforeSwap.selector, beforeSwapDelta, 0);
-    }
-
-    function _handleProxySettlement(
-        Currency proxyInputCurrency,
-        uint128 amountIn
-    ) internal {
-        _settle(proxyInputCurrency, amountIn);
-    }
-
-    // use this helper to perform a swap and settle operation on the core pool
-    function swapAndSettleBalances(
-        PoolKey memory key,
-        SwapParams memory params,
-        Currency coreInputCurrency,
-        Currency coreOutputCurrency
-    ) internal returns (BalanceDelta, uint256) {
-        // Conduct the swap inside the Pool Manager
-        BalanceDelta delta = poolManager.swap(key, params, bytes(""));
-        uint256 outputAmount = 0;
-        console.log("amount 0 delta: ", delta.amount0());
-        console.log("amount 1 delta: ", delta.amount1());
-        console.log(" ");
-        // If we just did a zeroForOne swap
-        // We need to send Token 0 to PM, and receive Token 1 from PM
-        if (params.zeroForOne) {
-            console.log("test 1");
-            // Negative Value => Money leaving user's wallet
-            // Promise Mint some tokens in order to settle with the pool manager
-            // Settle with PoolManager
-            if (delta.amount0() < 0) {
-                // Minting lcc token - proxyPoolKey.currency0 to hook.
-                IToken(Currency.unwrap(coreInputCurrency)).custodianMint(
-                    uint256(int256(-delta.amount0()))
-                );
-                // We transfer above minted lcc tokens to PM.
-                // Now PM has 10 lcc tokens
-                _settle(coreInputCurrency, uint128(-delta.amount0()));
-            }
-
-            // Positive Value => Money coming into user's wallet
-            // Take from PM
-            if (delta.amount1() > 0) {
-                _take(coreOutputCurrency, uint128(delta.amount1()));
-                outputAmount = uint256(uint128(delta.amount1()));
-            }
-        } else {
-            console.log("test 2");
-            if (delta.amount1() < 0) {
-                // Promise Mint some tokens in order to settle with the pool manager
-                // Settle with PoolManager
-                IToken(Currency.unwrap(corePoolKey.currency1)).custodianMint(
-                    uint256(int256(-delta.amount1()))
-                );
-                _settle(key.currency1, uint128(-delta.amount1()));
-            }
-
-            if (delta.amount0() > 0) {
-                _take(key.currency0, uint128(delta.amount0()));
-                outputAmount = uint256(uint128(delta.amount0()));
-            }
-        }
-
-        return (delta, outputAmount);
-    }
-
-    // Helper function to transfer and settle a debt with the pool manager
-    function _settle(Currency currency, uint128 amount) internal {
-        // Transfer tokens to PM and let it know
-        poolManager.sync(currency);
-        currency.transfer(address(poolManager), amount);
-        poolManager.settle();
-    }
-
-    // helper function to help take a particular currency from the pool manager
-    function _take(Currency currency, uint128 amount) internal {
-        // Take tokens out of PM to our hook contract
-        poolManager.take(currency, address(this), amount);
+        BeforeSwapDelta newDelta = params.zeroForOne == zeroForOne_core
+            ? delta
+            : BeforeSwapDelta({
+                currency0Delta: delta.amount1(),
+                currency1Delta: delta.amount0()
+            });
+        return (this.beforeSwap.selector, newDelta, 0);
     }
 }
