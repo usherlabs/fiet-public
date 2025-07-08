@@ -14,7 +14,6 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {CurrencyDelta} from "@uniswap/v4-core/src/libraries/CurrencyDelta.sol";
 import {BeforeSwapDeltaLibrary} from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
-import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import "forge-std/console.sol";
 
 import {IToken} from "./IToken.sol";
@@ -43,6 +42,10 @@ contract ProxyHook is BaseHook {
         int128 amount0,
         int128 amount1
     );
+
+    // As per https://github.com/Uniswap/v4-core/blob/main/src/libraries/TickMath.sol#L10
+    uint160 internal constant MAX_SQRT_PRICE =
+        1461446703485210103287273052203988822378723970342;
 
     // store pool identifiers for the core and proxy pool
     PoolKey corePoolKey;
@@ -204,7 +207,7 @@ contract ProxyHook is BaseHook {
             if (sqrtPriceLimitX96_core == 0) {
                 // When a zeroForOne swap has a limit of 0, it is unbounded. The reciprocal is infinity.
                 // An unbounded oneForZero swap has a limit of type(uint160).max.
-                sqrtPriceLimitX96_core = TickMath.MAX_SQRT_RATIO;
+                sqrtPriceLimitX96_core = MAX_SQRT_PRICE;
             } else {
                 // The price is inverted, so the limit must be inverted too.
                 sqrtPriceLimitX96_core = uint160(
@@ -321,12 +324,13 @@ contract ProxyHook is BaseHook {
             );
         }
 
-        BeforeSwapDelta newDelta = params.zeroForOne == zeroForOne_core
-            ? delta
-            : BeforeSwapDelta({
-                currency0Delta: delta.amount1(),
-                currency1Delta: delta.amount0()
-            });
+        BeforeSwapDelta newDelta;
+        if (params.zeroForOne == zeroForOne_core) {
+            newDelta = toBeforeSwapDelta(delta.amount0(), delta.amount1());
+        } else {
+            newDelta = toBeforeSwapDelta(delta.amount1(), delta.amount0());
+        }
+
         return (this.beforeSwap.selector, newDelta, 0);
     }
 }
