@@ -143,8 +143,13 @@ contract IToken is ERC20, Ownable {
             custodians[custodian].totalSupply -= amount;
 
             // transfer underlying tokens to the user
-            console.log("Itoken: transferfrom start");
-            underlying_asset_token.transferFrom(custodian, to, amount);
+
+            bool success = underlying_asset_token.transferFrom(
+                custodian,
+                to,
+                amount
+            );
+            require(success, "Unwrap failed");
             console.log("Itoken: transferfrom done");
         } else {
             // dead code: isSufficientLiquidity() hard coded to true

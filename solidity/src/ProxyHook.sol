@@ -12,6 +12,8 @@ import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
+import {CurrencyDelta} from "@uniswap/v4-core/src/libraries/CurrencyDelta.sol";
+import {BeforeSwapDeltaLibrary} from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
 import "forge-std/console.sol";
 
 import {IToken} from "./IToken.sol";
@@ -115,8 +117,21 @@ contract ProxyHook is BaseHook {
         SwapParams calldata params,
         bytes calldata hookData
     ) internal override returns (bytes4, BeforeSwapDelta, uint24) {
-        console.log("=== DIRECTIONAL SETTLEMENT DEBUG ===");
-        console.log("zeroForOne:", params.zeroForOne);
+        {
+            console.log("=== DIRECTIONAL SETTLEMENT DEBUG ===");
+            console.log("zeroForOne:", params.zeroForOne);
+
+            console.log(
+                "Core pool: ",
+                IERC20Metadata(Currency.unwrap(corePoolKey.currency0)).name(),
+                IERC20Metadata(Currency.unwrap(corePoolKey.currency1)).name()
+            );
+            console.log(
+                "Proxy pool: ",
+                IERC20Metadata(Currency.unwrap(proxyPoolKey.currency0)).name(),
+                IERC20Metadata(Currency.unwrap(proxyPoolKey.currency1)).name()
+            );
+        }
 
         // unwrap the output amount of the recieved token to get the underlying asset added to balance
         Currency coreOutputCurrency;
@@ -125,57 +140,36 @@ contract ProxyHook is BaseHook {
         Currency proxyOutputCurrency;
 
         if (params.zeroForOne) {
-            coreOutputCurrency = tokenMapping[key.currency1];
-            coreInputCurrency = tokenMapping[key.currency0];
-            proxyOutputCurrency = key.currency1;
             proxyInputCurrency = key.currency0;
+            coreInputCurrency = tokenMapping[key.currency0];
+
+            proxyOutputCurrency = key.currency1;
+            coreOutputCurrency = tokenMapping[key.currency1];
         } else {
-            coreOutputCurrency = tokenMapping[key.currency0];
-            coreInputCurrency = tokenMapping[key.currency1];
-            proxyOutputCurrency = key.currency0;
             proxyInputCurrency = key.currency1;
+            coreInputCurrency = tokenMapping[key.currency1];
+
+            proxyOutputCurrency = key.currency0;
+            coreOutputCurrency = tokenMapping[key.currency0];
         }
-        console.log(
-            "coreInputCurrency: ",
-            IERC20Metadata(Currency.unwrap(coreInputCurrency)).name(),
-            " from coreOutputCurrency to: ",
-            IERC20Metadata(Currency.unwrap(coreOutputCurrency)).name()
-        );
-        console.log(
-            "proxyInputCurrency: ",
-            IERC20Metadata(Currency.unwrap(proxyInputCurrency)).name(),
-            " from coreOutputCurrency to: ",
-            IERC20Metadata(Currency.unwrap(proxyOutputCurrency)).name()
-        );
+        {
+            console.log(
+                "coreInputCurrency: ",
+                IERC20Metadata(Currency.unwrap(coreInputCurrency)).name(),
+                " to: ",
+                IERC20Metadata(Currency.unwrap(coreOutputCurrency)).name()
+            );
+            console.log(
+                "proxyInputCurrency: ",
+                IERC20Metadata(Currency.unwrap(proxyInputCurrency)).name(),
+                " to: ",
+                IERC20Metadata(Currency.unwrap(proxyOutputCurrency)).name()
+            );
+        }
         console.log(" ");
         IToken iOutToken = IToken(Currency.unwrap(coreOutputCurrency));
-        IToken iInToken = IToken(Currency.unwrap(coreInputCurrency));
-        IERC20 proxyTokenIn = IERC20(Currency.unwrap(proxyInputCurrency));
-        IERC20 proxyTokenOut = IERC20(Currency.unwrap(proxyOutputCurrency));
-        //iOutToken.checkForRFS(); // dead code
 
-        {
-            console.log("=== Initial balance check DEBUG ===");
-            uint initialBalanceCoreIn = iInToken.balanceOf(address(this));
-            uint initialBalanceCoreOut = iOutToken.balanceOf(address(this));
-            console.log(
-                "initialBalanceCoreIn: ",
-                initialBalanceCoreIn / 1e18,
-                "initialBalanceCoreOut",
-                initialBalanceCoreOut / 1e18
-            );
-            uint initialBalanceProxyIn = proxyTokenIn.balanceOf(address(this));
-            uint initialBalanceProxyOut = proxyTokenOut.balanceOf(
-                address(this)
-            );
-            console.log(
-                "initialBalanceProxyIn: ",
-                initialBalanceProxyIn / 1e18,
-                "initialBalanceProxyout: ",
-                initialBalanceProxyOut / 1e18
-            );
-            console.log(" ");
-        }
+        //iOutToken.checkForRFS(); // dead code
 
         address recipient = abi.decode(hookData, (address));
         uint256 amountInOutPositive = params.amountSpecified > 0
@@ -191,9 +185,18 @@ contract ProxyHook is BaseHook {
                 ? int128(params.amountSpecified)
                 : int128(0)
         );
-
-        // take deposit from the pool manager
-        // Takes underflying token from proxyPool
+        console.log("params.amountSpecified: ", params.amountSpecified);
+        console.log(
+            "beforeSwapDelta (specified): ",
+            BeforeSwapDeltaLibrary.getSpecifiedDelta(beforeSwapDelta)
+        );
+        console.log(
+            "beforeSwapDelta (unspecified): ",
+            BeforeSwapDeltaLibrary.getUnspecifiedDelta(beforeSwapDelta)
+        );
+        console.log("amountInOutPositive: ", amountInOutPositive);
+        // Update delta
+        // poolManager is in negative delta and this hook is in positive in case zeroforone == true
         proxyInputCurrency.take(
             poolManager,
             address(this),
@@ -201,50 +204,15 @@ contract ProxyHook is BaseHook {
             true
         );
 
-        console.log("=== Test 1 balance check DEBUG ===");
-        uint initialBalanceCoreIn1 = iInToken.balanceOf(address(this));
-        uint initialBalanceCoreOut1 = iOutToken.balanceOf(address(this));
-        console.log(
-            "initialBalanceCoreIn: ",
-            initialBalanceCoreIn1 / 1e18,
-            "initialBalanceCoreOut",
-            initialBalanceCoreOut1 / 1e18
-        );
-        uint initialBalanceProxyIn1 = proxyTokenIn.balanceOf(address(this));
-        uint initialBalanceProxyOut1 = proxyTokenOut.balanceOf(address(this));
-        console.log(
-            "initialBalanceProxyIn: ",
-            initialBalanceProxyIn1 / 1e18,
-            "initialBalanceProxyout: ",
-            initialBalanceProxyOut1 / 1e18
-        );
-        console.log(" ");
-
+        // poolManager is in negative delta and this hook is in positive in case zeroforone == true
         // wrap the provided token to use as input token or token specified
-        (, uint256 outputAmount) = swapAndSettleBalances(corePoolKey, params);
+        (, uint256 outputAmount) = swapAndSettleBalances(
+            corePoolKey,
+            params,
+            coreInputCurrency,
+            coreOutputCurrency
+        );
 
-        {
-            console.log("=== Test 2 balance check DEBUG ===");
-            uint initialBalanceCoreIn2 = iInToken.balanceOf(address(this));
-            uint initialBalanceCoreOut2 = iOutToken.balanceOf(address(this));
-            console.log(
-                "initialBalanceCoreIn: ",
-                initialBalanceCoreIn2 / 1e18,
-                "initialBalanceCoreOut",
-                initialBalanceCoreOut2 / 1e18
-            );
-            uint initialBalanceProxyIn2 = proxyTokenIn.balanceOf(address(this));
-            uint initialBalanceProxyOut2 = proxyTokenOut.balanceOf(
-                address(this)
-            );
-            console.log(
-                "initialBalanceProxyIn: ",
-                initialBalanceProxyIn2 / 1e18,
-                "initialBalanceProxyout: ",
-                initialBalanceProxyOut2 / 1e18
-            );
-            console.log(" ");
-        }
         // unwrap the response/provided token
         // approve the iToken to take amount to be unwrapped from the hook
         iOutToken.approve(address(iOutToken), outputAmount);
@@ -254,61 +222,27 @@ contract ProxyHook is BaseHook {
         IERC20(underlyingAsset).approve(address(iOutToken), outputAmount);
         // this essentially transfers the underlying asset from the hook to the recipient
         iOutToken.unwrap(recipient, outputAmount);
-
-        {
-            console.log("=== Test 3 balance check DEBUG ===");
-            uint initialBalanceCoreIn3 = iInToken.balanceOf(address(this));
-            uint initialBalanceCoreOut3 = iOutToken.balanceOf(address(this));
-            console.log(
-                "initialBalanceCoreIn: ",
-                initialBalanceCoreIn3 / 1e18,
-                "initialBalanceCoreOut",
-                initialBalanceCoreOut3 / 1e18
-            );
-            uint initialBalanceProxyIn3 = proxyTokenIn.balanceOf(address(this));
-            uint initialBalanceProxyOut3 = proxyTokenOut.balanceOf(
-                address(this)
-            );
-            console.log(
-                "initialBalanceProxyIn: ",
-                initialBalanceProxyIn3 / 1e18,
-                "initialBalanceProxyout: ",
-                initialBalanceProxyOut3 / 1e18
-            );
-            console.log(" ");
-        }
-        //_settle(proxyOutputCurrency, uint128(outputAmount));
-
-        {
-            console.log("=== Test 4 balance check DEBUG ===");
-            uint initialBalanceCoreIn4 = iInToken.balanceOf(address(this));
-            uint initialBalanceCoreOut4 = iOutToken.balanceOf(address(this));
-            console.log(
-                "initialBalanceCoreIn: ",
-                initialBalanceCoreIn4,
-                "initialBalanceCoreOut",
-                initialBalanceCoreOut4
-            );
-            uint initialBalanceProxyIn4 = proxyTokenIn.balanceOf(address(this));
-            uint initialBalanceProxyOut4 = proxyTokenOut.balanceOf(
-                address(this)
-            );
-            console.log(
-                "initialBalanceProxyIn: ",
-                initialBalanceProxyIn4,
-                "initialBalanceProxyout: ",
-                initialBalanceProxyOut4
-            );
-            console.log(" ");
-        }
+        _handleProxySettlement(
+            proxyInputCurrency,
+            uint128(amountInOutPositive)
+        );
 
         return (this.beforeSwap.selector, beforeSwapDelta, 0);
+    }
+
+    function _handleProxySettlement(
+        Currency proxyInputCurrency,
+        uint128 amountIn
+    ) internal {
+        _settle(proxyInputCurrency, amountIn);
     }
 
     // use this helper to perform a swap and settle operation on the core pool
     function swapAndSettleBalances(
         PoolKey memory key,
-        SwapParams memory params
+        SwapParams memory params,
+        Currency coreInputCurrency,
+        Currency coreOutputCurrency
     ) internal returns (BalanceDelta, uint256) {
         // Conduct the swap inside the Pool Manager
         BalanceDelta delta = poolManager.swap(key, params, bytes(""));
@@ -319,23 +253,28 @@ contract ProxyHook is BaseHook {
         // If we just did a zeroForOne swap
         // We need to send Token 0 to PM, and receive Token 1 from PM
         if (params.zeroForOne) {
+            console.log("test 1");
             // Negative Value => Money leaving user's wallet
             // Promise Mint some tokens in order to settle with the pool manager
             // Settle with PoolManager
             if (delta.amount0() < 0) {
-                IToken(Currency.unwrap(corePoolKey.currency0)).custodianMint(
+                // Minting lcc token - proxyPoolKey.currency0 to hook.
+                IToken(Currency.unwrap(coreInputCurrency)).custodianMint(
                     uint256(int256(-delta.amount0()))
                 );
-                _settle(key.currency0, uint128(-delta.amount0()));
+                // We transfer above minted lcc tokens to PM.
+                // Now PM has 10 lcc tokens
+                _settle(coreInputCurrency, uint128(-delta.amount0()));
             }
 
             // Positive Value => Money coming into user's wallet
             // Take from PM
             if (delta.amount1() > 0) {
-                _take(key.currency1, uint128(delta.amount1()));
+                _take(coreOutputCurrency, uint128(delta.amount1()));
                 outputAmount = uint256(uint128(delta.amount1()));
             }
         } else {
+            console.log("test 2");
             if (delta.amount1() < 0) {
                 // Promise Mint some tokens in order to settle with the pool manager
                 // Settle with PoolManager

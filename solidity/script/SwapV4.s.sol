@@ -99,12 +99,10 @@ contract SwapV4 is ScriptHelper {
 
         // Encode V4Router actions
         bytes memory actions = abi.encodePacked(
-            uint8(Actions.SWAP_EXACT_IN_SINGLE),
-            uint8(Actions.SETTLE_ALL),
-            uint8(Actions.TAKE_ALL)
+            uint8(Actions.SWAP_EXACT_IN_SINGLE)
         );
 
-        bytes[] memory params = new bytes[](3);
+        bytes[] memory params = new bytes[](1);
 
         // First parameter: swap configuration
         params[0] = abi.encode(
@@ -119,10 +117,10 @@ contract SwapV4 is ScriptHelper {
 
         // Second parameter: specify input tokens for the swap
         // encode SETTLE_ALL parameters
-        params[1] = abi.encode(key.currency0, amountIn);
+        // params[1] = abi.encode(key.currency0, amountIn);
 
-        // Third parameter: specify output tokens from the swap
-        params[2] = abi.encode(key.currency1, minAmountOut);
+        // // Third parameter: specify output tokens from the swap
+        // params[2] = abi.encode(key.currency1, minAmountOut);
 
         bytes[] memory inputs = new bytes[](1);
 
