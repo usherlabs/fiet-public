@@ -177,28 +177,29 @@ contract IToken is ERC20, Ownable {
         reserveAmount = (amount * baseVtsBPS) / 10_000;
     }
 
-    function _isRecipientWhitelisted(
-        address whitelisted
-    ) internal view returns (bool) {
-        return
-            custodians[whitelisted].whitelisted == true ||
-            liquidityProviders[whitelisted] == true;
-    }
+    // function _isRecipientWhitelisted(
+    //     address whitelisted
+    // ) internal view returns (bool) {
+    //     return
+    //         custodians[whitelisted].whitelisted == true ||
+    //         liquidityProviders[whitelisted] == true;
+    // }
 
     function _update(
         address from,
         address to,
         uint256 value
     ) internal virtual override {
-        // Allow minting and transferring only to whitelisted addresses
-        if (to != address(0)) {
-            require(_isRecipientWhitelisted(to), "Recipient not whitelisted");
-        }
+        // TODO: Re-include the whitelisting mechanics so that LCCs are protocol-bound.
+        // // Allow minting and transferring only to whitelisted addresses
+        // if (to != address(0)) {
+        //     require(_isRecipientWhitelisted(to), "Recipient not whitelisted");
+        // }
 
-        // Optional: restrict burns to whitelisted senders too
-        if (from != address(0)) {
-            require(_isRecipientWhitelisted(from), "Sender not whitelisted");
-        }
+        // // Optional: restrict burns to whitelisted senders too
+        // if (from != address(0)) {
+        //     require(_isRecipientWhitelisted(from), "Sender not whitelisted");
+        // }
 
         super._update(from, to, value);
     }
