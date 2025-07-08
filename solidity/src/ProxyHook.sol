@@ -36,16 +36,10 @@ contract ProxyHook is BaseHook {
 
     // v4 pool id
     // router address
-    event HookModifyLiquidity(
-        bytes32 indexed id,
-        address indexed sender,
-        int128 amount0,
-        int128 amount1
-    );
+    event HookModifyLiquidity(bytes32 indexed id, address indexed sender, int128 amount0, int128 amount1);
 
     // As per https://github.com/Uniswap/v4-core/blob/main/src/libraries/TickMath.sol#L10
-    uint160 internal constant MAX_SQRT_PRICE =
-        1461446703485210103287273052203988822378723970342;
+    uint160 internal constant MAX_SQRT_PRICE = 1461446703485210103287273052203988822378723970342;
 
     // store pool identifiers for the core and proxy pool
     PoolKey corePoolKey;
@@ -54,69 +48,53 @@ contract ProxyHook is BaseHook {
     // Map of NATIVE => LCC.
     mapping(Currency => Currency) tokenMapping;
 
-    constructor(
-        IPoolManager poolManager,
-        PoolKey memory _corePoolKey
-    ) BaseHook(poolManager) {
+    constructor(IPoolManager poolManager, PoolKey memory _corePoolKey) BaseHook(poolManager) {
         corePoolKey = _corePoolKey;
 
         // // ? Could have just saved uToken0 and uToken1 to storage, instead of a mapping of two.
         // // ? Mapping makes more sense if Proxy Hook Smart Contract allows many Proxy Pools => Core Pools.
 
         // This is currently just a map of NATIVE => LCC.
-        Currency underlyingToken0 = Currency.wrap(
-            IToken(Currency.unwrap(_corePoolKey.currency0)).underlyingAsset()
-        );
+        Currency underlyingToken0 = Currency.wrap(IToken(Currency.unwrap(_corePoolKey.currency0)).underlyingAsset());
         tokenMapping[underlyingToken0] = _corePoolKey.currency0;
-        Currency underlyingToken1 = Currency.wrap(
-            IToken(Currency.unwrap(_corePoolKey.currency1)).underlyingAsset()
-        );
+        Currency underlyingToken1 = Currency.wrap(IToken(Currency.unwrap(_corePoolKey.currency1)).underlyingAsset());
         tokenMapping[underlyingToken1] = _corePoolKey.currency1;
 
         // Assume lcc-ETH/lcc-USDC core pool has token1 as lcc-ETH, whereas proxypool has ETH as token0.
     }
 
-    function getHookPermissions()
-        public
-        pure
-        override
-        returns (Hooks.Permissions memory)
-    {
-        return
-            Hooks.Permissions({
-                beforeInitialize: true, // On initialization we shouls
-                afterInitialize: false,
-                beforeAddLiquidity: true, // Don't allow adding liquidity normally
-                afterAddLiquidity: false,
-                beforeRemoveLiquidity: false,
-                afterRemoveLiquidity: false,
-                beforeSwap: true, // Override how swaps are done
-                afterSwap: false,
-                beforeDonate: false,
-                afterDonate: false,
-                beforeSwapReturnDelta: true, // Allow beforeSwap to return a custom delta
-                afterSwapReturnDelta: false,
-                afterAddLiquidityReturnDelta: false,
-                afterRemoveLiquidityReturnDelta: false
-            });
+    function getHookPermissions() public pure override returns (Hooks.Permissions memory) {
+        return Hooks.Permissions({
+            beforeInitialize: true, // On initialization we shouls
+            afterInitialize: false,
+            beforeAddLiquidity: true, // Don't allow adding liquidity normally
+            afterAddLiquidity: false,
+            beforeRemoveLiquidity: false,
+            afterRemoveLiquidity: false,
+            beforeSwap: true, // Override how swaps are done
+            afterSwap: false,
+            beforeDonate: false,
+            afterDonate: false,
+            beforeSwapReturnDelta: true, // Allow beforeSwap to return a custom delta
+            afterSwapReturnDelta: false,
+            afterAddLiquidityReturnDelta: false,
+            afterRemoveLiquidityReturnDelta: false
+        });
     }
 
-    function _beforeInitialize(
-        address,
-        PoolKey calldata key,
-        uint160
-    ) internal virtual override returns (bytes4) {
+    function _beforeInitialize(address, PoolKey calldata key, uint160) internal virtual override returns (bytes4) {
         proxyPoolKey = key;
         return this.beforeInitialize.selector;
     }
 
     // Disable adding liquidity to the proxy pool
-    function _beforeAddLiquidity(
-        address,
-        PoolKey calldata,
-        ModifyLiquidityParams calldata,
-        bytes calldata
-    ) internal pure virtual override returns (bytes4) {
+    function _beforeAddLiquidity(address, PoolKey calldata, ModifyLiquidityParams calldata, bytes calldata)
+        internal
+        pure
+        virtual
+        override
+        returns (bytes4)
+    {
         revert AddLiquidityThroughHook();
     }
 
@@ -124,12 +102,11 @@ contract ProxyHook is BaseHook {
     // to ensure that the user gets a debit of amount specified
     // and we disable the core swap mechanism
     // and proxy the swap through the core pool
-    function _beforeSwap(
-        address,
-        PoolKey calldata key,
-        SwapParams calldata params,
-        bytes calldata
-    ) internal override returns (bytes4, BeforeSwapDelta, uint24) {
+    function _beforeSwap(address, PoolKey calldata key, SwapParams calldata params, bytes calldata)
+        internal
+        override
+        returns (bytes4, BeforeSwapDelta, uint24)
+    {
         {
             console.log("=== DIRECTIONAL SETTLEMENT DEBUG ===");
             console.log("zeroForOne:", params.zeroForOne);
@@ -188,11 +165,6 @@ contract ProxyHook is BaseHook {
             IERC20Metadata(Currency.unwrap(proxyOutputCurrency)).name()
         );
 
-        /// The desired input amount if negative (exactIn), or the desired output amount if positive (exactOut)
-        uint256 dxInPositive = params.amountSpecified > 0
-            ? uint256(params.amountSpecified)
-            : uint256(-params.amountSpecified);
-
         // BalanceDelta is a packed value of (currency0Amount, currency1Amount)
 
         // BeforeSwapDelta varies such that it is not sorted by token0 and token1
@@ -202,32 +174,62 @@ contract ProxyHook is BaseHook {
         // Unspecified Currency => The other currency
 
         // Calculate the correct sqrtPriceLimitX96 for the core pool
-        uint160 sqrtPriceLimitX96_core = params.sqrtPriceLimitX96;
-        if (params.zeroForOne != zeroForOne_core) {
-            if (sqrtPriceLimitX96_core == 0) {
-                // When a zeroForOne swap has a limit of 0, it is unbounded. The reciprocal is infinity.
-                // An unbounded oneForZero swap has a limit of type(uint160).max.
-                sqrtPriceLimitX96_core = MAX_SQRT_PRICE;
-            } else {
-                // The price is inverted, so the limit must be inverted too.
-                sqrtPriceLimitX96_core = uint160(
-                    (uint256(1) << 192) / sqrtPriceLimitX96_core
-                );
-            }
-        }
+        // uint160 sqrtPriceLimitX96_core = params.sqrtPriceLimitX96;
+        // if (params.zeroForOne != zeroForOne_core) {
+        //     if (sqrtPriceLimitX96_core == 0) {
+        //         // When a zeroForOne swap has a limit of 0, it is unbounded. The reciprocal is infinity.
+        //         // An unbounded oneForZero swap has a limit of type(uint160).max.
+        //         sqrtPriceLimitX96_core = MAX_SQRT_PRICE;
+        //     } else {
+        //         // The price is inverted, so the limit must be inverted too.
+        //         sqrtPriceLimitX96_core = uint160((uint256(1) << 192) / sqrtPriceLimitX96_core);
+        //     }
+        // }
 
         // Conduct the swap inside the Pool Manager
         BalanceDelta delta = poolManager.swap(
             corePoolKey,
             SwapParams({
                 zeroForOne: zeroForOne_core,
-                amountSpecified: params.zeroForOne == zeroForOne_core
-                    ? params.amountSpecified
-                    : -params.amountSpecified,
-                sqrtPriceLimitX96: sqrtPriceLimitX96_core
+                amountSpecified: params.amountSpecified,
+                sqrtPriceLimitX96: params.sqrtPriceLimitX96
             }),
             bytes("")
         );
+
+        console.log(
+            "Core Pool Delta amount0: ",
+            // uint256(int256(delta.amount0()))
+            delta.amount0()
+        );
+        console.log(
+            "Core Pool Delta amount1: ",
+            // uint256(int256(delta.amount1()))
+            delta.amount1()
+        );
+
+        /// The desired input amount if negative (exactIn), or the desired output amount if positive (exactOut)
+        uint256 amountIn;
+        uint256 amountOut;
+        bool isExactInput = params.amountSpecified < 0;
+        if (isExactInput) {
+            amountIn = uint256(-params.amountSpecified);
+            if (params.zeroForOne == zeroForOne_core) {
+                amountOut = uint256(int256(-delta.amount1()));
+            } else {
+                amountOut = uint256(int256(-delta.amount0()));
+            }
+        } else {
+            if (params.zeroForOne == zeroForOne_core) {
+                amountIn = uint256(int256(-delta.amount0()));
+            } else {
+                amountIn = uint256(int256(-delta.amount1()));
+            }
+            amountOut = uint256(params.amountSpecified);
+        }
+
+        console.log("amountIn: ", amountIn);
+        console.log("amountOut: ", amountOut);
 
         // ? Liquidity is managed inside of the Proxy Hook
         IToken lccToken0 = IToken(Currency.unwrap(tokenMapping[key.currency0]));
@@ -238,35 +240,24 @@ contract ProxyHook is BaseHook {
 
             // They will be sending Token 0 to the PM, creating a debit of Token 0 in the PM
             // We will take Token 0 from the PM and keep it in the hook
-            // Then settle Token 1 in return.
-            key.currency0.take(poolManager, address(this), dxInPositive, true);
+            key.currency0.take(poolManager, address(this), amountIn, true);
 
             // If we're taking Token 0, then we're wrapping it into an LCC
-            lccToken0.custodianMint(uint256(int256(-delta.amount0())));
+            lccToken0.custodianMint(amountIn);
 
             // We then need to settle Token 0 LCC to the PM
             // No claims tokens here, because the Hook does not manage LCC tokens after they're settled back into the PM (Core Pool)
-            tokenMapping[key.currency0].settle(
-                poolManager,
-                address(this),
-                uint256(int256(-delta.amount0())),
-                false
-            );
+            tokenMapping[key.currency0].settle(poolManager, address(this), amountIn, false);
 
             // Now we need to receive LCC of Token 1 from Core Pool from the PM.
-            tokenMapping[key.currency1].take(
-                poolManager,
-                address(this),
-                uint256(int256(-delta.amount1())),
-                false
-            );
+            tokenMapping[key.currency1].take(poolManager, address(this), amountOut, false);
 
             // Theoretically, we should unwrap LCC of Token 1 from the PM now... Hook should already house the underlying liquidity for the LCC ...
             // Therefore all we need to do is burn the LCC tokens from the hook.
             lccToken1.unwrap(
                 // address(this), // TODO: This is correct, however, for now:
                 address(poolManager), // TODO: TEMPORARY: burn it from the poolManager...
-                uint256(int256(-delta.amount1()))
+                amountOut
             );
 
             // Finally, Trader will be receiving Token 1 from the PM, creating a credit of Token 1 in the PM
@@ -275,53 +266,33 @@ contract ProxyHook is BaseHook {
 
             // TODO: As per bug detailed in https://github.com/usherlabs/fiet-protocol/blob/586d63bbef0847b78c251bffcf340f28f75f1dec/solidity/src/IToken.sol#L155
             // We'll need to dynamically adjust the settlement here based on the amount of native token that can actually be settled...
-            key.currency1.settle(
-                poolManager,
-                address(this),
-                uint256(int256(-delta.amount0())),
-                true
-            );
+            key.currency1.settle(poolManager, address(this), amountOut, true);
         } else {
             // If user is selling Token 1 and buying Token 0
-            key.currency1.take(poolManager, address(this), dxInPositive, true);
+            key.currency1.take(poolManager, address(this), amountIn, true);
 
-            // If we're taking Token 0, then we're wrapping it into an LCC
-            lccToken1.custodianMint(uint256(int256(-delta.amount1())));
+            // If we're taking Token 1, then we're wrapping it into an LCC
+            lccToken1.custodianMint(amountIn);
 
-            // We then need to settle Token 0 LCC to the PM
+            // We then need to settle Token 1 LCC to the PM
             // No claims tokens here, because the Hook does not manage LCC tokens after they're settled back into the PM (Core Pool)
-            tokenMapping[key.currency1].settle(
-                poolManager,
-                address(this),
-                uint256(int256(-delta.amount1())),
-                false
-            );
+            tokenMapping[key.currency1].settle(poolManager, address(this), amountIn, false);
 
-            // Now we need to receive LCC of Token 1 from Core Pool from the PM.
-            tokenMapping[key.currency0].take(
-                poolManager,
-                address(this),
-                uint256(int256(-delta.amount0())),
-                false
-            );
+            // Now we need to receive LCC of Token 0 from Core Pool from the PM.
+            tokenMapping[key.currency0].take(poolManager, address(this), amountOut, false);
 
             // Theoretically, we should unwrap LCC of Token 1 from the PM now... Hook should already house the underlying liquidity for the LCC ...
             // Therefore all we need to do is burn the LCC tokens from the hook.
             lccToken0.unwrap(
                 // address(this), // TODO: This is correct, however, for now:
                 address(poolManager), // TODO: TEMPORARY: burn it from the poolManager...
-                uint256(int256(-delta.amount0()))
+                amountOut
             );
 
             // Finally, Trader will be receiving Token 1 from the PM, creating a credit of Token 1 in the PM
             // We will burn claim tokens for Token 1 from the hook so PM can pay the user
             // and create an equivalent debit for Token 1 since it is ours!
-            key.currency0.settle(
-                poolManager,
-                address(this),
-                uint256(int256(-delta.amount0())),
-                true
-            );
+            key.currency0.settle(poolManager, address(this), amountOut, true);
         }
 
         BeforeSwapDelta newDelta;
