@@ -13,7 +13,6 @@ FORGE=forge
 SCRIPT_DIR=script
 DEPLOYMENTS=$(SCRIPT_DIR)/deployments/deployments.json
 
-	
 .PHONY: all build clean fork swap \
 	deploy-tokenB deploy-lccTokenA deploy-lccTokenB deploy-proxyHook deploy-corePool deploy-proxyPool \
 
@@ -29,7 +28,8 @@ build:
 # === Fork ===
 fork:
 	@echo "⛽ Starting anvil forked from Arbitrum Sepolia..."
-	anvil --fork-url $(ARB_SEPOLIA_RPC_URL) --port $(ANVIL_PORT)  --steps-tracing
+	anvil --fork-url $(ARB_SEPOLIA_RPC_URL) --port $(ANVIL_PORT)  --steps-tracing 
+# --gas-limit 30000000 --block-time 1
 
 # === Individual deployments ===
 deploy-tokenA:
