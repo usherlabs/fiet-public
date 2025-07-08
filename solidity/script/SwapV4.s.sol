@@ -109,8 +109,10 @@ contract SwapV4 is ScriptHelper {
         console.log("USDT approved");
 
         console.log("Executing swap...");
-        // swapExactInputSingle(poolKey, 10e18, 0, userAddress);
-        swapExactInputSingle(poolKey, 1, 0, userAddress);
+
+        // For an 18 decimal token, 10e18 is 10 tokens
+        swapExactInputSingle(poolKey, 10e18, 0, userAddress);
+        // swapExactInputSingle(poolKey, 1, 0, userAddress);
         console.log("Swap executed");
 
         vm.stopBroadcast();

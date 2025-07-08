@@ -7,8 +7,13 @@ import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {SepoliaConstants} from "./constants.sol";
 import {ScriptHelper} from "./deployments/ScriptHelper.s.sol";
 
+// ? This will default to 18 decimals, but we can override it for testing purposes when required.
 contract Token is ERC20 {
-    constructor(string memory name, string memory symbol, uint256 initialSupply) ERC20(name, symbol) {
+    constructor(
+        string memory name,
+        string memory symbol,
+        uint256 initialSupply
+    ) ERC20(name, symbol) {
         _mint(msg.sender, initialSupply);
     }
 }
@@ -47,7 +52,12 @@ contract ITokenUSDTScript is ScriptHelper {
         address underlyingAsset = readAddress("usdtToken");
         uint256 deployerPrivateKey = uint256(vm.envBytes32("PRIVATE_KEY"));
         vm.startBroadcast(deployerPrivateKey);
-        token = new IToken("Mock LCC USDT", "LCC USDT", underlyingAsset, 10_000); // base = 100%
+        token = new IToken(
+            "Mock LCC USDT",
+            "LCC USDT",
+            underlyingAsset,
+            10_000
+        ); // base = 100%
 
         vm.stopBroadcast();
         writeAddress("lccTokenUSDT", address(token));
@@ -61,7 +71,12 @@ contract ITokenUSDCScript is ScriptHelper {
         address underlyingAsset = readAddress("usdcToken");
         uint256 deployerPrivateKey = uint256(vm.envBytes32("PRIVATE_KEY"));
         vm.startBroadcast(deployerPrivateKey);
-        token = new IToken("Mock LCC USDC", "LCC USDC", underlyingAsset, 10_000); // base = 100%
+        token = new IToken(
+            "Mock LCC USDC",
+            "LCC USDC",
+            underlyingAsset,
+            10_000
+        ); // base = 100%
         vm.stopBroadcast();
         writeAddress("lccTokenUSDC", address(token));
     }

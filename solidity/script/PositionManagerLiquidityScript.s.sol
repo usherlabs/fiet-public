@@ -124,6 +124,7 @@ contract PositionManagerLiquidityScript is ScriptHelper {
         address coreToken0 = Currency.unwrap(corePoolKey.currency0);
         address coreToken1 = Currency.unwrap(corePoolKey.currency1);
 
+        // TODO: Should be ERC20 wrap, not IToken... also rename IToken to LCC
         IToken iToken0 = IToken(coreToken0);
         IToken iToken1 = IToken(coreToken1);
 

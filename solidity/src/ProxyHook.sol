@@ -14,6 +14,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {CurrencyDelta} from "@uniswap/v4-core/src/libraries/CurrencyDelta.sol";
 import {BeforeSwapDeltaLibrary} from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
+import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import "forge-std/console.sol";
 
 import {IToken} from "./IToken.sol";
@@ -124,7 +125,7 @@ contract ProxyHook is BaseHook {
         address,
         PoolKey calldata key,
         SwapParams calldata params,
-        bytes calldata hookData
+        bytes calldata
     ) internal override returns (bytes4, BeforeSwapDelta, uint24) {
         {
             console.log("=== DIRECTIONAL SETTLEMENT DEBUG ===");
@@ -148,56 +149,137 @@ contract ProxyHook is BaseHook {
         Currency proxyInputCurrency;
         Currency proxyOutputCurrency;
 
+        bool zeroForOne_corePool;
+
+        // Establish native -> lcc mapping
         if (params.zeroForOne) {
             proxyInputCurrency = key.currency0;
             coreInputCurrency = tokenMapping[key.currency0];
 
             proxyOutputCurrency = key.currency1;
             coreOutputCurrency = tokenMapping[key.currency1];
+
+            // Core Pool is zeroForOne if Proxy Pool is zeroForOne, AND Proxy token0 = Core token0
+            zeroForOne_corePool = coreInputCurrency == corePoolKey.currency0;
         } else {
             proxyInputCurrency = key.currency1;
             coreInputCurrency = tokenMapping[key.currency1];
 
             proxyOutputCurrency = key.currency0;
             coreOutputCurrency = tokenMapping[key.currency0];
-        }
-        {
-            console.log(
-                "coreInputCurrency: ",
-                IERC20Metadata(Currency.unwrap(coreInputCurrency)).name(),
-                " to: ",
-                IERC20Metadata(Currency.unwrap(coreOutputCurrency)).name()
-            );
-            console.log(
-                "proxyInputCurrency: ",
-                IERC20Metadata(Currency.unwrap(proxyInputCurrency)).name(),
-                " to: ",
-                IERC20Metadata(Currency.unwrap(proxyOutputCurrency)).name()
-            );
-        }
-        console.log(" ");
-        IToken iOutToken = IToken(Currency.unwrap(coreOutputCurrency));
 
-        //iOutToken.checkForRFS(); // dead code
+            // Core Pool is NOT zeroForOne if Proxy Pool is NOT zeroForOne, AND Proxy token1 = Core token1
+            zeroForOne_corePool = coreInputCurrency == corePoolKey.currency1;
+        }
 
-        address recipient = abi.decode(hookData, (address)); // TODO: Should not exist.
+        console.log(
+            "coreInputCurrency: ",
+            IERC20Metadata(Currency.unwrap(coreInputCurrency)).name(),
+            " to: ",
+            IERC20Metadata(Currency.unwrap(coreOutputCurrency)).name()
+        );
+        console.log(
+            "proxyInputCurrency: ",
+            IERC20Metadata(Currency.unwrap(proxyInputCurrency)).name(),
+            " to: ",
+            IERC20Metadata(Currency.unwrap(proxyOutputCurrency)).name()
+        );
 
         /// The desired input amount if negative (exactIn), or the desired output amount if positive (exactOut)
-        uint256 amountInOutPositive = params.amountSpecified > 0
+        uint256 dxInPositive = params.amountSpecified > 0
             ? uint256(params.amountSpecified)
             : uint256(-params.amountSpecified);
 
-        // disable swap mechanism
+        // BalanceDelta is a packed value of (currency0Amount, currency1Amount)
 
-        // TODO: Really... the i/o on the contract should be determined by the i/o on the core pool.
-        BeforeSwapDelta beforeSwapDelta = toBeforeSwapDelta(
-            params.amountSpecified > 0
-                ? int128(0)
-                : int128(-params.amountSpecified),
-            params.amountSpecified > 0
-                ? int128(params.amountSpecified)
-                : int128(0)
+        // BeforeSwapDelta varies such that it is not sorted by token0 and token1
+        // Instead, it is sorted by "specifiedCurrency" and "unspecifiedCurrency"
+
+        // Specified Currency => The currency in which the user is specifying the amount they're swapping for
+        // Unspecified Currency => The other currency
+
+        // Calculate the correct sqrtPriceLimitX96 for the core pool
+        uint160 sqrtPriceLimitX96_core = params.sqrtPriceLimitX96;
+        if (params.zeroForOne != zeroForOne_corePool) {
+            if (sqrtPriceLimitX96_core == 0) {
+                // When a zeroForOne swap has a limit of 0, it is unbounded. The reciprocal is infinity.
+                // An unbounded oneForZero swap has a limit of type(uint160).max.
+                sqrtPriceLimitX96_core = TickMath.MAX_SQRT_RATIO;
+            } else {
+                // The price is inverted, so the limit must be inverted too.
+                sqrtPriceLimitX96_core = uint160(
+                    (uint256(1) << 192) / sqrtPriceLimitX96_core
+                );
+            }
+        }
+
+        // Conduct the swap inside the Pool Manager
+        BalanceDelta delta = poolManager.swap(
+            corePoolKey,
+            SwapParams({
+                zeroForOne: zeroForOne_corePool,
+                amountSpecified: params.zeroForOne == zeroForOne_corePool
+                    ? params.amountSpecified
+                    : -params.amountSpecified,
+                sqrtPriceLimitX96: sqrtPriceLimitX96_core
+                // amount0Min: params.zeroForOne == zeroForOne_corePool
+                //     ? params.amount0Min
+                //     : params.amount1Min,
+                // amount1Min: params.zeroForOne == zeroForOne_corePool
+                //     ? params.amount1Min
+                //     : params.amount0Min,
+                // recipient: address(this)
+            }),
+            bytes("")
         );
+
+        console.log("amount 0 delta: ", delta.amount0());
+        console.log("amount 1 delta: ", delta.amount1());
+        console.log(" ");
+        // If we just did a zeroForOne swap
+        // We need to send Token 0 to PM, and receive Token 1 from PM
+        if (params.zeroForOne) {
+            // If user is selling Token 0 and buying Token 1
+
+            // They will be sending Token 0 to the PM, creating a debit of Token 0 in the PM
+            // We will take claim tokens for that Token 0 from the PM and keep it in the hook
+            // and create an equivalent credit for that Token 0 since it is ours!
+            if (delta.amount0() < 0) {
+                // Minting lcc token - proxyPoolKey.currency0 to hook.
+                IToken(Currency.unwrap(coreInputCurrency)).custodianMint(
+                    uint256(int256(-delta.amount0()))
+                );
+                // We transfer above minted lcc tokens to PM.
+                // Now PM has 10 lcc tokens
+                _settle(coreInputCurrency, uint128(-delta.amount0()));
+            }
+
+            // Positive Value => Money coming into user's wallet
+            // Take from PM
+            if (delta.amount1() > 0) {
+                _take(coreOutputCurrency, uint128(delta.amount1()));
+                outputAmount = uint256(uint128(delta.amount1()));
+            }
+        } else {
+            console.log("test 2");
+            if (delta.amount1() < 0) {
+                // Promise Mint some tokens in order to settle with the pool manager
+                // Settle with PoolManager
+                IToken(Currency.unwrap(corePoolKey.currency1)).custodianMint(
+                    uint256(int256(-delta.amount1()))
+                );
+                _settle(key.currency1, uint128(-delta.amount1()));
+            }
+
+            if (delta.amount0() > 0) {
+                _take(key.currency0, uint128(delta.amount0()));
+                outputAmount = uint256(uint128(delta.amount0()));
+            }
+        }
+
+        console.log(" ");
+        IToken iOutToken = IToken(Currency.unwrap(coreOutputCurrency));
+
         console.log("params.amountSpecified: ", params.amountSpecified);
         console.log(
             "beforeSwapDelta (specified): ",
