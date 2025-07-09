@@ -18,12 +18,12 @@ import {BeforeSwapDeltaLibrary} from "@uniswap/v4-core/src/types/BeforeSwapDelta
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "forge-std/console.sol";
 
-import {IToken} from "./IToken.sol";
+import {LiquidityCommitmentCertificate} from "./LCC.sol";
 
 contract ProxyHook is BaseHook {
     using CurrencySettler for Currency;
 
-    error AddLiquidityThroughHook();
+    error AddLiquidityThroughHookNotAllowed();
     error UnsafeInt128ToUint256Conversion(int128 value);
 
     // router of the swap
@@ -40,9 +40,6 @@ contract ProxyHook is BaseHook {
     // v4 pool id
     // router address
     event HookModifyLiquidity(bytes32 indexed id, address indexed sender, int128 amount0, int128 amount1);
-
-    // As per https://github.com/Uniswap/v4-core/blob/main/src/libraries/TickMath.sol#L10
-    uint160 internal constant MAX_SQRT_PRICE = 1461446703485210103287273052203988822378723970342;
 
     // store pool identifiers for the core and proxy pool
     PoolKey corePoolKey;
@@ -70,9 +67,11 @@ contract ProxyHook is BaseHook {
         // // ? Mapping makes more sense if Proxy Hook Smart Contract allows many Proxy Pools => Core Pools.
 
         // This is currently just a map of NATIVE => LCC.
-        Currency underlyingToken0 = Currency.wrap(IToken(Currency.unwrap(_corePoolKey.currency0)).underlyingAsset());
+        Currency underlyingToken0 =
+            Currency.wrap(LiquidityCommitmentCertificate(Currency.unwrap(_corePoolKey.currency0)).underlyingAsset());
         tokenMapping[underlyingToken0] = _corePoolKey.currency0;
-        Currency underlyingToken1 = Currency.wrap(IToken(Currency.unwrap(_corePoolKey.currency1)).underlyingAsset());
+        Currency underlyingToken1 =
+            Currency.wrap(LiquidityCommitmentCertificate(Currency.unwrap(_corePoolKey.currency1)).underlyingAsset());
         tokenMapping[underlyingToken1] = _corePoolKey.currency1;
 
         // Assume lcc-ETH/lcc-USDC core pool has token1 as lcc-ETH, whereas proxypool has ETH as token0.
@@ -102,7 +101,6 @@ contract ProxyHook is BaseHook {
         return this.beforeInitialize.selector;
     }
 
-    // Disable adding liquidity to the proxy pool
     function _beforeAddLiquidity(address, PoolKey calldata, ModifyLiquidityParams calldata, bytes calldata)
         internal
         pure
@@ -110,7 +108,7 @@ contract ProxyHook is BaseHook {
         override
         returns (bytes4)
     {
-        revert AddLiquidityThroughHook();
+        revert AddLiquidityThroughHookNotAllowed();
     }
 
     struct LiquidityCallbackData {
@@ -147,22 +145,6 @@ contract ProxyHook is BaseHook {
         override
         returns (bytes4, BeforeSwapDelta, uint24)
     {
-        {
-            console.log("=== DIRECTIONAL SETTLEMENT DEBUG ===");
-            console.log("zeroForOne:", params.zeroForOne);
-
-            console.log(
-                "Core pool: ",
-                IERC20Metadata(Currency.unwrap(corePoolKey.currency0)).name(),
-                IERC20Metadata(Currency.unwrap(corePoolKey.currency1)).name()
-            );
-            console.log(
-                "Proxy pool: ",
-                IERC20Metadata(Currency.unwrap(proxyPoolKey.currency0)).name(),
-                IERC20Metadata(Currency.unwrap(proxyPoolKey.currency1)).name()
-            );
-        }
-
         // unwrap the output amount of the recieved token to get the underlying asset added to balance
         Currency coreOutputCurrency;
         Currency coreInputCurrency;
@@ -266,8 +248,10 @@ contract ProxyHook is BaseHook {
         console.log("amountOut: ", amountOut);
 
         // ? Liquidity is managed inside of the Proxy Hook
-        IToken lccToken0 = IToken(Currency.unwrap(tokenMapping[key.currency0]));
-        IToken lccToken1 = IToken(Currency.unwrap(tokenMapping[key.currency1]));
+        LiquidityCommitmentCertificate lccToken0 =
+            LiquidityCommitmentCertificate(Currency.unwrap(tokenMapping[key.currency0]));
+        LiquidityCommitmentCertificate lccToken1 =
+            LiquidityCommitmentCertificate(Currency.unwrap(tokenMapping[key.currency1]));
 
         if (params.zeroForOne) {
             // If user is selling Token 0 and buying Token 1

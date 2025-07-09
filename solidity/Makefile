@@ -81,3 +81,28 @@ deploy-swap:
 	$(FORGE) script $(SCRIPT_DIR)/SwapV4.s.sol \
 		--rpc-url $(RPC_URL) \
 		--broadcast -vvv
+
+# Linting and Formatting
+.PHONY: lint lint-fix format format-check install-deps
+
+install-deps:
+	npm install
+
+lint:
+	npm run lint
+
+lint-fix:
+	npm run lint:fix
+
+format:
+	npm run format
+
+format-check:
+	npm run format:check
+
+# Security analysis
+security:
+	npm run security
+
+# Combined quality check
+quality: format-check lint security
