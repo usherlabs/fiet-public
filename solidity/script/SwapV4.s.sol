@@ -18,7 +18,7 @@ import {IHooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {SepoliaConstants} from "./constants.sol";
 import {ScriptHelper} from "./deployments/ScriptHelper.s.sol";
 import {CurrencySortHelper} from "./CurrencySortHelper.sol";
-import {IToken} from "../src/IToken.sol";
+import {LiquidityCommitmentCertificate} from "../src/LCC.sol";
 
 contract SwapV4 is ScriptHelper {
     using StateLibrary for IPoolManager;
@@ -29,8 +29,8 @@ contract SwapV4 is ScriptHelper {
     IHooks hook;
 
     // Core pool tokens (intent tokens - WHERE LIQUIDITY GOES)
-    IToken lccUSDCToken;
-    IToken lccUSDTToken;
+    LiquidityCommitmentCertificate lccUSDCToken;
+    LiquidityCommitmentCertificate lccUSDTToken;
 
     // Proxy pool tokens (underlying tokens)
     address usdcToken;
@@ -52,8 +52,8 @@ contract SwapV4 is ScriptHelper {
         console.log("Proxy Hook loaded");
 
         // Core pool tokens
-        lccUSDCToken = IToken(readAddress("lccTokenUSDC"));
-        lccUSDTToken = IToken(readAddress("lccTokenUSDT"));
+        lccUSDCToken = LiquidityCommitmentCertificate(readAddress("lccTokenUSDC"));
+        lccUSDTToken = LiquidityCommitmentCertificate(readAddress("lccTokenUSDT"));
 
         usdcToken = readAddress("usdcToken");
         console.log("USDC Token loaded");
@@ -63,8 +63,7 @@ contract SwapV4 is ScriptHelper {
         uint256 userPrivateKey = uint256(vm.envBytes32("LP_PRIVATE_KEY"));
         address userAddress = vm.addr(userPrivateKey);
 
-        (Currency currencyA, Currency currencyB) = CurrencySortHelper
-            .sortAddresses(usdcToken, usdtToken);
+        (Currency currencyA, Currency currencyB) = CurrencySortHelper.sortAddresses(usdcToken, usdtToken);
         PoolKey memory poolKey = PoolKey({
             currency0: currencyA,
             currency1: currencyB,
@@ -76,9 +75,7 @@ contract SwapV4 is ScriptHelper {
         uint256 balanceBeforeCurrency1;
         uint256 balanceBeforeCurrency0;
 
-        try
-            IERC20(Currency.unwrap(poolKey.currency1)).balanceOf(userAddress)
-        returns (uint256 balance) {
+        try IERC20(Currency.unwrap(poolKey.currency1)).balanceOf(userAddress) returns (uint256 balance) {
             balanceBeforeCurrency1 = balance;
             console.log("Currency1 balance checked");
         } catch {
@@ -86,9 +83,7 @@ contract SwapV4 is ScriptHelper {
             balanceBeforeCurrency1 = 0;
         }
 
-        try
-            IERC20(Currency.unwrap(poolKey.currency0)).balanceOf(userAddress)
-        returns (uint256 balance) {
+        try IERC20(Currency.unwrap(poolKey.currency0)).balanceOf(userAddress) returns (uint256 balance) {
             balanceBeforeCurrency0 = balance;
             console.log("Currency0 balance checked");
         } catch {
@@ -97,7 +92,7 @@ contract SwapV4 is ScriptHelper {
         }
 
         // Whitelist the proxyHook as custodian for LCC tokens
-        whitelistProxyHookAsCustodian();
+        // whitelistProxyHookAsCustodian();
 
         vm.startBroadcast(userPrivateKey);
 
@@ -116,12 +111,8 @@ contract SwapV4 is ScriptHelper {
         console.log("Swap executed");
 
         vm.stopBroadcast();
-        uint256 balanceAfterCurrency1 = IERC20(
-            Currency.unwrap(poolKey.currency1)
-        ).balanceOf(userAddress);
-        uint256 balanceAfterCurrency0 = IERC20(
-            Currency.unwrap(poolKey.currency0)
-        ).balanceOf(userAddress);
+        uint256 balanceAfterCurrency1 = IERC20(Currency.unwrap(poolKey.currency1)).balanceOf(userAddress);
+        uint256 balanceAfterCurrency0 = IERC20(Currency.unwrap(poolKey.currency0)).balanceOf(userAddress);
         console.log(
             "user: Currency 0 balance Before: ",
             balanceBeforeCurrency0 / 1e18,
@@ -145,9 +136,9 @@ contract SwapV4 is ScriptHelper {
         // Required to separate the broadcast as using deployer private key
         vm.startBroadcast(deployerPrivateKey);
 
-        // Approve Hook as custodian for LCC tokens
-        approveLccCustodian(address(hook), lccUSDCToken);
-        approveLccCustodian(address(hook), lccUSDTToken);
+        // // Approve Hook as custodian for LCC tokens
+        // approveLccCustodian(address(hook), lccUSDCToken);
+        // approveLccCustodian(address(hook), lccUSDTToken);
 
         // Also approve Pool manager as custodian
         // approveLccCustodian(address(poolManager), lccUSDCToken);
@@ -156,25 +147,6 @@ contract SwapV4 is ScriptHelper {
         vm.stopBroadcast();
 
         console.log("ProxyHook whitelisted as custodian for LCC tokens");
-    }
-
-    function approveLccCustodian(address _address, IToken token) internal {
-        (, , bool whitelisted) = token.custodians(_address);
-        if (!whitelisted) {
-            token.whitelistCustodian(_address, true);
-            console.log(
-                "Whitelisted",
-                _address,
-                "as custodian for",
-                address(token)
-            );
-        } else {
-            console.log(
-                _address,
-                "is already whitelisted as custodian for",
-                address(token)
-            );
-        }
     }
 
     function approveTokenWithPermit2(address token) public {
@@ -192,9 +164,7 @@ contract SwapV4 is ScriptHelper {
         bytes memory commands = abi.encodePacked(uint8(Commands.V4_SWAP));
 
         // Encode V4Router actions
-        bytes memory actions = abi.encodePacked(
-            uint8(Actions.SWAP_EXACT_IN_SINGLE)
-        );
+        bytes memory actions = abi.encodePacked(uint8(Actions.SWAP_EXACT_IN_SINGLE));
 
         bytes[] memory params = new bytes[](1);
 

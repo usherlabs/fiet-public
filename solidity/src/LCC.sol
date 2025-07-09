@@ -10,6 +10,7 @@ import {ERC20} from "solmate/tokens/ERC20.sol";
 contract LiquidityCommitmentCertificate is ERC20, Ownable {
     error InvalidUnderlyingAsset();
     error TransferNotAllowed();
+    error InvalidAmount();
 
     address public immutable underlyingAsset;
 
@@ -87,71 +88,97 @@ contract LiquidityCommitmentCertificate is ERC20, Ownable {
         }
     }
 
-    // checks if there is sufficient liquidity to unwrap a token
-    // compares current vts with base vts and returns
-    function isSufficientLiquidity() internal pure returns (bool) {
-        return true;
-    }
-
     // some trusted issuer Smart Contracts can be allowed to mint tokens and hold the liquidity
     // this minting provides tokens at a 1:1 ratio and intended for onchain preswap wrapping
-    function mint(uint256 amount) public isIssuer(msg.sender) {
+    function mint(uint256 amount) external isIssuer(msg.sender) {
         address issuer = msg.sender;
         _mint(issuer, amount);
     }
 
     // DirectLPs and Traders engaging the CorePool directly will need LCC. LCC is 1:1 with the underlying asset.
-    function wrap(address custodian, uint256 amount) public validCustodian(custodian) onlyLP(msg.sender) {
-        address owner = msg.sender;
+    function _wrap(address from, address to, uint256 amount) internal {
+        ERC20 uaToken = ERC20(underlyingAsset);
 
         // transfer the equivalent of the underlying asset from the recipient
-        SafeTransferLib.safeTransferFrom(underlyingAsset, owner, address(this), amount);
+        SafeTransferLib.safeTransferFrom(uaToken, from, address(this), amount);
         // mint some tokens
-        _mint(owner, amount);
+        _mint(to, amount);
+
+        uaSupply += amount;
     }
 
-    // unwrap some tokens
-    function unwrap(address to, uint256 amount) public validCustodian(msg.sender) {
-        address custodian = msg.sender;
-        IERC20 underlying_asset_token = IERC20(underlyingAsset);
+    // unwrap some tokens - engaged by the Trader
+    function _unwrap(address from, address to, uint256 amount) internal {
+        ERC20 uaToken = ERC20(underlyingAsset);
 
-        require(amount > 0 && amount <= custodians[custodian].totalSupply, "INVALID AMOUNT");
+        if (amount == 0 || amount > balanceOf[from]) {
+            revert InvalidAmount();
+        }
 
-        if (isSufficientLiquidity()) {
-            // and burn their tokens
-            _burn(custodian, amount);
-            // since the hook has paid back some of its debt, reduce by the promised amount
-            custodians[custodian].totalSupply -= amount;
-
-            // transfer underlying tokens to the user
-
-            bool success = underlying_asset_token.transferFrom(custodian, to, amount);
-            require(success, "Unwrap failed");
-            console.log("Itoken: transferfrom done");
+        uint256 amountToUnwrap;
+        uint256 deficit = 0;
+        if (uaSupply < amount) {
+            // Is insufficient liquidity
+            amountToUnwrap = uaSupply;
+            deficit = amount - uaSupply;
         } else {
-            // TODO: https://www.notion.so/usherlabs/Outcomes-of-LCC-Insufficient-Liquidity-22b6d8286da580c8a455efc4175970a0?source=copy_link#22b6d8286da580de8a33cf367d3b7220
+            // Is sufficient liquidity
+            amountToUnwrap = amount;
+        }
 
+        // and burn their tokens
+        _burn(from, amount);
+        // reduce the underlying asset supply
+        uaSupply -= amount;
+
+        if (deficit > 0) {
+            // TODO: https://www.notion.so/usherlabs/Outcomes-of-LCC-Insufficient-Liquidity-22b6d8286da580c8a455efc4175970a0?source=copy_link#22b6d8286da580de8a33cf367d3b7220
             // TODO: Add LCC into a queue, where if new liquidity is settled, it immediately covers the unwrap within their wallet.
         }
+
+        SafeTransferLib.safeTransfer(uaToken, to, amountToUnwrap);
     }
 
-    function transfer(address to, uint256 amount)
-        public
-        virtual
-        override
-        onlyProtocolTransfer(msg.sender, to)
-        returns (bool)
-    {
-        return super.transfer(to, amount);
+    function wrap(uint256 amount) external {
+        _wrap(msg.sender, msg.sender, amount);
     }
 
-    function transferFrom(address from, address to, uint256 amount)
-        public
-        virtual
-        override
-        onlyProtocolTransfer(from, to)
-        returns (bool)
-    {
-        return super.transferFrom(from, to, amount);
+    function unwrap(uint256 amount) external {
+        _unwrap(msg.sender, msg.sender, amount);
     }
+
+    function wrapTo(address to, uint256 amount) external {
+        _wrap(msg.sender, to, amount);
+    }
+
+    function unwrapTo(address to, uint256 amount) external {
+        _unwrap(msg.sender, to, amount);
+    }
+
+    // ? We may not need a withdraw for ProxyHook, as poolManager settle can from this LCC.
+    // function withdraw(address to, uint256 amount) public isIssuer(msg.sender) {
+    //     IERC20 underlying_asset_token = IERC20(underlyingAsset);
+    //     underlying_asset_token.transferFrom(custodian, to, amount);
+    // }
+
+    // TODO: Re-enable in the future...
+    // function transfer(address to, uint256 amount)
+    //     public
+    //     virtual
+    //     override
+    //     onlyProtocolTransfer(msg.sender, to)
+    //     returns (bool)
+    // {
+    //     return super.transfer(to, amount);
+    // }
+
+    // function transferFrom(address from, address to, uint256 amount)
+    //     public
+    //     virtual
+    //     override
+    //     onlyProtocolTransfer(from, to)
+    //     returns (bool)
+    // {
+    //     return super.transferFrom(from, to, amount);
+    // }
 }

@@ -15,10 +15,11 @@ import {Actions} from "@uniswap/v4-periphery/src/libraries/Actions.sol";
 import {LiquidityAmounts} from "@uniswap/v4-periphery/src/libraries/LiquidityAmounts.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {MockERC20} from "@uniswap/v4-core/lib/solmate/src/test/utils/mocks/MockERC20.sol";
 import {IPermit2} from "@uniswap/permit2/src/interfaces/IPermit2.sol";
 
-import {IToken} from "../src/IToken.sol";
+import {LiquidityCommitmentCertificate} from "../src/LCC.sol";
 import {SepoliaConstants} from "./constants.sol";
 import {ScriptHelper} from "./deployments/ScriptHelper.s.sol";
 import {ProxyHook} from "../src/ProxyHook.sol";
@@ -31,8 +32,8 @@ contract PositionManagerLiquidityScript is ScriptHelper {
     ProxyHook proxyHook;
 
     // Core pool tokens (intent tokens - WHERE LIQUIDITY GOES)
-    IToken lccUSDCToken;
-    IToken lccUSDTToken;
+    LiquidityCommitmentCertificate lccUSDCToken;
+    LiquidityCommitmentCertificate lccUSDTToken;
 
     // Proxy pool tokens (underlying tokens)
     address usdcToken;
@@ -59,8 +60,8 @@ contract PositionManagerLiquidityScript is ScriptHelper {
         poolManager = IPoolManager(SepoliaConstants.POOL_MANAGER);
         permit2 = IPermit2(SepoliaConstants.PERMIT2);
         // Core pool tokens
-        lccUSDCToken = IToken(readAddress("lccTokenUSDC"));
-        lccUSDTToken = IToken(readAddress("lccTokenUSDT"));
+        lccUSDCToken = LiquidityCommitmentCertificate(readAddress("lccTokenUSDC"));
+        lccUSDTToken = LiquidityCommitmentCertificate(readAddress("lccTokenUSDT"));
         // Proxy pool tokens (underlying tokens)
         usdcToken = readAddress("usdcToken");
         usdtToken = readAddress("usdtToken");
@@ -71,8 +72,6 @@ contract PositionManagerLiquidityScript is ScriptHelper {
         setupAmounts();
 
         vm.startBroadcast(deployerPrivateKey);
-        lccWhitelistLPAndCustodian(lpAddress);
-        console.log("Whitelisted LP and Custodian Contracts");
         setAccounts(lpAddress);
         provisionProxyHookLiquidity();
         vm.stopBroadcast();
@@ -124,19 +123,12 @@ contract PositionManagerLiquidityScript is ScriptHelper {
         // Calculate amounts based on token decimals and ordering
         address coreToken0 = Currency.unwrap(corePoolKey.currency0);
         address coreToken1 = Currency.unwrap(corePoolKey.currency1);
-
-        // TODO: Should be ERC20 wrap, not IToken... also rename IToken to LCC
-        IToken iToken0 = IToken(coreToken0);
-        IToken iToken1 = IToken(coreToken1);
-
         // Calculate desired amounts with proper decimals
-        amount0Desired = AMOUNT_DESIRED * (10 ** iToken0.decimals());
-        amount1Desired = AMOUNT_DESIRED * (10 ** iToken1.decimals());
+        amount0Desired = AMOUNT_DESIRED * (10 ** IERC20Metadata(coreToken0).decimals());
+        amount1Desired = AMOUNT_DESIRED * (10 ** IERC20Metadata(coreToken1).decimals());
 
         console.log("Token0:", coreToken0);
         console.log("Token1:", coreToken1);
-        console.log("Decimals0:", iToken0.decimals());
-        console.log("Decimals1:", iToken1.decimals());
         console.log("Amount0Desired:", amount0Desired);
         console.log("Amount1Desired:", amount1Desired);
     }
@@ -162,40 +154,6 @@ contract PositionManagerLiquidityScript is ScriptHelper {
         console.log("ProxyHook USDT balance:", IERC20(usdtToken).balanceOf(address(proxyHook)));
     }
 
-    function lccWhitelistLPAndCustodian(address user) internal {
-        // Approve liquidity providers
-        approveLccLP(user, lccUSDCToken);
-        approveLccLP(user, lccUSDTToken);
-
-        // Approve Hook
-        approveLccCustodian(address(proxyHook), lccUSDCToken);
-        approveLccCustodian(address(proxyHook), lccUSDTToken);
-
-        // Approve Pool manager
-        // TODO: Technically shouldn't be the Pool Manager or the Position Manager as Custodians...
-        // TODO: Custodians are authorised to mint LCCs, typically in response or advance of receiving underlying tokens.
-        approveLccCustodian(address(poolManager), lccUSDCToken);
-        approveLccCustodian(address(poolManager), lccUSDTToken);
-
-        // Approve Position manager
-        approveLccCustodian(address(positionManager), lccUSDCToken);
-        approveLccCustodian(address(positionManager), lccUSDTToken);
-    }
-
-    function approveLccCustodian(address _address, IToken token) internal {
-        (,, bool whitelisted) = token.custodians(_address);
-        if (!whitelisted) {
-            token.whitelistCustodian(_address, true);
-        }
-    }
-
-    function approveLccLP(address _address, IToken token) internal {
-        bool isAllowed = token.liquidityProviders(_address);
-        if (!isAllowed) {
-            token.whitelistLP(_address, true);
-        }
-    }
-
     function wrapToLccTokens(address user) internal {
         // Cache storage reads
         Currency core0 = corePoolKey.currency0;
@@ -203,43 +161,48 @@ contract PositionManagerLiquidityScript is ScriptHelper {
         Currency proxy0 = proxyPoolKey.currency0;
         Currency proxy1 = proxyPoolKey.currency1;
 
-        address iTokenAddr0 = Currency.unwrap(core0);
-        address iTokenAddr1 = Currency.unwrap(core1);
+        address lccTokenAddr0 = Currency.unwrap(core0);
+        address lccTokenAddr1 = Currency.unwrap(core1);
         address tokenAddr0 = Currency.unwrap(proxy0);
         address tokenAddr1 = Currency.unwrap(proxy1);
 
-        IToken iToken0 = IToken(iTokenAddr0);
-        IToken iToken1 = IToken(iTokenAddr1);
+        LiquidityCommitmentCertificate lccToken0 = LiquidityCommitmentCertificate(lccTokenAddr0);
+        LiquidityCommitmentCertificate lccToken1 = LiquidityCommitmentCertificate(lccTokenAddr1);
 
         // Quick mapping check
-        address underlying0 = iToken0.underlyingAsset();
-        address underlying1 = iToken1.underlyingAsset();
+        address underlying0 = lccToken0.underlyingAsset();
+        address underlying1 = lccToken1.underlyingAsset();
         uint256 amount0;
         uint256 amount1;
         // Determine correct pairing
         if (underlying0 == tokenAddr0 && underlying1 == tokenAddr1) {
             amount0 = amount0Desired;
-            _wrapTokenOptimized(user, iToken0, IERC20(tokenAddr0), amount0);
+            _wrapTokenOptimized(user, lccToken0, IERC20(tokenAddr0), amount0);
             amount1 = amount1Desired;
-            _wrapTokenOptimized(user, iToken1, IERC20(tokenAddr1), amount1);
+            _wrapTokenOptimized(user, lccToken1, IERC20(tokenAddr1), amount1);
         } else if (underlying0 == tokenAddr1 && underlying1 == tokenAddr0) {
             amount0 = amount0Desired;
-            _wrapTokenOptimized(user, iToken0, IERC20(tokenAddr1), amount0);
+            _wrapTokenOptimized(user, lccToken0, IERC20(tokenAddr1), amount0);
             amount1 = amount1Desired;
-            _wrapTokenOptimized(user, iToken1, IERC20(tokenAddr0), amount1);
+            _wrapTokenOptimized(user, lccToken1, IERC20(tokenAddr0), amount1);
         } else {
             revert("Invalid token mapping configuration");
         }
     }
 
-    function _wrapTokenOptimized(address user, IToken iToken, IERC20 underlying, uint256 desired) internal {
-        uint256 current = iToken.balanceOf(user);
+    function _wrapTokenOptimized(
+        address user,
+        LiquidityCommitmentCertificate lccToken,
+        IERC20 underlying,
+        uint256 desired
+    ) internal {
+        uint256 current = lccToken.balanceOf(user);
         if (current < desired) {
             uint256 needed = desired - current;
             uint256 available = underlying.balanceOf(user);
             string memory name = MockERC20(address(underlying)).name();
             require(available >= needed, string(abi.encodePacked(name, " insufficient")));
-            iToken.wrap(address(proxyHook), needed);
+            lccToken.wrap(address(proxyHook), needed);
         }
     }
 
@@ -340,7 +303,7 @@ contract PositionManagerLiquidityScript is ScriptHelper {
         console.log(" ");
     }
 
-    function permit2AllowanceTransfer(address user, IToken token, address spender) internal {
+    function permit2AllowanceTransfer(address user, LiquidityCommitmentCertificate token, address spender) internal {
         console.log(" ");
         console.log("Setting permit2 allowance for:", address(token), "spender:", spender);
 
