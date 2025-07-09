@@ -2,8 +2,8 @@
 pragma solidity ^0.8.0;
 
 import {console} from "forge-std/Script.sol";
-import {IUniversalRouter} from "./lib/universal-router/IUniversalRouter.sol";
-import {Commands} from "./lib/universal-router/Commands.sol";
+import {IUniversalRouter} from "./libraries/universal-router/IUniversalRouter.sol";
+import {Commands} from "./libraries/universal-router/Commands.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IV4Router} from "@uniswap/v4-periphery/src/interfaces/IV4Router.sol";
 import {Actions} from "@uniswap/v4-periphery/src/libraries/Actions.sol";

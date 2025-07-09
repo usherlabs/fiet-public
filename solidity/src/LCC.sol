@@ -1,22 +1,23 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
-import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {IERC20Metadata} from "openzeppelin-contracts/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {SafeTransferLib} from "solmate/utils/SafeTransferLib.sol";
 import "forge-std/console.sol";
 import {ERC20} from "solmate/tokens/ERC20.sol";
+import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 
-contract LiquidityCommitmentCertificate is ERC20, Ownable {
+contract LiquidityCommitmentCertificate is ERC20 {
     error InvalidUnderlyingAsset();
     error TransferNotAllowed();
     error InvalidAmount();
+    error InvalidMarketFactory();
 
     address public immutable underlyingAsset;
+    address public immutable marketFactory;
 
     // All native underlying liquidity will either be
     mapping(address => bool) public issuers;
-    mapping(address => bool) public bounds;
 
     uint256 public uaSupply; // underlying asset supply
 
@@ -33,13 +34,13 @@ contract LiquidityCommitmentCertificate is ERC20, Ownable {
         }
 
         // Allow transfers between protocol bounds
-        if (bounds[to] || bounds[from]) {
+        if (IMarketFactory(marketFactory).bounds(to) || IMarketFactory(marketFactory).bounds(from)) {
             _;
             return;
         }
 
         // Only protocol bounds can transfer to non-bounds (EOAs, other contracts)
-        if (!bounds[from]) {
+        if (!IMarketFactory(marketFactory).bounds(from)) {
             revert TransferNotAllowed();
         }
 
@@ -50,14 +51,21 @@ contract LiquidityCommitmentCertificate is ERC20, Ownable {
      * @param _underlyingAsset The underlying asset of the LCC.
      * @param _issuers The issuers of the LCC. ProxyHook, and MMPositionManager
      * @param _bounds The protocol addresses that form the LCC bounds. - Uniswap PoolManager, Routers, etc. is managed by an owner for dev-safety.
+     * @param _marketFactory The MarketFactory contract that manages this LCC.
      */
-    constructor(address _underlyingAsset, address[] memory _issuers, address[] memory _bounds) Ownable(msg.sender) {
+    constructor(address _underlyingAsset, address[] memory _issuers, address _marketFactory) {
         // TODO: handle ETH native token is future?
         if (_underlyingAsset == address(0)) {
             revert InvalidUnderlyingAsset();
         }
+        if (_marketFactory == address(0)) {
+            revert InvalidMarketFactory();
+        }
+
         underlyingAsset = _underlyingAsset;
-        metadata = IERC20Metadata(underlyingAsset);
+        marketFactory = _marketFactory;
+
+        IERC20Metadata metadata = IERC20Metadata(underlyingAsset);
         string memory _name = metadata.name();
         string memory _symbol = metadata.symbol();
         uint8 _decimals = metadata.decimals();
@@ -74,18 +82,6 @@ contract LiquidityCommitmentCertificate is ERC20, Ownable {
         string memory prefixedSymbol = string.concat("lcc-", _symbol);
         string memory prefixedName = string.concat("Fiet Liquidity Commitment Certificate for ", _name);
         ERC20(prefixedName, prefixedSymbol, _decimals);
-    }
-
-    function addBounds(address[] memory _bounds) public onlyOwner {
-        for (uint256 i = 0; i < _bounds.length; i++) {
-            bounds[_bounds[i]] = true;
-        }
-    }
-
-    function removeBounds(address[] memory _bounds) public onlyOwner {
-        for (uint256 i = 0; i < _bounds.length; i++) {
-            bounds[_bounds[i]] = false;
-        }
     }
 
     // some trusted issuer Smart Contracts can be allowed to mint tokens and hold the liquidity

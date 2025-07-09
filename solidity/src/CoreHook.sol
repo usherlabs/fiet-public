@@ -4,14 +4,18 @@ pragma solidity ^0.8.0;
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
-import {CurrencySettler} from "@uniswap/v4-core/test/utils/CurrencySettler.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
-import {BeforeSwapDelta, toBeforeSwapDelta} from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
-import {BaseHook} from "v4-periphery/src/utils/BaseHook.sol";
+import {BaseHook} from "@uniswap/v4-periphery/src/utils/BaseHook.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
-import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
+import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {CurrencyDelta} from "@uniswap/v4-core/src/libraries/CurrencyDelta.sol";
-import {BeforeSwapDeltaLibrary} from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
+import {HookMiner} from "@uniswap/v4-periphery/src/utils/HookMiner.sol";
+import {IHooks} from "@uniswap/v4-core/interfaces/IHooks.sol";
+
+import {Ownable} from "openzeppelin-contracts/contracts/access/Ownable.sol";
+
+import {LiquidityCommitmentCertificate} from "./LCC.sol";
+import {ProxyHook} from "./ProxyHook.sol";
 
 import "forge-std/console.sol";
 
@@ -20,14 +24,23 @@ import "forge-std/console.sol";
  *     This way it can calculate and manage Liquidity Commitments (C_A(r)) for each Position.
  *     Furthermore, we need to know when Direct LP occurs, as this determines whether the underlying native tokens are settled to the Pool Manager.
  */
-contract CoreHook is BaseHook {
-    constructor(address _poolManager) BaseHook(IPoolManager(_poolManager)) {}
+contract CoreHook is BaseHook, Ownable {
+    error InvalidUnderlyingAsset();
+    error InvalidInitialiser();
+
+    address public immutable marketFactory;
+    PoolKey public corePoolKey;
+
+    // Owner will be set to MarketFactory
+    constructor(address _poolManager, address _marketFactory) BaseHook(IPoolManager(_poolManager)) {
+        marketFactory = _marketFactory;
+    }
 
     function getHookPermissions() public pure override returns (Hooks.Permissions memory) {
         return Hooks.Permissions({
-            beforeInitialize: false,
-            afterInitialize: false,
-            beforeAddLiquidity: false, // Don't allow adding liquidity normally
+            beforeInitialize: true,
+            afterInitialize: true,
+            beforeAddLiquidity: false,
             afterAddLiquidity: true, // Intercept liquidity modifications
             beforeRemoveLiquidity: false,
             afterRemoveLiquidity: true, // Intercept liquidity modifications
@@ -42,14 +55,53 @@ contract CoreHook is BaseHook {
         });
     }
 
+    function _beforeInitialize(address sender, PoolKey calldata key, uint160)
+        internal
+        pure
+        virtual
+        override
+        returns (bytes4)
+    {
+        if (sender != marketFactory) {
+            revert InvalidInitialiser();
+        }
+        return this._beforeInitialize.selector;
+    }
+
+    function _afterInitialize(address, PoolKey calldata key, uint160, bytes calldata)
+        internal
+        virtual
+        override
+        returns (bytes4)
+    {
+        // Store the core pool key
+        corePoolKey = key;
+
+        // TODO: Create the Proxy Pool...
+        return this._afterInitialize.selector;
+    }
+
+    /**
+     * @notice Returns the core pool key for use by ProxyHook
+     * @return The core pool key
+     */
+    function getCorePoolKey() external view returns (PoolKey memory) {
+        return corePoolKey;
+    }
+
     function _afterAddLiquidity(
         address sender,
         PoolKey calldata key,
         ModifyLiquidityParams calldata params,
         BalanceDelta delta,
-        BalanceDelta feesAccrued,
-        bytes calldata hookData
+        BalanceDelta,
+        bytes calldata
     ) internal pure virtual override returns (bytes4) {
+        if (sender == address(poolManager)) {
+            // Handle Direct LP
+            // Notify the Proxy Hook to settle underlying tokens as liquidity to the Pool Manager.
+        }
+
         return this._afterAddLiquidity.selector;
     }
 
@@ -57,9 +109,9 @@ contract CoreHook is BaseHook {
         address sender,
         PoolKey calldata key,
         ModifyLiquidityParams calldata params,
-        BalanceDelta delta,
-        BalanceDelta feesAccrued,
-        bytes calldata hookData
+        BalanceDelta,
+        BalanceDelta,
+        bytes calldata
     ) internal pure virtual override returns (bytes4) {
         return this._afterRemoveLiquidity.selector;
     }

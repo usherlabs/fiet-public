@@ -25,6 +25,7 @@ contract ProxyHook is BaseHook {
 
     error AddLiquidityThroughHookNotAllowed();
     error UnsafeInt128ToUint256Conversion(int128 value);
+    error InvalidInitialiser();
 
     // router of the swap
     // v4 pool id
@@ -40,6 +41,8 @@ contract ProxyHook is BaseHook {
     // v4 pool id
     // router address
     event HookModifyLiquidity(bytes32 indexed id, address indexed sender, int128 amount0, int128 amount1);
+
+    address public immutable marketFactory;
 
     // store pool identifiers for the core and proxy pool
     PoolKey corePoolKey;
@@ -60,7 +63,10 @@ contract ProxyHook is BaseHook {
         return uint256(uint128(value));
     }
 
-    constructor(IPoolManager poolManager, PoolKey memory _corePoolKey) BaseHook(poolManager) {
+    constructor(IPoolManager poolManager, PoolKey memory _corePoolKey, address _marketFactory)
+        BaseHook(poolManager)
+        Ownable(msg.sender)
+    {
         corePoolKey = _corePoolKey;
 
         // // ? Could have just saved uToken0 and uToken1 to storage, instead of a mapping of two.
@@ -77,10 +83,29 @@ contract ProxyHook is BaseHook {
         // Assume lcc-ETH/lcc-USDC core pool has token1 as lcc-ETH, whereas proxypool has ETH as token0.
     }
 
+    /**
+     * @dev Updates the core pool key with the actual core pool configuration
+     * @param _corePoolKey The actual core pool key to set
+     */
+    function updateCorePoolKey(PoolKey calldata _corePoolKey) external {
+        // Only the CoreHook can update the core pool key
+        require(msg.sender == address(this), "ProxyHook: only self can update core pool key");
+        corePoolKey = _corePoolKey;
+
+        // Update the token mapping with the actual LCC tokens
+        Currency underlyingToken0 =
+            Currency.wrap(LiquidityCommitmentCertificate(Currency.unwrap(_corePoolKey.currency0)).underlyingAsset());
+        tokenMapping[underlyingToken0] = _corePoolKey.currency0;
+
+        Currency underlyingToken1 =
+            Currency.wrap(LiquidityCommitmentCertificate(Currency.unwrap(_corePoolKey.currency1)).underlyingAsset());
+        tokenMapping[underlyingToken1] = _corePoolKey.currency1;
+    }
+
     function getHookPermissions() public pure override returns (Hooks.Permissions memory) {
         return Hooks.Permissions({
-            beforeInitialize: true, // On initialization we shouls
-            afterInitialize: false,
+            beforeInitialize: true, // Ensure that markets are only created by MarketFactory
+            afterInitialize: true, // On initialization, we should setup the a Proxy Pool...
             beforeAddLiquidity: true, // Don't allow adding liquidity normally
             afterAddLiquidity: false,
             beforeRemoveLiquidity: false,
@@ -94,6 +119,31 @@ contract ProxyHook is BaseHook {
             afterAddLiquidityReturnDelta: false,
             afterRemoveLiquidityReturnDelta: false
         });
+    }
+
+    function _beforeInitialize(address sender, PoolKey calldata key, uint160)
+        internal
+        pure
+        virtual
+        override
+        returns (bytes4)
+    {
+        if (sender != marketFactory) {
+            revert InvalidInitialiser();
+        }
+        return this._beforeInitialize.selector;
+    }
+
+    function _afterInitialize(address, PoolKey calldata key, uint160, int24)
+        internal
+        pure
+        virtual
+        override
+        returns (bytes4)
+    {
+        // TODO: Create LCC tokens if they do not already exist...
+        // TODO: Create the Proxy Pool...
+        return this._afterInitialize.selector;
     }
 
     function _beforeInitialize(address, PoolKey calldata key, uint160) internal virtual override returns (bytes4) {
