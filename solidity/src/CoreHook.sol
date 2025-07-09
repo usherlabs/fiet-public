@@ -25,6 +25,7 @@ import "forge-std/console.sol";
 contract CoreHook is BaseHook, Ownable {
     error InvalidUnderlyingAsset();
     error InvalidInitialiser();
+    error CounterpartHookNotSet();
 
     address public immutable marketFactory;
 
@@ -87,7 +88,7 @@ contract CoreHook is BaseHook, Ownable {
         if (sender == address(poolManager)) {
             // Handle Direct LP
             // Notify the Proxy Hook to settle underlying tokens as liquidity to the Pool Manager.
-            address counterpartHook = getCounterpartHook();
+            address counterpartHook = getCounterpartHook(key.toId());
             ProxyHook(counterpartHook).onDirectLP(key, params, delta);
         }
 
@@ -105,11 +106,18 @@ contract CoreHook is BaseHook, Ownable {
         return this._afterRemoveLiquidity.selector;
     }
 
-    function getCounterpartHook() internal view returns (address) {
+    function getCounterpartHook(PoolId thisPoolId) internal returns (address) {
         if (counterpartHook == address(0)) {
             IMarketFactory mf = IMarketFactory(marketFactory);
-            PoolId proxyPoolId = mf.coreToProxy(corePoolId);
-            counterpartHook = mf.getHook(proxyPoolId);
+            PoolId id = mf.coreToProxy(thisPoolId);
+            counterpartHook = mf.getHook(id);
+        }
+        return counterpartHook;
+    }
+
+    function _getCounterpartHook() internal returns (address) {
+        if (counterpartHook == address(0)) {
+            revert CounterpartHookNotSet();
         }
         return counterpartHook;
     }

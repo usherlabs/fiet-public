@@ -60,7 +60,7 @@ contract MarketFactory is IMarketFactory, Ownable {
     mapping(PoolId => PoolId) public coreToProxy;
 
     // Mapping from proxy pool ID to core pool ID
-    // mapping(PoolId => PoolId) public proxyToCore;
+    mapping(PoolId => PoolId) public proxyToCore;
 
     // Mapping of addresses that found protocol-bounds
     mapping(address => bool) public bounds;
@@ -121,6 +121,7 @@ contract MarketFactory is IMarketFactory, Ownable {
 
         // Store the relationship between core and proxy pools
         coreToProxy[corePoolId] = proxyPoolId;
+        proxyToCore[proxyPoolId] = corePoolId;
 
         emit MarketCreated(
             corePoolId,

@@ -67,6 +67,13 @@ interface IMarketFactory {
     function coreToProxy(PoolId corePoolId) external view returns (PoolId);
 
     /**
+     * @notice Gets the core pool ID for a given proxy pool ID
+     * @param proxyPoolId The proxy pool ID
+     * @return The core pool ID
+     */
+    function proxyToCore(PoolId proxyPoolId) external view returns (PoolId);
+
+    /**
      * @notice Checks if an address is a bound for an LCC token
      * @param lccToken The LCC token address
      * @param bound The address to check

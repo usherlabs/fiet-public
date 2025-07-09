@@ -47,8 +47,15 @@ contract ProxyHook is BaseHook {
 
     address public immutable counterpartHook; // if this is core hook, then proxy hook -- otherwise, if this is proxy hook, then core hook
 
-    modifier onlyCounterpartHook() {
-        if (msg.sender != counterpartHook) {
+    modifier onlyCounterpartHook(PoolId thisPoolId) {
+        if (msg.sender != getCounterpartHook(thisPoolId)) {
+            revert InvalidSender();
+        }
+        _;
+    }
+
+    modifier _onlyCounterpartHook() {
+        if (msg.sender != _getCounterpartHook()) {
             revert InvalidSender();
         }
         _;
@@ -118,6 +125,10 @@ contract ProxyHook is BaseHook {
         if (sender != marketFactory) {
             revert InvalidInitialiser();
         }
+
+        // initialise the counterparty hook -- proxy pool is created after the core pool.
+        getCounterpartHook(key.toId());
+
         return this._beforeInitialize.selector;
     }
 
@@ -140,14 +151,20 @@ contract ProxyHook is BaseHook {
     }
 
     // Method called by the Core Hook notifying that Direct Liquidity Provision occurred.
-    function onDirectLP(PoolKey calldata key, ModifyLiquidityParams calldata params, BalanceDelta delta)
+    function onDirectLP(PoolKey calldata corePoolkey, ModifyLiquidityParams calldata params, BalanceDelta delta)
         external
         virtual
         nonReentrant
-        onlyCounterpartHook
+        _onlyCounterpartHook
         returns (uint256)
     {
-        require(block.timestamp <= deadline, "Deadline not met");
+        // require(block.timestamp <= deadline, "Deadline not met");
+
+        // TODO: We need to settle... no need to manage keys here.
+        // PoolId corePoolId = corePoolkey.toId();
+        // IMarketFactory mf = IMarketFactory(marketFactory);
+        // PoolId id = mf.proxyToCore(thisPoolId);
+        // counterpartHook = mf.getHook(id);
 
         IPoolManager(self.poolManager).unlock(
             abi.encode(
@@ -181,6 +198,7 @@ contract ProxyHook is BaseHook {
             proxyOutputCurrency = key.currency1;
             coreOutputCurrency = tokenMapping[key.currency1];
 
+            // TODO: We need to determine zeroForOne on the core...
             // Core Pool is zeroForOne if Proxy Pool is zeroForOne, AND Proxy token0 = Core token0
             zeroForOne_core = coreInputCurrency == corePoolKey.currency0;
         } else {
@@ -268,10 +286,9 @@ contract ProxyHook is BaseHook {
         console.log("amountOut: ", amountOut);
 
         // ? Liquidity is managed inside of the Proxy Hook
-        LiquidityCommitmentCertificate lccToken0 =
-            LiquidityCommitmentCertificate(Currency.unwrap(tokenMapping[key.currency0]));
-        LiquidityCommitmentCertificate lccToken1 =
-            LiquidityCommitmentCertificate(Currency.unwrap(tokenMapping[key.currency1]));
+        IMarketFactory mf = IMarketFactory(marketFactory);
+        LiquidityCommitmentCertificate lccToken0 = mf.getLCC(Currency.unwrap(key.currency0));
+        LiquidityCommitmentCertificate lccToken1 = mf.getLCC(Currency.unwrap(key.currency1));
 
         if (params.zeroForOne) {
             // If user is selling Token 0 and buying Token 1
@@ -332,11 +349,18 @@ contract ProxyHook is BaseHook {
         return (this.beforeSwap.selector, newDelta, 0);
     }
 
-    function getCounterpartHook() internal view returns (address) {
+    function getCounterpartHook(PoolId thisPoolId) internal returns (address) {
         if (counterpartHook == address(0)) {
             IMarketFactory mf = IMarketFactory(marketFactory);
-            PoolId proxyPoolId = mf.coreToProxy(corePoolId);
-            counterpartHook = mf.getHook(proxyPoolId);
+            PoolId id = mf.proxyToCore(thisPoolId);
+            counterpartHook = mf.getHook(id);
+        }
+        return counterpartHook;
+    }
+
+    function _getCounterpartHook() internal returns (address) {
+        if (counterpartHook == address(0)) {
+            revert CounterpartHookNotSet();
         }
         return counterpartHook;
     }
