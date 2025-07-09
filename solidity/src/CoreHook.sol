@@ -15,8 +15,6 @@ import {IHooks} from "@uniswap/v4-core/interfaces/IHooks.sol";
 import {Ownable} from "openzeppelin-contracts/contracts/access/Ownable.sol";
 
 import {LiquidityCommitmentCertificate} from "./LCC.sol";
-import {ProxyHook} from "./ProxyHook.sol";
-
 import "forge-std/console.sol";
 
 /**
@@ -29,7 +27,8 @@ contract CoreHook is BaseHook, Ownable {
     error InvalidInitialiser();
 
     address public immutable marketFactory;
-    PoolKey public corePoolKey;
+
+    address public immutable counterpartHook; // if this is core hook, then proxy hook -- otherwise, if this is proxy hook, then core hook
 
     // Owner will be set to MarketFactory
     constructor(address _poolManager, address _marketFactory) BaseHook(IPoolManager(_poolManager)) {
@@ -38,8 +37,8 @@ contract CoreHook is BaseHook, Ownable {
 
     function getHookPermissions() public pure override returns (Hooks.Permissions memory) {
         return Hooks.Permissions({
-            beforeInitialize: true,
-            afterInitialize: true,
+            beforeInitialize: true, // Validate and set global parameters
+            afterInitialize: false,
             beforeAddLiquidity: false,
             afterAddLiquidity: true, // Intercept liquidity modifications
             beforeRemoveLiquidity: false,
@@ -68,26 +67,14 @@ contract CoreHook is BaseHook, Ownable {
         return this._beforeInitialize.selector;
     }
 
-    function _afterInitialize(address, PoolKey calldata key, uint160, bytes calldata)
-        internal
-        virtual
-        override
-        returns (bytes4)
-    {
-        // Store the core pool key
-        corePoolKey = key;
-
-        // TODO: Create the Proxy Pool...
-        return this._afterInitialize.selector;
-    }
-
-    /**
-     * @notice Returns the core pool key for use by ProxyHook
-     * @return The core pool key
-     */
-    function getCorePoolKey() external view returns (PoolKey memory) {
-        return corePoolKey;
-    }
+    // function _afterInitialize(address, PoolKey calldata key, uint160, bytes calldata)
+    //     internal
+    //     virtual
+    //     override
+    //     returns (bytes4)
+    // {
+    //     return this._afterInitialize.selector;
+    // }
 
     function _afterAddLiquidity(
         address sender,
@@ -100,6 +87,8 @@ contract CoreHook is BaseHook, Ownable {
         if (sender == address(poolManager)) {
             // Handle Direct LP
             // Notify the Proxy Hook to settle underlying tokens as liquidity to the Pool Manager.
+            address counterpartHook = getCounterpartHook();
+            ProxyHook(counterpartHook).onDirectLP(key, params, delta);
         }
 
         return this._afterAddLiquidity.selector;
@@ -114,5 +103,14 @@ contract CoreHook is BaseHook, Ownable {
         bytes calldata
     ) internal pure virtual override returns (bytes4) {
         return this._afterRemoveLiquidity.selector;
+    }
+
+    function getCounterpartHook() internal view returns (address) {
+        if (counterpartHook == address(0)) {
+            IMarketFactory mf = IMarketFactory(marketFactory);
+            PoolId proxyPoolId = mf.coreToProxy(corePoolId);
+            counterpartHook = mf.getHook(proxyPoolId);
+        }
+        return counterpartHook;
     }
 }

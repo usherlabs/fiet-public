@@ -26,6 +26,7 @@ contract ProxyHook is BaseHook {
     error AddLiquidityThroughHookNotAllowed();
     error UnsafeInt128ToUint256Conversion(int128 value);
     error InvalidInitialiser();
+    error InvalidSender();
 
     // router of the swap
     // v4 pool id
@@ -44,12 +45,14 @@ contract ProxyHook is BaseHook {
 
     address public immutable marketFactory;
 
-    // store pool identifiers for the core and proxy pool
-    PoolKey corePoolKey;
-    PoolKey proxyPoolKey;
+    address public immutable counterpartHook; // if this is core hook, then proxy hook -- otherwise, if this is proxy hook, then core hook
 
-    // Map of NATIVE => LCC.
-    mapping(Currency => Currency) tokenMapping;
+    modifier onlyCounterpartHook() {
+        if (msg.sender != counterpartHook) {
+            revert InvalidSender();
+        }
+        _;
+    }
 
     /**
      * @dev Safely converts int128 to uint256, handling negative values by taking absolute value
@@ -63,24 +66,8 @@ contract ProxyHook is BaseHook {
         return uint256(uint128(value));
     }
 
-    constructor(IPoolManager poolManager, PoolKey memory _corePoolKey, address _marketFactory)
-        BaseHook(poolManager)
-        Ownable(msg.sender)
-    {
-        corePoolKey = _corePoolKey;
-
-        // // ? Could have just saved uToken0 and uToken1 to storage, instead of a mapping of two.
-        // // ? Mapping makes more sense if Proxy Hook Smart Contract allows many Proxy Pools => Core Pools.
-
-        // This is currently just a map of NATIVE => LCC.
-        Currency underlyingToken0 =
-            Currency.wrap(LiquidityCommitmentCertificate(Currency.unwrap(_corePoolKey.currency0)).underlyingAsset());
-        tokenMapping[underlyingToken0] = _corePoolKey.currency0;
-        Currency underlyingToken1 =
-            Currency.wrap(LiquidityCommitmentCertificate(Currency.unwrap(_corePoolKey.currency1)).underlyingAsset());
-        tokenMapping[underlyingToken1] = _corePoolKey.currency1;
-
-        // Assume lcc-ETH/lcc-USDC core pool has token1 as lcc-ETH, whereas proxypool has ETH as token0.
+    constructor(address _poolManager, address _marketFactory) BaseHook(IPoolManager(_poolManager)) {
+        marketFactory = _marketFactory;
     }
 
     /**
@@ -105,7 +92,7 @@ contract ProxyHook is BaseHook {
     function getHookPermissions() public pure override returns (Hooks.Permissions memory) {
         return Hooks.Permissions({
             beforeInitialize: true, // Ensure that markets are only created by MarketFactory
-            afterInitialize: true, // On initialization, we should setup the a Proxy Pool...
+            afterInitialize: false,
             beforeAddLiquidity: true, // Don't allow adding liquidity normally
             afterAddLiquidity: false,
             beforeRemoveLiquidity: false,
@@ -134,23 +121,6 @@ contract ProxyHook is BaseHook {
         return this._beforeInitialize.selector;
     }
 
-    function _afterInitialize(address, PoolKey calldata key, uint160, int24)
-        internal
-        pure
-        virtual
-        override
-        returns (bytes4)
-    {
-        // TODO: Create LCC tokens if they do not already exist...
-        // TODO: Create the Proxy Pool...
-        return this._afterInitialize.selector;
-    }
-
-    function _beforeInitialize(address, PoolKey calldata key, uint160) internal virtual override returns (bytes4) {
-        proxyPoolKey = key;
-        return this.beforeInitialize.selector;
-    }
-
     function _beforeAddLiquidity(address, PoolKey calldata, ModifyLiquidityParams calldata, bytes calldata)
         internal
         pure
@@ -169,12 +139,12 @@ contract ProxyHook is BaseHook {
         bool isAdd;
     }
 
-    // to do : check if amounts ordering is compatible with stored data
-    function addLiquidity(uint256[] calldata amounts, uint256 minToMint, uint256 deadline)
+    // Method called by the Core Hook notifying that Direct Liquidity Provision occurred.
+    function onDirectLP(PoolKey calldata key, ModifyLiquidityParams calldata params, BalanceDelta delta)
         external
-        payable
         virtual
         nonReentrant
+        onlyCounterpartHook
         returns (uint256)
     {
         require(block.timestamp <= deadline, "Deadline not met");
@@ -360,5 +330,14 @@ contract ProxyHook is BaseHook {
         }
 
         return (this.beforeSwap.selector, newDelta, 0);
+    }
+
+    function getCounterpartHook() internal view returns (address) {
+        if (counterpartHook == address(0)) {
+            IMarketFactory mf = IMarketFactory(marketFactory);
+            PoolId proxyPoolId = mf.coreToProxy(corePoolId);
+            counterpartHook = mf.getHook(proxyPoolId);
+        }
+        return counterpartHook;
     }
 }
