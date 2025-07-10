@@ -89,6 +89,8 @@ contract LiquidityCommitmentCertificate is ERC20 {
     function mint(uint256 amount) external isIssuer(msg.sender) {
         address issuer = msg.sender;
         _mint(issuer, amount);
+
+        uaSupply += amount;
     }
 
     // DirectLPs and Traders engaging the CorePool directly will need LCC. LCC is 1:1 with the underlying asset.

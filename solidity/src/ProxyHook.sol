@@ -57,6 +57,8 @@ contract ProxyHook is BaseHook, IActionTypes {
 
     address public immutable counterpartHook; // if this is core hook, then proxy hook -- otherwise, if this is proxy hook, then core hook
 
+    mapping(PoolId => PoolKey) public corePoolKey;
+
     modifier onlyCounterpartHook(PoolId thisPoolId) {
         if (msg.sender != getCounterpartHook(thisPoolId)) {
             revert InvalidSender();
@@ -66,6 +68,13 @@ contract ProxyHook is BaseHook, IActionTypes {
 
     modifier _onlyCounterpartHook() {
         if (msg.sender != _getCounterpartHook()) {
+            revert InvalidSender();
+        }
+        _;
+    }
+
+    modifier onlyFactory() {
+        if (msg.sender != marketFactory) {
             revert InvalidSender();
         }
         _;
@@ -91,19 +100,8 @@ contract ProxyHook is BaseHook, IActionTypes {
      * @dev Updates the core pool key with the actual core pool configuration
      * @param _corePoolKey The actual core pool key to set
      */
-    function updateCorePoolKey(PoolKey calldata _corePoolKey) external {
-        // Only the CoreHook can update the core pool key
-        require(msg.sender == address(this), "ProxyHook: only self can update core pool key");
-        corePoolKey = _corePoolKey;
-
-        // Update the token mapping with the actual LCC tokens
-        Currency underlyingToken0 =
-            Currency.wrap(LiquidityCommitmentCertificate(Currency.unwrap(_corePoolKey.currency0)).underlyingAsset());
-        tokenMapping[underlyingToken0] = _corePoolKey.currency0;
-
-        Currency underlyingToken1 =
-            Currency.wrap(LiquidityCommitmentCertificate(Currency.unwrap(_corePoolKey.currency1)).underlyingAsset());
-        tokenMapping[underlyingToken1] = _corePoolKey.currency1;
+    function setCorePoolKey(PoolId thisPoolId, PoolKey calldata _corePoolKey) external onlyFactory {
+        corePoolKey[thisPoolId] = _corePoolKey;
     }
 
     function getHookPermissions() public pure override returns (Hooks.Permissions memory) {
@@ -209,7 +207,7 @@ contract ProxyHook is BaseHook, IActionTypes {
 
             callbackData.currency0.take(
                 IPoolManager(callbackData.poolManager),
-                Currency.unwrap(callbackData.currency0),
+                Currency.unwrap(callbackData.currency0), // Send native liquidity back to LCC
                 callbackData.amount0,
                 false // mint` = `true` i.e. we're  claiming erc20
             );
@@ -259,48 +257,19 @@ contract ProxyHook is BaseHook, IActionTypes {
         override
         returns (bytes4, BeforeSwapDelta, uint24)
     {
-        // unwrap the output amount of the recieved token to get the underlying asset added to balance
-        Currency coreOutputCurrency;
-        Currency coreInputCurrency;
-        Currency proxyInputCurrency;
-        Currency proxyOutputCurrency;
+        bool coreZeroForOne;
+        PoolKey memory coreKey = corePoolKey[key.toId()];
 
-        bool zeroForOne_core;
+        LiquidityCommitmentCertificate lccToken0 = LiquidityCommitmentCertificate(Currency.unwrap(coreKey.currency0));
+        LiquidityCommitmentCertificate lccToken1 = LiquidityCommitmentCertificate(Currency.unwrap(coreKey.currency1));
 
-        // Establish native -> lcc mapping
         if (params.zeroForOne) {
-            proxyInputCurrency = key.currency0;
-            coreInputCurrency = tokenMapping[key.currency0];
-
-            proxyOutputCurrency = key.currency1;
-            coreOutputCurrency = tokenMapping[key.currency1];
-
-            // TODO: We need to determine zeroForOne on the core...
-            // Core Pool is zeroForOne if Proxy Pool is zeroForOne, AND Proxy token0 = Core token0
-            zeroForOne_core = coreInputCurrency == corePoolKey.currency0;
+            // If tokens match order, then coreZeroForOne is true
+            coreZeroForOne = Currency.unwrap(key.currency0) == lccToken0.underlyingAsset();
         } else {
-            proxyInputCurrency = key.currency1;
-            coreInputCurrency = tokenMapping[key.currency1];
-
-            proxyOutputCurrency = key.currency0;
-            coreOutputCurrency = tokenMapping[key.currency0];
-
-            // Core Pool is NOT zeroForOne if Proxy Pool is NOT zeroForOne, AND Proxy token1 = Core token1
-            zeroForOne_core = coreInputCurrency == corePoolKey.currency1;
+            // If tokens match order, then coreZeroForOne is false
+            coreZeroForOne = Currency.unwrap(key.currency1) == lccToken1.underlyingAsset();
         }
-
-        console.log(
-            "coreInputCurrency: ",
-            IERC20Metadata(Currency.unwrap(coreInputCurrency)).name(),
-            " to: ",
-            IERC20Metadata(Currency.unwrap(coreOutputCurrency)).name()
-        );
-        console.log(
-            "proxyInputCurrency: ",
-            IERC20Metadata(Currency.unwrap(proxyInputCurrency)).name(),
-            " to: ",
-            IERC20Metadata(Currency.unwrap(proxyOutputCurrency)).name()
-        );
 
         // BalanceDelta is a packed value of (currency0Amount, currency1Amount)
 
@@ -312,7 +281,7 @@ contract ProxyHook is BaseHook, IActionTypes {
 
         // Calculate the correct sqrtPriceLimitX96 for the core pool
         // uint160 sqrtPriceLimitX96_core = params.sqrtPriceLimitX96;
-        // if (params.zeroForOne != zeroForOne_core) {
+        // if (params.zeroForOne != coreZeroForOne) {
         //     if (sqrtPriceLimitX96_core == 0) {
         //         // When a zeroForOne swap has a limit of 0, it is unbounded. The reciprocal is infinity.
         //         // An unbounded oneForZero swap has a limit of type(uint160).max.
@@ -325,9 +294,9 @@ contract ProxyHook is BaseHook, IActionTypes {
 
         // Conduct the swap inside the Pool Manager
         BalanceDelta delta = poolManager.swap(
-            corePoolKey,
+            coreKey,
             SwapParams({
-                zeroForOne: zeroForOne_core,
+                zeroForOne: coreZeroForOne,
                 amountSpecified: params.amountSpecified,
                 sqrtPriceLimitX96: params.sqrtPriceLimitX96
             }),
@@ -336,7 +305,7 @@ contract ProxyHook is BaseHook, IActionTypes {
 
         console.log("Core Pool Delta amount0: ", delta.amount0());
         console.log("Core Pool Delta amount1: ", delta.amount1());
-        console.log("zeroForOne_core: ", zeroForOne_core);
+        console.log("coreZeroForOne: ", coreZeroForOne);
         console.log("params.zeroForOne: ", params.zeroForOne);
 
         /// The desired input amount if negative (exactIn), or the desired output amount if positive (exactOut)
@@ -345,13 +314,13 @@ contract ProxyHook is BaseHook, IActionTypes {
         bool isExactInput = params.amountSpecified < 0;
         if (isExactInput) {
             amountIn = uint256(-params.amountSpecified);
-            if (params.zeroForOne == zeroForOne_core) {
+            if (params.zeroForOne == coreZeroForOne) {
                 amountOut = _safeInt128ToUint256(delta.amount1());
             } else {
                 amountOut = _safeInt128ToUint256(delta.amount0());
             }
         } else {
-            if (params.zeroForOne == zeroForOne_core) {
+            if (params.zeroForOne == coreZeroForOne) {
                 amountIn = _safeInt128ToUint256(delta.amount0());
             } else {
                 amountIn = _safeInt128ToUint256(delta.amount1());
@@ -361,11 +330,6 @@ contract ProxyHook is BaseHook, IActionTypes {
 
         console.log("amountIn: ", amountIn);
         console.log("amountOut: ", amountOut);
-
-        // ? Liquidity is managed inside of the Proxy Hook
-        IMarketFactory mf = IMarketFactory(marketFactory);
-        LiquidityCommitmentCertificate lccToken0 = mf.getLCC(Currency.unwrap(key.currency0));
-        LiquidityCommitmentCertificate lccToken1 = mf.getLCC(Currency.unwrap(key.currency1));
 
         if (params.zeroForOne) {
             // If user is selling Token 0 and buying Token 1
@@ -417,7 +381,7 @@ contract ProxyHook is BaseHook, IActionTypes {
         poolManager.settle();
 
         BeforeSwapDelta newDelta;
-        if (params.zeroForOne == zeroForOne_core) {
+        if (params.zeroForOne == coreZeroForOne) {
             newDelta = toBeforeSwapDelta(delta.amount0(), delta.amount1());
         } else {
             newDelta = toBeforeSwapDelta(delta.amount1(), delta.amount0());
@@ -428,9 +392,9 @@ contract ProxyHook is BaseHook, IActionTypes {
 
     function getCounterpartHook(PoolId thisPoolId) internal returns (address) {
         if (counterpartHook == address(0)) {
-            IMarketFactory mf = IMarketFactory(marketFactory);
-            PoolId id = mf.proxyToCore(thisPoolId);
-            counterpartHook = mf.getHook(id);
+            PoolKey memory key = corePoolKey[thisPoolId];
+            PoolId corePoolId = key.toId();
+            counterpartHook = mf.getHook(corePoolId);
         }
         return counterpartHook;
     }

@@ -5,7 +5,7 @@ import {Ownable} from "openzeppelin-contracts/contracts/access/Ownable.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
-import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
+import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {LiquidityCommitmentCertificate} from "./LCC.sol";
 import {CoreHook} from "./CoreHook.sol";
@@ -59,9 +59,6 @@ contract MarketFactory is IMarketFactory, Ownable {
     // Mapping from core pool ID to proxy pool ID
     mapping(PoolId => PoolId) public coreToProxy;
 
-    // Mapping from proxy pool ID to core pool ID
-    mapping(PoolId => PoolId) public proxyToCore;
-
     // Mapping of addresses that found protocol-bounds
     mapping(address => bool) public bounds;
 
@@ -114,10 +111,14 @@ contract MarketFactory is IMarketFactory, Ownable {
         address lccToken1 = _getOrCreateLCC(underlyingAsset1);
 
         // Create core pool with LCC tokens
-        corePoolId = _createCorePool(lccToken0, lccToken1, corePoolFee, tickSpacing, initialSqrtPriceX96);
+        PoolKey memory corePoolKey =
+            _createCorePool(lccToken0, lccToken1, corePoolFee, tickSpacing, initialSqrtPriceX96);
 
         // Create proxy pool with underlying assets
-        proxyPoolId = _createProxyPool(underlyingAsset0, underlyingAsset1, tickSpacing);
+        PoolKey memory proxyPoolId = _createProxyPool(corePoolKey, underlyingAsset0, underlyingAsset1, tickSpacing);
+
+        corePoolId = corePoolKey.toId();
+        proxyPoolId = proxyPoolKey.toId();
 
         // Store the relationship between core and proxy pools
         coreToProxy[corePoolId] = proxyPoolId;
@@ -172,19 +173,19 @@ contract MarketFactory is IMarketFactory, Ownable {
         uint24 corePoolFee,
         uint24 corePoolTickSpacing,
         uint160 initialSqrtPriceX96
-    ) internal returns (PoolId poolId) {
+    ) internal returns (PoolKey memory poolKey) {
         // Create pool key
         (Currency currency0, Currency currency1) = _sortCurrencies(lccToken0, lccToken1);
 
-        PoolKey memory poolKey = PoolKey({
+        poolKey = PoolKey({
             currency0: currency0,
             currency1: currency1,
             fee: corePoolFee,
             tickSpacing: corePoolTickSpacing,
-            hooks: coreHook
+            hooks: IHooks(coreHook)
         });
 
-        poolId = poolKey.toId();
+        PoolId poolId = poolKey.toId();
 
         // Check if pool already exists
         if (poolToHook[poolId] != address(0)) {
@@ -205,22 +206,24 @@ contract MarketFactory is IMarketFactory, Ownable {
      * @param corePoolId The associated core pool ID
      * @return poolId The created pool ID
      */
-    function _createProxyPool(address underlyingAsset0, address underlyingAsset1, uint24 proxyPoolTickSpacing)
-        internal
-        returns (PoolId poolId)
-    {
+    function _createProxyPool(
+        PoolKey memory corePoolKey,
+        address underlyingAsset0,
+        address underlyingAsset1,
+        uint24 proxyPoolTickSpacing
+    ) internal returns (PoolKey memory poolKey) {
         // Create pool key for proxy pool
         (Currency currency0, Currency currency1) = _sortCurrencies(underlyingAsset0, underlyingAsset1);
 
-        PoolKey memory poolKey = PoolKey({
+        poolKey = PoolKey({
             currency0: currency0,
             currency1: currency1,
             fee: 0,
             tickSpacing: proxyPoolTickSpacing,
-            hooks: proxyHook
+            hooks: IHooks(proxyHook)
         });
 
-        poolId = poolKey.toId();
+        PoolId poolId = poolKey.toId();
 
         // Check if pool already exists
         if (poolToHook[poolId] != address(0)) {
@@ -229,6 +232,9 @@ contract MarketFactory is IMarketFactory, Ownable {
 
         // Initialize the pool
         poolManager.initialize(poolKey, 0);
+
+        // Set corePoolKey for Proxy PoolId on ProxyHook
+        ProxyHook(proxyHook).setCorePoolKey(poolId, corePoolKey);
 
         // Store hook reference
         poolToHook[poolId] = proxyHook;
