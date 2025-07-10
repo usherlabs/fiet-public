@@ -6,7 +6,7 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {BaseHook} from "@uniswap/v4-periphery/src/utils/BaseHook.sol";
-import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {BalanceDelta, BalanceDeltaLibrary} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {CurrencyDelta} from "@uniswap/v4-core/src/libraries/CurrencyDelta.sol";
 import {HookMiner} from "@uniswap/v4-periphery/src/utils/HookMiner.sol";
@@ -15,6 +15,7 @@ import {IHooks} from "@uniswap/v4-core/interfaces/IHooks.sol";
 import {Ownable} from "openzeppelin-contracts/contracts/access/Ownable.sol";
 
 import {LiquidityCommitmentCertificate} from "./LCC.sol";
+import {IActionTypes} from "./interfaces/IActionTypes.sol";
 import "forge-std/console.sol";
 
 /**
@@ -22,7 +23,7 @@ import "forge-std/console.sol";
  *     This way it can calculate and manage Liquidity Commitments (C_A(r)) for each Position.
  *     Furthermore, we need to know when Direct LP occurs, as this determines whether the underlying native tokens are settled to the Pool Manager.
  */
-contract CoreHook is BaseHook, Ownable {
+contract CoreHook is BaseHook, Ownable, IActionTypes {
     error InvalidUnderlyingAsset();
     error InvalidInitialiser();
     error CounterpartHookNotSet();
@@ -84,15 +85,13 @@ contract CoreHook is BaseHook, Ownable {
         BalanceDelta delta,
         BalanceDelta,
         bytes calldata
-    ) internal pure virtual override returns (bytes4) {
-        if (sender == address(poolManager)) {
-            // Handle Direct LP
-            // Notify the Proxy Hook to settle underlying tokens as liquidity to the Pool Manager.
-            address counterpartHook = getCounterpartHook(key.toId());
-            ProxyHook(counterpartHook).onDirectLP(key, params, delta);
-        }
+    ) internal virtual returns (bytes4, BalanceDelta) {
+        // Handle Direct LP
+        // Notify the Proxy Hook to settle underlying tokens as liquidity to the Pool Manager.
+        address counterpartHook = getCounterpartHook(key.toId());
+        ProxyHook(counterpartHook).onDirectLP(key, params, delta, ActionType.DirectLPAddLiquidity);
 
-        return this._afterAddLiquidity.selector;
+        return (this.afterAddLiquidity.selector, BalanceDeltaLibrary.ZERO_DELTA);
     }
 
     function _afterRemoveLiquidity(
@@ -102,8 +101,13 @@ contract CoreHook is BaseHook, Ownable {
         BalanceDelta,
         BalanceDelta,
         bytes calldata
-    ) internal pure virtual override returns (bytes4) {
-        return this._afterRemoveLiquidity.selector;
+    ) internal virtual returns (bytes4, BalanceDelta) {
+        // Handle Direct LP
+        // Notify the Proxy Hook to settle underlying tokens as liquidity to the Pool Manager.
+        address counterpartHook = getCounterpartHook(key.toId());
+        ProxyHook(counterpartHook).onDirectLP(key, params, delta, ActionType.DirectLPRemoveLiquidity);
+
+        return (this.afterRemoveLiquidity.selector, BalanceDeltaLibrary.ZERO_DELTA);
     }
 
     function getCounterpartHook(PoolId thisPoolId) internal returns (address) {

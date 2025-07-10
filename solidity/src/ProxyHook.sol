@@ -19,14 +19,24 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 import "forge-std/console.sol";
 
 import {LiquidityCommitmentCertificate} from "./LCC.sol";
+import {IActionTypes} from "./interfaces/IActionTypes.sol";
 
-contract ProxyHook is BaseHook {
+contract ProxyHook is BaseHook, IActionTypes {
     using CurrencySettler for Currency;
 
     error AddLiquidityThroughHookNotAllowed();
     error UnsafeInt128ToUint256Conversion(int128 value);
     error InvalidInitialiser();
     error InvalidSender();
+
+    struct LiquidityCallbackData {
+        uint256 amount0;
+        uint256 amount1;
+        Currency currency0;
+        Currency currency1;
+        address poolManager;
+        ActionType actionType;
+    }
 
     // router of the swap
     // v4 pool id
@@ -142,33 +152,100 @@ contract ProxyHook is BaseHook {
         revert AddLiquidityThroughHookNotAllowed();
     }
 
-    struct LiquidityCallbackData {
-        uint256 amount;
-        Currency currency;
-        address sender;
-        address poolManager;
-        bool isAdd;
+    function unlockCallback(bytes calldata data) external override onlyPoolManager returns (bytes memory) {
+        LiquidityCallbackData memory callbackData = abi.decode(data, (LiquidityCallbackData));
+        if (callbackData.actionType == ActionType.DirectLPAddLiquidity) {
+            // Add liquidity to the core pool
+
+            // Settle `callbackData.amount` of each currency from the sender
+            // i.e. Create a debit of `callbackData.amount` of each currency with the Pool Manager
+            callbackData.currency0.settle(
+                IPoolManager(callbackData.poolManager),
+                Currency.unwrap(callbackData.currency0),
+                callbackData.amount0,
+                false // `burn` = `false` i.e. we're actually transferring tokens, not burning ERC-6909 Claim Tokens
+            );
+            callbackData.currency1.settle(
+                IPoolManager(callbackData.poolManager),
+                Currency.unwrap(callbackData.currency1),
+                callbackData.amount1,
+                false // `burn` = `false` i.e. we're actually transferring tokens, not burning ERC-6909 Claim Tokens
+            );
+
+            // Since we didn't go through the regular "modify liquidity" flow,
+            // the PM just has a debit of `callbackData.amount` of each currency from us
+            // We can, in exchange, get back ERC-6909 claim tokens for `callbackData.amount`
+            // to create a credit of `callbackData.amount` of each currency to us that balances out the debit
+
+            // We will store those claim tokens with the hook, so when swaps take place
+            // liquidity from our CSMM can be used by minting/burning claim tokens the hook owns
+            callbackData.currency0.take(
+                IPoolManager(callbackData.poolManager),
+                address(this),
+                callbackData.amount0,
+                true // `mint` = `true` i.e. we're minting claim tokens for the hook, equivalent to money we just deposited to the PM
+            );
+            callbackData.currency1.take(
+                IPoolManager(callbackData.poolManager),
+                address(this),
+                callbackData.amount1,
+                true // `mint` = `true` i.e. we're minting claim tokens for the hook, equivalent to money we just deposited to the PM
+            );
+        } else if (callbackData.actionType == ActionType.DirectLPRemoveLiquidity) {
+            // Remove liquidity from the core pool
+
+            callbackData.currency0.settle(
+                IPoolManager(callbackData.poolManager),
+                address(this),
+                callbackData.amount0,
+                true // `burn` = `true` i.e. we're  burning ERC-6909 Claim Tokens
+            );
+            callbackData.currency1.settle(
+                IPoolManager(callbackData.poolManager),
+                address(this),
+                callbackData.amount1,
+                true // `burn` = `true` i.e. we're  burning ERC-6909 Claim Tokens
+            );
+
+            callbackData.currency0.take(
+                IPoolManager(callbackData.poolManager),
+                Currency.unwrap(callbackData.currency0),
+                callbackData.amount0,
+                false // mint` = `true` i.e. we're  claiming erc20
+            );
+            callbackData.currency1.take(
+                IPoolManager(callbackData.poolManager),
+                Currency.unwrap(callbackData.currency1),
+                callbackData.amount1,
+                false // mint` = `true` i.e. we're  claiming erc20
+            );
+        }
     }
 
     // Method called by the Core Hook notifying that Direct Liquidity Provision occurred.
-    function onDirectLP(PoolKey calldata corePoolkey, ModifyLiquidityParams calldata params, BalanceDelta delta)
-        external
-        virtual
-        nonReentrant
-        _onlyCounterpartHook
-        returns (uint256)
-    {
+    // We notify the Proxy Hook so that the BeforeSwapDelta can facilitate liquidity management of native underlying tokens.
+    function onDirectLP(
+        PoolKey calldata corePoolkey,
+        ModifyLiquidityParams calldata params,
+        BalanceDelta delta,
+        ActionType actionType
+    ) external virtual nonReentrant _onlyCounterpartHook returns (uint256) {
         // require(block.timestamp <= deadline, "Deadline not met");
 
-        // TODO: We need to settle... no need to manage keys here.
-        // PoolId corePoolId = corePoolkey.toId();
-        // IMarketFactory mf = IMarketFactory(marketFactory);
-        // PoolId id = mf.proxyToCore(thisPoolId);
-        // counterpartHook = mf.getHook(id);
+        // Get the LCC tokens for the core pool
+        LiquidityCommitmentCertificate lccToken0 = Currency.unwrap(corePoolkey.currency0);
+        LiquidityCommitmentCertificate lccToken1 = Currency.unwrap(corePoolkey.currency1);
 
         IPoolManager(self.poolManager).unlock(
             abi.encode(
-                LiquidityCallbackData(amounts[i], CurrencyLibrary.fromId(currentId), msg.sender, self.poolManager, true)
+                LiquidityCallbackData(
+                    delta.amount0(),
+                    delta.amount1(),
+                    Currency.wrap(lccToken0.underlyingAsset()),
+                    Currency.wrap(lccToken1.underlyingAsset()),
+                    self.poolManager,
+                    actionType
+                )
             )
         );
     }
