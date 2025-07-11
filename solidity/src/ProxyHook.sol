@@ -12,8 +12,7 @@ import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
-import {CurrencyDelta} from "@uniswap/v4-core/src/libraries/CurrencyDelta.sol";
-import {BeforeSwapDeltaLibrary} from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
+// import {BeforeSwapDeltaLibrary} from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
 
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "forge-std/console.sol";
@@ -271,6 +270,15 @@ contract ProxyHook is BaseHook, IActionTypes {
             coreZeroForOne = Currency.unwrap(key.currency1) == lccToken1.underlyingAsset();
         }
 
+        // If zeroForOne match, then lccTokenForCurrency0 is lccToken0 and lccTokenForCurrency1 is lccToken1
+        // If zeroForOne does not match, then lccTokenForCurrency0 is lccToken1 and lccTokenForCurrency1 is lccToken0
+        LiquidityCommitmentCertificate lccTokenForCurrency0 =
+            params.zeroForOne == coreZeroForOne ? lccToken0 : lccToken1;
+        LiquidityCommitmentCertificate lccTokenForCurrency1 =
+            params.zeroForOne == coreZeroForOne ? lccToken1 : lccToken0;
+        Currency lccCurrencyForCurrency0 = Currency.wrap(address(lccTokenForCurrency0));
+        Currency lccCurrencyForCurrency1 = Currency.wrap(address(lccTokenForCurrency1));
+
         // BalanceDelta is a packed value of (currency0Amount, currency1Amount)
 
         // BeforeSwapDelta varies such that it is not sorted by token0 and token1
@@ -334,52 +342,51 @@ contract ProxyHook is BaseHook, IActionTypes {
         if (params.zeroForOne) {
             // If user is selling Token 0 and buying Token 1
             // First mint LCC tokens for the input amount
-            lccToken0.custodianMint(amountIn);
+            lccTokenForCurrency0.mint(address(this), amountIn);
 
-            // Settle LCC tokens to the PoolManager (this gives PM the underlying tokens)
-            tokenMapping[key.currency0].settle(poolManager, address(this), amountIn, false);
+            // Settle LCC tokens to the PoolManager
+            // Accounts for LCC of 0 IN for the Core Pool Swap
+            lccCurrencyForCurrency0.settle(poolManager, address(this), amountIn, false);
 
-            // Now take the underlying tokens from PoolManager to the Hook
-            poolManager.take(key.currency0, address(this), amountIn);
+            // Now take the underlying tokens from PoolManager to the LCC
+            // This will allow unwrap with liquidity from trader deposits.
+            poolManager.take(key.currency0, address(lccTokenForCurrency0), amountIn);
 
-            // Take LCC tokens of Token 1 from Core Pool via PoolManager
-            tokenMapping[key.currency1].take(poolManager, address(this), amountOut, false);
+            // Take LCC tokens of Token 1 from PoolManager
+            // Accounts for LCC of 1 OUT for the Core Pool Swap
+            lccCurrencyForCurrency1.take(poolManager, address(this), amountOut, false);
 
-            // Theoretically, we should unwrap LCC of Token 1 from the PM now... Hook should already house the underlying liquidity for the LCC ...
-            // Therefore all we need to do is burn the LCC tokens from the hook.
-
-            // TODO: Unwrap and Burn the LCC tokens from the PM... might need to be executed elsewhere...
-            // lccToken1.unwrap(address(this), amountOut);
+            // Unwrap and Burn the LCC of Token 1 from the PM... might need to be executed elsewhere...
+            lccTokenForCurrency1.burnOnSettle(address(this), amountOut);
+            // Once Uniswap conducts fund settlement, it'll burn this amountOut from the LCC.
         } else {
-            // If user is selling Token 1 and buying Token 0
+            // If user is selling Token 1 (IN) and buying Token 0 (OUT)
             // First mint LCC tokens for the input amount
-            lccToken1.custodianMint(amountIn);
+            lccTokenForCurrency1.mint(address(this), amountIn);
 
-            // Settle LCC tokens to the PoolManager (this gives PM the underlying tokens)
-            tokenMapping[key.currency1].settle(poolManager, address(this), amountIn, false);
+            // Settle LCC tokens to the PoolManager
+            lccCurrencyForCurrency1.settle(poolManager, address(this), amountIn, false);
 
-            // Now take the underlying tokens from PoolManager to the Hook
-            poolManager.take(key.currency1, address(this), amountIn);
+            // Now take the underlying tokens from PoolManager to the LCC
+            // This will allow unwrap with liquidity from trader deposits.
+            poolManager.take(key.currency1, address(lccTokenForCurrency1), amountIn);
 
-            // Take LCC tokens of Token 0 from Core Pool via PoolManager
-            tokenMapping[key.currency0].take(poolManager, address(this), amountOut, false);
+            // Take LCC tokens of Token 0 from PoolManager
+            // Accounts for LCC of 0 OUT for the Core Pool Swap
+            lccCurrencyForCurrency0.take(poolManager, address(this), amountOut, false);
 
-            // Theoretically, we should unwrap LCC of Token 1 from the PM now... Hook should already house the underlying liquidity for the LCC ...
-            // Therefore all we need to do is burn the LCC tokens from the hook.
-            // TODO: Unwrap and Burn the LCC tokens from the PM... might need to be executed elsewhere...
-            // lccToken0.unwrap(
-            //     address(this), // TODO: This is correct, however, for now:
-            //     amountOut
-            // );
+            // Unwrap and Burn the LCC of Token 0 from the PM
+            lccTokenForCurrency0.burnOnSettle(address(this), amountOut);
+            // Once Uniswap conducts fund settlement, it'll burn this amountOut from the LCC.
         }
-
-        // TODO: This Proxy Hook will need to draw on liquidity from the PositionManager that MMs engage.
 
         // pay the output token, to the PoolManager from Proxy Hook.
         // the credit will be forwarded to the swap router, which then forwards it to the swapper
         poolManager.sync(params.zeroForOne ? key.currency1 : key.currency0);
         poolManager.settle();
 
+        // TODO: Consider scenario where LCC has insufficient liquidity.
+        // ie. less from here for token OUT, and more from core Token OUT.
         BeforeSwapDelta newDelta;
         if (params.zeroForOne == coreZeroForOne) {
             newDelta = toBeforeSwapDelta(delta.amount0(), delta.amount1());

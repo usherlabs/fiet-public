@@ -8,6 +8,7 @@ import {ERC20} from "solmate/tokens/ERC20.sol";
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 
 contract LiquidityCommitmentCertificate is ERC20 {
+    error SenderNotIssuer();
     error InvalidUnderlyingAsset();
     error TransferNotAllowed();
     error InvalidAmount();
@@ -16,13 +17,17 @@ contract LiquidityCommitmentCertificate is ERC20 {
     address public immutable underlyingAsset;
     address public immutable marketFactory;
 
+    mapping(address => uint256) public burnOnSettleQueue;
+
     // All native underlying liquidity will either be
     mapping(address => bool) public issuers;
 
     uint256 public uaSupply; // underlying asset supply
 
-    modifier isIssuer(address sender) {
-        require(issuers[sender], "SENDER NOT ISSUER");
+    modifier onlyIssuer() {
+        if (!issuers[msg.sender]) {
+            revert SenderNotIssuer();
+        }
         _;
     }
 
@@ -86,11 +91,16 @@ contract LiquidityCommitmentCertificate is ERC20 {
 
     // some trusted issuer Smart Contracts can be allowed to mint tokens and hold the liquidity
     // this minting provides tokens at a 1:1 ratio and intended for onchain preswap wrapping
-    function mint(uint256 amount) external isIssuer(msg.sender) {
+    function mint(uint256 amount) external onlyIssuer {
         address issuer = msg.sender;
         _mint(issuer, amount);
 
         uaSupply += amount;
+    }
+
+    function burnOnSettle(address from, uint256 amount) external onlyIssuer {
+        address issuer = msg.sender;
+        burnOnSettleQueue[issuer] += amount;
     }
 
     // DirectLPs and Traders engaging the CorePool directly will need LCC. LCC is 1:1 with the underlying asset.
@@ -153,30 +163,25 @@ contract LiquidityCommitmentCertificate is ERC20 {
         _unwrap(msg.sender, to, amount);
     }
 
-    // ? We may not need a withdraw for ProxyHook, as poolManager settle can from this LCC.
-    // function withdraw(address to, uint256 amount) public isIssuer(msg.sender) {
-    //     IERC20 underlying_asset_token = IERC20(underlyingAsset);
-    //     underlying_asset_token.transferFrom(custodian, to, amount);
-    // }
-
     // TODO: Re-enable in the future...
-    // function transfer(address to, uint256 amount)
-    //     public
-    //     virtual
-    //     override
-    //     onlyProtocolTransfer(msg.sender, to)
-    //     returns (bool)
-    // {
-    //     return super.transfer(to, amount);
-    // }
 
-    // function transferFrom(address from, address to, uint256 amount)
-    //     public
-    //     virtual
-    //     override
-    //     onlyProtocolTransfer(from, to)
-    //     returns (bool)
-    // {
-    //     return super.transferFrom(from, to, amount);
-    // }
+    // On transfer hook...
+    // function onTransfer(address from, address to, uint256 amount) internal onlyProtocolTransfer(msg.sender, to){
+    function onTransfer(address from, address to, uint256) internal {
+        // Burn if parameters match.
+        if (issuers[to] != address(0) && burnOnSettleQueue[to] > 0) {
+            _burn(to, burnOnSettleQueue[to]);
+            burnOnSettleQueue[to] = 0;
+        }
+    }
+
+    function transfer(address to, uint256 amount) public virtual override returns (bool) {
+        onTransfer(msg.sender, to, amount);
+        return super.transfer(to, amount);
+    }
+
+    function transferFrom(address from, address to, uint256 amount) public virtual override returns (bool) {
+        onTransfer(from, to, amount);
+        return super.transferFrom(from, to, amount);
+    }
 }
