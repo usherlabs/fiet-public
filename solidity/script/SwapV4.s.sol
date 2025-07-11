@@ -19,6 +19,7 @@ import {SepoliaConstants} from "./constants/sepolia.sol";
 import {ScriptHelper} from "./deployments/ScriptHelper.s.sol";
 import {CurrencySortHelper} from "./CurrencySortHelper.sol";
 import {LiquidityCommitmentCertificate} from "../src/LCC.sol";
+import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
 
 contract SwapV4 is ScriptHelper {
     using StateLibrary for IPoolManager;
@@ -51,12 +52,14 @@ contract SwapV4 is ScriptHelper {
         hook = IHooks(readAddress("proxyHook"));
         console.log("Proxy Hook loaded");
 
+        address marketFactory = readAddress("marketFactory");
+
         // Core pool tokens
         lccUSDCToken = LiquidityCommitmentCertificate(
-            readAddress("lccTokenUSDC")
+            IMarketFactory(marketFactory).getLCC(usdcToken)
         );
         lccUSDTToken = LiquidityCommitmentCertificate(
-            readAddress("lccTokenUSDT")
+            IMarketFactory(marketFactory).getLCC(usdtToken)
         );
 
         usdcToken = readAddress("usdcToken");
@@ -115,7 +118,7 @@ contract SwapV4 is ScriptHelper {
         console.log("Executing swap...");
 
         // For an 18 decimal token, 10e18 is 10 tokens
-        swapExactInputSingle(poolKey, 10e18, 0, userAddress);
+        swapExactInputSingle(poolKey, 10e18, 0);
         // swapExactInputSingle(poolKey, 1, 0, userAddress);
         console.log("Swap executed");
 
@@ -171,8 +174,7 @@ contract SwapV4 is ScriptHelper {
     function swapExactInputSingle(
         PoolKey memory key, // PoolKey struct that identifies the v4 pool
         uint128 amountIn, // Exact amount of tokens to swap
-        uint128 minAmountOut,
-        address user // Minimum amount of output tokens expected
+        uint128 minAmountOut // Minimum amount of output tokens expected
     ) public {
         bytes memory commands = abi.encodePacked(uint8(Commands.V4_SWAP));
 
@@ -192,15 +194,15 @@ contract SwapV4 is ScriptHelper {
                 zeroForOne: true, // true if we're swapping token0 for token1
                 amountIn: amountIn, // amount of tokens we're swapping
                 amountOutMinimum: minAmountOut, // minimum amount we expect to receive
-                hookData: abi.encode(user)
+                hookData: new bytes(0) // Remove user-specific hook data if not needed
             })
         );
 
         // Second parameter: settle all for input
         params[1] = abi.encode(key.currency0, type(uint256).max);
 
-        // Third parameter: take all for output with min 0
-        params[2] = abi.encode(key.currency1, uint256(0));
+        // Third parameter: take all for output with minAmountOut
+        params[2] = abi.encode(key.currency1, minAmountOut);
 
         bytes[] memory inputs = new bytes[](1);
 

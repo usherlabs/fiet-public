@@ -99,7 +99,7 @@ contract CoreHook is BaseHook, IHookCommon {
         BalanceDelta delta,
         BalanceDelta,
         bytes calldata
-    ) internal virtual returns (bytes4, BalanceDelta) {
+    ) internal virtual override returns (bytes4, BalanceDelta) {
         // Handle Direct LP
         // Notify the Proxy Hook to settle underlying tokens as liquidity to the Pool Manager.
         ProxyHook(proxyHook).onDirectLP(
@@ -119,10 +119,10 @@ contract CoreHook is BaseHook, IHookCommon {
         address sender,
         PoolKey calldata key,
         ModifyLiquidityParams calldata params,
-        BalanceDelta,
+        BalanceDelta delta,
         BalanceDelta,
         bytes calldata
-    ) internal virtual returns (bytes4, BalanceDelta) {
+    ) internal virtual override returns (bytes4, BalanceDelta) {
         // Handle Direct LP
         // Notify the Proxy Hook to settle underlying tokens as liquidity to the Pool Manager.
         ProxyHook(proxyHook).onDirectLP(

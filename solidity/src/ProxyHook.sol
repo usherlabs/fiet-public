@@ -3,6 +3,7 @@ pragma solidity ^0.8.0;
 
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {CurrencySettler} from "@uniswap/v4-core/test/utils/CurrencySettler.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
@@ -10,6 +11,7 @@ import {BeforeSwapDelta, toBeforeSwapDelta} from "@uniswap/v4-core/src/types/Bef
 import {BaseHook} from "v4-periphery/src/utils/BaseHook.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
+import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 // import {BeforeSwapDeltaLibrary} from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
 
 import "forge-std/console.sol";
@@ -148,7 +150,7 @@ contract ProxyHook is BaseHook, IHookCommon {
         // Note: This is a placeholder for future implementation
         // The core hook reference is already set in constructor
 
-        return this._beforeInitialize.selector;
+        return this.beforeInitialize.selector;
     }
 
     function _beforeAddLiquidity(
@@ -162,7 +164,7 @@ contract ProxyHook is BaseHook, IHookCommon {
 
     function unlockCallback(
         bytes calldata data
-    ) external override onlyPoolManager returns (bytes memory) {
+    ) external onlyPoolManager returns (bytes memory) {
         LiquidityCallbackData memory callbackData = abi.decode(
             data,
             (LiquidityCallbackData)
@@ -244,25 +246,25 @@ contract ProxyHook is BaseHook, IHookCommon {
         ModifyLiquidityParams calldata params,
         BalanceDelta delta,
         ActionType actionType
-    ) external virtual nonReentrant onlyCoreHook returns (uint256) {
+    ) external virtual onlyCoreHook returns (uint256) {
         // require(block.timestamp <= deadline, "Deadline not met");
 
         // Get the LCC tokens for the core pool
-        LiquidityCommitmentCertificate lccToken0 = Currency.unwrap(
-            corePoolkey.currency0
-        );
-        LiquidityCommitmentCertificate lccToken1 = Currency.unwrap(
-            corePoolkey.currency1
-        );
+        LiquidityCommitmentCertificate lccToken0 = LiquidityCommitmentCertificate(
+                Currency.unwrap(corePoolkey.currency0)
+            );
+        LiquidityCommitmentCertificate lccToken1 = LiquidityCommitmentCertificate(
+                Currency.unwrap(corePoolkey.currency1)
+            );
 
-        IPoolManager(self.poolManager).unlock(
+        IPoolManager(poolManager).unlock(
             abi.encode(
                 LiquidityCallbackData(
-                    delta.amount0(),
-                    delta.amount1(),
+                    _safeInt128ToUint256(delta.amount0()),
+                    _safeInt128ToUint256(delta.amount1()),
                     Currency.wrap(lccToken0.underlyingAsset()),
                     Currency.wrap(lccToken1.underlyingAsset()),
-                    self.poolManager,
+                    address(poolManager),
                     actionType
                 )
             )
@@ -379,7 +381,7 @@ contract ProxyHook is BaseHook, IHookCommon {
         if (params.zeroForOne) {
             // If user is selling Token 0 and buying Token 1
             // First mint LCC tokens for the input amount
-            lccTokenForCurrency0.mint(address(this), amountIn);
+            lccTokenForCurrency0.mint(amountIn);
 
             // Settle LCC tokens to the PoolManager
             // Accounts for LCC of 0 IN for the Core Pool Swap
@@ -413,7 +415,7 @@ contract ProxyHook is BaseHook, IHookCommon {
         } else {
             // If user is selling Token 1 (IN) and buying Token 0 (OUT)
             // First mint LCC tokens for the input amount
-            lccTokenForCurrency1.mint(address(this), amountIn);
+            lccTokenForCurrency1.mint(amountIn);
 
             // Settle LCC tokens to the PoolManager
             lccCurrencyForCurrency1.settle(
