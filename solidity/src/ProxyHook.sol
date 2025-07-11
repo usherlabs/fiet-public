@@ -58,7 +58,7 @@ contract ProxyHook is BaseHook, IHookCommon {
 
     address public immutable marketFactory;
 
-    address public immutable coreHook; // specific to proxy hook.
+    address public coreHook; // specific to proxy hook.
 
     mapping(PoolId => PoolKey) public corePoolKey;
 

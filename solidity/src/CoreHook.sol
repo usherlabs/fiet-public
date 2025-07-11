@@ -26,7 +26,7 @@ contract CoreHook is BaseHook, IHookCommon {
 
     address public immutable marketFactory;
 
-    address public immutable proxyHook;
+    address public proxyHook;
 
     modifier onlyFactory() {
         if (msg.sender != marketFactory) {
@@ -74,13 +74,13 @@ contract CoreHook is BaseHook, IHookCommon {
 
     function _beforeInitialize(
         address sender,
-        PoolKey calldata key,
+        PoolKey calldata,
         uint160
     ) internal pure virtual override returns (bytes4) {
         if (sender != marketFactory) {
             revert InvalidInitialiser();
         }
-        return this._beforeInitialize.selector;
+        return this.beforeInitialize.selector;
     }
 
     // function _afterInitialize(address, PoolKey calldata key, uint160, bytes calldata)
@@ -93,7 +93,7 @@ contract CoreHook is BaseHook, IHookCommon {
     // }
 
     function _afterAddLiquidity(
-        address sender,
+        address,
         PoolKey calldata key,
         ModifyLiquidityParams calldata params,
         BalanceDelta delta,
@@ -116,7 +116,7 @@ contract CoreHook is BaseHook, IHookCommon {
     }
 
     function _afterRemoveLiquidity(
-        address sender,
+        address,
         PoolKey calldata key,
         ModifyLiquidityParams calldata params,
         BalanceDelta delta,
