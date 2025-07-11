@@ -41,9 +41,6 @@ deploy-tokenB:
 		--broadcast $(VERIFY_FLAGS) -vvv
 
 deploy:
-	$(FORGE) script $(SCRIPT_DIR)/TestDeploy.s.sol \
-		--rpc-url $(RPC_URL) \
-		--broadcast $(VERIFY_FLAGS) -vvv
 	$(FORGE) script $(SCRIPT_DIR)/DeployComplete.s.sol \
 		--rpc-url $(RPC_URL) \
 		--broadcast $(VERIFY_FLAGS) -vvv

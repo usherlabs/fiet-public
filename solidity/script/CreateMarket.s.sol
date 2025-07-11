@@ -6,6 +6,8 @@ import {MarketFactory} from "../src/MarketFactory.sol";
 import {SepoliaConstants} from "./constants/Sepolia.sol";
 import {ScriptHelper} from "./deployments/ScriptHelper.s.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {CurrencySortHelper} from "./CurrencySortHelper.sol";
 
 /**
  * @title CreateMarketScript
@@ -24,6 +26,8 @@ contract CreateMarketScript is ScriptHelper {
     // Market parameters - can be configured via environment variables
     address public underlyingAsset0;
     address public underlyingAsset1;
+    Currency public underlyingCurrency0;
+    Currency public underlyingCurrency1;
     uint24 public corePoolFee;
     int24 public tickSpacing;
     uint160 public initialSqrtPriceX96;
@@ -100,6 +104,15 @@ contract CreateMarketScript is ScriptHelper {
         } catch {
             underlyingAsset1 = readAddress("usdcToken");
         }
+
+        (Currency currency0, Currency currency1) = CurrencySortHelper
+            .sortAddresses(underlyingAsset0, underlyingAsset1);
+
+        underlyingCurrency0 = currency0;
+        underlyingCurrency1 = currency1;
+
+        underlyingAsset0 = Currency.unwrap(underlyingCurrency0);
+        underlyingAsset1 = Currency.unwrap(underlyingCurrency1);
 
         try vm.envUint("CORE_POOL_FEE") returns (uint256 fee) {
             corePoolFee = uint24(fee);
@@ -185,11 +198,11 @@ contract CreateMarketScript is ScriptHelper {
 
         // Get LCC tokens
         MarketFactory factory = MarketFactory(marketFactory);
-        address lccToken0 = factory.getLCC(underlyingAsset0);
-        address lccToken1 = factory.getLCC(underlyingAsset1);
+        address lccTokenOfAsset0 = factory.getLCC(underlyingAsset0);
+        address lccTokenOfAsset1 = factory.getLCC(underlyingAsset1);
 
-        console.log("LCC Token 0:", lccToken0);
-        console.log("LCC Token 1:", lccToken1);
+        console.log("LCC Token 0:", lccTokenOfAsset0);
+        console.log("LCC Token 1:", lccTokenOfAsset1);
 
         // Verify pool relationships
         PoolId storedProxyId = factory.coreToProxy(corePoolId);
@@ -210,9 +223,9 @@ contract CreateMarketScript is ScriptHelper {
 
         // Create a unique market identifier
         string memory marketId = string.concat(
-            vm.toString(underlyingAsset0),
+            vm.toString(Currency.unwrap(underlyingCurrency0)),
             "_",
-            vm.toString(underlyingAsset1),
+            vm.toString(Currency.unwrap(underlyingCurrency1)),
             "_",
             vm.toString(corePoolFee)
         );
@@ -227,11 +240,11 @@ contract CreateMarketScript is ScriptHelper {
         );
         writeString(
             string.concat(marketId, "_underlyingAsset0"),
-            vm.toString(underlyingAsset0)
+            vm.toString(Currency.unwrap(underlyingCurrency0))
         );
         writeString(
             string.concat(marketId, "_underlyingAsset1"),
-            vm.toString(underlyingAsset1)
+            vm.toString(Currency.unwrap(underlyingCurrency1))
         );
         writeString(
             string.concat(marketId, "_corePoolFee"),
@@ -271,8 +284,12 @@ contract CreateMarketScript is ScriptHelper {
         console.log("Pool relationships verified");
 
         // Verify LCC tokens exist
-        address lccToken0 = factory.getLCC(underlyingAsset0);
-        address lccToken1 = factory.getLCC(underlyingAsset1);
+        address lccToken0 = factory.getLCC(
+            Currency.unwrap(underlyingCurrency0)
+        );
+        address lccToken1 = factory.getLCC(
+            Currency.unwrap(underlyingCurrency1)
+        );
 
         require(lccToken0 != address(0), "LCC token 0 not found");
         require(lccToken1 != address(0), "LCC token 1 not found");
@@ -281,11 +298,13 @@ contract CreateMarketScript is ScriptHelper {
 
         // Verify underlying assets
         require(
-            factory.getUnderlyingAsset(lccToken0) == underlyingAsset0,
+            factory.getUnderlyingAsset(lccToken0) ==
+                Currency.unwrap(underlyingCurrency0),
             "LCC token 0 underlying mismatch"
         );
         require(
-            factory.getUnderlyingAsset(lccToken1) == underlyingAsset1,
+            factory.getUnderlyingAsset(lccToken1) ==
+                Currency.unwrap(underlyingCurrency1),
             "LCC token 1 underlying mismatch"
         );
 
@@ -325,6 +344,14 @@ contract CreateMarketScript is ScriptHelper {
         console.log("Core Pool Fee:", corePoolFee);
         console.log("Tick Spacing:", tickSpacing);
         console.log("Initial Sqrt Price X96:", initialSqrtPriceX96);
+
+        (Currency currency0, Currency currency1) = CurrencySortHelper
+            .sortAddresses(
+                address(underlyingAsset0),
+                address(underlyingAsset1)
+            );
+        underlyingCurrency0 = currency0;
+        underlyingCurrency1 = currency1;
 
         vm.startBroadcast(deployerPrivateKey);
 

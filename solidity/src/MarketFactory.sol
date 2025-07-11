@@ -112,7 +112,8 @@ contract MarketFactory is IMarketFactory, Ownable {
             underlyingAsset0,
             underlyingAsset1,
             tickSpacing,
-            proxyHook
+            proxyHook,
+            initialSqrtPriceX96 // Pass the initial price for 1:1 ratio
         );
 
         corePoolId = corePoolKey.toId();
@@ -222,7 +223,8 @@ contract MarketFactory is IMarketFactory, Ownable {
         address underlyingAsset0,
         address underlyingAsset1,
         int24 proxyPoolTickSpacing,
-        address proxyHookInstance
+        address proxyHookInstance,
+        uint160 initialSqrtPriceX96 // Add parameter for initial price
     ) internal returns (PoolKey memory poolKey) {
         // Create pool key for proxy pool
         (Currency currency0, Currency currency1) = _sortCurrencies(
@@ -244,7 +246,7 @@ contract MarketFactory is IMarketFactory, Ownable {
         }
 
         // Initialize the pool
-        _poolManager.initialize(poolKey, 0);
+        _poolManager.initialize(poolKey, initialSqrtPriceX96); // Use provided initial price instead of 0
     }
 
     /**
