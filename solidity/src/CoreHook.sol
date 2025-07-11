@@ -76,7 +76,7 @@ contract CoreHook is BaseHook, IHookCommon {
         address sender,
         PoolKey calldata,
         uint160
-    ) internal pure virtual override returns (bytes4) {
+    ) internal view virtual override returns (bytes4) {
         if (sender != marketFactory) {
             revert InvalidInitialiser();
         }

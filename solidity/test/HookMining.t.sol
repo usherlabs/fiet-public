@@ -33,7 +33,7 @@ contract HookTest is Test {
         factory.setHooks(address(coreHook), address(proxyHook));
     }
 
-    function testCoreHookPermissions() public {
+    function testCoreHookPermissions() public view {
         Hooks.Permissions memory perms = coreHook.getHookPermissions();
         assertTrue(perms.beforeInitialize);
         assertFalse(perms.afterInitialize);
@@ -45,7 +45,7 @@ contract HookTest is Test {
         assertFalse(perms.afterSwap);
     }
 
-    function testProxyHookPermissions() public {
+    function testProxyHookPermissions() public view {
         Hooks.Permissions memory perms = proxyHook.getHookPermissions();
         assertTrue(perms.beforeInitialize);
         assertFalse(perms.afterInitialize);
@@ -58,7 +58,7 @@ contract HookTest is Test {
         assertTrue(perms.beforeSwapReturnDelta);
     }
 
-    function testActivate() public {
+    function testActivate() public view {
         // Activation is called in setHooks, test if hooks have factory set or something
         assertEq(address(coreHook.marketFactory()), address(factory));
         assertEq(address(proxyHook.marketFactory()), address(factory));

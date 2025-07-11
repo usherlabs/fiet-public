@@ -54,7 +54,7 @@ contract TestDeployScript is Script {
         console.log("\n=== All tests passed! ===");
     }
 
-    function _testCoreHookMining() internal {
+    function _testCoreHookMining() internal view {
         // Create a mock MarketFactory for testing
         address mockMarketFactory = address(
             0x3333333333333333333333333333333333333333
@@ -84,7 +84,7 @@ contract TestDeployScript is Script {
         console.log("CoreHook mining test passed");
     }
 
-    function _testProxyHookMining() internal {
+    function _testProxyHookMining() internal view {
         // Create a mock MarketFactory for testing
         address mockMarketFactory = address(
             0x3333333333333333333333333333333333333333

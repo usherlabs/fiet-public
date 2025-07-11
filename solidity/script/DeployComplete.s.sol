@@ -198,7 +198,7 @@ contract CompleteDeployScript is ScriptHelper {
      * @dev Activates hooks by setting cross-references
      * This is called after hooks are set in MarketFactory to verify the relationship
      */
-    function _activateHooks() internal {
+    function _activateHooks() internal view {
         // Verify the cross-references are set correctly after setHooks() call
 
         CoreHook coreHookInstance = CoreHook(coreHook);
@@ -249,7 +249,7 @@ contract CompleteDeployScript is ScriptHelper {
     function _verifyHookFlags(
         address hookAddress,
         uint160 expectedFlags
-    ) internal view {
+    ) internal pure {
         uint160 hookFlags = uint160(hookAddress) & Hooks.ALL_HOOK_MASK;
         require(hookFlags == expectedFlags, "Hook flags mismatch");
     }
@@ -314,23 +314,9 @@ contract CompleteDeployScript is ScriptHelper {
             address marketFactoryAddr
         )
     {
-        try this.readAddress("coreHook") returns (address core) {
-            coreHookAddr = core;
-        } catch {
-            coreHookAddr = address(0);
-        }
-
-        try this.readAddress("proxyHook") returns (address proxy) {
-            proxyHookAddr = proxy;
-        } catch {
-            proxyHookAddr = address(0);
-        }
-
-        try this.readAddress("marketFactory") returns (address factory) {
-            marketFactoryAddr = factory;
-        } catch {
-            marketFactoryAddr = address(0);
-        }
+        coreHookAddr = readAddress("coreHook");
+        proxyHookAddr = readAddress("proxyHook");
+        marketFactoryAddr = readAddress("marketFactory");
 
         console.log("Deployment addresses from JSON:");
         console.log("CoreHook:", coreHookAddr);

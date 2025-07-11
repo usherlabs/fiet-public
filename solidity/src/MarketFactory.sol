@@ -20,8 +20,8 @@ contract MarketFactory is IMarketFactory, Ownable {
     using PoolIdLibrary for PoolKey;
 
     IPoolManager private immutable _poolManager;
-    address public immutable coreHook;
-    address public immutable proxyHook;
+    address public coreHook;
+    address public proxyHook;
 
     // Mapping from underlying asset to LCC token
     mapping(address => address) public underlyingToLCC;
@@ -59,11 +59,13 @@ contract MarketFactory is IMarketFactory, Ownable {
     ) external onlyOwner {
         // These variables are immutable. Can only be set once
         // Tie this factory to these hooks as LCCs/markets/hooks are tied to the factory.
-        coreHook = _coreHook;
-        proxyHook = _proxyHook;
+        if (_coreHook == address(0) && _proxyHook == address(0)) {
+            coreHook = _coreHook;
+            proxyHook = _proxyHook;
 
-        IHookCommon(coreHook).activate();
-        IHookCommon(proxyHook).activate();
+            IHookCommon(coreHook).activate();
+            IHookCommon(proxyHook).activate();
+        }
     }
 
     /**
@@ -278,17 +280,9 @@ contract MarketFactory is IMarketFactory, Ownable {
 
     /**
      * @notice Removes protocol bounds from LCC tokens
-     * @param lccToken The LCC token address
      * @param _bounds Array of addresses to remove from bounds
      */
-    function removeBounds(
-        address lccToken,
-        address[] calldata _bounds
-    ) external onlyOwner {
-        if (lccToFactory[lccToken] != address(this)) {
-            revert InvalidBound();
-        }
-
+    function removeBounds(address[] calldata _bounds) external onlyOwner {
         for (uint256 i = 0; i < _bounds.length; i++) {
             bounds[_bounds[i]] = false;
         }

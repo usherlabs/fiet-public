@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import {Script, console} from "forge-std/Script.sol";
+import "forge-std/Script.sol";
 import {MarketFactory} from "../src/MarketFactory.sol";
 import {SepoliaConstants} from "./constants/Sepolia.sol";
 import {ScriptHelper} from "./deployments/ScriptHelper.s.sol";
@@ -25,7 +25,7 @@ contract CreateMarketScript is ScriptHelper {
     address public underlyingAsset0;
     address public underlyingAsset1;
     uint24 public corePoolFee;
-    uint24 public tickSpacing;
+    int24 public tickSpacing;
     uint160 public initialSqrtPriceX96;
 
     // Deployed contract addresses
@@ -80,14 +80,8 @@ contract CreateMarketScript is ScriptHelper {
     function _loadDeploymentAddresses() internal {
         _setFilename("sepolia");
 
-        try readAddress("marketFactory") returns (address factory) {
-            marketFactory = factory;
-            console.log("MarketFactory address loaded:", marketFactory);
-        } catch {
-            revert(
-                "MarketFactory address not found in deployment file. Please run DeployComplete.s.sol first."
-            );
-        }
+        marketFactory = readAddress("marketFactory");
+        console.log("MarketFactory address loaded:", marketFactory);
     }
 
     /**
@@ -116,7 +110,7 @@ contract CreateMarketScript is ScriptHelper {
         }
 
         try vm.envUint("TICK_SPACING") returns (uint256 spacing) {
-            tickSpacing = uint24(spacing);
+            tickSpacing = int24(uint24(spacing));
         } catch {
             // Default tick spacing for 0.3% fee
             tickSpacing = 60;
@@ -178,10 +172,16 @@ contract CreateMarketScript is ScriptHelper {
     /**
      * @dev Logs detailed market information
      */
-    function _logMarketDetails() internal {
+    function _logMarketDetails() internal view {
         console.log("\n=== Market Details ===");
-        console.log("Core Pool ID:", PoolId.unwrap(corePoolId));
-        console.log("Proxy Pool ID:", PoolId.unwrap(proxyPoolId));
+        console.log(
+            "Core Pool ID:",
+            string.concat("", vm.toString(PoolId.unwrap(corePoolId)))
+        );
+        console.log(
+            "Proxy Pool ID:",
+            string.concat("0x", vm.toString(PoolId.unwrap(proxyPoolId)))
+        );
 
         // Get LCC tokens
         MarketFactory factory = MarketFactory(marketFactory);
@@ -193,10 +193,11 @@ contract CreateMarketScript is ScriptHelper {
 
         // Verify pool relationships
         PoolId storedProxyId = factory.coreToProxy(corePoolId);
-        PoolId storedCoreId = factory.proxyToCore(proxyPoolId);
 
-        require(storedProxyId == proxyPoolId, "Core to proxy mapping mismatch");
-        require(storedCoreId == corePoolId, "Proxy to core mapping mismatch");
+        require(
+            PoolId.unwrap(storedProxyId) == PoolId.unwrap(proxyPoolId),
+            "Core to proxy mapping mismatch"
+        );
 
         console.log("Pool relationships verified");
     }
@@ -261,10 +262,11 @@ contract CreateMarketScript is ScriptHelper {
 
         // Verify pool relationships
         PoolId storedProxyId = factory.coreToProxy(corePoolId);
-        PoolId storedCoreId = factory.proxyToCore(proxyPoolId);
 
-        require(storedProxyId == proxyPoolId, "Core to proxy mapping mismatch");
-        require(storedCoreId == corePoolId, "Proxy to core mapping mismatch");
+        require(
+            PoolId.unwrap(storedProxyId) == PoolId.unwrap(proxyPoolId),
+            "Core to proxy mapping mismatch"
+        );
 
         console.log("Pool relationships verified");
 
@@ -299,7 +301,7 @@ contract CreateMarketScript is ScriptHelper {
         address _underlyingAsset0,
         address _underlyingAsset1,
         uint24 _corePoolFee,
-        uint24 _tickSpacing,
+        int24 _tickSpacing,
         uint160 _initialSqrtPriceX96
     ) external {
         uint256 deployerPrivateKey = uint256(vm.envBytes32("PRIVATE_KEY"));

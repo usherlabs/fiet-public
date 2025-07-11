@@ -139,9 +139,9 @@ contract ProxyHook is BaseHook, IHookCommon {
 
     function _beforeInitialize(
         address sender,
-        PoolKey calldata key,
+        PoolKey calldata,
         uint160
-    ) internal pure virtual override returns (bytes4) {
+    ) internal view virtual override returns (bytes4) {
         if (sender != marketFactory) {
             revert InvalidInitialiser();
         }
@@ -237,16 +237,17 @@ contract ProxyHook is BaseHook, IHookCommon {
                 false // mint` = `true` i.e. we're  claiming erc20
             );
         }
+        return bytes("");
     }
 
     // Method called by the Core Hook notifying that Direct Liquidity Provision occurred.
     // We notify the Proxy Hook so that the BeforeSwapDelta can facilitate liquidity management of native underlying tokens.
     function onDirectLP(
         PoolKey calldata corePoolkey,
-        ModifyLiquidityParams calldata params,
+        ModifyLiquidityParams calldata,
         BalanceDelta delta,
         ActionType actionType
-    ) external virtual onlyCoreHook returns (uint256) {
+    ) external virtual onlyCoreHook {
         // require(block.timestamp <= deadline, "Deadline not met");
 
         // Get the LCC tokens for the core pool

@@ -10,6 +10,7 @@ import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {MockERC20} from "solmate/test/utils/mocks/MockERC20.sol";
 
 import {MarketFactory} from "../src/MarketFactory.sol";
+import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
 import {CoreHook} from "../src/CoreHook.sol";
 import {ProxyHook} from "../src/ProxyHook.sol";
 import {LiquidityCommitmentCertificate} from "../src/LCC.sol";
@@ -73,11 +74,11 @@ contract MarketFactoryTest is Test {
         assertEq(factory.getUnderlyingAsset(lcc1), address(token1));
     }
 
-    function testGetCoreHook() public {
+    function testGetCoreHook() public view {
         assertEq(factory.getCoreHook(), coreHookAddr);
     }
 
-    function testGetProxyHook() public {
+    function testGetProxyHook() public view {
         assertEq(factory.getProxyHook(), proxyHookAddr);
     }
 
@@ -91,18 +92,16 @@ contract MarketFactoryTest is Test {
             79228162514264337593543950336
         );
 
-        address lcc0 = factory.getLCC(address(token0));
-
         address[] memory newBounds = new address[](1);
         newBounds[0] = makeAddr("newBound");
 
         vm.prank(owner);
-        factory.addBounds(lcc0, newBounds);
-        assertTrue(LiquidityCommitmentCertificate(lcc0).bounds(newBounds[0]));
+        factory.addBounds(newBounds);
+        assertTrue(factory.bounds(newBounds[0]));
 
         vm.prank(owner);
-        factory.removeBounds(lcc0, newBounds);
-        assertFalse(LiquidityCommitmentCertificate(lcc0).bounds(newBounds[0]));
+        factory.removeBounds(newBounds);
+        assertFalse(factory.bounds(newBounds[0]));
     }
 
     function testIsBound() public {
@@ -115,21 +114,20 @@ contract MarketFactoryTest is Test {
             79228162514264337593543950336
         );
 
-        address lcc0 = factory.getLCC(address(token0));
         address boundAddr = makeAddr("bound");
 
         address[] memory bounds = new address[](1);
         bounds[0] = boundAddr;
 
         vm.prank(owner);
-        factory.addBounds(lcc0, bounds);
+        factory.addBounds(bounds);
 
-        assertTrue(factory.isBound(lcc0, boundAddr));
+        assertTrue(factory.bounds(boundAddr));
     }
 
     function testRevertInvalidUnderlying() public {
         vm.prank(owner);
-        vm.expectRevert(MarketFactory.InvalidUnderlyingAsset.selector);
+        vm.expectRevert(IMarketFactory.InvalidUnderlyingAsset.selector);
         factory.createMarket(
             address(0),
             address(token1),

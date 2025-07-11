@@ -325,13 +325,13 @@ contract PositionManagerLiquidityScript is ScriptHelper {
         checkAndApproveErc20(
             user,
             address(permit2),
-            lccUSDCToken,
+            IERC20(address(lccUSDCToken)),
             amount0Desired
         );
         checkAndApproveErc20(
             user,
             address(permit2),
-            lccUSDTToken,
+            IERC20(address(lccUSDTToken)),
             amount1Desired
         );
         checkAndApproveErc20(

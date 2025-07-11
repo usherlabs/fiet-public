@@ -96,23 +96,21 @@ interface IMarketFactory {
         address underlyingAsset0,
         address underlyingAsset1,
         uint24 corePoolFee,
-        uint24 tickSpacing,
+        int24 tickSpacing,
         uint160 initialSqrtPriceX96
     ) external returns (PoolId corePoolId, PoolId proxyPoolId);
 
     /**
      * @notice Adds protocol bounds to LCC tokens
-     * @param lccToken The LCC token address
      * @param bounds Array of addresses to add as bounds
      */
-    function addBounds(address lccToken, address[] calldata bounds) external;
+    function addBounds(address[] calldata bounds) external;
 
     /**
      * @notice Removes protocol bounds from LCC tokens
-     * @param lccToken The LCC token address
      * @param bounds Array of addresses to remove from bounds
      */
-    function removeBounds(address lccToken, address[] calldata bounds) external;
+    function removeBounds(address[] calldata bounds) external;
 
     /**
      * @notice Gets the pool manager address

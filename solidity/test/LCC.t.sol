@@ -42,7 +42,7 @@ contract LCCTest is Test {
         );
     }
 
-    function testConstructor() public {
+    function testConstructor() public view {
         assertEq(lcc.underlyingAsset(), address(underlying));
         assertEq(lcc.marketFactory(), factory);
         assertEq(

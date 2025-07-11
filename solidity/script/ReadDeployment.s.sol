@@ -10,7 +10,7 @@ import {ScriptHelper} from "./deployments/ScriptHelper.s.sol";
  * @dev Useful for other scripts that need to reference deployed contracts
  */
 contract ReadDeploymentScript is ScriptHelper {
-    function run() external view {
+    function run() external {
         _setFilename("sepolia");
         console.log(
             "Reading deployment addresses from script/deployments/sepolia_deployments.json..."
