@@ -19,9 +19,7 @@ import {ProxyHook} from "./ProxyHook.sol";
  *     Furthermore, we need to know when Direct LP occurs, as this determines whether the underlying native tokens are settled to the Pool Manager.
  */
 contract CoreHook is BaseHook, IHookCommon {
-    error InvalidUnderlyingAsset();
     error InvalidInitialiser();
-    error CounterpartHookNotSet();
     error InvalidSender();
 
     address public immutable marketFactory;

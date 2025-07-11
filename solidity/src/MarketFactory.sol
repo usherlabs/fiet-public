@@ -59,12 +59,15 @@ contract MarketFactory is IMarketFactory, Ownable {
     ) external onlyOwner {
         // These variables are immutable. Can only be set once
         // Tie this factory to these hooks as LCCs/markets/hooks are tied to the factory.
-        if (_coreHook == address(0) && _proxyHook == address(0)) {
+        if (coreHook == address(0) && proxyHook == address(0)) {
+            if (_coreHook == address(0) || _proxyHook == address(0)) {
+                revert("Invalid hook addresses");
+            }
             coreHook = _coreHook;
             proxyHook = _proxyHook;
 
-            IHookCommon(coreHook).activate();
-            IHookCommon(proxyHook).activate();
+            IHookCommon(_coreHook).activate();
+            IHookCommon(_proxyHook).activate();
         }
     }
 

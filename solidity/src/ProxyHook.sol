@@ -23,7 +23,6 @@ contract ProxyHook is BaseHook, IHookCommon {
     using CurrencySettler for Currency;
 
     error AddLiquidityThroughHookNotAllowed();
-    error UnsafeInt128ToUint256Conversion(int128 value);
     error InvalidInitialiser();
     error InvalidSender();
 
