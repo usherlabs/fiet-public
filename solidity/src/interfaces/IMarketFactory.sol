@@ -23,7 +23,7 @@ interface IMarketFactory {
     );
 
     event LCCCreated(address indexed underlyingAsset, address indexed lccToken);
-    event BoundsUpdated(address indexed lccToken, address[] bounds, bool added);
+    event BoundsUpdated(address[] bounds, bool added);
 
     // ============ ERRORS ============
 
@@ -50,7 +50,9 @@ interface IMarketFactory {
      * @param lccToken The LCC token address
      * @return The underlying asset address
      */
-    function getUnderlyingAsset(address lccToken) external view returns (address);
+    function getUnderlyingAsset(
+        address lccToken
+    ) external view returns (address);
 
     /**
      * @notice Gets the proxy pool ID for a given core pool ID
@@ -60,32 +62,11 @@ interface IMarketFactory {
     function coreToProxy(PoolId corePoolId) external view returns (PoolId);
 
     /**
-     * @notice Gets the core pool ID for a given proxy pool ID
-     * @param proxyPoolId The proxy pool ID
-     * @return The core pool ID
-     */
-    function proxyToCore(PoolId proxyPoolId) external view returns (PoolId);
-
-    /**
-     * @notice Checks if an address is a bound for an LCC token
-     * @param lccToken The LCC token address
-     * @param bound The address to check
-     * @return True if the address is a bound
-     */
-    function isBound(address lccToken, address bound) external view returns (bool);
-
-    /**
      * @notice Checks if an address is a protocol bound
      * @param bound The address to check
      * @return True if the address is a protocol bound
      */
     function bounds(address bound) external view returns (bool);
-
-    /**
-     * @notice Gets the pool manager address
-     * @return The pool manager address
-     */
-    function poolManager() external view returns (address);
 
     /**
      * @notice Gets the core hook address
@@ -132,4 +113,10 @@ interface IMarketFactory {
      * @param bounds Array of addresses to remove from bounds
      */
     function removeBounds(address lccToken, address[] calldata bounds) external;
+
+    /**
+     * @notice Gets the pool manager address
+     * @return The pool manager address
+     */
+    function poolManager() external view returns (address);
 }

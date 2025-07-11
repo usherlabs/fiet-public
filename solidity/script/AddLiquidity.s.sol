@@ -64,7 +64,7 @@ contract PositionManagerLiquidityScript is ScriptHelper {
         // Load deployment addresses
         _setFilename("sepolia");
         address marketFactoryAddr = readAddress("marketFactory");
-        MarketFactory factory = MarketFactory(marketFactoryAddr);
+        IMarketFactory factory = IMarketFactory(marketFactoryAddr);
         usdcToken = readAddress("usdcToken");
         usdtToken = readAddress("usdtToken");
         proxyHook = ProxyHook(readAddress("proxyHook"));

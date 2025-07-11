@@ -9,7 +9,7 @@
     "format:check": "forge fmt --check",
     "slither": "slither .",
     "mythril": "myth analyze src/",
-    "security": "npm run slither && npm run mythril"
+    "security": "pnpm run slither && pnpm run mythril"
   },
   "devDependencies": {
     "solhint": "^4.0.0"

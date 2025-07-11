@@ -13,13 +13,11 @@ FORGE=forge
 SCRIPT_DIR=script
 DEPLOYMENTS=$(SCRIPT_DIR)/deployments/deployments.json
 
-.PHONY: all build fork swap \
+.PHONY: build fork swap \
 	deploy-tokenB deploy-lccTokenA deploy-lccTokenB deploy-proxyHook deploy-corePool deploy-proxyPool \
 
 # === All ===
-all: deploy-tokenA deploy-tokenB deploy create-market
-
-swap: deploy-position deploy-swap
+dev: deploy-tokenA deploy-tokenB deploy create-market
 
 # === Build ===
 build:
@@ -28,7 +26,7 @@ build:
 # === Fork ===
 fork:
 	@echo "⛽ Starting anvil forked from Arbitrum Sepolia..."
-	anvil --fork-url $(ARB_SEPOLIA_RPC_URL) --port $(ANVIL_PORT)  --steps-tracing 
+	anvil --fork-url $(ARB_SEPOLIA_RPC_URL) --port $(ANVIL_PORT)  --steps-tracing
 # --gas-limit 30000000 --block-time 1
 
 # === Individual deployments ===
@@ -42,67 +40,45 @@ deploy-tokenB:
 		--rpc-url $(RPC_URL) \
 		--broadcast $(VERIFY_FLAGS) -vvv
 
-# === lcc USDC ===
-deploy-lccTokenA:
-	$(FORGE) script $(SCRIPT_DIR)/MockERC20script.s.sol:ITokenUSDCScript \
+deploy:
+	$(FORGE) script $(SCRIPT_DIR)/TestDeploy.s.sol \
+		--rpc-url $(RPC_URL) \
+		--broadcast $(VERIFY_FLAGS) -vvv
+	$(FORGE) script $(SCRIPT_DIR)/DeployComplete.s.sol \
 		--rpc-url $(RPC_URL) \
 		--broadcast $(VERIFY_FLAGS) -vvv
 
-# === lcc USDT ===
-deploy-lccTokenB:
-	$(FORGE) script $(SCRIPT_DIR)/MockERC20script.s.sol:ITokenUSDTScript \
-		--rpc-url $(RPC_URL) \
-		--broadcast $(VERIFY_FLAGS) -vvv
-
-# === Proxy hook ===
-deploy-proxyHook:
-	$(FORGE) script $(SCRIPT_DIR)/ProxyHookScript.s.sol \
-		--rpc-url $(RPC_URL) \
-		--broadcast $(VERIFY_FLAGS) -vvv
-
-# === Core Pool: lcc USDT/USDC ===
-deploy-corePool:
-	$(FORGE) script $(SCRIPT_DIR)/UniSwapV4PoolScript.s.sol:CorePoolScript \
+create-market:
+	$(FORGE) script $(SCRIPT_DIR)/CreateMarket.s.sol \
 		--rpc-url $(RPC_URL) \
 		--broadcast -vvv
 
-# === Proxy Pool: USDT/USDC ===
-deploy-proxyPool:
-	$(FORGE) script $(SCRIPT_DIR)/UniSwapV4PoolScript.s.sol:ProxyPoolScript \
-		--rpc-url $(RPC_URL) \
-		--broadcast -vvv
-
-deploy-position:
-	$(FORGE) script $(SCRIPT_DIR)/PositionManagerLiquidityScript.s.sol \
-		--rpc-url $(RPC_URL) \
-		--broadcast -vvv
-
-deploy-swap:
+swap:
 	$(FORGE) script $(SCRIPT_DIR)/SwapV4.s.sol \
 		--rpc-url $(RPC_URL) \
 		--broadcast -vvv
 
 # Linting and Formatting
-.PHONY: lint lint-fix format format-check install-deps
+.PHONY: install-deps lint lint-fix format format-check
 
 install-deps:
-	npm install
+	pnpm install
 
 lint:
-	npm run lint
+	pnpm run lint
 
 lint-fix:
-	npm run lint:fix
+	pnpm run lint:fix
 
 format:
-	npm run format
+	pnpm run format
 
 format-check:
-	npm run format:check
+	pnpm run format:check
 
 # Security analysis
 security:
-	npm run security
+	pnpm run security
 
 # Combined quality check
 quality: format-check lint security

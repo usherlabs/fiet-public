@@ -103,9 +103,6 @@ contract SwapV4 is ScriptHelper {
             balanceBeforeCurrency0 = 0;
         }
 
-        // Whitelist the proxyHook as custodian for LCC tokens
-        // whitelistProxyHookAsCustodian();
-
         vm.startBroadcast(userPrivateKey);
 
         console.log("Approving tokens...");
@@ -141,28 +138,6 @@ contract SwapV4 is ScriptHelper {
             "Balance After: ",
             balanceAfterCurrency1 / 1e18
         );
-    }
-
-    function whitelistProxyHookAsCustodian() internal {
-        console.log("Whitelisting proxyHook as custodian for LCC tokens...");
-
-        // Get deployer private key for whitelisting
-        uint256 deployerPrivateKey = uint256(vm.envBytes32("PRIVATE_KEY"));
-
-        // Required to separate the broadcast as using deployer private key
-        vm.startBroadcast(deployerPrivateKey);
-
-        // // Approve Hook as custodian for LCC tokens
-        // approveLccCustodian(address(hook), lccUSDCToken);
-        // approveLccCustodian(address(hook), lccUSDTToken);
-
-        // Also approve Pool manager as custodian
-        // approveLccCustodian(address(poolManager), lccUSDCToken);
-        // approveLccCustodian(address(poolManager), lccUSDTToken);
-
-        vm.stopBroadcast();
-
-        console.log("ProxyHook whitelisted as custodian for LCC tokens");
     }
 
     function approveTokenWithPermit2(address token) public {

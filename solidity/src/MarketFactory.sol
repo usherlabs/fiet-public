@@ -35,9 +35,6 @@ contract MarketFactory is IMarketFactory, Ownable {
     // Mapping from core pool ID to proxy pool ID
     mapping(PoolId => PoolId) public coreToProxy;
 
-    // Mapping from proxy pool ID to core pool ID
-    mapping(PoolId => PoolId) public proxyToCore;
-
     // Mapping of addresses that found protocol-bounds
     mapping(address => bool) public bounds;
 
@@ -118,7 +115,6 @@ contract MarketFactory is IMarketFactory, Ownable {
 
         // Store the relationship between core and proxy pools
         coreToProxy[corePoolId] = proxyPoolId;
-        proxyToCore[proxyPoolId] = corePoolId;
 
         emit MarketCreated(
             corePoolId,
@@ -270,19 +266,14 @@ contract MarketFactory is IMarketFactory, Ownable {
 
     /**
      * @notice Adds protocol bounds to LCC tokens
-     * @param lccToken The LCC token address
      * @param _bounds Array of addresses to add as bounds
      */
-    function addBounds(
-        address lccToken,
-        address[] calldata _bounds
-    ) external onlyOwner {
-        if (lccToFactory[lccToken] != address(this)) {
-            revert InvalidBound();
+    function addBounds(address[] calldata _bounds) external onlyOwner {
+        for (uint256 i = 0; i < _bounds.length; i++) {
+            bounds[_bounds[i]] = true;
         }
 
-        LiquidityCommitmentCertificate(lccToken).addBounds(_bounds);
-        emit BoundsUpdated(lccToken, _bounds, true);
+        emit BoundsUpdated(_bounds, true);
     }
 
     /**
@@ -298,8 +289,11 @@ contract MarketFactory is IMarketFactory, Ownable {
             revert InvalidBound();
         }
 
-        LiquidityCommitmentCertificate(lccToken).removeBounds(_bounds);
-        emit BoundsUpdated(lccToken, _bounds, false);
+        for (uint256 i = 0; i < _bounds.length; i++) {
+            bounds[_bounds[i]] = false;
+        }
+
+        emit BoundsUpdated(_bounds, false);
     }
 
     // ============ VIEW FUNCTIONS ============
@@ -341,21 +335,9 @@ contract MarketFactory is IMarketFactory, Ownable {
     }
 
     /**
-     * @notice Checks if an address is a bound for an LCC token
-     * @param lccToken The LCC token address
-     * @param bound The address to check
-     * @return True if the address is a bound
+     * @notice Gets the pool manager address
+     * @return The pool manager address
      */
-    function isBound(
-        address lccToken,
-        address bound
-    ) external view returns (bool) {
-        if (lccToFactory[lccToken] != address(this)) {
-            return false;
-        }
-        return LiquidityCommitmentCertificate(lccToken).bounds(bound);
-    }
-
     function poolManager() external view returns (address) {
         return address(_poolManager);
     }
