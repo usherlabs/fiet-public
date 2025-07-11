@@ -39,7 +39,10 @@ contract LiquidityCommitmentCertificate is ERC20 {
         }
 
         // Allow transfers between protocol bounds
-        if (IMarketFactory(marketFactory).bounds(to) || IMarketFactory(marketFactory).bounds(from)) {
+        if (
+            IMarketFactory(marketFactory).bounds(to) ||
+            IMarketFactory(marketFactory).bounds(from)
+        ) {
             _;
             return;
         }
@@ -55,10 +58,13 @@ contract LiquidityCommitmentCertificate is ERC20 {
     /**
      * @param _underlyingAsset The underlying asset of the LCC.
      * @param _issuers The issuers of the LCC. ProxyHook, and MMPositionManager
-     * @param _bounds The protocol addresses that form the LCC bounds. - Uniswap PoolManager, Routers, etc. is managed by an owner for dev-safety.
      * @param _marketFactory The MarketFactory contract that manages this LCC.
      */
-    constructor(address _underlyingAsset, address[] memory _issuers, address _marketFactory) {
+    constructor(
+        address _underlyingAsset,
+        address[] memory _issuers,
+        address _marketFactory
+    ) {
         // TODO: handle ETH native token is future?
         if (_underlyingAsset == address(0)) {
             revert InvalidUnderlyingAsset();
@@ -79,13 +85,13 @@ contract LiquidityCommitmentCertificate is ERC20 {
             issuers[_issuers[i]] = true;
         }
 
-        bounds[address(this)] = true;
-        for (uint256 i = 0; i < _bounds.length; i++) {
-            bounds[_bounds[i]] = true;
-        }
+        // Note: bounds are managed by the MarketFactory, not set in constructor
 
         string memory prefixedSymbol = string.concat("lcc-", _symbol);
-        string memory prefixedName = string.concat("Fiet Liquidity Commitment Certificate for ", _name);
+        string memory prefixedName = string.concat(
+            "Fiet Liquidity Commitment Certificate for ",
+            _name
+        );
         ERC20(prefixedName, prefixedSymbol, _decimals);
     }
 
@@ -175,13 +181,34 @@ contract LiquidityCommitmentCertificate is ERC20 {
         }
     }
 
-    function transfer(address to, uint256 amount) public virtual override returns (bool) {
+    function transfer(
+        address to,
+        uint256 amount
+    ) public virtual override returns (bool) {
         onTransfer(msg.sender, to, amount);
         return super.transfer(to, amount);
     }
 
-    function transferFrom(address from, address to, uint256 amount) public virtual override returns (bool) {
+    function transferFrom(
+        address from,
+        address to,
+        uint256 amount
+    ) public virtual override returns (bool) {
         onTransfer(from, to, amount);
         return super.transferFrom(from, to, amount);
+    }
+
+    function addBounds(address[] calldata _bounds) external {
+        require(msg.sender == marketFactory, "Only factory can add bounds");
+        for (uint256 i = 0; i < _bounds.length; i++) {
+            bounds[_bounds[i]] = true;
+        }
+    }
+
+    function removeBounds(address[] calldata _bounds) external {
+        require(msg.sender == marketFactory, "Only factory can remove bounds");
+        for (uint256 i = 0; i < _bounds.length; i++) {
+            bounds[_bounds[i]] = false;
+        }
     }
 }

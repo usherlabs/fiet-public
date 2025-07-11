@@ -53,18 +53,18 @@ interface IMarketFactory {
     function getUnderlyingAsset(address lccToken) external view returns (address);
 
     /**
-     * @notice Gets the hook address for a given pool
-     * @param poolId The pool ID
-     * @return The hook address
-     */
-    function getHook(PoolId poolId) external view returns (address);
-
-    /**
      * @notice Gets the proxy pool ID for a given core pool ID
      * @param corePoolId The core pool ID
      * @return The proxy pool ID
      */
     function coreToProxy(PoolId corePoolId) external view returns (PoolId);
+
+    /**
+     * @notice Gets the core pool ID for a given proxy pool ID
+     * @param proxyPoolId The proxy pool ID
+     * @return The core pool ID
+     */
+    function proxyToCore(PoolId proxyPoolId) external view returns (PoolId);
 
     /**
      * @notice Checks if an address is a bound for an LCC token
@@ -87,19 +87,37 @@ interface IMarketFactory {
      */
     function poolManager() external view returns (address);
 
+    /**
+     * @notice Gets the core hook address
+     * @return The core hook address
+     */
+    function getCoreHook() external view returns (address);
+
+    /**
+     * @notice Gets the proxy hook address
+     * @return The proxy hook address
+     */
+    function getProxyHook() external view returns (address);
+
     // ============ STATE CHANGING FUNCTIONS ============
 
     /**
      * @notice Creates a new market with core and proxy pools
      * @param underlyingAsset0 First underlying asset address
      * @param underlyingAsset1 Second underlying asset address
-     * @param initialBounds Initial protocol bounds for LCC tokens
+     * @param corePoolFee Fee for the core pool
+     * @param tickSpacing Tick spacing for both pools
+     * @param initialSqrtPriceX96 Initial sqrt price for core pool
      * @return corePoolId The ID of the created core pool
      * @return proxyPoolId The ID of the created proxy pool
      */
-    function createMarket(address underlyingAsset0, address underlyingAsset1, address[] calldata initialBounds)
-        external
-        returns (PoolId corePoolId, PoolId proxyPoolId);
+    function createMarket(
+        address underlyingAsset0,
+        address underlyingAsset1,
+        uint24 corePoolFee,
+        uint24 tickSpacing,
+        uint160 initialSqrtPriceX96
+    ) external returns (PoolId corePoolId, PoolId proxyPoolId);
 
     /**
      * @notice Adds protocol bounds to LCC tokens

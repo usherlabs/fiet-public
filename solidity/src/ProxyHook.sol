@@ -18,9 +18,9 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 import "forge-std/console.sol";
 
 import {LiquidityCommitmentCertificate} from "./LCC.sol";
-import {IActionTypes} from "./interfaces/IActionTypes.sol";
+import {IHookCommon} from "./interfaces/IHookCommon.sol";
 
-contract ProxyHook is BaseHook, IActionTypes {
+contract ProxyHook is BaseHook, IHookCommon {
     using CurrencySettler for Currency;
 
     error AddLiquidityThroughHookNotAllowed();
@@ -54,19 +54,12 @@ contract ProxyHook is BaseHook, IActionTypes {
 
     address public immutable marketFactory;
 
-    address public immutable counterpartHook; // if this is core hook, then proxy hook -- otherwise, if this is proxy hook, then core hook
+    address public immutable coreHook; // specific to proxy hook.
 
     mapping(PoolId => PoolKey) public corePoolKey;
 
-    modifier onlyCounterpartHook(PoolId thisPoolId) {
-        if (msg.sender != getCounterpartHook(thisPoolId)) {
-            revert InvalidSender();
-        }
-        _;
-    }
-
-    modifier _onlyCounterpartHook() {
-        if (msg.sender != _getCounterpartHook()) {
+    modifier onlyCoreHook() {
+        if (msg.sender != coreHook) {
             revert InvalidSender();
         }
         _;
@@ -93,6 +86,10 @@ contract ProxyHook is BaseHook, IActionTypes {
 
     constructor(address _poolManager, address _marketFactory) BaseHook(IPoolManager(_poolManager)) {
         marketFactory = _marketFactory;
+    }
+
+    function activate() external onlyFactory {
+        coreHook = IMarketFactory(marketFactory).getCoreHook();
     }
 
     /**
@@ -134,7 +131,8 @@ contract ProxyHook is BaseHook, IActionTypes {
         }
 
         // initialise the counterparty hook -- proxy pool is created after the core pool.
-        getCounterpartHook(key.toId());
+        // Note: This is a placeholder for future implementation
+        // The core hook reference is already set in constructor
 
         return this._beforeInitialize.selector;
     }
@@ -226,7 +224,7 @@ contract ProxyHook is BaseHook, IActionTypes {
         ModifyLiquidityParams calldata params,
         BalanceDelta delta,
         ActionType actionType
-    ) external virtual nonReentrant _onlyCounterpartHook returns (uint256) {
+    ) external virtual nonReentrant onlyCoreHook returns (uint256) {
         // require(block.timestamp <= deadline, "Deadline not met");
 
         // Get the LCC tokens for the core pool
@@ -395,21 +393,5 @@ contract ProxyHook is BaseHook, IActionTypes {
         }
 
         return (this.beforeSwap.selector, newDelta, 0);
-    }
-
-    function getCounterpartHook(PoolId thisPoolId) internal returns (address) {
-        if (counterpartHook == address(0)) {
-            PoolKey memory key = corePoolKey[thisPoolId];
-            PoolId corePoolId = key.toId();
-            counterpartHook = mf.getHook(corePoolId);
-        }
-        return counterpartHook;
-    }
-
-    function _getCounterpartHook() internal returns (address) {
-        if (counterpartHook == address(0)) {
-            revert CounterpartHookNotSet();
-        }
-        return counterpartHook;
     }
 }

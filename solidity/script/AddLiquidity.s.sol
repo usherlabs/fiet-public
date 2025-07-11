@@ -24,6 +24,7 @@ import {SepoliaConstants} from "./constants.sol";
 import {ScriptHelper} from "./deployments/ScriptHelper.s.sol";
 import {ProxyHook} from "../src/ProxyHook.sol";
 import {CurrencySortHelper} from "./CurrencySortHelper.sol";
+import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
 
 contract PositionManagerLiquidityScript is ScriptHelper {
     using StateLibrary for IPoolManager;
@@ -59,16 +60,31 @@ contract PositionManagerLiquidityScript is ScriptHelper {
         positionManager = IPositionManager(SepoliaConstants.POSITION_MANAGER);
         poolManager = IPoolManager(SepoliaConstants.POOL_MANAGER);
         permit2 = IPermit2(SepoliaConstants.PERMIT2);
-        // Core pool tokens
-        lccUSDCToken = LiquidityCommitmentCertificate(readAddress("lccTokenUSDC"));
-        lccUSDTToken = LiquidityCommitmentCertificate(readAddress("lccTokenUSDT"));
-        // Proxy pool tokens (underlying tokens)
+
+        // Load deployment addresses
+        _setFilename("sepolia");
+        address marketFactoryAddr = readAddress("marketFactory");
+        MarketFactory factory = MarketFactory(marketFactoryAddr);
         usdcToken = readAddress("usdcToken");
         usdtToken = readAddress("usdtToken");
-        // Proxy Hook
         proxyHook = ProxyHook(readAddress("proxyHook"));
+        address coreHookAddr = factory.getCoreHook();
 
-        setupPoolKeys();
+        // Load LCC tokens from factory
+        lccUSDCToken = LiquidityCommitmentCertificate(
+            factory.getLCC(usdcToken)
+        );
+        lccUSDTToken = LiquidityCommitmentCertificate(
+            factory.getLCC(usdtToken)
+        );
+
+        // Load pool parameters from env or defaults
+        uint24 coreFee = uint24(vm.envOr("CORE_POOL_FEE", uint256(0)));
+        int24 tickSpacingVal = int24(
+            uint24(vm.envOr("TICK_SPACING", uint256(60)))
+        );
+
+        setupPoolKeys(coreHookAddr, coreFee, tickSpacingVal);
         setupAmounts();
 
         vm.startBroadcast(deployerPrivateKey);
@@ -85,27 +101,31 @@ contract PositionManagerLiquidityScript is ScriptHelper {
         vm.stopBroadcast();
     }
 
-    function setupPoolKeys() internal {
+    function setupPoolKeys(
+        address coreHookAddr,
+        uint24 coreFee,
+        int24 tickSpacingVal
+    ) internal {
         // Core pool: wrapped tokens, no hooks (this gets liquidity)
-        (Currency currency0Core, Currency currency1Core) =
-            CurrencySortHelper.sortAddresses(address(lccUSDCToken), address(lccUSDTToken));
+        (Currency currency0Core, Currency currency1Core) = CurrencySortHelper
+            .sortAddresses(address(lccUSDCToken), address(lccUSDTToken));
         corePoolKey = PoolKey({
             currency0: currency0Core,
             currency1: currency1Core,
-            fee: 0,
-            tickSpacing: 60,
-            hooks: IHooks(address(0)) // No hooks on core pool
+            fee: coreFee,
+            tickSpacing: tickSpacingVal,
+            hooks: IHooks(coreHookAddr)
         });
 
         // Proxy pool: underlying tokens, with hooks (users interact here)
-        (Currency currency0Proxy, Currency currency1Proxy) =
-            CurrencySortHelper.sortAddresses(address(usdcToken), address(usdtToken));
+        (Currency currency0Proxy, Currency currency1Proxy) = CurrencySortHelper
+            .sortAddresses(address(usdcToken), address(usdtToken));
         proxyPoolKey = PoolKey({
             currency0: currency0Proxy,
             currency1: currency1Proxy,
             fee: 0,
-            tickSpacing: 60,
-            hooks: proxyHook // hook
+            tickSpacing: tickSpacingVal,
+            hooks: proxyHook
         });
         console.log(" ");
         console.log("Core Pool (receives liquidity):");
@@ -124,8 +144,12 @@ contract PositionManagerLiquidityScript is ScriptHelper {
         address coreToken0 = Currency.unwrap(corePoolKey.currency0);
         address coreToken1 = Currency.unwrap(corePoolKey.currency1);
         // Calculate desired amounts with proper decimals
-        amount0Desired = AMOUNT_DESIRED * (10 ** IERC20Metadata(coreToken0).decimals());
-        amount1Desired = AMOUNT_DESIRED * (10 ** IERC20Metadata(coreToken1).decimals());
+        amount0Desired =
+            AMOUNT_DESIRED *
+            (10 ** IERC20Metadata(coreToken0).decimals());
+        amount1Desired =
+            AMOUNT_DESIRED *
+            (10 ** IERC20Metadata(coreToken1).decimals());
 
         console.log("Token0:", coreToken0);
         console.log("Token1:", coreToken1);
@@ -150,8 +174,14 @@ contract PositionManagerLiquidityScript is ScriptHelper {
 
         console.log("Transferred", hookLiquidityAmount, "USDC to ProxyHook");
         console.log("Transferred", hookLiquidityAmount, "USDT to ProxyHook");
-        console.log("ProxyHook USDC balance:", IERC20(usdcToken).balanceOf(address(proxyHook)));
-        console.log("ProxyHook USDT balance:", IERC20(usdtToken).balanceOf(address(proxyHook)));
+        console.log(
+            "ProxyHook USDC balance:",
+            IERC20(usdcToken).balanceOf(address(proxyHook))
+        );
+        console.log(
+            "ProxyHook USDT balance:",
+            IERC20(usdtToken).balanceOf(address(proxyHook))
+        );
     }
 
     function wrapToLccTokens(address user) internal {
@@ -166,8 +196,12 @@ contract PositionManagerLiquidityScript is ScriptHelper {
         address tokenAddr0 = Currency.unwrap(proxy0);
         address tokenAddr1 = Currency.unwrap(proxy1);
 
-        LiquidityCommitmentCertificate lccToken0 = LiquidityCommitmentCertificate(lccTokenAddr0);
-        LiquidityCommitmentCertificate lccToken1 = LiquidityCommitmentCertificate(lccTokenAddr1);
+        LiquidityCommitmentCertificate lccToken0 = LiquidityCommitmentCertificate(
+                lccTokenAddr0
+            );
+        LiquidityCommitmentCertificate lccToken1 = LiquidityCommitmentCertificate(
+                lccTokenAddr1
+            );
 
         // Quick mapping check
         address underlying0 = lccToken0.underlyingAsset();
@@ -201,12 +235,17 @@ contract PositionManagerLiquidityScript is ScriptHelper {
             uint256 needed = desired - current;
             uint256 available = underlying.balanceOf(user);
             string memory name = MockERC20(address(underlying)).name();
-            require(available >= needed, string(abi.encodePacked(name, " insufficient")));
-            lccToken.wrap(address(proxyHook), needed);
+            require(
+                available >= needed,
+                string(abi.encodePacked(name, " insufficient"))
+            );
+            lccToken.wrap(needed);
         }
     }
 
-    function mintPositionToCore(address recipient) internal returns (uint256 tokenId) {
+    function mintPositionToCore(
+        address recipient
+    ) internal returns (uint256 tokenId) {
         console.log(" ");
         console.log("Minting position to core pool");
 
@@ -214,7 +253,7 @@ contract PositionManagerLiquidityScript is ScriptHelper {
         int24 tickLower = -887220; // Min tick
         int24 tickUpper = 887220; // Max tick
         // Get current pool state for liquidity calculation
-        (uint160 sqrtPriceX96,,,) = poolManager.getSlot0(corePoolKey.toId());
+        (uint160 sqrtPriceX96, , , ) = poolManager.getSlot0(corePoolKey.toId());
 
         // Calculate liquidity amount from desired token amounts
         uint128 liquidity = LiquidityAmounts.getLiquidityForAmounts(
@@ -226,11 +265,22 @@ contract PositionManagerLiquidityScript is ScriptHelper {
         );
         console.log("liquidity: ", liquidity);
 
-        bytes memory actions = abi.encodePacked(uint8(Actions.MINT_POSITION), uint8(Actions.SETTLE_PAIR));
+        bytes memory actions = abi.encodePacked(
+            uint8(Actions.MINT_POSITION),
+            uint8(Actions.SETTLE_PAIR)
+        );
         bytes[] memory params = new bytes[](2);
 
-        params[0] =
-            abi.encode(corePoolKey, tickLower, tickUpper, liquidity, amount0Desired, amount1Desired, recipient, "");
+        params[0] = abi.encode(
+            corePoolKey,
+            tickLower,
+            tickUpper,
+            liquidity,
+            amount0Desired,
+            amount1Desired,
+            recipient,
+            ""
+        );
         params[1] = abi.encode(corePoolKey.currency0, corePoolKey.currency1);
         // Get next token ID before minting
         tokenId = positionManager.nextTokenId();
@@ -238,14 +288,20 @@ contract PositionManagerLiquidityScript is ScriptHelper {
         uint256 deadline = block.timestamp + 300;
         vm.recordLogs();
         // Execute the position minting
-        positionManager.modifyLiquidities(abi.encode(actions, params), deadline);
+        positionManager.modifyLiquidities(
+            abi.encode(actions, params),
+            deadline
+        );
 
         console.log("Position minted successfully!");
         VmSafe.Log[] memory logs = vm.getRecordedLogs();
         for (uint256 i = 0; i < logs.length; i++) {
             VmSafe.Log memory log = logs[i];
 
-            if (log.topics.length > 0 && log.topics[0] == keccak256("Transfer(address,address,uint256)")) {
+            if (
+                log.topics.length > 0 &&
+                log.topics[0] == keccak256("Transfer(address,address,uint256)")
+            ) {
                 address from = address(uint160(uint256(log.topics[1])));
                 address to = address(uint160(uint256(log.topics[2])));
                 address emitter = log.emitter;
@@ -266,15 +322,50 @@ contract PositionManagerLiquidityScript is ScriptHelper {
     }
 
     function setupERC20Allowance(address user) internal {
-        checkAndApproveErc20(user, address(permit2), lccUSDCToken, amount0Desired);
-        checkAndApproveErc20(user, address(permit2), lccUSDTToken, amount1Desired);
-        checkAndApproveErc20(user, address(lccUSDCToken), IERC20(usdcToken), amount0Desired);
-        checkAndApproveErc20(user, address(lccUSDTToken), IERC20(usdtToken), amount1Desired);
-        checkAndApproveErc20(user, address(proxyHook), IERC20(usdcToken), amount0Desired);
-        checkAndApproveErc20(user, address(proxyHook), IERC20(usdtToken), amount0Desired);
+        checkAndApproveErc20(
+            user,
+            address(permit2),
+            lccUSDCToken,
+            amount0Desired
+        );
+        checkAndApproveErc20(
+            user,
+            address(permit2),
+            lccUSDTToken,
+            amount1Desired
+        );
+        checkAndApproveErc20(
+            user,
+            address(lccUSDCToken),
+            IERC20(usdcToken),
+            amount0Desired
+        );
+        checkAndApproveErc20(
+            user,
+            address(lccUSDTToken),
+            IERC20(usdtToken),
+            amount1Desired
+        );
+        checkAndApproveErc20(
+            user,
+            address(proxyHook),
+            IERC20(usdcToken),
+            amount0Desired
+        );
+        checkAndApproveErc20(
+            user,
+            address(proxyHook),
+            IERC20(usdtToken),
+            amount0Desired
+        );
     }
 
-    function checkAndApproveErc20(address user, address spender, IERC20 token, uint256 amount) internal {
+    function checkAndApproveErc20(
+        address user,
+        address spender,
+        IERC20 token,
+        uint256 amount
+    ) internal {
         uint256 approveLimit = token.allowance(user, spender);
 
         if (approveLimit < amount) {
@@ -286,15 +377,27 @@ contract PositionManagerLiquidityScript is ScriptHelper {
         console.log(" ");
         console.log("Setting up Permit2 allowances for user:", user);
 
-        uint256 permit2AllowanceA = IERC20(address(lccUSDCToken)).allowance(user, address(permit2));
-        uint256 permit2AllowanceB = IERC20(address(lccUSDTToken)).allowance(user, address(permit2));
+        uint256 permit2AllowanceA = IERC20(address(lccUSDCToken)).allowance(
+            user,
+            address(permit2)
+        );
+        uint256 permit2AllowanceB = IERC20(address(lccUSDTToken)).allowance(
+            user,
+            address(permit2)
+        );
 
         console.log("Current ERC20 allowances to Permit2:");
         console.log("  Token A:", permit2AllowanceA);
         console.log("  Token B:", permit2AllowanceB);
 
-        require(permit2AllowanceA >= amount0Desired, "Insufficient ERC20 allowance to Permit2 for token A");
-        require(permit2AllowanceB >= amount1Desired, "Insufficient ERC20 allowance to Permit2 for token B");
+        require(
+            permit2AllowanceA >= amount0Desired,
+            "Insufficient ERC20 allowance to Permit2 for token A"
+        );
+        require(
+            permit2AllowanceB >= amount1Desired,
+            "Insufficient ERC20 allowance to Permit2 for token B"
+        );
 
         permit2AllowanceTransfer(user, lccUSDCToken, address(positionManager));
         permit2AllowanceTransfer(user, lccUSDTToken, address(positionManager));
@@ -303,29 +406,63 @@ contract PositionManagerLiquidityScript is ScriptHelper {
         console.log(" ");
     }
 
-    function permit2AllowanceTransfer(address user, LiquidityCommitmentCertificate token, address spender) internal {
+    function permit2AllowanceTransfer(
+        address user,
+        LiquidityCommitmentCertificate token,
+        address spender
+    ) internal {
         console.log(" ");
-        console.log("Setting permit2 allowance for:", address(token), "spender:", spender);
+        console.log(
+            "Setting permit2 allowance for:",
+            address(token),
+            "spender:",
+            spender
+        );
 
-        (uint160 amount, uint48 expiration,) = permit2.allowance(user, address(token), spender);
+        (uint160 amount, uint48 expiration, ) = permit2.allowance(
+            user,
+            address(token),
+            spender
+        );
 
-        console.log("Current permit2 allowance - amount: ", amount, "expiration:", expiration);
+        console.log(
+            "Current permit2 allowance - amount: ",
+            amount,
+            "expiration:",
+            expiration
+        );
 
-        uint256 requiredAmount = (address(token) == address(lccUSDCToken)) ? amount0Desired : amount1Desired;
+        uint256 requiredAmount = (address(token) == address(lccUSDCToken))
+            ? amount0Desired
+            : amount1Desired;
         if (expiration <= block.timestamp || amount < requiredAmount) {
             uint48 deadline = uint48(block.timestamp + 86400); // 24 hours from now
             uint160 allowanceAmount = type(uint160).max; // Max allowance
 
-            console.log("Setting new permit2 allowance with deadline:", deadline);
+            console.log(
+                "Setting new permit2 allowance with deadline:",
+                deadline
+            );
 
             permit2.approve(address(token), spender, allowanceAmount, deadline);
 
             // Verify the allowance was set correctly
-            (uint160 newAmount, uint48 newExpiration,) = permit2.allowance(user, address(token), spender);
+            (uint160 newAmount, uint48 newExpiration, ) = permit2.allowance(
+                user,
+                address(token),
+                spender
+            );
 
-            console.log("New permit2 allowance - amount:", newAmount, "expiration:", newExpiration);
+            console.log(
+                "New permit2 allowance - amount:",
+                newAmount,
+                "expiration:",
+                newExpiration
+            );
         } else {
-            console.log("Permit2 allowance is already sufficient and not expired");
+            console.log(
+                "Permit2 allowance is already sufficient and not expired"
+            );
         }
     }
 
@@ -338,10 +475,17 @@ contract PositionManagerLiquidityScript is ScriptHelper {
         console.log("Position liquidity:", liquidity);
 
         // Get pool and position info
-        (PoolKey memory poolKey, PositionInfo positionInfo) = positionManager.getPoolAndPositionInfo(tokenId);
+        (PoolKey memory poolKey, PositionInfo positionInfo) = positionManager
+            .getPoolAndPositionInfo(tokenId);
 
-        console.log("Position pool currency0:", Currency.unwrap(poolKey.currency0));
-        console.log("Position pool currency1:", Currency.unwrap(poolKey.currency1));
+        console.log(
+            "Position pool currency0:",
+            Currency.unwrap(poolKey.currency0)
+        );
+        console.log(
+            "Position pool currency1:",
+            Currency.unwrap(poolKey.currency1)
+        );
         console.log("Position tick lower:", positionInfo.tickLower());
         console.log("Position tick upper:", positionInfo.tickUpper());
     }

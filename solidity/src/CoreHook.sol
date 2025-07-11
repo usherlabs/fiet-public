@@ -3,38 +3,42 @@ pragma solidity ^0.8.0;
 
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
-import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {BaseHook} from "@uniswap/v4-periphery/src/utils/BaseHook.sol";
 import {BalanceDelta, BalanceDeltaLibrary} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
-import {CurrencyDelta} from "@uniswap/v4-core/src/libraries/CurrencyDelta.sol";
-import {HookMiner} from "@uniswap/v4-periphery/src/utils/HookMiner.sol";
-import {IHooks} from "@uniswap/v4-core/interfaces/IHooks.sol";
-
-import {Ownable} from "openzeppelin-contracts/contracts/access/Ownable.sol";
 
 import {LiquidityCommitmentCertificate} from "./LCC.sol";
-import {IActionTypes} from "./interfaces/IActionTypes.sol";
-import "forge-std/console.sol";
+import {IHookCommon} from "./interfaces/IHookCommon.sol";
 
 /**
  * Core Pool should be aware of Positions.
  *     This way it can calculate and manage Liquidity Commitments (C_A(r)) for each Position.
  *     Furthermore, we need to know when Direct LP occurs, as this determines whether the underlying native tokens are settled to the Pool Manager.
  */
-contract CoreHook is BaseHook, Ownable, IActionTypes {
+contract CoreHook is BaseHook, IHookCommon {
     error InvalidUnderlyingAsset();
     error InvalidInitialiser();
     error CounterpartHookNotSet();
 
     address public immutable marketFactory;
 
-    address public immutable counterpartHook; // if this is core hook, then proxy hook -- otherwise, if this is proxy hook, then core hook
+    address public immutable proxyHook;
+
+    modifier onlyFactory() {
+        if (msg.sender != marketFactory) {
+            revert InvalidSender();
+        }
+        _;
+    }
 
     // Owner will be set to MarketFactory
     constructor(address _poolManager, address _marketFactory) BaseHook(IPoolManager(_poolManager)) {
         marketFactory = _marketFactory;
+    }
+
+    function activate() external onlyFactory {
+        proxyHook = IMarketFactory(marketFactory).getProxyHook();
     }
 
     function getHookPermissions() public pure override returns (Hooks.Permissions memory) {
@@ -88,8 +92,7 @@ contract CoreHook is BaseHook, Ownable, IActionTypes {
     ) internal virtual returns (bytes4, BalanceDelta) {
         // Handle Direct LP
         // Notify the Proxy Hook to settle underlying tokens as liquidity to the Pool Manager.
-        address counterpartHook = getCounterpartHook(key.toId());
-        ProxyHook(counterpartHook).onDirectLP(key, params, delta, ActionType.DirectLPAddLiquidity);
+        ProxyHook(proxyHook).onDirectLP(key, params, delta, ActionType.DirectLPAddLiquidity);
 
         return (this.afterAddLiquidity.selector, BalanceDeltaLibrary.ZERO_DELTA);
     }
@@ -104,25 +107,8 @@ contract CoreHook is BaseHook, Ownable, IActionTypes {
     ) internal virtual returns (bytes4, BalanceDelta) {
         // Handle Direct LP
         // Notify the Proxy Hook to settle underlying tokens as liquidity to the Pool Manager.
-        address counterpartHook = getCounterpartHook(key.toId());
-        ProxyHook(counterpartHook).onDirectLP(key, params, delta, ActionType.DirectLPRemoveLiquidity);
+        ProxyHook(proxyHook).onDirectLP(key, params, delta, ActionType.DirectLPRemoveLiquidity);
 
         return (this.afterRemoveLiquidity.selector, BalanceDeltaLibrary.ZERO_DELTA);
-    }
-
-    function getCounterpartHook(PoolId thisPoolId) internal returns (address) {
-        if (counterpartHook == address(0)) {
-            IMarketFactory mf = IMarketFactory(marketFactory);
-            PoolId id = mf.coreToProxy(thisPoolId);
-            counterpartHook = mf.getHook(id);
-        }
-        return counterpartHook;
-    }
-
-    function _getCounterpartHook() internal returns (address) {
-        if (counterpartHook == address(0)) {
-            revert CounterpartHookNotSet();
-        }
-        return counterpartHook;
     }
 }

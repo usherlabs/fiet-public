@@ -8,9 +8,8 @@ import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {LiquidityCommitmentCertificate} from "./LCC.sol";
-import {CoreHook} from "./CoreHook.sol";
-import {ProxyHook} from "./ProxyHook.sol";
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
+import {IHookCommon} from "./interfaces/IHookCommon.sol";
 
 /**
  * @title MarketFactory
@@ -20,30 +19,7 @@ import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 contract MarketFactory is IMarketFactory, Ownable {
     using PoolIdLibrary for PoolKey;
 
-    error InvalidPoolParameters();
-    error LCCAlreadyExists();
-    error CorePoolAlreadyExists();
-    error ProxyPoolAlreadyExists();
-    error InvalidHookAddress();
-    error InvalidUnderlyingAsset();
-    error InvalidIssuer();
-    error InvalidBound();
-
-    event MarketCreated(
-        PoolId indexed corePoolId,
-        PoolId indexed proxyPoolId,
-        address indexed underlyingAsset0,
-        address underlyingAsset1,
-        address lccToken0,
-        address lccToken1,
-        address coreHook,
-        address proxyHook
-    );
-
-    event LCCCreated(address indexed underlyingAsset, address indexed lccToken);
-    event BoundsUpdated(address indexed lccToken, address[] bounds, bool added);
-
-    IPoolManager public immutable poolManager;
+    IPoolManager private immutable _poolManager;
     address public immutable coreHook;
     address public immutable proxyHook;
 
@@ -53,28 +29,26 @@ contract MarketFactory is IMarketFactory, Ownable {
     // Mapping from LCC token to underlying asset
     mapping(address => address) public lccToUnderlying;
 
-    // Mapping from pool key to hook address
-    mapping(PoolId => address) public poolToHook;
+    // Mapping from LCC token to factory
+    mapping(address => address) public lccToFactory;
 
     // Mapping from core pool ID to proxy pool ID
     mapping(PoolId => PoolId) public coreToProxy;
 
+    // Mapping from proxy pool ID to core pool ID
+    mapping(PoolId => PoolId) public proxyToCore;
+
     // Mapping of addresses that found protocol-bounds
     mapping(address => bool) public bounds;
 
-    // // Core pool parameters
-    // uint24 public constant CORE_POOL_FEE = 3000; // 0.3%
-    // uint24 public constant CORE_POOL_TICK_SPACING = 60;
-
-    // // Proxy pool parameters
-    // uint24 public constant PROXY_POOL_FEE = 500; // 0.05%
-    // uint24 public constant PROXY_POOL_TICK_SPACING = 10;
-
-    constructor(address _poolManager, address[] memory _bounds) Ownable(msg.sender) {
-        if (_poolManager == address(0)) {
+    constructor(
+        address poolManagerAddr,
+        address[] memory _bounds
+    ) Ownable(msg.sender) {
+        if (poolManagerAddr == address(0)) {
             revert InvalidPoolParameters();
         }
-        poolManager = IPoolManager(_poolManager);
+        _poolManager = IPoolManager(poolManagerAddr);
 
         bounds[address(this)] = true;
         for (uint256 i = 0; i < _bounds.length; i++) {
@@ -82,16 +56,26 @@ contract MarketFactory is IMarketFactory, Ownable {
         }
     }
 
-    function setHooks(address _coreHook, address _proxyHook) external onlyOwner {
+    function setHooks(
+        address _coreHook,
+        address _proxyHook
+    ) external onlyOwner {
+        // These variables are immutable. Can only be set once
+        // Tie this factory to these hooks as LCCs/markets/hooks are tied to the factory.
         coreHook = _coreHook;
         proxyHook = _proxyHook;
+
+        IHookCommon(coreHook).activate();
+        IHookCommon(proxyHook).activate();
     }
 
     /**
      * @notice Creates a new market with core and proxy pools
      * @param underlyingAsset0 First underlying asset address
      * @param underlyingAsset1 Second underlying asset address
-     * @param initialBounds Initial protocol bounds for LCC tokens
+     * @param corePoolFee Fee for the core pool
+     * @param tickSpacing Tick spacing for both pools
+     * @param initialSqrtPriceX96 Initial sqrt price for core pool
      * @return corePoolId The ID of the created core pool
      * @return proxyPoolId The ID of the created proxy pool
      */
@@ -99,7 +83,7 @@ contract MarketFactory is IMarketFactory, Ownable {
         address underlyingAsset0,
         address underlyingAsset1,
         uint24 corePoolFee,
-        uint24 tickSpacing,
+        int24 tickSpacing,
         uint160 initialSqrtPriceX96
     ) external onlyOwner returns (PoolId corePoolId, PoolId proxyPoolId) {
         if (underlyingAsset0 == address(0) || underlyingAsset1 == address(0)) {
@@ -111,11 +95,23 @@ contract MarketFactory is IMarketFactory, Ownable {
         address lccToken1 = _getOrCreateLCC(underlyingAsset1);
 
         // Create core pool with LCC tokens
-        PoolKey memory corePoolKey =
-            _createCorePool(lccToken0, lccToken1, corePoolFee, tickSpacing, initialSqrtPriceX96);
+        PoolKey memory corePoolKey = _createCorePool(
+            lccToken0,
+            lccToken1,
+            corePoolFee,
+            tickSpacing,
+            initialSqrtPriceX96,
+            coreHook
+        );
 
         // Create proxy pool with underlying assets
-        PoolKey memory proxyPoolId = _createProxyPool(corePoolKey, underlyingAsset0, underlyingAsset1, tickSpacing);
+        PoolKey memory proxyPoolKey = _createProxyPool(
+            corePoolKey,
+            underlyingAsset0,
+            underlyingAsset1,
+            tickSpacing,
+            proxyHook
+        );
 
         corePoolId = corePoolKey.toId();
         proxyPoolId = proxyPoolKey.toId();
@@ -131,27 +127,34 @@ contract MarketFactory is IMarketFactory, Ownable {
             underlyingAsset1,
             lccToken0,
             lccToken1,
-            poolToHook[corePoolId],
-            poolToHook[proxyPoolId]
+            coreHook,
+            proxyHook
         );
     }
 
     /**
      * @notice Gets or creates an LCC token for the given underlying asset
      * @param underlyingAsset The underlying asset address
-     * @param initialBounds Initial protocol bounds
      * @return lccToken The LCC token address
      */
-    function _getOrCreateLCC(address underlyingAsset) internal returns (address lccToken) {
+    function _getOrCreateLCC(
+        address underlyingAsset
+    ) internal returns (address lccToken) {
         lccToken = underlyingToLCC[underlyingAsset];
 
         if (lccToken == address(0)) {
             // Create new LCC token
             address[] memory issuers = new address[](2);
             issuers[0] = address(this); // ProxyHook
-            // issuers[1] = address(poolManager); // PoolManager as issuer
+            // issuers[1] = address(poolManager); // TODO: Add MMPositionManager as issuer
 
-            lccToken = address(new LiquidityCommitmentCertificate(underlyingAsset, issuers));
+            lccToken = address(
+                new LiquidityCommitmentCertificate(
+                    underlyingAsset,
+                    issuers,
+                    address(this)
+                )
+            );
 
             underlyingToLCC[underlyingAsset] = lccToken;
             lccToUnderlying[lccToken] = underlyingAsset;
@@ -165,79 +168,82 @@ contract MarketFactory is IMarketFactory, Ownable {
      * @notice Creates a core pool with LCC tokens
      * @param lccToken0 First LCC token
      * @param lccToken1 Second LCC token
-     * @return poolId The created pool ID
+     * @param corePoolFee Fee for the core pool
+     * @param corePoolTickSpacing Tick spacing for the core pool
+     * @param initialSqrtPriceX96 Initial sqrt price
+     * @param coreHookInstance The core hook instance to use
+     * @return poolKey The created pool key
      */
     function _createCorePool(
         address lccToken0,
         address lccToken1,
         uint24 corePoolFee,
-        uint24 corePoolTickSpacing,
-        uint160 initialSqrtPriceX96
+        int24 corePoolTickSpacing,
+        uint160 initialSqrtPriceX96,
+        address coreHookInstance
     ) internal returns (PoolKey memory poolKey) {
         // Create pool key
-        (Currency currency0, Currency currency1) = _sortCurrencies(lccToken0, lccToken1);
+        (Currency currency0, Currency currency1) = _sortCurrencies(
+            lccToken0,
+            lccToken1
+        );
 
         poolKey = PoolKey({
             currency0: currency0,
             currency1: currency1,
             fee: corePoolFee,
             tickSpacing: corePoolTickSpacing,
-            hooks: IHooks(coreHook)
+            hooks: IHooks(coreHookInstance)
         });
 
         PoolId poolId = poolKey.toId();
 
         // Check if pool already exists
-        if (poolToHook[poolId] != address(0)) {
+        if (PoolId.unwrap(coreToProxy[poolId]) != bytes32(0)) {
             revert CorePoolAlreadyExists();
         }
 
         // Initialize the pool
-        poolManager.initialize(poolKey, initialSqrtPriceX96);
-
-        // Store hook reference
-        poolToHook[poolId] = coreHook;
+        _poolManager.initialize(poolKey, initialSqrtPriceX96);
     }
 
     /**
      * @notice Creates a proxy pool with underlying assets
+     * @param corePoolKey The associated core pool key
      * @param underlyingAsset0 First underlying asset
      * @param underlyingAsset1 Second underlying asset
-     * @param corePoolId The associated core pool ID
-     * @return poolId The created pool ID
+     * @param proxyPoolTickSpacing Tick spacing for the proxy pool
+     * @param proxyHookInstance The proxy hook instance to use
+     * @return poolKey The created pool key
      */
     function _createProxyPool(
         PoolKey memory corePoolKey,
         address underlyingAsset0,
         address underlyingAsset1,
-        uint24 proxyPoolTickSpacing
+        int24 proxyPoolTickSpacing,
+        address proxyHookInstance
     ) internal returns (PoolKey memory poolKey) {
         // Create pool key for proxy pool
-        (Currency currency0, Currency currency1) = _sortCurrencies(underlyingAsset0, underlyingAsset1);
+        (Currency currency0, Currency currency1) = _sortCurrencies(
+            underlyingAsset0,
+            underlyingAsset1
+        );
 
         poolKey = PoolKey({
             currency0: currency0,
             currency1: currency1,
             fee: 0,
             tickSpacing: proxyPoolTickSpacing,
-            hooks: IHooks(proxyHook)
+            hooks: IHooks(proxyHookInstance)
         });
 
-        PoolId poolId = poolKey.toId();
-
         // Check if pool already exists
-        if (poolToHook[poolId] != address(0)) {
+        if (PoolId.unwrap(coreToProxy[corePoolKey.toId()]) != bytes32(0)) {
             revert ProxyPoolAlreadyExists();
         }
 
         // Initialize the pool
-        poolManager.initialize(poolKey, 0);
-
-        // Set corePoolKey for Proxy PoolId on ProxyHook
-        ProxyHook(proxyHook).setCorePoolKey(poolId, corePoolKey);
-
-        // Store hook reference
-        poolToHook[poolId] = proxyHook;
+        _poolManager.initialize(poolKey, 0);
     }
 
     /**
@@ -247,11 +253,10 @@ contract MarketFactory is IMarketFactory, Ownable {
      * @return currency0 First currency
      * @return currency1 Second currency
      */
-    function _sortCurrencies(address token0, address token1)
-        internal
-        pure
-        returns (Currency currency0, Currency currency1)
-    {
+    function _sortCurrencies(
+        address token0,
+        address token1
+    ) internal pure returns (Currency currency0, Currency currency1) {
         if (token0 < token1) {
             currency0 = Currency.wrap(token0);
             currency1 = Currency.wrap(token1);
@@ -266,29 +271,35 @@ contract MarketFactory is IMarketFactory, Ownable {
     /**
      * @notice Adds protocol bounds to LCC tokens
      * @param lccToken The LCC token address
-     * @param bounds Array of addresses to add as bounds
+     * @param _bounds Array of addresses to add as bounds
      */
-    function addBounds(address lccToken, address[] calldata bounds) external onlyOwner {
+    function addBounds(
+        address lccToken,
+        address[] calldata _bounds
+    ) external onlyOwner {
         if (lccToFactory[lccToken] != address(this)) {
             revert InvalidBound();
         }
 
-        LiquidityCommitmentCertificate(lccToken).addBounds(bounds);
-        emit BoundsUpdated(lccToken, bounds, true);
+        LiquidityCommitmentCertificate(lccToken).addBounds(_bounds);
+        emit BoundsUpdated(lccToken, _bounds, true);
     }
 
     /**
      * @notice Removes protocol bounds from LCC tokens
      * @param lccToken The LCC token address
-     * @param bounds Array of addresses to remove from bounds
+     * @param _bounds Array of addresses to remove from bounds
      */
-    function removeBounds(address lccToken, address[] calldata bounds) external onlyOwner {
+    function removeBounds(
+        address lccToken,
+        address[] calldata _bounds
+    ) external onlyOwner {
         if (lccToFactory[lccToken] != address(this)) {
             revert InvalidBound();
         }
 
-        LiquidityCommitmentCertificate(lccToken).removeBounds(bounds);
-        emit BoundsUpdated(lccToken, bounds, false);
+        LiquidityCommitmentCertificate(lccToken).removeBounds(_bounds);
+        emit BoundsUpdated(lccToken, _bounds, false);
     }
 
     // ============ VIEW FUNCTIONS ============
@@ -307,17 +318,26 @@ contract MarketFactory is IMarketFactory, Ownable {
      * @param lccToken The LCC token address
      * @return The underlying asset address
      */
-    function getUnderlyingAsset(address lccToken) external view returns (address) {
+    function getUnderlyingAsset(
+        address lccToken
+    ) external view returns (address) {
         return lccToUnderlying[lccToken];
     }
 
     /**
-     * @notice Gets the hook address for a given pool
-     * @param poolId The pool ID
-     * @return The hook address
+     * @notice Gets the core hook address
+     * @return The core hook address
      */
-    function getHook(PoolId poolId) external view returns (address) {
-        return poolToHook[poolId];
+    function getCoreHook() external view returns (address) {
+        return coreHook;
+    }
+
+    /**
+     * @notice Gets the proxy hook address
+     * @return The proxy hook address
+     */
+    function getProxyHook() external view returns (address) {
+        return proxyHook;
     }
 
     /**
@@ -326,10 +346,17 @@ contract MarketFactory is IMarketFactory, Ownable {
      * @param bound The address to check
      * @return True if the address is a bound
      */
-    function isBound(address lccToken, address bound) external view returns (bool) {
+    function isBound(
+        address lccToken,
+        address bound
+    ) external view returns (bool) {
         if (lccToFactory[lccToken] != address(this)) {
             return false;
         }
         return LiquidityCommitmentCertificate(lccToken).bounds(bound);
+    }
+
+    function poolManager() external view returns (address) {
+        return address(_poolManager);
     }
 }
