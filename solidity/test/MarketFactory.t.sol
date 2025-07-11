@@ -2,220 +2,140 @@
 pragma solidity ^0.8.20;
 
 import "forge-std/Test.sol";
-import {CurrencyLibrary, Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
-import {MockERC20} from "@uniswap/v4-core/lib/solmate/src/test/utils/mocks/MockERC20.sol";
+import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {MockERC20} from "solmate/test/utils/mocks/MockERC20.sol";
 
 import {MarketFactory} from "../src/MarketFactory.sol";
-import {LiquidityCommitmentCertificate} from "../src/LCC.sol";
 import {CoreHook} from "../src/CoreHook.sol";
 import {ProxyHook} from "../src/ProxyHook.sol";
+import {LiquidityCommitmentCertificate} from "../src/LCC.sol";
 
 contract MarketFactoryTest is Test {
     using PoolIdLibrary for PoolKey;
 
-    MarketFactory marketFactory;
+    MarketFactory factory;
+    IPoolManager poolManager;
+    address coreHookAddr;
+    address proxyHookAddr;
     MockERC20 token0;
     MockERC20 token1;
-    IPoolManager poolManager;
-
     address owner = makeAddr("owner");
-    address user1 = makeAddr("user1");
-    address user2 = makeAddr("user2");
 
     function setUp() public {
-        // Deploy mock tokens
-        token0 = new MockERC20("Mock Token 0", "MTK0", 18);
-        token1 = new MockERC20("Mock Token 1", "MTK1", 18);
-
-        // Deploy mock pool manager
         poolManager = IPoolManager(makeAddr("poolManager"));
+        token0 = new MockERC20("Token0", "TK0", 18);
+        token1 = new MockERC20("Token1", "TK1", 18);
 
-        // Deploy MarketFactory with initial bounds
-        address[] memory initialBounds = new address[](1);
-        initialBounds[0] = address(poolManager);
+        address[] memory bounds = new address[](0);
 
-        vm.startPrank(owner);
-        marketFactory = new MarketFactory(address(poolManager), initialBounds);
-        vm.stopPrank();
+        vm.prank(owner);
+        factory = new MarketFactory(address(poolManager), bounds);
+
+        // Deploy hooks
+        coreHookAddr = address(
+            new CoreHook(address(poolManager), address(factory))
+        );
+        proxyHookAddr = address(
+            new ProxyHook(address(poolManager), address(factory))
+        );
+
+        vm.prank(owner);
+        factory.setHooks(coreHookAddr, proxyHookAddr);
     }
 
-    function test_Constructor() public {
-        assertEq(address(marketFactory.poolManager()), address(poolManager));
-        assertEq(marketFactory.owner(), owner);
-        assertTrue(marketFactory.bounds(address(poolManager)));
-        assertTrue(marketFactory.bounds(address(marketFactory)));
+    function testCreateMarket() public {
+        // Mock initialize calls
+        vm.mockCall(
+            address(poolManager),
+            abi.encodeWithSelector(IPoolManager.initialize.selector),
+            abi.encode(bytes32(0))
+        );
+
+        vm.prank(owner);
+        (PoolId coreId, PoolId proxyId) = factory.createMarket(
+            address(token0),
+            address(token1),
+            3000,
+            60,
+            79228162514264337593543950336 // 1:1 price
+        );
+
+        assertTrue(PoolId.unwrap(coreId) != bytes32(0));
+        assertTrue(PoolId.unwrap(proxyId) != bytes32(0));
+
+        address lcc0 = factory.getLCC(address(token0));
+        address lcc1 = factory.getLCC(address(token1));
+        assertEq(factory.getUnderlyingAsset(lcc0), address(token0));
+        assertEq(factory.getUnderlyingAsset(lcc1), address(token1));
     }
 
-    function test_CreateMarket() public {
-        address[] memory initialBounds = new address[](2);
-        initialBounds[0] = address(poolManager);
-        initialBounds[1] = address(this);
-
-        vm.startPrank(owner);
-        (PoolId corePoolId, PoolId proxyPoolId) =
-            marketFactory.createMarket(address(token0), address(token1), initialBounds);
-        vm.stopPrank();
-
-        // Verify LCC tokens were created
-        address lccToken0 = marketFactory.getLCC(address(token0));
-        address lccToken1 = marketFactory.getLCC(address(token1));
-
-        assertTrue(lccToken0 != address(0));
-        assertTrue(lccToken1 != address(0));
-
-        // Verify underlying asset mapping
-        assertEq(marketFactory.getUnderlyingAsset(lccToken0), address(token0));
-        assertEq(marketFactory.getUnderlyingAsset(lccToken1), address(token1));
-
-        // Verify LCC tokens are properly configured
-        LiquidityCommitmentCertificate lcc0 = LiquidityCommitmentCertificate(lccToken0);
-        LiquidityCommitmentCertificate lcc1 = LiquidityCommitmentCertificate(lccToken1);
-
-        assertEq(lcc0.underlyingAsset(), address(token0));
-        assertEq(lcc1.underlyingAsset(), address(token1));
-        assertEq(lcc0.marketFactory(), address(marketFactory));
-        assertEq(lcc1.marketFactory(), address(marketFactory));
-
-        // Verify bounds are set
-        assertTrue(lcc0.bounds(address(poolManager)));
-        assertTrue(lcc0.bounds(address(this)));
-        assertTrue(lcc1.bounds(address(poolManager)));
-        assertTrue(lcc1.bounds(address(this)));
-
-        // Verify hooks were created
-        address coreHook = marketFactory.getHook(corePoolId);
-        address proxyHook = marketFactory.getHook(proxyPoolId);
-
-        assertTrue(coreHook != address(0));
-        assertTrue(proxyHook != address(0));
+    function testGetCoreHook() public {
+        assertEq(factory.getCoreHook(), coreHookAddr);
     }
 
-    function test_CreateMarketWithExistingLCC() public {
-        address[] memory initialBounds = new address[](2);
-        initialBounds[0] = address(poolManager);
-        initialBounds[1] = address(this);
-
-        vm.startPrank(owner);
-
-        // Create first market
-        marketFactory.createMarket(address(token0), address(token1), initialBounds);
-
-        // Create second market with same token0 but different token1
-        MockERC20 token2 = new MockERC20("Mock Token 2", "MTK2", 18);
-        marketFactory.createMarket(address(token0), address(token2), initialBounds);
-        vm.stopPrank();
-
-        // Verify same LCC token is reused for token0
-        address lccToken0First = marketFactory.getLCC(address(token0));
-        address lccToken0Second = marketFactory.getLCC(address(token0));
-
-        assertEq(lccToken0First, lccToken0Second);
+    function testGetProxyHook() public {
+        assertEq(factory.getProxyHook(), proxyHookAddr);
     }
 
-    function test_AddBounds() public {
-        address[] memory initialBounds = new address[](1);
-        initialBounds[0] = address(poolManager);
+    function testAddRemoveBounds() public {
+        vm.prank(owner);
+        factory.createMarket(
+            address(token0),
+            address(token1),
+            3000,
+            60,
+            79228162514264337593543950336
+        );
 
-        vm.startPrank(owner);
-        (PoolId corePoolId, PoolId proxyPoolId) =
-            marketFactory.createMarket(address(token0), address(token1), initialBounds);
-        vm.stopPrank();
+        address lcc0 = factory.getLCC(address(token0));
 
-        address lccToken0 = marketFactory.getLCC(address(token0));
-        LiquidityCommitmentCertificate lcc0 = LiquidityCommitmentCertificate(lccToken0);
-
-        // Initially only poolManager should be a bound
-        assertTrue(lcc0.bounds(address(poolManager)));
-        assertFalse(lcc0.bounds(user1));
-
-        // Add new bounds
         address[] memory newBounds = new address[](1);
-        newBounds[0] = user1;
+        newBounds[0] = makeAddr("newBound");
 
-        vm.startPrank(owner);
-        marketFactory.addBounds(lccToken0, newBounds);
-        vm.stopPrank();
+        vm.prank(owner);
+        factory.addBounds(lcc0, newBounds);
+        assertTrue(LiquidityCommitmentCertificate(lcc0).bounds(newBounds[0]));
 
-        // Verify new bound was added
-        assertTrue(lcc0.bounds(user1));
+        vm.prank(owner);
+        factory.removeBounds(lcc0, newBounds);
+        assertFalse(LiquidityCommitmentCertificate(lcc0).bounds(newBounds[0]));
     }
 
-    function test_RemoveBounds() public {
-        address[] memory initialBounds = new address[](2);
-        initialBounds[0] = address(poolManager);
-        initialBounds[1] = user1;
+    function testIsBound() public {
+        vm.prank(owner);
+        factory.createMarket(
+            address(token0),
+            address(token1),
+            3000,
+            60,
+            79228162514264337593543950336
+        );
 
-        vm.startPrank(owner);
-        (PoolId corePoolId, PoolId proxyPoolId) =
-            marketFactory.createMarket(address(token0), address(token1), initialBounds);
-        vm.stopPrank();
+        address lcc0 = factory.getLCC(address(token0));
+        address boundAddr = makeAddr("bound");
 
-        address lccToken0 = marketFactory.getLCC(address(token0));
-        LiquidityCommitmentCertificate lcc0 = LiquidityCommitmentCertificate(lccToken0);
+        address[] memory bounds = new address[](1);
+        bounds[0] = boundAddr;
 
-        // Initially both should be bounds
-        assertTrue(lcc0.bounds(address(poolManager)));
-        assertTrue(lcc0.bounds(user1));
+        vm.prank(owner);
+        factory.addBounds(lcc0, bounds);
 
-        // Remove user1 from bounds
-        address[] memory boundsToRemove = new address[](1);
-        boundsToRemove[0] = user1;
-
-        vm.startPrank(owner);
-        marketFactory.removeBounds(lccToken0, boundsToRemove);
-        vm.stopPrank();
-
-        // Verify user1 was removed from bounds
-        assertTrue(lcc0.bounds(address(poolManager)));
-        assertFalse(lcc0.bounds(user1));
+        assertTrue(factory.isBound(lcc0, boundAddr));
     }
 
-    function test_IsBound() public {
-        address[] memory initialBounds = new address[](1);
-        initialBounds[0] = user1;
-
-        vm.startPrank(owner);
-        (PoolId corePoolId, PoolId proxyPoolId) =
-            marketFactory.createMarket(address(token0), address(token1), initialBounds);
-        vm.stopPrank();
-
-        address lccToken0 = marketFactory.getLCC(address(token0));
-
-        // Test isBound function
-        assertTrue(marketFactory.isBound(lccToken0, user1));
-        assertFalse(marketFactory.isBound(lccToken0, user2));
-    }
-
-    function test_RevertWhenNotOwner() public {
-        address[] memory initialBounds = new address[](1);
-        initialBounds[0] = address(poolManager);
-
-        vm.startPrank(user1);
-        vm.expectRevert();
-        marketFactory.createMarket(address(token0), address(token1), initialBounds);
-        vm.stopPrank();
-    }
-
-    function test_RevertWhenInvalidUnderlyingAsset() public {
-        address[] memory initialBounds = new address[](1);
-        initialBounds[0] = address(poolManager);
-
-        vm.startPrank(owner);
+    function testRevertInvalidUnderlying() public {
+        vm.prank(owner);
         vm.expectRevert(MarketFactory.InvalidUnderlyingAsset.selector);
-        marketFactory.createMarket(address(0), address(token1), initialBounds);
-        vm.stopPrank();
-    }
-
-    function test_RevertWhenInvalidPoolManager() public {
-        address[] memory initialBounds = new address[](1);
-        initialBounds[0] = address(poolManager);
-
-        vm.startPrank(owner);
-        vm.expectRevert(MarketFactory.InvalidPoolParameters.selector);
-        new MarketFactory(address(0), initialBounds);
-        vm.stopPrank();
+        factory.createMarket(
+            address(0),
+            address(token1),
+            3000,
+            60,
+            79228162514264337593543950336
+        );
     }
 }

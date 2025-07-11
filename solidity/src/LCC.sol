@@ -3,7 +3,6 @@ pragma solidity ^0.8.20;
 
 import {IERC20Metadata} from "openzeppelin-contracts/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {SafeTransferLib} from "solmate/utils/SafeTransferLib.sol";
-import "forge-std/console.sol";
 import {ERC20} from "solmate/tokens/ERC20.sol";
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 
@@ -64,7 +63,16 @@ contract LiquidityCommitmentCertificate is ERC20 {
         address _underlyingAsset,
         address[] memory _issuers,
         address _marketFactory
-    ) {
+    )
+        ERC20(
+            string.concat(
+                "Fiet Liquidity Commitment Certificate for ",
+                IERC20Metadata(_underlyingAsset).name()
+            ),
+            string.concat("lcc-", IERC20Metadata(_underlyingAsset).symbol()),
+            IERC20Metadata(_underlyingAsset).decimals()
+        )
+    {
         // TODO: handle ETH native token is future?
         if (_underlyingAsset == address(0)) {
             revert InvalidUnderlyingAsset();
@@ -76,23 +84,11 @@ contract LiquidityCommitmentCertificate is ERC20 {
         underlyingAsset = _underlyingAsset;
         marketFactory = _marketFactory;
 
-        IERC20Metadata metadata = IERC20Metadata(underlyingAsset);
-        string memory _name = metadata.name();
-        string memory _symbol = metadata.symbol();
-        uint8 _decimals = metadata.decimals();
-
         for (uint256 i = 0; i < _issuers.length; i++) {
             issuers[_issuers[i]] = true;
         }
 
         // Note: bounds are managed by the MarketFactory, not set in constructor
-
-        string memory prefixedSymbol = string.concat("lcc-", _symbol);
-        string memory prefixedName = string.concat(
-            "Fiet Liquidity Commitment Certificate for ",
-            _name
-        );
-        ERC20(prefixedName, prefixedSymbol, _decimals);
     }
 
     // some trusted issuer Smart Contracts can be allowed to mint tokens and hold the liquidity
@@ -104,7 +100,7 @@ contract LiquidityCommitmentCertificate is ERC20 {
         uaSupply += amount;
     }
 
-    function burnOnSettle(address from, uint256 amount) external onlyIssuer {
+    function burnOnSettle(uint256 amount) external onlyIssuer {
         address issuer = msg.sender;
         burnOnSettleQueue[issuer] += amount;
     }
@@ -169,13 +165,13 @@ contract LiquidityCommitmentCertificate is ERC20 {
         _unwrap(msg.sender, to, amount);
     }
 
-    // TODO: Re-enable in the future...
+    // TODO: Re-enable protocol-bounds in the future...
 
     // On transfer hook...
     // function onTransfer(address from, address to, uint256 amount) internal onlyProtocolTransfer(msg.sender, to){
-    function onTransfer(address from, address to, uint256) internal {
+    function onTransfer(address, address to, uint256) internal {
         // Burn if parameters match.
-        if (issuers[to] != address(0) && burnOnSettleQueue[to] > 0) {
+        if (issuers[to] && burnOnSettleQueue[to] > 0) {
             _burn(to, burnOnSettleQueue[to]);
             burnOnSettleQueue[to] = 0;
         }
@@ -196,19 +192,5 @@ contract LiquidityCommitmentCertificate is ERC20 {
     ) public virtual override returns (bool) {
         onTransfer(from, to, amount);
         return super.transferFrom(from, to, amount);
-    }
-
-    function addBounds(address[] calldata _bounds) external {
-        require(msg.sender == marketFactory, "Only factory can add bounds");
-        for (uint256 i = 0; i < _bounds.length; i++) {
-            bounds[_bounds[i]] = true;
-        }
-    }
-
-    function removeBounds(address[] calldata _bounds) external {
-        require(msg.sender == marketFactory, "Only factory can remove bounds");
-        for (uint256 i = 0; i < _bounds.length; i++) {
-            bounds[_bounds[i]] = false;
-        }
     }
 }

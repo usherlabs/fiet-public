@@ -12,7 +12,9 @@ import {ScriptHelper} from "./deployments/ScriptHelper.s.sol";
 contract ReadDeploymentScript is ScriptHelper {
     function run() external view {
         _setFilename("sepolia");
-        console.log("Reading deployment addresses from script/deployments/sepolia_deployments.json...");
+        console.log(
+            "Reading deployment addresses from script/deployments/sepolia_deployments.json..."
+        );
 
         // Read addresses from JSON file
         address coreHook = readAddress("coreHook");
@@ -36,17 +38,21 @@ contract ReadDeploymentScript is ScriptHelper {
 
         // Check if addresses are valid
         if (coreHook == address(0)) {
-            console.log("⚠️  CoreHook address not found in deployment file");
+            console.log("  CoreHook address not found in deployment file");
         }
         if (proxyHook == address(0)) {
-            console.log("⚠️  ProxyHook address not found in deployment file");
+            console.log("  ProxyHook address not found in deployment file");
         }
         if (marketFactory == address(0)) {
-            console.log("⚠️  MarketFactory address not found in deployment file");
+            console.log("  MarketFactory address not found in deployment file");
         }
 
-        if (coreHook != address(0) && proxyHook != address(0) && marketFactory != address(0)) {
-            console.log("\n✓ All deployment addresses found!");
+        if (
+            coreHook != address(0) &&
+            proxyHook != address(0) &&
+            marketFactory != address(0)
+        ) {
+            console.log("\nAll deployment addresses found!");
         }
     }
 
@@ -69,7 +75,11 @@ contract ReadDeploymentScript is ScriptHelper {
     function getDeploymentMetadata()
         external
         view
-        returns (string memory deploymentDate, string memory deploymentNetwork, string memory poolManager)
+        returns (
+            string memory deploymentDate,
+            string memory deploymentNetwork,
+            string memory poolManager
+        )
     {
         deploymentDate = readString("deploymentDate");
         deploymentNetwork = readString("deploymentNetwork");

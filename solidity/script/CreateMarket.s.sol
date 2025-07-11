@@ -3,7 +3,7 @@ pragma solidity ^0.8.0;
 
 import {Script, console} from "forge-std/Script.sol";
 import {MarketFactory} from "../src/MarketFactory.sol";
-import {SepoliaConstants} from "./constants.sol";
+import {SepoliaConstants} from "./constants/Sepolia.sol";
 import {ScriptHelper} from "./deployments/ScriptHelper.s.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 
@@ -82,9 +82,11 @@ contract CreateMarketScript is ScriptHelper {
 
         try readAddress("marketFactory") returns (address factory) {
             marketFactory = factory;
-            console.log("✓ MarketFactory address loaded:", marketFactory);
+            console.log("MarketFactory address loaded:", marketFactory);
         } catch {
-            revert("MarketFactory address not found in deployment file. Please run DeployComplete.s.sol first.");
+            revert(
+                "MarketFactory address not found in deployment file. Please run DeployComplete.s.sol first."
+            );
         }
     }
 
@@ -135,12 +137,21 @@ contract CreateMarketScript is ScriptHelper {
         require(marketFactory != address(0), "MarketFactory address is zero");
         require(underlyingAsset0 != address(0), "Underlying asset 0 is zero");
         require(underlyingAsset1 != address(0), "Underlying asset 1 is zero");
-        require(underlyingAsset0 != underlyingAsset1, "Assets must be different");
-        require(corePoolFee >= 0, "Core pool fee must be greater than or equal to 0");
+        require(
+            underlyingAsset0 != underlyingAsset1,
+            "Assets must be different"
+        );
+        require(
+            corePoolFee >= 0,
+            "Core pool fee must be greater than or equal to 0"
+        );
         require(tickSpacing > 0, "Tick spacing must be greater than 0");
-        require(initialSqrtPriceX96 > 0, "Initial price must be greater than 0");
+        require(
+            initialSqrtPriceX96 > 0,
+            "Initial price must be greater than 0"
+        );
 
-        console.log("✓ Market parameters validated");
+        console.log("Market parameters validated");
     }
 
     /**
@@ -150,13 +161,18 @@ contract CreateMarketScript is ScriptHelper {
         MarketFactory factory = MarketFactory(marketFactory);
 
         // Call createMarket function
-        (PoolId coreId, PoolId proxyId) =
-            factory.createMarket(underlyingAsset0, underlyingAsset1, corePoolFee, tickSpacing, initialSqrtPriceX96);
+        (PoolId coreId, PoolId proxyId) = factory.createMarket(
+            underlyingAsset0,
+            underlyingAsset1,
+            corePoolFee,
+            tickSpacing,
+            initialSqrtPriceX96
+        );
 
         corePoolId = coreId;
         proxyPoolId = proxyId;
 
-        console.log("✓ Market created successfully");
+        console.log("Market created successfully");
     }
 
     /**
@@ -182,7 +198,7 @@ contract CreateMarketScript is ScriptHelper {
         require(storedProxyId == proxyPoolId, "Core to proxy mapping mismatch");
         require(storedCoreId == corePoolId, "Proxy to core mapping mismatch");
 
-        console.log("✓ Pool relationships verified");
+        console.log("Pool relationships verified");
     }
 
     /**
@@ -193,18 +209,45 @@ contract CreateMarketScript is ScriptHelper {
 
         // Create a unique market identifier
         string memory marketId = string.concat(
-            vm.toString(underlyingAsset0), "_", vm.toString(underlyingAsset1), "_", vm.toString(corePoolFee)
+            vm.toString(underlyingAsset0),
+            "_",
+            vm.toString(underlyingAsset1),
+            "_",
+            vm.toString(corePoolFee)
         );
 
-        writeString(string.concat(marketId, "_corePoolId"), vm.toString(PoolId.unwrap(corePoolId)));
-        writeString(string.concat(marketId, "_proxyPoolId"), vm.toString(PoolId.unwrap(proxyPoolId)));
-        writeString(string.concat(marketId, "_underlyingAsset0"), vm.toString(underlyingAsset0));
-        writeString(string.concat(marketId, "_underlyingAsset1"), vm.toString(underlyingAsset1));
-        writeString(string.concat(marketId, "_corePoolFee"), vm.toString(corePoolFee));
-        writeString(string.concat(marketId, "_tickSpacing"), vm.toString(tickSpacing));
-        writeString(string.concat(marketId, "_initialSqrtPriceX96"), vm.toString(initialSqrtPriceX96));
+        writeString(
+            string.concat(marketId, "_corePoolId"),
+            vm.toString(PoolId.unwrap(corePoolId))
+        );
+        writeString(
+            string.concat(marketId, "_proxyPoolId"),
+            vm.toString(PoolId.unwrap(proxyPoolId))
+        );
+        writeString(
+            string.concat(marketId, "_underlyingAsset0"),
+            vm.toString(underlyingAsset0)
+        );
+        writeString(
+            string.concat(marketId, "_underlyingAsset1"),
+            vm.toString(underlyingAsset1)
+        );
+        writeString(
+            string.concat(marketId, "_corePoolFee"),
+            vm.toString(corePoolFee)
+        );
+        writeString(
+            string.concat(marketId, "_tickSpacing"),
+            vm.toString(tickSpacing)
+        );
+        writeString(
+            string.concat(marketId, "_initialSqrtPriceX96"),
+            vm.toString(initialSqrtPriceX96)
+        );
 
-        console.log("✓ Market details written to script/deployments/sepolia_markets_deployments.json");
+        console.log(
+            "Market details written to script/deployments/sepolia_markets_deployments.json"
+        );
     }
 
     /**
@@ -223,7 +266,7 @@ contract CreateMarketScript is ScriptHelper {
         require(storedProxyId == proxyPoolId, "Core to proxy mapping mismatch");
         require(storedCoreId == corePoolId, "Proxy to core mapping mismatch");
 
-        console.log("✓ Pool relationships verified");
+        console.log("Pool relationships verified");
 
         // Verify LCC tokens exist
         address lccToken0 = factory.getLCC(underlyingAsset0);
@@ -232,14 +275,20 @@ contract CreateMarketScript is ScriptHelper {
         require(lccToken0 != address(0), "LCC token 0 not found");
         require(lccToken1 != address(0), "LCC token 1 not found");
 
-        console.log("✓ LCC tokens verified");
+        console.log("LCC tokens verified");
 
         // Verify underlying assets
-        require(factory.getUnderlyingAsset(lccToken0) == underlyingAsset0, "LCC token 0 underlying mismatch");
-        require(factory.getUnderlyingAsset(lccToken1) == underlyingAsset1, "LCC token 1 underlying mismatch");
+        require(
+            factory.getUnderlyingAsset(lccToken0) == underlyingAsset0,
+            "LCC token 0 underlying mismatch"
+        );
+        require(
+            factory.getUnderlyingAsset(lccToken1) == underlyingAsset1,
+            "LCC token 1 underlying mismatch"
+        );
 
-        console.log("✓ Underlying assets verified");
-        console.log("✓ Market verification complete!");
+        console.log("Underlying assets verified");
+        console.log("Market verification complete!");
     }
 
     /**

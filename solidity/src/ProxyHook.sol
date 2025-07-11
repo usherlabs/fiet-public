@@ -7,14 +7,11 @@ import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {CurrencySettler} from "@uniswap/v4-core/test/utils/CurrencySettler.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {BeforeSwapDelta, toBeforeSwapDelta} from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
-import {BaseHook} from "@uniswap/v4-periphery/src/utils/BaseHook.sol";
+import {BaseHook} from "v4-periphery/src/utils/BaseHook.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 // import {BeforeSwapDeltaLibrary} from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
 
-import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "forge-std/console.sol";
 
 import {LiquidityCommitmentCertificate} from "./LCC.sol";
@@ -50,7 +47,12 @@ contract ProxyHook is BaseHook, IHookCommon {
 
     // v4 pool id
     // router address
-    event HookModifyLiquidity(bytes32 indexed id, address indexed sender, int128 amount0, int128 amount1);
+    event HookModifyLiquidity(
+        bytes32 indexed id,
+        address indexed sender,
+        int128 amount0,
+        int128 amount1
+    );
 
     address public immutable marketFactory;
 
@@ -77,14 +79,19 @@ contract ProxyHook is BaseHook, IHookCommon {
      * @param value The int128 value to convert
      * @return The uint256 representation (absolute value)
      */
-    function _safeInt128ToUint256(int128 value) internal pure returns (uint256) {
+    function _safeInt128ToUint256(
+        int128 value
+    ) internal pure returns (uint256) {
         if (value < 0) {
             return uint256(uint128(-value));
         }
         return uint256(uint128(value));
     }
 
-    constructor(address _poolManager, address _marketFactory) BaseHook(IPoolManager(_poolManager)) {
+    constructor(
+        address _poolManager,
+        address _marketFactory
+    ) BaseHook(IPoolManager(_poolManager)) {
         marketFactory = _marketFactory;
     }
 
@@ -96,36 +103,43 @@ contract ProxyHook is BaseHook, IHookCommon {
      * @dev Updates the core pool key with the actual core pool configuration
      * @param _corePoolKey The actual core pool key to set
      */
-    function setCorePoolKey(PoolId thisPoolId, PoolKey calldata _corePoolKey) external onlyFactory {
+    function setCorePoolKey(
+        PoolId thisPoolId,
+        PoolKey calldata _corePoolKey
+    ) external onlyFactory {
         corePoolKey[thisPoolId] = _corePoolKey;
     }
 
-    function getHookPermissions() public pure override returns (Hooks.Permissions memory) {
-        return Hooks.Permissions({
-            beforeInitialize: true, // Ensure that markets are only created by MarketFactory
-            afterInitialize: false,
-            beforeAddLiquidity: true, // Don't allow adding liquidity normally
-            afterAddLiquidity: false,
-            beforeRemoveLiquidity: false,
-            afterRemoveLiquidity: false,
-            beforeSwap: true, // Override how swaps are done
-            afterSwap: false,
-            beforeDonate: false,
-            afterDonate: false,
-            beforeSwapReturnDelta: true, // Allow beforeSwap to return a custom delta
-            afterSwapReturnDelta: false,
-            afterAddLiquidityReturnDelta: false,
-            afterRemoveLiquidityReturnDelta: false
-        });
+    function getHookPermissions()
+        public
+        pure
+        override
+        returns (Hooks.Permissions memory)
+    {
+        return
+            Hooks.Permissions({
+                beforeInitialize: true, // Ensure that markets are only created by MarketFactory
+                afterInitialize: false,
+                beforeAddLiquidity: true, // Don't allow adding liquidity normally
+                afterAddLiquidity: false,
+                beforeRemoveLiquidity: false,
+                afterRemoveLiquidity: false,
+                beforeSwap: true, // Override how swaps are done
+                afterSwap: false,
+                beforeDonate: false,
+                afterDonate: false,
+                beforeSwapReturnDelta: true, // Allow beforeSwap to return a custom delta
+                afterSwapReturnDelta: false,
+                afterAddLiquidityReturnDelta: false,
+                afterRemoveLiquidityReturnDelta: false
+            });
     }
 
-    function _beforeInitialize(address sender, PoolKey calldata key, uint160)
-        internal
-        pure
-        virtual
-        override
-        returns (bytes4)
-    {
+    function _beforeInitialize(
+        address sender,
+        PoolKey calldata key,
+        uint160
+    ) internal pure virtual override returns (bytes4) {
         if (sender != marketFactory) {
             revert InvalidInitialiser();
         }
@@ -137,18 +151,22 @@ contract ProxyHook is BaseHook, IHookCommon {
         return this._beforeInitialize.selector;
     }
 
-    function _beforeAddLiquidity(address, PoolKey calldata, ModifyLiquidityParams calldata, bytes calldata)
-        internal
-        pure
-        virtual
-        override
-        returns (bytes4)
-    {
+    function _beforeAddLiquidity(
+        address,
+        PoolKey calldata,
+        ModifyLiquidityParams calldata,
+        bytes calldata
+    ) internal pure virtual override returns (bytes4) {
         revert AddLiquidityThroughHookNotAllowed();
     }
 
-    function unlockCallback(bytes calldata data) external override onlyPoolManager returns (bytes memory) {
-        LiquidityCallbackData memory callbackData = abi.decode(data, (LiquidityCallbackData));
+    function unlockCallback(
+        bytes calldata data
+    ) external override onlyPoolManager returns (bytes memory) {
+        LiquidityCallbackData memory callbackData = abi.decode(
+            data,
+            (LiquidityCallbackData)
+        );
         if (callbackData.actionType == ActionType.DirectLPAddLiquidity) {
             // Add liquidity to the core pool
 
@@ -186,7 +204,9 @@ contract ProxyHook is BaseHook, IHookCommon {
                 callbackData.amount1,
                 true // `mint` = `true` i.e. we're minting claim tokens for the hook, equivalent to money we just deposited to the PM
             );
-        } else if (callbackData.actionType == ActionType.DirectLPRemoveLiquidity) {
+        } else if (
+            callbackData.actionType == ActionType.DirectLPRemoveLiquidity
+        ) {
             // Remove liquidity from the core pool
 
             callbackData.currency0.settle(
@@ -228,8 +248,12 @@ contract ProxyHook is BaseHook, IHookCommon {
         // require(block.timestamp <= deadline, "Deadline not met");
 
         // Get the LCC tokens for the core pool
-        LiquidityCommitmentCertificate lccToken0 = Currency.unwrap(corePoolkey.currency0);
-        LiquidityCommitmentCertificate lccToken1 = Currency.unwrap(corePoolkey.currency1);
+        LiquidityCommitmentCertificate lccToken0 = Currency.unwrap(
+            corePoolkey.currency0
+        );
+        LiquidityCommitmentCertificate lccToken1 = Currency.unwrap(
+            corePoolkey.currency1
+        );
 
         IPoolManager(self.poolManager).unlock(
             abi.encode(
@@ -249,33 +273,48 @@ contract ProxyHook is BaseHook, IHookCommon {
     // to ensure that the user gets a debit of amount specified
     // and we disable the core swap mechanism
     // and proxy the swap through the core pool
-    function _beforeSwap(address, PoolKey calldata key, SwapParams calldata params, bytes calldata)
-        internal
-        override
-        returns (bytes4, BeforeSwapDelta, uint24)
-    {
+    function _beforeSwap(
+        address,
+        PoolKey calldata key,
+        SwapParams calldata params,
+        bytes calldata
+    ) internal override returns (bytes4, BeforeSwapDelta, uint24) {
         bool coreZeroForOne;
         PoolKey memory coreKey = corePoolKey[key.toId()];
 
-        LiquidityCommitmentCertificate lccToken0 = LiquidityCommitmentCertificate(Currency.unwrap(coreKey.currency0));
-        LiquidityCommitmentCertificate lccToken1 = LiquidityCommitmentCertificate(Currency.unwrap(coreKey.currency1));
+        LiquidityCommitmentCertificate lccToken0 = LiquidityCommitmentCertificate(
+                Currency.unwrap(coreKey.currency0)
+            );
+        LiquidityCommitmentCertificate lccToken1 = LiquidityCommitmentCertificate(
+                Currency.unwrap(coreKey.currency1)
+            );
 
         if (params.zeroForOne) {
             // If tokens match order, then coreZeroForOne is true
-            coreZeroForOne = Currency.unwrap(key.currency0) == lccToken0.underlyingAsset();
+            coreZeroForOne =
+                Currency.unwrap(key.currency0) == lccToken0.underlyingAsset();
         } else {
             // If tokens match order, then coreZeroForOne is false
-            coreZeroForOne = Currency.unwrap(key.currency1) == lccToken1.underlyingAsset();
+            coreZeroForOne =
+                Currency.unwrap(key.currency1) == lccToken1.underlyingAsset();
         }
 
         // If zeroForOne match, then lccTokenForCurrency0 is lccToken0 and lccTokenForCurrency1 is lccToken1
         // If zeroForOne does not match, then lccTokenForCurrency0 is lccToken1 and lccTokenForCurrency1 is lccToken0
-        LiquidityCommitmentCertificate lccTokenForCurrency0 =
-            params.zeroForOne == coreZeroForOne ? lccToken0 : lccToken1;
-        LiquidityCommitmentCertificate lccTokenForCurrency1 =
-            params.zeroForOne == coreZeroForOne ? lccToken1 : lccToken0;
-        Currency lccCurrencyForCurrency0 = Currency.wrap(address(lccTokenForCurrency0));
-        Currency lccCurrencyForCurrency1 = Currency.wrap(address(lccTokenForCurrency1));
+        LiquidityCommitmentCertificate lccTokenForCurrency0 = params
+            .zeroForOne == coreZeroForOne
+            ? lccToken0
+            : lccToken1;
+        LiquidityCommitmentCertificate lccTokenForCurrency1 = params
+            .zeroForOne == coreZeroForOne
+            ? lccToken1
+            : lccToken0;
+        Currency lccCurrencyForCurrency0 = Currency.wrap(
+            address(lccTokenForCurrency0)
+        );
+        Currency lccCurrencyForCurrency1 = Currency.wrap(
+            address(lccTokenForCurrency1)
+        );
 
         // BalanceDelta is a packed value of (currency0Amount, currency1Amount)
 
@@ -344,18 +383,32 @@ contract ProxyHook is BaseHook, IHookCommon {
 
             // Settle LCC tokens to the PoolManager
             // Accounts for LCC of 0 IN for the Core Pool Swap
-            lccCurrencyForCurrency0.settle(poolManager, address(this), amountIn, false);
+            lccCurrencyForCurrency0.settle(
+                poolManager,
+                address(this),
+                amountIn,
+                false
+            );
 
             // Now take the underlying tokens from PoolManager to the LCC
             // This will allow unwrap with liquidity from trader deposits.
-            poolManager.take(key.currency0, address(lccTokenForCurrency0), amountIn);
+            poolManager.take(
+                key.currency0,
+                address(lccTokenForCurrency0),
+                amountIn
+            );
 
             // Take LCC tokens of Token 1 from PoolManager
             // Accounts for LCC of 1 OUT for the Core Pool Swap
-            lccCurrencyForCurrency1.take(poolManager, address(this), amountOut, false);
+            lccCurrencyForCurrency1.take(
+                poolManager,
+                address(this),
+                amountOut,
+                false
+            );
 
             // Unwrap and Burn the LCC of Token 1 from the PM... might need to be executed elsewhere...
-            lccTokenForCurrency1.burnOnSettle(address(this), amountOut);
+            lccTokenForCurrency1.burnOnSettle(amountOut);
             // Once Uniswap conducts fund settlement, it'll burn this amountOut from the LCC.
         } else {
             // If user is selling Token 1 (IN) and buying Token 0 (OUT)
@@ -363,18 +416,32 @@ contract ProxyHook is BaseHook, IHookCommon {
             lccTokenForCurrency1.mint(address(this), amountIn);
 
             // Settle LCC tokens to the PoolManager
-            lccCurrencyForCurrency1.settle(poolManager, address(this), amountIn, false);
+            lccCurrencyForCurrency1.settle(
+                poolManager,
+                address(this),
+                amountIn,
+                false
+            );
 
             // Now take the underlying tokens from PoolManager to the LCC
             // This will allow unwrap with liquidity from trader deposits.
-            poolManager.take(key.currency1, address(lccTokenForCurrency1), amountIn);
+            poolManager.take(
+                key.currency1,
+                address(lccTokenForCurrency1),
+                amountIn
+            );
 
             // Take LCC tokens of Token 0 from PoolManager
             // Accounts for LCC of 0 OUT for the Core Pool Swap
-            lccCurrencyForCurrency0.take(poolManager, address(this), amountOut, false);
+            lccCurrencyForCurrency0.take(
+                poolManager,
+                address(this),
+                amountOut,
+                false
+            );
 
             // Unwrap and Burn the LCC of Token 0 from the PM
-            lccTokenForCurrency0.burnOnSettle(address(this), amountOut);
+            lccTokenForCurrency0.burnOnSettle(amountOut);
             // Once Uniswap conducts fund settlement, it'll burn this amountOut from the LCC.
         }
 

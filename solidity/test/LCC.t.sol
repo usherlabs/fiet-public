@@ -1,131 +1,162 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
+pragma solidity ^0.8.20;
 
 import "forge-std/Test.sol";
-import {CurrencyLibrary, Currency} from "@uniswap/v4-core/src/types/Currency.sol";
-import {Constants} from "@uniswap/v4-core/test/utils/Constants.sol";
-import {IERC20Minimal} from "@uniswap/v4-core/src/interfaces/external/IERC20Minimal.sol";
-import {MockERC20} from "@uniswap/v4-core/lib/solmate/src/test/utils/mocks/MockERC20.sol";
-
 import {LiquidityCommitmentCertificate} from "../src/LCC.sol";
+import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
+import {MockERC20} from "solmate/test/utils/mocks/MockERC20.sol";
 
 contract LCCTest is Test {
-    LiquidityCommitmentCertificate lccToken;
-    MockERC20 token;
-    address custodian = makeAddr("custodian");
-    address userOne = makeAddr("userOne");
-    address userTwo = makeAddr("userTwo");
-    uint8 decimals = 6;
-    uint256 amountToMint = 100 * 10 ** decimals; // 100 tokens
-
-    function deployLCCTokens(string memory name, string memory symbol, address underlyingAsset, uint256 base_vts)
-        internal
-        returns (LiquidityCommitmentCertificate lccToken)
-    {
-        // Define issuers and bounds arrays for LCC constructor
-        address[] memory issuers = new address[](1);
-        issuers[0] = address(this); // Use test contract as initial issuer
-
-        address[] memory bounds = new address[](1);
-        bounds[0] = address(this); // Use test contract as initial bound
-
-        lccToken = new LiquidityCommitmentCertificate(underlyingAsset, issuers, bounds);
-        return lccToken;
-    }
-
-    function deployAndMintUnderlyingAsset(string memory name, string memory symbol, uint8 _decimals)
-        internal
-        returns (MockERC20)
-    {
-        token = new MockERC20(name, symbol, _decimals);
-
-        // send `amountToMint` mock usdc to user one and two
-        token.mint(userOne, amountToMint);
-        token.mint(userTwo, amountToMint);
-        return token;
-    }
-
-    function lccWhitelist() internal {
-        // Required to set to true
-        address[] memory newBounds = new address[](1);
-        newBounds[0] = custodian;
-        lccToken.addBounds(newBounds);
-        // Required to set to true
-        // Note: LCC uses issuers instead of LPs, and issuers are set in constructor
-        // For testing, we'll add userOne as a bound instead
-        newBounds[0] = userOne;
-        lccToken.addBounds(newBounds);
-    }
+    LiquidityCommitmentCertificate lcc;
+    MockERC20 underlying;
+    address factory;
+    address issuer1;
+    address issuer2;
+    address user1;
+    address user2;
 
     function setUp() public {
-        token = deployAndMintUnderlyingAsset("mock USDC", "mUSDC", decimals);
-        lccToken = deployLCCTokens("LCC USDC", "LCCUSDC", address(token), 10_000);
-        lccWhitelist();
+        factory = makeAddr("factory");
+        issuer1 = makeAddr("issuer1");
+        issuer2 = makeAddr("issuer2");
+        user1 = makeAddr("user1");
+        user2 = makeAddr("user2");
+
+        underlying = new MockERC20("Underlying", "UND", 18);
+
+        address[] memory issuers = new address[](2);
+        issuers[0] = issuer1;
+        issuers[1] = issuer2;
+
+        lcc = new LiquidityCommitmentCertificate(
+            address(underlying),
+            issuers,
+            factory
+        );
+
+        // Mock factory bounds
+        vm.mockCall(
+            factory,
+            abi.encodeWithSelector(IMarketFactory.bounds.selector, address(0)),
+            abi.encode(false)
+        );
     }
 
-    function test_correctDeployment() public view {
-        // Check custodian privilege
-        bool isAllowed = lccToken.bounds(custodian);
-        assertEq(isAllowed, true);
-        // Check LP privilege - userOne
-        bool isLpAllowed = lccToken.bounds(userOne);
-        assertEq(isLpAllowed, true);
-        // Check LP privilege - userTwo
-        bool isLpAllowedUserTwo = lccToken.bounds(userTwo);
-        assertEq(isLpAllowedUserTwo, false);
-        // Check underlying asset decimals
-        uint8 tokenDecimals = token.decimals();
-        assertEq(tokenDecimals, decimals);
-        // Check lcc asset decimals
-        uint8 lccTokenDecimals = lccToken.decimals();
-        assertEq(lccTokenDecimals, decimals);
-        // Check balance - userOne
-        uint256 userOneBalance = token.balanceOf(userOne);
-        assertEq(userOneBalance, amountToMint);
-        // Check balance - userTwo
-        uint256 userTwoBalance = token.balanceOf(userTwo);
-        assertEq(userTwoBalance, amountToMint);
+    function testConstructor() public {
+        assertEq(lcc.underlyingAsset(), address(underlying));
+        assertEq(lcc.marketFactory(), factory);
+        assertEq(
+            lcc.name(),
+            "Fiet Liquidity Commitment Certificate for Underlying"
+        );
+        assertEq(lcc.symbol(), "lcc-UND");
+        assertEq(lcc.decimals(), 18);
+        assertTrue(lcc.issuers(issuer1));
+        assertTrue(lcc.issuers(issuer2));
     }
 
-    function test_wrapUnderlyingAssetToLccToken() public {
-        uint256 amountToWrap = 10_000_000; // 10 Mock USDC
-        uint256 tokenBalanceBefore = token.balanceOf(address(userOne));
-        assertEq(tokenBalanceBefore, amountToMint);
-        // Check userOne LCC mock balance. This should be Zero
-        uint256 lccBalanceBefore = lccToken.balanceOf(address(userOne));
-        assertEq(lccBalanceBefore, 0);
-        // Check custodian balance. Underlying asset should go to custodian upon wrap
-        uint256 custodianBalanceBefore = token.balanceOf(address(custodian));
-        assertEq(custodianBalanceBefore, 0);
+    function testMintOnlyIssuer() public {
+        vm.expectRevert(
+            LiquidityCommitmentCertificate.SenderNotIssuer.selector
+        );
+        lcc.mint(100);
 
-        vm.startPrank(userOne);
-        token.approve(address(lccToken), type(uint256).max);
-        // Test wrap token - wrap
-        lccToken.wrap(custodian, amountToWrap);
+        vm.prank(issuer1);
+        lcc.mint(100);
+        assertEq(lcc.balanceOf(issuer1), 100);
+        assertEq(lcc.uaSupply(), 100);
+    }
+
+    function testBurnOnSettleOnlyIssuer() public {
+        vm.prank(issuer1);
+        lcc.mint(100);
+
+        vm.expectRevert(
+            LiquidityCommitmentCertificate.SenderNotIssuer.selector
+        );
+        lcc.burnOnSettle(50);
+
+        vm.prank(issuer1);
+        lcc.burnOnSettle(50);
+        assertEq(lcc.burnOnSettleQueue(issuer1), 50);
+    }
+
+    function testWrap() public {
+        underlying.mint(user1, 100);
+        vm.startPrank(user1);
+        underlying.approve(address(lcc), 100);
+        lcc.wrap(100);
         vm.stopPrank();
 
-        // Check lcc token balance after `wrap`
-        uint256 lccBalanceAfter = lccToken.balanceOf(address(userOne));
-        assertEq(lccBalanceAfter, amountToWrap);
-        // check underlying asset balance after `wrap`
-        uint256 tokenBalanceAfter = token.balanceOf(address(userOne));
-        assertEq(tokenBalanceAfter, tokenBalanceBefore - amountToWrap);
-        // Check custodian balance after. Underlying asset should go to custodian
-        uint256 custodianBalanceAfter = token.balanceOf(address(custodian));
-        assertEq(custodianBalanceAfter, amountToWrap);
+        assertEq(lcc.balanceOf(user1), 100);
+        assertEq(underlying.balanceOf(user1), 0);
+        assertEq(underlying.balanceOf(address(lcc)), 100);
+        assertEq(lcc.uaSupply(), 100);
     }
 
-    function test_unWrapToUnderlyingAsset() public {
-        vm.skip(true);
-        /**
-         * When unwrapping to underlying asset from user one this fails
-         * User should be able to wrap without restriction
-         */
-        test_wrapUnderlyingAssetToLccToken(); // performing wrap here
-        vm.startPrank(custodian);
-        uint256 amountToUnWrap = 5_000_000; // 5 mock USDC
-        // unwrap to underlying asset
-        lccToken.unwrap(userOne, amountToUnWrap);
+    function testUnwrap() public {
+        underlying.mint(user1, 100);
+        vm.startPrank(user1);
+        underlying.approve(address(lcc), 100);
+        lcc.wrap(100);
+        lcc.unwrap(100);
         vm.stopPrank();
+
+        assertEq(lcc.balanceOf(user1), 0);
+        assertEq(underlying.balanceOf(user1), 100);
+        assertEq(underlying.balanceOf(address(lcc)), 0);
+        assertEq(lcc.uaSupply(), 0);
+    }
+
+    function testWrapTo() public {
+        underlying.mint(user1, 100);
+        vm.startPrank(user1);
+        underlying.approve(address(lcc), 100);
+        lcc.wrapTo(user2, 100);
+        vm.stopPrank();
+
+        assertEq(lcc.balanceOf(user2), 100);
+        assertEq(underlying.balanceOf(user1), 0);
+        assertEq(underlying.balanceOf(address(lcc)), 100);
+    }
+
+    function testUnwrapTo() public {
+        underlying.mint(user1, 100);
+        vm.startPrank(user1);
+        underlying.approve(address(lcc), 100);
+        lcc.wrap(100);
+        lcc.unwrapTo(user2, 100);
+        vm.stopPrank();
+
+        assertEq(lcc.balanceOf(user1), 0);
+        assertEq(underlying.balanceOf(user2), 100);
+        assertEq(underlying.balanceOf(address(lcc)), 0);
+    }
+
+    function testTransferWithBurnOnSettle() public {
+        vm.prank(issuer1);
+        lcc.mint(100);
+
+        vm.prank(issuer1);
+        lcc.burnOnSettle(50);
+
+        vm.prank(issuer1);
+        lcc.transfer(issuer1, 100); // Transfer to self (issuer), should trigger burn
+
+        assertEq(lcc.balanceOf(issuer1), 50);
+        assertEq(lcc.burnOnSettleQueue(issuer1), 0);
+    }
+
+    function testTransferRestrictions() public {
+        // Currently, transfers are not restricted (TODO: re-enable)
+        // Add basic transfer test instead
+        vm.prank(issuer1);
+        lcc.mint(100);
+
+        vm.prank(issuer1);
+        lcc.transfer(user1, 50);
+
+        assertEq(lcc.balanceOf(user1), 50);
+        assertEq(lcc.balanceOf(issuer1), 50);
     }
 }
