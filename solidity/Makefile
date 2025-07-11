@@ -13,8 +13,7 @@ FORGE=forge
 SCRIPT_DIR=script
 DEPLOYMENTS=$(SCRIPT_DIR)/deployments/deployments.json
 
-.PHONY: build fork swap \
-	deploy-tokenB deploy-lccTokenA deploy-lccTokenB deploy-proxyHook deploy-corePool deploy-proxyPool \
+.PHONY: build deploy create-market
 
 # === All ===
 dev: deploy-tokenA deploy-tokenB deploy create-market
