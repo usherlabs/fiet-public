@@ -16,8 +16,6 @@ import {LiquidityCommitmentCertificate} from "./LCC.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {CurrencySettler} from "@uniswap/v4-core/test/utils/CurrencySettler.sol";
 
-import {console} from "forge-std/console.sol";
-
 /**
  * Core Pool should be aware of Positions.
  *     This way it can calculate and manage Liquidity Commitments (C_A(r)) for each Position.
@@ -105,6 +103,7 @@ contract CoreHook is BaseHook, IHookCommon {
         BalanceDelta,
         bytes calldata
     ) internal virtual override returns (bytes4, BalanceDelta) {
+        // TODO: Filter the sender address to determine whether it's MMPositionManager or DirectLP.
         ProxyHook(proxyHook).onDirectLP(
             key,
             delta,

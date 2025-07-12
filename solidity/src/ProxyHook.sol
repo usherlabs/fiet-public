@@ -217,25 +217,7 @@ contract ProxyHook is BaseHook, IHookCommon {
                 amount1,
                 true // `mint` = `true` i.e. we're minting claim tokens for the hook, equivalent to money we just deposited to the PM
             );
-
-            console.log("--------------------------------");
-            console.log("CoreHook: _afterAddLiquidity");
-            console.log("delta.amount0(): ", delta.amount0());
-            console.log("delta.amount1(): ", delta.amount1());
-            console.log("amount0: ", amount0);
-            console.log("amount1: ", amount1);
-            console.log("--------------------------------");
         } else if (actionType == ActionType.DirectLPRemoveLiquidity) {
-            console.log("--------------------------------");
-            console.log("CoreHook: _afterRemoveLiquidity");
-            console.log("Currency0: ", uaCurrency0.toId());
-            console.log("Currency1: ", uaCurrency1.toId());
-            console.log("delta.amount0(): ", delta.amount0());
-            console.log("delta.amount1(): ", delta.amount1());
-            console.log("amount0: ", amount0);
-            console.log("amount1: ", amount1);
-            console.log("--------------------------------");
-
             // Remove liquidity from the core pool
             uaCurrency0.settle(
                 poolManager,
