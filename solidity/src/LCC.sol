@@ -120,7 +120,7 @@ contract LiquidityCommitmentCertificate is ERC20 {
 
         if (deficit > 0) {
             // TODO: https://www.notion.so/usherlabs/Outcomes-of-LCC-Insufficient-Liquidity-22b6d8286da580c8a455efc4175970a0?source=copy_link#22b6d8286da580de8a33cf367d3b7220
-            // TODO: Add LCC into a queue, where if new liquidity is settled, it immediately covers the unwrap within their wallet.
+            // TODO: Add LCC into a queue, where if new liquidity is settled into market, it immediately covers the unwrap within their wallet.
         }
 
         return (amountToCancel, deficit);
@@ -128,8 +128,10 @@ contract LiquidityCommitmentCertificate is ERC20 {
 
     function prepareSettle(uint256 amount) external onlyIssuer {
         // Allow issuer to facilitate direct liquidity provision transfer of underlying tokens
-        IERC20(_underlyingAsset).approve(msg.sender, amount);
+        IERC20(underlyingAsset).approve(msg.sender, amount);
         uaSupply -= amount;
+
+        // TODO: We can use this hook to determine when LCC and therefore underlying assets are settled to market.
     }
 
     // DirectLPs and Traders engaging the CorePool directly will need LCC. LCC is 1:1 with the underlying asset.

@@ -391,9 +391,12 @@ contract ProxyHook is BaseHook, IHookCommon {
             );
 
             // Unwrap and Burn the LCC of Token 1 after taking from PM
-            (uint256 cancelledAmount, ) = lccTokenForCurrency1.cancel(
-                amountOut
-            );
+            (uint256 cancelledAmount, uint256 deficit) = lccTokenForCurrency1
+                .cancel(amountOut);
+
+            console.log("cancelledAmount: ", cancelledAmount);
+            console.log("deficit: ", deficit);
+
             // Once Uniswap conducts fund settlement, it'll burn this amountOut from the LCC.
 
             // Settle the output token to the PoolManager
@@ -432,9 +435,11 @@ contract ProxyHook is BaseHook, IHookCommon {
             );
 
             // Cancel (Unwrap/Burn) the LCC of Token 0 after taking from PM
-            (uint256 cancelledAmount, ) = lccTokenForCurrency0.cancel(
-                amountOut
-            );
+            (uint256 cancelledAmount, uint256 deficit) = lccTokenForCurrency0
+                .cancel(amountOut);
+
+            console.log("cancelledAmount: ", cancelledAmount);
+            console.log("deficit: ", deficit);
 
             // Settle the output token to the PoolManager
             // Burn claim tokens to release output token to the Trader from the PoolManager.
