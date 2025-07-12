@@ -156,6 +156,18 @@ This script will set up the initial state of the contracts as required by the pr
 
 Make sure to reference the latest version of these files for interacting with the most recently deployed contracts in your application.
 
+## Local Solidity Development Setup
+
+1. `make fork`
+
+2. `make all MODE=LOCAL`
+
+3. `forge script script/AddLiquidity.s.sol --rpc-url 127.0.0.1:8545 --broadcast`
+
+Remove Liquidity: `TOKEN_ID=47 forge script script/RemoveLiquidity.s.sol --rpc-url 127.0.0.1:8545`
+
+Execute Swap: `forge script script/SwapV4.s.sol --rpc-url 127.0.0.1:8545`
+
 ## Writing Tests
 
 Testing is essential for ensuring the reliability and security of the Fiet Protocol. This section outlines how to write and run tests for both Solidity and Stylus components of the protocol.
