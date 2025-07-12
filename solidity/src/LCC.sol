@@ -63,8 +63,7 @@ contract LiquidityCommitmentCertificate is ERC20 {
     constructor(
         address _underlyingAsset,
         address[] memory _issuers,
-        address _marketFactory,
-        address
+        address _marketFactory
     )
         ERC20(
             string.concat(
@@ -75,7 +74,7 @@ contract LiquidityCommitmentCertificate is ERC20 {
             IERC20Metadata(_underlyingAsset).decimals()
         )
     {
-        // TODO: handle ETH native token is future?
+        // TODO: handle ETH native token
         if (_underlyingAsset == address(0)) {
             revert InvalidUnderlyingAsset();
         }
@@ -90,12 +89,6 @@ contract LiquidityCommitmentCertificate is ERC20 {
             issuers[_issuers[i]] = true;
         }
 
-        // IERC20(_underlyingAsset).approve(_poolManager, type(uint256).max);
-        // Set unlimited allowance for CoreHook to facilitate direct liquidity provision transfer of underlying tokens
-        // IERC20(_underlyingAsset).approve(
-        //     IMarketFactory(marketFactory).getCoreHook(),
-        //     type(uint256).max
-        // );
         // Set unlimited allowance for ProxyHook to facilitate direct liquidity provision transfer of underlying tokens
         IERC20(_underlyingAsset).approve(
             IMarketFactory(marketFactory).getProxyHook(),

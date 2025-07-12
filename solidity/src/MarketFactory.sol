@@ -154,8 +154,7 @@ contract MarketFactory is IMarketFactory, Ownable2Step {
                 new LiquidityCommitmentCertificate(
                     underlyingAsset,
                     issuers,
-                    address(this),
-                    address(_poolManager)
+                    address(this)
                 )
             );
 

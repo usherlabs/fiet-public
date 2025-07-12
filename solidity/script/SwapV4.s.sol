@@ -40,6 +40,9 @@ contract SwapV4 is ScriptHelper {
     function run() external {
         console.log("Starting SwapV4 script...");
 
+        // Load deployment addresses
+        _setFilename("sepolia");
+
         router = IUniversalRouter(payable(SepoliaConstants.UNIVERSAL_ROUTER));
         console.log("Universal Router loaded");
 

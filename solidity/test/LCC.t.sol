@@ -9,7 +9,6 @@ import {MockERC20} from "solmate/test/utils/mocks/MockERC20.sol";
 contract LCCTest is Test {
     LiquidityCommitmentCertificate lcc;
     MockERC20 underlying;
-    address pm;
     address factory;
     address issuer1;
     address issuer2;
@@ -17,7 +16,6 @@ contract LCCTest is Test {
     address user2;
 
     function setUp() public {
-        pm = makeAddr("poolManager");
         factory = makeAddr("factory");
         issuer1 = makeAddr("issuer1");
         issuer2 = makeAddr("issuer2");
@@ -33,8 +31,7 @@ contract LCCTest is Test {
         lcc = new LiquidityCommitmentCertificate(
             address(underlying),
             issuers,
-            factory,
-            pm
+            factory
         );
 
         // Mock factory bounds
