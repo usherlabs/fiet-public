@@ -51,7 +51,8 @@ contract ProxyHookTest is Test, Deployers {
         LiquidityCommitmentCertificate token = new LiquidityCommitmentCertificate(
                 underlyingAsset,
                 issuers,
-                marketFactory
+                marketFactory,
+                address(0) // poolManager
             );
 
         address[10] memory toApprove = [

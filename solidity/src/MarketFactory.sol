@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {Ownable} from "openzeppelin-contracts/contracts/access/Ownable.sol";
+import {Ownable, Ownable2Step} from "openzeppelin-contracts/contracts/access/Ownable2Step.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
@@ -16,7 +16,7 @@ import {IHookCommon} from "./interfaces/IHookCommon.sol";
  * @notice Factory contract for creating Fiet protocol markets with LCC tokens and pool management
  * @dev Manages LCC token creation, pool deployment, and protocol bounds administration
  */
-contract MarketFactory is IMarketFactory, Ownable {
+contract MarketFactory is IMarketFactory, Ownable2Step {
     using PoolIdLibrary for PoolKey;
 
     IPoolManager private immutable _poolManager;
@@ -154,7 +154,8 @@ contract MarketFactory is IMarketFactory, Ownable {
                 new LiquidityCommitmentCertificate(
                     underlyingAsset,
                     issuers,
-                    address(this)
+                    address(this),
+                    address(_poolManager)
                 )
             );
 

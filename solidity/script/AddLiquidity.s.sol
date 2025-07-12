@@ -89,7 +89,6 @@ contract PositionManagerLiquidityScript is ScriptHelper {
 
         vm.startBroadcast(deployerPrivateKey);
         setAccounts(lpAddress);
-        provisionProxyHookLiquidity();
         vm.stopBroadcast();
 
         vm.startBroadcast(lpPrivateKey);
@@ -162,39 +161,9 @@ contract PositionManagerLiquidityScript is ScriptHelper {
         IERC20(usdtToken).transfer(user, 10000 ether);
     }
 
-    function provisionProxyHookLiquidity() internal {
-        console.log(" ");
-        console.log("Provisioning liquidity to ProxyHook for swap operations");
-
-        // Transfer underlying tokens to ProxyHook so it can take/settle during swaps
-        uint256 hookLiquidityAmount = 10000 ether; // Same amount as user gets
-
-        IERC20(usdcToken).transfer(address(proxyHook), hookLiquidityAmount);
-        IERC20(usdtToken).transfer(address(proxyHook), hookLiquidityAmount);
-
-        console.log("Transferred", hookLiquidityAmount, "USDC to ProxyHook");
-        console.log("Transferred", hookLiquidityAmount, "USDT to ProxyHook");
-        console.log(
-            "ProxyHook USDC balance:",
-            IERC20(usdcToken).balanceOf(address(proxyHook))
-        );
-        console.log(
-            "ProxyHook USDT balance:",
-            IERC20(usdtToken).balanceOf(address(proxyHook))
-        );
-    }
-
     function wrapToLccTokens(address user) internal {
-        // Cache storage reads
-        Currency core0 = corePoolKey.currency0;
-        Currency core1 = corePoolKey.currency1;
-        Currency proxy0 = proxyPoolKey.currency0;
-        Currency proxy1 = proxyPoolKey.currency1;
-
-        address lccTokenAddr0 = Currency.unwrap(core0);
-        address lccTokenAddr1 = Currency.unwrap(core1);
-        address tokenAddr0 = Currency.unwrap(proxy0);
-        address tokenAddr1 = Currency.unwrap(proxy1);
+        address lccTokenAddr0 = Currency.unwrap(corePoolKey.currency0);
+        address lccTokenAddr1 = Currency.unwrap(corePoolKey.currency1);
 
         LiquidityCommitmentCertificate lccToken0 = LiquidityCommitmentCertificate(
                 lccTokenAddr0
@@ -203,38 +172,23 @@ contract PositionManagerLiquidityScript is ScriptHelper {
                 lccTokenAddr1
             );
 
-        // Quick mapping check
-        address underlying0 = lccToken0.underlyingAsset();
-        address underlying1 = lccToken1.underlyingAsset();
-        uint256 amount0;
-        uint256 amount1;
-        // Determine correct pairing
-        if (underlying0 == tokenAddr0 && underlying1 == tokenAddr1) {
-            amount0 = amount0Desired;
-            _wrapTokenOptimized(user, lccToken0, IERC20(tokenAddr0), amount0);
-            amount1 = amount1Desired;
-            _wrapTokenOptimized(user, lccToken1, IERC20(tokenAddr1), amount1);
-        } else if (underlying0 == tokenAddr1 && underlying1 == tokenAddr0) {
-            amount0 = amount0Desired;
-            _wrapTokenOptimized(user, lccToken0, IERC20(tokenAddr1), amount0);
-            amount1 = amount1Desired;
-            _wrapTokenOptimized(user, lccToken1, IERC20(tokenAddr0), amount1);
-        } else {
-            revert("Invalid token mapping configuration");
-        }
+        _wrapToLCC(user, lccToken0, amount0Desired);
+        _wrapToLCC(user, lccToken1, amount1Desired);
     }
 
-    function _wrapTokenOptimized(
+    function _wrapToLCC(
         address user,
         LiquidityCommitmentCertificate lccToken,
-        IERC20 underlying,
         uint256 desired
     ) internal {
         uint256 current = lccToken.balanceOf(user);
         if (current < desired) {
             uint256 needed = desired - current;
-            uint256 available = underlying.balanceOf(user);
-            string memory name = MockERC20(address(underlying)).name();
+            uint256 available = IERC20(lccToken.underlyingAsset()).balanceOf(
+                user
+            );
+            string memory name = IERC20Metadata(lccToken.underlyingAsset())
+                .name();
             require(
                 available >= needed,
                 string(abi.encodePacked(name, " insufficient"))
@@ -322,42 +276,55 @@ contract PositionManagerLiquidityScript is ScriptHelper {
     }
 
     function setupERC20Allowance(address user) internal {
+        address lccTokenAddr0 = Currency.unwrap(corePoolKey.currency0);
+        address lccTokenAddr1 = Currency.unwrap(corePoolKey.currency1);
+
+        LiquidityCommitmentCertificate lccToken0 = LiquidityCommitmentCertificate(
+                lccTokenAddr0
+            );
+        LiquidityCommitmentCertificate lccToken1 = LiquidityCommitmentCertificate(
+                lccTokenAddr1
+            );
+
+        address underlyingToken0 = lccToken0.underlyingAsset();
+        address underlyingToken1 = lccToken1.underlyingAsset();
+
         checkAndApproveErc20(
             user,
             address(permit2),
-            IERC20(address(lccUSDCToken)),
+            IERC20(lccTokenAddr0),
             amount0Desired
         );
         checkAndApproveErc20(
             user,
             address(permit2),
-            IERC20(address(lccUSDTToken)),
+            IERC20(lccTokenAddr1),
             amount1Desired
         );
         checkAndApproveErc20(
             user,
-            address(lccUSDCToken),
-            IERC20(usdcToken),
+            address(lccTokenAddr0),
+            IERC20(underlyingToken0),
             amount0Desired
         );
         checkAndApproveErc20(
             user,
-            address(lccUSDTToken),
-            IERC20(usdtToken),
+            address(lccTokenAddr1),
+            IERC20(underlyingToken1),
             amount1Desired
         );
-        checkAndApproveErc20(
-            user,
-            address(proxyHook),
-            IERC20(usdcToken),
-            amount0Desired
-        );
-        checkAndApproveErc20(
-            user,
-            address(proxyHook),
-            IERC20(usdtToken),
-            amount0Desired
-        );
+        // checkAndApproveErc20(
+        //     user,
+        //     address(proxyHook),
+        //     IERC20(underlyingToken0),
+        //     amount0Desired
+        // );
+        // checkAndApproveErc20(
+        //     user,
+        //     address(proxyHook),
+        //     IERC20(underlyingToken1),
+        //     amount0Desired
+        // );
     }
 
     function checkAndApproveErc20(

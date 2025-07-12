@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
+import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 import {IERC20Metadata} from "openzeppelin-contracts/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {SafeTransferLib} from "solmate/utils/SafeTransferLib.sol";
 import {ERC20} from "solmate/tokens/ERC20.sol";
@@ -62,7 +63,8 @@ contract LiquidityCommitmentCertificate is ERC20 {
     constructor(
         address _underlyingAsset,
         address[] memory _issuers,
-        address _marketFactory
+        address _marketFactory,
+        address _poolManager
     )
         ERC20(
             string.concat(
@@ -87,6 +89,9 @@ contract LiquidityCommitmentCertificate is ERC20 {
         for (uint256 i = 0; i < _issuers.length; i++) {
             issuers[_issuers[i]] = true;
         }
+
+        // Set unlimited allowance for PoolManager to transfer underlying tokens
+        IERC20(_underlyingAsset).approve(_poolManager, type(uint256).max);
 
         // Note: bounds are managed by the MarketFactory, not set in constructor
     }
