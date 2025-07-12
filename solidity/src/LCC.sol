@@ -92,8 +92,13 @@ contract LiquidityCommitmentCertificate is ERC20 {
 
         // IERC20(_underlyingAsset).approve(_poolManager, type(uint256).max);
         // Set unlimited allowance for CoreHook to facilitate direct liquidity provision transfer of underlying tokens
+        // IERC20(_underlyingAsset).approve(
+        //     IMarketFactory(marketFactory).getCoreHook(),
+        //     type(uint256).max
+        // );
+        // Set unlimited allowance for ProxyHook to facilitate direct liquidity provision transfer of underlying tokens
         IERC20(_underlyingAsset).approve(
-            IMarketFactory(marketFactory).getCoreHook(),
+            IMarketFactory(marketFactory).getProxyHook(),
             type(uint256).max
         );
 

@@ -16,6 +16,8 @@ import {LiquidityCommitmentCertificate} from "./LCC.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {CurrencySettler} from "@uniswap/v4-core/test/utils/CurrencySettler.sol";
 
+import {console} from "forge-std/console.sol";
+
 /**
  * Core Pool should be aware of Positions.
  *     This way it can calculate and manage Liquidity Commitments (C_A(r)) for each Position.
@@ -103,61 +105,10 @@ contract CoreHook is BaseHook, IHookCommon {
         BalanceDelta,
         bytes calldata
     ) internal virtual override returns (bytes4, BalanceDelta) {
-        // Get LCC tokens from key
-        LiquidityCommitmentCertificate lccToken0 = LiquidityCommitmentCertificate(
-                Currency.unwrap(key.currency0)
-            );
-        LiquidityCommitmentCertificate lccToken1 = LiquidityCommitmentCertificate(
-                Currency.unwrap(key.currency1)
-            );
-
-        // Get underlying currencies
-        Currency uaCurrency0 = Currency.wrap(lccToken0.underlyingAsset());
-        Currency uaCurrency1 = Currency.wrap(lccToken1.underlyingAsset());
-
-        // Calculate absolute amounts from delta (assuming positive for add)
-        uint256 amount0 = delta.amount0() > 0
-            ? uint256(uint128(delta.amount0()))
-            : uint256(uint128(-delta.amount0()));
-        uint256 amount1 = delta.amount1() > 0
-            ? uint256(uint128(delta.amount1()))
-            : uint256(uint128(-delta.amount1()));
-
-        // Add liquidity to the core pool
-
-        // Settle `amount` of each currency from the sender
-        // i.e. Create a debit of `amount` of each currency with the Pool Manager
-        uaCurrency0.settle(
-            IPoolManager(poolManager),
-            address(lccToken0),
-            amount0,
-            false // `burn` = `false` i.e. we're actually transferring tokens, not burning ERC-6909 Claim Tokens
-        );
-        uaCurrency1.settle(
-            IPoolManager(poolManager),
-            address(lccToken1),
-            amount1,
-            false // `burn` = `false` i.e. we're actually transferring tokens, not burning ERC-6909 Claim Tokens
-        );
-
-        // Since we didn't go through the regular "modify liquidity" flow,
-        // the PM just has a debit of `amount` of each currency from us
-        // We can, in exchange, get back ERC-6909 claim tokens for `amount`
-        // to create a credit of `amount` of each currency to us that balances out the debit
-
-        // We will store those claim tokens with the hook, so when swaps take place
-        // liquidity from our CSMM can be used by minting/burning claim tokens the hook owns
-        uaCurrency0.take(
-            IPoolManager(poolManager),
-            proxyHook,
-            amount0,
-            true // `mint` = `true` i.e. we're minting claim tokens for the hook, equivalent to money we just deposited to the PM
-        );
-        uaCurrency1.take(
-            IPoolManager(poolManager),
-            proxyHook,
-            amount1,
-            true // `mint` = `true` i.e. we're minting claim tokens for the hook, equivalent to money we just deposited to the PM
+        ProxyHook(proxyHook).onDirectLP(
+            key,
+            delta,
+            ActionType.DirectLPAddLiquidity
         );
 
         return (
@@ -174,50 +125,10 @@ contract CoreHook is BaseHook, IHookCommon {
         BalanceDelta,
         bytes calldata
     ) internal virtual override returns (bytes4, BalanceDelta) {
-        // Get LCC tokens from key
-        LiquidityCommitmentCertificate lccToken0 = LiquidityCommitmentCertificate(
-                Currency.unwrap(key.currency0)
-            );
-        LiquidityCommitmentCertificate lccToken1 = LiquidityCommitmentCertificate(
-                Currency.unwrap(key.currency1)
-            );
-
-        // Get underlying currencies
-        Currency uaCurrency0 = Currency.wrap(lccToken0.underlyingAsset());
-        Currency uaCurrency1 = Currency.wrap(lccToken1.underlyingAsset());
-
-        // Calculate absolute amounts from delta (assuming positive for add)
-        uint256 amount0 = delta.amount0() > 0
-            ? uint256(uint128(delta.amount0()))
-            : uint256(uint128(-delta.amount0()));
-        uint256 amount1 = delta.amount1() > 0
-            ? uint256(uint128(delta.amount1()))
-            : uint256(uint128(-delta.amount1()));
-
-        // Remove liquidity from the core pool
-        uaCurrency0.settle(
-            IPoolManager(poolManager),
-            proxyHook,
-            amount0,
-            true // `burn` = `true` i.e. we're  burning ERC-6909 Claim Tokens
-        );
-        uaCurrency1.settle(
-            IPoolManager(poolManager),
-            proxyHook,
-            amount1,
-            true // `burn` = `true` i.e. we're  burning ERC-6909 Claim Tokens
-        );
-        uaCurrency0.take(
-            IPoolManager(poolManager),
-            address(lccToken0), // Send native liquidity back to LCC
-            amount0,
-            false // mint` = `true` i.e. we're  claiming erc20
-        );
-        uaCurrency1.take(
-            IPoolManager(poolManager),
-            address(lccToken1),
-            amount1,
-            false // mint` = `true` i.e. we're  claiming erc20
+        ProxyHook(proxyHook).onDirectLP(
+            key,
+            delta,
+            ActionType.DirectLPRemoveLiquidity
         );
 
         return (

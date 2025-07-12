@@ -41,7 +41,7 @@ contract PositionManagerLiquidityScript is ScriptHelper {
     address usdtToken;
 
     // Liquidity parameters
-    uint256 constant AMOUNT_DESIRED = 1000; // 20 tokens
+    uint256 constant AMOUNT_DESIRED = 1000;
     uint256 amount0Desired;
     uint256 amount1Desired;
 
@@ -97,6 +97,9 @@ contract PositionManagerLiquidityScript is ScriptHelper {
         wrapToLccTokens(lpAddress);
         uint256 tokenId = mintPositionToCore(lpAddress);
         verifyPosition(tokenId);
+
+        console.log("Position TokenId: ", tokenId);
+
         vm.stopBroadcast();
     }
 
@@ -206,6 +209,10 @@ contract PositionManagerLiquidityScript is ScriptHelper {
         // Define tick range (full range for maximum liquidity)
         int24 tickLower = -887220; // Min tick
         int24 tickUpper = 887220; // Max tick
+        // // Define a narrower tick range to avoid overflow (e.g., +/- 600 ticks around current price)
+        // int24 tickLower = -600;
+        // int24 tickUpper = 600;
+
         // Get current pool state for liquidity calculation
         (uint160 sqrtPriceX96, , , ) = poolManager.getSlot0(corePoolKey.toId());
 

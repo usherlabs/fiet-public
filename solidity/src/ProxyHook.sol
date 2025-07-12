@@ -162,87 +162,106 @@ contract ProxyHook is BaseHook, IHookCommon {
     }
 
     // Method called by the Core Hook notifying that Direct Liquidity Provision occurred.
-    // We notify the Proxy Hook so that the BeforeSwapDelta can facilitate liquidity management of native underlying tokens.
+    // Liquidity is managed by the Proxy Hook here to ensure PM credits the Proxy Hook (msg.sender) with relevant Currency Delta.
     // THIS IS ALREADY UNLOCKED FOR DIRECT LP ON CORE POOL.
     function onDirectLP(
         PoolKey calldata corePoolkey,
-        ModifyLiquidityParams calldata,
         BalanceDelta delta,
         ActionType actionType
     ) external virtual onlyCoreHook {
-        // // require(block.timestamp <= deadline, "Deadline not met");
-        // // Get the LCC tokens for the core pool
-        // LiquidityCommitmentCertificate lccToken0 = LiquidityCommitmentCertificate(
-        //         Currency.unwrap(corePoolkey.currency0)
-        //     );
-        // LiquidityCommitmentCertificate lccToken1 = LiquidityCommitmentCertificate(
-        //         Currency.unwrap(corePoolkey.currency1)
-        //     );
-        // Currency uaCurrency0 = Currency.wrap(lccToken0.underlyingAsset());
-        // Currency uaCurrency1 = Currency.wrap(lccToken1.underlyingAsset());
-        // uint256 amount0 = _safeInt128ToUint256(delta.amount0());
-        // uint256 amount1 = _safeInt128ToUint256(delta.amount1());
-        // if (actionType == ActionType.DirectLPAddLiquidity) {
-        //     // Add liquidity to the core pool
-        //     // Settle `amount` of each currency from the sender
-        //     // i.e. Create a debit of `amount` of each currency with the Pool Manager
-        //     uaCurrency0.settle(
-        //         IPoolManager(poolManager),
-        //         address(lccToken0),
-        //         amount0,
-        //         false // `burn` = `false` i.e. we're actually transferring tokens, not burning ERC-6909 Claim Tokens
-        //     );
-        //     uaCurrency1.settle(
-        //         IPoolManager(poolManager),
-        //         address(lccToken1),
-        //         amount1,
-        //         false // `burn` = `false` i.e. we're actually transferring tokens, not burning ERC-6909 Claim Tokens
-        //     );
-        //     // Since we didn't go through the regular "modify liquidity" flow,
-        //     // the PM just has a debit of `amount` of each currency from us
-        //     // We can, in exchange, get back ERC-6909 claim tokens for `amount`
-        //     // to create a credit of `amount` of each currency to us that balances out the debit
-        //     // We will store those claim tokens with the hook, so when swaps take place
-        //     // liquidity from our CSMM can be used by minting/burning claim tokens the hook owns
-        //     uaCurrency0.take(
-        //         IPoolManager(poolManager),
-        //         address(this),
-        //         amount0,
-        //         true // `mint` = `true` i.e. we're minting claim tokens for the hook, equivalent to money we just deposited to the PM
-        //     );
-        //     uaCurrency1.take(
-        //         IPoolManager(poolManager),
-        //         address(this),
-        //         amount1,
-        //         true // `mint` = `true` i.e. we're minting claim tokens for the hook, equivalent to money we just deposited to the PM
-        //     );
-        // } else if (actionType == ActionType.DirectLPRemoveLiquidity) {
-        //     // Remove liquidity from the core pool
-        //     uaCurrency0.settle(
-        //         IPoolManager(poolManager),
-        //         address(this),
-        //         amount0,
-        //         true // `burn` = `true` i.e. we're  burning ERC-6909 Claim Tokens
-        //     );
-        //     uaCurrency1.settle(
-        //         IPoolManager(poolManager),
-        //         address(this),
-        //         amount1,
-        //         true // `burn` = `true` i.e. we're  burning ERC-6909 Claim Tokens
-        //     );
-        //     uaCurrency0.take(
-        //         IPoolManager(poolManager),
-        //         address(lccToken0), // Send native liquidity back to LCC
-        //         amount0,
-        //         false // mint` = `true` i.e. we're  claiming erc20
-        //     );
-        //     uaCurrency1.take(
-        //         IPoolManager(poolManager),
-        //         address(lccToken1),
-        //         amount1,
-        //         false // mint` = `true` i.e. we're  claiming erc20
-        //     );
-        // }
+        LiquidityCommitmentCertificate lccToken0 = LiquidityCommitmentCertificate(
+                Currency.unwrap(corePoolkey.currency0)
+            );
+        LiquidityCommitmentCertificate lccToken1 = LiquidityCommitmentCertificate(
+                Currency.unwrap(corePoolkey.currency1)
+            );
+        Currency uaCurrency0 = Currency.wrap(lccToken0.underlyingAsset());
+        Currency uaCurrency1 = Currency.wrap(lccToken1.underlyingAsset());
+        uint256 amount0 = _safeInt128ToUint256(delta.amount0());
+        uint256 amount1 = _safeInt128ToUint256(delta.amount1());
+
+        if (actionType == ActionType.DirectLPAddLiquidity) {
+            // Add liquidity to the core pool
+
+            // Settle `amount` of each currency from the sender
+            // i.e. Create a debit of `amount` of each currency with the Pool Manager
+            uaCurrency0.settle(
+                poolManager,
+                address(lccToken0),
+                amount0,
+                false // `burn` = `false` i.e. we're actually transferring tokens, not burning ERC-6909 Claim Tokens
+            );
+            uaCurrency1.settle(
+                poolManager,
+                address(lccToken1),
+                amount1,
+                false // `burn` = `false` i.e. we're actually transferring tokens, not burning ERC-6909 Claim Tokens
+            );
+
+            // Since we didn't go through the regular "modify liquidity" flow,
+            // the PM just has a debit of `amount` of each currency from us
+            // We can, in exchange, get back ERC-6909 claim tokens for `amount`
+            // to create a credit of `amount` of each currency to us that balances out the debit
+
+            // We will store those claim tokens with the hook, so when swaps take place
+            // liquidity from our CSMM can be used by minting/burning claim tokens the hook owns
+            uaCurrency0.take(
+                poolManager,
+                address(this),
+                amount0,
+                true // `mint` = `true` i.e. we're minting claim tokens for the hook, equivalent to money we just deposited to the PM
+            );
+            uaCurrency1.take(
+                poolManager,
+                address(this),
+                amount1,
+                true // `mint` = `true` i.e. we're minting claim tokens for the hook, equivalent to money we just deposited to the PM
+            );
+
+            console.log("--------------------------------");
+            console.log("CoreHook: _afterAddLiquidity");
+            console.log("delta.amount0(): ", delta.amount0());
+            console.log("delta.amount1(): ", delta.amount1());
+            console.log("amount0: ", amount0);
+            console.log("amount1: ", amount1);
+            console.log("--------------------------------");
+        } else if (actionType == ActionType.DirectLPRemoveLiquidity) {
+            console.log("--------------------------------");
+            console.log("CoreHook: _afterRemoveLiquidity");
+            console.log("Currency0: ", uaCurrency0.toId());
+            console.log("Currency1: ", uaCurrency1.toId());
+            console.log("delta.amount0(): ", delta.amount0());
+            console.log("delta.amount1(): ", delta.amount1());
+            console.log("amount0: ", amount0);
+            console.log("amount1: ", amount1);
+            console.log("--------------------------------");
+
+            // Remove liquidity from the core pool
+            uaCurrency0.settle(
+                poolManager,
+                address(this),
+                amount0,
+                true // `burn` = `true` i.e. we're  burning ERC-6909 Claim Tokens
+            );
+            uaCurrency1.settle(
+                poolManager,
+                address(this),
+                amount1,
+                true // `burn` = `true` i.e. we're  burning ERC-6909 Claim Tokens
+            );
+            uaCurrency0.take(
+                poolManager,
+                address(lccToken0), // Send native liquidity back to LCC
+                amount0,
+                false // mint` = `true` i.e. we're  claiming erc20
+            );
+            uaCurrency1.take(
+                poolManager,
+                address(lccToken1),
+                amount1,
+                false // mint` = `true` i.e. we're  claiming erc20
+            );
+        }
     }
 
     // Before swap we make sure to provide enough delta
