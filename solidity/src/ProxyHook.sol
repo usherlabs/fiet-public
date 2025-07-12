@@ -18,6 +18,7 @@ import "forge-std/console.sol";
 
 import {LiquidityCommitmentCertificate} from "./LCC.sol";
 import {IHookCommon} from "./interfaces/IHookCommon.sol";
+import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 
 contract ProxyHook is BaseHook, IHookCommon {
     using CurrencySettler for Currency;
@@ -185,6 +186,8 @@ contract ProxyHook is BaseHook, IHookCommon {
 
             // Settle `amount` of each currency from the sender
             // i.e. Create a debit of `amount` of each currency with the Pool Manager
+            lccToken0.prepareSettle(amount0);
+            lccToken1.prepareSettle(amount1);
             uaCurrency0.settle(
                 poolManager,
                 address(lccToken0),
@@ -266,14 +269,15 @@ contract ProxyHook is BaseHook, IHookCommon {
                 Currency.unwrap(coreKey.currency1)
             );
 
-        if (params.zeroForOne) {
-            // If tokens match order, then coreZeroForOne is true
-            coreZeroForOne =
-                Currency.unwrap(key.currency0) == lccToken0.underlyingAsset();
+        if (
+            Currency.unwrap(key.currency0) == lccToken0.underlyingAsset() &&
+            Currency.unwrap(key.currency1) == lccToken1.underlyingAsset()
+        ) {
+            // If tokens match order, then Proxy matches Core
+            coreZeroForOne = params.zeroForOne;
         } else {
-            // If tokens match order, then coreZeroForOne is false
-            coreZeroForOne =
-                Currency.unwrap(key.currency1) == lccToken1.underlyingAsset();
+            // If tokens do not match order, then Proxy inverts Core
+            coreZeroForOne = !params.zeroForOne;
         }
 
         // If zeroForOne match, then lccTokenForCurrency0 is lccToken0 and lccTokenForCurrency1 is lccToken1
@@ -302,17 +306,22 @@ contract ProxyHook is BaseHook, IHookCommon {
         // Unspecified Currency => The other currency
 
         // Calculate the correct sqrtPriceLimitX96 for the core pool
-        // uint160 sqrtPriceLimitX96_core = params.sqrtPriceLimitX96;
-        // if (params.zeroForOne != coreZeroForOne) {
-        //     if (sqrtPriceLimitX96_core == 0) {
-        //         // When a zeroForOne swap has a limit of 0, it is unbounded. The reciprocal is infinity.
-        //         // An unbounded oneForZero swap has a limit of type(uint160).max.
-        //         sqrtPriceLimitX96_core = MAX_SQRT_PRICE;
-        //     } else {
-        //         // The price is inverted, so the limit must be inverted too.
-        //         sqrtPriceLimitX96_core = uint160((uint256(1) << 192) / sqrtPriceLimitX96_core);
-        //     }
-        // }
+        uint160 sqrtPriceLimitX96_core = params.sqrtPriceLimitX96;
+        bool flipped = params.zeroForOne != coreZeroForOne;
+        if (flipped) {
+            if (sqrtPriceLimitX96_core == TickMath.MIN_SQRT_PRICE + 1) {
+                sqrtPriceLimitX96_core = TickMath.MAX_SQRT_PRICE - 1;
+            } else if (sqrtPriceLimitX96_core == TickMath.MAX_SQRT_PRICE - 1) {
+                sqrtPriceLimitX96_core = TickMath.MIN_SQRT_PRICE + 1;
+            } else if (sqrtPriceLimitX96_core != 0) {
+                sqrtPriceLimitX96_core = uint160(
+                    (uint256(1) << 192) / sqrtPriceLimitX96_core
+                );
+            } else {
+                // If somehow 0 (though router overrides), set unbounded for flipped
+                sqrtPriceLimitX96_core = TickMath.MAX_SQRT_PRICE - 1;
+            }
+        }
 
         // Conduct the swap inside the Pool Manager
         BalanceDelta delta = poolManager.swap(
@@ -320,7 +329,7 @@ contract ProxyHook is BaseHook, IHookCommon {
             SwapParams({
                 zeroForOne: coreZeroForOne,
                 amountSpecified: params.amountSpecified,
-                sqrtPriceLimitX96: params.sqrtPriceLimitX96
+                sqrtPriceLimitX96: sqrtPriceLimitX96_core // Use adjusted limit
             }),
             bytes("")
         );
@@ -355,24 +364,21 @@ contract ProxyHook is BaseHook, IHookCommon {
 
         if (params.zeroForOne) {
             // If user is selling Token 0 and buying Token 1
-            // First mint LCC tokens for the input amount
-            lccTokenForCurrency0.mint(amountIn);
 
-            // Settle LCC tokens to the PoolManager
+            // Take the underlying tokens from PoolManager as Claim Tokens... the underlying liquidity remains in the Pool Manager...
+            key.currency0.take(poolManager, address(this), amountIn, true);
+
+            // Mint LCC tokens for the input amount
+            // These LCC tokens are collateralised by liquidity that remains in the Pool Manager.
+            lccTokenForCurrency0.issue(amountIn);
+
+            // Settle minted LCC tokens to the PoolManager
             // Accounts for LCC of 0 IN for the Core Pool Swap
             lccCurrencyForCurrency0.settle(
                 poolManager,
                 address(this),
                 amountIn,
                 false
-            );
-
-            // Now take the underlying tokens from PoolManager to the LCC
-            // This will allow unwrap with liquidity from trader deposits.
-            poolManager.take(
-                key.currency0,
-                address(lccTokenForCurrency0),
-                amountIn
             );
 
             // Take LCC tokens of Token 1 from PoolManager
@@ -384,13 +390,29 @@ contract ProxyHook is BaseHook, IHookCommon {
                 false
             );
 
-            // Unwrap and Burn the LCC of Token 1 from the PM... might need to be executed elsewhere...
-            lccTokenForCurrency1.burnOnSettle(amountOut);
+            // Unwrap and Burn the LCC of Token 1 after taking from PM
+            (uint256 cancelledAmount, ) = lccTokenForCurrency1.cancel(
+                amountOut
+            );
             // Once Uniswap conducts fund settlement, it'll burn this amountOut from the LCC.
+
+            // Settle the output token to the PoolManager
+            // Burn claim tokens to release output token to the Trader from the PoolManager.
+            // ? amountOut can be greater than total amount of underlying asset in PoolManager.
+            // ? In this case, there is insufficient liquidity to settle amountOut of output token.
+            // TODO: Solve for this case.
+            key.currency1.settle(
+                poolManager,
+                address(this),
+                cancelledAmount,
+                true
+            );
         } else {
+            key.currency1.take(poolManager, address(this), amountIn, true);
+
             // If user is selling Token 1 (IN) and buying Token 0 (OUT)
             // First mint LCC tokens for the input amount
-            lccTokenForCurrency1.mint(amountIn);
+            lccTokenForCurrency1.issue(amountIn);
 
             // Settle LCC tokens to the PoolManager
             lccCurrencyForCurrency1.settle(
@@ -398,14 +420,6 @@ contract ProxyHook is BaseHook, IHookCommon {
                 address(this),
                 amountIn,
                 false
-            );
-
-            // Now take the underlying tokens from PoolManager to the LCC
-            // This will allow unwrap with liquidity from trader deposits.
-            poolManager.take(
-                key.currency1,
-                address(lccTokenForCurrency1),
-                amountIn
             );
 
             // Take LCC tokens of Token 0 from PoolManager
@@ -417,15 +431,21 @@ contract ProxyHook is BaseHook, IHookCommon {
                 false
             );
 
-            // Unwrap and Burn the LCC of Token 0 from the PM
-            lccTokenForCurrency0.burnOnSettle(amountOut);
-            // Once Uniswap conducts fund settlement, it'll burn this amountOut from the LCC.
-        }
+            // Cancel (Unwrap/Burn) the LCC of Token 0 after taking from PM
+            (uint256 cancelledAmount, ) = lccTokenForCurrency0.cancel(
+                amountOut
+            );
 
-        // pay the output token, to the PoolManager from Proxy Hook.
-        // the credit will be forwarded to the swap router, which then forwards it to the swapper
-        poolManager.sync(params.zeroForOne ? key.currency1 : key.currency0);
-        poolManager.settle();
+            // Settle the output token to the PoolManager
+            // Burn claim tokens to release output token to the Trader from the PoolManager.
+            // TODO: Solve for above case.
+            key.currency0.settle(
+                poolManager,
+                address(this),
+                cancelledAmount,
+                true
+            );
+        }
 
         // TODO: Consider scenario where LCC has insufficient liquidity.
         // ie. less from here for token OUT, and more from core Token OUT.

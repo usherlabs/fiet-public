@@ -57,6 +57,11 @@ contract SwapV4 is ScriptHelper {
 
         address marketFactory = readAddress("marketFactory");
 
+        usdcToken = readAddress("usdcToken");
+        console.log("USDC Token loaded");
+        usdtToken = readAddress("usdtToken");
+        console.log("USDT Token loaded");
+
         // Core pool tokens
         lccUSDCToken = LiquidityCommitmentCertificate(
             IMarketFactory(marketFactory).getLCC(usdcToken)
@@ -64,11 +69,6 @@ contract SwapV4 is ScriptHelper {
         lccUSDTToken = LiquidityCommitmentCertificate(
             IMarketFactory(marketFactory).getLCC(usdtToken)
         );
-
-        usdcToken = readAddress("usdcToken");
-        console.log("USDC Token loaded");
-        usdtToken = readAddress("usdtToken");
-        console.log("USDT Token loaded");
 
         uint256 userPrivateKey = uint256(vm.envBytes32("LP_PRIVATE_KEY"));
         address userAddress = vm.addr(userPrivateKey);

@@ -17,12 +17,10 @@ contract LiquidityCommitmentCertificate is ERC20 {
     address public immutable underlyingAsset;
     address public immutable marketFactory;
 
-    mapping(address => uint256) public burnOnSettleQueue;
-
     // All native underlying liquidity will either be
     mapping(address => bool) public issuers;
 
-    uint256 public uaSupply; // underlying asset supply
+    uint256 public uaSupply; // underlying asset supply ONLY within the LCC.
 
     modifier onlyIssuer() {
         if (!issuers[msg.sender]) {
@@ -89,27 +87,49 @@ contract LiquidityCommitmentCertificate is ERC20 {
             issuers[_issuers[i]] = true;
         }
 
-        // Set unlimited allowance for ProxyHook to facilitate direct liquidity provision transfer of underlying tokens
-        IERC20(_underlyingAsset).approve(
-            IMarketFactory(marketFactory).getProxyHook(),
-            type(uint256).max
-        );
-
         // Note: bounds are managed by the MarketFactory, not set in constructor
     }
 
     // some trusted issuer Smart Contracts can be allowed to mint tokens and hold the liquidity
     // this minting provides tokens at a 1:1 ratio and intended for onchain preswap wrapping
-    function mint(uint256 amount) external onlyIssuer {
+    function issue(uint256 amount) external onlyIssuer {
         address issuer = msg.sender;
         _mint(issuer, amount);
 
-        uaSupply += amount;
+        // totalSupply will be greater than uaSupply (supply of underlying asset in LCC)
+        // This is because the PoolManager will custody the difference.
     }
 
-    function burnOnSettle(uint256 amount) external onlyIssuer {
+    function cancel(
+        uint256 amount
+    ) external onlyIssuer returns (uint256 amountToCancel, uint256 deficit) {
         address issuer = msg.sender;
-        burnOnSettleQueue[issuer] += amount;
+        uint256 externallyCustodied = totalSupply - uaSupply;
+        if (amount == 0) {
+            revert InvalidAmount();
+        }
+
+        if (amount > externallyCustodied) {
+            amountToCancel = externallyCustodied;
+            deficit = amount - externallyCustodied;
+        } else {
+            amountToCancel = amount;
+        }
+
+        _burn(issuer, amountToCancel);
+
+        if (deficit > 0) {
+            // TODO: https://www.notion.so/usherlabs/Outcomes-of-LCC-Insufficient-Liquidity-22b6d8286da580c8a455efc4175970a0?source=copy_link#22b6d8286da580de8a33cf367d3b7220
+            // TODO: Add LCC into a queue, where if new liquidity is settled, it immediately covers the unwrap within their wallet.
+        }
+
+        return (amountToCancel, deficit);
+    }
+
+    function prepareSettle(uint256 amount) external onlyIssuer {
+        // Allow issuer to facilitate direct liquidity provision transfer of underlying tokens
+        IERC20(_underlyingAsset).approve(msg.sender, amount);
+        uaSupply -= amount;
     }
 
     // DirectLPs and Traders engaging the CorePool directly will need LCC. LCC is 1:1 with the underlying asset.
@@ -124,6 +144,7 @@ contract LiquidityCommitmentCertificate is ERC20 {
         uaSupply += amount;
     }
 
+    // Users should only be able to unwrap if LCC in their wallet.
     // unwrap some tokens - engaged by the Trader
     function _unwrap(address from, address to, uint256 amount) internal {
         ERC20 uaToken = ERC20(underlyingAsset);
@@ -174,14 +195,10 @@ contract LiquidityCommitmentCertificate is ERC20 {
 
     // TODO: Re-enable protocol-bounds in the future...
 
-    // On transfer hook...
+    // On transfer hook
     // function onTransfer(address from, address to, uint256 amount) internal onlyProtocolTransfer(msg.sender, to){
     function onTransfer(address, address to, uint256) internal {
-        // Burn if parameters match.
-        if (issuers[to] && burnOnSettleQueue[to] > 0) {
-            _burn(to, burnOnSettleQueue[to]);
-            burnOnSettleQueue[to] = 0;
-        }
+        //...
     }
 
     function transfer(

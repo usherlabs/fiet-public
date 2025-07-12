@@ -10,6 +10,7 @@ import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {LiquidityCommitmentCertificate} from "./LCC.sol";
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 import {IHookCommon} from "./interfaces/IHookCommon.sol";
+import {ProxyHook} from "./ProxyHook.sol";
 
 /**
  * @title MarketFactory
@@ -122,6 +123,9 @@ contract MarketFactory is IMarketFactory, Ownable2Step {
         // Store the relationship between core and proxy pools
         coreToProxy[corePoolId] = proxyPoolId;
 
+        // Set the core pool key in the proxy hook for this new market
+        ProxyHook(proxyHook).setCorePoolKey(proxyPoolId, corePoolKey);
+
         emit MarketCreated(
             corePoolId,
             proxyPoolId,
@@ -147,7 +151,7 @@ contract MarketFactory is IMarketFactory, Ownable2Step {
         if (lccToken == address(0)) {
             // Create new LCC token
             address[] memory issuers = new address[](2);
-            issuers[0] = address(this); // ProxyHook
+            issuers[0] = proxyHook; // ProxyHook
             // issuers[1] = address(poolManager); // TODO: Add MMPositionManager as issuer
 
             lccToken = address(
