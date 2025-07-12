@@ -2,7 +2,7 @@
 pragma solidity ^0.8.0;
 
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-import {ScriptHelper} from "./deployments/ScriptHelper.s.sol";
+import {ScriptHelper} from "./libraries/ScriptHelper.s.sol";
 
 // ? This will default to 18 decimals, but we can override it for testing purposes when required.
 contract Token is ERC20 {

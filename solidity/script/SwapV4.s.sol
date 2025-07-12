@@ -16,8 +16,8 @@ import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {IHooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 
 import {SepoliaConstants} from "./constants/sepolia.sol";
-import {ScriptHelper} from "./deployments/ScriptHelper.s.sol";
-import {CurrencySortHelper} from "./CurrencySortHelper.sol";
+import {ScriptHelper} from "./libraries/ScriptHelper.s.sol";
+import {CurrencySortHelper} from "./libraries/CurrencySortHelper.sol";
 import {LiquidityCommitmentCertificate} from "../src/LCC.sol";
 import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
 

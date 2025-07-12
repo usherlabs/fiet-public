@@ -11,7 +11,7 @@ import {CoreHook} from "../src/CoreHook.sol";
 import {ProxyHook} from "../src/ProxyHook.sol";
 import {MarketFactory} from "../src/MarketFactory.sol";
 import {SepoliaConstants} from "./constants/sepolia.sol";
-import {ScriptHelper} from "./deployments/ScriptHelper.s.sol";
+import {ScriptHelper} from "./libraries/ScriptHelper.s.sol";
 
 /**
  * @title CompleteDeployScript

@@ -117,7 +117,7 @@ The deployment uses `ScriptHelper.s.sol` to manage addresses in JSON format:
 Other scripts can easily reference deployed contracts:
 
 ```solidity
-import {ScriptHelper} from "./deployments/ScriptHelper.s.sol";
+import {ScriptHelper} from "./libraries/ScriptHelper.s.sol";
 
 contract MyScript is ScriptHelper {
     function run() external {

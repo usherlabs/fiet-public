@@ -64,7 +64,7 @@ contract LiquidityCommitmentCertificate is ERC20 {
         address _underlyingAsset,
         address[] memory _issuers,
         address _marketFactory,
-        address _poolManager
+        address
     )
         ERC20(
             string.concat(
@@ -90,8 +90,12 @@ contract LiquidityCommitmentCertificate is ERC20 {
             issuers[_issuers[i]] = true;
         }
 
-        // Set unlimited allowance for PoolManager to transfer underlying tokens
-        IERC20(_underlyingAsset).approve(_poolManager, type(uint256).max);
+        // IERC20(_underlyingAsset).approve(_poolManager, type(uint256).max);
+        // Set unlimited allowance for CoreHook to facilitate direct liquidity provision transfer of underlying tokens
+        IERC20(_underlyingAsset).approve(
+            IMarketFactory(marketFactory).getCoreHook(),
+            type(uint256).max
+        );
 
         // Note: bounds are managed by the MarketFactory, not set in constructor
     }

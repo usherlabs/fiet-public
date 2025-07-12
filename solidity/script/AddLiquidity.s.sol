@@ -21,9 +21,9 @@ import {IPermit2} from "permit2/src/interfaces/IPermit2.sol";
 
 import {LiquidityCommitmentCertificate} from "../src/LCC.sol";
 import {SepoliaConstants} from "./constants/sepolia.sol";
-import {ScriptHelper} from "./deployments/ScriptHelper.s.sol";
+import {ScriptHelper} from "./libraries/ScriptHelper.s.sol";
 import {ProxyHook} from "../src/ProxyHook.sol";
-import {CurrencySortHelper} from "./CurrencySortHelper.sol";
+import {CurrencySortHelper} from "./libraries/CurrencySortHelper.sol";
 import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
 
 contract PositionManagerLiquidityScript is ScriptHelper {
