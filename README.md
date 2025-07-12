@@ -158,15 +158,14 @@ Make sure to reference the latest version of these files for interacting with th
 
 ## Local Solidity Development Setup
 
-1. `make fork`
+1. `cd ./solidity`
+2. `make fork`
+3. `make dev MODE=LOCAL`
+4. **Add Liqudity:** `forge script script/AddLiquidity.s.sol --rpc-url 127.0.0.1:8545 --broadcast`
 
-2. `make all MODE=LOCAL`
-
-3. `forge script script/AddLiquidity.s.sol --rpc-url 127.0.0.1:8545 --broadcast`
-
-Remove Liquidity: `TOKEN_ID=47 forge script script/RemoveLiquidity.s.sol --rpc-url 127.0.0.1:8545`
-
-Execute Swap: `forge script script/SwapV4.s.sol --rpc-url 127.0.0.1:8545`
+**Remove Liquidity:** `TOKEN_ID=47 forge script script/RemoveLiquidity.s.sol --rpc-url 127.0.0.1:8545`  
+OR  
+**Execute Swap:** `forge script script/SwapV4.s.sol --rpc-url 127.0.0.1:8545`
 
 ## Writing Tests
 
