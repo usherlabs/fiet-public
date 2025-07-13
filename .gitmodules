@@ -1,6 +1,15 @@
-[submodule "solidity/lib/v4-periphery"]
-	path = solidity/lib/v4-periphery
-	url = https://github.com/Uniswap/v4-periphery
 [submodule "solidity/lib/forge-std"]
 	path = solidity/lib/forge-std
 	url = https://github.com/foundry-rs/forge-std
+[submodule "solidity/lib/v4-periphery"]
+	path = solidity/lib/v4-periphery
+	url = https://github.com/uniswap/v4-periphery
+[submodule "solidity/lib/solmate"]
+	path = solidity/lib/solmate
+	url = https://github.com/transmissions11/solmate
+[submodule "solidity/lib/permit2"]
+	path = solidity/lib/permit2
+	url = https://github.com/Uniswap/permit2
+[submodule "solidity/lib/openzeppelin-contracts"]
+	path = solidity/lib/openzeppelin-contracts
+	url = https://github.com/OpenZeppelin/openzeppelin-contracts
