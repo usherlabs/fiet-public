@@ -12,6 +12,7 @@ import {BaseHook} from "v4-periphery/src/utils/BaseHook.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
+import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
 // import {BeforeSwapDeltaLibrary} from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
 
 import "forge-std/console.sol";
@@ -297,14 +298,6 @@ contract ProxyHook is BaseHook, IHookCommon {
             address(lccTokenForCurrency1)
         );
 
-        // BalanceDelta is a packed value of (currency0Amount, currency1Amount)
-
-        // BeforeSwapDelta varies such that it is not sorted by token0 and token1
-        // Instead, it is sorted by "specifiedCurrency" and "unspecifiedCurrency"
-
-        // Specified Currency => The currency in which the user is specifying the amount they're swapping for
-        // Unspecified Currency => The other currency
-
         // Calculate the correct sqrtPriceLimitX96 for the core pool
         uint160 sqrtPriceLimitX96_core = params.sqrtPriceLimitX96;
         bool flipped = params.zeroForOne != coreZeroForOne;
@@ -324,6 +317,10 @@ contract ProxyHook is BaseHook, IHookCommon {
         }
 
         // Conduct the swap inside the Pool Manager
+
+        // TODO: We may afterSwapReturnDelta on the core pool to make up the deficit during insufficient liquidity in market.
+        // That will affect the return delta of the core pool, and therefore the values downstream.
+        // ? This problem could be solved through transient storage.
         BalanceDelta delta = poolManager.swap(
             coreKey,
             SwapParams({
@@ -362,6 +359,8 @@ contract ProxyHook is BaseHook, IHookCommon {
         console.log("amountIn: ", amountIn);
         console.log("amountOut: ", amountOut);
 
+        uint256 amountToSettle;
+
         if (params.zeroForOne) {
             // If user is selling Token 0 and buying Token 1
 
@@ -397,7 +396,7 @@ contract ProxyHook is BaseHook, IHookCommon {
             console.log("cancelledAmount: ", cancelledAmount);
             console.log("deficit: ", deficit);
 
-            // Once Uniswap conducts fund settlement, it'll burn this amountOut from the LCC.
+            amountToSettle = cancelledAmount;
 
             // Settle the output token to the PoolManager
             // Burn claim tokens to release output token to the Trader from the PoolManager.
@@ -407,7 +406,7 @@ contract ProxyHook is BaseHook, IHookCommon {
             key.currency1.settle(
                 poolManager,
                 address(this),
-                cancelledAmount,
+                amountToSettle,
                 true
             );
         } else {
@@ -441,26 +440,45 @@ contract ProxyHook is BaseHook, IHookCommon {
             console.log("cancelledAmount: ", cancelledAmount);
             console.log("deficit: ", deficit);
 
+            amountToSettle = cancelledAmount;
+
             // Settle the output token to the PoolManager
             // Burn claim tokens to release output token to the Trader from the PoolManager.
             // TODO: Solve for above case.
             key.currency0.settle(
                 poolManager,
                 address(this),
-                cancelledAmount,
+                amountToSettle,
                 true
             );
         }
 
+        // BalanceDelta is a packed value of (currency0Amount, currency1Amount)
+
+        // BeforeSwapDelta varies such that it is not sorted by token0 and token1
+        // Instead, it is sorted by "specifiedCurrency" and "unspecifiedCurrency"
+
+        // Specified Currency => The currency in which the user is specifying the amount they're swapping for
+        // Unspecified Currency => The other currency
+
         // TODO: Consider scenario where LCC has insufficient liquidity.
         // ie. less from here for token OUT, and more from core Token OUT.
+
         BeforeSwapDelta newDelta;
-        if (params.zeroForOne == coreZeroForOne) {
-            newDelta = toBeforeSwapDelta(delta.amount0(), delta.amount1());
+
+        if (isExactInput) {
+            newDelta = toBeforeSwapDelta(
+                // exactIn = positive, exactOut = negative - as hook takes input, and releases output.
+                SafeCast.toInt128(amountIn),
+                -SafeCast.toInt128(amountToSettle)
+            );
         } else {
-            newDelta = toBeforeSwapDelta(delta.amount1(), delta.amount0());
+            newDelta = toBeforeSwapDelta(
+                -SafeCast.toInt128(amountToSettle),
+                SafeCast.toInt128(amountIn)
+            );
         }
 
-        return (this.beforeSwap.selector, newDelta, 0);
+        return (this.beforeSwap.selector, newDelta, 0); // last param is lpFeeOverride
     }
 }
