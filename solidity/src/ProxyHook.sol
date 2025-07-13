@@ -15,7 +15,7 @@ import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
 // import {BeforeSwapDeltaLibrary} from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
 
-import "forge-std/console.sol";
+// import "forge-std/console.sol";
 
 import {LiquidityCommitmentCertificate} from "./LCC.sol";
 import {IHookCommon} from "./interfaces/IHookCommon.sol";
@@ -331,10 +331,10 @@ contract ProxyHook is BaseHook, IHookCommon {
             bytes("")
         );
 
-        console.log("Core Pool Delta amount0: ", delta.amount0());
-        console.log("Core Pool Delta amount1: ", delta.amount1());
-        console.log("coreZeroForOne: ", coreZeroForOne);
-        console.log("params.zeroForOne: ", params.zeroForOne);
+        // console.log("Core Pool Delta amount0: ", delta.amount0());
+        // console.log("Core Pool Delta amount1: ", delta.amount1());
+        // console.log("coreZeroForOne: ", coreZeroForOne);
+        // console.log("params.zeroForOne: ", params.zeroForOne);
 
         /// The desired input amount if amountSpecified negative (exactIn), or the desired output amount if amountSpecified positive (exactOut)
         uint256 amountIn;
@@ -359,8 +359,8 @@ contract ProxyHook is BaseHook, IHookCommon {
             amountOut = uint256(params.amountSpecified);
         }
 
-        console.log("amountIn: ", amountIn / 1e18);
-        console.log("amountOut: ", amountOut / 1e18);
+        // console.log("amountIn: ", amountIn / 1e18);
+        // console.log("amountOut: ", amountOut / 1e18);
 
         uint256 amountToSettle;
 
@@ -393,11 +393,12 @@ contract ProxyHook is BaseHook, IHookCommon {
             );
 
             // Unwrap and Burn the LCC of Token 1 after taking from PM
-            (uint256 cancelledAmount, uint256 deficit) = lccTokenForCurrency1
-                .cancel(amountOut);
+            (uint256 cancelledAmount, ) = lccTokenForCurrency1.cancel(
+                amountOut
+            );
 
-            console.log("cancelledAmount: ", cancelledAmount / 1e18);
-            console.log("deficit: ", deficit / 1e18);
+            // console.log("cancelledAmount: ", cancelledAmount / 1e18);
+            // console.log("deficit: ", deficit / 1e18);
 
             amountToSettle = cancelledAmount;
 
@@ -437,11 +438,12 @@ contract ProxyHook is BaseHook, IHookCommon {
             );
 
             // Cancel (Unwrap/Burn) the LCC of Token 0 after taking from PM
-            (uint256 cancelledAmount, uint256 deficit) = lccTokenForCurrency0
-                .cancel(amountOut);
+            (uint256 cancelledAmount, ) = lccTokenForCurrency0.cancel(
+                amountOut
+            );
 
-            console.log("cancelledAmount: ", cancelledAmount / 1e18);
-            console.log("deficit: ", deficit / 1e18);
+            // console.log("cancelledAmount: ", cancelledAmount / 1e18);
+            // console.log("deficit: ", deficit / 1e18);
 
             amountToSettle = cancelledAmount;
 

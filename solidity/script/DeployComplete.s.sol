@@ -10,8 +10,9 @@ import {HookMiner} from "v4-periphery/src/utils/HookMiner.sol";
 import {CoreHook} from "../src/CoreHook.sol";
 import {ProxyHook} from "../src/ProxyHook.sol";
 import {MarketFactory} from "../src/MarketFactory.sol";
-import {SepoliaConstants} from "./constants/sepolia.sol";
 import {ScriptHelper} from "./libraries/ScriptHelper.s.sol";
+
+// Removed SepoliaConstants import
 
 /**
  * @title CompleteDeployScript
@@ -30,6 +31,11 @@ contract CompleteDeployScript is ScriptHelper {
     address public coreHook;
     address public proxyHook;
     address public marketFactory;
+
+    // Network-specific constants set from environment
+    address public poolManagerAddress;
+    address public create2Deployer;
+    string public networkName;
 
     // Hook flags for proper address mining
     uint160 constant CORE_HOOK_FLAGS =
@@ -50,11 +56,16 @@ contract CompleteDeployScript is ScriptHelper {
     function run() external {
         uint256 deployerPrivateKey = uint256(vm.envBytes32("PRIVATE_KEY"));
 
+        networkName = vm.envString("NETWORK");
+        poolManagerAddress = vm.envAddress("POOL_MANAGER");
+        create2Deployer = vm.envAddress("DEPLOYER_CREATE2");
+
         console.log(
-            "Starting deployment of CoreHook, ProxyHook, and MarketFactory..."
+            "Starting deployment of CoreHook, ProxyHook, and MarketFactory on %s...",
+            networkName
         );
-        console.log("Pool Manager:", SepoliaConstants.POOL_MANAGER);
-        console.log("CREATE2 Deployer:", SepoliaConstants.DEPLOYER_CREATE2);
+        console.log("Pool Manager:", poolManagerAddress);
+        console.log("CREATE2 Deployer:", create2Deployer);
 
         vm.startBroadcast(deployerPrivateKey);
 
@@ -100,13 +111,13 @@ contract CompleteDeployScript is ScriptHelper {
         // CoreHook constructor takes (poolManager, marketFactory)
         // Now we pass the actual marketFactory address
         bytes memory constructorArgs = abi.encode(
-            SepoliaConstants.POOL_MANAGER,
+            poolManagerAddress,
             marketFactory
         );
 
         // Mine the correct address with proper flags
         (address hookAddress, bytes32 salt) = HookMiner.find(
-            SepoliaConstants.DEPLOYER_CREATE2,
+            create2Deployer,
             CORE_HOOK_FLAGS,
             type(CoreHook).creationCode,
             constructorArgs
@@ -117,7 +128,7 @@ contract CompleteDeployScript is ScriptHelper {
 
         // Deploy the hook
         CoreHook deployedHook = new CoreHook{salt: salt}(
-            SepoliaConstants.POOL_MANAGER,
+            poolManagerAddress,
             marketFactory
         );
         require(
@@ -136,13 +147,13 @@ contract CompleteDeployScript is ScriptHelper {
         // ProxyHook constructor takes (poolManager, marketFactory)
         // Now we pass the actual marketFactory address
         bytes memory constructorArgs = abi.encode(
-            SepoliaConstants.POOL_MANAGER,
+            poolManagerAddress,
             marketFactory
         );
 
         // Mine the correct address with proper flags
         (address hookAddress, bytes32 salt) = HookMiner.find(
-            SepoliaConstants.DEPLOYER_CREATE2,
+            create2Deployer,
             PROXY_HOOK_FLAGS,
             type(ProxyHook).creationCode,
             constructorArgs
@@ -153,7 +164,7 @@ contract CompleteDeployScript is ScriptHelper {
 
         // Deploy the hook
         ProxyHook deployedHook = new ProxyHook{salt: salt}(
-            SepoliaConstants.POOL_MANAGER,
+            poolManagerAddress,
             marketFactory
         );
         require(
@@ -174,7 +185,7 @@ contract CompleteDeployScript is ScriptHelper {
 
         // MarketFactory constructor now only takes (poolManager, bounds)
         MarketFactory factory = new MarketFactory(
-            SepoliaConstants.POOL_MANAGER,
+            poolManagerAddress,
             initialBounds
         );
 
@@ -231,13 +242,14 @@ contract CompleteDeployScript is ScriptHelper {
      */
     function _writeDeploymentAddresses() internal {
         // Write addresses to JSON file using ScriptHelper
-        _setFilename("sepolia");
+        _setFilename(networkName);
         writeAddress("coreHook", coreHook);
         writeAddress("proxyHook", proxyHook);
         writeAddress("marketFactory", marketFactory);
 
         console.log(
-            "Deployment addresses written to script/deployments/sepolia_deployments.json"
+            "Deployment addresses written to script/deployments/%s_deployments.json",
+            networkName
         );
     }
 
@@ -259,7 +271,7 @@ contract CompleteDeployScript is ScriptHelper {
      * Can be called after deployment to ensure everything is set up correctly
      */
     function verifyDeployment() external view {
-        console.log("\n=== Verifying Deployment ===");
+        console.log("\n=== Verifying Deployment on %s ===", networkName);
 
         // Verify hook flags
         _verifyHookFlags(coreHook, CORE_HOOK_FLAGS);
@@ -270,7 +282,7 @@ contract CompleteDeployScript is ScriptHelper {
         // Verify MarketFactory configuration
         MarketFactory factory = MarketFactory(marketFactory);
         require(
-            factory.poolManager() == SepoliaConstants.POOL_MANAGER,
+            factory.poolManager() == poolManagerAddress,
             "MarketFactory: wrong poolManager"
         );
         require(
