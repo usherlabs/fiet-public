@@ -119,7 +119,11 @@ contract SwapV4 is ScriptHelper {
 
         uint8 swapType = uint8(vm.envOr("SWAP_TYPE", uint8(0)));
 
-        if (swapType == 0 || swapType == 1) {
+        if (swapType < 0 || swapType > 5) {
+            revert("Invalid swap type");
+        }
+
+        if (swapType == 0 || swapType == 1 || swapType == 5) {
             // For an 18 decimal token, 10e18 is 10 tokens
             swapExactInputSingle(
                 IV4Router.ExactInputSingleParams({
@@ -133,23 +137,8 @@ contract SwapV4 is ScriptHelper {
 
             // swapExactInputSingle(poolKey, 1, 0, userAddress);
             console.log("Exact Input Token 0 -> Token 1 Swap executed");
-            console.log(
-                "Token 0 - ",
-                IERC20Metadata(Currency.unwrap(poolKey.currency0)).name(),
-                ": ",
-                IERC20(Currency.unwrap(poolKey.currency0)).balanceOf(
-                    userAddress
-                ) / 1e18
-            );
-            console.log(
-                "Token 1 - ",
-                IERC20Metadata(Currency.unwrap(poolKey.currency1)).name(),
-                ": ",
-                IERC20(Currency.unwrap(poolKey.currency1)).balanceOf(
-                    userAddress
-                ) / 1e18
-            );
-        } else if (swapType == 2) {
+        }
+        if (swapType == 2 || swapType == 5) {
             swapExactInputSingle(
                 IV4Router.ExactInputSingleParams({
                     poolKey: poolKey,
@@ -161,25 +150,48 @@ contract SwapV4 is ScriptHelper {
             );
 
             console.log("Exact Input Token 1 -> Token 0 Swap executed");
-            console.log(
-                "Token 0 - ",
-                IERC20Metadata(Currency.unwrap(poolKey.currency0)).name(),
-                ": ",
-                IERC20(Currency.unwrap(poolKey.currency0)).balanceOf(
-                    userAddress
-                ) / 1e18
-            );
-            console.log(
-                "Token 1 - ",
-                IERC20Metadata(Currency.unwrap(poolKey.currency1)).name(),
-                ": ",
-                IERC20(Currency.unwrap(poolKey.currency1)).balanceOf(
-                    userAddress
-                ) / 1e18
-            );
-        } else {
-            revert("Invalid swap type");
         }
+        if (swapType == 3 || swapType == 5) {
+            swapExactOutputSingle(
+                IV4Router.ExactOutputSingleParams({
+                    poolKey: poolKey,
+                    zeroForOne: true,
+                    amountInMaximum: type(uint128).max,
+                    amountOut: 10e18,
+                    hookData: new bytes(0)
+                })
+            );
+
+            console.log("Exact Output Token 0 -> Token 1 Swap executed");
+        }
+        if (swapType == 4 || swapType == 5) {
+            swapExactOutputSingle(
+                IV4Router.ExactOutputSingleParams({
+                    poolKey: poolKey,
+                    zeroForOne: false,
+                    amountInMaximum: type(uint128).max,
+                    amountOut: 10e18 / 2, // half of the prior swap
+                    hookData: new bytes(0)
+                })
+            );
+
+            console.log("Exact Output Token 1 -> Token 0 Swap executed");
+        }
+
+        console.log(
+            "Token 0 - ",
+            IERC20Metadata(Currency.unwrap(poolKey.currency0)).name(),
+            ": ",
+            IERC20(Currency.unwrap(poolKey.currency0)).balanceOf(userAddress) /
+                1e18
+        );
+        console.log(
+            "Token 1 - ",
+            IERC20Metadata(Currency.unwrap(poolKey.currency1)).name(),
+            ": ",
+            IERC20(Currency.unwrap(poolKey.currency1)).balanceOf(userAddress) /
+                1e18
+        );
 
         vm.stopBroadcast();
         uint256 balanceAfterCurrency1 = IERC20(
@@ -267,7 +279,7 @@ contract SwapV4 is ScriptHelper {
 
         // Encode V4Router actions
         bytes memory actions = abi.encodePacked(
-            uint8(Actions.SWAP_EXACT_IN_SINGLE),
+            uint8(Actions.SWAP_EXACT_OUT_SINGLE),
             uint8(Actions.SETTLE_ALL),
             uint8(Actions.TAKE_ALL)
         );
@@ -278,23 +290,21 @@ contract SwapV4 is ScriptHelper {
         rParams[0] = abi.encode(params);
 
         if (params.zeroForOne) {
+            // zeroForOne means Token 0 -> Token 1.
+            // Therefore, here we're specifying Token 1 that we want OUT.
             rParams[1] = abi.encode(
                 params.poolKey.currency0,
-                type(uint256).max
-            );
-            rParams[2] = abi.encode(
-                params.poolKey.currency1,
                 params.amountInMaximum
             );
+            rParams[2] = abi.encode(params.poolKey.currency1, params.amountOut);
         } else {
+            // zeroForOne = false means Token 1 -> Token 0.
+            // We're specifying Token 0 that we want OUT.
             rParams[1] = abi.encode(
                 params.poolKey.currency1,
-                type(uint256).max
-            );
-            rParams[2] = abi.encode(
-                params.poolKey.currency0,
                 params.amountInMaximum
             );
+            rParams[2] = abi.encode(params.poolKey.currency0, params.amountOut);
         }
 
         bytes[] memory inputs = new bytes[](1);
