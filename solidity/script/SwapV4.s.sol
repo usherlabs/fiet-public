@@ -117,10 +117,69 @@ contract SwapV4 is ScriptHelper {
 
         console.log("Executing swap...");
 
-        // For an 18 decimal token, 10e18 is 10 tokens
-        swapExactInputSingle(poolKey, 10e18, 0);
-        // swapExactInputSingle(poolKey, 1, 0, userAddress);
-        console.log("Swap executed");
+        uint8 swapType = uint8(vm.envOr("SWAP_TYPE", uint8(0)));
+
+        if (swapType == 0 || swapType == 1) {
+            // For an 18 decimal token, 10e18 is 10 tokens
+            swapExactInputSingle(
+                IV4Router.ExactInputSingleParams({
+                    poolKey: poolKey,
+                    zeroForOne: true,
+                    amountIn: 10e18,
+                    amountOutMinimum: 0,
+                    hookData: new bytes(0)
+                })
+            );
+
+            // swapExactInputSingle(poolKey, 1, 0, userAddress);
+            console.log("Exact Input Token 0 -> Token 1 Swap executed");
+            console.log(
+                "Token 0 - ",
+                IERC20Metadata(Currency.unwrap(poolKey.currency0)).name(),
+                ": ",
+                IERC20(Currency.unwrap(poolKey.currency0)).balanceOf(
+                    userAddress
+                ) / 1e18
+            );
+            console.log(
+                "Token 1 - ",
+                IERC20Metadata(Currency.unwrap(poolKey.currency1)).name(),
+                ": ",
+                IERC20(Currency.unwrap(poolKey.currency1)).balanceOf(
+                    userAddress
+                ) / 1e18
+            );
+        } else if (swapType == 2) {
+            swapExactInputSingle(
+                IV4Router.ExactInputSingleParams({
+                    poolKey: poolKey,
+                    zeroForOne: false,
+                    amountIn: 10e18 / 2, // Half the first swap
+                    amountOutMinimum: 0,
+                    hookData: new bytes(0)
+                })
+            );
+
+            console.log("Exact Input Token 1 -> Token 0 Swap executed");
+            console.log(
+                "Token 0 - ",
+                IERC20Metadata(Currency.unwrap(poolKey.currency0)).name(),
+                ": ",
+                IERC20(Currency.unwrap(poolKey.currency0)).balanceOf(
+                    userAddress
+                ) / 1e18
+            );
+            console.log(
+                "Token 1 - ",
+                IERC20Metadata(Currency.unwrap(poolKey.currency1)).name(),
+                ": ",
+                IERC20(Currency.unwrap(poolKey.currency1)).balanceOf(
+                    userAddress
+                ) / 1e18
+            );
+        } else {
+            revert("Invalid swap type");
+        }
 
         vm.stopBroadcast();
         uint256 balanceAfterCurrency1 = IERC20(
@@ -150,9 +209,7 @@ contract SwapV4 is ScriptHelper {
     }
 
     function swapExactInputSingle(
-        PoolKey memory key, // PoolKey struct that identifies the v4 pool
-        uint128 amountIn, // Exact amount of tokens to swap
-        uint128 minAmountOut // Minimum amount of output tokens expected
+        IV4Router.ExactInputSingleParams memory params
     ) public {
         bytes memory commands = abi.encodePacked(uint8(Commands.V4_SWAP));
 
@@ -163,29 +220,87 @@ contract SwapV4 is ScriptHelper {
             uint8(Actions.TAKE_ALL)
         );
 
-        bytes[] memory params = new bytes[](3);
+        bytes[] memory rParams = new bytes[](3);
 
         // First parameter: swap configuration
-        params[0] = abi.encode(
-            IV4Router.ExactInputSingleParams({
-                poolKey: key,
-                zeroForOne: true, // true if we're swapping token0 for token1
-                amountIn: amountIn, // amount of tokens we're swapping
-                amountOutMinimum: minAmountOut, // minimum amount we expect to receive
-                hookData: new bytes(0) // Remove user-specific hook data if not needed
-            })
-        );
+        rParams[0] = abi.encode(params);
 
-        // Second parameter: settle all for input
-        params[1] = abi.encode(key.currency0, type(uint256).max);
+        if (params.zeroForOne) {
+            // Second parameter: settle all for input
+            rParams[1] = abi.encode(
+                params.poolKey.currency0,
+                type(uint256).max
+            );
+            // Third parameter: take all for output with minAmountOut
+            rParams[2] = abi.encode(
+                params.poolKey.currency1,
+                params.amountOutMinimum
+            );
+        } else {
+            // Second parameter: settle all for input
+            rParams[1] = abi.encode(
+                params.poolKey.currency1,
+                type(uint256).max
+            );
 
-        // Third parameter: take all for output with minAmountOut
-        params[2] = abi.encode(key.currency1, minAmountOut);
+            // Third parameter: take all for output with minAmountOut
+            rParams[2] = abi.encode(
+                params.poolKey.currency0,
+                params.amountOutMinimum
+            );
+        }
 
         bytes[] memory inputs = new bytes[](1);
 
         // Combine actions and params into inputs
-        inputs[0] = abi.encode(actions, params);
+        inputs[0] = abi.encode(actions, rParams);
+
+        // Execute the swap
+        uint256 deadline = block.timestamp + 20;
+        router.execute(commands, inputs, deadline);
+    }
+
+    function swapExactOutputSingle(
+        IV4Router.ExactOutputSingleParams memory params
+    ) public {
+        bytes memory commands = abi.encodePacked(uint8(Commands.V4_SWAP));
+
+        // Encode V4Router actions
+        bytes memory actions = abi.encodePacked(
+            uint8(Actions.SWAP_EXACT_IN_SINGLE),
+            uint8(Actions.SETTLE_ALL),
+            uint8(Actions.TAKE_ALL)
+        );
+
+        bytes[] memory rParams = new bytes[](3);
+
+        // First parameter: swap configuration
+        rParams[0] = abi.encode(params);
+
+        if (params.zeroForOne) {
+            rParams[1] = abi.encode(
+                params.poolKey.currency0,
+                type(uint256).max
+            );
+            rParams[2] = abi.encode(
+                params.poolKey.currency1,
+                params.amountInMaximum
+            );
+        } else {
+            rParams[1] = abi.encode(
+                params.poolKey.currency1,
+                type(uint256).max
+            );
+            rParams[2] = abi.encode(
+                params.poolKey.currency0,
+                params.amountInMaximum
+            );
+        }
+
+        bytes[] memory inputs = new bytes[](1);
+
+        // Combine actions and params into inputs
+        inputs[0] = abi.encode(actions, rParams);
 
         // Execute the swap
         uint256 deadline = block.timestamp + 20;

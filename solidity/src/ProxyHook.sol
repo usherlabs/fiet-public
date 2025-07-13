@@ -356,8 +356,8 @@ contract ProxyHook is BaseHook, IHookCommon {
             amountOut = uint256(params.amountSpecified);
         }
 
-        console.log("amountIn: ", amountIn);
-        console.log("amountOut: ", amountOut);
+        console.log("amountIn: ", amountIn / 1e18);
+        console.log("amountOut: ", amountOut / 1e18);
 
         uint256 amountToSettle;
 
