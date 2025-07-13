@@ -1,0 +1,139 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+import "forge-std/Test.sol";
+import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
+import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {MockERC20} from "solmate/test/utils/mocks/MockERC20.sol";
+
+import {MarketFactory} from "../src/MarketFactory.sol";
+import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
+import {CoreHook} from "../src/CoreHook.sol";
+import {ProxyHook} from "../src/ProxyHook.sol";
+import {LiquidityCommitmentCertificate} from "../src/LCC.sol";
+
+contract MarketFactoryTest is Test {
+    using PoolIdLibrary for PoolKey;
+
+    MarketFactory factory;
+    IPoolManager poolManager;
+    address coreHookAddr;
+    address proxyHookAddr;
+    MockERC20 token0;
+    MockERC20 token1;
+    address owner = makeAddr("owner");
+
+    function setUp() public {
+        poolManager = IPoolManager(makeAddr("poolManager"));
+        token0 = new MockERC20("Token0", "TK0", 18);
+        token1 = new MockERC20("Token1", "TK1", 18);
+
+        address[] memory bounds = new address[](0);
+
+        vm.prank(owner);
+        factory = new MarketFactory(address(poolManager), bounds);
+
+        // Deploy hooks
+        coreHookAddr = address(
+            new CoreHook(address(poolManager), address(factory))
+        );
+        proxyHookAddr = address(
+            new ProxyHook(address(poolManager), address(factory))
+        );
+
+        vm.prank(owner);
+        factory.setHooks(coreHookAddr, proxyHookAddr);
+    }
+
+    function testCreateMarket() public {
+        // Mock initialize calls
+        vm.mockCall(
+            address(poolManager),
+            abi.encodeWithSelector(IPoolManager.initialize.selector),
+            abi.encode(bytes32(0))
+        );
+
+        vm.prank(owner);
+        (PoolId coreId, PoolId proxyId) = factory.createMarket(
+            address(token0),
+            address(token1),
+            3000,
+            60,
+            79228162514264337593543950336 // 1:1 price
+        );
+
+        assertTrue(PoolId.unwrap(coreId) != bytes32(0));
+        assertTrue(PoolId.unwrap(proxyId) != bytes32(0));
+
+        address lcc0 = factory.getLCC(address(token0));
+        address lcc1 = factory.getLCC(address(token1));
+        assertEq(factory.getUnderlyingAsset(lcc0), address(token0));
+        assertEq(factory.getUnderlyingAsset(lcc1), address(token1));
+    }
+
+    function testGetCoreHook() public view {
+        assertEq(factory.getCoreHook(), coreHookAddr);
+    }
+
+    function testGetProxyHook() public view {
+        assertEq(factory.getProxyHook(), proxyHookAddr);
+    }
+
+    function testAddRemoveBounds() public {
+        vm.prank(owner);
+        factory.createMarket(
+            address(token0),
+            address(token1),
+            3000,
+            60,
+            79228162514264337593543950336
+        );
+
+        address[] memory newBounds = new address[](1);
+        newBounds[0] = makeAddr("newBound");
+
+        vm.prank(owner);
+        factory.addBounds(newBounds);
+        assertTrue(factory.bounds(newBounds[0]));
+
+        vm.prank(owner);
+        factory.removeBounds(newBounds);
+        assertFalse(factory.bounds(newBounds[0]));
+    }
+
+    function testIsBound() public {
+        vm.prank(owner);
+        factory.createMarket(
+            address(token0),
+            address(token1),
+            3000,
+            60,
+            79228162514264337593543950336
+        );
+
+        address boundAddr = makeAddr("bound");
+
+        address[] memory bounds = new address[](1);
+        bounds[0] = boundAddr;
+
+        vm.prank(owner);
+        factory.addBounds(bounds);
+
+        assertTrue(factory.bounds(boundAddr));
+    }
+
+    function testRevertInvalidUnderlying() public {
+        vm.prank(owner);
+        vm.expectRevert(IMarketFactory.InvalidUnderlyingAsset.selector);
+        factory.createMarket(
+            address(0),
+            address(token1),
+            3000,
+            60,
+            79228162514264337593543950336
+        );
+    }
+}

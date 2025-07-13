@@ -17,5 +17,7 @@ fs_permissions = [
 
 [rpc_endpoints]
 sepolia = "${ARB_SEPOLIA_RPC_URL}"
-[etherscan]
-sepolia = { key = "${ETHERSCAN_API_KEY}" }
+
+# For some reason etherscan api is required for local anvil fork.
+# [etherscan]
+# sepolia = { key = "${ETHERSCAN_API_KEY}" }

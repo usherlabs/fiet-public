@@ -4,26 +4,40 @@ pragma solidity ^0.8.0;
 import {Script, console} from "forge-std/Script.sol";
 
 abstract contract ScriptHelper is Script {
-    string constant FILE = "script/deployments/deployments.json";
+    string constant FILE_START = "script/deployments/";
+    string constant FILE_END = "_deployments.json";
 
-    function writeAddress(string memory name, address contractAddress) internal {
+    string file = "";
+
+    function _setFilename(string memory name) internal {
+        file = string.concat(FILE_START, name, FILE_END);
+    }
+
+    function writeAddress(
+        string memory name,
+        address contractAddress
+    ) internal {
         string memory contents;
-        try vm.readFile(FILE) returns (string memory data) {
+        try vm.readFile(file) returns (string memory data) {
             contents = data;
         } catch {
             contents = "{}";
         }
 
         string memory tempNS = "temp";
-        string memory newData = vm.serializeAddress(tempNS, name, contractAddress);
+        string memory newData = vm.serializeAddress(
+            tempNS,
+            name,
+            contractAddress
+        );
 
         string memory merged = _mergeJson(contents, newData);
-        vm.writeJson(merged, FILE);
+        vm.writeJson(merged, file);
     }
 
     function writeString(string memory name, string memory value) internal {
         string memory contents;
-        try vm.readFile(FILE) returns (string memory data) {
+        try vm.readFile(file) returns (string memory data) {
             contents = data;
         } catch {
             contents = "{}";
@@ -33,12 +47,12 @@ abstract contract ScriptHelper is Script {
         string memory newData = vm.serializeString(tempNS, name, value);
 
         string memory merged = _mergeJson(contents, newData);
-        vm.writeJson(merged, FILE);
+        vm.writeJson(merged, file);
     }
 
     function writeBytes(string memory name, bytes memory data) internal {
         string memory contents;
-        try vm.readFile(FILE) returns (string memory fileData) {
+        try vm.readFile(file) returns (string memory fileData) {
             contents = fileData;
         } catch {
             contents = "{}";
@@ -48,10 +62,13 @@ abstract contract ScriptHelper is Script {
         string memory newData = vm.serializeBytes(tempNS, name, data);
 
         string memory merged = _mergeJson(contents, newData);
-        vm.writeJson(merged, FILE);
+        vm.writeJson(merged, file);
     }
 
-    function _mergeJson(string memory a, string memory b) private pure returns (string memory) {
+    function _mergeJson(
+        string memory a,
+        string memory b
+    ) private pure returns (string memory) {
         bytes memory ba = bytes(a);
         bytes memory bb = bytes(b);
 
@@ -81,19 +98,23 @@ abstract contract ScriptHelper is Script {
 
     function readAddress(string memory name) internal view returns (address) {
         string memory path = string.concat(".", name);
-        string memory contents = vm.readFile(FILE);
+        string memory contents = vm.readFile(file);
         return vm.parseJsonAddress(contents, path);
     }
 
-    function readBytes(string memory name) internal view returns (bytes memory) {
+    function readBytes(
+        string memory name
+    ) internal view returns (bytes memory) {
         string memory path = string.concat(".", name);
-        string memory contents = vm.readFile(FILE);
+        string memory contents = vm.readFile(file);
         return vm.parseJsonBytes(contents, path);
     }
 
-    function readString(string memory name) internal view returns (string memory) {
+    function readString(
+        string memory name
+    ) internal view returns (string memory) {
         string memory path = string.concat(".", name);
-        string memory contents = vm.readFile(FILE);
+        string memory contents = vm.readFile(file);
         return vm.parseJsonString(contents, path);
     }
 }

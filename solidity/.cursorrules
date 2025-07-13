@@ -1,0 +1,39 @@
+# Solidity Development Rules for Cursor
+
+## Code Style
+
+- Use explicit function visibility modifiers (public, private, internal, external)
+- Follow Solidity naming conventions: camelCase for variables, PascalCase for contracts
+- Use NatSpec comments for all public and external functions
+- Implement proper error handling with custom errors instead of revert strings
+- Use OpenZeppelin contracts and libraries when appropriate
+
+## Security Best Practices
+
+- Always check for reentrancy vulnerabilities
+- Use SafeERC20 for token transfers
+- Implement proper access control
+- Avoid low-level calls when possible
+- Use pull over push payment patterns
+- Implement circuit breakers for critical functions
+
+## Gas Optimization
+
+- Use immutable variables for values set at construction
+- Pack structs efficiently
+- Use assembly sparingly and only when necessary
+- Optimize storage layout
+- Use libraries for complex operations
+
+## Testing
+
+- Write comprehensive unit tests
+- Use property-based testing for edge cases
+- Test all error conditions
+- Mock external dependencies
+
+## Documentation
+
+- Document complex business logic
+- Explain why, not just what
+- Keep documentation up to date with code changes 
