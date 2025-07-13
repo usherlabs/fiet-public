@@ -336,35 +336,26 @@ contract ProxyHook is BaseHook, IHookCommon {
         console.log("coreZeroForOne: ", coreZeroForOne);
         console.log("params.zeroForOne: ", params.zeroForOne);
 
-        /// The desired input amount if negative (exactIn), or the desired output amount if positive (exactOut)
+        /// The desired input amount if amountSpecified negative (exactIn), or the desired output amount if amountSpecified positive (exactOut)
         uint256 amountIn;
         uint256 amountOut;
         bool isExactInput = params.amountSpecified < 0;
         if (isExactInput) {
             amountIn = uint256(-params.amountSpecified);
-            if (params.zeroForOne) {
-                // exactIn is Token 0. If coreZeroForOne is also true, then amountOut is delta of LCC 1.
-                amountOut = _safeInt128ToUint256(
-                    coreZeroForOne ? delta.amount1() : delta.amount0()
-                );
-            } else {
-                // exactIn is Token 1. If coreZeroForOne is also false, then amountOut is delta of LCC 0.
-                amountOut = _safeInt128ToUint256(
-                    coreZeroForOne ? delta.amount1() : delta.amount0()
-                );
-            }
+
+            // Regardless of whether params.zeroForOne is true or false,
+            // If params.zeroForOne is true (Token 0 -> Token 1), then exactIn is Token 0. If coreZeroForOne is also true, then amountOut is delta of LCC 1.
+            // If params.zeroForOne is false (Token 1 -> Token 0), then exactIn is Token 1. If coreZeroForOne is also false, then amountOut is delta of LCC 0.
+            amountOut = _safeInt128ToUint256(
+                coreZeroForOne ? delta.amount1() : delta.amount0()
+            );
         } else {
-            if (params.zeroForOne) {
-                // exactOut is Token 1. If coreZeroForOne is also true, then amountIn is delta of LCC 0.
-                amountIn = _safeInt128ToUint256(
-                    coreZeroForOne ? delta.amount0() : delta.amount1()
-                );
-            } else {
-                // exactOut is Token 0. If coreZeroForOne is also false, then amountIn is delta of LCC 1.
-                amountIn = _safeInt128ToUint256(
-                    coreZeroForOne ? delta.amount0() : delta.amount1()
-                );
-            }
+            // Regardless of whether params.zeroForOne is true or false,
+            // If params.zeroForOne is true (Token 0 -> Token 1), then exactOut is Token 1. If coreZeroForOne is also true, then amountOut is delta of LCC 0.
+            // If params.zeroForOne is false (Token 1 -> Token 0), then exactOut is Token 0. If coreZeroForOne is also false, then amountOut is delta of LCC 1.
+            amountIn = _safeInt128ToUint256(
+                coreZeroForOne ? delta.amount0() : delta.amount1()
+            );
             amountOut = uint256(params.amountSpecified);
         }
 

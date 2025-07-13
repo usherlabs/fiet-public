@@ -115,8 +115,6 @@ contract SwapV4 is ScriptHelper {
         approveTokenWithPermit2(usdtToken);
         console.log("USDT approved");
 
-        console.log("Executing swap...");
-
         uint8 swapType = uint8(vm.envOr("SWAP_TYPE", uint8(0)));
 
         if (swapType < 0 || swapType > 5) {
@@ -124,6 +122,8 @@ contract SwapV4 is ScriptHelper {
         }
 
         if (swapType == 0 || swapType == 1 || swapType == 5) {
+            console.log("Executing Exact Input swap for Token 0 -> Token 1...");
+
             // For an 18 decimal token, 10e18 is 10 tokens
             swapExactInputSingle(
                 IV4Router.ExactInputSingleParams({
@@ -139,6 +139,8 @@ contract SwapV4 is ScriptHelper {
             console.log("Exact Input Token 0 -> Token 1 Swap executed");
         }
         if (swapType == 2 || swapType == 5) {
+            console.log("Executing Exact Input swap for Token 1 -> Token 0...");
+
             swapExactInputSingle(
                 IV4Router.ExactInputSingleParams({
                     poolKey: poolKey,
@@ -152,6 +154,10 @@ contract SwapV4 is ScriptHelper {
             console.log("Exact Input Token 1 -> Token 0 Swap executed");
         }
         if (swapType == 3 || swapType == 5) {
+            console.log(
+                "Executing Exact Output swap for Token 0 -> Token 1..."
+            );
+
             swapExactOutputSingle(
                 IV4Router.ExactOutputSingleParams({
                     poolKey: poolKey,
@@ -165,6 +171,10 @@ contract SwapV4 is ScriptHelper {
             console.log("Exact Output Token 0 -> Token 1 Swap executed");
         }
         if (swapType == 4 || swapType == 5) {
+            console.log(
+                "Executing Exact Output swap for Token 1 -> Token 0..."
+            );
+
             swapExactOutputSingle(
                 IV4Router.ExactOutputSingleParams({
                     poolKey: poolKey,
