@@ -10,7 +10,13 @@ abstract contract ScriptHelper is Script {
     string file = "";
 
     function _setFilename(string memory name) internal {
-        file = string.concat(FILE_START, name, FILE_END);
+        // INSERT_YOUR_CODE
+        string memory mode = vm.envString("MODE");
+        string memory prefix = "";
+        if (keccak256(bytes(mode)) == keccak256(bytes("LOCAL"))) {
+            prefix = "local_";
+        }
+        file = string.concat(FILE_START, prefix, name, FILE_END);
     }
 
     function writeAddress(
