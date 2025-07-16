@@ -11,7 +11,12 @@ abstract contract ScriptHelper is Script {
 
     function _setFilename(string memory name) internal {
         // INSERT_YOUR_CODE
-        string memory mode = vm.envString("MODE");
+        string memory mode;
+        try vm.envString("MODE") returns (string memory envMode) {
+            mode = envMode;
+        } catch {
+            mode = "LOCAL";
+        }
         string memory prefix = "";
         if (keccak256(bytes(mode)) == keccak256(bytes("LOCAL"))) {
             prefix = "local_";

@@ -2,8 +2,8 @@
 pragma solidity ^0.8.0;
 
 import {console} from "forge-std/Script.sol";
-import {IUniversalRouter} from "./external/IUniversalRouter.sol";
-import {Commands} from "./external/Commands.sol";
+import {IUniversalRouter} from "../external/IUniversalRouter.sol";
+import {Commands} from "../external/Commands.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IV4Router} from "v4-periphery/src/interfaces/IV4Router.sol";
 import {Actions} from "v4-periphery/src/libraries/Actions.sol";
@@ -15,11 +15,11 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {IHooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 
-import {SepoliaConstants} from "./constants/ArbitrumSepolia.sol";
-import {ScriptHelper} from "./libraries/ScriptHelper.s.sol";
-import {CurrencySortHelper} from "./libraries/CurrencySortHelper.sol";
-import {LiquidityCommitmentCertificate} from "../src/LCC.sol";
-import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
+import {SepoliaConstants} from "../constants/ArbitrumSepolia.sol";
+import {ScriptHelper} from "../libraries/ScriptHelper.s.sol";
+import {CurrencySortHelper} from "../libraries/CurrencySortHelper.sol";
+import {LiquidityCommitmentCertificate} from "../../src/LCC.sol";
+import {IMarketFactory} from "../../src/interfaces/IMarketFactory.sol";
 
 contract SwapV4 is ScriptHelper {
     using StateLibrary for IPoolManager;

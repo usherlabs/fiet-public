@@ -74,6 +74,16 @@ pause-market:
 		--rpc-url $(RPC_URL) \
 		--broadcast -vvv
 
+add-liquidity:
+	$(FORGE) script $(SCRIPT_DIR)/AddLiquidity.s.sol \
+		--rpc-url $(RPC_URL) \
+		--broadcast -vvv
+
+remove-liquidity:
+	$(FORGE) script $(SCRIPT_DIR)/RemoveLiquidity.s.sol \
+		--rpc-url $(RPC_URL) \
+		--broadcast -vvv
+
 swap:
 	$(FORGE) script $(SCRIPT_DIR)/dev/SwapV4.s.sol \
 		--rpc-url $(RPC_URL) \

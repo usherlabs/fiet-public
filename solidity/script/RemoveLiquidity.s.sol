@@ -47,13 +47,20 @@ contract RemoveLiquidityScript is ScriptHelper {
 
         uint256 tokenId = vm.envUint("TOKEN_ID");
 
-        networkName = vm.envString("NETWORK");
-        isSepolia = keccak256(bytes(networkName)) == keccak256(bytes("sepolia"));
+        try vm.envString("NETWORK") returns (string memory envNetworkName) {
+            networkName = envNetworkName;
+        } catch {
+            networkName = "sepolia";
+        }
+        isSepolia =
+            keccak256(bytes(networkName)) == keccak256(bytes("sepolia"));
 
         if (isSepolia) {
             poolManagerAddr = SepoliaConstants.POOL_MANAGER;
             positionManagerAddr = SepoliaConstants.POSITION_MANAGER;
-        } else if (keccak256(bytes(networkName)) == keccak256(bytes("arbitrum"))) {
+        } else if (
+            keccak256(bytes(networkName)) == keccak256(bytes("arbitrum"))
+        ) {
             poolManagerAddr = ArbitrumConstants.POOL_MANAGER;
             positionManagerAddr = ArbitrumConstants.POSITION_MANAGER;
         } else {
@@ -73,7 +80,9 @@ contract RemoveLiquidityScript is ScriptHelper {
             if (isSepolia) {
                 usdcToken = readAddress("usdcToken");
             } else {
-                revert("Please specify UNDERLYING_ASSET_0 via environment variable");
+                revert(
+                    "Please specify UNDERLYING_ASSET_0 via environment variable"
+                );
             }
         }
 
@@ -83,18 +92,26 @@ contract RemoveLiquidityScript is ScriptHelper {
             if (isSepolia) {
                 usdtToken = readAddress("usdtToken");
             } else {
-                revert("Please specify UNDERLYING_ASSET_1 via environment variable");
+                revert(
+                    "Please specify UNDERLYING_ASSET_1 via environment variable"
+                );
             }
         }
 
         proxyHook = ProxyHook(readAddress("proxyHook"));
         address coreHookAddr = factory.getCoreHook();
 
-        lccUSDCToken = LiquidityCommitmentCertificate(factory.getLCC(usdcToken));
-        lccUSDTToken = LiquidityCommitmentCertificate(factory.getLCC(usdtToken));
+        lccUSDCToken = LiquidityCommitmentCertificate(
+            factory.getLCC(usdcToken)
+        );
+        lccUSDTToken = LiquidityCommitmentCertificate(
+            factory.getLCC(usdtToken)
+        );
 
         uint24 coreFee = uint24(vm.envOr("CORE_POOL_FEE", uint256(0)));
-        int24 tickSpacingVal = int24(uint24(vm.envOr("TICK_SPACING", uint256(60))));
+        int24 tickSpacingVal = int24(
+            uint24(vm.envOr("TICK_SPACING", uint256(60)))
+        );
 
         setupPoolKeys(coreHookAddr, coreFee, tickSpacingVal);
 
@@ -103,9 +120,13 @@ contract RemoveLiquidityScript is ScriptHelper {
         vm.stopBroadcast();
     }
 
-    function setupPoolKeys(address coreHookAddr, uint24 coreFee, int24 tickSpacingVal) internal {
-        (Currency currency0Core, Currency currency1Core) =
-            CurrencySortHelper.sortAddresses(address(lccUSDCToken), address(lccUSDTToken));
+    function setupPoolKeys(
+        address coreHookAddr,
+        uint24 coreFee,
+        int24 tickSpacingVal
+    ) internal {
+        (Currency currency0Core, Currency currency1Core) = CurrencySortHelper
+            .sortAddresses(address(lccUSDCToken), address(lccUSDTToken));
         corePoolKey = PoolKey({
             currency0: currency0Core,
             currency1: currency1Core,
@@ -114,8 +135,8 @@ contract RemoveLiquidityScript is ScriptHelper {
             hooks: IHooks(coreHookAddr)
         });
 
-        (Currency currency0Proxy, Currency currency1Proxy) =
-            CurrencySortHelper.sortAddresses(address(usdcToken), address(usdtToken));
+        (Currency currency0Proxy, Currency currency1Proxy) = CurrencySortHelper
+            .sortAddresses(address(usdcToken), address(usdtToken));
         proxyPoolKey = PoolKey({
             currency0: currency0Proxy,
             currency1: currency1Proxy,
@@ -143,7 +164,10 @@ contract RemoveLiquidityScript is ScriptHelper {
         console.log("Position liquidity:", liquidity);
         require(liquidity > 0, "Empty position");
 
-        bytes memory actions = abi.encodePacked(uint8(Actions.BURN_POSITION), uint8(Actions.TAKE_PAIR));
+        bytes memory actions = abi.encodePacked(
+            uint8(Actions.BURN_POSITION),
+            uint8(Actions.TAKE_PAIR)
+        );
 
         bytes[] memory params = new bytes[](2);
         params[0] = abi.encode(
@@ -152,11 +176,18 @@ contract RemoveLiquidityScript is ScriptHelper {
             0, // amount1Min
             "" // hookData
         );
-        params[1] = abi.encode(corePoolKey.currency0, corePoolKey.currency1, recipient);
+        params[1] = abi.encode(
+            corePoolKey.currency0,
+            corePoolKey.currency1,
+            recipient
+        );
 
         uint256 deadline = block.timestamp + 300;
 
-        positionManager.modifyLiquidities(abi.encode(actions, params), deadline);
+        positionManager.modifyLiquidities(
+            abi.encode(actions, params),
+            deadline
+        );
 
         console.log("Position burned successfully!");
     }
