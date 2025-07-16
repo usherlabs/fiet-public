@@ -14,6 +14,7 @@ import {Deployers} from "@uniswap/v4-core/test/utils/Deployers.sol";
 import {CoreHook} from "../src/CoreHook.sol";
 import {ProxyHook} from "../src/ProxyHook.sol";
 import {MarketFactory} from "../src/MarketFactory.sol";
+import {HookFlags} from "../script/constants/HookFlags.sol";
 
 contract HookTest is Test, Deployers {
     IPoolManager poolManager;
@@ -30,33 +31,17 @@ contract HookTest is Test, Deployers {
         factory = new MarketFactory(address(poolManager), bounds);
 
         // Compute flags for CoreHook
-        uint160 coreFlags = Hooks.BEFORE_INITIALIZE_FLAG |
-            Hooks.BEFORE_ADD_LIQUIDITY_FLAG |
-            Hooks.AFTER_ADD_LIQUIDITY_FLAG |
-            Hooks.BEFORE_REMOVE_LIQUIDITY_FLAG |
-            Hooks.AFTER_REMOVE_LIQUIDITY_FLAG |
-            Hooks.AFTER_SWAP_FLAG;
+        uint160 coreFlags = HookFlags.CORE_HOOK_FLAGS;
         address coreHookAddrComputed = address(coreFlags);
 
-        deployCodeTo(
-            "CoreHook.sol:CoreHook",
-            abi.encode(poolManager, address(factory)),
-            coreHookAddrComputed
-        );
+        deployCodeTo("CoreHook.sol:CoreHook", abi.encode(poolManager, address(factory)), coreHookAddrComputed);
         coreHook = CoreHook(coreHookAddrComputed);
 
         // Compute flags for ProxyHook
-        uint160 proxyFlags = Hooks.BEFORE_INITIALIZE_FLAG |
-            Hooks.BEFORE_ADD_LIQUIDITY_FLAG |
-            Hooks.BEFORE_SWAP_FLAG |
-            Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG;
+        uint160 proxyFlags = HookFlags.PROXY_HOOK_FLAGS;
         address proxyHookAddrComputed = address(proxyFlags);
 
-        deployCodeTo(
-            "ProxyHook.sol:ProxyHook",
-            abi.encode(poolManager, address(factory)),
-            proxyHookAddrComputed
-        );
+        deployCodeTo("ProxyHook.sol:ProxyHook", abi.encode(poolManager, address(factory)), proxyHookAddrComputed);
         proxyHook = ProxyHook(proxyHookAddrComputed);
 
         // Activate hooks
@@ -113,9 +98,7 @@ contract HookTest is Test, Deployers {
 
         // Cannot re-pause
         vm.prank(address(factory));
-        vm.expectRevert(
-            abi.encodeWithSelector(PausablePool.EnforcedPause.selector)
-        );
+        vm.expectRevert(abi.encodeWithSelector(PausablePool.EnforcedPause.selector));
         coreHook.pause(poolId);
     }
 
@@ -137,9 +120,7 @@ contract HookTest is Test, Deployers {
 
         // Cannot re-unpause
         vm.prank(address(factory));
-        vm.expectRevert(
-            abi.encodeWithSelector(PausablePool.ExpectedPause.selector)
-        );
+        vm.expectRevert(abi.encodeWithSelector(PausablePool.ExpectedPause.selector));
         coreHook.unpause(poolId);
     }
 

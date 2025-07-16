@@ -18,6 +18,7 @@ import {PausablePool} from "../src/libraries/PausablePool.sol";
 import {Deployers} from "@uniswap/v4-core/test/utils/Deployers.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {HookFlags} from "../script/constants/HookFlags.sol";
 
 contract MarketFactoryTest is Test, Deployers {
     using PoolIdLibrary for PoolKey;
@@ -41,34 +42,18 @@ contract MarketFactoryTest is Test, Deployers {
         factory = new MarketFactory(address(poolManager), bounds);
 
         // Compute flags for CoreHook
-        uint160 coreFlags = Hooks.BEFORE_INITIALIZE_FLAG |
-            Hooks.BEFORE_ADD_LIQUIDITY_FLAG |
-            Hooks.AFTER_ADD_LIQUIDITY_FLAG |
-            Hooks.BEFORE_REMOVE_LIQUIDITY_FLAG |
-            Hooks.AFTER_REMOVE_LIQUIDITY_FLAG |
-            Hooks.AFTER_SWAP_FLAG;
+        uint160 coreFlags = HookFlags.CORE_HOOK_FLAGS;
         coreHookAddr = address(coreFlags);
 
         // Deploy CoreHook at computed address
-        deployCodeTo(
-            "CoreHook.sol:CoreHook",
-            abi.encode(poolManager, address(factory)),
-            coreHookAddr
-        );
+        deployCodeTo("CoreHook.sol:CoreHook", abi.encode(poolManager, address(factory)), coreHookAddr);
 
         // Compute flags for ProxyHook
-        uint160 proxyFlags = Hooks.BEFORE_INITIALIZE_FLAG |
-            Hooks.BEFORE_ADD_LIQUIDITY_FLAG |
-            Hooks.BEFORE_SWAP_FLAG |
-            Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG;
+        uint160 proxyFlags = HookFlags.PROXY_HOOK_FLAGS;
         proxyHookAddr = address(proxyFlags);
 
         // Deploy ProxyHook at computed address
-        deployCodeTo(
-            "ProxyHook.sol:ProxyHook",
-            abi.encode(poolManager, address(factory)),
-            proxyHookAddr
-        );
+        deployCodeTo("ProxyHook.sol:ProxyHook", abi.encode(poolManager, address(factory)), proxyHookAddr);
 
         vm.prank(owner);
         factory.setHooks(coreHookAddr, proxyHookAddr);
@@ -77,9 +62,7 @@ contract MarketFactoryTest is Test, Deployers {
     function testCreateMarket() public {
         // Mock initialize calls
         vm.mockCall(
-            address(poolManager),
-            abi.encodeWithSelector(IPoolManager.initialize.selector),
-            abi.encode(bytes32(0))
+            address(poolManager), abi.encodeWithSelector(IPoolManager.initialize.selector), abi.encode(bytes32(0))
         );
 
         vm.prank(owner);
@@ -110,19 +93,11 @@ contract MarketFactoryTest is Test, Deployers {
 
     function testAddRemoveBounds() public {
         vm.mockCall(
-            address(poolManager),
-            abi.encodeWithSelector(IPoolManager.initialize.selector),
-            abi.encode(bytes32(0))
+            address(poolManager), abi.encodeWithSelector(IPoolManager.initialize.selector), abi.encode(bytes32(0))
         );
 
         vm.prank(owner);
-        factory.createMarket(
-            address(token0),
-            address(token1),
-            3000,
-            60,
-            79228162514264337593543950336
-        );
+        factory.createMarket(address(token0), address(token1), 3000, 60, 79228162514264337593543950336);
 
         address[] memory newBounds = new address[](1);
         newBounds[0] = makeAddr("newBound");
@@ -138,19 +113,11 @@ contract MarketFactoryTest is Test, Deployers {
 
     function testIsBound() public {
         vm.mockCall(
-            address(poolManager),
-            abi.encodeWithSelector(IPoolManager.initialize.selector),
-            abi.encode(bytes32(0))
+            address(poolManager), abi.encodeWithSelector(IPoolManager.initialize.selector), abi.encode(bytes32(0))
         );
 
         vm.prank(owner);
-        factory.createMarket(
-            address(token0),
-            address(token1),
-            3000,
-            60,
-            79228162514264337593543950336
-        );
+        factory.createMarket(address(token0), address(token1), 3000, 60, 79228162514264337593543950336);
 
         address boundAddr = makeAddr("bound");
 
@@ -166,38 +133,20 @@ contract MarketFactoryTest is Test, Deployers {
     function testRevertInvalidUnderlying() public {
         vm.prank(owner);
         vm.expectRevert(IMarketFactory.InvalidUnderlyingAsset.selector);
-        factory.createMarket(
-            address(0),
-            address(token1),
-            3000,
-            60,
-            79228162514264337593543950336
-        );
+        factory.createMarket(address(0), address(token1), 3000, 60, 79228162514264337593543950336);
     }
 
     function testPauseMarket() public {
         vm.mockCall(
-            address(poolManager),
-            abi.encodeWithSelector(IPoolManager.initialize.selector),
-            abi.encode(bytes32(0))
+            address(poolManager), abi.encodeWithSelector(IPoolManager.initialize.selector), abi.encode(bytes32(0))
         );
 
         vm.prank(owner);
-        (PoolId coreId, ) = factory.createMarket(
-            address(token0),
-            address(token1),
-            3000,
-            60,
-            79228162514264337593543950336
-        );
+        (PoolId coreId,) =
+            factory.createMarket(address(token0), address(token1), 3000, 60, 79228162514264337593543950336);
 
         // Non-owner cannot pause
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                Ownable.OwnableUnauthorizedAccount.selector,
-                address(this)
-            )
-        );
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(this)));
         factory.pause(coreId);
 
         // Owner can pause
@@ -208,38 +157,24 @@ contract MarketFactoryTest is Test, Deployers {
 
         // Cannot re-pause
         vm.prank(owner);
-        vm.expectRevert(
-            abi.encodeWithSelector(PausablePool.EnforcedPause.selector)
-        );
+        vm.expectRevert(abi.encodeWithSelector(PausablePool.EnforcedPause.selector));
         factory.pause(coreId);
     }
 
     function testUnpauseMarket() public {
         vm.mockCall(
-            address(poolManager),
-            abi.encodeWithSelector(IPoolManager.initialize.selector),
-            abi.encode(bytes32(0))
+            address(poolManager), abi.encodeWithSelector(IPoolManager.initialize.selector), abi.encode(bytes32(0))
         );
 
         vm.prank(owner);
-        (PoolId coreId, ) = factory.createMarket(
-            address(token0),
-            address(token1),
-            3000,
-            60,
-            79228162514264337593543950336
-        );
+        (PoolId coreId,) =
+            factory.createMarket(address(token0), address(token1), 3000, 60, 79228162514264337593543950336);
 
         vm.prank(owner);
         factory.pause(coreId);
 
         // Non-owner cannot unpause
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                Ownable.OwnableUnauthorizedAccount.selector,
-                address(this)
-            )
-        );
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(this)));
         factory.unpause(coreId);
 
         // Owner can unpause
@@ -250,9 +185,7 @@ contract MarketFactoryTest is Test, Deployers {
 
         // Cannot re-unpause
         vm.prank(owner);
-        vm.expectRevert(
-            abi.encodeWithSelector(PausablePool.ExpectedPause.selector)
-        );
+        vm.expectRevert(abi.encodeWithSelector(PausablePool.ExpectedPause.selector));
         factory.unpause(coreId);
     }
 }

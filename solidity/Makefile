@@ -8,6 +8,8 @@ ANVIL_PORT=8545
 ANVIL_FORK_URL=http://localhost:$(ANVIL_PORT)
 FORK_SOURCE_RPC ?= $(ARB_SEPOLIA_RPC_URL)
 
+export NETWORK
+
 # Network configuration
 ifeq ($(NETWORK),sepolia)
 	FORK_SOURCE_RPC=$(ARB_SEPOLIA_RPC_URL)

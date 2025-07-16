@@ -42,10 +42,7 @@ contract CoreHook is BaseHook, IHookCommon, PausablePool {
     }
 
     // Owner will be set to MarketFactory
-    constructor(
-        address _poolManager,
-        address _marketFactory
-    ) BaseHook(IPoolManager(_poolManager)) {
+    constructor(address _poolManager, address _marketFactory) BaseHook(IPoolManager(_poolManager)) {
         marketFactory = _marketFactory;
     }
 
@@ -61,36 +58,32 @@ contract CoreHook is BaseHook, IHookCommon, PausablePool {
         _unpause(poolId);
     }
 
-    function getHookPermissions()
-        public
-        pure
-        override
-        returns (Hooks.Permissions memory)
-    {
-        return
-            Hooks.Permissions({
-                beforeInitialize: true, // Validate and set global parameters
-                afterInitialize: false,
-                beforeAddLiquidity: true,
-                afterAddLiquidity: true, // Intercept liquidity modifications
-                beforeRemoveLiquidity: true,
-                afterRemoveLiquidity: true, // Intercept liquidity modifications
-                beforeSwap: false,
-                afterSwap: true,
-                beforeDonate: false,
-                afterDonate: false,
-                beforeSwapReturnDelta: false,
-                afterSwapReturnDelta: false,
-                afterAddLiquidityReturnDelta: false,
-                afterRemoveLiquidityReturnDelta: false
-            });
+    function getHookPermissions() public pure override returns (Hooks.Permissions memory) {
+        return Hooks.Permissions({
+            beforeInitialize: true, // Validate and set global parameters
+            afterInitialize: false,
+            beforeAddLiquidity: false,
+            afterAddLiquidity: true, // Intercept liquidity modifications
+            beforeRemoveLiquidity: false,
+            afterRemoveLiquidity: true, // Intercept liquidity modifications
+            beforeSwap: false,
+            afterSwap: true,
+            beforeDonate: false,
+            afterDonate: false,
+            beforeSwapReturnDelta: false,
+            afterSwapReturnDelta: false,
+            afterAddLiquidityReturnDelta: false,
+            afterRemoveLiquidityReturnDelta: false
+        });
     }
 
-    function _beforeInitialize(
-        address sender,
-        PoolKey calldata,
-        uint160
-    ) internal view virtual override returns (bytes4) {
+    function _beforeInitialize(address sender, PoolKey calldata, uint160)
+        internal
+        view
+        virtual
+        override
+        returns (bytes4)
+    {
         if (sender != marketFactory) {
             revert InvalidInitialiser();
         }
@@ -106,13 +99,7 @@ contract CoreHook is BaseHook, IHookCommon, PausablePool {
     //     return this._afterInitialize.selector;
     // }
 
-    function _afterSwap(
-        address,
-        PoolKey calldata key,
-        SwapParams calldata,
-        BalanceDelta,
-        bytes calldata
-    )
+    function _afterSwap(address, PoolKey calldata key, SwapParams calldata, BalanceDelta, bytes calldata)
         internal
         virtual
         override
@@ -129,24 +116,11 @@ contract CoreHook is BaseHook, IHookCommon, PausablePool {
         BalanceDelta delta,
         BalanceDelta,
         bytes calldata
-    )
-        internal
-        virtual
-        override
-        whenNotPaused(key.toId())
-        returns (bytes4, BalanceDelta)
-    {
+    ) internal virtual override whenNotPaused(key.toId()) returns (bytes4, BalanceDelta) {
         // TODO: Filter the sender address to determine whether it's MMPositionManager or DirectLP.
-        ProxyHook(proxyHook).onDirectLP(
-            key,
-            delta,
-            ActionType.DirectLPAddLiquidity
-        );
+        ProxyHook(proxyHook).onDirectLP(key, delta, ActionType.DirectLPAddLiquidity);
 
-        return (
-            this.afterAddLiquidity.selector,
-            BalanceDeltaLibrary.ZERO_DELTA
-        );
+        return (this.afterAddLiquidity.selector, BalanceDeltaLibrary.ZERO_DELTA);
     }
 
     function _afterRemoveLiquidity(
@@ -159,15 +133,8 @@ contract CoreHook is BaseHook, IHookCommon, PausablePool {
     ) internal virtual override returns (bytes4, BalanceDelta) {
         // Allow removal of liquidity even when the market is paused.
 
-        ProxyHook(proxyHook).onDirectLP(
-            key,
-            delta,
-            ActionType.DirectLPRemoveLiquidity
-        );
+        ProxyHook(proxyHook).onDirectLP(key, delta, ActionType.DirectLPRemoveLiquidity);
 
-        return (
-            this.afterRemoveLiquidity.selector,
-            BalanceDeltaLibrary.ZERO_DELTA
-        );
+        return (this.afterRemoveLiquidity.selector, BalanceDeltaLibrary.ZERO_DELTA);
     }
 }

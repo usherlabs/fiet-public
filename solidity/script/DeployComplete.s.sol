@@ -14,6 +14,7 @@ import {ScriptHelper} from "./libraries/ScriptHelper.s.sol";
 
 import {SepoliaConstants} from "./constants/ArbitrumSepolia.sol";
 import {ArbitrumConstants} from "./constants/Arbitrum.sol";
+import {HookFlags} from "./constants/HookFlags.sol";
 
 /**
  * @title CompleteDeployScript
@@ -38,22 +39,6 @@ contract CompleteDeployScript is ScriptHelper {
     address public create2Deployer;
     string public networkName;
 
-    // Hook flags for proper address mining
-    uint160 constant CORE_HOOK_FLAGS =
-        uint160(
-            Hooks.BEFORE_INITIALIZE_FLAG |
-                Hooks.AFTER_ADD_LIQUIDITY_FLAG |
-                Hooks.AFTER_REMOVE_LIQUIDITY_FLAG
-        );
-
-    uint160 constant PROXY_HOOK_FLAGS =
-        uint160(
-            Hooks.BEFORE_INITIALIZE_FLAG |
-                Hooks.BEFORE_ADD_LIQUIDITY_FLAG |
-                Hooks.BEFORE_SWAP_FLAG |
-                Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG
-        );
-
     function run() external {
         uint256 deployerPrivateKey = uint256(vm.envBytes32("PRIVATE_KEY"));
 
@@ -67,10 +52,7 @@ contract CompleteDeployScript is ScriptHelper {
             create2Deployer = ArbitrumConstants.DEPLOYER_CREATE2;
         }
 
-        console.log(
-            "Starting deployment of CoreHook, ProxyHook, and MarketFactory on %s...",
-            networkName
-        );
+        console.log("Starting deployment of CoreHook, ProxyHook, and MarketFactory on %s...", networkName);
         console.log("Pool Manager:", poolManagerAddress);
         console.log("CREATE2 Deployer:", create2Deployer);
 
@@ -117,31 +99,18 @@ contract CompleteDeployScript is ScriptHelper {
     function _deployCoreHook() internal returns (address) {
         // CoreHook constructor takes (poolManager, marketFactory)
         // Now we pass the actual marketFactory address
-        bytes memory constructorArgs = abi.encode(
-            poolManagerAddress,
-            marketFactory
-        );
+        bytes memory constructorArgs = abi.encode(poolManagerAddress, marketFactory);
 
         // Mine the correct address with proper flags
-        (address hookAddress, bytes32 salt) = HookMiner.find(
-            create2Deployer,
-            CORE_HOOK_FLAGS,
-            type(CoreHook).creationCode,
-            constructorArgs
-        );
+        (address hookAddress, bytes32 salt) =
+            HookMiner.find(create2Deployer, HookFlags.CORE_HOOK_FLAGS, type(CoreHook).creationCode, constructorArgs);
 
         console.log("CoreHook will be deployed to:", hookAddress);
         console.log("CoreHook salt:", vm.toString(salt));
 
         // Deploy the hook
-        CoreHook deployedHook = new CoreHook{salt: salt}(
-            poolManagerAddress,
-            marketFactory
-        );
-        require(
-            address(deployedHook) == hookAddress,
-            "CoreHook: address mismatch"
-        );
+        CoreHook deployedHook = new CoreHook{salt: salt}(poolManagerAddress, marketFactory);
+        require(address(deployedHook) == hookAddress, "CoreHook: address mismatch");
 
         return address(deployedHook);
     }
@@ -153,31 +122,18 @@ contract CompleteDeployScript is ScriptHelper {
     function _deployProxyHook() internal returns (address) {
         // ProxyHook constructor takes (poolManager, marketFactory)
         // Now we pass the actual marketFactory address
-        bytes memory constructorArgs = abi.encode(
-            poolManagerAddress,
-            marketFactory
-        );
+        bytes memory constructorArgs = abi.encode(poolManagerAddress, marketFactory);
 
         // Mine the correct address with proper flags
-        (address hookAddress, bytes32 salt) = HookMiner.find(
-            create2Deployer,
-            PROXY_HOOK_FLAGS,
-            type(ProxyHook).creationCode,
-            constructorArgs
-        );
+        (address hookAddress, bytes32 salt) =
+            HookMiner.find(create2Deployer, HookFlags.PROXY_HOOK_FLAGS, type(ProxyHook).creationCode, constructorArgs);
 
         console.log("ProxyHook will be deployed to:", hookAddress);
         console.log("ProxyHook salt:", vm.toString(salt));
 
         // Deploy the hook
-        ProxyHook deployedHook = new ProxyHook{salt: salt}(
-            poolManagerAddress,
-            marketFactory
-        );
-        require(
-            address(deployedHook) == hookAddress,
-            "ProxyHook: address mismatch"
-        );
+        ProxyHook deployedHook = new ProxyHook{salt: salt}(poolManagerAddress, marketFactory);
+        require(address(deployedHook) == hookAddress, "ProxyHook: address mismatch");
 
         return address(deployedHook);
     }
@@ -191,10 +147,7 @@ contract CompleteDeployScript is ScriptHelper {
         address[] memory initialBounds = new address[](0);
 
         // MarketFactory constructor now only takes (poolManager, bounds)
-        MarketFactory factory = new MarketFactory(
-            poolManagerAddress,
-            initialBounds
-        );
+        MarketFactory factory = new MarketFactory(poolManagerAddress, initialBounds);
 
         return address(factory);
     }
@@ -224,22 +177,10 @@ contract CompleteDeployScript is ScriptHelper {
         MarketFactory factoryInstance = MarketFactory(marketFactory);
 
         // Verify the hooks are properly configured
-        require(
-            coreHookInstance.marketFactory() == marketFactory,
-            "CoreHook: marketFactory not set"
-        );
-        require(
-            proxyHookInstance.marketFactory() == marketFactory,
-            "ProxyHook: marketFactory not set"
-        );
-        require(
-            factoryInstance.getCoreHook() == coreHook,
-            "MarketFactory: coreHook not set"
-        );
-        require(
-            factoryInstance.getProxyHook() == proxyHook,
-            "MarketFactory: proxyHook not set"
-        );
+        require(coreHookInstance.marketFactory() == marketFactory, "CoreHook: marketFactory not set");
+        require(proxyHookInstance.marketFactory() == marketFactory, "ProxyHook: marketFactory not set");
+        require(factoryInstance.getCoreHook() == coreHook, "MarketFactory: coreHook not set");
+        require(factoryInstance.getProxyHook() == proxyHook, "MarketFactory: proxyHook not set");
 
         console.log("Hooks activated successfully");
     }
@@ -254,10 +195,7 @@ contract CompleteDeployScript is ScriptHelper {
         writeAddress("proxyHook", proxyHook);
         writeAddress("marketFactory", marketFactory);
 
-        console.log(
-            "Deployment addresses written to script/deployments/%s_deployments.json",
-            networkName
-        );
+        console.log("Deployment addresses written to script/deployments/%s_deployments.json", networkName);
     }
 
     /**
@@ -265,10 +203,7 @@ contract CompleteDeployScript is ScriptHelper {
      * @param hookAddress The hook address to verify
      * @param expectedFlags The expected flags for the hook
      */
-    function _verifyHookFlags(
-        address hookAddress,
-        uint160 expectedFlags
-    ) internal pure {
+    function _verifyHookFlags(address hookAddress, uint160 expectedFlags) internal pure {
         uint160 hookFlags = uint160(hookAddress) & Hooks.ALL_HOOK_MASK;
         require(hookFlags == expectedFlags, "Hook flags mismatch");
     }
@@ -281,25 +216,16 @@ contract CompleteDeployScript is ScriptHelper {
         console.log("\n=== Verifying Deployment on %s ===", networkName);
 
         // Verify hook flags
-        _verifyHookFlags(coreHook, CORE_HOOK_FLAGS);
-        _verifyHookFlags(proxyHook, PROXY_HOOK_FLAGS);
+        _verifyHookFlags(coreHook, HookFlags.CORE_HOOK_FLAGS);
+        _verifyHookFlags(proxyHook, HookFlags.PROXY_HOOK_FLAGS);
 
         console.log("Hook flags verified");
 
         // Verify MarketFactory configuration
         MarketFactory factory = MarketFactory(marketFactory);
-        require(
-            factory.poolManager() == poolManagerAddress,
-            "MarketFactory: wrong poolManager"
-        );
-        require(
-            factory.getCoreHook() == coreHook,
-            "MarketFactory: wrong coreHook"
-        );
-        require(
-            factory.getProxyHook() == proxyHook,
-            "MarketFactory: wrong proxyHook"
-        );
+        require(factory.poolManager() == poolManagerAddress, "MarketFactory: wrong poolManager");
+        require(factory.getCoreHook() == coreHook, "MarketFactory: wrong coreHook");
+        require(factory.getProxyHook() == proxyHook, "MarketFactory: wrong proxyHook");
 
         console.log("MarketFactory configuration verified");
 
@@ -307,14 +233,8 @@ contract CompleteDeployScript is ScriptHelper {
         CoreHook coreHookInstance = CoreHook(coreHook);
         ProxyHook proxyHookInstance = ProxyHook(proxyHook);
 
-        require(
-            coreHookInstance.marketFactory() == marketFactory,
-            "CoreHook: wrong marketFactory"
-        );
-        require(
-            proxyHookInstance.marketFactory() == marketFactory,
-            "ProxyHook: wrong marketFactory"
-        );
+        require(coreHookInstance.marketFactory() == marketFactory, "CoreHook: wrong marketFactory");
+        require(proxyHookInstance.marketFactory() == marketFactory, "ProxyHook: wrong marketFactory");
 
         console.log("Hook cross-references verified");
         console.log("All verifications passed!");
@@ -327,11 +247,7 @@ contract CompleteDeployScript is ScriptHelper {
     function readDeploymentAddresses()
         external
         view
-        returns (
-            address coreHookAddr,
-            address proxyHookAddr,
-            address marketFactoryAddr
-        )
+        returns (address coreHookAddr, address proxyHookAddr, address marketFactoryAddr)
     {
         coreHookAddr = readAddress("coreHook");
         proxyHookAddr = readAddress("proxyHook");
