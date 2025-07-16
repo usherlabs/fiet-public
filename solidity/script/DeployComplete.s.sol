@@ -12,7 +12,8 @@ import {ProxyHook} from "../src/ProxyHook.sol";
 import {MarketFactory} from "../src/MarketFactory.sol";
 import {ScriptHelper} from "./libraries/ScriptHelper.s.sol";
 
-// Removed SepoliaConstants import
+import {SepoliaConstants} from "./constants/Sepolia.sol";
+import {ArbitrumConstants} from "./constants/Arbitrum.sol";
 
 /**
  * @title CompleteDeployScript
@@ -56,9 +57,15 @@ contract CompleteDeployScript is ScriptHelper {
     function run() external {
         uint256 deployerPrivateKey = uint256(vm.envBytes32("PRIVATE_KEY"));
 
-        networkName = vm.envString("NETWORK");
-        poolManagerAddress = vm.envAddress("POOL_MANAGER");
-        create2Deployer = vm.envAddress("DEPLOYER_CREATE2");
+        networkName = vm.envString("NETWORK"); // "sepolia" | "arbitrum"
+        if (keccak256(bytes(networkName)) == keccak256(bytes("sepolia"))) {
+            poolManagerAddress = SepoliaConstants.POOL_MANAGER;
+            create2Deployer = SepoliaConstants.DEPLOYER_CREATE2;
+        }
+        if (keccak256(bytes(networkName)) == keccak256(bytes("arbitrum"))) {
+            poolManagerAddress = ArbitrumConstants.POOL_MANAGER;
+            create2Deployer = ArbitrumConstants.DEPLOYER_CREATE2;
+        }
 
         console.log(
             "Starting deployment of CoreHook, ProxyHook, and MarketFactory on %s...",

@@ -3,7 +3,7 @@ pragma solidity ^0.8.0;
 
 /**
  * @title IHookCommon
- * @notice Shared definitions for hooks across the protocol
+ * @notice Interface for the CoreHook and ProxyHook contract that provides common hook functionality.
  */
 interface IHookCommon {
     /**

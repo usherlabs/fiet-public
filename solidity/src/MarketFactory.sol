@@ -10,6 +10,7 @@ import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {LiquidityCommitmentCertificate} from "./LCC.sol";
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 import {IHookCommon} from "./interfaces/IHookCommon.sol";
+import {IHookPausable} from "./interfaces/IHookPausable.sol";
 import {ProxyHook} from "./ProxyHook.sol";
 
 /**
@@ -70,6 +71,22 @@ contract MarketFactory is IMarketFactory, Ownable2Step {
             IHookCommon(_coreHook).activate();
             IHookCommon(_proxyHook).activate();
         }
+    }
+
+    /**
+     * @notice Pauses a market
+     * @param poolId The Core Pool ID to pause
+     */
+    function pause(PoolId poolId) external onlyOwner {
+        IHookPausable(coreHook).pause(poolId);
+    }
+
+    /**
+     * @notice Unpauses a market
+     * @param poolId The Core Pool ID to unpause
+     */
+    function unpause(PoolId poolId) external onlyOwner {
+        IHookPausable(coreHook).unpause(poolId);
     }
 
     /**

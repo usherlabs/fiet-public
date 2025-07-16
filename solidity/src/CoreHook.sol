@@ -10,22 +10,26 @@ import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.so
 
 import {IHookCommon} from "./interfaces/IHookCommon.sol";
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
-
 import {ProxyHook} from "./ProxyHook.sol";
 import {LiquidityCommitmentCertificate} from "./LCC.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {CurrencySettler} from "@uniswap/v4-core/test/utils/CurrencySettler.sol";
+import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
+import {PausablePool} from "./libraries/PausablePool.sol";
+
+import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 
 /**
  * Core Pool should be aware of Positions.
  *     This way it can calculate and manage Liquidity Commitments (C_A(r)) for each Position.
  *     Furthermore, we need to know when Direct LP occurs, as this determines whether the underlying native tokens are settled to the Pool Manager.
  */
-contract CoreHook is BaseHook, IHookCommon {
+contract CoreHook is BaseHook, IHookCommon, PausablePool {
     using CurrencySettler for Currency;
 
     error InvalidInitialiser();
     error InvalidSender();
+    error MarketIsPaused();
 
     address public immutable marketFactory;
 
@@ -50,6 +54,14 @@ contract CoreHook is BaseHook, IHookCommon {
         proxyHook = IMarketFactory(marketFactory).getProxyHook();
     }
 
+    function pause(PoolId poolId) external onlyFactory {
+        _pause(poolId);
+    }
+
+    function unpause(PoolId poolId) external onlyFactory {
+        _unpause(poolId);
+    }
+
     function getHookPermissions()
         public
         pure
@@ -60,12 +72,12 @@ contract CoreHook is BaseHook, IHookCommon {
             Hooks.Permissions({
                 beforeInitialize: true, // Validate and set global parameters
                 afterInitialize: false,
-                beforeAddLiquidity: false,
+                beforeAddLiquidity: true,
                 afterAddLiquidity: true, // Intercept liquidity modifications
-                beforeRemoveLiquidity: false,
+                beforeRemoveLiquidity: true,
                 afterRemoveLiquidity: true, // Intercept liquidity modifications
                 beforeSwap: false,
-                afterSwap: false,
+                afterSwap: true,
                 beforeDonate: false,
                 afterDonate: false,
                 beforeSwapReturnDelta: false,
@@ -95,6 +107,20 @@ contract CoreHook is BaseHook, IHookCommon {
     //     return this._afterInitialize.selector;
     // }
 
+    function _afterSwap(
+        address,
+        PoolKey calldata key,
+        SwapParams calldata,
+        BalanceDelta,
+        bytes calldata
+    ) internal virtual override returns (bytes4, int128) {
+        if (paused(key.toId())) {
+            revert MarketIsPaused();
+        }
+
+        return (this.afterSwap.selector, 0);
+    }
+
     function _afterAddLiquidity(
         address,
         PoolKey calldata key,
@@ -103,6 +129,10 @@ contract CoreHook is BaseHook, IHookCommon {
         BalanceDelta,
         bytes calldata
     ) internal virtual override returns (bytes4, BalanceDelta) {
+        if (paused(key.toId())) {
+            revert MarketIsPaused();
+        }
+
         // TODO: Filter the sender address to determine whether it's MMPositionManager or DirectLP.
         ProxyHook(proxyHook).onDirectLP(
             key,
@@ -124,6 +154,8 @@ contract CoreHook is BaseHook, IHookCommon {
         BalanceDelta,
         bytes calldata
     ) internal virtual override returns (bytes4, BalanceDelta) {
+        // Allow removal of liquidity even when the market is paused.
+
         ProxyHook(proxyHook).onDirectLP(
             key,
             delta,

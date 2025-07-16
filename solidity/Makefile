@@ -3,15 +3,28 @@ include .env
 export
 
 MODE ?= live
+NETWORK ?= sepolia
 ANVIL_PORT=8545
 ANVIL_FORK_URL=http://localhost:$(ANVIL_PORT)
-RPC_URL=$(if $(filter $(MODE),LOCAL),$(ANVIL_FORK_URL),$(ARB_SEPOLIA_RPC_URL))
+FORK_SOURCE_RPC ?= $(ARB_SEPOLIA_RPC_URL)
+
+# Network configuration
+ifeq ($(NETWORK),sepolia)
+	FORK_SOURCE_RPC=$(ARB_SEPOLIA_RPC_URL)
+	RPC_URL=$(if $(filter $(MODE),LOCAL),$(ANVIL_FORK_URL),$(ARB_SEPOLIA_RPC_URL))
+else ifeq ($(NETWORK),arbitrum)
+	FORK_SOURCE_RPC=$(ARB_MAINNET_RPC_URL)
+	RPC_URL=$(if $(filter $(MODE),LOCAL),$(ANVIL_FORK_URL),$(ARB_MAINNET_RPC_URL))
+else
+	$(error Invalid NETWORK value: $(NETWORK). Must be either "sepolia" or "arbitrum")
+endif
+
 VERIFY_FLAGS=$(if $(filter $(MODE),LOCAL),,--verify)
 ETHERSCAN_KEY=${ETHERSCAN_API_KEY}
 
 FORGE=forge
 SCRIPT_DIR=script
-DEPLOYMENTS=$(SCRIPT_DIR)/deployments/deployments.json
+DEPLOYMENTS=$(SCRIPT_DIR)/deployments/$(NETWORK)_deployments.json
 
 .PHONY: build deploy create-market
 
@@ -24,8 +37,8 @@ build:
 
 # === Fork ===
 fork:
-	@echo "⛽ Starting anvil forked from Arbitrum Sepolia..."
-	anvil --fork-url $(ARB_SEPOLIA_RPC_URL) --port $(ANVIL_PORT)  --steps-tracing
+	@echo "⛽ Starting anvil forked from Network: $(NETWORK)..."
+	anvil --fork-url $(FORK_SOURCE_RPC) --port $(ANVIL_PORT)  --steps-tracing
 # --gas-limit 30000000 --block-time 1
 
 # === Individual deployments ===

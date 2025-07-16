@@ -16,8 +16,11 @@ fs_permissions = [
 ]
 
 [rpc_endpoints]
+local = "${ANVIL_FORK_URL}"
 sepolia = "${ARB_SEPOLIA_RPC_URL}"
+arbitrum = "${ARB_MAINNET_RPC_URL}"
 
 # For some reason etherscan api is required for local anvil fork.
-# [etherscan]
-# sepolia = { key = "${ETHERSCAN_API_KEY}" }
+[etherscan]
+sepolia = { key = "${ETHERSCAN_API_KEY}" }
+arbitrum = { key = "${ETHERSCAN_API_KEY}" }
