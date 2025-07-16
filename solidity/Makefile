@@ -45,12 +45,12 @@ fork:
 
 # === Individual deployments ===
 deploy-tokenA:
-	$(FORGE) script $(SCRIPT_DIR)/MockERC20.s.sol:TokenScriptUSDT \
+	$(FORGE) script $(SCRIPT_DIR)/dev/MockERC20.s.sol:TokenScriptUSDT \
 		--rpc-url $(RPC_URL) \
 		--broadcast $(VERIFY_FLAGS) -vvv
 
 deploy-tokenB:
-	$(FORGE) script $(SCRIPT_DIR)/MockERC20.s.sol:TokenScriptUSDC \
+	$(FORGE) script $(SCRIPT_DIR)/dev/MockERC20.s.sol:TokenScriptUSDC \
 		--rpc-url $(RPC_URL) \
 		--broadcast $(VERIFY_FLAGS) -vvv
 

@@ -165,7 +165,7 @@ Make sure to reference the latest version of these files for interacting with th
 
 **Remove Liquidity:** `TOKEN_ID=47 forge script script/RemoveLiquidity.s.sol --rpc-url 127.0.0.1:8545`  
 OR  
-**Execute Swap:** `forge script script/SwapV4.s.sol --rpc-url 127.0.0.1:8545`
+**Execute Swap:** `forge script script/dev/SwapV4.s.sol --rpc-url 127.0.0.1:8545`
 
 ## Writing Tests
 
