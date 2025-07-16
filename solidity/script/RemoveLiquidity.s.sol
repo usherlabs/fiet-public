@@ -12,7 +12,7 @@ import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {Actions} from "v4-periphery/src/libraries/Actions.sol";
 
 import {LiquidityCommitmentCertificate} from "../src/LCC.sol";
-import {SepoliaConstants} from "./constants/sepolia.sol";
+import {SepoliaConstants} from "./constants/ArbitrumSepolia.sol";
 import {ScriptHelper} from "./libraries/ScriptHelper.s.sol";
 import {ProxyHook} from "../src/ProxyHook.sol";
 import {CurrencySortHelper} from "./libraries/CurrencySortHelper.sol";

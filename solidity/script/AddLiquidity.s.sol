@@ -20,7 +20,7 @@ import {MockERC20} from "@uniswap/v4-core/lib/solmate/src/test/utils/mocks/MockE
 import {IPermit2} from "permit2/src/interfaces/IPermit2.sol";
 
 import {LiquidityCommitmentCertificate} from "../src/LCC.sol";
-import {SepoliaConstants} from "./constants/sepolia.sol";
+import {SepoliaConstants} from "./constants/ArbitrumSepolia.sol";
 import {ScriptHelper} from "./libraries/ScriptHelper.s.sol";
 import {ProxyHook} from "../src/ProxyHook.sol";
 import {CurrencySortHelper} from "./libraries/CurrencySortHelper.sol";

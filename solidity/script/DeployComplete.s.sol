@@ -12,7 +12,7 @@ import {ProxyHook} from "../src/ProxyHook.sol";
 import {MarketFactory} from "../src/MarketFactory.sol";
 import {ScriptHelper} from "./libraries/ScriptHelper.s.sol";
 
-import {SepoliaConstants} from "./constants/Sepolia.sol";
+import {SepoliaConstants} from "./constants/ArbitrumSepolia.sol";
 import {ArbitrumConstants} from "./constants/Arbitrum.sol";
 
 /**

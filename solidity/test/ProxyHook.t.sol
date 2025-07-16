@@ -7,7 +7,8 @@ import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
-import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+
+import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {CurrencyLibrary, Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {PoolSwapTest} from "@uniswap/v4-core/src/test/PoolSwapTest.sol";
@@ -69,6 +70,10 @@ contract ProxyHookTest is Test, Deployers {
 
         for (uint256 i = 0; i < toApprove.length; i++) {
             token.approve(toApprove[i], Constants.MAX_UINT256);
+            IERC20Minimal(underlyingAsset).approve(
+                toApprove[i],
+                Constants.MAX_UINT256
+            );
         }
 
         IERC20Minimal(underlyingAsset).approve(
@@ -198,8 +203,10 @@ contract ProxyHookTest is Test, Deployers {
     }
 
     function test_cannotModifyLiquidityOfProxyHook() public {
+        vm.prank(address(manager));
         vm.expectRevert(ProxyHook.AddLiquidityThroughHookNotAllowed.selector);
-        modifyLiquidityRouter.modifyLiquidity(
+        hook.beforeAddLiquidity(
+            address(1),
             proxyPoolKey,
             ModifyLiquidityParams({
                 tickLower: -60,
@@ -229,6 +236,13 @@ contract ProxyHookTest is Test, Deployers {
             takeClaims: false,
             settleUsingBurn: false
         });
+
+        BalanceDelta mockDelta = toBalanceDelta(int128(100), int128(-99));
+        vm.mockCall(
+            address(manager),
+            abi.encodeWithSelector(IPoolManager.swap.selector),
+            abi.encode(mockDelta)
+        );
 
         uint256 selfBalanceOfTokenABefore = proxyPoolKey
             .currency0
@@ -388,12 +402,12 @@ contract ProxyHookTest is Test, Deployers {
             currency1: _currency1,
             fee: 3000,
             tickSpacing: 60,
-            hooks: IHooks(address(0))
+            hooks: IHooks(hook)
         });
 
+        vm.prank(address(manager));
         vm.expectRevert(ProxyHook.InvalidInitialiser.selector);
-        vm.prank(address(1));
-        manager.initialize(testKey, SQRT_PRICE_1_1);
+        hook.beforeInitialize(address(1), testKey, SQRT_PRICE_1_1);
     }
 
     // More tests can be added for onDirectLP, unlockCallback, etc.

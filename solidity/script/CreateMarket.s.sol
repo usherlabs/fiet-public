@@ -3,7 +3,7 @@ pragma solidity ^0.8.0;
 
 import "forge-std/Script.sol";
 import {MarketFactory} from "../src/MarketFactory.sol";
-import {SepoliaConstants} from "./constants/Sepolia.sol";
+import {SepoliaConstants} from "./constants/ArbitrumSepolia.sol";
 import {ScriptHelper} from "./libraries/ScriptHelper.s.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
