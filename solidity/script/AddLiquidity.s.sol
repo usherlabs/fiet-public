@@ -18,6 +18,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {MockERC20} from "@uniswap/v4-core/lib/solmate/src/test/utils/mocks/MockERC20.sol";
 import {IPermit2} from "permit2/src/interfaces/IPermit2.sol";
+import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 
 import {LiquidityCommitmentCertificate} from "../src/LCC.sol";
 import {SepoliaConstants} from "./constants/ArbitrumSepolia.sol";
@@ -34,15 +35,15 @@ contract AddLiquidityScript is ScriptHelper {
     ProxyHook proxyHook;
 
     // Core pool tokens (intent tokens - WHERE LIQUIDITY GOES)
-    LiquidityCommitmentCertificate lccUSDCToken;
-    LiquidityCommitmentCertificate lccUSDTToken;
+    LiquidityCommitmentCertificate lcc0;
+    LiquidityCommitmentCertificate lcc1;
 
     // Proxy pool tokens (underlying tokens)
-    address usdcToken;
-    address usdtToken;
+    address token0;
+    address token1;
 
     // Liquidity parameters
-    uint256 constant AMOUNT_DESIRED = 1000;
+    uint256 constant DEFAULT_AMOUNT = 1000;
     uint256 amount0Desired;
     uint256 amount1Desired;
 
@@ -96,10 +97,10 @@ contract AddLiquidityScript is ScriptHelper {
         IMarketFactory factory = IMarketFactory(marketFactoryAddr);
 
         try vm.envAddress("UNDERLYING_ASSET_0") returns (address asset) {
-            usdcToken = asset;
+            token0 = asset;
         } catch {
             if (isSepolia) {
-                usdcToken = readAddress("usdcToken");
+                token0 = readAddress("usdcToken");
             } else {
                 revert(
                     "Please specify UNDERLYING_ASSET_0 via environment variable"
@@ -108,10 +109,10 @@ contract AddLiquidityScript is ScriptHelper {
         }
 
         try vm.envAddress("UNDERLYING_ASSET_1") returns (address asset) {
-            usdtToken = asset;
+            token1 = asset;
         } catch {
             if (isSepolia) {
-                usdtToken = readAddress("usdtToken");
+                token1 = readAddress("usdtToken");
             } else {
                 revert(
                     "Please specify UNDERLYING_ASSET_1 via environment variable"
@@ -123,12 +124,8 @@ contract AddLiquidityScript is ScriptHelper {
         address coreHookAddr = factory.getCoreHook();
 
         // Load LCC tokens from factory
-        lccUSDCToken = LiquidityCommitmentCertificate(
-            factory.getLCC(usdcToken)
-        );
-        lccUSDTToken = LiquidityCommitmentCertificate(
-            factory.getLCC(usdtToken)
-        );
+        lcc0 = LiquidityCommitmentCertificate(factory.getLCC(token0));
+        lcc1 = LiquidityCommitmentCertificate(factory.getLCC(token1));
 
         // Load pool parameters from env or defaults
         uint24 coreFee = uint24(vm.envOr("CORE_POOL_FEE", uint256(0)));
@@ -164,7 +161,7 @@ contract AddLiquidityScript is ScriptHelper {
     ) internal {
         // Core pool: wrapped tokens, no hooks (this gets liquidity)
         (Currency currency0Core, Currency currency1Core) = CurrencySortHelper
-            .sortAddresses(address(lccUSDCToken), address(lccUSDTToken));
+            .sortAddresses(address(lcc0), address(lcc1));
         corePoolKey = PoolKey({
             currency0: currency0Core,
             currency1: currency1Core,
@@ -175,7 +172,7 @@ contract AddLiquidityScript is ScriptHelper {
 
         // Proxy pool: underlying tokens, with hooks (users interact here)
         (Currency currency0Proxy, Currency currency1Proxy) = CurrencySortHelper
-            .sortAddresses(address(usdcToken), address(usdtToken));
+            .sortAddresses(address(token0), address(token1));
         proxyPoolKey = PoolKey({
             currency0: currency0Proxy,
             currency1: currency1Proxy,
@@ -196,26 +193,60 @@ contract AddLiquidityScript is ScriptHelper {
     }
 
     function setupAmounts() internal {
-        // Calculate amounts based on token decimals and ordering
+        // Get current pool state for price if needed
+        (uint160 sqrtPriceX96, , , ) = poolManager.getSlot0(corePoolKey.toId());
+
         address coreToken0 = Currency.unwrap(corePoolKey.currency0);
         address coreToken1 = Currency.unwrap(corePoolKey.currency1);
-        // Calculate desired amounts with proper decimals
-        amount0Desired =
-            AMOUNT_DESIRED *
-            (10 ** IERC20Metadata(coreToken0).decimals());
-        amount1Desired =
-            AMOUNT_DESIRED *
-            (10 ** IERC20Metadata(coreToken1).decimals());
 
         console.log("Token0:", coreToken0);
         console.log("Token1:", coreToken1);
+
+        uint8 dec0 = IERC20Metadata(coreToken0).decimals();
+        uint8 dec1 = IERC20Metadata(coreToken1).decimals();
+
+        // Check for environment variables
+        bool hasAmount0 = vm.envExists("AMOUNT_0_DESIRED");
+        bool hasAmount1 = vm.envExists("AMOUNT_1_DESIRED");
+
+        if (hasAmount0 && hasAmount1) {
+            revert("Only one amount can be specified");
+        }
+
+        if (!hasAmount0 && !hasAmount1) {
+            amount0Desired = DEFAULT_AMOUNT * (10 ** dec0);
+            amount1Desired = DEFAULT_AMOUNT * (10 ** dec1);
+        } else {
+            require(sqrtPriceX96 != 0, "Pool not initialized");
+
+            if (hasAmount0) {
+                amount0Desired = vm.envUint("AMOUNT_0_DESIRED");
+                // amount1Desired = (amount0Desired * sqrtPriceX96 * sqrtPriceX96) >> 192
+                uint256 temp = FullMath.mulDiv(
+                    amount0Desired,
+                    sqrtPriceX96,
+                    1 << 96
+                );
+                amount1Desired = FullMath.mulDiv(temp, sqrtPriceX96, 1 << 96);
+            } else {
+                amount1Desired = vm.envUint("AMOUNT_1_DESIRED");
+                // amount0Desired = (amount1Desired << 192) / (sqrtPriceX96 * sqrtPriceX96)
+                uint256 temp = FullMath.mulDiv(
+                    amount1Desired,
+                    1 << 96,
+                    sqrtPriceX96
+                );
+                amount0Desired = FullMath.mulDiv(temp, 1 << 96, sqrtPriceX96);
+            }
+        }
+
         console.log("Amount0Desired:", amount0Desired);
         console.log("Amount1Desired:", amount1Desired);
     }
 
     function setAccounts(address user) public {
-        IERC20(usdcToken).transfer(user, 10000 ether);
-        IERC20(usdtToken).transfer(user, 10000 ether);
+        IERC20(token0).transfer(user, 10000 ether);
+        IERC20(token1).transfer(user, 10000 ether);
     }
 
     function wrapToLccTokens(address user) internal {
@@ -405,30 +436,32 @@ contract AddLiquidityScript is ScriptHelper {
         console.log(" ");
         console.log("Setting up Permit2 allowances for user:", user);
 
-        uint256 permit2AllowanceA = IERC20(address(lccUSDCToken)).allowance(
-            user,
-            address(permit2)
-        );
-        uint256 permit2AllowanceB = IERC20(address(lccUSDTToken)).allowance(
-            user,
-            address(permit2)
-        );
-
-        console.log("Current ERC20 allowances to Permit2:");
-        console.log("  Token A:", permit2AllowanceA);
-        console.log("  Token B:", permit2AllowanceB);
-
+        // For lcc0
+        address lcc0Addr = address(lcc0);
+        bool isCurrency0 = (lcc0Addr == Currency.unwrap(corePoolKey.currency0));
+        uint256 required0 = isCurrency0 ? amount0Desired : amount1Desired;
+        uint256 allowance0 = IERC20(lcc0Addr).allowance(user, address(permit2));
+        console.log("Current ERC20 allowance to Permit2:");
+        console.log("  lcc0:", allowance0);
         require(
-            permit2AllowanceA >= amount0Desired,
-            "Insufficient ERC20 allowance to Permit2 for token A"
-        );
-        require(
-            permit2AllowanceB >= amount1Desired,
-            "Insufficient ERC20 allowance to Permit2 for token B"
+            allowance0 >= required0,
+            "Insufficient ERC20 allowance to Permit2 for lcc0"
         );
 
-        permit2AllowanceTransfer(user, lccUSDCToken, address(positionManager));
-        permit2AllowanceTransfer(user, lccUSDTToken, address(positionManager));
+        // For lcc1
+        address lcc1Addr = address(lcc1);
+        uint256 required1 = (lcc1Addr == Currency.unwrap(corePoolKey.currency0))
+            ? amount0Desired
+            : amount1Desired;
+        uint256 allowance1 = IERC20(lcc1Addr).allowance(user, address(permit2));
+        console.log("  lcc1:", allowance1);
+        require(
+            allowance1 >= required1,
+            "Insufficient ERC20 allowance to Permit2 for lcc1"
+        );
+
+        permit2AllowanceTransfer(user, lcc0, address(positionManager));
+        permit2AllowanceTransfer(user, lcc1, address(positionManager));
 
         console.log("Permit2 allowances setup complete");
         console.log(" ");
@@ -460,7 +493,8 @@ contract AddLiquidityScript is ScriptHelper {
             expiration
         );
 
-        uint256 requiredAmount = (address(token) == address(lccUSDCToken))
+        uint256 requiredAmount = (address(token) ==
+            Currency.unwrap(corePoolKey.currency0))
             ? amount0Desired
             : amount1Desired;
         if (expiration <= block.timestamp || amount < requiredAmount) {

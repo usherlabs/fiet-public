@@ -10,8 +10,14 @@ import {ScriptHelper} from "./libraries/ScriptHelper.s.sol";
  * @dev Useful for other scripts that need to reference deployed contracts
  */
 contract ReadDeploymentScript is ScriptHelper {
+    string public networkName;
+
     function run() external {
-        string memory networkName = vm.envString("NETWORK");
+        try vm.envString("NETWORK") returns (string memory envNetworkName) {
+            networkName = envNetworkName;
+        } catch {
+            networkName = "sepolia";
+        }
         _setFilename(networkName);
         console.log(
             "Reading deployment addresses from deployments/%s_deployments.json...",
@@ -46,37 +52,5 @@ contract ReadDeploymentScript is ScriptHelper {
         ) {
             console.log("\nAll deployment addresses found!");
         }
-    }
-
-    /**
-     * @dev Returns deployment addresses for use in other scripts
-     */
-    function getDeploymentAddresses()
-        external
-        returns (address coreHook, address proxyHook, address marketFactory)
-    {
-        string memory networkName = vm.envString("NETWORK");
-        _setFilename(networkName);
-        coreHook = readAddress("coreHook");
-        proxyHook = readAddress("proxyHook");
-        marketFactory = readAddress("marketFactory");
-    }
-
-    /**
-     * @dev Returns deployment metadata
-     */
-    function getDeploymentMetadata()
-        external
-        returns (
-            string memory deploymentDate,
-            string memory deploymentNetwork,
-            string memory poolManager
-        )
-    {
-        string memory networkName = vm.envString("NETWORK");
-        _setFilename(networkName);
-        deploymentDate = readString("deploymentDate");
-        deploymentNetwork = readString("deploymentNetwork");
-        poolManager = readString("poolManager");
     }
 }

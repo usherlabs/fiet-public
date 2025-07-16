@@ -397,7 +397,3 @@ cargo expand --all-features --release
 4. Run tests: `cargo test`
 5. Check compilation: `cargo stylus check`
 6. Submit a pull request
-
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](../LICENSE) file for details. 

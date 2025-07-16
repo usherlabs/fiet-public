@@ -2,7 +2,7 @@ export $(shell sed 's/=.*//' .env)
 include .env
 export
 
-MODE ?= live
+MODE ?= LOCAL
 NETWORK ?= sepolia
 ANVIL_PORT=8545
 ANVIL_FORK_URL=http://localhost:$(ANVIL_PORT)

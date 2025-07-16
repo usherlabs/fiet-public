@@ -305,7 +305,3 @@ forge script script/DeployComplete.s.sol --sig "verifyDeployment()" --rpc-url <r
 5. Run quality checks: `make quality`
 6. Submit a pull request
 
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](../LICENSE) file for details.
-

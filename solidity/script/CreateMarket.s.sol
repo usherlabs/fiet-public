@@ -8,6 +8,8 @@ import {ScriptHelper} from "./libraries/ScriptHelper.s.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {CurrencySortHelper} from "./libraries/CurrencySortHelper.sol";
+import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 
 /**
  * @title CreateMarketScript
@@ -22,6 +24,7 @@ import {CurrencySortHelper} from "./libraries/CurrencySortHelper.sol";
  */
 contract CreateMarketScript is ScriptHelper {
     using PoolIdLibrary for PoolId;
+    using StateLibrary for IPoolManager;
 
     string public networkName;
 
@@ -33,6 +36,8 @@ contract CreateMarketScript is ScriptHelper {
     uint24 public corePoolFee;
     int24 public tickSpacing;
     uint160 public initialSqrtPriceX96;
+
+    address public poolManager;
 
     // Deployed contract addresses
     address public marketFactory;
@@ -90,6 +95,9 @@ contract CreateMarketScript is ScriptHelper {
 
         marketFactory = readAddress("marketFactory");
         console.log("MarketFactory address loaded:", marketFactory);
+
+        poolManager = readAddress("poolManager");
+        console.log("PoolManager address loaded:", poolManager);
     }
 
     /**
@@ -145,11 +153,35 @@ contract CreateMarketScript is ScriptHelper {
             tickSpacing = 60;
         }
 
+        string memory referencePoolIdStr = vm.envOr(
+            "REFERENCE_POOL_ID",
+            string("")
+        );
         try vm.envUint("INITIAL_SQRT_PRICE_X96") returns (uint256 price) {
             initialSqrtPriceX96 = uint160(price);
         } catch {
-            // Default to 1:1 price ratio (sqrt(1) * 2^96)
-            initialSqrtPriceX96 = 79228162514264337593543950336;
+            if (bytes(referencePoolIdStr).length > 0) {
+                console.log(
+                    "Using reference pool %s for initial price",
+                    referencePoolIdStr
+                );
+
+                bytes32 poolIdBytes = vm.parseBytes32(referencePoolIdStr);
+                PoolId referencePoolId = PoolId.wrap(poolIdBytes);
+
+                IPoolManager manager = IPoolManager(poolManager);
+
+                (uint160 sqrtPrice, , , ) = manager.getSlot0(referencePoolId);
+                initialSqrtPriceX96 = sqrtPrice;
+
+                console.log(
+                    "Fetched initial sqrt price: %s",
+                    vm.toString(initialSqrtPriceX96)
+                );
+            } else {
+                // Default to 1:1 price ratio (sqrt(1) * 2^96)
+                initialSqrtPriceX96 = 79228162514264337593543950336;
+            }
         }
     }
 
