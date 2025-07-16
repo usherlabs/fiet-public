@@ -29,7 +29,6 @@ contract CoreHook is BaseHook, IHookCommon, PausablePool {
 
     error InvalidInitialiser();
     error InvalidSender();
-    error MarketIsPaused();
 
     address public immutable marketFactory;
 
@@ -113,11 +112,13 @@ contract CoreHook is BaseHook, IHookCommon, PausablePool {
         SwapParams calldata,
         BalanceDelta,
         bytes calldata
-    ) internal virtual override returns (bytes4, int128) {
-        if (paused(key.toId())) {
-            revert MarketIsPaused();
-        }
-
+    )
+        internal
+        virtual
+        override
+        whenNotPaused(key.toId())
+        returns (bytes4, int128)
+    {
         return (this.afterSwap.selector, 0);
     }
 
@@ -128,11 +129,13 @@ contract CoreHook is BaseHook, IHookCommon, PausablePool {
         BalanceDelta delta,
         BalanceDelta,
         bytes calldata
-    ) internal virtual override returns (bytes4, BalanceDelta) {
-        if (paused(key.toId())) {
-            revert MarketIsPaused();
-        }
-
+    )
+        internal
+        virtual
+        override
+        whenNotPaused(key.toId())
+        returns (bytes4, BalanceDelta)
+    {
         // TODO: Filter the sender address to determine whether it's MMPositionManager or DirectLP.
         ProxyHook(proxyHook).onDirectLP(
             key,
