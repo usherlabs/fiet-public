@@ -23,6 +23,8 @@ import {CurrencySortHelper} from "./libraries/CurrencySortHelper.sol";
 contract CreateMarketScript is ScriptHelper {
     using PoolIdLibrary for PoolId;
 
+    string public networkName;
+
     // Market parameters - can be configured via environment variables
     address public underlyingAsset0;
     address public underlyingAsset1;
@@ -41,6 +43,8 @@ contract CreateMarketScript is ScriptHelper {
 
     function run() external {
         uint256 deployerPrivateKey = uint256(vm.envBytes32("PRIVATE_KEY"));
+
+        networkName = vm.envString("NETWORK");
 
         console.log("Starting market creation via Market Factory...");
 
@@ -82,7 +86,7 @@ contract CreateMarketScript is ScriptHelper {
      * @dev Loads deployed contract addresses from deployment file
      */
     function _loadDeploymentAddresses() internal {
-        _setFilename("sepolia");
+        _setFilename(networkName);
 
         marketFactory = readAddress("marketFactory");
         console.log("MarketFactory address loaded:", marketFactory);
@@ -96,13 +100,25 @@ contract CreateMarketScript is ScriptHelper {
         try vm.envAddress("UNDERLYING_ASSET_0") returns (address asset0) {
             underlyingAsset0 = asset0;
         } catch {
-            underlyingAsset0 = readAddress("usdtToken");
+            if (keccak256(bytes(networkName)) == keccak256(bytes("sepolia"))) {
+                underlyingAsset0 = readAddress("usdtToken");
+            } else {
+                revert(
+                    "Please specify UNDERLYING_ASSET_0 via environment variable for this network"
+                );
+            }
         }
 
         try vm.envAddress("UNDERLYING_ASSET_1") returns (address asset1) {
             underlyingAsset1 = asset1;
         } catch {
-            underlyingAsset1 = readAddress("usdcToken");
+            if (keccak256(bytes(networkName)) == keccak256(bytes("sepolia"))) {
+                underlyingAsset1 = readAddress("usdcToken");
+            } else {
+                revert(
+                    "Please specify UNDERLYING_ASSET_1 via environment variable for this network"
+                );
+            }
         }
 
         (Currency currency0, Currency currency1) = CurrencySortHelper
@@ -219,7 +235,7 @@ contract CreateMarketScript is ScriptHelper {
      * @dev Writes market details to JSON file for future reference
      */
     function _writeMarketDetails() internal {
-        _setFilename("sepolia_markets");
+        _setFilename(string.concat(networkName, "_markets"));
 
         // Create a unique market identifier
         string memory marketId = string.concat(
@@ -260,7 +276,8 @@ contract CreateMarketScript is ScriptHelper {
         );
 
         console.log(
-            "Market details written to script/deployments/sepolia_markets_deployments.json"
+            "Market details written to deployments/%s_deployments.json",
+            string.concat(networkName, "_markets")
         );
     }
 

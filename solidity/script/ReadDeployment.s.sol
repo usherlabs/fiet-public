@@ -11,25 +11,17 @@ import {ScriptHelper} from "./libraries/ScriptHelper.s.sol";
  */
 contract ReadDeploymentScript is ScriptHelper {
     function run() external {
-        _setFilename("sepolia");
+        string memory networkName = vm.envString("NETWORK");
+        _setFilename(networkName);
         console.log(
-            "Reading deployment addresses from script/deployments/sepolia_deployments.json..."
+            "Reading deployment addresses from deployments/%s_deployments.json...",
+            networkName
         );
 
         // Read addresses from JSON file
         address coreHook = readAddress("coreHook");
         address proxyHook = readAddress("proxyHook");
         address marketFactory = readAddress("marketFactory");
-
-        // Read metadata
-        string memory deploymentDate = readString("deploymentDate");
-        string memory deploymentNetwork = readString("deploymentNetwork");
-        string memory poolManager = readString("poolManager");
-
-        console.log("\n=== Deployment Information ===");
-        console.log("Network:", deploymentNetwork);
-        console.log("Deployment Date:", deploymentDate);
-        console.log("Pool Manager:", poolManager);
 
         console.log("\n=== Contract Addresses ===");
         console.log("CoreHook:", coreHook);
@@ -61,9 +53,10 @@ contract ReadDeploymentScript is ScriptHelper {
      */
     function getDeploymentAddresses()
         external
-        view
         returns (address coreHook, address proxyHook, address marketFactory)
     {
+        string memory networkName = vm.envString("NETWORK");
+        _setFilename(networkName);
         coreHook = readAddress("coreHook");
         proxyHook = readAddress("proxyHook");
         marketFactory = readAddress("marketFactory");
@@ -74,13 +67,14 @@ contract ReadDeploymentScript is ScriptHelper {
      */
     function getDeploymentMetadata()
         external
-        view
         returns (
             string memory deploymentDate,
             string memory deploymentNetwork,
             string memory poolManager
         )
     {
+        string memory networkName = vm.envString("NETWORK");
+        _setFilename(networkName);
         deploymentDate = readString("deploymentDate");
         deploymentNetwork = readString("deploymentNetwork");
         poolManager = readString("poolManager");

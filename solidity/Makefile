@@ -26,7 +26,7 @@ ETHERSCAN_KEY=${ETHERSCAN_API_KEY}
 
 FORGE=forge
 SCRIPT_DIR=script
-DEPLOYMENTS=$(SCRIPT_DIR)/deployments/$(NETWORK)_deployments.json
+DEPLOYMENTS=deployments/$(NETWORK)_deployments.json
 
 .PHONY: build deploy create-market
 
@@ -56,6 +56,11 @@ deploy-tokenB:
 
 deploy:
 	$(FORGE) script $(SCRIPT_DIR)/DeployComplete.s.sol \
+		--rpc-url $(RPC_URL) \
+		--broadcast $(VERIFY_FLAGS) -vvv
+
+read-deployment:
+	$(FORGE) script $(SCRIPT_DIR)/ReadDeployment.s.sol \
 		--rpc-url $(RPC_URL) \
 		--broadcast $(VERIFY_FLAGS) -vvv
 

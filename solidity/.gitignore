@@ -157,8 +157,9 @@ tmp/
 temp/
 
 # Deployment artifacts
-deployments/
+deployments/*.json
 !deployments/.gitkeep
+!deployments/arbitrum_*.json
 
 # Test artifacts
 test-artifacts/
@@ -181,3 +182,5 @@ anvil.toml
 
 # Local development
 .local/
+
+identity.txt
