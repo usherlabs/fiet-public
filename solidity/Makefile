@@ -69,8 +69,13 @@ create-market:
 		--rpc-url $(RPC_URL) \
 		--broadcast -vvv
 
+pause-market:
+	$(FORGE) script $(SCRIPT_DIR)/PauseMarket.s.sol \
+		--rpc-url $(RPC_URL) \
+		--broadcast -vvv
+
 swap:
-	$(FORGE) script $(SCRIPT_DIR)/SwapV4.s.sol \
+	$(FORGE) script $(SCRIPT_DIR)/dev/SwapV4.s.sol \
 		--rpc-url $(RPC_URL) \
 		--broadcast -vvv
 
