@@ -20,9 +20,16 @@ import {ArbitrumConstants} from "./constants/Arbitrum.sol";
 import {ScriptHelper} from "./libraries/ScriptHelper.s.sol";
 import {CurrencySortHelper} from "./libraries/CurrencySortHelper.sol";
 import {EthSepoliaConstants} from "./constants/EthSepolia.sol";
+import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
+import {LiquidityCommitmentCertificate} from "../src/LCC.sol";
+
+import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
+
+import {TransientStateLibrary} from "@uniswap/v4-core/src/libraries/TransientStateLibrary.sol";
 
 contract SwapV4 is ScriptHelper {
     using StateLibrary for IPoolManager;
+    using TransientStateLibrary for IPoolManager;
 
     IUniversalRouter router;
     IPoolManager poolManager;
@@ -32,6 +39,13 @@ contract SwapV4 is ScriptHelper {
     // Proxy pool tokens (underlying tokens)
     address token0;
     address token1;
+
+    // variables for meta logs
+    string corePoolId;
+    PoolId _corePoolId;
+    address lccToken0;
+    address lccToken1;
+    PoolKey corePoolKey;
 
     function run() external {
         console.log("Starting SwapV4 script...");
@@ -77,9 +91,9 @@ contract SwapV4 is ScriptHelper {
         hook = IHooks(readAddress("proxyHook"));
         console.log("Proxy Hook loaded");
 
-        string memory corePoolId;
         try vm.envString("CORE_POOL_ID") returns (string memory envCorePoolId) {
             corePoolId = envCorePoolId;
+            _corePoolId = PoolId.wrap(bytes32(bytes(corePoolId)));
         } catch {}
 
         bool isSepolia = keccak256(bytes(networkName)) == keccak256(bytes("sepolia"));
@@ -121,6 +135,28 @@ contract SwapV4 is ScriptHelper {
             uint256 jsonTS = vm.parseJsonUint(json, keyTS);
             tickSpacing = int24(uint24(jsonTS));
             console.log("Tick spacing loaded:", tickSpacing);
+        }
+
+        address marketFactoryAddr = readAddress("marketFactory");
+        IMarketFactory marketFactory = IMarketFactory(marketFactoryAddr);
+        console.log("Market Factory loaded");
+        address coreHookAddr = marketFactory.getCoreHook();
+        console.log("Core Hook loaded");
+        lccToken0 = marketFactory.getLCC(token0);
+        lccToken1 = marketFactory.getLCC(token1);
+        console.log("LCC Tokens loaded");
+        (Currency currencyLccA, Currency currencyLccB) = CurrencySortHelper.sortAddresses(lccToken0, lccToken1);
+        corePoolKey = PoolKey({
+            currency0: currencyLccA,
+            currency1: currencyLccB,
+            fee: fee,
+            tickSpacing: tickSpacing,
+            hooks: IHooks(coreHookAddr)
+        });
+        console.log("Core PoolKey constructed");
+
+        if (bytes(corePoolId).length == 0) {
+            _corePoolId = corePoolKey.toId();
         }
 
         uint256 userPrivateKey = uint256(vm.envBytes32("LP_PRIVATE_KEY"));
@@ -177,7 +213,7 @@ contract SwapV4 is ScriptHelper {
             } catch {
                 amount = 10e18;
             }
-            console.log("Executing Exact Input swap for Token 0 -> Token 1...");
+            console.log("\n\nExecuting Exact Input swap for Token 0 -> Token 1...");
 
             // For an 18 decimal token, 10e18 is 10 tokens
             swapExactInputSingle(
@@ -190,7 +226,6 @@ contract SwapV4 is ScriptHelper {
                 })
             );
 
-            // swapExactInputSingle(poolKey, 1, 0, userAddress);
             console.log("Exact Input Token 0 -> Token 1 Swap executed");
         }
         if (swapType == 2 || swapType == 5) {
@@ -199,7 +234,7 @@ contract SwapV4 is ScriptHelper {
             } catch {
                 amount = 10e18 / 2;
             }
-            console.log("Executing Exact Input swap for Token 1 -> Token 0...");
+            console.log("\n\nExecuting Exact Input swap for Token 1 -> Token 0...");
 
             swapExactInputSingle(
                 IV4Router.ExactInputSingleParams({
@@ -219,7 +254,7 @@ contract SwapV4 is ScriptHelper {
             } catch {
                 amount = 10e18;
             }
-            console.log("Executing Exact Output swap for Token 0 -> Token 1...");
+            console.log("\n\nExecuting Exact Output swap for Token 0 -> Token 1...");
 
             swapExactOutputSingle(
                 IV4Router.ExactOutputSingleParams({
@@ -239,7 +274,7 @@ contract SwapV4 is ScriptHelper {
             } catch {
                 amount = 10e18 / 2;
             }
-            console.log("Executing Exact Output swap for Token 1 -> Token 0...");
+            console.log("\n\nExecuting Exact Output swap for Token 1 -> Token 0...");
 
             swapExactOutputSingle(
                 IV4Router.ExactOutputSingleParams({
@@ -291,6 +326,21 @@ contract SwapV4 is ScriptHelper {
     }
 
     function swapExactInputSingle(IV4Router.ExactInputSingleParams memory params) public {
+        (uint160 sqrtPriceX96Before, int24 tickBefore,,) = poolManager.getSlot0(_corePoolId);
+        uint128 liquidityBefore = poolManager.getLiquidity(_corePoolId);
+        int256 hookDelta0Before = poolManager.currencyDelta(address(hook), Currency.wrap(token0));
+        int256 hookDelta1Before = poolManager.currencyDelta(address(hook), Currency.wrap(token1));
+        uint256 uaSupply0Before = LiquidityCommitmentCertificate(lccToken0).uaSupply();
+        uint256 uaSupply1Before = LiquidityCommitmentCertificate(lccToken1).uaSupply();
+        console.log("Before Swap (Exact Input Single):");
+        console.log("Core Pool - sqrtPriceX96: %s", sqrtPriceX96Before);
+        console.log("Core Pool - tick: %d", tickBefore);
+        console.log("Core Pool - liquidity: %s", liquidityBefore);
+        console.log("Proxy Hook - delta0: %d", hookDelta0Before);
+        console.log("Proxy Hook - delta1: %d", hookDelta1Before);
+        console.log("LCC - uaSupply0: %s", uaSupply0Before);
+        console.log("LCC - uaSupply1: %s", uaSupply1Before);
+
         bytes memory commands = abi.encodePacked(uint8(Commands.V4_SWAP));
 
         // Encode V4Router actions
@@ -323,9 +373,47 @@ contract SwapV4 is ScriptHelper {
         // Execute the swap
         uint256 deadline = block.timestamp + 20;
         router.execute(commands, inputs, deadline);
+
+        // Log after
+        (uint160 sqrtPriceX96After, int24 tickAfter,,) = poolManager.getSlot0(_corePoolId);
+        uint128 liquidityAfter = poolManager.getLiquidity(_corePoolId);
+        int256 hookDelta0After = poolManager.currencyDelta(address(hook), Currency.wrap(token0));
+        int256 hookDelta1After = poolManager.currencyDelta(address(hook), Currency.wrap(token1));
+        uint256 uaSupply0After = LiquidityCommitmentCertificate(lccToken0).uaSupply();
+        uint256 uaSupply1After = LiquidityCommitmentCertificate(lccToken1).uaSupply();
+        console.log("After Swap (Exact Input Single):");
+        console.log("Core Pool - sqrtPriceX96: %s", sqrtPriceX96After);
+        console.log("Core Pool - tick: %d", tickAfter);
+        console.log("Core Pool - liquidity: %s", liquidityAfter);
+        console.log("Proxy Hook - delta0: %d", hookDelta0After);
+        console.log("Proxy Hook - delta1: %d", hookDelta1After);
+        console.log("LCC - uaSupply0: %s", uaSupply0After);
+        console.log("LCC - uaSupply1: %s", uaSupply1After);
+        console.log("Deltas:");
+        console.log("Core Pool - tick delta: %d", tickAfter - tickBefore);
+        console.log("liquidity delta: %d", int128(liquidityAfter) - int128(liquidityBefore));
+        console.log("Proxy Hook - delta0 delta: %d", hookDelta0After - hookDelta0Before);
+        console.log("delta1 delta: %d", hookDelta1After - hookDelta1Before);
+        console.log("LCC - uaSupply0 delta: %d", int256(uaSupply0After) - int256(uaSupply0Before));
+        console.log("uaSupply1 delta: %d", int256(uaSupply1After) - int256(uaSupply1Before));
     }
 
     function swapExactOutputSingle(IV4Router.ExactOutputSingleParams memory params) public {
+        (uint160 sqrtPriceX96Before, int24 tickBefore,,) = poolManager.getSlot0(_corePoolId);
+        uint128 liquidityBefore = poolManager.getLiquidity(_corePoolId);
+        int256 hookDelta0Before = poolManager.currencyDelta(address(hook), Currency.wrap(token0));
+        int256 hookDelta1Before = poolManager.currencyDelta(address(hook), Currency.wrap(token1));
+        uint256 uaSupply0Before = LiquidityCommitmentCertificate(lccToken0).uaSupply();
+        uint256 uaSupply1Before = LiquidityCommitmentCertificate(lccToken1).uaSupply();
+        console.log("Before Swap (Exact Output Single):");
+        console.log("Core Pool - sqrtPriceX96: %s", sqrtPriceX96Before);
+        console.log("Core Pool - tick: %d", tickBefore);
+        console.log("Core Pool - liquidity: %s", liquidityBefore);
+        console.log("Proxy Hook - delta0: %d", hookDelta0Before);
+        console.log("Proxy Hook - delta1: %d", hookDelta1Before);
+        console.log("LCC - uaSupply0: %s", uaSupply0Before);
+        console.log("LCC - uaSupply1: %s", uaSupply1Before);
+
         bytes memory commands = abi.encodePacked(uint8(Commands.V4_SWAP));
 
         // Encode V4Router actions
@@ -357,5 +445,28 @@ contract SwapV4 is ScriptHelper {
         // Execute the swap
         uint256 deadline = block.timestamp + 20;
         router.execute(commands, inputs, deadline);
+
+        // Log after
+        (uint160 sqrtPriceX96After, int24 tickAfter,,) = poolManager.getSlot0(_corePoolId);
+        uint128 liquidityAfter = poolManager.getLiquidity(_corePoolId);
+        int256 hookDelta0After = poolManager.currencyDelta(address(hook), Currency.wrap(token0));
+        int256 hookDelta1After = poolManager.currencyDelta(address(hook), Currency.wrap(token1));
+        uint256 uaSupply0After = LiquidityCommitmentCertificate(lccToken0).uaSupply();
+        uint256 uaSupply1After = LiquidityCommitmentCertificate(lccToken1).uaSupply();
+        console.log("After Swap (Exact Output Single):");
+        console.log("Core Pool - sqrtPriceX96: %s", sqrtPriceX96After);
+        console.log("Core Pool - tick: %d", tickAfter);
+        console.log("Core Pool - liquidity: %s", liquidityAfter);
+        console.log("Proxy Hook - delta0: %d", hookDelta0After);
+        console.log("Proxy Hook - delta1: %d", hookDelta1After);
+        console.log("LCC - uaSupply0: %s", uaSupply0After);
+        console.log("LCC - uaSupply1: %s", uaSupply1After);
+        console.log("Deltas:");
+        console.log("Core Pool - tick delta: %d", tickAfter - tickBefore);
+        console.log("liquidity delta: %d", int128(liquidityAfter) - int128(liquidityBefore));
+        console.log("Proxy Hook - delta0 delta: %d", hookDelta0After - hookDelta0Before);
+        console.log("delta1 delta: %d", hookDelta1After - hookDelta1Before);
+        console.log("LCC - uaSupply0 delta: %d", int256(uaSupply0After) - int256(uaSupply0Before));
+        console.log("uaSupply1 delta: %d", int256(uaSupply1After) - int256(uaSupply1Before));
     }
 }
