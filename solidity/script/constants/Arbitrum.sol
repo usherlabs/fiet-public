@@ -9,7 +9,7 @@ library ArbitrumConstants {
     address constant DEPLOYER_CREATE2 = 0x4e59b44847b379578588920cA78FbF26c0B4956C; // Assuming same CREATE2 deployer
     address constant PERMIT2 = 0x000000000022D473030F116dDEE9F6B43aC78BA3; // From v3 docs
     address constant UNIVERSAL_ROUTER = 0xA51afAFe0263b40EdaEf0Df8781eA9aa03E381a3; // From v3 docs
-    address constant STATE_VIEW = address(0x0000000000000000000000000000000000000000); // Replace if needed
+    address constant STATE_VIEW = 0x76Fd297e2D437cd7f76d50F01AfE6160f86e9990; // Replace if needed
 
     // Gas token (WETH) addresses
     address constant WETH_ADDRESS = 0x82aF49447D8a07e3bd95BD0d56f35241523fBab1;

@@ -19,7 +19,6 @@ import {SepoliaConstants} from "./constants/ArbitrumSepolia.sol";
 import {ArbitrumConstants} from "./constants/Arbitrum.sol";
 import {ScriptHelper} from "./libraries/ScriptHelper.s.sol";
 import {CurrencySortHelper} from "./libraries/CurrencySortHelper.sol";
-import {LiquidityCommitmentCertificate} from "../src/LCC.sol";
 import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
 
 contract SwapV4 is ScriptHelper {
@@ -29,10 +28,6 @@ contract SwapV4 is ScriptHelper {
     IPoolManager poolManager;
     IPermit2 permit2;
     IHooks hook;
-
-    // Core pool tokens (intent tokens - WHERE LIQUIDITY GOES)
-    LiquidityCommitmentCertificate lcc0;
-    LiquidityCommitmentCertificate lcc1;
 
     // Proxy pool tokens (underlying tokens)
     address token0;
@@ -74,45 +69,51 @@ contract SwapV4 is ScriptHelper {
 
         address marketFactory = readAddress("marketFactory");
 
-        try vm.envAddress("UNDERLYING_ASSET_0") returns (address asset) {
-            token0 = asset;
-            console.log("Token0 loaded from env");
-        } catch {
-            if (keccak256(bytes(networkName)) == keccak256(bytes("sepolia"))) {
+        string memory corePoolId = vm.envOr("CORE_POOL_ID", "");
+        bool isSepolia = keccak256(bytes(networkName)) == keccak256(bytes("sepolia"));
+
+        uint24 fee;
+        int24 tickSpacing;
+
+        if (bytes(corePoolId).length == 0) {
+            if (isSepolia) {
                 token0 = readAddress("usdcToken");
-                console.log("Token0 (USDC) loaded");
-            } else {
-                revert("Please specify UNDERLYING_ASSET_0 via environment variable");
-            }
-        }
-
-        try vm.envAddress("UNDERLYING_ASSET_1") returns (address asset) {
-            token1 = asset;
-            console.log("Token1 loaded from env");
-        } catch {
-            if (keccak256(bytes(networkName)) == keccak256(bytes("sepolia"))) {
+                console.log("Token0 (USDC) loaded from defaults");
                 token1 = readAddress("usdtToken");
-                console.log("Token1 (USDT) loaded");
+                console.log("Token1 (USDT) loaded from defaults");
             } else {
-                revert("Please specify UNDERLYING_ASSET_1 via environment variable");
+                revert("CORE_POOL_ID required for non-sepolia networks");
             }
+            fee = 0;
+            console.log("Pool fee (default):", fee);
+            tickSpacing = 60;
+            console.log("Tick spacing (default):", tickSpacing);
+        } else {
+            string memory filePath = string.concat("./deployments/", networkName, "_markets.json");
+            string memory json = vm.readFile(filePath);
+
+            string memory keyToken0 = string.concat(".", corePoolId, "_underlyingAsset0");
+            string memory keyToken1 = string.concat(".", corePoolId, "_underlyingAsset1");
+            string memory keyFee = string.concat(".", corePoolId, "_corePoolFee");
+            string memory keyTS = string.concat(".", corePoolId, "_tickSpacing");
+
+            token0 = vm.parseJsonAddress(json, keyToken0);
+            console.log("Token0 loaded from markets json");
+            token1 = vm.parseJsonAddress(json, keyToken1);
+            console.log("Token1 loaded from markets json");
+
+            uint256 jsonFee = vm.parseJsonUint(json, keyFee);
+            fee = uint24(jsonFee);
+            console.log("Pool fee loaded:", fee);
+
+            uint256 jsonTS = vm.parseJsonUint(json, keyTS);
+            tickSpacing = int24(uint24(jsonTS));
+            console.log("Tick spacing loaded:", tickSpacing);
         }
-
-        // Core pool tokens
-        lcc0 = LiquidityCommitmentCertificate(IMarketFactory(marketFactory).getLCC(token0));
-        lcc1 = LiquidityCommitmentCertificate(IMarketFactory(marketFactory).getLCC(token1));
-
-        uint256 userPrivateKey = uint256(vm.envBytes32("LP_PRIVATE_KEY"));
-        address userAddress = vm.addr(userPrivateKey);
 
         (Currency currencyA, Currency currencyB) = CurrencySortHelper.sortAddresses(token0, token1);
-        PoolKey memory poolKey = PoolKey({
-            currency0: currencyA,
-            currency1: currencyB,
-            fee: 0, // 0% fee
-            tickSpacing: 60,
-            hooks: hook
-        });
+        PoolKey memory poolKey =
+            PoolKey({currency0: currencyA, currency1: currencyB, fee: fee, tickSpacing: tickSpacing, hooks: hook});
         console.log("Checking balances...");
         uint256 balanceBeforeCurrency1;
         uint256 balanceBeforeCurrency0;
