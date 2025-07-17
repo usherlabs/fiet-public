@@ -2,6 +2,9 @@ export $(shell sed 's/=.*//' .env)
 include .env
 export
 
+include make/help.mk
+include make/exp.mk
+
 MODE ?= LOCAL
 NETWORK ?= sepolia
 ANVIL_PORT=8545
@@ -29,6 +32,11 @@ SCRIPT_DIR=script
 DEPLOYMENTS=deployments/$(NETWORK)_deployments.json
 
 .PHONY: build deploy create-market
+
+# === Experimental Commands Subcommand ===
+# This allows running experimental commands via: make exp <command>
+exp-%: ## Run experimental command (usage: make exp <command>)
+	@$(MAKE) $(subst exp-,,$@)
 
 # === All ===
 dev: deploy-tokenA deploy-tokenB deploy create-market
