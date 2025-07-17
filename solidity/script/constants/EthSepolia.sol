@@ -2,7 +2,7 @@
 pragma solidity ^0.8.0;
 
 // Helper contract
-library EthConstants {
+library EthSepoliaConstants {
     // To deploy uniswap pool
     address constant POOL_MANAGER = 0xE03A1074c86CFeDd5C142C4F04F1a1536e203543;
     address constant POSITION_MANAGER = 0x429ba70129df741B2Ca2a85BC3A2a3328e5c09b4;

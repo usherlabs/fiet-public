@@ -27,7 +27,7 @@ import {ProxyHook} from "../src/ProxyHook.sol";
 import {CurrencySortHelper} from "./libraries/CurrencySortHelper.sol";
 import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
 import {ArbitrumConstants} from "./constants/Arbitrum.sol";
-import {EthConstants} from "./constants/EthSepolia.sol";
+import {EthSepoliaConstants} from "./constants/EthSepolia.sol";
 
 contract AddLiquidityScript is ScriptHelper {
     using StateLibrary for IPoolManager;
@@ -82,9 +82,9 @@ contract AddLiquidityScript is ScriptHelper {
             positionManagerAddr = ArbitrumConstants.POSITION_MANAGER;
             permit2Addr = ArbitrumConstants.PERMIT2;
         } else if (keccak256(bytes(networkName)) == keccak256(bytes("ethsepolia"))) {
-            poolManagerAddr = EthConstants.POOL_MANAGER;
-            positionManagerAddr = EthConstants.POSITION_MANAGER;
-            permit2Addr = EthConstants.PERMIT2;
+            poolManagerAddr = EthSepoliaConstants.POOL_MANAGER;
+            positionManagerAddr = EthSepoliaConstants.POSITION_MANAGER;
+            permit2Addr = EthSepoliaConstants.PERMIT2;
         } else {
             revert("Unsupported network");
         }

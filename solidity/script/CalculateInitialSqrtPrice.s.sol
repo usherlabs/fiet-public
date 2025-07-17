@@ -6,7 +6,7 @@ import "forge-std/Script.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 
 contract CalculateInitialSqrtPrice is Script {
-    function run() external {
+    function run() external view {
         uint256 bid = vm.envUint("BID");
         uint256 ask = vm.envUint("ASK");
 

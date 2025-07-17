@@ -10,7 +10,8 @@ import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {CurrencySortHelper} from "./libraries/CurrencySortHelper.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
-import {EthConstants} from "./constants/EthSepolia.sol";
+import {EthSepoliaConstants} from "./constants/EthSepolia.sol";
+import {ArbitrumConstants} from "./constants/Arbitrum.sol";
 
 /**
  * @title CreateMarketScript
@@ -102,7 +103,7 @@ contract CreateMarketScript is ScriptHelper {
         } else if (keccak256(bytes(networkName)) == keccak256(bytes("sepolia"))) {
             poolManager = SepoliaConstants.POOL_MANAGER;
         } else if (keccak256(bytes(networkName)) == keccak256(bytes("ethsepolia"))) {
-            poolManager = EthConstants.POOL_MANAGER;
+            poolManager = EthSepoliaConstants.POOL_MANAGER;
         } else {
             revert("Unsupported network");
         }
@@ -120,7 +121,7 @@ contract CreateMarketScript is ScriptHelper {
             if (keccak256(bytes(networkName)) == keccak256(bytes("sepolia"))) {
                 underlyingAsset0 = readAddress("usdtToken");
             } else if (keccak256(bytes(networkName)) == keccak256(bytes("ethsepolia"))) {
-                underlyingAsset0 = EthConstants.USDC_ADDRESS;
+                underlyingAsset0 = EthSepoliaConstants.USDC_ADDRESS;
             } else {
                 revert("Please specify UNDERLYING_ASSET_0 via environment variable for this network");
             }
@@ -132,7 +133,7 @@ contract CreateMarketScript is ScriptHelper {
             if (keccak256(bytes(networkName)) == keccak256(bytes("sepolia"))) {
                 underlyingAsset1 = readAddress("usdcToken");
             } else if (keccak256(bytes(networkName)) == keccak256(bytes("ethsepolia"))) {
-                underlyingAsset1 = EthConstants.WETH_ADDRESS;
+                underlyingAsset1 = EthSepoliaConstants.WETH_ADDRESS;
             } else {
                 revert("Please specify UNDERLYING_ASSET_1 via environment variable for this network");
             }

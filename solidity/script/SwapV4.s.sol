@@ -19,8 +19,7 @@ import {SepoliaConstants} from "./constants/ArbitrumSepolia.sol";
 import {ArbitrumConstants} from "./constants/Arbitrum.sol";
 import {ScriptHelper} from "./libraries/ScriptHelper.s.sol";
 import {CurrencySortHelper} from "./libraries/CurrencySortHelper.sol";
-import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
-import {EthConstants} from "./constants/EthSepolia.sol";
+import {EthSepoliaConstants} from "./constants/EthSepolia.sol";
 
 contract SwapV4 is ScriptHelper {
     using StateLibrary for IPoolManager;
@@ -37,7 +36,13 @@ contract SwapV4 is ScriptHelper {
     function run() external {
         console.log("Starting SwapV4 script...");
 
-        string memory networkName = vm.envOr("NETWORK", "sepolia");
+        string memory networkName;
+        try vm.envString("NETWORK") returns (string memory envNetworkName) {
+            networkName = envNetworkName;
+        } catch {
+            networkName = "sepolia";
+        }
+
         _setFilename(networkName);
 
         address universalRouterAddr;
@@ -53,9 +58,9 @@ contract SwapV4 is ScriptHelper {
             poolManagerAddr = ArbitrumConstants.POOL_MANAGER;
             permit2Addr = ArbitrumConstants.PERMIT2;
         } else if (keccak256(bytes(networkName)) == keccak256(bytes("ethsepolia"))) {
-            universalRouterAddr = EthConstants.UNIVERSAL_ROUTER;
-            poolManagerAddr = EthConstants.POOL_MANAGER;
-            permit2Addr = EthConstants.PERMIT2;
+            universalRouterAddr = EthSepoliaConstants.UNIVERSAL_ROUTER;
+            poolManagerAddr = EthSepoliaConstants.POOL_MANAGER;
+            permit2Addr = EthSepoliaConstants.PERMIT2;
         } else {
             revert("Unsupported network");
         }
@@ -72,9 +77,11 @@ contract SwapV4 is ScriptHelper {
         hook = IHooks(readAddress("proxyHook"));
         console.log("Proxy Hook loaded");
 
-        address marketFactory = readAddress("marketFactory");
+        string memory corePoolId;
+        try vm.envString("CORE_POOL_ID") returns (string memory envCorePoolId) {
+            corePoolId = envCorePoolId;
+        } catch {}
 
-        string memory corePoolId = vm.envOr("CORE_POOL_ID", "");
         bool isSepolia = keccak256(bytes(networkName)) == keccak256(bytes("sepolia"));
 
         uint24 fee;
@@ -116,6 +123,9 @@ contract SwapV4 is ScriptHelper {
             console.log("Tick spacing loaded:", tickSpacing);
         }
 
+        uint256 userPrivateKey = uint256(vm.envBytes32("LP_PRIVATE_KEY"));
+        address userAddress = vm.addr(userPrivateKey);
+
         (Currency currencyA, Currency currencyB) = CurrencySortHelper.sortAddresses(token0, token1);
         PoolKey memory poolKey =
             PoolKey({currency0: currencyA, currency1: currencyB, fee: fee, tickSpacing: tickSpacing, hooks: hook});
@@ -148,14 +158,25 @@ contract SwapV4 is ScriptHelper {
         approveTokenWithPermit2(token1);
         console.log("Token1 approved");
 
-        uint8 swapType = uint8(vm.envOr("SWAP_TYPE", uint8(0)));
+        uint8 swapType;
+        try vm.envUint("SWAP_TYPE") returns (uint256 envSwapType) {
+            swapType = uint8(envSwapType);
+        } catch {
+            swapType = 0;
+        }
 
         if (swapType < 0 || swapType > 5) {
             revert("Invalid swap type");
         }
 
+        uint128 amount;
+
         if (swapType == 0 || swapType == 1 || swapType == 5) {
-            uint256 amount = vm.envOr("AMOUNT", 10e18);
+            try vm.envUint("AMOUNT") returns (uint256 envAmount) {
+                amount = uint128(envAmount);
+            } catch {
+                amount = 10e18;
+            }
             console.log("Executing Exact Input swap for Token 0 -> Token 1...");
 
             // For an 18 decimal token, 10e18 is 10 tokens
@@ -173,7 +194,11 @@ contract SwapV4 is ScriptHelper {
             console.log("Exact Input Token 0 -> Token 1 Swap executed");
         }
         if (swapType == 2 || swapType == 5) {
-            uint256 amount = vm.envOr("AMOUNT", 10e18 / 2);
+            try vm.envUint("AMOUNT") returns (uint256 envAmount) {
+                amount = uint128(envAmount);
+            } catch {
+                amount = 10e18 / 2;
+            }
             console.log("Executing Exact Input swap for Token 1 -> Token 0...");
 
             swapExactInputSingle(
@@ -189,7 +214,11 @@ contract SwapV4 is ScriptHelper {
             console.log("Exact Input Token 1 -> Token 0 Swap executed");
         }
         if (swapType == 3 || swapType == 5) {
-            uint256 amount = vm.envOr("AMOUNT", 10e18);
+            try vm.envUint("AMOUNT") returns (uint256 envAmount) {
+                amount = uint128(envAmount);
+            } catch {
+                amount = 10e18;
+            }
             console.log("Executing Exact Output swap for Token 0 -> Token 1...");
 
             swapExactOutputSingle(
@@ -205,7 +234,11 @@ contract SwapV4 is ScriptHelper {
             console.log("Exact Output Token 0 -> Token 1 Swap executed");
         }
         if (swapType == 4 || swapType == 5) {
-            uint256 amount = vm.envOr("AMOUNT", 10e18 / 2);
+            try vm.envUint("AMOUNT") returns (uint256 envAmount) {
+                amount = uint128(envAmount);
+            } catch {
+                amount = 10e18 / 2;
+            }
             console.log("Executing Exact Output swap for Token 1 -> Token 0...");
 
             swapExactOutputSingle(
