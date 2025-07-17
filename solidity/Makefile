@@ -39,7 +39,7 @@ DEPLOYMENTS=deployments/$(NETWORK)_deployments.json
 # === Experimental Commands Subcommand ===
 # This allows running experimental commands via: make exp <command>
 exp-%: ## Run experimental command (usage: make exp <command>)
-	@$(MAKE) $(subst exp-,,$@)
+	@$(MAKE) exp-$(subst exp-,,$@)
 
 # === All ===
 dev: deploy-tokenA deploy-tokenB deploy create-market

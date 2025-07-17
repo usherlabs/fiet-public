@@ -51,7 +51,7 @@
 # =============================================================================
 
 # === Experimental Commands Help ===
-exp: ## Show available experimental commands
+exp-help: ## Show available experimental commands
 	@echo "🧪 Fiet Protocol - Experimental Commands"
 	@echo "========================================"
 	@echo ""
@@ -92,6 +92,11 @@ exp: ## Show available experimental commands
 	@echo "  - ETH_SEPOLIA_RPC: Ethereum Sepolia RPC URL"
 	@echo "  - PRIVATE_KEY: Your private key for transactions"
 	@echo "  - LP_PRIVATE_KEY: Liquidity provider private key"
+
+
+# Default exp target - show usage when no command specified
+exp:
+	@echo ""
 
 # Arbitrum Sepolia Testnet Experiments
 
