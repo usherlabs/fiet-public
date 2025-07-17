@@ -20,6 +20,9 @@ ifeq ($(NETWORK),sepolia)
 else ifeq ($(NETWORK),arbitrum)
 	FORK_SOURCE_RPC=$(ARB_MAINNET_RPC_URL)
 	RPC_URL=$(if $(filter $(MODE),LOCAL),$(ANVIL_FORK_URL),$(ARB_MAINNET_RPC_URL))
+else ifeq ($(NETWORK),ethsepolia)
+	FORK_SOURCE_RPC=$(ETH_SEPOLIA_RPC_URL)
+	RPC_URL=$(if $(filter $(MODE),LOCAL),$(ANVIL_FORK_URL),$(ETH_SEPOLIA_RPC_URL))
 else
 	$(error Invalid NETWORK value: $(NETWORK). Must be either "sepolia" or "arbitrum")
 endif
