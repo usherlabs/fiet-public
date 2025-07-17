@@ -85,7 +85,7 @@ remove-liquidity:
 		--broadcast -vvv
 
 swap:
-	$(FORGE) script $(SCRIPT_DIR)/dev/SwapV4.s.sol \
+	$(FORGE) script $(SCRIPT_DIR)/SwapV4.s.sol \
 		--rpc-url $(RPC_URL) \
 		--broadcast -vvv
 

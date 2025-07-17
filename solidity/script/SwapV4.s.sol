@@ -2,8 +2,8 @@
 pragma solidity ^0.8.0;
 
 import {console} from "forge-std/Script.sol";
-import {IUniversalRouter} from "../external/IUniversalRouter.sol";
-import {Commands} from "../external/Commands.sol";
+import {IUniversalRouter} from "./external/IUniversalRouter.sol";
+import {Commands} from "./external/Commands.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IV4Router} from "v4-periphery/src/interfaces/IV4Router.sol";
 import {Actions} from "v4-periphery/src/libraries/Actions.sol";
@@ -15,11 +15,12 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {IHooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 
-import {SepoliaConstants} from "../constants/ArbitrumSepolia.sol";
-import {ScriptHelper} from "../libraries/ScriptHelper.s.sol";
-import {CurrencySortHelper} from "../libraries/CurrencySortHelper.sol";
-import {LiquidityCommitmentCertificate} from "../../src/LCC.sol";
-import {IMarketFactory} from "../../src/interfaces/IMarketFactory.sol";
+import {SepoliaConstants} from "./constants/ArbitrumSepolia.sol";
+import {ArbitrumConstants} from "./constants/Arbitrum.sol";
+import {ScriptHelper} from "./libraries/ScriptHelper.s.sol";
+import {CurrencySortHelper} from "./libraries/CurrencySortHelper.sol";
+import {LiquidityCommitmentCertificate} from "../src/LCC.sol";
+import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
 
 contract SwapV4 is ScriptHelper {
     using StateLibrary for IPoolManager;
@@ -30,26 +31,42 @@ contract SwapV4 is ScriptHelper {
     IHooks hook;
 
     // Core pool tokens (intent tokens - WHERE LIQUIDITY GOES)
-    LiquidityCommitmentCertificate lccUSDCToken;
-    LiquidityCommitmentCertificate lccUSDTToken;
+    LiquidityCommitmentCertificate lcc0;
+    LiquidityCommitmentCertificate lcc1;
 
     // Proxy pool tokens (underlying tokens)
-    address usdcToken;
-    address usdtToken;
+    address token0;
+    address token1;
 
     function run() external {
         console.log("Starting SwapV4 script...");
 
-        // Load deployment addresses
-        _setFilename("sepolia");
+        string memory networkName = vm.envOr("NETWORK", "sepolia");
+        _setFilename(networkName);
 
-        router = IUniversalRouter(payable(SepoliaConstants.UNIVERSAL_ROUTER));
+        address universalRouterAddr;
+        address poolManagerAddr;
+        address permit2Addr;
+
+        if (keccak256(bytes(networkName)) == keccak256(bytes("sepolia"))) {
+            universalRouterAddr = SepoliaConstants.UNIVERSAL_ROUTER;
+            poolManagerAddr = SepoliaConstants.POOL_MANAGER;
+            permit2Addr = SepoliaConstants.PERMIT2;
+        } else if (keccak256(bytes(networkName)) == keccak256(bytes("arbitrum"))) {
+            universalRouterAddr = ArbitrumConstants.UNIVERSAL_ROUTER;
+            poolManagerAddr = ArbitrumConstants.POOL_MANAGER;
+            permit2Addr = ArbitrumConstants.PERMIT2;
+        } else {
+            revert("Unsupported network");
+        }
+
+        router = IUniversalRouter(payable(universalRouterAddr));
         console.log("Universal Router loaded");
 
-        poolManager = IPoolManager(SepoliaConstants.POOL_MANAGER);
+        poolManager = IPoolManager(poolManagerAddr);
         console.log("Pool Manager loaded");
 
-        permit2 = IPermit2(SepoliaConstants.PERMIT2);
+        permit2 = IPermit2(permit2Addr);
         console.log("Permit2 loaded");
 
         hook = IHooks(readAddress("proxyHook"));
@@ -57,19 +74,38 @@ contract SwapV4 is ScriptHelper {
 
         address marketFactory = readAddress("marketFactory");
 
-        usdcToken = readAddress("usdcToken");
-        console.log("USDC Token loaded");
-        usdtToken = readAddress("usdtToken");
-        console.log("USDT Token loaded");
+        try vm.envAddress("UNDERLYING_ASSET_0") returns (address asset) {
+            token0 = asset;
+            console.log("Token0 loaded from env");
+        } catch {
+            if (keccak256(bytes(networkName)) == keccak256(bytes("sepolia"))) {
+                token0 = readAddress("usdcToken");
+                console.log("Token0 (USDC) loaded");
+            } else {
+                revert("Please specify UNDERLYING_ASSET_0 via environment variable");
+            }
+        }
+
+        try vm.envAddress("UNDERLYING_ASSET_1") returns (address asset) {
+            token1 = asset;
+            console.log("Token1 loaded from env");
+        } catch {
+            if (keccak256(bytes(networkName)) == keccak256(bytes("sepolia"))) {
+                token1 = readAddress("usdtToken");
+                console.log("Token1 (USDT) loaded");
+            } else {
+                revert("Please specify UNDERLYING_ASSET_1 via environment variable");
+            }
+        }
 
         // Core pool tokens
-        lccUSDCToken = LiquidityCommitmentCertificate(IMarketFactory(marketFactory).getLCC(usdcToken));
-        lccUSDTToken = LiquidityCommitmentCertificate(IMarketFactory(marketFactory).getLCC(usdtToken));
+        lcc0 = LiquidityCommitmentCertificate(IMarketFactory(marketFactory).getLCC(token0));
+        lcc1 = LiquidityCommitmentCertificate(IMarketFactory(marketFactory).getLCC(token1));
 
         uint256 userPrivateKey = uint256(vm.envBytes32("LP_PRIVATE_KEY"));
         address userAddress = vm.addr(userPrivateKey);
 
-        (Currency currencyA, Currency currencyB) = CurrencySortHelper.sortAddresses(usdcToken, usdtToken);
+        (Currency currencyA, Currency currencyB) = CurrencySortHelper.sortAddresses(token0, token1);
         PoolKey memory poolKey = PoolKey({
             currency0: currencyA,
             currency1: currencyB,
@@ -100,11 +136,11 @@ contract SwapV4 is ScriptHelper {
         vm.startBroadcast(userPrivateKey);
 
         console.log("Approving tokens...");
-        approveTokenWithPermit2(usdcToken);
-        console.log("USDC approved");
+        approveTokenWithPermit2(token0);
+        console.log("Token0 approved");
 
-        approveTokenWithPermit2(usdtToken);
-        console.log("USDT approved");
+        approveTokenWithPermit2(token1);
+        console.log("Token1 approved");
 
         uint8 swapType = uint8(vm.envOr("SWAP_TYPE", uint8(0)));
 
@@ -113,6 +149,7 @@ contract SwapV4 is ScriptHelper {
         }
 
         if (swapType == 0 || swapType == 1 || swapType == 5) {
+            uint256 amount = vm.envOr("AMOUNT", 10e18);
             console.log("Executing Exact Input swap for Token 0 -> Token 1...");
 
             // For an 18 decimal token, 10e18 is 10 tokens
@@ -120,7 +157,7 @@ contract SwapV4 is ScriptHelper {
                 IV4Router.ExactInputSingleParams({
                     poolKey: poolKey,
                     zeroForOne: true,
-                    amountIn: 10e18,
+                    amountIn: amount,
                     amountOutMinimum: 0,
                     hookData: new bytes(0)
                 })
@@ -130,13 +167,14 @@ contract SwapV4 is ScriptHelper {
             console.log("Exact Input Token 0 -> Token 1 Swap executed");
         }
         if (swapType == 2 || swapType == 5) {
+            uint256 amount = vm.envOr("AMOUNT", 10e18 / 2);
             console.log("Executing Exact Input swap for Token 1 -> Token 0...");
 
             swapExactInputSingle(
                 IV4Router.ExactInputSingleParams({
                     poolKey: poolKey,
                     zeroForOne: false,
-                    amountIn: 10e18 / 2, // Half the first swap
+                    amountIn: amount,
                     amountOutMinimum: 0,
                     hookData: new bytes(0)
                 })
@@ -145,6 +183,7 @@ contract SwapV4 is ScriptHelper {
             console.log("Exact Input Token 1 -> Token 0 Swap executed");
         }
         if (swapType == 3 || swapType == 5) {
+            uint256 amount = vm.envOr("AMOUNT", 10e18);
             console.log("Executing Exact Output swap for Token 0 -> Token 1...");
 
             swapExactOutputSingle(
@@ -152,7 +191,7 @@ contract SwapV4 is ScriptHelper {
                     poolKey: poolKey,
                     zeroForOne: true,
                     amountInMaximum: type(uint128).max,
-                    amountOut: 10e18,
+                    amountOut: amount,
                     hookData: new bytes(0)
                 })
             );
@@ -160,6 +199,7 @@ contract SwapV4 is ScriptHelper {
             console.log("Exact Output Token 0 -> Token 1 Swap executed");
         }
         if (swapType == 4 || swapType == 5) {
+            uint256 amount = vm.envOr("AMOUNT", 10e18 / 2);
             console.log("Executing Exact Output swap for Token 1 -> Token 0...");
 
             swapExactOutputSingle(
@@ -167,7 +207,7 @@ contract SwapV4 is ScriptHelper {
                     poolKey: poolKey,
                     zeroForOne: false,
                     amountInMaximum: type(uint128).max,
-                    amountOut: 10e18 / 2, // half of the prior swap
+                    amountOut: amount,
                     hookData: new bytes(0)
                 })
             );
