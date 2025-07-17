@@ -28,7 +28,7 @@ add-liquidity-sepolia:
 	forge script solidity/script/AddLiquidity.s.sol:AddLiquidityScript \
 		--rpc-url $(ARB_SEPOLIA_RPC) \
 		--broadcast \
-		--private-key $(PRIVATE_KEY) \
+		--private-key $(LP_PRIVATE_KEY) \
 		-vvvv \
 		--ffi \
 		--sig "run()" \
@@ -40,6 +40,20 @@ add-liquidity-sepolia:
 		TICK_SPACING=60 \
 		AMOUNT_0_DESIRED=10000000
 
+# ? Change the CORE_POOL_ID and AMOUNT or use as a reference to execute directly from the CLI
+swap-sepolia:
+	forge script solidity/script/SwapV4.s.sol:SwapV4 \
+		--rpc-url $(ARB_SEPOLIA_RPC) \
+		--broadcast \
+		--private-key $(LP_PRIVATE_KEY) \
+		-vvvv \
+		--ffi \
+		--sig "run()" \
+		--with-gas-price 2000000000 \
+		NETWORK=sepolia \
+		SWAP_TYPE=0 \
+		CORE_POOL_ID=0x0000000000000000000000000000000000000000000000000000000000000000 \
+		AMOUNT=1000000
 
 
 # Arbitrum Mainnet Experiments
@@ -71,7 +85,7 @@ add-liquidity-mainnet:
 	forge script solidity/script/AddLiquidity.s.sol:AddLiquidityScript \
 		--rpc-url $(ARB_RPC) \
 		--broadcast \
-		--private-key $(PRIVATE_KEY) \
+		--private-key $(LP_PRIVATE_KEY) \
 		-vvvv \
 		--ffi \
 		--sig "run()" \
@@ -113,7 +127,7 @@ add-liquidity-ethsepolia:
 	forge script solidity/script/AddLiquidity.s.sol:AddLiquidityScript \
 		--rpc-url $(ETH_SEPOLIA_RPC) \
 		--broadcast \
-		--private-key $(PRIVATE_KEY) \
+		--private-key $(LP_PRIVATE_KEY) \
 		-vvvv \
 		--ffi \
 		--sig "run()" \
