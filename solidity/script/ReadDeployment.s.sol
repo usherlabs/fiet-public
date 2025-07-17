@@ -19,10 +19,7 @@ contract ReadDeploymentScript is ScriptHelper {
             networkName = "sepolia";
         }
         _setFilename(networkName);
-        console.log(
-            "Reading deployment addresses from deployments/%s_deployments.json...",
-            networkName
-        );
+        console.log("Reading deployment addresses from deployments/%s_deployments.json...", networkName);
 
         // Read addresses from JSON file
         address coreHook = readAddress("coreHook");
@@ -45,11 +42,7 @@ contract ReadDeploymentScript is ScriptHelper {
             console.log("  MarketFactory address not found in deployment file");
         }
 
-        if (
-            coreHook != address(0) &&
-            proxyHook != address(0) &&
-            marketFactory != address(0)
-        ) {
+        if (coreHook != address(0) && proxyHook != address(0) && marketFactory != address(0)) {
             console.log("\nAll deployment addresses found!");
         }
     }

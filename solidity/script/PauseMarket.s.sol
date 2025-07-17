@@ -11,7 +11,7 @@ contract PauseMarketScript is ScriptHelper {
         uint256 deployerPrivateKey = uint256(vm.envBytes32("PRIVATE_KEY"));
         string memory networkName = vm.envString("NETWORK"); // "sepolia" | "arbitrum"
         bytes32 poolIdBytes = vm.envBytes32("POOL_ID");
-        uint pauseFlag = vm.envUint("PAUSE"); // 0 for unpause, 1 for pause
+        uint256 pauseFlag = vm.envUint("PAUSE"); // 0 for unpause, 1 for pause
 
         PoolId poolId = PoolId.wrap(poolIdBytes);
 

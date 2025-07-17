@@ -111,9 +111,7 @@ contract CreateMarketScript is ScriptHelper {
             if (keccak256(bytes(networkName)) == keccak256(bytes("sepolia"))) {
                 underlyingAsset0 = readAddress("usdtToken");
             } else {
-                revert(
-                    "Please specify UNDERLYING_ASSET_0 via environment variable for this network"
-                );
+                revert("Please specify UNDERLYING_ASSET_0 via environment variable for this network");
             }
         }
 
@@ -123,14 +121,11 @@ contract CreateMarketScript is ScriptHelper {
             if (keccak256(bytes(networkName)) == keccak256(bytes("sepolia"))) {
                 underlyingAsset1 = readAddress("usdcToken");
             } else {
-                revert(
-                    "Please specify UNDERLYING_ASSET_1 via environment variable for this network"
-                );
+                revert("Please specify UNDERLYING_ASSET_1 via environment variable for this network");
             }
         }
 
-        (Currency currency0, Currency currency1) = CurrencySortHelper
-            .sortAddresses(underlyingAsset0, underlyingAsset1);
+        (Currency currency0, Currency currency1) = CurrencySortHelper.sortAddresses(underlyingAsset0, underlyingAsset1);
 
         underlyingCurrency0 = currency0;
         underlyingCurrency1 = currency1;
@@ -153,31 +148,22 @@ contract CreateMarketScript is ScriptHelper {
             tickSpacing = 60;
         }
 
-        string memory referencePoolIdStr = vm.envOr(
-            "REFERENCE_POOL_ID",
-            string("")
-        );
+        string memory referencePoolIdStr = vm.envOr("REFERENCE_POOL_ID", string(""));
         try vm.envUint("INITIAL_SQRT_PRICE_X96") returns (uint256 price) {
             initialSqrtPriceX96 = uint160(price);
         } catch {
             if (bytes(referencePoolIdStr).length > 0) {
-                console.log(
-                    "Using reference pool %s for initial price",
-                    referencePoolIdStr
-                );
+                console.log("Using reference pool %s for initial price", referencePoolIdStr);
 
                 bytes32 poolIdBytes = vm.parseBytes32(referencePoolIdStr);
                 PoolId referencePoolId = PoolId.wrap(poolIdBytes);
 
                 IPoolManager manager = IPoolManager(poolManager);
 
-                (uint160 sqrtPrice, , , ) = manager.getSlot0(referencePoolId);
+                (uint160 sqrtPrice,,,) = manager.getSlot0(referencePoolId);
                 initialSqrtPriceX96 = sqrtPrice;
 
-                console.log(
-                    "Fetched initial sqrt price: %s",
-                    vm.toString(initialSqrtPriceX96)
-                );
+                console.log("Fetched initial sqrt price: %s", vm.toString(initialSqrtPriceX96));
             } else {
                 // Default to 1:1 price ratio (sqrt(1) * 2^96)
                 initialSqrtPriceX96 = 79228162514264337593543950336;
@@ -192,19 +178,10 @@ contract CreateMarketScript is ScriptHelper {
         require(marketFactory != address(0), "MarketFactory address is zero");
         require(underlyingAsset0 != address(0), "Underlying asset 0 is zero");
         require(underlyingAsset1 != address(0), "Underlying asset 1 is zero");
-        require(
-            underlyingAsset0 != underlyingAsset1,
-            "Assets must be different"
-        );
-        require(
-            corePoolFee >= 0,
-            "Core pool fee must be greater than or equal to 0"
-        );
+        require(underlyingAsset0 != underlyingAsset1, "Assets must be different");
+        require(corePoolFee >= 0, "Core pool fee must be greater than or equal to 0");
         require(tickSpacing > 0, "Tick spacing must be greater than 0");
-        require(
-            initialSqrtPriceX96 > 0,
-            "Initial price must be greater than 0"
-        );
+        require(initialSqrtPriceX96 > 0, "Initial price must be greater than 0");
 
         console.log("Market parameters validated");
     }
@@ -216,13 +193,8 @@ contract CreateMarketScript is ScriptHelper {
         MarketFactory factory = MarketFactory(marketFactory);
 
         // Call createMarket function
-        (PoolId coreId, PoolId proxyId) = factory.createMarket(
-            underlyingAsset0,
-            underlyingAsset1,
-            corePoolFee,
-            tickSpacing,
-            initialSqrtPriceX96
-        );
+        (PoolId coreId, PoolId proxyId) =
+            factory.createMarket(underlyingAsset0, underlyingAsset1, corePoolFee, tickSpacing, initialSqrtPriceX96);
 
         corePoolId = coreId;
         proxyPoolId = proxyId;
@@ -235,14 +207,8 @@ contract CreateMarketScript is ScriptHelper {
      */
     function _logMarketDetails() internal view {
         console.log("\n=== Market Details ===");
-        console.log(
-            "Core Pool ID:",
-            string.concat("", vm.toString(PoolId.unwrap(corePoolId)))
-        );
-        console.log(
-            "Proxy Pool ID:",
-            string.concat("0x", vm.toString(PoolId.unwrap(proxyPoolId)))
-        );
+        console.log("Core Pool ID:", string.concat("", vm.toString(PoolId.unwrap(corePoolId))));
+        console.log("Proxy Pool ID:", string.concat("0x", vm.toString(PoolId.unwrap(proxyPoolId))));
 
         // Get LCC tokens
         MarketFactory factory = MarketFactory(marketFactory);
@@ -255,10 +221,7 @@ contract CreateMarketScript is ScriptHelper {
         // Verify pool relationships
         PoolId storedProxyId = factory.coreToProxy(corePoolId);
 
-        require(
-            PoolId.unwrap(storedProxyId) == PoolId.unwrap(proxyPoolId),
-            "Core to proxy mapping mismatch"
-        );
+        require(PoolId.unwrap(storedProxyId) == PoolId.unwrap(proxyPoolId), "Core to proxy mapping mismatch");
 
         console.log("Pool relationships verified");
     }
@@ -278,39 +241,15 @@ contract CreateMarketScript is ScriptHelper {
             vm.toString(corePoolFee)
         );
 
-        writeString(
-            string.concat(marketId, "_corePoolId"),
-            vm.toString(PoolId.unwrap(corePoolId))
-        );
-        writeString(
-            string.concat(marketId, "_proxyPoolId"),
-            vm.toString(PoolId.unwrap(proxyPoolId))
-        );
-        writeString(
-            string.concat(marketId, "_underlyingAsset0"),
-            vm.toString(Currency.unwrap(underlyingCurrency0))
-        );
-        writeString(
-            string.concat(marketId, "_underlyingAsset1"),
-            vm.toString(Currency.unwrap(underlyingCurrency1))
-        );
-        writeString(
-            string.concat(marketId, "_corePoolFee"),
-            vm.toString(corePoolFee)
-        );
-        writeString(
-            string.concat(marketId, "_tickSpacing"),
-            vm.toString(tickSpacing)
-        );
-        writeString(
-            string.concat(marketId, "_initialSqrtPriceX96"),
-            vm.toString(initialSqrtPriceX96)
-        );
+        writeString(string.concat(marketId, "_corePoolId"), vm.toString(PoolId.unwrap(corePoolId)));
+        writeString(string.concat(marketId, "_proxyPoolId"), vm.toString(PoolId.unwrap(proxyPoolId)));
+        writeString(string.concat(marketId, "_underlyingAsset0"), vm.toString(Currency.unwrap(underlyingCurrency0)));
+        writeString(string.concat(marketId, "_underlyingAsset1"), vm.toString(Currency.unwrap(underlyingCurrency1)));
+        writeString(string.concat(marketId, "_corePoolFee"), vm.toString(corePoolFee));
+        writeString(string.concat(marketId, "_tickSpacing"), vm.toString(tickSpacing));
+        writeString(string.concat(marketId, "_initialSqrtPriceX96"), vm.toString(initialSqrtPriceX96));
 
-        console.log(
-            "Market details written to deployments/%s_deployments.json",
-            string.concat(networkName, "_markets")
-        );
+        console.log("Market details written to deployments/%s_deployments.json", string.concat(networkName, "_markets"));
     }
 
     /**
@@ -325,20 +264,13 @@ contract CreateMarketScript is ScriptHelper {
         // Verify pool relationships
         PoolId storedProxyId = factory.coreToProxy(corePoolId);
 
-        require(
-            PoolId.unwrap(storedProxyId) == PoolId.unwrap(proxyPoolId),
-            "Core to proxy mapping mismatch"
-        );
+        require(PoolId.unwrap(storedProxyId) == PoolId.unwrap(proxyPoolId), "Core to proxy mapping mismatch");
 
         console.log("Pool relationships verified");
 
         // Verify LCC tokens exist
-        address lccToken0 = factory.getLCC(
-            Currency.unwrap(underlyingCurrency0)
-        );
-        address lccToken1 = factory.getLCC(
-            Currency.unwrap(underlyingCurrency1)
-        );
+        address lccToken0 = factory.getLCC(Currency.unwrap(underlyingCurrency0));
+        address lccToken1 = factory.getLCC(Currency.unwrap(underlyingCurrency1));
 
         require(lccToken0 != address(0), "LCC token 0 not found");
         require(lccToken1 != address(0), "LCC token 1 not found");
@@ -347,13 +279,11 @@ contract CreateMarketScript is ScriptHelper {
 
         // Verify underlying assets
         require(
-            factory.getUnderlyingAsset(lccToken0) ==
-                Currency.unwrap(underlyingCurrency0),
+            factory.getUnderlyingAsset(lccToken0) == Currency.unwrap(underlyingCurrency0),
             "LCC token 0 underlying mismatch"
         );
         require(
-            factory.getUnderlyingAsset(lccToken1) ==
-                Currency.unwrap(underlyingCurrency1),
+            factory.getUnderlyingAsset(lccToken1) == Currency.unwrap(underlyingCurrency1),
             "LCC token 1 underlying mismatch"
         );
 
@@ -394,11 +324,8 @@ contract CreateMarketScript is ScriptHelper {
         console.log("Tick Spacing:", tickSpacing);
         console.log("Initial Sqrt Price X96:", initialSqrtPriceX96);
 
-        (Currency currency0, Currency currency1) = CurrencySortHelper
-            .sortAddresses(
-                address(underlyingAsset0),
-                address(underlyingAsset1)
-            );
+        (Currency currency0, Currency currency1) =
+            CurrencySortHelper.sortAddresses(address(underlyingAsset0), address(underlyingAsset1));
         underlyingCurrency0 = currency0;
         underlyingCurrency1 = currency1;
 

@@ -50,9 +50,7 @@ interface IMarketFactory {
      * @param lccToken The LCC token address
      * @return The underlying asset address
      */
-    function getUnderlyingAsset(
-        address lccToken
-    ) external view returns (address);
+    function getUnderlyingAsset(address lccToken) external view returns (address);
 
     /**
      * @notice Gets the proxy pool ID for a given core pool ID

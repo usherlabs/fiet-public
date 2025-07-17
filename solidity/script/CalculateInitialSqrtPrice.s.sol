@@ -27,8 +27,7 @@ contract CalculateInitialSqrtPrice is Script {
 
         // Validate it's within bounds
         require(
-            sqrtPriceX96 >= TickMath.MIN_SQRT_PRICE &&
-                sqrtPriceX96 <= TickMath.MAX_SQRT_PRICE,
+            sqrtPriceX96 >= TickMath.MIN_SQRT_PRICE && sqrtPriceX96 <= TickMath.MAX_SQRT_PRICE,
             "Calculated price out of bounds"
         );
 

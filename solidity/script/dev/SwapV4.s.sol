@@ -63,18 +63,13 @@ contract SwapV4 is ScriptHelper {
         console.log("USDT Token loaded");
 
         // Core pool tokens
-        lccUSDCToken = LiquidityCommitmentCertificate(
-            IMarketFactory(marketFactory).getLCC(usdcToken)
-        );
-        lccUSDTToken = LiquidityCommitmentCertificate(
-            IMarketFactory(marketFactory).getLCC(usdtToken)
-        );
+        lccUSDCToken = LiquidityCommitmentCertificate(IMarketFactory(marketFactory).getLCC(usdcToken));
+        lccUSDTToken = LiquidityCommitmentCertificate(IMarketFactory(marketFactory).getLCC(usdtToken));
 
         uint256 userPrivateKey = uint256(vm.envBytes32("LP_PRIVATE_KEY"));
         address userAddress = vm.addr(userPrivateKey);
 
-        (Currency currencyA, Currency currencyB) = CurrencySortHelper
-            .sortAddresses(usdcToken, usdtToken);
+        (Currency currencyA, Currency currencyB) = CurrencySortHelper.sortAddresses(usdcToken, usdtToken);
         PoolKey memory poolKey = PoolKey({
             currency0: currencyA,
             currency1: currencyB,
@@ -86,9 +81,7 @@ contract SwapV4 is ScriptHelper {
         uint256 balanceBeforeCurrency1;
         uint256 balanceBeforeCurrency0;
 
-        try
-            IERC20(Currency.unwrap(poolKey.currency1)).balanceOf(userAddress)
-        returns (uint256 balance) {
+        try IERC20(Currency.unwrap(poolKey.currency1)).balanceOf(userAddress) returns (uint256 balance) {
             balanceBeforeCurrency1 = balance;
             console.log("Currency1 balance checked");
         } catch {
@@ -96,9 +89,7 @@ contract SwapV4 is ScriptHelper {
             balanceBeforeCurrency1 = 0;
         }
 
-        try
-            IERC20(Currency.unwrap(poolKey.currency0)).balanceOf(userAddress)
-        returns (uint256 balance) {
+        try IERC20(Currency.unwrap(poolKey.currency0)).balanceOf(userAddress) returns (uint256 balance) {
             balanceBeforeCurrency0 = balance;
             console.log("Currency0 balance checked");
         } catch {
@@ -154,9 +145,7 @@ contract SwapV4 is ScriptHelper {
             console.log("Exact Input Token 1 -> Token 0 Swap executed");
         }
         if (swapType == 3 || swapType == 5) {
-            console.log(
-                "Executing Exact Output swap for Token 0 -> Token 1..."
-            );
+            console.log("Executing Exact Output swap for Token 0 -> Token 1...");
 
             swapExactOutputSingle(
                 IV4Router.ExactOutputSingleParams({
@@ -171,9 +160,7 @@ contract SwapV4 is ScriptHelper {
             console.log("Exact Output Token 0 -> Token 1 Swap executed");
         }
         if (swapType == 4 || swapType == 5) {
-            console.log(
-                "Executing Exact Output swap for Token 1 -> Token 0..."
-            );
+            console.log("Executing Exact Output swap for Token 1 -> Token 0...");
 
             swapExactOutputSingle(
                 IV4Router.ExactOutputSingleParams({
@@ -192,24 +179,18 @@ contract SwapV4 is ScriptHelper {
             "Token 0 - ",
             IERC20Metadata(Currency.unwrap(poolKey.currency0)).name(),
             ": ",
-            IERC20(Currency.unwrap(poolKey.currency0)).balanceOf(userAddress) /
-                1e18
+            IERC20(Currency.unwrap(poolKey.currency0)).balanceOf(userAddress) / 1e18
         );
         console.log(
             "Token 1 - ",
             IERC20Metadata(Currency.unwrap(poolKey.currency1)).name(),
             ": ",
-            IERC20(Currency.unwrap(poolKey.currency1)).balanceOf(userAddress) /
-                1e18
+            IERC20(Currency.unwrap(poolKey.currency1)).balanceOf(userAddress) / 1e18
         );
 
         vm.stopBroadcast();
-        uint256 balanceAfterCurrency1 = IERC20(
-            Currency.unwrap(poolKey.currency1)
-        ).balanceOf(userAddress);
-        uint256 balanceAfterCurrency0 = IERC20(
-            Currency.unwrap(poolKey.currency0)
-        ).balanceOf(userAddress);
+        uint256 balanceAfterCurrency1 = IERC20(Currency.unwrap(poolKey.currency1)).balanceOf(userAddress);
+        uint256 balanceAfterCurrency0 = IERC20(Currency.unwrap(poolKey.currency0)).balanceOf(userAddress);
         console.log(
             "user: Currency 0 balance Before: ",
             balanceBeforeCurrency0 / 1e18,
@@ -230,17 +211,12 @@ contract SwapV4 is ScriptHelper {
         permit2.approve(token, address(router), type(uint160).max, deadline);
     }
 
-    function swapExactInputSingle(
-        IV4Router.ExactInputSingleParams memory params
-    ) public {
+    function swapExactInputSingle(IV4Router.ExactInputSingleParams memory params) public {
         bytes memory commands = abi.encodePacked(uint8(Commands.V4_SWAP));
 
         // Encode V4Router actions
-        bytes memory actions = abi.encodePacked(
-            uint8(Actions.SWAP_EXACT_IN_SINGLE),
-            uint8(Actions.SETTLE_ALL),
-            uint8(Actions.TAKE_ALL)
-        );
+        bytes memory actions =
+            abi.encodePacked(uint8(Actions.SWAP_EXACT_IN_SINGLE), uint8(Actions.SETTLE_ALL), uint8(Actions.TAKE_ALL));
 
         bytes[] memory rParams = new bytes[](3);
 
@@ -249,27 +225,15 @@ contract SwapV4 is ScriptHelper {
 
         if (params.zeroForOne) {
             // Second parameter: settle all for input
-            rParams[1] = abi.encode(
-                params.poolKey.currency0,
-                type(uint256).max
-            );
+            rParams[1] = abi.encode(params.poolKey.currency0, type(uint256).max);
             // Third parameter: take all for output with minAmountOut
-            rParams[2] = abi.encode(
-                params.poolKey.currency1,
-                params.amountOutMinimum
-            );
+            rParams[2] = abi.encode(params.poolKey.currency1, params.amountOutMinimum);
         } else {
             // Second parameter: settle all for input
-            rParams[1] = abi.encode(
-                params.poolKey.currency1,
-                type(uint256).max
-            );
+            rParams[1] = abi.encode(params.poolKey.currency1, type(uint256).max);
 
             // Third parameter: take all for output with minAmountOut
-            rParams[2] = abi.encode(
-                params.poolKey.currency0,
-                params.amountOutMinimum
-            );
+            rParams[2] = abi.encode(params.poolKey.currency0, params.amountOutMinimum);
         }
 
         bytes[] memory inputs = new bytes[](1);
@@ -282,17 +246,12 @@ contract SwapV4 is ScriptHelper {
         router.execute(commands, inputs, deadline);
     }
 
-    function swapExactOutputSingle(
-        IV4Router.ExactOutputSingleParams memory params
-    ) public {
+    function swapExactOutputSingle(IV4Router.ExactOutputSingleParams memory params) public {
         bytes memory commands = abi.encodePacked(uint8(Commands.V4_SWAP));
 
         // Encode V4Router actions
-        bytes memory actions = abi.encodePacked(
-            uint8(Actions.SWAP_EXACT_OUT_SINGLE),
-            uint8(Actions.SETTLE_ALL),
-            uint8(Actions.TAKE_ALL)
-        );
+        bytes memory actions =
+            abi.encodePacked(uint8(Actions.SWAP_EXACT_OUT_SINGLE), uint8(Actions.SETTLE_ALL), uint8(Actions.TAKE_ALL));
 
         bytes[] memory rParams = new bytes[](3);
 
@@ -302,18 +261,12 @@ contract SwapV4 is ScriptHelper {
         if (params.zeroForOne) {
             // zeroForOne means Token 0 -> Token 1.
             // Therefore, here we're specifying Token 1 that we want OUT.
-            rParams[1] = abi.encode(
-                params.poolKey.currency0,
-                params.amountInMaximum
-            );
+            rParams[1] = abi.encode(params.poolKey.currency0, params.amountInMaximum);
             rParams[2] = abi.encode(params.poolKey.currency1, params.amountOut);
         } else {
             // zeroForOne = false means Token 1 -> Token 0.
             // We're specifying Token 0 that we want OUT.
-            rParams[1] = abi.encode(
-                params.poolKey.currency1,
-                params.amountInMaximum
-            );
+            rParams[1] = abi.encode(params.poolKey.currency1, params.amountInMaximum);
             rParams[2] = abi.encode(params.poolKey.currency0, params.amountOut);
         }
 
