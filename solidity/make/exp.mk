@@ -83,3 +83,45 @@ add-liquidity-mainnet:
 		TICK_SPACING=60 \
 		AMOUNT_1_DESIRED=10000000
 
+
+# Eth Sepolia Testnet Experiments
+
+WETH_ETHSEPOLIA=0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9
+USDC_ETHSEPOLIA=0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238
+SQRT_PRICE_ETHSEPOLIA=4537000000000000000000000  # Adjust as needed
+
+wrap-eth-ethsepolia:
+	cast send $(WETH_ETHSEPOLIA) "deposit()" --value 0.01ether --rpc-url $(ETH_SEPOLIA_RPC) --private-key $(PRIVATE_KEY)
+
+create-market-ethsepolia:
+	forge script solidity/script/CreateMarket.s.sol:CreateMarketScript \
+		--rpc-url $(ETH_SEPOLIA_RPC) \
+		--broadcast \
+		--private-key $(PRIVATE_KEY) \
+		-vvvv \
+		--ffi \
+		--sig "run()" \
+		--with-gas-price 2000000000 \
+		NETWORK=ethsepolia \
+		UNDERLYING_ASSET_0=$(WETH_ETHSEPOLIA) \
+		UNDERLYING_ASSET_1=$(USDC_ETHSEPOLIA) \
+		CORE_POOL_FEE=0 \
+		TICK_SPACING=60 \
+		INITIAL_SQRT_PRICE_X96=$(SQRT_PRICE_ETHSEPOLIA)
+
+add-liquidity-ethsepolia:
+	forge script solidity/script/AddLiquidity.s.sol:AddLiquidityScript \
+		--rpc-url $(ETH_SEPOLIA_RPC) \
+		--broadcast \
+		--private-key $(PRIVATE_KEY) \
+		-vvvv \
+		--ffi \
+		--sig "run()" \
+		--with-gas-price 2000000000 \
+		NETWORK=ethsepolia \
+		UNDERLYING_ASSET_0=$(USDC_ETHSEPOLIA) \
+		UNDERLYING_ASSET_1=$(WETH_ETHSEPOLIA) \
+		CORE_POOL_FEE=0 \
+		TICK_SPACING=60 \
+		AMOUNT_0_DESIRED=10000000
+

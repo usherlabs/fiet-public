@@ -18,6 +18,7 @@ import {ProxyHook} from "../src/ProxyHook.sol";
 import {CurrencySortHelper} from "./libraries/CurrencySortHelper.sol";
 import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
 import {ArbitrumConstants} from "./constants/Arbitrum.sol";
+import {EthConstants} from "./constants/EthSepolia.sol";
 
 contract RemoveLiquidityScript is ScriptHelper {
     using StateLibrary for IPoolManager;
@@ -60,6 +61,9 @@ contract RemoveLiquidityScript is ScriptHelper {
         } else if (keccak256(bytes(networkName)) == keccak256(bytes("arbitrum"))) {
             poolManagerAddr = ArbitrumConstants.POOL_MANAGER;
             positionManagerAddr = ArbitrumConstants.POSITION_MANAGER;
+        } else if (keccak256(bytes(networkName)) == keccak256(bytes("ethsepolia"))) {
+            poolManagerAddr = EthConstants.POOL_MANAGER;
+            positionManagerAddr = EthConstants.POSITION_MANAGER;
         } else {
             revert("Unsupported network");
         }
@@ -76,6 +80,8 @@ contract RemoveLiquidityScript is ScriptHelper {
         } catch {
             if (isSepolia) {
                 usdcToken = readAddress("usdcToken");
+            } else if (networkName == "ethsepolia") {
+                usdcToken = EthConstants.USDC_ADDRESS;
             } else {
                 revert("Please specify UNDERLYING_ASSET_0 via environment variable");
             }
@@ -86,6 +92,8 @@ contract RemoveLiquidityScript is ScriptHelper {
         } catch {
             if (isSepolia) {
                 usdtToken = readAddress("usdtToken");
+            } else if (networkName == "ethsepolia") {
+                usdtToken = EthConstants.WETH_ADDRESS;
             } else {
                 revert("Please specify UNDERLYING_ASSET_1 via environment variable");
             }

@@ -15,6 +15,7 @@ import {ScriptHelper} from "./libraries/ScriptHelper.s.sol";
 import {SepoliaConstants} from "./constants/ArbitrumSepolia.sol";
 import {ArbitrumConstants} from "./constants/Arbitrum.sol";
 import {HookFlags} from "./constants/HookFlags.sol";
+import {EthConstants} from "./constants/EthSepolia.sol";
 
 /**
  * @title CompleteDeployScript
@@ -46,10 +47,12 @@ contract CompleteDeployScript is ScriptHelper {
         if (keccak256(bytes(networkName)) == keccak256(bytes("sepolia"))) {
             poolManagerAddress = SepoliaConstants.POOL_MANAGER;
             create2Deployer = SepoliaConstants.DEPLOYER_CREATE2;
-        }
-        if (keccak256(bytes(networkName)) == keccak256(bytes("arbitrum"))) {
+        } else if (keccak256(bytes(networkName)) == keccak256(bytes("arbitrum"))) {
             poolManagerAddress = ArbitrumConstants.POOL_MANAGER;
             create2Deployer = ArbitrumConstants.DEPLOYER_CREATE2;
+        } else if (keccak256(bytes(networkName)) == keccak256(bytes("ethsepolia"))) {
+            poolManagerAddress = EthConstants.POOL_MANAGER;
+            create2Deployer = EthConstants.DEPLOYER_CREATE2;
         }
 
         console.log("Starting deployment of CoreHook, ProxyHook, and MarketFactory on %s...", networkName);

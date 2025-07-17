@@ -20,6 +20,7 @@ import {ArbitrumConstants} from "./constants/Arbitrum.sol";
 import {ScriptHelper} from "./libraries/ScriptHelper.s.sol";
 import {CurrencySortHelper} from "./libraries/CurrencySortHelper.sol";
 import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
+import {EthConstants} from "./constants/EthSepolia.sol";
 
 contract SwapV4 is ScriptHelper {
     using StateLibrary for IPoolManager;
@@ -51,6 +52,10 @@ contract SwapV4 is ScriptHelper {
             universalRouterAddr = ArbitrumConstants.UNIVERSAL_ROUTER;
             poolManagerAddr = ArbitrumConstants.POOL_MANAGER;
             permit2Addr = ArbitrumConstants.PERMIT2;
+        } else if (keccak256(bytes(networkName)) == keccak256(bytes("ethsepolia"))) {
+            universalRouterAddr = EthConstants.UNIVERSAL_ROUTER;
+            poolManagerAddr = EthConstants.POOL_MANAGER;
+            permit2Addr = EthConstants.PERMIT2;
         } else {
             revert("Unsupported network");
         }
