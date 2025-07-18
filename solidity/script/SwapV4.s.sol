@@ -163,6 +163,10 @@ contract SwapV4 is ScriptHelper {
         address userAddress = vm.addr(userPrivateKey);
 
         (Currency currencyA, Currency currencyB) = CurrencySortHelper.sortAddresses(token0, token1);
+        console.log("Proxy Currency 0 Address: ", Currency.unwrap(currencyA));
+        console.log("Proxy Currency 0 Name: ", IERC20Metadata(Currency.unwrap(currencyA)).name());
+        console.log("Proxy Currency 1 Address: ", Currency.unwrap(currencyB));
+        console.log("Proxy Currency 1 Name: ", IERC20Metadata(Currency.unwrap(currencyB)).name());
         PoolKey memory poolKey =
             PoolKey({currency0: currencyA, currency1: currencyB, fee: fee, tickSpacing: tickSpacing, hooks: hook});
         console.log("Checking balances...");
@@ -371,7 +375,7 @@ contract SwapV4 is ScriptHelper {
         inputs[0] = abi.encode(actions, rParams);
 
         // Execute the swap
-        uint256 deadline = block.timestamp + 20;
+        uint256 deadline = block.timestamp + 300;
         router.execute(commands, inputs, deadline);
 
         // Log after
@@ -443,7 +447,7 @@ contract SwapV4 is ScriptHelper {
         inputs[0] = abi.encode(actions, rParams);
 
         // Execute the swap
-        uint256 deadline = block.timestamp + 20;
+        uint256 deadline = block.timestamp + 300;
         router.execute(commands, inputs, deadline);
 
         // Log after
