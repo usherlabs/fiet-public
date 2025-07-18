@@ -11,14 +11,13 @@ optimizer = true
 via_ir = true
 ffi = true
 
-fs_permissions = [
-    { access = "read-write", path = "./deployments" },
-]
+fs_permissions = [{ access = "read-write", path = "./deployments" }]
 
 [rpc_endpoints]
 local = "${ANVIL_FORK_URL}"
 sepolia = "${ARB_SEPOLIA_RPC_URL}"
 arbitrum = "${ARB_MAINNET_RPC_URL}"
+ethsepolia = "${ETH_SEPOLIA_RPC_URL}"
 
 # For some reason etherscan api is required for local anvil fork.
 [etherscan]
