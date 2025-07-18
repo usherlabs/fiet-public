@@ -138,7 +138,7 @@ add-liquidity-sepolia: ## Add liquidity to WETH/USDC market on Arbitrum Sepolia 
 	UNDERLYING_ASSET_1=$(USDC_SEPOLIA) \
 	CORE_POOL_FEE=0 \
 	TICK_SPACING=60 \
-	AMOUNT_0_DESIRED=$(WETH_AMOUNT) \
+	WETH_AMOUNT=$(WETH_AMOUNT) \
 	forge script script/AddLiquidity.s.sol:AddLiquidityScript \
 		--rpc-url $(ARB_SEPOLIA_RPC_URL) \
 		-vvvv \
@@ -185,7 +185,7 @@ create-market-mainnet: ## Create ARB/USDC market on Arbitrum mainnet
 		--ffi \
 		--sig "run()" \
 		--with-gas-price 2000000000 \
-		$(ARGS) 
+		$(ARGS)
 
 add-liquidity-mainnet: ## Add liquidity to WETH/USDC market on Arbitrum mainnet
 	NETWORK=arbitrum \
@@ -193,7 +193,7 @@ add-liquidity-mainnet: ## Add liquidity to WETH/USDC market on Arbitrum mainnet
 	UNDERLYING_ASSET_1=$(USDC_MAINNET) \
 	CORE_POOL_FEE=100 \
 	TICK_SPACING=60 \
-	AMOUNT_0_DESIRED=$(WETH_AMOUNT) \
+	WETH_AMOUNT=$(WETH_AMOUNT) \
 	forge script script/AddLiquidity.s.sol:AddLiquidityScript \
 		--rpc-url $(ARB_MAINNET_RPC_URL) \
 		-vvvv \
@@ -233,7 +233,7 @@ add-liquidity-ethsepolia: ## Add liquidity to WETH/USDC market on Ethereum Sepol
 	UNDERLYING_ASSET_1=$(USDC_ETHSEPOLIA) \
 	CORE_POOL_FEE=100 \
 	TICK_SPACING=2 \
-	AMOUNT_0_DESIRED=$(USDC_AMOUNT) \
+	USDC_AMOUNT=$(USDC_AMOUNT) \
 	forge script script/AddLiquidity.s.sol:AddLiquidityScript \
 		--rpc-url $(ETH_SEPOLIA_RPC_URL) \
 		-vvvv \
