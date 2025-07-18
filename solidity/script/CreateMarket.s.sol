@@ -62,12 +62,6 @@ contract CreateMarketScript is ScriptHelper {
         // Load deployment addresses
         _loadDeploymentAddresses();
 
-        // Set market parameters
-        _setMarketParameters();
-
-        // Validate parameters
-        _validateParameters();
-
         console.log("\n=== Market Creation Parameters ===");
         console.log("Market Factory:", marketFactory);
         console.log("Underlying Asset 0:", underlyingAsset0);
@@ -77,6 +71,12 @@ contract CreateMarketScript is ScriptHelper {
         console.log("Initial Sqrt Price X96:", initialSqrtPriceX96);
 
         vm.startBroadcast(deployerPrivateKey);
+
+        // Set market parameters
+        _setMarketParameters();
+
+        // Validate parameters
+        _validateParameters();
 
         // Create the market
         console.log("\n=== Creating Market ===");

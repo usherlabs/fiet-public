@@ -27,8 +27,8 @@ else
 	$(error Invalid NETWORK value: $(NETWORK). Must be either "sepolia" or "arbitrum")
 endif
 
-VERIFY_FLAGS=$(if $(filter $(MODE),LOCAL),,--verify)
-ETHERSCAN_KEY=${ETHERSCAN_API_KEY}
+# VERIFY_FLAGS=$(if $(filter $(MODE),LOCAL),,--verify)
+VERIFY_FLAGS="" # TODO: Solve etherscan issue.
 
 FORGE=forge
 SCRIPT_DIR=script
