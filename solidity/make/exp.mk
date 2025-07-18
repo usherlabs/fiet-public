@@ -115,7 +115,7 @@ SWAP_AMOUNT=1000000 # 1 USDC * 10^6
 # ? (LP_)PRIVATE_KEY removed from the commands. Load via .env file.
 
 wrap-eth-sepolia: ## Wrap ETH to WETH on Arbitrum Sepolia testnet
-	cast send $(WETH_SEPOLIA) "deposit()" --value $(WETH_AMOUNT)ether --rpc-url $(ARB_SEPOLIA_RPC_URL)
+	cast send $(WETH_SEPOLIA) "deposit()" --value $(WETH_AMOUNT) --rpc-url $(ARB_SEPOLIA_RPC_URL) --private-key $(PRIVATE_KEY)
 
 create-market-sepolia: ## Create WETH/USDC market on Arbitrum Sepolia testnet
 	NETWORK=sepolia \
@@ -165,17 +165,18 @@ swap-sepolia: ## Execute swap on Arbitrum Sepolia testnet
 # Arbitrum Mainnet Experiments
 
 WETH_MAINNET=0x82aF49447D8a07e3bd95BD0d56f35241523fBab1
+ARB_MAINNET=
 USDC_MAINNET=0xaf88d065e77c8cC2239327C5EDb3A432268e5831
 SQRT_PRICE_MAINNET=4537000000000000000000000
 
 wrap-eth-mainnet: ## Wrap ETH to WETH on Arbitrum mainnet
-	cast send $(WETH_MAINNET) "deposit()" --value $(WETH_AMOUNT)ether --rpc-url $(ARB_MAINNET_RPC_URL)
+	cast send $(WETH_MAINNET) "deposit()" --value $(WETH_AMOUNT) --rpc-url $(ARB_MAINNET_RPC_URL) --private-key $(PRIVATE_KEY)
 
-create-market-mainnet: ## Create WETH/USDC market on Arbitrum mainnet
+create-market-mainnet: ## Create ARB/USDC market on Arbitrum mainnet
 	NETWORK=arbitrum \
-	UNDERLYING_ASSET_0=$(WETH_MAINNET) \
+	UNDERLYING_ASSET_0=$(ARB_MAINNET) \
 	UNDERLYING_ASSET_1=$(USDC_MAINNET) \
-	CORE_POOL_FEE=0 \
+	CORE_POOL_FEE=100 \
 	TICK_SPACING=60 \
 	INITIAL_SQRT_PRICE_X96=$(SQRT_PRICE_MAINNET) \
 	forge script script/CreateMarket.s.sol:CreateMarketScript \
@@ -188,11 +189,11 @@ create-market-mainnet: ## Create WETH/USDC market on Arbitrum mainnet
 
 add-liquidity-mainnet: ## Add liquidity to WETH/USDC market on Arbitrum mainnet
 	NETWORK=arbitrum \
-	UNDERLYING_ASSET_0=$(WETH_MAINNET) \
+	UNDERLYING_ASSET_0=$(ARB_MAINNET) \
 	UNDERLYING_ASSET_1=$(USDC_MAINNET) \
-	CORE_POOL_FEE=0 \
+	CORE_POOL_FEE=100 \
 	TICK_SPACING=60 \
-	AMOUNT_1_DESIRED=$(USDC_AMOUNT) \
+	AMOUNT_0_DESIRED=$(WETH_AMOUNT) \
 	forge script script/AddLiquidity.s.sol:AddLiquidityScript \
 		--rpc-url $(ARB_MAINNET_RPC_URL) \
 		-vvvv \
@@ -206,18 +207,18 @@ add-liquidity-mainnet: ## Add liquidity to WETH/USDC market on Arbitrum mainnet
 
 WETH_ETHSEPOLIA=0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9
 USDC_ETHSEPOLIA=0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238
-SQRT_PRICE_ETHSEPOLIA=4537000000000000000000000  # Adjust as needed
+SQRT_PRICE_ETHSEPOLIA=4753689750855860255612637020160  # Adjust as needed
 
 wrap-eth-ethsepolia: ## Wrap ETH to WETH on Ethereum Sepolia testnet
-	cast send $(WETH_ETHSEPOLIA) "deposit()" --value $(WETH_AMOUNT)ether --rpc-url $(ETH_SEPOLIA_RPC_URL)
+	cast send $(WETH_ETHSEPOLIA) "deposit()" --value $(WETH_AMOUNT) --rpc-url $(ETH_SEPOLIA_RPC_URL) --private-key $(PRIVATE_KEY)
 
 create-market-ethsepolia: ## Create WETH/USDC market on Ethereum Sepolia testnet
 	NETWORK=ethsepolia \
 	UNDERLYING_ASSET_0=$(WETH_ETHSEPOLIA) \
 	UNDERLYING_ASSET_1=$(USDC_ETHSEPOLIA) \
-	CORE_POOL_FEE=0 \
-	TICK_SPACING=60 \
-	INITIAL_SQRT_PRICE_X96=$(SQRT_PRICE_ETHSEPOLIA)
+	CORE_POOL_FEE=100 \
+	TICK_SPACING=2 \
+	INITIAL_SQRT_PRICE_X96=$(SQRT_PRICE_ETHSEPOLIA) \
 	forge script script/CreateMarket.s.sol:CreateMarketScript \
 		--rpc-url $(ETH_SEPOLIA_RPC_URL) \
 		-vvvv \
@@ -228,10 +229,10 @@ create-market-ethsepolia: ## Create WETH/USDC market on Ethereum Sepolia testnet
 
 add-liquidity-ethsepolia: ## Add liquidity to WETH/USDC market on Ethereum Sepolia testnet
 	NETWORK=ethsepolia \
-	UNDERLYING_ASSET_0=$(USDC_ETHSEPOLIA) \
-	UNDERLYING_ASSET_1=$(WETH_ETHSEPOLIA) \
-	CORE_POOL_FEE=0 \
-	TICK_SPACING=60 \
+	UNDERLYING_ASSET_0=$(WETH_ETHSEPOLIA) \
+	UNDERLYING_ASSET_1=$(USDC_ETHSEPOLIA) \
+	CORE_POOL_FEE=100 \
+	TICK_SPACING=2 \
 	AMOUNT_0_DESIRED=$(USDC_AMOUNT) \
 	forge script script/AddLiquidity.s.sol:AddLiquidityScript \
 		--rpc-url $(ETH_SEPOLIA_RPC_URL) \

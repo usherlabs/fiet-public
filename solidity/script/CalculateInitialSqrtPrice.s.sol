@@ -13,17 +13,16 @@ contract CalculateInitialSqrtPrice is Script {
         require(bid > 0 && ask > 0 && ask >= bid, "Invalid bid/ask values");
 
         // Compute geometric mean with reduced precision to avoid overflow
-        uint256 bidReduced = bid / 1_000_000_000;
-        uint256 askReduced = ask / 1_000_000_000;
-        uint256 product = bidReduced * askReduced;
+        // No reduction, assume bid/ask are small
+        uint256 product = bid * ask;
         uint256 sqrtProduct = sqrt(product);
-        uint256 geometric = sqrtProduct * 1_000_000_000;
+        uint256 geometric = sqrtProduct;
 
         // Compute sqrt(geometric) which has 9 decimals
         uint256 sqrtMid = sqrt(geometric);
 
         // sqrtPriceX96 = sqrtMid * 2^96 / 10^9
-        uint256 sqrtPriceX96 = (sqrtMid * (1 << 96)) / 1_000_000_000;
+        uint256 sqrtPriceX96 = (sqrtMid * (1 << 96));
 
         // Validate it's within bounds
         require(
