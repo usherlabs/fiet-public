@@ -12,6 +12,10 @@ import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {EthSepoliaConstants} from "./constants/EthSepolia.sol";
 import {ArbitrumConstants} from "./constants/Arbitrum.sol";
+import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
+import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
+import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
+import {BitMath} from "@uniswap/v4-core/src/libraries/BitMath.sol";
 
 /**
  * @title CreateMarketScript
@@ -168,6 +172,8 @@ contract CreateMarketScript is ScriptHelper {
         try vm.envUint("INITIAL_SQRT_PRICE_X96") returns (uint256 price) {
             initialSqrtPriceX96 = uint160(price);
         } catch {
+            MarketFactory factory = MarketFactory(marketFactory);
+
             if (bytes(referencePoolIdStr).length > 0) {
                 console.log("Using reference pool %s for initial price", referencePoolIdStr);
 
@@ -177,12 +183,88 @@ contract CreateMarketScript is ScriptHelper {
                 IPoolManager manager = IPoolManager(poolManager);
 
                 (uint160 sqrtPrice,,,) = manager.getSlot0(referencePoolId);
+
+                address refToken0 = vm.envOr("REFERENCE_TOKEN_0", address(0));
+                address refToken1 = vm.envOr("REFERENCE_TOKEN_1", address(0));
+                if (refToken0 == address(0) || refToken1 == address(0)) {
+                    // Assume reference pool tokens are the underlying assets in sorted order
+                    (Currency refCurr0, Currency refCurr1) =
+                        CurrencySortHelper.sortAddresses(underlyingAsset0, underlyingAsset1);
+                    refToken0 = Currency.unwrap(refCurr0);
+                    refToken1 = Currency.unwrap(refCurr1);
+                }
+
+                (Currency coreCurr0,) = CurrencySortHelper.sortAddresses(
+                    address(factory.getLCC(underlyingAsset0)), address(factory.getLCC(underlyingAsset1))
+                );
+                address coreToken0 = Currency.unwrap(coreCurr0);
+                // address coreToken1 = Currency.unwrap(coreCurr1);
+
+                bool needsInversion =
+                    (refToken0 == underlyingAsset1) != (coreToken0 == address(factory.getLCC(underlyingAsset1)));
+
+                uint8 dec0 = IERC20Metadata(refToken0).decimals();
+                uint8 dec1 = IERC20Metadata(refToken1).decimals();
+
+                if (needsInversion) {
+                    sqrtPrice = uint160((uint256(1) << 192) / sqrtPrice);
+                    (dec0, dec1) = (dec1, dec0);
+                }
+
+                int8 decDiff = int8(dec1) - int8(dec0);
+                if (decDiff != 0) {
+                    int256 absDiff = decDiff >= 0 ? int256(decDiff) : -int256(decDiff);
+                    uint160 sqrtScale = uint160(TickMath.getSqrtPriceAtTick(int24(absDiff / 2)));
+                    if (absDiff % 2 != 0) {
+                        sqrtScale = uint160(FullMath.mulDiv(sqrtScale, TickMath.getSqrtPriceAtTick(1), 1 << 96));
+                    }
+                    if (decDiff > 0) {
+                        sqrtPrice = uint160(FullMath.mulDiv(sqrtPrice, sqrtScale, 1 << 96));
+                    } else {
+                        sqrtPrice = uint160(FullMath.mulDiv(sqrtPrice, 1 << 96, sqrtScale));
+                    }
+                }
+
                 initialSqrtPriceX96 = sqrtPrice;
 
-                console.log("Fetched initial sqrt price: %s", vm.toString(initialSqrtPriceX96));
+                console.log("Adjusted initial sqrt price: %s", vm.toString(initialSqrtPriceX96));
             } else {
-                // Default to 1:1 price ratio (sqrt(1) * 2^96)
-                initialSqrtPriceX96 = 79228162514264337593543950336;
+                bool hasAsset0Price = vm.envExists("ASSET0_PRICE");
+                bool hasAsset1Price = vm.envExists("ASSET1_PRICE");
+                if (hasAsset0Price && hasAsset1Price) {
+                    uint256 asset0Price = vm.envUint("ASSET0_PRICE");
+                    uint256 asset1Price = vm.envUint("ASSET1_PRICE");
+
+                    uint8 priceDecimals = uint8(vm.envOr("PRICE_DECIMALS", uint256(6)));
+
+                    // Scale prices to 18 decimals
+                    asset0Price = asset0Price * (10 ** (18 - priceDecimals));
+                    asset1Price = asset1Price * (10 ** (18 - priceDecimals));
+
+                    uint8 dec0 = IERC20Metadata(underlyingAsset0).decimals();
+                    uint8 dec1 = IERC20Metadata(underlyingAsset1).decimals();
+
+                    (Currency coreCurr0,) = CurrencySortHelper.sortAddresses(
+                        address(factory.getLCC(underlyingAsset0)), address(factory.getLCC(underlyingAsset1))
+                    );
+                    bool isAsset0Core0 = (underlyingAsset0 < underlyingAsset1)
+                        == (Currency.unwrap(coreCurr0) == address(factory.getLCC(underlyingAsset0)));
+
+                    uint256 price;
+                    if (isAsset0Core0) {
+                        price = FullMath.mulDiv(asset0Price, 10 ** dec1, asset1Price) * (10 ** (18 - dec0));
+                    } else {
+                        price = FullMath.mulDiv(asset1Price, 10 ** dec0, asset0Price) * (10 ** (18 - dec1));
+                    }
+
+                    uint256 sqrtPrice = _sqrt(price);
+                    initialSqrtPriceX96 = uint160(FullMath.mulDiv(sqrtPrice, 1 << 96, 10 ** 9)); // Since sqrt(price) * 10^9 for 18-decimal price
+
+                    console.log("Derived initial sqrt price: %s", vm.toString(initialSqrtPriceX96));
+                } else {
+                    // Default to 1:1 price ratio (sqrt(1) * 2^96)
+                    initialSqrtPriceX96 = 79228162514264337593543950336;
+                }
             }
         }
     }
@@ -357,5 +439,21 @@ contract CreateMarketScript is ScriptHelper {
         _logMarketDetails();
 
         console.log("\n=== Custom Market Creation Complete ===");
+    }
+
+    /**
+     * @dev Custom square root function using Babylonian method for approximation.
+     * This is a simplified version and might not be as accurate as BitMath.sqrt
+     * for very large numbers or very small numbers.
+     */
+    function _sqrt(uint256 x) internal pure returns (uint256) {
+        if (x == 0) return 0;
+        uint256 z = (x + 1) / 2;
+        uint256 y = x;
+        while (z < y) {
+            y = z;
+            z = (x / z + z) / 2;
+        }
+        return y;
     }
 }

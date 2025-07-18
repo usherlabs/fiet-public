@@ -206,18 +206,8 @@ contract AddLiquidityScript is ScriptHelper {
         console.log("Symbol for currency0 underlying:", coreToken0 == address(lcc0) ? symbol0 : symbol1);
         console.log("Symbol for currency1 underlying:", coreToken0 == address(lcc0) ? symbol1 : symbol0);
 
-        string memory envAmount0;
-        string memory envAmount1;
-        if (coreToken0 == address(lcc0)) {
-            envAmount0 = string.concat(symbol0, "_AMOUNT");
-            envAmount1 = string.concat(symbol1, "_AMOUNT");
-        } else {
-            envAmount0 = string.concat(symbol1, "_AMOUNT");
-            envAmount1 = string.concat(symbol0, "_AMOUNT");
-        }
-
-        bool hasAmount0 = vm.envExists(envAmount0);
-        bool hasAmount1 = vm.envExists(envAmount1);
+        bool hasUa0 = vm.envExists("UA_0_AMOUNT");
+        bool hasUa1 = vm.envExists("UA_1_AMOUNT");
 
         uint8 dec0 = IERC20Metadata(coreToken0).decimals();
         uint8 dec1 = IERC20Metadata(coreToken1).decimals();
@@ -227,24 +217,45 @@ contract AddLiquidityScript is ScriptHelper {
         console.log("Token1:", dec1);
         console.log(" ");
 
-        if (hasAmount0 && hasAmount1) {
-            amount0Desired = vm.envUint(envAmount0);
-            amount1Desired = vm.envUint(envAmount1);
-        } else if (!hasAmount0 && !hasAmount1) {
-            amount0Desired = DEFAULT_AMOUNT * (10 ** dec0);
-            amount1Desired = DEFAULT_AMOUNT * (10 ** dec1);
-        } else {
-            require(sqrtPriceX96 != 0, "Pool not initialized");
+        bool isUa0Currency0 = (address(lcc0) == coreToken0);
 
-            if (hasAmount0) {
-                amount0Desired = vm.envUint(envAmount0);
+        if (hasUa0 && hasUa1) {
+            uint256 ua0Amt = vm.envUint("UA_0_AMOUNT");
+            uint256 ua1Amt = vm.envUint("UA_1_AMOUNT");
+            if (isUa0Currency0) {
+                amount0Desired = ua0Amt;
+                amount1Desired = ua1Amt;
+            } else {
+                amount0Desired = ua1Amt;
+                amount1Desired = ua0Amt;
+            }
+        } else if (hasUa0) {
+            uint256 ua0Amt = vm.envUint("UA_0_AMOUNT");
+            require(sqrtPriceX96 != 0, "Pool not initialized");
+            if (isUa0Currency0) {
+                amount0Desired = ua0Amt;
                 uint256 temp = FullMath.mulDiv(amount0Desired, sqrtPriceX96, 1 << 96);
                 amount1Desired = FullMath.mulDiv(temp, sqrtPriceX96, 1 << 96);
             } else {
-                amount1Desired = vm.envUint(envAmount1);
+                amount1Desired = ua0Amt;
                 uint256 temp = FullMath.mulDiv(amount1Desired, 1 << 96, sqrtPriceX96);
                 amount0Desired = FullMath.mulDiv(temp, 1 << 96, sqrtPriceX96);
             }
+        } else if (hasUa1) {
+            uint256 ua1Amt = vm.envUint("UA_1_AMOUNT");
+            require(sqrtPriceX96 != 0, "Pool not initialized");
+            if (isUa0Currency0) {
+                amount1Desired = ua1Amt;
+                uint256 temp = FullMath.mulDiv(amount1Desired, 1 << 96, sqrtPriceX96);
+                amount0Desired = FullMath.mulDiv(temp, 1 << 96, sqrtPriceX96);
+            } else {
+                amount0Desired = ua1Amt;
+                uint256 temp = FullMath.mulDiv(amount0Desired, sqrtPriceX96, 1 << 96);
+                amount1Desired = FullMath.mulDiv(temp, sqrtPriceX96, 1 << 96);
+            }
+        } else {
+            amount0Desired = DEFAULT_AMOUNT * (10 ** dec0);
+            amount1Desired = DEFAULT_AMOUNT * (10 ** dec1);
         }
 
         console.log("Amount0Desired:", amount0Desired);

@@ -306,39 +306,3 @@ forge script script/DeployComplete.s.sol --sig "verifyDeployment()" --rpc-url <r
 4. Run tests: `forge test`
 5. Run quality checks: `make quality`
 6. Submit a pull request
-
-## Square Root Price
-
-`GetCurrencySqrtPrice` for an existing Pool (ARB/USDC):
-
-```shell
-NETWORK=arbitrum \
-POOL_ID=0x7cc39a13b977532c0273b43e99a7c72bf21004edf58732036fa0044df3e20551 \
-TOKEN_A=0x912ce59144191c1204e64559fe8253a0e49e6548 \
-TOKEN_B=0xaf88d065e77c8cc2239327c5edb3a432268e5831 \
-forge script script/view/GetCurrentSqrtPrice.s.sol --rpc-url=<rpc_url>
-
-----
-No files changed, compilation skipped
-Script ran successfully.
-
-== Logs ==
-  Current sqrtPriceX96: 54811498016940860916185
-  Current price (with 18 decimals, no decimal adjustment): 477481
-  Adjusted price (with 18 decimals): 477481000000000000
-  This represents the price of 1 whole token0 in whole token1 units, scaled by 10^18
-```
-
-`CalculateSqrtPrice` for two tokens based on a bid/ask spread.
-
-For (ARB/USDC):
-*BID and ASK are 485400 (= .4854 * 10^6 decimals as per USDC).*
-
-```shell
-QUOTE_DECIMALS=6 \
-TOKEN_A=0x912ce59144191c1204e64559fe8253a0e49e6548 \
-TOKEN_B=0xaf88d065e77c8cc2239327c5edb3a432268e5831 \
-BID=477481 \
-ASK=477481 \
-forge script script/view/CalculateSqrtPrice.s.sol --rpc-url=<rpc_url>
-```

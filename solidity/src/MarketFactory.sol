@@ -108,19 +108,24 @@ contract MarketFactory is IMarketFactory, Ownable2Step {
         address lccToken0 = _getOrCreateLCC(underlyingAsset0);
         address lccToken1 = _getOrCreateLCC(underlyingAsset1);
 
+        // Determine if orders match
+        (Currency underlyingCurr0,) = _sortCurrencies(underlyingAsset0, underlyingAsset1);
+        (Currency lccCurr0,) = _sortCurrencies(lccToken0, lccToken1);
+        bool ordersMatch =
+            (underlyingAsset0 == Currency.unwrap(underlyingCurr0)) == (lccToken0 == Currency.unwrap(lccCurr0));
+
+        uint160 proxyInitialPrice = initialSqrtPriceX96;
+        if (!ordersMatch) {
+            proxyInitialPrice = uint160((uint256(1) << 192) / initialSqrtPriceX96);
+        }
+
         // Create core pool with LCC tokens
         PoolKey memory corePoolKey =
             _createCorePool(lccToken0, lccToken1, corePoolFee, tickSpacing, initialSqrtPriceX96, coreHook);
 
         // Create proxy pool with underlying assets
-        PoolKey memory proxyPoolKey = _createProxyPool(
-            corePoolKey,
-            underlyingAsset0,
-            underlyingAsset1,
-            tickSpacing,
-            proxyHook,
-            initialSqrtPriceX96 // Pass the initial price for 1:1 ratio
-        );
+        PoolKey memory proxyPoolKey =
+            _createProxyPool(corePoolKey, underlyingAsset0, underlyingAsset1, tickSpacing, proxyHook, proxyInitialPrice);
 
         corePoolId = corePoolKey.toId();
         proxyPoolId = proxyPoolKey.toId();

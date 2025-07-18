@@ -85,6 +85,11 @@ pause-market:
 		--rpc-url $(RPC_URL) \
 		--broadcast -vvv
 
+transfer-ownership:
+	$(FORGE) script $(SCRIPT_DIR)/TransferOwnership.s.sol \
+		--rpc-url $(RPC_URL) \
+		--broadcast -vvv
+
 add-liquidity:
 	$(FORGE) script $(SCRIPT_DIR)/AddLiquidity.s.sol \
 		--rpc-url $(RPC_URL) \
