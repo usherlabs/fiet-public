@@ -115,7 +115,7 @@ SWAP_AMOUNT=1000000 # 1 USDC * 10^6
 # ? (LP_)PRIVATE_KEY removed from the commands. Load via .env file.
 
 wrap-eth-sepolia: ## Wrap ETH to WETH on Arbitrum Sepolia testnet
-	cast send $(WETH_SEPOLIA) "deposit()" --value $(WETH_AMOUNT)ether --rpc-url $(ARB_SEPOLIA_RPC_URL) --private-key $(PRIVATE_KEY)
+	cast send $(WETH_SEPOLIA) "deposit()" --value $(WETH_AMOUNT)ether --rpc-url $(ARB_SEPOLIA_RPC_URL)
 
 create-market-sepolia: ## Create WETH/USDC market on Arbitrum Sepolia testnet
 	NETWORK=sepolia \
@@ -169,7 +169,7 @@ USDC_MAINNET=0xaf88d065e77c8cC2239327C5EDb3A432268e5831
 SQRT_PRICE_MAINNET=4537000000000000000000000
 
 wrap-eth-mainnet: ## Wrap ETH to WETH on Arbitrum mainnet
-	cast send $(WETH_MAINNET) "deposit()" --value $(WETH_AMOUNT)ether --rpc-url $(ARB_MAINNET_RPC_URL) --private-key $(PRIVATE_KEY)
+	cast send $(WETH_MAINNET) "deposit()" --value $(WETH_AMOUNT)ether --rpc-url $(ARB_MAINNET_RPC_URL)
 
 create-market-mainnet: ## Create WETH/USDC market on Arbitrum mainnet
 	NETWORK=arbitrum \
@@ -209,7 +209,7 @@ USDC_ETHSEPOLIA=0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238
 SQRT_PRICE_ETHSEPOLIA=4537000000000000000000000  # Adjust as needed
 
 wrap-eth-ethsepolia: ## Wrap ETH to WETH on Ethereum Sepolia testnet
-	cast send $(WETH_ETHSEPOLIA) "deposit()" --value $(WETH_AMOUNT)ether --rpc-url $(ETH_SEPOLIA_RPC_URL) --private-key $(PRIVATE_KEY)
+	cast send $(WETH_ETHSEPOLIA) "deposit()" --value $(WETH_AMOUNT)ether --rpc-url $(ETH_SEPOLIA_RPC_URL)
 
 create-market-ethsepolia: ## Create WETH/USDC market on Ethereum Sepolia testnet
 	NETWORK=ethsepolia \
