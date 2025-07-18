@@ -68,7 +68,12 @@ deploy-tokenB:
 deploy:
 	$(FORGE) script $(SCRIPT_DIR)/DeployComplete.s.sol \
 		--rpc-url $(RPC_URL) \
-		--broadcast $(VERIFY_FLAGS) -vvv
+		--broadcast -vvv
+
+deploy-verify:
+	$(FORGE) script $(SCRIPT_DIR)/DeployComplete.s.sol \
+		--rpc-url $(RPC_URL) \
+		--verify -vvv
 
 read-deployment:
 	$(FORGE) script $(SCRIPT_DIR)/ReadDeployment.s.sol \

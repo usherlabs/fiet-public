@@ -123,9 +123,14 @@ contract MarketFactory is IMarketFactory, Ownable2Step {
         PoolKey memory corePoolKey =
             _createCorePool(lccToken0, lccToken1, corePoolFee, tickSpacing, initialSqrtPriceX96, coreHook);
 
+        // Check if proxy pool already exists
+        if (PoolId.unwrap(coreToProxy[corePoolKey.toId()]) != bytes32(0)) {
+            revert ProxyPoolAlreadyExists();
+        }
+
         // Create proxy pool with underlying assets
         PoolKey memory proxyPoolKey =
-            _createProxyPool(corePoolKey, underlyingAsset0, underlyingAsset1, tickSpacing, proxyHook, proxyInitialPrice);
+            _createProxyPool(underlyingAsset0, underlyingAsset1, tickSpacing, proxyHook, proxyInitialPrice);
 
         corePoolId = corePoolKey.toId();
         proxyPoolId = proxyPoolKey.toId();
@@ -207,7 +212,6 @@ contract MarketFactory is IMarketFactory, Ownable2Step {
 
     /**
      * @notice Creates a proxy pool with underlying assets
-     * @param corePoolKey The associated core pool key
      * @param underlyingAsset0 First underlying asset
      * @param underlyingAsset1 Second underlying asset
      * @param proxyPoolTickSpacing Tick spacing for the proxy pool
@@ -215,7 +219,6 @@ contract MarketFactory is IMarketFactory, Ownable2Step {
      * @return poolKey The created pool key
      */
     function _createProxyPool(
-        PoolKey memory corePoolKey,
         address underlyingAsset0,
         address underlyingAsset1,
         int24 proxyPoolTickSpacing,
@@ -232,11 +235,6 @@ contract MarketFactory is IMarketFactory, Ownable2Step {
             tickSpacing: proxyPoolTickSpacing,
             hooks: IHooks(proxyHookInstance)
         });
-
-        // Check if pool already exists
-        if (PoolId.unwrap(coreToProxy[corePoolKey.toId()]) != bytes32(0)) {
-            revert ProxyPoolAlreadyExists();
-        }
 
         // Initialize the pool
         _poolManager.initialize(poolKey, initialSqrtPriceX96); // Use provided initial price instead of 0
