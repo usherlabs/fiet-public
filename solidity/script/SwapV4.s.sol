@@ -115,7 +115,7 @@ contract SwapV4 is ScriptHelper {
             tickSpacing = 60;
             console.log("Tick spacing (default):", tickSpacing);
         } else {
-            string memory filePath = string.concat("./deployments/", networkName, "_markets.json");
+            string memory filePath = string.concat("./deployments/", networkName, "_markets_deployments.json");
             string memory json = vm.readFile(filePath);
 
             string memory keyToken0 = string.concat(".", corePoolId, "_underlyingAsset0");

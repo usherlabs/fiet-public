@@ -116,6 +116,7 @@ contract CreateMarketScript is ScriptHelper {
     function _setMarketParameters() internal {
         // Try to read from environment variables, otherwise use defaults
         try vm.envAddress("UNDERLYING_ASSET_0") returns (address asset0) {
+            console.log("UNDERLYING_ASSET_0:", asset0);
             underlyingAsset0 = asset0;
         } catch {
             if (keccak256(bytes(networkName)) == keccak256(bytes("sepolia"))) {
@@ -128,6 +129,7 @@ contract CreateMarketScript is ScriptHelper {
         }
 
         try vm.envAddress("UNDERLYING_ASSET_1") returns (address asset1) {
+            console.log("UNDERLYING_ASSET_1:", asset1);
             underlyingAsset1 = asset1;
         } catch {
             if (keccak256(bytes(networkName)) == keccak256(bytes("sepolia"))) {
@@ -247,18 +249,19 @@ contract CreateMarketScript is ScriptHelper {
         _setFilename(string.concat(networkName, "_markets"));
 
         // Create a unique market identifier
-        string memory marketId = string.concat(
-            vm.toString(Currency.unwrap(underlyingCurrency0)),
-            "_",
-            vm.toString(Currency.unwrap(underlyingCurrency1)),
-            "_",
-            vm.toString(corePoolFee)
-        );
+        string memory marketId = vm.toString(PoolId.unwrap(corePoolId));
+
+        // Get LCC tokens
+        MarketFactory factory = MarketFactory(marketFactory);
+        address lccTokenOfAsset0 = factory.getLCC(underlyingAsset0);
+        address lccTokenOfAsset1 = factory.getLCC(underlyingAsset1);
 
         writeString(string.concat(marketId, "_corePoolId"), vm.toString(PoolId.unwrap(corePoolId)));
         writeString(string.concat(marketId, "_proxyPoolId"), vm.toString(PoolId.unwrap(proxyPoolId)));
         writeString(string.concat(marketId, "_underlyingAsset0"), vm.toString(Currency.unwrap(underlyingCurrency0)));
         writeString(string.concat(marketId, "_underlyingAsset1"), vm.toString(Currency.unwrap(underlyingCurrency1)));
+        writeString(string.concat(marketId, "_lcc0"), vm.toString(lccTokenOfAsset0));
+        writeString(string.concat(marketId, "_lcc1"), vm.toString(lccTokenOfAsset1));
         writeString(string.concat(marketId, "_corePoolFee"), vm.toString(corePoolFee));
         writeString(string.concat(marketId, "_tickSpacing"), vm.toString(tickSpacing));
         writeString(string.concat(marketId, "_initialSqrtPriceX96"), vm.toString(initialSqrtPriceX96));

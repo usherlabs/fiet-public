@@ -66,6 +66,12 @@ contract AddLiquidityScript is ScriptHelper {
         uint256 lpPrivateKey = uint256(vm.envBytes32("LP_PRIVATE_KEY"));
         address lpAddress = vm.addr(lpPrivateKey);
 
+        bool isLocal;
+        try vm.envString("MODE") returns (string memory envMode) {
+            isLocal = keccak256(bytes(envMode)) == keccak256(bytes("LOCAL"));
+        } catch {
+            isLocal = true;
+        }
         try vm.envString("NETWORK") returns (string memory envNetworkName) {
             networkName = envNetworkName;
         } catch {
@@ -101,7 +107,7 @@ contract AddLiquidityScript is ScriptHelper {
         try vm.envAddress("UNDERLYING_ASSET_0") returns (address asset) {
             token0 = asset;
         } catch {
-            if (isSepolia) {
+            if (isSepolia && isLocal) {
                 token0 = readAddress("usdcToken");
             } else {
                 revert("Please specify UNDERLYING_ASSET_0 via environment variable");
@@ -111,7 +117,7 @@ contract AddLiquidityScript is ScriptHelper {
         try vm.envAddress("UNDERLYING_ASSET_1") returns (address asset) {
             token1 = asset;
         } catch {
-            if (isSepolia) {
+            if (isSepolia && isLocal) {
                 token1 = readAddress("usdtToken");
             } else {
                 revert("Please specify UNDERLYING_ASSET_1 via environment variable");
@@ -132,9 +138,9 @@ contract AddLiquidityScript is ScriptHelper {
         setupPoolKeys(coreHookAddr, coreFee, tickSpacingVal);
         setupAmounts();
 
-        if (isSepolia) {
+        if (isSepolia && isLocal) {
             vm.startBroadcast(deployerPrivateKey);
-            setAccounts(lpAddress);
+            setupAccountsWithMockTokens(lpAddress);
             vm.stopBroadcast();
         }
 
@@ -197,6 +203,11 @@ contract AddLiquidityScript is ScriptHelper {
         uint8 dec0 = IERC20Metadata(coreToken0).decimals();
         uint8 dec1 = IERC20Metadata(coreToken1).decimals();
 
+        console.log("Decimals:");
+        console.log("Token0:", dec0);
+        console.log("Token1:", dec1);
+        console.log(" ");
+
         // Check for environment variables
         bool hasAmount0 = vm.envExists("AMOUNT_0_DESIRED");
         bool hasAmount1 = vm.envExists("AMOUNT_1_DESIRED");
@@ -228,7 +239,7 @@ contract AddLiquidityScript is ScriptHelper {
         console.log("Amount1Desired:", amount1Desired);
     }
 
-    function setAccounts(address user) public {
+    function setupAccountsWithMockTokens(address user) public {
         IERC20(token0).transfer(user, 10000 ether);
         IERC20(token1).transfer(user, 10000 ether);
     }
