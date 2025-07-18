@@ -122,7 +122,7 @@ contract LiquidityCommitmentCertificate is ERC20 {
         // TODO: We can use this hook to determine when LCC and therefore underlying assets are settled to market.
     }
 
-    function receiveUnderlying(uint256 amount) external onlyIssuer {
+    function confirmTake(uint256 amount) external onlyIssuer {
         uaSupply += amount;
     }
 
