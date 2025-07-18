@@ -146,6 +146,10 @@ contract MarketFactory is IMarketFactory, Ownable2Step {
         );
     }
 
+    function getOrCreateLCC(address underlyingAsset) external onlyOwner returns (address lccToken) {
+        return _getOrCreateLCC(underlyingAsset);
+    }
+
     /**
      * @notice Gets or creates an LCC token for the given underlying asset
      * @param underlyingAsset The underlying asset address

@@ -174,6 +174,9 @@ contract CreateMarketScript is ScriptHelper {
         } catch {
             MarketFactory factory = MarketFactory(marketFactory);
 
+            address lccToken0 = factory.getOrCreateLCC(underlyingAsset0);
+            address lccToken1 = factory.getOrCreateLCC(underlyingAsset1);
+
             if (bytes(referencePoolIdStr).length > 0) {
                 console.log("Using reference pool %s for initial price", referencePoolIdStr);
 
@@ -184,27 +187,10 @@ contract CreateMarketScript is ScriptHelper {
 
                 (uint160 sqrtPrice,,,) = manager.getSlot0(referencePoolId);
 
-                address refToken0 = vm.envOr("REFERENCE_TOKEN_0", address(0));
-                address refToken1 = vm.envOr("REFERENCE_TOKEN_1", address(0));
-                if (refToken0 == address(0) || refToken1 == address(0)) {
-                    // Assume reference pool tokens are the underlying assets in sorted order
-                    (Currency refCurr0, Currency refCurr1) =
-                        CurrencySortHelper.sortAddresses(underlyingAsset0, underlyingAsset1);
-                    refToken0 = Currency.unwrap(refCurr0);
-                    refToken1 = Currency.unwrap(refCurr1);
-                }
+                bool needsInversion = (underlyingAsset0 < underlyingAsset1) != (lccToken0 < lccToken1);
 
-                (Currency coreCurr0,) = CurrencySortHelper.sortAddresses(
-                    address(factory.getLCC(underlyingAsset0)), address(factory.getLCC(underlyingAsset1))
-                );
-                address coreToken0 = Currency.unwrap(coreCurr0);
-                // address coreToken1 = Currency.unwrap(coreCurr1);
-
-                bool needsInversion =
-                    (refToken0 == underlyingAsset1) != (coreToken0 == address(factory.getLCC(underlyingAsset1)));
-
-                uint8 dec0 = IERC20Metadata(refToken0).decimals();
-                uint8 dec1 = IERC20Metadata(refToken1).decimals();
+                uint8 dec0 = IERC20Metadata(underlyingAsset0).decimals();
+                uint8 dec1 = IERC20Metadata(underlyingAsset1).decimals();
 
                 if (needsInversion) {
                     sqrtPrice = uint160((uint256(1) << 192) / sqrtPrice);
@@ -244,11 +230,9 @@ contract CreateMarketScript is ScriptHelper {
                     uint8 dec0 = IERC20Metadata(underlyingAsset0).decimals();
                     uint8 dec1 = IERC20Metadata(underlyingAsset1).decimals();
 
-                    (Currency coreCurr0,) = CurrencySortHelper.sortAddresses(
-                        address(factory.getLCC(underlyingAsset0)), address(factory.getLCC(underlyingAsset1))
-                    );
-                    bool isAsset0Core0 = (underlyingAsset0 < underlyingAsset1)
-                        == (Currency.unwrap(coreCurr0) == address(factory.getLCC(underlyingAsset0)));
+                    (Currency coreCurr0,) = CurrencySortHelper.sortAddresses(lccToken0, lccToken1);
+                    bool isAsset0Core0 =
+                        (underlyingAsset0 < underlyingAsset1) == (Currency.unwrap(coreCurr0) == lccToken0);
 
                     uint256 price;
                     if (isAsset0Core0) {
