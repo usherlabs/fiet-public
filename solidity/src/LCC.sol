@@ -114,6 +114,7 @@ contract LiquidityCommitmentCertificate is ERC20 {
         return (amountToCancel, deficit);
     }
 
+    // Called by Issuer before settling liquidity from LCCs to the market.
     function prepareSettle(uint256 amount) external onlyIssuer {
         // Allow issuer to facilitate direct liquidity provision transfer of underlying tokens
         IERC20(underlyingAsset).approve(msg.sender, amount);
@@ -122,6 +123,7 @@ contract LiquidityCommitmentCertificate is ERC20 {
         // TODO: We can use this hook to determine when LCC and therefore underlying assets are settled to market.
     }
 
+    // Called by Issuer after taking liquidity from the market to LCC.
     function confirmTake(uint256 amount) external onlyIssuer {
         uaSupply += amount;
     }
