@@ -164,20 +164,20 @@ swap-sepolia: ## Execute swap on Arbitrum Sepolia testnet
 
 # Arbitrum Mainnet Experiments
 
-WETH_MAINNET=0x82aF49447D8a07e3bd95BD0d56f35241523fBab1
-ARB_MAINNET=
-USDC_MAINNET=0xaf88d065e77c8cC2239327C5EDb3A432268e5831
-SQRT_PRICE_MAINNET=4537000000000000000000000
+ARB_MAINNET=0x912ce59144191c1204e64559fe8253a0e49e6548
+USDT_MAINNET=0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9
+SQRT_PRICE_MAINNET=54186892196413079300539
+USDT_AMOUNT=1000000 # 1 USDT * 10^6
 
-wrap-eth-mainnet: ## Wrap ETH to WETH on Arbitrum mainnet
-	cast send $(WETH_MAINNET) "deposit()" --value $(WETH_AMOUNT) --rpc-url $(ARB_MAINNET_RPC_URL) --private-key $(PRIVATE_KEY)
+# wrap-eth-mainnet: ## Wrap ETH to WETH on Arbitrum mainnet
+# 	cast send $(WETH_MAINNET) "deposit()" --value $(WETH_AMOUNT) --rpc-url $(ARB_MAINNET_RPC_URL) --private-key $(PRIVATE_KEY)
 
-create-market-mainnet: ## Create ARB/USDC market on Arbitrum mainnet
+create-market-mainnet:
 	NETWORK=arbitrum \
 	UNDERLYING_ASSET_0=$(ARB_MAINNET) \
-	UNDERLYING_ASSET_1=$(USDC_MAINNET) \
-	CORE_POOL_FEE=100 \
-	TICK_SPACING=60 \
+	UNDERLYING_ASSET_1=$(USDT_MAINNET) \
+	CORE_POOL_FEE=500 \
+	TICK_SPACING=10 \
 	INITIAL_SQRT_PRICE_X96=$(SQRT_PRICE_MAINNET) \
 	forge script script/CreateMarket.s.sol:CreateMarketScript \
 		--rpc-url $(ARB_MAINNET_RPC_URL) \
@@ -187,13 +187,13 @@ create-market-mainnet: ## Create ARB/USDC market on Arbitrum mainnet
 		--with-gas-price 2000000000 \
 		$(ARGS)
 
-add-liquidity-mainnet: ## Add liquidity to WETH/USDC market on Arbitrum mainnet
+add-liquidity-mainnet:
 	NETWORK=arbitrum \
 	UNDERLYING_ASSET_0=$(ARB_MAINNET) \
-	UNDERLYING_ASSET_1=$(USDC_MAINNET) \
-	CORE_POOL_FEE=100 \
-	TICK_SPACING=60 \
-	WETH_AMOUNT=$(WETH_AMOUNT) \
+	UNDERLYING_ASSET_1=$(USDT_MAINNET) \
+	CORE_POOL_FEE=500 \
+	TICK_SPACING=10 \
+	USDT_AMOUNT=$(USDT_AMOUNT) \
 	forge script script/AddLiquidity.s.sol:AddLiquidityScript \
 		--rpc-url $(ARB_MAINNET_RPC_URL) \
 		-vvvv \
