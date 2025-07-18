@@ -122,6 +122,10 @@ contract LiquidityCommitmentCertificate is ERC20 {
         // TODO: We can use this hook to determine when LCC and therefore underlying assets are settled to market.
     }
 
+    function receiveUnderlying(uint256 amount) external onlyIssuer {
+        uaSupply += amount;
+    }
+
     // DirectLPs and Traders engaging the CorePool directly will need LCC. LCC is 1:1 with the underlying asset.
     function _wrap(address from, address to, uint256 amount) internal {
         ERC20 uaToken = ERC20(underlyingAsset);

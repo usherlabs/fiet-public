@@ -228,6 +228,9 @@ contract ProxyHook is BaseHook, IHookCommon {
                 amount1,
                 false // mint` = `true` i.e. we're  claiming erc20
             );
+
+            lccToken0.receiveUnderlying(amount0);
+            lccToken1.receiveUnderlying(amount1);
         }
     }
 

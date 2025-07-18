@@ -337,16 +337,23 @@ contract AddLiquidityScript is ScriptHelper {
                 address to = address(uint160(uint256(log.topics[2])));
                 address emitter = log.emitter;
 
-                if (log.data.length == 32) {
-                    uint256 value = abi.decode(log.data, (uint256));
-                    console.log("Transfer event");
-                    console.log("  From:", from);
-                    console.log("  To:", to);
-                    console.log("  Value:", value);
-                    console.log("  Emitter:", emitter);
-                } else {
-                    console.log("Malformed Transfer event: data length != 32");
+                if (from == address(0) && to == recipient) {
+                    // GET THE ACTUAL TOKEN ID FROM THE LOG
+                    tokenId = abi.decode(log.data, (uint256));
+                    console.log("Actual minted Token ID:", tokenId);
+                    break;
                 }
+
+                // if (log.data.length == 32) {
+                //     uint256 value = abi.decode(log.data, (uint256));
+                //     console.log("Transfer event");
+                //     console.log("  From:", from);
+                //     console.log("  To:", to);
+                //     console.log("  Value:", value);
+                //     console.log("  Emitter:", emitter);
+                // } else {
+                //     console.log("Malformed Transfer event: data length != 32");
+                // }
             }
         }
         return tokenId;

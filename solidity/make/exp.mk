@@ -169,7 +169,6 @@ USDT_MAINNET=0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9
 SQRT_PRICE_MAINNET=54275522706223419759561
 USDT_AMOUNT=1000000 # 1 USDT * 10^6
 ARB_AMOUNT=2121256710000000000 # 2.12125671 ARB * 10^18
-# TOKEN_ID=
 
 # wrap-eth-mainnet: ## Wrap ETH to WETH on Arbitrum mainnet
 # 	cast send $(WETH_MAINNET) "deposit()" --value $(WETH_AMOUNT) --rpc-url $(ARB_MAINNET_RPC_URL) --private-key $(PRIVATE_KEY)
@@ -206,10 +205,8 @@ add-liquidity-mainnet:
 
 remove-liquidity-mainnet:
 	NETWORK=arbitrum \
-	UNDERLYING_ASSET_0=$(ARB_MAINNET) \
-	UNDERLYING_ASSET_1=$(USDT_MAINNET) \
-	CORE_POOL_ID=$(CORE_POOL_ID) \
-	TOKEN_ID=$(TOKEN_ID) \
+	CORE_POOL_ID=0x6803ff0612b69d7d5d27e97447d717c6d2f72891f64af71414f12995efcabd6a \
+	TOKEN_ID=51204 \
 	forge script script/RemoveLiquidity.s.sol:RemoveLiquidityScript \
 		--rpc-url $(ARB_MAINNET_RPC_URL) \
 		-vvvv \

@@ -114,7 +114,7 @@ contract RemoveLiquidityScript is ScriptHelper {
             coreFee = uint24(vm.envOr("CORE_POOL_FEE", uint256(0)));
             tickSpacingVal = int24(uint24(vm.envOr("TICK_SPACING", uint256(60))));
         } else {
-            string memory filePath = string.concat("./deployments/", networkName, "_markets.json");
+            string memory filePath = string.concat("./deployments/", networkName, "_markets_deployments.json");
             string memory json = vm.readFile(filePath);
 
             string memory keyToken0 = string.concat(".", corePoolId, "_underlyingAsset0");
