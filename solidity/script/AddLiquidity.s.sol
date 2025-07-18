@@ -200,6 +200,25 @@ contract AddLiquidityScript is ScriptHelper {
         console.log("Token0:", coreToken0);
         console.log("Token1:", coreToken1);
 
+        string memory symbol0 = IERC20Metadata(token0).symbol();
+        string memory symbol1 = IERC20Metadata(token1).symbol();
+
+        console.log("Symbol for currency0 underlying:", coreToken0 == address(lcc0) ? symbol0 : symbol1);
+        console.log("Symbol for currency1 underlying:", coreToken0 == address(lcc0) ? symbol1 : symbol0);
+
+        string memory envAmount0;
+        string memory envAmount1;
+        if (coreToken0 == address(lcc0)) {
+            envAmount0 = string.concat(symbol0, "_AMOUNT");
+            envAmount1 = string.concat(symbol1, "_AMOUNT");
+        } else {
+            envAmount0 = string.concat(symbol1, "_AMOUNT");
+            envAmount1 = string.concat(symbol0, "_AMOUNT");
+        }
+
+        bool hasAmount0 = vm.envExists(envAmount0);
+        bool hasAmount1 = vm.envExists(envAmount1);
+
         uint8 dec0 = IERC20Metadata(coreToken0).decimals();
         uint8 dec1 = IERC20Metadata(coreToken1).decimals();
 
@@ -208,28 +227,21 @@ contract AddLiquidityScript is ScriptHelper {
         console.log("Token1:", dec1);
         console.log(" ");
 
-        // Check for environment variables
-        bool hasAmount0 = vm.envExists("AMOUNT_0_DESIRED");
-        bool hasAmount1 = vm.envExists("AMOUNT_1_DESIRED");
-
         if (hasAmount0 && hasAmount1) {
-            revert("Only one amount can be specified");
-        }
-
-        if (!hasAmount0 && !hasAmount1) {
+            amount0Desired = vm.envUint(envAmount0);
+            amount1Desired = vm.envUint(envAmount1);
+        } else if (!hasAmount0 && !hasAmount1) {
             amount0Desired = DEFAULT_AMOUNT * (10 ** dec0);
             amount1Desired = DEFAULT_AMOUNT * (10 ** dec1);
         } else {
             require(sqrtPriceX96 != 0, "Pool not initialized");
 
             if (hasAmount0) {
-                amount0Desired = vm.envUint("AMOUNT_0_DESIRED");
-                // amount1Desired = (amount0Desired * sqrtPriceX96 * sqrtPriceX96) >> 192
+                amount0Desired = vm.envUint(envAmount0);
                 uint256 temp = FullMath.mulDiv(amount0Desired, sqrtPriceX96, 1 << 96);
                 amount1Desired = FullMath.mulDiv(temp, sqrtPriceX96, 1 << 96);
             } else {
-                amount1Desired = vm.envUint("AMOUNT_1_DESIRED");
-                // amount0Desired = (amount1Desired << 192) / (sqrtPriceX96 * sqrtPriceX96)
+                amount1Desired = vm.envUint(envAmount1);
                 uint256 temp = FullMath.mulDiv(amount1Desired, 1 << 96, sqrtPriceX96);
                 amount0Desired = FullMath.mulDiv(temp, 1 << 96, sqrtPriceX96);
             }
