@@ -332,28 +332,17 @@ contract AddLiquidityScript is ScriptHelper {
         for (uint256 i = 0; i < logs.length; i++) {
             VmSafe.Log memory log = logs[i];
 
-            if (log.topics.length > 0 && log.topics[0] == keccak256("Transfer(address,address,uint256)")) {
+            if (log.topics.length == 4 && log.topics[0] == keccak256("Transfer(address,address,uint256)")) {
                 address from = address(uint160(uint256(log.topics[1])));
                 address to = address(uint160(uint256(log.topics[2])));
-                address emitter = log.emitter;
+                uint256 mintedTokenId = uint256(log.topics[3]);
 
                 if (from == address(0) && to == recipient) {
                     // GET THE ACTUAL TOKEN ID FROM THE LOG
-                    tokenId = abi.decode(log.data, (uint256));
+                    tokenId = mintedTokenId;
                     console.log("Actual minted Token ID:", tokenId);
                     break;
                 }
-
-                // if (log.data.length == 32) {
-                //     uint256 value = abi.decode(log.data, (uint256));
-                //     console.log("Transfer event");
-                //     console.log("  From:", from);
-                //     console.log("  To:", to);
-                //     console.log("  Value:", value);
-                //     console.log("  Emitter:", emitter);
-                // } else {
-                //     console.log("Malformed Transfer event: data length != 32");
-                // }
             }
         }
         return tokenId;

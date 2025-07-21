@@ -24,6 +24,10 @@ abstract contract ScriptHelper is Script {
         file = string.concat(FILE_START, prefix, name, FILE_END);
     }
 
+    function _getFilename() public view returns (string memory) {
+        return file;
+    }
+
     function writeAddress(string memory name, address contractAddress) internal {
         string memory contents;
         try vm.readFile(file) returns (string memory data) {

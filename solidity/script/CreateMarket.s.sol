@@ -332,7 +332,7 @@ contract CreateMarketScript is ScriptHelper {
         writeString(string.concat(marketId, "_tickSpacing"), vm.toString(tickSpacing));
         writeString(string.concat(marketId, "_initialSqrtPriceX96"), vm.toString(initialSqrtPriceX96));
 
-        console.log("Market details written to deployments/%s_deployments.json", string.concat(networkName, "_markets"));
+        console.log("Market details written to deployments/%s_deployments.json", _getFilename());
     }
 
     /**
