@@ -10,26 +10,21 @@ import {ScriptHelper} from "./libraries/ScriptHelper.s.sol";
  * @dev Useful for other scripts that need to reference deployed contracts
  */
 contract ReadDeploymentScript is ScriptHelper {
+    string public networkName;
+
     function run() external {
-        _setFilename("sepolia");
-        console.log(
-            "Reading deployment addresses from script/deployments/sepolia_deployments.json..."
-        );
+        try vm.envString("NETWORK") returns (string memory envNetworkName) {
+            networkName = envNetworkName;
+        } catch {
+            networkName = "sepolia";
+        }
+        _setFilename(networkName);
+        console.log("Reading deployment addresses from deployments/%s_deployments.json...", networkName);
 
         // Read addresses from JSON file
         address coreHook = readAddress("coreHook");
         address proxyHook = readAddress("proxyHook");
         address marketFactory = readAddress("marketFactory");
-
-        // Read metadata
-        string memory deploymentDate = readString("deploymentDate");
-        string memory deploymentNetwork = readString("deploymentNetwork");
-        string memory poolManager = readString("poolManager");
-
-        console.log("\n=== Deployment Information ===");
-        console.log("Network:", deploymentNetwork);
-        console.log("Deployment Date:", deploymentDate);
-        console.log("Pool Manager:", poolManager);
 
         console.log("\n=== Contract Addresses ===");
         console.log("CoreHook:", coreHook);
@@ -47,42 +42,8 @@ contract ReadDeploymentScript is ScriptHelper {
             console.log("  MarketFactory address not found in deployment file");
         }
 
-        if (
-            coreHook != address(0) &&
-            proxyHook != address(0) &&
-            marketFactory != address(0)
-        ) {
+        if (coreHook != address(0) && proxyHook != address(0) && marketFactory != address(0)) {
             console.log("\nAll deployment addresses found!");
         }
-    }
-
-    /**
-     * @dev Returns deployment addresses for use in other scripts
-     */
-    function getDeploymentAddresses()
-        external
-        view
-        returns (address coreHook, address proxyHook, address marketFactory)
-    {
-        coreHook = readAddress("coreHook");
-        proxyHook = readAddress("proxyHook");
-        marketFactory = readAddress("marketFactory");
-    }
-
-    /**
-     * @dev Returns deployment metadata
-     */
-    function getDeploymentMetadata()
-        external
-        view
-        returns (
-            string memory deploymentDate,
-            string memory deploymentNetwork,
-            string memory poolManager
-        )
-    {
-        deploymentDate = readString("deploymentDate");
-        deploymentNetwork = readString("deploymentNetwork");
-        poolManager = readString("poolManager");
     }
 }

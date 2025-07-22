@@ -10,9 +10,6 @@ env:
 
 jobs:
   solidity:
-    strategy:
-      fail-fast: true
-
     name: Solidity Tests
     runs-on: ubuntu-latest
     steps:
@@ -43,9 +40,6 @@ jobs:
         id: test
 
   stylus:
-    strategy:
-      fail-fast: true
-
     name: Stylus Tests
     runs-on: ubuntu-latest
 
@@ -59,15 +53,15 @@ jobs:
         - name: Run tests for staking contract
           run: cargo test --lib
           working-directory: stylus/fiet_stake
-        
+
         - name: Run tests for liquidity verifier
           run: cargo test --lib
           working-directory: stylus/liquidity_verifier
-        
+
         - name: Run tests for FI$T Token
           run: cargo test --lib
           working-directory: stylus/token
-        
+
         - name: Run tests for VRL Manager
           run: cargo test --lib
           working-directory: stylus/vrl_manager

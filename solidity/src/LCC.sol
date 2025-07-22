@@ -37,10 +37,7 @@ contract LiquidityCommitmentCertificate is ERC20 {
         }
 
         // Allow transfers between protocol bounds
-        if (
-            IMarketFactory(marketFactory).bounds(to) ||
-            IMarketFactory(marketFactory).bounds(from)
-        ) {
+        if (IMarketFactory(marketFactory).bounds(to) || IMarketFactory(marketFactory).bounds(from)) {
             _;
             return;
         }
@@ -58,16 +55,9 @@ contract LiquidityCommitmentCertificate is ERC20 {
      * @param _issuers The issuers of the LCC. ProxyHook, and MMPositionManager
      * @param _marketFactory The MarketFactory contract that manages this LCC.
      */
-    constructor(
-        address _underlyingAsset,
-        address[] memory _issuers,
-        address _marketFactory
-    )
+    constructor(address _underlyingAsset, address[] memory _issuers, address _marketFactory)
         ERC20(
-            string.concat(
-                "Fiet Liquidity Commitment Certificate for ",
-                IERC20Metadata(_underlyingAsset).name()
-            ),
+            string.concat("Fiet Liquidity Commitment Certificate for ", IERC20Metadata(_underlyingAsset).name()),
             string.concat("lcc-", IERC20Metadata(_underlyingAsset).symbol()),
             IERC20Metadata(_underlyingAsset).decimals()
         )
@@ -100,9 +90,7 @@ contract LiquidityCommitmentCertificate is ERC20 {
         // This is because the PoolManager will custody the difference.
     }
 
-    function cancel(
-        uint256 amount
-    ) external onlyIssuer returns (uint256 amountToCancel, uint256 deficit) {
+    function cancel(uint256 amount) external onlyIssuer returns (uint256 amountToCancel, uint256 deficit) {
         address issuer = msg.sender;
         uint256 externallyCustodied = totalSupply - uaSupply;
         if (amount == 0) {
@@ -126,12 +114,18 @@ contract LiquidityCommitmentCertificate is ERC20 {
         return (amountToCancel, deficit);
     }
 
+    // Called by Issuer before settling liquidity from LCCs to the market.
     function prepareSettle(uint256 amount) external onlyIssuer {
         // Allow issuer to facilitate direct liquidity provision transfer of underlying tokens
         IERC20(underlyingAsset).approve(msg.sender, amount);
         uaSupply -= amount;
 
         // TODO: We can use this hook to determine when LCC and therefore underlying assets are settled to market.
+    }
+
+    // Called by Issuer after taking liquidity from the market to LCC.
+    function confirmTake(uint256 amount) external onlyIssuer {
+        uaSupply += amount;
     }
 
     // DirectLPs and Traders engaging the CorePool directly will need LCC. LCC is 1:1 with the underlying asset.
@@ -203,19 +197,12 @@ contract LiquidityCommitmentCertificate is ERC20 {
         //...
     }
 
-    function transfer(
-        address to,
-        uint256 amount
-    ) public virtual override returns (bool) {
+    function transfer(address to, uint256 amount) public virtual override returns (bool) {
         onTransfer(msg.sender, to, amount);
         return super.transfer(to, amount);
     }
 
-    function transferFrom(
-        address from,
-        address to,
-        uint256 amount
-    ) public virtual override returns (bool) {
+    function transferFrom(address from, address to, uint256 amount) public virtual override returns (bool) {
         onTransfer(from, to, amount);
         return super.transferFrom(from, to, amount);
     }

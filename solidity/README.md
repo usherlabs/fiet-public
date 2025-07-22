@@ -1,55 +1,308 @@
-# Surety
+# Fiet Protocol - Solidity Contracts
 
-## Contract addresses
+This directory contains the Solidity contracts for the Fiet Protocol, including Uniswap V4 hooks for automated market making functionality.
 
-### LCC tokens
-- Itoken USDC: [0xf38B489ac21BC30A5246D4a19Dad730D4d394b62](https://sepolia.arbiscan.io/address/0xf38B489ac21BC30A5246D4a19Dad730D4d394b62#code)
-- Itoken USDT: [0xdfb445E174fD89C9919546C358C20DB780708686](https://sepolia.arbiscan.io/address/0xdfb445E174fD89C9919546C358C20DB780708686#code)
+## Overview
 
-### Mock tokens
-USDC:[0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d](https://sepolia.arbiscan.io/address/0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d)
-USDT:[0x382ED578cFBA5A1FfDD83a71CF69a00A6abaA308](https://sepolia.arbiscan.io/address/0x382ED578cFBA5A1FfDD83a71CF69a00A6abaA308)
+The Solidity contracts provide the automated market maker (AMM) functionality for the Fiet Protocol through Uniswap V4 hooks. The system consists of:
 
-### Uniswap V4 Core Pool LCC-USDC/LCC-USDT
-Pool id: 0xd0949d0917e91bf6167299bf4ca9c816fe4a535a0cfa319562056874f71a9b22
+- **CoreHook**: Manages core pool operations and liquidity commitments
+- **ProxyHook**: Handles user interactions and proxy pool operations  
+- **MarketFactory**: Coordinates between hooks and manages market creation
+- **LiquidityCommitmentCertificate (LCC)**: Wrapped tokens representing liquidity commitments
 
-### Uniswap V4 Proxy Pool USDC/USDT
-Pool id: 0x57df887f55f6ea24964ede5be11d58900c3f5adf85499c216a3506a3c52a8c77
+## Directory Structure
 
-### Uniswap V4 Proxy hook
-[0x466Cc3d82942a19568bbC9FCBb748F044CF96888](https://sepolia.arbiscan.io/address/0x466Cc3d82942a19568bbC9FCBb748F044CF96888#code)
-## Usage
-
-### Build
-
-```shell
-$ forge build
+```
+solidity/
+├── src/                    # Contract source files
+│   ├── CoreHook.sol       # Core pool hook implementation
+│   ├── ProxyHook.sol      # Proxy pool hook implementation
+│   ├── MarketFactory.sol  # Market factory contract
+│   ├── LCC.sol           # Liquidity Commitment Certificate
+│   └── interfaces/       # Contract interfaces
+├── script/                # Deployment and utility scripts
+│   ├── DeployComplete.s.sol    # Main deployment script
+│   ├── ReadDeployment.s.sol    # Read deployment addresses
+│   ├── AddLiquidity.s.sol      # Add liquidity script
+│   ├── RemoveLiquidity.s.sol   # Remove liquidity script
+│   ├── CreateMarket.s.sol      # Create market script
+│   └── constants/              # Network-specific constants
+├── test/                 # Test files
+├── lib/                  # Dependencies (Forge libraries)
+├── deployments/          # Deployment address files
+└── Makefile             # Build and deployment commands
 ```
 
-### Test
+## Prerequisites
 
-```shell
-$ forge test
+### 1. Install Foundry
+
+**Foundry** is a fast, portable, and modular toolkit for Ethereum application development.
+
+```bash
+# Install Foundry
+curl -L https://foundry.paradigm.xyz | bash
+
+# Initialize Foundry
+foundryup
+
+# Verify installation
+forge --version
 ```
 
-### Format
+### 2. Install Dependencies
 
-```shell
-$ forge fmt
+```bash
+# Install Node.js dependencies
+pnpm install
+
+# Install Forge dependencies
+forge install
 ```
 
-## To delpoy this locally on Arbitrum fork
+## Environment Setup
 
-### Run fork
-See .env.example for required variables
-```shell
-$ make fork
+Create a `.env` file in the solidity directory with the following variables:
+
+```bash
+# RPC URLs
+ARB_SEPOLIA_RPC_URL="https://sepolia-rollup.arbitrum.io/rpc"
+ARB_MAINNET_RPC_URL="https://arb1.arbitrum.io/rpc"
+
+# Deployment
+PRIVATE_KEY="your_private_key_here"
+ETHERSCAN_API_KEY="your_etherscan_api_key"
+
+# Optional: Override token addresses
+UNDERLYING_ASSET_0="0x..."  # USDC address
+UNDERLYING_ASSET_1="0x..."  # USDT address
 ```
 
-### Deploy contracts
-Case sensitive
+## Quick Start
 
-```shell
-$ make all MODE=LOCAL
+### 1. Build Contracts
+
+```bash
+make build
 ```
 
+### 2. Run Tests
+
+```bash
+# Run all tests
+forge test
+
+# Run specific test file
+forge test --match-contract MarketFactory
+```
+
+### 3. Local Development
+
+```bash
+# Start local fork
+make fork
+
+# Deploy contracts locally
+make dev MODE=LOCAL
+```
+
+## Deployment
+
+### Multi-Network Support
+
+The deployment scripts support multiple networks:
+
+- **Sepolia**: Testnet deployment
+- **Arbitrum**: Mainnet deployment
+
+### Deploy Contracts
+
+```bash
+# Deploy to Sepolia
+NETWORK=sepolia make deploy
+
+# Deploy to Arbitrum  
+NETWORK=arbitrum make deploy
+
+# Deploy locally (forked from mainnet)
+NETWORK=arbitrum make dev MODE=LOCAL
+```
+
+### Deployment Order
+
+1. **MarketFactory** - Deployed first (without hooks)
+2. **CoreHook** - Deployed with proper HookMiner logic
+3. **ProxyHook** - Deployed with proper HookMiner logic  
+4. **Set Hooks** - Configure hooks in MarketFactory
+5. **Hook Activation** - Verify cross-references
+
+### Read Deployment Addresses
+
+```bash
+# Read addresses for current network
+make read-deployment
+
+# Or run directly
+forge script script/ReadDeployment.s.sol --rpc-url <rpc_url>
+```
+
+## Liquidity Management
+
+### Add Liquidity
+
+```bash
+# Add liquidity to core pool
+forge script script/AddLiquidity.s.sol --rpc-url <rpc_url> --broadcast
+```
+
+### Remove Liquidity
+
+```bash
+# Remove liquidity (requires TOKEN_ID)
+TOKEN_ID=47 forge script script/RemoveLiquidity.s.sol --rpc-url <rpc_url> --broadcast
+```
+
+### Create Market
+
+```bash
+# Create new market
+forge script script/CreateMarket.s.sol --rpc-url <rpc_url> --broadcast
+```
+
+## Contract Architecture
+
+### Hook System
+
+The protocol uses a dual-hook system:
+
+```
+MarketFactory
+├── CoreHook (manages core pool operations)
+└── ProxyHook (manages proxy pool operations)
+    └── References CoreHook for cross-pool operations
+```
+
+### Hook Flags
+
+**CoreHook Flags:**
+
+- `BEFORE_INITIALIZE_FLAG` - Validates pool initialization
+- `AFTER_ADD_LIQUIDITY_FLAG` - Intercepts liquidity additions
+- `AFTER_REMOVE_LIQUIDITY_FLAG` - Intercepts liquidity removals
+
+**ProxyHook Flags:**
+
+- `BEFORE_INITIALIZE_FLAG` - Validates pool initialization
+- `BEFORE_ADD_LIQUIDITY_FLAG` - Blocks normal liquidity additions
+- `BEFORE_SWAP_FLAG` - Overrides swap functionality
+- `BEFORE_SWAP_RETURNS_DELTA_FLAG` - Allows custom swap deltas
+
+### Pool Structure
+
+- **Core Pool**: LCC tokens (wrapped liquidity commitments)
+- **Proxy Pool**: Underlying tokens (USDC/USDT) with user interface
+
+## Available Commands
+
+### Build Commands
+
+```bash
+forge build          # Build contracts
+forge clean          # Clean build artifacts
+```
+
+### Deployment Commands
+
+```bash
+make deploy         # Deploy all contracts
+make create-market  # Create market
+```
+
+### Development Commands
+
+```bash
+make fork               # Start local fork
+make dev MODE=LOCAL     # Full development setup
+make read-deployment    # Read deployment addresses
+```
+
+### Quality Commands
+
+```bash
+make format         # Format code
+make lint           # Lint code
+make security       # Security analysis
+make quality        # Run all quality checks
+```
+
+## Testing
+
+### Run Tests
+
+```bash
+# Run all tests
+forge test
+
+# Run specific test
+forge test --match-contract MarketFactory
+
+# Run with verbose output
+forge test -vvv
+```
+
+### Test Coverage
+
+```bash
+# Generate coverage report
+forge coverage
+
+# Generate coverage report with lcov
+forge coverage --report lcov
+```
+
+## Troubleshooting
+
+### Common Issues
+
+1. **Hook Address Mismatch**
+
+   ```bash
+   # Verify hook flags
+   forge script script/DeployComplete.s.sol --sig "verifyDeployment()"
+   ```
+
+2. **Insufficient Funds**
+   - Ensure deployer account has sufficient ETH for gas
+   - Check token balances for liquidity operations
+
+3. **Network Configuration**
+   - Verify RPC URLs are correct
+   - Check network constants in `script/constants/`
+
+### Debug Commands
+
+```bash
+# Read deployment addresses
+forge script script/ReadDeployment.s.sol --rpc-url <rpc_url>
+
+# Verify deployment
+forge script script/DeployComplete.s.sol --sig "verifyDeployment()" --rpc-url <rpc_url>
+
+```
+
+## Security
+
+- All hooks use CREATE2 for deterministic addresses
+- Hook flags are verified to match expected permissions
+- Cross-references are verified after deployment
+- Comprehensive test coverage for all critical functions
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Run tests: `forge test`
+5. Run quality checks: `make quality`
+6. Submit a pull request

@@ -1,0 +1,11 @@
+{
+  "0x9a24909eeeb9fb7bbae5e01f6bdf9d892aafdfadab304c377e2b617acb0db32a_corePoolId": "0x9a24909eeeb9fb7bbae5e01f6bdf9d892aafdfadab304c377e2b617acb0db32a",
+  "0x9a24909eeeb9fb7bbae5e01f6bdf9d892aafdfadab304c377e2b617acb0db32a_proxyPoolId": "0x1c7f26793f3bf3570d40e2098717b3cc5cbbfda6d4252158c0a362b7eb17ca3d",
+  "0x9a24909eeeb9fb7bbae5e01f6bdf9d892aafdfadab304c377e2b617acb0db32a_underlyingAsset0": "0x912CE59144191C1204E64559FE8253a0e49E6548",
+  "0x9a24909eeeb9fb7bbae5e01f6bdf9d892aafdfadab304c377e2b617acb0db32a_underlyingAsset1": "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9",
+  "0x9a24909eeeb9fb7bbae5e01f6bdf9d892aafdfadab304c377e2b617acb0db32a_lcc0": "0x508c0477756D188FBcE10138188E71e4f3DeA596",
+  "0x9a24909eeeb9fb7bbae5e01f6bdf9d892aafdfadab304c377e2b617acb0db32a_lcc1": "0x7fe38b2AE63862C74D5bA501C05771C00f7Ce4D4",
+  "0x9a24909eeeb9fb7bbae5e01f6bdf9d892aafdfadab304c377e2b617acb0db32a_corePoolFee": "400",
+  "0x9a24909eeeb9fb7bbae5e01f6bdf9d892aafdfadab304c377e2b617acb0db32a_tickSpacing": "10",
+  "0x9a24909eeeb9fb7bbae5e01f6bdf9d892aafdfadab304c377e2b617acb0db32a_initialSqrtPriceX96": "54250149159058084968438"
+}

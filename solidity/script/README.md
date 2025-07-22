@@ -133,7 +133,7 @@ contract MyScript is ScriptHelper {
 ## Files Generated
 
 After deployment, the following files are created:
-- `script/deployments/deployments.json` - All deployment addresses and metadata in JSON format
+- `deployments/deployments.json` - All deployment addresses and metadata in JSON format
 
 The JSON file contains:
 ```json

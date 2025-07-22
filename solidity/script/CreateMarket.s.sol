@@ -3,11 +3,19 @@ pragma solidity ^0.8.0;
 
 import "forge-std/Script.sol";
 import {MarketFactory} from "../src/MarketFactory.sol";
-import {SepoliaConstants} from "./constants/Sepolia.sol";
+import {SepoliaConstants} from "./constants/ArbitrumSepolia.sol";
 import {ScriptHelper} from "./libraries/ScriptHelper.s.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {CurrencySortHelper} from "./libraries/CurrencySortHelper.sol";
+import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
+import {EthSepoliaConstants} from "./constants/EthSepolia.sol";
+import {ArbitrumConstants} from "./constants/Arbitrum.sol";
+import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
+import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
+import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
+import {BitMath} from "@uniswap/v4-core/src/libraries/BitMath.sol";
 
 /**
  * @title CreateMarketScript
@@ -22,6 +30,9 @@ import {CurrencySortHelper} from "./libraries/CurrencySortHelper.sol";
  */
 contract CreateMarketScript is ScriptHelper {
     using PoolIdLibrary for PoolId;
+    using StateLibrary for IPoolManager;
+
+    string public networkName;
 
     // Market parameters - can be configured via environment variables
     address public underlyingAsset0;
@@ -31,6 +42,8 @@ contract CreateMarketScript is ScriptHelper {
     uint24 public corePoolFee;
     int24 public tickSpacing;
     uint160 public initialSqrtPriceX96;
+
+    address public poolManager;
 
     // Deployed contract addresses
     address public marketFactory;
@@ -42,16 +55,12 @@ contract CreateMarketScript is ScriptHelper {
     function run() external {
         uint256 deployerPrivateKey = uint256(vm.envBytes32("PRIVATE_KEY"));
 
+        networkName = vm.envString("NETWORK");
+
         console.log("Starting market creation via Market Factory...");
 
         // Load deployment addresses
         _loadDeploymentAddresses();
-
-        // Set market parameters
-        _setMarketParameters();
-
-        // Validate parameters
-        _validateParameters();
 
         console.log("\n=== Market Creation Parameters ===");
         console.log("Market Factory:", marketFactory);
@@ -62,6 +71,12 @@ contract CreateMarketScript is ScriptHelper {
         console.log("Initial Sqrt Price X96:", initialSqrtPriceX96);
 
         vm.startBroadcast(deployerPrivateKey);
+
+        // Set market parameters
+        _setMarketParameters();
+
+        // Validate parameters
+        _validateParameters();
 
         // Create the market
         console.log("\n=== Creating Market ===");
@@ -82,10 +97,21 @@ contract CreateMarketScript is ScriptHelper {
      * @dev Loads deployed contract addresses from deployment file
      */
     function _loadDeploymentAddresses() internal {
-        _setFilename("sepolia");
+        _setFilename(networkName);
 
         marketFactory = readAddress("marketFactory");
         console.log("MarketFactory address loaded:", marketFactory);
+
+        if (keccak256(bytes(networkName)) == keccak256(bytes("arbitrum"))) {
+            poolManager = ArbitrumConstants.POOL_MANAGER;
+        } else if (keccak256(bytes(networkName)) == keccak256(bytes("sepolia"))) {
+            poolManager = SepoliaConstants.POOL_MANAGER;
+        } else if (keccak256(bytes(networkName)) == keccak256(bytes("ethsepolia"))) {
+            poolManager = EthSepoliaConstants.POOL_MANAGER;
+        } else {
+            revert("Unsupported network");
+        }
+        console.log("PoolManager address loaded:", poolManager);
     }
 
     /**
@@ -94,19 +120,32 @@ contract CreateMarketScript is ScriptHelper {
     function _setMarketParameters() internal {
         // Try to read from environment variables, otherwise use defaults
         try vm.envAddress("UNDERLYING_ASSET_0") returns (address asset0) {
+            console.log("UNDERLYING_ASSET_0:", asset0);
             underlyingAsset0 = asset0;
         } catch {
-            underlyingAsset0 = readAddress("usdtToken");
+            if (keccak256(bytes(networkName)) == keccak256(bytes("sepolia"))) {
+                underlyingAsset0 = readAddress("usdtToken");
+            } else if (keccak256(bytes(networkName)) == keccak256(bytes("ethsepolia"))) {
+                underlyingAsset0 = EthSepoliaConstants.USDC_ADDRESS;
+            } else {
+                revert("Please specify UNDERLYING_ASSET_0 via environment variable for this network");
+            }
         }
 
         try vm.envAddress("UNDERLYING_ASSET_1") returns (address asset1) {
+            console.log("UNDERLYING_ASSET_1:", asset1);
             underlyingAsset1 = asset1;
         } catch {
-            underlyingAsset1 = readAddress("usdcToken");
+            if (keccak256(bytes(networkName)) == keccak256(bytes("sepolia"))) {
+                underlyingAsset1 = readAddress("usdcToken");
+            } else if (keccak256(bytes(networkName)) == keccak256(bytes("ethsepolia"))) {
+                underlyingAsset1 = EthSepoliaConstants.WETH_ADDRESS;
+            } else {
+                revert("Please specify UNDERLYING_ASSET_1 via environment variable for this network");
+            }
         }
 
-        (Currency currency0, Currency currency1) = CurrencySortHelper
-            .sortAddresses(underlyingAsset0, underlyingAsset1);
+        (Currency currency0, Currency currency1) = CurrencySortHelper.sortAddresses(underlyingAsset0, underlyingAsset1);
 
         underlyingCurrency0 = currency0;
         underlyingCurrency1 = currency1;
@@ -129,11 +168,88 @@ contract CreateMarketScript is ScriptHelper {
             tickSpacing = 60;
         }
 
+        string memory referencePoolIdStr = vm.envOr("REFERENCE_POOL_ID", string(""));
         try vm.envUint("INITIAL_SQRT_PRICE_X96") returns (uint256 price) {
             initialSqrtPriceX96 = uint160(price);
         } catch {
-            // Default to 1:1 price ratio (sqrt(1) * 2^96)
-            initialSqrtPriceX96 = 79228162514264337593543950336;
+            MarketFactory factory = MarketFactory(marketFactory);
+
+            address lccToken0 = factory.getOrCreateLCC(underlyingAsset0);
+            address lccToken1 = factory.getOrCreateLCC(underlyingAsset1);
+
+            if (bytes(referencePoolIdStr).length > 0) {
+                console.log("Using reference pool %s for initial price", referencePoolIdStr);
+
+                bytes32 poolIdBytes = vm.parseBytes32(referencePoolIdStr);
+                PoolId referencePoolId = PoolId.wrap(poolIdBytes);
+
+                IPoolManager manager = IPoolManager(poolManager);
+
+                (uint160 sqrtPrice,,,) = manager.getSlot0(referencePoolId);
+
+                bool needsInversion = (underlyingAsset0 < underlyingAsset1) != (lccToken0 < lccToken1);
+
+                uint8 dec0 = IERC20Metadata(underlyingAsset0).decimals();
+                uint8 dec1 = IERC20Metadata(underlyingAsset1).decimals();
+
+                if (needsInversion) {
+                    sqrtPrice = uint160((uint256(1) << 192) / sqrtPrice);
+                    (dec0, dec1) = (dec1, dec0);
+                }
+
+                int8 decDiff = int8(dec1) - int8(dec0);
+                if (decDiff != 0) {
+                    int256 absDiff = decDiff >= 0 ? int256(decDiff) : -int256(decDiff);
+                    uint160 sqrtScale = uint160(TickMath.getSqrtPriceAtTick(int24(absDiff / 2)));
+                    if (absDiff % 2 != 0) {
+                        sqrtScale = uint160(FullMath.mulDiv(sqrtScale, TickMath.getSqrtPriceAtTick(1), 1 << 96));
+                    }
+                    if (decDiff > 0) {
+                        sqrtPrice = uint160(FullMath.mulDiv(sqrtPrice, sqrtScale, 1 << 96));
+                    } else {
+                        sqrtPrice = uint160(FullMath.mulDiv(sqrtPrice, 1 << 96, sqrtScale));
+                    }
+                }
+
+                initialSqrtPriceX96 = sqrtPrice;
+
+                console.log("Adjusted initial sqrt price: %s", vm.toString(initialSqrtPriceX96));
+            } else {
+                bool hasAsset0Price = vm.envExists("ASSET0_PRICE");
+                bool hasAsset1Price = vm.envExists("ASSET1_PRICE");
+                if (hasAsset0Price && hasAsset1Price) {
+                    uint256 asset0Price = vm.envUint("ASSET0_PRICE");
+                    uint256 asset1Price = vm.envUint("ASSET1_PRICE");
+
+                    uint8 priceDecimals = uint8(vm.envOr("PRICE_DECIMALS", uint256(6)));
+
+                    // Scale prices to 18 decimals
+                    asset0Price = asset0Price * (10 ** (18 - priceDecimals));
+                    asset1Price = asset1Price * (10 ** (18 - priceDecimals));
+
+                    uint8 dec0 = IERC20Metadata(underlyingAsset0).decimals();
+                    uint8 dec1 = IERC20Metadata(underlyingAsset1).decimals();
+
+                    (Currency coreCurr0,) = CurrencySortHelper.sortAddresses(lccToken0, lccToken1);
+                    bool isAsset0Core0 =
+                        (underlyingAsset0 < underlyingAsset1) == (Currency.unwrap(coreCurr0) == lccToken0);
+
+                    uint256 price;
+                    if (isAsset0Core0) {
+                        price = FullMath.mulDiv(asset0Price, 10 ** dec1, asset1Price) * (10 ** (18 - dec0));
+                    } else {
+                        price = FullMath.mulDiv(asset1Price, 10 ** dec0, asset0Price) * (10 ** (18 - dec1));
+                    }
+
+                    uint256 sqrtPrice = _sqrt(price);
+                    initialSqrtPriceX96 = uint160(FullMath.mulDiv(sqrtPrice, 1 << 96, 10 ** 9)); // Since sqrt(price) * 10^9 for 18-decimal price
+
+                    console.log("Derived initial sqrt price: %s", vm.toString(initialSqrtPriceX96));
+                } else {
+                    // Default to 1:1 price ratio (sqrt(1) * 2^96)
+                    initialSqrtPriceX96 = 79228162514264337593543950336;
+                }
+            }
         }
     }
 
@@ -144,19 +260,10 @@ contract CreateMarketScript is ScriptHelper {
         require(marketFactory != address(0), "MarketFactory address is zero");
         require(underlyingAsset0 != address(0), "Underlying asset 0 is zero");
         require(underlyingAsset1 != address(0), "Underlying asset 1 is zero");
-        require(
-            underlyingAsset0 != underlyingAsset1,
-            "Assets must be different"
-        );
-        require(
-            corePoolFee >= 0,
-            "Core pool fee must be greater than or equal to 0"
-        );
+        require(underlyingAsset0 != underlyingAsset1, "Assets must be different");
+        require(corePoolFee >= 0, "Core pool fee must be greater than or equal to 0");
         require(tickSpacing > 0, "Tick spacing must be greater than 0");
-        require(
-            initialSqrtPriceX96 > 0,
-            "Initial price must be greater than 0"
-        );
+        require(initialSqrtPriceX96 > 0, "Initial price must be greater than 0");
 
         console.log("Market parameters validated");
     }
@@ -168,13 +275,8 @@ contract CreateMarketScript is ScriptHelper {
         MarketFactory factory = MarketFactory(marketFactory);
 
         // Call createMarket function
-        (PoolId coreId, PoolId proxyId) = factory.createMarket(
-            underlyingAsset0,
-            underlyingAsset1,
-            corePoolFee,
-            tickSpacing,
-            initialSqrtPriceX96
-        );
+        (PoolId coreId, PoolId proxyId) =
+            factory.createMarket(underlyingAsset0, underlyingAsset1, corePoolFee, tickSpacing, initialSqrtPriceX96);
 
         corePoolId = coreId;
         proxyPoolId = proxyId;
@@ -187,14 +289,8 @@ contract CreateMarketScript is ScriptHelper {
      */
     function _logMarketDetails() internal view {
         console.log("\n=== Market Details ===");
-        console.log(
-            "Core Pool ID:",
-            string.concat("", vm.toString(PoolId.unwrap(corePoolId)))
-        );
-        console.log(
-            "Proxy Pool ID:",
-            string.concat("0x", vm.toString(PoolId.unwrap(proxyPoolId)))
-        );
+        console.log("Core Pool ID:", string.concat("", vm.toString(PoolId.unwrap(corePoolId))));
+        console.log("Proxy Pool ID:", string.concat("0x", vm.toString(PoolId.unwrap(proxyPoolId))));
 
         // Get LCC tokens
         MarketFactory factory = MarketFactory(marketFactory);
@@ -207,10 +303,7 @@ contract CreateMarketScript is ScriptHelper {
         // Verify pool relationships
         PoolId storedProxyId = factory.coreToProxy(corePoolId);
 
-        require(
-            PoolId.unwrap(storedProxyId) == PoolId.unwrap(proxyPoolId),
-            "Core to proxy mapping mismatch"
-        );
+        require(PoolId.unwrap(storedProxyId) == PoolId.unwrap(proxyPoolId), "Core to proxy mapping mismatch");
 
         console.log("Pool relationships verified");
     }
@@ -219,49 +312,27 @@ contract CreateMarketScript is ScriptHelper {
      * @dev Writes market details to JSON file for future reference
      */
     function _writeMarketDetails() internal {
-        _setFilename("sepolia_markets");
+        _setFilename(string.concat(networkName, "_markets"));
 
         // Create a unique market identifier
-        string memory marketId = string.concat(
-            vm.toString(Currency.unwrap(underlyingCurrency0)),
-            "_",
-            vm.toString(Currency.unwrap(underlyingCurrency1)),
-            "_",
-            vm.toString(corePoolFee)
-        );
+        string memory marketId = vm.toString(PoolId.unwrap(corePoolId));
 
-        writeString(
-            string.concat(marketId, "_corePoolId"),
-            vm.toString(PoolId.unwrap(corePoolId))
-        );
-        writeString(
-            string.concat(marketId, "_proxyPoolId"),
-            vm.toString(PoolId.unwrap(proxyPoolId))
-        );
-        writeString(
-            string.concat(marketId, "_underlyingAsset0"),
-            vm.toString(Currency.unwrap(underlyingCurrency0))
-        );
-        writeString(
-            string.concat(marketId, "_underlyingAsset1"),
-            vm.toString(Currency.unwrap(underlyingCurrency1))
-        );
-        writeString(
-            string.concat(marketId, "_corePoolFee"),
-            vm.toString(corePoolFee)
-        );
-        writeString(
-            string.concat(marketId, "_tickSpacing"),
-            vm.toString(tickSpacing)
-        );
-        writeString(
-            string.concat(marketId, "_initialSqrtPriceX96"),
-            vm.toString(initialSqrtPriceX96)
-        );
+        // Get LCC tokens
+        MarketFactory factory = MarketFactory(marketFactory);
+        address lccTokenOfAsset0 = factory.getLCC(underlyingAsset0);
+        address lccTokenOfAsset1 = factory.getLCC(underlyingAsset1);
 
-        console.log(
-            "Market details written to script/deployments/sepolia_markets_deployments.json"
-        );
+        writeString(string.concat(marketId, "_corePoolId"), vm.toString(PoolId.unwrap(corePoolId)));
+        writeString(string.concat(marketId, "_proxyPoolId"), vm.toString(PoolId.unwrap(proxyPoolId)));
+        writeString(string.concat(marketId, "_underlyingAsset0"), vm.toString(Currency.unwrap(underlyingCurrency0)));
+        writeString(string.concat(marketId, "_underlyingAsset1"), vm.toString(Currency.unwrap(underlyingCurrency1)));
+        writeString(string.concat(marketId, "_lcc0"), vm.toString(lccTokenOfAsset0));
+        writeString(string.concat(marketId, "_lcc1"), vm.toString(lccTokenOfAsset1));
+        writeString(string.concat(marketId, "_corePoolFee"), vm.toString(corePoolFee));
+        writeString(string.concat(marketId, "_tickSpacing"), vm.toString(tickSpacing));
+        writeString(string.concat(marketId, "_initialSqrtPriceX96"), vm.toString(initialSqrtPriceX96));
+
+        console.log("Market details written to deployments/%s_deployments.json", _getFilename());
     }
 
     /**
@@ -276,20 +347,13 @@ contract CreateMarketScript is ScriptHelper {
         // Verify pool relationships
         PoolId storedProxyId = factory.coreToProxy(corePoolId);
 
-        require(
-            PoolId.unwrap(storedProxyId) == PoolId.unwrap(proxyPoolId),
-            "Core to proxy mapping mismatch"
-        );
+        require(PoolId.unwrap(storedProxyId) == PoolId.unwrap(proxyPoolId), "Core to proxy mapping mismatch");
 
         console.log("Pool relationships verified");
 
         // Verify LCC tokens exist
-        address lccToken0 = factory.getLCC(
-            Currency.unwrap(underlyingCurrency0)
-        );
-        address lccToken1 = factory.getLCC(
-            Currency.unwrap(underlyingCurrency1)
-        );
+        address lccToken0 = factory.getLCC(Currency.unwrap(underlyingCurrency0));
+        address lccToken1 = factory.getLCC(Currency.unwrap(underlyingCurrency1));
 
         require(lccToken0 != address(0), "LCC token 0 not found");
         require(lccToken1 != address(0), "LCC token 1 not found");
@@ -298,13 +362,11 @@ contract CreateMarketScript is ScriptHelper {
 
         // Verify underlying assets
         require(
-            factory.getUnderlyingAsset(lccToken0) ==
-                Currency.unwrap(underlyingCurrency0),
+            factory.getUnderlyingAsset(lccToken0) == Currency.unwrap(underlyingCurrency0),
             "LCC token 0 underlying mismatch"
         );
         require(
-            factory.getUnderlyingAsset(lccToken1) ==
-                Currency.unwrap(underlyingCurrency1),
+            factory.getUnderlyingAsset(lccToken1) == Currency.unwrap(underlyingCurrency1),
             "LCC token 1 underlying mismatch"
         );
 
@@ -345,11 +407,8 @@ contract CreateMarketScript is ScriptHelper {
         console.log("Tick Spacing:", tickSpacing);
         console.log("Initial Sqrt Price X96:", initialSqrtPriceX96);
 
-        (Currency currency0, Currency currency1) = CurrencySortHelper
-            .sortAddresses(
-                address(underlyingAsset0),
-                address(underlyingAsset1)
-            );
+        (Currency currency0, Currency currency1) =
+            CurrencySortHelper.sortAddresses(address(underlyingAsset0), address(underlyingAsset1));
         underlyingCurrency0 = currency0;
         underlyingCurrency1 = currency1;
 
@@ -364,5 +423,21 @@ contract CreateMarketScript is ScriptHelper {
         _logMarketDetails();
 
         console.log("\n=== Custom Market Creation Complete ===");
+    }
+
+    /**
+     * @dev Custom square root function using Babylonian method for approximation.
+     * This is a simplified version and might not be as accurate as BitMath.sqrt
+     * for very large numbers or very small numbers.
+     */
+    function _sqrt(uint256 x) internal pure returns (uint256) {
+        if (x == 0) return 0;
+        uint256 z = (x + 1) / 2;
+        uint256 y = x;
+        while (z < y) {
+            y = z;
+            z = (x / z + z) / 2;
+        }
+        return y;
     }
 }

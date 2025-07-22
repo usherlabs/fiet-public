@@ -7,12 +7,16 @@ import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {BalanceDelta, BalanceDeltaLibrary} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
+import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {PausablePool} from "../src/libraries/PausablePool.sol";
+import {Deployers} from "@uniswap/v4-core/test/utils/Deployers.sol";
 
 import {CoreHook} from "../src/CoreHook.sol";
 import {ProxyHook} from "../src/ProxyHook.sol";
 import {MarketFactory} from "../src/MarketFactory.sol";
+import {HookFlags} from "../script/constants/HookFlags.sol";
 
-contract HookTest is Test {
+contract HookTest is Test, Deployers {
     IPoolManager poolManager;
     MarketFactory factory;
     CoreHook coreHook;
@@ -26,11 +30,26 @@ contract HookTest is Test {
         vm.prank(owner);
         factory = new MarketFactory(address(poolManager), bounds);
 
-        coreHook = new CoreHook(address(poolManager), address(factory));
-        proxyHook = new ProxyHook(address(poolManager), address(factory));
+        // Compute flags for CoreHook
+        uint160 coreFlags = HookFlags.CORE_HOOK_FLAGS;
+        address coreHookAddrComputed = address(coreFlags);
 
-        vm.prank(owner);
-        factory.setHooks(address(coreHook), address(proxyHook));
+        deployCodeTo("CoreHook.sol:CoreHook", abi.encode(poolManager, address(factory)), coreHookAddrComputed);
+        coreHook = CoreHook(coreHookAddrComputed);
+
+        // Compute flags for ProxyHook
+        uint160 proxyFlags = HookFlags.PROXY_HOOK_FLAGS;
+        address proxyHookAddrComputed = address(proxyFlags);
+
+        deployCodeTo("ProxyHook.sol:ProxyHook", abi.encode(poolManager, address(factory)), proxyHookAddrComputed);
+        proxyHook = ProxyHook(proxyHookAddrComputed);
+
+        // Activate hooks
+        vm.prank(address(factory));
+        coreHook.activate();
+
+        vm.prank(address(factory));
+        proxyHook.activate();
     }
 
     function testCoreHookPermissions() public view {
@@ -42,7 +61,7 @@ contract HookTest is Test {
         assertFalse(perms.beforeRemoveLiquidity);
         assertTrue(perms.afterRemoveLiquidity);
         assertFalse(perms.beforeSwap);
-        assertFalse(perms.afterSwap);
+        assertTrue(perms.afterSwap);
     }
 
     function testProxyHookPermissions() public view {
@@ -62,6 +81,47 @@ contract HookTest is Test {
         // Activation is called in setHooks, test if hooks have factory set or something
         assertEq(address(coreHook.marketFactory()), address(factory));
         assertEq(address(proxyHook.marketFactory()), address(factory));
+    }
+
+    function testPauseHook() public {
+        PoolId poolId = PoolId.wrap(keccak256("test_pool"));
+
+        // Non-factory cannot pause
+        vm.expectRevert(CoreHook.InvalidSender.selector);
+        coreHook.pause(poolId);
+
+        // Factory can pause
+        vm.prank(address(factory));
+        coreHook.pause(poolId);
+
+        assertTrue(coreHook.paused(poolId));
+
+        // Cannot re-pause
+        vm.prank(address(factory));
+        vm.expectRevert(abi.encodeWithSelector(PausablePool.EnforcedPause.selector));
+        coreHook.pause(poolId);
+    }
+
+    function testUnpauseHook() public {
+        PoolId poolId = PoolId.wrap(keccak256("test_pool"));
+
+        vm.prank(address(factory));
+        coreHook.pause(poolId);
+
+        // Non-factory cannot unpause
+        vm.expectRevert(CoreHook.InvalidSender.selector);
+        coreHook.unpause(poolId);
+
+        // Factory can unpause
+        vm.prank(address(factory));
+        coreHook.unpause(poolId);
+
+        assertFalse(coreHook.paused(poolId));
+
+        // Cannot re-unpause
+        vm.prank(address(factory));
+        vm.expectRevert(abi.encodeWithSelector(PausablePool.ExpectedPause.selector));
+        coreHook.unpause(poolId);
     }
 
     // Add more tests for hook functions...

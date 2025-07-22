@@ -10,18 +10,21 @@ import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.so
 
 import {IHookCommon} from "./interfaces/IHookCommon.sol";
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
-
 import {ProxyHook} from "./ProxyHook.sol";
 import {LiquidityCommitmentCertificate} from "./LCC.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {CurrencySettler} from "@uniswap/v4-core/test/utils/CurrencySettler.sol";
+import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
+import {PausablePool} from "./libraries/PausablePool.sol";
+
+import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 
 /**
  * Core Pool should be aware of Positions.
  *     This way it can calculate and manage Liquidity Commitments (C_A(r)) for each Position.
  *     Furthermore, we need to know when Direct LP occurs, as this determines whether the underlying native tokens are settled to the Pool Manager.
  */
-contract CoreHook is BaseHook, IHookCommon {
+contract CoreHook is BaseHook, IHookCommon, PausablePool {
     using CurrencySettler for Currency;
 
     error InvalidInitialiser();
@@ -39,10 +42,7 @@ contract CoreHook is BaseHook, IHookCommon {
     }
 
     // Owner will be set to MarketFactory
-    constructor(
-        address _poolManager,
-        address _marketFactory
-    ) BaseHook(IPoolManager(_poolManager)) {
+    constructor(address _poolManager, address _marketFactory) BaseHook(IPoolManager(_poolManager)) {
         marketFactory = _marketFactory;
     }
 
@@ -50,36 +50,40 @@ contract CoreHook is BaseHook, IHookCommon {
         proxyHook = IMarketFactory(marketFactory).getProxyHook();
     }
 
-    function getHookPermissions()
-        public
-        pure
-        override
-        returns (Hooks.Permissions memory)
-    {
-        return
-            Hooks.Permissions({
-                beforeInitialize: true, // Validate and set global parameters
-                afterInitialize: false,
-                beforeAddLiquidity: false,
-                afterAddLiquidity: true, // Intercept liquidity modifications
-                beforeRemoveLiquidity: false,
-                afterRemoveLiquidity: true, // Intercept liquidity modifications
-                beforeSwap: false,
-                afterSwap: false,
-                beforeDonate: false,
-                afterDonate: false,
-                beforeSwapReturnDelta: false,
-                afterSwapReturnDelta: false,
-                afterAddLiquidityReturnDelta: false,
-                afterRemoveLiquidityReturnDelta: false
-            });
+    function pause(PoolId poolId) external onlyFactory {
+        _pause(poolId);
     }
 
-    function _beforeInitialize(
-        address sender,
-        PoolKey calldata,
-        uint160
-    ) internal view virtual override returns (bytes4) {
+    function unpause(PoolId poolId) external onlyFactory {
+        _unpause(poolId);
+    }
+
+    function getHookPermissions() public pure override returns (Hooks.Permissions memory) {
+        return Hooks.Permissions({
+            beforeInitialize: true, // Validate and set global parameters
+            afterInitialize: false,
+            beforeAddLiquidity: false,
+            afterAddLiquidity: true, // Intercept liquidity modifications
+            beforeRemoveLiquidity: false,
+            afterRemoveLiquidity: true, // Intercept liquidity modifications
+            beforeSwap: false,
+            afterSwap: true,
+            beforeDonate: false,
+            afterDonate: false,
+            beforeSwapReturnDelta: false,
+            afterSwapReturnDelta: false,
+            afterAddLiquidityReturnDelta: false,
+            afterRemoveLiquidityReturnDelta: false
+        });
+    }
+
+    function _beforeInitialize(address sender, PoolKey calldata, uint160)
+        internal
+        view
+        virtual
+        override
+        returns (bytes4)
+    {
         if (sender != marketFactory) {
             revert InvalidInitialiser();
         }
@@ -95,6 +99,16 @@ contract CoreHook is BaseHook, IHookCommon {
     //     return this._afterInitialize.selector;
     // }
 
+    function _afterSwap(address, PoolKey calldata key, SwapParams calldata, BalanceDelta, bytes calldata)
+        internal
+        virtual
+        override
+        whenNotPaused(key.toId())
+        returns (bytes4, int128)
+    {
+        return (this.afterSwap.selector, 0);
+    }
+
     function _afterAddLiquidity(
         address,
         PoolKey calldata key,
@@ -102,18 +116,11 @@ contract CoreHook is BaseHook, IHookCommon {
         BalanceDelta delta,
         BalanceDelta,
         bytes calldata
-    ) internal virtual override returns (bytes4, BalanceDelta) {
+    ) internal virtual override whenNotPaused(key.toId()) returns (bytes4, BalanceDelta) {
         // TODO: Filter the sender address to determine whether it's MMPositionManager or DirectLP.
-        ProxyHook(proxyHook).onDirectLP(
-            key,
-            delta,
-            ActionType.DirectLPAddLiquidity
-        );
+        ProxyHook(proxyHook).onDirectLP(key, delta, ActionType.DirectLPAddLiquidity);
 
-        return (
-            this.afterAddLiquidity.selector,
-            BalanceDeltaLibrary.ZERO_DELTA
-        );
+        return (this.afterAddLiquidity.selector, BalanceDeltaLibrary.ZERO_DELTA);
     }
 
     function _afterRemoveLiquidity(
@@ -124,15 +131,10 @@ contract CoreHook is BaseHook, IHookCommon {
         BalanceDelta,
         bytes calldata
     ) internal virtual override returns (bytes4, BalanceDelta) {
-        ProxyHook(proxyHook).onDirectLP(
-            key,
-            delta,
-            ActionType.DirectLPRemoveLiquidity
-        );
+        // Allow removal of liquidity even when the market is paused.
 
-        return (
-            this.afterRemoveLiquidity.selector,
-            BalanceDeltaLibrary.ZERO_DELTA
-        );
+        ProxyHook(proxyHook).onDirectLP(key, delta, ActionType.DirectLPRemoveLiquidity);
+
+        return (this.afterRemoveLiquidity.selector, BalanceDeltaLibrary.ZERO_DELTA);
     }
 }

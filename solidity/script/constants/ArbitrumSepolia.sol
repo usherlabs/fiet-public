@@ -11,9 +11,11 @@ library SepoliaConstants {
     address constant UNIVERSAL_ROUTER = 0xeFd1D4bD4cf1e86Da286BB4CB1B8BcED9C10BA47;
     address constant STATE_VIEW = 0x9D467FA9062b6e9B1a46E26007aD82db116c67cB;
 
-    // Gas token (WETH) addresses
-    address constant WETH_ARBITRUM_SEPOLIA = 0x980B62Da83eFf3D4576C647993b0c1D7faf17c73;
-    address constant WETH_MAINNET = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
+    // Tokens
+    address constant WETH_ADDRESS = 0x980B62Da83eFf3D4576C647993b0c1D7faf17c73;
+    address constant USDC_ADDRESS = 0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d;
+    // address constant USDT_ADDRESS = 0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d;
+    // address constant ARB_ADDRESS = 0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9;
 
     // Native ETH address (zero address)
     address constant ETH_ADDRESS = address(0);
