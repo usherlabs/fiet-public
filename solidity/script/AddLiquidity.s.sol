@@ -293,15 +293,29 @@ contract AddLiquidityScript is ScriptHelper {
         console.log(" ");
         console.log("Minting position to core pool");
 
+        // Get current pool state including tick for dynamic range
+        (uint160 sqrtPriceX96, int24 currentTick,,) = poolManager.getSlot0(corePoolKey.toId());
+
+        // Define range width (configurable via env, default 0)
+        int24 rangeWidth = int24(uint24(vm.envOr("RANGE_WIDTH", uint256(0))));
+
         // Define tick range (full range for maximum liquidity)
         int24 tickLower = -887220; // Min tick
         int24 tickUpper = 887220; // Max tick
-        // // Define a narrower tick range to avoid overflow (e.g., +/- 600 ticks around current price)
-        // int24 tickLower = -600;
-        // int24 tickUpper = 600;
+        if (rangeWidth > 0) {
+            // Calculate dynamic ticks around current tick
+            tickLower = currentTick - rangeWidth;
+            tickUpper = currentTick + rangeWidth;
+        }
 
-        // Get current pool state for liquidity calculation
-        (uint160 sqrtPriceX96,,,) = poolManager.getSlot0(corePoolKey.toId());
+        // Align to tickSpacing
+        int24 tickSpacing = corePoolKey.tickSpacing;
+        tickLower = (tickLower / tickSpacing) * tickSpacing;
+        tickUpper = (tickUpper / tickSpacing) * tickSpacing;
+
+        // Ensure within valid tick bounds
+        if (tickLower < TickMath.MIN_TICK) tickLower = TickMath.MIN_TICK;
+        if (tickUpper > TickMath.MAX_TICK) tickUpper = TickMath.MAX_TICK;
 
         // Calculate liquidity amount from desired token amounts
         uint128 liquidity = LiquidityAmounts.getLiquidityForAmounts(
@@ -340,6 +354,7 @@ contract AddLiquidityScript is ScriptHelper {
                 if (from == address(0) && to == recipient) {
                     // GET THE ACTUAL TOKEN ID FROM THE LOG
                     tokenId = mintedTokenId;
+                    // TODO: This stil does not log the accurate tokenId, need to fix this.
                     console.log("Actual minted Token ID:", tokenId);
                     break;
                 }
