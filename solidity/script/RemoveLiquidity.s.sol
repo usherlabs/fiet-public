@@ -205,8 +205,12 @@ contract RemoveLiquidityScript is ScriptHelper {
         uint256 amount0Received = IERC20(address(lcc0)).balanceOf(recipient) - balance0Before;
         uint256 amount1Received = IERC20(address(lcc1)).balanceOf(recipient) - balance1Before;
 
-        lcc0.unwrap(amount0Received);
-        lcc1.unwrap(amount1Received);
+        if (amount0Received > 0) {
+            lcc0.unwrap(amount0Received);
+        }
+        if (amount1Received > 0) {
+            lcc1.unwrap(amount1Received);
+        }
 
         console.log("Unwrapped %s LCC0 to underlying", amount0Received);
         console.log("Unwrapped %s LCC1 to underlying", amount1Received);

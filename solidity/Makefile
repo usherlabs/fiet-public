@@ -110,6 +110,11 @@ swap:
 		--rpc-url $(RPC_URL) \
 		--broadcast -vvv
 
+unwrap-all:
+	$(FORGE) script $(SCRIPT_DIR)/UnwrapLCC.s.sol \
+		--rpc-url $(RPC_URL) \
+		--broadcast -vvv
+
 # Linting and Formatting
 .PHONY: install-deps lint lint-fix format format-check
 
