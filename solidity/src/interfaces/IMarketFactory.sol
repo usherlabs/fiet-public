@@ -72,11 +72,6 @@ interface IMarketFactory {
      */
     function getCoreHook() external view returns (address);
 
-    /**
-     * @notice Gets the proxy hook address
-     * @return The proxy hook address
-     */
-    function getProxyHook() external view returns (address);
 
     // ============ STATE CHANGING FUNCTIONS ============
 
@@ -91,6 +86,7 @@ interface IMarketFactory {
      * @return proxyPoolId The ID of the created proxy pool
      */
     function createMarket(
+        address proxyHook,
         address underlyingAsset0,
         address underlyingAsset1,
         uint24 corePoolFee,
@@ -115,4 +111,11 @@ interface IMarketFactory {
      * @return The pool manager address
      */
     function poolManager() external view returns (address);
+
+    /**
+     * @notice Gets the proxy hook address for a given proxy pool ID
+     * @param proxyPoolId The proxy pool ID
+     * @return The proxy hook address
+     */
+    function proxyToHook(PoolId proxyPoolId) external view returns (address);
 }

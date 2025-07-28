@@ -32,7 +32,6 @@ contract CoreHook is BaseHook, IHookCommon, PausablePool {
 
     address public immutable marketFactory;
 
-    address public proxyHook;
 
     modifier onlyFactory() {
         if (msg.sender != marketFactory) {
@@ -46,9 +45,6 @@ contract CoreHook is BaseHook, IHookCommon, PausablePool {
         marketFactory = _marketFactory;
     }
 
-    function activate() external onlyFactory {
-        proxyHook = IMarketFactory(marketFactory).getProxyHook();
-    }
 
     function pause(PoolId poolId) external onlyFactory {
         _pause(poolId);
@@ -118,6 +114,8 @@ contract CoreHook is BaseHook, IHookCommon, PausablePool {
         bytes calldata
     ) internal virtual override whenNotPaused(key.toId()) returns (bytes4, BalanceDelta) {
         // TODO: Filter the sender address to determine whether it's MMPositionManager or DirectLP.
+        address proxyHook = _getProxyHook(key);
+
         ProxyHook(proxyHook).onDirectLP(key, delta, ActionType.DirectLPAddLiquidity);
 
         return (this.afterAddLiquidity.selector, BalanceDeltaLibrary.ZERO_DELTA);
@@ -132,9 +130,20 @@ contract CoreHook is BaseHook, IHookCommon, PausablePool {
         bytes calldata
     ) internal virtual override returns (bytes4, BalanceDelta) {
         // Allow removal of liquidity even when the market is paused.
+        // TODO: Filter the sender address to determine whether it's MMPositionManager or DirectLP.
+        // TODO dynamically get proxyhook from market factory
 
+        address proxyHook = _getProxyHook(key);
         ProxyHook(proxyHook).onDirectLP(key, delta, ActionType.DirectLPRemoveLiquidity);
 
         return (this.afterRemoveLiquidity.selector, BalanceDeltaLibrary.ZERO_DELTA);
+    }
+
+    // Helper function to get the proxy hook address from the core pool key
+    function _getProxyHook(PoolKey calldata corePoolKey) internal view returns (address) {
+        PoolId corePoolId = corePoolKey.toId();
+        PoolId proxyPoolId = IMarketFactory(marketFactory).coreToProxy(corePoolId);
+
+        return IMarketFactory(marketFactory).proxyToHook(proxyPoolId);
     }
 }

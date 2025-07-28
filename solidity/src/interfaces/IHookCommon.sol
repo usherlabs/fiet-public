@@ -14,5 +14,4 @@ interface IHookCommon {
         DirectLPRemoveLiquidity
     }
 
-    function activate() external;
 }

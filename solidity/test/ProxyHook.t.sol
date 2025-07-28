@@ -124,13 +124,9 @@ contract ProxyHookTest is Test, Deployers {
         vm.mockCall(
             marketFactory, abi.encodeWithSelector(IMarketFactory.getCoreHook.selector), abi.encode(coreHookAddress)
         );
-        vm.mockCall(
-            marketFactory, abi.encodeWithSelector(IMarketFactory.getProxyHook.selector), abi.encode(proxyHookAddress)
-        );
 
-        // Activate both hooks
-        vm.prank(marketFactory);
-        CoreHook(coreHookAddress).activate();
+
+        // Activate proxy hooks
         vm.prank(marketFactory);
         hook.activate();
 
@@ -147,7 +143,7 @@ contract ProxyHookTest is Test, Deployers {
 
         // Set core pool key against the proxy pool key id.
         vm.prank(marketFactory);
-        hook.setCorePoolKey(proxyPoolKey.toId(), corePoolKey);
+        hook.setCorePoolKey(corePoolKey);
 
         // Provide initial liquidity to core pool
         uint256 initialLiquidity = 10000e18;
@@ -163,6 +159,14 @@ contract ProxyHookTest is Test, Deployers {
 
         IERC20Minimal(lcc1.underlyingAsset()).approve(address(lcc1), initialLiquidity);
         lcc1.wrap(initialLiquidity);
+
+        // Mock factory calls made by CoreHook when liquidity is added or removed.
+        vm.mockCall(
+            marketFactory, abi.encodeWithSelector(IMarketFactory.coreToProxy.selector), abi.encode(proxyPoolKey.toId())
+        );
+        vm.mockCall(
+            marketFactory, abi.encodeWithSelector(IMarketFactory.proxyToHook.selector), abi.encode(proxyHookAddress)
+        );
 
         modifyLiquidityRouter.modifyLiquidity(
             corePoolKey,

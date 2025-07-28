@@ -16,6 +16,9 @@ import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IER
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {BitMath} from "@uniswap/v4-core/src/libraries/BitMath.sol";
+import {HookMiner} from "v4-periphery/src/utils/HookMiner.sol";
+import {HookFlags} from "./constants/HookFlags.sol";
+import {ProxyHook} from "../src/ProxyHook.sol";
 
 /**
  * @title CreateMarketScript
@@ -47,6 +50,7 @@ contract CreateMarketScript is ScriptHelper {
 
     // Deployed contract addresses
     address public marketFactory;
+    address public create2Deployer;
 
     // Created market details
     PoolId public corePoolId;
@@ -104,10 +108,13 @@ contract CreateMarketScript is ScriptHelper {
 
         if (keccak256(bytes(networkName)) == keccak256(bytes("arbitrum"))) {
             poolManager = ArbitrumConstants.POOL_MANAGER;
+            create2Deployer = ArbitrumConstants.DEPLOYER_CREATE2;
         } else if (keccak256(bytes(networkName)) == keccak256(bytes("sepolia"))) {
             poolManager = SepoliaConstants.POOL_MANAGER;
+            create2Deployer = SepoliaConstants.DEPLOYER_CREATE2;
         } else if (keccak256(bytes(networkName)) == keccak256(bytes("ethsepolia"))) {
             poolManager = EthSepoliaConstants.POOL_MANAGER;
+            create2Deployer = EthSepoliaConstants.DEPLOYER_CREATE2;
         } else {
             revert("Unsupported network");
         }
@@ -274,9 +281,11 @@ contract CreateMarketScript is ScriptHelper {
     function _createMarket() internal {
         MarketFactory factory = MarketFactory(marketFactory);
 
+        address proxyHook = _deployProxyHook();
+
         // Call createMarket function
         (PoolId coreId, PoolId proxyId) =
-            factory.createMarket(underlyingAsset0, underlyingAsset1, corePoolFee, tickSpacing, initialSqrtPriceX96);
+            factory.createMarket(proxyHook,underlyingAsset0, underlyingAsset1, corePoolFee, tickSpacing, initialSqrtPriceX96);
 
         corePoolId = coreId;
         proxyPoolId = proxyId;
@@ -439,5 +448,28 @@ contract CreateMarketScript is ScriptHelper {
             z = (x / z + z) / 2;
         }
         return y;
+    }
+
+    /**
+     * @dev Deploys ProxyHook using HookMiner to find correct address
+     * @return The deployed ProxyHook address
+    */
+    function _deployProxyHook() internal returns (address) {
+        // ProxyHook constructor takes (poolManager, marketFactory)
+        // Now we pass the actual marketFactory address
+        bytes memory constructorArgs = abi.encode(poolManager, marketFactory);
+
+        // Mine the correct address with proper flags
+        (address hookAddress, bytes32 salt) =
+            HookMiner.find(create2Deployer, HookFlags.PROXY_HOOK_FLAGS, type(ProxyHook).creationCode, constructorArgs);
+
+        console.log("ProxyHook will be deployed to:", hookAddress);
+        console.log("ProxyHook salt:", vm.toString(salt));
+
+        // Deploy the hook
+        ProxyHook deployedHook = new ProxyHook{salt: salt}(poolManager, marketFactory);
+        require(address(deployedHook) == hookAddress, "ProxyHook: address mismatch");
+
+        return address(deployedHook);
     }
 }
