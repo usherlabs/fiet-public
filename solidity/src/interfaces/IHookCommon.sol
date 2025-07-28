@@ -13,5 +13,4 @@ interface IHookCommon {
         DirectLPAddLiquidity,
         DirectLPRemoveLiquidity
     }
-
 }

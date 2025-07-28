@@ -160,8 +160,9 @@ contract MarketFactoryTest is Test, Deployers {
         );
 
         vm.prank(owner);
-        (PoolId coreId,) =
-            factory.createMarket(proxyHookAddr, address(token0), address(token1), 3000, 60, 79228162514264337593543950336);
+        (PoolId coreId,) = factory.createMarket(
+            proxyHookAddr, address(token0), address(token1), 3000, 60, 79228162514264337593543950336
+        );
 
         // Non-owner cannot pause
         vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(this)));
@@ -185,8 +186,9 @@ contract MarketFactoryTest is Test, Deployers {
         );
 
         vm.prank(owner);
-        (PoolId coreId,) =
-            factory.createMarket(proxyHookAddr, address(token0), address(token1), 3000, 60, 79228162514264337593543950336);
+        (PoolId coreId,) = factory.createMarket(
+            proxyHookAddr, address(token0), address(token1), 3000, 60, 79228162514264337593543950336
+        );
 
         vm.prank(owner);
         factory.pause(coreId);

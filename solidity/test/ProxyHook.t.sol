@@ -125,7 +125,6 @@ contract ProxyHookTest is Test, Deployers {
             marketFactory, abi.encodeWithSelector(IMarketFactory.getCoreHook.selector), abi.encode(coreHookAddress)
         );
 
-
         // Activate proxy hooks
         vm.prank(marketFactory);
         hook.activate();

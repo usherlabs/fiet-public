@@ -319,7 +319,6 @@ contract MarketFactory is IMarketFactory, Ownable2Step {
         return coreHook;
     }
 
-
     /**
      * @notice Gets the pool manager address
      * @return The pool manager address

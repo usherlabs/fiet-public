@@ -149,7 +149,6 @@ contract CompleteDeployScript is ScriptHelper {
         CoreHook coreHookInstance = CoreHook(coreHook);
         MarketFactory factoryInstance = MarketFactory(marketFactory);
 
-
         // Verify the hooks are properly configured
         require(coreHookInstance.marketFactory() == marketFactory, "CoreHook: marketFactory not set");
         require(factoryInstance.getCoreHook() == coreHook, "MarketFactory: coreHook not set");

@@ -284,8 +284,9 @@ contract CreateMarketScript is ScriptHelper {
         address proxyHook = _deployProxyHook();
 
         // Call createMarket function
-        (PoolId coreId, PoolId proxyId) =
-            factory.createMarket(proxyHook,underlyingAsset0, underlyingAsset1, corePoolFee, tickSpacing, initialSqrtPriceX96);
+        (PoolId coreId, PoolId proxyId) = factory.createMarket(
+            proxyHook, underlyingAsset0, underlyingAsset1, corePoolFee, tickSpacing, initialSqrtPriceX96
+        );
 
         corePoolId = coreId;
         proxyPoolId = proxyId;
@@ -453,7 +454,7 @@ contract CreateMarketScript is ScriptHelper {
     /**
      * @dev Deploys ProxyHook using HookMiner to find correct address
      * @return The deployed ProxyHook address
-    */
+     */
     function _deployProxyHook() internal returns (address) {
         // ProxyHook constructor takes (poolManager, marketFactory)
         // Now we pass the actual marketFactory address

@@ -32,7 +32,6 @@ contract CoreHook is BaseHook, IHookCommon, PausablePool {
 
     address public immutable marketFactory;
 
-
     modifier onlyFactory() {
         if (msg.sender != marketFactory) {
             revert InvalidSender();
@@ -44,7 +43,6 @@ contract CoreHook is BaseHook, IHookCommon, PausablePool {
     constructor(address _poolManager, address _marketFactory) BaseHook(IPoolManager(_poolManager)) {
         marketFactory = _marketFactory;
     }
-
 
     function pause(PoolId poolId) external onlyFactory {
         _pause(poolId);

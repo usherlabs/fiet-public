@@ -72,7 +72,6 @@ interface IMarketFactory {
      */
     function getCoreHook() external view returns (address);
 
-
     // ============ STATE CHANGING FUNCTIONS ============
 
     /**
