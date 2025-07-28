@@ -286,7 +286,18 @@ contract ProxyHook is BaseHook, IHookCommon {
 
         // Conduct the swap inside the Pool Manager
 
-        // TODO: We may afterSwapReturnDelta on the core pool to make up the deficit during insufficient liquidity in market.
+        // TODO: The wisest approach is to only swap what is settled by default.
+        // ? If hookData exists, then we can swap the full amount specified.
+        // As per V4Router.sol - if we settle excess LCC from this hook, there's no guarantee it'll be taken by the msgSender()/Locker
+        // Further, once the lock settles, then the deltas renew an the PoolManager will have excess LCC that has not been settled.
+
+        // We could technically attempt to send the excess LCC to the msgSender()/Locker... but this will not work if Action.TAKE uses a custom recipient.
+        // However, if recipient is passed inside of the hookData, then we send the excess there?
+        // Problem here is that if hookData is not passed, then the Router will receive the excess LCC.
+        // Therefore by default we just refund unless the hookData recipient exists...
+        // https://github.com/Uniswap/v4-periphery/blob/444c526b77d804590f0d7bc5a481af5a3277c952/src/V4Router.sol#L71
+        // Any caller that is aware of LCCs will execute a swap directly on the core pool...
+
         // That will affect the return delta of the core pool, and therefore the values downstream.
         // ? This problem could be solved through transient storage.
         BalanceDelta delta = poolManager.swap(
