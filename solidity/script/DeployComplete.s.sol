@@ -71,12 +71,12 @@ contract CompleteDeployScript is ScriptHelper {
         coreHook = _deployCoreHook();
         console.log("CoreHook deployed at:", coreHook);
 
-        // Step 4: Set hooks in MarketFactory
+        // Step 3: Set hooks in MarketFactory
         console.log("\n=== Setting Hooks in MarketFactory ===");
         _setHooksInFactory();
 
-        // Step 5: Activate hooks (set cross-references)
-        console.log("\n=== Activating Hooks ===");
+        // Step 4: Veify hooks addresses across the contracts (set cross-references)
+        console.log("\n=== Verifying Hooks ===");
         _verifyHooks();
 
         vm.stopBroadcast();
