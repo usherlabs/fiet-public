@@ -35,11 +35,14 @@ contract MarketFactory is IMarketFactory, Ownable2Step {
     // Mapping from core pool ID to proxy pool ID
     mapping(PoolId => PoolId) public coreToProxy;
 
-    // Mapping from proxy pool ID to proxy hook address
-    mapping(PoolId => address) public proxyToHook;
-
     // Mapping of addresses that found protocol-bounds
     mapping(address => bool) public bounds;
+
+    // Mapping from proxy pool ID to proxy hook address
+    mapping(PoolId => address) private _proxyToHook;
+
+    // Mapping from proxy hook address to currencies it manages
+    mapping(address => address[2]) private _proxyHookToCurrencyPair;
 
     constructor(address poolManagerAddr, address[] memory _bounds) Ownable(msg.sender) {
         if (poolManagerAddr == address(0)) {
@@ -135,7 +138,10 @@ contract MarketFactory is IMarketFactory, Ownable2Step {
 
         // Store the relationship between core and proxy pools
         coreToProxy[corePoolId] = proxyPoolId;
-        proxyToHook[proxyPoolId] = proxyHook;
+        _proxyToHook[proxyPoolId] = proxyHook;
+        // Store the currencies the proxy hook manages
+        _proxyHookToCurrencyPair[proxyHook] =
+            [Currency.unwrap(proxyPoolKey.currency0), Currency.unwrap(proxyPoolKey.currency1)];
 
         // Set the core pool key in the proxy hook for this new market
         ProxyHook(proxyHook).setCorePoolKey(corePoolKey);
@@ -325,5 +331,23 @@ contract MarketFactory is IMarketFactory, Ownable2Step {
      */
     function poolManager() external view returns (address) {
         return address(_poolManager);
+    }
+
+    /**
+     * @notice Gets the proxy hook address for a given proxy pool ID
+     * @param proxyPoolId The proxy pool ID
+     * @return The proxy hook address
+     */
+    function proxyToHook(PoolId proxyPoolId) external view returns (address) {
+        return _proxyToHook[proxyPoolId];
+    }
+
+    /**
+     * @notice Gets the currency pair managed by a proxy hook
+     * @param proxyHook The proxy hook address
+     * @return The currency pair
+     */
+    function proxyHookToCurrencyPair(address proxyHook) external view returns (address[2] memory) {
+        return _proxyHookToCurrencyPair[proxyHook];
     }
 }

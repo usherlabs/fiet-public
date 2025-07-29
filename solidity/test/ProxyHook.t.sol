@@ -124,6 +124,11 @@ contract ProxyHookTest is Test, Deployers {
         vm.mockCall(
             marketFactory, abi.encodeWithSelector(IMarketFactory.getCoreHook.selector), abi.encode(coreHookAddress)
         );
+        vm.mockCall(
+            marketFactory,
+            abi.encodeWithSelector(IMarketFactory.proxyHookToCurrencyPair.selector),
+            abi.encode(Currency.unwrap(_currency2), Currency.unwrap(_currency3))
+        );
 
         // Activate proxy hooks
         vm.prank(marketFactory);

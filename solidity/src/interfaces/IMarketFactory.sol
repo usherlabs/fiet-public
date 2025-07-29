@@ -117,4 +117,11 @@ interface IMarketFactory {
      * @return The proxy hook address
      */
     function proxyToHook(PoolId proxyPoolId) external view returns (address);
+
+    /**
+     * @notice Gets the currency pair managed by a proxy hook
+     * @param proxyHook The proxy hook address
+     * @return The currency pair
+     */
+    function proxyHookToCurrencyPair(address proxyHook) external view returns (address[2] memory);
 }
