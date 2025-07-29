@@ -75,7 +75,7 @@ contract CompleteDeployScript is ScriptHelper {
         console.log("\n=== Setting Hooks in MarketFactory ===");
         _setHooksInFactory();
 
-        // Step 4: Veify hooks addresses across the contracts (set cross-references)
+        // Step 4: Verify hooks addresses across the contracts (set cross-references)
         console.log("\n=== Verifying Hooks ===");
         _verifyHooks();
 
