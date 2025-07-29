@@ -160,8 +160,6 @@ contract MarketFactory is IMarketFactory, Ownable2Step {
         if (lccToken == address(0)) {
             // Create new LCC token
             address[] memory issuers = new address[](2);
-            // TODO dynamically add proxyhook as issuer
-            // issuers[0] = proxyHook; // ProxyHook
             // issuers[1] = address(poolManager); // TODO: Add MMPositionManager as issuer
 
             lccToken = address(new LiquidityCommitmentCertificate(underlyingAsset, issuers, address(this)));
