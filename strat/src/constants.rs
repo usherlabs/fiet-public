@@ -45,3 +45,20 @@ impl NetworkConstants {
         }
     }
 }
+
+#[derive(Debug, Clone)]
+pub struct UniswapActions {
+    pub burn_position: u8,
+    pub mint_position: u8,
+    pub take_pair: u8,
+}
+
+impl UniswapActions {
+    pub fn new() -> Self {
+        Self {
+            burn_position: 0x03,
+            mint_position: 0x02,
+            take_pair: 0x11,
+        }
+    }
+}

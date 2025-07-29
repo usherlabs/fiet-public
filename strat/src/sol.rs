@@ -21,7 +21,6 @@ sol! {
         function modifyLiquidities(bytes calldata unlockData, uint256 deadline) external;
     }
 
-    #[allow(missing_docs)]
     struct PoolKey {
         address currency0;
         address currency1;
@@ -30,12 +29,15 @@ sol! {
         address hooks;
     }
 
-    #[allow(missing_docs)]
     type PositionInfo is uint256; // Packed as per PositionInfoLibrary
 }
 
+/// PositionInfo is a packed uint256, similar to the Solidity type.
+#[derive(Copy, Clone, Debug)]
+pub struct PositionInfoWrap(pub U256);
+
 // Extensions for PositionInfo using logic from PositionInfoLibrary.sol
-impl PositionInfo {
+impl PositionInfoWrap {
     /// Extracts the tickLower from the packed PositionInfo.
     /// This corresponds to the tickLower function in the Solidity library.
     pub fn tick_lower(self) -> I24 {
