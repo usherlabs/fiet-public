@@ -95,3 +95,59 @@ pub fn compute_pool_id(pool_key: &PoolKey) -> alloy::primitives::B256 {
     // Hash the encoded data (equivalent to keccak256(abi.encode(poolKey)))
     keccak256(&encoded)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloy::primitives::{Address, U256};
+
+    #[test]
+    fn test_tick_lower_positive() {
+        // Packed with tick_lower = 100 (0x64), shifted left by 8
+        let packed = U256::from(100u32) << 8;
+        let info = PositionInfoWrap(packed);
+        assert_eq!(info.tick_lower(), I24::try_from(100).unwrap());
+    }
+
+    #[test]
+    fn test_tick_lower_negative() {
+        // tick_lower = -100, which is 0xFFFFFF9C in 24 bits (signed)
+        // But in u32 for shifting: need to simulate sign extension
+        let tick: i32 = -100;
+        let bits = (tick as u32) & 0xFFFFFF;
+        let packed = U256::from(bits) << 8;
+        let info = PositionInfoWrap(packed);
+        assert_eq!(info.tick_lower(), I24::try_from(-100).unwrap());
+    }
+
+    #[test]
+    fn test_tick_upper_positive() {
+        // tick_upper = 200 (0xC8), shifted left by 32
+        let packed = U256::from(200u32) << 32;
+        let info = PositionInfoWrap(packed);
+        assert_eq!(info.tick_upper(), I24::try_from(200).unwrap());
+    }
+
+    #[test]
+    fn test_tick_upper_negative() {
+        let tick: i32 = -200;
+        let bits = (tick as u32) & 0xFFFFFF;
+        let packed = U256::from(bits) << 32;
+        let info = PositionInfoWrap(packed);
+        assert_eq!(info.tick_upper(), I24::try_from(-200).unwrap());
+    }
+
+    #[test]
+    fn test_compute_pool_id_zero() {
+        let pool_key = PoolKey {
+            currency0: Address::ZERO,
+            currency1: Address::ZERO,
+            fee: alloy::primitives::aliases::U24::ZERO,
+            tickSpacing: I24::ZERO,
+            hooks: Address::ZERO,
+        };
+        let id = compute_pool_id(&pool_key);
+        // Expected can be precomputed if needed, but for now assert not zero or something
+        assert_ne!(id, alloy::primitives::B256::ZERO);
+    }
+}

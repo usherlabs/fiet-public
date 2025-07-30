@@ -147,3 +147,65 @@ pub fn get_sqrt_price_at_tick(tick: i32) -> eyre::Result<U256> {
 
     Ok(sqrt_price_x96)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloy::primitives::U256;
+
+    #[test]
+    fn test_get_sqrt_price_at_tick_zero() -> eyre::Result<()> {
+        let sqrt = get_sqrt_price_at_tick(0)?;
+        let expected = U256::ONE << 96;
+        assert_eq!(sqrt, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_amounts_for_liquidity_below_range() -> eyre::Result<()> {
+        let sqrt_price = U256::from(1) << 96;
+        let sqrt_a = U256::from(2) << 96;
+        let sqrt_b = U256::from(3) << 96;
+        let liquidity = 6u128;
+        let (amount0, amount1) = get_amounts_for_liquidity(sqrt_price, sqrt_a, sqrt_b, liquidity)?;
+        assert_eq!(amount0, U256::from(1));
+        assert_eq!(amount1, U256::ZERO);
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_amounts_for_liquidity_above_range() -> eyre::Result<()> {
+        let sqrt_price = U256::from(4) << 96;
+        let sqrt_a = U256::from(2) << 96;
+        let sqrt_b = U256::from(3) << 96;
+        let liquidity = 1u128;
+        let (amount0, amount1) = get_amounts_for_liquidity(sqrt_price, sqrt_a, sqrt_b, liquidity)?;
+        assert_eq!(amount0, U256::ZERO);
+        assert_eq!(amount1, U256::from(1));
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_amounts_for_liquidity_in_range() -> eyre::Result<()> {
+        let sqrt_price = U256::from(5) << 95; // 2.5 * 2^96
+        let sqrt_a = U256::from(2) << 96;
+        let sqrt_b = U256::from(3) << 96;
+        let liquidity = 15u128;
+        let (amount0, amount1) = get_amounts_for_liquidity(sqrt_price, sqrt_a, sqrt_b, liquidity)?;
+        assert_eq!(amount0, U256::from(1));
+        assert_eq!(amount1, U256::from(7));
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_liquidity_for_amounts_in_range() -> eyre::Result<()> {
+        let sqrt_price = U256::from(5) << 95; // 2.5 * 2^96
+        let sqrt_a = U256::from(2) << 96;
+        let sqrt_b = U256::from(3) << 96;
+        let amount0 = U256::from(1000);
+        let amount1 = U256::from(2000);
+        let liquidity = get_liquidity_for_amounts(sqrt_price, sqrt_a, sqrt_b, amount0, amount1)?;
+        assert!(liquidity > 0);
+        Ok(())
+    }
+}

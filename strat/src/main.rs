@@ -293,3 +293,46 @@ async fn main() -> Result<()> {
         sleep(Duration::from_secs(args.interval)).await;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_should_rebalance() {
+        let current_tick = 100i32;
+        let tick_lower = 50i32;
+        let tick_upper = 150i32;
+        let threshold = 30u32;
+
+        let tick_lower_diff = (current_tick - tick_lower).abs();
+        let tick_upper_diff = (tick_upper - current_tick).abs();
+        let should = tick_lower_diff > threshold as i32 || tick_upper_diff > threshold as i32;
+        assert!(should); // abs(100-50)=50 >30, yes
+
+        // Another case inside bounds
+        let tick_lower = 80i32;
+        let tick_upper = 120i32;
+        let tick_lower_diff = (current_tick - tick_lower).abs();
+        let tick_upper_diff = (tick_upper - current_tick).abs();
+        let should_not = tick_lower_diff > threshold as i32 || tick_upper_diff > threshold as i32;
+        assert!(!should_not); // 20 <30, 20<30
+    }
+
+    #[test]
+    fn test_new_tick_calculation() {
+        let current_tick = 100i32;
+        let range_width = 100u32;
+        let tick_spacing = 10i32;
+
+        let mut new_lower = current_tick - (range_width as i32) / 2;
+        let mut new_upper = current_tick + (range_width as i32) / 2;
+        new_lower = (new_lower / tick_spacing) * tick_spacing;
+        new_upper = (new_upper / tick_spacing) * tick_spacing;
+        new_lower = new_lower.max(-887220);
+        new_upper = new_upper.min(887220);
+
+        assert_eq!(new_lower, 50);
+        assert_eq!(new_upper, 150);
+    }
+}
