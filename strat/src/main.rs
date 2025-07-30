@@ -1,6 +1,6 @@
 use alloy::dyn_abi::DynSolValue;
 use alloy::network::EthereumWallet;
-use alloy::primitives::{keccak256, I256, U256};
+use alloy::primitives::{I256, U256};
 use alloy::providers::{Provider, ProviderBuilder};
 use alloy::rpc::types::eth::TransactionRequest;
 use alloy::sol_types::SolCall;
@@ -15,7 +15,7 @@ mod constants;
 use constants::{NetworkConstants, UniswapActions};
 
 mod sol;
-use sol::{compute_pool_id, IPoolManager, IPositionManager, PositionInfoWrap};
+use sol::{compute_pool_id, get_pool_slot0, IPoolManager, IPositionManager, PositionInfoWrap};
 
 mod liquidity;
 use liquidity::{
@@ -131,22 +131,9 @@ async fn main() -> Result<()> {
         info!("Position info: {:?}", position_info);
 
         // Compute state_slot = keccak256(abi.encodePacked(pool_id, bytes32(uint256(6))))
-        let pools_slot = alloy::primitives::B256::from(U256::from(6).to_be_bytes());
-        let mut concat = Vec::with_capacity(64);
-        concat.extend_from_slice(pool_id.as_slice());
-        concat.extend_from_slice(pools_slot.as_slice());
-        let state_slot = keccak256(concat);
-
-        let data = pool_manager.extsload(state_slot).call().await?;
-
-        // Parse tick and sqrt_price_x96 from data
-        let data_u256 = U256::from_be_bytes(data.0);
-        let sqrt_price_x96 = data_u256 & ((U256::ONE << 160) - U256::ONE);
-        let shifted = data_u256 >> 160;
-        let tick_bits: U256 = shifted & U256::from(0xFFFFFF);
-        let tick_u32: u32 = tick_bits.try_into().unwrap();
-        let tick_i32 = ((tick_u32 << 8) as i32) >> 8;
-        let current_tick: i32 = tick_i32;
+        let slot0 = get_pool_slot0(&pool_manager, pool_id).await?;
+        let current_tick = slot0.tick;
+        let sqrt_price_x96 = slot0.sqrt_price_x96;
 
         info!("Current tick: {}", current_tick);
 

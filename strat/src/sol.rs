@@ -1,5 +1,7 @@
-use alloy::primitives::{aliases::I24, keccak256, U256};
+use alloy::primitives::{aliases::I24, keccak256, FixedBytes, U256};
+use alloy::providers::Provider;
 use alloy::sol;
+use eyre::Result;
 
 // Define the necessary Solidity interfaces using alloy_sol! macro
 // sol! {
@@ -94,6 +96,51 @@ pub fn compute_pool_id(pool_key: &PoolKey) -> alloy::primitives::B256 {
 
     // Hash the encoded data (equivalent to keccak256(abi.encode(poolKey)))
     keccak256(&encoded)
+}
+
+#[derive(Debug, Clone)]
+pub struct Slot0 {
+    pub sqrt_price_x96: U256,
+    pub tick: i32,
+    #[allow(dead_code)]
+    pub protocol_fee: u32,
+    #[allow(dead_code)]
+    pub lp_fee: u32,
+}
+
+pub async fn get_pool_slot0<P: Provider>(
+    pool_manager: &IPoolManager::IPoolManagerInstance<P>,
+    pool_id: FixedBytes<32>,
+) -> Result<Slot0> {
+    let pools_slot = alloy::primitives::B256::from(U256::from(6).to_be_bytes());
+    let mut concat = Vec::with_capacity(64);
+    concat.extend_from_slice(pool_id.as_slice());
+    concat.extend_from_slice(pools_slot.as_slice());
+    let state_slot = keccak256(concat);
+
+    let data = pool_manager.extsload(state_slot).call().await?;
+
+    let data_u256 = U256::from_be_bytes(data.0);
+    let sqrt_price_x96 = data_u256 & ((U256::ONE << 160) - U256::ONE);
+    let shifted = data_u256 >> 160;
+    let tick_bits: U256 = shifted & U256::from(0xFFFFFFu64);
+    let tick_u32: u32 = tick_bits.try_into().unwrap();
+    let tick_i32 = ((tick_u32 << 8) as i32) >> 8;
+
+    let shifted_protocol: U256 = data_u256 >> 184;
+    let protocol_fee: u32 = (shifted_protocol & U256::from(0xFFFFFF))
+        .try_into()
+        .unwrap();
+
+    let shifted_lp: U256 = data_u256 >> 208;
+    let lp_fee: u32 = (shifted_lp & U256::from(0xFFFFFF)).try_into().unwrap();
+
+    Ok(Slot0 {
+        sqrt_price_x96,
+        tick: tick_i32,
+        protocol_fee,
+        lp_fee,
+    })
 }
 
 #[cfg(test)]
