@@ -129,18 +129,25 @@ async fn main() -> Result<()> {
         // 2. Get current tick
         let slot0 = pool_manager.getSlot0(pool_id).call().await?;
         let current_tick: i32 = slot0.tick.try_into().unwrap();
+        info!("Current tick: {}", current_tick);
 
         // 3. Get tick bounds
         let position_info_wrapped = PositionInfoWrap(U256::from(position_info));
         let tick_lower: i32 = position_info_wrapped.tick_lower().try_into().unwrap();
         let tick_upper: i32 = position_info_wrapped.tick_upper().try_into().unwrap();
+        info!("Position ticks: lower={}, upper={}", tick_lower, tick_upper);
 
         // 4. Check if rebalance needed
         let tick_lower_diff = (current_tick - tick_lower).abs();
         let tick_upper_diff = (tick_upper - current_tick).abs();
+        info!(
+            "Diffs: lower={}, upper={}",
+            tick_lower_diff, tick_upper_diff
+        );
         let should_rebalance =
             tick_lower_diff > args.threshold as i32 || tick_upper_diff > args.threshold as i32;
         if should_rebalance {
+            info!("Rebalancing triggered. Threshold: {}", args.threshold);
             // Rebalancing position...
             info!("Rebalancing position...");
 
@@ -151,9 +158,11 @@ async fn main() -> Result<()> {
                 .await?
                 .try_into()
                 .unwrap();
+            info!("Current liquidity: {}", liquidity);
 
             // Get current sqrt price
             let sqrt_price_x96 = slot0.sqrtPriceX96;
+            info!("Current sqrt_price_x96: {}", sqrt_price_x96);
 
             // Compute new ticks
             let tick_spacing: i32 = pool_key.tickSpacing.try_into().unwrap();
@@ -167,6 +176,7 @@ async fn main() -> Result<()> {
             // Clamp to min/max tick
             new_lower = new_lower.max(-887220);
             new_upper = new_upper.min(887220);
+            info!("New ticks: lower={}, upper={}", new_lower, new_upper);
 
             // Compute amounts from old position
             let sqrt_lower_old = get_sqrt_price_at_tick(tick_lower)?;
@@ -177,6 +187,7 @@ async fn main() -> Result<()> {
                 sqrt_upper_old,
                 liquidity,
             )?;
+            info!("Old amounts: amount0={}, amount1={}", amount0, amount1);
 
             // Compute new liquidity
             let sqrt_lower_new = get_sqrt_price_at_tick(new_lower)?;
@@ -188,6 +199,7 @@ async fn main() -> Result<()> {
                 amount0,
                 amount1,
             )?;
+            info!("New liquidity: {}", new_liquidity);
 
             // Build actions
             let uniswap_actions = UniswapActions::new();
@@ -287,6 +299,7 @@ async fn main() -> Result<()> {
             if let Some(new_id) = new_token_id_opt {
                 position_token_id = new_id.to::<u64>();
                 info!("New position token ID: {}", new_id);
+                info!("Rebalance completed. New token ID: {}", position_token_id);
             } else {
                 info!("Warning: Could not find new token ID in logs");
             }
