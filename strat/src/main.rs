@@ -7,6 +7,7 @@ use alloy::sol_types::SolCall;
 use clap::Parser;
 use dotenv::dotenv;
 use eyre::Result;
+use log::info;
 use std::time::Duration;
 use tokio::time::sleep;
 
@@ -62,10 +63,14 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    env_logger::init();
+
     // Load environment variables from .env file
     dotenv().ok();
 
     let args = Args::parse();
+    info!("Starting Feit pool position rebalancer strategy...");
+    info!("Arguments: {:?}", args);
 
     // Get network constants based on network argument
     let network_constants = match args.network.as_str() {
@@ -118,7 +123,7 @@ async fn main() -> Result<()> {
         // Compute poolId (bytes32 from pool_key hash)
         let pool_id = compute_pool_id(&pool_key);
 
-        println!("Pool ID: {:?}", pool_id);
+        info!("Pool ID: {:?}", pool_id);
 
         // 2. Get current tick
         let slot0 = pool_manager.getSlot0(pool_id).call().await?;
@@ -136,7 +141,7 @@ async fn main() -> Result<()> {
             tick_lower_diff > args.threshold as i32 || tick_upper_diff > args.threshold as i32;
         if should_rebalance {
             // Rebalancing position...
-            println!("Rebalancing position...");
+            info!("Rebalancing position...");
 
             // Get current liquidity
             let liquidity: u128 = position_manager
@@ -280,14 +285,14 @@ async fn main() -> Result<()> {
 
             if let Some(new_id) = new_token_id_opt {
                 position_token_id = new_id.to::<u64>();
-                println!("New position token ID: {}", new_id);
+                info!("New position token ID: {}", new_id);
             } else {
-                println!("Warning: Could not find new token ID in logs");
+                info!("Warning: Could not find new token ID in logs");
             }
 
-            println!("Rebalance transaction confirmed: {:?}", receipt);
+            info!("Rebalance transaction confirmed: {:?}", receipt);
         } else {
-            println!("Position within bounds.");
+            info!("Position within bounds.");
         }
 
         sleep(Duration::from_secs(args.interval)).await;
@@ -296,7 +301,7 @@ async fn main() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    // use super::*;
 
     #[test]
     fn test_should_rebalance() {
