@@ -23,9 +23,6 @@ use liquidity::{
     get_sqrt_price_at_tick,
 };
 
-mod error;
-mod tick_math;
-
 // CLI Arguments
 #[derive(Parser, Debug)]
 #[command(about = "Fiet Proxy Theory Experiment - Uniswap V4 Position Rebalancer Strategy")]
