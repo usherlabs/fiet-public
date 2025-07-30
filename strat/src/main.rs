@@ -107,6 +107,7 @@ async fn main() -> Result<()> {
     let pool_manager = IPoolManager::new(network_constants.pool_manager, &provider);
 
     let recipient = signer.address();
+    info!("Recipient signer address: {:?}", recipient);
 
     let mut position_token_id = args.token_id;
 
