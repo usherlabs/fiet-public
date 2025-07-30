@@ -3562,7 +3562,6 @@ dependencies = [
  "env_logger",
  "eyre",
  "log",
- "thiserror",
  "tokio",
 ]
 
