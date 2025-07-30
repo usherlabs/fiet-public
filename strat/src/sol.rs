@@ -11,7 +11,7 @@ use alloy::sol;
 sol! {
     #[sol(rpc)]
     interface IPoolManager {
-        function getSlot0(bytes32 poolId) external view returns (uint160 sqrtPriceX96, int24 tick, uint24 protocolFee, uint24 lpFee);
+        function extsload(bytes32 slot) external view returns (bytes32);
     }
 
     #[sol(rpc)]

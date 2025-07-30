@@ -14,19 +14,19 @@ This guide describes how to perform an end-to-end (E2E) test of the Fiet protoco
    Navigate to the `../solidity` directory and run:
 
    ```
-   make fork
+   make dev
    ```
 
    This starts Anvil forking the specified network (e.g., arbitrum_sepolia). Keep this running in a separate terminal.
 
-2. **Create the Market**
+2. **Create the Dev Market**
    In the `../solidity` directory, run:
 
    ```
-   make create-market
+   make dev
    ```
 
-   This deploys and initialises a new market pool. Note the pool details from the output.
+   This deploys and initialises a new market pool between mock currencies. Note the pool details from the output.
 
 3. **Add Liquidity**
    In the `../solidity` directory, run:
@@ -41,7 +41,7 @@ This guide describes how to perform an end-to-end (E2E) test of the Fiet protoco
    In the `strat` directory, run:
 
    ```
-   cargo run -- --token-id <TOKEN_ID> --network arbitrum_sepolia --threshold 10 --range-width 100
+   cargo run -- --token-id <TOKEN_ID> --network arbitrum_sepolia --threshold 10 --range-width 100 --rpc-url http://localhost:8545
    ```
 
    - `--token-id`: The position ID from step 3.

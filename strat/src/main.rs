@@ -1,6 +1,6 @@
 use alloy::dyn_abi::DynSolValue;
 use alloy::network::EthereumWallet;
-use alloy::primitives::{I256, U256};
+use alloy::primitives::{keccak256, I256, U256};
 use alloy::providers::{Provider, ProviderBuilder};
 use alloy::rpc::types::eth::TransactionRequest;
 use alloy::sol_types::SolCall;
@@ -18,7 +18,13 @@ mod sol;
 use sol::{compute_pool_id, IPoolManager, IPositionManager, PositionInfoWrap};
 
 mod liquidity;
-use liquidity::{get_amounts_for_liquidity, get_liquidity_for_amounts, get_sqrt_price_at_tick};
+use liquidity::{
+    align_to_nearest_tick, get_amounts_for_liquidity, get_liquidity_for_amounts,
+    get_sqrt_price_at_tick,
+};
+
+mod error;
+mod tick_math;
 
 // CLI Arguments
 #[derive(Parser, Debug)]
@@ -63,7 +69,7 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    env_logger::init();
+    env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
 
     // Load environment variables from .env file
     dotenv().ok();
@@ -122,13 +128,29 @@ async fn main() -> Result<()> {
         let position_info = pool_and_position.info;
 
         // Compute poolId (bytes32 from pool_key hash)
-        let pool_id = compute_pool_id(&pool_key);
+        let pool_id = compute_pool_id(&pool_key); // works.
 
         info!("Pool ID: {:?}", pool_id);
+        info!("Position info: {:?}", position_info);
 
-        // 2. Get current tick
-        let slot0 = pool_manager.getSlot0(pool_id).call().await?;
-        let current_tick: i32 = slot0.tick.try_into().unwrap();
+        // Compute state_slot = keccak256(abi.encodePacked(pool_id, bytes32(uint256(6))))
+        let pools_slot = alloy::primitives::B256::from(U256::from(6).to_be_bytes());
+        let mut concat = Vec::with_capacity(64);
+        concat.extend_from_slice(pool_id.as_slice());
+        concat.extend_from_slice(pools_slot.as_slice());
+        let state_slot = keccak256(concat);
+
+        let data = pool_manager.extsload(state_slot).call().await?;
+
+        // Parse tick and sqrt_price_x96 from data
+        let data_u256 = U256::from_be_bytes(data.0);
+        let sqrt_price_x96 = data_u256 & ((U256::ONE << 160) - U256::ONE);
+        let shifted = data_u256 >> 160;
+        let tick_bits: U256 = shifted & U256::from(0xFFFFFF);
+        let tick_u32: u32 = tick_bits.try_into().unwrap();
+        let tick_i32 = ((tick_u32 << 8) as i32) >> 8;
+        let current_tick: i32 = tick_i32;
+
         info!("Current tick: {}", current_tick);
 
         // 3. Get tick bounds
@@ -161,7 +183,7 @@ async fn main() -> Result<()> {
             info!("Current liquidity: {}", liquidity);
 
             // Get current sqrt price
-            let sqrt_price_x96 = slot0.sqrtPriceX96;
+            // Removed: let sqrt_price_x96 = slot0.sqrtPriceX96;
             info!("Current sqrt_price_x96: {}", sqrt_price_x96);
 
             // Compute new ticks
@@ -169,9 +191,16 @@ async fn main() -> Result<()> {
             let mut new_lower = current_tick - (args.range_width as i32) / 2;
             let mut new_upper = current_tick + (args.range_width as i32) / 2;
 
+            log::debug!(
+                "New ticks pre-alignment: lower={}, upper={}, tick_spacing={}",
+                new_lower,
+                new_upper,
+                tick_spacing,
+            );
+
             // Align to tick spacing
-            new_lower = (new_lower / tick_spacing) * tick_spacing;
-            new_upper = (new_upper / tick_spacing) * tick_spacing;
+            new_lower = align_to_nearest_tick(new_lower, tick_spacing);
+            new_upper = align_to_nearest_tick(new_upper, tick_spacing);
 
             // Clamp to min/max tick
             new_lower = new_lower.max(-887220);

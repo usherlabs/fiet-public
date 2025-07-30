@@ -1,8 +1,18 @@
 use alloy::primitives::U256;
+use alloy::primitives::U512;
+
+fn u512_to_u256(val: U512) -> U256 {
+    let limbs = val.as_limbs();
+    if limbs[4] != 0 || limbs[5] != 0 || limbs[6] != 0 || limbs[7] != 0 {
+        panic!("U512 to U256 overflow");
+    }
+    U256::from_limbs([limbs[0], limbs[1], limbs[2], limbs[3]])
+}
 
 pub fn mul_div(x: U256, y: U256, d: U256) -> U256 {
-    // Simple implementation for illustration; replace with proper wide mul_div in production
-    (x * y) / d
+    let prod = U512::from(x) * U512::from(y);
+    let res = prod / U512::from(d);
+    u512_to_u256(res)
 }
 
 pub fn get_amount0_for_liquidity(sqrt_a: U256, sqrt_b: U256, liquidity: u128) -> U256 {
@@ -130,7 +140,9 @@ pub fn get_sqrt_price_at_tick(tick: i32) -> eyre::Result<U256> {
     for (mask, mul_str) in ratios {
         if abs_tick & mask != 0 {
             let mul = U256::from_str_radix(mul_str, 16)?;
-            ratio = (ratio * mul) >> 128;
+            let prod = U512::from(ratio) * U512::from(mul);
+            let shifted = prod >> 128;
+            ratio = u512_to_u256(shifted);
         }
     }
 
@@ -138,14 +150,37 @@ pub fn get_sqrt_price_at_tick(tick: i32) -> eyre::Result<U256> {
         ratio = U256::MAX / ratio;
     }
 
-    let sqrt_price_x96 = (ratio >> 32)
-        + if ratio % (U256::ONE << 32) == U256::ZERO {
-            U256::ZERO
-        } else {
-            U256::ONE
-        };
+    let mut sqrt_price_x96 = ratio >> 32;
+    if ratio % (U256::ONE << 32) != U256::ZERO {
+        sqrt_price_x96 = sqrt_price_x96 + U256::ONE;
+    }
 
     Ok(sqrt_price_x96)
+}
+
+pub fn align_to_nearest_tick(tick: i32, tick_spacing: i32) -> i32 {
+    if tick_spacing == 0 {
+        return tick;
+    }
+    let abs_spacing = tick_spacing.abs();
+    let half_spacing = abs_spacing / 2;
+
+    if tick >= 0 {
+        let remainder = tick % abs_spacing;
+        if remainder >= half_spacing {
+            tick + (abs_spacing - remainder)
+        } else {
+            tick - remainder
+        }
+    } else {
+        let abs_tick = tick.abs();
+        let remainder = abs_tick % abs_spacing;
+        if remainder > half_spacing || (remainder == half_spacing && abs_spacing % 2 == 0) {
+            tick - (abs_spacing - remainder) // Round away from zero
+        } else {
+            tick + remainder // Round towards zero
+        }
+    }
 }
 
 #[cfg(test)]
@@ -206,6 +241,71 @@ mod tests {
         let amount1 = U256::from(2000);
         let liquidity = get_liquidity_for_amounts(sqrt_price, sqrt_a, sqrt_b, amount0, amount1)?;
         assert!(liquidity > 0);
+        Ok(())
+    }
+
+    #[test]
+    fn test_sqrt_price_at_tick_positive() -> eyre::Result<()> {
+        let sqrt = get_sqrt_price_at_tick(1)?;
+        let expected = U256::from(79232123823359799118286999568u128); // Approx sqrt(1.0001) * 2^96
+        assert_eq!(sqrt, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_sqrt_price_at_tick_negative() -> eyre::Result<()> {
+        let sqrt = get_sqrt_price_at_tick(-1)?;
+        let expected = U256::from(79224201403219477170569942574u128);
+        assert_eq!(sqrt, expected);
+        assert!(sqrt > U256::ZERO);
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_liquidity_for_amounts_below_range_non_zero() -> eyre::Result<()> {
+        let sqrt_price = U256::from(1) << 96;
+        let sqrt_a = U256::from(2) << 96;
+        let sqrt_b = U256::from(3) << 96;
+        let amount0 = U256::from(1000);
+        let amount1 = U256::from(0);
+        let liquidity = get_liquidity_for_amounts(sqrt_price, sqrt_a, sqrt_b, amount0, amount1)?;
+        assert!(liquidity > 0);
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_liquidity_for_amounts_in_range_non_zero() -> eyre::Result<()> {
+        let sqrt_price = U256::from(25) << 95; // 2.5 * 2^96
+        let sqrt_a = U256::from(2) << 96;
+        let sqrt_b = U256::from(3) << 96;
+        let amount0 = U256::from(500);
+        let amount1 = U256::from(600);
+        let liquidity = get_liquidity_for_amounts(sqrt_price, sqrt_a, sqrt_b, amount0, amount1)?;
+        assert!(liquidity > 0);
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_liquidity_for_amounts_above_range_non_zero() -> eyre::Result<()> {
+        let sqrt_price = U256::from(4) << 96;
+        let sqrt_a = U256::from(2) << 96;
+        let sqrt_b = U256::from(3) << 96;
+        let amount0 = U256::from(0);
+        let amount1 = U256::from(2000);
+        let liquidity = get_liquidity_for_amounts(sqrt_price, sqrt_a, sqrt_b, amount0, amount1)?;
+        assert!(liquidity > 0);
+        Ok(())
+    }
+
+    #[test]
+    fn test_align_to_nearest_tick() -> eyre::Result<()> {
+        let lower = -50;
+        let upper: i32 = 50;
+        let tick_spacing = 60;
+        let aligned_lower = align_to_nearest_tick(lower, tick_spacing);
+        let aligned_upper = align_to_nearest_tick(upper, tick_spacing);
+        assert_eq!(aligned_lower, -60);
+        assert_eq!(aligned_upper, 60);
         Ok(())
     }
 }
