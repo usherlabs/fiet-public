@@ -1,5 +1,4 @@
 {
-  "coreHook": "0x25077ead298D5DE9D59a47Ef4CDdd5e1caDa2540",
-  "proxyHook": "0xb589627a5Ee62e729D4142DB173d367E84062888",
-  "marketFactory": "0x35Dc319fba4e343ad00A0b09Fc7a52c4420d1d05"
+  "coreHook": "0x7f31604d91C4F129483c5977818144Fc39DE6540",
+  "marketFactory": "0xbFeBc2fe92dcbc247d7f594f78d5F6e68e28272C"
 }

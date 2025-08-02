@@ -234,10 +234,10 @@ create-market-ethsepolia: ## Create WETH/USDC market on Ethereum Sepolia testnet
 	NETWORK=ethsepolia \
 	UNDERLYING_ASSET_0=$(WETH_ETHSEPOLIA) \
 	UNDERLYING_ASSET_1=$(USDC_ETHSEPOLIA) \
-	CORE_POOL_FEE=200 \
+	CORE_POOL_FEE=100 \
 	TICK_SPACING=2 \
 	ASSET0_PRICE=1000000 \
-	ASSET1_PRICE=5518540000 \
+	ASSET1_PRICE=5829890000 \
 	forge script script/CreateMarket.s.sol:CreateMarketScript \
 		--rpc-url $(ETH_SEPOLIA_RPC_URL) \
 		-vvvv \
@@ -250,7 +250,7 @@ add-liquidity-ethsepolia: ## Add liquidity to WETH/USDC market on Ethereum Sepol
 	NETWORK=ethsepolia \
 	UNDERLYING_ASSET_0=$(USDC_ETHSEPOLIA) \
 	UNDERLYING_ASSET_1=$(WETH_ETHSEPOLIA) \
-	CORE_POOL_FEE=200 \
+	CORE_POOL_FEE=100 \
 	TICK_SPACING=2 \
 	RANGE_WIDTH=100 \
 	UA_1_AMOUNT=$(ETH_WETH_AMOUNT) \

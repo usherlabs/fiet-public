@@ -124,8 +124,11 @@ contract AddLiquidityScript is ScriptHelper {
             }
         }
 
-        proxyHook = ProxyHook(readAddress("proxyHook"));
         address coreHookAddr = factory.getCoreHook();
+
+        PoolId proxyPoolId = factory.coreToProxy(corePoolKey.toId());
+        address proxyHookAddr = factory.proxyToHook(proxyPoolId);
+        proxyHook = ProxyHook(proxyHookAddr);
 
         // Load LCC tokens from factory
         lcc0 = LiquidityCommitmentCertificate(factory.getLCC(token0));
