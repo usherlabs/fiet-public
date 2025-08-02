@@ -55,7 +55,7 @@ contract ProxyHook is BaseHook, IHookCommon {
 
     address public coreHook; // specific to proxy hook.
 
-    mapping(PoolId => PoolKey) public corePoolKey;
+    PoolKey public corePoolKey;
 
     modifier onlyCoreHook() {
         if (msg.sender != coreHook) {
@@ -95,8 +95,8 @@ contract ProxyHook is BaseHook, IHookCommon {
      * @dev Updates the core pool key with the actual core pool configuration
      * @param _corePoolKey The actual core pool key to set
      */
-    function setCorePoolKey(PoolId thisPoolId, PoolKey calldata _corePoolKey) external onlyFactory {
-        corePoolKey[thisPoolId] = _corePoolKey;
+    function setCorePoolKey(PoolKey calldata _corePoolKey) external onlyFactory {
+        corePoolKey = _corePoolKey;
     }
 
     function getHookPermissions() public pure override returns (Hooks.Permissions memory) {
@@ -243,7 +243,7 @@ contract ProxyHook is BaseHook, IHookCommon {
         returns (bytes4, BeforeSwapDelta, uint24)
     {
         bool coreZeroForOne;
-        PoolKey memory coreKey = corePoolKey[key.toId()];
+        PoolKey memory coreKey = corePoolKey;
 
         LiquidityCommitmentCertificate lccToken0 = LiquidityCommitmentCertificate(Currency.unwrap(coreKey.currency0));
         LiquidityCommitmentCertificate lccToken1 = LiquidityCommitmentCertificate(Currency.unwrap(coreKey.currency1));
