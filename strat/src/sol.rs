@@ -21,6 +21,9 @@ sol! {
         function getPoolAndPositionInfo(uint256 tokenId) external view returns (PoolKey poolKey, PositionInfo info);
         function getPositionLiquidity(uint256 tokenId) external view returns (uint128 liquidity);
         function modifyLiquidities(bytes calldata unlockData, uint256 deadline) external;
+        function ownerOf(uint256 tokenId) external view returns (address);
+        function isApprovedForAll(address owner, address operator) external view returns (bool);
+        function setApprovalForAll(address operator, bool approved) external;
     }
 
     struct PoolKey {

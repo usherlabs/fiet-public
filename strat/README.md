@@ -14,7 +14,7 @@ This guide describes how to perform an end-to-end (E2E) test of the Fiet protoco
    Navigate to the `../solidity` directory and run:
 
    ```
-   make dev
+   make fork
    ```
 
    This starts Anvil forking the specified network (e.g., arbitrum_sepolia). Keep this running in a separate terminal.

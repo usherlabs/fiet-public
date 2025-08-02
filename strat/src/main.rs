@@ -8,7 +8,7 @@ use clap::Parser;
 use dotenv::dotenv;
 use eyre::Result;
 use log::info;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::time::sleep;
 
 mod constants;
@@ -93,6 +93,8 @@ async fn main() -> Result<()> {
         .or_else(|| std::env::var("RPC_URL").ok())
         .unwrap_or_else(|| network_constants.rpc_url.to_string());
 
+    log::debug!("RPC URL: {:?}", rpc_url);
+
     // Determine private key: CLI arg > env var
     let private_key = args
         .private_key
@@ -120,6 +122,36 @@ async fn main() -> Result<()> {
             .getPoolAndPositionInfo(U256::from(position_token_id))
             .call()
             .await?;
+
+        // Check owner
+        let owner = position_manager
+            .ownerOf(U256::from(position_token_id))
+            .call()
+            .await?;
+        info!("Position owner: {:?}", owner);
+        if owner != recipient {
+            return Err(eyre::eyre!("Signer {:?} is not the owner of tokenId {}, owner is {:?}. Please use the owner's private key or approve the signer.", recipient, position_token_id, owner));
+        }
+
+        // Check if PositionManager is approved operator
+        let operator = network_constants.position_manager;
+        let is_approved = position_manager
+            .isApprovedForAll(owner, operator)
+            .call()
+            .await?;
+        if !is_approved {
+            info!("Approving PositionManager as operator for all tokens...");
+            let approval_call = IPositionManager::setApprovalForAllCall {
+                operator,
+                approved: true,
+            };
+            let approval_tx = TransactionRequest::default()
+                .to(network_constants.position_manager)
+                .input(approval_call.abi_encode().into());
+            let pending_approval = provider.send_transaction(approval_tx).await?;
+            let _ = pending_approval.get_receipt().await?;
+            info!("Approval transaction confirmed");
+        }
 
         let pool_key = pool_and_position.poolKey;
         let position_info = pool_and_position.info;
@@ -259,24 +291,72 @@ async fn main() -> Result<()> {
             ];
             params_encoded.push(DynSolValue::Tuple(take_tuple).abi_encode());
 
-            // Encode unlockData = abi.encode(actions, params)
-            let actions_dyn = DynSolValue::Bytes(actions.into());
-            let params_dyn = DynSolValue::Array(
-                params_encoded
-                    .into_iter()
-                    .map(|p| DynSolValue::Bytes(p.into()))
-                    .collect(),
+            // ? CREATE UNLOCK DATA ------------------------------------------------------------
+            // Manually encode unlockData in strict format to match contract's decoder
+            let actions_raw: Vec<u8> = actions.clone();
+            let actions_len = actions_raw.len() as u64;
+            let actions_padded_len = ((actions_len + 31) / 32) * 32;
+            let params_len = params_encoded.len() as u64;
+
+            // Compute relative offsets for params (relative to params.length position)
+            let mut param_offset_values: Vec<U256> = Vec::new();
+            let mut current = U256::from(params_len * 32);
+            for p in &params_encoded {
+                param_offset_values.push(current);
+                let len = p.len() as u64;
+                let padded = ((len + 31) / 32) * 32;
+                current += U256::from(32 + padded);
+            }
+
+            // Build unlock_data Vec<u8>
+            let mut unlock_data_vec: Vec<u8> = Vec::new();
+
+            // word0: 0x40
+            unlock_data_vec.extend_from_slice(&U256::from(0x40u64).to_be_bytes::<32>());
+
+            // word1: params_length_offset = 0x60 + actions_padded_len
+            let params_length_offset = 0x60u64 + actions_padded_len;
+            unlock_data_vec
+                .extend_from_slice(&U256::from(params_length_offset).to_be_bytes::<32>());
+
+            // word2: actions_len
+            unlock_data_vec.extend_from_slice(&U256::from(actions_len).to_be_bytes::<32>());
+
+            // actions data + padding
+            unlock_data_vec.extend(&actions_raw);
+            let current_size = unlock_data_vec.len();
+            unlock_data_vec.resize(
+                current_size + (actions_padded_len - actions_len) as usize,
+                0,
             );
-            let unlock_tuple = vec![actions_dyn, params_dyn];
-            let unlock_data = DynSolValue::Tuple(unlock_tuple).abi_encode();
+
+            // params.length
+            unlock_data_vec.extend_from_slice(&U256::from(params_len).to_be_bytes::<32>());
+
+            // params offsets
+            for off in param_offset_values {
+                unlock_data_vec.extend_from_slice(&off.to_be_bytes::<32>());
+            }
+
+            // params tails
+            for p in &params_encoded {
+                let len = p.len() as u64;
+                unlock_data_vec.extend_from_slice(&U256::from(len).to_be_bytes::<32>());
+                unlock_data_vec.extend(p);
+                let current_len = 32 + p.len();
+                let target_len = 32 + ((p.len() + 31) / 32) * 32;
+                unlock_data_vec.resize(unlock_data_vec.len() + (target_len - current_len), 0);
+            }
+
+            let unlock_data = unlock_data_vec;
+            // CREATE UNLOCK DATA ------------------------------------------------------------
 
             // Get current timestamp for deadline
-            let block = provider
-                .get_block_by_number(alloy::rpc::types::eth::BlockNumberOrTag::Latest)
-                .await?
-                .unwrap();
-            let current_timestamp = block.header.timestamp;
-            let deadline = current_timestamp + 3600;
+            let current_timestamp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+            let deadline = current_timestamp + 300;
 
             // Build and send transaction
             let call = IPositionManager::modifyLiquiditiesCall {
