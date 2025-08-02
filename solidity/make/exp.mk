@@ -237,7 +237,7 @@ create-market-ethsepolia: ## Create WETH/USDC market on Ethereum Sepolia testnet
 	CORE_POOL_FEE=100 \
 	TICK_SPACING=2 \
 	ASSET0_PRICE=1000000 \
-	ASSET1_PRICE=5829890000 \
+	ASSET1_PRICE=5751990000 \
 	forge script script/CreateMarket.s.sol:CreateMarketScript \
 		--rpc-url $(ETH_SEPOLIA_RPC_URL) \
 		-vvvv \
