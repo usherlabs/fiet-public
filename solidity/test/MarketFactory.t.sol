@@ -56,7 +56,7 @@ contract MarketFactoryTest is Test, Deployers {
         deployCodeTo("ProxyHook.sol:ProxyHook", abi.encode(poolManager, address(factory)), proxyHookAddr);
 
         vm.prank(owner);
-        factory.setHooks(coreHookAddr, proxyHookAddr);
+        factory.setHooks(coreHookAddr);
     }
 
     function testCreateMarket() public {
@@ -67,6 +67,7 @@ contract MarketFactoryTest is Test, Deployers {
 
         vm.prank(owner);
         (PoolId coreId, PoolId proxyId) = factory.createMarket(
+            proxyHookAddr,
             address(token0),
             address(token1),
             3000,
@@ -87,8 +88,25 @@ contract MarketFactoryTest is Test, Deployers {
         assertEq(factory.getCoreHook(), coreHookAddr);
     }
 
-    function testGetProxyHook() public view {
-        assertEq(factory.getProxyHook(), proxyHookAddr);
+    function testGetProxyHook() public {
+        // Mock initialize calls
+        vm.mockCall(
+            address(poolManager), abi.encodeWithSelector(IPoolManager.initialize.selector), abi.encode(bytes32(0))
+        );
+
+        vm.prank(owner);
+        (PoolId _coreId, PoolId proxyId) = factory.createMarket(
+            proxyHookAddr,
+            address(token0),
+            address(token1),
+            3000,
+            60,
+            79228162514264337593543950336 // 1:1 price
+        );
+
+        // get proxy hook address
+        address proxyHook = factory.proxyToHook(proxyId);
+        assertEq(proxyHook, proxyHookAddr);
     }
 
     function testAddRemoveBounds() public {
@@ -97,7 +115,7 @@ contract MarketFactoryTest is Test, Deployers {
         );
 
         vm.prank(owner);
-        factory.createMarket(address(token0), address(token1), 3000, 60, 79228162514264337593543950336);
+        factory.createMarket(proxyHookAddr, address(token0), address(token1), 3000, 60, 79228162514264337593543950336);
 
         address[] memory newBounds = new address[](1);
         newBounds[0] = makeAddr("newBound");
@@ -117,7 +135,7 @@ contract MarketFactoryTest is Test, Deployers {
         );
 
         vm.prank(owner);
-        factory.createMarket(address(token0), address(token1), 3000, 60, 79228162514264337593543950336);
+        factory.createMarket(proxyHookAddr, address(token0), address(token1), 3000, 60, 79228162514264337593543950336);
 
         address boundAddr = makeAddr("bound");
 
@@ -133,7 +151,7 @@ contract MarketFactoryTest is Test, Deployers {
     function testRevertInvalidUnderlying() public {
         vm.prank(owner);
         vm.expectRevert(IMarketFactory.InvalidUnderlyingAsset.selector);
-        factory.createMarket(address(0), address(token1), 3000, 60, 79228162514264337593543950336);
+        factory.createMarket(proxyHookAddr, address(0), address(token1), 3000, 60, 79228162514264337593543950336);
     }
 
     function testPauseMarket() public {
@@ -142,8 +160,9 @@ contract MarketFactoryTest is Test, Deployers {
         );
 
         vm.prank(owner);
-        (PoolId coreId,) =
-            factory.createMarket(address(token0), address(token1), 3000, 60, 79228162514264337593543950336);
+        (PoolId coreId,) = factory.createMarket(
+            proxyHookAddr, address(token0), address(token1), 3000, 60, 79228162514264337593543950336
+        );
 
         // Non-owner cannot pause
         vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(this)));
@@ -167,8 +186,9 @@ contract MarketFactoryTest is Test, Deployers {
         );
 
         vm.prank(owner);
-        (PoolId coreId,) =
-            factory.createMarket(address(token0), address(token1), 3000, 60, 79228162514264337593543950336);
+        (PoolId coreId,) = factory.createMarket(
+            proxyHookAddr, address(token0), address(token1), 3000, 60, 79228162514264337593543950336
+        );
 
         vm.prank(owner);
         factory.pause(coreId);

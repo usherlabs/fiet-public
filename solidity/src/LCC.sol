@@ -23,7 +23,17 @@ contract LiquidityCommitmentCertificate is ERC20 {
     uint256 public uaSupply; // underlying asset supply ONLY within the LCC.
 
     modifier onlyIssuer() {
-        if (!issuers[msg.sender]) {
+        address caller = msg.sender;
+        // Check the caller if they are a trusted proxy hook
+        // Get if the caller is a registered proxy hook
+        // If it is, then we need to get the two currencies it proxies
+        // Then check if the underlying asset falls under any of the two currencies it supports
+        address[2] memory currencies = IMarketFactory(marketFactory).proxyHookToCurrencyPair(caller);
+        bool isAssetProxyPool = (currencies[0] == underlyingAsset || currencies[1] == underlyingAsset);
+        bool isValidIssuer = issuers[caller] || isAssetProxyPool;
+
+        // if caller is not a valid issuer then revert
+        if (!isValidIssuer) {
             revert SenderNotIssuer();
         }
         _;

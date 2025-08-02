@@ -9,7 +9,6 @@ import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {LiquidityCommitmentCertificate} from "./LCC.sol";
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
-import {IHookCommon} from "./interfaces/IHookCommon.sol";
 import {IHookPausable} from "./interfaces/IHookPausable.sol";
 import {ProxyHook} from "./ProxyHook.sol";
 
@@ -23,7 +22,6 @@ contract MarketFactory is IMarketFactory, Ownable2Step {
 
     IPoolManager private immutable _poolManager;
     address public coreHook;
-    address public proxyHook;
 
     // Mapping from underlying asset to LCC token
     mapping(address => address) public underlyingToLCC;
@@ -40,6 +38,12 @@ contract MarketFactory is IMarketFactory, Ownable2Step {
     // Mapping of addresses that found protocol-bounds
     mapping(address => bool) public bounds;
 
+    // Mapping from proxy pool ID to proxy hook address
+    mapping(PoolId => address) private _proxyToHook;
+
+    // Mapping from proxy hook address to currencies it manages
+    mapping(address => address[2]) private _proxyHookToCurrencyPair;
+
     constructor(address poolManagerAddr, address[] memory _bounds) Ownable(msg.sender) {
         if (poolManagerAddr == address(0)) {
             revert InvalidPoolParameters();
@@ -52,18 +56,14 @@ contract MarketFactory is IMarketFactory, Ownable2Step {
         }
     }
 
-    function setHooks(address _coreHook, address _proxyHook) external onlyOwner {
+    function setHooks(address _coreHook) external onlyOwner {
         // These variables are immutable. Can only be set once
         // Tie this factory to these hooks as LCCs/markets/hooks are tied to the factory.
-        if (coreHook == address(0) && proxyHook == address(0)) {
-            if (_coreHook == address(0) || _proxyHook == address(0)) {
+        if (coreHook == address(0)) {
+            if (_coreHook == address(0)) {
                 revert("Invalid hook addresses");
             }
             coreHook = _coreHook;
-            proxyHook = _proxyHook;
-
-            IHookCommon(_coreHook).activate();
-            IHookCommon(_proxyHook).activate();
         }
     }
 
@@ -94,6 +94,7 @@ contract MarketFactory is IMarketFactory, Ownable2Step {
      * @return proxyPoolId The ID of the created proxy pool
      */
     function createMarket(
+        address proxyHook,
         address underlyingAsset0,
         address underlyingAsset1,
         uint24 corePoolFee,
@@ -137,9 +138,13 @@ contract MarketFactory is IMarketFactory, Ownable2Step {
 
         // Store the relationship between core and proxy pools
         coreToProxy[corePoolId] = proxyPoolId;
+        _proxyToHook[proxyPoolId] = proxyHook;
+        // Store the currencies the proxy hook manages
+        _proxyHookToCurrencyPair[proxyHook] =
+            [Currency.unwrap(proxyPoolKey.currency0), Currency.unwrap(proxyPoolKey.currency1)];
 
         // Set the core pool key in the proxy hook for this new market
-        ProxyHook(proxyHook).setCorePoolKey(proxyPoolId, corePoolKey);
+        ProxyHook(proxyHook).setCorePoolKey(corePoolKey);
 
         emit MarketCreated(
             corePoolId, proxyPoolId, underlyingAsset0, underlyingAsset1, lccToken0, lccToken1, coreHook, proxyHook
@@ -161,7 +166,6 @@ contract MarketFactory is IMarketFactory, Ownable2Step {
         if (lccToken == address(0)) {
             // Create new LCC token
             address[] memory issuers = new address[](2);
-            issuers[0] = proxyHook; // ProxyHook
             // issuers[1] = address(poolManager); // TODO: Add MMPositionManager as issuer
 
             lccToken = address(new LiquidityCommitmentCertificate(underlyingAsset, issuers, address(this)));
@@ -320,18 +324,28 @@ contract MarketFactory is IMarketFactory, Ownable2Step {
     }
 
     /**
-     * @notice Gets the proxy hook address
-     * @return The proxy hook address
-     */
-    function getProxyHook() external view returns (address) {
-        return proxyHook;
-    }
-
-    /**
      * @notice Gets the pool manager address
      * @return The pool manager address
      */
     function poolManager() external view returns (address) {
         return address(_poolManager);
+    }
+
+    /**
+     * @notice Gets the proxy hook address for a given proxy pool ID
+     * @param proxyPoolId The proxy pool ID
+     * @return The proxy hook address
+     */
+    function proxyToHook(PoolId proxyPoolId) external view returns (address) {
+        return _proxyToHook[proxyPoolId];
+    }
+
+    /**
+     * @notice Gets the currency pair managed by a proxy hook
+     * @param proxyHook The proxy hook address
+     * @return The currency pair
+     */
+    function proxyHookToCurrencyPair(address proxyHook) external view returns (address[2] memory) {
+        return _proxyHookToCurrencyPair[proxyHook];
     }
 }
