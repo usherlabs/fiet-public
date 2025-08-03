@@ -118,8 +118,8 @@ async fn main() -> Result<()> {
     let position_manager = IPositionManager::new(network_constants.position_manager, &provider);
     let pool_manager = IPoolManager::new(network_constants.pool_manager, &provider);
 
-    let recipient = signer.address();
-    info!("Recipient signer address: {:?}", recipient);
+    let signer_address = signer.address();
+    info!("Signer address: {:?}", signer_address);
 
     let mut position_token_id = args.token_id;
 
@@ -149,28 +149,9 @@ async fn main() -> Result<()> {
             .call()
             .await?;
         info!("Position owner: {:?}", owner);
-        if owner != recipient {
-            return Err(eyre::eyre!("Signer {:?} is not the owner of tokenId {}, owner is {:?}. Please use the owner's private key or approve the signer.", recipient, position_token_id, owner));
+        if owner != signer_address {
+            return Err(eyre::eyre!("Signer {:?} is not the owner of tokenId {}, owner is {:?}. Please use the owner's private key or approve the signer.", signer_address, position_token_id, owner));
         }
-
-        // // Check if signer is approved to operate on the position
-        // let is_approved = position_manager
-        //     .isApprovedForAll(owner, recipient)
-        //     .call()
-        //     .await?;
-        // if !is_approved {
-        //     info!("Approving signer as operator for all tokens...");
-        //     let approval_call = IPositionManager::setApprovalForAllCall {
-        //         operator: recipient,
-        //         approved: true,
-        //     };
-        //     let approval_tx = TransactionRequest::default()
-        //         .to(network_constants.position_manager)
-        //         .input(approval_call.abi_encode().into());
-        //     let pending_approval = provider.send_transaction(approval_tx).await?;
-        //     let _ = pending_approval.get_receipt().await?;
-        //     info!("Approval transaction confirmed");
-        // }
 
         let pool_key = pool_and_position.poolKey;
         let position_info = pool_and_position.info;
@@ -303,7 +284,7 @@ async fn main() -> Result<()> {
                 DynSolValue::Uint(U256::from(new_liquidity), 128),
                 DynSolValue::Uint(amount0, 256),
                 DynSolValue::Uint(amount1, 256),
-                DynSolValue::Address(recipient),
+                DynSolValue::Address(signer_address),
                 DynSolValue::Bytes(vec![].into()),
             ];
             params_encoded.push(DynSolValue::Tuple(mint_tuple).abi_encode());
@@ -312,7 +293,7 @@ async fn main() -> Result<()> {
             let take_tuple = vec![
                 DynSolValue::Address(pool_key.currency0),
                 DynSolValue::Address(pool_key.currency1),
-                DynSolValue::Address(recipient),
+                DynSolValue::Address(signer_address),
             ];
             params_encoded.push(DynSolValue::Tuple(take_tuple).abi_encode());
 
@@ -344,13 +325,11 @@ async fn main() -> Result<()> {
             };
             let mut tx = TransactionRequest::default()
                 .to(network_constants.position_manager)
-                .input(call.abi_encode().into())
-                .from(recipient);
+                .input(call.abi_encode().into());
             tx.gas = Some(10_000_000);
 
-            debug!("Transaction signer: {:?}", recipient);
-            debug!("Position owner: {:?}", owner);
-            debug!("Transaction from address: {:?}", tx.from);
+            // debug!("Transaction signer: {:?}", signer_address);
+            // debug!("Position owner: {:?}", owner);
 
             debug!(
                 "ModifyLiquidities calldata: 0x{}",
@@ -420,7 +399,7 @@ async fn main() -> Result<()> {
                         "Found Transfer event: from={:?}, to={:?}, token_id={:?}",
                         from, to, token_id
                     );
-                    if from == alloy::primitives::Address::ZERO && to == recipient {
+                    if from == alloy::primitives::Address::ZERO && to == signer_address {
                         new_token_id_opt = Some(U256::from_be_slice(&token_id));
                         break;
                     }
