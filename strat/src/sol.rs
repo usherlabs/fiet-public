@@ -146,6 +146,64 @@ pub async fn get_pool_slot0<P: Provider>(
     })
 }
 
+pub fn params_to_unlock_data(actions: &Vec<u8>, params_encoded: &Vec<Vec<u8>>) -> Vec<u8> {
+    let actions_raw: Vec<u8> = actions.clone();
+    let actions_len = actions_raw.len() as u64;
+    let actions_padded_len = ((actions_len + 31) / 32) * 32;
+    let params_len = params_encoded.len() as u64;
+
+    // Compute relative offsets for params (relative to params.length position)
+    let mut param_offset_values: Vec<U256> = Vec::new();
+    let mut current = U256::from(params_len * 32);
+    for p in params_encoded {
+        param_offset_values.push(current);
+        let len = p.len() as u64;
+        let padded = ((len + 31) / 32) * 32;
+        current += U256::from(32 + padded);
+    }
+
+    // Build unlock_data Vec<u8>
+    let mut unlock_data_vec: Vec<u8> = Vec::new();
+
+    // word0: 0x40
+    unlock_data_vec.extend_from_slice(&U256::from(0x40u64).to_be_bytes::<32>());
+
+    // word1: params_length_offset = 0x60 + actions_padded_len
+    let params_length_offset = 0x60u64 + actions_padded_len;
+    unlock_data_vec.extend_from_slice(&U256::from(params_length_offset).to_be_bytes::<32>());
+
+    // word2: actions_len
+    unlock_data_vec.extend_from_slice(&U256::from(actions_len).to_be_bytes::<32>());
+
+    // actions data + padding
+    unlock_data_vec.extend(&actions_raw);
+    let current_size = unlock_data_vec.len();
+    unlock_data_vec.resize(
+        current_size + (actions_padded_len - actions_len) as usize,
+        0,
+    );
+
+    // params.length
+    unlock_data_vec.extend_from_slice(&U256::from(params_len).to_be_bytes::<32>());
+
+    // params offsets
+    for off in param_offset_values {
+        unlock_data_vec.extend_from_slice(&off.to_be_bytes::<32>());
+    }
+
+    // params tails
+    for p in params_encoded {
+        let len = p.len() as u64;
+        unlock_data_vec.extend_from_slice(&U256::from(len).to_be_bytes::<32>());
+        unlock_data_vec.extend(p);
+        let current_len = 32 + p.len();
+        let target_len = 32 + ((p.len() + 31) / 32) * 32;
+        unlock_data_vec.resize(unlock_data_vec.len() + (target_len - current_len), 0);
+    }
+
+    unlock_data_vec
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

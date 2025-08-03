@@ -7,7 +7,7 @@ use alloy::sol_types::SolCall;
 use clap::Parser;
 use dotenv::dotenv;
 use eyre::Result;
-use log::info;
+use log::{debug, info, warn};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::time::sleep;
 
@@ -15,7 +15,10 @@ mod constants;
 use constants::{NetworkConstants, UniswapActions};
 
 mod sol;
-use sol::{compute_pool_id, get_pool_slot0, IPoolManager, IPositionManager, PositionInfoWrap};
+use sol::{
+    compute_pool_id, get_pool_slot0, params_to_unlock_data, IPoolManager, IPositionManager,
+    PositionInfoWrap,
+};
 
 mod liquidity;
 use liquidity::{
@@ -77,13 +80,6 @@ async fn main() -> Result<()> {
     info!("Starting Fiet pool position rebalancer strategy...");
     info!("Arguments: {:?}", args);
 
-    if args.range_width / 2 > args.threshold {
-        return Err(eyre::eyre!(
-            "Range width must be greater than twice the threshold. (threshold > {})",
-            args.range_width / 2,
-        ));
-    }
-
     // Get network constants based on network argument
     let network_constants = match args.network.as_str() {
         "arbitrum" => NetworkConstants::arbitrum(),
@@ -104,7 +100,7 @@ async fn main() -> Result<()> {
         .or_else(|| std::env::var("RPC_URL").ok())
         .unwrap_or_else(|| network_constants.rpc_url.to_string());
 
-    log::debug!("RPC URL: {:?}", rpc_url);
+    debug!("RPC URL: {:?}", rpc_url);
 
     // Determine private key: CLI arg > env var
     let private_key = args
@@ -129,10 +125,23 @@ async fn main() -> Result<()> {
 
     loop {
         // 1. Get position info
-        let pool_and_position = position_manager
+        let pool_and_position = match position_manager
             .getPoolAndPositionInfo(U256::from(position_token_id))
             .call()
-            .await?;
+            .await
+        {
+            Ok(info) => info,
+            Err(err) => {
+                info!(
+                    "Failed to get position info for token {}: {}",
+                    position_token_id, err
+                );
+                return Err(eyre::eyre!(
+                    "Position {} does not exist or has been burned",
+                    position_token_id
+                ));
+            }
+        };
 
         // Check owner
         let owner = position_manager
@@ -143,6 +152,25 @@ async fn main() -> Result<()> {
         if owner != recipient {
             return Err(eyre::eyre!("Signer {:?} is not the owner of tokenId {}, owner is {:?}. Please use the owner's private key or approve the signer.", recipient, position_token_id, owner));
         }
+
+        // // Check if signer is approved to operate on the position
+        // let is_approved = position_manager
+        //     .isApprovedForAll(owner, recipient)
+        //     .call()
+        //     .await?;
+        // if !is_approved {
+        //     info!("Approving signer as operator for all tokens...");
+        //     let approval_call = IPositionManager::setApprovalForAllCall {
+        //         operator: recipient,
+        //         approved: true,
+        //     };
+        //     let approval_tx = TransactionRequest::default()
+        //         .to(network_constants.position_manager)
+        //         .input(approval_call.abi_encode().into());
+        //     let pending_approval = provider.send_transaction(approval_tx).await?;
+        //     let _ = pending_approval.get_receipt().await?;
+        //     info!("Approval transaction confirmed");
+        // }
 
         let pool_key = pool_and_position.poolKey;
         let position_info = pool_and_position.info;
@@ -198,11 +226,9 @@ async fn main() -> Result<()> {
             let mut new_lower = current_tick - (args.range_width as i32) / 2;
             let mut new_upper = current_tick + (args.range_width as i32) / 2;
 
-            log::debug!(
+            debug!(
                 "New ticks pre-alignment: lower={}, upper={}, tick_spacing={}",
-                new_lower,
-                new_upper,
-                tick_spacing,
+                new_lower, new_upper, tick_spacing,
             );
 
             // Align to tick spacing
@@ -213,6 +239,13 @@ async fn main() -> Result<()> {
             new_lower = new_lower.max(-887220);
             new_upper = new_upper.min(887220);
             info!("New ticks: lower={}, upper={}", new_lower, new_upper);
+
+            // if new_lower == tick_lower || new_upper == tick_upper {
+            //     // Should not really ever happen as per should_rebalance conditional
+            //     log::warn!("New ticks are the same as the old ticks. (new_lower == tick_lower || new_upper == tick_upper)");
+            //     sleep(Duration::from_secs(args.interval)).await;
+            //     continue;
+            // }
 
             // Compute amounts from old position
             let sqrt_lower_old = get_sqrt_price_at_tick(tick_lower)?;
@@ -237,13 +270,14 @@ async fn main() -> Result<()> {
             )?;
             info!("New liquidity: {}", new_liquidity);
 
-            // Build actions
+            // Build actions - let's try just burn first to test
             let uniswap_actions = UniswapActions::new();
             let actions: Vec<u8> = vec![
                 uniswap_actions.burn_position,
                 uniswap_actions.mint_position,
                 uniswap_actions.take_pair,
             ]; // BURN_POSITION, MINT_POSITION, TAKE_PAIR
+            debug!("Actions: {:?}", actions);
 
             // Build params
             let mut params_encoded: Vec<Vec<u8>> = Vec::new();
@@ -282,64 +316,19 @@ async fn main() -> Result<()> {
             ];
             params_encoded.push(DynSolValue::Tuple(take_tuple).abi_encode());
 
+            // debug!(
+            //     "Params encoded lengths: {:?}",
+            //     params_encoded.iter().map(|p| p.len()).collect::<Vec<_>>()
+            // );
+            // debug!("Burn params: 0x{}", hex::encode(&params_encoded[0]));
+            // debug!("Mint params: 0x{}", hex::encode(&params_encoded[1]));
+            // debug!("Take params: 0x{}", hex::encode(&params_encoded[2]));
+
             // ? CREATE UNLOCK DATA ------------------------------------------------------------
             // Manually encode unlockData in strict format to match contract's decoder
-            let actions_raw: Vec<u8> = actions.clone();
-            let actions_len = actions_raw.len() as u64;
-            let actions_padded_len = ((actions_len + 31) / 32) * 32;
-            let params_len = params_encoded.len() as u64;
-
-            // Compute relative offsets for params (relative to params.length position)
-            let mut param_offset_values: Vec<U256> = Vec::new();
-            let mut current = U256::from(params_len * 32);
-            for p in &params_encoded {
-                param_offset_values.push(current);
-                let len = p.len() as u64;
-                let padded = ((len + 31) / 32) * 32;
-                current += U256::from(32 + padded);
-            }
-
-            // Build unlock_data Vec<u8>
-            let mut unlock_data_vec: Vec<u8> = Vec::new();
-
-            // word0: 0x40
-            unlock_data_vec.extend_from_slice(&U256::from(0x40u64).to_be_bytes::<32>());
-
-            // word1: params_length_offset = 0x60 + actions_padded_len
-            let params_length_offset = 0x60u64 + actions_padded_len;
-            unlock_data_vec
-                .extend_from_slice(&U256::from(params_length_offset).to_be_bytes::<32>());
-
-            // word2: actions_len
-            unlock_data_vec.extend_from_slice(&U256::from(actions_len).to_be_bytes::<32>());
-
-            // actions data + padding
-            unlock_data_vec.extend(&actions_raw);
-            let current_size = unlock_data_vec.len();
-            unlock_data_vec.resize(
-                current_size + (actions_padded_len - actions_len) as usize,
-                0,
-            );
-
-            // params.length
-            unlock_data_vec.extend_from_slice(&U256::from(params_len).to_be_bytes::<32>());
-
-            // params offsets
-            for off in param_offset_values {
-                unlock_data_vec.extend_from_slice(&off.to_be_bytes::<32>());
-            }
-
-            // params tails
-            for p in &params_encoded {
-                let len = p.len() as u64;
-                unlock_data_vec.extend_from_slice(&U256::from(len).to_be_bytes::<32>());
-                unlock_data_vec.extend(p);
-                let current_len = 32 + p.len();
-                let target_len = 32 + ((p.len() + 31) / 32) * 32;
-                unlock_data_vec.resize(unlock_data_vec.len() + (target_len - current_len), 0);
-            }
-
-            let unlock_data = unlock_data_vec;
+            let unlock_data = params_to_unlock_data(&actions, &params_encoded);
+            // debug!("Unlock data length: {}", unlock_data.len());
+            // debug!("Unlock data hex: 0x{}", hex::encode(&unlock_data));
             // CREATE UNLOCK DATA ------------------------------------------------------------
 
             // Get current timestamp for deadline
@@ -355,13 +344,34 @@ async fn main() -> Result<()> {
             };
             let mut tx = TransactionRequest::default()
                 .to(network_constants.position_manager)
-                .input(call.abi_encode().into());
+                .input(call.abi_encode().into())
+                .from(recipient);
             tx.gas = Some(10_000_000);
 
-            log::debug!(
+            debug!("Transaction signer: {:?}", recipient);
+            debug!("Position owner: {:?}", owner);
+            debug!("Transaction from address: {:?}", tx.from);
+
+            debug!(
                 "ModifyLiquidities calldata: 0x{}",
                 hex::encode(call.abi_encode())
             );
+
+            // Simulate transaction
+            if let Err(sim_err) = position_manager
+                .modifyLiquidities(unlock_data.clone().into(), U256::from(deadline))
+                .call()
+                .await
+            {
+                if let Some(revert_data) = sim_err.as_revert_data() {
+                    let error_msg = errors::parse_revert_error(revert_data.to_vec().as_slice());
+                    info!("Simulation revert reason: {}", error_msg);
+                    return Err(eyre::eyre!("Transaction reverted: {}", error_msg));
+                } else {
+                    info!("Simulation error: {}", sim_err);
+                    return Err(sim_err.into());
+                }
+            }
 
             // Build and send transaction
             let send_result = provider.send_transaction(tx).await;
@@ -373,36 +383,32 @@ async fn main() -> Result<()> {
                 }
             };
             let receipt = pending_tx.get_receipt().await?;
+            debug!("Transaction receipt: {:?}", receipt);
+            debug!("Transaction hash: {:?}", receipt.transaction_hash);
+            debug!("Transaction status: {:?}", receipt.status());
+
             if !receipt.status() {
-                // ! This is not reached as the error occurs in the prior RpcError block...
-                // info!("Transaction reverted on-chain");
-                // let unlock_data_clone = unlock_data.clone();
-                // if let Err(sim_err) = position_manager
-                //     .modifyLiquidities(unlock_data_clone.into(), U256::from(deadline))
-                //     .call()
-                //     .await
-                // {
-                //     if let Some(revert_data) = sim_err.as_revert_data() {
-                //         let error_msg = errors::parse_revert_error(revert_data.to_vec().as_slice());
-                //         info!("Revert reason: {}", error_msg);
-                //         return Err(eyre::eyre!("Transaction reverted: {}", error_msg));
-                //     } else {
-                //         info!("Simulation error: {}", sim_err);
-                //         return Err(sim_err.into());
-                //     }
-                // } else {
-                //     return Err(eyre::eyre!(
-                //         "Transaction reverted but simulation succeeded - state changed?"
-                //     ));
-                // }
+                return Err(eyre::eyre!("Transaction reverted on-chain"));
             }
 
             // Parse logs for new token ID
             let transfer_topic =
                 alloy::primitives::keccak256("Transfer(address,address,uint256)".as_bytes());
+            debug!(
+                "Looking for Transfer events in {} logs",
+                receipt.logs().len()
+            );
             let mut new_token_id_opt = None;
-            for log in receipt.logs().iter() {
+            for (i, log) in receipt.logs().iter().enumerate() {
                 let topics = log.topics();
+                debug!(
+                    "Log {}: address={:?}, topics={:?}, data={:?}",
+                    i,
+                    log.address(),
+                    topics,
+                    log.data()
+                );
+
                 if topics.len() == 3
                     && topics[0] == transfer_topic
                     && log.address() == network_constants.position_manager
@@ -410,6 +416,10 @@ async fn main() -> Result<()> {
                     let from = alloy::primitives::Address::from_word(topics[1]);
                     let to = alloy::primitives::Address::from_word(topics[2]);
                     let token_id = log.data().data.to_vec();
+                    info!(
+                        "Found Transfer event: from={:?}, to={:?}, token_id={:?}",
+                        from, to, token_id
+                    );
                     if from == alloy::primitives::Address::ZERO && to == recipient {
                         new_token_id_opt = Some(U256::from_be_slice(&token_id));
                         break;
@@ -426,6 +436,29 @@ async fn main() -> Result<()> {
             }
 
             info!("Rebalance transaction confirmed: {:?}", receipt);
+
+            // Check if position was actually rebalanced by getting new position info
+            let new_pool_and_position = position_manager
+                .getPoolAndPositionInfo(U256::from(position_token_id))
+                .call()
+                .await?;
+            let new_position_info = new_pool_and_position.info;
+            let new_position_info_wrapped = PositionInfoWrap(U256::from(new_position_info));
+            let new_tick_lower: i32 = new_position_info_wrapped.tick_lower().try_into().unwrap();
+            let new_tick_upper: i32 = new_position_info_wrapped.tick_upper().try_into().unwrap();
+            info!(
+                "Position after rebalance: lower={}, upper={}",
+                new_tick_lower, new_tick_upper
+            );
+
+            if new_tick_lower == tick_lower && new_tick_upper == tick_upper {
+                warn!("Warning: Position ticks unchanged after rebalance");
+            } else {
+                info!(
+                    "Position successfully rebalanced from ({}, {}) to ({}, {})",
+                    tick_lower, tick_upper, new_tick_lower, new_tick_upper
+                );
+            }
         } else {
             info!("Position within bounds.");
         }
