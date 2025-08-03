@@ -3561,6 +3561,7 @@ dependencies = [
  "dotenv",
  "env_logger",
  "eyre",
+ "hex",
  "log",
  "tokio",
 ]

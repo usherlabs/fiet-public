@@ -23,6 +23,8 @@ use liquidity::{
     get_sqrt_price_at_tick,
 };
 
+mod errors;
+
 // CLI Arguments
 #[derive(Parser, Debug)]
 #[command(about = "Fiet Proxy Theory Experiment - Uniswap V4 Position Rebalancer Strategy")]
@@ -72,7 +74,7 @@ async fn main() -> Result<()> {
     dotenv().ok();
 
     let args = Args::parse();
-    info!("Starting Feit pool position rebalancer strategy...");
+    info!("Starting Fiet pool position rebalancer strategy...");
     info!("Arguments: {:?}", args);
 
     // Get network constants based on network argument
@@ -86,6 +88,8 @@ async fn main() -> Result<()> {
             ))
         }
     };
+
+    info!("Network constants: {:?}", network_constants);
 
     // Determine RPC URL: CLI arg > env var > network default
     let rpc_url = args
@@ -131,26 +135,6 @@ async fn main() -> Result<()> {
         info!("Position owner: {:?}", owner);
         if owner != recipient {
             return Err(eyre::eyre!("Signer {:?} is not the owner of tokenId {}, owner is {:?}. Please use the owner's private key or approve the signer.", recipient, position_token_id, owner));
-        }
-
-        // Check if PositionManager is approved operator
-        let operator = network_constants.position_manager;
-        let is_approved = position_manager
-            .isApprovedForAll(owner, operator)
-            .call()
-            .await?;
-        if !is_approved {
-            info!("Approving PositionManager as operator for all tokens...");
-            let approval_call = IPositionManager::setApprovalForAllCall {
-                operator,
-                approved: true,
-            };
-            let approval_tx = TransactionRequest::default()
-                .to(network_constants.position_manager)
-                .input(approval_call.abi_encode().into());
-            let pending_approval = provider.send_transaction(approval_tx).await?;
-            let _ = pending_approval.get_receipt().await?;
-            info!("Approval transaction confirmed");
         }
 
         let pool_key = pool_and_position.poolKey;
@@ -356,18 +340,55 @@ async fn main() -> Result<()> {
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_secs();
-            let deadline = current_timestamp + 300;
+            let deadline = current_timestamp + 3600;
 
-            // Build and send transaction
             let call = IPositionManager::modifyLiquiditiesCall {
-                unlockData: unlock_data.into(),
+                unlockData: unlock_data.clone().into(),
                 deadline: U256::from(deadline),
             };
-            let tx = TransactionRequest::default()
+            let mut tx = TransactionRequest::default()
                 .to(network_constants.position_manager)
                 .input(call.abi_encode().into());
-            let pending_tx = provider.send_transaction(tx).await?;
+            tx.gas = Some(10_000_000);
+
+            log::debug!(
+                "ModifyLiquidities calldata: 0x{}",
+                hex::encode(call.abi_encode())
+            );
+
+            // Build and send transaction
+            let send_result = provider.send_transaction(tx).await;
+            let pending_tx = match send_result {
+                Ok(ptx) => ptx,
+                Err(err) => {
+                    info!("Transaction send failed: {}", err);
+                    return Err(err.into());
+                }
+            };
             let receipt = pending_tx.get_receipt().await?;
+            if !receipt.status() {
+                // ! This is not reached as the error occurs in the prior RpcError block...
+                // info!("Transaction reverted on-chain");
+                // let unlock_data_clone = unlock_data.clone();
+                // if let Err(sim_err) = position_manager
+                //     .modifyLiquidities(unlock_data_clone.into(), U256::from(deadline))
+                //     .call()
+                //     .await
+                // {
+                //     if let Some(revert_data) = sim_err.as_revert_data() {
+                //         let error_msg = errors::parse_revert_error(revert_data.to_vec().as_slice());
+                //         info!("Revert reason: {}", error_msg);
+                //         return Err(eyre::eyre!("Transaction reverted: {}", error_msg));
+                //     } else {
+                //         info!("Simulation error: {}", sim_err);
+                //         return Err(sim_err.into());
+                //     }
+                // } else {
+                //     return Err(eyre::eyre!(
+                //         "Transaction reverted but simulation succeeded - state changed?"
+                //     ));
+                // }
+            }
 
             // Parse logs for new token ID
             let transfer_topic =
