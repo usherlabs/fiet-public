@@ -77,6 +77,13 @@ async fn main() -> Result<()> {
     info!("Starting Fiet pool position rebalancer strategy...");
     info!("Arguments: {:?}", args);
 
+    if args.range_width / 2 > args.threshold {
+        return Err(eyre::eyre!(
+            "Range width must be greater than twice the threshold. (threshold > {})",
+            args.range_width / 2,
+        ));
+    }
+
     // Get network constants based on network argument
     let network_constants = match args.network.as_str() {
         "arbitrum" => NetworkConstants::arbitrum(),
