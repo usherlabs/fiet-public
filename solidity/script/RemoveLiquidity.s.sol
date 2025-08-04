@@ -5,7 +5,7 @@ import "forge-std/Script.sol";
 import {IPositionManager} from "v4-periphery/src/interfaces/IPositionManager.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
-import {PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
@@ -132,8 +132,11 @@ contract RemoveLiquidityScript is ScriptHelper {
             tickSpacingVal = int24(uint24(jsonTS));
         }
 
-        proxyHook = ProxyHook(readAddress("proxyHook"));
         address coreHookAddr = factory.getCoreHook();
+
+        PoolId proxyPoolId = factory.coreToProxy(corePoolKey.toId());
+        address proxyHookAddr = factory.proxyToHook(proxyPoolId);
+        proxyHook = ProxyHook(proxyHookAddr);
 
         lcc0 = LiquidityCommitmentCertificate(factory.getLCC(token0));
         lcc1 = LiquidityCommitmentCertificate(factory.getLCC(token1));

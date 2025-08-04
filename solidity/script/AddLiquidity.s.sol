@@ -124,8 +124,11 @@ contract AddLiquidityScript is ScriptHelper {
             }
         }
 
-        proxyHook = ProxyHook(readAddress("proxyHook"));
         address coreHookAddr = factory.getCoreHook();
+
+        PoolId proxyPoolId = factory.coreToProxy(corePoolKey.toId());
+        address proxyHookAddr = factory.proxyToHook(proxyPoolId);
+        proxyHook = ProxyHook(proxyHookAddr);
 
         // Load LCC tokens from factory
         lcc0 = LiquidityCommitmentCertificate(factory.getLCC(token0));
@@ -203,8 +206,8 @@ contract AddLiquidityScript is ScriptHelper {
         string memory symbol0 = IERC20Metadata(token0).symbol();
         string memory symbol1 = IERC20Metadata(token1).symbol();
 
-        console.log("Symbol for currency0 underlying:", coreToken0 == address(lcc0) ? symbol0 : symbol1);
-        console.log("Symbol for currency1 underlying:", coreToken0 == address(lcc0) ? symbol1 : symbol0);
+        console.log("Symbol for Core Pool currency0 underlying:", coreToken0 == address(lcc0) ? symbol0 : symbol1);
+        console.log("Symbol for Core Pool currency1 underlying:", coreToken0 == address(lcc0) ? symbol1 : symbol0);
 
         bool hasUa0 = vm.envExists("UA_0_AMOUNT");
         bool hasUa1 = vm.envExists("UA_1_AMOUNT");

@@ -25,6 +25,7 @@
 #   wrap-eth-ethsepolia    - Wrap ETH to WETH on Ethereum Sepolia
 #   create-market-ethsepolia - Create a new market on Ethereum Sepolia
 #   add-liquidity-ethsepolia - Add liquidity to market on Ethereum Sepolia
+#   unwrap-eth-ethsepolia   - Unwrap all WETH to ETH on Ethereum Sepolia testnet
 #
 # 📋 Prerequisites:
 #   - Set up environment variables in .env file
@@ -74,6 +75,7 @@ exp-help: ## Show available experimental commands
 	@echo "  wrap-eth-ethsepolia    - Wrap ETH to WETH on Ethereum Sepolia"
 	@echo "  create-market-ethsepolia - Create WETH/USDC market on Ethereum Sepolia"
 	@echo "  add-liquidity-ethsepolia - Add liquidity to market on Ethereum Sepolia"
+	@echo "  unwrap-eth-ethsepolia   - Unwrap all WETH to ETH on Ethereum Sepolia testnet"
 	@echo ""
 	@echo "💡 Examples:"
 	@echo "  make exp wrap-eth-sepolia      # Wrap 0.01 ETH on Arbitrum Sepolia"
@@ -168,7 +170,7 @@ SQRT_PRICE_MAINNET=54275522706223419759561
 # USDT_AMOUNT=1000000 # 1 USDT * 10^6
 # USDT_AMOUNT=998000000 # 998 USDT * 10^6
 # USDT_AMOUNT=50000000 # 50 USDT * 10^6
-USDT_AMOUNT=6002000000 # 6003 USDT * 10^6
+USDT_AMOUNT=5660000000 # 6003 USDT * 10^6
 # ARB_AMOUNT=2121256710000000000 # 2.12125671 ARB * 10^18
 
 # wrap-eth-mainnet: ## Wrap ETH to WETH on Arbitrum mainnet
@@ -195,7 +197,7 @@ add-liquidity-mainnet:
 	UNDERLYING_ASSET_1=$(USDT_MAINNET) \
 	CORE_POOL_FEE=400 \
 	TICK_SPACING=10 \
-	RANGE_WIDTH=600 \
+	RANGE_WIDTH=48000 \
 	UA_1_AMOUNT=$(USDT_AMOUNT) \
 	forge script script/AddLiquidity.s.sol:AddLiquidityScript \
 		--rpc-url $(ARB_MAINNET_RPC_URL) \
@@ -208,7 +210,7 @@ add-liquidity-mainnet:
 remove-liquidity-mainnet:
 	NETWORK=arbitrum \
 	CORE_POOL_ID=0x9a24909eeeb9fb7bbae5e01f6bdf9d892aafdfadab304c377e2b617acb0db32a \
-	TOKEN_ID=52786 \
+	TOKEN_ID=52788 \
 	forge script script/RemoveLiquidity.s.sol:RemoveLiquidityScript \
 		--rpc-url $(ARB_MAINNET_RPC_URL) \
 		-vvvv \
@@ -222,10 +224,11 @@ remove-liquidity-mainnet:
 
 WETH_ETHSEPOLIA=0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9
 USDC_ETHSEPOLIA=0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238
-SQRT_PRICE_ETHSEPOLIA=4753689750855860255612637020160  # Adjust as needed
+# SQRT_PRICE_ETHSEPOLIA=1080713651697821322704392060815896  # Adjust as needed - source: https://sepolia.etherscan.io/address/0x3289680dD4d6C10bb19b899729cda5eEF58AEfF1#events
+ETH_WETH_AMOUNT=100000000000000000 # 0.1 WETH * 10^18
 
 wrap-eth-ethsepolia: ## Wrap ETH to WETH on Ethereum Sepolia testnet
-	cast send $(WETH_ETHSEPOLIA) "deposit()" --value $(WETH_AMOUNT) --rpc-url $(ETH_SEPOLIA_RPC_URL) --private-key $(PRIVATE_KEY)
+	cast send $(WETH_ETHSEPOLIA) "deposit()" --value $(ETH_WETH_AMOUNT) --rpc-url $(ETH_SEPOLIA_RPC_URL) --private-key $(PRIVATE_KEY)
 
 create-market-ethsepolia: ## Create WETH/USDC market on Ethereum Sepolia testnet
 	NETWORK=ethsepolia \
@@ -233,7 +236,8 @@ create-market-ethsepolia: ## Create WETH/USDC market on Ethereum Sepolia testnet
 	UNDERLYING_ASSET_1=$(USDC_ETHSEPOLIA) \
 	CORE_POOL_FEE=100 \
 	TICK_SPACING=2 \
-	INITIAL_SQRT_PRICE_X96=$(SQRT_PRICE_ETHSEPOLIA) \
+	ASSET0_PRICE=1000000 \
+	ASSET1_PRICE=5751990000 \
 	forge script script/CreateMarket.s.sol:CreateMarketScript \
 		--rpc-url $(ETH_SEPOLIA_RPC_URL) \
 		-vvvv \
@@ -244,11 +248,12 @@ create-market-ethsepolia: ## Create WETH/USDC market on Ethereum Sepolia testnet
 
 add-liquidity-ethsepolia: ## Add liquidity to WETH/USDC market on Ethereum Sepolia testnet
 	NETWORK=ethsepolia \
-	UNDERLYING_ASSET_0=$(WETH_ETHSEPOLIA) \
-	UNDERLYING_ASSET_1=$(USDC_ETHSEPOLIA) \
+	UNDERLYING_ASSET_0=$(USDC_ETHSEPOLIA) \
+	UNDERLYING_ASSET_1=$(WETH_ETHSEPOLIA) \
 	CORE_POOL_FEE=100 \
 	TICK_SPACING=2 \
-	USDC_AMOUNT=$(USDC_AMOUNT) \
+	RANGE_WIDTH=100 \
+	UA_1_AMOUNT=$(ETH_WETH_AMOUNT) \
 	forge script script/AddLiquidity.s.sol:AddLiquidityScript \
 		--rpc-url $(ETH_SEPOLIA_RPC_URL) \
 		-vvvv \
@@ -257,3 +262,20 @@ add-liquidity-ethsepolia: ## Add liquidity to WETH/USDC market on Ethereum Sepol
 		--with-gas-price 2000000000 \
 		$(ARGS)
 
+remove-liquidity-ethsepolia:
+	NETWORK=ethsepolia \
+	CORE_POOL_ID=0x4103a354d3ade92a0eb6b7fdb49fee00b252270d988ef6b45f022129a498fa6b \
+	TOKEN_ID=15518 \
+	forge script script/RemoveLiquidity.s.sol:RemoveLiquidityScript \
+		--rpc-url $(ETH_SEPOLIA_RPC_URL) \
+		-vvvv \
+		--ffi \
+		--sig "run()" \
+		--with-gas-price 2000000000 \
+		$(ARGS)
+
+unwrap-eth-ethsepolia: ## Unwrap all WETH to ETH on Ethereum Sepolia testnet
+	ADDRESS=$$(cast wallet address --private-key $(PRIVATE_KEY)); \
+	BAL_HEX=$$(cast call $(WETH_ETHSEPOLIA) \"balanceOf(address)(uint256)\" $$ADDRESS --rpc-url $(ETH_SEPOLIA_RPC_URL)); \
+	BALANCE=$$(cast --to-decimal $$BAL_HEX); \
+	if [ $$BALANCE -eq 0 ]; then echo \"No WETH to unwrap\"; else cast send $(WETH_ETHSEPOLIA) \"withdraw(uint256)\" $$BALANCE --rpc-url $(ETH_SEPOLIA_RPC_URL) --private-key $(PRIVATE_KEY); fi

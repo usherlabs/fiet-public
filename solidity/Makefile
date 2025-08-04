@@ -51,7 +51,7 @@ build:
 # === Fork ===
 fork:
 	@echo "⛽ Starting anvil forked from Network: $(NETWORK)..."
-	anvil --fork-url $(FORK_SOURCE_RPC) --port $(ANVIL_PORT)  --steps-tracing
+	anvil --fork-url $(FORK_SOURCE_RPC) --port $(ANVIL_PORT)
 # --gas-limit 30000000 --block-time 1
 
 # === Individual deployments ===

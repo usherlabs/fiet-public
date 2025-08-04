@@ -307,8 +307,13 @@ contract CreateMarketScript is ScriptHelper {
         address lccTokenOfAsset0 = factory.getLCC(underlyingAsset0);
         address lccTokenOfAsset1 = factory.getLCC(underlyingAsset1);
 
-        console.log("LCC Token 0:", lccTokenOfAsset0);
-        console.log("LCC Token 1:", lccTokenOfAsset1);
+        console.log("LCC Token of Asset 0:", lccTokenOfAsset0);
+        console.log("LCC Token of Asset 1:", lccTokenOfAsset1);
+        console.log("LCC Token of Asset 0 Symbol:", IERC20Metadata(lccTokenOfAsset0).symbol());
+        console.log("LCC Token of Asset 1 Symbol:", IERC20Metadata(lccTokenOfAsset1).symbol());
+
+        console.log("LCC Token of Asset 0 is Currency:", lccTokenOfAsset0 < lccTokenOfAsset1 ? "0" : "1");
+        console.log("LCC Token of Asset 1 is Currency:", lccTokenOfAsset0 < lccTokenOfAsset1 ? "1" : "0");
 
         // Verify pool relationships
         PoolId storedProxyId = factory.coreToProxy(corePoolId);
@@ -413,6 +418,8 @@ contract CreateMarketScript is ScriptHelper {
         console.log("\n=== Creating Custom Market ===");
         console.log("Underlying Asset 0:", underlyingAsset0);
         console.log("Underlying Asset 1:", underlyingAsset1);
+        console.log("Underlying Asset 0 Symbol:", IERC20Metadata(underlyingAsset0).symbol());
+        console.log("Underlying Asset 1 Symbol:", IERC20Metadata(underlyingAsset1).symbol());
         console.log("Core Pool Fee:", corePoolFee);
         console.log("Tick Spacing:", tickSpacing);
         console.log("Initial Sqrt Price X96:", initialSqrtPriceX96);
