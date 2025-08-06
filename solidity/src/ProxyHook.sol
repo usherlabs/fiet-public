@@ -73,6 +73,16 @@ contract ProxyHook is BaseHook, IHookCommon {
         _;
     }
 
+    /**
+     * @notice Modifier to automatically handle proxy swap flag management
+     * @dev Sets the flag at the start and clears it at the end of the function
+     */
+    modifier withProxySwapFlag() {
+        ProxySwapFlag.setProxySwapFlag();
+        _;
+        ProxySwapFlag.clearProxySwapFlag();
+    }
+
     constructor(address _poolManager, address _marketFactory) BaseHook(IPoolManager(_poolManager)) {
         marketFactory = _marketFactory;
     }
@@ -226,7 +236,9 @@ contract ProxyHook is BaseHook, IHookCommon {
     function onCorePoolSwap(BalanceDelta delta) external virtual onlyCoreHook {
         // if this flag is not set, then it means that this is a direct swap
         bool isDirectSwap = ProxySwapFlag.isDirectSwap();
-        // if this is not a direct swap, then we need to return
+        // if this is not a direct swap, then we need to return because we dont want to touch swaps initiated by the proxy hook
+        // ? the way the flag is set up, every swap is a direct swap by default, unless the ProxySwapFlag flag is set by the proxy hook to indicate it has an ongoing swap
+        // ? it is currently set in the _beforeSwap function of the proxy hook making sure it is set and cleared during a swap initiated by the proxy hook
         if (!isDirectSwap) {
             return;
         }
@@ -325,10 +337,10 @@ contract ProxyHook is BaseHook, IHookCommon {
     function _beforeSwap(address, PoolKey calldata key, SwapParams calldata params, bytes calldata)
         internal
         override
+        withProxySwapFlag
         returns (bytes4, BeforeSwapDelta, uint24)
     {
         // set the proxy swap flag to indicate that a swap initiated by the proxy hook is in progress
-        ProxySwapFlag.setProxySwapFlag();
 
         bool coreZeroForOne;
         PoolKey memory coreKey = corePoolKey;
@@ -510,7 +522,6 @@ contract ProxyHook is BaseHook, IHookCommon {
             newDelta = toBeforeSwapDelta(-SafeCast.toInt128(amountToSettle), SafeCast.toInt128(amountIn));
         }
 
-        ProxySwapFlag.clearProxySwapFlag(); // clear the proxy swap flag to indicate that the proxy swap is complete
         return (this.beforeSwap.selector, newDelta, 0); // last param is lpFeeOverride
     }
 }

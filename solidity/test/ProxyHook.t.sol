@@ -303,7 +303,7 @@ contract ProxyHookTest is Test, Deployers {
         assertEq(selfBalanceOfTokenAAfter, selfBalanceOfTokenABefore + swapAmount);
     }
 
-    function test_swap_exactOutput_ZeroForOneOnCore() public {
+    function test_swap_exactOutput_zeroForOneOnCore() public {
         PoolSwapTest.TestSettings memory settings =
             PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false});
 
@@ -373,7 +373,7 @@ contract ProxyHookTest is Test, Deployers {
         assertEq(preBalanceOfToken1UnderlyingAssetInPM - postBalanceOfToken1UnderlyingAssetInPM, deltaAmount1);
     }
 
-    function test_swap_exactOutput_OneForZeroOnCore() public {
+    function test_swap_exactOutput_oneForZeroOnCore() public {
         PoolSwapTest.TestSettings memory settings =
             PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false});
 
