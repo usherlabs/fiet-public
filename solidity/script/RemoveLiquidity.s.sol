@@ -144,13 +144,15 @@ contract RemoveLiquidityScript is ScriptHelper {
         setupPoolKeys(coreHookAddr, coreFee, tickSpacingVal);
 
         vm.startBroadcast(lpPrivateKey);
-        burnPosition(tokenId, lpAddress);
+        // burnPosition(tokenId, lpAddress);
         vm.stopBroadcast();
     }
 
     function setupPoolKeys(address coreHookAddr, uint24 coreFee, int24 tickSpacingVal) internal {
         (Currency currency0Core, Currency currency1Core) =
             CurrencySortHelper.sortAddresses(address(lcc0), address(lcc1));
+        console.log("currency0Core", Currency.unwrap(currency0Core));
+        console.log("currency1Core", Currency.unwrap(currency1Core));
         corePoolKey = PoolKey({
             currency0: currency0Core,
             currency1: currency1Core,

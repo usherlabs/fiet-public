@@ -16,8 +16,11 @@ import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {CurrencySettler} from "@uniswap/v4-core/test/utils/CurrencySettler.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {PausablePool} from "./libraries/PausablePool.sol";
+import {ProxySwapFlag} from "./libraries/ProxySwapFlag.sol";
 
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
+
+import {console} from "forge-std/console.sol";
 
 /**
  * Core Pool should be aware of Positions.
@@ -93,13 +96,15 @@ contract CoreHook is BaseHook, IHookCommon, PausablePool {
     //     return this._afterInitialize.selector;
     // }
 
-    function _afterSwap(address, PoolKey calldata key, SwapParams calldata, BalanceDelta, bytes calldata)
+    function _afterSwap(address, PoolKey calldata key, SwapParams calldata, BalanceDelta delta, bytes calldata)
         internal
         virtual
         override
         whenNotPaused(key.toId())
         returns (bytes4, int128)
     {
+        ProxyHook(_getProxyHook(key)).onCorePoolSwap(delta);
+
         return (this.afterSwap.selector, 0);
     }
 

@@ -17,6 +17,8 @@ import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
 import {LiquidityCommitmentCertificate} from "./LCC.sol";
 import {IHookCommon} from "./interfaces/IHookCommon.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
+import {ProxySwapFlag} from "./libraries/ProxySwapFlag.sol";
+import {LiquidityUtils} from "../src/libraries/LiquidityUtils.sol";
 
 import {console} from "forge-std/console.sol";
 
@@ -69,18 +71,6 @@ contract ProxyHook is BaseHook, IHookCommon {
             revert InvalidSender();
         }
         _;
-    }
-
-    /**
-     * @dev Safely converts int128 to uint256, handling negative values by taking absolute value
-     * @param value The int128 value to convert
-     * @return The uint256 representation (absolute value)
-     */
-    function _safeInt128ToUint256(int128 value) internal pure returns (uint256) {
-        if (value < 0) {
-            return uint256(uint128(-value));
-        }
-        return uint256(uint128(value));
     }
 
     constructor(address _poolManager, address _marketFactory) BaseHook(IPoolManager(_poolManager)) {
@@ -160,8 +150,8 @@ contract ProxyHook is BaseHook, IHookCommon {
             LiquidityCommitmentCertificate(Currency.unwrap(corePoolkey.currency1));
         Currency uaCurrency0 = Currency.wrap(lccToken0.underlyingAsset());
         Currency uaCurrency1 = Currency.wrap(lccToken1.underlyingAsset());
-        uint256 amount0 = _safeInt128ToUint256(delta.amount0());
-        uint256 amount1 = _safeInt128ToUint256(delta.amount1());
+        uint256 amount0 = LiquidityUtils.safeInt128ToUint256(delta.amount0());
+        uint256 amount1 = LiquidityUtils.safeInt128ToUint256(delta.amount1());
 
         if (actionType == ActionType.DirectLPAddLiquidity) {
             // Add liquidity to the core pool
@@ -233,6 +223,101 @@ contract ProxyHook is BaseHook, IHookCommon {
         }
     }
 
+    function onCorePoolSwap(BalanceDelta delta) external virtual onlyCoreHook {
+        // if this flag is not set, then it means that this is a direct swap
+        bool isDirectSwap = ProxySwapFlag.isDirectSwap();
+        // if this is not a direct swap, then we need to return
+        if (!isDirectSwap) {
+            return;
+        }
+
+        // if this is a direct swap, then we need to run the direct swap logic
+        // this is a direct swap logic
+        // 1. take the underlying tokens from the pool manager
+        // 2. mint the lcc tokens for the input amount (this is the input amount)
+        // 3. settle the lcc tokens to the pool manager
+        // 4. take the lcc tokens of the output amount from the pool manager
+        // 5. cancel the lcc tokens of the output amount
+        // 6. settle the output token to the pool manager
+        // 7. return the output token to the user
+        // Handle LCC underlying liquidity management for direct swaps
+        // LCC underlying liquidity for Token IN is moved "in-market" — to the PoolManager via Proxy Hook
+        // LCC underlying liquidity for Token OUT attempts to move from "in-market" into relevant LCC
+
+        // Check if this is a zero one swap or one for zero swap
+        bool isZeroForOne = delta.amount0() < 0;
+
+        uint256 amount0 = LiquidityUtils.safeInt128ToUint256(delta.amount0());
+        uint256 amount1 = LiquidityUtils.safeInt128ToUint256(delta.amount1());
+
+        LiquidityCommitmentCertificate lccToken0 =
+            LiquidityCommitmentCertificate(Currency.unwrap(corePoolKey.currency0));
+        LiquidityCommitmentCertificate lccToken1 =
+            LiquidityCommitmentCertificate(Currency.unwrap(corePoolKey.currency1));
+
+        // Handle Token IN liquidity (move to PoolManager from lcc token)
+        LiquidityCommitmentCertificate lccTokenIn = isZeroForOne ? lccToken0 : lccToken1;
+        // Get the amount of the token that is being swapped in based on if this is a zero one swap or one for zero swap
+        uint256 amountIn = isZeroForOne ? amount0 : amount1;
+        // Deposit underlying liquidity to pool manager from lcc token
+        lccTokenIn.prepareSettle(amountIn);
+        Currency uaCurrencyIn = Currency.wrap(lccTokenIn.underlyingAsset());
+        uaCurrencyIn.settle(
+            poolManager,
+            address(lccTokenIn),
+            amountIn,
+            false // `burn` = `false` i.e. we're actually transferring tokens, not burning ERC-6909 Claim Tokens
+        );
+        // mint corresponding claim tokens for amount just settled to pool
+        uaCurrencyIn.take(
+            poolManager,
+            address(this),
+            amountIn,
+            true // `mint` = `true` i.e. we're minting claim tokens for the hook, equivalent to money we just deposited to the PM
+        );
+
+        // Handle Token OUT liquidity (move from PoolManager into LCC token) or add to queue when there is not enough liquidity
+        LiquidityCommitmentCertificate lccTokenOut = isZeroForOne ? lccToken1 : lccToken0;
+        // Get the amount of the token that is being swapped in based on if this is a zero one swap or one for zero swap
+        uint256 amountOut = isZeroForOne ? amount1 : amount0;
+        // Get the underlying asset of the token that is being swapped out
+        Currency uaCurrencyOut = Currency.wrap(lccTokenOut.underlyingAsset());
+        // Check how much liquidity(amount) of that token is available in PoolManager
+        uint256 availableLiquidityOutToken = uaCurrencyOut.balanceOf(address(poolManager));
+        // Validate the pool manager has enough liquidity to settle the amount that is being swapped out
+        uint256 amountToTakeFromPm = amountOut;
+        uint256 deficit = 0;
+        // if there is not enough liquidity in the pool manager, then we need to settle the amount that is available
+        // and add the deficit to the debt queue to be settleed as soon as more liquidity is available
+        if (availableLiquidityOutToken < amountOut) {
+            amountToTakeFromPm = availableLiquidityOutToken;
+            deficit = amountOut - availableLiquidityOutToken;
+        }
+        // if deficit, add to debt queue
+        if (deficit > 0) {
+            // add to debt queue
+            // debtQueue.push(deficit);
+            // TODO: Add check on recipient when clearing debt queue, because if we owe an lcc token and we pay
+            // TODO: we would also need to call confirmTake on the lcc to increase the total supply
+        }
+        // burn some claim tokens to release the underlying liquidity to the pool manager
+        uaCurrencyOut.settle(
+            poolManager,
+            address(this),
+            amountToTakeFromPm,
+            true // burn = true i.e. we're burning claim tokens to release the underlying liquidity to the pool manager
+        );
+        // take the amount from the pool manager
+        uaCurrencyOut.take(
+            poolManager,
+            address(lccTokenOut),
+            amountToTakeFromPm,
+            false // `mint` = `false` i.e. we're actually transferring tokens, not burning ERC-6909 Claim Tokens
+        );
+        // confirm the take of the underlying liquidity to the pool manager to let the LCC know about the new balance
+        lccToken0.confirmTake(amountToTakeFromPm);
+    }
+
     // Before swap we make sure to provide enough delta
     // to ensure that the user gets a debit of amount specified
     // and we disable the core swap mechanism
@@ -242,6 +327,9 @@ contract ProxyHook is BaseHook, IHookCommon {
         override
         returns (bytes4, BeforeSwapDelta, uint24)
     {
+        // set the proxy swap flag to indicate that a swap initiated by the proxy hook is in progress
+        ProxySwapFlag.setProxySwapFlag();
+
         bool coreZeroForOne;
         PoolKey memory coreKey = corePoolKey;
 
@@ -325,12 +413,12 @@ contract ProxyHook is BaseHook, IHookCommon {
             // Regardless of whether params.zeroForOne is true or false,
             // If params.zeroForOne is true (Token 0 -> Token 1), then exactIn is Token 0. If coreZeroForOne is also true, then amountOut is delta of LCC 1.
             // If params.zeroForOne is false (Token 1 -> Token 0), then exactIn is Token 1. If coreZeroForOne is also false, then amountOut is delta of LCC 0.
-            amountOut = _safeInt128ToUint256(coreZeroForOne ? delta.amount1() : delta.amount0());
+            amountOut = LiquidityUtils.safeInt128ToUint256(coreZeroForOne ? delta.amount1() : delta.amount0());
         } else {
             // Regardless of whether params.zeroForOne is true or false,
             // If params.zeroForOne is true (Token 0 -> Token 1), then exactOut is Token 1. If coreZeroForOne is also true, then amountOut is delta of LCC 0.
             // If params.zeroForOne is false (Token 1 -> Token 0), then exactOut is Token 0. If coreZeroForOne is also false, then amountOut is delta of LCC 1.
-            amountIn = _safeInt128ToUint256(coreZeroForOne ? delta.amount0() : delta.amount1());
+            amountIn = LiquidityUtils.safeInt128ToUint256(coreZeroForOne ? delta.amount0() : delta.amount1());
             amountOut = uint256(params.amountSpecified);
         }
 
@@ -422,6 +510,7 @@ contract ProxyHook is BaseHook, IHookCommon {
             newDelta = toBeforeSwapDelta(-SafeCast.toInt128(amountToSettle), SafeCast.toInt128(amountIn));
         }
 
+        ProxySwapFlag.clearProxySwapFlag(); // clear the proxy swap flag to indicate that the proxy swap is complete
         return (this.beforeSwap.selector, newDelta, 0); // last param is lpFeeOverride
     }
 }
