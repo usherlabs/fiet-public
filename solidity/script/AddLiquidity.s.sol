@@ -161,7 +161,9 @@ contract AddLiquidityScript is ScriptHelper {
         vm.stopBroadcast();
     }
 
-    function setupPoolKeys(IMarketFactory factory,address coreHookAddr, uint24 coreFee, int24 tickSpacingVal) internal {
+    function setupPoolKeys(IMarketFactory factory, address coreHookAddr, uint24 coreFee, int24 tickSpacingVal)
+        internal
+    {
         // Core pool: wrapped tokens, no hooks (this gets liquidity)
         (Currency currency0Core, Currency currency1Core) =
             CurrencySortHelper.sortAddresses(address(lcc0), address(lcc1));

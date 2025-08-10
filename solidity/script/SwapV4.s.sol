@@ -99,7 +99,7 @@ contract SwapV4 is ScriptHelper {
 
         // if MODE="local" then do not load core pool id from env variable
         // the address is hardcoded in the script solidity/make/exp.mk:111
-        // and it is overriding the core pool id and thus the proxy pool id 
+        // and it is overriding the core pool id and thus the proxy pool id
         // for a newly created market
         bool isLocalFork = keccak256(bytes(mode)) == keccak256(bytes("LOCAL"));
         if (!isLocalFork) {
@@ -108,7 +108,7 @@ contract SwapV4 is ScriptHelper {
                 corePoolId = envCorePoolId;
                 _corePoolId = PoolId.wrap(bytes32(bytes(corePoolId)));
             } catch {}
-        }else{
+        } else {
             console.log("is running local fork, skipping core pool id loading from env...");
         }
 
