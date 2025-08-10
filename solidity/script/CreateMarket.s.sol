@@ -300,12 +300,15 @@ contract CreateMarketScript is ScriptHelper {
     function _logMarketDetails() internal view {
         console.log("\n=== Market Details ===");
         console.log("Core Pool ID:", string.concat("", vm.toString(PoolId.unwrap(corePoolId))));
-        console.log("Proxy Pool ID:", string.concat("0x", vm.toString(PoolId.unwrap(proxyPoolId))));
+        console.log("Proxy Pool ID:", string.concat("", vm.toString(PoolId.unwrap(proxyPoolId))));
 
         // Get LCC tokens
         MarketFactory factory = MarketFactory(marketFactory);
         address lccTokenOfAsset0 = factory.getLCC(underlyingAsset0);
         address lccTokenOfAsset1 = factory.getLCC(underlyingAsset1);
+
+        console.log("Underlying Asset 0:", underlyingAsset0);
+        console.log("Underlying Asset 1:", underlyingAsset1);
 
         console.log("LCC Token of Asset 0:", lccTokenOfAsset0);
         console.log("LCC Token of Asset 1:", lccTokenOfAsset1);

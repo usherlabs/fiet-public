@@ -54,11 +54,17 @@ contract SwapV4 is ScriptHelper {
             networkName = "sepolia";
         }
 
+        // Fetch the mode from the env to determine if we are running a local fork
+        string memory mode;
+        try vm.envString("MODE") returns (string memory envMode) {
+            mode = envMode;
+        } catch {}
+
         // Load deployment addresses
         _setFilename(networkName);
         address marketFactoryAddr = readAddress("marketFactory");
         IMarketFactory marketFactory = IMarketFactory(marketFactoryAddr);
-        console.log("Market Factory loaded");
+        console.log("Market Factory loaded: ", marketFactoryAddr);
 
         address universalRouterAddr;
         address poolManagerAddr;
@@ -89,30 +95,44 @@ contract SwapV4 is ScriptHelper {
         permit2 = IPermit2(permit2Addr);
         console.log("Permit2 loaded");
 
-        PoolId proxyPoolId = marketFactory.coreToProxy(corePoolKey.toId());
-        hook = IHooks(marketFactory.proxyToHook(proxyPoolId));
         console.log("Proxy Hook loaded");
 
-        try vm.envString("CORE_POOL_ID") returns (string memory envCorePoolId) {
-            corePoolId = envCorePoolId;
-            _corePoolId = PoolId.wrap(bytes32(bytes(corePoolId)));
-        } catch {}
+        // if MODE="local" then do not load core pool id from env variable
+        // the address is hardcoded in the script solidity/make/exp.mk:111
+        // and it is overriding the core pool id and thus the proxy pool id 
+        // for a newly created market
+        bool isLocalFork = keccak256(bytes(mode)) == keccak256(bytes("LOCAL"));
+        if (!isLocalFork) {
+            try vm.envString("CORE_POOL_ID") returns (string memory envCorePoolId) {
+                console.log("CORE_POOL_ID loaded from env: ", envCorePoolId);
+                corePoolId = envCorePoolId;
+                _corePoolId = PoolId.wrap(bytes32(bytes(corePoolId)));
+            } catch {}
+        }else{
+            console.log("is running local fork, skipping core pool id loading from env...");
+        }
 
         bool isSepolia = keccak256(bytes(networkName)) == keccak256(bytes("sepolia"));
 
-        uint24 fee;
+        uint24 fee = 0;
+        // if core pool key is set locally then load it into fee variable
+        // because core pool fee is not always 0
+        try vm.envUint("CORE_POOL_FEE") returns (uint256 envFee) {
+            fee = uint24(envFee);
+            console.log("Pool fee loaded from env:", fee);
+        } catch {}
         int24 tickSpacing;
 
         if (bytes(corePoolId).length == 0) {
             if (isSepolia) {
                 token0 = readAddress("usdcToken");
-                console.log("Token0 (USDC) loaded from defaults");
+                console.log("Token0 (USDC) loaded from defaults: ", token0);
                 token1 = readAddress("usdtToken");
-                console.log("Token1 (USDT) loaded from defaults");
+                console.log("Token1 (USDT) loaded from defaults: ", token1);
             } else {
                 revert("CORE_POOL_ID required for non-sepolia networks");
             }
-            fee = 0;
+            // fee = 0;
             console.log("Pool fee (default):", fee);
             tickSpacing = 60;
             console.log("Tick spacing (default):", tickSpacing);
@@ -126,9 +146,9 @@ contract SwapV4 is ScriptHelper {
             string memory keyTS = string.concat(".", corePoolId, "_tickSpacing");
 
             token0 = vm.parseJsonAddress(json, keyToken0);
-            console.log("Token0 loaded from markets json");
+            console.log("Token0 loaded from markets json: ", token0);
             token1 = vm.parseJsonAddress(json, keyToken1);
-            console.log("Token1 loaded from markets json");
+            console.log("Token1 loaded from markets json: ", token1);
 
             uint256 jsonFee = vm.parseJsonUint(json, keyFee);
             fee = uint24(jsonFee);
@@ -144,6 +164,9 @@ contract SwapV4 is ScriptHelper {
         lccToken0 = marketFactory.getLCC(token0);
         lccToken1 = marketFactory.getLCC(token1);
         console.log("LCC Tokens loaded");
+        console.log("lccToken0: ", lccToken0);
+        console.log("lccToken1: ", lccToken1);
+        console.log("token0: ", token0);
         (Currency currencyLccA, Currency currencyLccB) = CurrencySortHelper.sortAddresses(lccToken0, lccToken1);
         corePoolKey = PoolKey({
             currency0: currencyLccA,
@@ -152,7 +175,20 @@ contract SwapV4 is ScriptHelper {
             tickSpacing: tickSpacing,
             hooks: IHooks(coreHookAddr)
         });
+        console.log("Currency0: ", Currency.unwrap(corePoolKey.currency0));
+        console.log("Currency1: ", Currency.unwrap(corePoolKey.currency1));
+        console.log("Fee: ", corePoolKey.fee);
+        console.log("Tick Spacing: ", corePoolKey.tickSpacing);
+        console.log("Hooks: ", address(corePoolKey.hooks));
+
         console.log("Core PoolKey constructed");
+        console.log("Core PoolKey toId: ");
+        console.logBytes32(PoolId.unwrap(corePoolKey.toId()));
+
+        PoolId proxyPoolId = marketFactory.coreToProxy(corePoolKey.toId());
+        hook = IHooks(marketFactory.proxyToHook(proxyPoolId));
+        console.log("Proxy Hook loaded");
+        console.log("Proxy Hook Address: ", address(hook));
 
         if (bytes(corePoolId).length == 0) {
             _corePoolId = corePoolKey.toId();
@@ -160,14 +196,14 @@ contract SwapV4 is ScriptHelper {
 
         uint256 userPrivateKey = uint256(vm.envBytes32("LP_PRIVATE_KEY"));
         address userAddress = vm.addr(userPrivateKey);
-
         (Currency currencyA, Currency currencyB) = CurrencySortHelper.sortAddresses(token0, token1);
         console.log("Proxy Currency 0 Address: ", Currency.unwrap(currencyA));
         console.log("Proxy Currency 0 Name: ", IERC20Metadata(Currency.unwrap(currencyA)).name());
         console.log("Proxy Currency 1 Address: ", Currency.unwrap(currencyB));
         console.log("Proxy Currency 1 Name: ", IERC20Metadata(Currency.unwrap(currencyB)).name());
+        uint24 proxyFee = 0;
         PoolKey memory poolKey =
-            PoolKey({currency0: currencyA, currency1: currencyB, fee: fee, tickSpacing: tickSpacing, hooks: hook});
+            PoolKey({currency0: currencyA, currency1: currencyB, fee: proxyFee, tickSpacing: tickSpacing, hooks: hook});
         console.log("Checking balances...");
         uint256 balanceBeforeCurrency1;
         uint256 balanceBeforeCurrency0;
@@ -216,7 +252,7 @@ contract SwapV4 is ScriptHelper {
             } catch {
                 amount = 10e18;
             }
-            console.log("\n\nExecuting Exact Input swap for Token 0 -> Token 1...");
+            console.log("\n\nExecuting Exact Input swap for Token 0 -> Token 1 with amount:", amount);
 
             // For an 18 decimal token, 10e18 is 10 tokens
             swapExactInputSingle(
