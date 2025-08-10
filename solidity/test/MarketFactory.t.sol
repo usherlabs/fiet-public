@@ -14,7 +14,7 @@ import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
 import {CoreHook} from "../src/CoreHook.sol";
 import {ProxyHook} from "../src/ProxyHook.sol";
 import {LiquidityCommitmentCertificate} from "../src/LCC.sol";
-import {PausablePool} from "../src/libraries/PausablePool.sol";
+import {PausablePool} from "../src/modules/PausablePool.sol";
 import {Deployers} from "@uniswap/v4-core/test/utils/Deployers.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";

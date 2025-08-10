@@ -8,7 +8,7 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {BalanceDelta, BalanceDeltaLibrary} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
-import {PausablePool} from "../src/libraries/PausablePool.sol";
+import {PausablePool} from "../src/modules/PausablePool.sol";
 import {Deployers} from "@uniswap/v4-core/test/utils/Deployers.sol";
 
 import {CoreHook} from "../src/CoreHook.sol";

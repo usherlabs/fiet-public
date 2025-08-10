@@ -13,16 +13,17 @@ import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
+import {Exttload} from "v4-periphery/lib/v4-core/src/Exttload.sol";
 
 import {LiquidityCommitmentCertificate} from "./LCC.sol";
 import {IHookCommon} from "./interfaces/IHookCommon.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {ProxySwapFlag} from "./libraries/ProxySwapFlag.sol";
 import {LiquidityUtils} from "../src/libraries/LiquidityUtils.sol";
+import {MarketVault} from "./modules/MarketVault.sol";
+import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 
-import {console} from "forge-std/console.sol";
-
-contract ProxyHook is BaseHook, IHookCommon {
+contract ProxyHook is BaseHook, IHookCommon, MarketVault, Exttload {
     using CurrencySettler for Currency;
 
     error AddLiquidityThroughHookNotAllowed();
@@ -83,7 +84,10 @@ contract ProxyHook is BaseHook, IHookCommon {
         ProxySwapFlag.clearProxySwapFlag();
     }
 
-    constructor(address _poolManager, address _marketFactory) BaseHook(IPoolManager(_poolManager)) {
+    constructor(address _poolManager, address _marketFactory)
+        BaseHook(IPoolManager(_poolManager))
+        MarketVault(IPoolManager(_poolManager))
+    {
         marketFactory = _marketFactory;
     }
 
@@ -97,6 +101,23 @@ contract ProxyHook is BaseHook, IHookCommon {
      */
     function setCorePoolKey(PoolKey calldata _corePoolKey) external onlyFactory {
         corePoolKey = _corePoolKey;
+    }
+
+    /**
+     * @dev This is what the ProxyHook can actually withdraw from the pool manager (its "credits")
+     * @dev It is our account balance against a currency in the pool manager
+     */
+    function getProxyHookAvailableLiquidity(Currency currency) external view returns (uint256) {
+        // ProxyHook's ERC-6909 claim token balance for this currency
+        return poolManager.balanceOf(address(this), currency.toId());
+    }
+
+    /**
+     * @dev Returns the core pool id
+     * @return The core pool id
+     */
+    function getCorePoolId() external view returns (PoolId) {
+        return corePoolKey.toId();
     }
 
     function getHookPermissions() public pure override returns (Hooks.Permissions memory) {
@@ -158,31 +179,12 @@ contract ProxyHook is BaseHook, IHookCommon {
             LiquidityCommitmentCertificate(Currency.unwrap(corePoolkey.currency0));
         LiquidityCommitmentCertificate lccToken1 =
             LiquidityCommitmentCertificate(Currency.unwrap(corePoolkey.currency1));
-        Currency uaCurrency0 = Currency.wrap(lccToken0.underlyingAsset());
-        Currency uaCurrency1 = Currency.wrap(lccToken1.underlyingAsset());
+
         uint256 amount0 = LiquidityUtils.safeInt128ToUint256(delta.amount0());
         uint256 amount1 = LiquidityUtils.safeInt128ToUint256(delta.amount1());
 
         if (actionType == ActionType.DirectLPAddLiquidity) {
             // Add liquidity to the core pool
-
-            // Settle `amount` of each currency from the sender
-            // i.e. Create a debit of `amount` of each currency with the Pool Manager
-            lccToken0.prepareSettle(amount0);
-            lccToken1.prepareSettle(amount1);
-            uaCurrency0.settle(
-                poolManager,
-                address(lccToken0),
-                amount0,
-                false // `burn` = `false` i.e. we're actually transferring tokens, not burning ERC-6909 Claim Tokens
-            );
-            uaCurrency1.settle(
-                poolManager,
-                address(lccToken1),
-                amount1,
-                false // `burn` = `false` i.e. we're actually transferring tokens, not burning ERC-6909 Claim Tokens
-            );
-
             // Since we didn't go through the regular "modify liquidity" flow,
             // the PM just has a debit of `amount` of each currency from us
             // We can, in exchange, get back ERC-6909 claim tokens for `amount`
@@ -190,50 +192,21 @@ contract ProxyHook is BaseHook, IHookCommon {
 
             // We will store those claim tokens with the hook, so when swaps take place
             // liquidity from our CSMM can be used by minting/burning claim tokens the hook owns
-            uaCurrency0.take(
-                poolManager,
-                address(this),
-                amount0,
-                true // `mint` = `true` i.e. we're minting claim tokens for the hook, equivalent to money we just deposited to the PM
-            );
-            uaCurrency1.take(
-                poolManager,
-                address(this),
-                amount1,
-                true // `mint` = `true` i.e. we're minting claim tokens for the hook, equivalent to money we just deposited to the PM
-            );
+
+            _settleFromLCCToVault(lccToken0, amount0);
+            _settleFromLCCToVault(lccToken1, amount1);
+
+            _settleVaultDebtsToLCC(corePoolkey);
         } else if (actionType == ActionType.DirectLPRemoveLiquidity) {
             // Remove liquidity from the core pool
-            uaCurrency0.settle(
-                poolManager,
-                address(this),
-                amount0,
-                true // `burn` = `true` i.e. we're  burning ERC-6909 Claim Tokens
-            );
-            uaCurrency1.settle(
-                poolManager,
-                address(this),
-                amount1,
-                true // `burn` = `true` i.e. we're  burning ERC-6909 Claim Tokens
-            );
-            uaCurrency0.take(
-                poolManager,
-                address(lccToken0), // Send native liquidity back to LCC
-                amount0,
-                false // mint` = `true` i.e. we're  claiming erc20
-            );
-            uaCurrency1.take(
-                poolManager,
-                address(lccToken1),
-                amount1,
-                false // mint` = `true` i.e. we're  claiming erc20
-            );
-            lccToken0.confirmTake(amount0);
-            lccToken1.confirmTake(amount1);
+            // Remove the underlying tokens from the vault to the LCCs
+            // and notify the LCCs about the new balance
+            _takeFromVaultToLCC(lccToken0, amount0);
+            _takeFromVaultToLCC(lccToken1, amount1);
         }
     }
 
-    function onCorePoolSwap(BalanceDelta delta) external virtual onlyCoreHook {
+    function onCorePoolDirectSwap(BalanceDelta delta) external virtual onlyCoreHook {
         // if this flag is not set, then it means that this is a direct swap
         bool isDirectSwap = ProxySwapFlag.isDirectSwap();
         // if this is not a direct swap, then we need to return because we dont want to touch swaps initiated by the proxy hook
@@ -259,9 +232,11 @@ contract ProxyHook is BaseHook, IHookCommon {
         // Check if this is a zero one swap or one for zero swap
         bool isZeroForOne = delta.amount0() < 0;
 
+        // Get the amount of the token that is being swapped in based on if this is a zero one swap or one for zero swap
         uint256 amount0 = LiquidityUtils.safeInt128ToUint256(delta.amount0());
         uint256 amount1 = LiquidityUtils.safeInt128ToUint256(delta.amount1());
 
+        // Get the LCC tokens for the core pool
         LiquidityCommitmentCertificate lccToken0 =
             LiquidityCommitmentCertificate(Currency.unwrap(corePoolKey.currency0));
         LiquidityCommitmentCertificate lccToken1 =
@@ -272,62 +247,20 @@ contract ProxyHook is BaseHook, IHookCommon {
         // Get the amount of the token that is being swapped in based on if this is a zero one swap or one for zero swap
         uint256 amountIn = isZeroForOne ? amount0 : amount1;
         // Deposit underlying liquidity to pool manager from lcc token
-        lccTokenIn.prepareSettle(amountIn);
-        Currency uaCurrencyIn = Currency.wrap(lccTokenIn.underlyingAsset());
-        uaCurrencyIn.settle(
-            poolManager,
-            address(lccTokenIn),
-            amountIn,
-            false // `burn` = `false` i.e. we're actually transferring tokens, not burning ERC-6909 Claim Tokens
-        );
-        // mint corresponding claim tokens for amount just settled to pool
-        uaCurrencyIn.take(
-            poolManager,
-            address(this),
-            amountIn,
-            true // `mint` = `true` i.e. we're minting claim tokens for the hook, equivalent to money we just deposited to the PM
-        );
+        _settleFromLCCToVault(lccTokenIn, amountIn);
 
         // Handle Token OUT liquidity (move from PoolManager into LCC token) or add to queue when there is not enough liquidity
         LiquidityCommitmentCertificate lccTokenOut = isZeroForOne ? lccToken1 : lccToken0;
         // Get the amount of the token that is being swapped in based on if this is a zero one swap or one for zero swap
         uint256 amountOut = isZeroForOne ? amount1 : amount0;
-        // Get the underlying asset of the token that is being swapped out
-        Currency uaCurrencyOut = Currency.wrap(lccTokenOut.underlyingAsset());
-        // Check how much liquidity(amount) of that token is available in PoolManager
-        uint256 availableLiquidityOutToken = uaCurrencyOut.balanceOf(address(poolManager));
-        // Validate the pool manager has enough liquidity to settle the amount that is being swapped out
-        uint256 amountToTakeFromPm = amountOut;
-        uint256 deficit = 0;
-        // if there is not enough liquidity in the pool manager, then we need to settle the amount that is available
-        // and add the deficit to the debt queue to be settleed as soon as more liquidity is available
-        if (availableLiquidityOutToken < amountOut) {
-            amountToTakeFromPm = availableLiquidityOutToken;
-            deficit = amountOut - availableLiquidityOutToken;
-        }
-        // if deficit, add to debt queue
+
+        uint256 deficit = _tryTakeFromVaultToLCC(lccTokenOut, amountOut);
+
+        // New liquidity in pool, so we try and settle the debt if any
+        _settleVaultDebtsToLCC(corePoolKey);
         if (deficit > 0) {
-            // add to debt queue
-            // debtQueue.push(deficit);
-            // TODO: Add check on recipient when clearing debt queue, because if we owe an lcc token and we pay
-            // TODO: we would also need to call confirmTake on the lcc to increase the total supply
+            // TODO: NOTHING TO DO HERE
         }
-        // burn some claim tokens to release the underlying liquidity to the pool manager
-        uaCurrencyOut.settle(
-            poolManager,
-            address(this),
-            amountToTakeFromPm,
-            true // burn = true i.e. we're burning claim tokens to release the underlying liquidity to the pool manager
-        );
-        // take the amount from the pool manager
-        uaCurrencyOut.take(
-            poolManager,
-            address(lccTokenOut),
-            amountToTakeFromPm,
-            false // `mint` = `false` i.e. we're actually transferring tokens, not burning ERC-6909 Claim Tokens
-        );
-        // confirm the take of the underlying liquidity to the pool manager to let the LCC know about the new balance
-        lccToken0.confirmTake(amountToTakeFromPm);
     }
 
     // Before swap we make sure to provide enough delta

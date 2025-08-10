@@ -124,4 +124,11 @@ interface IMarketFactory {
      * @return The currency pair
      */
     function proxyHookToCurrencyPair(address proxyHook) external view returns (address[2] memory);
+
+    /**
+     * @notice Gets the currency pair managed by a core pool
+     * @param corePoolId The core pool ID
+     * @return The currency pair
+     */
+    function corePoolToCurrencyPair(PoolId corePoolId) external view returns (address[2] memory);
 }

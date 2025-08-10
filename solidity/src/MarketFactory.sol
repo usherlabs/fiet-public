@@ -44,6 +44,8 @@ contract MarketFactory is IMarketFactory, Ownable2Step {
     // Mapping from proxy hook address to currencies it manages
     mapping(address => address[2]) private _proxyHookToCurrencyPair;
 
+    mapping(PoolId => address[2]) private _corePoolToCurrencyPair;
+
     constructor(address poolManagerAddr, address[] memory _bounds) Ownable(msg.sender) {
         if (poolManagerAddr == address(0)) {
             revert InvalidPoolParameters();
@@ -142,6 +144,9 @@ contract MarketFactory is IMarketFactory, Ownable2Step {
         // Store the currencies the proxy hook manages
         _proxyHookToCurrencyPair[proxyHook] =
             [Currency.unwrap(proxyPoolKey.currency0), Currency.unwrap(proxyPoolKey.currency1)];
+        // Store the currencies the core pool trades
+        _corePoolToCurrencyPair[corePoolId] =
+            [Currency.unwrap(corePoolKey.currency0), Currency.unwrap(corePoolKey.currency1)];
 
         // Set the core pool key in the proxy hook for this new market
         ProxyHook(proxyHook).setCorePoolKey(corePoolKey);
@@ -348,5 +353,14 @@ contract MarketFactory is IMarketFactory, Ownable2Step {
      */
     function proxyHookToCurrencyPair(address proxyHook) external view returns (address[2] memory) {
         return _proxyHookToCurrencyPair[proxyHook];
+    }
+
+    /**
+     * @notice Gets the currency pair managed by a core pool
+     * @param corePoolId The core pool ID
+     * @return The currency pair
+     */
+    function corePoolToCurrencyPair(PoolId corePoolId) external view returns (address[2] memory) {
+        return _corePoolToCurrencyPair[corePoolId];
     }
 }

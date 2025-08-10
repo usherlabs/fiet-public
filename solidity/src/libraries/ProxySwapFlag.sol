@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
+import {TransientSlots} from "./TransientSlots.sol";
+
 /**
  * @title SwapTracking
  * @notice Library for managing transient storage to track swap state during transaction lifecycle
@@ -8,13 +10,12 @@ pragma solidity ^0.8.0;
  */
 library ProxySwapFlag {
     // Transient storage slot for proxy swap flag
-    //  bytes32(uint256(keccak256("ProxySwapFlag.proxySwapFlag")) - 1)
-    bytes32 private constant PROXY_SWAP_FLAG_SLOT = 0xb2cdeda168ef16aaceb40605a2d55b1591e47cb286357600199476109313a907;
 
     /**
      * @notice Set the proxy swap flag to indicate a swap initiated by the proxy hook is in progress
      */
     function setProxySwapFlag() internal {
+        bytes32 PROXY_SWAP_FLAG_SLOT = TransientSlots.PROXY_SWAP_FLAG_SLOT;
         assembly {
             tstore(PROXY_SWAP_FLAG_SLOT, true)
         }
@@ -24,6 +25,7 @@ library ProxySwapFlag {
      * @notice Clears the state of the proxy swap flag
      */
     function clearProxySwapFlag() internal {
+        bytes32 PROXY_SWAP_FLAG_SLOT = TransientSlots.PROXY_SWAP_FLAG_SLOT;
         assembly {
             tstore(PROXY_SWAP_FLAG_SLOT, false)
         }
@@ -34,6 +36,8 @@ library ProxySwapFlag {
      * @return flag True if a proxy swap is in progress, false otherwise
      */
     function isProxySwapInProgress() internal view returns (bool flag) {
+        bytes32 PROXY_SWAP_FLAG_SLOT = TransientSlots.PROXY_SWAP_FLAG_SLOT;
+
         assembly {
             flag := tload(PROXY_SWAP_FLAG_SLOT)
         }

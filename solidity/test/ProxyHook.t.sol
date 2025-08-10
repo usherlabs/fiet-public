@@ -25,168 +25,15 @@ import {IHookCommon} from "../src/interfaces/IHookCommon.sol";
 import {LiquidityUtils} from "../src/libraries/LiquidityUtils.sol";
 import {console} from "forge-std/console.sol";
 import {HookFlags} from "../script/constants/HookFlags.sol";
+// inherit from the MarketTestBase contract
+import {MarketTestBase} from "./modules/MarketTestBase.sol";
 
-contract ProxyHookTest is Test, Deployers {
+contract ProxyHookTest is MarketTestBase {
     using PoolIdLibrary for PoolId;
     using CurrencyLibrary for Currency;
 
-    ProxyHook hook;
-    Currency internal _currency0;
-    Currency internal _currency1;
-    Currency internal _currency2;
-    Currency internal _currency3;
-
-    uint160 constant ZERO_FOR_ONE_LIMIT = TickMath.MIN_SQRT_PRICE + 1;
-    uint160 constant ONE_FOR_ZERO_LIMIT = TickMath.MAX_SQRT_PRICE - 1;
-
-    PoolKey corePoolKey;
-    PoolKey proxyPoolKey;
-
-    address marketFactory;
-    address coreHookAddress;
-
-    function deployAndApproveLCC(address underlyingAsset, address hookAddr) internal returns (Currency currency) {
-        address[] memory issuers = new address[](2);
-        issuers[0] = hookAddr;
-        issuers[1] = address(this);
-
-        LiquidityCommitmentCertificate token =
-            new LiquidityCommitmentCertificate(underlyingAsset, issuers, marketFactory);
-
-        address[10] memory toApprove = [
-            address(swapRouter),
-            address(swapRouterNoChecks),
-            address(modifyLiquidityRouter),
-            address(modifyLiquidityNoChecks),
-            address(donateRouter),
-            address(takeRouter),
-            address(claimsRouter),
-            address(nestedActionRouter.executor()),
-            address(actionsRouter),
-            address(manager)
-        ];
-
-        for (uint256 i = 0; i < toApprove.length; i++) {
-            token.approve(toApprove[i], Constants.MAX_UINT256);
-            IERC20Minimal(underlyingAsset).approve(toApprove[i], Constants.MAX_UINT256);
-        }
-
-        IERC20Minimal(underlyingAsset).approve(address(token), Constants.MAX_UINT256);
-        return Currency.wrap(address(token));
-    }
-
-    function deployCurrencies(address hookAddr) internal {
-        Currency _currencyA = deployMintAndApproveCurrency();
-        Currency _currencyB = deployMintAndApproveCurrency();
-
-        Currency _currencyC = deployAndApproveLCC(Currency.unwrap(_currencyA), hookAddr);
-        Currency _currencyD = deployAndApproveLCC(Currency.unwrap(_currencyB), hookAddr);
-
-        (_currency0, _currency1) =
-            CurrencySortHelper.sortAddresses(Currency.unwrap(_currencyA), Currency.unwrap(_currencyB));
-
-        (_currency2, _currency3) =
-            CurrencySortHelper.sortAddresses(Currency.unwrap(_currencyC), Currency.unwrap(_currencyD));
-    }
-
-    function deployCorePool() internal {
-        Currency currencyA = _currency2;
-        Currency currencyB = _currency3;
-        if (Currency.unwrap(currencyA) > Currency.unwrap(currencyB)) {
-            (currencyA, currencyB) = (currencyB, currencyA);
-        }
-        corePoolKey = PoolKey(currencyA, currencyB, 3000, 60, IHooks(coreHookAddress));
-        vm.prank(marketFactory);
-        manager.initialize(corePoolKey, SQRT_PRICE_1_1);
-    }
-
-    function deployProxyPool(address proxyHookAddress) internal {
-        // Deployment and activation moved to setUp
-    }
-
     function setUp() public {
-        deployFreshManagerAndRouters();
-        marketFactory = makeAddr("marketFactory");
-
-        // Compute core hook address
-        uint160 coreFlags = HookFlags.CORE_HOOK_FLAGS;
-        coreHookAddress = address(coreFlags);
-
-        // Deploy CoreHook
-        deployCodeTo("CoreHook.sol", abi.encode(manager, marketFactory), coreHookAddress);
-
-        // Compute proxy hook address
-        uint160 proxyFlags = HookFlags.PROXY_HOOK_FLAGS;
-        address proxyHookAddress = address(proxyFlags);
-
-        // Deploy ProxyHook
-        deployCodeTo("ProxyHook.sol", abi.encode(manager, marketFactory), proxyHookAddress);
-        hook = ProxyHook(proxyHookAddress);
-
-        // Mock factory calls
-        vm.mockCall(
-            marketFactory, abi.encodeWithSelector(IMarketFactory.getCoreHook.selector), abi.encode(coreHookAddress)
-        );
-        vm.mockCall(
-            marketFactory,
-            abi.encodeWithSelector(IMarketFactory.proxyHookToCurrencyPair.selector),
-            abi.encode(Currency.unwrap(_currency2), Currency.unwrap(_currency3))
-        );
-
-        // Activate proxy hooks
-        vm.prank(marketFactory);
-        hook.activate();
-
-        deployCurrencies(proxyHookAddress);
-        deployCorePool();
-
-        // Initialize proxy pool
-        Currency currencyA = _currency0;
-        Currency currencyB = _currency1;
-        if (Currency.unwrap(currencyA) > Currency.unwrap(currencyB)) {
-            (currencyA, currencyB) = (currencyB, currencyA);
-        }
-        proxyPoolKey = PoolKey(currencyA, currencyB, 3000, 60, IHooks(proxyHookAddress));
-        vm.prank(marketFactory);
-        manager.initialize(proxyPoolKey, SQRT_PRICE_1_1);
-
-        // Set core pool key against the proxy pool key id.
-        vm.prank(marketFactory);
-        hook.setCorePoolKey(corePoolKey);
-
-        // Provide initial liquidity to core pool
-        uint256 initialLiquidity = 10000e18;
-
-        LiquidityCommitmentCertificate lcc0 = LiquidityCommitmentCertificate(Currency.unwrap(_currency2));
-        LiquidityCommitmentCertificate lcc1 = LiquidityCommitmentCertificate(Currency.unwrap(_currency3));
-
-        _currency0.transfer(address(this), initialLiquidity);
-        _currency1.transfer(address(this), initialLiquidity);
-
-        IERC20Minimal(lcc0.underlyingAsset()).approve(address(lcc0), initialLiquidity);
-        lcc0.wrap(initialLiquidity);
-
-        IERC20Minimal(lcc1.underlyingAsset()).approve(address(lcc1), initialLiquidity);
-        lcc1.wrap(initialLiquidity);
-
-        // Mock factory calls made by CoreHook when liquidity is added or removed.
-        vm.mockCall(
-            marketFactory, abi.encodeWithSelector(IMarketFactory.coreToProxy.selector), abi.encode(proxyPoolKey.toId())
-        );
-        vm.mockCall(
-            marketFactory, abi.encodeWithSelector(IMarketFactory.proxyToHook.selector), abi.encode(proxyHookAddress)
-        );
-
-        modifyLiquidityRouter.modifyLiquidity(
-            corePoolKey,
-            ModifyLiquidityParams({
-                tickLower: -60,
-                tickUpper: 60,
-                liquidityDelta: int256(initialLiquidity),
-                salt: bytes32(0)
-            }),
-            ZERO_BYTES
-        );
+        _setupMarket();
     }
 
     function test_cannotModifyLiquidityOfProxyHook() public {
@@ -303,6 +150,7 @@ contract ProxyHookTest is Test, Deployers {
         assertEq(selfBalanceOfTokenAAfter, selfBalanceOfTokenABefore + swapAmount);
     }
 
+    // Tests that after a direct swap on the
     function test_swap_exactOutput_zeroForOneOnCore() public {
         PoolSwapTest.TestSettings memory settings =
             PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false});
@@ -338,8 +186,8 @@ contract ProxyHookTest is Test, Deployers {
             ZERO_BYTES
         );
 
-        uint256 deltaAmount0 = _safeInt128ToUint256(delta.amount0());
-        uint256 deltaAmount1 = _safeInt128ToUint256(delta.amount1());
+        uint256 deltaAmount0 = LiquidityUtils.safeInt128ToUint256(delta.amount0());
+        uint256 deltaAmount1 = LiquidityUtils.safeInt128ToUint256(delta.amount1());
 
         console.log("delta 0:", delta.amount0());
         console.log("delta 1:", delta.amount1());
@@ -452,18 +300,6 @@ contract ProxyHookTest is Test, Deployers {
         vm.prank(address(manager));
         vm.expectRevert(ProxyHook.InvalidInitialiser.selector);
         hook.beforeInitialize(address(1), testKey, SQRT_PRICE_1_1);
-    }
-
-    /**
-     * @dev Safely converts int128 to uint256, handling negative values by taking absolute value
-     * @param value The int128 value to convert
-     * @return The uint256 representation (absolute value)
-     */
-    function _safeInt128ToUint256(int128 value) internal pure returns (uint256) {
-        if (value < 0) {
-            return uint256(uint128(-value));
-        }
-        return uint256(uint128(value));
     }
 
     // More tests can be added for onDirectLP, unlockCallback, etc.

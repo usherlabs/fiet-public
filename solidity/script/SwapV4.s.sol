@@ -54,7 +54,11 @@ contract SwapV4 is ScriptHelper {
             networkName = "sepolia";
         }
 
+        // Load deployment addresses
         _setFilename(networkName);
+        address marketFactoryAddr = readAddress("marketFactory");
+        IMarketFactory marketFactory = IMarketFactory(marketFactoryAddr);
+        console.log("Market Factory loaded");
 
         address universalRouterAddr;
         address poolManagerAddr;
@@ -85,7 +89,8 @@ contract SwapV4 is ScriptHelper {
         permit2 = IPermit2(permit2Addr);
         console.log("Permit2 loaded");
 
-        hook = IHooks(readAddress("proxyHook"));
+        PoolId proxyPoolId = marketFactory.coreToProxy(corePoolKey.toId());
+        hook = IHooks(marketFactory.proxyToHook(proxyPoolId));
         console.log("Proxy Hook loaded");
 
         try vm.envString("CORE_POOL_ID") returns (string memory envCorePoolId) {
@@ -134,9 +139,6 @@ contract SwapV4 is ScriptHelper {
             console.log("Tick spacing loaded:", tickSpacing);
         }
 
-        address marketFactoryAddr = readAddress("marketFactory");
-        IMarketFactory marketFactory = IMarketFactory(marketFactoryAddr);
-        console.log("Market Factory loaded");
         address coreHookAddr = marketFactory.getCoreHook();
         console.log("Core Hook loaded");
         lccToken0 = marketFactory.getLCC(token0);
