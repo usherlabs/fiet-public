@@ -149,8 +149,9 @@ contract MarketFactory is IMarketFactory, Ownable2Step {
             [Currency.unwrap(corePoolKey.currency0), Currency.unwrap(corePoolKey.currency1)];
 
         // Set the core pool key in the proxy hook for this new market
-        ProxyHook(proxyHook).setCorePoolKey(corePoolKey);
-        ProxyHook(proxyHook).activate();
+        ProxyHook proxyHookInstance = ProxyHook(proxyHook);
+        proxyHookInstance.setCorePoolKey(corePoolKey);
+        proxyHookInstance.activate();
 
         emit MarketCreated(
             corePoolId, proxyPoolId, underlyingAsset0, underlyingAsset1, lccToken0, lccToken1, coreHook, proxyHook

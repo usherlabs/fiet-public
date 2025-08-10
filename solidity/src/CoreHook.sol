@@ -8,7 +8,6 @@ import {BaseHook} from "v4-periphery/src/utils/BaseHook.sol";
 import {BalanceDelta, BalanceDeltaLibrary} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 
-import {IHookCommon} from "./interfaces/IHookCommon.sol";
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 import {ProxyHook} from "./ProxyHook.sol";
 import {LiquidityCommitmentCertificate} from "./LCC.sol";
@@ -21,7 +20,7 @@ import {Exttload} from "v4-periphery/lib/v4-core/src/Exttload.sol";
 import {IExttload} from "v4-periphery/lib/v4-core/src/interfaces/IExttload.sol";
 import {ProxySwapFlag} from "./libraries/ProxySwapFlag.sol";
 import {TransientSlots} from "./libraries/TransientSlots.sol";
-
+import {LiquidityUtils} from "./libraries/LiquidityUtils.sol";
 import {console} from "forge-std/console.sol";
 
 /**
@@ -29,7 +28,7 @@ import {console} from "forge-std/console.sol";
  *     This way it can calculate and manage Liquidity Commitments (C_A(r)) for each Position.
  *     Furthermore, we need to know when Direct LP occurs, as this determines whether the underlying native tokens are settled to the Pool Manager.
  */
-contract CoreHook is BaseHook, IHookCommon, PausablePool, Exttload {
+contract CoreHook is BaseHook, PausablePool, Exttload {
     using CurrencySettler for Currency;
 
     error InvalidInitialiser();
@@ -128,7 +127,7 @@ contract CoreHook is BaseHook, IHookCommon, PausablePool, Exttload {
         // TODO: Filter the sender address to determine whether it's MMPositionManager or DirectLP.
         address proxyHook = _getProxyHook(key);
 
-        ProxyHook(proxyHook).onDirectLP(key, delta, ActionType.DirectLPAddLiquidity);
+        ProxyHook(proxyHook).onDirectLP(key, delta, LiquidityUtils.ActionType.DirectLPAddLiquidity);
 
         return (this.afterAddLiquidity.selector, BalanceDeltaLibrary.ZERO_DELTA);
     }
@@ -146,7 +145,7 @@ contract CoreHook is BaseHook, IHookCommon, PausablePool, Exttload {
         // TODO dynamically get proxyhook from market factory
 
         address proxyHook = _getProxyHook(key);
-        ProxyHook(proxyHook).onDirectLP(key, delta, ActionType.DirectLPRemoveLiquidity);
+        ProxyHook(proxyHook).onDirectLP(key, delta, LiquidityUtils.ActionType.DirectLPRemoveLiquidity);
 
         return (this.afterRemoveLiquidity.selector, BalanceDeltaLibrary.ZERO_DELTA);
     }

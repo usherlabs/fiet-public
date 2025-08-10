@@ -23,7 +23,6 @@ import {ProxyHook} from "../../src/ProxyHook.sol";
 import {CoreHook} from "../../src/CoreHook.sol";
 import {LiquidityCommitmentCertificate} from "../../src/LCC.sol";
 import {IMarketFactory} from "../../src/interfaces/IMarketFactory.sol";
-import {IHookCommon} from "../../src/interfaces/IHookCommon.sol";
 import {LiquidityUtils} from "../../src/libraries/LiquidityUtils.sol";
 import {console} from "forge-std/console.sol";
 import {HookFlags} from "../../script/constants/HookFlags.sol";

@@ -16,14 +16,14 @@ import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
 import {Exttload} from "v4-periphery/lib/v4-core/src/Exttload.sol";
 
 import {LiquidityCommitmentCertificate} from "./LCC.sol";
-import {IHookCommon} from "./interfaces/IHookCommon.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {ProxySwapFlag} from "./libraries/ProxySwapFlag.sol";
 import {LiquidityUtils} from "../src/libraries/LiquidityUtils.sol";
 import {MarketVault} from "./modules/MarketVault.sol";
+
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 
-contract ProxyHook is BaseHook, IHookCommon, MarketVault, Exttload {
+contract ProxyHook is BaseHook, MarketVault, Exttload {
     using CurrencySettler for Currency;
 
     error AddLiquidityThroughHookNotAllowed();
@@ -36,7 +36,7 @@ contract ProxyHook is BaseHook, IHookCommon, MarketVault, Exttload {
         Currency currency0;
         Currency currency1;
         address poolManager;
-        ActionType actionType;
+        LiquidityUtils.ActionType actionType;
     }
 
     // router of the swap
@@ -170,7 +170,7 @@ contract ProxyHook is BaseHook, IHookCommon, MarketVault, Exttload {
     // Method called by the Core Hook notifying that Direct Liquidity Provision occurred.
     // Liquidity is managed by the Proxy Hook here to ensure PM credits the Proxy Hook (msg.sender) with relevant Currency Delta.
     // THIS IS ALREADY UNLOCKED FOR DIRECT LP ON CORE POOL.
-    function onDirectLP(PoolKey calldata corePoolkey, BalanceDelta delta, ActionType actionType)
+    function onDirectLP(PoolKey calldata corePoolkey, BalanceDelta delta, LiquidityUtils.ActionType actionType)
         external
         virtual
         onlyCoreHook
@@ -183,7 +183,7 @@ contract ProxyHook is BaseHook, IHookCommon, MarketVault, Exttload {
         uint256 amount0 = LiquidityUtils.safeInt128ToUint256(delta.amount0());
         uint256 amount1 = LiquidityUtils.safeInt128ToUint256(delta.amount1());
 
-        if (actionType == ActionType.DirectLPAddLiquidity) {
+        if (actionType == LiquidityUtils.ActionType.DirectLPAddLiquidity) {
             // Add liquidity to the core pool
             // Since we didn't go through the regular "modify liquidity" flow,
             // the PM just has a debit of `amount` of each currency from us
@@ -197,7 +197,7 @@ contract ProxyHook is BaseHook, IHookCommon, MarketVault, Exttload {
             _settleFromLCCToVault(lccToken1, amount1);
 
             _settleVaultDebtsToLCC(corePoolkey);
-        } else if (actionType == ActionType.DirectLPRemoveLiquidity) {
+        } else if (actionType == LiquidityUtils.ActionType.DirectLPRemoveLiquidity) {
             // Remove liquidity from the core pool
             // Remove the underlying tokens from the vault to the LCCs
             // and notify the LCCs about the new balance

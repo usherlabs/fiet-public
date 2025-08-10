@@ -4,6 +4,14 @@ pragma solidity ^0.8.0;
 /// @notice Library for liquidity utility functions
 library LiquidityUtils {
     /**
+     * @notice Enum defining different types of liquidity actions
+     */
+    enum ActionType {
+        DirectLPAddLiquidity,
+        DirectLPRemoveLiquidity
+    }
+
+    /**
      * @dev Safely converts int128 to uint256, handling negative values by taking absolute value
      * @param value The int128 value to convert
      * @return The uint256 representation (absolute value)
