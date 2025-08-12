@@ -6,7 +6,7 @@ import {IERC20Metadata} from "openzeppelin-contracts/contracts/token/ERC20/exten
 import {SafeTransferLib} from "solmate/utils/SafeTransferLib.sol";
 import {ERC20} from "solmate/tokens/ERC20.sol";
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
-import {MarketDebt} from "./modules/MarketDebt.sol";
+import {MarketLiquidityDebt} from "./modules/MarketLiquidityDebt.sol";
 import {IExttload} from "v4-periphery/lib/v4-core/src/interfaces/IExttload.sol";
 import {TransientSlots} from "./libraries/TransientSlots.sol";
 import {PoolId} from "v4-periphery/lib/v4-core/src/types/PoolId.sol";
@@ -15,7 +15,7 @@ import {IProxyHook} from "./interfaces/IProxyHook.sol";
 import {MarketVault} from "./modules/MarketVault.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 
-contract LiquidityCommitmentCertificate is ERC20, MarketDebt {
+contract LiquidityCommitmentCertificate is ERC20, MarketLiquidityDebt {
     using SafeTransferLib for ERC20;
 
     error SenderNotIssuer();
@@ -42,8 +42,10 @@ contract LiquidityCommitmentCertificate is ERC20, MarketDebt {
         // Get if the caller is a registered proxy hook
         // If it is, then we need to get the two currencies it proxies
         // Then check if the underlying asset falls under any of the two currencies it supports
-        address[2] memory currencies = IMarketFactory(marketFactory).proxyHookToCurrencyPair(caller);
-        bool isAssetProxyPool = (currencies[0] == underlyingAsset || currencies[1] == underlyingAsset);
+        address[2] memory currencies = IMarketFactory(marketFactory)
+            .proxyHookToCurrencyPair(caller);
+        bool isAssetProxyPool = (currencies[0] == underlyingAsset ||
+            currencies[1] == underlyingAsset);
         bool isValidIssuer = issuers[caller] || isAssetProxyPool;
 
         // if caller is not a valid issuer then revert
@@ -61,7 +63,10 @@ contract LiquidityCommitmentCertificate is ERC20, MarketDebt {
         }
 
         // Allow transfers between protocol bounds
-        if (IMarketFactory(marketFactory).bounds(to) || IMarketFactory(marketFactory).bounds(from)) {
+        if (
+            IMarketFactory(marketFactory).bounds(to) ||
+            IMarketFactory(marketFactory).bounds(from)
+        ) {
             _;
             return;
         }
@@ -79,9 +84,16 @@ contract LiquidityCommitmentCertificate is ERC20, MarketDebt {
      * @param _issuers The issuers of the LCC. ProxyHook, and MMPositionManager
      * @param _marketFactory The MarketFactory contract that manages this LCC.
      */
-    constructor(address _underlyingAsset, address[] memory _issuers, address _marketFactory)
+    constructor(
+        address _underlyingAsset,
+        address[] memory _issuers,
+        address _marketFactory
+    )
         ERC20(
-            string.concat("Fiet Liquidity Commitment Certificate for ", IERC20Metadata(_underlyingAsset).name()),
+            string.concat(
+                "Fiet Liquidity Commitment Certificate for ",
+                IERC20Metadata(_underlyingAsset).name()
+            ),
             string.concat("lcc-", IERC20Metadata(_underlyingAsset).symbol()),
             IERC20Metadata(_underlyingAsset).decimals()
         )
@@ -114,7 +126,9 @@ contract LiquidityCommitmentCertificate is ERC20, MarketDebt {
         // This is because the PoolManager will custody the difference.
     }
 
-    function cancel(uint256 amount) external onlyIssuer returns (uint256 amountToCancel, uint256 deficit) {
+    function cancel(
+        uint256 amount
+    ) external onlyIssuer returns (uint256 amountToCancel, uint256 deficit) {
         address issuer = msg.sender;
         uint256 externallyCustodied = totalSupply - uaSupply;
         if (amount == 0) {
@@ -154,7 +168,12 @@ contract LiquidityCommitmentCertificate is ERC20, MarketDebt {
         bytes32 marketId = PoolId.unwrap(corePoolId);
 
         // Process the debt queue for this market
-        uint256 processedAmount = _processMarketDebtQueue(marketId, amount);
+        // burn to indicate that we want to burn the tokens for the debt settlement
+        uint256 processedAmount = _processMarketDebtQueue(
+            marketId,
+            amount,
+            true
+        );
         uint256 remainingAmount = amount - processedAmount;
 
         // if after settling debts there is still some liquidity left, then store it in the market reserves
@@ -190,7 +209,12 @@ contract LiquidityCommitmentCertificate is ERC20, MarketDebt {
      * @param amount The amount to unwrap from this market
      * @return The amount actually unwrapped from this market
      */
-    function _unwrapFromMarket(bytes32 marketId, address from, address to, uint256 amount) internal returns (uint256) {
+    function _useLiquidityFromMarketPool(
+        bytes32 marketId,
+        address from,
+        address to,
+        uint256 amount
+    ) internal returns (uint256) {
         // Use market liquidity
         uint256 amountAvailable = _useMarketLiquidity(marketId, amount);
 
@@ -203,34 +227,29 @@ contract LiquidityCommitmentCertificate is ERC20, MarketDebt {
         // Update user's market balance
         userMarketBalances[from][marketId] -= amountAvailable;
 
-        // Transfer what we can immediately
-        if (amountAvailable > 0) {
-            _transferUnderlyingAssets(to, amountAvailable);
-        }
-
         return amountAvailable;
     }
 
     /**
-     * @dev Unwraps LCC from general liquidity pool (wrapped LCC)
+     * @dev Unwraps LCC from general liquidity pool (wrapped LCC) i.e LCC that was created by wrapping
      * @dev Unwraps using liquidity that was provided by wrapping
-     * @param to The recipient of underlying assets
      * @param amount The amount to unwrap from general pool
      * @return The amount actually unwrapped
      */
-    function _unwrapFromGeneralPool(address to, uint256 amount) internal returns (uint256) {
+    function _useLqiuidityFromWrappedPool(
+        uint256 amount
+    ) internal view returns (uint256) {
         // Wrapped LCC should always be fully backed by uaSupply
         // No debt queue needed ? - this should always succeed
 
-        if (uaSupply < amount) {
-            // This should never happen in a properly functioning system
-            // If it does, it's a bug in the accounting
-            // Do we need to track amount wrapped as well.
+        // get the UA supply that was wrapped by sutracting the total supply from the sum of all market balances
+        uint256 totalMarketBalances = _getTotalMarketBalances();
+        uint256 uaSupplyWrapped = totalSupply - totalMarketBalances;
+
+        // if the UA supply that was wrapped is less than the amount to unwrap, then revert
+        if (uaSupplyWrapped < amount) {
             revert InsufficientWrappedLiquidity(amount, uaSupply);
         }
-
-        // Transfer the full amount
-        _transferUnderlyingAssets(to, amount);
 
         // Should Always returns full amount
         return amount;
@@ -243,36 +262,53 @@ contract LiquidityCommitmentCertificate is ERC20, MarketDebt {
             revert InvalidAmount();
         }
 
-        uint256 remainingToUnwrap = amount;
         uint256 totalAmountUnwrapped = 0;
 
-        // Step 1: Unwrap from user's market-specific balances first
-        // This ensures market LCC uses market-specific liquidity
         bytes32[] memory userMarkets = _getUserMarkets(from);
-
-        for (uint256 i = 0; i < userMarkets.length && remainingToUnwrap > 0; i++) {
-            bytes32 marketId = userMarkets[i];
-            uint256 userMarketBalance = userMarketBalances[from][marketId];
-
-            if (userMarketBalance > 0) {
-                uint256 amountFromThisMarket = Math.min(remainingToUnwrap, userMarketBalance);
-
-                // Try to unwrap from this market's liquidity
-                uint256 amountUnwrapped = _unwrapFromMarket(marketId, from, to, amountFromThisMarket);
-
-                totalAmountUnwrapped += amountUnwrapped;
-                remainingToUnwrap -= amountFromThisMarket;
-            }
-        }
-
-        // Step 2: Any remaining amount comes from wrapped LCC (general pool)
-        if (remainingToUnwrap > 0) {
-            uint256 amountUnwrapped = _unwrapFromGeneralPool(to, remainingToUnwrap);
+        uint256 userMarketsTotalDebt = _getUserTotalMarketBalance(from);
+        uint256 userWrappedBalance = balanceOf[from] - userMarketsTotalDebt;
+        // if the user has wrapped balance, then we need to unwrap from the market first
+        if (userWrappedBalance > 0) {
+            uint256 amountUnwrapped = _useLqiuidityFromWrappedPool(amount);
             totalAmountUnwrapped += amountUnwrapped;
         }
 
-        // Burn the full amount of LCC tokens
-        _burn(from, amount);
+        // any amount not wrapped should be unwrapped from the market
+        uint256 remainingToUnwrap = amount - totalAmountUnwrapped;
+
+        for (
+            uint256 i = 0;
+            i < userMarkets.length && remainingToUnwrap > 0;
+            i++
+        ) {
+            bytes32 marketId = userMarkets[i];
+            uint256 userMarketBalance = userMarketBalances[from][marketId];
+
+            if (userMarketBalance == 0) continue;
+
+            // get the max amount that can be unwrapped from this market
+            uint256 amountFromThisMarket = Math.min(
+                remainingToUnwrap,
+                userMarketBalance
+            );
+
+            // unwrap from this market's liquidity
+            uint256 amountUnwrapped = _useLiquidityFromMarketPool(
+                marketId,
+                from,
+                to,
+                amountFromThisMarket
+            );
+
+            totalAmountUnwrapped += amountUnwrapped;
+            remainingToUnwrap -= amountFromThisMarket;
+        }
+
+        // burn the amount that was unwrapped
+        // and transfer the underlying assets to the user
+        if (totalAmountUnwrapped > 0) {
+            _payMarketDebt(from, totalAmountUnwrapped);
+        }
     }
 
     function unwrap(uint256 amount) external {
@@ -287,29 +323,45 @@ contract LiquidityCommitmentCertificate is ERC20, MarketDebt {
         _unwrap(msg.sender, to, amount);
     }
 
-    function _transferUnderlyingAssets(address user, uint256 amount) internal override {
+    function _transferUnderlyingAssets(address user, uint256 amount) internal {
         // confirm the amount is valid and not greater than the uaSupply
         require(amount > 0 && amount <= uaSupply, "invalid amount");
-
         uaSupply -= amount;
 
         SafeTransferLib.safeTransfer(ERC20(underlyingAsset), user, amount);
+    }
+
+    // PAy a debt to a user and burn their underlying tokens
+    function _payMarketDebt(address user, uint256 amount) internal override {
+        _burn(user, amount);
+        _transferUnderlyingAssets(user, amount);
     }
 
     // TODO: Re-enable protocol-bounds in the future...
 
     // On transfer hook
     // function onTransfer(address from, address to, uint256 amount) internal onlyProtocolTransfer(msg.sender, to){
-    function onTransfer(address, address to, uint256 amount) internal {
+    function onTransfer(address from, address to, uint256 amount) internal {
+        // clear any debt in all markets to be paid to the sender initiating the transfer
+        _annulUserDebtBeforeTransfer(from, amount);
+
+        // process the market tracing logic to find out which market the token transfer came from
         _processMarketTracing(to, amount);
     }
 
-    function transfer(address to, uint256 amount) public virtual override returns (bool) {
+    function transfer(
+        address to,
+        uint256 amount
+    ) public virtual override returns (bool) {
         onTransfer(msg.sender, to, amount);
         return super.transfer(to, amount);
     }
 
-    function transferFrom(address from, address to, uint256 amount) public virtual override returns (bool) {
+    function transferFrom(
+        address from,
+        address to,
+        uint256 amount
+    ) public virtual override returns (bool) {
         onTransfer(from, to, amount);
         return super.transferFrom(from, to, amount);
     }
@@ -319,17 +371,70 @@ contract LiquidityCommitmentCertificate is ERC20, MarketDebt {
      * @return isTracingActive Whether tracing is active
      * @return currentMarket The current market if any is set
      */
-    function _getCoreHookFlags() internal view returns (bool isTracingActive, bytes32 currentMarket) {
+    function _getCoreHookFlags()
+        internal
+        view
+        returns (bool isTracingActive, bytes32 currentMarket)
+    {
         // get the core hook from the market factory
         address coreHook = IMarketFactory(marketFactory).getCoreHook();
 
         // read in all the bytes from the transient storage of the hook contract
-        bytes32 tracingFlagBytes = IExttload(coreHook).exttload(TransientSlots.TRACING_FLAG_SLOT);
-        bytes32 currentMarketBytes = IExttload(coreHook).exttload(TransientSlots.CURRENT_MARKET_SLOT);
+        bytes32 tracingFlagBytes = IExttload(coreHook).exttload(
+            TransientSlots.TRACING_FLAG_SLOT
+        );
+        bytes32 currentMarketBytes = IExttload(coreHook).exttload(
+            TransientSlots.CURRENT_MARKET_SLOT
+        );
 
         // set the tracing flag and current market
         isTracingActive = tracingFlagBytes != bytes32(0);
         currentMarket = currentMarketBytes;
+    }
+
+    /**
+     * @dev Annul the user's debt partially or completely
+     * @param fromUser The user to annul the debt for
+     * @param amountToTransfer The amount to transfer
+     */
+
+    function _annulUserDebtBeforeTransfer(
+        address fromUser,
+        uint256 amountToTransfer
+    ) internal {
+        // get the markets the user has LCC from
+        // get their balance
+        // get their total market debt
+        // max amount they can transfer  is balance - debt
+        // if they try to transfer more than that, then we need to annull the equivalent debt
+        uint256 userBalance = balanceOf[fromUser];
+
+        // if from user is protocol bound then return
+        if (IMarketFactory(marketFactory).bounds(fromUser)) {
+            return;
+        }
+
+        if (userBalance == 0) {
+            return;
+        }
+
+        if (amountToTransfer > userBalance) {
+            revert InvalidAmount();
+        }
+
+        // get the user's total debt across all markets
+        uint256 userTotalDebt = _getUserTotalDebt(fromUser);
+        if (userTotalDebt == 0) {
+            return;
+        }
+
+        uint256 maxAmountCanTransfer = userBalance - userTotalDebt;
+
+        if (amountToTransfer > maxAmountCanTransfer) {
+            uint256 amountToAnnull = amountToTransfer - maxAmountCanTransfer;
+            // annull the equivalent debt
+            _processAllMarketDebtQueue(fromUser, amountToAnnull, false);
+        }
     }
 
     /**
@@ -343,8 +448,12 @@ contract LiquidityCommitmentCertificate is ERC20, MarketDebt {
 
         // read in all the bytes from the transient storage of the hook contract
         // Read transient storage from CoreHook
-        bytes32 tracingFlagBytes = IExttload(coreHook).exttload(TransientSlots.TRACING_FLAG_SLOT);
-        bytes32 currentMarketBytes = IExttload(coreHook).exttload(TransientSlots.CURRENT_MARKET_SLOT);
+        bytes32 tracingFlagBytes = IExttload(coreHook).exttload(
+            TransientSlots.TRACING_FLAG_SLOT
+        );
+        bytes32 currentMarketBytes = IExttload(coreHook).exttload(
+            TransientSlots.CURRENT_MARKET_SLOT
+        );
 
         // Tracing is active if this flag has been set by the core hook right after a swap
         bool isTracingActive = tracingFlagBytes != bytes32(0);
@@ -363,38 +472,53 @@ contract LiquidityCommitmentCertificate is ERC20, MarketDebt {
     }
 
     /**
-     * @dev Check if the LCC is supported by the market
+     * @dev Process all the market debt queues for a user partially or completely clearing out their debt
+     * @param fromUser The user to process the debt queues for
+     * @param debtToClear The total debt to clear
+     * @param burnTokens Whether to burn the equivalent LCC tokens for the debt settled
+     */
+    function _processAllMarketDebtQueue(
+        address fromUser,
+        uint256 debtToClear,
+        bool burnTokens
+    ) internal {
+        uint256 totalDebtCleared = 0;
+        // get the markets the user has LCC from
+        bytes32[] memory userMarkets = _getUserMarkets(fromUser);
+        for (uint256 i = 0; i < userMarkets.length; i++) {
+            bytes32 marketId = userMarkets[i];
+
+            // Check if we've already cleared enough debt
+            if (totalDebtCleared == debtToClear) break;
+
+            uint256 cleared = _processMarketDebtQueue(
+                marketId,
+                debtToClear,
+                burnTokens
+            );
+            totalDebtCleared += cleared;
+        }
+    }
+
+    /**
+     * @dev Check if the LCC is supported by the market i.e if the LCC is either token0 or token1 for a given core pool
      * @param marketId The ID of the market i.e for uniswap v4 it is the core pool id
      * @return bool True if the LCC is supported by the market, false otherwise
      */
-    function _isLCCSupportedByMarket(bytes32 marketId) internal view returns (bool) {
+    function _isLCCSupportedByMarket(
+        bytes32 marketId
+    ) internal view returns (bool) {
         // get the core pool from the market factory
-        PoolId corePool = IMarketFactory(marketFactory).coreToProxy(PoolId.wrap(marketId));
+        PoolId corePool = IMarketFactory(marketFactory).coreToProxy(
+            PoolId.wrap(marketId)
+        );
 
         // get the two currencies that the core pool is trading
-        address[2] memory currencies = IMarketFactory(marketFactory).corePoolToCurrencyPair(corePool);
+        address[2] memory currencies = IMarketFactory(marketFactory)
+            .corePoolToCurrencyPair(corePool);
 
         // Check if this LCC contract matches either currency in the core pool
         address lccAddress = address(this);
         return (lccAddress == currencies[0] || lccAddress == currencies[1]);
-    }
-
-    /**
-     * @dev Gets all markets a user has LCC from
-     * @param user The user address
-     * @return Array of market IDs the user has balances in
-     */
-    function _getUserMarkets(address user) public view returns (bytes32[] memory) {
-        bytes32[] memory userMarkets = new bytes32[](knownMarkets.length);
-        uint256 count = 0;
-
-        for (uint256 i = 0; i < knownMarkets.length; i++) {
-            bytes32 marketId = knownMarkets[i];
-            if (userMarketBalances[user][marketId] > 0) {
-                userMarkets[count] = marketId;
-                count++;
-            }
-        }
-        return userMarkets;
     }
 }

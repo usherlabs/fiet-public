@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT
+// it is typically tied to a proxy hook that is managing liquidity through a pool manager
 // outlines market vault functionality for the proxy hook
 // this is used to manage the liquidity of the vault and the underlying assets
 // it is also used to settle debts owed to the LCCs
 // it is also used to take and settle underlying assets to and from the LCCs
 
-pragma solidity ^0.8.0;
+pragma solidity ^0.8.20;
 
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
