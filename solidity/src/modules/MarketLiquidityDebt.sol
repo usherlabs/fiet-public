@@ -15,11 +15,7 @@ abstract contract MarketLiquidityDebt {
 
     // When a debt request is added to the queue
     event DebtRequestQueued(
-        bytes32 indexed marketId,
-        address indexed recipient,
-        uint256 amount,
-        uint256 queueIndex,
-        uint256 timestamp
+        bytes32 indexed marketId, address indexed recipient, uint256 amount, uint256 queueIndex, uint256 timestamp
     );
 
     // When a debt request is settled/cleared
@@ -33,12 +29,7 @@ abstract contract MarketLiquidityDebt {
     );
 
     // When a debt request is annulled
-    event DebtRequestAnnulled(
-        bytes32 indexed marketId,
-        address indexed recipient,
-        uint256 amount,
-        uint256 timestamp
-    );
+    event DebtRequestAnnulled(bytes32 indexed marketId, address indexed recipient, uint256 amount, uint256 timestamp);
 
     // Events for market tracking
     event MarketRegistered(bytes32 indexed marketId);
@@ -65,9 +56,7 @@ abstract contract MarketLiquidityDebt {
      * @param marketId The market ID
      * @return The total debt for this market
      */
-    function getMarketTotalDebt(
-        bytes32 marketId
-    ) external view returns (uint256) {
+    function getMarketTotalDebt(bytes32 marketId) external view returns (uint256) {
         return marketTotalDebt[marketId];
     }
 
@@ -76,9 +65,7 @@ abstract contract MarketLiquidityDebt {
      * @param marketId The market ID
      * @return The amount of liquidity reserves for this market
      */
-    function getMarketLiquidityReserves(
-        bytes32 marketId
-    ) external view returns (uint256) {
+    function getMarketLiquidityReserves(bytes32 marketId) external view returns (uint256) {
         return marketLiquidityReserves[marketId];
     }
 
@@ -88,10 +75,7 @@ abstract contract MarketLiquidityDebt {
      * @param marketId The market ID
      * @return The user's balance from this market
      */
-    function getUserMarketBalance(
-        address user,
-        bytes32 marketId
-    ) external view returns (uint256) {
+    function getUserMarketBalance(address user, bytes32 marketId) external view returns (uint256) {
         return userMarketBalances[user][marketId];
     }
 
@@ -108,9 +92,7 @@ abstract contract MarketLiquidityDebt {
      * @param marketId The market ID
      * @return The number of debt holders in this market
      */
-    function getMarketQueueLength(
-        bytes32 marketId
-    ) external view returns (uint256) {
+    function getMarketQueueLength(bytes32 marketId) external view returns (uint256) {
         return marketDebtHolders[marketId].length;
     }
 
@@ -146,10 +128,7 @@ abstract contract MarketLiquidityDebt {
      * @param amount The amount of liquidity to use
      * @return actualAmount The actual amount used (may be less if insufficient liquidity is present)
      */
-    function _useMarketLiquidity(
-        bytes32 marketId,
-        uint256 amount
-    ) internal returns (uint256 actualAmount) {
+    function _useMarketLiquidity(bytes32 marketId, uint256 amount) internal returns (uint256 actualAmount) {
         uint256 available = marketLiquidityReserves[marketId];
         actualAmount = Math.min(amount, available);
 
@@ -177,11 +156,7 @@ abstract contract MarketLiquidityDebt {
      * @param recipient The address we owe debt to
      * @param amount The amount of debt to add
      */
-    function _addMarketDebtRequest(
-        bytes32 marketId,
-        address recipient,
-        uint256 amount
-    ) internal {
+    function _addMarketDebtRequest(bytes32 marketId, address recipient, uint256 amount) internal {
         // Add to debt we owe this recipient for this market
         if (marketUserDebt[marketId][recipient] == 0) {
             // First debt to this recipient in this market
@@ -220,9 +195,7 @@ abstract contract MarketLiquidityDebt {
      * @param user The user address
      * @return The total balance across all markets
      */
-    function _getUserTotalMarketBalance(
-        address user
-    ) internal view returns (uint256) {
+    function _getUserTotalMarketBalance(address user) internal view returns (uint256) {
         uint256 total = 0;
         for (uint256 i = 0; i < knownMarkets.length; i++) {
             total += userMarketBalances[user][knownMarkets[i]];
@@ -233,18 +206,13 @@ abstract contract MarketLiquidityDebt {
     /*
      * @dev Gets debt holders sorted by debt amount (smallest first)
      */
-    function _getSortedDebtHolders(
-        bytes32 marketId
-    ) internal view returns (address[] memory) {
+    function _getSortedDebtHolders(bytes32 marketId) internal view returns (address[] memory) {
         address[] memory debtHolders = marketDebtHolders[marketId];
 
         // Simple bubble sort
         for (uint256 i = 0; i < debtHolders.length; i++) {
             for (uint256 j = i + 1; j < debtHolders.length; j++) {
-                if (
-                    marketUserDebt[marketId][debtHolders[i]] >
-                    marketUserDebt[marketId][debtHolders[j]]
-                ) {
+                if (marketUserDebt[marketId][debtHolders[i]] > marketUserDebt[marketId][debtHolders[j]]) {
                     // Swap
                     address temp = debtHolders[i];
                     debtHolders[i] = debtHolders[j];
@@ -261,9 +229,7 @@ abstract contract MarketLiquidityDebt {
      * @param recipient The address to check
      * @return totalDebt The total debt owed across all markets
      */
-    function _getUserTotalDebt(
-        address recipient
-    ) internal view returns (uint256 totalDebt) {
+    function _getUserTotalDebt(address recipient) internal view returns (uint256 totalDebt) {
         totalDebt = 0;
 
         for (uint256 i = 0; i < knownMarkets.length; i++) {
@@ -278,11 +244,7 @@ abstract contract MarketLiquidityDebt {
      * @param marketId The market ID they acquired from
      * @param amount The amount of LCC acquired
      */
-    function _trackMarketAcquisition(
-        address user,
-        bytes32 marketId,
-        uint256 amount
-    ) internal {
+    function _trackMarketAcquisition(address user, bytes32 marketId, uint256 amount) internal {
         // Register the market if it is not already registered
         _registerMarket(marketId);
 
@@ -294,9 +256,7 @@ abstract contract MarketLiquidityDebt {
      * @param user The user address
      * @return Array of market IDs the user has balances in
      */
-    function _getUserMarkets(
-        address user
-    ) public view returns (bytes32[] memory) {
+    function _getUserMarkets(address user) public view returns (bytes32[] memory) {
         bytes32[] memory userMarkets = new bytes32[](knownMarkets.length);
         uint256 count = 0;
 
@@ -317,33 +277,22 @@ abstract contract MarketLiquidityDebt {
      * @param burnTokens Whether to burn the equivalent LCC tokens for the debt settled
      * @return processedAmount The amount processed from the debt queue
      */
-    function _processMarketDebtQueue(
-        bytes32 marketId,
-        uint256 availableLiquidity,
-        bool burnTokens
-    ) internal returns (uint256 processedAmount) {
-        uint256 remainingLiquidity = Math.min(
-            availableLiquidity,
-            marketTotalDebt[marketId]
-        );
+    function _processMarketDebtQueue(bytes32 marketId, uint256 availableLiquidity, bool burnTokens)
+        internal
+        returns (uint256 processedAmount)
+    {
+        uint256 remainingLiquidity = Math.min(availableLiquidity, marketTotalDebt[marketId]);
 
         // Sort debt holders by debt amount (smallest first)
         address[] memory sortedDebtHolders = _getSortedDebtHolders(marketId);
 
-        for (
-            uint256 i = 0;
-            i < sortedDebtHolders.length && remainingLiquidity > 0;
-            i++
-        ) {
+        for (uint256 i = 0; i < sortedDebtHolders.length && remainingLiquidity > 0; i++) {
             address debtHolder = sortedDebtHolders[i];
             uint256 debtAmount = marketUserDebt[marketId][debtHolder];
 
             if (debtAmount == 0) continue; // Skip paid debts - very cheap
 
-            uint256 amountToSettleFromDebt = Math.min(
-                remainingLiquidity,
-                debtAmount
-            );
+            uint256 amountToSettleFromDebt = Math.min(remainingLiquidity, debtAmount);
 
             // Update debt we owe
             marketUserDebt[marketId][debtHolder] -= amountToSettleFromDebt;
@@ -368,14 +317,7 @@ abstract contract MarketLiquidityDebt {
                 // _transferUnderlyingAssets(debtHolder, amountToSettleFromDebt);
             }
 
-            emit DebtRequestSettled(
-                marketId,
-                debtHolder,
-                amountToSettleFromDebt,
-                0,
-                block.timestamp,
-                burnTokens
-            );
+            emit DebtRequestSettled(marketId, debtHolder, amountToSettleFromDebt, 0, block.timestamp, burnTokens);
         }
     }
 

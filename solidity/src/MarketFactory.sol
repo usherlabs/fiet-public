@@ -11,6 +11,8 @@ import {LiquidityCommitmentCertificate} from "./LCC.sol";
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 import {IHookPausable} from "./interfaces/IHookPausable.sol";
 import {ProxyHook} from "./ProxyHook.sol";
+import {MarketDeployer} from "./MarketDeployer.sol";
+import {console} from "forge-std/console.sol";
 
 /**
  * @title MarketFactory
@@ -22,6 +24,7 @@ contract MarketFactory is IMarketFactory, Ownable2Step {
 
     IPoolManager private immutable _poolManager;
     address public coreHook;
+    address public marketDeployer;
 
     // Mapping from underlying asset to LCC token
     mapping(address => address) public underlyingToLCC;
@@ -56,6 +59,7 @@ contract MarketFactory is IMarketFactory, Ownable2Step {
         for (uint256 i = 0; i < _bounds.length; i++) {
             bounds[_bounds[i]] = true;
         }
+        marketDeployer = address(new MarketDeployer());
     }
 
     function setHooks(address _coreHook) external onlyOwner {
@@ -96,13 +100,17 @@ contract MarketFactory is IMarketFactory, Ownable2Step {
      * @return proxyPoolId The ID of the created proxy pool
      */
     function createMarket(
-        address proxyHook,
         address underlyingAsset0,
         address underlyingAsset1,
         uint24 corePoolFee,
         int24 tickSpacing,
-        uint160 initialSqrtPriceX96
+        uint160 initialSqrtPriceX96,
+        bytes32 salt
     ) external onlyOwner returns (PoolId corePoolId, PoolId proxyPoolId) {
+        // Deploy proxy hook
+        address proxyHookAddress =
+            MarketDeployer(marketDeployer).deployProxyHook(address(_poolManager), address(this), salt);
+
         if (underlyingAsset0 == address(0) || underlyingAsset1 == address(0)) {
             revert InvalidUnderlyingAsset();
         }
@@ -133,28 +141,35 @@ contract MarketFactory is IMarketFactory, Ownable2Step {
 
         // Create proxy pool with underlying assets
         PoolKey memory proxyPoolKey =
-            _createProxyPool(underlyingAsset0, underlyingAsset1, tickSpacing, proxyHook, proxyInitialPrice);
+            _createProxyPool(underlyingAsset0, underlyingAsset1, tickSpacing, proxyHookAddress, proxyInitialPrice);
 
         corePoolId = corePoolKey.toId();
         proxyPoolId = proxyPoolKey.toId();
 
         // Store the relationship between core and proxy pools
         coreToProxy[corePoolId] = proxyPoolId;
-        _proxyToHook[proxyPoolId] = proxyHook;
+        _proxyToHook[proxyPoolId] = proxyHookAddress;
         // Store the currencies the proxy hook manages
-        _proxyHookToCurrencyPair[proxyHook] =
+        _proxyHookToCurrencyPair[proxyHookAddress] =
             [Currency.unwrap(proxyPoolKey.currency0), Currency.unwrap(proxyPoolKey.currency1)];
         // Store the currencies the core pool trades
         _corePoolToCurrencyPair[corePoolId] =
             [Currency.unwrap(corePoolKey.currency0), Currency.unwrap(corePoolKey.currency1)];
 
         // Set the core pool key in the proxy hook for this new market
-        ProxyHook proxyHookInstance = ProxyHook(proxyHook);
+        ProxyHook proxyHookInstance = ProxyHook(proxyHookAddress);
         proxyHookInstance.setCorePoolKey(corePoolKey);
         proxyHookInstance.activate();
 
         emit MarketCreated(
-            corePoolId, proxyPoolId, underlyingAsset0, underlyingAsset1, lccToken0, lccToken1, coreHook, proxyHook
+            corePoolId,
+            proxyPoolId,
+            underlyingAsset0,
+            underlyingAsset1,
+            lccToken0,
+            lccToken1,
+            coreHook,
+            proxyHookAddress
         );
     }
 

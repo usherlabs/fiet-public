@@ -25,7 +25,7 @@ import {LiquidityCommitmentCertificate} from "../../src/LCC.sol";
 import {IMarketFactory} from "../../src/interfaces/IMarketFactory.sol";
 import {LiquidityUtils} from "../../src/libraries/LiquidityUtils.sol";
 import {console} from "forge-std/console.sol";
-import {HookFlags} from "../../script/constants/HookFlags.sol";
+import {HookFlags} from "../../src/libraries/HookFlags.sol";
 
 abstract contract MarketTestBase is Test, Deployers {
     using PoolIdLibrary for PoolId;

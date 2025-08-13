@@ -29,7 +29,6 @@ contract MarketLiquidityTest is MarketTestBase {
     using PoolIdLibrary for PoolId;
     using CurrencyLibrary for Currency;
 
-
     address test_user_1 = makeAddr("test_user_1");
     // ? we need to mint the minimum required liquidity for the swap
     // ? because if there is more liquidity than needed we would need to account for it when calculating debts for the marrket during unwraps
@@ -38,7 +37,7 @@ contract MarketLiquidityTest is MarketTestBase {
     // ? i.e rather than accounting for wrapped amounts, since we are testing for queues, we better make it zero than account for it
     uint256 amount0ToMint = 100;
     uint256 amount1ToMint = 0;
-    int256 public  ZERO_FOR_ONE_SWAP_AMOUNT = -int256(amount0ToMint);
+    int256 public ZERO_FOR_ONE_SWAP_AMOUNT = -int256(amount0ToMint);
 
     LiquidityCommitmentCertificate lcc0;
     LiquidityCommitmentCertificate lcc1;
@@ -46,50 +45,32 @@ contract MarketLiquidityTest is MarketTestBase {
     function setUp() public {
         _setupMarket();
         // set it to false i.e Market Tracking would be enabled since we track addresses that are not within bounds
-        vm.mockCall(
-            marketFactory,
-            abi.encodeWithSelector(IMarketFactory.bounds.selector),
-            abi.encode(false)
-        );
+        vm.mockCall(marketFactory, abi.encodeWithSelector(IMarketFactory.bounds.selector), abi.encode(false));
         // mint some LCC na underlying tokens to the test user
         _currency0.transfer(test_user_1, amount0ToMint);
         _currency1.transfer(test_user_1, amount1ToMint);
 
         vm.startPrank(test_user_1);
-        ApproveLCCForMarketUse(
-            LiquidityCommitmentCertificate(Currency.unwrap(_currency2))
-        );
-        ApproveLCCForMarketUse(
-            LiquidityCommitmentCertificate(Currency.unwrap(_currency3))
-        );
+        ApproveLCCForMarketUse(LiquidityCommitmentCertificate(Currency.unwrap(_currency2)));
+        ApproveLCCForMarketUse(LiquidityCommitmentCertificate(Currency.unwrap(_currency3)));
 
         lcc0 = LiquidityCommitmentCertificate(Currency.unwrap(_currency2));
         lcc1 = LiquidityCommitmentCertificate(Currency.unwrap(_currency3));
 
-        IERC20Minimal(lcc0.underlyingAsset()).approve(
-            address(lcc0),
-            amount0ToMint
-        );
+        IERC20Minimal(lcc0.underlyingAsset()).approve(address(lcc0), amount0ToMint);
         lcc0.wrap(amount0ToMint);
 
-        IERC20Minimal(lcc1.underlyingAsset()).approve(
-            address(lcc1),
-            amount1ToMint
-        );
+        IERC20Minimal(lcc1.underlyingAsset()).approve(address(lcc1), amount1ToMint);
         lcc1.wrap(amount1ToMint);
 
-        // log 
+        // log
     }
 
-    function test_swap_exactOutput_zeroForOneOnCore_with_marketTracing()
-        public
-    {
+    function test_swap_exactOutput_zeroForOneOnCore_with_marketTracing() public {
         vm.startPrank(test_user_1);
 
-        PoolSwapTest.TestSettings memory settings = PoolSwapTest.TestSettings({
-            takeClaims: false,
-            settleUsingBurn: false
-        });
+        PoolSwapTest.TestSettings memory settings =
+            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false});
 
         // Perform a swap to ensure liquidity is moved from pool manager into lcc market sub-balance
         BalanceDelta delta = swapRouter.swap(
@@ -118,10 +99,8 @@ contract MarketLiquidityTest is MarketTestBase {
     function test_canUnwrap_from_singleMarketWithLiquidity() public {
         vm.startPrank(test_user_1);
 
-        PoolSwapTest.TestSettings memory settings = PoolSwapTest.TestSettings({
-            takeClaims: false,
-            settleUsingBurn: false
-        });
+        PoolSwapTest.TestSettings memory settings =
+            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false});
 
         bytes32 marketId = PoolId.unwrap(corePoolKey.toId());
         BalanceDelta delta1 = swapRouter.swap(
@@ -135,60 +114,32 @@ contract MarketLiquidityTest is MarketTestBase {
             ZERO_BYTES
         );
         // get the balance of the out token in the lcc that came from this market
-        uint256 marketReservesAmount = lcc1.getMarketLiquidityReserves(
-            marketId
-        );
+        uint256 marketReservesAmount = lcc1.getMarketLiquidityReserves(marketId);
 
         // validate that the amount out of the swap is equal to the market reserves
         // the market eserves of an lcc token is the amount of underlying liquidity that this market has sent to the LCC
-        assertEq(
-            LiquidityUtils.safeInt128ToUint256(delta1.amount1()),
-            marketReservesAmount
-        );
+        assertEq(LiquidityUtils.safeInt128ToUint256(delta1.amount1()), marketReservesAmount);
 
         // Validate that underlying asset balance went up by the amount of the swap
         // validate that lcc balance went down by the amount of the swap
         uint256 lccBalanceRightBeforeUnwrap = lcc1.balanceOf(test_user_1);
-        uint256 underlyingBalanceRightBeforeUnwrap = IERC20Minimal(
-            lcc1.underlyingAsset()
-        ).balanceOf(test_user_1);
+        uint256 underlyingBalanceRightBeforeUnwrap = IERC20Minimal(lcc1.underlyingAsset()).balanceOf(test_user_1);
 
-        console.log(
-            "lcc balance right before unwrap",
-            lccBalanceRightBeforeUnwrap
-        );
-        console.log(
-            "underlying balance right before unwrap",
-            underlyingBalanceRightBeforeUnwrap
-        );
+        console.log("lcc balance right before unwrap", lccBalanceRightBeforeUnwrap);
+        console.log("underlying balance right before unwrap", underlyingBalanceRightBeforeUnwrap);
         // unwrap from the market
         lcc1.unwrap(marketReservesAmount);
         // check underlying asset and lcc balance after unwrap
-        uint256 underlyingBalanceRightAfterUnwrap = IERC20Minimal(
-            lcc1.underlyingAsset()
-        ).balanceOf(test_user_1);
+        uint256 underlyingBalanceRightAfterUnwrap = IERC20Minimal(lcc1.underlyingAsset()).balanceOf(test_user_1);
         uint256 lccBalanceRightAfterUnwrap = lcc1.balanceOf(test_user_1);
 
-        console.log(
-            "lcc balance right after unwrap",
-            lccBalanceRightAfterUnwrap
-        );
-        console.log(
-            "underlying balance right after unwrap",
-            underlyingBalanceRightAfterUnwrap
-        );
+        console.log("lcc balance right after unwrap", lccBalanceRightAfterUnwrap);
+        console.log("underlying balance right after unwrap", underlyingBalanceRightAfterUnwrap);
 
         // validate that the market reserves are now 0 as we have taken all the liquidity this market contributed to the LCC
         assertEq(lcc1.getMarketLiquidityReserves(marketId), 0);
-        assertEq(
-            lccBalanceRightAfterUnwrap,
-            lccBalanceRightBeforeUnwrap - marketReservesAmount
-        );
-        assertEq(
-            underlyingBalanceRightAfterUnwrap -
-                underlyingBalanceRightBeforeUnwrap,
-            marketReservesAmount
-        );
+        assertEq(lccBalanceRightAfterUnwrap, lccBalanceRightBeforeUnwrap - marketReservesAmount);
+        assertEq(underlyingBalanceRightAfterUnwrap - underlyingBalanceRightBeforeUnwrap, marketReservesAmount);
     }
 
     // act as a user
@@ -197,14 +148,10 @@ contract MarketLiquidityTest is MarketTestBase {
     // make sure the recipient is a new address to ensure fresh supply of lcc
     // make the pm run out of underlying liquidity
     // unwrap from the market enough to get an entry into the debt queue
-    function _createDebtQueueEntry(
-        bytes32 marketId
-    ) public returns (BalanceDelta) {
+    function _createDebtQueueEntry(bytes32 marketId) public returns (BalanceDelta) {
         console.log("creating debt queue entry");
-        PoolSwapTest.TestSettings memory settings = PoolSwapTest.TestSettings({
-            takeClaims: false,
-            settleUsingBurn: false
-        });
+        PoolSwapTest.TestSettings memory settings =
+            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false});
         // Perform another swap, but mock the pool manager to have no liquidity to ensure that unwraps are queued
         // Use vm.mockCall to make poolmanager balance of currency0 return 0
         address proxyHook = address(hook);
@@ -244,9 +191,7 @@ contract MarketLiquidityTest is MarketTestBase {
         uint256 amountOut = LiquidityUtils.safeInt128ToUint256(delta.amount1());
 
         // validate that the market reserves are still 0 as no liquidity was sent to the market
-        uint256 marketReservesAmount = lcc1.getMarketLiquidityReserves(
-            marketId
-        );
+        uint256 marketReservesAmount = lcc1.getMarketLiquidityReserves(marketId);
 
         assertEq(marketReservesAmount, 0);
 
@@ -259,9 +204,7 @@ contract MarketLiquidityTest is MarketTestBase {
         assertEq(lcc1.marketTotalDebt(marketId), amountOut);
 
         // update call to pool manager to have some liquidity now so we can further test functions that add liquidity and trigger debt settlement
-        uint256 poolunderlyingassetBalance = IERC20Minimal(
-            lcc1.underlyingAsset()
-        ).balanceOf(address(manager));
+        uint256 poolunderlyingassetBalance = IERC20Minimal(lcc1.underlyingAsset()).balanceOf(address(manager));
         vm.mockCall(
             address(manager),
             abi.encodeWithSelector(
@@ -283,9 +226,7 @@ contract MarketLiquidityTest is MarketTestBase {
         // create a debt queue entry i.e. unwrap from the market enough to get an entry into the debt queue for the given market for the specified user
         BalanceDelta delta = _createDebtQueueEntry(marketId);
         uint256 amountOut = LiquidityUtils.safeInt128ToUint256(delta.amount1());
-        uint256 underlyingBalanceRightAfterSwap = IERC20Minimal(
-            lcc1.underlyingAsset()
-        ).balanceOf(test_user_1);
+        uint256 underlyingBalanceRightAfterSwap = IERC20Minimal(lcc1.underlyingAsset()).balanceOf(test_user_1);
 
         // validate that lcc was burned only after debt was paid off
         uint256 lccBalanceRightAfterSwap = lcc1.balanceOf(test_user_1);
@@ -308,33 +249,24 @@ contract MarketLiquidityTest is MarketTestBase {
         vm.startPrank(test_user_1);
 
         // Validate that LSS was burned as user's debt was settled
-        uint256 lccBalanceRightAfterDebtSettlement = lcc1.balanceOf(
-            test_user_1
-        );
-        assertEq(
-            lccBalanceRightAfterDebtSettlement,
-            lccBalanceRightAfterSwap - amountOut
-        );
+        uint256 lccBalanceRightAfterDebtSettlement = lcc1.balanceOf(test_user_1);
+        assertEq(lccBalanceRightAfterDebtSettlement, lccBalanceRightAfterSwap - amountOut);
 
         // validate that the debt was paid off and the rest of the liquidity is in the pool manager
         assertEq(lcc1.marketUserDebt(marketId, test_user_1), 0);
         assertEq(lcc1.marketTotalDebt(marketId), 0);
 
-        uint256 underlyingBalanceRightAfterModifyLiquidity = IERC20Minimal(
-            lcc1.underlyingAsset()
-        ).balanceOf(test_user_1);
+        uint256 underlyingBalanceRightAfterModifyLiquidity =
+            IERC20Minimal(lcc1.underlyingAsset()).balanceOf(test_user_1);
 
         assertEq(
-            underlyingBalanceRightAfterModifyLiquidity -
-                underlyingBalanceRightAfterSwap,
+            underlyingBalanceRightAfterModifyLiquidity - underlyingBalanceRightAfterSwap,
             LiquidityUtils.safeInt128ToUint256(delta.amount1())
         );
     }
 
     function test_canUnwrap_from_singleMarketWithQueue_usingSwap() public {
-        uint256 poolunderlyingassetBalance = IERC20Minimal(
-            lcc1.underlyingAsset()
-        ).balanceOf(address(manager));
+        uint256 poolunderlyingassetBalance = IERC20Minimal(lcc1.underlyingAsset()).balanceOf(address(manager));
         vm.mockCall(
             address(manager),
             abi.encodeWithSelector(
@@ -346,10 +278,8 @@ contract MarketLiquidityTest is MarketTestBase {
             abi.encode(poolunderlyingassetBalance)
         );
         vm.startPrank(test_user_1);
-        PoolSwapTest.TestSettings memory settings = PoolSwapTest.TestSettings({
-            takeClaims: false,
-            settleUsingBurn: false
-        });
+        PoolSwapTest.TestSettings memory settings =
+            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false});
 
         bytes32 marketId = PoolId.unwrap(corePoolKey.toId());
 
@@ -357,9 +287,7 @@ contract MarketLiquidityTest is MarketTestBase {
         BalanceDelta delta = _createDebtQueueEntry(marketId);
         uint256 amountOut = LiquidityUtils.safeInt128ToUint256(delta.amount1());
 
-        uint256 underlyingBalanceRightAfterSwap = IERC20Minimal(
-            lcc1.underlyingAsset()
-        ).balanceOf(test_user_1);
+        uint256 underlyingBalanceRightAfterSwap = IERC20Minimal(lcc1.underlyingAsset()).balanceOf(test_user_1);
 
         // validate that lcc was burned only after debt was paid off
         uint256 lccBalanceRightAfterSwap = lcc1.balanceOf(test_user_1);
@@ -387,21 +315,14 @@ contract MarketLiquidityTest is MarketTestBase {
         assertEq(lcc1.marketTotalDebt(marketId), 0);
 
         // validate that lcc was burned only after debt was paid off
-        uint256 lccBalanceRightAfterDebtSettlement = lcc1.balanceOf(
-            test_user_1
-        );
-        assertEq(
-            lccBalanceRightAfterDebtSettlement,
-            lccBalanceRightAfterSwap - amountOut
-        );
+        uint256 lccBalanceRightAfterDebtSettlement = lcc1.balanceOf(test_user_1);
+        assertEq(lccBalanceRightAfterDebtSettlement, lccBalanceRightAfterSwap - amountOut);
 
-        uint256 underlyingBalanceRightAfterModifyLiquidity = IERC20Minimal(
-            lcc1.underlyingAsset()
-        ).balanceOf(test_user_1);
+        uint256 underlyingBalanceRightAfterModifyLiquidity =
+            IERC20Minimal(lcc1.underlyingAsset()).balanceOf(test_user_1);
 
         assertEq(
-            underlyingBalanceRightAfterModifyLiquidity -
-                underlyingBalanceRightAfterSwap,
+            underlyingBalanceRightAfterModifyLiquidity - underlyingBalanceRightAfterSwap,
             LiquidityUtils.safeInt128ToUint256(delta.amount1())
         );
     }
@@ -435,10 +356,8 @@ contract MarketLiquidityTest is MarketTestBase {
 
     function test_partially_annulDebtQueueEntry_onTransfer() public {
         vm.startPrank(test_user_1);
-        PoolSwapTest.TestSettings memory settings = PoolSwapTest.TestSettings({
-            takeClaims: false,
-            settleUsingBurn: false
-        });
+        PoolSwapTest.TestSettings memory settings =
+            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false});
 
         bytes32 marketId = PoolId.unwrap(corePoolKey.toId());
 
@@ -452,8 +371,7 @@ contract MarketLiquidityTest is MarketTestBase {
         // get the user's LCC balance
         uint256 lccBalanceRightBeforeTransfer = lcc1.balanceOf(test_user_1);
         uint256 expectedDebtLeft = 10;
-        uint256 amountTransferred = lccBalanceRightBeforeTransfer -
-            expectedDebtLeft;
+        uint256 amountTransferred = lccBalanceRightBeforeTransfer - expectedDebtLeft;
 
         // transfer all of the LCC to a protocol bound address i.e the pool manager
         // it has to be a protocol bound address bcause lcc's transfer is limited to protocol bound addresses
@@ -464,9 +382,7 @@ contract MarketLiquidityTest is MarketTestBase {
         assertEq(lcc1.marketTotalDebt(marketId), expectedDebtLeft);
         assertEq(lcc1.balanceOf(test_user_1), expectedDebtLeft);
 
-        uint256 underlyingBalanceRightBeforeSwap = IERC20Minimal(
-            lcc1.underlyingAsset()
-        ).balanceOf(test_user_1);
+        uint256 underlyingBalanceRightBeforeSwap = IERC20Minimal(lcc1.underlyingAsset()).balanceOf(test_user_1);
 
         // clear the debt and validate LCC balance is zero by permorming a swap as another user
         vm.stopPrank();
@@ -482,16 +398,11 @@ contract MarketLiquidityTest is MarketTestBase {
             ZERO_BYTES
         );
 
-        uint256 underlyingBalanceRightAfterSwap = IERC20Minimal(
-            lcc1.underlyingAsset()
-        ).balanceOf(test_user_1);
+        uint256 underlyingBalanceRightAfterSwap = IERC20Minimal(lcc1.underlyingAsset()).balanceOf(test_user_1);
 
         // validate lcc balance is zero since LCC should have been burned to pay off the debt
         assertEq(lcc1.balanceOf(test_user_1), 0);
-        assertEq(
-            underlyingBalanceRightAfterSwap - underlyingBalanceRightBeforeSwap,
-            expectedDebtLeft
-        );
+        assertEq(underlyingBalanceRightAfterSwap - underlyingBalanceRightBeforeSwap, expectedDebtLeft);
         // validate that the debt is zero after the swap
         assertEq(lcc1.marketUserDebt(marketId, test_user_1), 0);
         assertEq(lcc1.marketTotalDebt(marketId), 0);
@@ -523,5 +434,5 @@ contract MarketLiquidityTest is MarketTestBase {
         assertEq(lcc1.marketUserDebt(marketId, test_user_1), debtAmount);
         assertEq(lcc1.marketTotalDebt(marketId), debtAmount);
         assertEq(lcc1.balanceOf(test_user_1), debtAmount);
-    }   
+    }
 }

@@ -85,12 +85,12 @@ interface IMarketFactory {
      * @return proxyPoolId The ID of the created proxy pool
      */
     function createMarket(
-        address proxyHook,
         address underlyingAsset0,
         address underlyingAsset1,
         uint24 corePoolFee,
         int24 tickSpacing,
-        uint160 initialSqrtPriceX96
+        uint160 initialSqrtPriceX96,
+        bytes32 salt
     ) external returns (PoolId corePoolId, PoolId proxyPoolId);
 
     /**

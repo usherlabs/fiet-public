@@ -14,7 +14,7 @@ import {Deployers} from "@uniswap/v4-core/test/utils/Deployers.sol";
 import {CoreHook} from "../src/CoreHook.sol";
 import {ProxyHook} from "../src/ProxyHook.sol";
 import {MarketFactory} from "../src/MarketFactory.sol";
-import {HookFlags} from "../script/constants/HookFlags.sol";
+import {HookFlags} from "../src/libraries/HookFlags.sol";
 
 contract HookTest is Test, Deployers {
     IPoolManager poolManager;
