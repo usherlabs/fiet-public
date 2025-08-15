@@ -12,7 +12,6 @@ import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 import {IHookPausable} from "./interfaces/IHookPausable.sol";
 import {ProxyHook} from "./ProxyHook.sol";
 import {MarketDeployer} from "./MarketDeployer.sol";
-import {console} from "forge-std/console.sol";
 
 /**
  * @title MarketFactory

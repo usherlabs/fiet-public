@@ -2,7 +2,6 @@
 pragma solidity ^0.8.20;
 
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
-import {console} from "forge-std/console.sol";
 
 abstract contract MarketLiquidityDebt {
     struct Request {
@@ -111,6 +110,8 @@ abstract contract MarketLiquidityDebt {
 
     /**
      * @dev Records liquidity added to a market (called by ProxyHook)
+     *      Tracks how much of the UA is accounted for by this market,
+     *      i.e how much of the UA is available for tokens gotten from this market that want to be unwrapped
      * @param marketId The market that received liquidity
      * @param amount The amount of liquidity added
      */
@@ -313,8 +314,6 @@ abstract contract MarketLiquidityDebt {
             // if burn is false, it means we are clearinig a debt we did not pay off
             if (burnTokens) {
                 _payMarketDebt(debtHolder, amountToSettleFromDebt);
-                // _burn(debtHolder, amountToSettleFromDebt);
-                // _transferUnderlyingAssets(debtHolder, amountToSettleFromDebt);
             }
 
             emit DebtRequestSettled(marketId, debtHolder, amountToSettleFromDebt, 0, block.timestamp, burnTokens);

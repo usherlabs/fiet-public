@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
+import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
+
 /// @notice Library for liquidity utility functions
 library LiquidityUtils {
     /**
@@ -10,6 +12,9 @@ library LiquidityUtils {
         DirectLPAddLiquidity,
         DirectLPRemoveLiquidity
     }
+
+    uint160 constant ZERO_FOR_ONE_LIMIT = TickMath.MIN_SQRT_PRICE + 1;
+    uint160 constant ONE_FOR_ZERO_LIMIT = TickMath.MAX_SQRT_PRICE - 1;
 
     /**
      * @dev Safely converts int128 to uint256, handling negative values by taking absolute value

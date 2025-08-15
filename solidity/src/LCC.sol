@@ -10,7 +10,6 @@ import {MarketLiquidityDebt} from "./modules/MarketLiquidityDebt.sol";
 import {IExttload} from "v4-periphery/lib/v4-core/src/interfaces/IExttload.sol";
 import {TransientSlots} from "./libraries/TransientSlots.sol";
 import {PoolId} from "v4-periphery/lib/v4-core/src/types/PoolId.sol";
-import {console} from "forge-std/console.sol";
 import {IProxyHook} from "./interfaces/IProxyHook.sol";
 import {MarketVault} from "./modules/MarketVault.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
@@ -114,27 +113,42 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidityDebt {
         // This is because the PoolManager will custody the difference.
     }
 
-    function cancel(uint256 amount) external onlyIssuer returns (uint256 amountToCancel, uint256 deficit) {
+    function cancel(uint256 amount, address deficitRecipient)
+        external
+        onlyIssuer
+        returns (uint256 amountToCancel, uint256 deficitAmount)
+    {
         address issuer = msg.sender;
-        uint256 externallyCustodied = totalSupply - uaSupply;
+        // ? this may not be correct, we need to actually get the amount of underlying liquidity that this issuer has of this LCC'S underlying asset
+        // uint256 externallyCustodied = totalSupply - uaSupply;
+        // ? there is no way to know how much UA is custodied by the issuer unless we make a call to them
+        uint256 externallyCustodied = IProxyHook(issuer).getAvailableLiquidity(underlyingAsset);
+
         if (amount == 0) {
             revert InvalidAmount();
         }
 
         if (amount > externallyCustodied) {
             amountToCancel = externallyCustodied;
-            deficit = amount - externallyCustodied;
+            deficitAmount = amount - externallyCustodied;
         } else {
             amountToCancel = amount;
         }
 
         _burn(issuer, amountToCancel);
 
-        if (deficit > 0) {
-            // TODO: https://www.notion.so/usherlabs/Outcomes-of-LCC-Insufficient-Liquidity-22b6d8286da580c8a455efc4175970a0?source=copy_link#22b6d8286da580de8a33cf367d3b7220
+        if (deficitAmount > 0) {
+            // get market id from the issuer
+            bytes32 marketId = PoolId.unwrap(IProxyHook(issuer).getCorePoolId());
+            // mint deficit to the recipient
+            _mint(deficitRecipient, deficitAmount);
+            // we need to track the acquisition of the deficit amount to the market so unwrap knows where to unwrap from if they swap with their tokens and we need to clear the debt
+            _trackMarketAcquisition(deficitRecipient, marketId, amount);
+            // add the deficit to the market debt queue for immediate settlement when liquidity is available
+            _addMarketDebtRequest(marketId, deficitRecipient, deficitAmount);
         }
 
-        return (amountToCancel, deficit);
+        return (amountToCancel, deficitAmount);
     }
 
     // Called by Issuer before settling liquidity from LCCs to the market.
@@ -222,7 +236,7 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidityDebt {
 
         // get the UA supply that was wrapped by sutracting the total supply from the sum of all market balances
         uint256 totalMarketBalances = _getTotalMarketBalances();
-        uint256 uaSupplyWrapped = totalSupply - totalMarketBalances;
+        uint256 uaSupplyWrapped = uaSupply - totalMarketBalances;
 
         // if the UA supply that was wrapped is less than the amount to unwrap, then revert
         if (uaSupplyWrapped < amount) {
@@ -409,7 +423,7 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidityDebt {
                 return; // This LCC doesn't belong to the active market
             }
 
-            // Process the market tracing logic
+            // Process the market tracing logic, letting us know where this LCC came from for this particular user
             _trackMarketAcquisition(recipient, currentMarket, amount);
         }
     }

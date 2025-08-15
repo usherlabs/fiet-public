@@ -21,7 +21,6 @@ import {IExttload} from "v4-periphery/lib/v4-core/src/interfaces/IExttload.sol";
 import {ProxySwapFlag} from "./libraries/ProxySwapFlag.sol";
 import {TransientSlots} from "./libraries/TransientSlots.sol";
 import {LiquidityUtils} from "./libraries/LiquidityUtils.sol";
-import {console} from "forge-std/console.sol";
 
 /**
  * Core Pool should be aware of Positions.

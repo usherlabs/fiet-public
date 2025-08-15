@@ -14,7 +14,6 @@ import {LiquidityCommitmentCertificate} from "./LCC.sol";
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 import {IHookPausable} from "./interfaces/IHookPausable.sol";
 import {ProxyHook} from "./ProxyHook.sol";
-import {console} from "forge-std/console.sol";
 
 contract MarketDeployer is Ownable {
     constructor() Ownable(msg.sender) {}

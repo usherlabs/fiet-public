@@ -40,8 +40,8 @@ abstract contract MarketTestBase is Test, Deployers {
     Currency internal _currency2;
     Currency internal _currency3;
 
-    uint160 constant ZERO_FOR_ONE_LIMIT = TickMath.MIN_SQRT_PRICE + 1;
-    uint160 constant ONE_FOR_ZERO_LIMIT = TickMath.MAX_SQRT_PRICE - 1;
+    uint160 constant ZERO_FOR_ONE_LIMIT = LiquidityUtils.ZERO_FOR_ONE_LIMIT;
+    uint160 constant ONE_FOR_ZERO_LIMIT = LiquidityUtils.ONE_FOR_ZERO_LIMIT;
 
     PoolKey corePoolKey;
     PoolKey proxyPoolKey;

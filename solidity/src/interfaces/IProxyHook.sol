@@ -13,5 +13,5 @@ interface IProxyHook {
 
     function getCorePoolId() external view returns (PoolId);
 
-    function getProxyHookAvailableLiquidity(Currency currency) external view returns (uint256);
+    function getAvailableLiquidity(address currencyAddress) external view returns (uint256);
 }

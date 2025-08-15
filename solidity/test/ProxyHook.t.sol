@@ -26,13 +26,20 @@ import {console} from "forge-std/console.sol";
 import {HookFlags} from "../script/constants/HookFlags.sol";
 // inherit from the MarketTestBase contract
 import {MarketTestBase} from "./modules/MarketTestBase.sol";
+import {SwapSimulator} from "../src/libraries/SwapSimulator.sol";
 
 contract ProxyHookTest is MarketTestBase {
     using PoolIdLibrary for PoolId;
     using CurrencyLibrary for Currency;
 
+    LiquidityCommitmentCertificate lcc0;
+    LiquidityCommitmentCertificate lcc1;
+
     function setUp() public {
         _setupMarket();
+
+        lcc0 = LiquidityCommitmentCertificate(Currency.unwrap(_currency2));
+        lcc1 = LiquidityCommitmentCertificate(Currency.unwrap(_currency3));
     }
 
     function test_cannotModifyLiquidityOfProxyHook() public {
@@ -89,6 +96,11 @@ contract ProxyHookTest is MarketTestBase {
 
         uint256 selfBalanceOfTokenABefore = proxyPoolKey.currency0.balanceOfSelf();
         uint256 selfBalanceOfTokenBBefore = proxyPoolKey.currency1.balanceOfSelf();
+        // proxy balance of tokens
+        uint256 balanceOfTokenA = hook.getAvailableLiquidity(Currency.unwrap(proxyPoolKey.currency0));
+        uint256 balanceOfTokenB = hook.getAvailableLiquidity(Currency.unwrap(proxyPoolKey.currency1));
+        console.log("balanceOfTokenA", balanceOfTokenA);
+        console.log("balanceOfTokenB", balanceOfTokenB);
 
         uint256 swapAmount = 100;
         swapRouter.swap(
@@ -149,7 +161,7 @@ contract ProxyHookTest is MarketTestBase {
         assertEq(selfBalanceOfTokenAAfter, selfBalanceOfTokenABefore + swapAmount);
     }
 
-    // Tests that after a direct swap on the
+    // Tests that after a direct swap on the underlying liquidity of the lcc tokens are moved accordingly
     function test_swap_exactOutput_zeroForOneOnCore() public {
         PoolSwapTest.TestSettings memory settings =
             PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false});
@@ -220,6 +232,7 @@ contract ProxyHookTest is MarketTestBase {
         assertEq(preBalanceOfToken1UnderlyingAssetInPM - postBalanceOfToken1UnderlyingAssetInPM, deltaAmount1);
     }
 
+    // Tests that after a direct swap on the underlying liquidity of the lcc tokens are moved accordingly
     function test_swap_exactOutput_oneForZeroOnCore() public {
         PoolSwapTest.TestSettings memory settings =
             PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false});
@@ -288,6 +301,173 @@ contract ProxyHookTest is MarketTestBase {
         // because liquidity of the underlying tokens will be moved from LCC token to pool-manager
         // so the pool manager's underlying balance should increase by the amount of token-in(token1) swapped into of the pool
         assertEq(postBalanceOfToken1UnderlyingAssetInPM - preBalanceOfToken1UnderlyingAssetInPM, deltaAmount1);
+    }
+
+    // Test that a swap with limited liquidity on the proxy pool works as expected
+    // when no hook data is provided, the swap with adjust the swap params to use the max available liquidity
+    function test_swap_exactInput_oneForZeroOnProxy_withLimitedLiquidity_noHookData() public {
+        modifyLiquidityRouter.modifyLiquidity(
+            corePoolKey,
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e18, salt: bytes32(0)}),
+            ZERO_BYTES
+        );
+
+        uint256 ua0Balance = hook.getAvailableLiquidity(Currency.unwrap(proxyPoolKey.currency0));
+        console.log("ua0Balance", ua0Balance);
+        console.log("proxyPoolKey.currency0", Currency.unwrap(proxyPoolKey.currency0));
+        uint256 ua1Balance = hook.getAvailableLiquidity(Currency.unwrap(proxyPoolKey.currency1));
+        console.log("ua1Balance", ua1Balance);
+        console.log("proxyPoolKey.currency1", Currency.unwrap(proxyPoolKey.currency1));
+
+        uint256 ua2balance = hook.getAvailableLiquidity(Currency.unwrap(proxyPoolKey.currency1));
+        console.log("ua2balance", ua2balance);
+        PoolSwapTest.TestSettings memory settings =
+            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false});
+
+        uint256 selfBalanceOfTokenABefore = proxyPoolKey.currency0.balanceOfSelf();
+        uint256 selfBalanceOfTokenBBefore = proxyPoolKey.currency1.balanceOfSelf();
+
+        console.log("selfBalanceOfTokenABefore", selfBalanceOfTokenABefore);
+        console.log("selfBalanceOfTokenBBefore", selfBalanceOfTokenBBefore);
+
+        uint256 swapAmount = 100;
+
+        BalanceDelta swapDelta = swapRouter.swap(
+            proxyPoolKey,
+            SwapParams({zeroForOne: true, amountSpecified: -int256(swapAmount), sqrtPriceLimitX96: ZERO_FOR_ONE_LIMIT}),
+            settings,
+            ZERO_BYTES
+        );
+
+        console.log("====== actual deltas =======");
+        console.log("delta 0:", swapDelta.amount0());
+        console.log("delta 1:", swapDelta.amount1());
+
+        uint256 selfBalanceOfTokenAAfter = proxyPoolKey.currency0.balanceOfSelf();
+        uint256 selfBalanceOfTokenBAfter = proxyPoolKey.currency1.balanceOfSelf();
+
+        console.log("selfBalanceOfTokenAAfter", selfBalanceOfTokenAAfter);
+        console.log("selfBalanceOfTokenBAfter", selfBalanceOfTokenBAfter);
+
+        // diff
+        console.log("diff0", int256(selfBalanceOfTokenAAfter) - int256(selfBalanceOfTokenABefore));
+        console.log("diff1", int256(selfBalanceOfTokenBAfter) - int256(selfBalanceOfTokenBBefore));
+
+        // assertEq(selfBalanceOfTokenBBefore - selfBalanceOfTokenBAfter, swapAmount);
+        // assertGt(selfBalanceOfTokenAAfter, selfBalanceOfTokenABefore);
+    }
+
+    // Test that a swap with limited liquidity on the proxy pool works as expected
+    // when no hook data is provided, the swap with adjust the swap params to use the max available liquidity
+    function test_swap_exactInput_oneForZeroOnProxy_withLimitedLiquidity_withHookData() public {
+        bytes32 marketId = PoolId.unwrap(corePoolKey.toId());
+        address lcc_recipient = makeAddr("lcc_recipient");
+        console.log("lcc_recipient", lcc_recipient);
+        console.log("marketId");
+        console.logBytes32(marketId);
+
+        address proxyHook = address(hook);
+        uint256 mockAvailableLiquidity = 50;
+
+        // use  mock call to make poolmanager balance of currency1 return a mock value
+        // this way it appears as if there is no liquidity in the pool manager for output token
+        vm.mockCall(
+            address(manager),
+            abi.encodeWithSelector(
+                // to do
+                manager.balanceOf.selector,
+                address(proxyHook),
+                _currency1.toId()
+            ),
+            abi.encode(mockAvailableLiquidity) // Return 0 liquidity
+        );
+
+        uint256 ua0Balance = hook.getAvailableLiquidity(Currency.unwrap(proxyPoolKey.currency0));
+        console.log("ua0Balance", ua0Balance);
+        console.log("proxyPoolKey.currency0", Currency.unwrap(proxyPoolKey.currency0));
+        uint256 ua1Balance = hook.getAvailableLiquidity(Currency.unwrap(proxyPoolKey.currency1));
+        console.log("ua1Balance", ua1Balance);
+        console.log("proxyPoolKey.currency1", Currency.unwrap(proxyPoolKey.currency1));
+
+        uint256 ua2balance = hook.getAvailableLiquidity(Currency.unwrap(proxyPoolKey.currency1));
+        console.log("ua2balance", ua2balance);
+        PoolSwapTest.TestSettings memory settings =
+            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false});
+
+        uint256 selfBalanceOfTokenABefore = proxyPoolKey.currency0.balanceOfSelf();
+        uint256 selfBalanceOfTokenBBefore = proxyPoolKey.currency1.balanceOfSelf();
+
+        console.log("selfBalanceOfTokenABefore", selfBalanceOfTokenABefore);
+        console.log("selfBalanceOfTokenBBefore", selfBalanceOfTokenBBefore);
+
+        uint256 swapAmount = 100;
+        uint256 expectedOutput = 98; //TODO: get this from the simulation
+        bytes memory hookData = abi.encode(lcc_recipient);
+        console.log("hookData");
+        console.logBytes(hookData);
+        (BalanceDelta simulatedSwapDelta,,,) = SwapSimulator.simulateSwap(
+            manager,
+            corePoolKey,
+            SwapParams({zeroForOne: true, amountSpecified: -int256(swapAmount), sqrtPriceLimitX96: ZERO_FOR_ONE_LIMIT})
+        );
+
+        console.log("====== simulated deltas =======");
+        console.log("delta 0:", simulatedSwapDelta.amount0());
+        console.log("delta 1:", simulatedSwapDelta.amount1());
+
+        BalanceDelta swapDelta = swapRouter.swap(
+            proxyPoolKey,
+            SwapParams({zeroForOne: true, amountSpecified: -int256(swapAmount), sqrtPriceLimitX96: ZERO_FOR_ONE_LIMIT}),
+            settings,
+            hookData
+        );
+        console.log("====== actual deltas =======");
+        console.log("delta 0:", swapDelta.amount0());
+        console.log("delta 1:", swapDelta.amount1());
+
+        uint256 selfBalanceOfTokenAAfter = proxyPoolKey.currency0.balanceOfSelf();
+        uint256 selfBalanceOfTokenBAfter = proxyPoolKey.currency1.balanceOfSelf();
+
+        console.log("selfBalanceOfTokenAAfter", selfBalanceOfTokenAAfter);
+        console.log("selfBalanceOfTokenBAfter", selfBalanceOfTokenBAfter);
+
+        // diff
+        console.log("diff0", int256(selfBalanceOfTokenAAfter) - int256(selfBalanceOfTokenABefore));
+        console.log("diff1", int256(selfBalanceOfTokenBAfter) - int256(selfBalanceOfTokenBBefore));
+
+        // check debt queue for lcc_recipient in LCC token
+        LiquidityCommitmentCertificate lccOut = lcc1.underlyingAsset() == Currency.unwrap(_currency1) ? lcc1 : lcc0;
+
+        // validate user got lcc tokens and a debt from this market
+        uint256 deficit = expectedOutput - mockAvailableLiquidity;
+        console.log("deficit", deficit);
+        assertEq(lccOut.marketUserDebt(marketId, lcc_recipient), deficit);
+        assertEq(lccOut.marketTotalDebt(marketId), deficit);
+        assertEq(lccOut.balanceOf(lcc_recipient), deficit);
+
+        assertEq(_currency1.balanceOf(lcc_recipient), 0);
+
+        // add some liquidity to the core pool to attempt to clear the debt
+        // add some liquidity to the core pool
+        modifyLiquidityRouter.modifyLiquidity(
+            corePoolKey,
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e18, salt: bytes32(0)}),
+            ZERO_BYTES
+        );
+
+        assertEq(lccOut.marketUserDebt(marketId, lcc_recipient), 0);
+        assertEq(lccOut.marketTotalDebt(marketId), 0);
+        assertEq(lccOut.balanceOf(lcc_recipient), 0);
+        //confirm recippient got ua
+        assertEq(_currency1.balanceOf(lcc_recipient), deficit);
+
+        // console.log("debtQueueBalance", debtQueueBalance);
+        // console.log("debtQueueBalance", debtQueueBalance);
+        // assertEq(debtQueueBalance, swapAmount);
+
+        // assertEq(selfBalanceOfTokenBBefore - selfBalanceOfTokenBAfter, swapAmount);
+        // assertGt(selfBalanceOfTokenAAfter, selfBalanceOfTokenABefore);
+        vm.clearMockedCalls();
     }
 
     // Additional tests
