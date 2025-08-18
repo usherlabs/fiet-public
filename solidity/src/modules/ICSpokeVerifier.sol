@@ -1,0 +1,72 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
+
+import {ISpokeVerifier} from "../interfaces/ISpokeVerifier.sol";
+import {MarketMaker} from "../libraries/MarketMaker.sol";
+import {console} from "forge-std/console.sol";
+import {ShaMerkle} from "../libraries/ShaMerkle.sol";
+
+contract ICSpokeVerifier is ISpokeVerifier {
+    using ECDSA for bytes32;
+    using ShaMerkle for bytes32[];
+    using MarketMaker for MarketMaker.State;
+
+    error UnauthorizedCaller();
+    error InvalidMerkleProof();
+    error InvalidRootStateHashSignature();
+
+    address public canisterAddress;
+
+    constructor(address _canisterAddress) {
+        canisterAddress = _canisterAddress;
+    }
+
+    function verifyProof(
+        bytes32 rootStateHash,
+        bytes calldata rootStateHashSignature,
+        bytes calldata mmStateHashSignature,
+        MarketMaker.State calldata mmStateData,
+        bytes32[] calldata merkleProof
+    ) external view returns (bool) {
+        address caller = address(msg.sender);
+        bytes32 mmStateHash = mmStateData.toLeafHash();
+        bool isCallerAuthorized = false;
+        // if signature is provided, validate it against mmstate 'owner' field
+        // if it is not, verify the msg.sender is the mmstate 'owner' field i.e owner is caller
+        if (mmStateHashSignature.length == 0) {
+            // if the caller is valid, set isCallerAuthorized to true
+            isCallerAuthorized = caller == mmStateData.owner;
+        } else {
+            // if the signature is valid, set isCallerAuthorized to true
+            address recovered =
+                MessageHashUtils.toEthSignedMessageHash(mmStateData.toLeafHash()).recover(mmStateHashSignature);
+            isCallerAuthorized = recovered == mmStateData.owner;
+        }
+
+        // make sure the caller is authorized to perform this action
+        if (!isCallerAuthorized) {
+            // revert UnauthorizedCaller();
+            return false;
+        }
+
+        // verify the merkle proof
+        bool isProofValid = merkleProof.verifyMerkleTreeInclusion(rootStateHash, mmStateHash);
+        if (!isProofValid) {
+            // revert InvalidMerkleProof();
+            return false;
+        }
+
+        // verify signature of the canister on the root state hash
+        bool isRootStateHashValid =
+            MessageHashUtils.toEthSignedMessageHash(rootStateHash).recover(rootStateHashSignature) == canisterAddress;
+        if (!isRootStateHashValid) {
+            // revert InvalidRootStateHashSignature();
+            return false;
+        }
+
+        return true;
+    }
+}
