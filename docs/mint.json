@@ -7,14 +7,23 @@
   },
   "favicon": "/logo/icons/favicon.ico",
   "colors": {
-    "primary": "#1d3f4d",
-    "light": "#2f7b8f",
-    "dark": "#011318",
-    "anchors": "#011318"
+    "primary": "#11535b",
+    "light": "#2cd5c4",
+    "dark": "#040404",
+    "anchors": "#040404"
   },
   "font": {
     "headings": {
-      "family": "Lexend"
+      "family": "Objectivity",
+      "weight": 700,
+      "url": "https://fiet.finance/fonts/objectivity/Objectivity-Bold.woff2",
+      "format": "woff2"
+    },
+    "body": {
+      "family": "Geologica",
+      "weight": 400,
+      "url": "https://fiet.finance/fonts/geologica/Geologica-Regular.woff2",
+      "format": "woff2"
     }
   },
   "topbarLinks": [],
