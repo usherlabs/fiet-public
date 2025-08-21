@@ -61,8 +61,8 @@ contract MMPositionManager is LiquidityRouter, VRLSpokeReceiver, ERC721 {
             calculateLCCAmountsDeltaFromUSD(positionParams, totalSignalUsdValue);
 
         // Mint the tokens required for the liquidity commitment
-        uint256 lccAmount0ToMint = lccAmount0Delta + 1;
-        uint256 lccAmount1ToMint = lccAmount1Delta + 1;
+        uint256 lccAmount0ToMint = lccAmount0Delta;
+        uint256 lccAmount1ToMint = lccAmount1Delta;
         _mintLCCPairWithBaseVTS(positionParams.corePoolKey, lccAmount0ToMint, lccAmount1ToMint);
 
         // approve pool manager to spend the lccs

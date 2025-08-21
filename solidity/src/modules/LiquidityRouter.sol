@@ -98,7 +98,8 @@ contract LiquidityRouter is IUnlockCallback {
             sqrtPriceX96, sqrtPriceAtTickLower, sqrtPriceAtTickUpper, liquidityDelta
         );
 
-        return (lccAmount0, lccAmount1, liquidityDelta);
+        // when adding liquidity to the pool, add 1 to the amounts returned by this library
+        return (lccAmount0 + 1, lccAmount1 + 1, liquidityDelta);
     }
 
     /// callback function to modify the liquidity of the pool after the pool manager is unlocked
