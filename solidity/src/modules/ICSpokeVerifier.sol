@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// This contract is used by the VRLSpokeReceiver contract to verify the root state hash and the mm state data
 pragma solidity ^0.8.0;
 
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";

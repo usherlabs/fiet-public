@@ -13,8 +13,10 @@ import {PoolId} from "v4-periphery/lib/v4-core/src/types/PoolId.sol";
 import {IProxyHook} from "./interfaces/IProxyHook.sol";
 import {MarketVault} from "./modules/MarketVault.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
+import {IOracle} from "./interfaces/IOracle.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
-contract LiquidityCommitmentCertificate is ERC20, MarketLiquidityDebt {
+contract LiquidityCommitmentCertificate is ERC20, MarketLiquidityDebt, Ownable {
     using SafeTransferLib for ERC20;
 
     error SenderNotIssuer();
@@ -23,7 +25,9 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidityDebt {
     error InvalidAmount();
     error InvalidMarketFactory();
     error InsufficientWrappedLiquidity(uint256 requested, uint256 available);
+    error InvalidPriceFeed();
 
+    address public oracleAddress;
     address public immutable underlyingAsset;
     address public immutable marketFactory;
     bytes32 public immutable defaultMarket = bytes32(0);
@@ -84,6 +88,7 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidityDebt {
             string.concat("lcc-", IERC20Metadata(_underlyingAsset).symbol()),
             IERC20Metadata(_underlyingAsset).decimals()
         )
+        Ownable(msg.sender)
     {
         // TODO: handle ETH native token
         if (_underlyingAsset == address(0)) {
@@ -111,6 +116,29 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidityDebt {
 
         // totalSupply will be greater than uaSupply (supply of underlying asset in LCC)
         // This is because the PoolManager will custody the difference.
+    }
+
+    // mock the vts for now
+    function getVTS() public pure returns (uint256) {
+        uint256 vts = 2000; // 2000bps is 20%
+        return vts;
+    }
+
+    function setIssuer(address issuer, bool isIssuer) external onlyOwner {
+        issuers[issuer] = isIssuer;
+    }
+
+    function mintWithBaseVTS(uint256 amount, bytes32 marketId, address from) external onlyIssuer {
+        address issuer = msg.sender;
+
+        // mint the LCC tokens to the issuer
+        _mint(issuer, amount);
+        // based on the base vts calculates the amount of underlying liquidity to transfer from the isser to the LCC tokens
+        uint256 underlyingLiquidityFraction = (amount * getVTS()) / 10000;
+        // pay the debt of this market and store the remaining liquidity in the market reserves
+        _confirmTake(marketId, underlyingLiquidityFraction);
+        // transfer the underlying liquidity from the issuer to the LCC
+        ERC20(underlyingAsset).transferFrom(from, address(this), underlyingLiquidityFraction);
     }
 
     function cancel(uint256 amount, address deficitRecipient)
@@ -167,6 +195,10 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidityDebt {
         PoolId corePoolId = IProxyHook(issuer).getCorePoolId();
         bytes32 marketId = PoolId.unwrap(corePoolId);
 
+        _confirmTake(marketId, amount);
+    }
+
+    function _confirmTake(bytes32 marketId, uint256 amount) internal {
         // Process the debt queue for this market
         // burn to indicate that we want to burn the tokens for the debt settlement
         uint256 processedAmount = _processMarketDebtQueue(marketId, amount, true);
@@ -337,6 +369,14 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidityDebt {
     function transferFrom(address from, address to, uint256 amount) public virtual override returns (bool) {
         onTransfer(from, to, amount);
         return super.transferFrom(from, to, amount);
+    }
+
+    function setOracleAddress(address _oracleAddress) external onlyOwner {
+        oracleAddress = _oracleAddress;
+    }
+
+    function getOraclePrice() external view returns (uint256) {
+        return IOracle(oracleAddress).price();
     }
 
     /**

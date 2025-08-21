@@ -124,6 +124,7 @@ contract CoreHook is BaseHook, PausablePool, Exttload {
         bytes calldata
     ) internal virtual override whenNotPaused(key.toId()) returns (bytes4, BalanceDelta) {
         // TODO: Filter the sender address to determine whether it's MMPositionManager or DirectLP.
+        // ? caller is always the pool manager so no way to know caller is MMPositionManager or DirectLP.
         address proxyHook = _getProxyHook(key);
 
         ProxyHook(proxyHook).onDirectLP(key, delta, LiquidityUtils.ActionType.DirectLPAddLiquidity);
@@ -141,7 +142,7 @@ contract CoreHook is BaseHook, PausablePool, Exttload {
     ) internal virtual override returns (bytes4, BalanceDelta) {
         // Allow removal of liquidity even when the market is paused.
         // TODO: Filter the sender address to determine whether it's MMPositionManager or DirectLP.
-        // TODO dynamically get proxyhook from market factory
+        // ? caller is always the pool manager so no way to know caller is MMPositionManager or DirectLP.
 
         address proxyHook = _getProxyHook(key);
         ProxyHook(proxyHook).onDirectLP(key, delta, LiquidityUtils.ActionType.DirectLPRemoveLiquidity);
