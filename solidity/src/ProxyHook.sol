@@ -32,6 +32,7 @@ import {ProxySwapFlag} from "./libraries/ProxySwapFlag.sol";
 import {LiquidityUtils} from "../src/libraries/LiquidityUtils.sol";
 import {Exttload} from "v4-periphery/lib/v4-core/src/Exttload.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
+import {console} from "forge-std/console.sol";
 
 contract ProxyHook is BaseHook, MarketVault, Exttload {
     using CurrencySettler for Currency;

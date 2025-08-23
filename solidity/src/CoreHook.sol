@@ -21,6 +21,7 @@ import {IExttload} from "v4-periphery/lib/v4-core/src/interfaces/IExttload.sol";
 import {ProxySwapFlag} from "./libraries/ProxySwapFlag.sol";
 import {TransientSlots} from "./libraries/TransientSlots.sol";
 import {LiquidityUtils} from "./libraries/LiquidityUtils.sol";
+import {console} from "forge-std/console.sol";
 
 /**
  * Core Pool should be aware of Positions.
@@ -34,6 +35,7 @@ contract CoreHook is BaseHook, PausablePool, Exttload {
     error InvalidSender();
 
     address public immutable marketFactory;
+    address public immutable mmPositionManager;
 
     modifier onlyFactory() {
         if (msg.sender != marketFactory) {
@@ -43,8 +45,11 @@ contract CoreHook is BaseHook, PausablePool, Exttload {
     }
 
     // Owner will be set to MarketFactory
-    constructor(address _poolManager, address _marketFactory) BaseHook(IPoolManager(_poolManager)) {
+    constructor(address _poolManager, address _marketFactory, address _mmPositionManager)
+        BaseHook(IPoolManager(_poolManager))
+    {
         marketFactory = _marketFactory;
+        mmPositionManager = _mmPositionManager;
     }
 
     function pause(PoolId poolId) external onlyFactory {
@@ -123,8 +128,8 @@ contract CoreHook is BaseHook, PausablePool, Exttload {
         BalanceDelta,
         bytes calldata
     ) internal virtual override whenNotPaused(key.toId()) returns (bytes4, BalanceDelta) {
-        // only add direct liquidity  if the sender is the pool manager
-        if (sender == address(poolManager)) {
+        // only add direct liquidity  if the sender is not the market maker position manager/router
+        if (sender != address(mmPositionManager)) {
             address proxyHook = _getProxyHook(key);
             ProxyHook(proxyHook).onDirectLP(key, delta, LiquidityUtils.ActionType.DirectLPAddLiquidity);
         }
@@ -142,7 +147,9 @@ contract CoreHook is BaseHook, PausablePool, Exttload {
     ) internal virtual override returns (bytes4, BalanceDelta) {
         // Allow removal of liquidity even when the market is paused.
         // only remove direct liquidity  if the sender is the pool manager
-        if (sender == address(poolManager)) {
+        console.log("sender", sender);
+        console.log("mmPositionManager", address(mmPositionManager));
+        if (sender != address(mmPositionManager)) {
             address proxyHook = _getProxyHook(key);
             ProxyHook(proxyHook).onDirectLP(key, delta, LiquidityUtils.ActionType.DirectLPRemoveLiquidity);
         }

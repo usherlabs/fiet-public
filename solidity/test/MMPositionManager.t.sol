@@ -44,16 +44,12 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
     LiquidityCommitmentCertificate lcc0;
     LiquidityCommitmentCertificate lcc1;
 
-    MMPositionManager mmPositionManager;
-
     function setUp() public {
         _setupMarket();
         _setUpMM();
-
+        console.log("mmPositionManager", address(mmPositionManager));
         lcc0 = LiquidityCommitmentCertificate(Currency.unwrap(_currency2));
         lcc1 = LiquidityCommitmentCertificate(Currency.unwrap(_currency3));
-
-        mmPositionManager = new MMPositionManager(manager, address(stubSpokeVerifier));
 
         // approve the lccs to the mmPositionManager to be able to route tokens to the pool manager
         lcc0.approve(address(mmPositionManager), Constants.MAX_UINT256);
@@ -205,20 +201,15 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         uint256 totalUSDValue = mmPositionManager.getTotalUsdValue(tickers, amounts);
 
-        // (uint256 lccAmount0Delta, uint256 lccAmount1Delta,) = mmPositionManager.calculateLCCAmountsDeltaFromUSD(
-        //     MarketMaker.PositionParams({corePoolKey: corePoolKey, tickLower: tickLower, tickUpper: tickUpper}),
-        //     totalUSDValue
-        // );
-
         (uint256 lccUnderlyingAmountToCommit0, uint256 lccUnderlyingAmountToCommit1) = mmPositionManager
             .getCommitmentAmounts(
             MarketMaker.PositionParams({corePoolKey: corePoolKey, tickLower: tickLower, tickUpper: tickUpper}),
             totalUSDValue
         );
 
-        // approve the lccs to the mmPositionManager to be able to route tokens to the pool manager
-        ERC20(lcc0.underlyingAsset()).approve(address(lcc0), lccUnderlyingAmountToCommit0);
-        ERC20(lcc1.underlyingAsset()).approve(address(lcc1), lccUnderlyingAmountToCommit1);
+        // approve the Market Maker contract to spend our underlying tokens for lcc0 and lcc1
+        ERC20(lcc0.underlyingAsset()).approve(address(mmPositionManager), lccUnderlyingAmountToCommit0);
+        ERC20(lcc1.underlyingAsset()).approve(address(mmPositionManager), lccUnderlyingAmountToCommit1);
 
         // commit the liquidity
         uint256 tokenId = mmPositionManager.commitLiquidity(
@@ -253,6 +244,5 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         (uint128 totalLiquidity, uint256 activePositionCount) = mmPositionManager.getTotalNFTLiquidity(tokenId);
         assertEq(totalLiquidity, 0);
         assertEq(activePositionCount, 0);
-        // assertEq(mmPositionManager.ownerOf(tokenId), address(0));
     }
 }

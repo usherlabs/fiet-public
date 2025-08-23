@@ -12,9 +12,12 @@ contract MarketMakerTest is MarketMakerTestBase, Test {
     using MarketMaker for MarketMaker.State;
     using ShaMerkle for bytes32[];
 
+    ICSpokeVerifier icVerifier;
+
     function setUp() public {
         // Create and fill in the test state
         _setUpMM();
+        icVerifier = new ICSpokeVerifier(makeAddr("icCanister"));
     }
 
     /// Test the to_string function against a string generated using the rust code

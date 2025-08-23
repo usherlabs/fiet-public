@@ -3,8 +3,6 @@ pragma solidity ^0.8.0;
 
 import {MarketMaker} from "../../src/libraries/MarketMaker.sol";
 import {console} from "forge-std/console.sol";
-import {ICSpokeVerifier} from "../../src/modules/ICSpokeVerifier.sol";
-import {StubSpokeVerifier} from "../../src/modules/StubSpokeVerifier.sol";
 import {ShaMerkle} from "../../src/libraries/ShaMerkle.sol";
 
 abstract contract MarketMakerTestBase {
@@ -12,8 +10,6 @@ abstract contract MarketMakerTestBase {
     using ShaMerkle for bytes32[];
 
     MarketMaker.State mmState;
-    ICSpokeVerifier icVerifier;
-    StubSpokeVerifier stubSpokeVerifier;
 
     bytes32[] merkleProofs;
 
@@ -30,9 +26,6 @@ abstract contract MarketMakerTestBase {
     function _setUpMM() public {
         // Create and fill in the test state
         mmState = _createTestState();
-        // initialize the different verifiers
-        icVerifier = new ICSpokeVerifier(icCanister);
-        stubSpokeVerifier = new StubSpokeVerifier();
         // construct a merkle proof where the other leaf is the same as the first leaf
         merkleProofs = new bytes32[](1);
         merkleProofs[0] = mmState.toLeafHash();

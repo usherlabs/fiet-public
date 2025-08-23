@@ -28,7 +28,7 @@ contract MMPositionManager is LiquidityRouter, VRLSpokeReceiver, ERC721 {
     uint256 private nextTokenId = 1;
     mapping(uint256 => PositionInfo[]) public nftToPositions;
 
-    constructor(IPoolManager _manager, address _verifier)
+    constructor(address _manager, address _verifier)
         LiquidityRouter(_manager)
         VRLSpokeReceiver(_verifier)
         ERC721("MMPositionManager", "MMPM")

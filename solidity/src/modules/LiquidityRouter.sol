@@ -33,8 +33,8 @@ contract LiquidityRouter is IUnlockCallback {
 
     IPoolManager public immutable manager;
 
-    constructor(IPoolManager _manager) {
-        manager = _manager;
+    constructor(address _manager) {
+        manager = IPoolManager(_manager);
     }
 
     struct CallbackData {

@@ -33,7 +33,7 @@ abstract contract VRLSpokeReceiver is Ownable {
 
     function addAssetPriceFeed(string calldata asset, address priceFeed) external onlyOwner {
         // Add admin check in production
-        require(priceFeeds[asset] == address(0), "Asset already whitelisted");
+        // require(priceFeeds[asset] == address(0), "Asset already whitelisted");
         priceFeeds[asset] = priceFeed;
         whitelistedAssets.push(asset);
         emit AssetWhitelisted(asset, priceFeed);

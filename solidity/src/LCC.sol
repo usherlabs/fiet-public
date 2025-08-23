@@ -15,6 +15,7 @@ import {MarketVault} from "./modules/MarketVault.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {IOracle} from "./interfaces/IOracle.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {console} from "forge-std/console.sol";
 
 contract LiquidityCommitmentCertificate is ERC20, MarketLiquidityDebt, Ownable {
     using SafeTransferLib for ERC20;
@@ -175,6 +176,8 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidityDebt, Ownable {
         // from the proxy pool address, get the core pool id
         PoolId corePoolId = IProxyHook(issuer).getCorePoolId();
         bytes32 marketId = PoolId.unwrap(corePoolId);
+
+        console.log("taking liquidity from market", amount);
 
         _confirmTake(marketId, amount);
     }
