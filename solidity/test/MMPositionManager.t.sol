@@ -63,7 +63,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         // Mock the getOraclePrice
         // LCC0: ~$0.997 * 10^8 = 99700000
-        vm.mockCall(address(lcc0), abi.encodeWithSignature("getOraclePrice()"), abi.encode(uint256(91700000)));
+        vm.mockCall(address(lcc0), abi.encodeWithSignature("getOraclePrice()"), abi.encode(uint256(99700000)));
         // LCC1: ~$0.999 * 10^8 = 99900000
         vm.mockCall(address(lcc1), abi.encodeWithSignature("getOraclePrice()"), abi.encode(uint256(99900000)));
 

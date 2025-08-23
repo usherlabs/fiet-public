@@ -116,24 +116,24 @@ contract CoreHook is BaseHook, PausablePool, Exttload {
     }
 
     function _afterAddLiquidity(
-        address,
+        address sender,
         PoolKey calldata key,
         ModifyLiquidityParams calldata,
         BalanceDelta delta,
         BalanceDelta,
         bytes calldata
     ) internal virtual override whenNotPaused(key.toId()) returns (bytes4, BalanceDelta) {
-        // TODO: Filter the sender address to determine whether it's MMPositionManager or DirectLP.
-        // ? caller is always the pool manager so no way to know caller is MMPositionManager or DirectLP.
-        address proxyHook = _getProxyHook(key);
-
-        ProxyHook(proxyHook).onDirectLP(key, delta, LiquidityUtils.ActionType.DirectLPAddLiquidity);
+        // only add direct liquidity  if the sender is the pool manager
+        if(sender == address(poolManager)) {
+            address proxyHook = _getProxyHook(key);
+            ProxyHook(proxyHook).onDirectLP(key, delta, LiquidityUtils.ActionType.DirectLPAddLiquidity);
+        }
 
         return (this.afterAddLiquidity.selector, BalanceDeltaLibrary.ZERO_DELTA);
     }
 
     function _afterRemoveLiquidity(
-        address,
+        address sender,
         PoolKey calldata key,
         ModifyLiquidityParams calldata,
         BalanceDelta delta,
@@ -141,11 +141,11 @@ contract CoreHook is BaseHook, PausablePool, Exttload {
         bytes calldata
     ) internal virtual override returns (bytes4, BalanceDelta) {
         // Allow removal of liquidity even when the market is paused.
-        // TODO: Filter the sender address to determine whether it's MMPositionManager or DirectLP.
-        // ? caller is always the pool manager so no way to know caller is MMPositionManager or DirectLP.
-
-        address proxyHook = _getProxyHook(key);
-        ProxyHook(proxyHook).onDirectLP(key, delta, LiquidityUtils.ActionType.DirectLPRemoveLiquidity);
+        // only remove direct liquidity  if the sender is the pool manager
+        if(sender == address(poolManager)) {
+            address proxyHook = _getProxyHook(key);
+            ProxyHook(proxyHook).onDirectLP(key, delta, LiquidityUtils.ActionType.DirectLPRemoveLiquidity);
+        }
 
         return (this.afterRemoveLiquidity.selector, BalanceDeltaLibrary.ZERO_DELTA);
     }
