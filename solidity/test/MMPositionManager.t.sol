@@ -111,9 +111,9 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             totalUSDValue
         );
 
-        // approve the LCC contract to spend our underlying tokens for lcc0 and lcc1
-        ERC20(lcc0.underlyingAsset()).approve(address(lcc0), lccUnderlyingAmountToCommit0);
-        ERC20(lcc1.underlyingAsset()).approve(address(lcc1), lccUnderlyingAmountToCommit1);
+        // approve the Market Maker contract to spend our underlying tokens for lcc0 and lcc1
+        ERC20(lcc0.underlyingAsset()).approve(address(mmPositionManager), lccUnderlyingAmountToCommit0);
+        ERC20(lcc1.underlyingAsset()).approve(address(mmPositionManager), lccUnderlyingAmountToCommit1);
 
         // underlying balance of lcc0
         uint256 lcc0UnderlyingBalanceBeforeCommitment = ERC20(lcc0.underlyingAsset()).balanceOf(address(this));
@@ -182,6 +182,13 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         assertEq(mmPositionManager.ownerOf(tokenId), address(this));
 
         // validate the position details with the details of the liquidity added to the pool
+        PositionInfo memory positionInfo = mmPositionManager.getPositionInfo(tokenId, 0);
+        assertEq(positionInfo.tickLower, tickLower);
+        assertEq(positionInfo.tickUpper, tickUpper);
+        assertEq(positionInfo.liquidity, liquidityDelta);
+        assertEq(positionInfo.owner, address(this));
+        assertEq(positionInfo.issuer, mmState.prover);
+        assertEq(positionInfo.isActive, true);
     }
 
     function test_canRemoveCommitmentToCorePool() public {
@@ -198,10 +205,10 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         uint256 totalUSDValue = mmPositionManager.getTotalUsdValue(tickers, amounts);
 
-        (uint256 lccAmount0Delta, uint256 lccAmount1Delta,) = mmPositionManager.calculateLCCAmountsDeltaFromUSD(
-            MarketMaker.PositionParams({corePoolKey: corePoolKey, tickLower: tickLower, tickUpper: tickUpper}),
-            totalUSDValue
-        );
+        // (uint256 lccAmount0Delta, uint256 lccAmount1Delta,) = mmPositionManager.calculateLCCAmountsDeltaFromUSD(
+        //     MarketMaker.PositionParams({corePoolKey: corePoolKey, tickLower: tickLower, tickUpper: tickUpper}),
+        //     totalUSDValue
+        // );
 
         (uint256 lccUnderlyingAmountToCommit0, uint256 lccUnderlyingAmountToCommit1) = mmPositionManager
             .getCommitmentAmounts(

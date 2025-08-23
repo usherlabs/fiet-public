@@ -17,6 +17,7 @@ import {PoolId} from "v4-periphery/lib/v4-core/src/types/PoolId.sol";
 import {ERC20} from "solmate/tokens/ERC20.sol";
 import {ERC721} from "solmate/tokens/ERC721.sol";
 import {PositionInfo} from "./types/Position.sol";
+import {IERC20Minimal} from "@uniswap/v4-core/src/interfaces/external/IERC20Minimal.sol";
 
 contract MMPositionManager is LiquidityRouter, VRLSpokeReceiver, ERC721 {
     error InvalidTicker(string ticker);
@@ -35,6 +36,10 @@ contract MMPositionManager is LiquidityRouter, VRLSpokeReceiver, ERC721 {
 
     function tokenURI(uint256) public pure override returns (string memory) {
         revert("Metadata not implemented");
+    }
+
+    function getPositionInfo(uint256 tokenId, uint256 positionIndex) public view returns (PositionInfo memory) {
+        return nftToPositions[tokenId][positionIndex];
     }
 
     /**
@@ -56,14 +61,9 @@ contract MMPositionManager is LiquidityRouter, VRLSpokeReceiver, ERC721 {
         // verify the VRL, this will return the total signal USD value
         uint256 totalSignalUsdValue = _verifyVRL(proofParams, tickers, amounts);
 
-        // from this value we can calculate the amount of liquidity to add to the pool
-        (uint256 lccAmount0Delta, uint256 lccAmount1Delta, uint128 liquidityDelta) =
-            calculateLCCAmountsDeltaFromUSD(positionParams, totalSignalUsdValue);
-
         // Mint the tokens required for the liquidity commitment
-        uint256 lccAmount0ToMint = lccAmount0Delta;
-        uint256 lccAmount1ToMint = lccAmount1Delta;
-        _mintLCCPairWithBaseVTS(positionParams.corePoolKey, lccAmount0ToMint, lccAmount1ToMint);
+        (uint256 lccAmount0ToMint, uint256 lccAmount1ToMint, uint128 liquidityDelta) =
+            _mintLCCPairWithBaseVTS(positionParams, totalSignalUsdValue);
 
         // approve pool manager to spend the lccs
         ERC20(Currency.unwrap(positionParams.corePoolKey.currency0)).approve(address(manager), lccAmount0ToMint);
@@ -165,18 +165,14 @@ contract MMPositionManager is LiquidityRouter, VRLSpokeReceiver, ERC721 {
         view
         returns (uint256 lccUnderlyingAmount0, uint256 lccUnderlyingAmount1)
     {
+        //TODO: Get the base vts for the lccs instead of using a mock value
+        uint256 mockBaseVts = 2000;
         // calculate the split of lcc tokens in order to create the position with the specified parameters
         (uint256 lccAmount0, uint256 lccAmount1,) = calculateLCCAmountsDeltaFromUSD(positionParams, totalSignalUsdValue);
 
-        // mint the lccs to the mmPositionManager
-        LiquidityCommitmentCertificate lcc0 =
-            LiquidityCommitmentCertificate(Currency.unwrap(positionParams.corePoolKey.currency0));
-        LiquidityCommitmentCertificate lcc1 =
-            LiquidityCommitmentCertificate(Currency.unwrap(positionParams.corePoolKey.currency1));
-
         // get the amount of underlying liquidity to transfer from the issuer to the lcc
-        uint256 underlyingLiquidityFraction0 = (lccAmount0 * lcc0.getVTS()) / 10000;
-        uint256 underlyingLiquidityFraction1 = (lccAmount1 * lcc1.getVTS()) / 10000;
+        uint256 underlyingLiquidityFraction0 = (lccAmount0 * mockBaseVts) / 10000;
+        uint256 underlyingLiquidityFraction1 = (lccAmount1 * mockBaseVts) / 10000;
         return (underlyingLiquidityFraction0, underlyingLiquidityFraction1);
     }
 
@@ -217,20 +213,37 @@ contract MMPositionManager is LiquidityRouter, VRLSpokeReceiver, ERC721 {
         return tokenId;
     }
 
-    /**
-     * @dev This function is used to mint the lccs required to add some liquidity on behalf of a market maker
-     * @param corePoolKey The core pool key of the position should reside in
-     * @param lccAmount0 The amount of lcc0 to mint
-     * @param lccAmount1 The amount of lcc1 to mint
-     */
-    function _mintLCCPairWithBaseVTS(PoolKey memory corePoolKey, uint256 lccAmount0, uint256 lccAmount1) internal {
+    function _mintLCCPairWithBaseVTS(MarketMaker.PositionParams calldata positionParams, uint256 totalSignalUsdValue)
+        internal
+        returns (uint256 lccAmount0ToMint, uint256 lccAmount1ToMint, uint128 liquidityDelta)
+    {
         // mint the lccs to the mmPositionManager
-        LiquidityCommitmentCertificate lcc0 = LiquidityCommitmentCertificate(Currency.unwrap(corePoolKey.currency0));
-        LiquidityCommitmentCertificate lcc1 = LiquidityCommitmentCertificate(Currency.unwrap(corePoolKey.currency1));
+        LiquidityCommitmentCertificate lcc0 =
+            LiquidityCommitmentCertificate(Currency.unwrap(positionParams.corePoolKey.currency0));
+        LiquidityCommitmentCertificate lcc1 =
+            LiquidityCommitmentCertificate(Currency.unwrap(positionParams.corePoolKey.currency1));
 
-        bytes32 marketId = PoolId.unwrap(corePoolKey.toId());
+        // Get amount to mint and amount to commit based on total signal usd value
+        (lccAmount0ToMint, lccAmount1ToMint, liquidityDelta) =
+            calculateLCCAmountsDeltaFromUSD(positionParams, totalSignalUsdValue);
+        // Get amount of underlying liquidity to transfer from the issuer to the lcc
+        (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) =
+            getCommitmentAmounts(positionParams, totalSignalUsdValue);
 
-        lcc0.mintWithBaseVTS(lccAmount0, marketId, msg.sender);
-        lcc1.mintWithBaseVTS(lccAmount1, marketId, msg.sender);
+        bytes32 marketId = PoolId.unwrap(positionParams.corePoolKey.toId());
+
+        // issue the tokens needed to be minted
+        lcc0.issue(lccAmount0ToMint);
+        lcc1.issue(lccAmount1ToMint);
+
+        // Transfer the underlying tokens amount based on the vts to the respective lcc
+        IERC20Minimal(lcc0.underlyingAsset()).transferFrom(msg.sender, address(lcc0), underlyingLiquidityFraction0);
+        IERC20Minimal(lcc1.underlyingAsset()).transferFrom(msg.sender, address(lcc1), underlyingLiquidityFraction1);
+
+        // and then call confirmTake on the lcc with the marketId to account for the amount we just sent to it
+        lcc0.confirmTakeWithMarketId(marketId, underlyingLiquidityFraction0);
+        lcc1.confirmTakeWithMarketId(marketId, underlyingLiquidityFraction1);
+
+        return (lccAmount0ToMint, lccAmount1ToMint, liquidityDelta);
     }
 }

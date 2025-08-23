@@ -118,27 +118,8 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidityDebt, Ownable {
         // This is because the PoolManager will custody the difference.
     }
 
-    // mock the vts for now
-    function getVTS() public pure returns (uint256) {
-        uint256 vts = 2000; // 2000bps is 20%
-        return vts;
-    }
-
     function setIssuer(address issuer, bool isIssuer) external onlyOwner {
         issuers[issuer] = isIssuer;
-    }
-
-    function mintWithBaseVTS(uint256 amount, bytes32 marketId, address from) external onlyIssuer {
-        address issuer = msg.sender;
-
-        // mint the LCC tokens to the issuer
-        _mint(issuer, amount);
-        // based on the base vts calculates the amount of underlying liquidity to transfer from the isser to the LCC tokens
-        uint256 underlyingLiquidityFraction = (amount * getVTS()) / 10000;
-        // pay the debt of this market and store the remaining liquidity in the market reserves
-        _confirmTake(marketId, underlyingLiquidityFraction);
-        // transfer the underlying liquidity from the issuer to the LCC
-        ERC20(underlyingAsset).transferFrom(from, address(this), underlyingLiquidityFraction);
     }
 
     function cancel(uint256 amount, address deficitRecipient)
@@ -211,6 +192,10 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidityDebt, Ownable {
             // Track total underlying asset supply
             uaSupply += remainingAmount;
         }
+    }
+
+    function confirmTakeWithMarketId(bytes32 marketId, uint256 amount) external onlyIssuer {
+        _confirmTake(marketId, amount);
     }
 
     // DirectLPs and Traders engaging the CorePool directly will need LCC. LCC is 1:1 with the underlying asset.
