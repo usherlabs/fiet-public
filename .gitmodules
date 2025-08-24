@@ -13,3 +13,6 @@
 [submodule "solidity/lib/openzeppelin-contracts"]
 	path = solidity/lib/openzeppelin-contracts
 	url = https://github.com/OpenZeppelin/openzeppelin-contracts
+[submodule "solidity/lib/chainlink-brownie-contracts"]
+	path = solidity/lib/chainlink-brownie-contracts
+	url = https://github.com/smartcontractkit/chainlink-brownie-contracts
