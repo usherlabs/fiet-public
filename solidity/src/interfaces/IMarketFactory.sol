@@ -72,6 +72,12 @@ interface IMarketFactory {
      */
     function getCoreHook() external view returns (address);
 
+    /**
+     * @notice Gets the market maker position manager address
+     * @return The market maker position manager address
+     */
+    function mmPositionManager() external view returns (address);
+
     // ============ STATE CHANGING FUNCTIONS ============
 
     /**

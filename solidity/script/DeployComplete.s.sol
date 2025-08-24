@@ -63,28 +63,32 @@ contract CompleteDeployScript is ScriptHelper {
 
         vm.startBroadcast(deployerPrivateKey);
 
-        // Step 1: Deploy MarketFactory
-        console.log("\n=== Deploying MarketFactory ===");
-        marketFactory = _deployMarketFactory();
-        console.log("MarketFactory deployed at:", marketFactory);
-
-        // Step 3: Deploy MMPositionManager
+        // Step 1: Deploy MMPositionManager
         console.log("\n=== Deploying MMPositionManager ===");
         mmPositionManager = _deployMMPositionManager();
         console.log("MMPositionManager deployed at:", mmPositionManager);
 
-        // Step 4: Deploy CoreHook
+        // Step 2: Deploy MarketFactory
+        console.log("\n=== Deploying MarketFactory ===");
+        marketFactory = _deployMarketFactory();
+        console.log("MarketFactory deployed at:", marketFactory);
+
+        // Step 3: Deploy CoreHook
         console.log("\n=== Deploying CoreHook ===");
         coreHook = _deployCoreHook();
         console.log("CoreHook deployed at:", coreHook);
 
-        // Step 5: Set hooks in MarketFactory
+        // Step 4: Set hooks in MarketFactory
         console.log("\n=== Setting Hooks in MarketFactory ===");
         _setHooksInFactory();
 
-        // Step 6: Verify hooks addresses across the contracts
+        // Step 5: Verify hooks addresses across the contracts
         console.log("\n=== Verifying Hooks ===");
         _verifyHooks();
+
+        // Step 6: Add all the protocol addresses expected to hold LCC as a protocol bound address in the market factory
+        console.log("\n=== Adding addresses to bounds array ===");
+        _addAddressesToBounds();
 
         vm.stopBroadcast();
 
@@ -104,7 +108,7 @@ contract CompleteDeployScript is ScriptHelper {
     function _deployCoreHook() internal returns (address) {
         // CoreHook constructor takes (poolManager, marketFactory)
         // Now we pass the actual marketFactory address
-        bytes memory constructorArgs = abi.encode(poolManagerAddress, marketFactory, mmPositionManager);
+        bytes memory constructorArgs = abi.encode(poolManagerAddress, marketFactory);
 
         // Mine the correct address with proper flags
         (address hookAddress, bytes32 salt) =
@@ -114,7 +118,7 @@ contract CompleteDeployScript is ScriptHelper {
         console.log("CoreHook salt:", vm.toString(salt));
 
         // Deploy the hook
-        CoreHook deployedHook = new CoreHook{salt: salt}(poolManagerAddress, marketFactory, mmPositionManager);
+        CoreHook deployedHook = new CoreHook{salt: salt}(poolManagerAddress, marketFactory);
         require(address(deployedHook) == hookAddress, "CoreHook: address mismatch");
 
         return address(deployedHook);
@@ -128,11 +132,13 @@ contract CompleteDeployScript is ScriptHelper {
         // Initial bounds array (empty for now, can be updated later)
         address[] memory initialBounds = new address[](0);
 
-        // MarketFactory constructor now only takes (poolManager, bounds)
-        MarketFactory factory = new MarketFactory(poolManagerAddress, initialBounds);
+        // MarketFactory constructor now only takes (poolManager, mmPositionManager, bounds)
+        MarketFactory factory = new MarketFactory(poolManagerAddress, mmPositionManager, initialBounds);
 
         return address(factory);
     }
+
+    // add function to add all the addresses to the bounds array
 
     /**
      * @dev Deploys MMPositionManager with a stub verifier
@@ -175,6 +181,23 @@ contract CompleteDeployScript is ScriptHelper {
         require(factoryInstance.getCoreHook() == coreHook, "MarketFactory: coreHook not set");
 
         console.log("Hooks activated successfully");
+    }
+
+    /**
+     * @dev adds all relevant addess to bounds array in the market factory
+     * Whitelist protocol
+     */
+    function _addAddressesToBounds() internal {
+        // ? initial bounds(PM and MMPM) have been set in the MarketFactory constructor
+        // ? we can add more bounds here if needed
+        // MarketFactory factoryInstance = MarketFactory(marketFactory);
+        // address[] memory bounds = new address[](4);
+        // bounds[0] = poolManagerAddress;
+        // bounds[1] = mmPositionManager;
+        // bounds[2] = coreHook;
+        // bounds[3] = proxyHook;
+
+        // factoryInstance.addBounds(bounds);
     }
 
     /**

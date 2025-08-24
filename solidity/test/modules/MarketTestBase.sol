@@ -139,7 +139,7 @@ abstract contract MarketTestBase is Test, Deployers {
         coreHookAddress = address(coreFlags);
 
         // Deploy CoreHook
-        deployCodeTo("CoreHook.sol", abi.encode(manager, marketFactory, mmPositionManager), coreHookAddress);
+        deployCodeTo("CoreHook.sol", abi.encode(manager, marketFactory), coreHookAddress);
 
         // Compute proxy hook address
         uint160 proxyFlags = HookFlags.PROXY_HOOK_FLAGS;
@@ -152,6 +152,11 @@ abstract contract MarketTestBase is Test, Deployers {
         // Mock factory calls
         vm.mockCall(
             marketFactory, abi.encodeWithSelector(IMarketFactory.getCoreHook.selector), abi.encode(coreHookAddress)
+        );
+        vm.mockCall(
+            marketFactory,
+            abi.encodeWithSelector(IMarketFactory.mmPositionManager.selector),
+            abi.encode(address(mmPositionManager))
         );
         // LCC makes a call onTransfer to check if transfer is within bounds
         // set it to true i.e Market Tracking would be disabled since we do not track addresses that are within bounds

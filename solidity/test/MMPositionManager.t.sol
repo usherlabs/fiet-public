@@ -53,9 +53,14 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         // approve the lccs to the mmPositionManager to be able to route tokens to the pool manager
         lcc0.approve(address(mmPositionManager), Constants.MAX_UINT256);
-        lcc0.setIssuer(address(mmPositionManager), true);
         lcc1.approve(address(mmPositionManager), Constants.MAX_UINT256);
-        lcc1.setIssuer(address(mmPositionManager), true);
+        // Mock the proxyHookToCurrencyPair function in order to make this caller appear to be an issuer
+        address[2] memory mockCurrencies = [address(lcc0.underlyingAsset()), address(lcc1.underlyingAsset())];
+        vm.mockCall(
+            marketFactory,
+            abi.encodeWithSelector(IMarketFactory.proxyHookToCurrencyPair.selector, address(mmPositionManager)),
+            abi.encode(mockCurrencies)
+        );
 
         // Mock the getOraclePrice
         // LCC0: ~$0.997 * 10^8 = 99700000

@@ -46,7 +46,11 @@ contract MarketLiquidityTest is MarketTestBase {
     function setUp() public {
         _setupMarket();
         // set it to false i.e Market Tracking would be enabled since we track addresses that are not within bounds
-        vm.mockCall(marketFactory, abi.encodeWithSelector(IMarketFactory.bounds.selector), abi.encode(false));
+        vm.mockCall(
+            marketFactory,
+            abi.encodeWithSelector(IMarketFactory.bounds.selector, address(test_user_1)),
+            abi.encode(false)
+        );
         lcc0 = LiquidityCommitmentCertificate(Currency.unwrap(corePoolKey.currency0));
         lcc1 = LiquidityCommitmentCertificate(Currency.unwrap(corePoolKey.currency1));
 

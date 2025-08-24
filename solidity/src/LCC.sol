@@ -19,7 +19,7 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 contract LiquidityCommitmentCertificate is ERC20, MarketLiquidityDebt, Ownable {
     using SafeTransferLib for ERC20;
 
-    error SenderNotIssuer();
+    error SenderNotIssuer(address sender);
     error InvalidUnderlyingAsset();
     error TransferNotAllowed();
     error InvalidAmount();
@@ -51,7 +51,7 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidityDebt, Ownable {
 
         // if caller is not a valid issuer then revert
         if (!isValidIssuer) {
-            revert SenderNotIssuer();
+            revert SenderNotIssuer(caller);
         }
         _;
     }
@@ -116,10 +116,6 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidityDebt, Ownable {
 
         // totalSupply will be greater than uaSupply (supply of underlying asset in LCC)
         // This is because the PoolManager will custody the difference.
-    }
-
-    function setIssuer(address issuer, bool isIssuer) external onlyOwner {
-        issuers[issuer] = isIssuer;
     }
 
     function cancel(uint256 amount, address deficitRecipient)
@@ -334,11 +330,8 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidityDebt, Ownable {
         _transferUnderlyingAssets(user, amount);
     }
 
-    // TODO: Re-enable protocol-bounds in the future...
-
     // On transfer hook
-    // function onTransfer(address from, address to, uint256 amount) internal onlyProtocolTransfer(msg.sender, to){
-    function onTransfer(address from, address to, uint256 amount) internal {
+    function onTransfer(address from, address to, uint256 amount) internal onlyProtocolTransfer(msg.sender, to) {
         // clear any debt in all markets to be paid to the sender initiating the transfer
         _annulUserDebtBeforeTransfer(from, amount);
 
