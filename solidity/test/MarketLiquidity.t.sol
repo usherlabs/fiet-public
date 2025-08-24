@@ -24,6 +24,7 @@ import {IProxyHook} from "../src/interfaces/IProxyHook.sol";
 import {console} from "forge-std/console.sol";
 // inherit from the MarketTestBase contract
 import {MarketTestBase} from "./modules/MarketTestBase.sol";
+import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
 contract MarketLiquidityTest is MarketTestBase {
     using PoolIdLibrary for PoolId;
@@ -46,24 +47,22 @@ contract MarketLiquidityTest is MarketTestBase {
         _setupMarket();
         // set it to false i.e Market Tracking would be enabled since we track addresses that are not within bounds
         vm.mockCall(marketFactory, abi.encodeWithSelector(IMarketFactory.bounds.selector), abi.encode(false));
+        lcc0 = LiquidityCommitmentCertificate(Currency.unwrap(corePoolKey.currency0));
+        lcc1 = LiquidityCommitmentCertificate(Currency.unwrap(corePoolKey.currency1));
+
         // mint some LCC na underlying tokens to the test user
-        _currency0.transfer(test_user_1, amount0ToMint);
-        _currency1.transfer(test_user_1, amount1ToMint);
+        ERC20(lcc0.underlyingAsset()).transfer(test_user_1, amount0ToMint);
+        ERC20(lcc1.underlyingAsset()).transfer(test_user_1, amount1ToMint);
 
         vm.startPrank(test_user_1);
-        ApproveLCCForMarketUse(LiquidityCommitmentCertificate(Currency.unwrap(_currency2)));
-        ApproveLCCForMarketUse(LiquidityCommitmentCertificate(Currency.unwrap(_currency3)));
-
-        lcc0 = LiquidityCommitmentCertificate(Currency.unwrap(_currency2));
-        lcc1 = LiquidityCommitmentCertificate(Currency.unwrap(_currency3));
+        approveLCCForMarketUse(lcc0);
+        approveLCCForMarketUse(lcc1);
 
         IERC20Minimal(lcc0.underlyingAsset()).approve(address(lcc0), amount0ToMint);
-        lcc0.wrap(amount0ToMint);
-
         IERC20Minimal(lcc1.underlyingAsset()).approve(address(lcc1), amount1ToMint);
-        lcc1.wrap(amount1ToMint);
 
-        // log
+        lcc0.wrap(amount0ToMint);
+        lcc1.wrap(amount1ToMint);
     }
 
     function test_swap_exactOutput_zeroForOneOnCore_with_marketTracing() public {
@@ -204,14 +203,15 @@ contract MarketLiquidityTest is MarketTestBase {
         assertEq(lcc1.marketTotalDebt(marketId), amountOut);
 
         // update call to pool manager to have some liquidity now so we can further test functions that add liquidity and trigger debt settlement
-        uint256 poolunderlyingassetBalance = IERC20Minimal(lcc1.underlyingAsset()).balanceOf(address(manager));
+        address ua = lcc1.underlyingAsset();
+        uint256 poolunderlyingassetBalance = IERC20Minimal(ua).balanceOf(address(manager));
         vm.mockCall(
             address(manager),
             abi.encodeWithSelector(
                 // to do
                 manager.balanceOf.selector,
                 address(proxyHook),
-                _currency1.toId()
+                Currency.wrap(ua).toId()
             ),
             abi.encode(poolunderlyingassetBalance)
         );

@@ -26,6 +26,9 @@ import {IMarketFactory} from "../../src/interfaces/IMarketFactory.sol";
 import {LiquidityUtils} from "../../src/libraries/LiquidityUtils.sol";
 import {console} from "forge-std/console.sol";
 import {HookFlags} from "../../src/libraries/HookFlags.sol";
+import {MMPositionManager} from "../../src/MMPositionManager.sol";
+import {StubSpokeVerifier} from "../../src/modules/StubSpokeVerifier.sol";
+import {ICSpokeVerifier} from "../../src/modules/ICSpokeVerifier.sol";
 
 abstract contract MarketTestBase is Test, Deployers {
     using PoolIdLibrary for PoolId;
@@ -49,7 +52,11 @@ abstract contract MarketTestBase is Test, Deployers {
     address marketFactory;
     address coreHookAddress;
 
-    function ApproveLCCForMarketUse(LiquidityCommitmentCertificate token) internal returns (Currency currency) {
+    ICSpokeVerifier icVerifier;
+    StubSpokeVerifier stubSpokeVerifier;
+    MMPositionManager mmPositionManager;
+
+    function approveLCCForMarketUse(LiquidityCommitmentCertificate token) internal returns (Currency currency) {
         address underlyingAsset = token.underlyingAsset();
         address[10] memory toApprove = [
             address(swapRouter),
@@ -81,7 +88,7 @@ abstract contract MarketTestBase is Test, Deployers {
         LiquidityCommitmentCertificate token =
             new LiquidityCommitmentCertificate(underlyingAsset, issuers, marketFactory);
 
-        ApproveLCCForMarketUse(token);
+        approveLCCForMarketUse(token);
 
         return Currency.wrap(address(token));
     }
@@ -115,8 +122,16 @@ abstract contract MarketTestBase is Test, Deployers {
         // Deployment and activation moved to setUp
     }
 
-    function _setupMarket() internal {
+    function _deployFreshManagerAndRouters() internal {
         deployFreshManagerAndRouters();
+        // deploy custom router and verifier
+        icVerifier = new ICSpokeVerifier(makeAddr("icCanister"));
+        stubSpokeVerifier = new StubSpokeVerifier();
+        mmPositionManager = new MMPositionManager(address(manager), address(stubSpokeVerifier));
+    }
+
+    function _setupMarket() internal {
+        _deployFreshManagerAndRouters();
         marketFactory = makeAddr("marketFactory");
 
         // Compute core hook address
@@ -124,7 +139,7 @@ abstract contract MarketTestBase is Test, Deployers {
         coreHookAddress = address(coreFlags);
 
         // Deploy CoreHook
-        deployCodeTo("CoreHook.sol", abi.encode(manager, marketFactory), coreHookAddress);
+        deployCodeTo("CoreHook.sol", abi.encode(manager, marketFactory, mmPositionManager), coreHookAddress);
 
         // Compute proxy hook address
         uint160 proxyFlags = HookFlags.PROXY_HOOK_FLAGS;

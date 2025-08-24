@@ -20,12 +20,14 @@ import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {HookFlags} from "../src/libraries/HookFlags.sol";
 import {HookMiner} from "v4-periphery/src/utils/HookMiner.sol";
+import {MMPositionManager} from "../src/MMPositionManager.sol";
 
 contract MarketFactoryTest is Test, Deployers {
     using PoolIdLibrary for PoolKey;
 
     bytes32 salt;
     MarketFactory factory;
+    MMPositionManager positionManager;
     IPoolManager poolManager;
     address coreHookAddr;
     address proxyHookAddr;
@@ -42,13 +44,16 @@ contract MarketFactoryTest is Test, Deployers {
 
         vm.prank(owner);
         factory = new MarketFactory(address(poolManager), bounds);
+        positionManager = new MMPositionManager(address(poolManager), makeAddr("verifier"));
 
         // Compute flags for CoreHook
         uint160 coreFlags = HookFlags.CORE_HOOK_FLAGS;
         coreHookAddr = address(coreFlags);
 
         // Deploy CoreHook at computed address
-        deployCodeTo("CoreHook.sol:CoreHook", abi.encode(poolManager, address(factory)), coreHookAddr);
+        deployCodeTo(
+            "CoreHook.sol:CoreHook", abi.encode(poolManager, address(factory), address(positionManager)), coreHookAddr
+        );
 
         address proxyDeployer = MarketFactory(address(factory)).marketDeployer();
 
