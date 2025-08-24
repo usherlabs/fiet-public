@@ -15,6 +15,7 @@ import {LiquidityUtils} from "../libraries/LiquidityUtils.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {console} from "forge-std/console.sol";
 
 abstract contract MarketVault {
     using CurrencySettler for Currency;

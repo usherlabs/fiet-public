@@ -21,6 +21,7 @@ import {IExttload} from "v4-periphery/lib/v4-core/src/interfaces/IExttload.sol";
 import {ProxySwapFlag} from "./libraries/ProxySwapFlag.sol";
 import {TransientSlots} from "./libraries/TransientSlots.sol";
 import {LiquidityUtils} from "./libraries/LiquidityUtils.sol";
+import {console} from "forge-std/console.sol";
 
 /**
  * Core Pool should be aware of Positions.
@@ -34,6 +35,7 @@ contract CoreHook is BaseHook, PausablePool, Exttload {
     error InvalidSender();
 
     address public immutable marketFactory;
+    address public immutable mmPositionManager;
 
     modifier onlyFactory() {
         if (msg.sender != marketFactory) {
@@ -43,8 +45,11 @@ contract CoreHook is BaseHook, PausablePool, Exttload {
     }
 
     // Owner will be set to MarketFactory
-    constructor(address _poolManager, address _marketFactory) BaseHook(IPoolManager(_poolManager)) {
+    constructor(address _poolManager, address _marketFactory, address _mmPositionManager)
+        BaseHook(IPoolManager(_poolManager))
+    {
         marketFactory = _marketFactory;
+        mmPositionManager = _mmPositionManager;
     }
 
     function pause(PoolId poolId) external onlyFactory {
@@ -116,23 +121,24 @@ contract CoreHook is BaseHook, PausablePool, Exttload {
     }
 
     function _afterAddLiquidity(
-        address,
+        address sender,
         PoolKey calldata key,
         ModifyLiquidityParams calldata,
         BalanceDelta delta,
         BalanceDelta,
         bytes calldata
     ) internal virtual override whenNotPaused(key.toId()) returns (bytes4, BalanceDelta) {
-        // TODO: Filter the sender address to determine whether it's MMPositionManager or DirectLP.
-        address proxyHook = _getProxyHook(key);
-
-        ProxyHook(proxyHook).onDirectLP(key, delta, LiquidityUtils.ActionType.DirectLPAddLiquidity);
+        // only add direct liquidity  if the sender is not the market maker position manager/router
+        if (sender != address(mmPositionManager)) {
+            address proxyHook = _getProxyHook(key);
+            ProxyHook(proxyHook).onDirectLP(key, delta, LiquidityUtils.ActionType.DirectLPAddLiquidity);
+        }
 
         return (this.afterAddLiquidity.selector, BalanceDeltaLibrary.ZERO_DELTA);
     }
 
     function _afterRemoveLiquidity(
-        address,
+        address sender,
         PoolKey calldata key,
         ModifyLiquidityParams calldata,
         BalanceDelta delta,
@@ -140,11 +146,13 @@ contract CoreHook is BaseHook, PausablePool, Exttload {
         bytes calldata
     ) internal virtual override returns (bytes4, BalanceDelta) {
         // Allow removal of liquidity even when the market is paused.
-        // TODO: Filter the sender address to determine whether it's MMPositionManager or DirectLP.
-        // TODO dynamically get proxyhook from market factory
-
-        address proxyHook = _getProxyHook(key);
-        ProxyHook(proxyHook).onDirectLP(key, delta, LiquidityUtils.ActionType.DirectLPRemoveLiquidity);
+        // only remove direct liquidity  if the sender is the pool manager
+        console.log("sender", sender);
+        console.log("mmPositionManager", address(mmPositionManager));
+        if (sender != address(mmPositionManager)) {
+            address proxyHook = _getProxyHook(key);
+            ProxyHook(proxyHook).onDirectLP(key, delta, LiquidityUtils.ActionType.DirectLPRemoveLiquidity);
+        }
 
         return (this.afterRemoveLiquidity.selector, BalanceDeltaLibrary.ZERO_DELTA);
     }

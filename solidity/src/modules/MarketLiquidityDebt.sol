@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// This contract is inherited by the Liquidity Commitment Certificate contract to handle the debts that occur when an unwrap fails and liquidity has to be queued
 pragma solidity ^0.8.20;
 
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";

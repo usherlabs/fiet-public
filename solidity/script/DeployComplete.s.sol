@@ -16,6 +16,8 @@ import {SepoliaConstants} from "./constants/ArbitrumSepolia.sol";
 import {ArbitrumConstants} from "./constants/Arbitrum.sol";
 import {HookFlags} from "./constants/HookFlags.sol";
 import {EthSepoliaConstants} from "./constants/EthSepolia.sol";
+import {MMPositionManager} from "../src/MMPositionManager.sol";
+import {StubSpokeVerifier} from "../src/modules/StubSpokeVerifier.sol";
 
 /**
  * @title CompleteDeployScript
@@ -34,7 +36,7 @@ contract CompleteDeployScript is ScriptHelper {
     address public coreHook;
     address public proxyHook;
     address public marketFactory;
-
+    address public mmPositionManager;
     // Network-specific constants set from environment
     address public poolManagerAddress;
     address public create2Deployer;
@@ -66,16 +68,21 @@ contract CompleteDeployScript is ScriptHelper {
         marketFactory = _deployMarketFactory();
         console.log("MarketFactory deployed at:", marketFactory);
 
-        // Step 2: Deploy CoreHook
+        // Step 3: Deploy MMPositionManager
+        console.log("\n=== Deploying MMPositionManager ===");
+        mmPositionManager = _deployMMPositionManager();
+        console.log("MMPositionManager deployed at:", mmPositionManager);
+
+        // Step 4: Deploy CoreHook
         console.log("\n=== Deploying CoreHook ===");
         coreHook = _deployCoreHook();
         console.log("CoreHook deployed at:", coreHook);
 
-        // Step 3: Set hooks in MarketFactory
+        // Step 5: Set hooks in MarketFactory
         console.log("\n=== Setting Hooks in MarketFactory ===");
         _setHooksInFactory();
 
-        // Step 4: Verify hooks addresses across the contracts (set cross-references)
+        // Step 6: Verify hooks addresses across the contracts
         console.log("\n=== Verifying Hooks ===");
         _verifyHooks();
 
@@ -87,6 +94,7 @@ contract CompleteDeployScript is ScriptHelper {
         console.log("\n=== Deployment Complete ===");
         console.log("CoreHook:", coreHook);
         console.log("MarketFactory:", marketFactory);
+        console.log("MMPositionManager:", mmPositionManager);
     }
 
     /**
@@ -96,7 +104,7 @@ contract CompleteDeployScript is ScriptHelper {
     function _deployCoreHook() internal returns (address) {
         // CoreHook constructor takes (poolManager, marketFactory)
         // Now we pass the actual marketFactory address
-        bytes memory constructorArgs = abi.encode(poolManagerAddress, marketFactory);
+        bytes memory constructorArgs = abi.encode(poolManagerAddress, marketFactory, mmPositionManager);
 
         // Mine the correct address with proper flags
         (address hookAddress, bytes32 salt) =
@@ -106,7 +114,7 @@ contract CompleteDeployScript is ScriptHelper {
         console.log("CoreHook salt:", vm.toString(salt));
 
         // Deploy the hook
-        CoreHook deployedHook = new CoreHook{salt: salt}(poolManagerAddress, marketFactory);
+        CoreHook deployedHook = new CoreHook{salt: salt}(poolManagerAddress, marketFactory, mmPositionManager);
         require(address(deployedHook) == hookAddress, "CoreHook: address mismatch");
 
         return address(deployedHook);
@@ -124,6 +132,19 @@ contract CompleteDeployScript is ScriptHelper {
         MarketFactory factory = new MarketFactory(poolManagerAddress, initialBounds);
 
         return address(factory);
+    }
+
+    /**
+     * @dev Deploys MMPositionManager with a stub verifier
+     * @return The deployed MMPositionManager address
+     */
+    function _deployMMPositionManager() internal returns (address) {
+        // ? deploy a stub verifier for now
+        address stubVerifier = address(new StubSpokeVerifier());
+        console.log("StubSpokeVerifier deployed at:", stubVerifier);
+        MMPositionManager positionManager = new MMPositionManager(poolManagerAddress, stubVerifier);
+        console.log("MMPositionManager deployed at:", address(positionManager));
+        return address(positionManager);
     }
 
     /**
@@ -164,6 +185,7 @@ contract CompleteDeployScript is ScriptHelper {
         _setFilename(networkName);
         writeAddress("coreHook", coreHook);
         writeAddress("marketFactory", marketFactory);
+        writeAddress("positionManager", mmPositionManager);
 
         console.log("Deployment addresses written to deployments/%s_deployments.json", networkName);
     }
