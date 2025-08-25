@@ -23,7 +23,7 @@ This guide describes how to perform an end-to-end (E2E) test of the Fiet protoco
    In the `../solidity` directory, run:
 
    ```
-   make dev
+   rm -rf deployments/local_sepolia_* && make dev
    ```
 
    This deploys and initialises a new market pool between mock currencies. Note the pool details from the output.

@@ -2,9 +2,6 @@ export $(shell sed 's/=.*//' .env)
 include .env
 export
 
-include make/help.mk
-include make/exp.mk
-
 MODE ?= LOCAL
 NETWORK ?= sepolia
 ANVIL_PORT=8545

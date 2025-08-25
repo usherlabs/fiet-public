@@ -85,9 +85,6 @@ contract SwapV4 is ScriptHelper {
         permit2 = IPermit2(permit2Addr);
         console.log("Permit2 loaded");
 
-        hook = IHooks(readAddress("proxyHook"));
-        console.log("Proxy Hook loaded");
-
         try vm.envString("CORE_POOL_ID") returns (string memory envCorePoolId) {
             corePoolId = envCorePoolId;
             _corePoolId = PoolId.wrap(bytes32(bytes(corePoolId)));
@@ -112,7 +109,15 @@ contract SwapV4 is ScriptHelper {
             tickSpacing = 60;
             console.log("Tick spacing (default):", tickSpacing);
         } else {
-            string memory filePath = string.concat("./deployments/", networkName, "_markets_deployments.json");
+            // Determine correct deployments file (respect MODE and local_ prefix like ScriptHelper)
+            string memory mode;
+            try vm.envString("MODE") returns (string memory envMode) {
+                mode = envMode;
+            } catch {
+                mode = "LOCAL";
+            }
+            string memory prefix = keccak256(bytes(mode)) == keccak256(bytes("LOCAL")) ? "local_" : "";
+            string memory filePath = string.concat("./deployments/", prefix, networkName, "_markets_deployments.json");
             string memory json = vm.readFile(filePath);
 
             string memory keyToken0 = string.concat(".", corePoolId, "_underlyingAsset0");
@@ -139,22 +144,31 @@ contract SwapV4 is ScriptHelper {
         console.log("Market Factory loaded");
         address coreHookAddr = marketFactory.getCoreHook();
         console.log("Core Hook loaded");
+
+        // Load LCC tokens for later metrics/logging
         lccToken0 = marketFactory.getLCC(token0);
         lccToken1 = marketFactory.getLCC(token1);
         console.log("LCC Tokens loaded");
-        (Currency currencyLccA, Currency currencyLccB) = CurrencySortHelper.sortAddresses(lccToken0, lccToken1);
-        corePoolKey = PoolKey({
-            currency0: currencyLccA,
-            currency1: currencyLccB,
-            fee: fee,
-            tickSpacing: tickSpacing,
-            hooks: IHooks(coreHookAddr)
-        });
-        console.log("Core PoolKey constructed");
 
+        // Construct corePoolKey via LCCs only if CORE_POOL_ID was not provided
         if (bytes(corePoolId).length == 0) {
+            (Currency currencyLccA, Currency currencyLccB) = CurrencySortHelper.sortAddresses(lccToken0, lccToken1);
+            corePoolKey = PoolKey({
+                currency0: currencyLccA,
+                currency1: currencyLccB,
+                fee: fee,
+                tickSpacing: tickSpacing,
+                hooks: IHooks(coreHookAddr)
+            });
+            console.log("Core PoolKey constructed");
             _corePoolId = corePoolKey.toId();
         }
+
+        // Resolve proxy pool/hook now that _corePoolId is known
+        PoolId proxyPoolId = marketFactory.coreToProxy(_corePoolId);
+        address proxyHookAddr = marketFactory.proxyToHook(proxyPoolId);
+        hook = IHooks(proxyHookAddr);
+        console.log("Proxy Hook loaded");
 
         uint256 userPrivateKey = uint256(vm.envBytes32("LP_PRIVATE_KEY"));
         address userAddress = vm.addr(userPrivateKey);
