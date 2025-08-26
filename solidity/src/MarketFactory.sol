@@ -24,6 +24,7 @@ contract MarketFactory is IMarketFactory, Ownable2Step {
     IPoolManager private immutable _poolManager;
     address public coreHook;
     address public marketDeployer;
+    address public mmPositionManager;
 
     // Mapping from underlying asset to LCC token
     mapping(address => address) public underlyingToLCC;
@@ -48,13 +49,16 @@ contract MarketFactory is IMarketFactory, Ownable2Step {
 
     mapping(PoolId => address[2]) private _corePoolToCurrencyPair;
 
-    constructor(address poolManagerAddr, address[] memory _bounds) Ownable(msg.sender) {
+    constructor(address poolManagerAddr, address mmPositionManagerAddr, address[] memory _bounds) Ownable(msg.sender) {
         if (poolManagerAddr == address(0)) {
             revert InvalidPoolParameters();
         }
         _poolManager = IPoolManager(poolManagerAddr);
+        mmPositionManager = mmPositionManagerAddr;
 
         bounds[address(this)] = true;
+        bounds[mmPositionManagerAddr] = true;
+        bounds[poolManagerAddr] = true;
         for (uint256 i = 0; i < _bounds.length; i++) {
             bounds[_bounds[i]] = true;
         }
@@ -186,8 +190,8 @@ contract MarketFactory is IMarketFactory, Ownable2Step {
 
         if (lccToken == address(0)) {
             // Create new LCC token
-            address[] memory issuers = new address[](2);
-            // issuers[1] = address(poolManager); // TODO: Add MMPositionManager as issuer
+            address[] memory issuers = new address[](1);
+            issuers[0] = address(mmPositionManager);
 
             lccToken = address(new LiquidityCommitmentCertificate(underlyingAsset, issuers, address(this)));
 
