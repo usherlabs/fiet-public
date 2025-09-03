@@ -72,6 +72,12 @@ interface IMarketFactory {
      */
     function getCoreHook() external view returns (address);
 
+    /**
+     * @notice Gets the market maker position manager address
+     * @return The market maker position manager address
+     */
+    function mmPositionManager() external view returns (address);
+
     // ============ STATE CHANGING FUNCTIONS ============
 
     /**
@@ -85,12 +91,12 @@ interface IMarketFactory {
      * @return proxyPoolId The ID of the created proxy pool
      */
     function createMarket(
-        address proxyHook,
         address underlyingAsset0,
         address underlyingAsset1,
         uint24 corePoolFee,
         int24 tickSpacing,
-        uint160 initialSqrtPriceX96
+        uint160 initialSqrtPriceX96,
+        bytes32 salt
     ) external returns (PoolId corePoolId, PoolId proxyPoolId);
 
     /**
@@ -124,4 +130,11 @@ interface IMarketFactory {
      * @return The currency pair
      */
     function proxyHookToCurrencyPair(address proxyHook) external view returns (address[2] memory);
+
+    /**
+     * @notice Gets the currency pair managed by a core pool
+     * @param corePoolId The core pool ID
+     * @return The currency pair
+     */
+    function corePoolToCurrencyPair(PoolId corePoolId) external view returns (address[2] memory);
 }

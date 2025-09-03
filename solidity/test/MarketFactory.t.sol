@@ -14,16 +14,20 @@ import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
 import {CoreHook} from "../src/CoreHook.sol";
 import {ProxyHook} from "../src/ProxyHook.sol";
 import {LiquidityCommitmentCertificate} from "../src/LCC.sol";
-import {PausablePool} from "../src/libraries/PausablePool.sol";
+import {PausablePool} from "../src/modules/PausablePool.sol";
 import {Deployers} from "@uniswap/v4-core/test/utils/Deployers.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
-import {HookFlags} from "../script/constants/HookFlags.sol";
+import {HookFlags} from "../src/libraries/HookFlags.sol";
+import {HookMiner} from "v4-periphery/src/utils/HookMiner.sol";
+import {MMPositionManager} from "../src/MMPositionManager.sol";
 
 contract MarketFactoryTest is Test, Deployers {
     using PoolIdLibrary for PoolKey;
 
+    bytes32 salt;
     MarketFactory factory;
+    MMPositionManager positionManager;
     IPoolManager poolManager;
     address coreHookAddr;
     address proxyHookAddr;
@@ -38,22 +42,23 @@ contract MarketFactoryTest is Test, Deployers {
 
         address[] memory bounds = new address[](0);
 
+        positionManager = new MMPositionManager(address(poolManager), makeAddr("verifier"));
         vm.prank(owner);
-        factory = new MarketFactory(address(poolManager), bounds);
+        factory = new MarketFactory(address(poolManager), address(positionManager), bounds);
 
         // Compute flags for CoreHook
         uint160 coreFlags = HookFlags.CORE_HOOK_FLAGS;
         coreHookAddr = address(coreFlags);
 
         // Deploy CoreHook at computed address
-        deployCodeTo("CoreHook.sol:CoreHook", abi.encode(poolManager, address(factory)), coreHookAddr);
+        deployCodeTo(
+            "CoreHook.sol:CoreHook", abi.encode(poolManager, address(factory), address(positionManager)), coreHookAddr
+        );
 
-        // Compute flags for ProxyHook
-        uint160 proxyFlags = HookFlags.PROXY_HOOK_FLAGS;
-        proxyHookAddr = address(proxyFlags);
+        address proxyDeployer = MarketFactory(address(factory)).marketDeployer();
 
-        // Deploy ProxyHook at computed address
-        deployCodeTo("ProxyHook.sol:ProxyHook", abi.encode(poolManager, address(factory)), proxyHookAddr);
+        (salt, proxyHookAddr) =
+            _generateProxyHookAddress(address(proxyDeployer), abi.encode(poolManager, address(factory)));
 
         vm.prank(owner);
         factory.setHooks(coreHookAddr);
@@ -67,12 +72,12 @@ contract MarketFactoryTest is Test, Deployers {
 
         vm.prank(owner);
         (PoolId coreId, PoolId proxyId) = factory.createMarket(
-            proxyHookAddr,
             address(token0),
             address(token1),
             3000,
             60,
-            79228162514264337593543950336 // 1:1 price
+            79228162514264337593543950336, // 1:1 price
+            salt
         );
 
         assertTrue(PoolId.unwrap(coreId) != bytes32(0));
@@ -95,13 +100,13 @@ contract MarketFactoryTest is Test, Deployers {
         );
 
         vm.prank(owner);
-        (PoolId _coreId, PoolId proxyId) = factory.createMarket(
-            proxyHookAddr,
+        (, PoolId proxyId) = factory.createMarket(
             address(token0),
             address(token1),
             3000,
             60,
-            79228162514264337593543950336 // 1:1 price
+            79228162514264337593543950336, // 1:1 price
+            salt
         );
 
         // get proxy hook address
@@ -115,7 +120,7 @@ contract MarketFactoryTest is Test, Deployers {
         );
 
         vm.prank(owner);
-        factory.createMarket(proxyHookAddr, address(token0), address(token1), 3000, 60, 79228162514264337593543950336);
+        factory.createMarket(address(token0), address(token1), 3000, 60, 79228162514264337593543950336, salt);
 
         address[] memory newBounds = new address[](1);
         newBounds[0] = makeAddr("newBound");
@@ -135,7 +140,7 @@ contract MarketFactoryTest is Test, Deployers {
         );
 
         vm.prank(owner);
-        factory.createMarket(proxyHookAddr, address(token0), address(token1), 3000, 60, 79228162514264337593543950336);
+        factory.createMarket(address(token0), address(token1), 3000, 60, 79228162514264337593543950336, salt);
 
         address boundAddr = makeAddr("bound");
 
@@ -151,7 +156,7 @@ contract MarketFactoryTest is Test, Deployers {
     function testRevertInvalidUnderlying() public {
         vm.prank(owner);
         vm.expectRevert(IMarketFactory.InvalidUnderlyingAsset.selector);
-        factory.createMarket(proxyHookAddr, address(0), address(token1), 3000, 60, 79228162514264337593543950336);
+        factory.createMarket(address(0), address(token1), 3000, 60, 79228162514264337593543950336, salt);
     }
 
     function testPauseMarket() public {
@@ -160,9 +165,8 @@ contract MarketFactoryTest is Test, Deployers {
         );
 
         vm.prank(owner);
-        (PoolId coreId,) = factory.createMarket(
-            proxyHookAddr, address(token0), address(token1), 3000, 60, 79228162514264337593543950336
-        );
+        (PoolId coreId,) =
+            factory.createMarket(address(token0), address(token1), 3000, 60, 79228162514264337593543950336, salt);
 
         // Non-owner cannot pause
         vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(this)));
@@ -186,9 +190,8 @@ contract MarketFactoryTest is Test, Deployers {
         );
 
         vm.prank(owner);
-        (PoolId coreId,) = factory.createMarket(
-            proxyHookAddr, address(token0), address(token1), 3000, 60, 79228162514264337593543950336
-        );
+        (PoolId coreId,) =
+            factory.createMarket(address(token0), address(token1), 3000, 60, 79228162514264337593543950336, salt);
 
         vm.prank(owner);
         factory.pause(coreId);
@@ -207,5 +210,27 @@ contract MarketFactoryTest is Test, Deployers {
         vm.prank(owner);
         vm.expectRevert(abi.encodeWithSelector(PausablePool.ExpectedPause.selector));
         factory.unpause(coreId);
+    }
+
+    /**
+     * @dev Deploys ProxyHook using HookMiner to find correct address
+     * @return The deployed ProxyHook address
+     */
+    function _generateProxyHookAddress(address deployer, bytes memory constructorArgs)
+        internal
+        view
+        returns (bytes32, address)
+    {
+        // ProxyHook constructor takes (poolManager, marketFactory)
+        // Now we pass the actual marketFactory address
+
+        // Mine the correct address with proper flags
+        (address _hookAddress, bytes32 _salt) =
+            HookMiner.find(deployer, HookFlags.PROXY_HOOK_FLAGS, type(ProxyHook).creationCode, constructorArgs);
+
+        console.log("ProxyHook will be deployed to:", _hookAddress);
+        console.log("ProxyHook salt:", vm.toString(salt));
+
+        return (_salt, address(_hookAddress));
     }
 }

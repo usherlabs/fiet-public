@@ -8,23 +8,27 @@ import {BaseHook} from "v4-periphery/src/utils/BaseHook.sol";
 import {BalanceDelta, BalanceDeltaLibrary} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 
-import {IHookCommon} from "./interfaces/IHookCommon.sol";
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 import {ProxyHook} from "./ProxyHook.sol";
 import {LiquidityCommitmentCertificate} from "./LCC.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {CurrencySettler} from "@uniswap/v4-core/test/utils/CurrencySettler.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
-import {PausablePool} from "./libraries/PausablePool.sol";
-
+import {PausablePool} from "./modules/PausablePool.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {Exttload} from "v4-periphery/lib/v4-core/src/Exttload.sol";
+import {IExttload} from "v4-periphery/lib/v4-core/src/interfaces/IExttload.sol";
+import {ProxySwapFlag} from "./libraries/ProxySwapFlag.sol";
+import {TransientSlots} from "./libraries/TransientSlots.sol";
+import {LiquidityUtils} from "./libraries/LiquidityUtils.sol";
+import {console} from "forge-std/console.sol";
 
 /**
  * Core Pool should be aware of Positions.
  *     This way it can calculate and manage Liquidity Commitments (C_A(r)) for each Position.
  *     Furthermore, we need to know when Direct LP occurs, as this determines whether the underlying native tokens are settled to the Pool Manager.
  */
-contract CoreHook is BaseHook, IHookCommon, PausablePool {
+contract CoreHook is BaseHook, PausablePool, Exttload {
     using CurrencySettler for Currency;
 
     error InvalidInitialiser();
@@ -42,6 +46,10 @@ contract CoreHook is BaseHook, IHookCommon, PausablePool {
     // Owner will be set to MarketFactory
     constructor(address _poolManager, address _marketFactory) BaseHook(IPoolManager(_poolManager)) {
         marketFactory = _marketFactory;
+    }
+
+    function getMMPositionManager() public view returns (address) {
+        return IMarketFactory(marketFactory).mmPositionManager();
     }
 
     function pause(PoolId poolId) external onlyFactory {
@@ -93,34 +101,45 @@ contract CoreHook is BaseHook, IHookCommon, PausablePool {
     //     return this._afterInitialize.selector;
     // }
 
-    function _afterSwap(address, PoolKey calldata key, SwapParams calldata, BalanceDelta, bytes calldata)
+    function _afterSwap(address, PoolKey calldata key, SwapParams calldata, BalanceDelta delta, bytes calldata)
         internal
         virtual
         override
         whenNotPaused(key.toId())
         returns (bytes4, int128)
     {
+        address proxyHook = _getProxyHook(key);
+
+        // Check if this is a direct core pool swap, and if it is, call the proxy hook
+        if (IExttload(proxyHook).exttload(TransientSlots.PROXY_SWAP_FLAG_SLOT) == bytes32(0)) {
+            ProxyHook(proxyHook).onCorePoolDirectSwap(delta);
+        }
+
+        _triggerInternalTracingFlag(key.toId());
+
         return (this.afterSwap.selector, 0);
     }
 
     function _afterAddLiquidity(
-        address,
+        address sender,
         PoolKey calldata key,
         ModifyLiquidityParams calldata,
         BalanceDelta delta,
         BalanceDelta,
         bytes calldata
     ) internal virtual override whenNotPaused(key.toId()) returns (bytes4, BalanceDelta) {
-        // TODO: Filter the sender address to determine whether it's MMPositionManager or DirectLP.
-        address proxyHook = _getProxyHook(key);
-
-        ProxyHook(proxyHook).onDirectLP(key, delta, ActionType.DirectLPAddLiquidity);
+        // only add direct liquidity  if the sender is not the market maker position manager/router
+        address mmPositionManager = getMMPositionManager();
+        if (sender != address(mmPositionManager)) {
+            address proxyHook = _getProxyHook(key);
+            ProxyHook(proxyHook).onDirectLP(key, delta, LiquidityUtils.ActionType.DirectLPAddLiquidity);
+        }
 
         return (this.afterAddLiquidity.selector, BalanceDeltaLibrary.ZERO_DELTA);
     }
 
     function _afterRemoveLiquidity(
-        address,
+        address sender,
         PoolKey calldata key,
         ModifyLiquidityParams calldata,
         BalanceDelta delta,
@@ -128,11 +147,12 @@ contract CoreHook is BaseHook, IHookCommon, PausablePool {
         bytes calldata
     ) internal virtual override returns (bytes4, BalanceDelta) {
         // Allow removal of liquidity even when the market is paused.
-        // TODO: Filter the sender address to determine whether it's MMPositionManager or DirectLP.
-        // TODO dynamically get proxyhook from market factory
-
-        address proxyHook = _getProxyHook(key);
-        ProxyHook(proxyHook).onDirectLP(key, delta, ActionType.DirectLPRemoveLiquidity);
+        // only remove direct liquidity  if the sender is the pool manager
+        address mmPositionManager = getMMPositionManager();
+        if (sender != address(mmPositionManager)) {
+            address proxyHook = _getProxyHook(key);
+            ProxyHook(proxyHook).onDirectLP(key, delta, LiquidityUtils.ActionType.DirectLPRemoveLiquidity);
+        }
 
         return (this.afterRemoveLiquidity.selector, BalanceDeltaLibrary.ZERO_DELTA);
     }
@@ -143,5 +163,24 @@ contract CoreHook is BaseHook, IHookCommon, PausablePool {
         PoolId proxyPoolId = IMarketFactory(marketFactory).coreToProxy(corePoolId);
 
         return IMarketFactory(marketFactory).proxyToHook(proxyPoolId);
+    }
+
+    /**
+     * @notice Trigger the internal tracing flags that would be read by lcc tokens
+     * @dev This is used to indicate that a swap has occurred and the current market is the core pool
+     * @dev In order to help the lcc track markets transfers came from
+     * @param corePoolId The core pool id
+     */
+    function _triggerInternalTracingFlag(PoolId corePoolId) internal {
+        // Trigger flag within the core hook to indicate that a swap has occurred
+        // Set some variables that would be read by the corresponding recipient LCC contract
+        bytes32 tracingFlagSlot = TransientSlots.TRACING_FLAG_SLOT;
+        bytes32 currentMarketSlot = TransientSlots.CURRENT_MARKET_SLOT;
+        // bytes32 swapDeltaSlot = TransientSlots.SWAP_DELTA_SLOT;
+
+        assembly ("memory-safe") {
+            tstore(tracingFlagSlot, 1) // true
+            tstore(currentMarketSlot, corePoolId)
+        }
     }
 }

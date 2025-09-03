@@ -105,6 +105,9 @@ make fork
 
 # Deploy contracts locally
 make dev MODE=LOCAL
+
+# Deploy contracts, add liquidity and perform a swap
+make e2e MODE=LOCAL
 ```
 
 ## Deployment

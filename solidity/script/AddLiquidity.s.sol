@@ -102,6 +102,7 @@ contract AddLiquidityScript is ScriptHelper {
         // Load deployment addresses
         _setFilename(networkName);
         address marketFactoryAddr = readAddress("marketFactory");
+        console.log("Market Factory Address: ", marketFactoryAddr);
         IMarketFactory factory = IMarketFactory(marketFactoryAddr);
 
         try vm.envAddress("UNDERLYING_ASSET_0") returns (address asset) {
@@ -126,10 +127,6 @@ contract AddLiquidityScript is ScriptHelper {
 
         address coreHookAddr = factory.getCoreHook();
 
-        PoolId proxyPoolId = factory.coreToProxy(corePoolKey.toId());
-        address proxyHookAddr = factory.proxyToHook(proxyPoolId);
-        proxyHook = ProxyHook(proxyHookAddr);
-
         // Load LCC tokens from factory
         lcc0 = LiquidityCommitmentCertificate(factory.getLCC(token0));
         lcc1 = LiquidityCommitmentCertificate(factory.getLCC(token1));
@@ -138,8 +135,13 @@ contract AddLiquidityScript is ScriptHelper {
         uint24 coreFee = uint24(vm.envOr("CORE_POOL_FEE", uint256(0)));
         int24 tickSpacingVal = int24(uint24(vm.envOr("TICK_SPACING", uint256(60))));
 
-        setupPoolKeys(coreHookAddr, coreFee, tickSpacingVal);
+        setupPoolKeys(factory, coreHookAddr, coreFee, tickSpacingVal);
         setupAmounts();
+
+        // Get the proxy pool id and hook from the core pool id just created
+        PoolId proxyPoolId = factory.coreToProxy(corePoolKey.toId());
+        address proxyHookAddr = factory.proxyToHook(proxyPoolId);
+        proxyHook = ProxyHook(proxyHookAddr);
 
         if (isSepolia && isLocal) {
             vm.startBroadcast(deployerPrivateKey);
@@ -159,10 +161,17 @@ contract AddLiquidityScript is ScriptHelper {
         vm.stopBroadcast();
     }
 
-    function setupPoolKeys(address coreHookAddr, uint24 coreFee, int24 tickSpacingVal) internal {
+    function setupPoolKeys(IMarketFactory factory, address coreHookAddr, uint24 coreFee, int24 tickSpacingVal)
+        internal
+    {
         // Core pool: wrapped tokens, no hooks (this gets liquidity)
         (Currency currency0Core, Currency currency1Core) =
             CurrencySortHelper.sortAddresses(address(lcc0), address(lcc1));
+        console.log("currency0Core: ", Currency.unwrap(currency0Core));
+        console.log("currency1Core: ", Currency.unwrap(currency1Core));
+        console.log("coreHookAddr: ", coreHookAddr);
+        console.log("coreFee: ", coreFee);
+        console.log("tickSpacingVal: ", tickSpacingVal);
         corePoolKey = PoolKey({
             currency0: currency0Core,
             currency1: currency1Core,
@@ -170,6 +179,17 @@ contract AddLiquidityScript is ScriptHelper {
             tickSpacing: tickSpacingVal,
             hooks: IHooks(coreHookAddr)
         });
+
+        console.log("Core PoolKey toId: ");
+        console.logBytes32(PoolId.unwrap(corePoolKey.toId()));
+        PoolId proxyPoolId = factory.coreToProxy(corePoolKey.toId());
+        console.log("Proxy PoolId");
+        console.logBytes32(PoolId.unwrap(proxyPoolId));
+        address proxyHookAddr = factory.proxyToHook(proxyPoolId);
+        console.log("Proxy Hook Address: ", proxyHookAddr);
+        proxyHook = ProxyHook(proxyHookAddr);
+
+        console.log(" coore fee: ", coreFee);
 
         // Proxy pool: underlying tokens, with hooks (users interact here)
         (Currency currency0Proxy, Currency currency1Proxy) =
@@ -183,11 +203,13 @@ contract AddLiquidityScript is ScriptHelper {
         });
         console.log(" ");
         console.log("Core Pool (receives liquidity):");
+        console.logBytes32(PoolId.unwrap(corePoolKey.toId()));
         console.log("Currency0:", Currency.unwrap(corePoolKey.currency0));
         console.log("Currency1:", Currency.unwrap(corePoolKey.currency1));
         console.log("Hooks:", address(corePoolKey.hooks));
         console.log(" ");
         console.log("Proxy Pool (user interface):");
+        console.logBytes32(PoolId.unwrap(proxyPoolKey.toId()));
         console.log("Currency0:", Currency.unwrap(proxyPoolKey.currency0));
         console.log("Currency1:", Currency.unwrap(proxyPoolKey.currency1));
         console.log("Hooks:", address(proxyPoolKey.hooks));

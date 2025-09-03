@@ -16,6 +16,8 @@ import {SepoliaConstants} from "./constants/ArbitrumSepolia.sol";
 import {ArbitrumConstants} from "./constants/Arbitrum.sol";
 import {HookFlags} from "./constants/HookFlags.sol";
 import {EthSepoliaConstants} from "./constants/EthSepolia.sol";
+import {MMPositionManager} from "../src/MMPositionManager.sol";
+import {StubSpokeVerifier} from "../src/modules/StubSpokeVerifier.sol";
 
 /**
  * @title CompleteDeployScript
@@ -34,7 +36,7 @@ contract CompleteDeployScript is ScriptHelper {
     address public coreHook;
     address public proxyHook;
     address public marketFactory;
-
+    address public mmPositionManager;
     // Network-specific constants set from environment
     address public poolManagerAddress;
     address public create2Deployer;
@@ -61,23 +63,32 @@ contract CompleteDeployScript is ScriptHelper {
 
         vm.startBroadcast(deployerPrivateKey);
 
-        // Step 1: Deploy MarketFactory
+        // Step 1: Deploy MMPositionManager
+        console.log("\n=== Deploying MMPositionManager ===");
+        mmPositionManager = _deployMMPositionManager();
+        console.log("MMPositionManager deployed at:", mmPositionManager);
+
+        // Step 2: Deploy MarketFactory
         console.log("\n=== Deploying MarketFactory ===");
         marketFactory = _deployMarketFactory();
         console.log("MarketFactory deployed at:", marketFactory);
 
-        // Step 2: Deploy CoreHook
+        // Step 3: Deploy CoreHook
         console.log("\n=== Deploying CoreHook ===");
         coreHook = _deployCoreHook();
         console.log("CoreHook deployed at:", coreHook);
 
-        // Step 3: Set hooks in MarketFactory
+        // Step 4: Set hooks in MarketFactory
         console.log("\n=== Setting Hooks in MarketFactory ===");
         _setHooksInFactory();
 
-        // Step 4: Verify hooks addresses across the contracts (set cross-references)
+        // Step 5: Verify hooks addresses across the contracts
         console.log("\n=== Verifying Hooks ===");
         _verifyHooks();
+
+        // Step 6: Add all the protocol addresses expected to hold LCC as a protocol bound address in the market factory
+        console.log("\n=== Adding addresses to bounds array ===");
+        _addAddressesToBounds();
 
         vm.stopBroadcast();
 
@@ -87,6 +98,7 @@ contract CompleteDeployScript is ScriptHelper {
         console.log("\n=== Deployment Complete ===");
         console.log("CoreHook:", coreHook);
         console.log("MarketFactory:", marketFactory);
+        console.log("MMPositionManager:", mmPositionManager);
     }
 
     /**
@@ -120,10 +132,25 @@ contract CompleteDeployScript is ScriptHelper {
         // Initial bounds array (empty for now, can be updated later)
         address[] memory initialBounds = new address[](0);
 
-        // MarketFactory constructor now only takes (poolManager, bounds)
-        MarketFactory factory = new MarketFactory(poolManagerAddress, initialBounds);
+        // MarketFactory constructor now only takes (poolManager, mmPositionManager, bounds)
+        MarketFactory factory = new MarketFactory(poolManagerAddress, mmPositionManager, initialBounds);
 
         return address(factory);
+    }
+
+    // add function to add all the addresses to the bounds array
+
+    /**
+     * @dev Deploys MMPositionManager with a stub verifier
+     * @return The deployed MMPositionManager address
+     */
+    function _deployMMPositionManager() internal returns (address) {
+        // ? deploy a stub verifier for now
+        address stubVerifier = address(new StubSpokeVerifier());
+        console.log("StubSpokeVerifier deployed at:", stubVerifier);
+        MMPositionManager positionManager = new MMPositionManager(poolManagerAddress, stubVerifier);
+        console.log("MMPositionManager deployed at:", address(positionManager));
+        return address(positionManager);
     }
 
     /**
@@ -157,6 +184,23 @@ contract CompleteDeployScript is ScriptHelper {
     }
 
     /**
+     * @dev adds all relevant addess to bounds array in the market factory
+     * Whitelist protocol
+     */
+    function _addAddressesToBounds() internal {
+        // ? initial bounds(PM and MMPM) have been set in the MarketFactory constructor
+        // ? we can add more bounds here if needed
+        // MarketFactory factoryInstance = MarketFactory(marketFactory);
+        // address[] memory bounds = new address[](4);
+        // bounds[0] = poolManagerAddress;
+        // bounds[1] = mmPositionManager;
+        // bounds[2] = coreHook;
+        // bounds[3] = proxyHook;
+
+        // factoryInstance.addBounds(bounds);
+    }
+
+    /**
      * @dev Writes deployment addresses to JSON file for future reference
      */
     function _writeDeploymentAddresses() internal {
@@ -164,6 +208,7 @@ contract CompleteDeployScript is ScriptHelper {
         _setFilename(networkName);
         writeAddress("coreHook", coreHook);
         writeAddress("marketFactory", marketFactory);
+        writeAddress("positionManager", mmPositionManager);
 
         console.log("Deployment addresses written to deployments/%s_deployments.json", networkName);
     }

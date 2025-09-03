@@ -8,16 +8,18 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {BalanceDelta, BalanceDeltaLibrary} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
-import {PausablePool} from "../src/libraries/PausablePool.sol";
+import {PausablePool} from "../src/modules/PausablePool.sol";
 import {Deployers} from "@uniswap/v4-core/test/utils/Deployers.sol";
 
 import {CoreHook} from "../src/CoreHook.sol";
 import {ProxyHook} from "../src/ProxyHook.sol";
 import {MarketFactory} from "../src/MarketFactory.sol";
-import {HookFlags} from "../script/constants/HookFlags.sol";
+import {HookFlags} from "../src/libraries/HookFlags.sol";
+import {MMPositionManager} from "../src/MMPositionManager.sol";
 
 contract HookTest is Test, Deployers {
     IPoolManager poolManager;
+    MMPositionManager mmPositionManager;
     MarketFactory factory;
     CoreHook coreHook;
     ProxyHook proxyHook;
@@ -28,13 +30,18 @@ contract HookTest is Test, Deployers {
 
         address[] memory bounds = new address[](0);
         vm.prank(owner);
-        factory = new MarketFactory(address(poolManager), bounds);
+        mmPositionManager = new MMPositionManager(address(poolManager), makeAddr("verifier"));
+        factory = new MarketFactory(address(poolManager), address(mmPositionManager), bounds);
 
         // Compute flags for CoreHook
         uint160 coreFlags = HookFlags.CORE_HOOK_FLAGS;
         address coreHookAddrComputed = address(coreFlags);
 
-        deployCodeTo("CoreHook.sol:CoreHook", abi.encode(poolManager, address(factory)), coreHookAddrComputed);
+        deployCodeTo(
+            "CoreHook.sol:CoreHook",
+            abi.encode(poolManager, address(factory), address(mmPositionManager)),
+            coreHookAddrComputed
+        );
         coreHook = CoreHook(coreHookAddrComputed);
 
         // Compute flags for ProxyHook

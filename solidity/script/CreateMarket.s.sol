@@ -17,8 +17,8 @@ import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {BitMath} from "@uniswap/v4-core/src/libraries/BitMath.sol";
 import {HookMiner} from "v4-periphery/src/utils/HookMiner.sol";
-import {HookFlags} from "./constants/HookFlags.sol";
 import {ProxyHook} from "../src/ProxyHook.sol";
+import {HookFlags} from "../src/libraries/HookFlags.sol";
 
 /**
  * @title CreateMarketScript
@@ -280,12 +280,15 @@ contract CreateMarketScript is ScriptHelper {
      */
     function _createMarket() internal {
         MarketFactory factory = MarketFactory(marketFactory);
+        address deployer = MarketFactory(marketFactory).marketDeployer();
 
-        address proxyHook = _deployProxyHook();
+        bytes memory constructorArgs = abi.encode(poolManager, marketFactory);
+
+        (bytes32 salt,) = _generateProxyHookAddress(deployer, constructorArgs);
 
         // Call createMarket function
         (PoolId coreId, PoolId proxyId) = factory.createMarket(
-            proxyHook, underlyingAsset0, underlyingAsset1, corePoolFee, tickSpacing, initialSqrtPriceX96
+            underlyingAsset0, underlyingAsset1, corePoolFee, tickSpacing, initialSqrtPriceX96, salt
         );
 
         corePoolId = coreId;
@@ -300,12 +303,15 @@ contract CreateMarketScript is ScriptHelper {
     function _logMarketDetails() internal view {
         console.log("\n=== Market Details ===");
         console.log("Core Pool ID:", string.concat("", vm.toString(PoolId.unwrap(corePoolId))));
-        console.log("Proxy Pool ID:", string.concat("0x", vm.toString(PoolId.unwrap(proxyPoolId))));
+        console.log("Proxy Pool ID:", string.concat("", vm.toString(PoolId.unwrap(proxyPoolId))));
 
         // Get LCC tokens
         MarketFactory factory = MarketFactory(marketFactory);
         address lccTokenOfAsset0 = factory.getLCC(underlyingAsset0);
         address lccTokenOfAsset1 = factory.getLCC(underlyingAsset1);
+
+        console.log("Underlying Asset 0:", underlyingAsset0);
+        console.log("Underlying Asset 1:", underlyingAsset1);
 
         console.log("LCC Token of Asset 0:", lccTokenOfAsset0);
         console.log("LCC Token of Asset 1:", lccTokenOfAsset1);
@@ -462,22 +468,21 @@ contract CreateMarketScript is ScriptHelper {
      * @dev Deploys ProxyHook using HookMiner to find correct address
      * @return The deployed ProxyHook address
      */
-    function _deployProxyHook() internal returns (address) {
+    function _generateProxyHookAddress(address deployer, bytes memory constructorArgs)
+        internal
+        view
+        returns (bytes32, address)
+    {
         // ProxyHook constructor takes (poolManager, marketFactory)
         // Now we pass the actual marketFactory address
-        bytes memory constructorArgs = abi.encode(poolManager, marketFactory);
 
         // Mine the correct address with proper flags
         (address hookAddress, bytes32 salt) =
-            HookMiner.find(create2Deployer, HookFlags.PROXY_HOOK_FLAGS, type(ProxyHook).creationCode, constructorArgs);
+            HookMiner.find(deployer, HookFlags.PROXY_HOOK_FLAGS, type(ProxyHook).creationCode, constructorArgs);
 
         console.log("ProxyHook will be deployed to:", hookAddress);
         console.log("ProxyHook salt:", vm.toString(salt));
 
-        // Deploy the hook
-        ProxyHook deployedHook = new ProxyHook{salt: salt}(poolManager, marketFactory);
-        require(address(deployedHook) == hookAddress, "ProxyHook: address mismatch");
-
-        return address(deployedHook);
+        return (salt, address(hookAddress));
     }
 }

@@ -44,6 +44,12 @@ exp-%: ## Run experimental command (usage: make exp <command>)
 # === All ===
 dev: deploy-tokenA deploy-tokenB deploy create-market
 
+# === E2E FLOW ===
+# !@deploy-tokenA Make sure to have some ETH and WETH in the attached wallet
+# !@deploy-tokenB Make sure to have some USDC in the attached wallet
+# !@fork Make sure the fork is running, it can be started with: make fork
+e2e: deploy-tokenA deploy-tokenB deploy create-market add-liquidity swap #remove-liquidity
+
 # === Build ===
 build:
 	$(FORGE) build
