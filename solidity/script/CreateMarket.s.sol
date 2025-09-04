@@ -18,6 +18,7 @@ import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {BitMath} from "@uniswap/v4-core/src/libraries/BitMath.sol";
 import {HookMiner} from "v4-periphery/src/utils/HookMiner.sol";
 import {ProxyHook} from "../src/ProxyHook.sol";
+import {VTSConfigs} from "../src/libraries/VTSConfigs.sol";
 import {HookFlags} from "../src/libraries/HookFlags.sol";
 
 /**
@@ -288,7 +289,13 @@ contract CreateMarketScript is ScriptHelper {
 
         // Call createMarket function
         (PoolId coreId, PoolId proxyId) = factory.createMarket(
-            underlyingAsset0, underlyingAsset1, corePoolFee, tickSpacing, initialSqrtPriceX96, salt
+            underlyingAsset0,
+            underlyingAsset1,
+            corePoolFee,
+            tickSpacing,
+            initialSqrtPriceX96,
+            salt,
+            VTSConfigs.getDefaultConfig()
         );
 
         corePoolId = coreId;

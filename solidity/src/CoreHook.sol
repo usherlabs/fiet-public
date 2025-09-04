@@ -22,13 +22,14 @@ import {ProxySwapFlag} from "./libraries/ProxySwapFlag.sol";
 import {TransientSlots} from "./libraries/TransientSlots.sol";
 import {LiquidityUtils} from "./libraries/LiquidityUtils.sol";
 import {console} from "forge-std/console.sol";
+import {VTSManager} from "./modules/VTSManager.sol";
 
 /**
  * Core Pool should be aware of Positions.
- *     This way it can calculate and manage Liquidity Commitments (C_A(r)) for each Position.
- *     Furthermore, we need to know when Direct LP occurs, as this determines whether the underlying native tokens are settled to the Pool Manager.
+ * This way it can calculate and manage Liquidity Commitments (C_A(r)) for each Position.
+ * Furthermore, we need to know when Direct LP occurs, as this determines whether the underlying native tokens are settled to the Pool Manager.
  */
-contract CoreHook is BaseHook, PausablePool, Exttload {
+contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
     using CurrencySettler for Currency;
 
     error InvalidInitialiser();
@@ -44,7 +45,10 @@ contract CoreHook is BaseHook, PausablePool, Exttload {
     }
 
     // Owner will be set to MarketFactory
-    constructor(address _poolManager, address _marketFactory) BaseHook(IPoolManager(_poolManager)) {
+    constructor(address _poolManager, address _marketFactory)
+        BaseHook(IPoolManager(_poolManager))
+        VTSManager(_marketFactory)
+    {
         marketFactory = _marketFactory;
     }
 

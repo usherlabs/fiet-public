@@ -2,6 +2,7 @@
 pragma solidity ^0.8.20;
 
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {MarketVTSConfiguration} from "../types/VTS.sol";
 
 /**
  * @title IMarketFactory
@@ -93,6 +94,8 @@ interface IMarketFactory {
      * @param corePoolFee Fee for the core pool
      * @param tickSpacing Tick spacing for both pools
      * @param initialSqrtPriceX96 Initial sqrt price for core pool
+     * @param salt Salt for the proxy hook
+     * @param vtsConfiguration VTS configuration
      * @return corePoolId The ID of the created core pool
      * @return proxyPoolId The ID of the created proxy pool
      */
@@ -102,7 +105,8 @@ interface IMarketFactory {
         uint24 corePoolFee,
         int24 tickSpacing,
         uint160 initialSqrtPriceX96,
-        bytes32 salt
+        bytes32 salt,
+        MarketVTSConfiguration calldata vtsConfiguration
     ) external returns (PoolId corePoolId, PoolId proxyPoolId);
 
     /**

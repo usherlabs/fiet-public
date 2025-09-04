@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// This contract is inherited by the MArket Maker position manager contract which acts as a liquidity router for the market maker positions
+// This contract is inherited by the Market Maker position manager contract which acts as a liquidity router for the market maker positions
 pragma solidity ^0.8.0;
 
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
