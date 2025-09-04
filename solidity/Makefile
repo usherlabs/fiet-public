@@ -1,3 +1,51 @@
+# === Help ===
+help: ## Show this help message
+	@echo "🚀 Fiet Protocol - Solidity Development Commands"
+	@echo "================================================"
+	@echo ""
+	@echo "📋 Available Commands:"
+	@echo ""
+	@echo "🔧 Development Commands:"
+	@echo "  dev                    - Complete development setup (deploy tokens, contracts, create market)"
+	@echo "  build                  - Build all Solidity contracts"
+	@echo "  fork                   - Start Anvil fork for local development"
+	@echo ""
+	@echo "🚀 Deployment Commands:"
+	@echo "  deploy-tokenA          - Deploy USDT mock token"
+	@echo "  deploy-tokenB          - Deploy USDC mock token"
+	@echo "  deploy                 - Deploy all core contracts"
+	@echo "  read-deployment        - Read deployment information"
+	@echo ""
+	@echo "📊 Market Operations:"
+	@echo "  create-market          - Create a new market"
+	@echo "  pause-market           - Pause market operations"
+	@echo "  add-liquidity          - Add liquidity to market"
+	@echo "  remove-liquidity       - Remove liquidity from market"
+	@echo "  swap                   - Execute a swap"
+	@echo ""
+	@echo "🔍 Quality & Security:"
+	@echo "  install-deps           - Install project dependencies"
+	@echo "  lint                   - Run linting checks"
+	@echo "  lint-fix               - Fix linting issues"
+	@echo "  format                 - Format code"
+	@echo "  format-check           - Check code formatting"
+	@echo "  security               - Run security analysis"
+	@echo "  quality                - Run all quality checks (format, lint, security)"
+	@echo ""
+	@echo "⚙️  Configuration:"
+	@echo "  MODE=LOCAL|REMOTE      - Set deployment mode (default: LOCAL)"
+	@echo "  NETWORK=sepolia|arbitrum - Set target network (default: sepolia)"
+	@echo ""
+	@echo "💡 Examples:"
+	@echo "  make help               - Show this help message"
+	@echo "  make dev                - Complete development setup"
+	@echo "  make fork               - Start local fork"
+	@echo "  make NETWORK=arbitrum deploy - Deploy to Arbitrum mainnet"
+	@echo "  make MODE=REMOTE deploy - Deploy to remote network"
+	@echo ""
+	@echo "📖 For more information, see the documentation in docs/"
+
+# ==== Environment ====
 export $(shell sed 's/=.*//' .env)
 include .env
 export
@@ -31,14 +79,10 @@ FORGE=forge
 SCRIPT_DIR=script
 DEPLOYMENTS=deployments/$(NETWORK)_deployments.json
 
+# === All ===
+
 .PHONY: build deploy create-market
 
-# === Experimental Commands Subcommand ===
-# This allows running experimental commands via: make exp <command>
-exp-%: ## Run experimental command (usage: make exp <command>)
-	@$(MAKE) exp-$(subst exp-,,$@)
-
-# === All ===
 dev: deploy-tokenA deploy-tokenB deploy create-market
 
 # === Build ===
@@ -136,3 +180,22 @@ security:
 
 # Combined quality check
 quality: format-check lint security
+
+# === CLI: Read proxy PoolId from Core PoolId ===
+core-to-proxy: ## Usage: make core-to-proxy CORE_POOL_ID=0x...
+	@if [ -z "$(CORE_POOL_ID)" ]; then \
+		echo "Usage: make core-to-proxy CORE_POOL_ID=0x<core_pool_id> [NETWORK=sepolia|arbitrum|ethsepolia]"; \
+		exit 1; \
+	fi
+	@ADDRESS=$$(jq -r '.marketFactory' $(DEPLOYMENTS)); \
+	echo "Reading coreToProxy for CORE_POOL_ID=$(CORE_POOL_ID) on $(NETWORK) via $$ADDRESS"; \
+	cast call $$ADDRESS "coreToProxy(bytes32)(bytes32)" $(CORE_POOL_ID) --rpc-url $(RPC_URL)
+
+proxy-to-hook: ## Usage: make proxy-to-hook PROXY_POOL_ID=0x...
+	@if [ -z "$(PROXY_POOL_ID)" ]; then \
+		echo "Usage: make proxy-to-hook PROXY_POOL_ID=0x<proxy_pool_id> [NETWORK=sepolia|arbitrum|ethsepolia]"; \
+		exit 1; \
+	fi
+	@ADDRESS=$$(jq -r '.marketFactory' $(DEPLOYMENTS)); \
+	echo "Reading proxyToHook for PROXY_POOL_ID=$(PROXY_POOL_ID) on $(NETWORK) via $$ADDRESS"; \
+	cast call $$ADDRESS "proxyToHook(bytes32)(address)" $(PROXY_POOL_ID) --rpc-url $(RPC_URL)

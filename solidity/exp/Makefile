@@ -1,3 +1,6 @@
+export $(shell sed 's/=.*//' ../.env)
+include ../.env
+export
 
 # =============================================================================
 # Fiet Protocol - Experimental Commands
@@ -52,7 +55,7 @@
 # =============================================================================
 
 # === Experimental Commands Help ===
-exp-help: ## Show available experimental commands
+help: ## Show available experimental commands
 	@echo "🧪 Fiet Protocol - Experimental Commands"
 	@echo "========================================"
 	@echo ""
@@ -96,10 +99,6 @@ exp-help: ## Show available experimental commands
 	@echo "  - LP_PRIVATE_KEY: Liquidity provider private key"
 
 
-# Default exp target - show usage when no command specified
-exp:
-	@echo ""
-
 # Arbitrum Sepolia Testnet Experiments
 
 WETH_SEPOLIA=0x980B62Da83eFf3D4576C647993b0c1D7faf17c73
@@ -124,7 +123,7 @@ create-market-sepolia: ## Create WETH/USDC market on Arbitrum Sepolia testnet
 	CORE_POOL_FEE=0 \
 	TICK_SPACING=60 \
 	INITIAL_SQRT_PRICE_X96=$(SQRT_PRICE_SEPOLIA) \
-	forge script script/CreateMarket.s.sol:CreateMarketScript \
+	forge script ../script/CreateMarket.s.sol:CreateMarketScript \
 		--rpc-url $(ARB_SEPOLIA_RPC_URL) \
 		-vvvv \
 		--ffi \
@@ -139,7 +138,7 @@ add-liquidity-sepolia: ## Add liquidity to WETH/USDC market on Arbitrum Sepolia 
 	CORE_POOL_FEE=0 \
 	TICK_SPACING=60 \
 	WETH_AMOUNT=$(WETH_AMOUNT) \
-	forge script script/AddLiquidity.s.sol:AddLiquidityScript \
+	forge script ../script/AddLiquidity.s.sol:AddLiquidityScript \
 		--rpc-url $(ARB_SEPOLIA_RPC_URL) \
 		-vvvv \
 		--ffi \
@@ -153,7 +152,7 @@ swap-sepolia: ## Execute swap on Arbitrum Sepolia testnet
 	SWAP_TYPE=0 \
 	CORE_POOL_ID=$(CORE_POOL_ID) \
 	AMOUNT=$(SWAP_AMOUNT) \
-	forge script script/SwapV4.s.sol:SwapV4 \
+	forge script ../script/SwapV4.s.sol:SwapV4 \
 		--rpc-url $(ARB_SEPOLIA_RPC_URL) \
 		-vvvv \
 		--ffi \
@@ -183,7 +182,7 @@ create-market-mainnet:
 	CORE_POOL_FEE=400 \
 	TICK_SPACING=10 \
 	REFERENCE_POOL_ID=0x90adeaeba1b0550987637183712c138484af473093e2006a0fecaad3241ddb1c \
-	forge script script/CreateMarket.s.sol:CreateMarketScript \
+	forge script ../script/CreateMarket.s.sol:CreateMarketScript \
 		--rpc-url $(ARB_MAINNET_RPC_URL) \
 		-vvvv \
 		--ffi \
@@ -197,9 +196,9 @@ add-liquidity-mainnet:
 	UNDERLYING_ASSET_1=$(USDT_MAINNET) \
 	CORE_POOL_FEE=400 \
 	TICK_SPACING=10 \
-	RANGE_WIDTH=48000 \
+	RANGE_WIDTH=200 \
 	UA_1_AMOUNT=$(USDT_AMOUNT) \
-	forge script script/AddLiquidity.s.sol:AddLiquidityScript \
+	forge script ../script/AddLiquidity.s.sol:AddLiquidityScript \
 		--rpc-url $(ARB_MAINNET_RPC_URL) \
 		-vvvv \
 		--ffi \
@@ -211,7 +210,7 @@ remove-liquidity-mainnet:
 	NETWORK=arbitrum \
 	CORE_POOL_ID=0x9a24909eeeb9fb7bbae5e01f6bdf9d892aafdfadab304c377e2b617acb0db32a \
 	TOKEN_ID=52788 \
-	forge script script/RemoveLiquidity.s.sol:RemoveLiquidityScript \
+	forge script ../script/RemoveLiquidity.s.sol:RemoveLiquidityScript \
 		--rpc-url $(ARB_MAINNET_RPC_URL) \
 		-vvvv \
 		--ffi \
@@ -238,7 +237,7 @@ create-market-ethsepolia: ## Create WETH/USDC market on Ethereum Sepolia testnet
 	TICK_SPACING=2 \
 	ASSET0_PRICE=1000000 \
 	ASSET1_PRICE=5751990000 \
-	forge script script/CreateMarket.s.sol:CreateMarketScript \
+	forge script ../script/CreateMarket.s.sol:CreateMarketScript \
 		--rpc-url $(ETH_SEPOLIA_RPC_URL) \
 		-vvvv \
 		--ffi \
@@ -254,7 +253,7 @@ add-liquidity-ethsepolia: ## Add liquidity to WETH/USDC market on Ethereum Sepol
 	TICK_SPACING=2 \
 	RANGE_WIDTH=100 \
 	UA_1_AMOUNT=$(ETH_WETH_AMOUNT) \
-	forge script script/AddLiquidity.s.sol:AddLiquidityScript \
+	forge script ../script/AddLiquidity.s.sol:AddLiquidityScript \
 		--rpc-url $(ETH_SEPOLIA_RPC_URL) \
 		-vvvv \
 		--ffi \
@@ -266,7 +265,7 @@ remove-liquidity-ethsepolia:
 	NETWORK=ethsepolia \
 	CORE_POOL_ID=0x4103a354d3ade92a0eb6b7fdb49fee00b252270d988ef6b45f022129a498fa6b \
 	TOKEN_ID=15518 \
-	forge script script/RemoveLiquidity.s.sol:RemoveLiquidityScript \
+	forge script ../script/RemoveLiquidity.s.sol:RemoveLiquidityScript \
 		--rpc-url $(ETH_SEPOLIA_RPC_URL) \
 		-vvvv \
 		--ffi \
