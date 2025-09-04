@@ -26,7 +26,6 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidityDebt, Ownable {
     error InvalidAmount();
     error InvalidMarketFactory();
     error InsufficientWrappedLiquidity(uint256 requested, uint256 available);
-    error InvalidPriceFeed();
 
     address public immutable underlyingAsset;
     address public immutable marketFactory;

@@ -18,16 +18,8 @@ abstract contract VRLSpokeReceiver is Ownable {
     IOracleRegistry public oracleRegistry;
 
     event VerifierChanged(address indexed oldVerifier, address indexed newVerifier);
-    event AssetWhitelisted(string indexed asset, address indexed priceFeed);
-    event AssetUnwhitelisted(string indexed asset);
 
     error InvalidProof();
-    error InsufficientReserves();
-    error InvalidSignalAmount();
-    error InvalidSignalAmountAndTickers();
-
-    mapping(string => address) public priceFeeds;
-    string[] public whitelistedAssets;
 
     constructor(address _verifier, address _oracleRegistry) Ownable(msg.sender) {
         verifier = ISpokeVerifier(_verifier);

@@ -40,9 +40,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
     using CurrencyLibrary for Currency;
     using MarketMaker for MarketMaker.State;
 
-    MockV3Aggregator btcPriceFeed;
-    MockV3Aggregator usdtPriceFeed;
-
     LiquidityCommitmentCertificate lcc0;
     LiquidityCommitmentCertificate lcc1;
 
