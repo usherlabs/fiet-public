@@ -21,6 +21,8 @@ import {TransientStateLibrary} from "v4-periphery/lib/v4-core/src/libraries/Tran
 import {TickMath} from "v4-periphery/lib/v4-core/src/libraries/TickMath.sol";
 import {LiquidityAmounts} from "v4-periphery/lib/v4-core/test/utils/LiquidityAmounts.sol";
 import {MarketMaker} from "../libraries/MarketMaker.sol";
+import {LiquiditySignal} from "../types/Position.sol";
+import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
 import {FixedPoint96} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint96.sol";
 import {console} from "forge-std/console.sol";
 
@@ -46,60 +48,27 @@ contract LiquidityRouter is IUnlockCallback {
         bool takeClaims;
     }
 
-    /**
-     * @dev This function is used to calculate the amounts of underlying liquidity needed for token0 and token1
-     *      in order to create a position with the specified parameters. This is used to calculate the amount of liquidity to add to the pool
-     *      for a position to be created.
-     * @param positionParams The parameters of the position
-     * @param totalSignalUsdValue The total signal USD value
-     * @return lccAmount0 The amount of underlying liquidity for token0 to create the position with the specified parameters
-     * @return lccAmount1 The amount of underlying liquidity for token1 to create the position with the specified parameters
-     * @return liquidityDelta The amount of liquidity to add to the pool
-     */
-    function calculateLCCAmountsDeltaFromUSD(
-        MarketMaker.PositionParams calldata positionParams,
-        uint256 totalSignalUsdValue
-    ) public view returns (uint256 lccAmount0, uint256 lccAmount1, uint128 liquidityDelta) {
-        (, int24 currentTick,,) = manager.getSlot0(positionParams.corePoolKey.toId());
+    /// calculate the deposit amounts from the position params
+    function calculateTokenAmountsFromPositionParams(
+        PoolKey memory poolKey,
+        ModifyLiquidityParams memory positionParams
+    ) public view returns (uint256 depositAmount0, uint256 depositAmount1) {
+        (, int24 currentTick,,) = manager.getSlot0(poolKey.toId());
 
         uint160 sqrtPriceX96 = TickMath.getSqrtPriceAtTick(currentTick);
         uint160 sqrtPriceAtTickLower = TickMath.getSqrtPriceAtTick(positionParams.tickLower);
         uint160 sqrtPriceAtTickUpper = TickMath.getSqrtPriceAtTick(positionParams.tickUpper);
 
-        // standard decimals for oracle pricing
-        uint256 oracleDecimals = 1e8;
-
-        // pull oracles for both tokens (priced in USD, 8 decimals)
-        LiquidityCommitmentCertificate lcc0 =
-            LiquidityCommitmentCertificate(Currency.unwrap(positionParams.corePoolKey.currency0));
-        LiquidityCommitmentCertificate lcc1 =
-            LiquidityCommitmentCertificate(Currency.unwrap(positionParams.corePoolKey.currency1));
-
-        uint256 price0 = lcc0.getOraclePrice(); // USD price of token0 (8 decimals)
-        uint256 price1 = lcc1.getOraclePrice(); // USD price of token1 (8 decimals)
-
-        // split budget equally between token0 and token1
-        uint256 priceRatio = (uint256(sqrtPriceX96) * uint256(sqrtPriceX96)) / FixedPoint96.Q96;
-
-        uint256 usdForToken0 = (totalSignalUsdValue * priceRatio) / (priceRatio + FixedPoint96.Q96);
-        uint256 usdForToken1 = totalSignalUsdValue - usdForToken0;
-
-        // convert USD budget → token0 amount
-        lccAmount0 = (usdForToken0 * oracleDecimals) / price0;
-        lccAmount1 = (usdForToken1 * oracleDecimals) / price1;
-
-        // get max liquidity delta both amounts can add to the pool
-        liquidityDelta = LiquidityAmounts.getLiquidityForAmounts(
-            sqrtPriceX96, sqrtPriceAtTickLower, sqrtPriceAtTickUpper, lccAmount0, lccAmount1
-        );
-
         // get actual amounts from liquidity delta we got
-        (lccAmount0, lccAmount1) = LiquidityAmounts.getAmountsForLiquidity(
-            sqrtPriceX96, sqrtPriceAtTickLower, sqrtPriceAtTickUpper, liquidityDelta
+        (depositAmount0, depositAmount1) = LiquidityAmounts.getAmountsForLiquidity(
+            sqrtPriceX96,
+            sqrtPriceAtTickLower,
+            sqrtPriceAtTickUpper,
+            SafeCast.toUint128(uint256(positionParams.liquidityDelta))
         );
 
         // when adding liquidity to the pool, add 1 to the amounts returned by this library
-        return (lccAmount0 + 1, lccAmount1 + 1, liquidityDelta);
+        return (depositAmount0 + 1, depositAmount1 + 1);
     }
 
     /// callback function to modify the liquidity of the pool after the pool manager is unlocked

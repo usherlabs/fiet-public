@@ -92,7 +92,7 @@ contract MarketMakerTest is MarketMakerTestBase, Test {
     function test_marketMaker_canVerifyProof() public view {
         // Verify the signatures and merkle proof
         bool success = icVerifier.verifyProof(
-            merkleRootHash, mm1MerkleRootHashSignature, mm1StateHashSignature, mmState, merkleProofs
+            merkleRootHash, icCanisterMerkleRootHashSignature, mm1StateHashSignature, mmState, merkleProofs
         );
         console.log("success:", success);
     }

@@ -25,6 +25,7 @@ contract MarketFactory is IMarketFactory, Ownable2Step {
     address public coreHook;
     address public marketDeployer;
     address public mmPositionManager;
+    address public oracleRegistry;
 
     // Mapping from underlying asset to LCC token
     mapping(address => address) public underlyingToLCC;
@@ -49,19 +50,22 @@ contract MarketFactory is IMarketFactory, Ownable2Step {
 
     mapping(PoolId => address[2]) private _corePoolToCurrencyPair;
 
-    constructor(address poolManagerAddr, address mmPositionManagerAddr, address[] memory _bounds) Ownable(msg.sender) {
+    constructor(address poolManagerAddr, address _oracleRegistry, address[] memory _bounds)
+        Ownable(msg.sender)
+    {
         if (poolManagerAddr == address(0)) {
             revert InvalidPoolParameters();
         }
         _poolManager = IPoolManager(poolManagerAddr);
-        mmPositionManager = mmPositionManagerAddr;
+        oracleRegistry = _oracleRegistry;
 
+        // Set Protocol bounds addresses
         bounds[address(this)] = true;
-        bounds[mmPositionManagerAddr] = true;
         bounds[poolManagerAddr] = true;
         for (uint256 i = 0; i < _bounds.length; i++) {
             bounds[_bounds[i]] = true;
         }
+        // Deploy MarketDeployer which would be used to deploy proxy hooks on behalf of the factory
         marketDeployer = address(new MarketDeployer());
     }
 

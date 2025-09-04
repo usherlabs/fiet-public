@@ -32,6 +32,8 @@ import {MockV3Aggregator} from "@chainlink/contracts/src/v0.8/tests/MockV3Aggreg
 import {MarketMaker} from "../src/libraries/MarketMaker.sol";
 import {ERC20} from "solmate/tokens/ERC20.sol";
 import {PositionInfo} from "../src/types/Position.sol";
+import {IOracleRegistry} from "../src/interfaces/IOracleRegistry.sol";
+import {IOracle} from "../src/interfaces/IOracle.sol";
 
 contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
     using PoolIdLibrary for PoolId;
@@ -44,39 +46,70 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
     LiquidityCommitmentCertificate lcc0;
     LiquidityCommitmentCertificate lcc1;
 
+    address mockOracleBTC = makeAddr("mockOracleBTC");
+    address mockOracleUSDT = makeAddr("mockOracleUSDT");
+
     function setUp() public {
         _setupMarket();
         _setUpMM();
-        console.log("mmPositionManager", address(mmPositionManager));
-        lcc0 = LiquidityCommitmentCertificate(Currency.unwrap(_currency2));
-        lcc1 = LiquidityCommitmentCertificate(Currency.unwrap(_currency3));
+        console.log("setUP() mmPositionManager", address(mmPositionManager));
+        lcc0 = LiquidityCommitmentCertificate(payable(Currency.unwrap(_currency2)));
+        lcc1 = LiquidityCommitmentCertificate(payable(Currency.unwrap(_currency3)));
 
         // approve the lccs to the mmPositionManager to be able to route tokens to the pool manager
-        lcc0.approve(address(mmPositionManager), Constants.MAX_UINT256);
-        lcc1.approve(address(mmPositionManager), Constants.MAX_UINT256);
+        // lcc0.approve(address(mmPositionManager), Constants.MAX_UINT256);
+        // lcc1.approve(address(mmPositionManager), Constants.MAX_UINT256);
         // Mock the proxyHookToCurrencyPair function in order to make this caller appear to be an issuer
+        // when deploying the factory the mmposiiton manager will be provided and thus whitelsited
+        // but since we are mocking the factory, we need to mock a way to return the mmposition manager as an issuer
         address[2] memory mockCurrencies = [address(lcc0.underlyingAsset()), address(lcc1.underlyingAsset())];
         vm.mockCall(
             marketFactory,
             abi.encodeWithSelector(IMarketFactory.proxyHookToCurrencyPair.selector, address(mmPositionManager)),
             abi.encode(mockCurrencies)
         );
+        // mock the factory to return the right core hook
+        vm.mockCall(
+            marketFactory, abi.encodeWithSelector(IMarketFactory.coreToProxy.selector), abi.encode(proxyPoolKey.toId())
+        );
+        // mock the factory to return the right proxy hook
+        vm.mockCall(marketFactory, abi.encodeWithSelector(IMarketFactory.proxyToHook.selector), abi.encode(proxyHook));
+        // mock the oracle registry to return mock oracles for BTC/USD and USDT/USD which are the currencies in the user's signalled liquidity reserves
+        vm.mockCall(
+            address(oracleRegistry),
+            abi.encodeWithSelector(IOracleRegistry.getOracle.selector, "BTC/USD"),
+            abi.encode(mockOracleBTC)
+        );
+        vm.mockCall(
+            address(oracleRegistry),
+            abi.encodeWithSelector(IOracleRegistry.getOracle.selector, "USDT/USD"),
+            abi.encode(mockOracleUSDT)
+        );
+
+        // mock the price oracles to return prices and decimals numbers
+        // initialize the price feeds for the mock assets
+        // Create mock price feeds with 8 decimals (standard for Chainlink)
+        // BTC/USD: ~$113,000 * 10^8 = 11300000000000
+        vm.mockCall(mockOracleBTC, abi.encodeWithSelector(IOracle.getPrice.selector), abi.encode(11300000000000));
+        // USDT/USD: ~$0.997 * 10^8 = 99700000
+        vm.mockCall(mockOracleUSDT, abi.encodeWithSelector(IOracle.getPrice.selector), abi.encode(99700000));
+        // set the
+        vm.mockCall(mockOracleBTC, abi.encodeWithSelector(IOracle.decimals.selector), abi.encode(8));
+        vm.mockCall(mockOracleUSDT, abi.encodeWithSelector(IOracle.decimals.selector), abi.encode(8));
 
         // Mock the getOraclePrice
         // LCC0: ~$0.997 * 10^8 = 99700000
-        vm.mockCall(address(lcc0), abi.encodeWithSignature("getOraclePrice()"), abi.encode(uint256(99700000)));
+        vm.mockCall(
+            address(lcc0),
+            abi.encodeWithSelector(LiquidityCommitmentCertificate.usdPrice.selector),
+            abi.encode(uint256(99700000), 8)
+        );
         // LCC1: ~$0.999 * 10^8 = 99900000
-        vm.mockCall(address(lcc1), abi.encodeWithSignature("getOraclePrice()"), abi.encode(uint256(99900000)));
-
-        // initialize the price feeds for the mock assets
-        // Create mock price feeds with 8 decimals (standard for Chainlink)
-        // BTC: $200 * 10^8 = 20000000000
-        // BTC: ~$113,000 * 10^8 = 11300000000000
-        btcPriceFeed = new MockV3Aggregator(8, 11300000000000);
-        // USDT: ~$1.00 * 10^8 = 100000000
-        usdtPriceFeed = new MockV3Aggregator(8, 100000000);
-        mmPositionManager.addAssetPriceFeed("BTC", address(btcPriceFeed));
-        mmPositionManager.addAssetPriceFeed("USDT", address(usdtPriceFeed));
+        vm.mockCall(
+            address(lcc1),
+            abi.encodeWithSelector(LiquidityCommitmentCertificate.usdPrice.selector),
+            abi.encode(uint256(99900000), 8)
+        );
     }
 
     function test_canAddLiquidityToCorePool() public {
@@ -87,167 +120,58 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         );
     }
 
-    function test_canCommitLiquidityToCorePool() public {
-        int24 tickLower = -60;
-        int24 tickUpper = 60;
+    function test_canCommitLCCToCorePoolWithMMPM() public {
+        ModifyLiquidityParams memory liquidityParams =
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
 
-        // fill in the amounts and tickers
-        uint256[] memory amounts = new uint256[](2);
-        amounts[0] = 1;
-        amounts[1] = 15001;
-        string[] memory tickers = new string[](2);
-        tickers[0] = "BTC";
-        tickers[1] = "USDT";
+        bytes memory liquiditySignal = abi.encode(liquiditySignal);
 
-        uint256 totalUSDValue = mmPositionManager.getTotalUsdValue(tickers, amounts);
+        // Get the amount of LCC tokens that will be minted
+        (uint256 token0AmountMinted, uint256 token1AmountMinted) =
+            mmPositionManager.calculateTokenAmountsFromPositionParams(corePoolKey, liquidityParams);
 
-        (uint256 lccUnderlyingAmountToCommit0, uint256 lccUnderlyingAmountToCommit1) = mmPositionManager
-            .getCommitmentAmounts(
-            MarketMaker.PositionParams({corePoolKey: corePoolKey, tickLower: tickLower, tickUpper: tickUpper}),
-            totalUSDValue
-        );
-        (uint256 lccAmount0ToMint, uint256 lccAmount1ToMint, uint128 liquidityDelta) = mmPositionManager
-            .calculateLCCAmountsDeltaFromUSD(
-            MarketMaker.PositionParams({corePoolKey: corePoolKey, tickLower: tickLower, tickUpper: tickUpper}),
-            totalUSDValue
-        );
+        // Get amount of underlying liquidity to transfer from the issuer to the lcc
+        (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) =
+            mmPositionManager.getBaseSettlementAmounts(corePoolKey, token0AmountMinted, token1AmountMinted);
 
-        // approve the Market Maker contract to spend our underlying tokens for lcc0 and lcc1
-        ERC20(lcc0.underlyingAsset()).approve(address(mmPositionManager), lccUnderlyingAmountToCommit0);
-        ERC20(lcc1.underlyingAsset()).approve(address(mmPositionManager), lccUnderlyingAmountToCommit1);
+        // Approve
+        ERC20(lcc0.underlyingAsset()).approve(address(mmPositionManager), underlyingLiquidityFraction0);
+        ERC20(lcc1.underlyingAsset()).approve(address(mmPositionManager), underlyingLiquidityFraction1);
 
-        // underlying balance of lcc0
-        uint256 lcc0UnderlyingBalanceBeforeCommitment = ERC20(lcc0.underlyingAsset()).balanceOf(address(this));
-        uint256 lcc1UnderlyingBalanceBeforeCommitment = ERC20(lcc1.underlyingAsset()).balanceOf(address(this));
+        uint256 pmLcc0BalanceBefore = lcc0.balanceOf(address(manager));
+        uint256 pmLcc1BalanceBefore = lcc1.balanceOf(address(manager));
 
-        uint256 lcc0TotalSupplyBeforeCommitment = lcc0.totalSupply();
-        uint256 lcc1TotalSupplyBeforeCommitment = lcc1.totalSupply();
-        // total supply of lcc1 and lcc2
+        uint256 proxyCurrency0BalanceBefore = manager.balanceOf(address(proxyHook), proxyPoolKey.currency0.toId());
+        uint256 proxyCurrency1BalanceBefore = manager.balanceOf(address(proxyHook), proxyPoolKey.currency1.toId());
 
-        // get the poolmanaggers lcc balance
-        uint256 pmlcc0BalanceBeforeCommitment = lcc0.balanceOf(address(manager));
-        uint256 pmlcc1BalanceBeforeCommitment = lcc1.balanceOf(address(manager));
+        uint256 tokenId = mmPositionManager.commit(corePoolKey, liquidityParams, liquiditySignal);
 
-        // confirm there are no lcc's in the MM contract prior to it being minted when liquidity is being commited
-        assertEq(lcc0.balanceOf(address(mmPositionManager)), 0);
-        assertEq(lcc1.balanceOf(address(mmPositionManager)), 0);
+        uint256 pmLcc0BalanceAfter = lcc0.balanceOf(address(manager));
+        uint256 pmLcc1BalanceAfter = lcc1.balanceOf(address(manager));
 
-        // commit the liquidity
-        mmPositionManager.commitLiquidity(
-            MarketMaker.PositionParams({corePoolKey: corePoolKey, tickLower: tickLower, tickUpper: tickUpper}),
-            MarketMaker.ProofParams({
-                rootStateHash: merkleRootHash,
-                rootStateHashSignature: mm1MerkleRootHashSignature,
-                merkleProof: merkleProofs,
-                mmStateData: mmState,
-                mmStateHashSignature: mm1StateHashSignature
-            }),
-            tickers,
-            amounts
-        );
-        // confirm there are no left over lcc's in the MPMM contract after liquidity is committed
-        assertEq(lcc0.balanceOf(address(mmPositionManager)), 0);
-        assertEq(lcc1.balanceOf(address(mmPositionManager)), 0);
+        // validate lcc liquidity has been added to the core pool
+        assertEq(pmLcc0BalanceAfter, pmLcc0BalanceBefore + token0AmountMinted);
+        assertEq(pmLcc1BalanceAfter, pmLcc1BalanceBefore + token1AmountMinted);
 
-        // get the poolmanaggers lcc balance
-        uint256 pmlcc0BalanceAfterCommitment = lcc0.balanceOf(address(manager));
-        uint256 pmlcc1BalanceAfterCommitment = lcc1.balanceOf(address(manager));
+        // validate underlying tokens have been transferred to proxy pool
+        // and proxy hook has claim tokens
+        uint256 proxyCurrency0BalanceAfter = manager.balanceOf(address(proxyHook), proxyPoolKey.currency0.toId());
+        uint256 proxyCurrency1BalanceAfter = manager.balanceOf(address(proxyHook), proxyPoolKey.currency1.toId());
 
-        // underlying balance of lcc0
-        uint256 lcc0UnderlyingBalanceAfterCommitment = ERC20(lcc0.underlyingAsset()).balanceOf(address(this));
-        uint256 lcc1UnderlyingBalanceAfterCommitment = ERC20(lcc1.underlyingAsset()).balanceOf(address(this));
+        assertEq(proxyCurrency0BalanceAfter, proxyCurrency0BalanceBefore + underlyingLiquidityFraction0);
+        assertEq(proxyCurrency1BalanceAfter, proxyCurrency1BalanceBefore + underlyingLiquidityFraction1);
 
-        // total supply of lcc1 and lcc2
-        uint256 lcc0TotalSupplyAfterCommitment = lcc0.totalSupply();
-        uint256 lcc1TotalSupplyAfterCommitment = lcc1.totalSupply();
-
-        // validate liquidity was added to the pool, and the right amounts of lccs were minted and the right amounts of underlying tokens were transferred to the lccs
-        assertEq(
-            lcc0UnderlyingBalanceBeforeCommitment - lcc0UnderlyingBalanceAfterCommitment, lccUnderlyingAmountToCommit0
-        );
-        assertEq(
-            lcc1UnderlyingBalanceBeforeCommitment - lcc1UnderlyingBalanceAfterCommitment, lccUnderlyingAmountToCommit1
-        );
-        assertEq(lcc0TotalSupplyAfterCommitment - lcc0TotalSupplyBeforeCommitment, lccAmount0ToMint);
-        assertEq(lcc1TotalSupplyAfterCommitment - lcc1TotalSupplyBeforeCommitment, lccAmount1ToMint);
-
-        // validate pool manager lcc balance increases after commitment
-        assertGt(pmlcc0BalanceAfterCommitment, pmlcc0BalanceBeforeCommitment);
-        assertGt(pmlcc1BalanceAfterCommitment, pmlcc1BalanceBeforeCommitment);
-
-        // validate the position's nft was created
-        uint256 tokenId = 1;
-        (uint128 totalLiquidity, uint256 activePositionCount) = mmPositionManager.getTotalNFTLiquidity(tokenId);
-        assertEq(totalLiquidity, liquidityDelta);
+        // validate proper nft details
+        (int256 totalLiquidity, uint256 activePositionCount) = mmPositionManager.getTotalNFTLiquidity(tokenId);
+        assertEq(totalLiquidity, liquidityParams.liquidityDelta);
         assertEq(activePositionCount, 1);
-        assertEq(mmPositionManager.ownerOf(tokenId), address(this));
 
-        // validate the position details with the details of the liquidity added to the pool
-        PositionInfo memory positionInfo = mmPositionManager.getPositionInfo(tokenId, 0);
-        assertEq(positionInfo.tickLower, tickLower);
-        assertEq(positionInfo.tickUpper, tickUpper);
-        assertEq(positionInfo.liquidity, liquidityDelta);
+        PositionInfo memory positionInfo = mmPositionManager.getPositionInfo(tokenId, activePositionCount - 1);
+        assertEq(PoolId.unwrap(positionInfo.poolKey.toId()), PoolId.unwrap(corePoolKey.toId()));
+        assertEq(positionInfo.tickLower, liquidityParams.tickLower);
+        assertEq(positionInfo.tickUpper, liquidityParams.tickUpper);
+        assertEq(positionInfo.liquidity, liquidityParams.liquidityDelta);
         assertEq(positionInfo.owner, address(this));
-        assertEq(positionInfo.issuer, mmState.prover);
         assertEq(positionInfo.isActive, true);
-    }
-
-    function test_canRemoveCommitmentToCorePool() public {
-        int24 tickLower = -60;
-        int24 tickUpper = 60;
-
-        // fill in the amounts and tickers
-        uint256[] memory amounts = new uint256[](2);
-        amounts[0] = 1;
-        amounts[1] = 1000;
-        string[] memory tickers = new string[](2);
-        tickers[0] = "BTC";
-        tickers[1] = "USDT";
-
-        uint256 totalUSDValue = mmPositionManager.getTotalUsdValue(tickers, amounts);
-
-        (uint256 lccUnderlyingAmountToCommit0, uint256 lccUnderlyingAmountToCommit1) = mmPositionManager
-            .getCommitmentAmounts(
-            MarketMaker.PositionParams({corePoolKey: corePoolKey, tickLower: tickLower, tickUpper: tickUpper}),
-            totalUSDValue
-        );
-
-        // approve the Market Maker contract to spend our underlying tokens for lcc0 and lcc1
-        ERC20(lcc0.underlyingAsset()).approve(address(mmPositionManager), lccUnderlyingAmountToCommit0);
-        ERC20(lcc1.underlyingAsset()).approve(address(mmPositionManager), lccUnderlyingAmountToCommit1);
-
-        // commit the liquidity
-        uint256 tokenId = mmPositionManager.commitLiquidity(
-            MarketMaker.PositionParams({corePoolKey: corePoolKey, tickLower: tickLower, tickUpper: tickUpper}),
-            MarketMaker.ProofParams({
-                rootStateHash: merkleRootHash,
-                rootStateHashSignature: mm1MerkleRootHashSignature,
-                merkleProof: merkleProofs,
-                mmStateData: mmState,
-                mmStateHashSignature: mm1StateHashSignature
-            }),
-            tickers,
-            amounts
-        );
-
-        // get lcc balances of lcc0 and lcc1 of position manager
-        console.log("mmpmLcc0BalanceAfterCommitment", lcc0.balanceOf(address(mmPositionManager)));
-        console.log("mmpmLcc1BalanceAfterCommitment", lcc1.balanceOf(address(mmPositionManager)));
-
-        //  try decommit the liquidity
-        mmPositionManager.removeLiquidityCommitment(tokenId);
-
-        console.log("mmpmLcc0BalanceAfterDeCommitment", lcc0.balanceOf(address(mmPositionManager)));
-        console.log("mmpmLcc1BalanceAfterDeCommitment", lcc1.balanceOf(address(mmPositionManager)));
-
-        // confirm the lcc tokens have indeed been added to the position manager contract i.e the liquidity has been removed from the pool
-        // validate that the lcc balance of the position manager/router has increased by the amount of lccs removed from the pool
-        assertGt(lcc0.balanceOf(address(mmPositionManager)), 0);
-        assertGt(lcc1.balanceOf(address(mmPositionManager)), 0);
-
-        // validate the position's nft was destroyed
-        (uint128 totalLiquidity, uint256 activePositionCount) = mmPositionManager.getTotalNFTLiquidity(tokenId);
-        assertEq(totalLiquidity, 0);
-        assertEq(activePositionCount, 0);
     }
 }

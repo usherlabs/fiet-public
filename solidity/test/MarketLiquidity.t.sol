@@ -51,8 +51,8 @@ contract MarketLiquidityTest is MarketTestBase {
             abi.encodeWithSelector(IMarketFactory.bounds.selector, address(test_user_1)),
             abi.encode(false)
         );
-        lcc0 = LiquidityCommitmentCertificate(Currency.unwrap(corePoolKey.currency0));
-        lcc1 = LiquidityCommitmentCertificate(Currency.unwrap(corePoolKey.currency1));
+        lcc0 = LiquidityCommitmentCertificate(payable(Currency.unwrap(corePoolKey.currency0)));
+        lcc1 = LiquidityCommitmentCertificate(payable(Currency.unwrap(corePoolKey.currency1)));
 
         // mint some LCC na underlying tokens to the test user
         ERC20(lcc0.underlyingAsset()).transfer(test_user_1, amount0ToMint);
@@ -157,7 +157,7 @@ contract MarketLiquidityTest is MarketTestBase {
             PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false});
         // Perform another swap, but mock the pool manager to have no liquidity to ensure that unwraps are queued
         // Use vm.mockCall to make poolmanager balance of currency0 return 0
-        address proxyHook = address(hook);
+        address proxyHook = address(proxyHook);
         vm.mockCall(
             address(manager),
             abi.encodeWithSelector(
@@ -276,7 +276,7 @@ contract MarketLiquidityTest is MarketTestBase {
             abi.encodeWithSelector(
                 // to do
                 manager.balanceOf.selector,
-                address(hook),
+                address(proxyHook),
                 _currency1.toId()
             ),
             abi.encode(poolunderlyingassetBalance)

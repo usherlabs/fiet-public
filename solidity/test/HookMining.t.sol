@@ -16,9 +16,11 @@ import {ProxyHook} from "../src/ProxyHook.sol";
 import {MarketFactory} from "../src/MarketFactory.sol";
 import {HookFlags} from "../src/libraries/HookFlags.sol";
 import {MMPositionManager} from "../src/MMPositionManager.sol";
+import {IOracleRegistry} from "../src/interfaces/IOracleRegistry.sol";
 
 contract HookTest is Test, Deployers {
     IPoolManager poolManager;
+    IOracleRegistry oracleRegistry;
     MMPositionManager mmPositionManager;
     MarketFactory factory;
     CoreHook coreHook;
@@ -27,11 +29,13 @@ contract HookTest is Test, Deployers {
 
     function setUp() public {
         poolManager = IPoolManager(makeAddr("poolManager"));
-
+        oracleRegistry = IOracleRegistry(makeAddr("oracleRegistry"));
         address[] memory bounds = new address[](0);
         vm.prank(owner);
-        mmPositionManager = new MMPositionManager(address(poolManager), makeAddr("verifier"));
-        factory = new MarketFactory(address(poolManager), address(mmPositionManager), bounds);
+
+        factory = new MarketFactory(address(poolManager), address(oracleRegistry), bounds);
+        mmPositionManager =
+            new MMPositionManager(address(poolManager), address(oracleRegistry), makeAddr("verifier"), address(factory));
 
         // Compute flags for CoreHook
         uint160 coreFlags = HookFlags.CORE_HOOK_FLAGS;
@@ -44,7 +48,7 @@ contract HookTest is Test, Deployers {
         );
         coreHook = CoreHook(coreHookAddrComputed);
 
-        // Compute flags for ProxyHook
+        // Compute flags for ProxyHook's address
         uint160 proxyFlags = HookFlags.PROXY_HOOK_FLAGS;
         address proxyHookAddrComputed = address(proxyFlags);
 

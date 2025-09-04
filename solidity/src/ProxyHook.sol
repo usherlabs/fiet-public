@@ -39,7 +39,7 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
 
     error AddLiquidityThroughHookNotAllowed();
     error InvalidInitialiser();
-    error InvalidSender();
+    error InvalidCurrency(address currency);
 
     struct LiquidityCallbackData {
         uint256 amount0;
@@ -70,6 +70,8 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
     address public coreHook; // specific to proxy hook.
 
     PoolKey public corePoolKey;
+
+    PoolKey public proxyPoolKey;
 
     modifier onlyCoreHook() {
         if (msg.sender != coreHook) {
@@ -159,9 +161,8 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         });
     }
 
-    function _beforeInitialize(address sender, PoolKey calldata, uint160)
+    function _beforeInitialize(address sender, PoolKey calldata key, uint160)
         internal
-        view
         virtual
         override
         returns (bytes4)
@@ -169,7 +170,7 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         if (sender != marketFactory) {
             revert InvalidInitialiser();
         }
-
+        proxyPoolKey = key;
         // initialise the counterparty hook -- proxy pool is created after the core pool.
         // Note: This is a placeholder for future implementation
         // The core hook reference is already set in constructor
@@ -196,9 +197,9 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         onlyCoreHook
     {
         LiquidityCommitmentCertificate lccToken0 =
-            LiquidityCommitmentCertificate(Currency.unwrap(corePoolkey.currency0));
+            LiquidityCommitmentCertificate(payable(Currency.unwrap(corePoolkey.currency0)));
         LiquidityCommitmentCertificate lccToken1 =
-            LiquidityCommitmentCertificate(Currency.unwrap(corePoolkey.currency1));
+            LiquidityCommitmentCertificate(payable(Currency.unwrap(corePoolkey.currency1)));
 
         uint256 amount0 = LiquidityUtils.safeInt128ToUint256(delta.amount0());
         uint256 amount1 = LiquidityUtils.safeInt128ToUint256(delta.amount1());
@@ -226,6 +227,39 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         }
     }
 
+    /**
+     * @dev This function is called by the MMPositionManager to add liquidity directly to the vault
+     * @param currency0 The currency0 to add to the vault
+     * @param currency1 The currency1 to add to the vault
+     * @param amount0 The amount of currency0 to add to the vault
+     * @param amount1 The amount of currency1 to add to the vault
+     */
+    function onAddLiquidityToVault(address currency0, address currency1, uint256 amount0, uint256 amount1) external {
+        address mmpmAddr = IMarketFactory(marketFactory).mmPositionManager();
+        if (msg.sender != mmpmAddr) {
+            revert InvalidSender();
+        }
+        // make sure both currencies are valid for this proxy hook
+        // i.e make sure both currencies are either currency0 or currency1 of the proxy pool key
+        // to ensure we do not add liquidity to the vault with an invalid currency
+        if (
+            Currency.unwrap(proxyPoolKey.currency0) != currency0 && Currency.unwrap(proxyPoolKey.currency1) != currency0
+        ) {
+            revert InvalidCurrency(currency0);
+        }
+        if (
+            Currency.unwrap(proxyPoolKey.currency0) != currency1 && Currency.unwrap(proxyPoolKey.currency1) != currency1
+        ) {
+            revert InvalidCurrency(currency1);
+        }
+        _addLiquidityToVault(currency0, currency1, amount0, amount1);
+    }
+
+    /**
+     * @dev This function is called by the CoreHook to handle a direct swap i.e a swap on the core pool that was not initiated from the proxy pool
+     *      This ensures that the underlying liquidity is moved from the LCC's to the proxy pool at a 1:1 ratio
+     * @param delta The delta of the swap
+     */
     function onCorePoolDirectSwap(BalanceDelta delta) external virtual onlyCoreHook {
         // if this flag is not set, then it means that this is a direct swap
         bool isDirectSwap = ProxySwapFlag.isDirectSwap();
@@ -258,9 +292,9 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
 
         // Get the LCC tokens for the core pool
         LiquidityCommitmentCertificate lccToken0 =
-            LiquidityCommitmentCertificate(Currency.unwrap(corePoolKey.currency0));
+            LiquidityCommitmentCertificate(payable(Currency.unwrap(corePoolKey.currency0)));
         LiquidityCommitmentCertificate lccToken1 =
-            LiquidityCommitmentCertificate(Currency.unwrap(corePoolKey.currency1));
+            LiquidityCommitmentCertificate(payable(Currency.unwrap(corePoolKey.currency1)));
 
         // Handle Token IN liquidity (move to PoolManager from lcc token)
         LiquidityCommitmentCertificate lccTokenIn = isZeroForOne ? lccToken0 : lccToken1;
@@ -302,8 +336,10 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         bool coreZeroForOne;
         PoolKey memory coreKey = corePoolKey;
 
-        LiquidityCommitmentCertificate lccToken0 = LiquidityCommitmentCertificate(Currency.unwrap(coreKey.currency0));
-        LiquidityCommitmentCertificate lccToken1 = LiquidityCommitmentCertificate(Currency.unwrap(coreKey.currency1));
+        LiquidityCommitmentCertificate lccToken0 =
+            LiquidityCommitmentCertificate(payable(Currency.unwrap(coreKey.currency0)));
+        LiquidityCommitmentCertificate lccToken1 =
+            LiquidityCommitmentCertificate(payable(Currency.unwrap(coreKey.currency1)));
 
         if (
             Currency.unwrap(key.currency0) == lccToken0.underlyingAsset()
@@ -381,24 +417,11 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         // console.log("coreZeroForOne: ", coreZeroForOne);
         // console.log("params.zeroForOne: ", params.zeroForOne);
 
-        /// The desired input amount if amountSpecified negative (exactIn), or the desired output amount if amountSpecified positive (exactOut)
-        uint256 amountIn;
-        uint256 amountOut;
+        /// The desired input amount and output amount
+        // the deltas should be the source of truth since input and output amounts are potentially modified if no hook data is provided
+        uint256 amountIn = LiquidityUtils.safeInt128ToUint256(coreZeroForOne ? delta.amount0() : delta.amount1());
+        uint256 amountOut = LiquidityUtils.safeInt128ToUint256(coreZeroForOne ? delta.amount1() : delta.amount0());
         bool isExactInput = params.amountSpecified < 0;
-        if (isExactInput) {
-            amountIn = uint256(-coreSwapParams.amountSpecified);
-
-            // Regardless of whether params.zeroForOne is true or false,
-            // If params.zeroForOne is true (Token 0 -> Token 1), then exactIn is Token 0. If coreZeroForOne is also true, then amountOut is delta of LCC 1.
-            // If params.zeroForOne is false (Token 1 -> Token 0), then exactIn is Token 1. If coreZeroForOne is also false, then amountOut is delta of LCC 0.
-            amountOut = LiquidityUtils.safeInt128ToUint256(coreZeroForOne ? delta.amount1() : delta.amount0());
-        } else {
-            // Regardless of whether params.zeroForOne is true or false,
-            // If params.zeroForOne is true (Token 0 -> Token 1), then exactOut is Token 1. If coreZeroForOne is also true, then amountOut is delta of LCC 0.
-            // If params.zeroForOne is false (Token 1 -> Token 0), then exactOut is Token 0. If coreZeroForOne is also false, then amountOut is delta of LCC 1.
-            amountIn = LiquidityUtils.safeInt128ToUint256(coreZeroForOne ? delta.amount0() : delta.amount1());
-            amountOut = LiquidityUtils.safeInt128ToUint256(coreZeroForOne ? delta.amount1() : delta.amount0());
-        }
 
         // console.log("amountIn: ", amountIn / 1e18);
         // console.log("amountOut: ", amountOut / 1e18);

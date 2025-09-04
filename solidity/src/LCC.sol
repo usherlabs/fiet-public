@@ -15,6 +15,7 @@ import {MarketVault} from "./modules/MarketVault.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {IOracle} from "./interfaces/IOracle.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {IOracleRegistry} from "./interfaces/IOracleRegistry.sol";
 
 contract LiquidityCommitmentCertificate is ERC20, MarketLiquidityDebt, Ownable {
     using SafeTransferLib for ERC20;
@@ -27,7 +28,6 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidityDebt, Ownable {
     error InsufficientWrappedLiquidity(uint256 requested, uint256 available);
     error InvalidPriceFeed();
 
-    address public oracleAddress;
     address public immutable underlyingAsset;
     address public immutable marketFactory;
     bytes32 public immutable defaultMarket = bytes32(0);
@@ -349,12 +349,26 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidityDebt, Ownable {
         return super.transferFrom(from, to, amount);
     }
 
-    function setOracleAddress(address _oracleAddress) external onlyOwner {
-        oracleAddress = _oracleAddress;
-    }
+    /**
+     * @dev Get the price of the underlying asset
+     * @return The price of the asset
+     * @return The decimals of the asset
+     */
+    function usdPrice() public view returns (uint256, uint256) {
+        string memory quoteTicker = "USD";
+        address oracleRegistry = IMarketFactory(marketFactory).oracleRegistry();
+        // get the ticker of the underlying asset
+        string memory ticker = IERC20Metadata(underlyingAsset).symbol();
+        // asspend /quote to it eg /USDT
+        string memory pricePair = string.concat(ticker, "/", quoteTicker);
+        // get the price of the asset using oracle
+        address oracle = IOracleRegistry(oracleRegistry).getOracle(pricePair);
 
-    function getOraclePrice() external view returns (uint256) {
-        return IOracle(oracleAddress).price();
+        // get the price of the asset
+        uint256 assetPrice = IOracle(oracle).getPrice();
+        uint256 decimals = IOracle(oracle).decimals();
+
+        return (assetPrice, decimals);
     }
 
     /**

@@ -42,9 +42,11 @@ contract MarketFactoryTest is Test, Deployers {
 
         address[] memory bounds = new address[](0);
 
-        positionManager = new MMPositionManager(address(poolManager), makeAddr("verifier"));
         vm.prank(owner);
-        factory = new MarketFactory(address(poolManager), address(positionManager), bounds);
+        factory = new MarketFactory(address(poolManager), makeAddr("oracleRegistry"), bounds);
+        positionManager = new MMPositionManager(
+            address(poolManager), makeAddr("oracleRegistry"), makeAddr("verifier"), address(factory)
+        );
 
         // Compute flags for CoreHook
         uint160 coreFlags = HookFlags.CORE_HOOK_FLAGS;

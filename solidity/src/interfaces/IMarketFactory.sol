@@ -78,6 +78,12 @@ interface IMarketFactory {
      */
     function mmPositionManager() external view returns (address);
 
+    /**
+     * @notice Gets the oracle registry address
+     * @return The oracle factory address
+     */
+    function oracleRegistry() external view returns (address);
+
     // ============ STATE CHANGING FUNCTIONS ============
 
     /**
