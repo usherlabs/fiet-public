@@ -50,9 +50,7 @@ contract MarketFactory is IMarketFactory, Ownable2Step {
 
     mapping(PoolId => address[2]) private _corePoolToCurrencyPair;
 
-    constructor(address poolManagerAddr, address _oracleRegistry, address[] memory _bounds)
-        Ownable(msg.sender)
-    {
+    constructor(address poolManagerAddr, address _oracleRegistry, address[] memory _bounds) Ownable(msg.sender) {
         if (poolManagerAddr == address(0)) {
             revert InvalidPoolParameters();
         }
