@@ -2,7 +2,7 @@
 // it is typically tied to a proxy hook that is managing liquidity through a pool manager
 // outlines market vault functionality for the proxy hook
 // this is used to manage the liquidity of the vault and the underlying assets
-// it is also used to settle debts owed to the LCCs
+// it is also used to pay for pending settlements owed to the LCCs
 // it is also used to take and settle underlying assets to and from the LCCs
 
 pragma solidity ^0.8.20;
@@ -189,10 +189,10 @@ abstract contract MarketVault {
     }
 
     /**
-     * @dev Settle debts from the vault to the LCC
+     * @dev Fill Pending settlements to the LCC from the vault
      * @param corePoolKey The core pool key
      */
-    function _settleVaultDebtsToLCC(PoolKey memory corePoolKey) internal {
+    function _settleMarketDebtsToLCC(PoolKey memory corePoolKey) internal {
         bytes32 marketId = PoolId.unwrap(corePoolKey.toId());
         // Get both LCC tokens for this market
         LiquidityCommitmentCertificate lccToken0 =
@@ -200,30 +200,30 @@ abstract contract MarketVault {
         LiquidityCommitmentCertificate lccToken1 =
             LiquidityCommitmentCertificate(payable(Currency.unwrap(corePoolKey.currency1)));
 
-        // Try to settle debts for both tokens
-        _trySettleDebtsForLCC(lccToken0, marketId);
-        _trySettleDebtsForLCC(lccToken1, marketId);
+        // Try to fill pending settlements for both tokens
+        _tryFillPendingLCCSettlements(lccToken0, marketId);
+        _tryFillPendingLCCSettlements(lccToken1, marketId);
     }
 
     /**
-     * @dev Try to settle debts owed to the LCC if any
+     * @dev Try to fill pending settlements for the LCC if any
      * @param lccToken The LCC token
      * @param marketId The market ID
      */
-    function _trySettleDebtsForLCC(LiquidityCommitmentCertificate lccToken, bytes32 marketId) internal {
-        // Check how much debt this LCC has for this market
-        uint256 totalDebt = lccToken.getMarketTotalDebt(marketId);
-        if (totalDebt == 0) return; // No debt to settle
+    function _tryFillPendingLCCSettlements(LiquidityCommitmentCertificate lccToken, bytes32 marketId) internal {
+        // Check how much pending settlements this LCC has for this market
+        uint256 totalPendingSettlement = lccToken.getMarketTotalSettlement(marketId);
+        if (totalPendingSettlement == 0) return; // No pending settlements to fill
 
         // Check how much liquidity ProxyHook has available
         Currency uaCurrency = Currency.wrap(lccToken.underlyingAsset());
         uint256 availableLiquidity = vaultPoolManager.balanceOf(address(this), uaCurrency.toId());
 
         // Calculate how much we can settle
-        uint256 amountToSettle = Math.min(totalDebt, availableLiquidity);
+        uint256 amountToSettle = Math.min(totalPendingSettlement, availableLiquidity);
         if (amountToSettle == 0) return; // No liquidity available
 
-        // Move liquidity from PoolManager to LCC (this triggers debt processing)
+        // Move liquidity from PoolManager to LCC (this triggers settlement process)
         _takeFromVaultToLCC(lccToken, amountToSettle);
     }
 

@@ -236,6 +236,14 @@ contract MMPositionManager is LiquidityRouter, VRLSpokeReceiver, ERC721 {
         return tokenId;
     }
 
+    /**
+     * @dev This function is used to issue(mint) the LCC pair required to create the position on the pool
+     *      it also derives the initial settlement amounts for the underlying tokens for the LCC pair, and transfers the underlying tokens to the proxy prool
+     *      it then calls the proxy hook notify it of the added liquidity so the proxy pool can get claim tokens for them and deposit it into the pool manager
+     * @param poolKey The pool key to issue and settle the base lcc pair for
+     * @param token0Amount The amount of token0 to issue and settle
+     * @param token1Amount The amount of token1 to issue and settle
+     */
     function _issueAndSettleBaseLCCPair(PoolKey memory poolKey, uint256 token0Amount, uint256 token1Amount) internal {
         // mint the lccs to the mmPositionManager
         LiquidityCommitmentCertificate lcc0 =
@@ -264,7 +272,8 @@ contract MMPositionManager is LiquidityRouter, VRLSpokeReceiver, ERC721 {
         IERC20Minimal(lcc0.underlyingAsset()).transferFrom(sender, proxyHook, underlyingLiquidityFraction0);
         IERC20Minimal(lcc1.underlyingAsset()).transferFrom(sender, proxyHook, underlyingLiquidityFraction1);
 
-        // specify token0 and token1 order then validate the tokens are valid for this proxy hook
+        // specify token0, amount0 and token1, amount1 it is important to specify the token1 and token0 here because order is important to know
+        // and we can validate if the tokens are handled by the proxy hook in the `onAddLiquidityToVault` function
         ProxyHook(proxyHook).onAddLiquidityToVault(
             lcc0.underlyingAsset(), lcc1.underlyingAsset(), underlyingLiquidityFraction0, underlyingLiquidityFraction1
         );

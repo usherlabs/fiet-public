@@ -434,38 +434,31 @@ contract ProxyHookTest is MarketTestBase {
         console.log("diff0", int256(selfBalanceOfTokenAAfter) - int256(selfBalanceOfTokenABefore));
         console.log("diff1", int256(selfBalanceOfTokenBAfter) - int256(selfBalanceOfTokenBBefore));
 
-        // check debt queue for lcc_recipient in LCC token
+        // check settlement queue for lcc_recipient in LCC token
         LiquidityCommitmentCertificate lccOut = lcc1.underlyingAsset() == Currency.unwrap(_currency1) ? lcc1 : lcc0;
 
-        // validate user got lcc tokens and a debt from this market
+        // validate user got lcc tokens and a pending settlement from this market
         uint256 deficit = expectedOutput - mockAvailableLiquidity;
         console.log("deficit", deficit);
-        assertEq(lccOut.marketUserDebt(marketId, lcc_recipient), deficit);
-        assertEq(lccOut.marketTotalDebt(marketId), deficit);
+        assertEq(lccOut.marketUserSettlement(marketId, lcc_recipient), deficit);
+        assertEq(lccOut.marketTotalSettlement(marketId), deficit);
         assertEq(lccOut.balanceOf(lcc_recipient), deficit);
 
         assertEq(_currency1.balanceOf(lcc_recipient), 0);
 
-        // add some liquidity to the core pool to attempt to clear the debt
-        // add some liquidity to the core pool
+        // add some liquidity to the core pool to attempt to clear pending settlements
         modifyLiquidityRouter.modifyLiquidity(
             corePoolKey,
             ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e18, salt: bytes32(0)}),
             ZERO_BYTES
         );
 
-        assertEq(lccOut.marketUserDebt(marketId, lcc_recipient), 0);
-        assertEq(lccOut.marketTotalDebt(marketId), 0);
+        assertEq(lccOut.marketUserSettlement(marketId, lcc_recipient), 0);
+        assertEq(lccOut.marketTotalSettlement(marketId), 0);
         assertEq(lccOut.balanceOf(lcc_recipient), 0);
         //confirm recippient got ua
         assertEq(_currency1.balanceOf(lcc_recipient), deficit);
 
-        // console.log("debtQueueBalance", debtQueueBalance);
-        // console.log("debtQueueBalance", debtQueueBalance);
-        // assertEq(debtQueueBalance, swapAmount);
-
-        // assertEq(selfBalanceOfTokenBBefore - selfBalanceOfTokenBAfter, swapAmount);
-        // assertGt(selfBalanceOfTokenAAfter, selfBalanceOfTokenABefore);
         vm.clearMockedCalls();
     }
 

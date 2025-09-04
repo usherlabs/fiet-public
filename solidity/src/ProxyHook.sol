@@ -217,7 +217,7 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
             _settleFromLCCToVault(lccToken0, amount0);
             _settleFromLCCToVault(lccToken1, amount1);
 
-            _settleVaultDebtsToLCC(corePoolkey);
+            _settleMarketDebtsToLCC(corePoolkey);
         } else if (actionType == LiquidityUtils.ActionType.DirectLPRemoveLiquidity) {
             // Remove liquidity from the core pool
             // Remove the underlying tokens from the vault to the LCCs
@@ -311,7 +311,7 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         uint256 deficit = _tryTakeFromVaultToLCC(lccTokenOut, amountOut);
 
         // New liquidity in pool, so we try and settle the debt if any
-        _settleVaultDebtsToLCC(corePoolKey);
+        _settleMarketDebtsToLCC(corePoolKey);
         if (deficit > 0) {
             // TODO: NOTHING TO DO HERE
         }
