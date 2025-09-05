@@ -139,9 +139,19 @@ library RollingOutflowTrackerLibrary {
             return;
         }
 
+        // if no time window was set, then use full time range and just keep a running sum
+        if(tracker.timeWindow == 0) {
+            // if time window is 0, we do not need to clean old entries
+            // we can just return
+            tracker.tail = tracker.head - 1;
+            return;
+        }
+
+        // otherwise check entries that have become stale from the last stale entry
         uint256 cutoffTime = currentTime - tracker.timeWindow;
         uint256 trailingHead = tracker.tail;
 
+        // iterate from last stale entry until we reach none-stale item or we reach the head i.e all items are stale
         while (trailingHead != tracker.head && tracker.timestamps[trailingHead] <= cutoffTime) {
             // Subtract old outflow from totals
             tracker.totalOutflow0 -= tracker.outflow0[trailingHead];

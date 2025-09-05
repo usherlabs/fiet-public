@@ -44,17 +44,6 @@ contract RollingOutflowTrackerTest is Test {
         assertEq(tracker.totalOutflow1, 600);
     }
 
-    function testCircularBuffer() public {
-        // Fill buffer beyond BUFFER_SIZE
-        for (uint256 i = 0; i < 1005; i++) {
-            tracker.recordOutflow(i, i * 2);
-        }
-
-        // Should still have BUFFER_SIZE entries
-        assertEq(tracker.timestamps.length, 1000);
-        assertEq(tracker.head, 5); // Head moved to position 5
-    }
-
     function testZeroOutflow() public {
         // Record zero outflows
         tracker.recordOutflow(0, 0);

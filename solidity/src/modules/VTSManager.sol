@@ -34,6 +34,7 @@ abstract contract VTSManager {
             revert InvalidCaller();
         }
         corePoolToVTSConfiguration[corePoolId] = vtsConfiguration;
+        marketOutflow[corePoolId].initialize(vtsConfiguration.timeWindow);
     }
 
     /**
@@ -62,11 +63,6 @@ abstract contract VTSManager {
      */
     function _recordOutflow(PoolId corePoolId, BalanceDelta delta) internal {
         // get the time window from the VTS configuration
-        uint256 timeWindow = corePoolToVTSConfiguration[corePoolId].timeWindow;
-        if (timeWindow == 0) {
-            revert InvalidMarketVTSConfiguration(corePoolId);
-        }
-
         int256 delta0 = delta.amount0();
         int256 delta1 = delta.amount1();
 
@@ -75,9 +71,6 @@ abstract contract VTSManager {
         uint256 outflow1 = delta1 < 0 ? uint256(-delta1) : 0;
 
         // Record both outflows (even if one is 0)
-        if (!marketOutflow[corePoolId].isInitialized) {
-            marketOutflow[corePoolId].initialize(timeWindow);
-        }
         marketOutflow[corePoolId].recordOutflow(outflow0, outflow1);
     }
 }
