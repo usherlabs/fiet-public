@@ -16,6 +16,7 @@ abstract contract VTSManager {
     mapping(PoolId => RollingOutflowTracker) public marketOutflow;
 
     error InvalidCaller();
+    error InvalidMarketVTSConfiguration(PoolId corePoolId);
 
     address private immutable marketFactory;
 
@@ -45,6 +46,16 @@ abstract contract VTSManager {
     }
 
     /**
+     * @notice Gets the total outflow for the currencies in a core pool/Market
+     * @param corePoolId The core pool ID
+     * @return totalOutflow0 Total outflow for currency0
+     * @return totalOutflow1 Total outflow for currency1
+     */
+    function getMarketOutflow(PoolId corePoolId) public view returns (uint256 totalOutflow0, uint256 totalOutflow1) {
+        return marketOutflow[corePoolId].getTotalOutflow();
+    }
+
+    /**
      * @notice Records the outflow for the currencies in a core pool/Market
      * @param corePoolId The core pool ID
      * @param delta The balance delta
@@ -52,6 +63,9 @@ abstract contract VTSManager {
     function _recordOutflow(PoolId corePoolId, BalanceDelta delta) internal {
         // get the time window from the VTS configuration
         uint256 timeWindow = corePoolToVTSConfiguration[corePoolId].timeWindow;
+        if (timeWindow == 0) {
+            revert InvalidMarketVTSConfiguration(corePoolId);
+        }
 
         int256 delta0 = delta.amount0();
         int256 delta1 = delta.amount1();
