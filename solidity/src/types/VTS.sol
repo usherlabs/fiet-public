@@ -16,7 +16,7 @@ struct MarketVTSConfiguration {
     // Token configuration for token1
     TokenConfiguration token1;
     // Time t
-    uint256 t;
+    uint256 timeWindow;
     // Alpha scaling parameter
     uint256 boostTerm;
     // Lambda — ln(2) / (amount of time in seconds)

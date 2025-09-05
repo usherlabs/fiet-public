@@ -17,7 +17,7 @@ library VTSConfigs {
                 seizureUnlockTime: 3600, // 1 hour
                 baseVTSRate: 1 // 0.01% (1 bip)
             }),
-            t: 172800, // 48 hours
+            timeWindow: 172800, // 48 hours
             boostTerm: 110, // 1.1% (110 bips)
             decayTerm: 3466 // ln(2) ÷ 2 ≈ 0.347 (3466 bips)
         });

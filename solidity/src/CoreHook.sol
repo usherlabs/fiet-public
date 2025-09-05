@@ -120,7 +120,7 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
         }
 
         _triggerInternalTracingFlag(key.toId());
-
+        _recordOutflow(key.toId(), delta);
         return (this.afterSwap.selector, 0);
     }
 
