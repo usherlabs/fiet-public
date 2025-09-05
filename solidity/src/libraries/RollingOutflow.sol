@@ -81,14 +81,14 @@ library RollingOutflowTrackerLibrary {
         // Clean old entries outside time window
         _subtractStaleEntryFromRunningTotal(tracker, currentTime);
 
-        // TODO: make sure the buffer is not full
         if (nextHead == tracker.tail) {
             //? tail should always be behind head
             //? if it comes from behind to be equal due to the nature of circular buffers
             //? it means the current circular buffer is full of items that are not stale yet
-            //? we cannot clean old entries
+            //? we cannot clean unused entries
             //? since buffer is full without enough time elapsing
             //? we do nothing
+            // ? when enough time has passed, the tail will be updated to give more space to new entries
             return;
         }
 
@@ -125,7 +125,6 @@ library RollingOutflowTrackerLibrary {
         return (tracker.totalOutflow0, tracker.totalOutflow1);
     }
 
-
     /**
      * @notice Cleans old entries outside the time window
      *         And it does this by updating the tail pointer
@@ -140,7 +139,7 @@ library RollingOutflowTrackerLibrary {
         }
 
         // if no time window was set, then use full time range and just keep a running sum
-        if(tracker.timeWindow == 0) {
+        if (tracker.timeWindow == 0) {
             // if time window is 0, we do not need to clean old entries
             // we can just return
             tracker.tail = tracker.head - 1;
