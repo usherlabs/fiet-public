@@ -32,6 +32,8 @@ import {ProxySwapFlag} from "./libraries/ProxySwapFlag.sol";
 import {LiquidityUtils} from "../src/libraries/LiquidityUtils.sol";
 import {Exttload} from "v4-periphery/lib/v4-core/src/Exttload.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
+import {PositionId} from "./types/Position.sol";
+import {IVTSManager} from "./interfaces/IVTSManager.sol";
 import {console} from "forge-std/console.sol";
 
 contract ProxyHook is BaseHook, MarketVault, Exttload {
@@ -234,7 +236,9 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
      * @param amount0 The amount of currency0 to add to the vault
      * @param amount1 The amount of currency1 to add to the vault
      */
-    function onAddLiquidityToVault(address currency0, address currency1, uint256 amount0, uint256 amount1) external {
+    function onSettleUnderlyingAssets(address currency0, address currency1, uint256 amount0, uint256 amount1)
+        external
+    {
         address mmpmAddr = IMarketFactory(marketFactory).mmPositionManager();
         if (msg.sender != mmpmAddr) {
             revert InvalidSender();
@@ -252,6 +256,7 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         ) {
             revert InvalidCurrency(currency1);
         }
+        // add the assets to the pool manager and claim the underlying tokens for the proxy hook
         _addLiquidityToVault(currency0, currency1, amount0, amount1);
     }
 

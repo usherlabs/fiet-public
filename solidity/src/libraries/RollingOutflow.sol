@@ -78,6 +78,7 @@ library RollingOutflowTrackerLibrary {
     function recordOutflow(RollingOutflowTracker storage tracker, uint256 outflow0, uint256 outflow1) internal {
         uint256 currentTime = block.timestamp;
         uint256 nextHead = (tracker.head + 1) % BUFFER_SIZE;
+
         // Clean old entries outside time window
         _subtractStaleEntryFromRunningTotal(tracker, currentTime);
 
@@ -134,6 +135,7 @@ library RollingOutflowTrackerLibrary {
      */
     function _subtractStaleEntryFromRunningTotal(RollingOutflowTracker storage tracker, uint256 currentTime) private {
         // if not enough time has elapsed or if no items have been added yet
+        // tracker.head == tracker.tail when we have no items in the new buffer so skip in that case
         if (currentTime < tracker.timeWindow || tracker.head == tracker.tail) {
             return;
         }
@@ -151,6 +153,7 @@ library RollingOutflowTrackerLibrary {
         uint256 trailingHead = tracker.tail;
 
         // iterate from last stale entry until we reach none-stale item or we reach the head i.e all items are stale
+        // basically subtract items whos timestamp is less than the cutoff time from the running total
         while (trailingHead != tracker.head && tracker.timestamps[trailingHead] <= cutoffTime) {
             // Subtract old outflow from totals
             tracker.totalOutflow0 -= tracker.outflow0[trailingHead];

@@ -16,6 +16,7 @@ import {CurrencySettler} from "@uniswap/v4-core/test/utils/CurrencySettler.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {PausablePool} from "./modules/PausablePool.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {Position} from "@uniswap/v4-core/src/libraries/Position.sol";
 import {Exttload} from "v4-periphery/lib/v4-core/src/Exttload.sol";
 import {IExttload} from "v4-periphery/lib/v4-core/src/interfaces/IExttload.sol";
 import {ProxySwapFlag} from "./libraries/ProxySwapFlag.sol";
@@ -36,6 +37,7 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
     error InvalidSender();
 
     address public immutable marketFactory;
+    address public immutable mmPositionManager;
 
     modifier onlyFactory() {
         if (msg.sender != marketFactory) {
@@ -45,11 +47,12 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
     }
 
     // Owner will be set to MarketFactory
-    constructor(address _poolManager, address _marketFactory)
+    constructor(address _poolManager, address _marketFactory, address _mmPositionManager)
         BaseHook(IPoolManager(_poolManager))
-        VTSManager(_marketFactory)
+        VTSManager(_marketFactory, _mmPositionManager)
     {
         marketFactory = _marketFactory;
+        mmPositionManager = _mmPositionManager;
     }
 
     function getMMPositionManager() public view returns (address) {
@@ -127,16 +130,20 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
     function _afterAddLiquidity(
         address sender,
         PoolKey calldata key,
-        ModifyLiquidityParams calldata,
+        ModifyLiquidityParams calldata params,
         BalanceDelta delta,
         BalanceDelta,
         bytes calldata
     ) internal virtual override whenNotPaused(key.toId()) returns (bytes4, BalanceDelta) {
         // only add direct liquidity  if the sender is not the market maker position manager/router
-        address mmPositionManager = getMMPositionManager();
         if (sender != address(mmPositionManager)) {
             address proxyHook = _getProxyHook(key);
             ProxyHook(proxyHook).onDirectLP(key, delta, LiquidityUtils.ActionType.DirectLPAddLiquidity);
+        }
+
+        if (sender == address(mmPositionManager)) {
+            // Track maximum potemtial commitment for both tokens in the position
+            _trackMaxPotentialCommitment(key, sender, params, delta);
         }
 
         return (this.afterAddLiquidity.selector, BalanceDeltaLibrary.ZERO_DELTA);
@@ -145,17 +152,21 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
     function _afterRemoveLiquidity(
         address sender,
         PoolKey calldata key,
-        ModifyLiquidityParams calldata,
+        ModifyLiquidityParams calldata params,
         BalanceDelta delta,
         BalanceDelta,
         bytes calldata
     ) internal virtual override returns (bytes4, BalanceDelta) {
         // Allow removal of liquidity even when the market is paused.
         // only remove direct liquidity  if the sender is the pool manager
-        address mmPositionManager = getMMPositionManager();
         if (sender != address(mmPositionManager)) {
             address proxyHook = _getProxyHook(key);
             ProxyHook(proxyHook).onDirectLP(key, delta, LiquidityUtils.ActionType.DirectLPRemoveLiquidity);
+        }
+
+        if (sender == address(mmPositionManager)) {
+            // Track maximum potemtial commitment for both tokens in the position
+            _trackMaxPotentialCommitment(key, sender, params, delta);
         }
 
         return (this.afterRemoveLiquidity.selector, BalanceDeltaLibrary.ZERO_DELTA);

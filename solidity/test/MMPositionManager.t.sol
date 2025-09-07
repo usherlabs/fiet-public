@@ -40,6 +40,8 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
     using CurrencyLibrary for Currency;
     using MarketMaker for MarketMaker.State;
 
+    MMPositionManager positionManager;
+
     LiquidityCommitmentCertificate lcc0;
     LiquidityCommitmentCertificate lcc1;
 
@@ -50,6 +52,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         _setupMarket();
         _setUpMM();
         console.log("setUP() mmPositionManager", address(mmPositionManager));
+        positionManager = MMPositionManager(mmPositionManager);
         lcc0 = LiquidityCommitmentCertificate(payable(Currency.unwrap(_currency2)));
         lcc1 = LiquidityCommitmentCertificate(payable(Currency.unwrap(_currency3)));
 
@@ -125,11 +128,11 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         // Get the amount of LCC tokens that will be minted
         (uint256 token0AmountMinted, uint256 token1AmountMinted) =
-            mmPositionManager.calculateTokenAmountsFromPositionParams(corePoolKey, liquidityParams);
+            positionManager.calculateTokenAmountsFromPositionParams(corePoolKey, liquidityParams);
 
         // Get amount of underlying liquidity to transfer from the issuer to the lcc
         (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) =
-            mmPositionManager.getBaseSettlementAmounts(corePoolKey, token0AmountMinted, token1AmountMinted);
+            positionManager.getBaseSettlementAmounts(corePoolKey, token0AmountMinted, token1AmountMinted);
 
         // Approve
         ERC20(lcc0.underlyingAsset()).approve(address(mmPositionManager), underlyingLiquidityFraction0);
@@ -141,7 +144,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         uint256 proxyCurrency0BalanceBefore = manager.balanceOf(address(proxyHook), proxyPoolKey.currency0.toId());
         uint256 proxyCurrency1BalanceBefore = manager.balanceOf(address(proxyHook), proxyPoolKey.currency1.toId());
 
-        uint256 tokenId = mmPositionManager.commit(corePoolKey, liquidityParams, liquiditySignal);
+        uint256 tokenId = positionManager.commit(corePoolKey, liquidityParams, liquiditySignal);
 
         uint256 pmLcc0BalanceAfter = lcc0.balanceOf(address(manager));
         uint256 pmLcc1BalanceAfter = lcc1.balanceOf(address(manager));
@@ -159,11 +162,11 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         assertEq(proxyCurrency1BalanceAfter, proxyCurrency1BalanceBefore + underlyingLiquidityFraction1);
 
         // validate proper nft details
-        (int256 totalLiquidity, uint256 activePositionCount) = mmPositionManager.getTotalNFTLiquidity(tokenId);
+        (int256 totalLiquidity, uint256 activePositionCount) = positionManager.getTotalNFTLiquidity(tokenId);
         assertEq(totalLiquidity, liquidityParams.liquidityDelta);
         assertEq(activePositionCount, 1);
 
-        PositionInfo memory positionInfo = mmPositionManager.getPositionInfo(tokenId, activePositionCount - 1);
+        PositionInfo memory positionInfo = positionManager.getPositionInfo(tokenId, activePositionCount - 1);
         assertEq(PoolId.unwrap(positionInfo.poolKey.toId()), PoolId.unwrap(corePoolKey.toId()));
         assertEq(positionInfo.tickLower, liquidityParams.tickLower);
         assertEq(positionInfo.tickUpper, liquidityParams.tickUpper);
