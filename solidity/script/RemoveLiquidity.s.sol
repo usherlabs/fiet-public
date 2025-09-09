@@ -203,7 +203,7 @@ contract RemoveLiquidityScript is ScriptHelper {
         );
         params[1] = abi.encode(corePoolKey.currency0, corePoolKey.currency1, recipient);
 
-        uint256 deadline = block.timestamp + 300;
+        uint256 deadline = block.timestamp + 3600; // update deadine
 
         positionManager.modifyLiquidities(abi.encode(actions, params), deadline);
 
