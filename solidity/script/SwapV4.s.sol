@@ -31,7 +31,7 @@ contract SwapV4 is ScriptHelper {
     IUniversalRouter router;
     IPoolManager poolManager;
     IPermit2 permit2;
-    IHooks hook;
+    IHooks proxyHook;
 
     // Proxy pool tokens (underlying tokens)
     address token0;
@@ -173,7 +173,7 @@ contract SwapV4 is ScriptHelper {
         // Resolve proxy pool/hook now that _corePoolId is known
         PoolId proxyPoolId = marketFactory.coreToProxy(_corePoolId);
         address proxyHookAddr = marketFactory.proxyToHook(proxyPoolId);
-        hook = IHooks(proxyHookAddr);
+        proxyHook = IHooks(proxyHookAddr);
         console.log("Proxy Hook loaded, address: ", proxyHookAddr);
 
         uint256 userPrivateKey = uint256(vm.envBytes32("LP_PRIVATE_KEY"));
@@ -186,8 +186,13 @@ contract SwapV4 is ScriptHelper {
         console.log("Proxy Currency 1 Name: ", IERC20Metadata(Currency.unwrap(currencyB)).name());
         // Proxy pools are created with fee = 0 in MarketFactory
         uint24 proxyFee = 0;
-        PoolKey memory poolKey =
-            PoolKey({currency0: currencyA, currency1: currencyB, fee: proxyFee, tickSpacing: tickSpacing, hooks: hook});
+        PoolKey memory poolKey = PoolKey({
+            currency0: currencyA,
+            currency1: currencyB,
+            fee: proxyFee,
+            tickSpacing: tickSpacing,
+            hooks: proxyHook
+        });
         console.log("Checking balances...");
         uint256 balanceBeforeCurrency1;
         uint256 balanceBeforeCurrency0;
@@ -228,14 +233,18 @@ contract SwapV4 is ScriptHelper {
             revert("Invalid swap type");
         }
 
-        uint128 amount;
+        uint128 amount = 0;
+        try vm.envUint("AMOUNT") returns (uint256 envAmount) {
+            amount = uint128(envAmount);
+        } catch {
+            try vm.envUint("EAMOUNT") returns (uint256 envAmountInEther) {
+                amount = uint128(envAmountInEther * 1e18);
+            } catch {
+                revert("AMOUNT or EAMOUNT required");
+            }
+        }
 
         if (swapType == 0 || swapType == 1 || swapType == 5) {
-            try vm.envUint("AMOUNT") returns (uint256 envAmount) {
-                amount = uint128(envAmount);
-            } catch {
-                amount = 10e18;
-            }
             console.log("\n\nExecuting Exact Input swap for Token 0 -> Token 1...");
 
             // For an 18 decimal token, 10e18 is 10 tokens
@@ -243,7 +252,7 @@ contract SwapV4 is ScriptHelper {
                 IV4Router.ExactInputSingleParams({
                     poolKey: poolKey,
                     zeroForOne: true,
-                    amountIn: amount,
+                    amountIn: amount == 0 ? 10e18 : amount,
                     amountOutMinimum: 0,
                     hookData: new bytes(0)
                 })
@@ -252,18 +261,13 @@ contract SwapV4 is ScriptHelper {
             console.log("Exact Input Token 0 -> Token 1 Swap executed");
         }
         if (swapType == 2 || swapType == 5) {
-            try vm.envUint("AMOUNT") returns (uint256 envAmount) {
-                amount = uint128(envAmount);
-            } catch {
-                amount = 10e18 / 2;
-            }
             console.log("\n\nExecuting Exact Input swap for Token 1 -> Token 0...");
 
             swapExactInputSingle(
                 IV4Router.ExactInputSingleParams({
                     poolKey: poolKey,
                     zeroForOne: false,
-                    amountIn: amount,
+                    amountIn: amount == 0 ? (10e18 / 2) : amount,
                     amountOutMinimum: 0,
                     hookData: new bytes(0)
                 })
@@ -272,11 +276,6 @@ contract SwapV4 is ScriptHelper {
             console.log("Exact Input Token 1 -> Token 0 Swap executed");
         }
         if (swapType == 3 || swapType == 5) {
-            try vm.envUint("AMOUNT") returns (uint256 envAmount) {
-                amount = uint128(envAmount);
-            } catch {
-                amount = 10e18;
-            }
             console.log("\n\nExecuting Exact Output swap for Token 0 -> Token 1...");
 
             swapExactOutputSingle(
@@ -284,7 +283,7 @@ contract SwapV4 is ScriptHelper {
                     poolKey: poolKey,
                     zeroForOne: true,
                     amountInMaximum: type(uint128).max,
-                    amountOut: amount,
+                    amountOut: amount == 0 ? 10e18 : amount,
                     hookData: new bytes(0)
                 })
             );
@@ -292,11 +291,6 @@ contract SwapV4 is ScriptHelper {
             console.log("Exact Output Token 0 -> Token 1 Swap executed");
         }
         if (swapType == 4 || swapType == 5) {
-            try vm.envUint("AMOUNT") returns (uint256 envAmount) {
-                amount = uint128(envAmount);
-            } catch {
-                amount = 10e18 / 2;
-            }
             console.log("\n\nExecuting Exact Output swap for Token 1 -> Token 0...");
 
             swapExactOutputSingle(
@@ -304,7 +298,7 @@ contract SwapV4 is ScriptHelper {
                     poolKey: poolKey,
                     zeroForOne: false,
                     amountInMaximum: type(uint128).max,
-                    amountOut: amount,
+                    amountOut: amount == 0 ? (10e18 / 2) : amount,
                     hookData: new bytes(0)
                 })
             );

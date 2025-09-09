@@ -264,7 +264,6 @@ add-liquidity-ethsepolia: ## Add liquidity to WETH/USDC market on Ethereum Sepol
 remove-liquidity-ethsepolia:
 	NETWORK=ethsepolia \
 	CORE_POOL_ID=0x4103a354d3ade92a0eb6b7fdb49fee00b252270d988ef6b45f022129a498fa6b \
-	TOKEN_ID=15518 \
 	forge script ../script/RemoveLiquidity.s.sol:RemoveLiquidityScript \
 		--rpc-url $(ETH_SEPOLIA_RPC_URL) \
 		-vvvv \

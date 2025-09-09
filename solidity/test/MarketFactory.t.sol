@@ -95,7 +95,7 @@ contract MarketFactoryTest is Test, Deployers {
         );
 
         vm.prank(owner);
-        (PoolId _coreId, PoolId proxyId) = factory.createMarket(
+        (, PoolId proxyId) = factory.createMarket(
             proxyHookAddr,
             address(token0),
             address(token1),
