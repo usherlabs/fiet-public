@@ -219,7 +219,7 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
             _settleFromLCCToVault(lccToken0, amount0);
             _settleFromLCCToVault(lccToken1, amount1);
 
-            _settleMarketDebtsToLCC(corePoolkey);
+            _settleObligationsToLCC(corePoolkey);
         } else if (actionType == LiquidityUtils.ActionType.DirectLPRemoveLiquidity) {
             // Remove liquidity from the core pool
             // Remove the underlying tokens from the vault to the LCCs
@@ -236,9 +236,7 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
      * @param amount0 The amount of currency0 to add to the vault
      * @param amount1 The amount of currency1 to add to the vault
      */
-    function onSettleUnderlyingAssets(address currency0, address currency1, uint256 amount0, uint256 amount1)
-        external
-    {
+    function onMMSettleLiquidity(address currency0, address currency1, uint256 amount0, uint256 amount1) external {
         address mmpmAddr = IMarketFactory(marketFactory).mmPositionManager();
         if (msg.sender != mmpmAddr) {
             revert InvalidSender();
@@ -315,8 +313,8 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
 
         uint256 deficit = _tryTakeFromVaultToLCC(lccTokenOut, amountOut);
 
-        // New liquidity in pool, so we try and settle the debt if any
-        _settleMarketDebtsToLCC(corePoolKey);
+        // New liquidity in pool, so we try and settle the outstanding obligations, if any
+        _settleObligationsToLCC(corePoolKey);
         if (deficit > 0) {
             // TODO: NOTHING TO DO HERE
         }

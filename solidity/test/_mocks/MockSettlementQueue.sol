@@ -27,7 +27,7 @@ contract MockSettlementQueue is MarketLiquidity {
      * @param user user
      * @param amount amount
      */
-    function _payMarketDebt(address user, uint256 amount) internal override {
+    function _payOutstandingSettlementToUser(address user, uint256 amount) internal override {
         totalTransferred += amount;
         // burn tokens
         emit MockTransfer(user, amount);

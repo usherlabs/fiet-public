@@ -19,7 +19,7 @@ import {EthSepoliaConstants} from "./constants/EthSepolia.sol";
 import {MMPositionManager} from "../src/MMPositionManager.sol";
 import {StubSpokeVerifier} from "../src/modules/StubSpokeVerifier.sol";
 import {OracleRegistry} from "../src/OracleRegistry.sol";
-import {ChainLinkFactory} from "../src/oracles/ChainLinkFactory.sol";
+import {ChainlinkFactory} from "../src/oracles/chainlink/ChainlinkFactory.sol";
 
 /**
  * @title CompleteDeployScript
@@ -140,19 +140,19 @@ contract CompleteDeployScript is ScriptHelper {
         // Initial bounds array (empty for now, can be updated later)
         address[] memory initialBounds = new address[](0);
 
-        // MarketFactory constructor now only takes (poolManager, mmPositionManager, bounds)
         MarketFactory factory = new MarketFactory(poolManagerAddress, oracleRegistry, initialBounds);
 
         return address(factory);
     }
 
     function _deployOracleRegistry() internal returns (address) {
+        uint256 decimals = 18;
         OracleRegistry registry = new OracleRegistry();
         console.log("OracleRegistry deployed at:", address(registry));
         // deploy and set the chainlink oracle factory
-        ChainLinkFactory factory = new ChainLinkFactory(address(registry));
+        ChainlinkFactory factory = new ChainlinkFactory(address(registry), decimals);
         console.log("Chainlink Oracle Factory deployed at:", address(factory));
-        registry.setFactory(address(factory));
+        registry.setDefaultFactory(address(factory));
         console.log("Chainlink Oracle Factory set in OracleRegistry");
         return address(registry);
     }

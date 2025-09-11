@@ -16,9 +16,15 @@ import {LiquidityUtils} from "../libraries/LiquidityUtils.sol";
 import {console} from "forge-std/console.sol";
 import {PositionLibrary, PositionId} from "../types/Position.sol";
 import {IVTSManager} from "../interfaces/IVTSManager.sol";
+import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
+import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
+import {TransientStateLibrary} from "v4-periphery/lib/v4-core/src/libraries/TransientStateLibrary.sol";
+import {FixedPoint96} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint96.sol";
 
 abstract contract VTSManager is IVTSManager {
     using RollingOutflowTrackerLibrary for RollingOutflowTracker;
+    using StateLibrary for IPoolManager;
+    using TransientStateLibrary for IPoolManager;
 
     // Mapping from core pool ID to VTS configuration
     mapping(PoolId => MarketVTSConfiguration) public corePoolToVTSConfiguration;
@@ -39,8 +45,10 @@ abstract contract VTSManager is IVTSManager {
 
     address private immutable marketFactory;
     address private immutable mmPositionManager;
+    IPoolManager private immutable poolManager;
 
-    constructor(address _marketFactory, address _mmPositionManager) {
+    constructor(address _poolManager, address _marketFactory, address _mmPositionManager) {
+        poolManager = IPoolManager(_poolManager);
         marketFactory = _marketFactory;
         mmPositionManager = _mmPositionManager;
     }
@@ -109,32 +117,36 @@ abstract contract VTSManager is IVTSManager {
         view
         returns (uint256 c0, uint256 c1)
     {
-        LiquidityCommitmentCertificate lcc0 = LiquidityCommitmentCertificate(Currency.unwrap(corePoolKey.currency0));
-        LiquidityCommitmentCertificate lcc1 = LiquidityCommitmentCertificate(Currency.unwrap(corePoolKey.currency1));
-        // get the total usd commitment for this position
-        // decimals are negligable for price
-        (uint256 lcc0Price, uint256 lcc0PriceDecimals) = lcc0.usdPrice();
-        (uint256 lcc1Price, uint256 lcc1PriceDecimals) = lcc1.usdPrice();
+        // get the market oracle factory
+        uint256 lcc0Decimals = LiquidityCommitmentCertificate(Currency.unwrap(corePoolKey.currency0)).decimals();
+        uint256 lcc1Decimals = LiquidityCommitmentCertificate(Currency.unwrap(corePoolKey.currency1)).decimals();
 
-        // Normalize to 18 decimals from whatever decimals it was(it should be 8 decimal from the oracle) for consistent calculations
-        uint256 v0 = lcc0Price * (10 ** (18 - lcc0PriceDecimals));
-        uint256 v1 = lcc1Price * (10 ** (18 - lcc1PriceDecimals));
-
-        // we have a rool equation representing the relationship between the total commitment USD value for this position
-        // and the maximum potential commitments for the tokens in the range of the position
+        // The commitment formula is:
         // C(r) = ½(V₀ · C₀(r) + V₁ · C₁(r))
         // C(r) = xr + yr
-        // by substitution we get:
-        // C₀(r) = (2xr) / V₀
-        // C₁(r) = (2yr) / V₁
-        // C₀(r) and C₁(r) are the maximum potential commitments for the tokens in the range of the position
-        // xr and yr are the USD values of the total tokens in the position
-        // V₀ and V₁ are the USD values of 1 unit of the token 0 and 1
-        uint256 xr = (amountToken0 * v0) / 1e18;
-        uint256 yr = (amountToken1 * v1) / 1e18;
+        // By substitution: C₀(r) = (2xr) / V₀, C₁(r) = (2yr) / V₁
 
-        c0 = (2 * xr) / v0;
-        c1 = (2 * yr) / v1;
+        // In our context:
+        // - V₀ = price (token1 per token0) - the pool's exchange rate
+        // - V₁ = 1 (token1 per token1) - token1 is our base currency
+        // - xr = amountToken0 * price (value of token0 in token1 units)
+        // - yr = amountToken1 (value of token1 in token1 units)
+
+        // Applying the formula:
+        // C₀(r) = (2xr) / V₀ = (2 * amountToken0 * price) / price = 2 * amountToken0
+        // C₁(r) = (2yr) / V₁ = (2 * amountToken1) / 1 = 2 * amountToken1
+
+        // The price terms cancel out because:
+        // - We're using the pool's exchange rate as the "price"
+        // - When we multiply by price to get value, then divide by price to get back to units
+        // - The price scaling cancels out, leaving just the 2x multiplier
+
+        // This means the "maximum potential commitment" is simply 2x the deposited amounts
+        // The formula doesn't add complexity when using pool price as relative price
+
+        // calculate Commitments and scale the amounts by the decimals of the LCC tokens
+        c0 = (2 * amountToken0 / (10 ** lcc0Decimals));
+        c1 = (2 * amountToken1 / (10 ** lcc1Decimals));
     }
 
     /**
@@ -149,7 +161,7 @@ abstract contract VTSManager is IVTSManager {
         address router,
         ModifyLiquidityParams calldata params,
         BalanceDelta delta
-    ) internal {
+    ) public {
         PositionId positionId = PositionLibrary.generateId(router, params);
 
         bool isLiquidityAddition = params.liquidityDelta > 0;

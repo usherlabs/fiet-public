@@ -77,12 +77,12 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         // mock the oracle registry to return mock oracles for BTC/USD and USDT/USD which are the currencies in the user's signalled liquidity reserves
         vm.mockCall(
             address(oracleRegistry),
-            abi.encodeWithSelector(IOracleRegistry.getOracle.selector, "BTC/USD"),
+            abi.encodeWithSelector(IOracleRegistry.getOracle.selector, "BTC/USD", address(0)),
             abi.encode(mockOracleBTC)
         );
         vm.mockCall(
             address(oracleRegistry),
-            abi.encodeWithSelector(IOracleRegistry.getOracle.selector, "USDT/USD"),
+            abi.encodeWithSelector(IOracleRegistry.getOracle.selector, "USDT/USD", address(0)),
             abi.encode(mockOracleUSDT)
         );
 
@@ -167,11 +167,12 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         assertEq(activePositionCount, 1);
 
         PositionInfo memory positionInfo = positionManager.getPositionInfo(tokenId, activePositionCount - 1);
-        assertEq(PoolId.unwrap(positionInfo.poolKey.toId()), PoolId.unwrap(corePoolKey.toId()));
+        assertEq(PoolId.unwrap(positionInfo.poolId), PoolId.unwrap(corePoolKey.toId()));
         assertEq(positionInfo.tickLower, liquidityParams.tickLower);
         assertEq(positionInfo.tickUpper, liquidityParams.tickUpper);
         assertEq(positionInfo.liquidity, liquidityParams.liquidityDelta);
         assertEq(positionInfo.owner, address(this));
+        assertEq(positionInfo.positionIndex, activePositionCount - 1);
         assertEq(positionInfo.isActive, true);
     }
 }

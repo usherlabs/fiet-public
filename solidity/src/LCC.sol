@@ -16,6 +16,7 @@ import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {IOracle} from "./interfaces/IOracle.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {IOracleRegistry} from "./interfaces/IOracleRegistry.sol";
+import {console} from "forge-std/console.sol";
 
 contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable {
     using SafeTransferLib for ERC20;
@@ -300,7 +301,7 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable {
         // burn the amount that was unwrapped
         // and transfer the underlying assets to the user
         if (totalAmountUnwrapped > 0) {
-            _payMarketDebt(from, totalAmountUnwrapped);
+            _payOutstandingSettlementToUser(from, totalAmountUnwrapped);
         }
     }
 
@@ -325,7 +326,7 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable {
     }
 
     // Pay an outstanding settlement to a user and burn their underlying tokens
-    function _payMarketDebt(address user, uint256 amount) internal override {
+    function _payOutstandingSettlementToUser(address user, uint256 amount) internal override {
         _burn(user, amount);
         _transferUnderlyingAssets(user, amount);
     }
@@ -354,7 +355,7 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable {
      * @return The price of the asset
      * @return The decimals of the asset
      */
-    function usdPrice() public view returns (uint256, uint256) {
+    function usdPrice(address marketOracleFactory) public view returns (uint256, uint256) {
         string memory quoteTicker = "USD";
         address oracleRegistry = IMarketFactory(marketFactory).oracleRegistry();
         // get the ticker of the underlying asset
@@ -362,7 +363,7 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable {
         // asspend /quote to it eg /USDT
         string memory pricePair = string.concat(ticker, "/", quoteTicker);
         // get the price of the asset using oracle
-        address oracle = IOracleRegistry(oracleRegistry).getOracle(pricePair);
+        address oracle = IOracleRegistry(oracleRegistry).getOracle(pricePair, marketOracleFactory);
 
         // get the price of the asset
         uint256 assetPrice = IOracle(oracle).getPrice();

@@ -192,7 +192,7 @@ abstract contract MarketVault {
      * @dev Fill Pending settlements to the LCC from the vault
      * @param corePoolKey The core pool key
      */
-    function _settleMarketDebtsToLCC(PoolKey memory corePoolKey) internal {
+    function _settleObligationsToLCC(PoolKey memory corePoolKey) internal {
         bytes32 marketId = PoolId.unwrap(corePoolKey.toId());
         // Get both LCC tokens for this market
         LiquidityCommitmentCertificate lccToken0 =

@@ -19,7 +19,8 @@ library VTSConfigs {
             }),
             timeWindow: 172800, // 48 hours
             boostTerm: 110, // 1.1% (110 bips)
-            decayTerm: 3466 // ln(2) ÷ 2 ≈ 0.347 (3466 bips)
+            decayTerm: 3466, // ln(2) ÷ 2 ≈ 0.347 (3466 bips)
+            oracleFactory: address(0) // address(0) to use the default oracle factory
         });
     }
 }

@@ -89,13 +89,14 @@ abstract contract VRLSpokeReceiver is Ownable {
     function _getAssetUsdValue(string memory ticker, uint256 amount) internal view returns (uint256) {
         // get the price from the price oracle registry
         string memory pricePair = string.concat(ticker, "/", "USD");
+        // use the default market oracle factory when calculating value of assets in signal reserves
+        address marketOracleFactory = address(0);
 
-        address priceOracle = IOracleRegistry(oracleRegistry).getOracle(pricePair);
+        address priceOracle = IOracleRegistry(oracleRegistry).getOracle(pricePair, marketOracleFactory);
         // convert the price to USD value
         // assume each oracle provides a decimal interface to incerase precision
         uint256 decimals = IOracle(priceOracle).decimals();
         uint256 price = IOracle(priceOracle).getPrice();
-
         uint256 usdValue = (uint256(price) * amount) / 10 ** decimals;
         // return the USD value
         return usdValue;

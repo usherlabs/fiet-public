@@ -7,7 +7,7 @@ import {RollingOutflowTracker, RollingOutflowTrackerLibrary} from "../src/librar
 contract RollingOutflowTrackerTest is Test {
     using RollingOutflowTrackerLibrary for RollingOutflowTracker;
 
-    RollingOutflowTracker tracker;
+    RollingOutflowTracker public tracker;
 
     uint256 constant TIME_WINDOW = 300; // 5 minutes
 
@@ -20,8 +20,10 @@ contract RollingOutflowTrackerTest is Test {
         tracker.recordOutflow(100, 200);
         tracker.recordOutflow(300, 400);
 
-        // Check totals
+        // // Check totals
         (uint256 total0, uint256 total1) = tracker.getTotalOutflow();
+        console.log("Total0:", total0);
+        console.log("Total1:", total1);
         assertEq(total0, 400); // 100 + 300
         assertEq(total1, 600); // 200 + 400
     }
@@ -38,10 +40,13 @@ contract RollingOutflowTrackerTest is Test {
         // Move time beyond window and record new outflow
         vm.warp(700); // 300 + 5 minutes + 100 seconds
         tracker.recordOutflow(500, 600);
+        vm.warp(800); // 300 + 5 minutes + 200 seconds
+        tracker.recordOutflow(10, 10);
 
-        // Should have cleaned old entries, only new one remains
-        assertEq(tracker.totalOutflow0, 500);
-        assertEq(tracker.totalOutflow1, 600);
+        // Should only include data within the time window
+        (uint256 total0, uint256 total1) = tracker.getTotalOutflow();
+        assertEq(total0, 510); // Only the most recent outflow
+        assertEq(total1, 610);
     }
 
     function testZeroOutflow() public {
@@ -56,47 +61,22 @@ contract RollingOutflowTrackerTest is Test {
         assertEq(total1, 200);
     }
 
-    function testCircularBufferOverflow() public {
-        // Nearly fill buffer but leave 100 slots
-        uint256 BUFFER_SIZE = RollingOutflowTrackerLibrary.BUFFER_SIZE - 100;
+    function testBucketReuse() public {
+        // Start at time 1 (avoid timestamp 0)
+        vm.warp(1);
+        tracker.recordOutflow(100, 200); // Goes to bucket 1
 
-        for (uint256 i = 0; i < BUFFER_SIZE; i++) {
-            tracker.recordOutflow(i + 1, (i + 1) * 2);
-        }
+        // Record at time 2
+        vm.warp(2);
+        tracker.recordOutflow(300, 400); // Goes to bucket 2
 
-        assertEq(tracker.head, BUFFER_SIZE); // head corresponds to tip of data
-        assertEq(tracker.tail, 0); // tail corresponds to start of stale data
+        // Jump to time 1024 to reuse bucket 0
+        vm.warp(1024);
+        tracker.recordOutflow(500, 600); // Goes to bucket 0 (reused!)
 
-        // Check totals after filling buffer
+        // Should only include the most recent outflow
         (uint256 total0, uint256 total1) = tracker.getTotalOutflow();
-        assertGt(total0, 0); // Sum of 1 to 1000
-        assertGt(total1, 0); // Sum of 2 to 2000
-
-        // Add one more entry to trigger circular buffer
-        // move time ahead a bit
-        vm.warp(TIME_WINDOW + 1);
-        tracker.recordOutflow(9999, 19998);
-
-        (uint256 total0After, uint256 total1After) = tracker.getTotalOutflow();
-        assertEq(total0After, 9999);
-        assertEq(total1After, 19998);
-
-        // Should still have entries
-        vm.warp(TIME_WINDOW);
-        for (uint256 i = 0; i < 100; i++) {
-            tracker.recordOutflow(i + 1, (i + 1) * 2);
-        }
-
-        assertEq(tracker.head, 1);
-        assertEq(tracker.tail, BUFFER_SIZE);
-
-        vm.warp(TIME_WINDOW + TIME_WINDOW + TIME_WINDOW);
-        tracker.recordOutflow(9999, 19998);
-        (total0, total1) = tracker.getTotalOutflow();
-        assertEq(total0, 9999);
-        assertEq(total1, 19998);
-
-        assertEq(tracker.head, 2);
-        assertEq(tracker.tail, 1);
+        assertEq(total0, 500);
+        assertEq(total1, 600);
     }
 }

@@ -25,8 +25,12 @@ import {LiquiditySignal} from "../types/Position.sol";
 import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
 import {FixedPoint96} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint96.sol";
 import {console} from "forge-std/console.sol";
+import {SqrtPriceMath} from "v4-periphery/lib/v4-core/src/libraries/SqrtPriceMath.sol";
+import {toBalanceDelta} from "v4-periphery/lib/v4-core/src/types/BalanceDelta.sol";
+import {LiquidityUtils} from "../libraries/LiquidityUtils.sol";
 
 contract LiquidityRouter is IUnlockCallback {
+    using SafeCast for *;
     using CurrencySettler for Currency;
     using Hooks for IHooks;
     using LPFeeLibrary for uint24;
@@ -53,22 +57,48 @@ contract LiquidityRouter is IUnlockCallback {
         PoolKey memory poolKey,
         ModifyLiquidityParams memory positionParams
     ) public view returns (uint256 depositAmount0, uint256 depositAmount1) {
-        (, int24 currentTick,,) = manager.getSlot0(poolKey.toId());
+        (uint160 sqrtPriceX96, int24 currentTick,,) = manager.getSlot0(poolKey.toId());
+        BalanceDelta delta;
 
-        uint160 sqrtPriceX96 = TickMath.getSqrtPriceAtTick(currentTick);
-        uint160 sqrtPriceAtTickLower = TickMath.getSqrtPriceAtTick(positionParams.tickLower);
-        uint160 sqrtPriceAtTickUpper = TickMath.getSqrtPriceAtTick(positionParams.tickUpper);
+        if (currentTick < positionParams.tickLower) {
+            // current tick is below the passed range; liquidity can only become in range by crossing from left to
+            // right, when we'll need _more_ currency0 (it's becoming more valuable) so user must provide it
+            delta = toBalanceDelta(
+                SqrtPriceMath.getAmount0Delta(
+                    TickMath.getSqrtPriceAtTick(positionParams.tickLower),
+                    TickMath.getSqrtPriceAtTick(positionParams.tickUpper),
+                    positionParams.liquidityDelta.toInt128()
+                ).toInt128(),
+                0
+            );
+        } else if (currentTick < positionParams.tickUpper) {
+            delta = toBalanceDelta(
+                SqrtPriceMath.getAmount0Delta(
+                    sqrtPriceX96,
+                    TickMath.getSqrtPriceAtTick(positionParams.tickUpper),
+                    positionParams.liquidityDelta.toInt128()
+                ).toInt128(),
+                SqrtPriceMath.getAmount1Delta(
+                    TickMath.getSqrtPriceAtTick(positionParams.tickLower),
+                    sqrtPriceX96,
+                    positionParams.liquidityDelta.toInt128()
+                ).toInt128()
+            );
+        } else {
+            // current tick is above the passed range; liquidity can only become in range by crossing from right to
+            // left, when we'll need _more_ currency1 (it's becoming more valuable) so user must provide it
+            delta = toBalanceDelta(
+                0,
+                SqrtPriceMath.getAmount1Delta(
+                    TickMath.getSqrtPriceAtTick(positionParams.tickLower),
+                    TickMath.getSqrtPriceAtTick(positionParams.tickUpper),
+                    positionParams.liquidityDelta.toInt128()
+                ).toInt128()
+            );
+        }
 
-        // get actual amounts from liquidity delta we got
-        (depositAmount0, depositAmount1) = LiquidityAmounts.getAmountsForLiquidity(
-            sqrtPriceX96,
-            sqrtPriceAtTickLower,
-            sqrtPriceAtTickUpper,
-            SafeCast.toUint128(uint256(positionParams.liquidityDelta))
-        );
-
-        // when adding liquidity to the pool, add 1 to the amounts returned by this library
-        return (depositAmount0 + 1, depositAmount1 + 1);
+        return
+            (LiquidityUtils.safeInt128ToUint256(delta.amount0()), LiquidityUtils.safeInt128ToUint256(delta.amount1()));
     }
 
     /// callback function to modify the liquidity of the pool after the pool manager is unlocked
@@ -103,10 +133,18 @@ contract LiquidityRouter is IUnlockCallback {
             assert(!(delta0 > 0 || delta1 > 0));
         }
 
-        if (delta0 < 0) data.key.currency0.settle(manager, self, uint256(-delta0), data.settleUsingBurn);
-        if (delta1 < 0) data.key.currency1.settle(manager, self, uint256(-delta1), data.settleUsingBurn);
-        if (delta0 > 0) data.key.currency0.take(manager, self, uint256(delta0), data.takeClaims);
-        if (delta1 > 0) data.key.currency1.take(manager, self, uint256(delta1), data.takeClaims);
+        if (delta0 < 0) {
+            data.key.currency0.settle(manager, self, uint256(-delta0), data.settleUsingBurn);
+        }
+        if (delta1 < 0) {
+            data.key.currency1.settle(manager, self, uint256(-delta1), data.settleUsingBurn);
+        }
+        if (delta0 > 0) {
+            data.key.currency0.take(manager, self, uint256(delta0), data.takeClaims);
+        }
+        if (delta1 > 0) {
+            data.key.currency1.take(manager, self, uint256(delta1), data.takeClaims);
+        }
 
         return abi.encode(delta);
     }

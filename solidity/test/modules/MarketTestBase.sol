@@ -206,19 +206,6 @@ abstract contract MarketTestBase is Test, Deployers {
         IERC20Minimal(lcc1.underlyingAsset()).approve(address(lcc1), initialLiquidity);
         lcc1.wrap(initialLiquidity);
 
-        // mock lcc calls to fetch latest usd price
-        // this is used when we track maximum potential commitment for both tokens in the position when liquidity is modified
-        vm.mockCall(
-            address(lcc0),
-            abi.encodeWithSignature("usdPrice()"),
-            abi.encode(100000000, 8) // $1.00
-        );
-        vm.mockCall(
-            address(lcc1),
-            abi.encodeWithSignature("usdPrice()"),
-            abi.encode(100000000, 8) // $1.00
-        );
-
         // Mock factory calls made by LCC contract when it is transferred to a non-protocol bound address and tracking is activated
         vm.mockCall(
             marketFactory, abi.encodeWithSelector(IMarketFactory.coreToProxy.selector), abi.encode(proxyPoolKey.toId())

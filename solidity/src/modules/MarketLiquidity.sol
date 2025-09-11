@@ -269,7 +269,7 @@ abstract contract MarketLiquidity {
             // and transfer the underlying assets to the recipient of the settlement
             // if burn is false, it means we are clearing a settlement we did not pay off
             if (burnTokens) {
-                _payMarketDebt(recipient, amountToSettle);
+                _payOutstandingSettlementToUser(recipient, amountToSettle);
             }
 
             emit SettlementRequestCleared(marketId, recipient, amountToSettle, 0, block.timestamp, burnTokens);
@@ -281,5 +281,5 @@ abstract contract MarketLiquidity {
      * @param user The user to settle an outstanding amount to
      * @param amount The amount to settle
      */
-    function _payMarketDebt(address user, uint256 amount) internal virtual;
+    function _payOutstandingSettlementToUser(address user, uint256 amount) internal virtual;
 }

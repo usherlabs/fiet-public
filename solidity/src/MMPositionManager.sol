@@ -34,9 +34,12 @@ contract MMPositionManager is LiquidityRouter, VRLSpokeReceiver, ERC721 {
         address indexed mm, uint256 indexed tokenId, uint256 indexed positionIndex, uint256 amount0, uint256 amount1
     );
 
-    uint256 private nextTokenId = 1;
-    mapping(uint256 => PositionInfo[]) public nftToPositions;
     address public marketFactory;
+    uint256 private nextTokenId = 1;
+    // mapping(tokenId => mapping(positionIndex => PositionInfo)) public nftToPositions;
+    mapping(uint256 => mapping(uint256 => PositionInfo)) public nftToPositions;
+    // mapping(tokenId => numNFTPositionsCount) public nftToPositionCount;
+    mapping(uint256 => uint256) public nftToPositionCount;
 
     constructor(address _manager, address _oracleRegistry, address _verifier, address _marketFactory)
         LiquidityRouter(_manager)
@@ -81,12 +84,16 @@ contract MMPositionManager is LiquidityRouter, VRLSpokeReceiver, ERC721 {
             calculateTokenAmountsFromPositionParams(_poolKey, _liquidityParams);
 
         // calcualte the total LCC USD value and confirm it is less than the total signal usd value
-        (uint256 lcc0Price, uint256 lcc0Decimals) = lcc0.usdPrice();
-        (uint256 lcc1Price, uint256 lcc1Decimals) = lcc1.usdPrice();
+        address vtsManager = IMarketFactory(marketFactory).getCoreHook();
+        address marketOracleFactory = IVTSManager(vtsManager).getMarketVTSConfiguration(_poolKey.toId()).oracleFactory;
+
+        (uint256 lcc0Price, uint256 lcc0Decimals) = lcc0.usdPrice(marketOracleFactory);
+        (uint256 lcc1Price, uint256 lcc1Decimals) = lcc1.usdPrice(marketOracleFactory);
 
         uint256 totalLCCValue = ((lcc0Price * lcc0AmountToMint) / 10 ** lcc0Decimals)
             + ((lcc1Price * lcc1AmountToMint) / 10 ** lcc1Decimals);
 
+        // if the amount they want to commit is greater than the total signal usd value, revert
         if (totalLCCValue > totalSignalUsdValue) {
             revert InsufficientLiquidityInSignal(totalSignalUsdValue, totalLCCValue);
         }
@@ -100,8 +107,8 @@ contract MMPositionManager is LiquidityRouter, VRLSpokeReceiver, ERC721 {
         tokenId = _createCommitmentNFT(owner);
 
         // add liquidity to the pool using the token id and position index to generate a unique salt
-        uint256 positionIndex = nftToPositions[tokenId].length;
-        (PositionId positionId,) = _proxyModifyLiquidity(_poolKey, _liquidityParams, tokenId, positionIndex);
+        uint256 positionIndex = nftToPositionCount[tokenId];
+        (PositionId positionId,) = _callModifyLiquidity(_poolKey, _liquidityParams, tokenId, positionIndex);
 
         // use the position id to make the initial settlement of the underlying tokens to the proxy hook
         _settleBaseLCCPair(_poolKey, positionId, lcc0AmountToMint, lcc1AmountToMint);
@@ -109,18 +116,19 @@ contract MMPositionManager is LiquidityRouter, VRLSpokeReceiver, ERC721 {
         // Attach position to this nft
         // make sure to add the position only after modifying the liquidity
         // because the number of positions is used to generate the salt for the position
-        nftToPositions[tokenId].push(
-            PositionInfo({
-                positionId: positionId,
-                poolKey: _poolKey,
-                tickLower: _liquidityParams.tickLower,
-                tickUpper: _liquidityParams.tickUpper,
-                liquidity: _liquidityParams.liquidityDelta,
-                owner: owner,
-                issuer: issuer,
-                isActive: true
-            })
-        );
+        nftToPositions[tokenId][positionIndex] = PositionInfo({
+            owner: owner,
+            isActive: true,
+            issuer: issuer,
+            positionId: positionId,
+            poolId: _poolKey.toId(),
+            positionIndex: positionIndex,
+            tickLower: _liquidityParams.tickLower,
+            tickUpper: _liquidityParams.tickUpper,
+            liquidity: _liquidityParams.liquidityDelta
+        });
+        // increment the number of positions for the nft
+        nftToPositionCount[tokenId]++;
 
         emit SignalCommitted(msg.sender, tokenId, positionIndex, lcc0AmountToMint, lcc1AmountToMint);
     }
@@ -147,7 +155,7 @@ contract MMPositionManager is LiquidityRouter, VRLSpokeReceiver, ERC721 {
     //         });
 
     //         BalanceDelta balanceDelta =
-    //             _proxyModifyLiquidity(positionParams, -int128(positions[i].liquidity), tokenId, i);
+    //             _callModifyLiquidity(positionParams, -int128(positions[i].liquidity), tokenId, i);
 
     //         amount0Total += uint256(uint128(balanceDelta.amount0()));
     //         amount1Total += uint256(uint128(balanceDelta.amount1()));
@@ -172,11 +180,11 @@ contract MMPositionManager is LiquidityRouter, VRLSpokeReceiver, ERC721 {
         view
         returns (int256 totalLiquidity, uint256 activePositionCount)
     {
-        PositionInfo[] storage positions = nftToPositions[tokenId];
+        uint256 positionCount = nftToPositionCount[tokenId];
 
-        for (uint256 i = 0; i < positions.length; i++) {
-            if (positions[i].isActive) {
-                totalLiquidity += positions[i].liquidity;
+        for (uint256 i = 0; i < positionCount; i++) {
+            if (nftToPositions[tokenId][i].isActive) {
+                totalLiquidity += nftToPositions[tokenId][i].liquidity;
                 activePositionCount++;
             }
         }
@@ -217,7 +225,7 @@ contract MMPositionManager is LiquidityRouter, VRLSpokeReceiver, ERC721 {
      * @return positionId The position id
      * @return balanceDelta The balance delta
      */
-    function _proxyModifyLiquidity(
+    function _callModifyLiquidity(
         PoolKey memory poolKey,
         ModifyLiquidityParams memory liquidityParams,
         uint256 tokenId,
@@ -302,8 +310,8 @@ contract MMPositionManager is LiquidityRouter, VRLSpokeReceiver, ERC721 {
 
         // notify the proxy hook of the settled underlying tokens we just sent to it
         // specify token0, amount0 and token1, amount1 it is important to specify the token1 and token0 here because order is important to know
-        // and we can validate if the tokens are handled by the proxy hook in the `onSettleUnderlyingAssets` function
-        ProxyHook(proxyHook).onSettleUnderlyingAssets(
+        // and we can validate if the tokens are handled by the proxy hook in the `onMMSettleLiquidity` function
+        ProxyHook(proxyHook).onMMSettleLiquidity(
             lcc0.underlyingAsset(), lcc1.underlyingAsset(), underlyingLCC0AmountToSettle, underlyingLCC1AmountToSettle
         );
 
