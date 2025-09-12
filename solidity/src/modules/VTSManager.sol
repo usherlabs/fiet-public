@@ -39,26 +39,15 @@ abstract contract VTSManager is IVTSManager {
     error InvalidMarketVTSConfiguration(PoolId corePoolId);
 
     // Event to notify that the VTS configuration has been set/initialized for a core pool
-    event VTSConfigurationSet(
-        PoolId indexed corePoolId,
-        MarketVTSConfiguration indexed vtsConfiguration
-    );
+    event VTSConfigurationSet(PoolId indexed corePoolId, MarketVTSConfiguration indexed vtsConfiguration);
     // Event to notify that the assets have been settled on a position
-    event AssetsSettled(
-        PositionId indexed positionId,
-        uint256 amount0,
-        uint256 amount1
-    );
+    event AssetsSettled(PositionId indexed positionId, uint256 amount0, uint256 amount1);
 
     address private immutable marketFactory;
     address private immutable mmPositionManager;
     IPoolManager private immutable poolManager;
 
-    constructor(
-        address _poolManager,
-        address _marketFactory,
-        address _mmPositionManager
-    ) {
+    constructor(address _poolManager, address _marketFactory, address _mmPositionManager) {
         poolManager = IPoolManager(_poolManager);
         marketFactory = _marketFactory;
         mmPositionManager = _mmPositionManager;
@@ -69,10 +58,7 @@ abstract contract VTSManager is IVTSManager {
      * @param corePoolId The core pool ID
      * @param vtsConfiguration The VTS configuration
      */
-    function setMarketVTSConfiguration(
-        PoolId corePoolId,
-        MarketVTSConfiguration memory vtsConfiguration
-    ) public {
+    function setMarketVTSConfiguration(PoolId corePoolId, MarketVTSConfiguration memory vtsConfiguration) public {
         if (msg.sender != marketFactory) {
             revert InvalidCaller();
         }
@@ -87,9 +73,7 @@ abstract contract VTSManager is IVTSManager {
      * @param corePoolId The core pool ID
      * @return The VTS configuration
      */
-    function getMarketVTSConfiguration(
-        PoolId corePoolId
-    ) public view returns (MarketVTSConfiguration memory) {
+    function getMarketVTSConfiguration(PoolId corePoolId) public view returns (MarketVTSConfiguration memory) {
         return corePoolToVTSConfiguration[corePoolId];
     }
 
@@ -99,9 +83,7 @@ abstract contract VTSManager is IVTSManager {
      * @return totalOutflow0 Total outflow for currency0
      * @return totalOutflow1 Total outflow for currency1
      */
-    function getMarketOutflow(
-        PoolId corePoolId
-    ) public view returns (uint256 totalOutflow0, uint256 totalOutflow1) {
+    function getMarketOutflow(PoolId corePoolId) public view returns (uint256 totalOutflow0, uint256 totalOutflow1) {
         return marketOutflow[corePoolId].getTotalOutflow();
     }
 
@@ -130,18 +112,14 @@ abstract contract VTSManager is IVTSManager {
      * @return c0 The maximum potential commitment for token0
      * @return c1 The maximum potential commitment for token1
      */
-    function calculateMaxPotentialCommitment(
-        PoolKey memory corePoolKey,
-        uint256 amountToken0,
-        uint256 amountToken1
-    ) public view returns (uint256 c0, uint256 c1) {
+    function calculateMaxPotentialCommitment(PoolKey memory corePoolKey, uint256 amountToken0, uint256 amountToken1)
+        public
+        view
+        returns (uint256 c0, uint256 c1)
+    {
         // get the market oracle factory
-        uint256 lcc0Decimals = LiquidityCommitmentCertificate(
-            Currency.unwrap(corePoolKey.currency0)
-        ).decimals();
-        uint256 lcc1Decimals = LiquidityCommitmentCertificate(
-            Currency.unwrap(corePoolKey.currency1)
-        ).decimals();
+        uint256 lcc0Decimals = LiquidityCommitmentCertificate(Currency.unwrap(corePoolKey.currency0)).decimals();
+        uint256 lcc1Decimals = LiquidityCommitmentCertificate(Currency.unwrap(corePoolKey.currency1)).decimals();
 
         // The commitment formula is:
         // C(r) = ½(V₀ · C₀(r) + V₁ · C₁(r))
@@ -194,11 +172,7 @@ abstract contract VTSManager is IVTSManager {
         uint256 c0 = 0;
         uint256 c1 = 0;
         if (isLiquidityAddition) {
-            (c0, c1) = calculateMaxPotentialCommitment(
-                corePoolKey,
-                amount0,
-                amount1
-            );
+            (c0, c1) = calculateMaxPotentialCommitment(corePoolKey, amount0, amount1);
         }
         // update the max potential commitments for the tokens in the range of the position
         maxPotentialCommitment[positionId][0] = c0;
@@ -212,11 +186,7 @@ abstract contract VTSManager is IVTSManager {
      * @param amount0 The amount of token0 settled
      * @param amount1 The amount of token1 settled
      */
-    function onSettleAssets(
-        PositionId positionId,
-        uint256 amount0,
-        uint256 amount1
-    ) external {
+    function onSettleAssets(PositionId positionId, uint256 amount0, uint256 amount1) external {
         if (msg.sender != mmPositionManager) {
             revert InvalidCaller();
         }
@@ -235,10 +205,11 @@ abstract contract VTSManager is IVTSManager {
      * @return vtsCurrent0 The current vts for token0
      * @return vtsCurrent1 The current vts for token1
      */
-    function getVTSCurrent(
-        PoolId corePoolId,
-        PositionId positionId
-    ) public pure returns (uint256 vtsCurrent0, uint256 vtsCurrent1) {
+    function getVTSCurrent(PoolId corePoolId, PositionId positionId)
+        public
+        pure
+        returns (uint256 vtsCurrent0, uint256 vtsCurrent1)
+    {
         // MarketVTSConfiguration memory vtsConfiguration = corePoolToVTSConfiguration[corePoolId];
         corePoolId;
         positionId;

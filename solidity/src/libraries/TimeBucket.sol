@@ -34,19 +34,20 @@ library TimeBucketOutflowTrackerLibrary {
     uint256 public constant NUM_BUCKETS = 1024;
 
     error AlreadyInitialized();
+    error InvalidTimeWindow();
 
     /**
      * @notice Initializes a new rolling outflow tracker
      * @param tracker The tracker to initialize
      * @param timeWindow The time window duration in seconds
      */
-    function initialize(
-        TimeBucketOutflowTracker storage tracker,
-        uint256 timeWindow
-    ) internal {
+    function initialize(TimeBucketOutflowTracker storage tracker, uint256 timeWindow) internal {
         // confirm not initialized yet
         if (tracker.isInitialized) {
             revert AlreadyInitialized();
+        }
+        if (timeWindow == 0) {
+            revert InvalidTimeWindow();
         }
 
         tracker.bucketTimestamps = new uint256[](NUM_BUCKETS);
@@ -63,20 +64,15 @@ library TimeBucketOutflowTrackerLibrary {
      * @param outflow0 Outflow amount for currency0
      * @param outflow1 Outflow amount for currency1
      */
-    function recordOutflow(
-        TimeBucketOutflowTracker storage tracker,
-        uint256 outflow0,
-        uint256 outflow1
-    ) internal {
+    function recordOutflow(TimeBucketOutflowTracker storage tracker, uint256 outflow0, uint256 outflow1) internal {
         // unintitalized tracker
         // do nothing
-        if (tracker.timeWindow == 0) {
+        if (tracker.isInitialized == false) {
             return;
         }
 
         uint256 currentTime = block.timestamp;
-        uint256 bucketDuration = (tracker.timeWindow + NUM_BUCKETS - 1) /
-            NUM_BUCKETS;
+        uint256 bucketDuration = (tracker.timeWindow + NUM_BUCKETS - 1) / NUM_BUCKETS;
         if (bucketDuration == 0) bucketDuration = 1;
 
         uint256 currentBucket = (currentTime / bucketDuration) % NUM_BUCKETS;
@@ -99,9 +95,11 @@ library TimeBucketOutflowTrackerLibrary {
      * @return totalOutflow0 Total outflow for currency0
      * @return totalOutflow1 Total outflow for currency1
      */
-    function getTotalOutflow(
-        TimeBucketOutflowTracker storage tracker
-    ) internal view returns (uint256 totalOutflow0, uint256 totalOutflow1) {
+    function getTotalOutflow(TimeBucketOutflowTracker storage tracker)
+        internal
+        view
+        returns (uint256 totalOutflow0, uint256 totalOutflow1)
+    {
         uint256 total0 = 0;
         uint256 total1 = 0;
 
@@ -116,9 +114,7 @@ library TimeBucketOutflowTrackerLibrary {
             return (total0, total1);
         }
 
-        uint256 cutoffTime = block.timestamp >= tracker.timeWindow
-            ? block.timestamp - tracker.timeWindow
-            : 0;
+        uint256 cutoffTime = block.timestamp >= tracker.timeWindow ? block.timestamp - tracker.timeWindow : 0;
 
         // Scan all buckets; include only those within the window
         for (uint256 i = 0; i < NUM_BUCKETS; i++) {
