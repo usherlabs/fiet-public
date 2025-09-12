@@ -2,12 +2,12 @@
 pragma solidity ^0.8.0;
 
 import {Test, console} from "forge-std/Test.sol";
-import {RollingOutflowTracker, RollingOutflowTrackerLibrary} from "../src/libraries/RollingOutflow.sol";
+import {TimeBucketOutflowTracker, TimeBucketOutflowTrackerLibrary} from "../src/libraries/TimeBucket.sol";
 
-contract RollingOutflowTrackerTest is Test {
-    using RollingOutflowTrackerLibrary for RollingOutflowTracker;
+contract TimeBucketOutflowTrackerTest is Test {
+    using TimeBucketOutflowTrackerLibrary for TimeBucketOutflowTracker;
 
-    RollingOutflowTracker public tracker;
+    TimeBucketOutflowTracker public tracker;
 
     uint256 constant TIME_WINDOW = 300; // 5 minutes
 
