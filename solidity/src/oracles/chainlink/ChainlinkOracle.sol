@@ -40,6 +40,5 @@ contract ChainlinkOracle is IOracle {
         // ((quotePrice / (10 ^ quoteDecimals)) / (basePrice / (10 ^ baseDecimals))) * 10^decimals
         // simplifying the equation above we get
         price = (quotePrice * 10 ** (decimals + baseFeed.decimals() - quoteFeed.decimals())) / basePrice;
-        console.log("price", price);
     }
 }
