@@ -142,7 +142,8 @@ abstract contract VTSManager is IVTSManager {
         // - The price scaling cancels out, leaving just the 2x multiplier
 
         // This means the "maximum potential commitment" is simply 2x the deposited amounts
-        // The formula doesn't add complexity when using pool price as relative price
+        // provided the maximum potential commitment is expressed in units of token 1.
+        // thus the entire values are priced in token 1 and the price of the pool is used to derive the values
 
         // calculate Commitments and scale the amounts by the decimals of the LCC tokens
         c0 = ((2 * amountToken0) / (10 ** lcc0Decimals));
