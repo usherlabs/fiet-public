@@ -12,6 +12,8 @@ import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 import {IHookPausable} from "./interfaces/IHookPausable.sol";
 import {ProxyHook} from "./ProxyHook.sol";
 import {MarketDeployer} from "./MarketDeployer.sol";
+import {IVTSManager} from "./interfaces/IVTSManager.sol";
+import {MarketVTSConfiguration} from "./types/VTS.sol";
 
 /**
  * @title MarketFactory
@@ -21,10 +23,13 @@ import {MarketDeployer} from "./MarketDeployer.sol";
 contract MarketFactory is IMarketFactory, Ownable2Step {
     using PoolIdLibrary for PoolKey;
 
+    error InvalidVTSConfiguration();
+
     IPoolManager private immutable _poolManager;
     address public coreHook;
     address public marketDeployer;
     address public mmPositionManager;
+    address public oracleRegistry;
 
     // Mapping from underlying asset to LCC token
     mapping(address => address) public underlyingToLCC;
@@ -49,19 +54,20 @@ contract MarketFactory is IMarketFactory, Ownable2Step {
 
     mapping(PoolId => address[2]) private _corePoolToCurrencyPair;
 
-    constructor(address poolManagerAddr, address mmPositionManagerAddr, address[] memory _bounds) Ownable(msg.sender) {
+    constructor(address poolManagerAddr, address _oracleRegistry, address[] memory _bounds) Ownable(msg.sender) {
         if (poolManagerAddr == address(0)) {
             revert InvalidPoolParameters();
         }
         _poolManager = IPoolManager(poolManagerAddr);
-        mmPositionManager = mmPositionManagerAddr;
+        oracleRegistry = _oracleRegistry;
 
+        // Set Protocol bounds addresses
         bounds[address(this)] = true;
-        bounds[mmPositionManagerAddr] = true;
         bounds[poolManagerAddr] = true;
         for (uint256 i = 0; i < _bounds.length; i++) {
             bounds[_bounds[i]] = true;
         }
+        // Deploy MarketDeployer which would be used to deploy proxy hooks on behalf of the factory
         marketDeployer = address(new MarketDeployer());
     }
 
@@ -108,7 +114,8 @@ contract MarketFactory is IMarketFactory, Ownable2Step {
         uint24 corePoolFee,
         int24 tickSpacing,
         uint160 initialSqrtPriceX96,
-        bytes32 salt
+        bytes32 salt,
+        MarketVTSConfiguration calldata vtsConfiguration
     ) external onlyOwner returns (PoolId corePoolId, PoolId proxyPoolId) {
         // Deploy proxy hook
         address proxyHookAddress =
@@ -163,6 +170,9 @@ contract MarketFactory is IMarketFactory, Ownable2Step {
         ProxyHook proxyHookInstance = ProxyHook(proxyHookAddress);
         proxyHookInstance.setCorePoolKey(corePoolKey);
         proxyHookInstance.activate();
+
+        // Market was created then we call the VTS manager to store the configuration for the market
+        IVTSManager(coreHook).setMarketVTSConfiguration(corePoolId, vtsConfiguration);
 
         emit MarketCreated(
             corePoolId,

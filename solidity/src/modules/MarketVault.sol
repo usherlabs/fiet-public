@@ -2,7 +2,7 @@
 // it is typically tied to a proxy hook that is managing liquidity through a pool manager
 // outlines market vault functionality for the proxy hook
 // this is used to manage the liquidity of the vault and the underlying assets
-// it is also used to settle debts owed to the LCCs
+// it is also used to pay for pending settlements owed to the LCCs
 // it is also used to take and settle underlying assets to and from the LCCs
 
 pragma solidity ^0.8.20;
@@ -23,6 +23,7 @@ abstract contract MarketVault {
     error InsufficientLiquidity();
     error InsufficientBalance();
     error InvalidAmount();
+    error InvalidSender();
 
     IPoolManager public immutable vaultPoolManager;
 
@@ -34,12 +35,22 @@ abstract contract MarketVault {
     bytes32[] public knownMarkets; // List of known markets
     mapping(bytes32 => bool) public isMarketKnown; // Quick lookup for market existence
     mapping(bytes32 => uint256) public marketLiquidityReserves; // Market-specific underlying liquidity
-    uint256 public constant MAX_MARKETS_PER_USER = 50; // Reasonable limit for gas optimization
 
     // Events for market tracking
     event MarketRegistered(bytes32 indexed marketId);
     event MarketLiquidityAdded(bytes32 indexed marketId, uint256 amount);
     event MarketLiquidityUsed(bytes32 indexed marketId, uint256 amount);
+    event LiquidityAddedToVault(address indexed sender, address indexed from, address indexed currency, uint256 amount);
+    event LiquidityTakenFromVault(
+        address indexed sender, address indexed recipient, address indexed currency, uint256 amount
+    );
+
+    struct CallbackData {
+        Currency currency0;
+        Currency currency1;
+        uint256 amount1;
+        uint256 amount0;
+    }
 
     /**
      * @dev Take asset from the vault to the recipient address
@@ -67,6 +78,7 @@ abstract contract MarketVault {
             amount,
             false // mint` = `true` i.e. we're  claiming erc20
         );
+        emit LiquidityTakenFromVault(msg.sender, recipient, Currency.unwrap(uaCurrency), amount);
     }
 
     /**
@@ -117,6 +129,8 @@ abstract contract MarketVault {
             amount,
             true // `mint` = `true` i.e. we're minting claim tokens for the vault, equivalent to money we just deposited to the PM
         );
+
+        emit LiquidityAddedToVault(msg.sender, owner, Currency.unwrap(uaCurrency), amount);
     }
 
     /**
@@ -175,41 +189,72 @@ abstract contract MarketVault {
     }
 
     /**
-     * @dev Settle debts from the vault to the LCC
+     * @dev Fill Pending settlements to the LCC from the vault
      * @param corePoolKey The core pool key
      */
-    function _settleVaultDebtsToLCC(PoolKey memory corePoolKey) internal {
+    function _settleObligationsToLCC(PoolKey memory corePoolKey) internal {
         bytes32 marketId = PoolId.unwrap(corePoolKey.toId());
         // Get both LCC tokens for this market
         LiquidityCommitmentCertificate lccToken0 =
-            LiquidityCommitmentCertificate(Currency.unwrap(corePoolKey.currency0));
+            LiquidityCommitmentCertificate(payable(Currency.unwrap(corePoolKey.currency0)));
         LiquidityCommitmentCertificate lccToken1 =
-            LiquidityCommitmentCertificate(Currency.unwrap(corePoolKey.currency1));
+            LiquidityCommitmentCertificate(payable(Currency.unwrap(corePoolKey.currency1)));
 
-        // Try to settle debts for both tokens
-        _trySettleDebtsForLCC(lccToken0, marketId);
-        _trySettleDebtsForLCC(lccToken1, marketId);
+        // Try to fill pending settlements for both tokens
+        _tryFillPendingLCCSettlements(lccToken0, marketId);
+        _tryFillPendingLCCSettlements(lccToken1, marketId);
     }
 
     /**
-     * @dev Try to settle debts owed to the LCC if any
+     * @dev Try to fill pending settlements for the LCC if any
      * @param lccToken The LCC token
      * @param marketId The market ID
      */
-    function _trySettleDebtsForLCC(LiquidityCommitmentCertificate lccToken, bytes32 marketId) internal {
-        // Check how much debt this LCC has for this market
-        uint256 totalDebt = lccToken.getMarketTotalDebt(marketId);
-        if (totalDebt == 0) return; // No debt to settle
+    function _tryFillPendingLCCSettlements(LiquidityCommitmentCertificate lccToken, bytes32 marketId) internal {
+        // Check how much pending settlements this LCC has for this market
+        uint256 totalPendingSettlement = lccToken.getMarketTotalSettlement(marketId);
+        if (totalPendingSettlement == 0) return; // No pending settlements to fill
 
         // Check how much liquidity ProxyHook has available
         Currency uaCurrency = Currency.wrap(lccToken.underlyingAsset());
         uint256 availableLiquidity = vaultPoolManager.balanceOf(address(this), uaCurrency.toId());
 
         // Calculate how much we can settle
-        uint256 amountToSettle = Math.min(totalDebt, availableLiquidity);
+        uint256 amountToSettle = Math.min(totalPendingSettlement, availableLiquidity);
         if (amountToSettle == 0) return; // No liquidity available
 
-        // Move liquidity from PoolManager to LCC (this triggers debt processing)
+        // Move liquidity from PoolManager to LCC (this triggers settlement process)
         _takeFromVaultToLCC(lccToken, amountToSettle);
+    }
+
+    /**
+     * @dev Unlock callback function,  can only be called by the pool manager, it is called by the pool manager when we want to add liquidity to it
+     * @param data The data that was passed to the call to unlock
+     * @return The data that was passed to the call to unlock
+     */
+    function unlockCallback(bytes calldata data) external returns (bytes memory) {
+        if (msg.sender != address(vaultPoolManager)) {
+            revert InvalidSender();
+        }
+        CallbackData memory callbackData = abi.decode(data, (CallbackData));
+
+        // Settle `amount` of each currency from the the vault
+        _settleAssetToVault(callbackData.currency0, address(this), callbackData.amount0);
+        _settleAssetToVault(callbackData.currency1, address(this), callbackData.amount1);
+
+        return "";
+    }
+
+    /**
+     * @dev Manually add liquidity to the vault by first unlocking the pool manager then settling the removed funds
+     * @param currency0 The currency 0
+     * @param currency1 The currency 1
+     * @param amount0 The amount of currency 0
+     * @param amount1 The amount of currency 1
+     */
+    function _addLiquidityToVault(address currency0, address currency1, uint256 amount0, uint256 amount1) internal {
+        vaultPoolManager.unlock(
+            abi.encode(CallbackData(Currency.wrap(currency0), Currency.wrap(currency1), amount0, amount1))
+        );
     }
 }

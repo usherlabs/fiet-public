@@ -38,14 +38,14 @@ contract ProxyHookTest is MarketTestBase {
     function setUp() public {
         _setupMarket();
 
-        lcc0 = LiquidityCommitmentCertificate(Currency.unwrap(_currency2));
-        lcc1 = LiquidityCommitmentCertificate(Currency.unwrap(_currency3));
+        lcc0 = LiquidityCommitmentCertificate(payable(Currency.unwrap(_currency2)));
+        lcc1 = LiquidityCommitmentCertificate(payable(Currency.unwrap(_currency3)));
     }
 
     function test_cannotModifyLiquidityOfProxyHook() public {
         vm.prank(address(manager));
         vm.expectRevert(ProxyHook.AddLiquidityThroughHookNotAllowed.selector);
-        hook.beforeAddLiquidity(
+        proxyHook.beforeAddLiquidity(
             address(1),
             proxyPoolKey,
             ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1000e18, salt: bytes32(0)}),
@@ -97,8 +97,8 @@ contract ProxyHookTest is MarketTestBase {
         uint256 selfBalanceOfTokenABefore = proxyPoolKey.currency0.balanceOfSelf();
         uint256 selfBalanceOfTokenBBefore = proxyPoolKey.currency1.balanceOfSelf();
         // proxy balance of tokens
-        uint256 balanceOfTokenA = hook.getAvailableLiquidity(Currency.unwrap(proxyPoolKey.currency0));
-        uint256 balanceOfTokenB = hook.getAvailableLiquidity(Currency.unwrap(proxyPoolKey.currency1));
+        uint256 balanceOfTokenA = proxyHook.getAvailableLiquidity(Currency.unwrap(proxyPoolKey.currency0));
+        uint256 balanceOfTokenB = proxyHook.getAvailableLiquidity(Currency.unwrap(proxyPoolKey.currency1));
         console.log("balanceOfTokenA", balanceOfTokenA);
         console.log("balanceOfTokenB", balanceOfTokenB);
 
@@ -169,9 +169,9 @@ contract ProxyHookTest is MarketTestBase {
         // get balances of underlying token of the pool manager and lcc contracts
         // get the underlying asset of the lcc token A
         address underlyingAssetLCC0 =
-            LiquidityCommitmentCertificate(Currency.unwrap(corePoolKey.currency0)).underlyingAsset();
+            LiquidityCommitmentCertificate(payable(Currency.unwrap(corePoolKey.currency0))).underlyingAsset();
         address underlyingAssetLCC1 =
-            LiquidityCommitmentCertificate(Currency.unwrap(corePoolKey.currency1)).underlyingAsset();
+            LiquidityCommitmentCertificate(payable(Currency.unwrap(corePoolKey.currency1))).underlyingAsset();
 
         console.log("underlyingAsset-LCC0", underlyingAssetLCC0);
         console.log("underlyingAsset-LCC1", underlyingAssetLCC1);
@@ -312,14 +312,14 @@ contract ProxyHookTest is MarketTestBase {
             ZERO_BYTES
         );
 
-        uint256 ua0Balance = hook.getAvailableLiquidity(Currency.unwrap(proxyPoolKey.currency0));
+        uint256 ua0Balance = proxyHook.getAvailableLiquidity(Currency.unwrap(proxyPoolKey.currency0));
         console.log("ua0Balance", ua0Balance);
         console.log("proxyPoolKey.currency0", Currency.unwrap(proxyPoolKey.currency0));
-        uint256 ua1Balance = hook.getAvailableLiquidity(Currency.unwrap(proxyPoolKey.currency1));
+        uint256 ua1Balance = proxyHook.getAvailableLiquidity(Currency.unwrap(proxyPoolKey.currency1));
         console.log("ua1Balance", ua1Balance);
         console.log("proxyPoolKey.currency1", Currency.unwrap(proxyPoolKey.currency1));
 
-        uint256 ua2balance = hook.getAvailableLiquidity(Currency.unwrap(proxyPoolKey.currency1));
+        uint256 ua2balance = proxyHook.getAvailableLiquidity(Currency.unwrap(proxyPoolKey.currency1));
         console.log("ua2balance", ua2balance);
         PoolSwapTest.TestSettings memory settings =
             PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false});
@@ -366,7 +366,6 @@ contract ProxyHookTest is MarketTestBase {
         console.log("marketId");
         console.logBytes32(marketId);
 
-        address proxyHook = address(hook);
         uint256 mockAvailableLiquidity = 50;
 
         // use  mock call to make poolmanager balance of currency1 return a mock value
@@ -382,14 +381,14 @@ contract ProxyHookTest is MarketTestBase {
             abi.encode(mockAvailableLiquidity) // Return 0 liquidity
         );
 
-        uint256 ua0Balance = hook.getAvailableLiquidity(Currency.unwrap(proxyPoolKey.currency0));
+        uint256 ua0Balance = proxyHook.getAvailableLiquidity(Currency.unwrap(proxyPoolKey.currency0));
         console.log("ua0Balance", ua0Balance);
         console.log("proxyPoolKey.currency0", Currency.unwrap(proxyPoolKey.currency0));
-        uint256 ua1Balance = hook.getAvailableLiquidity(Currency.unwrap(proxyPoolKey.currency1));
+        uint256 ua1Balance = proxyHook.getAvailableLiquidity(Currency.unwrap(proxyPoolKey.currency1));
         console.log("ua1Balance", ua1Balance);
         console.log("proxyPoolKey.currency1", Currency.unwrap(proxyPoolKey.currency1));
 
-        uint256 ua2balance = hook.getAvailableLiquidity(Currency.unwrap(proxyPoolKey.currency1));
+        uint256 ua2balance = proxyHook.getAvailableLiquidity(Currency.unwrap(proxyPoolKey.currency1));
         console.log("ua2balance", ua2balance);
         PoolSwapTest.TestSettings memory settings =
             PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false});
@@ -435,50 +434,48 @@ contract ProxyHookTest is MarketTestBase {
         console.log("diff0", int256(selfBalanceOfTokenAAfter) - int256(selfBalanceOfTokenABefore));
         console.log("diff1", int256(selfBalanceOfTokenBAfter) - int256(selfBalanceOfTokenBBefore));
 
-        // check debt queue for lcc_recipient in LCC token
+        // check settlement queue for lcc_recipient in LCC token
         LiquidityCommitmentCertificate lccOut = lcc1.underlyingAsset() == Currency.unwrap(_currency1) ? lcc1 : lcc0;
 
-        // validate user got lcc tokens and a debt from this market
+        // validate user got lcc tokens and a pending settlement from this market
         uint256 deficit = expectedOutput - mockAvailableLiquidity;
         console.log("deficit", deficit);
-        assertEq(lccOut.marketUserDebt(marketId, lcc_recipient), deficit);
-        assertEq(lccOut.marketTotalDebt(marketId), deficit);
+        assertEq(lccOut.marketUserSettlement(marketId, lcc_recipient), deficit);
+        assertEq(lccOut.marketTotalSettlement(marketId), deficit);
         assertEq(lccOut.balanceOf(lcc_recipient), deficit);
 
         assertEq(_currency1.balanceOf(lcc_recipient), 0);
 
-        // add some liquidity to the core pool to attempt to clear the debt
-        // add some liquidity to the core pool
+        // add some liquidity to the core pool to attempt to clear pending settlements
         modifyLiquidityRouter.modifyLiquidity(
             corePoolKey,
             ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e18, salt: bytes32(0)}),
             ZERO_BYTES
         );
 
-        assertEq(lccOut.marketUserDebt(marketId, lcc_recipient), 0);
-        assertEq(lccOut.marketTotalDebt(marketId), 0);
+        assertEq(lccOut.marketUserSettlement(marketId, lcc_recipient), 0);
+        assertEq(lccOut.marketTotalSettlement(marketId), 0);
         assertEq(lccOut.balanceOf(lcc_recipient), 0);
         //confirm recippient got ua
         assertEq(_currency1.balanceOf(lcc_recipient), deficit);
 
-        // console.log("debtQueueBalance", debtQueueBalance);
-        // console.log("debtQueueBalance", debtQueueBalance);
-        // assertEq(debtQueueBalance, swapAmount);
-
-        // assertEq(selfBalanceOfTokenBBefore - selfBalanceOfTokenBAfter, swapAmount);
-        // assertGt(selfBalanceOfTokenAAfter, selfBalanceOfTokenABefore);
         vm.clearMockedCalls();
     }
 
     // Additional tests
 
     function test_beforeInitialize_revertIfNotFactory() public {
-        PoolKey memory testKey =
-            PoolKey({currency0: _currency0, currency1: _currency1, fee: 3000, tickSpacing: 60, hooks: IHooks(hook)});
+        PoolKey memory testKey = PoolKey({
+            currency0: _currency0,
+            currency1: _currency1,
+            fee: 3000,
+            tickSpacing: 60,
+            hooks: IHooks(proxyHook)
+        });
 
         vm.prank(address(manager));
         vm.expectRevert(ProxyHook.InvalidInitialiser.selector);
-        hook.beforeInitialize(address(1), testKey, SQRT_PRICE_1_1);
+        proxyHook.beforeInitialize(address(1), testKey, SQRT_PRICE_1_1);
     }
 
     // More tests can be added for onDirectLP, unlockCallback, etc.

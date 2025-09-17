@@ -29,6 +29,7 @@ import {HookFlags} from "../../src/libraries/HookFlags.sol";
 import {MMPositionManager} from "../../src/MMPositionManager.sol";
 import {StubSpokeVerifier} from "../../src/modules/StubSpokeVerifier.sol";
 import {ICSpokeVerifier} from "../../src/modules/ICSpokeVerifier.sol";
+import {OracleRegistry} from "../../src/OracleRegistry.sol";
 
 abstract contract MarketTestBase is Test, Deployers {
     using PoolIdLibrary for PoolId;
@@ -37,7 +38,7 @@ abstract contract MarketTestBase is Test, Deployers {
     // Provide initial liquidity to core pool
     uint256 initialLiquidity = 10000e18;
 
-    ProxyHook hook;
+    ProxyHook proxyHook;
     Currency internal _currency0;
     Currency internal _currency1;
     Currency internal _currency2;
@@ -52,9 +53,10 @@ abstract contract MarketTestBase is Test, Deployers {
     address marketFactory;
     address coreHookAddress;
 
+    OracleRegistry oracleRegistry;
     ICSpokeVerifier icVerifier;
     StubSpokeVerifier stubSpokeVerifier;
-    MMPositionManager mmPositionManager;
+    address mmPositionManager;
 
     function approveLCCForMarketUse(LiquidityCommitmentCertificate token) internal returns (Currency currency) {
         address underlyingAsset = token.underlyingAsset();
@@ -124,22 +126,27 @@ abstract contract MarketTestBase is Test, Deployers {
 
     function _deployFreshManagerAndRouters() internal {
         deployFreshManagerAndRouters();
+        marketFactory = makeAddr("marketFactory");
+
         // deploy custom router and verifier
         icVerifier = new ICSpokeVerifier(makeAddr("icCanister"));
         stubSpokeVerifier = new StubSpokeVerifier();
-        mmPositionManager = new MMPositionManager(address(manager), address(stubSpokeVerifier));
+        oracleRegistry = new OracleRegistry();
+        mmPositionManager = address(
+            new MMPositionManager(
+                address(manager), address(oracleRegistry), address(stubSpokeVerifier), address(marketFactory)
+            )
+        );
     }
 
     function _setupMarket() internal {
         _deployFreshManagerAndRouters();
-        marketFactory = makeAddr("marketFactory");
-
         // Compute core hook address
         uint160 coreFlags = HookFlags.CORE_HOOK_FLAGS;
         coreHookAddress = address(coreFlags);
 
         // Deploy CoreHook
-        deployCodeTo("CoreHook.sol", abi.encode(manager, marketFactory), coreHookAddress);
+        deployCodeTo("CoreHook.sol", abi.encode(manager, marketFactory, mmPositionManager), coreHookAddress);
 
         // Compute proxy hook address
         uint160 proxyFlags = HookFlags.PROXY_HOOK_FLAGS;
@@ -147,7 +154,7 @@ abstract contract MarketTestBase is Test, Deployers {
 
         // Deploy ProxyHook
         deployCodeTo("ProxyHook.sol", abi.encode(manager, marketFactory), proxyHookAddress);
-        hook = ProxyHook(proxyHookAddress);
+        proxyHook = ProxyHook(proxyHookAddress);
 
         // Mock factory calls
         vm.mockCall(
@@ -168,7 +175,7 @@ abstract contract MarketTestBase is Test, Deployers {
         );
         // Activate proxy hooks
         vm.prank(marketFactory);
-        hook.activate();
+        proxyHook.activate();
 
         deployCurrencies(proxyHookAddress);
         deployCorePool();
@@ -185,7 +192,7 @@ abstract contract MarketTestBase is Test, Deployers {
 
         // Set core pool key against the proxy pool key id.
         vm.prank(marketFactory);
-        hook.setCorePoolKey(corePoolKey);
+        proxyHook.setCorePoolKey(corePoolKey);
 
         LiquidityCommitmentCertificate lcc0 = LiquidityCommitmentCertificate(Currency.unwrap(_currency2));
         LiquidityCommitmentCertificate lcc1 = LiquidityCommitmentCertificate(Currency.unwrap(_currency3));

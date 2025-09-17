@@ -6,7 +6,7 @@ import {IERC20Metadata} from "openzeppelin-contracts/contracts/token/ERC20/exten
 import {SafeTransferLib} from "solmate/utils/SafeTransferLib.sol";
 import {ERC20} from "solmate/tokens/ERC20.sol";
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
-import {MarketLiquidityDebt} from "./modules/MarketLiquidityDebt.sol";
+import {MarketLiquidity} from "./modules/MarketLiquidity.sol";
 import {IExttload} from "v4-periphery/lib/v4-core/src/interfaces/IExttload.sol";
 import {TransientSlots} from "./libraries/TransientSlots.sol";
 import {PoolId} from "v4-periphery/lib/v4-core/src/types/PoolId.sol";
@@ -15,8 +15,10 @@ import {MarketVault} from "./modules/MarketVault.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {IOracle} from "./interfaces/IOracle.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {IOracleRegistry} from "./interfaces/IOracleRegistry.sol";
+import {console} from "forge-std/console.sol";
 
-contract LiquidityCommitmentCertificate is ERC20, MarketLiquidityDebt, Ownable {
+contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable {
     using SafeTransferLib for ERC20;
 
     error SenderNotIssuer(address sender);
@@ -25,9 +27,7 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidityDebt, Ownable {
     error InvalidAmount();
     error InvalidMarketFactory();
     error InsufficientWrappedLiquidity(uint256 requested, uint256 available);
-    error InvalidPriceFeed();
 
-    address public oracleAddress;
     address public immutable underlyingAsset;
     address public immutable marketFactory;
     bytes32 public immutable defaultMarket = bytes32(0);
@@ -147,10 +147,11 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidityDebt, Ownable {
             bytes32 marketId = PoolId.unwrap(IProxyHook(issuer).getCorePoolId());
             // mint deficit to the recipient
             _mint(deficitRecipient, deficitAmount);
-            // we need to track the acquisition of the deficit amount to the market so unwrap knows where to unwrap from if they swap with their tokens and we need to clear the debt
+            // we need to track the acquisition of the deficit amount to the market so unwrap knows where to unwrap
+            // from if they swap with their tokens and we need to clear the settlement queue
             _trackMarketAcquisition(deficitRecipient, marketId, amount);
-            // add the deficit to the market debt queue for immediate settlement when liquidity is available
-            _addMarketDebtRequest(marketId, deficitRecipient, deficitAmount);
+            // add the deficit to the market settlement queue for immediate payment of underlying tokens when liquidity is available
+            _addToSettlementQueue(marketId, deficitRecipient, deficitAmount);
         }
 
         return (amountToCancel, deficitAmount);
@@ -176,12 +177,12 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidityDebt, Ownable {
     }
 
     function _confirmTake(bytes32 marketId, uint256 amount) internal {
-        // Process the debt queue for this market
-        // burn to indicate that we want to burn the tokens for the debt settlement
-        uint256 processedAmount = _processMarketDebtQueue(marketId, amount, true);
+        // Process the settlement queue for this market
+        // burn = true to indicate that we want to burn the tokens and transfer underlying assets equivalent to amountt that was settled
+        uint256 processedAmount = _processSettlementQueue(marketId, amount, true);
         uint256 remainingAmount = amount - processedAmount;
 
-        // if after settling debts there is still some liquidity left, then store it in the market reserves
+        // if after filling the settlement queue there is still some liquidity left, then store it in the market reserves
         if (remainingAmount > 0) {
             // Track market specific  underlying asset supply
             _trackMarketLiquidity(marketId, remainingAmount);
@@ -225,10 +226,10 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidityDebt, Ownable {
         // Use market liquidity
         uint256 amountAvailable = _useMarketLiquidity(marketId, amount);
 
-        // Add remainder to market-specific debt queue
+        // Add remainder to market-specific settlement queue
         uint256 deficit = amount - amountAvailable;
         if (deficit > 0) {
-            _addMarketDebtRequest(marketId, to, deficit);
+            _addToSettlementQueue(marketId, to, deficit);
         }
 
         // Update user's market balance
@@ -243,9 +244,9 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidityDebt, Ownable {
      * @param amount The amount to unwrap from general pool
      * @return The amount actually unwrapped
      */
-    function _useLqiuidityFromWrappedPool(uint256 amount) internal view returns (uint256) {
+    function _useLiquidityFromWrappedPool(uint256 amount) internal view returns (uint256) {
         // Wrapped LCC should always be fully backed by uaSupply
-        // No debt queue needed ? - this should always succeed
+        // No settlement queue needed ? - this should always succeed
 
         // get the UA supply that was wrapped by sutracting the total supply from the sum of all market balances
         uint256 totalMarketBalances = _getTotalMarketBalances();
@@ -270,11 +271,11 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidityDebt, Ownable {
         uint256 totalAmountUnwrapped = 0;
 
         bytes32[] memory userMarkets = _getUserMarkets(from);
-        uint256 userMarketsTotalDebt = _getUserTotalMarketBalance(from);
-        uint256 userWrappedBalance = balanceOf[from] - userMarketsTotalDebt;
+        uint256 userMarketsTotalBalance = _getUserTotalMarketBalance(from);
+        uint256 userWrappedBalance = balanceOf[from] - userMarketsTotalBalance;
         // if the user has wrapped balance, then we need to unwrap from the market first
         if (userWrappedBalance > 0) {
-            uint256 amountUnwrapped = _useLqiuidityFromWrappedPool(amount);
+            uint256 amountUnwrapped = _useLiquidityFromWrappedPool(amount);
             totalAmountUnwrapped += amountUnwrapped;
         }
 
@@ -300,7 +301,7 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidityDebt, Ownable {
         // burn the amount that was unwrapped
         // and transfer the underlying assets to the user
         if (totalAmountUnwrapped > 0) {
-            _payMarketDebt(from, totalAmountUnwrapped);
+            _payOutstandingSettlementToUser(from, totalAmountUnwrapped);
         }
     }
 
@@ -324,16 +325,16 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidityDebt, Ownable {
         SafeTransferLib.safeTransfer(ERC20(underlyingAsset), user, amount);
     }
 
-    // PAy a debt to a user and burn their underlying tokens
-    function _payMarketDebt(address user, uint256 amount) internal override {
+    // Pay an outstanding settlement to a user and burn their underlying tokens
+    function _payOutstandingSettlementToUser(address user, uint256 amount) internal override {
         _burn(user, amount);
         _transferUnderlyingAssets(user, amount);
     }
 
     // On transfer hook
     function onTransfer(address from, address to, uint256 amount) internal onlyProtocolTransfer(msg.sender, to) {
-        // clear any debt in all markets to be paid to the sender initiating the transfer
-        _annulUserDebtBeforeTransfer(from, amount);
+        // clear any outstanding settlement in all markets to be paid to the sender initiating the transfer
+        _annulUserSettlementBeforeTransfer(from, amount);
 
         // process the market tracing logic to find out which market the token transfer came from
         _processMarketTracing(to, amount);
@@ -349,12 +350,26 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidityDebt, Ownable {
         return super.transferFrom(from, to, amount);
     }
 
-    function setOracleAddress(address _oracleAddress) external onlyOwner {
-        oracleAddress = _oracleAddress;
-    }
+    /**
+     * @dev Get the price of the underlying asset
+     * @return The price of the asset
+     * @return The decimals of the asset
+     */
+    function usdPrice(address marketOracleFactory) public view returns (uint256, uint256) {
+        string memory quoteTicker = "USD";
+        address oracleRegistry = IMarketFactory(marketFactory).oracleRegistry();
+        // get the ticker of the underlying asset
+        string memory ticker = IERC20Metadata(underlyingAsset).symbol();
+        // asspend /quote to it eg /USDT
+        string memory pricePair = string.concat(ticker, "/", quoteTicker);
+        // get the price of the asset using oracle
+        address oracle = IOracleRegistry(oracleRegistry).getOracle(pricePair, marketOracleFactory);
 
-    function getOraclePrice() external view returns (uint256) {
-        return IOracle(oracleAddress).price();
+        // get the price of the asset
+        uint256 assetPrice = IOracle(oracle).getPrice();
+        uint256 decimals = IOracle(oracle).decimals();
+
+        return (assetPrice, decimals);
     }
 
     /**
@@ -376,16 +391,16 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidityDebt, Ownable {
     }
 
     /**
-     * @dev Annul the user's debt partially or completely
-     * @param fromUser The user to annul the debt for
+     * @dev Annul the user's pending settlements partially or completely
+     * @param fromUser The user to annul the pending settlements for
      * @param amountToTransfer The amount to transfer
      */
-    function _annulUserDebtBeforeTransfer(address fromUser, uint256 amountToTransfer) internal {
+    function _annulUserSettlementBeforeTransfer(address fromUser, uint256 amountToTransfer) internal {
         // get the markets the user has LCC from
         // get their balance
-        // get their total market debt
-        // max amount they can transfer  is balance - debt
-        // if they try to transfer more than that, then we need to annull the equivalent debt
+        // get their total market pending settlements
+        // max amount they can transfer  is balance - sum pending settlements
+        // if they try to transfer more than that, then we need to annull the equivalent amount of pending settlements
         uint256 userBalance = balanceOf[fromUser];
 
         // if from user is protocol bound then return
@@ -401,18 +416,18 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidityDebt, Ownable {
             revert InvalidAmount();
         }
 
-        // get the user's total debt across all markets
-        uint256 userTotalDebt = _getUserTotalDebt(fromUser);
-        if (userTotalDebt == 0) {
+        // get the user's total pending settlements across all markets
+        uint256 userPendingSettlement = _getUserPendingSettlement(fromUser);
+        if (userPendingSettlement == 0) {
             return;
         }
 
-        uint256 maxAmountCanTransfer = userBalance - userTotalDebt;
+        uint256 maxAmountCanTransfer = userBalance - userPendingSettlement;
 
         if (amountToTransfer > maxAmountCanTransfer) {
-            uint256 amountToAnnull = amountToTransfer - maxAmountCanTransfer;
-            // annull the equivalent debt
-            _processAllMarketDebtQueue(fromUser, amountToAnnull, false);
+            uint256 amountToAnnul = amountToTransfer - maxAmountCanTransfer;
+            // annull the equivalent pending settlements
+            _processAllMarketSettlementQueue(fromUser, amountToAnnul, false);
         }
     }
 
@@ -447,23 +462,23 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidityDebt, Ownable {
     }
 
     /**
-     * @dev Process all the market debt queues for a user partially or completely clearing out their debt
-     * @param fromUser The user to process the debt queues for
-     * @param debtToClear The total debt to clear
-     * @param burnTokens Whether to burn the equivalent LCC tokens for the debt settled
+     * @dev Process all the market settlement queues for a user partially or completely clearing out their pending settlements
+     * @param fromUser The user who's settlements are being cleared
+     * @param amountToClear The amount of pending settlements to clear
+     * @param burnTokens If to burn the equivalent LCC tokens and Transfer underlying assets for the pending settlements settled
      */
-    function _processAllMarketDebtQueue(address fromUser, uint256 debtToClear, bool burnTokens) internal {
-        uint256 totalDebtCleared = 0;
+    function _processAllMarketSettlementQueue(address fromUser, uint256 amountToClear, bool burnTokens) internal {
+        uint256 totalAmountCleared = 0;
         // get the markets the user has LCC from
         bytes32[] memory userMarkets = _getUserMarkets(fromUser);
         for (uint256 i = 0; i < userMarkets.length; i++) {
             bytes32 marketId = userMarkets[i];
 
-            // Check if we've already cleared enough debt
-            if (totalDebtCleared == debtToClear) break;
+            // Check if we've already cleared enough pending settlements
+            if (totalAmountCleared == amountToClear) break;
 
-            uint256 cleared = _processMarketDebtQueue(marketId, debtToClear, burnTokens);
-            totalDebtCleared += cleared;
+            uint256 cleared = _processSettlementQueue(marketId, amountToClear, burnTokens);
+            totalAmountCleared += cleared;
         }
     }
 

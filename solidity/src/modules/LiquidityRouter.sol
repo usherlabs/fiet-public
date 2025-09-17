@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// This contract is inherited by the MArket Maker position manager contract which acts as a liquidity router for the market maker positions
+// This contract is inherited by the Market Maker position manager contract which acts as a liquidity router for the market maker positions
 pragma solidity ^0.8.0;
 
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
@@ -21,10 +21,16 @@ import {TransientStateLibrary} from "v4-periphery/lib/v4-core/src/libraries/Tran
 import {TickMath} from "v4-periphery/lib/v4-core/src/libraries/TickMath.sol";
 import {LiquidityAmounts} from "v4-periphery/lib/v4-core/test/utils/LiquidityAmounts.sol";
 import {MarketMaker} from "../libraries/MarketMaker.sol";
+import {LiquiditySignal} from "../types/Position.sol";
+import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
 import {FixedPoint96} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint96.sol";
 import {console} from "forge-std/console.sol";
+import {SqrtPriceMath} from "v4-periphery/lib/v4-core/src/libraries/SqrtPriceMath.sol";
+import {toBalanceDelta} from "v4-periphery/lib/v4-core/src/types/BalanceDelta.sol";
+import {LiquidityUtils} from "../libraries/LiquidityUtils.sol";
 
 contract LiquidityRouter is IUnlockCallback {
+    using SafeCast for *;
     using CurrencySettler for Currency;
     using Hooks for IHooks;
     using LPFeeLibrary for uint24;
@@ -46,60 +52,53 @@ contract LiquidityRouter is IUnlockCallback {
         bool takeClaims;
     }
 
-    /**
-     * @dev This function is used to calculate the amounts of underlying liquidity needed for token0 and token1
-     *      in order to create a position with the specified parameters. This is used to calculate the amount of liquidity to add to the pool
-     *      for a position to be created.
-     * @param positionParams The parameters of the position
-     * @param totalSignalUsdValue The total signal USD value
-     * @return lccAmount0 The amount of underlying liquidity for token0 to create the position with the specified parameters
-     * @return lccAmount1 The amount of underlying liquidity for token1 to create the position with the specified parameters
-     * @return liquidityDelta The amount of liquidity to add to the pool
-     */
-    function calculateLCCAmountsDeltaFromUSD(
-        MarketMaker.PositionParams calldata positionParams,
-        uint256 totalSignalUsdValue
-    ) public view returns (uint256 lccAmount0, uint256 lccAmount1, uint128 liquidityDelta) {
-        (, int24 currentTick,,) = manager.getSlot0(positionParams.corePoolKey.toId());
+    /// calculate the deposit amounts from the position params
+    function calculateTokenAmountsFromPositionParams(
+        PoolKey memory poolKey,
+        ModifyLiquidityParams memory positionParams
+    ) public view returns (uint256 depositAmount0, uint256 depositAmount1) {
+        (uint160 sqrtPriceX96, int24 currentTick,,) = manager.getSlot0(poolKey.toId());
+        BalanceDelta delta;
 
-        uint160 sqrtPriceX96 = TickMath.getSqrtPriceAtTick(currentTick);
-        uint160 sqrtPriceAtTickLower = TickMath.getSqrtPriceAtTick(positionParams.tickLower);
-        uint160 sqrtPriceAtTickUpper = TickMath.getSqrtPriceAtTick(positionParams.tickUpper);
+        if (currentTick < positionParams.tickLower) {
+            // current tick is below the passed range; liquidity can only become in range by crossing from left to
+            // right, when we'll need _more_ currency0 (it's becoming more valuable) so user must provide it
+            delta = toBalanceDelta(
+                SqrtPriceMath.getAmount0Delta(
+                    TickMath.getSqrtPriceAtTick(positionParams.tickLower),
+                    TickMath.getSqrtPriceAtTick(positionParams.tickUpper),
+                    positionParams.liquidityDelta.toInt128()
+                ).toInt128(),
+                0
+            );
+        } else if (currentTick < positionParams.tickUpper) {
+            delta = toBalanceDelta(
+                SqrtPriceMath.getAmount0Delta(
+                    sqrtPriceX96,
+                    TickMath.getSqrtPriceAtTick(positionParams.tickUpper),
+                    positionParams.liquidityDelta.toInt128()
+                ).toInt128(),
+                SqrtPriceMath.getAmount1Delta(
+                    TickMath.getSqrtPriceAtTick(positionParams.tickLower),
+                    sqrtPriceX96,
+                    positionParams.liquidityDelta.toInt128()
+                ).toInt128()
+            );
+        } else {
+            // current tick is above the passed range; liquidity can only become in range by crossing from right to
+            // left, when we'll need _more_ currency1 (it's becoming more valuable) so user must provide it
+            delta = toBalanceDelta(
+                0,
+                SqrtPriceMath.getAmount1Delta(
+                    TickMath.getSqrtPriceAtTick(positionParams.tickLower),
+                    TickMath.getSqrtPriceAtTick(positionParams.tickUpper),
+                    positionParams.liquidityDelta.toInt128()
+                ).toInt128()
+            );
+        }
 
-        // standard decimals for oracle pricing
-        uint256 oracleDecimals = 1e8;
-
-        // pull oracles for both tokens (priced in USD, 8 decimals)
-        LiquidityCommitmentCertificate lcc0 =
-            LiquidityCommitmentCertificate(Currency.unwrap(positionParams.corePoolKey.currency0));
-        LiquidityCommitmentCertificate lcc1 =
-            LiquidityCommitmentCertificate(Currency.unwrap(positionParams.corePoolKey.currency1));
-
-        uint256 price0 = lcc0.getOraclePrice(); // USD price of token0 (8 decimals)
-        uint256 price1 = lcc1.getOraclePrice(); // USD price of token1 (8 decimals)
-
-        // split budget equally between token0 and token1
-        uint256 priceRatio = (uint256(sqrtPriceX96) * uint256(sqrtPriceX96)) / FixedPoint96.Q96;
-
-        uint256 usdForToken0 = (totalSignalUsdValue * priceRatio) / (priceRatio + FixedPoint96.Q96);
-        uint256 usdForToken1 = totalSignalUsdValue - usdForToken0;
-
-        // convert USD budget → token0 amount
-        lccAmount0 = (usdForToken0 * oracleDecimals) / price0;
-        lccAmount1 = (usdForToken1 * oracleDecimals) / price1;
-
-        // get max liquidity delta both amounts can add to the pool
-        liquidityDelta = LiquidityAmounts.getLiquidityForAmounts(
-            sqrtPriceX96, sqrtPriceAtTickLower, sqrtPriceAtTickUpper, lccAmount0, lccAmount1
-        );
-
-        // get actual amounts from liquidity delta we got
-        (lccAmount0, lccAmount1) = LiquidityAmounts.getAmountsForLiquidity(
-            sqrtPriceX96, sqrtPriceAtTickLower, sqrtPriceAtTickUpper, liquidityDelta
-        );
-
-        // when adding liquidity to the pool, add 1 to the amounts returned by this library
-        return (lccAmount0 + 1, lccAmount1 + 1, liquidityDelta);
+        return
+            (LiquidityUtils.safeInt128ToUint256(delta.amount0()), LiquidityUtils.safeInt128ToUint256(delta.amount1()));
     }
 
     /// callback function to modify the liquidity of the pool after the pool manager is unlocked
@@ -134,10 +133,18 @@ contract LiquidityRouter is IUnlockCallback {
             assert(!(delta0 > 0 || delta1 > 0));
         }
 
-        if (delta0 < 0) data.key.currency0.settle(manager, self, uint256(-delta0), data.settleUsingBurn);
-        if (delta1 < 0) data.key.currency1.settle(manager, self, uint256(-delta1), data.settleUsingBurn);
-        if (delta0 > 0) data.key.currency0.take(manager, self, uint256(delta0), data.takeClaims);
-        if (delta1 > 0) data.key.currency1.take(manager, self, uint256(delta1), data.takeClaims);
+        if (delta0 < 0) {
+            data.key.currency0.settle(manager, self, uint256(-delta0), data.settleUsingBurn);
+        }
+        if (delta1 < 0) {
+            data.key.currency1.settle(manager, self, uint256(-delta1), data.settleUsingBurn);
+        }
+        if (delta0 > 0) {
+            data.key.currency0.take(manager, self, uint256(delta0), data.takeClaims);
+        }
+        if (delta1 > 0) {
+            data.key.currency1.take(manager, self, uint256(delta1), data.takeClaims);
+        }
 
         return abi.encode(delta);
     }

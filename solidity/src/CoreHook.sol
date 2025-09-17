@@ -16,25 +16,28 @@ import {CurrencySettler} from "@uniswap/v4-core/test/utils/CurrencySettler.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {PausablePool} from "./modules/PausablePool.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {Position} from "@uniswap/v4-core/src/libraries/Position.sol";
 import {Exttload} from "v4-periphery/lib/v4-core/src/Exttload.sol";
 import {IExttload} from "v4-periphery/lib/v4-core/src/interfaces/IExttload.sol";
 import {ProxySwapFlag} from "./libraries/ProxySwapFlag.sol";
 import {TransientSlots} from "./libraries/TransientSlots.sol";
 import {LiquidityUtils} from "./libraries/LiquidityUtils.sol";
 import {console} from "forge-std/console.sol";
+import {VTSManager} from "./modules/VTSManager.sol";
 
 /**
  * Core Pool should be aware of Positions.
- *     This way it can calculate and manage Liquidity Commitments (C_A(r)) for each Position.
- *     Furthermore, we need to know when Direct LP occurs, as this determines whether the underlying native tokens are settled to the Pool Manager.
+ * This way it can calculate and manage Liquidity Commitments (C_A(r)) for each Position.
+ * Furthermore, we need to know when Direct LP occurs, as this determines whether the underlying native tokens are settled to the Pool Manager.
  */
-contract CoreHook is BaseHook, PausablePool, Exttload {
+contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
     using CurrencySettler for Currency;
 
     error InvalidInitialiser();
     error InvalidSender();
 
     address public immutable marketFactory;
+    address public immutable mmPositionManager;
 
     modifier onlyFactory() {
         if (msg.sender != marketFactory) {
@@ -44,8 +47,12 @@ contract CoreHook is BaseHook, PausablePool, Exttload {
     }
 
     // Owner will be set to MarketFactory
-    constructor(address _poolManager, address _marketFactory) BaseHook(IPoolManager(_poolManager)) {
+    constructor(address _poolManager, address _marketFactory, address _mmPositionManager)
+        BaseHook(IPoolManager(_poolManager))
+        VTSManager(_poolManager, _marketFactory, _mmPositionManager)
+    {
         marketFactory = _marketFactory;
+        mmPositionManager = _mmPositionManager;
     }
 
     function getMMPositionManager() public view returns (address) {
@@ -116,24 +123,26 @@ contract CoreHook is BaseHook, PausablePool, Exttload {
         }
 
         _triggerInternalTracingFlag(key.toId());
-
+        _recordOutflow(key.toId(), delta);
         return (this.afterSwap.selector, 0);
     }
 
     function _afterAddLiquidity(
         address sender,
         PoolKey calldata key,
-        ModifyLiquidityParams calldata,
+        ModifyLiquidityParams calldata params,
         BalanceDelta delta,
         BalanceDelta,
         bytes calldata
     ) internal virtual override whenNotPaused(key.toId()) returns (bytes4, BalanceDelta) {
         // only add direct liquidity  if the sender is not the market maker position manager/router
-        address mmPositionManager = getMMPositionManager();
         if (sender != address(mmPositionManager)) {
             address proxyHook = _getProxyHook(key);
             ProxyHook(proxyHook).onDirectLP(key, delta, LiquidityUtils.ActionType.DirectLPAddLiquidity);
         }
+
+        // Track maximum potemtial commitment for both tokens in the position
+        _trackMaxPotentialCommitment(key, sender, params, delta);
 
         return (this.afterAddLiquidity.selector, BalanceDeltaLibrary.ZERO_DELTA);
     }
@@ -141,18 +150,20 @@ contract CoreHook is BaseHook, PausablePool, Exttload {
     function _afterRemoveLiquidity(
         address sender,
         PoolKey calldata key,
-        ModifyLiquidityParams calldata,
+        ModifyLiquidityParams calldata params,
         BalanceDelta delta,
         BalanceDelta,
         bytes calldata
     ) internal virtual override returns (bytes4, BalanceDelta) {
         // Allow removal of liquidity even when the market is paused.
         // only remove direct liquidity  if the sender is the pool manager
-        address mmPositionManager = getMMPositionManager();
         if (sender != address(mmPositionManager)) {
             address proxyHook = _getProxyHook(key);
             ProxyHook(proxyHook).onDirectLP(key, delta, LiquidityUtils.ActionType.DirectLPRemoveLiquidity);
         }
+
+        // Track maximum potemtial commitment for both tokens in the position
+        _trackMaxPotentialCommitment(key, sender, params, delta);
 
         return (this.afterRemoveLiquidity.selector, BalanceDeltaLibrary.ZERO_DELTA);
     }

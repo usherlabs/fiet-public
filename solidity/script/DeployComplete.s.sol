@@ -18,6 +18,8 @@ import {HookFlags} from "./constants/HookFlags.sol";
 import {EthSepoliaConstants} from "./constants/EthSepolia.sol";
 import {MMPositionManager} from "../src/MMPositionManager.sol";
 import {StubSpokeVerifier} from "../src/modules/StubSpokeVerifier.sol";
+import {OracleRegistry} from "../src/OracleRegistry.sol";
+import {ChainlinkFactory} from "../src/oracles/chainlink/ChainlinkFactory.sol";
 
 /**
  * @title CompleteDeployScript
@@ -37,6 +39,7 @@ contract CompleteDeployScript is ScriptHelper {
     address public proxyHook;
     address public marketFactory;
     address public mmPositionManager;
+    address public oracleRegistry;
     // Network-specific constants set from environment
     address public poolManagerAddress;
     address public create2Deployer;
@@ -63,30 +66,35 @@ contract CompleteDeployScript is ScriptHelper {
 
         vm.startBroadcast(deployerPrivateKey);
 
-        // Step 1: Deploy MMPositionManager
-        console.log("\n=== Deploying MMPositionManager ===");
-        mmPositionManager = _deployMMPositionManager();
-        console.log("MMPositionManager deployed at:", mmPositionManager);
+        // Step 1: Deploy OracleRegistry and chainlink oracle factory
+        console.log("\n=== Deploying OracleRegistry and Chainlink Oracle Factory ===");
+        oracleRegistry = _deployOracleRegistry();
+        console.log("OracleRegistry deployed at:", oracleRegistry);
 
         // Step 2: Deploy MarketFactory
         console.log("\n=== Deploying MarketFactory ===");
         marketFactory = _deployMarketFactory();
         console.log("MarketFactory deployed at:", marketFactory);
 
-        // Step 3: Deploy CoreHook
+        // Step 3: Deploy MMPositionManager
+        console.log("\n=== Deploying MMPositionManager ===");
+        mmPositionManager = _deployMMPositionManager();
+        console.log("MMPositionManager deployed at:", mmPositionManager);
+
+        // Step 4: Deploy CoreHook
         console.log("\n=== Deploying CoreHook ===");
         coreHook = _deployCoreHook();
         console.log("CoreHook deployed at:", coreHook);
 
-        // Step 4: Set hooks in MarketFactory
+        // Step 5: Set hooks in MarketFactory
         console.log("\n=== Setting Hooks in MarketFactory ===");
         _setHooksInFactory();
 
-        // Step 5: Verify hooks addresses across the contracts
+        // Step 6: Verify hooks addresses across the contracts
         console.log("\n=== Verifying Hooks ===");
         _verifyHooks();
 
-        // Step 6: Add all the protocol addresses expected to hold LCC as a protocol bound address in the market factory
+        // Step 7: Add all the protocol addresses expected to hold LCC as a protocol bound address in the market factory
         console.log("\n=== Adding addresses to bounds array ===");
         _addAddressesToBounds();
 
@@ -108,7 +116,7 @@ contract CompleteDeployScript is ScriptHelper {
     function _deployCoreHook() internal returns (address) {
         // CoreHook constructor takes (poolManager, marketFactory)
         // Now we pass the actual marketFactory address
-        bytes memory constructorArgs = abi.encode(poolManagerAddress, marketFactory);
+        bytes memory constructorArgs = abi.encode(poolManagerAddress, marketFactory, address(mmPositionManager));
 
         // Mine the correct address with proper flags
         (address hookAddress, bytes32 salt) =
@@ -118,7 +126,7 @@ contract CompleteDeployScript is ScriptHelper {
         console.log("CoreHook salt:", vm.toString(salt));
 
         // Deploy the hook
-        CoreHook deployedHook = new CoreHook{salt: salt}(poolManagerAddress, marketFactory);
+        CoreHook deployedHook = new CoreHook{salt: salt}(poolManagerAddress, marketFactory, address(mmPositionManager));
         require(address(deployedHook) == hookAddress, "CoreHook: address mismatch");
 
         return address(deployedHook);
@@ -132,13 +140,22 @@ contract CompleteDeployScript is ScriptHelper {
         // Initial bounds array (empty for now, can be updated later)
         address[] memory initialBounds = new address[](0);
 
-        // MarketFactory constructor now only takes (poolManager, mmPositionManager, bounds)
-        MarketFactory factory = new MarketFactory(poolManagerAddress, mmPositionManager, initialBounds);
+        MarketFactory factory = new MarketFactory(poolManagerAddress, oracleRegistry, initialBounds);
 
         return address(factory);
     }
 
-    // add function to add all the addresses to the bounds array
+    function _deployOracleRegistry() internal returns (address) {
+        uint256 decimals = 18;
+        OracleRegistry registry = new OracleRegistry();
+        console.log("OracleRegistry deployed at:", address(registry));
+        // deploy and set the chainlink oracle factory
+        ChainlinkFactory factory = new ChainlinkFactory(address(registry), decimals);
+        console.log("Chainlink Oracle Factory deployed at:", address(factory));
+        registry.setDefaultFactory(address(factory));
+        console.log("Chainlink Oracle Factory set in OracleRegistry");
+        return address(registry);
+    }
 
     /**
      * @dev Deploys MMPositionManager with a stub verifier
@@ -148,7 +165,8 @@ contract CompleteDeployScript is ScriptHelper {
         // ? deploy a stub verifier for now
         address stubVerifier = address(new StubSpokeVerifier());
         console.log("StubSpokeVerifier deployed at:", stubVerifier);
-        MMPositionManager positionManager = new MMPositionManager(poolManagerAddress, stubVerifier);
+        MMPositionManager positionManager =
+            new MMPositionManager(poolManagerAddress, oracleRegistry, stubVerifier, marketFactory);
         console.log("MMPositionManager deployed at:", address(positionManager));
         return address(positionManager);
     }
@@ -188,16 +206,15 @@ contract CompleteDeployScript is ScriptHelper {
      * Whitelist protocol
      */
     function _addAddressesToBounds() internal {
-        // ? initial bounds(PM and MMPM) have been set in the MarketFactory constructor
         // ? we can add more bounds here if needed
-        // MarketFactory factoryInstance = MarketFactory(marketFactory);
-        // address[] memory bounds = new address[](4);
-        // bounds[0] = poolManagerAddress;
+        MarketFactory factoryInstance = MarketFactory(marketFactory);
+        address[] memory bounds = new address[](1);
+        bounds[0] = mmPositionManager;
         // bounds[1] = mmPositionManager;
         // bounds[2] = coreHook;
         // bounds[3] = proxyHook;
 
-        // factoryInstance.addBounds(bounds);
+        factoryInstance.addBounds(bounds);
     }
 
     /**
@@ -209,6 +226,7 @@ contract CompleteDeployScript is ScriptHelper {
         writeAddress("coreHook", coreHook);
         writeAddress("marketFactory", marketFactory);
         writeAddress("positionManager", mmPositionManager);
+        writeAddress("oracleRegistry", oracleRegistry);
 
         console.log("Deployment addresses written to deployments/%s_deployments.json", networkName);
     }

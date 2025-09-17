@@ -16,23 +16,38 @@ import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {PoolId} from "v4-periphery/lib/v4-core/src/types/PoolId.sol";
 import {ERC20} from "solmate/tokens/ERC20.sol";
 import {ERC721} from "solmate/tokens/ERC721.sol";
-import {PositionInfo} from "./types/Position.sol";
+import {PositionInfo, PositionId, PositionLibrary} from "./types/Position.sol";
+import {LiquiditySignal} from "./types/Position.sol";
+import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
+import {ProxyHook} from "./ProxyHook.sol";
 import {IERC20Minimal} from "@uniswap/v4-core/src/interfaces/external/IERC20Minimal.sol";
+import {IVTSManager} from "./interfaces/IVTSManager.sol";
+import {MarketVTSConfiguration} from "./types/VTS.sol";
 
 contract MMPositionManager is LiquidityRouter, VRLSpokeReceiver, ERC721 {
     error InvalidTicker(string ticker);
     error InvalidTokenId(uint256 tokenId);
+    error InvalidLiquiditySignalEncoding();
+    error InsufficientLiquidityInSignal(uint256 totalSignalUsdValue, uint256 totalLCCValue);
 
-    event SignalDropped(uint256 indexed tokenId, address indexed mm, uint256 amount0, uint256 amount1);
+    event SignalCommitted(
+        address indexed mm, uint256 indexed tokenId, uint256 indexed positionIndex, uint256 amount0, uint256 amount1
+    );
 
+    address public marketFactory;
     uint256 private nextTokenId = 1;
-    mapping(uint256 => PositionInfo[]) public nftToPositions;
+    // mapping(tokenId => mapping(positionIndex => PositionInfo)) public nftToPositions;
+    mapping(uint256 => mapping(uint256 => PositionInfo)) public nftToPositions;
+    // mapping(tokenId => numNFTPositionsCount) public nftToPositionCount;
+    mapping(uint256 => uint256) public nftToPositionCount;
 
-    constructor(address _manager, address _verifier)
+    constructor(address _manager, address _oracleRegistry, address _verifier, address _marketFactory)
         LiquidityRouter(_manager)
-        VRLSpokeReceiver(_verifier)
+        VRLSpokeReceiver(_verifier, _oracleRegistry)
         ERC721("MMPositionManager", "MMPM")
-    {}
+    {
+        marketFactory = _marketFactory;
+    }
 
     function tokenURI(uint256) public pure override returns (string memory) {
         revert("Metadata not implemented");
@@ -42,91 +57,117 @@ contract MMPositionManager is LiquidityRouter, VRLSpokeReceiver, ERC721 {
         return nftToPositions[tokenId][positionIndex];
     }
 
-    /**
-     * @dev This function is used to commit liquidity to a pool on behalf of a market maker
-     * @param positionParams The parameters of the position
-     * @param proofParams The parameters of the proof
-     * @param tickers The tickers of the reserves
-     * @param amounts The amounts of the reserves
-     */
-    function commitLiquidity(
-        MarketMaker.PositionParams calldata positionParams,
-        // state verification parameters
-        MarketMaker.ProofParams calldata proofParams,
-        // amount/reserves/commitment parameters
-        string[] calldata tickers,
-        uint256[] calldata amounts
-    ) public returns (uint256 tokenId) {
+    function commit(
+        PoolKey calldata _poolKey,
+        ModifyLiquidityParams memory _liquidityParams,
+        bytes memory _liquiditySignal
+    ) external returns (uint256 tokenId) {
+        LiquidityCommitmentCertificate lcc0 =
+            LiquidityCommitmentCertificate(payable(Currency.unwrap(_poolKey.currency0)));
+        LiquidityCommitmentCertificate lcc1 =
+            LiquidityCommitmentCertificate(payable(Currency.unwrap(_poolKey.currency1)));
+
         address owner = msg.sender;
-        // verify the VRL, this will return the total signal USD value
-        uint256 totalSignalUsdValue = _verifyVRL(proofParams, tickers, amounts);
+        // verify the liquidity signal, this will return the validated reserves
+        if (_liquiditySignal.length == 0) {
+            revert InvalidLiquiditySignalEncoding();
+        }
+        LiquiditySignal memory signal = abi.decode(_liquiditySignal, (LiquiditySignal));
+        (string[] memory reservesTickers, uint256[] memory reservesAmounts) = _verifyLiquiditySignal(signal);
+        string memory issuer = signal.mmState.prover;
+
+        // calculate the total signal usd value
+        uint256 totalSignalUsdValue = getTotalUsdValue(reservesTickers, reservesAmounts);
+
+        // calculate the token0 and token1 amounts to mint to create the position
+        (uint256 lcc0AmountToMint, uint256 lcc1AmountToMint) =
+            calculateTokenAmountsFromPositionParams(_poolKey, _liquidityParams);
+
+        // calcualte the total LCC USD value and confirm it is less than the total signal usd value
+        address vtsManager = IMarketFactory(marketFactory).getCoreHook();
+        address marketOracleFactory = IVTSManager(vtsManager).getMarketVTSConfiguration(_poolKey.toId()).oracleFactory;
+
+        (uint256 lcc0Price, uint256 lcc0Decimals) = lcc0.usdPrice(marketOracleFactory);
+        (uint256 lcc1Price, uint256 lcc1Decimals) = lcc1.usdPrice(marketOracleFactory);
+
+        uint256 totalLCCValue = ((lcc0Price * lcc0AmountToMint) / 10 ** lcc0Decimals)
+            + ((lcc1Price * lcc1AmountToMint) / 10 ** lcc1Decimals);
+
+        // if the amount they want to commit is greater than the total signal usd value, revert
+        if (totalLCCValue > totalSignalUsdValue) {
+            revert InsufficientLiquidityInSignal(totalSignalUsdValue, totalLCCValue);
+        }
 
         // Mint the tokens required for the liquidity commitment
-        (uint256 lccAmount0ToMint, uint256 lccAmount1ToMint, uint128 liquidityDelta) =
-            _mintLCCPairWithBaseVTS(positionParams, totalSignalUsdValue);
-
-        // approve pool manager to spend the lccs
-        ERC20(Currency.unwrap(positionParams.corePoolKey.currency0)).approve(address(manager), lccAmount0ToMint);
-        ERC20(Currency.unwrap(positionParams.corePoolKey.currency1)).approve(address(manager), lccAmount1ToMint);
+        lcc0.issue(lcc0AmountToMint);
+        lcc1.issue(lcc1AmountToMint);
 
         // Mint nft representing this position
+        // ? under which condition will the tokenId be reused across multiple positions
         tokenId = _createCommitmentNFT(owner);
 
-        // add liquidity to the pool
-        _proxyModifyLiquidity(positionParams, int128(liquidityDelta), tokenId, nftToPositions[tokenId].length);
+        // add liquidity to the pool using the token id and position index to generate a unique salt
+        uint256 positionIndex = nftToPositionCount[tokenId];
+        (PositionId positionId,) = _callModifyLiquidity(_poolKey, _liquidityParams, tokenId, positionIndex);
+
+        // use the position id to make the initial settlement of the underlying tokens to the proxy hook
+        _settleBaseLCCPair(_poolKey, positionId, lcc0AmountToMint, lcc1AmountToMint);
 
         // Attach position to this nft
         // make sure to add the position only after modifying the liquidity
         // because the number of positions is used to generate the salt for the position
-        nftToPositions[tokenId].push(
-            PositionInfo({
-                poolKey: positionParams.corePoolKey,
-                tickLower: positionParams.tickLower,
-                tickUpper: positionParams.tickUpper,
-                liquidity: liquidityDelta,
-                owner: owner,
-                issuer: proofParams.mmStateData.prover,
-                isActive: true
-            })
-        );
+        nftToPositions[tokenId][positionIndex] = PositionInfo({
+            owner: owner,
+            isActive: true,
+            issuer: issuer,
+            positionId: positionId,
+            poolId: _poolKey.toId(),
+            positionIndex: positionIndex,
+            tickLower: _liquidityParams.tickLower,
+            tickUpper: _liquidityParams.tickUpper,
+            liquidity: _liquidityParams.liquidityDelta
+        });
+        // increment the number of positions for the nft
+        nftToPositionCount[tokenId]++;
+
+        emit SignalCommitted(msg.sender, tokenId, positionIndex, lcc0AmountToMint, lcc1AmountToMint);
     }
 
-    function removeLiquidityCommitment(uint256 tokenId) public {
-        // make sure only the owner can take back the commitment(s) attached to provided token id
-        if (ownerOf(tokenId) != msg.sender) {
-            revert InvalidTokenId(tokenId);
-        }
+    // function removeLiquidityCommitment(uint256 tokenId) public {
+    // make sure only the owner can take back the commitment(s) attached to provided token id
+    // if (ownerOf(tokenId) != msg.sender) {
+    //     revert InvalidTokenId(tokenId);
+    // }
 
-        // TODO: Check RfS lock
+    // // TODO: Check RfS lock
 
-        // keep track of the amount of currency0 and currency1 that was taken out of the pool
-        uint256 amount0Total = 0;
-        uint256 amount1Total = 0;
-        PositionInfo[] storage positions = nftToPositions[tokenId];
-        uint256 totalPositions = positions.length;
-        for (uint256 i = 0; i < totalPositions; i++) {
-            if (positions[i].isActive) {
-                MarketMaker.PositionParams memory positionParams = MarketMaker.PositionParams({
-                    corePoolKey: positions[i].poolKey,
-                    tickLower: positions[i].tickLower,
-                    tickUpper: positions[i].tickUpper
-                });
+    // // keep track of the amount of currency0 and currency1 that was taken out of the pool
+    // uint256 amount0Total = 0;
+    // uint256 amount1Total = 0;
+    // PositionInfo[] storage positions = nftToPositions[tokenId];
+    // uint256 totalPositions = positions.length;
+    // for (uint256 i = 0; i < totalPositions; i++) {
+    //     if (positions[i].isActive) {
+    //         MarketMaker.PositionParams memory positionParams = MarketMaker.PositionParams({
+    //             corePoolKey: positions[i].poolKey,
+    //             tickLower: positions[i].tickLower,
+    //             tickUpper: positions[i].tickUpper
+    //         });
 
-                BalanceDelta balanceDelta =
-                    _proxyModifyLiquidity(positionParams, -int128(positions[i].liquidity), tokenId, i);
+    //         BalanceDelta balanceDelta =
+    //             _callModifyLiquidity(positionParams, -int128(positions[i].liquidity), tokenId, i);
 
-                amount0Total += uint256(uint128(balanceDelta.amount0()));
-                amount1Total += uint256(uint128(balanceDelta.amount1()));
-            }
-            positions[i].isActive = false;
-        }
-        // After removing all the liquidity, burn the nft
-        _burn(tokenId);
+    //         amount0Total += uint256(uint128(balanceDelta.amount0()));
+    //         amount1Total += uint256(uint128(balanceDelta.amount1()));
+    //     }
+    //     positions[i].isActive = false;
+    // }
+    // // After removing all the liquidity, burn the nft
+    // _burn(tokenId);
 
-        // TODO: unwrap lcc gotten back from the pool and send back to the user at a determined ratio
+    // // TODO: unwrap lcc gotten back from the pool and send back to the user at a determined ratio
 
-        emit SignalDropped(tokenId, msg.sender, amount0Total, amount1Total);
-    }
+    // }
 
     /**
      * @dev Get the total liquidity across all active positions for an NFT
@@ -137,13 +178,13 @@ contract MMPositionManager is LiquidityRouter, VRLSpokeReceiver, ERC721 {
     function getTotalNFTLiquidity(uint256 tokenId)
         public
         view
-        returns (uint128 totalLiquidity, uint256 activePositionCount)
+        returns (int256 totalLiquidity, uint256 activePositionCount)
     {
-        PositionInfo[] storage positions = nftToPositions[tokenId];
+        uint256 positionCount = nftToPositionCount[tokenId];
 
-        for (uint256 i = 0; i < positions.length; i++) {
-            if (positions[i].isActive) {
-                totalLiquidity += positions[i].liquidity;
+        for (uint256 i = 0; i < positionCount; i++) {
+            if (nftToPositions[tokenId][i].isActive) {
+                totalLiquidity += nftToPositions[tokenId][i].liquidity;
                 activePositionCount++;
             }
         }
@@ -152,54 +193,59 @@ contract MMPositionManager is LiquidityRouter, VRLSpokeReceiver, ERC721 {
     }
 
     /**
-     * @dev This function is used to calculate the amounts of underlying liquidity needed for token0 and token1
-     *      in order to create a position with the specified parameters. This is used to calculate the amount of liquidity to add to the pool
-     *      for a position to be created.
-     * @param positionParams The parameters of the position
-     * @param totalSignalUsdValue The total signal USD value
-     * @return lccUnderlyingAmount0 The amount of underlying liquidity for token0 to create the position with the specified parameters
-     * @return lccUnderlyingAmount1 The amount of underlying liquidity for token1 to create the position with the specified parameters
+     * @dev This function is used to get the base settlement amounts using the base vts for a given pool key and lcc amounts
+     * @param poolKey The pool key to get the base settlement amounts for
+     * @param lccAmount0 The amount of lcc0 to get the base settlement amounts for
+     * @param lccAmount1 The amount of lcc1 to get the base settlement amounts for
+     * @return lccUnderlyingAmount0 The amount of underlying liquidity to transfer from the issuer to the lcc0
+     * @return lccUnderlyingAmount1 The amount of underlying liquidity to transfer from the issuer to the lcc1
      */
-    function getCommitmentAmounts(MarketMaker.PositionParams calldata positionParams, uint256 totalSignalUsdValue)
+    function getBaseSettlementAmounts(PoolKey memory poolKey, uint256 lccAmount0, uint256 lccAmount1)
         public
         view
         returns (uint256 lccUnderlyingAmount0, uint256 lccUnderlyingAmount1)
     {
-        //TODO: Get the base vts for the lccs instead of using a mock value
-        uint256 mockBaseVts = 2000;
-        // calculate the split of lcc tokens in order to create the position with the specified parameters
-        (uint256 lccAmount0, uint256 lccAmount1,) = calculateLCCAmountsDeltaFromUSD(positionParams, totalSignalUsdValue);
+        // get the base vts of the currencies from the pool configuration
+        address coreHook = IMarketFactory(marketFactory).getCoreHook();
+        MarketVTSConfiguration memory vtsConfiguration = IVTSManager(coreHook).getMarketVTSConfiguration(poolKey.toId());
 
         // get the amount of underlying liquidity to transfer from the issuer to the lcc
-        uint256 underlyingLiquidityFraction0 = (lccAmount0 * mockBaseVts) / 10000;
-        uint256 underlyingLiquidityFraction1 = (lccAmount1 * mockBaseVts) / 10000;
+        // divide by 10000 to convert to a percentage from bips
+        uint256 underlyingLiquidityFraction0 = (lccAmount0 * vtsConfiguration.token0.baseVTSRate) / 10000;
+        uint256 underlyingLiquidityFraction1 = (lccAmount1 * vtsConfiguration.token1.baseVTSRate) / 10000;
         return (underlyingLiquidityFraction0, underlyingLiquidityFraction1);
     }
 
     /**
-     * @dev This function is used to modify the liquidity of the pool
-     * @param positionParams The parameters of the position
-     * @param liquidityDelta The amount of liquidity to add to the pool
-     * @param tokenId The token id of the nft
+     * @dev This function is used to modify liquidity for a given pool key, token id and position index and generates a unique salt using the token id and position index
+     * @param poolKey The pool key to modify liquidity for
+     * @param liquidityParams The liquidity parameters to modify liquidity for
+     * @param tokenId The token id to modify liquidity for
+     * @param positionIndex The position index to modify liquidity for
+     * @return positionId The position id
+     * @return balanceDelta The balance delta
      */
-    function _proxyModifyLiquidity(
-        MarketMaker.PositionParams memory positionParams,
-        int128 liquidityDelta,
+    function _callModifyLiquidity(
+        PoolKey memory poolKey,
+        ModifyLiquidityParams memory liquidityParams,
         uint256 tokenId,
         uint256 positionIndex
-    ) internal returns (BalanceDelta balanceDelta) {
+    ) internal returns (PositionId positionId, BalanceDelta balanceDelta) {
         // generate salt using tokenId and identifier of the position
         bytes32 salt = keccak256(abi.encodePacked(tokenId, positionIndex));
+
         balanceDelta = _modifyLiquidity(
-            positionParams.corePoolKey,
+            poolKey,
             ModifyLiquidityParams({
-                tickLower: positionParams.tickLower,
-                tickUpper: positionParams.tickUpper,
-                liquidityDelta: int256(liquidityDelta),
+                tickLower: liquidityParams.tickLower,
+                tickUpper: liquidityParams.tickUpper,
+                liquidityDelta: int256(liquidityParams.liquidityDelta),
                 salt: salt
             }),
             Constants.ZERO_BYTES
         );
+
+        positionId = PositionLibrary.generateId(msg.sender, liquidityParams);
     }
 
     /**
@@ -207,43 +253,70 @@ contract MMPositionManager is LiquidityRouter, VRLSpokeReceiver, ERC721 {
      * @param to The address of the user who is creating the commitment
      * @return tokenId The id of the nft created
      */
-    function _createCommitmentNFT(address to) internal returns (uint256) {
-        uint256 tokenId = nextTokenId++;
+    function _createCommitmentNFT(address to) internal returns (uint256 tokenId) {
+        tokenId = nextTokenId++;
         _mint(to, tokenId);
-        return tokenId;
     }
 
-    function _mintLCCPairWithBaseVTS(MarketMaker.PositionParams calldata positionParams, uint256 totalSignalUsdValue)
+    /**
+     * @dev This function is used to settle the LCC pair required to create the position on the pool
+     *      it also derives the initial settlement amounts for the underlying tokens for the LCC pair, and transfers the underlying tokens to the proxy prool
+     *      it then calls the proxy hook notify it of the added liquidity so the proxy pool can get claim tokens for them and deposit it into the pool manager
+     * @param poolKey The pool key to issue and settle the base lcc pair for
+     * @param lcc0Amount The amount of lcc0 to settle
+     * @param lcc1Amount The amount of lcc1 to settle
+     */
+    function _settleBaseLCCPair(PoolKey memory poolKey, PositionId positionId, uint256 lcc0Amount, uint256 lcc1Amount)
         internal
-        returns (uint256 lccAmount0ToMint, uint256 lccAmount1ToMint, uint128 liquidityDelta)
     {
-        // mint the lccs to the mmPositionManager
-        LiquidityCommitmentCertificate lcc0 =
-            LiquidityCommitmentCertificate(Currency.unwrap(positionParams.corePoolKey.currency0));
-        LiquidityCommitmentCertificate lcc1 =
-            LiquidityCommitmentCertificate(Currency.unwrap(positionParams.corePoolKey.currency1));
-
-        // Get amount to mint and amount to commit based on total signal usd value
-        (lccAmount0ToMint, lccAmount1ToMint, liquidityDelta) =
-            calculateLCCAmountsDeltaFromUSD(positionParams, totalSignalUsdValue);
         // Get amount of underlying liquidity to transfer from the issuer to the lcc
         (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) =
-            getCommitmentAmounts(positionParams, totalSignalUsdValue);
+            getBaseSettlementAmounts(poolKey, lcc0Amount, lcc1Amount);
 
-        bytes32 marketId = PoolId.unwrap(positionParams.corePoolKey.toId());
+        // settle the underlying tokens to the proxy hook
+        _settleUnderlyingAssetToProxyHook(
+            poolKey, positionId, underlyingLiquidityFraction0, underlyingLiquidityFraction1
+        );
+    }
 
-        // issue the tokens needed to be minted
-        lcc0.issue(lccAmount0ToMint);
-        lcc1.issue(lccAmount1ToMint);
+    /**
+     * @dev This function is used to settle some assets to the proxy hook of a market specified by the pool key provided
+     * @param poolKey The pool key to settle the underlying assets to the proxy hook
+     * @param underlyingLCC0AmountToSettle The amount of underlying token0 to settle to the proxy hook
+     * @param underlyingLCC1AmountToSettle The amount of underlying token1 to settle to the proxy hook
+     */
+    function _settleUnderlyingAssetToProxyHook(
+        PoolKey memory poolKey,
+        PositionId positionId,
+        uint256 underlyingLCC0AmountToSettle,
+        uint256 underlyingLCC1AmountToSettle
+    ) internal {
+        address sender = msg.sender;
+        LiquidityCommitmentCertificate lcc0 =
+            LiquidityCommitmentCertificate(payable(Currency.unwrap(poolKey.currency0)));
+        LiquidityCommitmentCertificate lcc1 =
+            LiquidityCommitmentCertificate(payable(Currency.unwrap(poolKey.currency1)));
 
-        // Transfer the underlying tokens amount based on the vts to the respective lcc
-        IERC20Minimal(lcc0.underlyingAsset()).transferFrom(msg.sender, address(lcc0), underlyingLiquidityFraction0);
-        IERC20Minimal(lcc1.underlyingAsset()).transferFrom(msg.sender, address(lcc1), underlyingLiquidityFraction1);
+        // Transfer the underlying tokens amount based on the vts to the market in the proxy hook
+        // using the core pool key, get the corresponding proxy hook
+        // transfer token1 and token0 to the proxy hook
+        // call the proxy hook specifying the amount of underlying tokens transferred so it can get claim tokens for them
+        PoolId proxyPoolId = IMarketFactory(marketFactory).coreToProxy(poolKey.toId());
+        address proxyHook = IMarketFactory(marketFactory).proxyToHook(proxyPoolId);
 
-        // and then call confirmTake on the lcc with the marketId to account for the amount we just sent to it
-        lcc0.confirmTakeWithMarketId(marketId, underlyingLiquidityFraction0);
-        lcc1.confirmTakeWithMarketId(marketId, underlyingLiquidityFraction1);
+        // transfer the underlying tokens to the proxy hook
+        IERC20Minimal(lcc0.underlyingAsset()).transferFrom(sender, proxyHook, underlyingLCC0AmountToSettle);
+        IERC20Minimal(lcc1.underlyingAsset()).transferFrom(sender, proxyHook, underlyingLCC1AmountToSettle);
 
-        return (lccAmount0ToMint, lccAmount1ToMint, liquidityDelta);
+        // notify the proxy hook of the settled underlying tokens we just sent to it
+        // specify token0, amount0 and token1, amount1 it is important to specify the token1 and token0 here because order is important to know
+        // and we can validate if the tokens are handled by the proxy hook in the `onMMSettleLiquidity` function
+        ProxyHook(proxyHook).onMMSettleLiquidity(
+            lcc0.underlyingAsset(), lcc1.underlyingAsset(), underlyingLCC0AmountToSettle, underlyingLCC1AmountToSettle
+        );
+
+        // notify the vts manager of the settlement made for this position
+        address coreHook = IMarketFactory(marketFactory).getCoreHook();
+        IVTSManager(coreHook).onSettleAssets(positionId, underlyingLCC0AmountToSettle, underlyingLCC1AmountToSettle);
     }
 }

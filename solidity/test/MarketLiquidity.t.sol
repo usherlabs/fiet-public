@@ -32,8 +32,8 @@ contract MarketLiquidityTest is MarketTestBase {
 
     address test_user_1 = makeAddr("test_user_1");
     // ? we need to mint the minimum required liquidity for the swap
-    // ? because if there is more liquidity than needed we would need to account for it when calculating debts for the marrket during unwraps
-    // ? if 50 was wrapped and the user has a debt of 98, and wants to withdraw 98
+    // ? because if there is more liquidity than needed we would need to account for it when calculating pending settlements for the markets during unwraps
+    // ? if 50 was wrapped and the user has a pending settlement of 98, and wants to withdraw 98
     // ? i.e their wrapped balance would be exhaused first, and only 48 would be queued
     // ? i.e rather than accounting for wrapped amounts, since we are testing for queues, we better make it zero than account for it
     uint256 amount0ToMint = 100;
@@ -51,8 +51,8 @@ contract MarketLiquidityTest is MarketTestBase {
             abi.encodeWithSelector(IMarketFactory.bounds.selector, address(test_user_1)),
             abi.encode(false)
         );
-        lcc0 = LiquidityCommitmentCertificate(Currency.unwrap(corePoolKey.currency0));
-        lcc1 = LiquidityCommitmentCertificate(Currency.unwrap(corePoolKey.currency1));
+        lcc0 = LiquidityCommitmentCertificate(payable(Currency.unwrap(corePoolKey.currency0)));
+        lcc1 = LiquidityCommitmentCertificate(payable(Currency.unwrap(corePoolKey.currency1)));
 
         // mint some LCC na underlying tokens to the test user
         ERC20(lcc0.underlyingAsset()).transfer(test_user_1, amount0ToMint);
@@ -150,14 +150,13 @@ contract MarketLiquidityTest is MarketTestBase {
     // perform a swap
     // make sure the recipient is a new address to ensure fresh supply of lcc
     // make the pm run out of underlying liquidity
-    // unwrap from the market enough to get an entry into the debt queue
-    function _createDebtQueueEntry(bytes32 marketId) public returns (BalanceDelta) {
-        console.log("creating debt queue entry");
+    // unwrap from the market enough to get an entry into the settlement queue
+    function _createSettlementQueueEntry(bytes32 marketId) public returns (BalanceDelta) {
         PoolSwapTest.TestSettings memory settings =
             PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false});
         // Perform another swap, but mock the pool manager to have no liquidity to ensure that unwraps are queued
         // Use vm.mockCall to make poolmanager balance of currency0 return 0
-        address proxyHook = address(hook);
+        address proxyHook = address(proxyHook);
         vm.mockCall(
             address(manager),
             abi.encodeWithSelector(
@@ -199,24 +198,19 @@ contract MarketLiquidityTest is MarketTestBase {
         assertEq(marketReservesAmount, 0);
 
         // attempt to unwrap from the market
-        // since there is no liquidity in the pool manager, the unwrap will queue the liquidity in the debt queue
+        // since there is no liquidity in the pool manager, the unwrap will queue the liquidity in the settlement queue
         lcc1.unwrap(amountOut);
 
-        // validate an entry into the debt queue was created and the balance of the user remains unchanged
-        assertEq(lcc1.marketUserDebt(marketId, test_user_1), amountOut);
-        assertEq(lcc1.marketTotalDebt(marketId), amountOut);
+        // validate an entry into the settlement queue was created and the balance of the user remains unchanged
+        assertEq(lcc1.marketUserSettlement(marketId, test_user_1), amountOut);
+        assertEq(lcc1.marketTotalSettlement(marketId), amountOut);
 
-        // update call to pool manager to have some liquidity now so we can further test functions that add liquidity and trigger debt settlement
+        // update call to pool manager to have some liquidity now so we can further test functions that add liquidity and trigger settlement
         address ua = lcc1.underlyingAsset();
         uint256 poolunderlyingassetBalance = IERC20Minimal(ua).balanceOf(address(manager));
         vm.mockCall(
             address(manager),
-            abi.encodeWithSelector(
-                // to do
-                manager.balanceOf.selector,
-                address(proxyHook),
-                Currency.wrap(ua).toId()
-            ),
+            abi.encodeWithSelector(manager.balanceOf.selector, address(proxyHook), Currency.wrap(ua).toId()),
             abi.encode(poolunderlyingassetBalance)
         );
         return delta;
@@ -227,18 +221,18 @@ contract MarketLiquidityTest is MarketTestBase {
 
         bytes32 marketId = PoolId.unwrap(corePoolKey.toId());
 
-        // create a debt queue entry i.e. unwrap from the market enough to get an entry into the debt queue for the given market for the specified user
-        BalanceDelta delta = _createDebtQueueEntry(marketId);
+        // create a settlement queue entry i.e. unwrap from the market enough to get an entry into the settlement queue for the given market for the specified user
+        BalanceDelta delta = _createSettlementQueueEntry(marketId);
         uint256 amountOut = LiquidityUtils.safeInt128ToUint256(delta.amount1());
         uint256 underlyingBalanceRightAfterSwap = IERC20Minimal(lcc1.underlyingAsset()).balanceOf(test_user_1);
 
-        // validate that lcc was burned only after debt was paid off
+        // validate that lcc was burned only after settlement was paid off
         uint256 lccBalanceRightAfterSwap = lcc1.balanceOf(test_user_1);
 
         // stop acting as the test user, and have another user inject liquidity, that way the user balance does not change
-        // because it will if they were to add liquidity, however if they dont add, it should reduce the debt by the amount unwrapped
+        // because it will if they were to add liquidity, however if they dont add, it should reduce the pending settlement by the amount unwrapped
         vm.stopPrank();
-        // Inject liquidty into the system and validate the debt was paid off and the rest of the liquidty is in the pool manager
+        // Inject liquidty into the system and validate the pending settlement was paid off and the rest of the liquidty is in the pool manager
         modifyLiquidityRouter.modifyLiquidity(
             corePoolKey,
             ModifyLiquidityParams({
@@ -252,13 +246,13 @@ contract MarketLiquidityTest is MarketTestBase {
 
         vm.startPrank(test_user_1);
 
-        // Validate that LSS was burned as user's debt was settled
-        uint256 lccBalanceRightAfterDebtSettlement = lcc1.balanceOf(test_user_1);
-        assertEq(lccBalanceRightAfterDebtSettlement, lccBalanceRightAfterSwap - amountOut);
+        // Validate that LSS was burned as user's settlement was settled
+        uint256 lccBalanceRightAfterSettlement = lcc1.balanceOf(test_user_1);
+        assertEq(lccBalanceRightAfterSettlement, lccBalanceRightAfterSwap - amountOut);
 
-        // validate that the debt was paid off and the rest of the liquidity is in the pool manager
-        assertEq(lcc1.marketUserDebt(marketId, test_user_1), 0);
-        assertEq(lcc1.marketTotalDebt(marketId), 0);
+        // validate that the settlement was paid off and the rest of the liquidity is in the pool manager
+        assertEq(lcc1.marketUserSettlement(marketId, test_user_1), 0);
+        assertEq(lcc1.marketTotalSettlement(marketId), 0);
 
         uint256 underlyingBalanceRightAfterModifyLiquidity =
             IERC20Minimal(lcc1.underlyingAsset()).balanceOf(test_user_1);
@@ -276,7 +270,7 @@ contract MarketLiquidityTest is MarketTestBase {
             abi.encodeWithSelector(
                 // to do
                 manager.balanceOf.selector,
-                address(hook),
+                address(proxyHook),
                 _currency1.toId()
             ),
             abi.encode(poolunderlyingassetBalance)
@@ -287,20 +281,20 @@ contract MarketLiquidityTest is MarketTestBase {
 
         bytes32 marketId = PoolId.unwrap(corePoolKey.toId());
 
-        // create a debt queue entry i.e. unwrap from the market enough to get an entry into the debt queue for the given market for the specified user
-        BalanceDelta delta = _createDebtQueueEntry(marketId);
+        // create a settlement queue entry i.e. unwrap from the market enough to get an entry into the settlement queue for the given market for the specified user
+        BalanceDelta delta = _createSettlementQueueEntry(marketId);
         uint256 amountOut = LiquidityUtils.safeInt128ToUint256(delta.amount1());
 
         uint256 underlyingBalanceRightAfterSwap = IERC20Minimal(lcc1.underlyingAsset()).balanceOf(test_user_1);
 
-        // validate that lcc was burned only after debt was paid off
+        // validate that lcc was burned only after pending settlement was paid off
         uint256 lccBalanceRightAfterSwap = lcc1.balanceOf(test_user_1);
 
         // stop acting as the test user, and have another user inject liquidity, that way the user balance does not change
-        // because it will if they were to add liquidity, however if they dont add, it should reduce the debt by the amount unwrapped
+        // because it will if they were to add liquidity, however if they dont add, it should reduce the pending settlement amount by the amount unwrapped
         vm.stopPrank();
 
-        // Conduct a swap and validate the debt was paid off and the rest of the liquidty is in the pool manager
+        // Conduct a swap and validate the pending settlement was paid off and the rest of the liquidty is in the pool manager
         swapRouter.swap(
             corePoolKey,
             SwapParams({
@@ -314,13 +308,13 @@ contract MarketLiquidityTest is MarketTestBase {
 
         vm.startPrank(test_user_1);
 
-        // validate that the debt was paid off and the rest of the liquidity is in the pool manager
-        assertEq(lcc1.marketUserDebt(marketId, test_user_1), 0);
-        assertEq(lcc1.marketTotalDebt(marketId), 0);
+        // validate that the pending settlement was paid off and the rest of the liquidity is in the pool manager
+        assertEq(lcc1.marketUserSettlement(marketId, test_user_1), 0);
+        assertEq(lcc1.marketTotalSettlement(marketId), 0);
 
-        // validate that lcc was burned only after debt was paid off
-        uint256 lccBalanceRightAfterDebtSettlement = lcc1.balanceOf(test_user_1);
-        assertEq(lccBalanceRightAfterDebtSettlement, lccBalanceRightAfterSwap - amountOut);
+        // validate that lcc was burned only after pending settlement was paid off
+        uint256 lccBalanceRightAfterSettlement = lcc1.balanceOf(test_user_1);
+        assertEq(lccBalanceRightAfterSettlement, lccBalanceRightAfterSwap - amountOut);
 
         uint256 underlyingBalanceRightAfterModifyLiquidity =
             IERC20Minimal(lcc1.underlyingAsset()).balanceOf(test_user_1);
@@ -331,17 +325,17 @@ contract MarketLiquidityTest is MarketTestBase {
         );
     }
 
-    function test_fully_annulDebtQueueEntry_onTransfer() public {
+    function test_fully_annulSettlementQueueEntry_onTransfer() public {
         vm.startPrank(test_user_1);
 
         bytes32 marketId = PoolId.unwrap(corePoolKey.toId());
 
-        // create a debt queue entry i.e. unwrap from the market enough to get an entry into the debt queue for the given market for the specified user
-        BalanceDelta delta = _createDebtQueueEntry(marketId);
+        // create a settlement queue entry i.e. unwrap from the market enough to get an entry into the settlement queue for the given market for the specified user
+        BalanceDelta delta = _createSettlementQueueEntry(marketId);
         uint256 amountOut = LiquidityUtils.safeInt128ToUint256(delta.amount1());
 
-        // validate that the debt exists and is equal to the amount unwrapped
-        assertEq(lcc1.marketUserDebt(marketId, test_user_1), amountOut);
+        // validate that the pending settlement exists and is equal to the amount unwrapped
+        assertEq(lcc1.marketUserSettlement(marketId, test_user_1), amountOut);
 
         // get the user's LCC balance
         uint256 lccBalanceRightBeforeTransfer = lcc1.balanceOf(test_user_1);
@@ -350,47 +344,47 @@ contract MarketLiquidityTest is MarketTestBase {
         // it has to be a protocol bound address bcause lcc's transfer is limited to protocol bound addresses
         lcc1.transfer(address(manager), lccBalanceRightBeforeTransfer);
 
-        // validate that the debt was annulled and the user's LCC balance is zero
-        assertEq(lcc1.marketUserDebt(marketId, test_user_1), 0);
-        assertEq(lcc1.marketTotalDebt(marketId), 0);
+        // validate that the pending settlement was annulled and the user's LCC balance is zero
+        assertEq(lcc1.marketUserSettlement(marketId, test_user_1), 0);
+        assertEq(lcc1.marketTotalSettlement(marketId), 0);
         assertEq(lcc1.balanceOf(test_user_1), 0);
 
         vm.stopPrank();
     }
 
-    function test_partially_annulDebtQueueEntry_onTransfer() public {
+    function test_partially_annulSettlementQueueEntry_onTransfer() public {
         vm.startPrank(test_user_1);
         PoolSwapTest.TestSettings memory settings =
             PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false});
 
         bytes32 marketId = PoolId.unwrap(corePoolKey.toId());
 
-        // create a debt queue entry i.e. unwrap from the market enough to get an entry into the debt queue for the given market for the specified user
-        BalanceDelta delta = _createDebtQueueEntry(marketId);
+        // create a settlement queue entry i.e. unwrap from the market enough to get an entry into the settlement queue for the given market for the specified user
+        BalanceDelta delta = _createSettlementQueueEntry(marketId);
         uint256 amountOut = LiquidityUtils.safeInt128ToUint256(delta.amount1());
 
-        // validate that the debt exists and is equal to the amount unwrapped
-        assertEq(lcc1.marketUserDebt(marketId, test_user_1), amountOut);
+        // validate that the pending settlement exists and is equal to the amount unwrapped
+        assertEq(lcc1.marketUserSettlement(marketId, test_user_1), amountOut);
 
         // get the user's LCC balance
         uint256 lccBalanceRightBeforeTransfer = lcc1.balanceOf(test_user_1);
-        uint256 expectedDebtLeft = 10;
-        uint256 amountTransferred = lccBalanceRightBeforeTransfer - expectedDebtLeft;
+        uint256 expectedSettlementLeft = 10;
+        uint256 amountTransferred = lccBalanceRightBeforeTransfer - expectedSettlementLeft;
 
         // transfer all of the LCC to a protocol bound address i.e the pool manager
         // it has to be a protocol bound address bcause lcc's transfer is limited to protocol bound addresses
         lcc1.transfer(address(manager), amountTransferred);
 
-        // validate that the debt was partially annulled and the user's LCC balance is the expected debt left
-        assertEq(lcc1.marketUserDebt(marketId, test_user_1), expectedDebtLeft);
-        assertEq(lcc1.marketTotalDebt(marketId), expectedDebtLeft);
-        assertEq(lcc1.balanceOf(test_user_1), expectedDebtLeft);
+        // validate that the pending settlement was partially annulled and the user's LCC balance is the expected settlement left
+        assertEq(lcc1.marketUserSettlement(marketId, test_user_1), expectedSettlementLeft);
+        assertEq(lcc1.marketTotalSettlement(marketId), expectedSettlementLeft);
+        assertEq(lcc1.balanceOf(test_user_1), expectedSettlementLeft);
 
         uint256 underlyingBalanceRightBeforeSwap = IERC20Minimal(lcc1.underlyingAsset()).balanceOf(test_user_1);
 
-        // clear the debt and validate LCC balance is zero by permorming a swap as another user
+        // clear the pending settlement and validate LCC balance is zero by permorming a swap as another user
         vm.stopPrank();
-        // Conduct a swap and validate the debt was paid off and the rest of the liquidty is in the pool manager
+        // Conduct a swap and validate the pending settlement was paid off and the rest of the liquidty is in the pool manager
         swapRouter.swap(
             corePoolKey,
             SwapParams({
@@ -404,39 +398,39 @@ contract MarketLiquidityTest is MarketTestBase {
 
         uint256 underlyingBalanceRightAfterSwap = IERC20Minimal(lcc1.underlyingAsset()).balanceOf(test_user_1);
 
-        // validate lcc balance is zero since LCC should have been burned to pay off the debt
+        // validate lcc balance is zero since LCC should have been burned to pay off the pending settlement
         assertEq(lcc1.balanceOf(test_user_1), 0);
-        assertEq(underlyingBalanceRightAfterSwap - underlyingBalanceRightBeforeSwap, expectedDebtLeft);
-        // validate that the debt is zero after the swap
-        assertEq(lcc1.marketUserDebt(marketId, test_user_1), 0);
-        assertEq(lcc1.marketTotalDebt(marketId), 0);
+        assertEq(underlyingBalanceRightAfterSwap - underlyingBalanceRightBeforeSwap, expectedSettlementLeft);
+        // validate that the pending settlement is zero after the swap
+        assertEq(lcc1.marketUserSettlement(marketId, test_user_1), 0);
+        assertEq(lcc1.marketTotalSettlement(marketId), 0);
 
         vm.stopPrank();
     }
 
-    function test_doesNot_annulDebtQueueEntry_onTransfer() public {
+    function test_doesNot_annulSettlementQueueEntry_onTransfer() public {
         vm.startPrank(test_user_1);
 
         bytes32 marketId = PoolId.unwrap(corePoolKey.toId());
 
-        // create a debt queue entry i.e. unwrap from the market enough to get an entry into the debt queue for the given market for the specified user
-        BalanceDelta delta = _createDebtQueueEntry(marketId);
-        uint256 debtAmount = LiquidityUtils.safeInt128ToUint256(delta.amount1());
+        // create a settlement queue entry i.e. unwrap from the market enough to get an entry into the settlement queue for the given market for the specified user
+        BalanceDelta delta = _createSettlementQueueEntry(marketId);
+        uint256 pendingAmountToSettle = LiquidityUtils.safeInt128ToUint256(delta.amount1());
 
-        // validate that the debt exists and is equal to the amount unwrapped
-        assertEq(lcc1.marketUserDebt(marketId, test_user_1), debtAmount);
+        // validate that the pending settlement exists and is equal to the amount unwrapped
+        assertEq(lcc1.marketUserSettlement(marketId, test_user_1), pendingAmountToSettle);
 
         // get the user's LCC balance
         uint256 lccBalanceRightBeforeTransfer = lcc1.balanceOf(test_user_1);
 
         // transfer some of the LCC to a protocol bound address i.e the pool manager
         // it has to be a protocol bound address bcause lcc's transfer is limited to protocol bound addresses
-        lcc1.transfer(address(manager), lccBalanceRightBeforeTransfer - debtAmount);
+        lcc1.transfer(address(manager), lccBalanceRightBeforeTransfer - pendingAmountToSettle);
 
-        // validate that the debt was not annulled and the user's LCC balance is the debt amount left
-        // i.e as long as a user has equivalent LCC balance to the debt amount, the debt will not be annulled
-        assertEq(lcc1.marketUserDebt(marketId, test_user_1), debtAmount);
-        assertEq(lcc1.marketTotalDebt(marketId), debtAmount);
-        assertEq(lcc1.balanceOf(test_user_1), debtAmount);
+        // validate that the pending settlement was not annulled and the user's LCC balance is the pending settlement amount left
+        // i.e as long as a user has equivalent LCC balance to the pending settlement amount, the pending settlement will not be annulled
+        assertEq(lcc1.marketUserSettlement(marketId, test_user_1), pendingAmountToSettle);
+        assertEq(lcc1.marketTotalSettlement(marketId), pendingAmountToSettle);
+        assertEq(lcc1.balanceOf(test_user_1), pendingAmountToSettle);
     }
 }
