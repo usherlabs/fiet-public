@@ -10,12 +10,12 @@ library VTSConfigs {
             token0: TokenConfiguration({
                 gracePeriodTime: 1800, // 30 minutes
                 seizureUnlockTime: 3600, // 1 hour
-                baseVTSRate: 1 // 0.01% (1 bip)
+                baseVTSRate: 1000 // 10% (1000 bips)
             }),
             token1: TokenConfiguration({
                 gracePeriodTime: 1800, // 30 minutes
                 seizureUnlockTime: 3600, // 1 hour
-                baseVTSRate: 1 // 0.01% (1 bip)
+                baseVTSRate: 1000 // 10% (1000 bips)
             }),
             timeWindow: 172800, // 48 hours
             boostTerm: 110, // 1.1% (110 bips)

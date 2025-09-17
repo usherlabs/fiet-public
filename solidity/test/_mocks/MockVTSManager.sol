@@ -2,9 +2,59 @@
 pragma solidity ^0.8.0;
 
 import {VTSManager} from "../../src/modules/VTSManager.sol";
+import {PositionId} from "../../src/types/Position.sol";
+import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 
 contract MockVTSManager is VTSManager {
     constructor(address _poolManager, address _marketFactory, address _mmPositionManager)
         VTSManager(_poolManager, _marketFactory, _mmPositionManager)
     {}
+
+    // cache the required VTS per position using this mapping
+    mapping(PositionId => BalanceDelta) public mockVtsRequired;
+
+    // mock the required VTS for a position
+    function setMockVTSRequired(PositionId positionId, uint128 vtsRequired0, uint128 vtsRequired1) public {
+        mockVtsRequired[positionId] = toBalanceDelta(int128(vtsRequired0), int128(vtsRequired1));
+    }
+
+    // increase the VTS for a position by the provided value in bps
+    function increaseVTS(PositionId positionId, uint256 vtsIncreaseBps) public {
+        (uint256 currentVts0, uint256 currentVts1) = getVTSRequired(positionId);
+
+        // increase VTS by the provided bps value, ensuring it doesn't exceed 10000 bps (100%)
+        uint256 newVts0 = currentVts0 + vtsIncreaseBps;
+        uint256 newVts1 = currentVts1 + vtsIncreaseBps;
+
+        // cap at 10000 bps (100%)
+        if (newVts0 > 10000) newVts0 = 10000;
+        if (newVts1 > 10000) newVts1 = 10000;
+
+        setMockVTSRequired(positionId, uint128(newVts0), uint128(newVts1));
+    }
+
+    // decrease the VTS for a position by the provided value in bps
+    function decreaseVTS(PositionId positionId, uint256 vtsDecreaseBps) public {
+        (uint256 currentVts0, uint256 currentVts1) = getVTSRequired(positionId);
+
+        // decrease VTS by the provided bps value, ensuring it doesn't go below 0
+        uint256 newVts0 = currentVts0 > vtsDecreaseBps ? currentVts0 - vtsDecreaseBps : 0;
+        uint256 newVts1 = currentVts1 > vtsDecreaseBps ? currentVts1 - vtsDecreaseBps : 0;
+
+        setMockVTSRequired(positionId, uint128(newVts0), uint128(newVts1));
+    }
+
+    // since this is a mock contract, we need to overrride the function to get the current vts for a given position
+    // this way we can easily set a mock vts required for a given position
+    function getVTSRequired(PositionId positionId)
+        public
+        view
+        override
+        returns (uint256 vtsRequired0, uint256 vtsRequired1)
+    {
+        return (
+            uint256(uint128(mockVtsRequired[positionId].amount0())),
+            uint256(uint128(mockVtsRequired[positionId].amount1()))
+        );
+    }
 }

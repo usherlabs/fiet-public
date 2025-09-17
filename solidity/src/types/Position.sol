@@ -4,15 +4,19 @@ pragma solidity ^0.8.20;
 import {MarketMaker} from "../libraries/MarketMaker.sol";
 import {ModifyLiquidityParams} from "v4-periphery/lib/v4-core/src/types/PoolOperation.sol";
 import {Position} from "v4-periphery/lib/v4-core/src/libraries/Position.sol";
-import {PoolId} from "v4-periphery/lib/v4-core/src/types/PoolId.sol";
+import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 
 type PositionId is bytes32;
 
 struct PositionInfo {
+    // the token id of the position
+    uint256 tokenId;
+    // the index of the position in the mapping
+    uint256 positionIndex;
     // the id of the position
     PositionId positionId;
     // the pool key of the position
-    PoolId poolId;
+    PoolKey poolKey;
     // the lower tick of the position
     int24 tickLower;
     // the upper tick of the position
@@ -23,8 +27,6 @@ struct PositionInfo {
     address owner;
     // the issuer of the position
     string issuer;
-    // the index of the position in the mapping
-    uint256 positionIndex;
     // whether the position is active
     bool isActive;
 }

@@ -30,6 +30,8 @@ import {MMPositionManager} from "../../src/MMPositionManager.sol";
 import {StubSpokeVerifier} from "../../src/modules/StubSpokeVerifier.sol";
 import {ICSpokeVerifier} from "../../src/modules/ICSpokeVerifier.sol";
 import {OracleRegistry} from "../../src/OracleRegistry.sol";
+import {VTSConfigs} from "../../src/libraries/VTSConfigs.sol";
+import {IVTSManager} from "../../src/interfaces/IVTSManager.sol";
 
 abstract contract MarketTestBase is Test, Deployers {
     using PoolIdLibrary for PoolId;
@@ -172,6 +174,12 @@ abstract contract MarketTestBase is Test, Deployers {
             marketFactory,
             abi.encodeWithSelector(IMarketFactory.proxyHookToCurrencyPair.selector),
             abi.encode(Currency.unwrap(_currency2), Currency.unwrap(_currency3))
+        );
+        // mock the call to get the market VTS configuration
+        vm.mockCall(
+            coreHookAddress,
+            abi.encodeWithSelector(IVTSManager.getMarketVTSConfiguration.selector),
+            abi.encode(VTSConfigs.getDefaultConfig())
         );
         // Activate proxy hooks
         vm.prank(marketFactory);

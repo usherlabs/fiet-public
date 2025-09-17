@@ -15,6 +15,7 @@ import {LiquidityUtils} from "../libraries/LiquidityUtils.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {console} from "forge-std/console.sol";
 
 abstract contract MarketVault {
@@ -46,10 +47,10 @@ abstract contract MarketVault {
     );
 
     struct CallbackData {
+        address sender;
         Currency currency0;
         Currency currency1;
-        uint256 amount1;
-        uint256 amount0;
+        BalanceDelta balanceDelta;
     }
 
     /**
@@ -189,16 +190,16 @@ abstract contract MarketVault {
     }
 
     /**
-     * @dev Fill Pending settlements to the LCC from the vault
+     * @dev Fill Pending settlements of users who tried to unwrap with insufficient liquidity
      * @param corePoolKey The core pool key
      */
     function _settleObligationsToLCC(PoolKey memory corePoolKey) internal {
         bytes32 marketId = PoolId.unwrap(corePoolKey.toId());
         // Get both LCC tokens for this market
         LiquidityCommitmentCertificate lccToken0 =
-            LiquidityCommitmentCertificate(payable(Currency.unwrap(corePoolKey.currency0)));
+            LiquidityCommitmentCertificate(Currency.unwrap(corePoolKey.currency0));
         LiquidityCommitmentCertificate lccToken1 =
-            LiquidityCommitmentCertificate(payable(Currency.unwrap(corePoolKey.currency1)));
+            LiquidityCommitmentCertificate(Currency.unwrap(corePoolKey.currency1));
 
         // Try to fill pending settlements for both tokens
         _tryFillPendingLCCSettlements(lccToken0, marketId);
@@ -236,11 +237,31 @@ abstract contract MarketVault {
         if (msg.sender != address(vaultPoolManager)) {
             revert InvalidSender();
         }
+        // decode the callback data to determine the important parameters
         CallbackData memory callbackData = abi.decode(data, (CallbackData));
+        // get the amount0 and amount1 from the balance delta
+        (int128 amount0, int128 amount1) = (callbackData.balanceDelta.amount0(), callbackData.balanceDelta.amount1());
 
-        // Settle `amount` of each currency from the the vault
-        _settleAssetToVault(callbackData.currency0, address(this), callbackData.amount0);
-        _settleAssetToVault(callbackData.currency1, address(this), callbackData.amount1);
+        // if the delta of amount0 is negative, then we need to take equivalent tokens from the vault
+        if (amount0 < 0) {
+            // take asset from vault
+            _takeAssetFromVault(callbackData.currency0, callbackData.sender, uint256(int256(-amount0)));
+        }
+        // if the delta of amount1 is negative, then we need to take equivalent tokens from the vault
+        if (amount1 < 0) {
+            // take asset from vault
+            _takeAssetFromVault(callbackData.currency1, callbackData.sender, uint256(int256(-amount1)));
+        }
+        // if the delta of amount0 is positive, then we need to settle equivalent tokens to the vault
+        if (amount0 > 0) {
+            // settle asset to vault
+            _settleAssetToVault(callbackData.currency0, address(this), uint256(int256(amount0)));
+        }
+        // if the delta of amount1 is positive, then we need to settle equivalent tokens to the vault
+        if (amount1 > 0) {
+            // settle asset to vault
+            _settleAssetToVault(callbackData.currency1, address(this), uint256(int256(amount1)));
+        }
 
         return "";
     }
@@ -249,12 +270,11 @@ abstract contract MarketVault {
      * @dev Manually add liquidity to the vault by first unlocking the pool manager then settling the removed funds
      * @param currency0 The currency 0
      * @param currency1 The currency 1
-     * @param amount0 The amount of currency 0
-     * @param amount1 The amount of currency 1
+     * @param balanceDelta The balance delta of the currency 0 and currency 1
      */
-    function _addLiquidityToVault(address currency0, address currency1, uint256 amount0, uint256 amount1) internal {
+    function _modifyVaultLiquidity(address currency0, address currency1, BalanceDelta balanceDelta) internal {
         vaultPoolManager.unlock(
-            abi.encode(CallbackData(Currency.wrap(currency0), Currency.wrap(currency1), amount0, amount1))
+            abi.encode(CallbackData(msg.sender, Currency.wrap(currency0), Currency.wrap(currency1), balanceDelta))
         );
     }
 }

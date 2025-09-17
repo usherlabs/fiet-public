@@ -34,6 +34,9 @@ import {ERC20} from "solmate/tokens/ERC20.sol";
 import {PositionInfo} from "../src/types/Position.sol";
 import {IOracleRegistry} from "../src/interfaces/IOracleRegistry.sol";
 import {IOracle} from "../src/interfaces/IOracle.sol";
+import {PositionId} from "../src/types/Position.sol";
+import {IVTSManager} from "../src/interfaces/IVTSManager.sol";
+import {MarketVTSConfiguration} from "../src/types/VTS.sol";
 
 contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
     using PoolIdLibrary for PoolId;
@@ -41,6 +44,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
     using MarketMaker for MarketMaker.State;
 
     MMPositionManager positionManager;
+    MarketVTSConfiguration marketVTSConfiguration;
 
     LiquidityCommitmentCertificate lcc0;
     LiquidityCommitmentCertificate lcc1;
@@ -55,6 +59,8 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         positionManager = MMPositionManager(mmPositionManager);
         lcc0 = LiquidityCommitmentCertificate(payable(Currency.unwrap(_currency2)));
         lcc1 = LiquidityCommitmentCertificate(payable(Currency.unwrap(_currency3)));
+
+        marketVTSConfiguration = IVTSManager(coreHookAddress).getMarketVTSConfiguration(corePoolKey.toId());
 
         // approve the lccs to the mmPositionManager to be able to route tokens to the pool manager
         // lcc0.approve(address(mmPositionManager), Constants.MAX_UINT256);
@@ -89,15 +95,17 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         // mock the price oracles to return prices and decimals numbers
         // initialize the price feeds for the mock assets
         // Create mock price feeds with 8 decimals (standard for Chainlink)
+        // these are the mock prices of the assets in the signal reserves, if more assets are added, we need to mock the prices for them her
         // BTC/USD: ~$113,000 * 10^8 = 11300000000000
         vm.mockCall(mockOracleBTC, abi.encodeWithSelector(IOracle.getPrice.selector), abi.encode(11300000000000));
         // USDT/USD: ~$0.997 * 10^8 = 99700000
         vm.mockCall(mockOracleUSDT, abi.encodeWithSelector(IOracle.getPrice.selector), abi.encode(99700000));
-        // set the
+        // set the decimals for the mock oracles
         vm.mockCall(mockOracleBTC, abi.encodeWithSelector(IOracle.decimals.selector), abi.encode(8));
         vm.mockCall(mockOracleUSDT, abi.encodeWithSelector(IOracle.decimals.selector), abi.encode(8));
+        // TODO: add mock prices for the other assets in the signal reserves
 
-        // Mock the getOraclePrice
+        // Mock the getOraclePrice used to calculate the USD value of the LCCs total commitment
         // LCC0: ~$0.997 * 10^8 = 99700000
         vm.mockCall(
             address(lcc0),
@@ -120,7 +128,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         );
     }
 
-    function test_canCommitLCCToCorePoolWithMMPM() public {
+    function test_canCommitPosition() public {
         ModifyLiquidityParams memory liquidityParams =
             ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
 
@@ -144,7 +152,9 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         uint256 proxyCurrency0BalanceBefore = manager.balanceOf(address(proxyHook), proxyPoolKey.currency0.toId());
         uint256 proxyCurrency1BalanceBefore = manager.balanceOf(address(proxyHook), proxyPoolKey.currency1.toId());
 
-        uint256 tokenId = positionManager.commit(corePoolKey, liquidityParams, liquiditySignal);
+        PositionId positionId = positionManager.commit(corePoolKey, liquidityParams, liquiditySignal);
+        PositionInfo memory positionInfo = positionManager.getPosition(positionId);
+        uint256 tokenId = positionInfo.tokenId;
 
         uint256 pmLcc0BalanceAfter = lcc0.balanceOf(address(manager));
         uint256 pmLcc1BalanceAfter = lcc1.balanceOf(address(manager));
@@ -166,13 +176,199 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         assertEq(totalLiquidity, liquidityParams.liquidityDelta);
         assertEq(activePositionCount, 1);
 
-        PositionInfo memory positionInfo = positionManager.getPositionInfo(tokenId, activePositionCount - 1);
-        assertEq(PoolId.unwrap(positionInfo.poolId), PoolId.unwrap(corePoolKey.toId()));
+        assertEq(PoolId.unwrap(positionInfo.poolKey.toId()), PoolId.unwrap(corePoolKey.toId()));
         assertEq(positionInfo.tickLower, liquidityParams.tickLower);
         assertEq(positionInfo.tickUpper, liquidityParams.tickUpper);
         assertEq(positionInfo.liquidity, liquidityParams.liquidityDelta);
         assertEq(positionInfo.owner, address(this));
         assertEq(positionInfo.positionIndex, activePositionCount - 1);
         assertEq(positionInfo.isActive, true);
+    }
+
+    function test_canSettleToCreatedPosition() public {
+        // get the default market confiration so we can tweak it
+
+        bytes memory liquiditySignal = abi.encode(liquiditySignal);
+        ModifyLiquidityParams memory liquidityParams =
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
+
+        // Get the amount of LCC tokens that will be minted
+        (uint256 token0AmountMinted, uint256 token1AmountMinted) =
+            positionManager.calculateTokenAmountsFromPositionParams(corePoolKey, liquidityParams);
+
+        // Get amount of underlying liquidity to transfer from the issuer to the lcc
+        (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) =
+            positionManager.getBaseSettlementAmounts(corePoolKey, token0AmountMinted, token1AmountMinted);
+
+        // Approve the position manager to take the base/minimum underlying liquidity to create to the position
+        ERC20(lcc0.underlyingAsset()).approve(address(mmPositionManager), underlyingLiquidityFraction0);
+        ERC20(lcc1.underlyingAsset()).approve(address(mmPositionManager), underlyingLiquidityFraction1);
+
+        // commit the position
+        PositionId positionId = positionManager.commit(corePoolKey, liquidityParams, liquiditySignal);
+
+        // get the current vts for this position
+        (uint256 vtsCurrent0BeforeSettlement, uint256 vtsCurrent1BeforeSettlement) =
+            IVTSManager(coreHookAddress).getVTSCurrent(positionId);
+
+        // assert the vts before further settlement is equal to the base vts
+        assertEq(vtsCurrent0BeforeSettlement, marketVTSConfiguration.token0.baseVTSRate);
+        assertEq(vtsCurrent1BeforeSettlement, marketVTSConfiguration.token1.baseVTSRate);
+        // make a settlement to the position with the base vts, which should double the current VTS for this position
+        // -- before making a settlement, we have to approve the position manager to take the tokens from us
+        ERC20(lcc0.underlyingAsset()).approve(address(mmPositionManager), underlyingLiquidityFraction0);
+        ERC20(lcc1.underlyingAsset()).approve(address(mmPositionManager), underlyingLiquidityFraction1);
+        // -- before making a settlement, we have to approve the position manager to take the tokens from us
+        positionManager.settle(positionId, underlyingLiquidityFraction0, underlyingLiquidityFraction1);
+
+        // get the current vts for this position
+        (uint256 vtsCurrent0AfterSettlement, uint256 vtsCurrent1AfterSettlement) =
+            IVTSManager(coreHookAddress).getVTSCurrent(positionId);
+        // assert the vts after settlement is equal to the base vts * 2
+        assertEq(vtsCurrent0AfterSettlement, marketVTSConfiguration.token0.baseVTSRate * 2);
+        assertEq(vtsCurrent1AfterSettlement, marketVTSConfiguration.token1.baseVTSRate * 2);
+    }
+
+    function test_canWithdrawFromSettledPosition_withoutOpenRFS() public {
+        // get the default market confiration so we can tweak it
+        bytes memory liquiditySignal = abi.encode(liquiditySignal);
+        ModifyLiquidityParams memory liquidityParams =
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
+
+        // Get the amount of LCC tokens that will be minted
+        (uint256 token0AmountMinted, uint256 token1AmountMinted) =
+            positionManager.calculateTokenAmountsFromPositionParams(corePoolKey, liquidityParams);
+
+        // Get amount of underlying liquidity to transfer from the issuer to the lcc
+        (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) =
+            positionManager.getBaseSettlementAmounts(corePoolKey, token0AmountMinted, token1AmountMinted);
+
+        // Approve the position manager to take the base/minimum underlying liquidity to create to the position
+        ERC20(lcc0.underlyingAsset()).approve(address(mmPositionManager), underlyingLiquidityFraction0);
+        ERC20(lcc1.underlyingAsset()).approve(address(mmPositionManager), underlyingLiquidityFraction1);
+
+        // commit the position
+        PositionId positionId = positionManager.commit(corePoolKey, liquidityParams, liquiditySignal);
+
+        // get current VTS
+        (uint256 vtsCurrent0BeforeWithdrawal, uint256 vtsCurrent1BeforeWithdrawal) =
+            IVTSManager(coreHookAddress).getVTSCurrent(positionId);
+
+        // Mock the RFS for this position
+        // this means RFS for this position is not open and the user can withdraw 1000 & 500 units of each token
+        uint256 amount0 = 100;
+        uint256 amount1 = 50;
+        bool rfsOpen = false; // if rfs is open then amount0 || amount1 will be less than zero
+        vm.mockCall(
+            address(IVTSManager(coreHookAddress)),
+            abi.encodeWithSelector(IVTSManager.getRFS.selector),
+            abi.encode(rfsOpen, toBalanceDelta(int128(int256(amount0)), int128(int256(amount1))))
+        );
+        // get balance of underlying tokens of position manager
+        uint256 preBalanceOfToken0UnderlyingAssetInPM = Currency.wrap(lcc0.underlyingAsset()).balanceOf(address(this));
+        uint256 preBalanceOfToken1UnderlyingAssetInPM = Currency.wrap(lcc1.underlyingAsset()).balanceOf(address(this));
+
+        // withdraw from the position
+        positionManager.withdraw(positionId, amount0, amount1);
+
+        // get balance of underlying tokens of position manager after withdrawal
+        uint256 postBalanceOfToken0UnderlyingAssetInPM = Currency.wrap(lcc0.underlyingAsset()).balanceOf(address(this));
+        uint256 postBalanceOfToken1UnderlyingAssetInPM = Currency.wrap(lcc1.underlyingAsset()).balanceOf(address(this));
+
+        // validate balance after withdrawal
+        assertEq(postBalanceOfToken0UnderlyingAssetInPM, preBalanceOfToken0UnderlyingAssetInPM + amount0);
+        assertEq(postBalanceOfToken1UnderlyingAssetInPM, preBalanceOfToken1UnderlyingAssetInPM + amount1);
+
+        // validate vts current reduces after withdrawal
+        (uint256 vtsCurrent0AfterWithdrawal, uint256 vtsCurrent1AfterWithdrawal) =
+            IVTSManager(coreHookAddress).getVTSCurrent(positionId);
+
+        assertGt(vtsCurrent0BeforeWithdrawal, vtsCurrent0AfterWithdrawal);
+        assertGt(vtsCurrent1BeforeWithdrawal, vtsCurrent1AfterWithdrawal);
+    }
+
+    function test_canDecommitPosition_usingPositionId() public {
+        // get the default market confiration so we can tweak it
+        bytes memory liquiditySignal = abi.encode(liquiditySignal);
+        ModifyLiquidityParams memory liquidityParams =
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
+
+        // Get the amount of LCC tokens that will be minted
+        (uint256 token0AmountMinted, uint256 token1AmountMinted) =
+            positionManager.calculateTokenAmountsFromPositionParams(corePoolKey, liquidityParams);
+
+        // Get amount of underlying liquidity to transfer from the issuer to the lcc
+        (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) =
+            positionManager.getBaseSettlementAmounts(corePoolKey, token0AmountMinted, token1AmountMinted);
+
+        // Approve the position manager to take the base/minimum underlying liquidity to create to the position
+        ERC20(lcc0.underlyingAsset()).approve(address(mmPositionManager), underlyingLiquidityFraction0);
+        ERC20(lcc1.underlyingAsset()).approve(address(mmPositionManager), underlyingLiquidityFraction1);
+        PositionId positionId = positionManager.commit(corePoolKey, liquidityParams, liquiditySignal);
+
+        // get underlying asset balance before decommitment
+        uint256 token0BalanceBefore = Currency.wrap(lcc0.underlyingAsset()).balanceOf(address(this));
+        uint256 token1BalanceBefore = Currency.wrap(lcc1.underlyingAsset()).balanceOf(address(this));
+
+        console.log("token0BalanceBefore", token0BalanceBefore);
+        console.log("token1BalanceBefore", token1BalanceBefore);
+
+        // Mock the RFS for this position
+        vm.mockCall(
+            address(IVTSManager(coreHookAddress)),
+            abi.encodeWithSelector(IVTSManager.getRFS.selector),
+            abi.encode(false, toBalanceDelta(0, 0))
+        );
+        BalanceDelta balanceDelta = positionManager.decommitPosition(positionId);
+
+        // get underlying asset balance after decommitment
+        uint256 token0BalanceAfter = Currency.wrap(lcc0.underlyingAsset()).balanceOf(address(this));
+        uint256 token1BalanceAfter = Currency.wrap(lcc1.underlyingAsset()).balanceOf(address(this));
+
+        assertEq(token0BalanceAfter, token0BalanceBefore + LiquidityUtils.safeInt128ToUint256(balanceDelta.amount0()));
+        assertEq(token1BalanceAfter, token1BalanceBefore + LiquidityUtils.safeInt128ToUint256(balanceDelta.amount1()));
+    }
+
+    function test_canDecommitPosition_usingTokenId() public {
+        // get the default market confiration so we can tweak it
+        bytes memory liquiditySignal = abi.encode(liquiditySignal);
+        ModifyLiquidityParams memory liquidityParams =
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
+
+        // Get the amount of LCC tokens that will be minted
+        (uint256 token0AmountMinted, uint256 token1AmountMinted) =
+            positionManager.calculateTokenAmountsFromPositionParams(corePoolKey, liquidityParams);
+
+        // Get amount of underlying liquidity to transfer from the issuer to the lcc
+        (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) =
+            positionManager.getBaseSettlementAmounts(corePoolKey, token0AmountMinted, token1AmountMinted);
+
+        // Approve the position manager to take the base/minimum underlying liquidity to create to the position
+        ERC20(lcc0.underlyingAsset()).approve(address(mmPositionManager), underlyingLiquidityFraction0);
+        ERC20(lcc1.underlyingAsset()).approve(address(mmPositionManager), underlyingLiquidityFraction1);
+        PositionId positionId = positionManager.commit(corePoolKey, liquidityParams, liquiditySignal);
+
+        // get the token id for the position
+        uint256 tokenId = positionManager.getPosition(positionId).tokenId;
+
+        // get underlying asset balance before decommitment
+        uint256 token0BalanceBefore = Currency.wrap(lcc0.underlyingAsset()).balanceOf(address(this));
+        uint256 token1BalanceBefore = Currency.wrap(lcc1.underlyingAsset()).balanceOf(address(this));
+
+        // Mock the RFS for this position
+        vm.mockCall(
+            address(IVTSManager(coreHookAddress)),
+            abi.encodeWithSelector(IVTSManager.getRFS.selector),
+            abi.encode(false, toBalanceDelta(0, 0))
+        );
+
+        positionManager.decommit(tokenId);
+
+        // get underlying asset balance after decommitment
+        uint256 token0BalanceAfter = Currency.wrap(lcc0.underlyingAsset()).balanceOf(address(this));
+        uint256 token1BalanceAfter = Currency.wrap(lcc1.underlyingAsset()).balanceOf(address(this));
+
+        assertGt(token0BalanceAfter, token0BalanceBefore);
+        assertGt(token1BalanceAfter, token1BalanceBefore);
     }
 }

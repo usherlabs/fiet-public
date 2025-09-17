@@ -27,6 +27,7 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable {
     error InvalidAmount();
     error InvalidMarketFactory();
     error InsufficientWrappedLiquidity(uint256 requested, uint256 available);
+    error SenderNotMMPositionManager(address sender);
 
     address public immutable underlyingAsset;
     address public immutable marketFactory;
@@ -123,6 +124,7 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable {
         onlyIssuer
         returns (uint256 amountToCancel, uint256 deficitAmount)
     {
+        // TODO: provide issuer address to the function when calling it
         address issuer = msg.sender;
         // ? this may not be correct, we need to actually get the amount of underlying liquidity that this issuer has of this LCC'S underlying asset
         // uint256 externallyCustodied = totalSupply - uaSupply;
@@ -155,6 +157,14 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable {
         }
 
         return (amountToCancel, deficitAmount);
+    }
+
+    function burn(uint256 amount) external {
+        address mmpm = IMarketFactory(marketFactory).mmPositionManager();
+        if (msg.sender != mmpm) {
+            revert SenderNotMMPositionManager(msg.sender);
+        }
+        _burn(msg.sender, amount);
     }
 
     // Called by Issuer before settling liquidity from LCCs to the market.
