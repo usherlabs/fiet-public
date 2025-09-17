@@ -2,8 +2,6 @@
 /// @notice Library for tracking rolling outflow of a currency in a pool/market data in a time window
 pragma solidity ^0.8.0;
 
-import {console} from "forge-std/console.sol";
-
 /**
  * @title TimeBucketOutflowTracker
  * @notice Tracks outflow data for a specific time window using time-based bucketing
@@ -20,6 +18,10 @@ struct TimeBucketOutflowTracker {
     uint256 head;
     /// @notice Time window duration in seconds
     uint256 timeWindow;
+    /// @notice Precomputed bucket duration in seconds
+    uint256 bucketDuration;
+    /// @notice Start timestamp of the current head bucket (aligned to bucketDuration)
+    uint256 lastBucketStart;
     /// @notice Is Initialized
     bool isInitialized;
 }
@@ -53,8 +55,19 @@ library TimeBucketOutflowTrackerLibrary {
         tracker.bucketTimestamps = new uint256[](NUM_BUCKETS);
         tracker.bucketOutflow0 = new uint256[](NUM_BUCKETS);
         tracker.bucketOutflow1 = new uint256[](NUM_BUCKETS);
-        tracker.head = 0;
         tracker.timeWindow = timeWindow;
+        // Precompute bucketDuration = ceil(timeWindow / NUM_BUCKETS), minimum 1
+        uint256 bucketDuration = (timeWindow + NUM_BUCKETS - 1) / NUM_BUCKETS;
+        if (bucketDuration == 0) bucketDuration = 1;
+        tracker.bucketDuration = bucketDuration;
+
+        // Initialise head and aligned bucket start based on current time
+        uint256 currentTime = block.timestamp;
+        uint256 currentBucket = (currentTime / bucketDuration) & (NUM_BUCKETS - 1);
+        tracker.head = currentBucket;
+        uint256 alignedStart = currentTime - (currentTime % bucketDuration);
+        tracker.lastBucketStart = alignedStart;
+        tracker.bucketTimestamps[currentBucket] = alignedStart;
         tracker.isInitialized = true;
     }
 
@@ -72,21 +85,34 @@ library TimeBucketOutflowTrackerLibrary {
         }
 
         uint256 currentTime = block.timestamp;
-        uint256 bucketDuration = (tracker.timeWindow + NUM_BUCKETS - 1) / NUM_BUCKETS;
-        if (bucketDuration == 0) bucketDuration = 1;
+        uint256 head = tracker.head;
+        uint256 lastStart = tracker.lastBucketStart;
+        uint256 bucketDuration = tracker.bucketDuration;
 
-        uint256 currentBucket = (currentTime / bucketDuration) % NUM_BUCKETS;
-        if (currentBucket != tracker.head) {
-            // We are moving to a new bucket index; reset the bucket
-            tracker.bucketOutflow0[currentBucket] = 0;
-            tracker.bucketOutflow1[currentBucket] = 0;
-            tracker.bucketTimestamps[currentBucket] = currentTime;
-            tracker.head = currentBucket;
+        // Fast path: still within current bucket window (no division/modulo)
+        if (currentTime < lastStart + bucketDuration) {
+            tracker.bucketOutflow0[head] += outflow0;
+            tracker.bucketOutflow1[head] += outflow1;
+            return;
         }
 
-        // Aggregate into current bucket
-        tracker.bucketOutflow0[tracker.head] += outflow0;
-        tracker.bucketOutflow1[tracker.head] += outflow1;
+        // Crossed one or more bucket windows; compute how many steps forward
+        uint256 steps = (currentTime - lastStart) / bucketDuration;
+        uint256 newHead = (head + steps) & (NUM_BUCKETS - 1);
+
+        // Reset destination bucket and set its start timestamp aligned to bucket boundary
+        tracker.bucketOutflow0[newHead] = 0;
+        tracker.bucketOutflow1[newHead] = 0;
+        uint256 newStart = lastStart + steps * bucketDuration;
+        tracker.bucketTimestamps[newHead] = newStart;
+
+        // Update head and last start
+        tracker.head = newHead;
+        tracker.lastBucketStart = newStart;
+
+        // Aggregate into new head bucket
+        tracker.bucketOutflow0[newHead] += outflow0;
+        tracker.bucketOutflow1[newHead] += outflow1;
     }
 
     /**
@@ -102,8 +128,6 @@ library TimeBucketOutflowTrackerLibrary {
     {
         uint256 total0 = 0;
         uint256 total1 = 0;
-
-        console.log("tracker.timeWindow", tracker.timeWindow);
 
         if (tracker.timeWindow == 0) {
             // If no time window, sum all buckets

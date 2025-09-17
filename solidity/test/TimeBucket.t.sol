@@ -12,23 +12,37 @@ contract TimeBucketOutflowTrackerTest is Test {
     uint256 constant TIME_WINDOW = 300; // 5 minutes
 
     function setUp() public {
+        // Ensure non-zero timestamp so bucket timestamps are included in window filtering
+        vm.warp(1);
         tracker.initialize(TIME_WINDOW);
     }
 
-    function testRecordAndGetOutflow() public {
+    function test_recordOutflow() public {
         // Record some outflows
         tracker.recordOutflow(100, 200);
         tracker.recordOutflow(300, 400);
 
-        // // Check totals
-        (uint256 total0, uint256 total1) = tracker.getTotalOutflow();
-        console.log("Total0:", total0);
-        console.log("Total1:", total1);
-        assertEq(total0, 400); // 100 + 300
-        assertEq(total1, 600); // 200 + 400
+        // Check the current head bucket accumulated values
+        assertEq(tracker.bucketOutflow0[tracker.head], 400); // 100 + 300
+        assertEq(tracker.bucketOutflow1[tracker.head], 600); // 200 + 400
     }
 
-    function testTimeWindowCleanup() public {
+    function test_recordAndGetOutflow() public {
+        // Record some outflows
+        tracker.recordOutflow(100, 200);
+        tracker.recordOutflow(300, 400);
+
+        // Check the current head bucket accumulated values
+        assertEq(tracker.bucketOutflow0[tracker.head], 400); // 100 + 300
+        assertEq(tracker.bucketOutflow1[tracker.head], 600); // 200 + 400
+
+        // Check totals
+        (uint256 total0, uint256 total1) = tracker.getTotalOutflow();
+        assertEq(total0, 400);
+        assertEq(total1, 600);
+    }
+
+    function test_timeWindowCleanup() public {
         // Record outflow at time 0
         vm.warp(0);
         tracker.recordOutflow(100, 200);
@@ -49,7 +63,7 @@ contract TimeBucketOutflowTrackerTest is Test {
         assertEq(total1, 610);
     }
 
-    function testZeroOutflow() public {
+    function test_zeroOutflow() public {
         // Record zero outflows
         tracker.recordOutflow(0, 0);
         tracker.recordOutflow(100, 0);
@@ -61,7 +75,7 @@ contract TimeBucketOutflowTrackerTest is Test {
         assertEq(total1, 200);
     }
 
-    function testBucketReuse() public {
+    function test_bucketReuse() public {
         // Start at time 1 (avoid timestamp 0)
         vm.warp(1);
         tracker.recordOutflow(100, 200); // Goes to bucket 1
