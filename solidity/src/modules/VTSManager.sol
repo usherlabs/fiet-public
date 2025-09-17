@@ -20,6 +20,8 @@ import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
 import {TransientStateLibrary} from "v4-periphery/lib/v4-core/src/libraries/TransientStateLibrary.sol";
 import {FixedPoint96} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint96.sol";
+import {TickMath} from "v4-periphery/lib/v4-core/src/libraries/TickMath.sol";
+import {SqrtPriceMath} from "v4-periphery/lib/v4-core/src/libraries/SqrtPriceMath.sol";
 
 abstract contract VTSManager is IVTSManager {
     using TimeBucketOutflowTrackerLibrary for TimeBucketOutflowTracker;
@@ -105,49 +107,26 @@ abstract contract VTSManager is IVTSManager {
     }
 
     /**
-     * @notice Calculates the maximum potential commitment for two tokens in a position
-     * @param corePoolKey The core pool key
-     * @param amountToken0 The amount of token0 in the position
-     * @param amountToken1 The amount of token1 in the position
-     * @return c0 The maximum potential commitment for token0
-     * @return c1 The maximum potential commitment for token1
+     * @notice Calculates the maximum potential commitment for both tokens over a tick range for a given liquidity
+     * @dev Uses CLMM formulas based on tick bounds and liquidity. Results are in raw token units.
+     * @param tickLower The lower tick bound of the position
+     * @param tickUpper The upper tick bound of the position
+     * @param liquidity The position liquidity to evaluate against the tick range
+     * @return c0 The maximum potential commitment for token0 over [tickLower, tickUpper]
+     * @return c1 The maximum potential commitment for token1 over [tickLower, tickUpper]
      */
-    function calculateMaxPotentialCommitment(PoolKey memory corePoolKey, uint256 amountToken0, uint256 amountToken1)
+    function calculateMaxPotentialCommitment(int24 tickLower, int24 tickUpper, uint128 liquidity)
         public
-        view
+        pure
         returns (uint256 c0, uint256 c1)
     {
-        // get the market oracle factory
-        uint256 lcc0Decimals = LiquidityCommitmentCertificate(Currency.unwrap(corePoolKey.currency0)).decimals();
-        uint256 lcc1Decimals = LiquidityCommitmentCertificate(Currency.unwrap(corePoolKey.currency1)).decimals();
+        uint160 sqrtPriceLowerX96 = TickMath.getSqrtPriceAtTick(tickLower);
+        uint160 sqrtPriceUpperX96 = TickMath.getSqrtPriceAtTick(tickUpper);
 
-        // The commitment formula is:
-        // C(r) = ½(V₀ · C₀(r) + V₁ · C₁(r))
-        // C(r) = xr + yr
-        // By substitution: C₀(r) = (2xr) / V₀, C₁(r) = (2yr) / V₁
-
-        // In our context:
-        // - V₀ = price (token1 per token0) - the pool's exchange rate
-        // - V₁ = 1 (token1 per token1) - token1 is our base currency
-        // - xr = amountToken0 * price (value of token0 in token1 units)
-        // - yr = amountToken1 (value of token1 in token1 units)
-
-        // Applying the formula:
-        // C₀(r) = (2xr) / V₀ = (2 * amountToken0 * price) / price = 2 * amountToken0
-        // C₁(r) = (2yr) / V₁ = (2 * amountToken1) / 1 = 2 * amountToken1
-
-        // The price terms cancel out because:
-        // - We're using the pool's exchange rate as the "price"
-        // - When we multiply by price to get value, then divide by price to get back to units
-        // - The price scaling cancels out, leaving just the 2x multiplier
-
-        // This means the "maximum potential commitment" is simply 2x the deposited amounts
-        // provided the maximum potential commitment is expressed in units of token 1.
-        // thus the entire values are priced in token 1 and the price of the pool is used to derive the values
-
-        // calculate Commitments and scale the amounts by the decimals of the LCC tokens
-        c0 = ((2 * amountToken0) / (10 ** lcc0Decimals));
-        c1 = ((2 * amountToken1) / (10 ** lcc1Decimals));
+        // Token0 amount across the full range for this liquidity
+        c0 = SqrtPriceMath.getAmount0Delta(sqrtPriceLowerX96, sqrtPriceUpperX96, liquidity, true);
+        // Token1 amount across the full range for this liquidity
+        c1 = SqrtPriceMath.getAmount1Delta(sqrtPriceLowerX96, sqrtPriceUpperX96, liquidity, true);
     }
 
     /**
@@ -167,13 +146,12 @@ abstract contract VTSManager is IVTSManager {
 
         bool isLiquidityAddition = params.liquidityDelta > 0;
 
-        uint256 amount0 = LiquidityUtils.safeInt128ToUint256(delta.amount0());
-        uint256 amount1 = LiquidityUtils.safeInt128ToUint256(delta.amount1());
-
         uint256 c0 = 0;
         uint256 c1 = 0;
         if (isLiquidityAddition) {
-            (c0, c1) = calculateMaxPotentialCommitment(corePoolKey, amount0, amount1);
+            // Compute maxima for the liquidity being added over the specified tick range
+            uint128 liquidityAdded = SafeCastLib.safeCastTo128(uint256(params.liquidityDelta));
+            (c0, c1) = calculateMaxPotentialCommitment(params.tickLower, params.tickUpper, liquidityAdded);
         }
         // update the max potential commitments for the tokens in the range of the position
         maxPotentialCommitment[positionId][0] = c0;
