@@ -255,6 +255,10 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         }
         // add the assets to the pool manager and claim the underlying tokens for the proxy hook
         _modifyVaultLiquidity(currency0, currency1, balanceDelta);
+        // if there was an addition, then settle the obligations to the lcc tokens
+        if (balanceDelta.amount0() > 0 || balanceDelta.amount1() > 0) {
+            _settleObligationsToLCC(corePoolKey);
+        }
     }
 
     /**
