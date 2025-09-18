@@ -20,6 +20,7 @@ import {MMPositionManager} from "../src/MMPositionManager.sol";
 import {StubSpokeVerifier} from "../src/modules/StubSpokeVerifier.sol";
 import {OracleRegistry} from "../src/OracleRegistry.sol";
 import {ChainlinkFactory} from "../src/oracles/chainlink/ChainlinkFactory.sol";
+import {VRLSpokeReceiver} from "../src/modules/VRLSpokeReceiver.sol";
 
 /**
  * @title CompleteDeployScript
@@ -165,8 +166,10 @@ contract CompleteDeployScript is ScriptHelper {
         // ? deploy a stub verifier for now
         address stubVerifier = address(new StubSpokeVerifier());
         console.log("StubSpokeVerifier deployed at:", stubVerifier);
+        address spokeReceiver = address(new VRLSpokeReceiver(stubVerifier, oracleRegistry));
+        console.log("SpokeReceiver deployed at:", spokeReceiver);
         MMPositionManager positionManager =
-            new MMPositionManager(poolManagerAddress, oracleRegistry, stubVerifier, marketFactory);
+            new MMPositionManager(poolManagerAddress, oracleRegistry, spokeReceiver, marketFactory);
         console.log("MMPositionManager deployed at:", address(positionManager));
         return address(positionManager);
     }

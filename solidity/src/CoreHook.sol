@@ -10,7 +10,7 @@ import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.so
 
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 import {ProxyHook} from "./ProxyHook.sol";
-import {LiquidityCommitmentCertificate} from "./LCC.sol";
+import {ILCC} from "./interfaces/ILCC.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {CurrencySettler} from "@uniswap/v4-core/test/utils/CurrencySettler.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";

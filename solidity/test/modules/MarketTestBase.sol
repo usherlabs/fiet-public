@@ -32,6 +32,7 @@ import {ICSpokeVerifier} from "../../src/modules/ICSpokeVerifier.sol";
 import {OracleRegistry} from "../../src/OracleRegistry.sol";
 import {VTSConfigs} from "../../src/libraries/VTSConfigs.sol";
 import {IVTSManager} from "../../src/interfaces/IVTSManager.sol";
+import {VRLSpokeReceiver} from "../../src/modules/VRLSpokeReceiver.sol";
 
 abstract contract MarketTestBase is Test, Deployers {
     using PoolIdLibrary for PoolId;
@@ -58,6 +59,7 @@ abstract contract MarketTestBase is Test, Deployers {
     OracleRegistry oracleRegistry;
     ICSpokeVerifier icVerifier;
     StubSpokeVerifier stubSpokeVerifier;
+    VRLSpokeReceiver spokeReceiver;
     address mmPositionManager;
 
     function approveLCCForMarketUse(LiquidityCommitmentCertificate token) internal returns (Currency currency) {
@@ -128,15 +130,16 @@ abstract contract MarketTestBase is Test, Deployers {
 
     function _deployFreshManagerAndRouters() internal {
         deployFreshManagerAndRouters();
+        oracleRegistry = new OracleRegistry();
         marketFactory = makeAddr("marketFactory");
 
         // deploy custom router and verifier
         icVerifier = new ICSpokeVerifier(makeAddr("icCanister"));
         stubSpokeVerifier = new StubSpokeVerifier();
-        oracleRegistry = new OracleRegistry();
+        spokeReceiver = new VRLSpokeReceiver(address(stubSpokeVerifier), address(oracleRegistry));
         mmPositionManager = address(
             new MMPositionManager(
-                address(manager), address(oracleRegistry), address(stubSpokeVerifier), address(marketFactory)
+                address(manager), address(oracleRegistry), address(spokeReceiver), address(marketFactory)
             )
         );
     }

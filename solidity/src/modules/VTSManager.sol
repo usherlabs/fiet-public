@@ -208,7 +208,12 @@ abstract contract VTSManager is IVTSManager {
      * @return vtsCurrent0 The current vts for token0
      * @return vtsCurrent1 The current vts for token1
      */
-    function getVTSCurrent(PositionId positionId) public view returns (uint256 vtsCurrent0, uint256 vtsCurrent1) {
+    function getVTSCurrent(PositionId positionId)
+        public
+        view
+        virtual
+        returns (uint256 vtsCurrent0, uint256 vtsCurrent1)
+    {
         uint256 commitment0 = commitment[positionId][0];
         uint256 commitment1 = commitment[positionId][1];
         uint256 totalSettlementAmount0 = totalSettlementAmount[positionId][0];
@@ -237,14 +242,28 @@ abstract contract VTSManager is IVTSManager {
     }
 
     /**
+     * @notice Gets the commitment for a position
+     * @param positionId The position id
+     * @return commitment0 The commitment for token0
+     * @return commitment1 The commitment for token1
+     */
+    function _getCommitment(PositionId positionId)
+        internal
+        view
+        virtual
+        returns (uint256 commitment0, uint256 commitment1)
+    {
+        return (commitment[positionId][0], commitment[positionId][1]);
+    }
+
+    /**
      * @notice Gets the RFS for a position
      * @param positionId The position id
      * @return rfsOpen Whether the RFS is open
      * @return balanceDelta The balance delta of the amount of required to be settled or allowed to be withdrawn depending on if it is negative or positive
      */
     function getRFS(PositionId positionId) public view returns (bool, BalanceDelta) {
-        uint256 commitment0 = commitment[positionId][0];
-        uint256 commitment1 = commitment[positionId][1];
+        (uint256 commitment0, uint256 commitment1) = _getCommitment(positionId);
 
         // get vts current
         (uint256 vtsCurrent0, uint256 vtsCurrent1) = getVTSCurrent(positionId);

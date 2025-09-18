@@ -13,7 +13,7 @@ import {IOracleRegistry} from "../interfaces/IOracleRegistry.sol";
 import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
 import {console} from "forge-std/console.sol";
 
-abstract contract VRLSpokeReceiver is Ownable {
+contract VRLSpokeReceiver is Ownable {
     ISpokeVerifier public verifier;
     IOracleRegistry public oracleRegistry;
 
@@ -43,8 +43,8 @@ abstract contract VRLSpokeReceiver is Ownable {
      * @return tickers The tickers of the assets
      * @return amounts The amounts of the assets
      */
-    function _verifyLiquiditySignal(LiquiditySignal memory liquiditySignal)
-        internal
+    function verifyLiquiditySignal(LiquiditySignal memory liquiditySignal)
+        public
         view
         returns (string[] memory tickers, uint256[] memory amounts)
     {

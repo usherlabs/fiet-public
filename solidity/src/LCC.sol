@@ -17,8 +17,9 @@ import {IOracle} from "./interfaces/IOracle.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {IOracleRegistry} from "./interfaces/IOracleRegistry.sol";
 import {console} from "forge-std/console.sol";
+import {ILCC} from "./interfaces/ILCC.sol";
 
-contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable {
+contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC {
     using SafeTransferLib for ERC20;
 
     error SenderNotIssuer(address sender);
