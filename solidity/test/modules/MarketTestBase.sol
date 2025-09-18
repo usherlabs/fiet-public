@@ -137,11 +137,8 @@ abstract contract MarketTestBase is Test, Deployers {
         icVerifier = new ICSpokeVerifier(makeAddr("icCanister"));
         stubSpokeVerifier = new StubSpokeVerifier();
         spokeReceiver = new VRLSpokeReceiver(address(stubSpokeVerifier), address(oracleRegistry));
-        mmPositionManager = address(
-            new MMPositionManager(
-                address(manager), address(oracleRegistry), address(spokeReceiver), address(marketFactory)
-            )
-        );
+        mmPositionManager =
+            address(new MMPositionManager(address(manager), address(spokeReceiver), address(marketFactory)));
     }
 
     function _setupMarket() internal {

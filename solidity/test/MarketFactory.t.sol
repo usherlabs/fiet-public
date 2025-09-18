@@ -49,9 +49,7 @@ contract MarketFactoryTest is Test, Deployers {
 
         vm.prank(owner);
         factory = new MarketFactory(address(poolManager), makeAddr("oracleRegistry"), bounds);
-        positionManager = new MMPositionManager(
-            address(poolManager), makeAddr("oracleRegistry"), makeAddr("spokeReceiver"), address(factory)
-        );
+        positionManager = new MMPositionManager(address(poolManager), makeAddr("spokeReceiver"), address(factory));
 
         // Deploy CoreHook at computed address
         deployCodeTo(

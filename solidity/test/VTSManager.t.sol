@@ -33,7 +33,7 @@ contract VTSManagerTest is Test, MarketTestBase {
         vtsManager = new MockVTSManager(address(manager), MOCK_MARKET_FACTORY, MOCK_MM_POSITION_MANAGER);
     }
 
-    function test_calculateMaxPotentialCommitment_UsesTickBoundsAndLiquidity() public {
+    function test_calculateMaxPotentialCommitment_UsesTickBoundsAndLiquidity() public view {
         int24 tickLower = -60;
         int24 tickUpper = 60;
         uint128 liquidity = uint128(10000e18);
@@ -90,8 +90,6 @@ contract VTSManagerTest is Test, MarketTestBase {
 
         // Calculate the RFS
         (bool rfsOpen, BalanceDelta balanceDelta) = vtsManager.getRFS(positionId);
-        uint256 balanceDelta0 = uint256(uint128(balanceDelta.amount0()));
-        uint256 balanceDelta1 = uint256(uint128(balanceDelta.amount1()));
 
         // Assert that the RFS is  open
         assertEq(rfsOpen, true);

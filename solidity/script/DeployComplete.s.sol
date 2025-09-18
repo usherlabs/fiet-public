@@ -168,8 +168,7 @@ contract CompleteDeployScript is ScriptHelper {
         console.log("StubSpokeVerifier deployed at:", stubVerifier);
         address spokeReceiver = address(new VRLSpokeReceiver(stubVerifier, oracleRegistry));
         console.log("SpokeReceiver deployed at:", spokeReceiver);
-        MMPositionManager positionManager =
-            new MMPositionManager(poolManagerAddress, oracleRegistry, spokeReceiver, marketFactory);
+        MMPositionManager positionManager = new MMPositionManager(poolManagerAddress, spokeReceiver, marketFactory);
         console.log("MMPositionManager deployed at:", address(positionManager));
         return address(positionManager);
     }

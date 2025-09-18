@@ -50,7 +50,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
     // mapping(tokenId => numNFTPositionsCount) public nftToPositionCount;
     mapping(uint256 => uint256) public nftToPositionCount;
 
-    constructor(address _manager, address _oracleRegistry, address _spokeReceiver, address _marketFactory)
+    constructor(address _manager, address _spokeReceiver, address _marketFactory)
         LiquidityRouter(_manager)
         ERC721("MMPositionManager", "MMPM")
     {

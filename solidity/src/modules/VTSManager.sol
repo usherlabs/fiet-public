@@ -231,6 +231,7 @@ abstract contract VTSManager is IVTSManager {
         virtual
         returns (uint256 vtsRequired0, uint256 vtsRequired1)
     {
+        _positionId;
         // TODO: use linked libraries to derive the required vts for this position using the stateful parameters
         return (0, 0);
     }
