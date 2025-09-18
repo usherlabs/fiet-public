@@ -140,17 +140,11 @@ abstract contract VTSManager is IVTSManager {
 
     /**
      * @notice Tracks the maximum potential commitment for both tokens in a position
-     * @param corePoolKey The core pool key
      * @param router The sender of the transaction
      * @param params The parameters of the transaction
      * @param delta The delta of the transaction
      */
-    function _trackCommitment(
-        PoolKey memory corePoolKey,
-        address router,
-        ModifyLiquidityParams calldata params,
-        BalanceDelta delta
-    ) public {
+    function _trackCommitment(address router, ModifyLiquidityParams calldata params, BalanceDelta delta) public {
         PositionId positionId = PositionLibrary.generateId(router, params);
 
         bool isLiquidityAddition = params.liquidityDelta > 0;
@@ -166,9 +160,9 @@ abstract contract VTSManager is IVTSManager {
         if (isLiquidityAddition) {
             // Compute maxima for the liquidity being added over the specified tick range
             uint128 liquidityAdded = SafeCastLib.safeCastTo128(uint256(params.liquidityDelta));
-            (c0, c1) = calculateMaxPotentialCommitment(params.tickLower, params.tickUpper, liquidityAdded);
             a0 = LiquidityUtils.safeInt128ToUint256(delta.amount0());
             a1 = LiquidityUtils.safeInt128ToUint256(delta.amount1());
+            (c0, c1) = calculateMaxPotentialCommitment(params.tickLower, params.tickUpper, liquidityAdded);
         }
 
         // in the case of liquidity removal, all these values will be s

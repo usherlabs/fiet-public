@@ -141,7 +141,7 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
             ProxyHook(proxyHook).onDirectLP(key, delta, LiquidityUtils.ActionType.DirectLPAddLiquidity);
         }
         // Track maximum potemtial commitment for both tokens in the position
-        _trackCommitment(key, sender, params, delta);
+        _trackCommitment(sender, params, delta);
 
         return (this.afterAddLiquidity.selector, BalanceDeltaLibrary.ZERO_DELTA);
     }
@@ -162,7 +162,7 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
         }
 
         // Track maximum potential commitment for both tokens in the position
-        _trackCommitment(key, sender, params, delta);
+        _trackCommitment(sender, params, delta);
 
         return (this.afterRemoveLiquidity.selector, BalanceDeltaLibrary.ZERO_DELTA);
     }
