@@ -340,7 +340,7 @@ contract CreateMarketScript is ScriptHelper {
      * @dev Writes market details to JSON file for future reference
      */
     function _writeMarketDetails() internal {
-        _setFilename(string.concat(networkName, "_markets"));
+        _setFilenameWithSuffix(networkName, "_markets");
 
         // Create a unique market identifier
         string memory marketId = vm.toString(PoolId.unwrap(corePoolId));

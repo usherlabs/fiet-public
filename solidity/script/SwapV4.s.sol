@@ -58,7 +58,9 @@ contract SwapV4 is ScriptHelper {
         string memory mode;
         try vm.envString("MODE") returns (string memory envMode) {
             mode = envMode;
-        } catch {}
+        } catch {
+            mode = "LOCAL";
+        }
 
         // Load deployment addresses
         _setFilename(networkName);
@@ -70,19 +72,16 @@ contract SwapV4 is ScriptHelper {
         address poolManagerAddr;
         address permit2Addr;
 
-        if (keccak256(bytes(networkName)) == keccak256(bytes("sepolia"))) {
+        bool isSepolia = keccak256(bytes(networkName)) == keccak256(bytes("sepolia"));
+        if (isSepolia) {
             universalRouterAddr = SepoliaConstants.UNIVERSAL_ROUTER;
             poolManagerAddr = SepoliaConstants.POOL_MANAGER;
             permit2Addr = SepoliaConstants.PERMIT2;
-        } else if (
-            keccak256(bytes(networkName)) == keccak256(bytes("arbitrum"))
-        ) {
+        } else if (keccak256(bytes(networkName)) == keccak256(bytes("arbitrum"))) {
             universalRouterAddr = ArbitrumConstants.UNIVERSAL_ROUTER;
             poolManagerAddr = ArbitrumConstants.POOL_MANAGER;
             permit2Addr = ArbitrumConstants.PERMIT2;
-        } else if (
-            keccak256(bytes(networkName)) == keccak256(bytes("ethsepolia"))
-        ) {
+        } else if (keccak256(bytes(networkName)) == keccak256(bytes("ethsepolia"))) {
             universalRouterAddr = EthSepoliaConstants.UNIVERSAL_ROUTER;
             poolManagerAddr = EthSepoliaConstants.POOL_MANAGER;
             permit2Addr = EthSepoliaConstants.PERMIT2;
@@ -105,16 +104,11 @@ contract SwapV4 is ScriptHelper {
         // for a newly created market
         bool isLocalFork = keccak256(bytes(mode)) == keccak256(bytes("LOCAL"));
         if (!isLocalFork) {
-            try vm.envString("CORE_POOL_ID") returns (
-                string memory envCorePoolId
-            ) {
+            try vm.envString("CORE_POOL_ID") returns (string memory envCorePoolId) {
                 console.log("CORE_POOL_ID loaded from env: ", envCorePoolId);
                 corePoolId = envCorePoolId;
                 bytes memory idBytes = vm.parseBytes(corePoolId);
-                require(
-                    idBytes.length == 32,
-                    "CORE_POOL_ID must be 32-byte hex"
-                );
+                require(idBytes.length == 32, "CORE_POOL_ID must be 32-byte hex");
                 bytes32 parsedId;
                 assembly {
                     parsedId := mload(add(idBytes, 32))
@@ -122,13 +116,8 @@ contract SwapV4 is ScriptHelper {
                 _corePoolId = PoolId.wrap(parsedId);
             } catch {}
         } else {
-            console.log(
-                "is running local fork, skipping core pool id loading from env..."
-            );
+            console.log("is running local fork, skipping core pool id loading from env...");
         }
-
-        bool isSepolia = keccak256(bytes(networkName)) ==
-            keccak256(bytes("sepolia"));
 
         uint24 coreFee = 0;
         // if core pool key is set locally then load it into fee variable
@@ -154,44 +143,15 @@ contract SwapV4 is ScriptHelper {
             console.log("Tick spacing (default):", tickSpacing);
         } else {
             // Determine correct deployments file (respect MODE and local_ prefix like ScriptHelper)
-            string memory deploymentMode;
-            try vm.envString("MODE") returns (string memory envMode) {
-                deploymentMode = envMode;
-            } catch {
-                deploymentMode = "LOCAL";
-            }
-            string memory prefix = keccak256(bytes(deploymentMode)) ==
-                keccak256(bytes("LOCAL"))
-                ? "local_"
-                : "";
-            string memory filePath = string.concat(
-                "./deployments/",
-                prefix,
-                networkName,
-                "_markets_deployments.json"
-            );
+            bool isLocalSepolia = isSepolia && keccak256(bytes(mode)) == keccak256(bytes("LOCAL"));
+            string memory prefix = isLocalSepolia ? "local_" : "";
+            string memory filePath = string.concat("./deployments/", prefix, networkName, "_markets_deployments.json");
             string memory json = vm.readFile(filePath);
 
-            string memory keyToken0 = string.concat(
-                ".",
-                corePoolId,
-                "_underlyingAsset0"
-            );
-            string memory keyToken1 = string.concat(
-                ".",
-                corePoolId,
-                "_underlyingAsset1"
-            );
-            string memory keyFee = string.concat(
-                ".",
-                corePoolId,
-                "_corePoolFee"
-            );
-            string memory keyTS = string.concat(
-                ".",
-                corePoolId,
-                "_tickSpacing"
-            );
+            string memory keyToken0 = string.concat(".", corePoolId, "_underlyingAsset0");
+            string memory keyToken1 = string.concat(".", corePoolId, "_underlyingAsset1");
+            string memory keyFee = string.concat(".", corePoolId, "_corePoolFee");
+            string memory keyTS = string.concat(".", corePoolId, "_tickSpacing");
 
             token0 = vm.parseJsonAddress(json, keyToken0);
             console.log("Token0 loaded from markets json: ", token0);
@@ -219,8 +179,7 @@ contract SwapV4 is ScriptHelper {
 
         // Construct corePoolKey via LCCs only if CORE_POOL_ID was not provided
         if (bytes(corePoolId).length == 0) {
-            (Currency currencyLccA, Currency currencyLccB) = CurrencySortHelper
-                .sortAddresses(lccToken0, lccToken1);
+            (Currency currencyLccA, Currency currencyLccB) = CurrencySortHelper.sortAddresses(lccToken0, lccToken1);
             corePoolKey = PoolKey({
                 currency0: currencyLccA,
                 currency1: currencyLccB,
@@ -248,18 +207,11 @@ contract SwapV4 is ScriptHelper {
 
         uint256 userPrivateKey = uint256(vm.envBytes32("LP_PRIVATE_KEY"));
         address userAddress = vm.addr(userPrivateKey);
-        (Currency currencyA, Currency currencyB) = CurrencySortHelper
-            .sortAddresses(token0, token1);
+        (Currency currencyA, Currency currencyB) = CurrencySortHelper.sortAddresses(token0, token1);
         console.log("Proxy Currency 0 Address: ", Currency.unwrap(currencyA));
-        console.log(
-            "Proxy Currency 0 Name: ",
-            IERC20Metadata(Currency.unwrap(currencyA)).name()
-        );
+        console.log("Proxy Currency 0 Name: ", IERC20Metadata(Currency.unwrap(currencyA)).name());
         console.log("Proxy Currency 1 Address: ", Currency.unwrap(currencyB));
-        console.log(
-            "Proxy Currency 1 Name: ",
-            IERC20Metadata(Currency.unwrap(currencyB)).name()
-        );
+        console.log("Proxy Currency 1 Name: ", IERC20Metadata(Currency.unwrap(currencyB)).name());
         // Proxy pools are created with fee = 0 in MarketFactory
         uint24 proxyFee = 0;
         PoolKey memory poolKey = PoolKey({
@@ -273,9 +225,7 @@ contract SwapV4 is ScriptHelper {
         uint256 balanceBeforeCurrency1;
         uint256 balanceBeforeCurrency0;
 
-        try
-            IERC20(Currency.unwrap(poolKey.currency1)).balanceOf(userAddress)
-        returns (uint256 balance) {
+        try IERC20(Currency.unwrap(poolKey.currency1)).balanceOf(userAddress) returns (uint256 balance) {
             balanceBeforeCurrency1 = balance;
             console.log("Currency1 balance checked");
         } catch {
@@ -283,9 +233,7 @@ contract SwapV4 is ScriptHelper {
             balanceBeforeCurrency1 = 0;
         }
 
-        try
-            IERC20(Currency.unwrap(poolKey.currency0)).balanceOf(userAddress)
-        returns (uint256 balance) {
+        try IERC20(Currency.unwrap(poolKey.currency0)).balanceOf(userAddress) returns (uint256 balance) {
             balanceBeforeCurrency0 = balance;
             console.log("Currency0 balance checked");
         } catch {
@@ -325,9 +273,7 @@ contract SwapV4 is ScriptHelper {
         }
 
         if (swapType == 0 || swapType == 1 || swapType == 5) {
-            console.log(
-                "\n\nExecuting Exact Input swap for Token 0 -> Token 1..."
-            );
+            console.log("\n\nExecuting Exact Input swap for Token 0 -> Token 1...");
 
             // For an 18 decimal token, 10e18 is 10 tokens
             swapExactInputSingle(
@@ -343,9 +289,7 @@ contract SwapV4 is ScriptHelper {
             console.log("Exact Input Token 0 -> Token 1 Swap executed");
         }
         if (swapType == 2 || swapType == 5) {
-            console.log(
-                "\n\nExecuting Exact Input swap for Token 1 -> Token 0..."
-            );
+            console.log("\n\nExecuting Exact Input swap for Token 1 -> Token 0...");
 
             swapExactInputSingle(
                 IV4Router.ExactInputSingleParams({
@@ -360,9 +304,7 @@ contract SwapV4 is ScriptHelper {
             console.log("Exact Input Token 1 -> Token 0 Swap executed");
         }
         if (swapType == 3 || swapType == 5) {
-            console.log(
-                "\n\nExecuting Exact Output swap for Token 0 -> Token 1..."
-            );
+            console.log("\n\nExecuting Exact Output swap for Token 0 -> Token 1...");
 
             swapExactOutputSingle(
                 IV4Router.ExactOutputSingleParams({
@@ -377,9 +319,7 @@ contract SwapV4 is ScriptHelper {
             console.log("Exact Output Token 0 -> Token 1 Swap executed");
         }
         if (swapType == 4 || swapType == 5) {
-            console.log(
-                "\n\nExecuting Exact Output swap for Token 1 -> Token 0..."
-            );
+            console.log("\n\nExecuting Exact Output swap for Token 1 -> Token 0...");
 
             swapExactOutputSingle(
                 IV4Router.ExactOutputSingleParams({
@@ -398,24 +338,18 @@ contract SwapV4 is ScriptHelper {
             "Token 0 - ",
             IERC20Metadata(Currency.unwrap(poolKey.currency0)).name(),
             ": ",
-            IERC20(Currency.unwrap(poolKey.currency0)).balanceOf(userAddress) /
-                1e18
+            IERC20(Currency.unwrap(poolKey.currency0)).balanceOf(userAddress) / 1e18
         );
         console.log(
             "Token 1 - ",
             IERC20Metadata(Currency.unwrap(poolKey.currency1)).name(),
             ": ",
-            IERC20(Currency.unwrap(poolKey.currency1)).balanceOf(userAddress) /
-                1e18
+            IERC20(Currency.unwrap(poolKey.currency1)).balanceOf(userAddress) / 1e18
         );
 
         vm.stopBroadcast();
-        uint256 balanceAfterCurrency1 = IERC20(
-            Currency.unwrap(poolKey.currency1)
-        ).balanceOf(userAddress);
-        uint256 balanceAfterCurrency0 = IERC20(
-            Currency.unwrap(poolKey.currency0)
-        ).balanceOf(userAddress);
+        uint256 balanceAfterCurrency1 = IERC20(Currency.unwrap(poolKey.currency1)).balanceOf(userAddress);
+        uint256 balanceAfterCurrency0 = IERC20(Currency.unwrap(poolKey.currency0)).balanceOf(userAddress);
         console.log(
             "user: Currency 0 balance Before: ",
             balanceBeforeCurrency0 / 1e18,
@@ -436,16 +370,11 @@ contract SwapV4 is ScriptHelper {
         permit2.approve(token, address(router), type(uint160).max, deadline);
     }
 
-    function swapExactInputSingle(
-        IV4Router.ExactInputSingleParams memory params
-    ) public {
-        (uint160 sqrtPriceX96Before, int24 tickBefore, , ) = poolManager
-            .getSlot0(_corePoolId);
+    function swapExactInputSingle(IV4Router.ExactInputSingleParams memory params) public {
+        (uint160 sqrtPriceX96Before, int24 tickBefore,,) = poolManager.getSlot0(_corePoolId);
         uint128 liquidityBefore = poolManager.getLiquidity(_corePoolId);
-        uint256 uaSupply0Before = LiquidityCommitmentCertificate(lccToken0)
-            .uaSupply();
-        uint256 uaSupply1Before = LiquidityCommitmentCertificate(lccToken1)
-            .uaSupply();
+        uint256 uaSupply0Before = LiquidityCommitmentCertificate(lccToken0).uaSupply();
+        uint256 uaSupply1Before = LiquidityCommitmentCertificate(lccToken1).uaSupply();
         console.log("Before Swap (Exact Input Single):");
         console.log("Core Pool - sqrtPriceX96: %s", sqrtPriceX96Before);
         console.log("Core Pool - tick: %d", tickBefore);
@@ -456,11 +385,8 @@ contract SwapV4 is ScriptHelper {
         bytes memory commands = abi.encodePacked(uint8(Commands.V4_SWAP));
 
         // Encode V4Router actions
-        bytes memory actions = abi.encodePacked(
-            uint8(Actions.SWAP_EXACT_IN_SINGLE),
-            uint8(Actions.SETTLE_ALL),
-            uint8(Actions.TAKE_ALL)
-        );
+        bytes memory actions =
+            abi.encodePacked(uint8(Actions.SWAP_EXACT_IN_SINGLE), uint8(Actions.SETTLE_ALL), uint8(Actions.TAKE_ALL));
 
         bytes[] memory rParams = new bytes[](3);
 
@@ -469,27 +395,15 @@ contract SwapV4 is ScriptHelper {
 
         if (params.zeroForOne) {
             // Second parameter: settle all for input
-            rParams[1] = abi.encode(
-                params.poolKey.currency0,
-                type(uint256).max
-            );
+            rParams[1] = abi.encode(params.poolKey.currency0, type(uint256).max);
             // Third parameter: take all for output with minAmountOut
-            rParams[2] = abi.encode(
-                params.poolKey.currency1,
-                params.amountOutMinimum
-            );
+            rParams[2] = abi.encode(params.poolKey.currency1, params.amountOutMinimum);
         } else {
             // Second parameter: settle all for input
-            rParams[1] = abi.encode(
-                params.poolKey.currency1,
-                type(uint256).max
-            );
+            rParams[1] = abi.encode(params.poolKey.currency1, type(uint256).max);
 
             // Third parameter: take all for output with minAmountOut
-            rParams[2] = abi.encode(
-                params.poolKey.currency0,
-                params.amountOutMinimum
-            );
+            rParams[2] = abi.encode(params.poolKey.currency0, params.amountOutMinimum);
         }
 
         bytes[] memory inputs = new bytes[](1);
@@ -502,14 +416,10 @@ contract SwapV4 is ScriptHelper {
         router.execute(commands, inputs, deadline);
 
         // Log after
-        (uint160 sqrtPriceX96After, int24 tickAfter, , ) = poolManager.getSlot0(
-            _corePoolId
-        );
+        (uint160 sqrtPriceX96After, int24 tickAfter,,) = poolManager.getSlot0(_corePoolId);
         uint128 liquidityAfter = poolManager.getLiquidity(_corePoolId);
-        uint256 uaSupply0After = LiquidityCommitmentCertificate(lccToken0)
-            .uaSupply();
-        uint256 uaSupply1After = LiquidityCommitmentCertificate(lccToken1)
-            .uaSupply();
+        uint256 uaSupply0After = LiquidityCommitmentCertificate(lccToken0).uaSupply();
+        uint256 uaSupply1After = LiquidityCommitmentCertificate(lccToken1).uaSupply();
         console.log("After Swap (Exact Input Single):");
         console.log("Core Pool - sqrtPriceX96: %s", sqrtPriceX96After);
         console.log("Core Pool - tick: %d", tickAfter);
@@ -518,30 +428,16 @@ contract SwapV4 is ScriptHelper {
         console.log("LCC - uaSupply1: %s", uaSupply1After);
         console.log("Deltas:");
         console.log("Core Pool - tick delta: %d", tickAfter - tickBefore);
-        console.log(
-            "liquidity delta: %d",
-            int128(liquidityAfter) - int128(liquidityBefore)
-        );
-        console.log(
-            "LCC - uaSupply0 delta: %d",
-            int256(uaSupply0After) - int256(uaSupply0Before)
-        );
-        console.log(
-            "uaSupply1 delta: %d",
-            int256(uaSupply1After) - int256(uaSupply1Before)
-        );
+        console.log("liquidity delta: %d", int128(liquidityAfter) - int128(liquidityBefore));
+        console.log("LCC - uaSupply0 delta: %d", int256(uaSupply0After) - int256(uaSupply0Before));
+        console.log("uaSupply1 delta: %d", int256(uaSupply1After) - int256(uaSupply1Before));
     }
 
-    function swapExactOutputSingle(
-        IV4Router.ExactOutputSingleParams memory params
-    ) public {
-        (uint160 sqrtPriceX96Before, int24 tickBefore, , ) = poolManager
-            .getSlot0(_corePoolId);
+    function swapExactOutputSingle(IV4Router.ExactOutputSingleParams memory params) public {
+        (uint160 sqrtPriceX96Before, int24 tickBefore,,) = poolManager.getSlot0(_corePoolId);
         uint128 liquidityBefore = poolManager.getLiquidity(_corePoolId);
-        uint256 uaSupply0Before = LiquidityCommitmentCertificate(lccToken0)
-            .uaSupply();
-        uint256 uaSupply1Before = LiquidityCommitmentCertificate(lccToken1)
-            .uaSupply();
+        uint256 uaSupply0Before = LiquidityCommitmentCertificate(lccToken0).uaSupply();
+        uint256 uaSupply1Before = LiquidityCommitmentCertificate(lccToken1).uaSupply();
         console.log("Before Swap (Exact Output Single):");
         console.log("Core Pool - sqrtPriceX96: %s", sqrtPriceX96Before);
         console.log("Core Pool - tick: %d", tickBefore);
@@ -552,11 +448,8 @@ contract SwapV4 is ScriptHelper {
         bytes memory commands = abi.encodePacked(uint8(Commands.V4_SWAP));
 
         // Encode V4Router actions
-        bytes memory actions = abi.encodePacked(
-            uint8(Actions.SWAP_EXACT_OUT_SINGLE),
-            uint8(Actions.SETTLE_ALL),
-            uint8(Actions.TAKE_ALL)
-        );
+        bytes memory actions =
+            abi.encodePacked(uint8(Actions.SWAP_EXACT_OUT_SINGLE), uint8(Actions.SETTLE_ALL), uint8(Actions.TAKE_ALL));
 
         bytes[] memory rParams = new bytes[](3);
 
@@ -566,18 +459,12 @@ contract SwapV4 is ScriptHelper {
         if (params.zeroForOne) {
             // zeroForOne means Token 0 -> Token 1.
             // Therefore, here we're specifying Token 1 that we want OUT.
-            rParams[1] = abi.encode(
-                params.poolKey.currency0,
-                params.amountInMaximum
-            );
+            rParams[1] = abi.encode(params.poolKey.currency0, params.amountInMaximum);
             rParams[2] = abi.encode(params.poolKey.currency1, params.amountOut);
         } else {
             // zeroForOne = false means Token 1 -> Token 0.
             // We're specifying Token 0 that we want OUT.
-            rParams[1] = abi.encode(
-                params.poolKey.currency1,
-                params.amountInMaximum
-            );
+            rParams[1] = abi.encode(params.poolKey.currency1, params.amountInMaximum);
             rParams[2] = abi.encode(params.poolKey.currency0, params.amountOut);
         }
 
@@ -591,14 +478,10 @@ contract SwapV4 is ScriptHelper {
         router.execute(commands, inputs, deadline);
 
         // Log after
-        (uint160 sqrtPriceX96After, int24 tickAfter, , ) = poolManager.getSlot0(
-            _corePoolId
-        );
+        (uint160 sqrtPriceX96After, int24 tickAfter,,) = poolManager.getSlot0(_corePoolId);
         uint128 liquidityAfter = poolManager.getLiquidity(_corePoolId);
-        uint256 uaSupply0After = LiquidityCommitmentCertificate(lccToken0)
-            .uaSupply();
-        uint256 uaSupply1After = LiquidityCommitmentCertificate(lccToken1)
-            .uaSupply();
+        uint256 uaSupply0After = LiquidityCommitmentCertificate(lccToken0).uaSupply();
+        uint256 uaSupply1After = LiquidityCommitmentCertificate(lccToken1).uaSupply();
         console.log("After Swap (Exact Output Single):");
         console.log("Core Pool - sqrtPriceX96: %s", sqrtPriceX96After);
         console.log("Core Pool - tick: %d", tickAfter);
@@ -607,17 +490,8 @@ contract SwapV4 is ScriptHelper {
         console.log("LCC - uaSupply1: %s", uaSupply1After);
         console.log("Deltas:");
         console.log("Core Pool - tick delta: %d", tickAfter - tickBefore);
-        console.log(
-            "liquidity delta: %d",
-            int128(liquidityAfter) - int128(liquidityBefore)
-        );
-        console.log(
-            "LCC - uaSupply0 delta: %d",
-            int256(uaSupply0After) - int256(uaSupply0Before)
-        );
-        console.log(
-            "uaSupply1 delta: %d",
-            int256(uaSupply1After) - int256(uaSupply1Before)
-        );
+        console.log("liquidity delta: %d", int128(liquidityAfter) - int128(liquidityBefore));
+        console.log("LCC - uaSupply0 delta: %d", int256(uaSupply0After) - int256(uaSupply0Before));
+        console.log("uaSupply1 delta: %d", int256(uaSupply1After) - int256(uaSupply1Before));
     }
 }

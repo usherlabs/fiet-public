@@ -209,7 +209,6 @@ add-liquidity-mainnet:
 remove-liquidity-mainnet:
 	NETWORK=arbitrum \
 	CORE_POOL_ID=0x9a24909eeeb9fb7bbae5e01f6bdf9d892aafdfadab304c377e2b617acb0db32a \
-	TOKEN_ID=52788 \
 	forge script ../script/RemoveLiquidity.s.sol:RemoveLiquidityScript \
 		--rpc-url $(ARB_MAINNET_RPC_URL) \
 		-vvvv \
