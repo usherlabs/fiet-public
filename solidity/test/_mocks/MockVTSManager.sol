@@ -4,6 +4,8 @@ pragma solidity ^0.8.0;
 import {VTSManager} from "../../src/modules/VTSManager.sol";
 import {PositionId} from "../../src/types/Position.sol";
 import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
+import {PositionLibrary} from "../../src/types/Position.sol";
 
 contract MockVTSManager is VTSManager {
     constructor(address _poolManager, address _marketFactory, address _mmPositionManager)
@@ -18,6 +20,24 @@ contract MockVTSManager is VTSManager {
     // mock the required VTS for a position
     function setMockVTSRequired(PositionId positionId, uint128 vtsRequired0, uint128 vtsRequired1) public {
         mockVTSRequired[positionId] = toBalanceDelta(int128(vtsRequired0), int128(vtsRequired1));
+    }
+
+    // Expose tracked commitmentMaxima for testing
+    function getTrackedCommitment(PositionId positionId)
+        external
+        view
+        returns (uint256 commitment0, uint256 commitment1)
+    {
+        return (commitmentMaxima[positionId][0], commitmentMaxima[positionId][1]);
+    }
+
+    function getTrackedCommitmentFor(address router, ModifyLiquidityParams calldata params)
+        external
+        view
+        returns (uint256 commitment0, uint256 commitment1)
+    {
+        PositionId positionId = PositionLibrary.generateId(router, params);
+        return (commitmentMaxima[positionId][0], commitmentMaxima[positionId][1]);
     }
 
     // mock the current VTS for a position

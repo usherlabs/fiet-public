@@ -6,23 +6,16 @@ import {MarketVTSConfiguration} from "../types/VTS.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {TimeBucketOutflowTracker, TimeBucketOutflowTrackerLibrary} from "../libraries/TimeBucket.sol";
-import {Position} from "@uniswap/v4-core/src/libraries/Position.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
-import {LiquidityCommitmentCertificate} from "../LCC.sol";
-import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
-import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {SafeCastLib} from "v4-periphery/lib/v4-core/lib/solmate/src/utils/SafeCastLib.sol";
-import {LiquidityUtils} from "../libraries/LiquidityUtils.sol";
-import {console} from "forge-std/console.sol";
 import {PositionLibrary, PositionId} from "../types/Position.sol";
 import {IVTSManager} from "../interfaces/IVTSManager.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
 import {TransientStateLibrary} from "v4-periphery/lib/v4-core/src/libraries/TransientStateLibrary.sol";
-import {FixedPoint96} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint96.sol";
 import {TickMath} from "v4-periphery/lib/v4-core/src/libraries/TickMath.sol";
 import {SqrtPriceMath} from "v4-periphery/lib/v4-core/src/libraries/SqrtPriceMath.sol";
-import {BalanceDeltaLibrary, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 
 abstract contract VTSManager is IVTSManager {
     using SafeCastLib for *;
@@ -35,11 +28,11 @@ abstract contract VTSManager is IVTSManager {
     // Mapping from core pool ID to rolling outflow tracker
     mapping(PoolId => TimeBucketOutflowTracker) public marketOutflow;
     // Mapping to store maximum potential commitment for each position
-    mapping(PositionId => uint256[2]) internal maxPotentialCommitment;
+    mapping(PositionId => uint256[2]) internal commitmentMaxima;
     // Mapping to store the total settlement amount for each position
     mapping(PositionId => uint256[2]) internal totalSettlementAmount;
-    // Mapping to store the commitment
-    mapping(PositionId => uint256[2]) internal commitment;
+    // Deprecated: previous per-position committed-at-add amounts (replaced by commitmentMaxima)
+    // mapping(PositionId => uint256[2]) internal commitment;
 
     error InvalidCaller();
     error InvalidMarketVTSConfiguration(PoolId corePoolId);
@@ -124,7 +117,7 @@ abstract contract VTSManager is IVTSManager {
      * @return c0 The maximum potential commitment for token0 over [tickLower, tickUpper]
      * @return c1 The maximum potential commitment for token1 over [tickLower, tickUpper]
      */
-    function calculateMaxPotentialCommitment(int24 tickLower, int24 tickUpper, uint128 liquidity)
+    function calculateCommitmentMaxima(int24 tickLower, int24 tickUpper, uint128 liquidity)
         public
         pure
         returns (uint256 c0, uint256 c1)
@@ -142,36 +135,37 @@ abstract contract VTSManager is IVTSManager {
      * @notice Tracks the maximum potential commitment for both tokens in a position
      * @param router The sender of the transaction
      * @param params The parameters of the transaction
-     * @param delta The delta of the transaction
      */
-    function _trackCommitment(address router, ModifyLiquidityParams calldata params, BalanceDelta delta) public {
+    function _trackCommitment(address router, ModifyLiquidityParams calldata params, BalanceDelta /* delta */ )
+        public
+    {
         PositionId positionId = PositionLibrary.generateId(router, params);
 
-        bool isLiquidityAddition = params.liquidityDelta > 0;
+        // Current tracked maxima for this position
+        uint256 currentC0 = commitmentMaxima[positionId][0];
+        uint256 currentC1 = commitmentMaxima[positionId][1];
 
-        // the maximum potential commitment for the token0
-        uint256 c0 = 0;
-        // the maximum potential commitment for the token1
-        uint256 c1 = 0;
-        // the amounts committed for the token0
-        uint256 a0 = 0;
-        // the amounts committed for the token1
-        uint256 a1 = 0;
-        if (isLiquidityAddition) {
-            // Compute maxima for the liquidity being added over the specified tick range
+        if (params.liquidityDelta > 0) {
+            // Liquidity added: increase tracked maxima by the delta's maxima over the tick range
             uint128 liquidityAdded = SafeCastLib.safeCastTo128(uint256(params.liquidityDelta));
-            a0 = LiquidityUtils.safeInt128ToUint256(delta.amount0());
-            a1 = LiquidityUtils.safeInt128ToUint256(delta.amount1());
-            (c0, c1) = calculateMaxPotentialCommitment(params.tickLower, params.tickUpper, liquidityAdded);
-        }
+            (uint256 addC0, uint256 addC1) =
+                calculateCommitmentMaxima(params.tickLower, params.tickUpper, liquidityAdded);
 
-        // in the case of liquidity removal, all these values will be s
-        // update the max potential commitments for the tokens in the range of the position
-        maxPotentialCommitment[positionId][0] = c0;
-        maxPotentialCommitment[positionId][1] = c1;
-        // update the amounts committed for the tokens in the range of the position
-        commitment[positionId][0] = a0;
-        commitment[positionId][1] = a1;
+            commitmentMaxima[positionId][0] = currentC0 + addC0;
+            commitmentMaxima[positionId][1] = currentC1 + addC1;
+        } else if (params.liquidityDelta < 0) {
+            // Liquidity removed: decrease tracked maxima by the delta's maxima over the tick range
+            uint128 liquidityRemoved = SafeCastLib.safeCastTo128(uint256(-params.liquidityDelta));
+            (uint256 subC0, uint256 subC1) =
+                calculateCommitmentMaxima(params.tickLower, params.tickUpper, liquidityRemoved);
+
+            // Clamp at zero to avoid underflow; if fully removed, both become zero
+            commitmentMaxima[positionId][0] = currentC0 > subC0 ? (currentC0 - subC0) : 0;
+            commitmentMaxima[positionId][1] = currentC1 > subC1 ? (currentC1 - subC1) : 0;
+        } else {
+            // No-op if liquidityDelta == 0 (poke)
+            return;
+        }
     }
 
     /**
@@ -208,14 +202,14 @@ abstract contract VTSManager is IVTSManager {
         virtual
         returns (uint256 vtsCurrent0, uint256 vtsCurrent1)
     {
-        uint256 commitment0 = commitment[positionId][0];
-        uint256 commitment1 = commitment[positionId][1];
-        uint256 totalSettlementAmount0 = totalSettlementAmount[positionId][0];
-        uint256 totalSettlementAmount1 = totalSettlementAmount[positionId][1];
+        uint256 c0 = commitmentMaxima[positionId][0];
+        uint256 c1 = commitmentMaxima[positionId][1];
+        uint256 s0 = totalSettlementAmount[positionId][0];
+        uint256 s1 = totalSettlementAmount[positionId][1];
 
-        // VTS  is total commited / total settled expressed in basis points
-        vtsCurrent0 = commitment0 > 0 ? (totalSettlementAmount0 * 10000) / commitment0 : 0;
-        vtsCurrent1 = commitment1 > 0 ? (totalSettlementAmount1 * 10000) / commitment1 : 0;
+        // VTS is total settled / total committed expressed in basis points
+        vtsCurrent0 = c0 > 0 ? (s0 * 10000) / c0 : 0;
+        vtsCurrent1 = c1 > 0 ? (s1 * 10000) / c1 : 0;
     }
 
     /**
@@ -248,7 +242,7 @@ abstract contract VTSManager is IVTSManager {
         virtual
         returns (uint256 commitment0, uint256 commitment1)
     {
-        return (commitment[positionId][0], commitment[positionId][1]);
+        return (commitmentMaxima[positionId][0], commitmentMaxima[positionId][1]);
     }
 
     /**
