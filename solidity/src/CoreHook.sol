@@ -47,9 +47,9 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
     }
 
     // Owner will be set to MarketFactory
-    constructor(address _poolManager, address _marketFactory, address _mmPositionManager)
+    constructor(address _poolManager, address _marketFactory, address _mmPositionManager, address _calculator)
         BaseHook(IPoolManager(_poolManager))
-        VTSManager(_poolManager, _marketFactory, _mmPositionManager)
+        VTSManager(_poolManager, _marketFactory, _mmPositionManager, _calculator)
     {
         marketFactory = _marketFactory;
         mmPositionManager = _mmPositionManager;
@@ -141,7 +141,7 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
             ProxyHook(proxyHook).onDirectLP(key, delta, LiquidityUtils.ActionType.DirectLPAddLiquidity);
         }
         // Track maximum potemtial commitment for both tokens in the position
-        _trackCommitment(sender, params, delta);
+        _trackCommitment(sender, key.toId(), params);
 
         return (this.afterAddLiquidity.selector, BalanceDeltaLibrary.ZERO_DELTA);
     }
@@ -162,7 +162,7 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
         }
 
         // Track maximum potential commitment for both tokens in the position
-        _trackCommitment(sender, params, delta);
+        _trackCommitment(sender, key.toId(), params);
 
         return (this.afterRemoveLiquidity.selector, BalanceDeltaLibrary.ZERO_DELTA);
     }

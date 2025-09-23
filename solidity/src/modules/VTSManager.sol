@@ -15,7 +15,10 @@ import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.
 import {TransientStateLibrary} from "v4-periphery/lib/v4-core/src/libraries/TransientStateLibrary.sol";
 import {TickMath} from "v4-periphery/lib/v4-core/src/libraries/TickMath.sol";
 import {SqrtPriceMath} from "v4-periphery/lib/v4-core/src/libraries/SqrtPriceMath.sol";
+import {VTSMath} from "../libraries/VTSMath.sol";
+import {IVTSCalculator} from "../interfaces/IVTSCalculator.sol";
 import {toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {IMMPositionManager} from "../interfaces/IMMPositionManager.sol";
 
 abstract contract VTSManager is IVTSManager {
     using SafeCastLib for *;
@@ -31,6 +34,8 @@ abstract contract VTSManager is IVTSManager {
     mapping(PositionId => uint256[2]) internal commitmentMaxima;
     // Mapping to store the total settlement amount for each position
     mapping(PositionId => uint256[2]) internal totalSettlementAmount;
+    // Mapping from position to its core pool id (for reading window outflows)
+    mapping(PositionId => PoolId) internal positionPoolId;
     // Deprecated: previous per-position committed-at-add amounts (replaced by commitmentMaxima)
     // mapping(PositionId => uint256[2]) internal commitment;
 
@@ -46,11 +51,15 @@ abstract contract VTSManager is IVTSManager {
     address private immutable marketFactory;
     address private immutable mmPositionManager;
     IPoolManager private immutable poolManager;
+    IVTSCalculator private calculator; // optional external calculator (Stylus or pure)
 
-    constructor(address _poolManager, address _marketFactory, address _mmPositionManager) {
+    constructor(address _poolManager, address _marketFactory, address _mmPositionManager, address _calculator) {
         poolManager = IPoolManager(_poolManager);
         marketFactory = _marketFactory;
         mmPositionManager = _mmPositionManager;
+        if (_calculator != address(0)) {
+            calculator = IVTSCalculator(_calculator);
+        }
     }
 
     /**
@@ -136,10 +145,10 @@ abstract contract VTSManager is IVTSManager {
      * @param router The sender of the transaction
      * @param params The parameters of the transaction
      */
-    function _trackCommitment(address router, ModifyLiquidityParams calldata params, BalanceDelta /* delta */ )
-        public
-    {
+    function _trackCommitment(address router, PoolId corePoolId, ModifyLiquidityParams calldata params) public {
         PositionId positionId = PositionLibrary.generateId(router, params);
+        // Associate position with its core pool id for later reads
+        positionPoolId[positionId] = corePoolId;
 
         // Current tracked maxima for this position
         uint256 currentC0 = commitmentMaxima[positionId][0];
@@ -166,6 +175,20 @@ abstract contract VTSManager is IVTSManager {
             // No-op if liquidityDelta == 0 (poke)
             return;
         }
+    }
+
+    // Placeholder: without duplicating enumeration, we approximate share using position's own liquidity vs pool liquidity
+    // For exact per-position allocation, wire a pool-wide position iterator (e.g., from MMPositionManager) later.
+    function _getLiquidityShareForPosition(PoolId corePoolId, PositionId positionId)
+        internal
+        view
+        returns (uint128 positionLiquidity, uint256 inRangeTotal)
+    {
+        // Position-specific liquidity
+        uint128 liqPos = poolManager.getPositionLiquidity(corePoolId, PositionId.unwrap(positionId));
+        // Use pool total in-range liquidity as denominator approximation - See explaination: static/poolManager-getLiquidity.md
+        uint128 poolLiq = poolManager.getLiquidity(corePoolId);
+        return (liqPos, uint256(poolLiq));
     }
 
     /**
@@ -207,9 +230,8 @@ abstract contract VTSManager is IVTSManager {
         uint256 s0 = totalSettlementAmount[positionId][0];
         uint256 s1 = totalSettlementAmount[positionId][1];
 
-        // VTS is total settled / total committed expressed in basis points
-        vtsCurrent0 = c0 > 0 ? (s0 * 10000) / c0 : 0;
-        vtsCurrent1 = c1 > 0 ? (s1 * 10000) / c1 : 0;
+        vtsCurrent0 = VTSMath.vtsCurrentBps(s0, c0);
+        vtsCurrent1 = VTSMath.vtsCurrentBps(s1, c1);
     }
 
     /**
@@ -225,9 +247,38 @@ abstract contract VTSManager is IVTSManager {
         virtual
         returns (uint256 vtsRequired0, uint256 vtsRequired1)
     {
-        _positionId;
-        // TODO: use linked libraries to derive the required vts for this position using the stateful parameters
-        return (0, 0);
+        // If calculator is set, try calculator first
+        if (address(calculator) != address(0)) {
+            IVTSCalculator.PositionSnapshot[] memory snaps = new IVTSCalculator.PositionSnapshot[](1);
+            snaps[0] = IVTSCalculator.PositionSnapshot({
+                positionId: _positionId,
+                liquidity: 0, // optional to fill later
+                tickLower: 0,
+                tickUpper: 0,
+                commitment0: commitmentMaxima[_positionId][0],
+                commitment1: commitmentMaxima[_positionId][1],
+                settled0: totalSettlementAmount[_positionId][0],
+                settled1: totalSettlementAmount[_positionId][1]
+            });
+            try calculator.vtsRequiredBatchBps(snaps) returns (uint256[] memory r0, uint256[] memory r1) {
+                if (r0.length > 0 && r1.length > 0) {
+                    return (r0[0], r1[0]);
+                }
+            } catch {
+                // fallthrough to local math
+            }
+        }
+
+        // Allocate the pool’s windowed outflow to each active (in-range) position proportional to its current L(r) share, then compute min(1, ΔO_A(r)/C_A(r)) per token. This matches the spec’s pragmatic fallback and is implementable on-chain without per-swap tick traversal.
+        PoolId corePoolId = positionPoolId[_positionId];
+        (uint256 out0, uint256 out1) = marketOutflow[corePoolId].getTotalOutflow();
+
+        (uint128 liqPos, uint256 liqTotal) = _getLiquidityShareForPosition(corePoolId, _positionId);
+
+        uint256 c0 = commitmentMaxima[_positionId][0];
+        uint256 c1 = commitmentMaxima[_positionId][1];
+
+        return VTSMath.vtsRequiredBps(out0, out1, c0, c1, liqPos, liqTotal);
     }
 
     /**

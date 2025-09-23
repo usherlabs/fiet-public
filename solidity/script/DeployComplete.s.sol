@@ -117,7 +117,9 @@ contract CompleteDeployScript is ScriptHelper {
     function _deployCoreHook() internal returns (address) {
         // CoreHook constructor takes (poolManager, marketFactory)
         // Now we pass the actual marketFactory address
-        bytes memory constructorArgs = abi.encode(poolManagerAddress, marketFactory, address(mmPositionManager));
+        address calculator = address(0);
+        bytes memory constructorArgs =
+            abi.encode(poolManagerAddress, marketFactory, address(mmPositionManager), calculator);
 
         // Mine the correct address with proper flags
         (address hookAddress, bytes32 salt) =
@@ -127,7 +129,8 @@ contract CompleteDeployScript is ScriptHelper {
         console.log("CoreHook salt:", vm.toString(salt));
 
         // Deploy the hook
-        CoreHook deployedHook = new CoreHook{salt: salt}(poolManagerAddress, marketFactory, address(mmPositionManager));
+        CoreHook deployedHook =
+            new CoreHook{salt: salt}(poolManagerAddress, marketFactory, address(mmPositionManager), calculator);
         require(address(deployedHook) == hookAddress, "CoreHook: address mismatch");
 
         return address(deployedHook);

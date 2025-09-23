@@ -115,7 +115,7 @@ contract VTSManagerTest is Test, MarketTestBase {
             salt: salt
         });
 
-        vtsManager._trackCommitment(router, paramsAdd, BalanceDeltaLibrary.ZERO_DELTA);
+        vtsManager._trackCommitment(router, paramsAdd);
 
         (uint256 expectedAddC0, uint256 expectedAddC1) =
             vtsManager.calculateCommitmentMaxima(tickLower, tickUpper, addLiq);
@@ -131,7 +131,7 @@ contract VTSManagerTest is Test, MarketTestBase {
             liquidityDelta: -int256(uint256(removePart)),
             salt: salt
         });
-        vtsManager._trackCommitment(router, paramsRemPart, BalanceDeltaLibrary.ZERO_DELTA);
+        vtsManager._trackCommitment(router, paramsRemPart);
 
         (uint256 subPartC0, uint256 subPartC1) = vtsManager.calculateCommitmentMaxima(tickLower, tickUpper, removePart);
         (trackedC0, trackedC1) = vtsManager.getTrackedCommitmentFor(router, paramsAdd);
@@ -146,7 +146,7 @@ contract VTSManagerTest is Test, MarketTestBase {
             liquidityDelta: -int256(uint256(removeRest)),
             salt: salt
         });
-        vtsManager._trackCommitment(router, paramsRemAll, BalanceDeltaLibrary.ZERO_DELTA);
+        vtsManager._trackCommitment(router, paramsRemAll);
 
         (trackedC0, trackedC1) = vtsManager.getTrackedCommitmentFor(router, paramsAdd);
         assertEq(trackedC0, 0, "tracked C0 should reset to zero on full removal");
