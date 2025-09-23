@@ -249,24 +249,26 @@ abstract contract VTSManager is IVTSManager {
     {
         // If calculator is set, try calculator first
         if (address(calculator) != address(0)) {
-            IVTSCalculator.PositionSnapshot[] memory snaps = new IVTSCalculator.PositionSnapshot[](1);
-            snaps[0] = IVTSCalculator.PositionSnapshot({
-                positionId: _positionId,
-                liquidity: 0, // optional to fill later
-                tickLower: 0,
-                tickUpper: 0,
-                commitment0: commitmentMaxima[_positionId][0],
-                commitment1: commitmentMaxima[_positionId][1],
-                settled0: totalSettlementAmount[_positionId][0],
-                settled1: totalSettlementAmount[_positionId][1]
-            });
-            try calculator.vtsRequiredBatchBps(snaps) returns (uint256[] memory r0, uint256[] memory r1) {
-                if (r0.length > 0 && r1.length > 0) {
-                    return (r0[0], r1[0]);
-                }
-            } catch {
-                // fallthrough to local math
-            }
+            // IVTSCalculator.PositionSnapshot[] memory snaps = new IVTSCalculator.PositionSnapshot[](1);
+            // snaps[0] = IVTSCalculator.PositionSnapshot({
+            //     positionId: _positionId,
+            //     liquidity: 0, // optional to fill later
+            //     tickLower: 0,
+            //     tickUpper: 0,
+            //     commitment0: commitmentMaxima[_positionId][0],
+            //     commitment1: commitmentMaxima[_positionId][1],
+            //     settled0: totalSettlementAmount[_positionId][0],
+            //     settled1: totalSettlementAmount[_positionId][1]
+            // });
+            // try calculator.vtsRequiredBatchBps(snaps) returns (uint256[] memory r0, uint256[] memory r1) {
+            //     if (r0.length > 0 && r1.length > 0) {
+            //         return (r0[0], r1[0]);
+            //     }
+            // } catch {
+            //     // fallthrough to local math
+            // }
+            // TODO: Focus on pure Solidity implementation for now.
+            return (0, 0);
         }
 
         // Allocate the pool’s windowed outflow to each active (in-range) position proportional to its current L(r) share, then compute min(1, ΔO_A(r)/C_A(r)) per token. This matches the spec’s pragmatic fallback and is implementable on-chain without per-swap tick traversal.
