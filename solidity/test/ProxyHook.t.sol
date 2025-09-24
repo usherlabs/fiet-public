@@ -306,21 +306,13 @@ contract ProxyHookTest is MarketTestBase {
     // Test that a swap with limited liquidity on the proxy pool works as expected
     // when no hook data is provided, the swap with adjust the swap params to use the max available liquidity
     function test_swap_exactInput_oneForZeroOnProxy_withLimitedLiquidity_noHookData() public {
-        modifyLiquidityRouter.modifyLiquidity(
-            corePoolKey,
-            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e18, salt: bytes32(0)}),
-            ZERO_BYTES
+        // Mock limited available liquidity for output token in PM credits
+        uint256 mockAvailableLiquidity = 50;
+        vm.mockCall(
+            address(manager),
+            abi.encodeWithSelector(manager.balanceOf.selector, address(proxyHook), _currency1.toId()),
+            abi.encode(mockAvailableLiquidity)
         );
-
-        uint256 ua0Balance = proxyHook.getAvailableLiquidity(Currency.unwrap(proxyPoolKey.currency0));
-        console.log("ua0Balance", ua0Balance);
-        console.log("proxyPoolKey.currency0", Currency.unwrap(proxyPoolKey.currency0));
-        uint256 ua1Balance = proxyHook.getAvailableLiquidity(Currency.unwrap(proxyPoolKey.currency1));
-        console.log("ua1Balance", ua1Balance);
-        console.log("proxyPoolKey.currency1", Currency.unwrap(proxyPoolKey.currency1));
-
-        uint256 ua2balance = proxyHook.getAvailableLiquidity(Currency.unwrap(proxyPoolKey.currency1));
-        console.log("ua2balance", ua2balance);
         PoolSwapTest.TestSettings memory settings =
             PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false});
 
@@ -353,8 +345,14 @@ contract ProxyHookTest is MarketTestBase {
         console.log("diff0", int256(selfBalanceOfTokenAAfter) - int256(selfBalanceOfTokenABefore));
         console.log("diff1", int256(selfBalanceOfTokenBAfter) - int256(selfBalanceOfTokenBBefore));
 
-        // assertEq(selfBalanceOfTokenBBefore - selfBalanceOfTokenBAfter, swapAmount);
-        // assertGt(selfBalanceOfTokenAAfter, selfBalanceOfTokenABefore);
+        // With no hookData, params are adjusted so output <= available; there should be no deficit minted
+        bytes32 marketId = PoolId.unwrap(corePoolKey.toId());
+        LiquidityCommitmentCertificate lccOut = lcc1.underlyingAsset() == Currency.unwrap(_currency1) ? lcc1 : lcc0;
+        assertEq(lccOut.marketTotalSettlement(marketId), 0);
+        // Locker (address(1)) should not hold LCC because no deficit
+        assertEq(lccOut.balanceOf(address(1)), 0);
+
+        vm.clearMockedCalls();
     }
 
     // Test that a swap with limited liquidity on the proxy pool works as expected
@@ -400,7 +398,6 @@ contract ProxyHookTest is MarketTestBase {
         console.log("selfBalanceOfTokenBBefore", selfBalanceOfTokenBBefore);
 
         uint256 swapAmount = 100;
-        uint256 expectedOutput = 98; //TODO: get this from the simulation
         bytes memory hookData = abi.encode(lcc_recipient);
         console.log("hookData");
         console.logBytes(hookData);
@@ -413,6 +410,7 @@ contract ProxyHookTest is MarketTestBase {
         console.log("====== simulated deltas =======");
         console.log("delta 0:", simulatedSwapDelta.amount0());
         console.log("delta 1:", simulatedSwapDelta.amount1());
+        uint256 expectedOutput = LiquidityUtils.safeInt128ToUint256(simulatedSwapDelta.amount1());
 
         BalanceDelta swapDelta = swapRouter.swap(
             proxyPoolKey,

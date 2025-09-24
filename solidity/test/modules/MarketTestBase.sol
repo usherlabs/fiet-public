@@ -147,8 +147,8 @@ abstract contract MarketTestBase is Test, Deployers {
         uint160 coreFlags = HookFlags.CORE_HOOK_FLAGS;
         coreHookAddress = address(coreFlags);
 
-        // Deploy CoreHook
-        deployCodeTo("CoreHook.sol", abi.encode(manager, marketFactory, mmPositionManager), coreHookAddress);
+        // Deploy CoreHook (calculator set to address(0))
+        deployCodeTo("CoreHook.sol", abi.encode(manager, marketFactory, mmPositionManager, address(0)), coreHookAddress);
 
         // Compute proxy hook address
         uint160 proxyFlags = HookFlags.PROXY_HOOK_FLAGS;

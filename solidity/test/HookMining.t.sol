@@ -42,7 +42,7 @@ contract HookTest is Test, Deployers {
 
         deployCodeTo(
             "CoreHook.sol:CoreHook",
-            abi.encode(poolManager, address(factory), address(mmPositionManager)),
+            abi.encode(poolManager, address(factory), address(mmPositionManager), address(0)),
             coreHookAddrComputed
         );
         coreHook = CoreHook(coreHookAddrComputed);

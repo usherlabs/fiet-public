@@ -9,7 +9,7 @@ import {PositionLibrary} from "../../src/types/Position.sol";
 
 contract MockVTSManager is VTSManager {
     constructor(address _poolManager, address _marketFactory, address _mmPositionManager)
-        VTSManager(_poolManager, _marketFactory, _mmPositionManager)
+        VTSManager(_poolManager, _marketFactory, _mmPositionManager, address(0))
     {}
 
     // cache the required VTS per position using this mapping

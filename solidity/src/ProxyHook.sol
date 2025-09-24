@@ -385,7 +385,7 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
 
         // Conduct the swap inside the Pool Manager
 
-        // TODO: The wisest approach is to only swap what is settled by default.
+        // ? The wisest approach is to only swap what is settled by default.
         // ? If hookData exists, then we can swap the full amount specified.
         // As per V4Router.sol - if we settle excess LCC from this hook, there's no guarantee it'll be taken by the msgSender()/Locker
         // Further, once the lock settles, then the deltas renew an the PoolManager will have excess LCC that has not been settled.
@@ -400,21 +400,34 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         // That will affect the return delta of the core pool, and therefore the values downstream.
         // ? This problem could be solved through transient storage.
 
-        SwapParams memory coreSwapParams = isHookRecipientSpecified
-            ? SwapParams({
+        SwapParams memory coreSwapParams;
+        if (isHookRecipientSpecified) {
+            coreSwapParams = SwapParams({
                 zeroForOne: coreZeroForOne,
                 amountSpecified: params.amountSpecified,
-                sqrtPriceLimitX96: sqrtPriceLimitX96_core // Use adjusted limit
-            })
-            : _adjustSwapParamsForAvailableLiquidity(
-                SwapParams({
+                sqrtPriceLimitX96: sqrtPriceLimitX96_core
+            });
+        } else {
+            // Fast-path bound check at current price to avoid simulation when clearly safe
+            uint256 outUpper = _upperBoundOutAtCurrentPrice(coreKey, params.amountSpecified, coreZeroForOne);
+            if (outUpper <= maxOutputTokenAvailable) {
+                coreSwapParams = SwapParams({
                     zeroForOne: coreZeroForOne,
                     amountSpecified: params.amountSpecified,
-                    sqrtPriceLimitX96: sqrtPriceLimitX96_core // Use adjusted limit
-                }),
-                corePoolKey,
-                maxOutputTokenAvailable
-            );
+                    sqrtPriceLimitX96: sqrtPriceLimitX96_core
+                });
+            } else {
+                coreSwapParams = _adjustSwapParamsForAvailableLiquidity(
+                    SwapParams({
+                        zeroForOne: coreZeroForOne,
+                        amountSpecified: params.amountSpecified,
+                        sqrtPriceLimitX96: sqrtPriceLimitX96_core
+                    }),
+                    corePoolKey,
+                    maxOutputTokenAvailable
+                );
+            }
+        }
 
         BalanceDelta delta = poolManager.swap(coreKey, coreSwapParams, bytes(""));
 
@@ -531,96 +544,71 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         PoolKey memory poolKey,
         uint256 outputAvailable
     ) internal view returns (SwapParams memory adjustedParams) {
-        uint256 inputNeededForAvailableOutput;
-        // ? we could add a buffer to not completely exhaust the liquidity
-        // uint256 outputNeededForAvailableInput = outputAvailable * 90/100;
         uint256 maxOutputAvailable = outputAvailable;
-        // simulate the swap and derive the expected output and input amounts respectively from the returning deltas
-        (BalanceDelta swapDelta,,,) = SwapSimulator.simulateSwap(poolManager, poolKey, params);
-
         bool isExactInput = params.amountSpecified < 0;
         uint256 originalAmount = uint256(params.amountSpecified < 0 ? -params.amountSpecified : params.amountSpecified);
 
-        // console.log("Original swap amount: ", originalAmount);
-        // console.log("Is exact input: ", isExactInput);
-
-        uint256 expectedOutput = _getExpectedOutputFromDelta(swapDelta, params.zeroForOne);
-        // console.log("Expected output from simulation: ", expectedOutput);
-
-        // if it is an exact input swap, then we need to check if the expected output(from simulation) is greater than the max output available for the currency
-        if (isExactInput) {
-            if (expectedOutput > maxOutputAvailable) {
-                // console.log(
-                //     "Output exceeds available liquidity, capping to: ",
-                //     maxOutputAvailable
-                // );
-
-                // if it is then we need to calcualte the exact input amount that is needed to get the max output available for the currency
-                inputNeededForAvailableOutput =
-                    _calculateInputForExactOutput(poolManager, poolKey, maxOutputAvailable, params.zeroForOne);
-
-                // console.log(
-                //     "Input needed for available output: ",
-                //     inputNeededForAvailableOutput
-                // );
-
-                // adjust the swap params to use the input needed for max output
-                adjustedParams = SwapParams({
-                    zeroForOne: params.zeroForOne,
-                    // negative for exact input swap
-                    // this exact input swap would give us the maximum output available for the currency
-                    amountSpecified: -int256(inputNeededForAvailableOutput),
-                    sqrtPriceLimitX96: params.sqrtPriceLimitX96
-                });
-            } else {
-                // Output is within limits, no adjustment needed
-                // adjusted params is the same as the original params
-                // original amount is the amount needed to get the expected output
-                // swap will continue as normal
-                adjustedParams = params;
-                inputNeededForAvailableOutput = originalAmount;
-            }
-        }
-        // if it is an exact output swap, then we need to check if the expected output is greater than the max output available for the currency
-        else {
-            // Token0 -> Token1 or Token1 -> Token0:
-            // check if output token exceeds available liquidity
-            // if we have enough liquidity swap will continue as normal
-            // if we dont have enough liquidity, we need to cap the output to the max output available for the currency
+        // Exact output: no simulation needed, cap directly to available liquidity
+        if (!isExactInput) {
             uint256 cappedOutput = Math.min(originalAmount, maxOutputAvailable);
-
-            // Cap the output to available liquidity
             adjustedParams = SwapParams({
                 zeroForOne: params.zeroForOne,
-                amountSpecified: int256(cappedOutput), // Positive for exact output
+                amountSpecified: int256(cappedOutput),
                 sqrtPriceLimitX96: params.sqrtPriceLimitX96
             });
-            // ? optional calculation,  as input amount is not needed for exact output swap
-            // ? but is usefull for debugging and consistency
-            // and calculate the input needed to get the max output available for the currency
-            // and adjust the swap params to use the input needed for max output
-            // and swap will continue as normal
-            inputNeededForAvailableOutput =
-                _calculateInputForExactOutput(poolManager, poolKey, cappedOutput, params.zeroForOne);
-            // console.log(
-            //     "Input needed for available output: ",
-            //     inputNeededForAvailableOutput
-            // );
+            return adjustedParams;
         }
 
-        // console.log(
-        //     "Adjusted params amount: ",
-        //     uint256(
-        //         adjustedParams.amountSpecified < 0
-        //             ? -adjustedParams.amountSpecified
-        //             : adjustedParams.amountSpecified
-        //     )
-        // );
-        // console.log("Final max output available: ", maxOutputAvailable);
-        // console.log(
-        //     "Final input needed for max output: ",
-        //     inputNeededForAvailableOutput
-        // );
+        // Exact input: single simulation to estimate output, then linear scale if needed
+        (BalanceDelta swapDelta,,,) = SwapSimulator.simulateSwap(poolManager, poolKey, params);
+        uint256 expectedOutput = _getExpectedOutputFromDelta(swapDelta, params.zeroForOne);
+
+        if (expectedOutput > maxOutputAvailable) {
+            uint256 scaledIn = Math.mulDiv(originalAmount, maxOutputAvailable, expectedOutput);
+            // Optional conservative haircut to ensure we stay under available even with non-linearity
+            if (scaledIn > 0) {
+                scaledIn = (scaledIn * 999_000) / 1_000_000;
+            }
+            adjustedParams = SwapParams({
+                zeroForOne: params.zeroForOne,
+                amountSpecified: -int256(scaledIn),
+                sqrtPriceLimitX96: params.sqrtPriceLimitX96
+            });
+        } else {
+            adjustedParams = params;
+        }
+    }
+
+    // Fast-path bound: upper bound on output at current price (ignoring tick crossing)
+    function _upperBoundOutAtCurrentPrice(PoolKey memory coreKey, int256 amountSpecified, bool zeroForOne)
+        internal
+        view
+        returns (uint256 outUpper)
+    {
+        // For exact output, the requested output itself is the bound
+        if (amountSpecified > 0) {
+            return uint256(amountSpecified);
+        }
+
+        (uint160 sqrtP,, uint24 protocolFee, uint24 lpFee) = StateLibrary.getSlot0(poolManager, coreKey.toId());
+        uint24 swapFee = protocolFee == 0 ? lpFee : ProtocolFeeLibrary.calculateSwapFee(uint16(protocolFee), lpFee);
+        uint256 feeDenom = ProtocolFeeLibrary.PIPS_DENOMINATOR;
+        uint256 oneMinusFee = feeDenom - swapFee;
+        uint256 absIn = uint256(-amountSpecified);
+
+        // Start with fee-adjusted input
+        uint256 adjIn = Math.mulDiv(absIn, oneMinusFee, feeDenom);
+        uint256 Q96 = uint256(1) << 96;
+
+        if (zeroForOne) {
+            // out <= in * price => multiply by sqrtP twice, dividing by Q96 each time
+            outUpper = Math.mulDiv(adjIn, uint256(sqrtP), Q96);
+            outUpper = Math.mulDiv(outUpper, uint256(sqrtP), Q96);
+        } else {
+            // out <= in / price => divide by sqrtP twice, multiplying by Q96 each time
+            outUpper = Math.mulDiv(adjIn, Q96, uint256(sqrtP));
+            outUpper = Math.mulDiv(outUpper, Q96, uint256(sqrtP));
+        }
     }
 
     /**

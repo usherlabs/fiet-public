@@ -53,7 +53,9 @@ contract MarketFactoryTest is Test, Deployers {
 
         // Deploy CoreHook at computed address
         deployCodeTo(
-            "CoreHook.sol:CoreHook", abi.encode(poolManager, address(factory), address(positionManager)), coreHookAddr
+            "CoreHook.sol:CoreHook",
+            abi.encode(poolManager, address(factory), address(positionManager), address(0)),
+            coreHookAddr
         );
 
         address proxyDeployer = MarketFactory(address(factory)).marketDeployer();

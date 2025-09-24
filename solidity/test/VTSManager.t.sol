@@ -16,6 +16,7 @@ import {BalanceDeltaLibrary} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {SqrtPriceMath} from "@uniswap/v4-core/src/libraries/SqrtPriceMath.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
+import {PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 
 contract VTSManagerTest is Test, MarketTestBase {
     MockVTSManager vtsManager;
@@ -115,7 +116,7 @@ contract VTSManagerTest is Test, MarketTestBase {
             salt: salt
         });
 
-        vtsManager._trackCommitment(router, paramsAdd);
+        vtsManager._trackCommitment(router, PoolIdLibrary.toId(corePoolKey), paramsAdd);
 
         (uint256 expectedAddC0, uint256 expectedAddC1) =
             vtsManager.calculateCommitmentMaxima(tickLower, tickUpper, addLiq);
@@ -131,7 +132,7 @@ contract VTSManagerTest is Test, MarketTestBase {
             liquidityDelta: -int256(uint256(removePart)),
             salt: salt
         });
-        vtsManager._trackCommitment(router, paramsRemPart);
+        vtsManager._trackCommitment(router, PoolIdLibrary.toId(corePoolKey), paramsRemPart);
 
         (uint256 subPartC0, uint256 subPartC1) = vtsManager.calculateCommitmentMaxima(tickLower, tickUpper, removePart);
         (trackedC0, trackedC1) = vtsManager.getTrackedCommitmentFor(router, paramsAdd);
@@ -146,7 +147,7 @@ contract VTSManagerTest is Test, MarketTestBase {
             liquidityDelta: -int256(uint256(removeRest)),
             salt: salt
         });
-        vtsManager._trackCommitment(router, paramsRemAll);
+        vtsManager._trackCommitment(router, PoolIdLibrary.toId(corePoolKey), paramsRemAll);
 
         (trackedC0, trackedC1) = vtsManager.getTrackedCommitmentFor(router, paramsAdd);
         assertEq(trackedC0, 0, "tracked C0 should reset to zero on full removal");
