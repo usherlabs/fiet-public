@@ -213,7 +213,7 @@ abstract contract MarketVault {
      */
     function _tryFillPendingLCCSettlements(LiquidityCommitmentCertificate lccToken, bytes32 marketId) internal {
         // Check how much pending settlements this LCC has for this market
-        uint256 totalPendingSettlement = lccToken.getMarketTotalSettlement(marketId);
+        uint256 totalPendingSettlement = lccToken.getMarketTotalSettlementDeficit(marketId);
         if (totalPendingSettlement == 0) return; // No pending settlements to fill
 
         // Check how much liquidity ProxyHook has available

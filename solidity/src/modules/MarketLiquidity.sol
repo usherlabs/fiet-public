@@ -32,7 +32,7 @@ abstract contract MarketLiquidity {
 
     // Market-specific settlement queues
     mapping(bytes32 => mapping(address => uint256)) public marketUserSettlement; // marketId => recipient => amount we owe them
-    mapping(bytes32 => uint256) public marketTotalSettlement; // Total amount we owe per market
+    mapping(bytes32 => uint256) public marketTotalSettlementDeficit; // Total amount we owe per market
     mapping(bytes32 => address[]) public marketSettlementRecipients; // List of addresses with pending settlements to per market
     mapping(bytes32 => mapping(address => bool)) public hasPendingSettlement; // Quick lookup for who has a pending settlement with the market
 
@@ -45,8 +45,8 @@ abstract contract MarketLiquidity {
      * @return The total pending settlement for this market
      *
      */
-    function getMarketTotalSettlement(bytes32 marketId) external view returns (uint256) {
-        return marketTotalSettlement[marketId];
+    function getMarketTotalSettlementDeficit(bytes32 marketId) external view returns (uint256) {
+        return marketTotalSettlementDeficit[marketId];
     }
 
     /**
@@ -150,7 +150,7 @@ abstract contract MarketLiquidity {
         }
 
         marketUserSettlement[marketId][recipient] += amount;
-        marketTotalSettlement[marketId] += amount;
+        marketTotalSettlementDeficit[marketId] += amount;
 
         emit SettlementRequestQueued(marketId, recipient, amount, block.timestamp);
     }
@@ -239,7 +239,7 @@ abstract contract MarketLiquidity {
         internal
         returns (uint256 processedAmount)
     {
-        uint256 remainingLiquidity = Math.min(availableLiquidity, marketTotalSettlement[marketId]);
+        uint256 remainingLiquidity = Math.min(availableLiquidity, marketTotalSettlementDeficit[marketId]);
 
         address[] memory settlementRecipients = marketSettlementRecipients[marketId];
 
@@ -253,7 +253,7 @@ abstract contract MarketLiquidity {
 
             // Update amount we owe
             marketUserSettlement[marketId][recipient] -= amountToSettle;
-            marketTotalSettlement[marketId] -= amountToSettle;
+            marketTotalSettlementDeficit[marketId] -= amountToSettle;
 
             // Update the remaining liquidity and processed amount for this iteration
             remainingLiquidity -= amountToSettle;
