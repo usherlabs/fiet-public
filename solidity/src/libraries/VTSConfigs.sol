@@ -17,10 +17,7 @@ library VTSConfigs {
                 seizureUnlockTime: 3600, // 1 hour
                 baseVTSRate: 1000 // 10% (1000 bips)
             }),
-            // timeWindow: 172800, // 48 hours
             timeWindow: 3600, // 1 hour
-            boostTerm: 110, // 1.1% (110 bips)
-            decayTerm: 3466, // ln(2) ÷ 2 ≈ 0.347 (3466 bips)
             oracleFactory: address(0) // address(0) to use the default oracle factory // TODO: replace with the oracle registry.
         });
     }
