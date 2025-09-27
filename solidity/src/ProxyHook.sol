@@ -224,6 +224,8 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
             // Remove liquidity from the core pool
             // Remove the underlying tokens from the vault to the LCCs
             // and notify the LCCs about the new balance
+
+            // TODO: Does this mean DirectLPs pay out pending LCC settlements on position removal?
             _takeFromVaultToLCC(lccToken0, amount0);
             _takeFromVaultToLCC(lccToken1, amount1);
         }

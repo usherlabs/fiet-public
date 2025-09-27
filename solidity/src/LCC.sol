@@ -189,7 +189,7 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
 
     function _confirmTake(bytes32 marketId, uint256 amount) internal {
         // Process the settlement queue for this market
-        // burn = true to indicate that we want to burn the tokens and transfer underlying assets equivalent to amountt that was settled
+        // burn = true to indicate that we want to burn the tokens and transfer underlying assets equivalent to amount that was settled
         uint256 processedAmount = _processSettlementQueue(marketId, amount, true);
         uint256 remainingAmount = amount - processedAmount;
 
@@ -238,6 +238,8 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
         uint256 amountAvailable = _useMarketLiquidity(marketId, amount);
 
         // Add remainder to market-specific settlement queue
+
+        // TODO: If there is a deficit, then we cannot burn/transfer the amountAvailable (_useLiquidityFromMarketPool is called from _unwrap)
         uint256 deficit = amount - amountAvailable;
         if (deficit > 0) {
             _addToSettlementQueue(marketId, to, deficit);
@@ -403,6 +405,7 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
 
     /**
      * @dev Annul the user's pending settlements partially or completely
+     * @dev This is called before a transfer is made to clear any outstanding settlements to this user relative to the amount to settle.
      * @param fromUser The user to annul the pending settlements for
      * @param amountToTransfer The amount to transfer
      */

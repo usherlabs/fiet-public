@@ -414,6 +414,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
      * @param underlyingLCC0AmountToTake The amount of underlying token0 to settle to the proxy hook
      * @param underlyingLCC1AmountToTake The amount of underlying token1 to settle to the proxy hook
      */
+    // TODO: Should be takeUnderlyingAssetFromMarketVault...
     function _takeUnderlyingAssetFromProxyHook(
         PoolKey memory poolKey,
         PositionId positionId,
