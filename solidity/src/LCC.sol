@@ -235,9 +235,9 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
         // Use market liquidity
         uint256 amountAvailable = _useMarketLiquidity(marketId, amount);
 
-        // Add remainder to market-specific settlement queue
-
-        // TODO: If there is a deficit, then we cannot burn/transfer the amountAvailable (_useLiquidityInMarket is called from _unwrap)
+        // When we unwrap, we first use whatever liquidity is directly wrapped.
+        // Then, we turn to available in the market.
+        // If there's deficit between the amount to unwrap from market and the amount available, then we're in an insufficient liquidity situation and we queue a settlement
         uint256 deficit = amount - amountAvailable;
         if (deficit > 0) {
             _addToSettlementQueue(marketId, to, deficit);
@@ -415,11 +415,6 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
         // if they try to transfer more than that, then we need to annull the equivalent amount of pending settlements
         uint256 userBalance = balanceOf[fromUser];
 
-        // if from user is protocol bound then return
-        if (IMarketFactory(marketFactory).bounds(fromUser)) {
-            return;
-        }
-
         if (userBalance == 0) {
             return;
         }
@@ -434,17 +429,14 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
             return;
         }
 
-        uint256 maxAmountCanTransfer = userBalance - userPendingSettlement;
+        uint256 maxAmountCanTransferWithoutClearing = userBalance - userPendingSettlement;
 
-        if (amountToTransfer > maxAmountCanTransfer) {
-            uint256 amountToAnnul = amountToTransfer - maxAmountCanTransfer;
+        if (amountToTransfer > maxAmountCanTransferWithoutClearing) {
+            uint256 amountToAnnul = amountToTransfer - maxAmountCanTransferWithoutClearing;
             // annull the equivalent pending settlements
 
-            // TODO: This function does not clear the settlement from queue, it attempts to process it when the LCC is transferred... which cannot be done if there's unsufficient liquidity.
-            // TODO: Therefore, we simply need to remove the settlement from the queue, rather than processing it - allowing for the full LCC transfer to take place, and for the new recipient to receive the full amount.
             // If a transaction to process settlements occurs before the transfer. In that case, the user's LCC transfer will revert, and they'll have native assets in their wallet instead.
-            // _processAllMarketSettlementQueue(fromUser, amountToAnnul, false);
-            _clearUserFromSettlementQueue(fromUser, amountToAnnul);
+            _annulUserSettlement(fromUser, amountToAnnul);
         }
     }
 
