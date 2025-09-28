@@ -45,7 +45,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
     IVRLSpokeReceiver public spokeReceiver;
     // mapping(tokenId => mapping(positionIndex => PositionInfo)) public nftToPositions;
     mapping(uint256 => mapping(uint256 => PositionId)) public nftToPositionId;
-    mapping(PositionId => PositionInfo) public positions;
+    mapping(PositionId => PositionInfo) public positions; // TODO: Merge PositionIndex and this mapping, unifying all position state across DirectLPs and MMs.
 
     // mapping(tokenId => numNFTPositionsCount) public nftToPositionCount;
     mapping(uint256 => uint256) public nftToPositionCount;

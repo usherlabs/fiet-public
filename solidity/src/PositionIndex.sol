@@ -2,9 +2,9 @@
 pragma solidity ^0.8.26;
 
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
-import {PositionId} from "../types/Position.sol";
-import {IPositionIndex, PositionMeta, LiquidityUpdate} from "../interfaces/IPositionIndex.sol";
-import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
+import {PositionId} from "./types/Position.sol";
+import {IPositionIndex, PositionMeta, LiquidityUpdate} from "./interfaces/IPositionIndex.sol";
+import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 
 /// @notice Central index for position metadata and sparse liquidity history
 contract PositionIndex is IPositionIndex {

@@ -193,15 +193,15 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
     // Method called by the Core Hook notifying that Direct Liquidity Provision occurred.
     // Liquidity is managed by the Proxy Hook here to ensure PM credits the Proxy Hook (msg.sender) with relevant Currency Delta.
     // THIS IS ALREADY UNLOCKED FOR DIRECT LP ON CORE POOL.
-    function onDirectLP(PoolKey calldata corePoolkey, BalanceDelta delta, LiquidityUtils.ActionType actionType)
+    function onDirectLP(PoolKey calldata corePoolKey, BalanceDelta delta, LiquidityUtils.ActionType actionType)
         external
         virtual
         onlyCoreHook
     {
         LiquidityCommitmentCertificate lccToken0 =
-            LiquidityCommitmentCertificate(payable(Currency.unwrap(corePoolkey.currency0)));
+            LiquidityCommitmentCertificate(payable(Currency.unwrap(corePoolKey.currency0)));
         LiquidityCommitmentCertificate lccToken1 =
-            LiquidityCommitmentCertificate(payable(Currency.unwrap(corePoolkey.currency1)));
+            LiquidityCommitmentCertificate(payable(Currency.unwrap(corePoolKey.currency1)));
 
         uint256 amount0 = LiquidityUtils.safeInt128ToUint256(delta.amount0());
         uint256 amount1 = LiquidityUtils.safeInt128ToUint256(delta.amount1());
@@ -216,16 +216,22 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
             // We will store those claim tokens with the hook, so when swaps take place
             // liquidity from our CSMM can be used by minting/burning claim tokens the hook owns
 
+            // Settle underlying liquidity to the vault from the LCCs that were acquired.
             _settleFromLCCToVault(lccToken0, amount0);
             _settleFromLCCToVault(lccToken1, amount1);
 
-            _settleObligations(corePoolkey);
+            // Then we take whatever is considered an settlement obligation amount from the vault.
+            // This fulfils some accounting mechanics when DirectLPs add liquidity.
+            _settleObligations(corePoolKey);
         } else if (actionType == LiquidityUtils.ActionType.DirectLPRemoveLiquidity) {
-            // Remove liquidity from the core pool
-            // Remove the underlying tokens from the vault to the LCCs
-            // and notify the LCCs about the new balance
+            // 1. Remove LCCs from the Core Pool
+            // 2. Move the underlying tokens from the vault to the LCCs
+            // 3. Notify the LCCs about the new balance
 
             // TODO: Does this mean DirectLPs pay out pending LCC settlements on position removal?
+            // ! Since we're settling obligations using liquidity deposited by DirectLPs, this could fail.
+            // Try take from vault to LCCs.
+            // If there's a deficit, add recipient to settlement queue.
             _takeFromVaultToLCC(lccToken0, amount0);
             _takeFromVaultToLCC(lccToken1, amount1);
         }

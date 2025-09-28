@@ -312,6 +312,7 @@ abstract contract MarketLiquidity {
             _payOutstandingSettlementToUser(recipient, amount);
         }
 
+        // TODO: Convert to settlement event.
         emit SettlementRequestCleared(marketId, recipient, amount, 0, block.timestamp, burnTokens);
     }
 
