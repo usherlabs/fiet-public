@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: MIT
 // This contract is inherited by the core hook contract and it is responsible for tracking state wide variables for the VTS
-pragma solidity ^0.8.0;
+pragma solidity ^0.8.26;
 
 import {MarketVTSConfiguration} from "../types/VTS.sol";
+import {EventRing, DeficitEvent, SettlementEvent} from "../libraries/EventRing.sol";
+import {IPositionIndex, PositionMeta} from "../interfaces/IPositionIndex.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {TimeBucketOutflowTracker, TimeBucketOutflowTrackerLibrary} from "../libraries/TimeBucket.sol";
@@ -18,18 +20,23 @@ import {SqrtPriceMath} from "v4-periphery/lib/v4-core/src/libraries/SqrtPriceMat
 import {VTSMath} from "../libraries/VTSMath.sol";
 import {IVTSCalculator} from "../interfaces/IVTSCalculator.sol";
 import {toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
-import {IMMPositionManager} from "../interfaces/IMMPositionManager.sol";
+// import {IMMPositionManager} from "../interfaces/IMMPositionManager.sol";
 
 abstract contract VTSManager is IVTSManager {
     using SafeCastLib for *;
     using TimeBucketOutflowTrackerLibrary for TimeBucketOutflowTracker;
     using StateLibrary for IPoolManager;
     using TransientStateLibrary for IPoolManager;
+    using EventRing for EventRing.RingD;
+    using EventRing for EventRing.RingS;
 
     // Mapping from core pool ID to VTS configuration
     mapping(PoolId => MarketVTSConfiguration) public corePoolToVTSConfiguration;
     // Mapping from core pool ID to rolling outflow tracker
     mapping(PoolId => TimeBucketOutflowTracker) public marketOutflow;
+    // Event rings per market (deficits and settlements)
+    mapping(PoolId => EventRing.RingD) internal deficitRing;
+    mapping(PoolId => EventRing.RingS) internal settlementRing;
     // Mapping to store maximum potential commitment for each position
     mapping(PositionId => uint256[2]) internal commitmentMaxima;
     // Mapping to store the total settlement amount for each position
@@ -52,6 +59,12 @@ abstract contract VTSManager is IVTSManager {
     address private immutable mmPositionManager;
     IPoolManager private immutable poolManager;
     IVTSCalculator private calculator; // optional external calculator (Stylus or pure)
+    IPositionIndex internal positionIndex; // external index for position metadata and liquidity history
+
+    modifier onlyMarketFactory() {
+        if (msg.sender != marketFactory) revert InvalidCaller();
+        _;
+    }
 
     constructor(address _poolManager, address _marketFactory, address _mmPositionManager, address _calculator) {
         poolManager = IPoolManager(_poolManager);
@@ -67,14 +80,60 @@ abstract contract VTSManager is IVTSManager {
      * @param corePoolId The core pool ID
      * @param vtsConfiguration The VTS configuration
      */
-    function setMarketVTSConfiguration(PoolId corePoolId, MarketVTSConfiguration memory vtsConfiguration) public {
-        if (msg.sender != marketFactory) {
-            revert InvalidCaller();
-        }
+    function setMarketVTSConfiguration(PoolId corePoolId, MarketVTSConfiguration memory vtsConfiguration)
+        public
+        onlyMarketFactory
+    {
         corePoolToVTSConfiguration[corePoolId] = vtsConfiguration;
         marketOutflow[corePoolId].initialize(vtsConfiguration.timeWindow);
+        uint16 dsz = vtsConfiguration.deficitRingSize == 0 ? 1024 : vtsConfiguration.deficitRingSize;
+        uint16 ssz = vtsConfiguration.settlementRingSize == 0 ? 512 : vtsConfiguration.settlementRingSize;
+        deficitRing[corePoolId].initD(dsz);
+        settlementRing[corePoolId].initS(ssz);
 
         emit VTSConfigurationSet(corePoolId, vtsConfiguration);
+    }
+
+    function setPositionIndex(address index) external onlyMarketFactory {
+        positionIndex = IPositionIndex(index);
+    }
+
+    // --- Event recording (protocol bounds only) ---
+    function recordDeficitEvent(
+        PoolId corePoolId,
+        uint8 token,
+        uint160 sqrtP_before,
+        uint160 sqrtP_after,
+        uint128 out0,
+        uint128 out1,
+        uint128 deficit
+    ) external {
+        // TODO: Ensure it's only callable from correct contract.
+        deficitRing[corePoolId].push(
+            DeficitEvent({
+                ts: uint64(block.timestamp),
+                token: token,
+                sqrtP_before: sqrtP_before,
+                sqrtP_after: sqrtP_after,
+                out0: out0,
+                out1: out1,
+                deficit: deficit
+            })
+        );
+    }
+
+    function recordSettlementEvent(PoolId corePoolId, uint8 token, uint128 settled, uint128 marketDeficitBefore)
+        external
+    {
+        // TODO: Ensure it's only callable from correct contract.
+        settlementRing[corePoolId].push(
+            SettlementEvent({
+                ts: uint64(block.timestamp),
+                token: token,
+                settled: settled,
+                marketDeficitBefore: marketDeficitBefore
+            })
+        );
     }
 
     function getPositionSettledAmounts(PositionId positionId) public view returns (uint256 amount0, uint256 amount1) {
@@ -88,6 +147,26 @@ abstract contract VTSManager is IVTSManager {
      */
     function getMarketVTSConfiguration(PoolId corePoolId) public view returns (MarketVTSConfiguration memory) {
         return corePoolToVTSConfiguration[corePoolId];
+    }
+
+    /// @dev Register/update position metadata and liquidity snapshots in the PositionIndex
+    function _touchPositionIndex(address router, PoolId corePoolId, ModifyLiquidityParams calldata params) internal {
+        if (address(positionIndex) == address(0)) return;
+        // Derive position id consistent with Uniswap position keying
+        PositionId positionId = PositionLibrary.generateId(router, params);
+        // Ensure registration exists (owner set) and current liquidity snapshot is appended
+        // Read meta; if not registered, owner will be zero address
+        PositionMeta memory positionMeta = positionIndex.getMeta(positionId);
+        if (positionMeta.owner == address(0)) {
+            positionIndex.register(
+                positionId, corePoolId, params.tickLower, params.tickUpper, router, uint64(block.timestamp)
+            );
+        } else if (!positionMeta.isActive) {
+            // Reactivate if needed (optional). Skip for now.
+        }
+        // Snapshot current on-chain liquidity
+        uint128 liq = poolManager.getPositionLiquidity(corePoolId, PositionId.unwrap(positionId));
+        positionIndex.updateLiquidity(positionId, liq);
     }
 
     /**
@@ -271,16 +350,9 @@ abstract contract VTSManager is IVTSManager {
             return (0, 0);
         }
 
-        // Allocate the pool’s windowed outflow to each active (in-range) position proportional to its current L(r) share, then compute min(1, ΔO_A(r)/C_A(r)) per token. This matches the spec’s pragmatic fallback and is implementable on-chain without per-swap tick traversal.
-        PoolId corePoolId = positionPoolId[_positionId];
-        (uint256 out0, uint256 out1) = marketOutflow[corePoolId].getTotalOutflow();
-
-        (uint128 liqPos, uint256 liqTotal) = _getLiquidityShareForPosition(corePoolId, _positionId);
-
-        uint256 c0 = commitmentMaxima[_positionId][0];
-        uint256 c1 = commitmentMaxima[_positionId][1];
-
-        return VTSMath.vtsRequiredBps(out0, out1, c0, c1, liqPos, liqTotal);
+        // Deficit-based required VTS will be computed later; placeholder returns zero for now.
+        // Next step will compute D_A(r) from recorded events and liquidityAt(ts) via PositionIndex.
+        return (0, 0);
     }
 
     /**

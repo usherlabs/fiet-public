@@ -10,7 +10,8 @@ pragma solidity ^0.8.20;
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {CurrencySettler} from "@uniswap/v4-core/test/utils/CurrencySettler.sol";
-import {LiquidityCommitmentCertificate} from "../LCC.sol";
+import {ILCC} from "../interfaces/ILCC.sol";
+
 import {LiquidityUtils} from "../libraries/LiquidityUtils.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
@@ -21,8 +22,8 @@ import {console} from "forge-std/console.sol";
 abstract contract MarketVault {
     using CurrencySettler for Currency;
 
-    error InsufficientLiquidity();
-    error InsufficientBalance();
+    error InsufficientLiquidityToTake();
+    error InsufficientLiquidityToSettle();
     error InvalidAmount();
     error InvalidSender();
 
@@ -54,96 +55,70 @@ abstract contract MarketVault {
     }
 
     /**
-     * @dev Take asset from the vault to the recipient address
-     * @param uaCurrency The underlying asset of the LCC
+     * @dev Get the balance of a token in the MarketVault
+     * @param currency The currency in market vault
+     * @return The balance of the currency in the market vault
+     */
+    function inMarketBalanceOf(Currency currency) public view returns (uint256) {
+        return vaultPoolManager.balanceOf(address(this), currency.toId());
+    }
+
+    /**
+     * @dev Take asset from the vault to the recipient address. Will revert if there is not enough liquidity in the vault.
+     * @param assetCurrency The underlying asset of the LCC
      * @param recipient The recipient of the underlying asset
      * @param amount The amount of the underlying asset to take from the vault
      */
-    function _takeAssetFromVault(Currency uaCurrency, address recipient, uint256 amount) internal {
+    function _takeAssetFromVault(Currency assetCurrency, address recipient, uint256 amount) internal {
         // verify that the vault/proxy hook has enough liquidity to take for the underlying asset
-        uint256 availableLiquidity = vaultPoolManager.balanceOf(address(this), uaCurrency.toId());
+        uint256 availableLiquidity = inMarketBalanceOf(assetCurrency);
         if (availableLiquidity < amount) {
-            revert InsufficientLiquidity();
+            revert InsufficientLiquidityToTake();
         }
         // Burn some claim tokens from the pool manager in order to release the underlying liquidity for use
-        uaCurrency.settle(
+        assetCurrency.settle(
             vaultPoolManager,
             address(this),
             amount,
             true // `burn` = `true` i.e. we're  burning ERC-6909 Claim Tokens
         );
         // take from the vault to the recipient address
-        uaCurrency.take(
+        assetCurrency.take(
             vaultPoolManager,
             recipient,
             amount,
             false // mint` = `true` i.e. we're  claiming erc20
         );
-        emit LiquidityTakenFromVault(msg.sender, recipient, Currency.unwrap(uaCurrency), amount);
+        emit LiquidityTakenFromVault(msg.sender, recipient, Currency.unwrap(assetCurrency), amount);
     }
 
     /**
-     * @dev Take asset from the vault to the recipient address
-     * @param uaCurrency The underlying asset of the LCC
+     * @dev Take as much asset as possible from the vault to the recipient address
+     * @param assetCurrency The underlying asset of the LCC
      * @param recipient The recipient of the underlying asset
      * @param amount The amount of the underlying asset to take from the vault
      *
      */
-    function _tryTakeAssetFromVault(Currency uaCurrency, address recipient, uint256 amount)
+    function _tryTakeAssetFromVault(Currency assetCurrency, address recipient, uint256 amount)
         internal
         returns (uint256)
     {
         // verify that the vault/proxy hook has enough liquidity to take for the underlying asset
-        uint256 availableLiquidity = vaultPoolManager.balanceOf(address(this), uaCurrency.toId());
+        uint256 availableLiquidity = inMarketBalanceOf(assetCurrency);
         uint256 amountToTake = Math.min(availableLiquidity, amount);
         // Take all the available liquidity from the vault for the underlying asset
-        _takeAssetFromVault(uaCurrency, recipient, amountToTake);
+        _takeAssetFromVault(assetCurrency, recipient, amountToTake);
         // return the amount of the underlying asset that was taken from the vault
         return amountToTake;
     }
 
     /**
-     * @dev Settle asset to the vault
-     * @param uaCurrency The underlying asset of the LCC
-     * @param owner The owner of the underlying asset
-     * @param amount The amount of the underlying asset to settle to the vault
-     */
-    function _settleAssetToVault(Currency uaCurrency, address owner, uint256 amount) internal {
-        // validate that the owner has enough balance of underlying token to take from
-        // uint256 ownerBalance = uaCurrency.balanceOf(owner);
-        // if (ownerBalance < amount) {
-        //     revert InsufficientBalance();
-        // }
-        // settle the asset to the vault
-        uaCurrency.settle(
-            vaultPoolManager,
-            owner,
-            amount,
-            false // `burn` = `false` i.e. we're actually transferring tokens, not burning ERC-6909 Claim Tokens
-        );
-
-        // Mint claim tokens for the vault for the amount we just deposited into it
-        // burning these tokens will enable us to 'take liquidity from the vault
-        uaCurrency.take(
-            vaultPoolManager,
-            address(this),
-            amount,
-            true // `mint` = `true` i.e. we're minting claim tokens for the vault, equivalent to money we just deposited to the PM
-        );
-
-        emit LiquidityAddedToVault(msg.sender, owner, Currency.unwrap(uaCurrency), amount);
-    }
-
-    /**
-     * @dev Take asset from the vault to the LCC
+     * @dev Take as much underlyingasset as possible from the vault to the LCC
      * @param lccToken The LCC token
      * @param amount The amount of the underlying asset to take from the vault
-     * @return The deficit of the underlying asset that was taken from the vault i.e how much we were unable to take from the vault
+     * @return The amount of the underlying asset that was taken from the vault
      */
-    function _tryTakeFromVaultToLCC(LiquidityCommitmentCertificate lccToken, uint256 amount)
-        internal
-        returns (uint256)
-    {
+    function _tryTakeFromVaultToLCC(ILCC lccToken, uint256 amount) internal returns (uint256) {
         Currency uaCurrency = Currency.wrap(lccToken.underlyingAsset());
         // Take the asset from the vault to the LCC
         uint256 amountTaken = _tryTakeAssetFromVault(uaCurrency, address(lccToken), amount);
@@ -151,18 +126,15 @@ abstract contract MarketVault {
         if (amountTaken > 0) {
             lccToken.confirmTake(amountTaken);
         }
-        // Calculate the deficit of the underlying asset that was taken from the vault i.e how much we were unable to take from the vault
-        uint256 deficit = amount - amountTaken;
-
-        return deficit;
+        return amountTaken;
     }
 
     /**
-     * @dev Take asset from the vault to the LCC
+     * @dev Take asset from the vault to the LCC. Will revert if there is not enough liquidity in the vault.
      * @param lccToken The LCC token
      * @param amount The amount of the underlying asset to take from the vault
      */
-    function _takeFromVaultToLCC(LiquidityCommitmentCertificate lccToken, uint256 amount) internal {
+    function _takeFromVaultToLCC(ILCC lccToken, uint256 amount) internal {
         if (amount == 0) revert InvalidAmount();
         Currency uaCurrency = Currency.wrap(lccToken.underlyingAsset());
         // Take the asset from the vault to the LCC
@@ -172,11 +144,44 @@ abstract contract MarketVault {
     }
 
     /**
+     * @dev Settle asset to the vault. Will revert if there is not enough liquidity in the sender settling to the vault.
+     * @param assetCurrency The underlying asset of the LCC
+     * @param sender The owner of the underlying asset sending to the vault
+     * @param amount The amount of the underlying asset to settle to the vault
+     */
+    function _settleAssetToVault(Currency assetCurrency, address sender, uint256 amount) internal {
+        // validate that the owner has enough balance of underlying token to take from
+        uint256 ownerBalance = assetCurrency.balanceOf(sender);
+        if (ownerBalance < amount) {
+            revert InsufficientLiquidityToSettle();
+        }
+
+        // settle the asset to the vault
+        assetCurrency.settle(
+            vaultPoolManager,
+            sender,
+            amount,
+            false // `burn` = `false` i.e. we're actually transferring tokens, not burning ERC-6909 Claim Tokens
+        );
+
+        // Mint claim tokens for the vault for the amount we just deposited into it
+        // burning these tokens will enable us to 'take liquidity from the vault
+        assetCurrency.take(
+            vaultPoolManager,
+            address(this),
+            amount,
+            true // `mint` = `true` i.e. we're minting claim tokens for the vault, equivalent to money we just deposited to the PM
+        );
+
+        emit LiquidityAddedToVault(msg.sender, sender, Currency.unwrap(assetCurrency), amount);
+    }
+
+    /**
      * @dev Settle asset from the LCC to the vault
      * @param lccToken The LCC token
      * @param amount The amount of the underlying asset to settle from the LCC to the vault
      */
-    function _settleFromLCCToVault(LiquidityCommitmentCertificate lccToken, uint256 amount) internal {
+    function _settleFromLCCToVault(ILCC lccToken, uint256 amount) internal {
         // Prepare the settle of the LCC to the vault,
         // this authorizes us to transfer from
         lccToken.prepareSettle(amount);
@@ -184,41 +189,41 @@ abstract contract MarketVault {
         // Get the underlying asset of the LCC
         Currency uaCurrency = Currency.wrap(lccToken.underlyingAsset());
 
+        address sender = address(lccToken);
+
         // Get the amount of the underlying asset that is being settled to the vault
         // Settle the asset to the vault
-        _settleAssetToVault(uaCurrency, address(lccToken), amount);
+        _settleAssetToVault(uaCurrency, sender, amount);
     }
 
     /**
      * @dev Fill Pending settlements of users who tried to unwrap with insufficient liquidity
      * @param corePoolKey The core pool key
      */
-    function _settleObligationsToLCC(PoolKey memory corePoolKey) internal {
+    function _settleObligations(PoolKey memory corePoolKey) internal {
         bytes32 marketId = PoolId.unwrap(corePoolKey.toId());
         // Get both LCC tokens for this market
-        LiquidityCommitmentCertificate lccToken0 =
-            LiquidityCommitmentCertificate(Currency.unwrap(corePoolKey.currency0));
-        LiquidityCommitmentCertificate lccToken1 =
-            LiquidityCommitmentCertificate(Currency.unwrap(corePoolKey.currency1));
+        ILCC lccToken0 = ILCC(Currency.unwrap(corePoolKey.currency0));
+        ILCC lccToken1 = ILCC(Currency.unwrap(corePoolKey.currency1));
 
         // Try to fill pending settlements for both tokens
-        _tryFillPendingLCCSettlements(lccToken0, marketId);
-        _tryFillPendingLCCSettlements(lccToken1, marketId);
+        _settleObligationsForLCC(lccToken0, marketId);
+        _settleObligationsForLCC(lccToken1, marketId);
     }
 
     /**
-     * @dev Try to fill pending settlements for the LCC if any
+     * @dev Try to settle pending settlement obligations via LCCs if any deficit is available
      * @param lccToken The LCC token
      * @param marketId The market ID
      */
-    function _tryFillPendingLCCSettlements(LiquidityCommitmentCertificate lccToken, bytes32 marketId) internal {
+    function _settleObligationsForLCC(ILCC lccToken, bytes32 marketId) internal {
         // Check how much pending settlements this LCC has for this market
         uint256 totalPendingSettlement = lccToken.getMarketTotalSettlementDeficit(marketId);
         if (totalPendingSettlement == 0) return; // No pending settlements to fill
 
         // Check how much liquidity ProxyHook has available
         Currency uaCurrency = Currency.wrap(lccToken.underlyingAsset());
-        uint256 availableLiquidity = vaultPoolManager.balanceOf(address(this), uaCurrency.toId());
+        uint256 availableLiquidity = inMarketBalanceOf(uaCurrency);
 
         // Calculate how much we can settle
         uint256 amountToSettle = Math.min(totalPendingSettlement, availableLiquidity);
@@ -226,6 +231,20 @@ abstract contract MarketVault {
 
         // Move liquidity from PoolManager to LCC (this triggers settlement process)
         _takeFromVaultToLCC(lccToken, amountToSettle);
+
+        // TODO: Correctly place this logic.
+        // // Record settlement event to VTS manager for proportional decay tracking
+        // address coreHook = IMarketFactory(marketFactory).getCoreHook();
+        // uint8 tokenIndex;
+        // PoolKey memory coreKey = corePoolKey; // proxy has this set via setCorePoolKey
+        // if (Currency.unwrap(coreKey.currency0) == address(lccToken)) {
+        //     tokenIndex = 0;
+        // } else {
+        //     tokenIndex = 1;
+        // }
+        // IVTSManager(coreHook).recordSettlementEvent(
+        //     coreKey.toId(), tokenIndex, uint128(amountToSettle), uint128(totalPendingSettlement)
+        // );
     }
 
     /**

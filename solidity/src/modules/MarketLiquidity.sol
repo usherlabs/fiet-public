@@ -152,6 +152,7 @@ abstract contract MarketLiquidity {
         marketUserSettlement[marketId][recipient] += amount;
         marketTotalSettlementDeficit[marketId] += amount;
 
+        // TODO: Convert to deficit event.
         emit SettlementRequestQueued(marketId, recipient, amount, block.timestamp);
     }
 
@@ -229,7 +230,7 @@ abstract contract MarketLiquidity {
     }
 
     /**
-     * @dev Partially or Completely Process the market settlement queue
+     * @dev Partially or Completely process the market settlement queue
      * @param marketId The market to process the settlement queue for
      * @param availableLiquidity The available liquidity in the market
      * @param burnTokens Whether to burn the equivalent LCC tokens for the settlement settled
@@ -250,30 +251,68 @@ abstract contract MarketLiquidity {
             if (amount == 0) continue; // Skip fully paid settlements
 
             uint256 amountToSettle = Math.min(remainingLiquidity, amount);
-
-            // Update amount we owe
-            marketUserSettlement[marketId][recipient] -= amountToSettle;
-            marketTotalSettlementDeficit[marketId] -= amountToSettle;
-
-            // Update the remaining liquidity and processed amount for this iteration
+            _processSettlementQueueForRecipient(marketId, recipient, amountToSettle, burnTokens);
             remainingLiquidity -= amountToSettle;
             processedAmount += amountToSettle;
-
-            // If amount fully paid, remove from pending settlement holders list
-            if (marketUserSettlement[marketId][recipient] == 0) {
-                hasPendingSettlement[marketId][recipient] = false;
-                _removeSettlementRequest(marketId, recipient);
-            }
-
-            // burn the equivalent LCC Tokens for this user's amount that was just paid off
-            // and transfer the underlying assets to the recipient of the settlement
-            // if burn is false, it means we are clearing a settlement we did not pay off
-            if (burnTokens) {
-                _payOutstandingSettlementToUser(recipient, amountToSettle);
-            }
-
-            emit SettlementRequestCleared(marketId, recipient, amountToSettle, 0, block.timestamp, burnTokens);
         }
+    }
+
+    function _processSettlementQueueForAllRecipientMarkets(address recipient, uint256 amountToProcess, bool burnTokens)
+        internal
+    {
+        uint256 remainingLiquidity = amountToProcess;
+        bytes32[] memory userMarkets = _getUserMarkets(recipient);
+        for (uint256 i = 0; i < userMarkets.length; i++) {
+            bytes32 marketId = userMarkets[i];
+            uint256 amountInMarket = marketUserSettlement[marketId][recipient];
+            if (amountInMarket == 0) continue;
+            uint256 amount = Math.min(remainingLiquidity, amountInMarket);
+
+            remainingLiquidity -= amount; // Math.min ensures that the amount is always less than or equal to the remaining liquidity to process
+
+            _processSettlementQueueForRecipient(marketId, recipient, amount, burnTokens);
+
+            if (remainingLiquidity == 0) break;
+        }
+    }
+
+    /**
+     * @dev Process all the market settlement queues for a user partially or completely clearing out their pending settlements
+     * @param fromUser The user who's settlements are being cleared
+     * @param amountToClear The amount of pending settlements to clear
+     */
+    function _annulUserSettlement(address fromUser, uint256 amountToClear) internal {
+        _processSettlementQueueForAllRecipientMarkets(fromUser, amountToClear, false);
+    }
+
+    /**
+     * @dev Processes a settlement queue for a recipient
+     * @param marketId The market ID to process the settlement queue for
+     * @param recipient The recipient to process the settlement queue for
+     * @param amount The amount to process
+     * @param burnTokens Whether to burn the equivalent LCC tokens for the settlement settled
+     */
+    function _processSettlementQueueForRecipient(bytes32 marketId, address recipient, uint256 amount, bool burnTokens)
+        internal
+    {
+        // Update amount we owe
+        marketUserSettlement[marketId][recipient] -= amount;
+        marketTotalSettlementDeficit[marketId] -= amount;
+
+        // If amount fully paid, remove from pending settlement holders list
+        if (marketUserSettlement[marketId][recipient] == 0) {
+            hasPendingSettlement[marketId][recipient] = false;
+            _removeSettlementRequest(marketId, recipient);
+        }
+
+        // burn the equivalent LCC Tokens for this user's amount that was just paid off
+        // and transfer the underlying assets to the recipient of the settlement
+        // if burn is false, it means we are clearing a settlement we did not pay off
+        if (burnTokens) {
+            _payOutstandingSettlementToUser(recipient, amount);
+        }
+
+        emit SettlementRequestCleared(marketId, recipient, amount, 0, block.timestamp, burnTokens);
     }
 
     /**

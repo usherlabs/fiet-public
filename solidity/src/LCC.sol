@@ -65,14 +65,16 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
             return;
         }
 
+        IMarketFactory mf = IMarketFactory(marketFactory);
+
         // Allow transfers between protocol bounds
-        if (IMarketFactory(marketFactory).bounds(to) || IMarketFactory(marketFactory).bounds(from)) {
+        if (mf.bounds(to) || mf.bounds(from)) {
             _;
             return;
         }
 
         // Only protocol bounds can transfer to non-bounds (EOAs, other contracts)
-        if (!IMarketFactory(marketFactory).bounds(from)) {
+        if (!mf.bounds(from)) {
             revert TransferNotAllowed();
         }
 
@@ -125,11 +127,7 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
         onlyIssuer
         returns (uint256 amountToCancel, uint256 deficitAmount)
     {
-        // TODO: provide issuer address to the function when calling it
         address issuer = msg.sender;
-        // ? this may not be correct, we need to actually get the amount of underlying liquidity that this issuer has of this LCC'S underlying asset
-        // uint256 externallyCustodied = totalSupply - uaSupply;
-        // ? there is no way to know how much UA is custodied by the issuer unless we make a call to them
         uint256 externallyCustodied = IProxyHook(issuer).getAvailableLiquidity(underlyingAsset);
 
         if (amount == 0) {
@@ -230,7 +228,7 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
      * @param amount The amount to unwrap from this market
      * @return The amount actually unwrapped from this market
      */
-    function _useLiquidityFromMarketPool(bytes32 marketId, address from, address to, uint256 amount)
+    function _useLiquidityInMarket(bytes32 marketId, address from, address to, uint256 amount)
         internal
         returns (uint256)
     {
@@ -239,7 +237,7 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
 
         // Add remainder to market-specific settlement queue
 
-        // TODO: If there is a deficit, then we cannot burn/transfer the amountAvailable (_useLiquidityFromMarketPool is called from _unwrap)
+        // TODO: If there is a deficit, then we cannot burn/transfer the amountAvailable (_useLiquidityInMarket is called from _unwrap)
         uint256 deficit = amount - amountAvailable;
         if (deficit > 0) {
             _addToSettlementQueue(marketId, to, deficit);
@@ -305,7 +303,7 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
             uint256 amountFromThisMarket = Math.min(remainingToUnwrap, userMarketBalance);
 
             // unwrap from this market's liquidity
-            uint256 amountUnwrapped = _useLiquidityFromMarketPool(marketId, from, to, amountFromThisMarket);
+            uint256 amountUnwrapped = _useLiquidityInMarket(marketId, from, to, amountFromThisMarket);
 
             totalAmountUnwrapped += amountUnwrapped;
             remainingToUnwrap -= amountFromThisMarket;
@@ -441,7 +439,12 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
         if (amountToTransfer > maxAmountCanTransfer) {
             uint256 amountToAnnul = amountToTransfer - maxAmountCanTransfer;
             // annull the equivalent pending settlements
-            _processAllMarketSettlementQueue(fromUser, amountToAnnul, false);
+
+            // TODO: This function does not clear the settlement from queue, it attempts to process it when the LCC is transferred... which cannot be done if there's unsufficient liquidity.
+            // TODO: Therefore, we simply need to remove the settlement from the queue, rather than processing it - allowing for the full LCC transfer to take place, and for the new recipient to receive the full amount.
+            // If a transaction to process settlements occurs before the transfer. In that case, the user's LCC transfer will revert, and they'll have native assets in their wallet instead.
+            // _processAllMarketSettlementQueue(fromUser, amountToAnnul, false);
+            _clearUserFromSettlementQueue(fromUser, amountToAnnul);
         }
     }
 
@@ -472,27 +475,6 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
 
             // Process the market tracing logic, letting us know where this LCC came from for this particular user
             _trackMarketAcquisition(recipient, currentMarket, amount);
-        }
-    }
-
-    /**
-     * @dev Process all the market settlement queues for a user partially or completely clearing out their pending settlements
-     * @param fromUser The user who's settlements are being cleared
-     * @param amountToClear The amount of pending settlements to clear
-     * @param burnTokens If to burn the equivalent LCC tokens and Transfer underlying assets for the pending settlements settled
-     */
-    function _processAllMarketSettlementQueue(address fromUser, uint256 amountToClear, bool burnTokens) internal {
-        uint256 totalAmountCleared = 0;
-        // get the markets the user has LCC from
-        bytes32[] memory userMarkets = _getUserMarkets(fromUser);
-        for (uint256 i = 0; i < userMarkets.length; i++) {
-            bytes32 marketId = userMarkets[i];
-
-            // Check if we've already cleared enough pending settlements
-            if (totalAmountCleared == amountToClear) break;
-
-            uint256 cleared = _processSettlementQueue(marketId, amountToClear, burnTokens);
-            totalAmountCleared += cleared;
         }
     }
 

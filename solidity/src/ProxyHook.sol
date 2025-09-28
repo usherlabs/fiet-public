@@ -219,7 +219,7 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
             _settleFromLCCToVault(lccToken0, amount0);
             _settleFromLCCToVault(lccToken1, amount1);
 
-            _settleObligationsToLCC(corePoolkey);
+            _settleObligations(corePoolkey);
         } else if (actionType == LiquidityUtils.ActionType.DirectLPRemoveLiquidity) {
             // Remove liquidity from the core pool
             // Remove the underlying tokens from the vault to the LCCs
@@ -259,7 +259,7 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         _modifyVaultLiquidity(currency0, currency1, balanceDelta);
         // if there was an addition, then settle the obligations to the lcc tokens
         if (balanceDelta.amount0() > 0 || balanceDelta.amount1() > 0) {
-            _settleObligationsToLCC(corePoolKey);
+            _settleObligations(corePoolKey);
         }
     }
 
@@ -316,13 +316,10 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         // Get the amount of the token that is being swapped in based on if this is a zero one swap or one for zero swap
         uint256 amountOut = isZeroForOne ? amount1 : amount0;
 
-        uint256 deficit = _tryTakeFromVaultToLCC(lccTokenOut, amountOut);
+        _tryTakeFromVaultToLCC(lccTokenOut, amountOut);
 
         // New liquidity in pool, so we try and settle the outstanding obligations, if any
-        _settleObligationsToLCC(corePoolKey);
-        if (deficit > 0) {
-            // TODO: NOTHING TO DO HERE
-        }
+        _settleObligations(corePoolKey);
     }
 
     // Before swap we make sure to provide enough delta
@@ -335,6 +332,8 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         withProxySwapFlag
         returns (bytes4, BeforeSwapDelta, uint24)
     {
+        // Capture pre-swap sqrtP for core pool
+        (uint160 sqrtP_before,,,) = StateLibrary.getSlot0(poolManager, corePoolKey.toId());
         bool isHookRecipientSpecified = hookData.length > 0;
 
         uint256 maxOutputTokenAvailable =
@@ -433,6 +432,9 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
 
         BalanceDelta delta = poolManager.swap(coreKey, coreSwapParams, bytes(""));
 
+        // Capture post-swap sqrtP for core pool
+        (uint160 sqrtP_after,,,) = StateLibrary.getSlot0(poolManager, coreKey.toId());
+
         // console.log("Core Pool Delta amount0: ", delta.amount0());
         // console.log("Core Pool Delta amount1: ", delta.amount1());
         // console.log("coreZeroForOne: ", coreZeroForOne);
@@ -469,12 +471,23 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
             lccCurrencyForCurrency1.take(poolManager, address(this), amountOut, false);
 
             // Unwrap and Burn the LCC of Token 1 after taking from PM
-            (uint256 cancelledAmount,) = lccTokenForCurrency1.cancel(amountOut, _determineExcessRecipient(hookData));
+            (uint256 cancelledAmount, uint256 deficit) =
+                lccTokenForCurrency1.cancel(amountOut, _determineExcessRecipient(hookData));
 
             // console.log("cancelledAmount: ", cancelledAmount / 1e18);
             // console.log("deficit: ", deficit / 1e18);
 
             amountToSettle = cancelledAmount;
+
+            // Record deficit event if any // TODO: Move this into the actual cancel function.
+            if (deficit > 0) {
+                uint8 tokenOutIndex = coreZeroForOne ? 1 : 0;
+                uint128 out0 = tokenOutIndex == 0 ? uint128(amountOut) : 0;
+                uint128 out1 = tokenOutIndex == 1 ? uint128(amountOut) : 0;
+                IVTSManager(IMarketFactory(marketFactory).getCoreHook()).recordDeficitEvent(
+                    coreKey.toId(), tokenOutIndex, sqrtP_before, sqrtP_after, out0, out1, uint128(deficit)
+                );
+            }
 
             // Settle the output token to the PoolManager
             // Burn claim tokens to release output token to the Trader from the PoolManager.
@@ -496,12 +509,23 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
             lccCurrencyForCurrency0.take(poolManager, address(this), amountOut, false);
 
             // Cancel (Unwrap/Burn) the LCC of Token 0 after taking from PM
-            (uint256 cancelledAmount,) = lccTokenForCurrency0.cancel(amountOut, _determineExcessRecipient(hookData));
+            (uint256 cancelledAmount, uint256 deficit) =
+                lccTokenForCurrency0.cancel(amountOut, _determineExcessRecipient(hookData));
 
             // console.log("cancelledAmount: ", cancelledAmount / 1e18);
             // console.log("deficit: ", deficit / 1e18);
 
             amountToSettle = cancelledAmount;
+
+            // Record deficit event if any // TODO: Move this into the actual cancel function.
+            if (deficit > 0) {
+                uint8 tokenOutIndex = coreZeroForOne ? 1 : 0;
+                uint128 out0 = tokenOutIndex == 0 ? uint128(amountOut) : 0;
+                uint128 out1 = tokenOutIndex == 1 ? uint128(amountOut) : 0;
+                IVTSManager(IMarketFactory(marketFactory).getCoreHook()).recordDeficitEvent(
+                    coreKey.toId(), tokenOutIndex, sqrtP_before, sqrtP_after, out0, out1, uint128(deficit)
+                );
+            }
 
             // Settle the output token to the PoolManager
             // Burn claim tokens to release output token to the Trader from the PoolManager.

@@ -200,6 +200,8 @@ contract MarketFactory is IMarketFactory, Ownable2Step {
 
         if (lccToken == address(0)) {
             // Create new LCC token
+
+            // Set MMPositionManager as an issuer. By default, ProxyHook/MarketVault is an issuer.
             address[] memory issuers = new address[](1);
             issuers[0] = address(mmPositionManager);
 

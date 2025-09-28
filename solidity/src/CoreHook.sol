@@ -142,6 +142,8 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
         }
         // Track maximum potemtial commitment for both tokens in the position
         _trackCommitment(sender, key.toId(), params);
+        // Update PositionIndex with registration (if new) and a liquidity snapshot
+        _touchPositionIndex(sender, key.toId(), params);
 
         return (this.afterAddLiquidity.selector, BalanceDeltaLibrary.ZERO_DELTA);
     }
@@ -163,6 +165,8 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
 
         // Track maximum potential commitment for both tokens in the position
         _trackCommitment(sender, key.toId(), params);
+        // Update PositionIndex with latest liquidity snapshot (and meta if not yet registered)
+        _touchPositionIndex(sender, key.toId(), params);
 
         return (this.afterRemoveLiquidity.selector, BalanceDeltaLibrary.ZERO_DELTA);
     }

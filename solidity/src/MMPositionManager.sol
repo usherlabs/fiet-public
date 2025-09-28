@@ -90,7 +90,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         }
 
         // settle the underlying assets to the proxy hook
-        _settleUnderlyingAssetToProxyHook(position.poolKey, position.positionId, amount0, amount1);
+        _settleUnderlyingAssetToMarket(position.poolKey, position.positionId, amount0, amount1);
     }
 
     /**
@@ -129,7 +129,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         }
 
         // withdraw the amounts from the position
-        _takeUnderlyingAssetFromProxyHook(position.poolKey, positionId, amount0, amount1);
+        _takeUnderlyingAssetFromMarket(position.poolKey, positionId, amount0, amount1);
     }
 
     /**
@@ -197,9 +197,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
             getBaseSettlementAmounts(_poolKey, lcc0AmountToMint, lcc1AmountToMint);
 
         // settle the underlying tokens to the proxy hook
-        _settleUnderlyingAssetToProxyHook(
-            _poolKey, positionId, underlyingLiquidityFraction0, underlyingLiquidityFraction1
-        );
+        _settleUnderlyingAssetToMarket(_poolKey, positionId, underlyingLiquidityFraction0, underlyingLiquidityFraction1);
 
         // Attach position to this nft
         // make sure to add the position only after modifying the liquidity
@@ -374,7 +372,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
      * @param underlyingLCC0AmountToSettle The amount of underlying token0 to settle to the proxy hook
      * @param underlyingLCC1AmountToSettle The amount of underlying token1 to settle to the proxy hook
      */
-    function _settleUnderlyingAssetToProxyHook(
+    function _settleUnderlyingAssetToMarket(
         PoolKey memory poolKey,
         PositionId positionId,
         uint256 underlyingLCC0AmountToSettle,
@@ -414,8 +412,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
      * @param underlyingLCC0AmountToTake The amount of underlying token0 to settle to the proxy hook
      * @param underlyingLCC1AmountToTake The amount of underlying token1 to settle to the proxy hook
      */
-    // TODO: Should be takeUnderlyingAssetFromMarketVault...
-    function _takeUnderlyingAssetFromProxyHook(
+    function _takeUnderlyingAssetFromMarket(
         PoolKey memory poolKey,
         PositionId positionId,
         uint256 underlyingLCC0AmountToTake,
@@ -491,7 +488,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         lcc1.burn(amount1);
 
         // take amount settled from the proxy hook
-        _takeUnderlyingAssetFromProxyHook(position.poolKey, positionId, settledAmount0, settledAmount1);
+        _takeUnderlyingAssetFromMarket(position.poolKey, positionId, settledAmount0, settledAmount1);
 
         // return the balance delta which is the settled amount
         return toBalanceDelta(int128(uint128(settledAmount0)), int128(uint128(settledAmount1)));
