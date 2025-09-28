@@ -220,7 +220,7 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
             _settleFromLCCToVault(lccToken0, amount0);
             _settleFromLCCToVault(lccToken1, amount1);
 
-            // Then we take whatever is considered an settlement obligation amount from the vault.
+            // Then we take what is available within the total settlement deficit amount from the vault to LCCs.
             // This fulfils some accounting mechanics when DirectLPs add liquidity.
             _settleObligations(corePoolKey);
         } else if (actionType == LiquidityUtils.ActionType.DirectLPRemoveLiquidity) {
@@ -228,12 +228,9 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
             // 2. Move the underlying tokens from the vault to the LCCs
             // 3. Notify the LCCs about the new balance
 
-            // TODO: Does this mean DirectLPs pay out pending LCC settlements on position removal?
-            // ! Since we're settling obligations using liquidity deposited by DirectLPs, this could fail.
-            // Try take from vault to LCCs.
-            // If there's a deficit, add recipient to settlement queue.
-            _takeFromVaultToLCC(lccToken0, amount0);
-            _takeFromVaultToLCC(lccToken1, amount1);
+            // Try take from vault to LCCs. If there's a deficit, it will surface in settlement queue to the DirectLP on LCC unwrap.
+            _tryTakeFromVaultToLCC(lccToken0, amount0);
+            _tryTakeFromVaultToLCC(lccToken1, amount1);
         }
     }
 

@@ -124,7 +124,7 @@ abstract contract MarketVault {
         uint256 amountTaken = _tryTakeAssetFromVault(uaCurrency, address(lccToken), amount);
         // Confirm the take of the underlying liquidity to the LCC to let the LCC know about the new balance
         if (amountTaken > 0) {
-            lccToken.confirmTake(amountTaken);
+            lccToken.confirmTake(amountTaken, false);
         }
         return amountTaken;
     }
@@ -134,13 +134,13 @@ abstract contract MarketVault {
      * @param lccToken The LCC token
      * @param amount The amount of the underlying asset to take from the vault
      */
-    function _takeFromVaultToLCC(ILCC lccToken, uint256 amount) internal {
+    function _takeFromVaultToLCC(ILCC lccToken, uint256 amount, bool shouldProcessQueue) internal {
         if (amount == 0) revert InvalidAmount();
         Currency uaCurrency = Currency.wrap(lccToken.underlyingAsset());
         // Take the asset from the vault to the LCC
         _takeAssetFromVault(uaCurrency, address(lccToken), amount);
         // Confirm the take of the underlying liquidity to the LCC to let the LCC know about the new balance
-        lccToken.confirmTake(amount);
+        lccToken.confirmTake(amount, shouldProcessQueue);
     }
 
     /**
@@ -230,21 +230,8 @@ abstract contract MarketVault {
         if (amountToSettle == 0) return; // No liquidity available
 
         // Move liquidity from PoolManager to LCC (this triggers settlement process)
-        _takeFromVaultToLCC(lccToken, amountToSettle);
-
-        // TODO: Correctly place this logic.
-        // // Record settlement event to VTS manager for proportional decay tracking
-        // address coreHook = IMarketFactory(marketFactory).getCoreHook();
-        // uint8 tokenIndex;
-        // PoolKey memory coreKey = corePoolKey; // proxy has this set via setCorePoolKey
-        // if (Currency.unwrap(coreKey.currency0) == address(lccToken)) {
-        //     tokenIndex = 0;
-        // } else {
-        //     tokenIndex = 1;
-        // }
-        // IVTSManager(coreHook).recordSettlementEvent(
-        //     coreKey.toId(), tokenIndex, uint128(amountToSettle), uint128(totalPendingSettlement)
-        // );
+        // Pass shouldProcessQueue = true to process the settlement queue after taking to LCC.
+        _takeFromVaultToLCC(lccToken, amountToSettle, true);
     }
 
     /**

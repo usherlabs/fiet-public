@@ -173,35 +173,26 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
         uaSupply -= amount;
     }
 
-    // Called by Issuer after taking liquidity from the market to LCC.
-    function confirmTake(uint256 amount) external onlyIssuer {
+    function _issuerToMarket() internal view returns (bytes32) {
         // get the market id from the caller
         address issuer = msg.sender;
-
         // from the proxy pool address, get the core pool id
         PoolId corePoolId = IProxyHook(issuer).getCorePoolId();
         bytes32 marketId = PoolId.unwrap(corePoolId);
-
-        _confirmTake(marketId, amount);
+        return marketId;
     }
 
-    function _confirmTake(bytes32 marketId, uint256 amount) internal {
-        // Process the settlement queue for this market
-        // burn = true to indicate that we want to burn the tokens and transfer underlying assets equivalent to amount that was settled
-        uint256 processedAmount = _processSettlementQueue(marketId, amount, true);
-        uint256 remainingAmount = amount - processedAmount;
-
-        // if after filling the settlement queue there is still some liquidity left, then store it in the market reserves
-        if (remainingAmount > 0) {
-            // Track market specific  underlying asset supply
-            _trackMarketLiquidity(marketId, remainingAmount);
-            // Track total underlying asset supply
-            uaSupply += remainingAmount;
+    // Called by Issuer after taking liquidity from the market to LCC.
+    // confirmTake accounts for Vault -> LCC - ONLY.
+    function confirmTake(uint256 amount, bool shouldProcessQueue) external onlyIssuer {
+        bytes32 marketId = _issuerToMarket();
+        // Track which market this underlying asset liquidity derived from.
+        _trackMarketLiquidity(marketId, amount);
+        // Track total underlying asset supply
+        uaSupply += amount;
+        if (shouldProcessQueue) {
+            _processSettlementQueue(marketId, amount, true);
         }
-    }
-
-    function confirmTakeWithMarketId(bytes32 marketId, uint256 amount) external onlyIssuer {
-        _confirmTake(marketId, amount);
     }
 
     // DirectLPs and Traders engaging the CorePool directly will need LCC. LCC is 1:1 with the underlying asset.

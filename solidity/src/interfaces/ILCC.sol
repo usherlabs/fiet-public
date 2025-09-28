@@ -19,7 +19,7 @@ interface ILCC {
 
     function getMarketTotalSettlementDeficit(bytes32 marketId) external view returns (uint256);
 
-    function confirmTake(uint256 amount) external;
+    function confirmTake(uint256 amount, bool shouldProcessQueue) external;
 
     function prepareSettle(uint256 amount) external;
 }

@@ -313,6 +313,19 @@ abstract contract MarketLiquidity {
         }
 
         // TODO: Convert to settlement event.
+        // TODO: Correctly place this logic.
+        // // Record settlement event to VTS manager for proportional decay tracking
+        // address coreHook = IMarketFactory(marketFactory).getCoreHook();
+        // uint8 tokenIndex;
+        // PoolKey memory coreKey = corePoolKey; // proxy has this set via setCorePoolKey
+        // if (Currency.unwrap(coreKey.currency0) == address(lccToken)) {
+        //     tokenIndex = 0;
+        // } else {
+        //     tokenIndex = 1;
+        // }
+        // IVTSManager(coreHook).recordSettlementEvent(
+        //     coreKey.toId(), tokenIndex, uint128(amountToSettle), uint128(totalPendingSettlement)
+        // );
         emit SettlementRequestCleared(marketId, recipient, amount, 0, block.timestamp, burnTokens);
     }
 
