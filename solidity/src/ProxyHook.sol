@@ -329,6 +329,8 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
     // to ensure that the user gets a debit of amount specified
     // and we disable the core swap mechanism
     // and proxy the swap through the core pool
+    // TODO: hookData includes explicit recipient, such that if available, then full swap against core pool is conducted and any excess is reditributed to that recipient.
+    // TODO: Currently, if hookData is empty, the it would reditribute the excess to the Locker... which never occurs because we're always forcing liquidity restricted swap on the core.
     function _beforeSwap(address, PoolKey calldata key, SwapParams calldata params, bytes calldata hookData)
         internal
         override
@@ -474,6 +476,7 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
             lccCurrencyForCurrency1.take(poolManager, address(this), amountOut, false);
 
             // Unwrap and Burn the LCC of Token 1 after taking from PM
+            // TODO: considering we're taking the amountOut, then burning, should there really be a deficit here?
             (uint256 cancelledAmount, uint256 deficit) =
                 lccTokenForCurrency1.cancel(amountOut, _determineExcessRecipient(hookData));
 

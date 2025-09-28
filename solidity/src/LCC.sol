@@ -28,7 +28,6 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
     error InvalidAmount();
     error InvalidMarketFactory();
     error InsufficientWrappedLiquidity(uint256 requested, uint256 available);
-    error SenderNotMMPositionManager(address sender);
 
     address public immutable underlyingAsset;
     address public immutable marketFactory;
@@ -128,12 +127,18 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
         returns (uint256 amountToCancel, uint256 deficitAmount)
     {
         address issuer = msg.sender;
-        uint256 externallyCustodied = IProxyHook(issuer).getAvailableLiquidity(underlyingAsset);
 
         if (amount == 0) {
             revert InvalidAmount();
         }
 
+        address mmpm = IMarketFactory(marketFactory).mmPositionManager();
+        if (issuer == mmpm) {
+            _burn(issuer, amount);
+            return (amount, 0);
+        }
+
+        uint256 externallyCustodied = IProxyHook(issuer).getAvailableLiquidity(underlyingAsset);
         if (amount > externallyCustodied) {
             amountToCancel = externallyCustodied;
             deficitAmount = amount - externallyCustodied;
@@ -143,7 +148,7 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
 
         _burn(issuer, amountToCancel);
 
-        if (deficitAmount > 0) {
+        if (deficitAmount > 0 && deficitRecipient != address(0)) {
             // get market id from the issuer
             bytes32 marketId = PoolId.unwrap(IProxyHook(issuer).getCorePoolId());
             // mint deficit to the recipient
@@ -156,14 +161,6 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
         }
 
         return (amountToCancel, deficitAmount);
-    }
-
-    function burn(uint256 amount) external {
-        address mmpm = IMarketFactory(marketFactory).mmPositionManager();
-        if (msg.sender != mmpm) {
-            revert SenderNotMMPositionManager(msg.sender);
-        }
-        _burn(msg.sender, amount);
     }
 
     // Called by Issuer before settling liquidity from LCCs to the market.
@@ -187,7 +184,7 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
     function confirmTake(uint256 amount, bool shouldProcessQueue) external onlyIssuer {
         bytes32 marketId = _issuerToMarket();
         // Track which market this underlying asset liquidity derived from.
-        _trackMarketLiquidity(marketId, amount);
+        _trackReceivedLiquidity(marketId, amount);
         // Track total underlying asset supply
         uaSupply += amount;
         if (shouldProcessQueue) {
@@ -224,7 +221,7 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
         returns (uint256)
     {
         // Use market liquidity
-        uint256 amountAvailable = _useMarketLiquidity(marketId, amount);
+        uint256 amountAvailable = _useMarketLiquidity(marketId, amount, from);
 
         // When we unwrap, we first use whatever liquidity is directly wrapped.
         // Then, we turn to available in the market.
@@ -233,9 +230,6 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
         if (deficit > 0) {
             _addToSettlementQueue(marketId, to, deficit);
         }
-
-        // Update user's market balance
-        userMarketBalances[from][marketId] -= amountAvailable;
 
         return amountAvailable;
     }
@@ -291,7 +285,7 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
 
         for (uint256 i = 0; i < userMarkets.length && remainingToUnwrap > 0; i++) {
             bytes32 marketId = userMarkets[i];
-            uint256 userMarketBalance = userMarketBalances[from][marketId];
+            uint256 userMarketBalance = getBalanceOfUserInMarket(from, marketId);
 
             if (userMarketBalance == 0) continue;
 
