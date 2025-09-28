@@ -228,7 +228,7 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
      * @param amount The amount to unwrap from this market
      * @return The amount actually unwrapped from this market
      */
-    function _useLiquidityInMarket(bytes32 marketId, address from, address to, uint256 amount)
+    function _unwrapFromMarketLiquidity(bytes32 marketId, address from, address to, uint256 amount)
         internal
         returns (uint256)
     {
@@ -255,7 +255,7 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
      * @param amount The amount to unwrap from general pool
      * @return The amount actually unwrapped
      */
-    function _useLiquidityFromWrappedPool(uint256 amount) internal view returns (uint256) {
+    function _unwrapFromWrappedLiquidity(uint256 amount) internal view returns (uint256) {
         // Wrapped LCC should always be fully backed by uaSupply
         // No settlement queue needed ? - this should always succeed
 
@@ -272,8 +272,13 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
         return amount;
     }
 
-    // Users should only be able to unwrap if LCC in their wallet.
-    // unwrap some tokens - engaged by the Trader
+    /**
+     * @dev Unwraps LCC from the user's wallet.
+     * @dev Users should only be able to unwrap if LCC in their wallet.
+     * @param from The user to unwrap from
+     * @param to The recipient of the underlying asset
+     * @param amount The amount to unwrap
+     */
     function _unwrap(address from, address to, uint256 amount) internal {
         if (amount == 0 || amount > balanceOf[from]) {
             revert InvalidAmount();
@@ -286,7 +291,7 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
         uint256 userWrappedBalance = balanceOf[from] - userMarketsTotalBalance;
         // if the user has wrapped balance, then we need to unwrap from the market first
         if (userWrappedBalance > 0) {
-            uint256 amountUnwrapped = _useLiquidityFromWrappedPool(amount);
+            uint256 amountUnwrapped = _unwrapFromWrappedLiquidity(amount);
             totalAmountUnwrapped += amountUnwrapped;
         }
 
@@ -303,7 +308,7 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
             uint256 amountFromThisMarket = Math.min(remainingToUnwrap, userMarketBalance);
 
             // unwrap from this market's liquidity
-            uint256 amountUnwrapped = _useLiquidityInMarket(marketId, from, to, amountFromThisMarket);
+            uint256 amountUnwrapped = _unwrapFromMarketLiquidity(marketId, from, to, amountFromThisMarket);
 
             totalAmountUnwrapped += amountUnwrapped;
             remainingToUnwrap -= amountFromThisMarket;
