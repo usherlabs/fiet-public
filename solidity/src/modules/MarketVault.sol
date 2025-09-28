@@ -11,7 +11,7 @@ import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {CurrencySettler} from "@uniswap/v4-core/test/utils/CurrencySettler.sol";
 import {ILCC} from "../interfaces/ILCC.sol";
-
+import {IMarketLiquidity} from "../interfaces/IMarketLiquidity.sol";
 import {LiquidityUtils} from "../libraries/LiquidityUtils.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
@@ -134,7 +134,7 @@ abstract contract MarketVault {
      * @param lccToken The LCC token
      * @param amount The amount of the underlying asset to take from the vault
      */
-    function _takeFromVaultToLCC(ILCC lccToken, uint256 amount, bool shouldProcessQueue) internal {
+    function _takeFromVaultAndSettle(ILCC lccToken, uint256 amount, bool shouldProcessQueue) internal {
         if (amount == 0) revert InvalidAmount();
         Currency uaCurrency = Currency.wrap(lccToken.underlyingAsset());
         // Take the asset from the vault to the LCC
@@ -218,7 +218,7 @@ abstract contract MarketVault {
      */
     function _settleObligationsForLCC(ILCC lccToken, bytes32 marketId) internal {
         // Check how much pending settlements this LCC has for this market
-        uint256 totalPendingSettlement = lccToken.getMarketTotalSettlementDeficit(marketId);
+        uint256 totalPendingSettlement = IMarketLiquidity(address(lccToken)).getMarketTotalSettlementDeficit(marketId);
         if (totalPendingSettlement == 0) return; // No pending settlements to fill
 
         // Check how much liquidity ProxyHook has available
@@ -231,7 +231,7 @@ abstract contract MarketVault {
 
         // Move liquidity from PoolManager to LCC (this triggers settlement process)
         // Pass shouldProcessQueue = true to process the settlement queue after taking to LCC.
-        _takeFromVaultToLCC(lccToken, amountToSettle, true);
+        _takeFromVaultAndSettle(lccToken, amountToSettle, true);
     }
 
     /**

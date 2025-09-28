@@ -3,8 +3,9 @@
 pragma solidity ^0.8.20;
 
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {IMarketLiquidity} from "../interfaces/IMarketLiquidity.sol";
 
-abstract contract MarketLiquidity {
+abstract contract MarketLiquidity is IMarketLiquidity {
     // When a settlement request is added to the queue
     event SettlementRequestQueued(
         bytes32 indexed marketId, address indexed recipient, uint256 amount, uint256 timestamp

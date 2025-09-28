@@ -348,7 +348,7 @@ contract ProxyHookTest is MarketTestBase {
         // With no hookData, params are adjusted so output <= available; there should be no deficit minted
         bytes32 marketId = PoolId.unwrap(corePoolKey.toId());
         LiquidityCommitmentCertificate lccOut = lcc1.underlyingAsset() == Currency.unwrap(_currency1) ? lcc1 : lcc0;
-        assertEq(lccOut.marketTotalSettlement(marketId), 0);
+        assertEq(lccOut.marketTotalSettlementDeficit(marketId), 0);
         // Locker (address(1)) should not hold LCC because no deficit
         assertEq(lccOut.balanceOf(address(1)), 0);
 
@@ -439,7 +439,7 @@ contract ProxyHookTest is MarketTestBase {
         uint256 deficit = expectedOutput - mockAvailableLiquidity;
         console.log("deficit", deficit);
         assertEq(lccOut.marketUserSettlement(marketId, lcc_recipient), deficit);
-        assertEq(lccOut.marketTotalSettlement(marketId), deficit);
+        assertEq(lccOut.marketTotalSettlementDeficit(marketId), deficit);
         assertEq(lccOut.balanceOf(lcc_recipient), deficit);
 
         assertEq(_currency1.balanceOf(lcc_recipient), 0);
@@ -452,7 +452,7 @@ contract ProxyHookTest is MarketTestBase {
         );
 
         assertEq(lccOut.marketUserSettlement(marketId, lcc_recipient), 0);
-        assertEq(lccOut.marketTotalSettlement(marketId), 0);
+        assertEq(lccOut.marketTotalSettlementDeficit(marketId), 0);
         assertEq(lccOut.balanceOf(lcc_recipient), 0);
         //confirm recippient got ua
         assertEq(_currency1.balanceOf(lcc_recipient), deficit);
