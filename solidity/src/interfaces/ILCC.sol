@@ -2,21 +2,20 @@
 pragma solidity ^0.8.0;
 
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 
 interface ILCC {
-    function burn(uint256 amount) external;
-
     function underlyingAsset() external view returns (address);
 
     function usdPrice(address oracleFactory) external view returns (uint256, uint256);
 
     function issue(uint256 amount) external;
 
-    function cancel(uint256 amount, address deficitRecipient)
-        external
-        returns (uint256 amountToCancel, uint256 deficitAmount);
+    function cancel(uint256 amount) external;
 
-    function confirmTake(uint256 amount, bool shouldProcessQueue) external;
+    function confirmTake(bytes32 marketId, uint256 amount, bool shouldProcessQueue) external;
 
     function prepareSettle(uint256 amount) external;
+
+    function toERC20() external view returns (IERC20);
 }

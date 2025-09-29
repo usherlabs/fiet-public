@@ -484,8 +484,8 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         positions[positionId].isActive = false;
 
         // burn the LCC gotten back from the pool
-        lcc0.cancel(amount0, address(0));
-        lcc1.cancel(amount1, address(0));
+        lcc0.cancel(amount0);
+        lcc1.cancel(amount1);
 
         // take amount settled from the proxy hook
         _takeUnderlyingAssetFromMarket(position.poolKey, positionId, settledAmount0, settledAmount1);

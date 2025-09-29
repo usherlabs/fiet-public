@@ -83,8 +83,8 @@ contract MarketSettlementQueueTest is Test {
         settlementQueue.trackMarketAcquisition(user1, market1, 100);
         settlementQueue.trackMarketAcquisition(user1, market2, 50);
 
-        assertEq(settlementQueue.getUserMarketBalance(user1, market1), 100);
-        assertEq(settlementQueue.getUserMarketBalance(user1, market2), 50);
+        assertEq(settlementQueue.getBalanceOfUserFromMarket(user1, market1), 100);
+        assertEq(settlementQueue.getBalanceOfUserFromMarket(user1, market2), 50);
     }
 
     /// @notice Tests that different markets have isolated settlement queues

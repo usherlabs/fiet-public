@@ -118,13 +118,13 @@ abstract contract MarketVault {
      * @param amount The amount of the underlying asset to take from the vault
      * @return The amount of the underlying asset that was taken from the vault
      */
-    function _tryTakeFromVaultToLCC(ILCC lccToken, uint256 amount) internal returns (uint256) {
+    function _tryTakeFromVaultToLCC(bytes32 marketId, ILCC lccToken, uint256 amount) internal returns (uint256) {
         Currency uaCurrency = Currency.wrap(lccToken.underlyingAsset());
         // Take the asset from the vault to the LCC
         uint256 amountTaken = _tryTakeAssetFromVault(uaCurrency, address(lccToken), amount);
         // Confirm the take of the underlying liquidity to the LCC to let the LCC know about the new balance
         if (amountTaken > 0) {
-            lccToken.confirmTake(amountTaken, false);
+            lccToken.confirmTake(marketId, amountTaken, false);
         }
         return amountTaken;
     }
@@ -134,13 +134,15 @@ abstract contract MarketVault {
      * @param lccToken The LCC token
      * @param amount The amount of the underlying asset to take from the vault
      */
-    function _takeFromVaultAndSettle(ILCC lccToken, uint256 amount, bool shouldProcessQueue) internal {
+    function _takeFromVaultAndSettle(bytes32 marketId, ILCC lccToken, uint256 amount, bool shouldProcessQueue)
+        internal
+    {
         if (amount == 0) revert InvalidAmount();
         Currency uaCurrency = Currency.wrap(lccToken.underlyingAsset());
         // Take the asset from the vault to the LCC
         _takeAssetFromVault(uaCurrency, address(lccToken), amount);
         // Confirm the take of the underlying liquidity to the LCC to let the LCC know about the new balance
-        lccToken.confirmTake(amount, shouldProcessQueue);
+        lccToken.confirmTake(marketId, amount, shouldProcessQueue);
     }
 
     /**
@@ -198,6 +200,7 @@ abstract contract MarketVault {
 
     /**
      * @dev Fill Pending settlements of users who tried to unwrap with insufficient liquidity
+     * @dev Called by MarketVault when new underyling asset liquidity is deposited into the Market via LCCs - ie. via Core Swap, MM settle, and DirectLP
      * @param corePoolKey The core pool key
      */
     function _settleObligations(PoolKey memory corePoolKey) internal {
@@ -231,7 +234,7 @@ abstract contract MarketVault {
 
         // Move liquidity from PoolManager to LCC (this triggers settlement process)
         // Pass shouldProcessQueue = true to process the settlement queue after taking to LCC.
-        _takeFromVaultAndSettle(lccToken, amountToSettle, true);
+        _takeFromVaultAndSettle(marketId, lccToken, amountToSettle, true);
     }
 
     /**

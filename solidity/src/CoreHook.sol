@@ -137,8 +137,7 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
     ) internal virtual override whenNotPaused(key.toId()) returns (bytes4, BalanceDelta) {
         // only add direct liquidity  if the sender is not the market maker position manager/router
         if (sender != address(mmPositionManager)) {
-            address proxyHook = _getProxyHook(key);
-            ProxyHook(proxyHook).onDirectLP(key, delta, LiquidityUtils.ActionType.DirectLPAddLiquidity);
+            ProxyHook(_getProxyHook(key)).onDirectLP(delta, LiquidityUtils.ActionType.DirectLPAddLiquidity); // Fetching ProxyHook by corePoolKey, therefore no need to pass again.
         }
         // Track maximum potemtial commitment for both tokens in the position
         _trackCommitment(sender, key.toId(), params);
@@ -159,8 +158,7 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
         // Allow removal of liquidity even when the market is paused.
         // only remove direct liquidity  if the sender is the pool manager
         if (sender != address(mmPositionManager)) {
-            address proxyHook = _getProxyHook(key);
-            ProxyHook(proxyHook).onDirectLP(key, delta, LiquidityUtils.ActionType.DirectLPRemoveLiquidity);
+            ProxyHook(_getProxyHook(key)).onDirectLP(delta, LiquidityUtils.ActionType.DirectLPRemoveLiquidity);
         }
 
         // Track maximum potential commitment for both tokens in the position

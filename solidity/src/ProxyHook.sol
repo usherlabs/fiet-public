@@ -12,9 +12,9 @@ import {BaseHook} from "v4-periphery/src/utils/BaseHook.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
+import {ILCC} from "./interfaces/ILCC.sol";
 import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
-import {LiquidityCommitmentCertificate} from "./LCC.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {Pool} from "@uniswap/v4-core/src/libraries/Pool.sol";
 import {ProtocolFeeLibrary} from "@uniswap/v4-core/src/libraries/ProtocolFeeLibrary.sol";
@@ -42,6 +42,7 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
     error AddLiquidityThroughHookNotAllowed();
     error InvalidInitialiser();
     error InvalidCurrency(address currency);
+    error InvalidDeficitRecipient();
 
     struct LiquidityCallbackData {
         uint256 amount0;
@@ -52,20 +53,9 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         LiquidityUtils.ActionType actionType;
     }
 
-    // router of the swap
-    // v4 pool id
-    event HookSwap(
-        bytes32 indexed id,
-        address indexed sender,
-        int128 amount0,
-        int128 amount1,
-        uint128 hookLPfeeAmount0,
-        uint128 hookLPfeeAmount1
+    event SwapDeficit(
+        PoolId indexed poolId, PoolId corePoolId, address lccToken, address deficitRecipient, uint256 deficitAmount
     );
-
-    // v4 pool id
-    // router address
-    event HookModifyLiquidity(bytes32 indexed id, address indexed sender, int128 amount0, int128 amount1);
 
     address public immutable marketFactory;
 
@@ -193,15 +183,9 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
     // Method called by the Core Hook notifying that Direct Liquidity Provision occurred.
     // Liquidity is managed by the Proxy Hook here to ensure PM credits the Proxy Hook (msg.sender) with relevant Currency Delta.
     // THIS IS ALREADY UNLOCKED FOR DIRECT LP ON CORE POOL.
-    function onDirectLP(PoolKey calldata corePoolKey, BalanceDelta delta, LiquidityUtils.ActionType actionType)
-        external
-        virtual
-        onlyCoreHook
-    {
-        LiquidityCommitmentCertificate lccToken0 =
-            LiquidityCommitmentCertificate(payable(Currency.unwrap(corePoolKey.currency0)));
-        LiquidityCommitmentCertificate lccToken1 =
-            LiquidityCommitmentCertificate(payable(Currency.unwrap(corePoolKey.currency1)));
+    function onDirectLP(BalanceDelta delta, LiquidityUtils.ActionType actionType) external virtual onlyCoreHook {
+        ILCC lccToken0 = ILCC(payable(Currency.unwrap(corePoolKey.currency0)));
+        ILCC lccToken1 = ILCC(payable(Currency.unwrap(corePoolKey.currency1)));
 
         uint256 amount0 = LiquidityUtils.safeInt128ToUint256(delta.amount0());
         uint256 amount1 = LiquidityUtils.safeInt128ToUint256(delta.amount1());
@@ -229,8 +213,9 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
             // 3. Notify the LCCs about the new balance
 
             // Try take from vault to LCCs. If there's a deficit, it will surface in settlement queue to the DirectLP on LCC unwrap.
-            _tryTakeFromVaultToLCC(lccToken0, amount0);
-            _tryTakeFromVaultToLCC(lccToken1, amount1);
+            bytes32 marketId = PoolId.unwrap(corePoolKey.toId());
+            _tryTakeFromVaultToLCC(marketId, lccToken0, amount0);
+            _tryTakeFromVaultToLCC(marketId, lccToken1, amount1);
         }
     }
 
@@ -302,24 +287,23 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         uint256 amount1 = LiquidityUtils.safeInt128ToUint256(delta.amount1());
 
         // Get the LCC tokens for the core pool
-        LiquidityCommitmentCertificate lccToken0 =
-            LiquidityCommitmentCertificate(payable(Currency.unwrap(corePoolKey.currency0)));
-        LiquidityCommitmentCertificate lccToken1 =
-            LiquidityCommitmentCertificate(payable(Currency.unwrap(corePoolKey.currency1)));
+        ILCC lccToken0 = ILCC(payable(Currency.unwrap(corePoolKey.currency0)));
+        ILCC lccToken1 = ILCC(payable(Currency.unwrap(corePoolKey.currency1)));
 
         // Handle Token IN liquidity (move to PoolManager from lcc token)
-        LiquidityCommitmentCertificate lccTokenIn = isZeroForOne ? lccToken0 : lccToken1;
+        ILCC lccTokenIn = isZeroForOne ? lccToken0 : lccToken1;
         // Get the amount of the token that is being swapped in based on if this is a zero one swap or one for zero swap
         uint256 amountIn = isZeroForOne ? amount0 : amount1;
         // Deposit underlying liquidity to pool manager from lcc token
         _settleFromLCCToVault(lccTokenIn, amountIn);
 
         // Handle Token OUT liquidity (move from PoolManager into LCC token) or add to queue when there is not enough liquidity
-        LiquidityCommitmentCertificate lccTokenOut = isZeroForOne ? lccToken1 : lccToken0;
+        ILCC lccTokenOut = isZeroForOne ? lccToken1 : lccToken0;
         // Get the amount of the token that is being swapped in based on if this is a zero one swap or one for zero swap
         uint256 amountOut = isZeroForOne ? amount1 : amount0;
 
-        _tryTakeFromVaultToLCC(lccTokenOut, amountOut);
+        bytes32 marketId = PoolId.unwrap(corePoolKey.toId());
+        _tryTakeFromVaultToLCC(marketId, lccTokenOut, amountOut);
 
         // New liquidity in pool, so we try and settle the outstanding obligations, if any
         _settleObligations(corePoolKey);
@@ -329,17 +313,14 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
     // to ensure that the user gets a debit of amount specified
     // and we disable the core swap mechanism
     // and proxy the swap through the core pool
-    // TODO: hookData includes explicit recipient, such that if available, then full swap against core pool is conducted and any excess is reditributed to that recipient.
-    // TODO: Currently, if hookData is empty, the it would reditribute the excess to the Locker... which never occurs because we're always forcing liquidity restricted swap on the core.
     function _beforeSwap(address, PoolKey calldata key, SwapParams calldata params, bytes calldata hookData)
         internal
         override
         withProxySwapFlag
         returns (bytes4, BeforeSwapDelta, uint24)
     {
-        // Capture pre-swap sqrtP for core pool
-        (uint160 sqrtP_before,,,) = StateLibrary.getSlot0(poolManager, corePoolKey.toId());
-        bool isHookRecipientSpecified = hookData.length > 0;
+        address excessRecipient = _determineExcessRecipient(hookData);
+        bool isHookExcessRecipientSpecified = excessRecipient != address(0);
 
         uint256 maxOutputTokenAvailable =
             _getCurrencyAvailableLiquidity(params.zeroForOne ? key.currency1 : key.currency0);
@@ -348,10 +329,8 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         bool coreZeroForOne;
         PoolKey memory coreKey = corePoolKey;
 
-        LiquidityCommitmentCertificate lccToken0 =
-            LiquidityCommitmentCertificate(payable(Currency.unwrap(coreKey.currency0)));
-        LiquidityCommitmentCertificate lccToken1 =
-            LiquidityCommitmentCertificate(payable(Currency.unwrap(coreKey.currency1)));
+        ILCC lccToken0 = ILCC(payable(Currency.unwrap(coreKey.currency0)));
+        ILCC lccToken1 = ILCC(payable(Currency.unwrap(coreKey.currency1)));
 
         if (
             Currency.unwrap(key.currency0) == lccToken0.underlyingAsset()
@@ -366,10 +345,8 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
 
         // If zeroForOne match, then lccTokenForCurrency0 is lccToken0 and lccTokenForCurrency1 is lccToken1
         // If zeroForOne does not match, then lccTokenForCurrency0 is lccToken1 and lccTokenForCurrency1 is lccToken0
-        LiquidityCommitmentCertificate lccTokenForCurrency0 =
-            params.zeroForOne == coreZeroForOne ? lccToken0 : lccToken1;
-        LiquidityCommitmentCertificate lccTokenForCurrency1 =
-            params.zeroForOne == coreZeroForOne ? lccToken1 : lccToken0;
+        ILCC lccTokenForCurrency0 = params.zeroForOne == coreZeroForOne ? lccToken0 : lccToken1;
+        ILCC lccTokenForCurrency1 = params.zeroForOne == coreZeroForOne ? lccToken1 : lccToken0;
         Currency lccCurrencyForCurrency0 = Currency.wrap(address(lccTokenForCurrency0));
         Currency lccCurrencyForCurrency1 = Currency.wrap(address(lccTokenForCurrency1));
 
@@ -407,13 +384,14 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         // ? This problem could be solved through transient storage.
 
         SwapParams memory coreSwapParams;
-        if (isHookRecipientSpecified) {
+        if (isHookExcessRecipientSpecified) {
             coreSwapParams = SwapParams({
                 zeroForOne: coreZeroForOne,
                 amountSpecified: params.amountSpecified,
                 sqrtPriceLimitX96: sqrtPriceLimitX96_core
             });
         } else {
+            // * If not excess recipient, then perform restricted swap on native (underlying asset) liquidity
             // Fast-path bound check at current price to avoid simulation when clearly safe
             uint256 outUpper = _upperBoundOutAtCurrentPrice(coreKey, params.amountSpecified, coreZeroForOne);
             if (outUpper <= maxOutputTokenAvailable) {
@@ -436,9 +414,6 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         }
 
         BalanceDelta delta = poolManager.swap(coreKey, coreSwapParams, bytes(""));
-
-        // Capture post-swap sqrtP for core pool
-        (uint160 sqrtP_after,,,) = StateLibrary.getSlot0(poolManager, coreKey.toId());
 
         // console.log("Core Pool Delta amount0: ", delta.amount0());
         // console.log("Core Pool Delta amount1: ", delta.amount1());
@@ -476,24 +451,13 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
             lccCurrencyForCurrency1.take(poolManager, address(this), amountOut, false);
 
             // Unwrap and Burn the LCC of Token 1 after taking from PM
-            // TODO: considering we're taking the amountOut, then burning, should there really be a deficit here?
-            (uint256 cancelledAmount, uint256 deficit) =
-                lccTokenForCurrency1.cancel(amountOut, _determineExcessRecipient(hookData));
 
-            // console.log("cancelledAmount: ", cancelledAmount / 1e18);
-            // console.log("deficit: ", deficit / 1e18);
-
-            amountToSettle = cancelledAmount;
-
-            // Record deficit event if any // TODO: Move this into the actual cancel function.
-            if (deficit > 0) {
-                uint8 tokenOutIndex = coreZeroForOne ? 1 : 0;
-                uint128 out0 = tokenOutIndex == 0 ? uint128(amountOut) : 0;
-                uint128 out1 = tokenOutIndex == 1 ? uint128(amountOut) : 0;
-                IVTSManager(IMarketFactory(marketFactory).getCoreHook()).recordDeficitEvent(
-                    coreKey.toId(), tokenOutIndex, sqrtP_before, sqrtP_after, out0, out1, uint128(deficit)
-                );
-            }
+            // * With excess LCC: Trader always deposits correct amount of params.amountSpecified. However, the counterparty side could have insufficent liquidity.
+            // * In this case, the deficit is the amount of LCC that the counterparty side does not have.
+            // * This deficit is then distributed to the excessRecipient.
+            // * The excessRecipient is either specified, the Locker or the msg.sender.
+            // This excess functionality is Proxy Pool specific.
+            amountToSettle = _cancelLCCWithDeficit(key, lccTokenForCurrency1, amountOut, excessRecipient);
 
             // Settle the output token to the PoolManager
             // Burn claim tokens to release output token to the Trader from the PoolManager.
@@ -515,23 +479,7 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
             lccCurrencyForCurrency0.take(poolManager, address(this), amountOut, false);
 
             // Cancel (Unwrap/Burn) the LCC of Token 0 after taking from PM
-            (uint256 cancelledAmount, uint256 deficit) =
-                lccTokenForCurrency0.cancel(amountOut, _determineExcessRecipient(hookData));
-
-            // console.log("cancelledAmount: ", cancelledAmount / 1e18);
-            // console.log("deficit: ", deficit / 1e18);
-
-            amountToSettle = cancelledAmount;
-
-            // Record deficit event if any // TODO: Move this into the actual cancel function.
-            if (deficit > 0) {
-                uint8 tokenOutIndex = coreZeroForOne ? 1 : 0;
-                uint128 out0 = tokenOutIndex == 0 ? uint128(amountOut) : 0;
-                uint128 out1 = tokenOutIndex == 1 ? uint128(amountOut) : 0;
-                IVTSManager(IMarketFactory(marketFactory).getCoreHook()).recordDeficitEvent(
-                    coreKey.toId(), tokenOutIndex, sqrtP_before, sqrtP_after, out0, out1, uint128(deficit)
-                );
-            }
+            amountToSettle = _cancelLCCWithDeficit(key, lccTokenForCurrency0, amountOut, excessRecipient);
 
             // Settle the output token to the PoolManager
             // Burn claim tokens to release output token to the Trader from the PoolManager.
@@ -546,9 +494,6 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         // Specified Currency => The currency in which the user is specifying the amount they're swapping for
         // Unspecified Currency => The other currency
 
-        // TODO: Consider scenario where LCC has insufficient liquidity.
-        // ie. less from here for token OUT, and more from core Token OUT.
-
         BeforeSwapDelta newDelta;
 
         if (isExactInput) {
@@ -562,6 +507,30 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         }
 
         return (this.beforeSwap.selector, newDelta, 0); // last param is lpFeeOverride
+    }
+
+    function _cancelLCCWithDeficit(PoolKey calldata key, ILCC lccToken, uint256 amount, address deficitRecipient)
+        internal
+        returns (uint256 amountToCancel)
+    {
+        uint256 deficitAmount = 0;
+        uint256 inCustody = _getCurrencyAvailableLiquidity(Currency.wrap(lccToken.underlyingAsset()));
+        if (amount > inCustody) {
+            amountToCancel = inCustody; // amount to cancel becomes what ever is in custody.
+            deficitAmount = amount - inCustody; // deficit amount becomes the difference between the amount to cancel and the amount in custody.
+        } else {
+            amountToCancel = amount;
+        }
+
+        lccToken.cancel(amountToCancel); // we only cancel what native asset we distribute via the swap mechanism.
+
+        if (deficitAmount > 0 && deficitRecipient != address(0)) {
+            // ? we do not need to mint the full amount... because the ProxyHook will have already taken the full LCC amount from the PoolManager.
+            // Furthermore, if we simply transfer to recipient, tracing should be triggered via the flag on afterSwap on Core Hook executed by the Proxy Hook.
+            lccToken.toERC20().transfer(deficitRecipient, deficitAmount);
+            emit SwapDeficit(key.toId(), corePoolKey.toId(), address(lccToken), deficitRecipient, deficitAmount);
+        }
+        // if deficit recipient is not specified, but a deficit > 0, then excess will accumulate. This means prior swap amount restriction must therefore be broken, which should never happen...
     }
 
     // Adjust the swap params to execute the swap to fully execute with the available liquidity
@@ -692,7 +661,7 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
     // Determine the excess recipient for a given swap with overflow
     function _determineExcessRecipient(bytes calldata hookData) internal view returns (address) {
         if (hookData.length == 0) {
-            return address(1); // Default to locker
+            return address(0); // Default to null address
         }
 
         address recipient = abi.decode(hookData, (address));

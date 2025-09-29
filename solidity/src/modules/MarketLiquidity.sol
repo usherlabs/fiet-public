@@ -27,18 +27,18 @@ abstract contract MarketLiquidity is IMarketLiquidity {
     event MarketLiquidityUsed(bytes32 indexed marketId, uint256 amount);
 
     // Market tracking state variables
-    bytes32[] public knownMarkets; // List of known markets
-    mapping(bytes32 => bool) public isMarketKnown; // Quick lookup for market existence
-    mapping(bytes32 => uint256) public marketLiquidityReserves; // Market-specific underlying liquidity
+    bytes32[] internal knownMarkets; // List of known markets
+    mapping(bytes32 => bool) internal isMarketKnown; // Quick lookup for market existence
+    mapping(bytes32 => uint256) internal marketLiquidityReserves; // Market-specific underlying liquidity
 
     // Market-specific settlement queues
-    mapping(bytes32 => mapping(address => uint256)) public marketUserSettlement; // marketId => recipient => amount we owe them
-    mapping(bytes32 => uint256) public marketTotalSettlementDeficit; // Total amount we owe per market
-    mapping(bytes32 => address[]) public marketSettlementRecipients; // List of addresses with pending settlements to per market
-    mapping(bytes32 => mapping(address => bool)) public hasPendingSettlement; // Quick lookup for who has a pending settlement with the market
+    mapping(bytes32 => mapping(address => uint256)) internal marketUserSettlement; // marketId => recipient => amount we owe them
+    mapping(bytes32 => uint256) internal marketTotalSettlementDeficit; // Total amount we owe per market
+    mapping(bytes32 => address[]) internal marketSettlementRecipients; // List of addresses with pending settlements to per market
+    mapping(bytes32 => mapping(address => bool)) internal hasPendingSettlement; // Quick lookup for who has a pending settlement with the market
 
     // Market specific balances for each user
-    mapping(address => mapping(bytes32 => uint256)) private balanceOfUserInMarket; // User balance per market. Independent of the settlement queue. Used for tracing before settlements are processed.
+    mapping(address => mapping(bytes32 => uint256)) internal balanceOfUserFromMarket; // User balance per market. Independent of the settlement queue. Used for tracing before settlements are processed.
 
     /**
      * @dev Gets the total pending settlement for a specific market
@@ -67,8 +67,8 @@ abstract contract MarketLiquidity is IMarketLiquidity {
      * @return The user's balance from this market
      *
      */
-    function getBalanceOfUserInMarket(address user, bytes32 marketId) external view returns (uint256) {
-        return balanceOfUserInMarket[user][marketId];
+    function getBalanceOfUserFromMarket(address user, bytes32 marketId) external view returns (uint256) {
+        return balanceOfUserFromMarket[user][marketId];
     }
 
     /**
@@ -78,6 +78,16 @@ abstract contract MarketLiquidity is IMarketLiquidity {
      */
     function getNumPendingSettlementOwners(bytes32 marketId) external view returns (uint256) {
         return marketSettlementRecipients[marketId].length;
+    }
+
+    /**
+     * @dev Gets the amount of settlement owed to a recipient for a specific market
+     * @param marketId The market ID
+     * @param recipient The recipient address
+     * @return The amount of settlement owed to the recipient
+     */
+    function getSettlementAmountOwedTo(bytes32 marketId, address recipient) external view returns (uint256) {
+        return marketUserSettlement[marketId][recipient];
     }
 
     /**
@@ -126,7 +136,7 @@ abstract contract MarketLiquidity is IMarketLiquidity {
 
             if (address(from) != address(0)) {
                 // Update user's market balance if we're using liquidity from a specific user
-                balanceOfUserInMarket[from][marketId] -= actualAmount;
+                balanceOfUserFromMarket[from][marketId] -= actualAmount;
             }
 
             emit MarketLiquidityUsed(marketId, actualAmount);
@@ -163,6 +173,12 @@ abstract contract MarketLiquidity is IMarketLiquidity {
         marketTotalSettlementDeficit[marketId] += amount;
 
         // TODO: Convert to deficit event.
+        // uint8 tokenOutIndex = coreZeroForOne ? 1 : 0;
+        // uint128 out0 = tokenOutIndex == 0 ? uint128(amountOut) : 0;
+        // uint128 out1 = tokenOutIndex == 1 ? uint128(amountOut) : 0;
+        // IVTSManager(IMarketFactory(marketFactory).getCoreHook()).recordDeficitEvent(
+        //     coreKey.toId(), tokenOutIndex, sqrtP_before, sqrtP_after, out0, out1, uint128(deficit)
+        // );
         emit SettlementRequestQueued(marketId, recipient, amount, block.timestamp);
     }
 
@@ -188,7 +204,7 @@ abstract contract MarketLiquidity is IMarketLiquidity {
     function _getUserTotalMarketBalance(address user) internal view returns (uint256) {
         uint256 total = 0;
         for (uint256 i = 0; i < knownMarkets.length; i++) {
-            total += balanceOfUserInMarket[user][knownMarkets[i]];
+            total += balanceOfUserFromMarket[user][knownMarkets[i]];
         }
         return total;
     }
@@ -217,7 +233,7 @@ abstract contract MarketLiquidity is IMarketLiquidity {
         // Register the market if it is not already registered
         _registerMarket(marketId);
 
-        balanceOfUserInMarket[user][marketId] += amount;
+        balanceOfUserFromMarket[user][marketId] += amount;
     }
 
     /**
@@ -231,7 +247,7 @@ abstract contract MarketLiquidity is IMarketLiquidity {
 
         for (uint256 i = 0; i < knownMarkets.length; i++) {
             bytes32 marketId = knownMarkets[i];
-            if (balanceOfUserInMarket[user][marketId] > 0) {
+            if (balanceOfUserFromMarket[user][marketId] > 0) {
                 userMarkets[count] = marketId;
                 count++;
             }

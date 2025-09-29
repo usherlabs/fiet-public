@@ -115,52 +115,27 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
     // this minting provides tokens at a 1:1 ratio and intended for onchain preswap wrapping
     function issue(uint256 amount) external onlyIssuer {
         address issuer = msg.sender;
+
+        if (amount == 0) {
+            revert InvalidAmount();
+        }
+
         _mint(issuer, amount);
 
         // totalSupply will be greater than uaSupply (supply of underlying asset in LCC)
         // This is because the PoolManager will custody the difference.
     }
 
-    function cancel(uint256 amount, address deficitRecipient)
-        external
-        onlyIssuer
-        returns (uint256 amountToCancel, uint256 deficitAmount)
-    {
+    function cancel(uint256 amount) external onlyIssuer {
         address issuer = msg.sender;
 
         if (amount == 0) {
             revert InvalidAmount();
         }
 
-        address mmpm = IMarketFactory(marketFactory).mmPositionManager();
-        if (issuer == mmpm) {
-            _burn(issuer, amount);
-            return (amount, 0);
-        }
+        _burn(issuer, amount);
 
-        uint256 externallyCustodied = IProxyHook(issuer).getAvailableLiquidity(underlyingAsset);
-        if (amount > externallyCustodied) {
-            amountToCancel = externallyCustodied;
-            deficitAmount = amount - externallyCustodied;
-        } else {
-            amountToCancel = amount;
-        }
-
-        _burn(issuer, amountToCancel);
-
-        if (deficitAmount > 0 && deficitRecipient != address(0)) {
-            // get market id from the issuer
-            bytes32 marketId = PoolId.unwrap(IProxyHook(issuer).getCorePoolId());
-            // mint deficit to the recipient
-            _mint(deficitRecipient, deficitAmount);
-            // we need to track the acquisition of the deficit amount to the market so unwrap knows where to unwrap
-            // from if they swap with their tokens and we need to clear the settlement queue
-            _trackMarketAcquisition(deficitRecipient, marketId, amount);
-            // add the deficit to the market settlement queue for immediate payment of underlying tokens when liquidity is available
-            _addToSettlementQueue(marketId, deficitRecipient, deficitAmount);
-        }
-
-        return (amountToCancel, deficitAmount);
+        // totalSupply will return back to uaSupply now that the surplus LCC managed by the issuer engagin the PoolManager has been cancelled.
     }
 
     // Called by Issuer before settling liquidity from LCCs to the market.
@@ -170,19 +145,9 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
         uaSupply -= amount;
     }
 
-    function _issuerToMarket() internal view returns (bytes32) {
-        // get the market id from the caller
-        address issuer = msg.sender;
-        // from the proxy pool address, get the core pool id
-        PoolId corePoolId = IProxyHook(issuer).getCorePoolId();
-        bytes32 marketId = PoolId.unwrap(corePoolId);
-        return marketId;
-    }
-
     // Called by Issuer after taking liquidity from the market to LCC.
-    // confirmTake accounts for Vault -> LCC - ONLY.
-    function confirmTake(uint256 amount, bool shouldProcessQueue) external onlyIssuer {
-        bytes32 marketId = _issuerToMarket();
+    // Accounts for Vault -> LCC. if shouldProcessQueue is true, Vault -> Recipients.
+    function confirmTake(bytes32 marketId, uint256 amount, bool shouldProcessQueue) external onlyIssuer {
         // Track which market this underlying asset liquidity derived from.
         _trackReceivedLiquidity(marketId, amount);
         // Track total underlying asset supply
@@ -285,7 +250,7 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
 
         for (uint256 i = 0; i < userMarkets.length && remainingToUnwrap > 0; i++) {
             bytes32 marketId = userMarkets[i];
-            uint256 userMarketBalance = getBalanceOfUserInMarket(from, marketId);
+            uint256 userMarketBalance = balanceOfUserFromMarket[from][marketId]; // inherited from MarketLiquidity
 
             if (userMarketBalance == 0) continue;
 
@@ -450,6 +415,7 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
         bytes32 currentMarket = currentMarketBytes;
 
         if (isTracingActive && !isProtocolBound) {
+            // !isProtocolBound is to ensure that we only process the market tracing logic for non-protocol bounds (ie. transfer to EOAs.)
             // CRITICAL CHECK: Ensure this LCC belongs to the active market
             if (!_isLCCSupportedByMarket(currentMarket)) {
                 return; // This LCC doesn't belong to the active market
@@ -475,5 +441,9 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
         // Check if this LCC contract matches either currency in the core pool
         address lccAddress = address(this);
         return (lccAddress == currencies[0] || lccAddress == currencies[1]);
+    }
+
+    function toERC20() external view returns (IERC20) {
+        return IERC20(address(this));
     }
 }
