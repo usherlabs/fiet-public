@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 import {IERC20Metadata} from "openzeppelin-contracts/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {SafeTransferLib} from "solmate/utils/SafeTransferLib.sol";
 import {ERC20} from "solmate/tokens/ERC20.sol";
@@ -141,7 +140,7 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
     // Called by Issuer before settling liquidity from LCCs to the market.
     function prepareSettle(uint256 amount) external onlyIssuer {
         // Allow issuer to facilitate direct liquidity provision transfer of underlying tokens
-        IERC20(underlyingAsset).approve(msg.sender, amount);
+        ERC20(underlyingAsset).approve(msg.sender, amount);
         uaSupply -= amount;
     }
 
@@ -159,13 +158,11 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
 
     // DirectLPs and Traders engaging the CorePool directly will need LCC. LCC is 1:1 with the underlying asset.
     function _wrap(address from, address to, uint256 amount) internal {
-        ERC20 uaToken = ERC20(underlyingAsset);
-
         // mint some tokens
         _mint(to, amount);
 
         // transfer the equivalent of the underlying asset from the recipient
-        SafeTransferLib.safeTransferFrom(uaToken, from, address(this), amount);
+        ERC20(underlyingAsset).safeTransferFrom(from, address(this), amount);
 
         uaSupply += amount;
     }
@@ -288,7 +285,7 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
         require(amount > 0 && amount <= uaSupply, "invalid amount");
         uaSupply -= amount;
 
-        SafeTransferLib.safeTransfer(ERC20(underlyingAsset), user, amount);
+        ERC20(underlyingAsset).safeTransfer(user, amount);
     }
 
     // Pay an outstanding settlement to a user and burn their underlying tokens
@@ -415,7 +412,7 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
         bytes32 currentMarket = currentMarketBytes;
 
         if (isTracingActive && !isProtocolBound) {
-            // !isProtocolBound is to ensure that we only process the market tracing logic for non-protocol bounds (ie. transfer to EOAs.)
+            // ? !isProtocolBound is to ensure that we only process the market tracing logic for non-protocol bounds (ie. transfer to EOAs.)
             // CRITICAL CHECK: Ensure this LCC belongs to the active market
             if (!_isLCCSupportedByMarket(currentMarket)) {
                 return; // This LCC doesn't belong to the active market
@@ -443,7 +440,7 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
         return (lccAddress == currencies[0] || lccAddress == currencies[1]);
     }
 
-    function toERC20() external view returns (IERC20) {
-        return IERC20(address(this));
+    function toERC20() external view returns (ERC20) {
+        return ERC20(address(this));
     }
 }

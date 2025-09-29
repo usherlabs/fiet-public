@@ -2,7 +2,7 @@
 pragma solidity ^0.8.0;
 
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
-import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
+import {ERC20} from "solmate/tokens/ERC20.sol";
 
 interface ILCC {
     function underlyingAsset() external view returns (address);
@@ -17,5 +17,5 @@ interface ILCC {
 
     function prepareSettle(uint256 amount) external;
 
-    function toERC20() external view returns (IERC20);
+    function toERC20() external view returns (ERC20);
 }

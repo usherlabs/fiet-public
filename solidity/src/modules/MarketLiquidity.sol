@@ -297,7 +297,7 @@ abstract contract MarketLiquidity is IMarketLiquidity {
      * @dev Removes a settlement recipient from market record
      * @dev Called specifically by _processSettlementQueueForRecipient to remove the recipient from the market.
      * @param marketId The market ID to remove the settlement request from
-     * @param user The user to remove the settlement request from
+     * @param recipient The recipient to remove the settlement request from
      */
     function _removeMarketRecipientRecord(bytes32 marketId, address recipient) private {
         address[] storage settlementRecipients = marketSettlementRecipients[marketId];
