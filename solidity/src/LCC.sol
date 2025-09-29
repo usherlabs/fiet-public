@@ -15,6 +15,7 @@ import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {IOracle} from "./interfaces/IOracle.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {IOracleRegistry} from "./interfaces/IOracleRegistry.sol";
+import {IVTSManager} from "./interfaces/IVTSManager.sol";
 import {console} from "forge-std/console.sol";
 import {ILCC} from "./interfaces/ILCC.sol";
 
@@ -38,6 +39,11 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
     // Define a mapping from
 
     uint256 public uaSupply; // underlying asset supply ONLY within the LCC.
+    // Emitted when LCC issuance is traced to a market during a swap
+
+    event FietSwapSupplement(
+        bytes32 indexed marketId, uint8 indexed tokenIndex, address indexed recipient, uint64 ts, uint256 lccAmount
+    );
 
     modifier onlyIssuer() {
         address caller = msg.sender;
@@ -420,6 +426,10 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
 
             // Process the market tracing logic, letting us know where this LCC came from for this particular user
             _trackMarketAcquisition(recipient, currentMarket, amount);
+
+            // Emit supplement for off-chain correlation to Uniswap Swap logs
+            uint8 tokenIndex = _resolveTokenIndex(currentMarket);
+            emit FietSwapSupplement(currentMarket, tokenIndex, recipient, uint64(block.timestamp), amount);
         }
     }
 
@@ -438,6 +448,41 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
         // Check if this LCC contract matches either currency in the core pool
         address lccAddress = address(this);
         return (lccAddress == currencies[0] || lccAddress == currencies[1]);
+    }
+
+    function _resolveTokenIndex(bytes32 marketId) internal view returns (uint8) {
+        PoolId corePool = IMarketFactory(marketFactory).coreToProxy(PoolId.wrap(marketId));
+        address[2] memory currencies = IMarketFactory(marketFactory).corePoolToCurrencyPair(corePool);
+        return address(this) == currencies[0] ? uint8(0) : uint8(1);
+    }
+
+    // --- MarketLiquidity hooks overrides ---
+    function _onDeficitQueued(bytes32 marketId, address, /*recipient*/ uint256 amount, uint64 ts)
+        internal
+        virtual
+        override
+    {
+        address coreHook = IMarketFactory(marketFactory).getCoreHook();
+        uint8 tokenIndex = _resolveTokenIndex(marketId);
+        // Record into VTS rings
+        IVTSManager(coreHook).recordDeficitEvent(PoolId.wrap(marketId), tokenIndex, 0, 0, 0, 0, uint128(amount));
+        // Emit supplement also, with direction already covered by tokenIndex
+        emit FietSwapSupplement(marketId, tokenIndex, address(0), ts, amount);
+    }
+
+    function _onSettlementProcessed(
+        bytes32 marketId,
+        address, /*recipient*/
+        uint256 settled,
+        uint256 marketDeficitBefore,
+        uint64 ts
+    ) internal virtual override {
+        address coreHook = IMarketFactory(marketFactory).getCoreHook();
+        uint8 tokenIndex = _resolveTokenIndex(marketId);
+        IVTSManager(coreHook).recordSettlementEvent(
+            PoolId.wrap(marketId), tokenIndex, uint128(settled), uint128(marketDeficitBefore)
+        );
+        // Optionally emit a simple mirror event here if desired for indexing; reusing supplement is unnecessary
     }
 
     function toERC20() external view returns (ERC20) {

@@ -3,7 +3,8 @@
 pragma solidity ^0.8.26;
 
 import {MarketVTSConfiguration} from "../types/VTS.sol";
-import {EventRing, DeficitEvent, SettlementEvent} from "../libraries/EventRing.sol";
+import {EventRing, DeficitEvent, SettlementEvent, SwapEvent} from "../libraries/EventRing.sol";
+import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
 import {IPositionIndex, PositionMeta} from "../interfaces/IPositionIndex.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
@@ -29,14 +30,23 @@ abstract contract VTSManager is IVTSManager {
     using TransientStateLibrary for IPoolManager;
     using EventRing for EventRing.RingD;
     using EventRing for EventRing.RingS;
+    using EventRing for EventRing.RingSwap;
 
     // Mapping from core pool ID to VTS configuration
     mapping(PoolId => MarketVTSConfiguration) public corePoolToVTSConfiguration;
     // Mapping from core pool ID to rolling outflow tracker
     mapping(PoolId => TimeBucketOutflowTracker) public marketOutflow;
-    // Event rings per market (deficits and settlements)
+    // Event rings per market (swaps, deficits, settlements)
+    mapping(PoolId => EventRing.RingSwap) internal swapRing;
     mapping(PoolId => EventRing.RingD) internal deficitRing;
     mapping(PoolId => EventRing.RingS) internal settlementRing;
+    // Flushed merkle roots (optional off-chain verification)
+    mapping(PoolId => uint256) private swapFlushCount;
+    mapping(PoolId => mapping(uint256 => bytes32)) private swapFlushedRoots;
+    mapping(PoolId => uint256) private deficitFlushCount;
+    mapping(PoolId => mapping(uint256 => bytes32)) private deficitFlushedRoots;
+    mapping(PoolId => uint256) private settlementFlushCount;
+    mapping(PoolId => mapping(uint256 => bytes32)) private settlementFlushedRoots;
     // Mapping to store maximum potential commitment for each position
     mapping(PositionId => uint256[2]) internal commitmentMaxima;
     // Mapping to store the total settlement amount for each position
@@ -54,6 +64,18 @@ abstract contract VTSManager is IVTSManager {
     event VTSConfigurationSet(PoolId indexed corePoolId, MarketVTSConfiguration indexed vtsConfiguration);
     // Event to notify that the assets have been settled on a position
     event AssetsSettled(PositionId indexed positionId, int128 amount0, int128 amount1);
+    // Per-entry events for off-chain fallback
+    event SwapRecorded(
+        PoolId indexed poolId, uint64 ts, uint160 sqrtP_before, uint160 sqrtP_after, uint128 out0, uint128 out1
+    );
+    event DeficitRecorded(PoolId indexed poolId, uint8 token, uint128 deficit, uint64 ts);
+    event SettlementRecorded(
+        PoolId indexed poolId, uint8 token, uint128 settled, uint128 marketDeficitBefore, uint64 ts
+    );
+    // ringType: 0=Swap,1=Deficit,2=Settlement
+    event RingFlushed(
+        PoolId indexed poolId, uint8 ringType, uint256 segmentId, bytes32 root, uint16 startIndex, uint16 endIndex
+    );
 
     address private immutable marketFactory;
     address private immutable mmPositionManager;
@@ -63,6 +85,12 @@ abstract contract VTSManager is IVTSManager {
 
     modifier onlyMarketFactory() {
         if (msg.sender != marketFactory) revert InvalidCaller();
+        _;
+    }
+
+    modifier onlyMarketAssets(PoolId corePoolId) {
+        address[2] memory currencies = IMarketFactory(marketFactory).corePoolToCurrencyPair(corePoolId);
+        if (msg.sender != currencies[0] && msg.sender != currencies[1]) revert InvalidCaller();
         _;
     }
 
@@ -86,8 +114,10 @@ abstract contract VTSManager is IVTSManager {
     {
         corePoolToVTSConfiguration[corePoolId] = vtsConfiguration;
         marketOutflow[corePoolId].initialize(vtsConfiguration.timeWindow);
+        uint16 spsz = vtsConfiguration.deficitRingSize == 0 ? 1024 : vtsConfiguration.deficitRingSize; // reuse
         uint16 dsz = vtsConfiguration.deficitRingSize == 0 ? 1024 : vtsConfiguration.deficitRingSize;
         uint16 ssz = vtsConfiguration.settlementRingSize == 0 ? 512 : vtsConfiguration.settlementRingSize;
+        swapRing[corePoolId].initSwap(spsz);
         deficitRing[corePoolId].initD(dsz);
         settlementRing[corePoolId].initS(ssz);
 
@@ -99,33 +129,25 @@ abstract contract VTSManager is IVTSManager {
     }
 
     // --- Event recording (protocol bounds only) ---
-    function recordDeficitEvent(
-        PoolId corePoolId,
-        uint8 token,
-        uint160 sqrtP_before,
-        uint160 sqrtP_after,
-        uint128 out0,
-        uint128 out1,
-        uint128 deficit
-    ) external {
-        // TODO: Ensure it's only callable from correct contract.
-        deficitRing[corePoolId].push(
-            DeficitEvent({
-                ts: uint64(block.timestamp),
-                token: token,
-                sqrtP_before: sqrtP_before,
-                sqrtP_after: sqrtP_after,
-                out0: out0,
-                out1: out1,
-                deficit: deficit
-            })
-        );
+    function recordDeficitEvent(PoolId corePoolId, uint8 token, uint128 deficit)
+        external
+        onlyMarketAssets(corePoolId)
+    {
+        // flush if full (half ring flush)
+        if (EventRing.isFull(deficitRing[corePoolId])) {
+            _flushDeficit(corePoolId);
+        }
+        deficitRing[corePoolId].push(DeficitEvent({ts: uint64(block.timestamp), token: token, deficit: deficit}));
+        emit DeficitRecorded(corePoolId, token, deficit, uint64(block.timestamp));
     }
 
     function recordSettlementEvent(PoolId corePoolId, uint8 token, uint128 settled, uint128 marketDeficitBefore)
         external
+        onlyMarketAssets(corePoolId)
     {
-        // TODO: Ensure it's only callable from correct contract.
+        if (EventRing.isFull(settlementRing[corePoolId])) {
+            _flushSettlement(corePoolId);
+        }
         settlementRing[corePoolId].push(
             SettlementEvent({
                 ts: uint64(block.timestamp),
@@ -134,6 +156,24 @@ abstract contract VTSManager is IVTSManager {
                 marketDeficitBefore: marketDeficitBefore
             })
         );
+        emit SettlementRecorded(corePoolId, token, settled, marketDeficitBefore, uint64(block.timestamp));
+    }
+
+    function recordSwapEvent(
+        PoolId corePoolId,
+        uint64 ts,
+        uint160 sqrtP_before,
+        uint160 sqrtP_after,
+        uint128 out0,
+        uint128 out1
+    ) internal {
+        if (EventRing.isFull(swapRing[corePoolId])) {
+            _flushSwap(corePoolId);
+        }
+        swapRing[corePoolId].push(
+            SwapEvent({ts: ts, sqrtP_before: sqrtP_before, sqrtP_after: sqrtP_after, out0: out0, out1: out1})
+        );
+        emit SwapRecorded(corePoolId, ts, sqrtP_before, sqrtP_after, out0, out1);
     }
 
     function getPositionSettledAmounts(PositionId positionId) public view returns (uint256 amount0, uint256 amount1) {
@@ -161,8 +201,6 @@ abstract contract VTSManager is IVTSManager {
             positionIndex.register(
                 positionId, corePoolId, params.tickLower, params.tickUpper, router, uint64(block.timestamp)
             );
-        } else if (!positionMeta.isActive) {
-            // Reactivate if needed (optional). Skip for now.
         }
         // Snapshot current on-chain liquidity
         uint128 liq = poolManager.getPositionLiquidity(corePoolId, PositionId.unwrap(positionId));
@@ -328,31 +366,135 @@ abstract contract VTSManager is IVTSManager {
     {
         // If calculator is set, try calculator first
         if (address(calculator) != address(0)) {
-            // IVTSCalculator.PositionSnapshot[] memory snaps = new IVTSCalculator.PositionSnapshot[](1);
-            // snaps[0] = IVTSCalculator.PositionSnapshot({
-            //     positionId: _positionId,
-            //     liquidity: 0, // optional to fill later
-            //     tickLower: 0,
-            //     tickUpper: 0,
-            //     commitment0: commitmentMaxima[_positionId][0],
-            //     commitment1: commitmentMaxima[_positionId][1],
-            //     settled0: totalSettlementAmount[_positionId][0],
-            //     settled1: totalSettlementAmount[_positionId][1]
-            // });
-            // try calculator.vtsRequiredBatchBps(snaps) returns (uint256[] memory r0, uint256[] memory r1) {
-            //     if (r0.length > 0 && r1.length > 0) {
-            //         return (r0[0], r1[0]);
-            //     }
-            // } catch {
-            //     // fallthrough to local math
-            // }
-            // TODO: Focus on pure Solidity implementation for now.
             return (0, 0);
         }
 
-        // Deficit-based required VTS will be computed later; placeholder returns zero for now.
-        // Next step will compute D_A(r) from recorded events and liquidityAt(ts) via PositionIndex.
-        return (0, 0);
+        // Position metadata
+        PositionMeta memory meta = positionIndex.getMeta(_positionId);
+        PoolId corePoolId = meta.poolId;
+        if (PoolId.unwrap(corePoolId) == bytes32(0)) {
+            return (0, 0);
+        }
+
+        // Commitment caps
+        uint256 c0 = commitmentMaxima[_positionId][0];
+        uint256 c1 = commitmentMaxima[_positionId][1];
+        if (c0 == 0 && c1 == 0) {
+            return (0, 0);
+        }
+
+        // Accumulators for per-position deficits
+        uint256 Dr0 = 0;
+        uint256 Dr1 = 0;
+
+        // Walk deficits in chronological order; attribute from latest prior swap
+        EventRing.RingD storage dRing = deficitRing[corePoolId];
+        EventRing.RingSwap storage sRing = swapRing[corePoolId];
+
+        // Precompute position range sqrt bounds
+        uint160 sqrtLower = TickMath.getSqrtPriceAtTick(meta.tickLower);
+        uint160 sqrtUpper = TickMath.getSqrtPriceAtTick(meta.tickUpper);
+
+        // Pointer to latest swap consumed
+        uint16 sHead = sRing.head;
+        uint16 sTail = sRing.tail;
+        // We'll do a linear scan per deficit to find latest prior swap (bounded by ring size)
+
+        uint16 dHead = dRing.head;
+        for (uint16 di = dRing.tail; di != dHead; di = (di + 1) & (dRing.cap - 1)) {
+            DeficitEvent storage de = dRing.buf[di];
+            // Find latest swap ts <= deficit.ts
+            // Start from sHead - 1 and walk backwards until ts matches
+            if (sHead == sTail) {
+                // no swaps yet; fallback to liquidity share attribution
+                (uint128 liqPos, uint256 liqTot) = _getLiquidityShareForPosition(corePoolId, _positionId);
+                if (liqTot > 0) {
+                    if (de.token == 0) {
+                        Dr0 += (uint256(de.deficit) * uint256(liqPos)) / liqTot;
+                    } else {
+                        Dr1 += (uint256(de.deficit) * uint256(liqPos)) / liqTot;
+                    }
+                }
+            } else {
+                uint16 idx = (sHead + sRing.cap - 1) & (sRing.cap - 1);
+                SwapEvent storage chosen = sRing.buf[idx];
+                // Walk backwards while ts > de.ts and not reaching tail
+                uint16 cur = idx;
+                while (true) {
+                    if (chosen.ts <= de.ts) break;
+                    if (cur == sTail) break;
+                    cur = (cur + sRing.cap - 1) & (sRing.cap - 1);
+                    chosen = sRing.buf[cur];
+                    if (cur == idx) break; // safety
+                }
+                if (chosen.ts == 0 || chosen.ts > de.ts) {
+                    // fallback to liquidity share attribution
+                    (uint128 liqPos2, uint256 liqTot2) = _getLiquidityShareForPosition(corePoolId, _positionId);
+                    if (liqTot2 > 0) {
+                        if (de.token == 0) {
+                            Dr0 += (uint256(de.deficit) * uint256(liqPos2)) / liqTot2;
+                        } else {
+                            Dr1 += (uint256(de.deficit) * uint256(liqPos2)) / liqTot2;
+                        }
+                    }
+                } else {
+                    // Position liquidity at chosen.ts
+                    uint128 Lr = positionIndex.liquidityAt(_positionId, chosen.ts);
+                    if (Lr > 0) {
+                        // Clamp sqrt range to position
+                        uint160 a = chosen.sqrtP_before;
+                        uint160 b = chosen.sqrtP_after;
+                        uint160 start = a < b ? a : b;
+                        uint160 end = a < b ? b : a;
+                        // intersect with [sqrtLower, sqrtUpper]
+                        if (end > sqrtLower && start < sqrtUpper) {
+                            uint160 isStart = start < sqrtLower ? sqrtLower : start;
+                            uint160 isEnd = end > sqrtUpper ? sqrtUpper : end;
+                            if (isStart != isEnd) {
+                                if (de.token == 0) {
+                                    uint256 dTot = chosen.out0;
+                                    if (dTot > 0) {
+                                        uint256 dPos = SqrtPriceMath.getAmount0Delta(isStart, isEnd, Lr, true);
+                                        if (dPos > 0) {
+                                            Dr0 += (de.deficit * dPos) / dTot;
+                                        }
+                                    }
+                                } else {
+                                    uint256 dTot = chosen.out1;
+                                    if (dTot > 0) {
+                                        uint256 dPos = SqrtPriceMath.getAmount1Delta(isStart, isEnd, Lr, true);
+                                        if (dPos > 0) {
+                                            Dr1 += (de.deficit * dPos) / dTot;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Apply pro-rata decay from settlements
+        EventRing.RingS storage rRing = settlementRing[corePoolId];
+        uint16 rHead = rRing.head;
+        for (uint16 ri = rRing.tail; ri != rHead; ri = (ri + 1) & (rRing.cap - 1)) {
+            SettlementEvent storage se = rRing.buf[ri];
+            if (se.marketDeficitBefore == 0) continue;
+            if (se.token == 0) {
+                if (Dr0 > 0) {
+                    Dr0 = Dr0 - ((Dr0 * se.settled) / se.marketDeficitBefore);
+                }
+            } else {
+                if (Dr1 > 0) {
+                    Dr1 = Dr1 - ((Dr1 * se.settled) / se.marketDeficitBefore);
+                }
+            }
+        }
+
+        vtsRequired0 = VTSMath.vtsRequired(Dr0, c0);
+        vtsRequired1 = VTSMath.vtsRequired(Dr1, c1);
+        return (vtsRequired0, vtsRequired1);
     }
 
     /**
@@ -424,5 +566,77 @@ abstract contract VTSManager is IVTSManager {
         }
 
         return currentSettled;
+    }
+
+    function _flushSwap(PoolId poolId) internal {
+        EventRing.RingSwap storage r = swapRing[poolId];
+        uint16 cap = r.cap;
+        uint16 start = r.tail;
+        uint16 count = cap / 2;
+        bytes32 h;
+        for (uint16 i = 0; i < count; i++) {
+            uint16 idx = (start + i) & (cap - 1);
+            SwapEvent storage e = r.buf[idx];
+            h = keccak256(abi.encodePacked(h, e.ts, e.sqrtP_before, e.sqrtP_after, e.out0, e.out1));
+        }
+        uint256 seg = swapFlushCount[poolId]++;
+        swapFlushedRoots[poolId][seg] = h;
+        emit RingFlushed(poolId, 0, seg, h, start, uint16((start + count) & (cap - 1)));
+        r.tail = uint16((start + count) & (cap - 1));
+    }
+
+    function _flushDeficit(PoolId poolId) internal {
+        EventRing.RingD storage r = deficitRing[poolId];
+        uint16 cap = r.cap;
+        uint16 start = r.tail;
+        uint16 count = cap / 2;
+        bytes32 h;
+        for (uint16 i = 0; i < count; i++) {
+            uint16 idx = (start + i) & (cap - 1);
+            DeficitEvent storage e = r.buf[idx];
+            h = keccak256(abi.encodePacked(h, e.ts, e.token, e.deficit));
+        }
+        uint256 seg = deficitFlushCount[poolId]++;
+        deficitFlushedRoots[poolId][seg] = h;
+        emit RingFlushed(poolId, 1, seg, h, start, uint16((start + count) & (cap - 1)));
+        r.tail = uint16((start + count) & (cap - 1));
+    }
+
+    function _flushSettlement(PoolId poolId) internal {
+        EventRing.RingS storage r = settlementRing[poolId];
+        uint16 cap = r.cap;
+        uint16 start = r.tail;
+        uint16 count = cap / 2;
+        bytes32 h;
+        for (uint16 i = 0; i < count; i++) {
+            uint16 idx = (start + i) & (cap - 1);
+            SettlementEvent storage e = r.buf[idx];
+            h = keccak256(abi.encodePacked(h, e.ts, e.token, e.settled, e.marketDeficitBefore));
+        }
+        uint256 seg = settlementFlushCount[poolId]++;
+        settlementFlushedRoots[poolId][seg] = h;
+        emit RingFlushed(poolId, 2, seg, h, start, uint16((start + count) & (cap - 1)));
+        r.tail = uint16((start + count) & (cap - 1));
+    }
+
+    // Debugging helpers
+    function getSwapRingState(PoolId poolId) external view returns (uint16 head, uint16 tail) {
+        return (swapRing[poolId].head, swapRing[poolId].tail);
+    }
+
+    function getDeficitRingState(PoolId poolId) external view returns (uint16 head, uint16 tail) {
+        return (deficitRing[poolId].head, deficitRing[poolId].tail);
+    }
+
+    function getSettlementRingState(PoolId poolId) external view returns (uint16 head, uint16 tail) {
+        return (settlementRing[poolId].head, settlementRing[poolId].tail);
+    }
+
+    function getFlushedCounts(PoolId poolId)
+        external
+        view
+        returns (uint256 swapCount, uint256 deficitCount, uint256 settlementCount)
+    {
+        return (swapFlushCount[poolId], deficitFlushCount[poolId], settlementFlushCount[poolId]);
     }
 }

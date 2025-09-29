@@ -167,15 +167,10 @@ abstract contract MarketLiquidity is IMarketLiquidity {
         marketUserSettlement[marketId][recipient] += amount;
         marketTotalSettlementDeficit[marketId] += amount;
 
-        // TODO: Convert to deficit event.
-        // ? We only record this event on unwrap()... however, it pertains to swaps that will occur before unwrap...
-        // uint8 tokenOutIndex = coreZeroForOne ? 1 : 0;
-        // uint128 out0 = tokenOutIndex == 0 ? uint128(amountOut) : 0;
-        // uint128 out1 = tokenOutIndex == 1 ? uint128(amountOut) : 0;
-        // IVTSManager(IMarketFactory(marketFactory).getCoreHook()).recordDeficitEvent(
-        //     coreKey.toId(), tokenOutIndex, sqrtP_before, sqrtP_after, out0, out1, uint128(deficit)
-        // );
         emit SettlementRequestQueued(marketId, recipient, amount, block.timestamp);
+
+        // Hook for deficit event integration
+        _onDeficitQueued(marketId, recipient, amount, uint64(block.timestamp));
     }
 
     /**
@@ -320,6 +315,8 @@ abstract contract MarketLiquidity is IMarketLiquidity {
     function _processSettlementQueueForRecipient(bytes32 marketId, address recipient, uint256 amount, bool burnTokens)
         internal
     {
+        // capture pre-reduction market deficit for eventing
+        uint256 marketDeficitBefore = marketTotalSettlementDeficit[marketId];
         // Update amount we owe
         marketUserSettlement[marketId][recipient] -= amount;
         marketTotalSettlementDeficit[marketId] -= amount;
@@ -337,22 +334,21 @@ abstract contract MarketLiquidity is IMarketLiquidity {
             _payOutstandingSettlementToUser(recipient, amount);
         }
 
-        // TODO: Convert to settlement event.
-        // TODO: Correctly place this logic.
-        // // Record settlement event to VTS manager for proportional decay tracking
-        // address coreHook = IMarketFactory(marketFactory).getCoreHook();
-        // uint8 tokenIndex;
-        // PoolKey memory coreKey = corePoolKey; // proxy has this set via setCorePoolKey
-        // if (Currency.unwrap(coreKey.currency0) == address(lccToken)) {
-        //     tokenIndex = 0;
-        // } else {
-        //     tokenIndex = 1;
-        // }
-        // IVTSManager(coreHook).recordSettlementEvent(
-        //     coreKey.toId(), tokenIndex, uint128(amountToSettle), uint128(totalPendingSettlement)
-        // );
         emit SettlementRequestCleared(marketId, recipient, amount, block.timestamp, burnTokens);
+
+        // Hook for settlement processed integration
+        _onSettlementProcessed(marketId, recipient, amount, marketDeficitBefore, uint64(block.timestamp));
     }
+
+    // Hooks for protocol-specific integrations (overridden by LCC)
+    function _onDeficitQueued(bytes32 marketId, address recipient, uint256 amount, uint64 ts) internal virtual;
+    function _onSettlementProcessed(
+        bytes32 marketId,
+        address recipient,
+        uint256 settled,
+        uint256 marketDeficitBefore,
+        uint64 ts
+    ) internal virtual;
 
     /**
      * @dev Pays an outstanding settlement to a user and burn their underlying tokens

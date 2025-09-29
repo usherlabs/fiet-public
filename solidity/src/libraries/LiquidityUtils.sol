@@ -27,4 +27,16 @@ library LiquidityUtils {
         }
         return uint256(uint128(value));
     }
+
+    /**
+     * @dev Safely converts int128 to uint128, handling negative values by taking absolute value
+     * @param value The int128 value to convert
+     * @return The uint128 representation (absolute value)
+     */
+    function safeInt128ToUint128(int128 value) internal pure returns (uint128) {
+        if (value < 0) {
+            return uint128(-value);
+        }
+        return uint128(value);
+    }
 }

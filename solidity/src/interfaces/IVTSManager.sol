@@ -27,15 +27,7 @@ interface IVTSManager {
         returns (uint256 amount0, uint256 amount1);
 
     // Event recording (protocol-bounds only)
-    function recordDeficitEvent(
-        PoolId corePoolId,
-        uint8 token,
-        uint160 sqrtP_before,
-        uint160 sqrtP_after,
-        uint128 out0,
-        uint128 out1,
-        uint128 deficit
-    ) external;
+    function recordDeficitEvent(PoolId corePoolId, uint8 token, uint128 deficit) external;
 
     function recordSettlementEvent(PoolId corePoolId, uint8 token, uint128 settled, uint128 marketDeficitBefore)
         external;

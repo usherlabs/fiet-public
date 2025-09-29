@@ -10,20 +10,20 @@ import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.so
 
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 import {ProxyHook} from "./ProxyHook.sol";
-import {ILCC} from "./interfaces/ILCC.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {CurrencySettler} from "@uniswap/v4-core/test/utils/CurrencySettler.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {PausablePool} from "./modules/PausablePool.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
-import {Position} from "@uniswap/v4-core/src/libraries/Position.sol";
 import {Exttload} from "v4-periphery/lib/v4-core/src/Exttload.sol";
 import {IExttload} from "v4-periphery/lib/v4-core/src/interfaces/IExttload.sol";
 import {ProxySwapFlag} from "./libraries/ProxySwapFlag.sol";
 import {TransientSlots} from "./libraries/TransientSlots.sol";
 import {LiquidityUtils} from "./libraries/LiquidityUtils.sol";
-import {console} from "forge-std/console.sol";
 import {VTSManager} from "./modules/VTSManager.sol";
+import {IVTSManager} from "./interfaces/IVTSManager.sol";
+import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
+import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
 
 /**
  * Core Pool should be aware of Positions.
@@ -75,7 +75,7 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
             afterAddLiquidity: true, // Intercept liquidity modifications
             beforeRemoveLiquidity: false,
             afterRemoveLiquidity: true, // Intercept liquidity modifications
-            beforeSwap: false,
+            beforeSwap: true,
             afterSwap: true,
             beforeDonate: false,
             afterDonate: false,
@@ -108,6 +108,20 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
     //     return this._afterInitialize.selector;
     // }
 
+    function _beforeSwap(address, PoolKey calldata key, SwapParams calldata, bytes calldata)
+        internal
+        override
+        returns (bytes4, BeforeSwapDelta, uint24)
+    {
+        // store sqrtP_before in transient storage
+        (uint160 sqrtPBefore,,,) = StateLibrary.getSlot0(poolManager, key.toId());
+        bytes32 slot = TransientSlots.SQRTP_BEFORE_SLOT;
+        assembly ("memory-safe") {
+            tstore(slot, sqrtPBefore)
+        }
+        return (this.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
+    }
+
     function _afterSwap(address, PoolKey calldata key, SwapParams calldata, BalanceDelta delta, bytes calldata)
         internal
         virtual
@@ -124,6 +138,19 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
 
         _triggerInternalTracingFlag(key.toId());
         _recordOutflow(key.toId(), delta);
+
+        // Record minimal swap event for on-chain attribution
+        (uint160 sqrtPAfter,,,) = StateLibrary.getSlot0(poolManager, key.toId());
+        // load sqrtP_before from transient storage
+        uint160 sqrtPBefore;
+        bytes32 slot = TransientSlots.SQRTP_BEFORE_SLOT;
+        assembly ("memory-safe") {
+            sqrtPBefore := tload(slot)
+        }
+        uint128 out0 = delta.amount0() < 0 ? LiquidityUtils.safeInt128ToUint128(delta.amount0()) : 0;
+        uint128 out1 = delta.amount1() < 0 ? LiquidityUtils.safeInt128ToUint128(delta.amount1()) : 0;
+        // Called from VTSManager
+        recordSwapEvent(key.toId(), uint64(block.timestamp), sqrtPBefore, sqrtPAfter, out0, out1);
         return (this.afterSwap.selector, 0);
     }
 
