@@ -42,7 +42,8 @@ contract ICSpokeVerifier is ISpokeVerifier {
             isCallerAuthorized = caller == mmStateData.owner;
         } else {
             // if the signature is valid, set isCallerAuthorized to true
-            address recovered = mmStateHash.recover(mmStateHashSignature);
+            address recovered =
+                MessageHashUtils.toEthSignedMessageHash(mmStateData.toLeafHash()).recover(mmStateHashSignature);
             isCallerAuthorized = recovered == mmStateData.owner;
         }
 
@@ -60,7 +61,8 @@ contract ICSpokeVerifier is ISpokeVerifier {
         }
 
         // verify signature of the canister on the root state hash
-        bool isRootStateHashValid = rootStateHash.recover(rootStateHashSignature) == canisterAddress;
+        bool isRootStateHashValid =
+            MessageHashUtils.toEthSignedMessageHash(rootStateHash).recover(rootStateHashSignature) == canisterAddress;
         if (!isRootStateHashValid) {
             // revert InvalidRootStateHashSignature();
             return false;
