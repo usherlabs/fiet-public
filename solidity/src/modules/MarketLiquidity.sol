@@ -13,12 +13,7 @@ abstract contract MarketLiquidity is IMarketLiquidity {
 
     // When a settlement request is settled/cleared
     event SettlementRequestCleared(
-        bytes32 indexed marketId,
-        address indexed recipient,
-        uint256 amount,
-        uint256 queueIndex,
-        uint256 timestamp,
-        bool tokensBurned
+        bytes32 indexed marketId, address indexed recipient, uint256 amount, uint256 timestamp, bool tokensBurned
     );
 
     // Events for market tracking
@@ -173,6 +168,7 @@ abstract contract MarketLiquidity is IMarketLiquidity {
         marketTotalSettlementDeficit[marketId] += amount;
 
         // TODO: Convert to deficit event.
+        // ? We only record this event on unwrap()... however, it pertains to swaps that will occur before unwrap...
         // uint8 tokenOutIndex = coreZeroForOne ? 1 : 0;
         // uint128 out0 = tokenOutIndex == 0 ? uint128(amountOut) : 0;
         // uint128 out1 = tokenOutIndex == 1 ? uint128(amountOut) : 0;
@@ -180,20 +176,6 @@ abstract contract MarketLiquidity is IMarketLiquidity {
         //     coreKey.toId(), tokenOutIndex, sqrtP_before, sqrtP_after, out0, out1, uint128(deficit)
         // );
         emit SettlementRequestQueued(marketId, recipient, amount, block.timestamp);
-    }
-
-    /**
-     * @dev Removes a settlement request from record
-     */
-    function _removeFromSettlementQueue(bytes32 marketId, address user) internal {
-        address[] storage settlementRecipients = marketSettlementRecipients[marketId];
-        for (uint256 i = 0; i < settlementRecipients.length; i++) {
-            if (settlementRecipients[i] == user) {
-                settlementRecipients[i] = settlementRecipients[settlementRecipients.length - 1];
-                settlementRecipients.pop();
-                break;
-            }
-        }
     }
 
     /**
@@ -312,6 +294,23 @@ abstract contract MarketLiquidity is IMarketLiquidity {
     }
 
     /**
+     * @dev Removes a settlement recipient from market record
+     * @dev Called specifically by _processSettlementQueueForRecipient to remove the recipient from the market.
+     * @param marketId The market ID to remove the settlement request from
+     * @param user The user to remove the settlement request from
+     */
+    function _removeMarketRecipientRecord(bytes32 marketId, address recipient) private {
+        address[] storage settlementRecipients = marketSettlementRecipients[marketId];
+        for (uint256 i = 0; i < settlementRecipients.length; i++) {
+            if (settlementRecipients[i] == recipient) {
+                settlementRecipients[i] = settlementRecipients[settlementRecipients.length - 1];
+                settlementRecipients.pop();
+                break;
+            }
+        }
+    }
+
+    /**
      * @dev Processes a settlement queue for a recipient
      * @param marketId The market ID to process the settlement queue for
      * @param recipient The recipient to process the settlement queue for
@@ -328,7 +327,7 @@ abstract contract MarketLiquidity is IMarketLiquidity {
         // If amount fully paid, remove from pending settlement holders list
         if (marketUserSettlement[marketId][recipient] == 0) {
             hasPendingSettlement[marketId][recipient] = false;
-            _removeFromSettlementQueue(marketId, recipient);
+            _removeMarketRecipientRecord(marketId, recipient);
         }
 
         // burn the equivalent LCC Tokens for this user's amount that was just paid off
@@ -352,7 +351,7 @@ abstract contract MarketLiquidity is IMarketLiquidity {
         // IVTSManager(coreHook).recordSettlementEvent(
         //     coreKey.toId(), tokenIndex, uint128(amountToSettle), uint128(totalPendingSettlement)
         // );
-        emit SettlementRequestCleared(marketId, recipient, amount, 0, block.timestamp, burnTokens);
+        emit SettlementRequestCleared(marketId, recipient, amount, block.timestamp, burnTokens);
     }
 
     /**
