@@ -50,9 +50,10 @@ abstract contract VTSManager is IVTSManager, VTSEvents {
     error InvalidCaller();
     error InvalidMarketVTSConfiguration(PoolId corePoolId);
     error NotEnoughSettlementBalance(uint256 amount0, uint256 amount1);
+    error InvalidPosition(PositionId positionId);
 
     // Event to notify that the VTS configuration has been set/initialized for a core pool
-    event VTSConfigurationSet(PoolId indexed corePoolId, MarketVTSConfiguration indexed vtsConfiguration);
+    event MarketVTSConfigurationSet(PoolId indexed corePoolId, MarketVTSConfiguration indexed vtsConfiguration);
     // Event to notify that the assets have been settled on a position
     event AssetsSettled(PositionId indexed positionId, int128 amount0, int128 amount1);
     // Per-entry events are declared in VTSEvents
@@ -100,13 +101,15 @@ abstract contract VTSManager is IVTSManager, VTSEvents {
         uint16 ssz = vtsConfiguration.settlementRingSize == 0 ? 512 : vtsConfiguration.settlementRingSize;
         _initRings(corePoolId, spsz, dsz, ssz);
 
-        emit VTSConfigurationSet(corePoolId, vtsConfiguration);
+        emit MarketVTSConfigurationSet(corePoolId, vtsConfiguration);
     }
 
+    // TODO: Should be passed in constructor, or inherited.
     function setPositionIndex(address index) external onlyMarketFactory {
         positionIndex = IPositionIndex(index);
     }
 
+    // TODO: Should be onlyOwner...
     function setOracleAdapter(address adapter) external onlyMarketFactory {
         oracleAdapter = IVTSOracleAdapter(adapter);
     }
@@ -295,64 +298,68 @@ abstract contract VTSManager is IVTSManager, VTSEvents {
         emit AssetsSettled(positionId, amount0, amount1);
     }
 
-    /**
-     * @notice Gets the current vts for a position
-     * @param positionId The position id
-     * @return vtsCurrent0 The current vts for token0
-     * @return vtsCurrent1 The current vts for token1
-     */
-    function getVTSCurrent(PositionId positionId)
-        public
-        view
-        virtual
-        returns (uint256 vtsCurrent0, uint256 vtsCurrent1)
-    {
-        uint256 c0 = commitmentMaxima[positionId][0];
-        uint256 c1 = commitmentMaxima[positionId][1];
-        uint256 s0 = totalSettlementAmount[positionId][0];
-        uint256 s1 = totalSettlementAmount[positionId][1];
+    // /**
+    //  * @notice Gets the current vts for a position
+    //  * @param positionId The position id
+    //  * @return vtsCurrent0 The current vts for token0
+    //  * @return vtsCurrent1 The current vts for token1
+    //  */
+    // function getVTSCurrent(PositionId positionId)
+    //     public
+    //     view
+    //     virtual
+    //     returns (uint256 vtsCurrent0, uint256 vtsCurrent1)
+    // {
+    //     uint256 c0 = commitmentMaxima[positionId][0];
+    //     uint256 c1 = commitmentMaxima[positionId][1];
+    //     if (c0 == 0 && c1 == 0) {
+    //         revert InvalidPosition(positionId);
+    //     }
 
-        return VTSCalculatorLib.calcVTSCurrentBps(s0, s1, c0, c1);
-    }
+    //     uint256 s0 = totalSettlementAmount[positionId][0];
+    //     uint256 s1 = totalSettlementAmount[positionId][1];
 
-    /**
-     * @notice Gets the required vts for a position
-     * @dev this function is virtual and can be overridden in order to mock the values
-     * @param _positionId The position id
-     * @return vtsRequired0 The required vts for token0
-     * @return vtsRequired1 The required vts for token1
-     */
-    function getVTSRequired(PositionId _positionId)
-        public
-        view
-        virtual
-        returns (uint256 vtsRequired0, uint256 vtsRequired1)
-    {
-        // If calculator is set, try calculator first (not implemented here)
-        if (address(calculator) != address(0)) {
-            return (0, 0);
-        }
+    //     return VTSCalculatorLib.calcVTSCurrent(s0, s1, c0, c1);
+    // }
 
-        // Position metadata
-        PositionMeta memory meta = positionIndex.getMeta(_positionId);
-        PoolId corePoolId = meta.poolId;
-        if (PoolId.unwrap(corePoolId) == bytes32(0)) {
-            return (0, 0);
-        }
+    // /**
+    //  * @notice Gets the required vts for a position
+    //  * @dev this function is virtual and can be overridden in order to mock the values
+    //  * @param _positionId The position id
+    //  * @return vtsRequired0 The required vts for token0
+    //  * @return vtsRequired1 The required vts for token1
+    //  */
+    // function getVTSRequired(PositionId _positionId)
+    //     public
+    //     view
+    //     virtual
+    //     returns (uint256 vtsRequired0, uint256 vtsRequired1)
+    // {
+    //     // Position metadata
+    //     PositionMeta memory meta = positionIndex.getMeta(_positionId);
+    //     PoolId corePoolId = meta.poolId;
+    //     if (PoolId.unwrap(corePoolId) == bytes32(0)) {
+    //         revert InvalidPosition(_positionId);
+    //     }
 
-        // Commitment caps
-        uint256 c0 = commitmentMaxima[_positionId][0];
-        uint256 c1 = commitmentMaxima[_positionId][1];
-        if (c0 == 0 && c1 == 0) {
-            return (0, 0);
-        }
+    //     // Commitment caps
+    //     uint256 c0 = commitmentMaxima[_positionId][0];
+    //     uint256 c1 = commitmentMaxima[_positionId][1];
+    //     if (c0 == 0 && c1 == 0) {
+    //         revert InvalidPosition(_positionId);
+    //     }
 
-        // Delegate to oracle-aware calculator library (falls back to on-chain if coverage ok)
-        (uint256 v0, uint256 v1,) = VTSCalculatorLib.calcVTSRequiredWithOracleSupport(
-            this, _positionId, meta, positionIndex, c0, c1, oracleAdapter
-        );
-        return (v0, v1);
-    }
+    //     // If calculator is set, try calculator first (not implemented here)
+    //     if (address(calculator) != address(0)) {
+    //         return (0, 0);
+    //     }
+
+    //     // Delegate to oracle-aware calculator library (falls back to on-chain if coverage ok)
+    //     (uint256 v0, uint256 v1,) = VTSCalculatorLib.calcVTSRequiredWithOracleSupport(
+    //         this, _positionId, meta, positionIndex, c0, c1, oracleAdapter
+    //     );
+    //     return (v0, v1);
+    // }
 
     /**
      * @notice Gets the commitment for a position
@@ -371,34 +378,36 @@ abstract contract VTSManager is IVTSManager, VTSEvents {
 
     /**
      * @notice Gets the RFS for a position
-     * @param positionId The position id
+     * @param _positionId The position id
      * @return rfsOpen Whether the RFS is open
      * @return balanceDelta The balance delta of the amount of required to be settled or allowed to be withdrawn depending on if it is negative or positive
      */
-    function getRFS(PositionId positionId) public view returns (bool, BalanceDelta) {
-        (uint256 commitment0, uint256 commitment1) = _getCommitment(positionId);
+    function getRFS(PositionId _positionId) public view returns (bool, BalanceDelta) {
+        // Position metadata
+        PositionMeta memory meta = positionIndex.getMeta(_positionId);
+        PoolId corePoolId = meta.poolId;
+        if (PoolId.unwrap(corePoolId) == bytes32(0)) {
+            revert InvalidPosition(_positionId);
+        }
 
-        // get vts current
-        (uint256 vtsCurrent0, uint256 vtsCurrent1) = getVTSCurrent(positionId);
-        // get vts required
-        (uint256 vtsRequired0, uint256 vtsRequired1) = getVTSRequired(positionId);
+        // Commitment caps
+        uint256 c0 = commitmentMaxima[_positionId][0];
+        uint256 c1 = commitmentMaxima[_positionId][1];
+        if (c0 == 0 && c1 == 0) {
+            revert InvalidPosition(_positionId);
+        }
 
-        // is rfs open if vts current is less than vts required for either currency0 or currency 1
-        bool rfsOpen = vtsCurrent0 < vtsRequired0 || vtsCurrent1 < vtsRequired1;
+        uint256 s0 = totalSettlementAmount[_positionId][0];
+        uint256 s1 = totalSettlementAmount[_positionId][1];
 
-        // get the balance delta required to be settled
-        // the delta could either be positive or negative
-        // if positive, it means the mm can withdraw the positive amount specified
-        // if negative, it means the mm needs to settle the negative amount specified to at least meet the required vts treshold
-        int128 delta0 = int128(int256(vtsCurrent0) - int256(vtsRequired0));
-        int128 delta1 = int128(int256(vtsCurrent1) - int256(vtsRequired1));
+        // If calculator is set, try calculator first (not implemented here)
+        if (address(calculator) != address(0)) {
+            return (false, toBalanceDelta(0, 0));
+        }
 
-        // calculate the fraction of commitment based on delta (in bps)
-        int128 commitmentFraction0 = (int128(int256(commitment0)) * delta0) / 10000;
-        int128 commitmentFraction1 = (int128(int256(commitment1)) * delta1) / 10000;
-
-        BalanceDelta balanceDelta = toBalanceDelta(commitmentFraction0, commitmentFraction1);
-
+        // TODO: Use usedOracle to determine excess gas to compensate?
+        (bool rfsOpen, BalanceDelta balanceDelta, bool _usedOracle) =
+            VTSCalculatorLib.calcRFS(this, _positionId, meta, positionIndex, c0, c1, s0, s1, oracleAdapter);
         return (rfsOpen, balanceDelta);
     }
 

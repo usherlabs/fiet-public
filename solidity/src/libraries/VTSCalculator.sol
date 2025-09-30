@@ -10,6 +10,7 @@ import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {PositionId} from "../types/Position.sol";
 import {IVTSEventsReader, SwapEvent, DeficitEvent, SettlementEvent} from "../interfaces/IVTSEventsReader.sol";
 import {IVTSOracleAdapter} from "../interfaces/IVTSOracleAdapter.sol";
+import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 
 library VTSCalculatorLib {
     using EventRing for EventRing.Ring;
@@ -21,11 +22,7 @@ library VTSCalculatorLib {
         return FullMath.mulDiv(settled, ONE_BPS, committed);
     }
 
-    function calcVTSCurrentBps(uint256 s0, uint256 s1, uint256 c0, uint256 c1)
-        internal
-        pure
-        returns (uint256, uint256)
-    {
+    function calcVTSCurrent(uint256 s0, uint256 s1, uint256 c0, uint256 c1) internal pure returns (uint256, uint256) {
         return (vtsCurrent(s0, c0), vtsCurrent(s1, c1));
     }
 
@@ -130,7 +127,7 @@ library VTSCalculatorLib {
     /// - This check is O(1) and conservative; it may force oracle even when
     ///   on-chain could theoretically approximate from partial data, favouring
     ///   correctness over performance.
-    /// @return usedOracle true if oracle path was used
+    /// Return: usedOracle true if oracle path was used
     function calcVTSRequiredWithOracleSupport(
         IVTSEventsReader reader,
         PositionId positionId,
@@ -179,5 +176,36 @@ library VTSCalculatorLib {
 
         (vts0, vts1) = calcVTSRequired(reader, positionId, meta, positionIndex, c0, c1);
         return (vts0, vts1, false);
+    }
+
+    /// @notice Calculate whether Request-for-Settlement (RfS) is open and the settlement/withdrawal delta
+    /// @dev Adheres to VTS Model: open when VTS_current < VTS_required for either token.
+    ///      Delta is commitment * (VTS_current - VTS_required) in basis points per token.
+    ///      Positive delta -> withdrawable; Negative delta -> required to settle.
+    function calcRFS(
+        IVTSEventsReader reader,
+        PositionId positionId,
+        PositionMeta memory meta,
+        IPositionIndex positionIndex,
+        uint256 c0,
+        uint256 c1,
+        uint256 s0,
+        uint256 s1,
+        IVTSOracleAdapter oracle
+    ) internal pure returns (bool, BalanceDelta, bool) {
+        (uint256 vtsCurrent0, uint256 vtsCurrent1) = calcVTSCurrent(s0, s1, c0, c1);
+
+        // TODO: Replace with VTSTarget calculation.
+        (uint256 vtsRequired0, uint256 vtsRequired1, bool usedOracle) =
+            calcVTSRequiredWithOracleSupport(reader, positionId, meta, positionIndex, c0, c1, oracle);
+        bool open = (vtsCurrent0 < vtsRequired0) || (vtsCurrent1 < vtsRequired1);
+
+        int128 deltaBps0 = int128(int256(vtsCurrent0) - int256(vtsRequired0));
+        int128 deltaBps1 = int128(int256(vtsCurrent1) - int256(vtsRequired1));
+
+        int128 amount0 = (int128(int256(c0)) * deltaBps0) / int128(int256(ONE_BPS));
+        int128 amount1 = (int128(int256(c1)) * deltaBps1) / int128(int256(ONE_BPS));
+
+        return (open, toBalanceDelta(amount0, amount1), usedOracle);
     }
 }

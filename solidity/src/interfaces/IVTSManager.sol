@@ -17,9 +17,9 @@ interface IVTSManager {
 
     function getRFS(PositionId positionId) external view returns (bool, BalanceDelta);
 
-    function getVTSCurrent(PositionId positionId) external view returns (uint256 vtsCurrent0, uint256 vtsCurrent1);
+    // function getVTSCurrent(PositionId positionId) external view returns (uint256 vtsCurrent0, uint256 vtsCurrent1);
 
-    function getVTSRequired(PositionId positionId) external view returns (uint256 vtsRequired0, uint256 vtsRequired1);
+    // function getVTSRequired(PositionId positionId) external view returns (uint256 vtsRequired0, uint256 vtsRequired1);
 
     function getPositionSettledAmounts(PositionId positionId)
         external
