@@ -86,5 +86,5 @@ contract MockSettlementQueue is MarketLiquidity {
     // --- Required hooks (no-op for testing) ---
     function _onDeficitQueued(bytes32, address, uint256, uint64) internal override {}
 
-    function _onSettlementProcessed(bytes32, address, uint256, uint256, uint64) internal override {}
+    function _onSettlementProcessed(bytes32, address, uint256, uint256, bool) internal override {}
 }

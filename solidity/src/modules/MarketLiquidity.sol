@@ -6,16 +6,6 @@ import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {IMarketLiquidity} from "../interfaces/IMarketLiquidity.sol";
 
 abstract contract MarketLiquidity is IMarketLiquidity {
-    // When a settlement request is added to the queue
-    event SettlementRequestQueued(
-        bytes32 indexed marketId, address indexed recipient, uint256 amount, uint256 timestamp
-    );
-
-    // When a settlement request is settled/cleared
-    event SettlementRequestCleared(
-        bytes32 indexed marketId, address indexed recipient, uint256 amount, uint256 timestamp, bool tokensBurned
-    );
-
     // Events for market tracking
     event MarketRegistered(bytes32 indexed marketId);
     event MarketLiquidityAdded(bytes32 indexed marketId, uint256 amount);
@@ -166,8 +156,6 @@ abstract contract MarketLiquidity is IMarketLiquidity {
 
         marketUserSettlement[marketId][recipient] += amount;
         marketTotalSettlementDeficit[marketId] += amount;
-
-        emit SettlementRequestQueued(marketId, recipient, amount, block.timestamp);
 
         // Hook for deficit event integration
         _onDeficitQueued(marketId, recipient, amount, uint64(block.timestamp));
@@ -334,10 +322,8 @@ abstract contract MarketLiquidity is IMarketLiquidity {
             _payOutstandingSettlementToUser(recipient, amount);
         }
 
-        emit SettlementRequestCleared(marketId, recipient, amount, block.timestamp, burnTokens);
-
         // Hook for settlement processed integration
-        _onSettlementProcessed(marketId, recipient, amount, marketDeficitBefore, uint64(block.timestamp));
+        _onSettlementProcessed(marketId, recipient, amount, marketDeficitBefore, burnTokens);
     }
 
     // Hooks for protocol-specific integrations (overridden by LCC)
@@ -347,7 +333,7 @@ abstract contract MarketLiquidity is IMarketLiquidity {
         address recipient,
         uint256 settled,
         uint256 marketDeficitBefore,
-        uint64 ts
+        bool burnTokens
     ) internal virtual;
 
     /**

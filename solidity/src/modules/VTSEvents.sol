@@ -2,8 +2,8 @@
 pragma solidity ^0.8.26;
 
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
-import {EventRing, DeficitEvent, SettlementEvent, SwapEvent} from "../libraries/EventRing.sol";
-import {IVTSEventsReader} from "../interfaces/IVTSEventsReader.sol";
+import {EventRing} from "../libraries/EventRing.sol";
+import {IVTSEventsReader, SwapEvent, DeficitEvent, SettlementEvent} from "../interfaces/IVTSEventsReader.sol";
 
 abstract contract VTSEvents is IVTSEventsReader {
     using EventRing for EventRing.Ring;
@@ -30,7 +30,13 @@ abstract contract VTSEvents is IVTSEventsReader {
     );
     event DeficitRecorded(PoolId indexed poolId, uint8 token, uint128 deficit, uint64 ts);
     event SettlementRecorded(
-        PoolId indexed poolId, uint8 token, uint128 settled, uint128 marketDeficitBefore, uint64 ts
+        PoolId indexed poolId,
+        address recipient,
+        uint8 token,
+        uint128 settled,
+        uint128 marketDeficitBefore,
+        uint64 ts,
+        bool burnTokens
     );
     // ringType: 0=Swap,1=Deficit,2=Settlement
     event RingFlushed(
@@ -71,7 +77,14 @@ abstract contract VTSEvents is IVTSEventsReader {
         emit DeficitRecorded(corePoolId, token, deficit, uint64(block.timestamp));
     }
 
-    function _recordSettlement(PoolId corePoolId, uint8 token, uint128 settled, uint128 marketDeficitBefore) internal {
+    function _recordSettlement(
+        PoolId corePoolId,
+        address recipient,
+        uint8 token,
+        uint128 settled,
+        uint128 marketDeficitBefore,
+        bool burnTokens
+    ) internal {
         if (EventRing.isFull(settlementRing[corePoolId])) {
             _flushSettlement(corePoolId);
         }
@@ -82,7 +95,9 @@ abstract contract VTSEvents is IVTSEventsReader {
             settled: settled,
             marketDeficitBefore: marketDeficitBefore
         });
-        emit SettlementRecorded(corePoolId, token, settled, marketDeficitBefore, uint64(block.timestamp));
+        emit SettlementRecorded(
+            corePoolId, recipient, token, settled, marketDeficitBefore, uint64(block.timestamp), burnTokens
+        );
     }
 
     // --- Flush ---
@@ -152,6 +167,13 @@ abstract contract VTSEvents is IVTSEventsReader {
 
     function getFlushedCounts(PoolId poolId) external view returns (uint256, uint256, uint256) {
         return (swapFlushCount[poolId], deficitFlushCount[poolId], settlementFlushCount[poolId]);
+    }
+
+    function getFlushedRoot(PoolId poolId, uint8 ringType, uint256 segmentId) external view returns (bytes32) {
+        if (ringType == 0) return swapFlushedRoots[poolId][segmentId];
+        if (ringType == 1) return deficitFlushedRoots[poolId][segmentId];
+        if (ringType == 2) return settlementFlushedRoots[poolId][segmentId];
+        return bytes32(0);
     }
 
     // --- Internal payload readers ---

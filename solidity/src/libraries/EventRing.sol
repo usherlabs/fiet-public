@@ -1,30 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-/// @notice Minimal swap record for on-chain attribution
-struct SwapEvent {
-    uint64 ts;
-    uint160 sqrtP_before;
-    uint160 sqrtP_after;
-    uint128 out0;
-    uint128 out1;
-}
-
-/// @notice Compact record of a deficit created during a swap for a market
-struct DeficitEvent {
-    uint64 ts;
-    uint8 token; // 0 or 1
-    uint128 deficit;
-}
-
-/// @notice Compact record of a settlement processed for a market/token
-struct SettlementEvent {
-    uint64 ts;
-    uint8 token; // 0 or 1
-    uint128 settled;
-    uint128 marketDeficitBefore;
-}
-
 library EventRing {
     /// @notice Generic ring state. Payload buffers are stored alongside by the consumer contract.
     struct Ring {

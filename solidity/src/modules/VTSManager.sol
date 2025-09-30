@@ -3,7 +3,7 @@
 pragma solidity ^0.8.26;
 
 import {MarketVTSConfiguration} from "../types/VTS.sol";
-import {EventRing, DeficitEvent, SettlementEvent, SwapEvent} from "../libraries/EventRing.sol";
+import {EventRing} from "../libraries/EventRing.sol";
 import {VTSEvents} from "./VTSEvents.sol";
 import {VTSCalculatorLib} from "../libraries/VTSCalculator.sol";
 import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
@@ -21,6 +21,7 @@ import {TransientStateLibrary} from "v4-periphery/lib/v4-core/src/libraries/Tran
 import {TickMath} from "v4-periphery/lib/v4-core/src/libraries/TickMath.sol";
 import {SqrtPriceMath} from "v4-periphery/lib/v4-core/src/libraries/SqrtPriceMath.sol";
 import {IVTSCalculator} from "../interfaces/IVTSCalculator.sol";
+import {SwapEvent, DeficitEvent, SettlementEvent} from "../interfaces/IVTSEventsReader.sol";
 import {toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 // import {IMMPositionManager} from "../interfaces/IMMPositionManager.sol";
 
@@ -112,11 +113,15 @@ abstract contract VTSManager is IVTSManager, VTSEvents {
         _recordDeficit(corePoolId, token, deficit);
     }
 
-    function recordSettlementEvent(PoolId corePoolId, uint8 token, uint128 settled, uint128 marketDeficitBefore)
-        external
-        onlyMarketAssets(corePoolId)
-    {
-        _recordSettlement(corePoolId, token, settled, marketDeficitBefore);
+    function recordSettlementEvent(
+        PoolId corePoolId,
+        address recipient,
+        uint8 token,
+        uint128 settled,
+        uint128 marketDeficitBefore,
+        bool burnTokens
+    ) external onlyMarketAssets(corePoolId) {
+        _recordSettlement(corePoolId, recipient, token, settled, marketDeficitBefore, burnTokens);
     }
 
     function recordSwapEvent(

@@ -4,11 +4,11 @@ pragma solidity ^0.8.26;
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {TickMath} from "v4-periphery/lib/v4-core/src/libraries/TickMath.sol";
 import {SqrtPriceMath} from "v4-periphery/lib/v4-core/src/libraries/SqrtPriceMath.sol";
-import {EventRing, DeficitEvent, SettlementEvent, SwapEvent} from "../libraries/EventRing.sol";
+import {EventRing} from "../libraries/EventRing.sol";
 import {IPositionIndex, PositionMeta} from "../interfaces/IPositionIndex.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {PositionId} from "../types/Position.sol";
-import {IVTSEventsReader} from "../interfaces/IVTSEventsReader.sol";
+import {IVTSEventsReader, SwapEvent, DeficitEvent, SettlementEvent} from "../interfaces/IVTSEventsReader.sol";
 
 library VTSCalculatorLib {
     using EventRing for EventRing.Ring;

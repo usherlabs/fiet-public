@@ -472,15 +472,15 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
 
     function _onSettlementProcessed(
         bytes32 marketId,
-        address, /*recipient*/
+        address recipient,
         uint256 settled,
         uint256 marketDeficitBefore,
-        uint64 ts
+        bool burnTokens
     ) internal virtual override {
         address coreHook = IMarketFactory(marketFactory).getCoreHook();
         uint8 tokenIndex = _resolveTokenIndex(marketId);
         IVTSManager(coreHook).recordSettlementEvent(
-            PoolId.wrap(marketId), tokenIndex, uint128(settled), uint128(marketDeficitBefore)
+            PoolId.wrap(marketId), recipient, tokenIndex, uint128(settled), uint128(marketDeficitBefore), burnTokens
         );
         // Optionally emit a simple mirror event here if desired for indexing; reusing supplement is unnecessary
     }
