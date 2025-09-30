@@ -41,4 +41,10 @@ interface IVTSEventsReader {
     function readSwapAt(PoolId poolId, uint16 idx) external view returns (SwapEvent memory e);
     function readDeficitAt(PoolId poolId, uint16 idx) external view returns (DeficitEvent memory e);
     function readSettlementAt(PoolId poolId, uint16 idx) external view returns (SettlementEvent memory e);
+
+    /// @notice Tail timestamps for each ring (0 if ring empty or slot uninitialised)
+    function getTailEventTimestamps(PoolId poolId)
+        external
+        view
+        returns (uint64 swapTailTs, uint64 deficitTailTs, uint64 settlementTailTs);
 }

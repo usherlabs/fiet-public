@@ -214,4 +214,27 @@ abstract contract VTSEvents is IVTSEventsReader {
     function readSettlementAt(PoolId poolId, uint16 idx) external view returns (SettlementEvent memory e) {
         return _readSettlement(poolId, idx);
     }
+
+    // --- Tail timestamp helpers ---
+    function getTailEventTimestamps(PoolId poolId)
+        external
+        view
+        returns (uint64 swapTailTs, uint64 deficitTailTs, uint64 settlementTailTs)
+    {
+        EventRing.Ring storage sr = swapRing[poolId];
+        EventRing.Ring storage dr = deficitRing[poolId];
+        EventRing.Ring storage rr = settlementRing[poolId];
+        if (sr.cap != 0) {
+            SwapEvent storage se = swapBuf[poolId][sr.tail];
+            swapTailTs = se.ts;
+        }
+        if (dr.cap != 0) {
+            DeficitEvent storage de = deficitBuf[poolId][dr.tail];
+            deficitTailTs = de.ts;
+        }
+        if (rr.cap != 0) {
+            SettlementEvent storage re = settlementBuf[poolId][rr.tail];
+            settlementTailTs = re.ts;
+        }
+    }
 }

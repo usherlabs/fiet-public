@@ -9,15 +9,24 @@ import {IPositionIndex, PositionMeta} from "../interfaces/IPositionIndex.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {PositionId} from "../types/Position.sol";
 import {IVTSEventsReader, SwapEvent, DeficitEvent, SettlementEvent} from "../interfaces/IVTSEventsReader.sol";
+import {IVTSOracleAdapter} from "../interfaces/IVTSOracleAdapter.sol";
 
 library VTSCalculatorLib {
     using EventRing for EventRing.Ring;
 
     uint256 internal constant ONE_BPS = 10000;
 
-    function vtsCurrentBps(uint256 settled, uint256 committed) internal pure returns (uint256) {
+    function vtsCurrent(uint256 settled, uint256 committed) internal pure returns (uint256) {
         if (committed == 0) return 0;
         return FullMath.mulDiv(settled, ONE_BPS, committed);
+    }
+
+    function calcVTSCurrentBps(uint256 s0, uint256 s1, uint256 c0, uint256 c1)
+        internal
+        pure
+        returns (uint256, uint256)
+    {
+        return (vtsCurrent(s0, c0), vtsCurrent(s1, c1));
     }
 
     function _vtsRequired(uint256 deficit, uint256 committed) internal pure returns (uint256) {
@@ -101,5 +110,74 @@ library VTSCalculatorLib {
 
         vtsRequired0 = _vtsRequired(Dr0, c0);
         vtsRequired1 = _vtsRequired(Dr1, c1);
+    }
+
+    /// @notice Oracle-aware dual-path calculator
+    ///
+    /// Safety principle: Only compute on-chain when the event rings provably
+    /// retain all history needed to attribute the earliest retained deficit to
+    /// prior swaps and to decay it via settlements. Otherwise, defer to the
+    /// oracle adapter's cached result.
+    ///
+    /// Coverage gate:
+    /// - Let minDeficitTs := deficit ring tail timestamp (earliest retained deficit)
+    /// - Require swap tail ts <= minDeficitTs (or 0 for empty/uninitialised)
+    /// - Require settlement tail ts <= minDeficitTs (or 0 for empty/uninitialised)
+    /// If either fails, fall back to oracle.
+    ///
+    /// Notes:
+    /// - Timestamps are monotonic (block.timestamp), so tail is the earliest.
+    /// - This check is O(1) and conservative; it may force oracle even when
+    ///   on-chain could theoretically approximate from partial data, favouring
+    ///   correctness over performance.
+    /// @return usedOracle true if oracle path was used
+    function calcVTSRequiredWithOracleSupport(
+        IVTSEventsReader reader,
+        PositionId positionId,
+        PositionMeta memory meta,
+        IPositionIndex positionIndex,
+        uint256 c0,
+        uint256 c1,
+        IVTSOracleAdapter oracle
+    ) internal view returns (uint256 vts0, uint256 vts1, bool usedOracle) {
+        if (PoolId.unwrap(meta.poolId) == bytes32(0)) return (0, 0, false);
+        if (c0 == 0 && c1 == 0) return (0, 0, false);
+
+        // If no deficits present, short-circuit
+        (uint16 dHead, uint16 dTail) = reader.getDeficitRingState(meta.poolId);
+        if (dTail == dHead) return (0, 0, false);
+
+        // Coverage gate using tail timestamps (O(1))
+        (uint64 sTailTs, uint64 deTailTs, uint64 rTailTs) = reader.getTailEventTimestamps(meta.poolId);
+        // Earliest retained deficit drives attribution horizon.
+        uint64 minDeficitTs = deTailTs;
+        bool swapsCover = (sTailTs == 0 || sTailTs <= minDeficitTs);
+        bool settlementsCover = (rTailTs == 0 || rTailTs <= minDeficitTs);
+        bool coverageOk = swapsCover && settlementsCover;
+
+        if (!coverageOk && address(oracle) != address(0)) {
+            (vts0, vts1,,,,) = oracle.getVTSRequiredCached(positionId);
+            // ? Freshness check: on-chain can compare current getFlushedCounts(poolId) with (swapSeg, deficitSeg, settlementSeg). If chain counts are greater, the oracle is stale; prefer coverage gate or reject.
+            // ie. (swapSeg, deficitSeg, settlementSeg) are at least the on-chain flushed counts for that pool (freshness).
+            /**
+             *             // Pull cached oracle result plus its processed segment watermarks
+             *             uint64 _version;
+             *             uint256 swapSeg;
+             *             uint256 deficitSeg;
+             *             uint256 settlementSeg;
+             *             (vts0, vts1, _version, swapSeg, deficitSeg, settlementSeg) = oracle.getVTSRequiredCached(positionId);
+             *
+             *             // Freshness check: compare oracle watermarks with on-chain flushed counts
+             *             (uint256 swapCnt, uint256 defCnt, uint256 settCnt) = reader.getFlushedCounts(meta.poolId);
+             *             bool oracleFreshEnough = (swapSeg >= swapCnt) && (deficitSeg >= defCnt) && (settlementSeg >= settCnt);
+             *             // Current policy: even if stale, we must return oracle because on-chain coverage is insufficient.
+             *             // Integrators may add stricter policy (e.g., revert if !oracleFreshEnough) via a wrapper.
+             *             (void(oracleFreshEnough));
+             */
+            return (vts0, vts1, true);
+        }
+
+        (vts0, vts1) = calcVTSRequired(reader, positionId, meta, positionIndex, c0, c1);
+        return (vts0, vts1, false);
     }
 }

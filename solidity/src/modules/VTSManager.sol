@@ -21,6 +21,7 @@ import {TransientStateLibrary} from "v4-periphery/lib/v4-core/src/libraries/Tran
 import {TickMath} from "v4-periphery/lib/v4-core/src/libraries/TickMath.sol";
 import {SqrtPriceMath} from "v4-periphery/lib/v4-core/src/libraries/SqrtPriceMath.sol";
 import {IVTSCalculator} from "../interfaces/IVTSCalculator.sol";
+import {IVTSOracleAdapter} from "../interfaces/IVTSOracleAdapter.sol";
 import {SwapEvent, DeficitEvent, SettlementEvent} from "../interfaces/IVTSEventsReader.sol";
 import {toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 // import {IMMPositionManager} from "../interfaces/IMMPositionManager.sol";
@@ -60,6 +61,7 @@ abstract contract VTSManager is IVTSManager, VTSEvents {
     address private immutable mmPositionManager;
     IPoolManager private immutable poolManager;
     IVTSCalculator private calculator; // optional external calculator (Stylus or pure)
+    IVTSOracleAdapter private oracleAdapter; // optional external oracle adapter for deficits attribution
     IPositionIndex internal positionIndex; // external index for position metadata and liquidity history
 
     modifier onlyMarketFactory() {
@@ -103,6 +105,10 @@ abstract contract VTSManager is IVTSManager, VTSEvents {
 
     function setPositionIndex(address index) external onlyMarketFactory {
         positionIndex = IPositionIndex(index);
+    }
+
+    function setOracleAdapter(address adapter) external onlyMarketFactory {
+        oracleAdapter = IVTSOracleAdapter(adapter);
     }
 
     // --- Event recording (protocol bounds only) ---
@@ -306,8 +312,7 @@ abstract contract VTSManager is IVTSManager, VTSEvents {
         uint256 s0 = totalSettlementAmount[positionId][0];
         uint256 s1 = totalSettlementAmount[positionId][1];
 
-        vtsCurrent0 = VTSCalculatorLib.vtsCurrentBps(s0, c0);
-        vtsCurrent1 = VTSCalculatorLib.vtsCurrentBps(s1, c1);
+        return VTSCalculatorLib.calcVTSCurrentBps(s0, s1, c0, c1);
     }
 
     /**
@@ -323,7 +328,7 @@ abstract contract VTSManager is IVTSManager, VTSEvents {
         virtual
         returns (uint256 vtsRequired0, uint256 vtsRequired1)
     {
-        // If calculator is set, try calculator first
+        // If calculator is set, try calculator first (not implemented here)
         if (address(calculator) != address(0)) {
             return (0, 0);
         }
@@ -342,8 +347,11 @@ abstract contract VTSManager is IVTSManager, VTSEvents {
             return (0, 0);
         }
 
-        // Delegate to calculator library (internal, inlined by optimizer)
-        return VTSCalculatorLib.calcVTSRequired(this, _positionId, meta, positionIndex, c0, c1);
+        // Delegate to oracle-aware calculator library (falls back to on-chain if coverage ok)
+        (uint256 v0, uint256 v1,) = VTSCalculatorLib.calcVTSRequiredWithOracleSupport(
+            this, _positionId, meta, positionIndex, c0, c1, oracleAdapter
+        );
+        return (v0, v1);
     }
 
     /**
