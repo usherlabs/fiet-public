@@ -82,4 +82,9 @@ contract MockSettlementQueue is MarketLiquidity {
     function userHasPendingSettlement(bytes32 marketId, address user) external view returns (bool) {
         return hasPendingSettlement[marketId][user];
     }
+
+    // --- Required hooks (no-op for testing) ---
+    function _onDeficitQueued(bytes32, address, uint256, uint64) internal override {}
+
+    function _onSettlementProcessed(bytes32, address, uint256, uint256, uint64) internal override {}
 }

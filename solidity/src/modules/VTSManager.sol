@@ -387,7 +387,7 @@ abstract contract VTSManager is IVTSManager {
         uint256 Dr0 = 0;
         uint256 Dr1 = 0;
 
-        // Walk deficits in chronological order; attribute from latest prior swap
+        // Walk deficits in chronological order; attribute across all prior swaps (no fallback)
         EventRing.RingD storage dRing = deficitRing[corePoolId];
         EventRing.RingSwap storage sRing = swapRing[corePoolId];
 
@@ -395,83 +395,72 @@ abstract contract VTSManager is IVTSManager {
         uint160 sqrtLower = TickMath.getSqrtPriceAtTick(meta.tickLower);
         uint160 sqrtUpper = TickMath.getSqrtPriceAtTick(meta.tickUpper);
 
-        // Pointer to latest swap consumed
-        uint16 sHead = sRing.head;
-        uint16 sTail = sRing.tail;
-        // We'll do a linear scan per deficit to find latest prior swap (bounded by ring size)
-
+        // For each DeficitEvent, it sums pool outflows and the position’s attributed outflows across all SwapEvents with ts <= deficit.ts, intersecting the swap path with the position’s price range and using liquidityAt(ts).
         uint16 dHead = dRing.head;
         for (uint16 di = dRing.tail; di != dHead; di = (di + 1) & (dRing.cap - 1)) {
             DeficitEvent storage de = dRing.buf[di];
-            // Find latest swap ts <= deficit.ts
-            // Start from sHead - 1 and walk backwards until ts matches
-            if (sHead == sTail) {
-                // no swaps yet; fallback to liquidity share attribution
-                (uint128 liqPos, uint256 liqTot) = _getLiquidityShareForPosition(corePoolId, _positionId);
-                if (liqTot > 0) {
-                    if (de.token == 0) {
-                        Dr0 += (uint256(de.deficit) * uint256(liqPos)) / liqTot;
-                    } else {
-                        Dr1 += (uint256(de.deficit) * uint256(liqPos)) / liqTot;
-                    }
+
+            // Sum pool outflow and position-attributed outflow across all swaps with ts <= deficit.ts
+            uint256 sumPoolOut = 0;
+            uint256 sumPosOut = 0;
+
+            uint16 sHead2 = sRing.head;
+            uint16 sTail2 = sRing.tail;
+            for (uint16 si = sTail2; si != sHead2; si = (si + 1) & (sRing.cap - 1)) {
+                SwapEvent storage sv = sRing.buf[si];
+                if (sv.ts == 0 || sv.ts > de.ts) {
+                    // only consider swaps at or before deficit timestamp
+                    if (sv.ts == 0) continue;
+                    break;
                 }
-            } else {
-                uint16 idx = (sHead + sRing.cap - 1) & (sRing.cap - 1);
-                SwapEvent storage chosen = sRing.buf[idx];
-                // Walk backwards while ts > de.ts and not reaching tail
-                uint16 cur = idx;
-                while (true) {
-                    if (chosen.ts <= de.ts) break;
-                    if (cur == sTail) break;
-                    cur = (cur + sRing.cap - 1) & (sRing.cap - 1);
-                    chosen = sRing.buf[cur];
-                    if (cur == idx) break; // safety
+
+                // Accumulate total pool outflow for selected token
+                uint256 outTot = de.token == 0 ? uint256(sv.out0) : uint256(sv.out1);
+                if (outTot == 0) {
+                    continue;
                 }
-                if (chosen.ts == 0 || chosen.ts > de.ts) {
-                    // fallback to liquidity share attribution
-                    (uint128 liqPos2, uint256 liqTot2) = _getLiquidityShareForPosition(corePoolId, _positionId);
-                    if (liqTot2 > 0) {
-                        if (de.token == 0) {
-                            Dr0 += (uint256(de.deficit) * uint256(liqPos2)) / liqTot2;
-                        } else {
-                            Dr1 += (uint256(de.deficit) * uint256(liqPos2)) / liqTot2;
-                        }
-                    }
+                sumPoolOut += outTot;
+
+                // Attribute position share if swap path intersects position range at that time
+                uint128 Lr = positionIndex.liquidityAt(_positionId, sv.ts);
+                if (Lr == 0) {
+                    continue;
+                }
+                uint160 a = sv.sqrtP_before;
+                uint160 b = sv.sqrtP_after;
+                uint160 start = a < b ? a : b;
+                uint160 end = a < b ? b : a;
+                if (end <= sqrtLower || start >= sqrtUpper) {
+                    continue; // no intersection
+                }
+                uint160 isStart = start < sqrtLower ? sqrtLower : start;
+                uint160 isEnd = end > sqrtUpper ? sqrtUpper : end;
+                if (isStart == isEnd) {
+                    continue;
+                }
+
+                uint256 posOut;
+                if (de.token == 0) {
+                    posOut = SqrtPriceMath.getAmount0Delta(isStart, isEnd, Lr, true);
                 } else {
-                    // Position liquidity at chosen.ts
-                    uint128 Lr = positionIndex.liquidityAt(_positionId, chosen.ts);
-                    if (Lr > 0) {
-                        // Clamp sqrt range to position
-                        uint160 a = chosen.sqrtP_before;
-                        uint160 b = chosen.sqrtP_after;
-                        uint160 start = a < b ? a : b;
-                        uint160 end = a < b ? b : a;
-                        // intersect with [sqrtLower, sqrtUpper]
-                        if (end > sqrtLower && start < sqrtUpper) {
-                            uint160 isStart = start < sqrtLower ? sqrtLower : start;
-                            uint160 isEnd = end > sqrtUpper ? sqrtUpper : end;
-                            if (isStart != isEnd) {
-                                if (de.token == 0) {
-                                    uint256 dTot = chosen.out0;
-                                    if (dTot > 0) {
-                                        uint256 dPos = SqrtPriceMath.getAmount0Delta(isStart, isEnd, Lr, true);
-                                        if (dPos > 0) {
-                                            Dr0 += (de.deficit * dPos) / dTot;
-                                        }
-                                    }
-                                } else {
-                                    uint256 dTot = chosen.out1;
-                                    if (dTot > 0) {
-                                        uint256 dPos = SqrtPriceMath.getAmount1Delta(isStart, isEnd, Lr, true);
-                                        if (dPos > 0) {
-                                            Dr1 += (de.deficit * dPos) / dTot;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    posOut = SqrtPriceMath.getAmount1Delta(isStart, isEnd, Lr, true);
                 }
+                if (posOut == 0) {
+                    continue;
+                }
+                sumPosOut += posOut;
+            }
+
+            if (sumPoolOut == 0 || sumPosOut == 0) {
+                // No attribution possible on-chain within ring window; skip (no fallback)
+                continue;
+            }
+
+            uint256 attributed = (uint256(de.deficit) * sumPosOut) / sumPoolOut;
+            if (de.token == 0) {
+                Dr0 += attributed;
+            } else {
+                Dr1 += attributed;
             }
         }
 

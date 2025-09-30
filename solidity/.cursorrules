@@ -1,5 +1,9 @@
 # Solidity Development Rules for Cursor
 
+## Tooling
+
+- Use Foundry Forge - eg. `forge build`
+
 ## Code Style
 
 - Use explicit function visibility modifiers (public, private, internal, external)

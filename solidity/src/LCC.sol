@@ -465,7 +465,7 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
         address coreHook = IMarketFactory(marketFactory).getCoreHook();
         uint8 tokenIndex = _resolveTokenIndex(marketId);
         // Record into VTS rings
-        IVTSManager(coreHook).recordDeficitEvent(PoolId.wrap(marketId), tokenIndex, 0, 0, 0, 0, uint128(amount));
+        IVTSManager(coreHook).recordDeficitEvent(PoolId.wrap(marketId), tokenIndex, uint128(amount));
         // Emit supplement also, with direction already covered by tokenIndex
         emit FietSwapSupplement(marketId, tokenIndex, address(0), ts, amount);
     }
