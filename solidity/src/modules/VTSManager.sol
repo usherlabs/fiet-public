@@ -20,7 +20,6 @@ import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.
 import {TransientStateLibrary} from "v4-periphery/lib/v4-core/src/libraries/TransientStateLibrary.sol";
 import {TickMath} from "v4-periphery/lib/v4-core/src/libraries/TickMath.sol";
 import {SqrtPriceMath} from "v4-periphery/lib/v4-core/src/libraries/SqrtPriceMath.sol";
-import {VTSCalculatorLib} from "../libraries/VTSCalculator.sol";
 import {IVTSCalculator} from "../interfaces/IVTSCalculator.sol";
 import {toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 // import {IMMPositionManager} from "../interfaces/IMMPositionManager.sol";
@@ -30,9 +29,7 @@ abstract contract VTSManager is IVTSManager, VTSEvents {
     using TimeBucketOutflowTrackerLibrary for TimeBucketOutflowTracker;
     using StateLibrary for IPoolManager;
     using TransientStateLibrary for IPoolManager;
-    using EventRing for EventRing.RingD;
-    using EventRing for EventRing.RingS;
-    using EventRing for EventRing.RingSwap;
+    using EventRing for EventRing.Ring;
 
     // Mapping from core pool ID to VTS configuration
     mapping(PoolId => MarketVTSConfiguration) public corePoolToVTSConfiguration;
@@ -341,16 +338,7 @@ abstract contract VTSManager is IVTSManager, VTSEvents {
         }
 
         // Delegate to calculator library (internal, inlined by optimizer)
-        return VTSCalculatorLib.getVTSRequired(
-            _positionId,
-            meta,
-            swapRing[corePoolId],
-            deficitRing[corePoolId],
-            settlementRing[corePoolId],
-            positionIndex,
-            c0,
-            c1
-        );
+        return VTSCalculatorLib.calcVTSRequired(this, _positionId, meta, positionIndex, c0, c1);
     }
 
     /**

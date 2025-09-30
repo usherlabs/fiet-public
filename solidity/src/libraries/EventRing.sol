@@ -26,86 +26,33 @@ struct SettlementEvent {
 }
 
 library EventRing {
-    struct RingSwap {
+    /// @notice Generic ring state. Payload buffers are stored alongside by the consumer contract.
+    struct Ring {
         uint16 cap; // power-of-two capacity
         uint16 head; // next write index
         uint16 tail; // oldest index
         bool init;
-        mapping(uint16 => SwapEvent) buf;
-    }
-
-    struct RingD {
-        uint16 cap; // power-of-two capacity
-        uint16 head; // next write index
-        uint16 tail; // oldest index
-        bool init;
-        mapping(uint16 => DeficitEvent) buf;
-    }
-
-    struct RingS {
-        uint16 cap; // power-of-two capacity
-        uint16 head; // next write index
-        uint16 tail; // oldest index
-        bool init;
-        mapping(uint16 => SettlementEvent) buf;
     }
 
     function _ensurePow2(uint16 cap) private pure {
         require(cap != 0 && (cap & (cap - 1)) == 0, "cap!pow2");
     }
 
-    function initSwap(RingSwap storage r, uint16 cap) internal {
+    function init(Ring storage r, uint16 cap) internal {
         if (r.init) return;
         _ensurePow2(cap);
         r.cap = cap;
         r.init = true;
     }
 
-    function initD(RingD storage r, uint16 cap) internal {
-        if (r.init) return;
-        _ensurePow2(cap);
-        r.cap = cap;
-        r.init = true;
-    }
-
-    function initS(RingS storage r, uint16 cap) internal {
-        if (r.init) return;
-        _ensurePow2(cap);
-        r.cap = cap;
-        r.init = true;
-    }
-
-    function isFull(RingSwap storage r) internal view returns (bool) {
+    function isFull(Ring storage r) internal view returns (bool) {
         return r.init && ((r.head + 1) & (r.cap - 1)) == r.tail;
     }
 
-    function isFull(RingD storage r) internal view returns (bool) {
-        return r.init && ((r.head + 1) & (r.cap - 1)) == r.tail;
-    }
-
-    function isFull(RingS storage r) internal view returns (bool) {
-        return r.init && ((r.head + 1) & (r.cap - 1)) == r.tail;
-    }
-
-    function push(RingSwap storage r, SwapEvent memory e) internal {
-        require(r.init, "ringSwap not init");
-        uint16 nextHead = (r.head + 1) & (r.cap - 1);
-        // assume caller handles overflow/flush
-        r.buf[r.head] = e;
-        r.head = nextHead;
-    }
-
-    function push(RingD storage r, DeficitEvent memory e) internal {
-        require(r.init, "ringD not init");
-        uint16 nextHead = (r.head + 1) & (r.cap - 1);
-        r.buf[r.head] = e;
-        r.head = nextHead;
-    }
-
-    function push(RingS storage r, SettlementEvent memory e) internal {
-        require(r.init, "ringS not init");
-        uint16 nextHead = (r.head + 1) & (r.cap - 1);
-        r.buf[r.head] = e;
-        r.head = nextHead;
+    /// @notice Reserve next index for caller's payload write. Caller must ensure flush before full.
+    function acquire(Ring storage r) internal returns (uint16 idx) {
+        require(r.init, "ring not init");
+        idx = r.head;
+        r.head = (r.head + 1) & (r.cap - 1);
     }
 }
