@@ -33,8 +33,9 @@ abstract contract VTSEvents is IVTSEventsReader {
         PoolId indexed poolId,
         address recipient,
         uint8 token,
-        uint128 settled,
+        int256 settled,
         uint128 marketDeficitBefore,
+        bytes32 positionId,
         uint64 ts,
         bool burnTokens
     );
@@ -81,8 +82,9 @@ abstract contract VTSEvents is IVTSEventsReader {
         PoolId corePoolId,
         address recipient,
         uint8 token,
-        uint128 settled,
+        int256 settled,
         uint128 marketDeficitBefore,
+        bytes32 positionId,
         bool burnTokens
     ) internal {
         if (EventRing.isFull(settlementRing[corePoolId])) {
@@ -93,10 +95,11 @@ abstract contract VTSEvents is IVTSEventsReader {
             ts: uint64(block.timestamp),
             token: token,
             settled: settled,
-            marketDeficitBefore: marketDeficitBefore
+            marketDeficitBefore: marketDeficitBefore,
+            positionId: positionId
         });
         emit SettlementRecorded(
-            corePoolId, recipient, token, settled, marketDeficitBefore, uint64(block.timestamp), burnTokens
+            corePoolId, recipient, token, settled, marketDeficitBefore, positionId, uint64(block.timestamp), burnTokens
         );
     }
 
@@ -144,7 +147,7 @@ abstract contract VTSEvents is IVTSEventsReader {
         for (uint16 i = 0; i < count; i++) {
             uint16 idx = (start + i) & (cap - 1);
             SettlementEvent storage e = settlementBuf[poolId][idx];
-            h = keccak256(abi.encodePacked(h, e.ts, e.token, e.settled, e.marketDeficitBefore));
+            h = keccak256(abi.encodePacked(h, e.ts, e.token, e.settled, e.marketDeficitBefore, e.positionId));
         }
         uint256 seg = settlementFlushCount[poolId]++;
         settlementFlushedRoots[poolId][seg] = h;
@@ -189,7 +192,13 @@ abstract contract VTSEvents is IVTSEventsReader {
 
     function _readSettlement(PoolId poolId, uint16 idx) internal view returns (SettlementEvent memory e) {
         SettlementEvent storage s = settlementBuf[poolId][idx];
-        e = SettlementEvent({ts: s.ts, token: s.token, settled: s.settled, marketDeficitBefore: s.marketDeficitBefore});
+        e = SettlementEvent({
+            ts: s.ts,
+            token: s.token,
+            settled: s.settled,
+            marketDeficitBefore: s.marketDeficitBefore,
+            positionId: s.positionId
+        });
     }
 
     // --- External payload readers ---

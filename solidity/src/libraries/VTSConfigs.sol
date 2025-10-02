@@ -18,8 +18,9 @@ library VTSConfigs {
                 baseVTSRate: 1000 // 10% (1000 bips)
             }),
             timeWindow: 3600, // 1 hour
+            swapRingSize: 0, // defaults to 1024
             deficitRingSize: 0, // defaults to 1024
-            settlementRingSize: 0, // defaults to 512
+            settlementRingSize: 0, // defaults to 1024
             oracleFactory: address(0) // address(0) to use the default oracle factory // TODO: replace with the oracle registry.
         });
     }

@@ -17,6 +17,15 @@ library VTSCalculatorLib {
 
     uint256 internal constant ONE_BPS = 10000;
 
+    uint16 internal constant DEFAULT_SWAP_RING_SIZE = 1024;
+    uint16 internal constant DEFAULT_DEFICIT_RING_SIZE = 1024;
+    uint16 internal constant DEFAULT_SETTLEMENT_RING_SIZE = 1024;
+
+    function getSizeDefaults() internal pure returns (uint16, uint16, uint16) {
+        // swap, deficit, settlement
+        return (DEFAULT_SWAP_RING_SIZE, DEFAULT_DEFICIT_RING_SIZE, DEFAULT_SETTLEMENT_RING_SIZE);
+    }
+
     function vtsCurrent(uint256 settled, uint256 committed) internal pure returns (uint256) {
         if (committed == 0) return 0;
         return FullMath.mulDiv(settled, ONE_BPS, committed);
@@ -54,6 +63,7 @@ library VTSCalculatorLib {
         uint160 sqrtLower = TickMath.getSqrtPriceAtTick(meta.tickLower);
         uint160 sqrtUpper = TickMath.getSqrtPriceAtTick(meta.tickUpper);
 
+        // Apply per-position deficit attribution
         for (uint16 di = dTail; di != dHead; di = (di + 1) & (dCap - 1)) {
             DeficitEvent memory de = reader.readDeficitAt(meta.poolId, di);
             uint256 sumPoolOut = 0;
@@ -95,13 +105,45 @@ library VTSCalculatorLib {
             else Dr1 += attributed;
         }
 
+        // Apply per-position settlement credits (proactive MM settle/withdraw events)
+        // Only consider settlement entries that are position-scoped (positionId matches)
+        // and are not market deficit settlements (marketDeficitBefore == 0).
+        // Positive credits reduce the attributed deficit; negative do not increase it.
+        int256 credit0 = 0;
+        int256 credit1 = 0;
+        for (uint16 ri = rTail; ri != rHead; ri = (ri + 1) & (rCap - 1)) {
+            SettlementEvent memory se = reader.readSettlementAt(meta.poolId, ri);
+            if (se.marketDeficitBefore != 0) continue; // skip market-level deficit settlements here
+            if (se.positionId == PositionId.unwrap(positionId)) {
+                if (se.token == 0) credit0 += se.settled;
+                else credit1 += se.settled;
+            }
+        }
+        if (credit0 > 0) {
+            uint256 c0u = uint256(credit0);
+            Dr0 = Dr0 > c0u ? (Dr0 - c0u) : 0;
+        }
+        if (credit1 > 0) {
+            uint256 c1u = uint256(credit1);
+            Dr1 = Dr1 > c1u ? (Dr1 - c1u) : 0;
+        }
+
+        // Apply market-level proportional decay from deficit settlements
         for (uint16 ri = rTail; ri != rHead; ri = (ri + 1) & (rCap - 1)) {
             SettlementEvent memory se = reader.readSettlementAt(meta.poolId, ri);
             if (se.marketDeficitBefore == 0) continue;
             if (se.token == 0) {
-                if (Dr0 > 0) Dr0 = Dr0 - ((Dr0 * se.settled) / se.marketDeficitBefore);
+                if (Dr0 > 0 && se.settled > 0) {
+                    uint256 settledU = uint256(se.settled);
+                    uint256 dec = (Dr0 * settledU) / se.marketDeficitBefore;
+                    Dr0 = Dr0 > dec ? (Dr0 - dec) : 0;
+                }
             } else {
-                if (Dr1 > 0) Dr1 = Dr1 - ((Dr1 * se.settled) / se.marketDeficitBefore);
+                if (Dr1 > 0 && se.settled > 0) {
+                    uint256 settledU = uint256(se.settled);
+                    uint256 dec = (Dr1 * settledU) / se.marketDeficitBefore;
+                    Dr1 = Dr1 > dec ? (Dr1 - dec) : 0;
+                }
             }
         }
 

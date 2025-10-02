@@ -24,6 +24,7 @@ struct MarketVTSConfiguration {
     // oracle address for this market, can be address(0) to use the default oracle
     address oracleFactory;
     // Ring sizes (power of two). If zero, defaults are used
+    uint16 swapRingSize;
     uint16 deficitRingSize;
     uint16 settlementRingSize;
 }

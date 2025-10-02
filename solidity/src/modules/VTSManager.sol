@@ -102,9 +102,11 @@ abstract contract VTSManager is IVTSManager, VTSEvents {
     {
         corePoolToVTSConfiguration[corePoolId] = vtsConfiguration;
         marketOutflow[corePoolId].initialize(vtsConfiguration.timeWindow);
-        uint16 spsz = vtsConfiguration.deficitRingSize == 0 ? 1024 : vtsConfiguration.deficitRingSize; // reuse size
-        uint16 dsz = vtsConfiguration.deficitRingSize == 0 ? 1024 : vtsConfiguration.deficitRingSize;
-        uint16 ssz = vtsConfiguration.settlementRingSize == 0 ? 512 : vtsConfiguration.settlementRingSize;
+        (uint16 defaultSwap, uint16 defaultDeficit, uint16 defaultSettlement) = VTSCalculatorLib.getSizeDefaults();
+        // If a ring size is zero, use default; else use provided
+        uint16 spsz = vtsConfiguration.swapRingSize == 0 ? defaultSwap : vtsConfiguration.swapRingSize;
+        uint16 dsz = vtsConfiguration.deficitRingSize == 0 ? defaultDeficit : vtsConfiguration.deficitRingSize;
+        uint16 ssz = vtsConfiguration.settlementRingSize == 0 ? defaultSettlement : vtsConfiguration.settlementRingSize;
         _initRings(corePoolId, spsz, dsz, ssz);
 
         emit MarketVTSConfigurationSet(corePoolId, vtsConfiguration);
@@ -134,19 +136,23 @@ abstract contract VTSManager is IVTSManager, VTSEvents {
         // }
     }
 
-    // Settlements occur when deficits are processed - ie. via _annulUserSettlement (LCC re-use), or _processSettlementQueue (within MarketVault.settleObligations)
-    // MarketVault.settleObligations is called whenever new liquidity enters on the protocol - ie. via DirectSwap, MM Settlement, DirectLP AddLiquidity
-    // ProxyPool swaps do not impact as they derive liquidity from any excess.
-    // DeficitSettlement is only recorded when there's liquidity to settle that covers opened deficits.
-    function recordDeficitSettlementEvent(
+    // Settlements occur whenever liquidity in/out of the protocol.
+    // Positive settled amount is IN, and negative is OUT.
+    // ? If position is unknown, and liquidity OUT, then deficits are processed by pool - ie. via _annulUserSettlement (LCC re-use), or _processSettlementQueue (within MarketVault.settleObligations)
+    //      MarketVault.settleObligations is called whenever new liquidity enters on the protocol - ie. via DirectSwap, MM Settlement, DirectLP AddLiquidity
+    // ? If position is known, and liquidity OUT, then liquidity derived from MM withdrawals.
+    // ? If position is unknown, and liquidity IN, then liquidity derived from swaps, etc.
+    // ? If position is known, and liquidity IN, then liquidity derived from MM settlements.
+    function recordSettlementEvent(
         PoolId corePoolId,
         address recipient,
         uint8 token,
-        uint128 settled,
+        int256 settled,
         uint128 marketDeficitBefore,
+        bytes32 positionId,
         bool burnTokens
     ) external onlyMarketAssets(corePoolId) {
-        _recordSettlement(corePoolId, recipient, token, settled, marketDeficitBefore, burnTokens);
+        _recordSettlement(corePoolId, recipient, token, settled, marketDeficitBefore, positionId, burnTokens);
         // if (token == 0) {
         //     uint256 d0 = marketDeficitOutstanding[corePoolId][0];
         //     marketDeficitOutstanding[corePoolId][0] = settled > d0 ? 0 : (d0 - uint256(settled));
@@ -213,6 +219,7 @@ abstract contract VTSManager is IVTSManager, VTSEvents {
      * @param corePoolId The core pool ID
      * @param delta The balance delta
      */
+    // TODO: Determine whether this is necessary considering we're swap recording...
     function _recordOutflow(PoolId corePoolId, BalanceDelta delta) internal {
         // Extract outflow amounts (negative deltas indicate outflow)
         int256 delta0 = delta.amount0();
@@ -344,6 +351,14 @@ abstract contract VTSManager is IVTSManager, VTSEvents {
         //     uint256 curS1 = marketSettled[corePoolId][1];
         //     marketSettled[corePoolId][1] = s1abs > curS1 ? 0 : (curS1 - s1abs);
         // }
+
+        // Record ring settlement events for both tokens (positive=settle, negative=withdraw)
+        if (amount0 != 0) {
+            _recordSettlement(corePoolId, msg.sender, 0, int256(amount0), 0, PositionId.unwrap(positionId), false);
+        }
+        if (amount1 != 0) {
+            _recordSettlement(corePoolId, msg.sender, 1, int256(amount1), 0, PositionId.unwrap(positionId), false);
+        }
 
         // emit an event to notify that the assets have been settled on a position
         emit AssetsSettled(positionId, amount0, amount1);

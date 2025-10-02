@@ -118,7 +118,7 @@ contract VTSEventsRequiredTest is Test {
 
         // settle half of market deficit -> Dr0 halves
         vm.prank(currency0);
-        mgr.recordSettlementEvent(poolId, address(0xA), 0, D / 2, D, true);
+        mgr.recordSettlementEvent(poolId, address(0xA), 0, int256(uint256(D / 2)), D, bytes32(0), true);
         (uint256 req0After,) = mgr.getVTSRequired(pid);
 
         assertApproxEqAbs(req0After, req0Before / 2, 1, "required should halve after 50% market settlement");
@@ -157,7 +157,7 @@ contract VTSEventsRequiredTest is Test {
         vm.prank(currency1);
         mgr.recordDeficitEvent(poolId, 1, 77);
         vm.prank(currency1);
-        mgr.recordSettlementEvent(poolId, address(0xB), 1, 33, 77, false);
+        mgr.recordSettlementEvent(poolId, address(0xB), 1, int256(33), 77, bytes32(0), false);
 
         // verify ring caps configured
         (uint16 sCap, uint16 dCap, uint16 rCap) = mgr.getRingCaps(poolId);
@@ -200,7 +200,7 @@ contract VTSEventsRequiredTest is Test {
         mgr.readDeficitAt(poolId, dTail);
 
         vm.prank(currency0);
-        mgr.recordSettlementEvent(poolId, address(0xC0FFEE), 0, 600, 1200, true);
+        mgr.recordSettlementEvent(poolId, address(0xC0FFEE), 0, int256(600), 1200, bytes32(0), true);
         (uint16 rHead, uint16 rTail) = mgr.getSettlementRingState(poolId);
         assertEq((rHead + 65536 - rTail) % 65536, 1, "one settlement recorded");
         // read back first settlement

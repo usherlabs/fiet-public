@@ -23,8 +23,9 @@ struct DeficitEvent {
 struct SettlementEvent {
     uint64 ts;
     uint8 token; // 0 or 1
-    uint128 settled;
+    int256 settled;
     uint128 marketDeficitBefore;
+    bytes32 positionId;
 }
 
 interface IVTSEventsReader {

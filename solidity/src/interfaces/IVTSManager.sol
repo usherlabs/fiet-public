@@ -29,12 +29,13 @@ interface IVTSManager {
     // Event recording (protocol-bounds only)
     function recordDeficitEvent(PoolId corePoolId, uint8 token, uint128 deficit) external;
 
-    function recordDeficitSettlementEvent(
+    function recordSettlementEvent(
         PoolId corePoolId,
         address recipient,
         uint8 token,
-        uint128 settled,
+        int256 settled,
         uint128 marketDeficitBefore,
+        bytes32 positionId,
         bool burnTokens
     ) external;
 }
