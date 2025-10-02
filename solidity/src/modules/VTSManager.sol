@@ -262,33 +262,33 @@ abstract contract VTSManager is IVTSManager, VTSEvents {
         uint256 currentC0 = commitmentMaxima[positionId][0];
         uint256 currentC1 = commitmentMaxima[positionId][1];
 
-        // if (params.liquidityDelta > 0) {
-        //     // Liquidity added: increase tracked maxima by the delta's maxima over the tick range
-        //     uint128 liquidityAdded = SafeCastLib.safeCastTo128(uint256(params.liquidityDelta));
-        //     (uint256 addC0, uint256 addC1) =
-        //         calculateCommitmentMaxima(params.tickLower, params.tickUpper, liquidityAdded);
+        if (params.liquidityDelta > 0) {
+            // Liquidity added: increase tracked maxima by the delta's maxima over the tick range
+            uint128 liquidityAdded = SafeCastLib.safeCastTo128(uint256(params.liquidityDelta));
+            (uint256 addC0, uint256 addC1) =
+                calculateCommitmentMaxima(params.tickLower, params.tickUpper, liquidityAdded);
 
-        //     commitmentMaxima[positionId][0] = currentC0 + addC0;
-        //     commitmentMaxima[positionId][1] = currentC1 + addC1;
-        //     marketCommitted[corePoolId][0] += addC0;
-        //     marketCommitted[corePoolId][1] += addC1;
-        // } else if (params.liquidityDelta < 0) {
-        //     // Liquidity removed: decrease tracked maxima by the delta's maxima over the tick range
-        //     uint128 liquidityRemoved = SafeCastLib.safeCastTo128(uint256(-params.liquidityDelta));
-        //     (uint256 subC0, uint256 subC1) =
-        //         calculateCommitmentMaxima(params.tickLower, params.tickUpper, liquidityRemoved);
+            commitmentMaxima[positionId][0] = currentC0 + addC0;
+            commitmentMaxima[positionId][1] = currentC1 + addC1;
+            // marketCommitted[corePoolId][0] += addC0;
+            // marketCommitted[corePoolId][1] += addC1;
+        } else if (params.liquidityDelta < 0) {
+            // Liquidity removed: decrease tracked maxima by the delta's maxima over the tick range
+            uint128 liquidityRemoved = SafeCastLib.safeCastTo128(uint256(-params.liquidityDelta));
+            (uint256 subC0, uint256 subC1) =
+                calculateCommitmentMaxima(params.tickLower, params.tickUpper, liquidityRemoved);
 
-        //     // Clamp at zero to avoid underflow; if fully removed, both become zero
-        //     commitmentMaxima[positionId][0] = currentC0 > subC0 ? (currentC0 - subC0) : 0;
-        //     commitmentMaxima[positionId][1] = currentC1 > subC1 ? (currentC1 - subC1) : 0;
-        //     uint256 mc0 = marketCommitted[corePoolId][0];
-        //     uint256 mc1 = marketCommitted[corePoolId][1];
-        //     marketCommitted[corePoolId][0] = subC0 > mc0 ? 0 : (mc0 - subC0);
-        //     marketCommitted[corePoolId][1] = subC1 > mc1 ? 0 : (mc1 - subC1);
-        // } else {
-        //     // No-op if liquidityDelta == 0 (poke)
-        //     return;
-        // }
+            // Clamp at zero to avoid underflow; if fully removed, both become zero
+            commitmentMaxima[positionId][0] = currentC0 > subC0 ? (currentC0 - subC0) : 0;
+            commitmentMaxima[positionId][1] = currentC1 > subC1 ? (currentC1 - subC1) : 0;
+            // uint256 mc0 = marketCommitted[corePoolId][0];
+            // uint256 mc1 = marketCommitted[corePoolId][1];
+            // marketCommitted[corePoolId][0] = subC0 > mc0 ? 0 : (mc0 - subC0);
+            // marketCommitted[corePoolId][1] = subC1 > mc1 ? 0 : (mc1 - subC1);
+        } else {
+            // No-op if liquidityDelta == 0 (poke)
+            return;
+        }
     }
 
     // Placeholder: without duplicating enumeration, we approximate share using position's own liquidity vs pool liquidity

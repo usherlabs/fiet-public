@@ -48,6 +48,8 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
     // mapping(tokenId => numNFTPositionsCount) public nftToPositionCount;
     mapping(uint256 => uint256) public nftToPositionCount;
 
+    address private immutable CORE_HOOK;
+
     constructor(address _manager, address _spokeReceiver, address _marketFactory)
         LiquidityRouter(_manager)
         ERC721("MMPositionManager", "MMPM")
@@ -67,6 +69,13 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
      */
     function getPosition(PositionId positionId) public view returns (PositionInfo memory) {
         return positions[positionId];
+    }
+
+    function _getCoreHook() internal view returns (address) {
+        if (CORE_HOOK == address(0)) {
+            CORE_HOOK = IMarketFactory(marketFactory).getCoreHook();
+        }
+        return CORE_HOOK;
     }
 
     /**
@@ -109,7 +118,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         }
 
         // validate that there is no open RFS for this position
-        address vtsManager = IMarketFactory(marketFactory).getCoreHook();
+        address vtsManager = _getCoreHook();
         (bool rfsOpen, BalanceDelta balanceDelta) = IVTSManager(vtsManager).getRFS(positionId);
         if (rfsOpen) {
             revert RFSOpenForPosition(positionId);
@@ -163,7 +172,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
             calculateTokenAmountsFromPositionParams(_poolKey, _liquidityParams);
 
         // calcualte the total LCC USD value and confirm it is less than the total signal usd value
-        address vtsManager = IMarketFactory(marketFactory).getCoreHook();
+        address vtsManager = _getCoreHook();
         address marketOracleFactory = IVTSManager(vtsManager).getMarketVTSConfiguration(_poolKey.toId()).oracleFactory;
 
         (uint256 lcc0Price, uint256 lcc0Decimals) = lcc0.usdPrice(marketOracleFactory);
@@ -258,7 +267,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         }
 
         // check if RFS is open
-        address vtsManager = IMarketFactory(marketFactory).getCoreHook();
+        address vtsManager = _getCoreHook();
         (bool rfsOpen,) = IVTSManager(vtsManager).getRFS(positionId);
         if (rfsOpen) {
             revert RFSOpenForPosition(positionId);
@@ -313,7 +322,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         returns (uint256 lccUnderlyingAmount0, uint256 lccUnderlyingAmount1)
     {
         // get the base vts of the currencies from the pool configuration
-        address coreHook = IMarketFactory(marketFactory).getCoreHook();
+        address coreHook = _getCoreHook();
         MarketVTSConfiguration memory vtsConfiguration = IVTSManager(coreHook).getMarketVTSConfiguration(poolKey.toId());
 
         // get the amount of underlying liquidity to transfer from the issuer to the lcc
@@ -400,7 +409,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         IProxyHook(proxyHook).onMMLiquidityModify(lcc0.underlyingAsset(), lcc1.underlyingAsset(), balanceDelta);
 
         // notify the vts manager of the settlement made for this position
-        address coreHook = IMarketFactory(marketFactory).getCoreHook();
+        address coreHook = _getCoreHook();
         IVTSManager(coreHook).onMMLiquidityModify(positionId, balanceDelta);
     }
 
@@ -433,7 +442,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         IProxyHook(proxyHook).onMMLiquidityModify(lcc0.underlyingAsset(), lcc1.underlyingAsset(), balanceDelta);
 
         // notify the vts manager of the settlement made for this position
-        address coreHook = IMarketFactory(marketFactory).getCoreHook();
+        address coreHook = _getCoreHook();
         IVTSManager(coreHook).onMMLiquidityModify(positionId, balanceDelta);
 
         // transfer from this contract to the actual recipient
@@ -458,7 +467,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         // get total amount settled from the VTS manager
         // important to do this before removing the liquidity from the pool
         // because the position information is cleared after removing the liquidity
-        address vtsManager = IMarketFactory(marketFactory).getCoreHook();
+        address vtsManager = _getCoreHook();
         (uint256 settledAmount0, uint256 settledAmount1) = IVTSManager(vtsManager).getPositionSettledAmounts(positionId);
 
         // remove the liquidity from the pool
@@ -473,6 +482,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
             position.tokenId,
             position.positionIndex
         );
+        // ? Now the MMPositionManager has LCCs that are capitalised to the max they can be.
 
         // get the amounts removed from the pool
         uint256 amount0 = LiquidityUtils.safeInt128ToUint256(balanceDelta.amount0());

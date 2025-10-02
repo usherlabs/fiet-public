@@ -254,7 +254,7 @@ abstract contract MarketVault {
         // if the delta of amount0 is negative, then we need to take equivalent tokens from the vault
         if (amount0 < 0) {
             // take asset from vault
-            // TODO: This will fail if vault has insufficient liquidity to take. All liquidity settled is utilied by the market. Liquidity is not confined to positions.
+            // ? This function will fail if the amounts provided are greater than the available liquidity in the vault. This is purposeful. Callers must ensure they have sufficient liquidity in the vault.
             _takeAssetFromVault(callbackData.currency0, callbackData.sender, uint256(int256(-amount0)));
         }
         // if the delta of amount1 is negative, then we need to take equivalent tokens from the vault

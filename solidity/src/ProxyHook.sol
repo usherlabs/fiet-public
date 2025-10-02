@@ -109,24 +109,6 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
     }
 
     /**
-     * @dev This is what the ProxyHook can actually withdraw from the pool manager (its "credits")
-     * @dev It is our account balance against a currency in the pool manager
-     */
-    function _getCurrencyAvailableLiquidity(Currency currency) internal view returns (uint256) {
-        // ProxyHook's ERC-6909 claim token balance for this currency
-        return poolManager.balanceOf(address(this), currency.toId());
-    }
-
-    /**
-     * @dev This is what the ProxyHook can actually withdraw from the pool manager (its "credits")
-     * @dev It is our account balance against a currency in the pool manager
-     */
-    function getAvailableLiquidity(address currencyAddress) external view returns (uint256) {
-        // ProxyHook's ERC-6909 claim token balance for this currency
-        return _getCurrencyAvailableLiquidity(Currency.wrap(currencyAddress));
-    }
-
-    /**
      * @dev Returns the core pool id
      * @return The core pool id
      */
@@ -306,8 +288,7 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         _tryTakeFromVaultToLCC(marketId, lccTokenOut, amountOut);
 
         // New liquidity in pool, so we try and settle the outstanding obligations, if any
-        // Maybe call only for lccTokenIn... as lccTokenOut is settled to the LCC acquired by the trader.
-        _settleObligations(corePoolKey);
+        _settleObligationsForLCC(lccTokenIn, marketId);
     }
 
     // Before swap we make sure to provide enough delta
@@ -323,8 +304,7 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         address excessRecipient = _determineExcessRecipient(hookData);
         bool isHookExcessRecipientSpecified = excessRecipient != address(0);
 
-        uint256 maxOutputTokenAvailable =
-            _getCurrencyAvailableLiquidity(params.zeroForOne ? key.currency1 : key.currency0);
+        uint256 maxOutputTokenAvailable = inMarketBalanceOf(params.zeroForOne ? key.currency1 : key.currency0);
         // console.log("Max token output available: ", maxOutputTokenAvailable);
 
         bool coreZeroForOne;
@@ -465,6 +445,10 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
             // ? amountOut can be greater than total amount of underlying asset in PoolManager.
             // ? In this case, there is insufficient liquidity to settle amountOut of output token.
             key.currency1.settle(poolManager, address(this), amountToSettle, true);
+
+            // Once funds in have settled to MarketVault, we can use them settle obligations.
+            // ? Settlements only originally occured on DirectSwap.
+            _settleObligationsForLCC(lccToken0, PoolId.unwrap(coreKey.toId()));
         } else {
             key.currency1.take(poolManager, address(this), amountIn, true);
 
@@ -485,6 +469,9 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
             // Settle the output token to the PoolManager
             // Burn claim tokens to release output token to the Trader from the PoolManager.
             key.currency0.settle(poolManager, address(this), amountToSettle, true);
+
+            // Once funds in have settled to MarketVault, we can use them settle obligations.
+            _settleObligationsForLCC(lccToken1, PoolId.unwrap(coreKey.toId()));
         }
 
         // BalanceDelta is a packed value of (currency0Amount, currency1Amount)
@@ -515,10 +502,10 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         returns (uint256 amountToCancel)
     {
         uint256 deficitAmount = 0;
-        uint256 inCustody = _getCurrencyAvailableLiquidity(Currency.wrap(lccToken.underlyingAsset()));
-        if (amount > inCustody) {
-            amountToCancel = inCustody; // amount to cancel becomes what ever is in custody.
-            deficitAmount = amount - inCustody; // deficit amount becomes the difference between the amount to cancel and the amount in custody.
+        uint256 availableLiquidity = inMarketBalanceOf(Currency.wrap(lccToken.underlyingAsset()));
+        if (amount > availableLiquidity) {
+            amountToCancel = availableLiquidity; // amount to cancel becomes what ever is in custody.
+            deficitAmount = amount - availableLiquidity; // deficit amount becomes the difference between the amount to cancel and the amount in custody.
         } else {
             amountToCancel = amount;
         }
