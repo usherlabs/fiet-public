@@ -38,9 +38,9 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
     event SignalCommitted(address indexed mm, PositionId positionId, uint256 amount0, uint256 amount1);
     event SignalDecommitted(address indexed mm, PositionId positionId, uint256 amount0, uint256 amount1);
 
-    address public marketFactory;
+    address public immutable marketFactory;
     uint256 private nextTokenId = 1;
-    IVRLSpokeReceiver public spokeReceiver;
+    IVRLSpokeReceiver public immutable spokeReceiver;
     // mapping(tokenId => mapping(positionIndex => PositionInfo)) public nftToPositions;
     mapping(uint256 => mapping(uint256 => PositionId)) public nftToPositionId;
     mapping(PositionId => PositionInfo) public positions; // TODO: Merge PositionIndex and this mapping, unifying all position state across DirectLPs and MMs.
@@ -48,7 +48,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
     // mapping(tokenId => numNFTPositionsCount) public nftToPositionCount;
     mapping(uint256 => uint256) public nftToPositionCount;
 
-    address private immutable CORE_HOOK;
+    address private immutable coreHook;
 
     constructor(address _manager, address _spokeReceiver, address _marketFactory)
         LiquidityRouter(_manager)
@@ -56,10 +56,15 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
     {
         marketFactory = _marketFactory;
         spokeReceiver = IVRLSpokeReceiver(_spokeReceiver);
+        coreHook = IMarketFactory(marketFactory).getCoreHook();
     }
 
     function tokenURI(uint256) public pure override returns (string memory) {
         revert("Metadata not implemented");
+    }
+
+    function _getCoreHook() internal view returns (address) {
+        return coreHook;
     }
 
     /**
@@ -69,13 +74,6 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
      */
     function getPosition(PositionId positionId) public view returns (PositionInfo memory) {
         return positions[positionId];
-    }
-
-    function _getCoreHook() internal view returns (address) {
-        if (CORE_HOOK == address(0)) {
-            CORE_HOOK = IMarketFactory(marketFactory).getCoreHook();
-        }
-        return CORE_HOOK;
     }
 
     /**

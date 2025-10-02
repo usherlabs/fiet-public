@@ -77,23 +77,23 @@ contract CompleteDeployScript is ScriptHelper {
         marketFactory = _deployMarketFactory();
         console.log("MarketFactory deployed at:", marketFactory);
 
-        // Step 3: Deploy MMPositionManager
-        console.log("\n=== Deploying MMPositionManager ===");
-        mmPositionManager = _deployMMPositionManager();
-        console.log("MMPositionManager deployed at:", mmPositionManager);
-
-        // Step 4: Deploy CoreHook
+        // Step 3: Deploy CoreHook
         console.log("\n=== Deploying CoreHook ===");
         coreHook = _deployCoreHook();
         console.log("CoreHook deployed at:", coreHook);
 
-        // Step 5: Set hooks in MarketFactory
+        // Step 4: Set hooks in MarketFactory
         console.log("\n=== Setting Hooks in MarketFactory ===");
         _setHooksInFactory();
 
-        // Step 6: Verify hooks addresses across the contracts
+        // Step 5: Verify hooks addresses across the contracts
         console.log("\n=== Verifying Hooks ===");
         _verifyHooks();
+
+        // Step 6: Deploy MMPositionManager
+        console.log("\n=== Deploying MMPositionManager ===");
+        mmPositionManager = _deployMMPositionManager();
+        console.log("MMPositionManager deployed at:", mmPositionManager);
 
         // Step 7: Add all the protocol addresses expected to hold LCC as a protocol bound address in the market factory
         console.log("\n=== Adding addresses to bounds array ===");

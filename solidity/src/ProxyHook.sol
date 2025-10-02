@@ -43,6 +43,7 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
     error InvalidInitialiser();
     error InvalidCurrency(address currency);
     error InvalidDeficitRecipient();
+    error CorePoolKeyAlreadySet();
 
     struct LiquidityCallbackData {
         uint256 amount0;
@@ -97,7 +98,9 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
     }
 
     function activate() external onlyFactory {
-        coreHook = IMarketFactory(marketFactory).getCoreHook();
+        if (coreHook == address(0)) {
+            coreHook = IMarketFactory(marketFactory).getCoreHook();
+        }
     }
 
     /**
@@ -105,6 +108,9 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
      * @param _corePoolKey The actual core pool key to set
      */
     function setCorePoolKey(PoolKey calldata _corePoolKey) external onlyFactory {
+        if (PoolId.unwrap(corePoolKey.toId()) != 0) {
+            revert CorePoolKeyAlreadySet();
+        }
         corePoolKey = _corePoolKey;
     }
 
