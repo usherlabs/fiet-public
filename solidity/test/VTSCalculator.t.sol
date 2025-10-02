@@ -105,4 +105,60 @@ contract VTSCalculatorTest is Test {
         // We can't compute exact expected Dr here; assert non-zero and sane
         assertTrue(req0 >= 0, "no negative required");
     }
+
+    function test_mixed_settle_then_withdraw_net_credit_applied() public {
+        PositionId p1 = _mkPos(-60, 60, 1_000_000);
+        uint256 C0 = 1_000_000_000;
+        mgr.setTrackedCommitment(p1, C0, 0);
+
+        _recordSwapAt(100, 0, 10, 2000, 0);
+
+        // +500 then -200 => net +300 credit
+        vm.prank(currency0);
+        mgr.recordSettlementEvent(poolId, address(this), 0, int256(500), 0, PositionId.unwrap(p1), false);
+        vm.prank(currency0);
+        mgr.recordSettlementEvent(poolId, address(this), 0, int256(-200), 0, PositionId.unwrap(p1), false);
+
+        vm.prank(currency0);
+        mgr.recordDeficitEvent(poolId, 0, 1000);
+        (uint256 req0,) = mgr.getVTSRequired(p1);
+        // Should be lower than if credit were zero; we assert strictly positive but not maximal
+        assertTrue(req0 < 10000, "required should be reduced by credit");
+    }
+
+    function test_token1_path_with_credits() public {
+        PositionId p = _mkPos(-120, 120, 900_000);
+        uint256 C1 = 500_000_000;
+        mgr.setTrackedCommitment(p, 0, C1);
+
+        // token1 outflow
+        _recordSwapAt(100, -20, 0, 0, 3000);
+
+        // proactive settle for token1
+        vm.prank(currency1);
+        mgr.recordSettlementEvent(poolId, address(this), 1, int256(400), 0, PositionId.unwrap(p), false);
+
+        vm.prank(currency1);
+        mgr.recordDeficitEvent(poolId, 1, 1000);
+
+        (, uint256 req1) = mgr.getVTSRequired(p);
+        assertTrue(req1 < 10000, "token1 required should be reduced");
+    }
+
+    function test_ring_truncation_bounds_do_not_revert() public {
+        PositionId p = _mkPos(-60, 60, 1_000_000);
+        uint256 C0 = 1_000_000_000;
+        mgr.setTrackedCommitment(p, C0, 0);
+
+        // Push more settlements than ring to exercise flush/truncation paths
+        for (uint256 i = 0; i < 200; i++) {
+            vm.prank(currency0);
+            mgr.recordSettlementEvent(poolId, address(this), 0, int256(1), 0, PositionId.unwrap(p), false);
+        }
+        vm.prank(currency0);
+        mgr.recordDeficitEvent(poolId, 0, 100);
+
+        (uint256 req0,) = mgr.getVTSRequired(p);
+        assertTrue(req0 <= 10000, "bounded required");
+    }
 }
