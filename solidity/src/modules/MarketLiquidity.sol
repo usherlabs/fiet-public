@@ -323,12 +323,12 @@ abstract contract MarketLiquidity is IMarketLiquidity {
         }
 
         // Hook for settlement processed integration
-        _onSettlementProcessed(marketId, recipient, amount, marketDeficitBefore, burnTokens);
+        _onDeficitSettled(marketId, recipient, amount, marketDeficitBefore, burnTokens);
     }
 
     // Hooks for protocol-specific integrations (overridden by LCC)
     function _onDeficitQueued(bytes32 marketId, address recipient, uint256 amount, uint64 ts) internal virtual;
-    function _onSettlementProcessed(
+    function _onDeficitSettled(
         bytes32 marketId,
         address recipient,
         uint256 settled,

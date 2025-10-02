@@ -306,6 +306,7 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         _tryTakeFromVaultToLCC(marketId, lccTokenOut, amountOut);
 
         // New liquidity in pool, so we try and settle the outstanding obligations, if any
+        // Maybe call only for lccTokenIn... as lccTokenOut is settled to the LCC acquired by the trader.
         _settleObligations(corePoolKey);
     }
 

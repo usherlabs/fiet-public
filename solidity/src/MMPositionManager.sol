@@ -405,10 +405,10 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
     }
 
     /**
-     * @dev This function is used to settle some assets to the proxy hook of a market specified by the pool key provided
-     * @param poolKey The pool key to settle the underlying assets to the proxy hook
-     * @param underlyingLCC0AmountToTake The amount of underlying token0 to settle to the proxy hook
-     * @param underlyingLCC1AmountToTake The amount of underlying token1 to settle to the proxy hook
+     * @dev This function is used to take some assets from the proxy hook of a market specified by the pool key provided
+     * @param poolKey The pool key to take the underlying assets from the proxy hook
+     * @param underlyingLCC0AmountToTake The amount of underlying token0 to take from the proxy hook
+     * @param underlyingLCC1AmountToTake The amount of underlying token1 to take from the proxy hook
      */
     function _takeUnderlyingAssetFromMarket(
         PoolKey memory poolKey,
