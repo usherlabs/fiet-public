@@ -137,7 +137,7 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
         }
 
         _triggerInternalTracingFlag(key.toId());
-        _recordOutflow(key.toId(), delta);
+        // _recordOutflow(key.toId(), delta); // TODO: Remove this if we do not use \Delta O_A
 
         // Record minimal swap event for on-chain attribution
         (uint160 sqrtPAfter,,,) = StateLibrary.getSlot0(poolManager, key.toId());

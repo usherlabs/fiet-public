@@ -236,15 +236,15 @@ library VTSCalculatorLib {
     /// @return open Whether the RFS is open
     /// @return balanceDelta The balance delta of the amount of required to be settled or allowed to be withdrawn depending on if it is negative or positive
     /// @return usedOracle Whether the oracle was used
-    function getRFS(
+    function calcRFS(
         IVTSEventsReader reader,
         PositionId positionId,
         PositionMeta memory meta,
         IPositionIndex positionIndex,
-        uint256 s0,
-        uint256 s1,
         uint256 c0,
         uint256 c1,
+        uint256 s0,
+        uint256 s1,
         IVTSOracleAdapter oracle
     ) internal view returns (bool, BalanceDelta, bool) {
         (uint256 vtsCurrent0, uint256 vtsCurrent1) = calcVTSCurrent(s0, s1, c0, c1);
