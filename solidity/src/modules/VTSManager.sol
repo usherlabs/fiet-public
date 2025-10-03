@@ -314,6 +314,23 @@ abstract contract VTSManager is IVTSManager {
     }
 
     /// @dev Accrue deficit growth to the global accumulator (per token) using current in-range liquidity
+    /**
+        - Growth accrues globally per swap as a per‑liquidity‑unit increment. Bound (initialised) ticks are only the partition points we flip at to compute “inside” for any range.
+        - “Normalise over liquidity depth” happens implicitly: growth is per unit liquidity, then you multiply by the position’s liquidity to get raw token units; you don’t divide by L again.
+
+        The flow:
+        - On each swap outflow for token A: Δg = outflowA / L_current → add to `deficitGrowthGlobal_A`.
+        - On each initialised tick crossed (both directions): flip `deficitGrowthOutside_A(tick)` for A=0,1.
+        - For a position r = [tickLower, tickUpper]:
+        - `inside_A = global_A − outside_A(lower) − outside_A(upper)`.
+        - `ΔD_attr = (inside_A − insideLast_A(r)) * L(r)` (raw token A units).
+        - Net against in‑market settlements: consume `S_A(r)` first; only `max(0, ΔD_attr − S_A(r))` is added to `cumulativeDeficit_A(r)`.
+        - Update `insideLast_A(r) = inside_A`.
+
+        - VTS_required(r, A) = min(1, `cumulativeDeficit_A(r)` / `C_A(r)`).
+
+        So: deficits are accrued globally per outflow, ticks just enable exact “inside” slice for your bounds, and the position’s attributed deficit is the inside growth times its liquidity, netted against its settled balance.
+     */
     function _accrueDeficitGrowth(
         PoolId corePoolId,
         uint8 token,
