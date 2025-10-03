@@ -139,7 +139,7 @@ abstract contract VTSManager is IVTSManager, VTSEvents {
     }
 
     // --- Event recording (protocol bounds only) ---
-    // Deficits occur on _addSettlementQueue within the LCC.confirmTake -- called whenever liquidity leaves the protocol, and no excess liquidity exists to cover.
+    // Deficits occur on _addToSettlementQueue within the LCC.confirmTake -- called whenever liquidity leaves the protocol, and no excess liquidity exists to cover.
     function recordDeficitEvent(PoolId corePoolId, uint8 token, uint128 deficit)
         external
         onlyMarketAssets(corePoolId)
@@ -180,13 +180,18 @@ abstract contract VTSManager is IVTSManager, VTSEvents {
 
     function recordSwapEvent(
         PoolId corePoolId,
-        uint64 ts,
         uint160 sqrtP_before,
         uint160 sqrtP_after,
-        uint128 out0,
-        uint128 out1
+        BalanceDelta delta,
+        bytes32 swapEventHash
     ) internal {
-        _recordSwap(corePoolId, ts, sqrtP_before, sqrtP_after, out0, out1);
+        // derive outputs as unsigned amounts representing outflows
+        int128 a0 = delta.amount0();
+        int128 a1 = delta.amount1();
+        uint128 out0 = a0 < 0 ? LiquidityUtils.safeInt128ToUint128(a0) : 0;
+        uint128 out1 = a1 < 0 ? LiquidityUtils.safeInt128ToUint128(a1) : 0;
+
+        _recordSwap(corePoolId, uint64(block.timestamp), sqrtP_before, sqrtP_after, out0, out1, swapEventHash);
     }
 
     function getPositionSettledAmounts(PositionId positionId) public view returns (uint256 amount0, uint256 amount1) {

@@ -194,6 +194,7 @@ library VTSCalculatorLib {
         bool settlementsCover = (rTailTs == 0 || rTailTs <= minDeficitTs);
         bool coverageOk = swapsCover && settlementsCover;
 
+        // TODO: Ensure coverage gate is still functional with new ring buffers.
         if (!coverageOk && address(oracle) != address(0)) {
             (vts0, vts1,,,,) = oracle.getVTSRequiredCached(positionId);
             // ? Freshness check: on-chain can compare current getFlushedCounts(poolId) with (swapSeg, deficitSeg, settlementSeg). If chain counts are greater, the oracle is stale; prefer coverage gate or reject.

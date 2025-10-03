@@ -25,9 +25,8 @@ abstract contract VTSEvents is IVTSEventsReader {
     mapping(PoolId => mapping(uint256 => bytes32)) private settlementFlushedRoots;
 
     // --- Events ---
-    event SwapRecorded(
-        PoolId indexed poolId, uint64 ts, uint160 sqrtP_before, uint160 sqrtP_after, uint128 out0, uint128 out1
-    );
+    // Event emitted for SwapRecorded involves supplemental data for the original Swap Event: https://github.com/Uniswap/v4-core/blob/a7cf038cd568801a79a9b4cf92cd5b52c95c8585/src/PoolManager.sol#L241
+    event SwapRecorded(PoolId indexed poolId, bytes32 swapEventHash);
     event DeficitRecorded(PoolId indexed poolId, uint8 token, uint128 deficit, uint64 ts);
     event SettlementRecorded(
         PoolId indexed poolId,
@@ -58,7 +57,8 @@ abstract contract VTSEvents is IVTSEventsReader {
         uint160 sqrtP_before,
         uint160 sqrtP_after,
         uint128 out0,
-        uint128 out1
+        uint128 out1,
+        bytes32 swapEventHash
     ) internal {
         if (EventRing.isFull(swapRing[corePoolId])) {
             _flushSwap(corePoolId);
@@ -66,7 +66,7 @@ abstract contract VTSEvents is IVTSEventsReader {
         uint16 idx = EventRing.acquire(swapRing[corePoolId]);
         swapBuf[corePoolId][idx] =
             SwapEvent({ts: ts, sqrtP_before: sqrtP_before, sqrtP_after: sqrtP_after, out0: out0, out1: out1});
-        emit SwapRecorded(corePoolId, ts, sqrtP_before, sqrtP_after, out0, out1);
+        emit SwapRecorded(corePoolId, swapEventHash);
     }
 
     function _recordDeficit(PoolId corePoolId, uint8 token, uint128 deficit) internal {

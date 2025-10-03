@@ -31,19 +31,11 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
 
     address public immutable underlyingAsset;
     address public immutable marketFactory;
-    bytes32 public immutable defaultMarket = bytes32(0);
 
     // All native underlying liquidity will either be
     mapping(address => bool) public issuers;
 
-    // Define a mapping from
-
     uint256 public uaSupply; // underlying asset supply ONLY within the LCC.
-    // Emitted when LCC issuance is traced to a market during a swap
-
-    event FietSwapSupplement(
-        bytes32 indexed marketId, uint8 indexed tokenIndex, address indexed recipient, uint64 ts, uint256 lccAmount
-    );
 
     modifier onlyIssuer() {
         address caller = msg.sender;
@@ -457,7 +449,7 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
     }
 
     // --- MarketLiquidity hooks overrides ---
-    function _onDeficitQueued(bytes32 marketId, address, /*recipient*/ uint256 amount, uint64 ts)
+    function _onDeficitQueued(bytes32 marketId, address recipient, uint256 amount, uint64 ts)
         internal
         virtual
         override
@@ -466,8 +458,6 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
         uint8 tokenIndex = _resolveTokenIndex(marketId);
         // Record into VTS rings
         IVTSManager(coreHook).recordDeficitEvent(PoolId.wrap(marketId), tokenIndex, uint128(amount));
-        // Emit supplement also, with direction already covered by tokenIndex
-        emit FietSwapSupplement(marketId, tokenIndex, address(0), ts, amount);
     }
 
     function _onDeficitSettled(
@@ -483,12 +473,11 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
             PoolId.wrap(marketId),
             recipient,
             tokenIndex,
-            int256(int256(settled)),
+            int256(settled),
             uint128(marketDeficitBefore),
             bytes32(0),
             burnTokens
         );
-        // Optionally emit a simple mirror event here if desired for indexing; reusing supplement is unnecessary
     }
 
     function toERC20() external view returns (ERC20) {
