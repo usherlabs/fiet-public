@@ -418,10 +418,6 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
 
             // Process the market tracing logic, letting us know where this LCC came from for this particular user
             _trackMarketAcquisition(recipient, currentMarket, amount);
-
-            // Emit supplement for off-chain correlation to Uniswap Swap logs
-            uint8 tokenIndex = _resolveTokenIndex(currentMarket);
-            emit FietSwapSupplement(currentMarket, tokenIndex, recipient, uint64(block.timestamp), amount);
         }
     }
 
@@ -449,34 +445,22 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
     }
 
     // --- MarketLiquidity hooks overrides ---
-    function _onDeficitQueued(bytes32 marketId, address recipient, uint256 amount, uint64 ts)
-        internal
-        virtual
-        override
-    {
+    function _onDeficitQueued(bytes32 marketId, uint256 amount) internal virtual override {
         address coreHook = IMarketFactory(marketFactory).getCoreHook();
         uint8 tokenIndex = _resolveTokenIndex(marketId);
         // Record into VTS rings
         IVTSManager(coreHook).recordDeficitEvent(PoolId.wrap(marketId), tokenIndex, uint128(amount));
     }
 
-    function _onDeficitSettled(
-        bytes32 marketId,
-        address recipient,
-        uint256 settled,
-        uint256 marketDeficitBefore,
-        bool burnTokens
-    ) internal virtual override {
+    function _onDeficitSettled(bytes32 marketId, uint128 settled, uint256 marketDeficitBefore, bool burnTokens)
+        internal
+        virtual
+        override
+    {
         address coreHook = IMarketFactory(marketFactory).getCoreHook();
         uint8 tokenIndex = _resolveTokenIndex(marketId);
         IVTSManager(coreHook).recordSettlementEvent(
-            PoolId.wrap(marketId),
-            recipient,
-            tokenIndex,
-            int256(settled),
-            uint128(marketDeficitBefore),
-            bytes32(0),
-            burnTokens
+            PoolId.wrap(marketId), tokenIndex, int128(settled), uint128(marketDeficitBefore), bytes32(0), burnTokens
         );
     }
 

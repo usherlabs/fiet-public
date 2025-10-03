@@ -208,6 +208,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         PositionId positionId = positionManager.commit(corePoolKey, liquidityParams, liquiditySignal);
 
         // get the current vts for this position
+        // TODO: Change these tests to either depend on VTSCalculator, or ...
         (uint256 vtsCurrent0BeforeSettlement, uint256 vtsCurrent1BeforeSettlement) =
             IVTSManager(coreHookAddress).getVTSCurrent(positionId);
 

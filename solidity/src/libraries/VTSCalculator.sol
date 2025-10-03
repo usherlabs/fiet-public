@@ -134,6 +134,7 @@ library VTSCalculatorLib {
             if (se.marketDeficitBefore == 0) continue;
             if (se.token == 0) {
                 if (Dr0 > 0 && se.settled > 0) {
+                    // TODO: This calculcator needs to be re-written.
                     uint256 settledU = uint256(se.settled);
                     uint256 dec = (Dr0 * settledU) / se.marketDeficitBefore;
                     Dr0 = Dr0 > dec ? (Dr0 - dec) : 0;

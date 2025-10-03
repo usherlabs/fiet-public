@@ -73,7 +73,7 @@ contract VTSCalculatorTest is Test {
 
         // Proactive settle by p1: +300
         vm.prank(currency0);
-        mgr.recordSettlementEvent(poolId, address(this), 0, int256(300), 0, PositionId.unwrap(p1), false);
+        mgr.recordSettlementEvent(poolId, address(this), 0, int128(300), 0, PositionId.unwrap(p1), false);
 
         // Deficit 1000 for token0
         vm.warp(200);
@@ -95,7 +95,7 @@ contract VTSCalculatorTest is Test {
         // Swap and then negative settlement (withdraw -200)
         _recordSwapAt(100, 0, 10, 1000, 0);
         vm.prank(currency0);
-        mgr.recordSettlementEvent(poolId, address(this), 0, int256(-200), 0, PositionId.unwrap(p1), false);
+        mgr.recordSettlementEvent(poolId, address(this), 0, int128(-200), 0, PositionId.unwrap(p1), false);
 
         vm.prank(currency0);
         mgr.recordDeficitEvent(poolId, 0, 500);
@@ -115,9 +115,9 @@ contract VTSCalculatorTest is Test {
 
         // +500 then -200 => net +300 credit
         vm.prank(currency0);
-        mgr.recordSettlementEvent(poolId, address(this), 0, int256(500), 0, PositionId.unwrap(p1), false);
+        mgr.recordSettlementEvent(poolId, address(this), 0, int128(500), 0, PositionId.unwrap(p1), false);
         vm.prank(currency0);
-        mgr.recordSettlementEvent(poolId, address(this), 0, int256(-200), 0, PositionId.unwrap(p1), false);
+        mgr.recordSettlementEvent(poolId, address(this), 0, int128(-200), 0, PositionId.unwrap(p1), false);
 
         vm.prank(currency0);
         mgr.recordDeficitEvent(poolId, 0, 1000);
@@ -136,7 +136,7 @@ contract VTSCalculatorTest is Test {
 
         // proactive settle for token1
         vm.prank(currency1);
-        mgr.recordSettlementEvent(poolId, address(this), 1, int256(400), 0, PositionId.unwrap(p), false);
+        mgr.recordSettlementEvent(poolId, address(this), 1, int128(400), 0, PositionId.unwrap(p), false);
 
         vm.prank(currency1);
         mgr.recordDeficitEvent(poolId, 1, 1000);
@@ -153,7 +153,7 @@ contract VTSCalculatorTest is Test {
         // Push more settlements than ring to exercise flush/truncation paths
         for (uint256 i = 0; i < 200; i++) {
             vm.prank(currency0);
-            mgr.recordSettlementEvent(poolId, address(this), 0, int256(1), 0, PositionId.unwrap(p), false);
+            mgr.recordSettlementEvent(poolId, address(this), 0, int128(1), 0, PositionId.unwrap(p), false);
         }
         vm.prank(currency0);
         mgr.recordDeficitEvent(poolId, 0, 100);

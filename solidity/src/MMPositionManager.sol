@@ -85,13 +85,8 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
     function settle(PositionId positionId, uint256 amount0, uint256 amount1) public {
         PositionInfo memory position = positions[positionId];
         // make sure only the owner can settle the position
-        if (position.owner != msg.sender) {
+        if (position.owner != msg.sender || !position.isActive) {
             revert InvalidPositionId(positionId);
-        }
-
-        // make sure the position is active
-        if (!position.isActive) {
-            revert InactivePosition(positionId);
         }
 
         // settle the underlying assets to the proxy hook
@@ -107,12 +102,8 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
     function withdraw(PositionId positionId, uint256 amount0, uint256 amount1) public {
         PositionInfo memory position = positions[positionId];
         // make sure only the owner can withdraw the position
-        if (position.owner != msg.sender) {
+        if (position.owner != msg.sender || !position.isActive) {
             revert InvalidPositionId(positionId);
-        }
-        // make sure the position is active
-        if (!position.isActive) {
-            revert InactivePosition(positionId);
         }
 
         // validate that there is no open RFS for this position
@@ -260,7 +251,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
     function decommitPosition(PositionId positionId) public returns (BalanceDelta) {
         PositionInfo memory position = positions[positionId];
         // make sure only the owner can take back the commitment(s) attached to provided token id
-        if (position.owner != msg.sender) {
+        if (position.owner != msg.sender || !position.isActive) {
             revert InvalidPositionId(positionId);
         }
 
@@ -320,7 +311,6 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         returns (uint256 lccUnderlyingAmount0, uint256 lccUnderlyingAmount1)
     {
         // get the base vts of the currencies from the pool configuration
-        address coreHook = _getCoreHook();
         MarketVTSConfiguration memory vtsConfiguration = IVTSManager(coreHook).getMarketVTSConfiguration(poolKey.toId());
 
         // get the amount of underlying liquidity to transfer from the issuer to the lcc
@@ -407,7 +397,6 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         IProxyHook(proxyHook).onMMLiquidityModify(lcc0.underlyingAsset(), lcc1.underlyingAsset(), balanceDelta);
 
         // notify the vts manager of the settlement made for this position
-        address coreHook = _getCoreHook();
         IVTSManager(coreHook).onMMLiquidityModify(positionId, balanceDelta);
     }
 
@@ -440,7 +429,6 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         IProxyHook(proxyHook).onMMLiquidityModify(lcc0.underlyingAsset(), lcc1.underlyingAsset(), balanceDelta);
 
         // notify the vts manager of the settlement made for this position
-        address coreHook = _getCoreHook();
         IVTSManager(coreHook).onMMLiquidityModify(positionId, balanceDelta);
 
         // transfer from this contract to the actual recipient

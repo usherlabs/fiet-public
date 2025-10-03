@@ -23,7 +23,7 @@ struct DeficitEvent {
 struct SettlementEvent {
     uint64 ts;
     uint8 token; // 0 or 1
-    int256 settled;
+    int128 settled;
     uint128 marketDeficitBefore;
     bytes32 positionId;
 }

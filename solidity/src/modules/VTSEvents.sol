@@ -29,9 +29,8 @@ abstract contract VTSEvents is IVTSEventsReader {
     event DeficitRecorded(PoolId indexed poolId, uint8 token, uint128 deficit, uint64 ts);
     event SettlementRecorded(
         PoolId indexed poolId,
-        address recipient,
         uint8 token,
-        int256 settled,
+        int128 settled,
         uint128 marketDeficitBefore,
         bytes32 positionId,
         uint64 ts,
@@ -79,9 +78,8 @@ abstract contract VTSEvents is IVTSEventsReader {
 
     function _recordSettlement(
         PoolId corePoolId,
-        address recipient,
         uint8 token,
-        int256 settled,
+        int128 settled,
         uint128 marketDeficitBefore,
         bytes32 positionId,
         bool burnTokens
@@ -98,7 +96,7 @@ abstract contract VTSEvents is IVTSEventsReader {
             positionId: positionId
         });
         emit SettlementRecorded(
-            corePoolId, recipient, token, settled, marketDeficitBefore, positionId, uint64(block.timestamp), burnTokens
+            corePoolId, token, settled, marketDeficitBefore, positionId, uint64(block.timestamp), burnTokens
         );
     }
 

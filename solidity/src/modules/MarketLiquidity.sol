@@ -158,7 +158,7 @@ abstract contract MarketLiquidity is IMarketLiquidity {
         marketTotalSettlementDeficit[marketId] += amount;
 
         // Hook for deficit event integration
-        _onDeficitQueued(marketId, recipient, amount, uint64(block.timestamp));
+        _onDeficitQueued(marketId, amount);
     }
 
     /**
@@ -323,18 +323,15 @@ abstract contract MarketLiquidity is IMarketLiquidity {
         }
 
         // Hook for settlement processed integration
-        _onDeficitSettled(marketId, recipient, amount, marketDeficitBefore, burnTokens);
+        // TODO: Change amounts to use leaner data types for gas efficiency. Uv4 BalanceDelta uses int128 for amounts...
+        _onDeficitSettled(marketId, uint128(amount), marketDeficitBefore, burnTokens);
     }
 
     // Hooks for protocol-specific integrations (overridden by LCC)
-    function _onDeficitQueued(bytes32 marketId, address recipient, uint256 amount, uint64 ts) internal virtual;
-    function _onDeficitSettled(
-        bytes32 marketId,
-        address recipient,
-        uint256 settled,
-        uint256 marketDeficitBefore,
-        bool burnTokens
-    ) internal virtual;
+    function _onDeficitQueued(bytes32 marketId, uint256 amount) internal virtual;
+    function _onDeficitSettled(bytes32 marketId, uint128 settled, uint256 marketDeficitBefore, bool burnTokens)
+        internal
+        virtual;
 
     /**
      * @dev Pays an outstanding settlement to a user and burn their underlying tokens

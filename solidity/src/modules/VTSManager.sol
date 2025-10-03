@@ -25,6 +25,8 @@ import {IVTSOracleAdapter} from "../interfaces/IVTSOracleAdapter.sol";
 import {toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 // import {IMMPositionManager} from "../interfaces/IMMPositionManager.sol";
 
+import {LiquidityUtils} from "../libraries/LiquidityUtils.sol";
+
 abstract contract VTSManager is IVTSManager, VTSEvents {
     using SafeCastLib for *;
     using TimeBucketOutflowTrackerLibrary for TimeBucketOutflowTracker;
@@ -91,7 +93,7 @@ abstract contract VTSManager is IVTSManager, VTSEvents {
         _;
     }
 
-    modifier onlyMMP(){
+    modifier onlyMMP() {
         if (msg.sender != mmPositionManager) {
             revert InvalidCaller();
         }
@@ -161,14 +163,13 @@ abstract contract VTSManager is IVTSManager, VTSEvents {
     // ? If position is known, and liquidity IN, then liquidity derived from MM settlements.
     function recordSettlementEvent(
         PoolId corePoolId,
-        address recipient,
         uint8 token,
-        int256 settled,
+        int128 settled,
         uint128 marketDeficitBefore,
         bytes32 positionId,
         bool burnTokens
     ) external onlyMarketAssets(corePoolId) {
-        _recordSettlement(corePoolId, recipient, token, settled, marketDeficitBefore, positionId, burnTokens);
+        _recordSettlement(corePoolId, token, settled, marketDeficitBefore, positionId, burnTokens);
         // if (token == 0) {
         //     uint256 d0 = marketDeficitOutstanding[corePoolId][0];
         //     marketDeficitOutstanding[corePoolId][0] = settled > d0 ? 0 : (d0 - uint256(settled));
@@ -178,12 +179,9 @@ abstract contract VTSManager is IVTSManager, VTSEvents {
         // }
     }
 
-    function recordSwapEvent(
-        PoolId corePoolId,
-        uint160 sqrtP_before,
-        uint160 sqrtP_after,
-        BalanceDelta delta
-    ) internal {
+    function recordSwapEvent(PoolId corePoolId, uint160 sqrtP_before, uint160 sqrtP_after, BalanceDelta delta)
+        internal
+    {
         // derive outputs as unsigned amounts representing outflows
         int128 a0 = delta.amount0();
         int128 a1 = delta.amount1();
@@ -338,7 +336,11 @@ abstract contract VTSManager is IVTSManager, VTSEvents {
      * @param positionId The id of the position
      * @param balanceDelta The balance delta of the settlement
      */
-    function onMMLiquidityModify(PositionId positionId, BalanceDelta balanceDelta) external onlyMMP isPositionValid(positionId) {
+    function onMMLiquidityModify(PositionId positionId, BalanceDelta balanceDelta)
+        external
+        onlyMMP
+        isPositionValid(positionId)
+    {
         int128 amount0 = balanceDelta.amount0();
         int128 amount1 = balanceDelta.amount1();
 
@@ -367,10 +369,14 @@ abstract contract VTSManager is IVTSManager, VTSEvents {
 
         // Record ring settlement events for both tokens (positive=settle, negative=withdraw)
         if (amount0 != 0) {
-            _recordSettlement(corePoolId, msg.sender, 0, int256(amount0), 0, PositionId.unwrap(positionId), false);
+            _recordSettlement(
+                positionPoolId[positionId], msg.sender, 0, amount0, 0, PositionId.unwrap(positionId), false
+            );
         }
         if (amount1 != 0) {
-            _recordSettlement(corePoolId, msg.sender, 1, int256(amount1), 0, PositionId.unwrap(positionId), false);
+            _recordSettlement(
+                positionPoolId[positionId], msg.sender, 1, amount1, 0, PositionId.unwrap(positionId), false
+            );
         }
 
         // emit an event to notify that the assets have been settled on a position
@@ -454,7 +460,7 @@ abstract contract VTSManager is IVTSManager, VTSEvents {
     {
         (uint256 c0, uint256 c1) = (commitmentMaxima[positionId][0], commitmentMaxima[positionId][1]);
         if (c0 == 0 && c1 == 0) {
-            revert InvalidPosition(_positionId);
+            revert InvalidPosition(positionId);
         }
         return (c0, c1);
     }
@@ -465,7 +471,7 @@ abstract contract VTSManager is IVTSManager, VTSEvents {
      * @return rfsOpen Whether the RFS is open
      * @return balanceDelta The balance delta of the amount of required to be settled or allowed to be withdrawn depending on if it is negative or positive
      */
-    function getRFS(PositionId _positionId) public view returns (bool, BalanceDelta) isPositionValid(_positionId) {
+    function getRFS(PositionId _positionId) public view isPositionValid(_positionId) returns (bool, BalanceDelta) {
         // Commitment caps
         (uint256 c0, uint256 c1) = _getCommitment(_positionId);
 
@@ -496,8 +502,9 @@ abstract contract VTSManager is IVTSManager, VTSEvents {
         // uint256 aggD1 = 0;
         // (uint256 totalOutflow0, uint256 totalOutflow1) = getMarketOutflow(corePoolId);
 
-        (bool rfsOpen, BalanceDelta balanceDelta,) =
-            VTSCalculatorLib.calcRFS(this, _positionId, meta, positionIndex, c0, c1, s0, s1, oracleAdapter);
+        (bool rfsOpen, BalanceDelta balanceDelta,) = VTSCalculatorLib.calcRFS(
+            this, _positionId, positionIndex.getMeta(_positionId), positionIndex, c0, c1, s0, s1, oracleAdapter
+        );
         return (rfsOpen, balanceDelta);
     }
 

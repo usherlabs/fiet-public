@@ -31,9 +31,8 @@ interface IVTSManager {
 
     function recordSettlementEvent(
         PoolId corePoolId,
-        address recipient,
         uint8 token,
-        int256 settled,
+        int128 settled,
         uint128 marketDeficitBefore,
         bytes32 positionId,
         bool burnTokens

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
+pragma solidity ^0.8.20;
 
 // Mock implementation of MarketSettlementQueue for testing purposes.
 // This contract provides a concrete implementation of the abstract MarketSettlementQueue
@@ -15,6 +15,9 @@ contract MockSettlementQueue is MarketLiquidity {
     address public mockAsset;
     // Track total amount transferred for verification
     uint256 public totalTransferred;
+
+    uint256 public deficitQueued;
+    uint256 public deficitSettled;
 
     event MockTransfer(address indexed user, uint256 amount);
 
@@ -84,7 +87,11 @@ contract MockSettlementQueue is MarketLiquidity {
     }
 
     // --- Required hooks (no-op for testing) ---
-    function _onDeficitQueued(bytes32, address, uint256, uint64) internal override {}
+    function _onDeficitQueued(bytes32, uint256) internal override {
+        deficitQueued++;
+    }
 
-    function _onSettlementProcessed(bytes32, address, uint256, uint256, bool) internal override {}
+    function _onDeficitSettled(bytes32, uint128, uint256, bool) internal override {
+        deficitSettled++;
+    }
 }
