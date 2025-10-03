@@ -309,7 +309,7 @@ abstract contract VTSManager is IVTSManager {
     }
 
     /// @notice Called by the hook on tick cross to flip outside growth for a tick
-    function onTickCross(PoolId corePoolId, int24 tick, uint8 token) external {
+    function _onTickCross(PoolId corePoolId, int24 tick, uint8 token) internal {
         _flipDeficitGrowthOutside(corePoolId, tick, token);
     }
 

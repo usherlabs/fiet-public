@@ -181,8 +181,8 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
                         if (next >= tickAfter) break;
                     }
                     if (initialized) {
-                        onTickCross(key.toId(), next, 0);
-                        onTickCross(key.toId(), next, 1);
+                        _onTickCross(key.toId(), next, 0);
+                        _onTickCross(key.toId(), next, 1);
                     }
                     stepTick = next;
                 }
