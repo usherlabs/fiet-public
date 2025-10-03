@@ -26,7 +26,6 @@ abstract contract VTSEvents is IVTSEventsReader {
 
     // --- Events ---
     // Event emitted for SwapRecorded involves supplemental data for the original Swap Event: https://github.com/Uniswap/v4-core/blob/a7cf038cd568801a79a9b4cf92cd5b52c95c8585/src/PoolManager.sol#L241
-    event SwapRecorded(PoolId indexed poolId, bytes32 swapEventHash);
     event DeficitRecorded(PoolId indexed poolId, uint8 token, uint128 deficit, uint64 ts);
     event SettlementRecorded(
         PoolId indexed poolId,
@@ -57,8 +56,7 @@ abstract contract VTSEvents is IVTSEventsReader {
         uint160 sqrtP_before,
         uint160 sqrtP_after,
         uint128 out0,
-        uint128 out1,
-        bytes32 swapEventHash
+        uint128 out1
     ) internal {
         if (EventRing.isFull(swapRing[corePoolId])) {
             _flushSwap(corePoolId);
@@ -66,7 +64,8 @@ abstract contract VTSEvents is IVTSEventsReader {
         uint16 idx = EventRing.acquire(swapRing[corePoolId]);
         swapBuf[corePoolId][idx] =
             SwapEvent({ts: ts, sqrtP_before: sqrtP_before, sqrtP_after: sqrtP_after, out0: out0, out1: out1});
-        emit SwapRecorded(corePoolId, swapEventHash);
+
+        // No emit event, as we can reconstruct from the native swap event...
     }
 
     function _recordDeficit(PoolId corePoolId, uint8 token, uint128 deficit) internal {
@@ -113,7 +112,7 @@ abstract contract VTSEvents is IVTSEventsReader {
         for (uint16 i = 0; i < count; i++) {
             uint16 idx = (start + i) & (cap - 1);
             SwapEvent storage e = swapBuf[poolId][idx];
-            h = keccak256(abi.encodePacked(h, e.ts, e.sqrtP_before, e.sqrtP_after, e.out0, e.out1));
+            h = keccak256(abi.encodePacked(h, e.ts, e.sqrtP_before, e.sqrtP_after, e.out0, e.out1)); // ? NOTE: Off-chain reconstruction must utilise native swap events to derive these values. ts from block, etc.
         }
         uint256 seg = swapFlushCount[poolId]++;
         swapFlushedRoots[poolId][seg] = h;

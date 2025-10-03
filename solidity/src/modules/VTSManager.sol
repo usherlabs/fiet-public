@@ -182,8 +182,7 @@ abstract contract VTSManager is IVTSManager, VTSEvents {
         PoolId corePoolId,
         uint160 sqrtP_before,
         uint160 sqrtP_after,
-        BalanceDelta delta,
-        bytes32 swapEventHash
+        BalanceDelta delta
     ) internal {
         // derive outputs as unsigned amounts representing outflows
         int128 a0 = delta.amount0();
@@ -191,7 +190,7 @@ abstract contract VTSManager is IVTSManager, VTSEvents {
         uint128 out0 = a0 < 0 ? LiquidityUtils.safeInt128ToUint128(a0) : 0;
         uint128 out1 = a1 < 0 ? LiquidityUtils.safeInt128ToUint128(a1) : 0;
 
-        _recordSwap(corePoolId, uint64(block.timestamp), sqrtP_before, sqrtP_after, out0, out1, swapEventHash);
+        _recordSwap(corePoolId, uint64(block.timestamp), sqrtP_before, sqrtP_after, out0, out1);
     }
 
     function getPositionSettledAmounts(PositionId positionId) public view returns (uint256 amount0, uint256 amount1) {

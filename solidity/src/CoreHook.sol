@@ -124,13 +124,13 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
         return (this.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
     }
 
-    function _afterSwap(
-        address sender,
-        PoolKey calldata key,
-        SwapParams calldata params,
-        BalanceDelta delta,
-        bytes calldata
-    ) internal virtual override whenNotPaused(key.toId()) returns (bytes4, int128) {
+    function _afterSwap(address sender, PoolKey calldata key, SwapParams calldata, BalanceDelta delta, bytes calldata)
+        internal
+        virtual
+        override
+        whenNotPaused(key.toId())
+        returns (bytes4, int128)
+    {
         address proxyHook = _getProxyHook(key);
 
         // Check if this is a direct core pool swap, and if it is, call the proxy hook
@@ -143,19 +143,7 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
 
         // Record minimal swap event for on-chain attribution
         PoolId pId = key.toId();
-        (uint160 sqrtPAfter, int24 tick, uint24 protocolFeeAmount, uint24 lpFee) =
-            StateLibrary.getSlot0(poolManager, pId);
-        // Read and extract directional protocol fee (from the same slot0)
-        uint16 protocolFee = params.zeroForOne
-            ? ProtocolFeeLibrary.getZeroForOneFee(protocolFeeAmount)
-            : ProtocolFeeLibrary.getOneForZeroFee(protocolFeeAmount);
-
-        // Calculate effective swapFee (as before)
-        uint24 swapFee = ProtocolFeeLibrary.calculateSwapFee(protocolFee, lpFee);
-        uint128 liquidity = StateLibrary.getLiquidity(poolManager, pId);
-        // compute hash of the original Uniswap v4 Swap event fields - https://github.com/Uniswap/v4-core/blob/a7cf038cd568801a79a9b4cf92cd5b52c95c8585/src/PoolManager.sol#L241
-        bytes32 swapEventHash =
-            keccak256(abi.encode(pId, sender, delta.amount0(), delta.amount1(), sqrtPAfter, liquidity, tick, swapFee));
+        (uint160 sqrtPAfter,,,) = StateLibrary.getSlot0(poolManager, pId);
 
         // load sqrtP_before from transient storage
         uint160 sqrtPBefore;
@@ -164,7 +152,7 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
             sqrtPBefore := tload(slot)
         }
         // Called from VTSManager
-        recordSwapEvent(key.toId(), sqrtPBefore, sqrtPAfter, delta, swapEventHash);
+        recordSwapEvent(key.toId(), sqrtPBefore, sqrtPAfter, delta);
         return (this.afterSwap.selector, 0);
     }
 
