@@ -1,6 +1,6 @@
-# Value-to-Signal Model — Revision Research #2: Continued — @Yesterday 20:48
+# Value-to-Signal Model — Revision Research #2: Continued — @Thursday 20:48
 
-Continuation of [Value-to-Signal Model — Revision Research #2 — 24 September 2025 17:47 ](https://www.notion.so/Value-to-Signal-Model-Revision-Research-2-2786d8286da580ff9286d24a698cc223?pvs=21) 
+Continuation of [Value-to-Signal Model — Revision Research #2 — 24 September 2025 17:47](https://www.notion.so/Value-to-Signal-Model-Revision-Research-2-2786d8286da580ff9286d24a698cc223?pvs=21) 
 
 ---
 
@@ -60,21 +60,51 @@ This model is efficient, with attributions on-demand, ensuring market makers set
 
 ---
 
-### Simplification of the VTS equations
+### Important Clarifications
 
-$$
-VTS_{current}(r, A) = \frac{S_A(r) + \Delta I_A(r)}{C_A(r)}
-$$
-
-$$
-VTS_{required}(r, A) = \min\left(1, \frac{D_A(r) + \max\left(0, \Delta O_A(r) - S_A(r)\right)}{C_A(r)}\right)
-$$
-
-Where:
-
-- $S_A(r)$ is the settled liquidity for token $A$ in position $r$.
-- $\Delta I_A(r) = w(r) \cdot \Delta I_A$ is the apportioned inflow for token $A$ over the window.
-- $D_A(r)$ is the existing deficit for token $A$ in position $r$.
-- $\Delta O_A(r) = w(r) \cdot \Delta O_A$ is the apportioned outflow for token $A$ over the window.
-- $C_A(r)$ is the committed liquidity for token $A$ in position $r$.
-- $w(r) = \frac{L(r)}{\sum L(r')}$ is the liquidity weight over active positions $r′$.
+1. LCCs are ONLY issued when 
+    1. User deposits their native assets into Fiet Protocol, and receives an equal amount of LCCs representing their deposits.
+    2. Market Makers prove solvency of liquidity reserves, enabling the protocol to issue LCCs relative to this total amount, whereby these LCCs are immediately used to create a liquidity position within the AMM pool/market.
+2. Within the Fiet Protocol, liquidity is structured into separate pools labelled as “in-market” and “out-of-market” liquidity.
+    1. Each market (AMM pool) in Fiet includes a `MarketVault` containing the two tokens. LCCs are that deposited into the `MarketVault` consider their underlying native asset liquidity as “in-market”.
+    2. Each LCC maintains a reserve of the underlying native asset that is represents (eg. USDC reserve for lcc-USDC). Assets that reside here are “out-of-market”, and remain isolated to ensure that liquidity received from markets can be unwrapped/settled accordingly.
+3. This means $\Delta O_A$ and $\Delta I_A$ represents the outflows/inflows of liquidity to a market’s vault (`MarketVault`). 
+    1. Therefore, swap-related data is representative of $\Delta O_A$ and $\Delta I_A$ produced by Traders.
+    2. Market Makers contribute to $\Delta O_A$ and $\Delta I_A$ through their settlement/withdraw mechanics.
+4. Deficits $D_A(r)$ accrue when $\Delta O_A(r) > S_A(r)$. 
+    1. This is regardless of whether the protocol has liquidity available, both “in-market” and “out-of-market”, to cover $\Delta O_A$ apportioned to position $r$ (ie. $\Delta O_A(r)$).
+    2. If the protocol does not have the liquidity, then recipient of the LCCs must await for $D_A(r)$ to be filled by the MM.
+    3. Therefore, 
+        
+        $$
+        D_A(r) = D_A(r, t) + \max\left(0, (\sum_{\text{since t}} \Delta O_A(r)) - S_A(r)\right)
+        $$
+        
+    4. **Note:** the $\Delta$ in $\Delta O_A$ refers to the change in liquidity relative **to a single swap.** 
+    
+    The problem on implementation is apportioning to position $r$.
+    
+    We only know $w(r_i) = \frac{L(r_i)}{\sum L(r')}$, however, offers an approximation at best, and skips positions that were in range at $i_{before}$ but not at $i_{after}$.
+    
+    Therefore, we could allocate the deficit to the tick range $D_A(i_{before}, i_{after})$ per swap, and then
+    
+    $$
+    D_A(r) = \sum D_A(i_{before}, i_{after}) \space \text{ where } r_l \leq i < r_u
+    $$
+    
+    However, it will involve tick iteration.
+    
+    Assuming we take this approach, then:
+    
+    $$
+    D_A(i) = \max\left(0, \Delta O_A - S_A(r)\right)
+    $$
+    
+    Where $w(r) = \frac{L(r)}{\sum L(r')}$
+    
+    Regardless of the approach
+    
+    $$
+    VTS_{required} = \min\left(1, \frac{D_A(r)}{C_A(r)} \right)
+    $$
+    

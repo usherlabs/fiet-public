@@ -3,14 +3,10 @@
 pragma solidity ^0.8.26;
 
 import {MarketVTSConfiguration} from "../types/VTS.sol";
-import {EventRing} from "../libraries/EventRing.sol";
-import {VTSEvents} from "./VTSEvents.sol";
-import {VTSCalculatorLib} from "../libraries/VTSCalculator.sol";
 import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
 import {IPositionIndex, PositionMeta} from "../interfaces/IPositionIndex.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
-import {TimeBucketOutflowTracker, TimeBucketOutflowTrackerLibrary} from "../libraries/TimeBucket.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {SafeCastLib} from "v4-periphery/lib/v4-core/lib/solmate/src/utils/SafeCastLib.sol";
 import {PositionLibrary, PositionId} from "../types/Position.sol";
@@ -25,35 +21,33 @@ import {IVTSOracleAdapter} from "../interfaces/IVTSOracleAdapter.sol";
 import {toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 // import {IMMPositionManager} from "../interfaces/IMMPositionManager.sol";
 
-import {LiquidityUtils} from "../libraries/LiquidityUtils.sol";
+import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 
-abstract contract VTSManager is IVTSManager, VTSEvents {
+abstract contract VTSManager is IVTSManager {
     using SafeCastLib for *;
-    using TimeBucketOutflowTrackerLibrary for TimeBucketOutflowTracker;
     using StateLibrary for IPoolManager;
     using TransientStateLibrary for IPoolManager;
-    using EventRing for EventRing.Ring;
 
     // Mapping from core pool ID to VTS configuration
     mapping(PoolId => MarketVTSConfiguration) public corePoolToVTSConfiguration;
-    // Mapping from core pool ID to rolling outflow tracker
-    mapping(PoolId => TimeBucketOutflowTracker) public marketOutflow;
-    // Event ring storage and flush roots now live in VTSEvents
+    // Event ring/outflow tracking removed in favour of deficit growth accounting
     // Mapping to store maximum potential commitment for each position
     mapping(PositionId => uint256[2]) internal commitmentMaxima;
     // Mapping to store the total settlement amount for each position
     mapping(PositionId => uint256[2]) internal totalSettlementAmount;
-    // // Pool-wide aggregates (market-level; future refinement to in-range tracking)
-    // // Total settled amounts across positions for each token (MM settlements path)
-    // mapping(PoolId => uint256[2]) internal marketSettled;
-    // // Total committed maxima across positions for each token
-    // mapping(PoolId => uint256[2]) internal marketCommitted;
-    // // Outstanding market deficit per token (queued deficits minus settlements)
-    // mapping(PoolId => uint256[2]) internal marketDeficitOutstanding;
+    // Deficit growth accounting (Uniswap v3-style growth per liquidity unit, Q128)
+    uint256 internal constant Q128 = 1 << 128;
+    // Per-market (pool) global deficit growth per token (token0, token1)
+    mapping(PoolId => uint256[2]) internal deficitGrowthGlobal;
+    // Per-market per-tick outside deficit growth per token
+    mapping(PoolId => mapping(int24 => uint256[2]))
+        internal deficitGrowthOutside;
+    // Per-position last inside deficit growth snapshot per token
+    mapping(PositionId => uint256[2]) internal deficitGrowthInsideLast;
+    // Per-position cumulative deficit (in raw token units)
+    mapping(PositionId => uint256[2]) internal cumulativeDeficit;
     // Mapping from position to its core pool id (for reading window outflows)
     mapping(PositionId => PoolId) internal positionPoolId;
-    // Deprecated: previous per-position committed-at-add amounts (replaced by commitmentMaxima)
-    // mapping(PositionId => uint256[2]) internal commitment;
 
     error InvalidCaller();
     error InvalidMarketVTSConfiguration(PoolId corePoolId);
@@ -61,7 +55,10 @@ abstract contract VTSManager is IVTSManager, VTSEvents {
     error InvalidPosition(PositionId positionId);
 
     // Event to notify that the VTS configuration has been set/initialized for a core pool
-    event MarketVTSConfigurationSet(PoolId indexed corePoolId, MarketVTSConfiguration indexed vtsConfiguration);
+    event MarketVTSConfigurationSet(
+        PoolId indexed corePoolId,
+        MarketVTSConfiguration indexed vtsConfiguration
+    );
     // Per-entry events are declared in VTSEvents
 
     address private immutable marketFactory;
@@ -77,8 +74,10 @@ abstract contract VTSManager is IVTSManager, VTSEvents {
     }
 
     modifier onlyMarketAssets(PoolId corePoolId) {
-        address[2] memory currencies = IMarketFactory(marketFactory).corePoolToCurrencyPair(corePoolId);
-        if (msg.sender != currencies[0] && msg.sender != currencies[1]) revert InvalidCaller();
+        address[2] memory currencies = IMarketFactory(marketFactory)
+            .corePoolToCurrencyPair(corePoolId);
+        if (msg.sender != currencies[0] && msg.sender != currencies[1])
+            revert InvalidCaller();
         _;
     }
 
@@ -98,7 +97,12 @@ abstract contract VTSManager is IVTSManager, VTSEvents {
         _;
     }
 
-    constructor(address _poolManager, address _marketFactory, address _mmPositionManager, address _calculator) {
+    constructor(
+        address _poolManager,
+        address _marketFactory,
+        address _mmPositionManager,
+        address _calculator
+    ) {
         poolManager = IPoolManager(_poolManager);
         marketFactory = _marketFactory;
         mmPositionManager = _mmPositionManager;
@@ -112,18 +116,11 @@ abstract contract VTSManager is IVTSManager, VTSEvents {
      * @param corePoolId The core pool ID
      * @param vtsConfiguration The VTS configuration
      */
-    function setMarketVTSConfiguration(PoolId corePoolId, MarketVTSConfiguration memory vtsConfiguration)
-        public
-        onlyMarketFactory
-    {
+    function setMarketVTSConfiguration(
+        PoolId corePoolId,
+        MarketVTSConfiguration memory vtsConfiguration
+    ) public onlyMarketFactory {
         corePoolToVTSConfiguration[corePoolId] = vtsConfiguration;
-        marketOutflow[corePoolId].initialize(vtsConfiguration.timeWindow);
-        (uint16 defaultSwap, uint16 defaultDeficit, uint16 defaultSettlement) = VTSCalculatorLib.getSizeDefaults();
-        // If a ring size is zero, use default; else use provided
-        uint16 spsz = vtsConfiguration.swapRingSize == 0 ? defaultSwap : vtsConfiguration.swapRingSize;
-        uint16 dsz = vtsConfiguration.deficitRingSize == 0 ? defaultDeficit : vtsConfiguration.deficitRingSize;
-        uint16 ssz = vtsConfiguration.settlementRingSize == 0 ? defaultSettlement : vtsConfiguration.settlementRingSize;
-        _initRings(corePoolId, spsz, dsz, ssz);
 
         emit MarketVTSConfigurationSet(corePoolId, vtsConfiguration);
     }
@@ -133,52 +130,22 @@ abstract contract VTSManager is IVTSManager, VTSEvents {
         positionIndex = IPositionIndex(index);
     }
 
-    // TODO: Should be onlyOwner...
-    function setOracleAdapter(address adapter) external onlyMarketFactory {
-        oracleAdapter = IVTSOracleAdapter(adapter);
-    }
-
-    // --- Event recording (protocol bounds only) ---
-    // Deficits occur on _addToSettlementQueue within the LCC.confirmTake -- called whenever liquidity leaves the protocol, and no excess liquidity exists to cover.
-    function recordDeficitEvent(PoolId corePoolId, uint8 token, uint128 deficit)
-        external
-        onlyMarketAssets(corePoolId)
-    {
-        _recordDeficit(corePoolId, token, deficit);
-        // if (token == 0) {
-        //     marketDeficitOutstanding[corePoolId][0] += uint256(deficit);
-        // } else {
-        //     marketDeficitOutstanding[corePoolId][1] += uint256(deficit);
-        // }
-    }
-
-    // Settlements occur whenever liquidity in/out of the protocol.
-    // Positive settled amount is IN, and negative is OUT.
-    // ? If position is unknown, and liquidity OUT, then deficits are processed by pool - ie. via _annulUserSettlement (LCC re-use), or _processSettlementQueue (within MarketVault.settleObligations)
-    //      MarketVault.settleObligations is called whenever new liquidity enters on the protocol - ie. via DirectSwap, MM Settlement, DirectLP AddLiquidity
-    // ? If position is known, and liquidity OUT, then liquidity derived from MM withdrawals.
-    // ? If position is unknown, and liquidity IN, then liquidity derived from swaps, etc.
-    // ? If position is known, and liquidity IN, then liquidity derived from MM settlements.
-    function recordSettlementEvent(
+    // TODO: Add bounds to this function if it is necessary.
+    function recordDeficitEvent(
         PoolId corePoolId,
         uint8 token,
-        int128 settled,
-        uint128 marketDeficitBefore,
-        bytes32 positionId,
-        bool burnTokens
-    ) external onlyMarketAssets(corePoolId) {
-        _recordSettlement(corePoolId, token, settled, marketDeficitBefore, positionId, burnTokens);
-        // if (token == 0) {
-        //     uint256 d0 = marketDeficitOutstanding[corePoolId][0];
-        //     marketDeficitOutstanding[corePoolId][0] = settled > d0 ? 0 : (d0 - uint256(settled));
-        // } else {
-        //     uint256 d1 = marketDeficitOutstanding[corePoolId][1];
-        //     marketDeficitOutstanding[corePoolId][1] = settled > d1 ? 0 : (d1 - uint256(settled));
-        // }
+        uint128 deficit
+    ) external {
+        _accrueDeficitGrowth(corePoolId, token, uint256(deficit));
     }
 
-    function getPositionSettledAmounts(PositionId positionId) public view returns (uint256 amount0, uint256 amount1) {
-        return (totalSettlementAmount[positionId][0], totalSettlementAmount[positionId][1]);
+    function getPositionSettledAmounts(
+        PositionId positionId
+    ) public view returns (uint256 amount0, uint256 amount1) {
+        return (
+            totalSettlementAmount[positionId][0],
+            totalSettlementAmount[positionId][1]
+        );
     }
 
     /**
@@ -186,18 +153,21 @@ abstract contract VTSManager is IVTSManager, VTSEvents {
      * @param corePoolId The core pool ID
      * @return The VTS configuration
      */
-    function getMarketVTSConfiguration(PoolId corePoolId) public view returns (MarketVTSConfiguration memory) {
+    function getMarketVTSConfiguration(
+        PoolId corePoolId
+    ) public view returns (MarketVTSConfiguration memory) {
         return corePoolToVTSConfiguration[corePoolId];
     }
 
     /// @dev Register/update position metadata and liquidity snapshots in the PositionIndex
-    function _touchPositionIndex(address router, PoolId corePoolId, ModifyLiquidityParams calldata params)
-        internal
-        returns (bytes32 _positionId)
-    {
-        if (address(positionIndex) == address(0)){
-            return bytes32(0);
-        };
+    function _touchPositionIndex(
+        address router,
+        PoolId corePoolId,
+        ModifyLiquidityParams calldata params
+    ) internal {
+        if (address(positionIndex) == address(0)) {
+            return;
+        }
         // Derive position id consistent with Uniswap position keying
         PositionId positionId = PositionLibrary.generateId(router, params);
         // Ensure registration exists (owner set) and current liquidity snapshot is appended
@@ -205,43 +175,21 @@ abstract contract VTSManager is IVTSManager, VTSEvents {
         PositionMeta memory positionMeta = positionIndex.getMeta(positionId);
         if (positionMeta.owner == address(0)) {
             positionIndex.register(
-                positionId, corePoolId, params.tickLower, params.tickUpper, router, uint64(block.timestamp)
+                positionId,
+                corePoolId,
+                params.tickLower,
+                params.tickUpper,
+                router,
+                uint64(block.timestamp)
             );
         }
         // Snapshot current on-chain liquidity
-        uint128 liq = poolManager.getPositionLiquidity(corePoolId, PositionId.unwrap(positionId));
+        uint128 liq = poolManager.getPositionLiquidity(
+            corePoolId,
+            PositionId.unwrap(positionId)
+        );
         positionIndex.updateLiquidity(positionId, liq);
-
-        return PositionId.unwrap(positionId);
     }
-
-    /**
-     * @notice Gets the total outflow for the currencies in a core pool/Market
-     * @param corePoolId The core pool ID
-     * @return totalOutflow0 Total outflow for currency0
-     * @return totalOutflow1 Total outflow for currency1
-     */
-    function getMarketOutflow(PoolId corePoolId) public view returns (uint256 totalOutflow0, uint256 totalOutflow1) {
-        return marketOutflow[corePoolId].getTotalOutflow();
-    }
-
-    /**
-     * @notice Records the outflow for the currencies in a core pool/Market
-     * @param corePoolId The core pool ID
-     * @param delta The balance delta
-     */
-    // TODO: Determine whether this is necessary considering we're swap recording...
-    // function _recordOutflow(PoolId corePoolId, BalanceDelta delta) internal {
-    //     // Extract outflow amounts (negative deltas indicate outflow)
-    //     int256 delta0 = delta.amount0();
-    //     int256 delta1 = delta.amount1();
-
-    //     uint256 outflow0 = delta0 < 0 ? uint256(-delta0) : 0;
-    //     uint256 outflow1 = delta1 < 0 ? uint256(-delta1) : 0;
-
-    //     // Record both outflows (even if one is 0)
-    //     marketOutflow[corePoolId].recordOutflow(outflow0, outflow1);
-    // }
 
     /**
      * @notice Calculates the maximum potential commitment for both tokens over a tick range for a given liquidity
@@ -252,18 +200,28 @@ abstract contract VTSManager is IVTSManager, VTSEvents {
      * @return c0 The maximum potential commitment for token0 over [tickLower, tickUpper]
      * @return c1 The maximum potential commitment for token1 over [tickLower, tickUpper]
      */
-    function calculateCommitmentMaxima(int24 tickLower, int24 tickUpper, uint128 liquidity)
-        public
-        pure
-        returns (uint256 c0, uint256 c1)
-    {
+    function calculateCommitmentMaxima(
+        int24 tickLower,
+        int24 tickUpper,
+        uint128 liquidity
+    ) public pure returns (uint256 c0, uint256 c1) {
         uint160 sqrtPriceLowerX96 = TickMath.getSqrtPriceAtTick(tickLower);
         uint160 sqrtPriceUpperX96 = TickMath.getSqrtPriceAtTick(tickUpper);
 
         // Token0 amount across the full range for this liquidity
-        c0 = SqrtPriceMath.getAmount0Delta(sqrtPriceLowerX96, sqrtPriceUpperX96, liquidity, true);
+        c0 = SqrtPriceMath.getAmount0Delta(
+            sqrtPriceLowerX96,
+            sqrtPriceUpperX96,
+            liquidity,
+            true
+        );
         // Token1 amount across the full range for this liquidity
-        c1 = SqrtPriceMath.getAmount1Delta(sqrtPriceLowerX96, sqrtPriceUpperX96, liquidity, true);
+        c1 = SqrtPriceMath.getAmount1Delta(
+            sqrtPriceLowerX96,
+            sqrtPriceUpperX96,
+            liquidity,
+            true
+        );
     }
 
     /**
@@ -271,7 +229,11 @@ abstract contract VTSManager is IVTSManager, VTSEvents {
      * @param router The sender of the transaction
      * @param params The parameters of the transaction
      */
-    function _trackCommitment(address router, PoolId corePoolId, ModifyLiquidityParams calldata params) internal {
+    function _trackCommitment(
+        address router,
+        PoolId corePoolId,
+        ModifyLiquidityParams calldata params
+    ) internal {
         PositionId positionId = PositionLibrary.generateId(router, params);
         // Associate position with its core pool id for later reads
         positionPoolId[positionId] = corePoolId;
@@ -282,46 +244,40 @@ abstract contract VTSManager is IVTSManager, VTSEvents {
 
         if (params.liquidityDelta > 0) {
             // Liquidity added: increase tracked maxima by the delta's maxima over the tick range
-            uint128 liquidityAdded = SafeCastLib.safeCastTo128(uint256(params.liquidityDelta));
-            (uint256 addC0, uint256 addC1) =
-                calculateCommitmentMaxima(params.tickLower, params.tickUpper, liquidityAdded);
+            uint128 liquidityAdded = SafeCastLib.safeCastTo128(
+                uint256(params.liquidityDelta)
+            );
+            (uint256 addC0, uint256 addC1) = calculateCommitmentMaxima(
+                params.tickLower,
+                params.tickUpper,
+                liquidityAdded
+            );
 
             commitmentMaxima[positionId][0] = currentC0 + addC0;
             commitmentMaxima[positionId][1] = currentC1 + addC1;
-            // marketCommitted[corePoolId][0] += addC0;
-            // marketCommitted[corePoolId][1] += addC1;
         } else if (params.liquidityDelta < 0) {
             // Liquidity removed: decrease tracked maxima by the delta's maxima over the tick range
-            uint128 liquidityRemoved = SafeCastLib.safeCastTo128(uint256(-params.liquidityDelta));
-            (uint256 subC0, uint256 subC1) =
-                calculateCommitmentMaxima(params.tickLower, params.tickUpper, liquidityRemoved);
+            uint128 liquidityRemoved = SafeCastLib.safeCastTo128(
+                uint256(-params.liquidityDelta)
+            );
+            (uint256 subC0, uint256 subC1) = calculateCommitmentMaxima(
+                params.tickLower,
+                params.tickUpper,
+                liquidityRemoved
+            );
 
             // Clamp at zero to avoid underflow; if fully removed, both become zero
-            commitmentMaxima[positionId][0] = currentC0 > subC0 ? (currentC0 - subC0) : 0;
-            commitmentMaxima[positionId][1] = currentC1 > subC1 ? (currentC1 - subC1) : 0;
-            // uint256 mc0 = marketCommitted[corePoolId][0];
-            // uint256 mc1 = marketCommitted[corePoolId][1];
-            // marketCommitted[corePoolId][0] = subC0 > mc0 ? 0 : (mc0 - subC0);
-            // marketCommitted[corePoolId][1] = subC1 > mc1 ? 0 : (mc1 - subC1);
+            commitmentMaxima[positionId][0] = currentC0 > subC0
+                ? (currentC0 - subC0)
+                : 0;
+            commitmentMaxima[positionId][1] = currentC1 > subC1
+                ? (currentC1 - subC1)
+                : 0;
         } else {
             // No-op if liquidityDelta == 0 (poke)
             return;
         }
     }
-
-    // // Placeholder: without duplicating enumeration, we approximate share using position's own liquidity vs pool liquidity
-    // // For exact per-position allocation, wire a pool-wide position iterator (e.g., from MMPositionManager) later.
-    // function _getLiquidityShareForPosition(PoolId corePoolId, PositionId positionId)
-    //     internal
-    //     view
-    //     returns (uint128 positionLiquidity, uint256 inRangeTotal)
-    // {
-    //     // Position-specific liquidity
-    //     uint128 liqPos = poolManager.getPositionLiquidity(corePoolId, PositionId.unwrap(positionId));
-    //     // Use pool total in-range liquidity as denominator approximation - See explaination: static/poolManager-getLiquidity.md
-    //     uint128 poolLiq = poolManager.getLiquidity(corePoolId);
-    //     return (liqPos, uint256(poolLiq));
-    // }
 
     /**
      * @notice Records the settlement of assets on a position
@@ -329,106 +285,173 @@ abstract contract VTSManager is IVTSManager, VTSEvents {
      * @param positionId The id of the position
      * @param balanceDelta The balance delta of the settlement
      */
-    function onMMLiquidityModify(PositionId positionId, BalanceDelta balanceDelta)
-        external
-        onlyMMP
-        isPositionValid(positionId)
-    {
+    function onMMLiquidityModify(
+        PositionId positionId,
+        BalanceDelta balanceDelta
+    ) external onlyMMP isPositionValid(positionId) {
+        // First, settle any deficit growth accrued since last touch for this position
+        _settlePositionDeficitGrowth(positionId);
+
         int128 amount0 = balanceDelta.amount0();
         int128 amount1 = balanceDelta.amount1();
 
-        totalSettlementAmount[positionId][0] = _updateSettlement(totalSettlementAmount[positionId][0], amount0);
-        totalSettlementAmount[positionId][1] = _updateSettlement(totalSettlementAmount[positionId][1], amount1);
+        totalSettlementAmount[positionId][0] = _updateSettlement(
+            totalSettlementAmount[positionId][0],
+            amount0
+        );
+        totalSettlementAmount[positionId][1] = _updateSettlement(
+            totalSettlementAmount[positionId][1],
+            amount1
+        );
 
-        // // Update pool-wide settled aggregates for the position's market
-        // int128 a0 = balanceDelta.amount0();
-        // int128 a1 = balanceDelta.amount1();
-        // if (a0 > 0) {
-        //     marketSettled[corePoolId][0] += uint256(uint128(a0));
-        // } else if (a0 < 0) {
-        //     uint256 s0abs = uint256(uint128(-a0));
-        //     uint256 curS0 = marketSettled[corePoolId][0];
-        //     marketSettled[corePoolId][0] = s0abs > curS0 ? 0 : (curS0 - s0abs);
-        // }
-        // if (a1 > 0) {
-        //     marketSettled[corePoolId][1] += uint256(uint128(a1));
-        // } else if (a1 < 0) {
-        //     uint256 s1abs = uint256(uint128(-a1));
-        //     uint256 curS1 = marketSettled[corePoolId][1];
-        //     marketSettled[corePoolId][1] = s1abs > curS1 ? 0 : (curS1 - s1abs);
-        // }
-
-        // Record ring settlement events for both tokens (positive=settle, negative=withdraw)
-        if (amount0 != 0) {
-            _recordSettlement(positionPoolId[positionId], 0, amount0, 0, PositionId.unwrap(positionId), amount0 < 0); // burn tokens if amount0 is negative
+        // Net settlements against cumulative deficit (reduce debt when MM settles)
+        if (amount0 > 0) {
+            uint256 a0 = uint256(uint128(amount0));
+            uint256 cur0 = cumulativeDeficit[positionId][0];
+            cumulativeDeficit[positionId][0] = a0 >= cur0 ? 0 : (cur0 - a0);
         }
-        if (amount1 != 0) {
-            _recordSettlement(positionPoolId[positionId], 1, amount1, 0, PositionId.unwrap(positionId), amount1 < 0); // burn tokens if amount1 is negative
+        if (amount1 > 0) {
+            uint256 a1 = uint256(uint128(amount1));
+            uint256 cur1 = cumulativeDeficit[positionId][1];
+            cumulativeDeficit[positionId][1] = a1 >= cur1 ? 0 : (cur1 - a1);
         }
     }
 
-    // /**
-    //  * @notice Gets the current vts for a position
-    //  * @param positionId The position id
-    //  * @return vtsCurrent0 The current vts for token0
-    //  * @return vtsCurrent1 The current vts for token1
-    //  */
-    // function getVTSCurrent(PositionId positionId)
-    //     public
-    //     view
-    //     virtual
-    //     returns (uint256 vtsCurrent0, uint256 vtsCurrent1)
-    // {
-    //     uint256 c0 = commitmentMaxima[positionId][0];
-    //     uint256 c1 = commitmentMaxima[positionId][1];
-    //     if (c0 == 0 && c1 == 0) {
-    //         revert InvalidPosition(positionId);
-    //     }
+    /// @notice Called by the hook on tick cross to flip outside growth for a tick
+    function onTickCross(PoolId corePoolId, int24 tick, uint8 token) external {
+        _flipDeficitGrowthOutside(corePoolId, tick, token);
+    }
 
-    //     uint256 s0 = totalSettlementAmount[positionId][0];
-    //     uint256 s1 = totalSettlementAmount[positionId][1];
+    /// @dev Accrue deficit growth to the global accumulator (per token) using current in-range liquidity
+    function _accrueDeficitGrowth(
+        PoolId corePoolId,
+        uint8 token,
+        uint256 deficitAmount
+    ) internal {
+        // Guard invalid token index
+        if (token > 1) return;
+        // Use pool total in-range liquidity as denominator (Uniswap v4 core)
+        uint128 liq = poolManager.getLiquidity(corePoolId);
+        if (liq == 0 || deficitAmount == 0) {
+            return;
+        }
+        // deltaG = deficitAmount / L, scaled by Q128
+        uint256 deltaG = (deficitAmount * Q128) / uint256(liq);
+        uint256[2] storage g = deficitGrowthGlobal[corePoolId];
+        g[token] = g[token] + deltaG;
+    }
 
-    //     return VTSCalculatorLib.calcVTSCurrent(s0, s1, c0, c1);
-    // }
+    /// @dev Flip the outside accumulator for a tick (like feeGrowthOutside flip)
+    function _flipDeficitGrowthOutside(
+        PoolId corePoolId,
+        int24 tick,
+        uint8 token
+    ) internal {
+        if (token > 1) return;
+        uint256 globalG = deficitGrowthGlobal[corePoolId][token];
+        uint256 currentOutside = deficitGrowthOutside[corePoolId][tick][token];
+        deficitGrowthOutside[corePoolId][tick][token] =
+            globalG -
+            currentOutside;
+    }
 
-    // /**
-    //  * @notice Gets the required vts for a position
-    //  * @dev this function is virtual and can be overridden in order to mock the values
-    //  * @param _positionId The position id
-    //  * @return vtsRequired0 The required vts for token0
-    //  * @return vtsRequired1 The required vts for token1
-    //  */
-    // function getVTSRequired(PositionId _positionId)
-    //     public
-    //     view
-    //     virtual
-    //     returns (uint256 vtsRequired0, uint256 vtsRequired1)
-    // {
-    //     // Position metadata
-    //     PositionMeta memory meta = positionIndex.getMeta(_positionId);
-    //     PoolId corePoolId = meta.poolId;
-    //     if (PoolId.unwrap(corePoolId) == bytes32(0)) {
-    //         revert InvalidPosition(_positionId);
-    //     }
+    /// @dev Compute inside accumulator for a position bounds
+    function _deficitGrowthInside(
+        PoolId corePoolId,
+        int24 tickLower,
+        int24 tickUpper
+    ) internal view returns (uint256 inside0, uint256 inside1) {
+        uint256 g0 = deficitGrowthGlobal[corePoolId][0];
+        uint256 g1 = deficitGrowthGlobal[corePoolId][1];
+        uint256 lower0 = deficitGrowthOutside[corePoolId][tickLower][0];
+        uint256 lower1 = deficitGrowthOutside[corePoolId][tickLower][1];
+        uint256 upper0 = deficitGrowthOutside[corePoolId][tickUpper][0];
+        uint256 upper1 = deficitGrowthOutside[corePoolId][tickUpper][1];
+        // inside = global - outside(lower) - outside(upper)
+        inside0 = g0 - lower0 - upper0;
+        inside1 = g1 - lower1 - upper1;
+    }
 
-    //     // Commitment caps
-    //     uint256 c0 = commitmentMaxima[_positionId][0];
-    //     uint256 c1 = commitmentMaxima[_positionId][1];
-    //     if (c0 == 0 && c1 == 0) {
-    //         revert InvalidPosition(_positionId);
-    //     }
+    /// @dev Settle deficit growth for a position into cumulativeDeficit in raw token units
+    function _settlePositionDeficitGrowth(PositionId positionId) internal {
+        PositionMeta memory meta = positionIndex.getMeta(positionId);
+        PoolId corePoolId = meta.poolId;
+        if (PoolId.unwrap(corePoolId) == bytes32(0)) {
+            return;
+        }
+        (uint256 inside0, uint256 inside1) = _deficitGrowthInside(
+            corePoolId,
+            meta.tickLower,
+            meta.tickUpper
+        );
+        uint256 last0 = deficitGrowthInsideLast[positionId][0];
+        uint256 last1 = deficitGrowthInsideLast[positionId][1];
+        uint256 delta0 = inside0 - last0;
+        uint256 delta1 = inside1 - last1;
+        if (delta0 == 0 && delta1 == 0) {
+            return;
+        }
+        // Use current position liquidity for scaling back to raw units
+        uint128 liq = poolManager.getPositionLiquidity(
+            corePoolId,
+            PositionId.unwrap(positionId)
+        );
+        if (liq > 0) {
+            // amount = deltaInside * L / Q128
+            uint256 add0 = (delta0 * uint256(liq)) >> 128;
+            uint256 add1 = (delta1 * uint256(liq)) >> 128;
+            if (add0 > 0) cumulativeDeficit[positionId][0] += add0;
+            if (add1 > 0) cumulativeDeficit[positionId][1] += add1;
+        }
+        // Update snapshots
+        deficitGrowthInsideLast[positionId][0] = inside0;
+        deficitGrowthInsideLast[positionId][1] = inside1;
+    }
 
-    //     // If calculator is set, try calculator first (not implemented here)
-    //     if (address(calculator) != address(0)) {
-    //         return (0, 0);
-    //     }
+    /**
+     * @notice Gets the required vts for a position using cumulative deficits
+     * @param _positionId The position id
+     * @return vtsRequired0 The required vts for token0 (1e18 scale)
+     * @return vtsRequired1 The required vts for token1 (1e18 scale)
+     */
+    function getVTSRequired(
+        PositionId _positionId
+    ) public view virtual returns (uint256 vtsRequired0, uint256 vtsRequired1) {
+        // If external calculator is configured, defer
+        if (address(calculator) != address(0)) {
+            return (0, 0);
+        }
+        (uint256 c0, uint256 c1) = _getCommitment(_positionId);
+        uint256 d0 = cumulativeDeficit[_positionId][0];
+        uint256 d1 = cumulativeDeficit[_positionId][1];
+        uint256 one = 1e18;
+        vtsRequired0 = c0 == 0 ? 0 : (d0 >= c0 ? one : (d0 * one) / c0);
+        vtsRequired1 = c1 == 0 ? 0 : (d1 >= c1 ? one : (d1 * one) / c1);
+    }
 
-    //     // Delegate to oracle-aware calculator library (falls back to on-chain if coverage ok)
-    //     (uint256 v0, uint256 v1,) = VTSCalculatorLib.calcVTSRequiredWithOracleSupport(
-    //         this, _positionId, meta, positionIndex, c0, c1, oracleAdapter
-    //     );
-    //     return (v0, v1);
-    // }
+    /**
+     * @notice Gets the current vts for a position
+     * @param positionId The position id
+     * @return vtsCurrent0 The current vts for token0
+     * @return vtsCurrent1 The current vts for token1
+     */
+    function getVTSCurrent(
+        PositionId positionId
+    ) public view virtual returns (uint256 vtsCurrent0, uint256 vtsCurrent1) {
+        uint256 c0 = commitmentMaxima[positionId][0];
+        uint256 c1 = commitmentMaxima[positionId][1];
+        if (c0 == 0 && c1 == 0) {
+            revert InvalidPosition(positionId);
+        }
+
+        uint256 s0 = totalSettlementAmount[positionId][0];
+        uint256 s1 = totalSettlementAmount[positionId][1];
+
+        uint256 one = 1e18;
+        uint256 v0 = FullMath.mulDiv(s0, one, c0);
+        uint256 v1 = FullMath.mulDiv(s1, one, c1);
+        return (v0, v1);
+    }
 
     /**
      * @notice Gets the commitment for a position
@@ -436,13 +459,13 @@ abstract contract VTSManager is IVTSManager, VTSEvents {
      * @return commitment0 The commitment for token0
      * @return commitment1 The commitment for token1
      */
-    function _getCommitment(PositionId positionId)
-        internal
-        view
-        virtual
-        returns (uint256 commitment0, uint256 commitment1)
-    {
-        (uint256 c0, uint256 c1) = (commitmentMaxima[positionId][0], commitmentMaxima[positionId][1]);
+    function _getCommitment(
+        PositionId positionId
+    ) internal view virtual returns (uint256 commitment0, uint256 commitment1) {
+        (uint256 c0, uint256 c1) = (
+            commitmentMaxima[positionId][0],
+            commitmentMaxima[positionId][1]
+        );
         if (c0 == 0 && c1 == 0) {
             revert InvalidPosition(positionId);
         }
@@ -455,41 +478,33 @@ abstract contract VTSManager is IVTSManager, VTSEvents {
      * @return rfsOpen Whether the RFS is open
      * @return balanceDelta The balance delta of the amount of required to be settled or allowed to be withdrawn depending on if it is negative or positive
      */
-    function getRFS(PositionId _positionId) public view isPositionValid(_positionId) returns (bool, BalanceDelta) {
+    function getRFS(
+        PositionId _positionId
+    ) public view isPositionValid(_positionId) returns (bool, BalanceDelta) {
         // Commitment caps
         (uint256 c0, uint256 c1) = _getCommitment(_positionId);
-
-        uint256 s0 = totalSettlementAmount[_positionId][0];
-        uint256 s1 = totalSettlementAmount[_positionId][1];
 
         // If calculator is set, try calculator first (not implemented here)
         if (address(calculator) != address(0)) {
             return (false, toBalanceDelta(0, 0));
         }
 
-        // TODO: Use usedOracle to determine excess gas to compensate?
-        // Compute weight inputs from on-chain liquidity
-        // (uint128 liqPos, uint256 liqPool) = _getLiquidityShareForPosition(corePoolId, _positionId);
-
-        // Pull aggregates for market-level settled/committed/deficit and window outflows
-        // uint256 aggS0 = marketSettled[corePoolId][0];
-        // uint256 aggS1 = marketSettled[corePoolId][1];
-        // uint256 aggC0 = marketCommitted[corePoolId][0];
-        // uint256 aggC1 = marketCommitted[corePoolId][1];
-        // uint256 aggD0 = marketDeficitOutstanding[corePoolId][0];
-        // uint256 aggD1 = marketDeficitOutstanding[corePoolId][1];
-        // uint256 aggS0 = 0;
-        // uint256 aggS1 = 0;
-        // uint256 aggC0 = 0;
-        // uint256 aggC1 = 0;
-        // uint256 aggD0 = 0;
-        // uint256 aggD1 = 0;
-        // (uint256 totalOutflow0, uint256 totalOutflow1) = getMarketOutflow(corePoolId);
-
-        (bool rfsOpen, BalanceDelta balanceDelta,) = VTSCalculatorLib.calcRFS(
-            this, _positionId, positionIndex.getMeta(_positionId), positionIndex, c0, c1, s0, s1, oracleAdapter
+        (uint256 vtsCurrent0, uint256 vtsCurrent1) = getVTSCurrent(_positionId);
+        (uint256 vtsRequired0, uint256 vtsRequired1) = getVTSRequired(
+            _positionId
         );
-        return (rfsOpen, balanceDelta);
+
+        bool open = (vtsCurrent0 < vtsRequired0) ||
+            (vtsCurrent1 < vtsRequired1);
+
+        int128 deltaBps0 = int128(int256(vtsCurrent0) - int256(vtsRequired0));
+        int128 deltaBps1 = int128(int256(vtsCurrent1) - int256(vtsRequired1));
+
+        uint256 one = 1e18;
+        int128 amount0 = (int128(int256(c0)) * deltaBps0) / int128(int256(one));
+        int128 amount1 = (int128(int256(c1)) * deltaBps1) / int128(int256(one));
+
+        return (open, toBalanceDelta(amount0, amount1));
     }
 
     /**
@@ -498,7 +513,10 @@ abstract contract VTSManager is IVTSManager, VTSEvents {
      * @param delta The delta of the settlement
      * @return The updated settlement amount
      */
-    function _updateSettlement(uint256 currentSettled, int256 delta) internal pure returns (uint256) {
+    function _updateSettlement(
+        uint256 currentSettled,
+        int256 delta
+    ) internal pure returns (uint256) {
         if (delta > 0) {
             return currentSettled + uint256(delta);
         }

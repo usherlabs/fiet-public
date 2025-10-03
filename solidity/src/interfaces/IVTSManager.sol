@@ -13,28 +13,17 @@ interface IVTSManager {
 
     function getMarketVTSConfiguration(PoolId corePoolId) external view returns (MarketVTSConfiguration memory);
 
-    function getMarketOutflow(PoolId corePoolId) external view returns (uint256 totalOutflow0, uint256 totalOutflow1);
-
     function getRFS(PositionId positionId) external view returns (bool, BalanceDelta);
 
-    // function getVTSCurrent(PositionId positionId) external view returns (uint256 vtsCurrent0, uint256 vtsCurrent1);
+    function getVTSCurrent(PositionId positionId) external view returns (uint256 vtsCurrent0, uint256 vtsCurrent1);
 
-    // function getVTSRequired(PositionId positionId) external view returns (uint256 vtsRequired0, uint256 vtsRequired1);
+    function getVTSRequired(PositionId positionId) external view returns (uint256 vtsRequired0, uint256 vtsRequired1);
 
     function getPositionSettledAmounts(PositionId positionId)
         external
         view
         returns (uint256 amount0, uint256 amount1);
 
-    // Event recording (protocol-bounds only)
+    // Deficit accrual entrypoint (protocol-bounds only)
     function recordDeficitEvent(PoolId corePoolId, uint8 token, uint128 deficit) external;
-
-    function recordSettlementEvent(
-        PoolId corePoolId,
-        uint8 token,
-        int128 settled,
-        uint128 marketDeficitBefore,
-        bytes32 positionId,
-        bool burnTokens
-    ) external;
 }

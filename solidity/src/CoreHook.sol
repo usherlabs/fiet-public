@@ -49,9 +49,19 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
     }
 
     // Owner will be set to MarketFactory
-    constructor(address _poolManager, address _marketFactory, address _mmPositionManager, address _calculator)
+    constructor(
+        address _poolManager,
+        address _marketFactory,
+        address _mmPositionManager,
+        address _calculator
+    )
         BaseHook(IPoolManager(_poolManager))
-        VTSManager(_poolManager, _marketFactory, _mmPositionManager, _calculator)
+        VTSManager(
+            _poolManager,
+            _marketFactory,
+            _mmPositionManager,
+            _calculator
+        )
     {
         marketFactory = _marketFactory;
         mmPositionManager = _mmPositionManager;
@@ -69,62 +79,49 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
         _unpause(poolId);
     }
 
-    function getHookPermissions() public pure override returns (Hooks.Permissions memory) {
-        return Hooks.Permissions({
-            beforeInitialize: true, // Validate and set global parameters
-            afterInitialize: false,
-            beforeAddLiquidity: false,
-            afterAddLiquidity: true, // Intercept liquidity modifications
-            beforeRemoveLiquidity: false,
-            afterRemoveLiquidity: true, // Intercept liquidity modifications
-            beforeSwap: true,
-            afterSwap: true,
-            beforeDonate: false,
-            afterDonate: false,
-            beforeSwapReturnDelta: false,
-            afterSwapReturnDelta: false,
-            afterAddLiquidityReturnDelta: false,
-            afterRemoveLiquidityReturnDelta: false
-        });
+    function getHookPermissions()
+        public
+        pure
+        override
+        returns (Hooks.Permissions memory)
+    {
+        return
+            Hooks.Permissions({
+                beforeInitialize: true, // Validate and set global parameters
+                afterInitialize: false,
+                beforeAddLiquidity: false,
+                afterAddLiquidity: true, // Intercept liquidity modifications
+                beforeRemoveLiquidity: false,
+                afterRemoveLiquidity: true, // Intercept liquidity modifications
+                beforeSwap: false,
+                afterSwap: true,
+                beforeDonate: false,
+                afterDonate: false,
+                beforeSwapReturnDelta: false,
+                afterSwapReturnDelta: false,
+                afterAddLiquidityReturnDelta: false,
+                afterRemoveLiquidityReturnDelta: false
+            });
     }
 
-    function _beforeInitialize(address sender, PoolKey calldata, uint160)
-        internal
-        view
-        virtual
-        override
-        returns (bytes4)
-    {
+    function _beforeInitialize(
+        address sender,
+        PoolKey calldata,
+        uint160
+    ) internal view virtual override returns (bytes4) {
         if (sender != marketFactory) {
             revert InvalidInitialiser();
         }
         return this.beforeInitialize.selector;
     }
 
-    // function _afterInitialize(address, PoolKey calldata key, uint160, bytes calldata)
-    //     internal
-    //     virtual
-    //     override
-    //     returns (bytes4)
-    // {
-    //     return this._afterInitialize.selector;
-    // }
-
-    function _beforeSwap(address, PoolKey calldata key, SwapParams calldata, bytes calldata)
-        internal
-        override
-        returns (bytes4, BeforeSwapDelta, uint24)
-    {
-        // store sqrtP_before in transient storage
-        (uint160 sqrtPBefore,,,) = StateLibrary.getSlot0(poolManager, key.toId());
-        bytes32 slot = TransientSlots.SQRTP_BEFORE_SLOT;
-        assembly ("memory-safe") {
-            tstore(slot, sqrtPBefore)
-        }
-        return (this.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
-    }
-
-    function _afterSwap(address sender, PoolKey calldata key, SwapParams calldata, BalanceDelta delta, bytes calldata)
+    function _afterSwap(
+        address,
+        PoolKey calldata key,
+        SwapParams calldata,
+        BalanceDelta delta,
+        bytes calldata
+    )
         internal
         virtual
         override
@@ -134,31 +131,15 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
         address proxyHook = _getProxyHook(key);
 
         // Check if this is a direct core pool swap, and if it is, call the proxy hook
-        if (IExttload(proxyHook).exttload(TransientSlots.PROXY_SWAP_FLAG_SLOT) == bytes32(0)) {
+        if (
+            IExttload(proxyHook).exttload(
+                TransientSlots.PROXY_SWAP_FLAG_SLOT
+            ) == bytes32(0)
+        ) {
             ProxyHook(proxyHook).onCorePoolDirectSwap(delta);
         }
 
         _triggerInternalTracingFlag(key.toId());
-        // _recordOutflow(key.toId(), delta); // TODO: Remove this if we do not use \Delta O_A
-
-        // Record minimal swap event for on-chain attribution
-        PoolId pId = key.toId();
-        (uint160 sqrtPAfter,,,) = StateLibrary.getSlot0(poolManager, pId);
-
-        // load sqrtP_before from transient storage
-        uint160 sqrtPBefore;
-        bytes32 slot = TransientSlots.SQRTP_BEFORE_SLOT;
-        assembly ("memory-safe") {
-            sqrtPBefore := tload(slot)
-        }
-
-        // derive outputs as unsigned amounts representing outflows
-        int128 a0 = delta.amount0();
-        int128 a1 = delta.amount1();
-        uint128 out0 = a0 < 0 ? LiquidityUtils.safeInt128ToUint128(a0) : 0;
-        uint128 out1 = a1 < 0 ? LiquidityUtils.safeInt128ToUint128(a1) : 0;
-        // From VTSEvents -> VTSManager -> CoreHook
-        _recordSwap(pId, uint64(block.timestamp), sqrtPBefore, sqrtPAfter, out0, out1);
 
         return (this.afterSwap.selector, 0);
     }
@@ -170,22 +151,30 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
         BalanceDelta delta,
         BalanceDelta,
         bytes calldata
-    ) internal virtual override whenNotPaused(key.toId()) returns (bytes4, BalanceDelta) {
+    )
+        internal
+        virtual
+        override
+        whenNotPaused(key.toId())
+        returns (bytes4, BalanceDelta)
+    {
         // Track maximum potemtial commitment for both tokens in the position
         _trackCommitment(sender, key.toId(), params);
         // Update PositionIndex with registration (if new) and a liquidity snapshot
-        bytes32 positionId = _touchPositionIndex(sender, key.toId(), params);
+        _touchPositionIndex(sender, key.toId(), params);
 
-        // only add direct liquidity  if the sender is not the market maker position manager/router
+        // only add direct liquidity if the sender is not the market maker position manager/router
         if (sender != address(mmPositionManager)) {
-            ProxyHook(_getProxyHook(key)).onDirectLP(delta, LiquidityUtils.ActionType.DirectLPAddLiquidity); // Fetching ProxyHook by corePoolKey, therefore no need to pass again.
-
-            // Record settlement to the MarketVault
-            _recordSettlement(key.toId(), 0, delta.amount0(), 0, positionId, false);
-            _recordSettlement(key.toId(), 1, delta.amount1(), 0, positionId, false);
+            ProxyHook(_getProxyHook(key)).onDirectLP(
+                delta,
+                LiquidityUtils.ActionType.DirectLPAddLiquidity
+            ); // Fetching ProxyHook by corePoolKey, therefore no need to pass again.
         }
 
-        return (this.afterAddLiquidity.selector, BalanceDeltaLibrary.ZERO_DELTA);
+        return (
+            this.afterAddLiquidity.selector,
+            BalanceDeltaLibrary.ZERO_DELTA
+        );
     }
 
     function _afterRemoveLiquidity(
@@ -199,25 +188,31 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
         // Track maximum potential commitment for both tokens in the position
         _trackCommitment(sender, key.toId(), params);
         // Update PositionIndex with latest liquidity snapshot (and meta if not yet registered)
-        bytes32 positionId = _touchPositionIndex(sender, key.toId(), params);
+        _touchPositionIndex(sender, key.toId(), params);
 
         // Allow removal of liquidity even when the market is paused.
-        // only remove direct liquidity  if the sender is the pool manager
+        // only remove direct liquidity if the sender is the pool manager
         if (sender != address(mmPositionManager)) {
-            ProxyHook(_getProxyHook(key)).onDirectLP(delta, LiquidityUtils.ActionType.DirectLPRemoveLiquidity);
-
-            // Covers settlements that move from MarketVault to LCCs.
-            _recordSettlement(key.toId(), 0, delta.amount0(), 0, positionId, false);
-            _recordSettlement(key.toId(), 1, delta.amount1(), 0, positionId, false);
+            ProxyHook(_getProxyHook(key)).onDirectLP(
+                delta,
+                LiquidityUtils.ActionType.DirectLPRemoveLiquidity
+            );
         }
 
-        return (this.afterRemoveLiquidity.selector, BalanceDeltaLibrary.ZERO_DELTA);
+        return (
+            this.afterRemoveLiquidity.selector,
+            BalanceDeltaLibrary.ZERO_DELTA
+        );
     }
 
     // Helper function to get the proxy hook address from the core pool key
-    function _getProxyHook(PoolKey calldata corePoolKey) internal view returns (address) {
+    function _getProxyHook(
+        PoolKey calldata corePoolKey
+    ) internal view returns (address) {
         PoolId corePoolId = corePoolKey.toId();
-        PoolId proxyPoolId = IMarketFactory(marketFactory).coreToProxy(corePoolId);
+        PoolId proxyPoolId = IMarketFactory(marketFactory).coreToProxy(
+            corePoolId
+        );
 
         return IMarketFactory(marketFactory).proxyToHook(proxyPoolId);
     }
