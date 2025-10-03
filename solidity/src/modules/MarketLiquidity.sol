@@ -324,7 +324,7 @@ abstract contract MarketLiquidity is IMarketLiquidity {
 
         // Hook for settlement processed integration
         // TODO: Change amounts to use leaner data types for gas efficiency. Uv4 BalanceDelta uses int128 for amounts...
-        _onDeficitSettled(marketId, uint128(amount), marketDeficitBefore, burnTokens);
+        _onDeficitSettled(marketId, -uint128(amount), marketDeficitBefore, burnTokens);
     }
 
     // Hooks for protocol-specific integrations (overridden by LCC)

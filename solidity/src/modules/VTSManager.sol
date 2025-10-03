@@ -62,8 +62,6 @@ abstract contract VTSManager is IVTSManager, VTSEvents {
 
     // Event to notify that the VTS configuration has been set/initialized for a core pool
     event MarketVTSConfigurationSet(PoolId indexed corePoolId, MarketVTSConfiguration indexed vtsConfiguration);
-    // Event to notify that the assets have been settled on a position
-    event AssetsSettled(PositionId indexed positionId, int128 amount0, int128 amount1);
     // Per-entry events are declared in VTSEvents
 
     address private immutable marketFactory;
@@ -179,18 +177,6 @@ abstract contract VTSManager is IVTSManager, VTSEvents {
         // }
     }
 
-    function recordSwapEvent(PoolId corePoolId, uint160 sqrtP_before, uint160 sqrtP_after, BalanceDelta delta)
-        internal
-    {
-        // derive outputs as unsigned amounts representing outflows
-        int128 a0 = delta.amount0();
-        int128 a1 = delta.amount1();
-        uint128 out0 = a0 < 0 ? LiquidityUtils.safeInt128ToUint128(a0) : 0;
-        uint128 out1 = a1 < 0 ? LiquidityUtils.safeInt128ToUint128(a1) : 0;
-
-        _recordSwap(corePoolId, uint64(block.timestamp), sqrtP_before, sqrtP_after, out0, out1);
-    }
-
     function getPositionSettledAmounts(PositionId positionId) public view returns (uint256 amount0, uint256 amount1) {
         return (totalSettlementAmount[positionId][0], totalSettlementAmount[positionId][1]);
     }
@@ -205,8 +191,13 @@ abstract contract VTSManager is IVTSManager, VTSEvents {
     }
 
     /// @dev Register/update position metadata and liquidity snapshots in the PositionIndex
-    function _touchPositionIndex(address router, PoolId corePoolId, ModifyLiquidityParams calldata params) internal {
-        if (address(positionIndex) == address(0)) return;
+    function _touchPositionIndex(address router, PoolId corePoolId, ModifyLiquidityParams calldata params)
+        internal
+        returns (bytes32 _positionId)
+    {
+        if (address(positionIndex) == address(0)){
+            return bytes32(0);
+        };
         // Derive position id consistent with Uniswap position keying
         PositionId positionId = PositionLibrary.generateId(router, params);
         // Ensure registration exists (owner set) and current liquidity snapshot is appended
@@ -220,6 +211,8 @@ abstract contract VTSManager is IVTSManager, VTSEvents {
         // Snapshot current on-chain liquidity
         uint128 liq = poolManager.getPositionLiquidity(corePoolId, PositionId.unwrap(positionId));
         positionIndex.updateLiquidity(positionId, liq);
+
+        return PositionId.unwrap(positionId);
     }
 
     /**
@@ -344,10 +337,8 @@ abstract contract VTSManager is IVTSManager, VTSEvents {
         int128 amount0 = balanceDelta.amount0();
         int128 amount1 = balanceDelta.amount1();
 
-        totalSettlementAmount[positionId][0] =
-            _updateSettlement(totalSettlementAmount[positionId][0], balanceDelta.amount0());
-        totalSettlementAmount[positionId][1] =
-            _updateSettlement(totalSettlementAmount[positionId][1], balanceDelta.amount1());
+        totalSettlementAmount[positionId][0] = _updateSettlement(totalSettlementAmount[positionId][0], amount0);
+        totalSettlementAmount[positionId][1] = _updateSettlement(totalSettlementAmount[positionId][1], amount1);
 
         // // Update pool-wide settled aggregates for the position's market
         // int128 a0 = balanceDelta.amount0();
@@ -369,18 +360,11 @@ abstract contract VTSManager is IVTSManager, VTSEvents {
 
         // Record ring settlement events for both tokens (positive=settle, negative=withdraw)
         if (amount0 != 0) {
-            _recordSettlement(
-                positionPoolId[positionId], msg.sender, 0, amount0, 0, PositionId.unwrap(positionId), false
-            );
+            _recordSettlement(positionPoolId[positionId], 0, amount0, 0, PositionId.unwrap(positionId), amount0 < 0); // burn tokens if amount0 is negative
         }
         if (amount1 != 0) {
-            _recordSettlement(
-                positionPoolId[positionId], msg.sender, 1, amount1, 0, PositionId.unwrap(positionId), false
-            );
+            _recordSettlement(positionPoolId[positionId], 1, amount1, 0, PositionId.unwrap(positionId), amount1 < 0); // burn tokens if amount1 is negative
         }
-
-        // emit an event to notify that the assets have been settled on a position
-        emit AssetsSettled(positionId, amount0, amount1);
     }
 
     // /**

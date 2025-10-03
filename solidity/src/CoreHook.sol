@@ -151,8 +151,15 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
         assembly ("memory-safe") {
             sqrtPBefore := tload(slot)
         }
-        // Called from VTSManager
-        recordSwapEvent(key.toId(), sqrtPBefore, sqrtPAfter, delta);
+
+        // derive outputs as unsigned amounts representing outflows
+        int128 a0 = delta.amount0();
+        int128 a1 = delta.amount1();
+        uint128 out0 = a0 < 0 ? LiquidityUtils.safeInt128ToUint128(a0) : 0;
+        uint128 out1 = a1 < 0 ? LiquidityUtils.safeInt128ToUint128(a1) : 0;
+        // From VTSEvents -> VTSManager -> CoreHook
+        _recordSwap(pId, uint64(block.timestamp), sqrtPBefore, sqrtPAfter, out0, out1);
+
         return (this.afterSwap.selector, 0);
     }
 
@@ -164,14 +171,19 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
         BalanceDelta,
         bytes calldata
     ) internal virtual override whenNotPaused(key.toId()) returns (bytes4, BalanceDelta) {
-        // only add direct liquidity  if the sender is not the market maker position manager/router
-        if (sender != address(mmPositionManager)) {
-            ProxyHook(_getProxyHook(key)).onDirectLP(delta, LiquidityUtils.ActionType.DirectLPAddLiquidity); // Fetching ProxyHook by corePoolKey, therefore no need to pass again.
-        }
         // Track maximum potemtial commitment for both tokens in the position
         _trackCommitment(sender, key.toId(), params);
         // Update PositionIndex with registration (if new) and a liquidity snapshot
-        _touchPositionIndex(sender, key.toId(), params);
+        bytes32 positionId = _touchPositionIndex(sender, key.toId(), params);
+
+        // only add direct liquidity  if the sender is not the market maker position manager/router
+        if (sender != address(mmPositionManager)) {
+            ProxyHook(_getProxyHook(key)).onDirectLP(delta, LiquidityUtils.ActionType.DirectLPAddLiquidity); // Fetching ProxyHook by corePoolKey, therefore no need to pass again.
+
+            // Record settlement to the MarketVault
+            _recordSettlement(key.toId(), 0, delta.amount0(), 0, positionId, false);
+            _recordSettlement(key.toId(), 1, delta.amount1(), 0, positionId, false);
+        }
 
         return (this.afterAddLiquidity.selector, BalanceDeltaLibrary.ZERO_DELTA);
     }
@@ -184,16 +196,20 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
         BalanceDelta,
         bytes calldata
     ) internal virtual override returns (bytes4, BalanceDelta) {
+        // Track maximum potential commitment for both tokens in the position
+        _trackCommitment(sender, key.toId(), params);
+        // Update PositionIndex with latest liquidity snapshot (and meta if not yet registered)
+        bytes32 positionId = _touchPositionIndex(sender, key.toId(), params);
+
         // Allow removal of liquidity even when the market is paused.
         // only remove direct liquidity  if the sender is the pool manager
         if (sender != address(mmPositionManager)) {
             ProxyHook(_getProxyHook(key)).onDirectLP(delta, LiquidityUtils.ActionType.DirectLPRemoveLiquidity);
-        }
 
-        // Track maximum potential commitment for both tokens in the position
-        _trackCommitment(sender, key.toId(), params);
-        // Update PositionIndex with latest liquidity snapshot (and meta if not yet registered)
-        _touchPositionIndex(sender, key.toId(), params);
+            // Covers settlements that move from MarketVault to LCCs.
+            _recordSettlement(key.toId(), 0, delta.amount0(), 0, positionId, false);
+            _recordSettlement(key.toId(), 1, delta.amount1(), 0, positionId, false);
+        }
 
         return (this.afterRemoveLiquidity.selector, BalanceDeltaLibrary.ZERO_DELTA);
     }

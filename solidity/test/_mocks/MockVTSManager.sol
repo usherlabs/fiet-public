@@ -78,31 +78,31 @@ contract MockVTSManager is VTSManager {
 
     // since this is a mock contract, we need to overrride the function to get the current vts for a given position
     // this way we can easily set a mock vts required for a given position
-    function getVTSRequired(PositionId positionId)
-        public
-        view
-        override
-        returns (uint256 vtsRequired0, uint256 vtsRequired1)
-    {
-        return (
-            uint256(uint128(mockVTSRequired[positionId].amount0())),
-            uint256(uint128(mockVTSRequired[positionId].amount1()))
-        );
-    }
+    // function getVTSRequired(PositionId positionId)
+    //     public
+    //     view
+    //     override
+    //     returns (uint256 vtsRequired0, uint256 vtsRequired1)
+    // {
+    //     return (
+    //         uint256(uint128(mockVTSRequired[positionId].amount0())),
+    //         uint256(uint128(mockVTSRequired[positionId].amount1()))
+    //     );
+    // }
 
     // since this is a mock contract, we need to overrride the function to get the current vts for a given position
     // this way we can easily set a mock vts current for a given position
-    function getVTSCurrent(PositionId positionId)
-        public
-        view
-        override
-        returns (uint256 vtsCurrent0, uint256 vtsCurrent1)
-    {
-        return (
-            uint256(uint128(mockVTSCurrent[positionId].amount0())),
-            uint256(uint128(mockVTSCurrent[positionId].amount1()))
-        );
-    }
+    // function getVTSCurrent(PositionId positionId)
+    //     public
+    //     view
+    //     override
+    //     returns (uint256 vtsCurrent0, uint256 vtsCurrent1)
+    // {
+    //     return (
+    //         uint256(uint128(mockVTSCurrent[positionId].amount0())),
+    //         uint256(uint128(mockVTSCurrent[positionId].amount1()))
+    //     );
+    // }
 
     // since this is a mock contract, we need to overrride the function to get the commitment for a given position
     function _getCommitment(PositionId positionId)

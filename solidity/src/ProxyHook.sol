@@ -189,8 +189,12 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
             // liquidity from our CSMM can be used by minting/burning claim tokens the hook owns
 
             // Settle underlying liquidity to the vault from the LCCs that were acquired.
-            _settleFromLCCToVault(lccToken0, amount0);
-            _settleFromLCCToVault(lccToken1, amount1);
+            if (amount0 > 0) {
+                _settleFromLCCToVault(lccToken0, amount0);
+            }
+            if (amount1 > 0) {
+                _settleFromLCCToVault(lccToken1, amount1);
+            }
 
             // Then we take what is available within the total settlement deficit amount from the vault to LCCs.
             // This fulfils some accounting mechanics when DirectLPs add liquidity.
@@ -202,8 +206,12 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
 
             // Try take from vault to LCCs. If there's a deficit, it will surface in settlement queue to the DirectLP on LCC unwrap.
             bytes32 marketId = PoolId.unwrap(corePoolKey.toId());
-            _tryTakeFromVaultToLCC(marketId, lccToken0, amount0);
-            _tryTakeFromVaultToLCC(marketId, lccToken1, amount1);
+            if (amount0 > 0) {
+                _tryTakeFromVaultToLCC(marketId, lccToken0, amount0);
+            }
+            if (amount1 > 0) {
+                _tryTakeFromVaultToLCC(marketId, lccToken1, amount1);
+            }
         }
     }
 

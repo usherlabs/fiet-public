@@ -460,7 +460,12 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
         address coreHook = IMarketFactory(marketFactory).getCoreHook();
         uint8 tokenIndex = _resolveTokenIndex(marketId);
         IVTSManager(coreHook).recordSettlementEvent(
-            PoolId.wrap(marketId), tokenIndex, int128(settled), uint128(marketDeficitBefore), bytes32(0), burnTokens
+            PoolId.wrap(marketId),
+            tokenIndex,
+            burnTokens ? -int128(settled) : int128(settled), // if burning tokens then native supply is decreased, otherwise it's still in protocol.
+            uint128(marketDeficitBefore),
+            bytes32(0),
+            burnTokens
         );
     }
 
