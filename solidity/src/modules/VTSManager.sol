@@ -130,15 +130,6 @@ abstract contract VTSManager is IVTSManager {
         positionIndex = IPositionIndex(index);
     }
 
-    // TODO: Add bounds to this function if it is necessary.
-    function recordDeficitEvent(
-        PoolId corePoolId,
-        uint8 token,
-        uint128 deficit
-    ) external {
-        _accrueDeficitGrowth(corePoolId, token, uint256(deficit));
-    }
-
     function getPositionSettledAmounts(
         PositionId positionId
     ) public view returns (uint256 amount0, uint256 amount1) {
@@ -400,8 +391,25 @@ abstract contract VTSManager is IVTSManager {
             // amount = deltaInside * L / Q128
             uint256 add0 = (delta0 * uint256(liq)) >> 128;
             uint256 add1 = (delta1 * uint256(liq)) >> 128;
-            if (add0 > 0) cumulativeDeficit[positionId][0] += add0;
-            if (add1 > 0) cumulativeDeficit[positionId][1] += add1;
+            if (add0 > 0) {
+                // consume settled coverage first, then accrue shortfall to deficit
+                uint256 s0 = totalSettlementAmount[positionId][0];
+                if (s0 >= add0) {
+                    totalSettlementAmount[positionId][0] = s0 - add0;
+                } else {
+                    cumulativeDeficit[positionId][0] += (add0 - s0);
+                    totalSettlementAmount[positionId][0] = 0;
+                }
+            }
+            if (add1 > 0) {
+                uint256 s1 = totalSettlementAmount[positionId][1];
+                if (s1 >= add1) {
+                    totalSettlementAmount[positionId][1] = s1 - add1;
+                } else {
+                    cumulativeDeficit[positionId][1] += (add1 - s1);
+                    totalSettlementAmount[positionId][1] = 0;
+                }
+            }
         }
         // Update snapshots
         deficitGrowthInsideLast[positionId][0] = inside0;

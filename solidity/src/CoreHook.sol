@@ -24,7 +24,9 @@ import {VTSManager} from "./modules/VTSManager.sol";
 import {IVTSManager} from "./interfaces/IVTSManager.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
-
+import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
+import {TickBitmap} from "@uniswap/v4-core/src/libraries/TickBitmap.sol";
+import {TickUtils} from "./libraries/TickUtils.sol";
 import {ProtocolFeeLibrary} from "@uniswap/v4-core/src/libraries/ProtocolFeeLibrary.sol";
 
 /**
@@ -93,7 +95,7 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
                 afterAddLiquidity: true, // Intercept liquidity modifications
                 beforeRemoveLiquidity: false,
                 afterRemoveLiquidity: true, // Intercept liquidity modifications
-                beforeSwap: false,
+                beforeSwap: true,
                 afterSwap: true,
                 beforeDonate: false,
                 afterDonate: false,
@@ -115,6 +117,24 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
         return this.beforeInitialize.selector;
     }
 
+    function _beforeSwap(
+        address,
+        PoolKey calldata key,
+        SwapParams calldata,
+        bytes calldata
+    ) internal override returns (bytes4, BeforeSwapDelta, uint24) {
+        // store sqrtP_before in transient storage for potential tick-cross processing
+        (uint160 sqrtPBefore, , , ) = StateLibrary.getSlot0(
+            poolManager,
+            key.toId()
+        );
+        bytes32 slot = TransientSlots.SQRTP_BEFORE_SLOT;
+        assembly ("memory-safe") {
+            tstore(slot, sqrtPBefore)
+        }
+        return (this.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
+    }
+
     function _afterSwap(
         address,
         PoolKey calldata key,
@@ -128,6 +148,47 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
         whenNotPaused(key.toId())
         returns (bytes4, int128)
     {
+        // Tick cross flips: iterate initialised ticks crossed during the swap
+        {
+            // read start tick from transient sqrtP_before and end tick from state
+            uint160 sqrtPBefore;
+            bytes32 slot = TransientSlots.SQRTP_BEFORE_SLOT;
+            assembly ("memory-safe") {
+                sqrtPBefore := tload(slot)
+            }
+            (uint160 sqrtPAfter, int24 tickAfter, , ) = StateLibrary.getSlot0(
+                poolManager,
+                key.toId()
+            );
+            int24 tickBefore = TickMath.getTickAtSqrtPrice(sqrtPBefore);
+
+            if (tickAfter != tickBefore) {
+                bool zeroForOne = tickAfter < tickBefore;
+                int24 stepTick = tickBefore;
+                while (true) {
+                    // next initialised tick in the direction of the swap
+                    (int24 next, bool initialized) = TickUtils
+                        .nextInitializedTickWithinOneWord(
+                            poolManager,
+                            key.toId(),
+                            stepTick,
+                            key.tickSpacing,
+                            zeroForOne
+                        );
+                    if (zeroForOne) {
+                        if (next <= tickAfter) break;
+                    } else {
+                        if (next >= tickAfter) break;
+                    }
+                    if (initialized) {
+                        onTickCross(key.toId(), next, 0);
+                        onTickCross(key.toId(), next, 1);
+                    }
+                    stepTick = next;
+                }
+            }
+        }
+
         address proxyHook = _getProxyHook(key);
 
         // Check if this is a direct core pool swap, and if it is, call the proxy hook
@@ -140,6 +201,26 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
         }
 
         _triggerInternalTracingFlag(key.toId());
+
+        // Accrue per-swap deficit growth for outflowing tokens
+        {
+            int128 a0 = delta.amount0();
+            int128 a1 = delta.amount1();
+            if (a0 < 0) {
+                _accrueDeficitGrowth(
+                    key.toId(),
+                    0,
+                    LiquidityUtils.safeInt128ToUint128(a0)
+                );
+            }
+            if (a1 < 0) {
+                _accrueDeficitGrowth(
+                    key.toId(),
+                    1,
+                    LiquidityUtils.safeInt128ToUint128(a1)
+                );
+            }
+        }
 
         return (this.afterSwap.selector, 0);
     }
