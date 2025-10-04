@@ -616,7 +616,7 @@ abstract contract VTSManager is IVTSManager {
         PositionId _positionId
     ) public isPositionValid(_positionId) returns (bool, BalanceDelta) {
         // Settle both growths to ensure up-to-date S and D before evaluating RFS
-        _settlePositionGrowths(_positionId);
+        _settlePositionGrowths(_positionId); // TODO: once all position liquidity modifications trigger this, we can return getRFS as a view.
         // Commitment caps
         (uint256 c0, uint256 c1) = _getCommitment(_positionId);
 
