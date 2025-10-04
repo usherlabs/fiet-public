@@ -14,7 +14,9 @@ interface IProxyHook {
 
     function getCorePoolId() external view returns (PoolId);
 
-    function getAvailableLiquidity(address currencyAddress) external view returns (uint256);
-
-    function onMMLiquidityModify(address currency0, address currency1, BalanceDelta balanceDelta) external;
+    function onMMLiquidityModify(
+        address currency0,
+        address currency1,
+        BalanceDelta balanceDelta
+    ) external;
 }

@@ -16,10 +16,7 @@ import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.
 import {TransientStateLibrary} from "v4-periphery/lib/v4-core/src/libraries/TransientStateLibrary.sol";
 import {TickMath} from "v4-periphery/lib/v4-core/src/libraries/TickMath.sol";
 import {SqrtPriceMath} from "v4-periphery/lib/v4-core/src/libraries/SqrtPriceMath.sol";
-import {IVTSCalculator} from "../interfaces/IVTSCalculator.sol";
-import {IVTSOracleAdapter} from "../interfaces/IVTSOracleAdapter.sol";
 import {toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
-// import {IMMPositionManager} from "../interfaces/IMMPositionManager.sol";
 
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 
@@ -73,8 +70,7 @@ abstract contract VTSManager is IVTSManager {
     address private immutable marketFactory;
     address private immutable mmPositionManager;
     IPoolManager private immutable poolManager;
-    IVTSCalculator private calculator; // optional external calculator (Stylus or pure)
-    IVTSOracleAdapter private oracleAdapter; // optional external oracle adapter for deficits attribution
+    address private calculator; // optional external calculator (Stylus or pure)
     IPositionIndex internal positionIndex; // external index for position metadata and liquidity history
 
     modifier onlyMarketFactory() {
@@ -116,7 +112,8 @@ abstract contract VTSManager is IVTSManager {
         marketFactory = _marketFactory;
         mmPositionManager = _mmPositionManager;
         if (_calculator != address(0)) {
-            calculator = IVTSCalculator(_calculator);
+            // calculator = IVTSCalculator(_calculator);
+            calculator = _calculator;
         }
     }
 

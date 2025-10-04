@@ -21,7 +21,7 @@ library TickUtils {
      * @return initialized Whether the next tick has liquidity
      * @dev This function navigates the tick bitmap to find the next tick with liquidity
      */
-    function _nextInitializedTickWithinOneWord(
+    function nextInitializedTickWithinOneWord(
         IPoolManager poolManager,
         PoolId poolId,
         int24 tick,

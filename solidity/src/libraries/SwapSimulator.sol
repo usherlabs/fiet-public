@@ -182,7 +182,7 @@ library SwapSimulator {
 
             // Find the next initialized tick in the swap direction
             (step.tickNext, step.initialized) = TickUtils
-                ._nextInitializedTickWithinOneWord(
+                .nextInitializedTickWithinOneWord(
                     poolManager,
                     corePoolKey.toId(),
                     result.tick,

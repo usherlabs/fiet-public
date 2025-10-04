@@ -36,11 +36,4 @@ interface IVTSManager {
     function getPositionSettledAmounts(
         PositionId positionId
     ) external view returns (uint256 amount0, uint256 amount1);
-
-    // Deficit accrual entrypoint (protocol-bounds only)
-    function recordDeficitEvent(
-        PoolId corePoolId,
-        uint8 token,
-        uint128 deficit
-    ) external;
 }

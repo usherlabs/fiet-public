@@ -178,9 +178,6 @@ abstract contract MarketLiquidity is IMarketLiquidity {
 
         marketUserSettlement[marketId][recipient] += amount;
         marketTotalSettlementDeficit[marketId] += amount;
-
-        // Hook for deficit event integration
-        _onDeficitQueued(marketId, amount);
     }
 
     /**

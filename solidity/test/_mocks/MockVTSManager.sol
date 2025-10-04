@@ -6,9 +6,14 @@ import {PositionId} from "../../src/types/Position.sol";
 import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {PositionLibrary} from "../../src/types/Position.sol";
+import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 
 contract MockVTSManager is VTSManager {
-    constructor(address _poolManager, address _marketFactory, address _mmPositionManager)
+    constructor(
+        address _poolManager,
+        address _marketFactory,
+        address _mmPositionManager
+    )
         VTSManager(_poolManager, _marketFactory, _mmPositionManager, address(0))
     {}
 
@@ -18,36 +23,60 @@ contract MockVTSManager is VTSManager {
     mapping(PositionId => BalanceDelta) public mockCommitment;
 
     // mock the required VTS for a position
-    function setMockVTSRequired(PositionId positionId, uint128 vtsRequired0, uint128 vtsRequired1) public {
-        mockVTSRequired[positionId] = toBalanceDelta(int128(vtsRequired0), int128(vtsRequired1));
+    function setMockVTSRequired(
+        PositionId positionId,
+        uint128 vtsRequired0,
+        uint128 vtsRequired1
+    ) public {
+        mockVTSRequired[positionId] = toBalanceDelta(
+            int128(vtsRequired0),
+            int128(vtsRequired1)
+        );
     }
 
     // Expose tracked commitmentMaxima for testing
-    function getTrackedCommitment(PositionId positionId)
-        external
-        view
-        returns (uint256 commitment0, uint256 commitment1)
-    {
-        return (commitmentMaxima[positionId][0], commitmentMaxima[positionId][1]);
+    function getTrackedCommitment(
+        PositionId positionId
+    ) external view returns (uint256 commitment0, uint256 commitment1) {
+        return (
+            commitmentMaxima[positionId][0],
+            commitmentMaxima[positionId][1]
+        );
     }
 
-    function getTrackedCommitmentFor(address router, ModifyLiquidityParams calldata params)
-        external
-        view
-        returns (uint256 commitment0, uint256 commitment1)
-    {
+    function getTrackedCommitmentFor(
+        address router,
+        ModifyLiquidityParams calldata params
+    ) external view returns (uint256 commitment0, uint256 commitment1) {
         PositionId positionId = PositionLibrary.generateId(router, params);
-        return (commitmentMaxima[positionId][0], commitmentMaxima[positionId][1]);
+        return (
+            commitmentMaxima[positionId][0],
+            commitmentMaxima[positionId][1]
+        );
     }
 
     // mock the current VTS for a position
-    function setMockVTSCurrent(PositionId positionId, uint128 vtsCurrent0, uint128 vtsCurrent1) public {
-        mockVTSCurrent[positionId] = toBalanceDelta(int128(vtsCurrent0), int128(vtsCurrent1));
+    function setMockVTSCurrent(
+        PositionId positionId,
+        uint128 vtsCurrent0,
+        uint128 vtsCurrent1
+    ) public {
+        mockVTSCurrent[positionId] = toBalanceDelta(
+            int128(vtsCurrent0),
+            int128(vtsCurrent1)
+        );
     }
 
     // mock the commitment for a position
-    function setMockCommitment(PositionId positionId, uint128 commitment0, uint128 commitment1) public {
-        mockCommitment[positionId] = toBalanceDelta(int128(commitment0), int128(commitment1));
+    function setMockCommitment(
+        PositionId positionId,
+        uint128 commitment0,
+        uint128 commitment1
+    ) public {
+        mockCommitment[positionId] = toBalanceDelta(
+            int128(commitment0),
+            int128(commitment1)
+        );
     }
 
     // increase the VTS for a position by the provided value in bps
@@ -70,10 +99,22 @@ contract MockVTSManager is VTSManager {
         (uint256 currentVts0, uint256 currentVts1) = getVTSRequired(positionId);
 
         // decrease VTS by the provided bps value, ensuring it doesn't go below 0
-        uint256 newVts0 = currentVts0 > vtsDecreaseBps ? currentVts0 - vtsDecreaseBps : 0;
-        uint256 newVts1 = currentVts1 > vtsDecreaseBps ? currentVts1 - vtsDecreaseBps : 0;
+        uint256 newVts0 = currentVts0 > vtsDecreaseBps
+            ? currentVts0 - vtsDecreaseBps
+            : 0;
+        uint256 newVts1 = currentVts1 > vtsDecreaseBps
+            ? currentVts1 - vtsDecreaseBps
+            : 0;
 
         setMockVTSRequired(positionId, uint128(newVts0), uint128(newVts1));
+    }
+
+    function trackCommitment(
+        address router,
+        PoolId corePoolId,
+        ModifyLiquidityParams calldata params
+    ) external {
+        _trackCommitment(router, corePoolId, params);
     }
 
     // since this is a mock contract, we need to overrride the function to get the current vts for a given position
@@ -105,7 +146,9 @@ contract MockVTSManager is VTSManager {
     // }
 
     // since this is a mock contract, we need to overrride the function to get the commitment for a given position
-    function _getCommitment(PositionId positionId)
+    function _getCommitment(
+        PositionId positionId
+    )
         internal
         view
         override
