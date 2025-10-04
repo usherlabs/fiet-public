@@ -49,6 +49,15 @@ abstract contract VTSManager is IVTSManager {
     // Mapping from position to its core pool id (for reading window outflows)
     mapping(PositionId => PoolId) internal positionPoolId;
 
+    // Inflow growth accounting (mirrors deficit growth; Uniswap v3-style growth per liquidity unit, Q128)
+    // Per-market (pool) global inflow growth per token (token0, token1)
+    mapping(PoolId => uint256[2]) internal inflowGrowthGlobal;
+    // Per-market per-tick outside inflow growth per token
+    mapping(PoolId => mapping(int24 => uint256[2]))
+        internal inflowGrowthOutside;
+    // Per-position last inside inflow growth snapshot per token
+    mapping(PositionId => uint256[2]) internal inflowGrowthInsideLast;
+
     error InvalidCaller();
     error InvalidMarketVTSConfiguration(PoolId corePoolId);
     error NotEnoughSettlementBalance(uint256 amount0, uint256 amount1);
@@ -280,8 +289,8 @@ abstract contract VTSManager is IVTSManager {
         PositionId positionId,
         BalanceDelta balanceDelta
     ) external onlyMMP isPositionValid(positionId) {
-        // First, settle any deficit growth accrued since last touch for this position
-        _settlePositionDeficitGrowth(positionId);
+        // First, settle both growths since last touch
+        _settlePositionGrowths(positionId);
 
         int128 amount0 = balanceDelta.amount0();
         int128 amount1 = balanceDelta.amount1();
@@ -308,9 +317,24 @@ abstract contract VTSManager is IVTSManager {
         }
     }
 
+    /// @dev Internal helper to settle both deficit and inflow growth for a position
+    function _settlePositionGrowths(PositionId positionId) internal {
+        _settlePositionDeficitGrowth(positionId);
+        _settlePositionInflowGrowth(positionId);
+    }
+
+    // /// @notice External poke to settle both deficit and inflow growth for a position
+    // /// @dev Can be called by anyone; settles growth to keep S and D up to date before reads
+    // function pokePosition(
+    //     PositionId positionId
+    // ) external isPositionValid(positionId) {
+    //     _settlePositionGrowths(positionId);
+    // }
+
     /// @notice Called by the hook on tick cross to flip outside growth for a tick
     function _onTickCross(PoolId corePoolId, int24 tick, uint8 token) internal {
         _flipDeficitGrowthOutside(corePoolId, tick, token);
+        _flipInflowGrowthOutside(corePoolId, tick, token);
     }
 
     /// @dev Accrue deficit growth to the global accumulator (per token) using current in-range liquidity
@@ -433,6 +457,91 @@ abstract contract VTSManager is IVTSManager {
         deficitGrowthInsideLast[positionId][1] = inside1;
     }
 
+    /// @dev Accrue inflow growth to the global accumulator (per token) using current in-range liquidity
+    ///      inflowAmount should be net of Uniswap LP/protocol fees (use no-fee input per segment)
+    function _accrueInflowGrowth(
+        PoolId corePoolId,
+        uint8 token,
+        uint256 inflowAmount
+    ) internal {
+        if (token > 1) return;
+        uint128 liq = poolManager.getLiquidity(corePoolId);
+        if (liq == 0 || inflowAmount == 0) {
+            return;
+        }
+        uint256 deltaG = (inflowAmount * Q128) / uint256(liq);
+        uint256[2] storage g = inflowGrowthGlobal[corePoolId];
+        g[token] = g[token] + deltaG;
+    }
+
+    /// @dev Flip the inflow outside accumulator for a tick (like feeGrowthOutside flip)
+    function _flipInflowGrowthOutside(
+        PoolId corePoolId,
+        int24 tick,
+        uint8 token
+    ) internal {
+        if (token > 1) return;
+        uint256 globalG = inflowGrowthGlobal[corePoolId][token];
+        uint256 currentOutside = inflowGrowthOutside[corePoolId][tick][token];
+        inflowGrowthOutside[corePoolId][tick][token] = globalG - currentOutside;
+    }
+
+    /// @dev Compute inflow inside accumulator for a position bounds
+    function _inflowGrowthInside(
+        PoolId corePoolId,
+        int24 tickLower,
+        int24 tickUpper
+    ) internal view returns (uint256 inside0, uint256 inside1) {
+        uint256 g0 = inflowGrowthGlobal[corePoolId][0];
+        uint256 g1 = inflowGrowthGlobal[corePoolId][1];
+        uint256 lower0 = inflowGrowthOutside[corePoolId][tickLower][0];
+        uint256 lower1 = inflowGrowthOutside[corePoolId][tickLower][1];
+        uint256 upper0 = inflowGrowthOutside[corePoolId][tickUpper][0];
+        uint256 upper1 = inflowGrowthOutside[corePoolId][tickUpper][1];
+        // inside = global - outside(lower) - outside(upper)
+        inside0 = g0 - lower0 - upper0;
+        inside1 = g1 - lower1 - upper1;
+    }
+
+    /// @dev Settle inflow growth for a position into totalSettlementAmount in raw token units
+    function _settlePositionInflowGrowth(PositionId positionId) internal {
+        PositionMeta memory meta = positionIndex.getMeta(positionId);
+        PoolId corePoolId = meta.poolId;
+        if (PoolId.unwrap(corePoolId) == bytes32(0)) {
+            return;
+        }
+        (uint256 inside0, uint256 inside1) = _inflowGrowthInside(
+            corePoolId,
+            meta.tickLower,
+            meta.tickUpper
+        );
+        uint256 last0 = inflowGrowthInsideLast[positionId][0];
+        uint256 last1 = inflowGrowthInsideLast[positionId][1];
+        uint256 delta0 = inside0 - last0;
+        uint256 delta1 = inside1 - last1;
+        if (delta0 == 0 && delta1 == 0) {
+            return;
+        }
+        uint128 liq = poolManager.getPositionLiquidity(
+            corePoolId,
+            PositionId.unwrap(positionId)
+        );
+        if (liq > 0) {
+            // amount = deltaInside * L / Q128
+            uint256 add0 = (delta0 * uint256(liq)) >> 128;
+            uint256 add1 = (delta1 * uint256(liq)) >> 128;
+            if (add0 > 0) {
+                totalSettlementAmount[positionId][0] += add0;
+            }
+            if (add1 > 0) {
+                totalSettlementAmount[positionId][1] += add1;
+            }
+        }
+        // Update snapshots
+        inflowGrowthInsideLast[positionId][0] = inside0;
+        inflowGrowthInsideLast[positionId][1] = inside1;
+    }
+
     /**
      * @notice Gets the required vts for a position using cumulative deficits
      * @param _positionId The position id
@@ -505,7 +614,9 @@ abstract contract VTSManager is IVTSManager {
      */
     function getRFS(
         PositionId _positionId
-    ) public view isPositionValid(_positionId) returns (bool, BalanceDelta) {
+    ) public isPositionValid(_positionId) returns (bool, BalanceDelta) {
+        // Settle both growths to ensure up-to-date S and D before evaluating RFS
+        _settlePositionGrowths(_positionId);
         // Commitment caps
         (uint256 c0, uint256 c1) = _getCommitment(_positionId);
 

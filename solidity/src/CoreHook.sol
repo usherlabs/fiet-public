@@ -217,6 +217,30 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
                                 outSeg
                             );
                         }
+                        // Inflow accrual per segment using no-fee input (net of LP/protocol fees)
+                        {
+                            uint8 tokenIn = zeroForOne ? 0 : 1;
+                            uint256 inNoFee = zeroForOne
+                                ? SqrtPriceMath.getAmount0Delta(
+                                    sqrtCurrent,
+                                    sqrtTarget,
+                                    segmentLiquidity,
+                                    true
+                                )
+                                : SqrtPriceMath.getAmount1Delta(
+                                    sqrtTarget,
+                                    sqrtCurrent,
+                                    segmentLiquidity,
+                                    true
+                                );
+                            if (inNoFee > 0) {
+                                _accrueInflowGrowth(
+                                    key.toId(),
+                                    tokenIn,
+                                    inNoFee
+                                );
+                            }
+                        }
                         sqrtCurrent = sqrtTarget;
                     }
                     // stop if we've reached final price
@@ -282,6 +306,26 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
                             zeroForOne ? 1 : 0,
                             outSeg
                         );
+                    }
+                    // Inflow accrual for intra-tick segment (no-fee input)
+                    {
+                        uint8 tokenIn = zeroForOne ? 0 : 1;
+                        uint256 inNoFee = zeroForOne
+                            ? SqrtPriceMath.getAmount0Delta(
+                                sqrtPBefore,
+                                sqrtPAfter,
+                                segmentLiquidity,
+                                true
+                            )
+                            : SqrtPriceMath.getAmount1Delta(
+                                sqrtPAfter,
+                                sqrtPBefore,
+                                segmentLiquidity,
+                                true
+                            );
+                        if (inNoFee > 0) {
+                            _accrueInflowGrowth(key.toId(), tokenIn, inNoFee);
+                        }
                     }
                 }
             }
