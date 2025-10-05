@@ -38,7 +38,7 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
     error InvalidInitialiser();
     error InvalidSender();
 
-    address public immutable marketFactory;
+    // MarketHandler already defines marketFactory; remove duplicate
     address public immutable mmPositionManager;
 
     modifier onlyFactory() {
@@ -364,9 +364,9 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
         returns (bytes4, BalanceDelta)
     {
         // Track maximum potemtial commitment for both tokens in the position
-        _trackCommitment(sender, key.toId(), params);
-        // Update PositionIndex with registration (if new) and a liquidity snapshot
-        _touchPositionIndex(sender, key.toId(), params);
+        _trackCommitment(sender, params);
+        // Update PositionIndex with registration/update based on actual pool id
+        _touchPosition(sender, key.toId(), params);
 
         // only add direct liquidity if the sender is not the market maker position manager/router
         if (sender != address(mmPositionManager)) {
@@ -391,9 +391,9 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
         bytes calldata
     ) internal virtual override returns (bytes4, BalanceDelta) {
         // Track maximum potential commitment for both tokens in the position
-        _trackCommitment(sender, key.toId(), params);
-        // Update PositionIndex with latest liquidity snapshot (and meta if not yet registered)
-        _touchPositionIndex(sender, key.toId(), params);
+        _trackCommitment(sender, params);
+        // Update PositionIndex with registration/update based on actual pool id
+        _touchPosition(sender, key.toId(), params);
 
         // Allow removal of liquidity even when the market is paused.
         // only remove direct liquidity if the sender is the pool manager

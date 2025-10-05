@@ -3,8 +3,8 @@
 pragma solidity ^0.8.26;
 
 import {MarketVTSConfiguration} from "../types/VTS.sol";
-import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
-import {IPositionIndex, PositionMeta} from "../interfaces/IPositionIndex.sol";
+import {PositionIndex} from "../PositionIndex.sol";
+import {PositionMeta} from "../types/Position.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
@@ -17,10 +17,9 @@ import {TransientStateLibrary} from "v4-periphery/lib/v4-core/src/libraries/Tran
 import {TickMath} from "v4-periphery/lib/v4-core/src/libraries/TickMath.sol";
 import {SqrtPriceMath} from "v4-periphery/lib/v4-core/src/libraries/SqrtPriceMath.sol";
 import {toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
-
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 
-abstract contract VTSManager is IVTSManager {
+abstract contract VTSManager is IVTSManager, PositionIndex {
     using SafeCastLib for *;
     using StateLibrary for IPoolManager;
     using TransientStateLibrary for IPoolManager;
@@ -43,8 +42,6 @@ abstract contract VTSManager is IVTSManager {
     mapping(PositionId => uint256[2]) internal deficitGrowthInsideLast;
     // Per-position cumulative deficit (in raw token units)
     mapping(PositionId => uint256[2]) internal cumulativeDeficit;
-    // Mapping from position to its core pool id (for reading window outflows)
-    mapping(PositionId => PoolId) internal positionPoolId;
 
     // Inflow growth accounting (mirrors deficit growth; Uniswap v3-style growth per liquidity unit, Q128)
     // Per-market (pool) global inflow growth per token (token0, token1)
@@ -55,10 +52,10 @@ abstract contract VTSManager is IVTSManager {
     // Per-position last inside inflow growth snapshot per token
     mapping(PositionId => uint256[2]) internal inflowGrowthInsideLast;
 
-    error InvalidCaller();
     error InvalidMarketVTSConfiguration(PoolId corePoolId);
     error NotEnoughSettlementBalance(uint256 amount0, uint256 amount1);
     error InvalidPosition(PositionId positionId);
+    error RFSOpenForPosition(PositionId positionId);
 
     // Event to notify that the VTS configuration has been set/initialized for a core pool
     event MarketVTSConfigurationSet(
@@ -67,29 +64,12 @@ abstract contract VTSManager is IVTSManager {
     );
     // Per-entry events are declared in VTSEvents
 
-    address private immutable marketFactory;
     address private immutable mmPositionManager;
     IPoolManager private immutable poolManager;
     address private calculator; // optional external calculator (Stylus or pure)
-    IPositionIndex internal positionIndex; // external index for position metadata and liquidity history
 
-    modifier onlyMarketFactory() {
-        if (msg.sender != marketFactory) revert InvalidCaller();
-        _;
-    }
-
-    modifier onlyMarketAssets(PoolId corePoolId) {
-        address[2] memory currencies = IMarketFactory(marketFactory)
-            .corePoolToCurrencyPair(corePoolId);
-        if (msg.sender != currencies[0] && msg.sender != currencies[1])
-            revert InvalidCaller();
-        _;
-    }
-
-    modifier isPositionValid(PositionId _positionId) {
-        PositionMeta memory meta = positionIndex.getMeta(_positionId);
-        PoolId corePoolId = meta.poolId;
-        if (PoolId.unwrap(corePoolId) == bytes32(0)) {
+    modifier onlyPositionValid(PositionId _positionId) {
+        if (!isPositionValid(_positionId, true)) {
             revert InvalidPosition(_positionId);
         }
         _;
@@ -107,9 +87,8 @@ abstract contract VTSManager is IVTSManager {
         address _marketFactory,
         address _mmPositionManager,
         address _calculator
-    ) {
+    ) PositionIndex(_marketFactory) {
         poolManager = IPoolManager(_poolManager);
-        marketFactory = _marketFactory;
         mmPositionManager = _mmPositionManager;
         if (_calculator != address(0)) {
             // calculator = IVTSCalculator(_calculator);
@@ -131,11 +110,6 @@ abstract contract VTSManager is IVTSManager {
         emit MarketVTSConfigurationSet(corePoolId, vtsConfiguration);
     }
 
-    // TODO: Should be passed in constructor, or inherited.
-    function setPositionIndex(address index) external onlyMarketFactory {
-        positionIndex = IPositionIndex(index);
-    }
-
     function getPositionSettledAmounts(
         PositionId positionId
     ) public view returns (uint256 amount0, uint256 amount1) {
@@ -143,6 +117,13 @@ abstract contract VTSManager is IVTSManager {
             totalSettlementAmount[positionId][0],
             totalSettlementAmount[positionId][1]
         );
+    }
+
+    // Expose PositionIndex view functions via IVTSManager
+    function getPosition(
+        PositionId id
+    ) external view returns (PositionMeta memory) {
+        return meta[id];
     }
 
     /**
@@ -154,38 +135,6 @@ abstract contract VTSManager is IVTSManager {
         PoolId corePoolId
     ) public view returns (MarketVTSConfiguration memory) {
         return corePoolToVTSConfiguration[corePoolId];
-    }
-
-    /// @dev Register/update position metadata and liquidity snapshots in the PositionIndex
-    function _touchPositionIndex(
-        address router,
-        PoolId corePoolId,
-        ModifyLiquidityParams calldata params
-    ) internal {
-        if (address(positionIndex) == address(0)) {
-            return;
-        }
-        // Derive position id consistent with Uniswap position keying
-        PositionId positionId = PositionLibrary.generateId(router, params);
-        // Ensure registration exists (owner set) and current liquidity snapshot is appended
-        // Read meta; if not registered, owner will be zero address
-        PositionMeta memory positionMeta = positionIndex.getMeta(positionId);
-        if (positionMeta.owner == address(0)) {
-            positionIndex.register(
-                positionId,
-                corePoolId,
-                params.tickLower,
-                params.tickUpper,
-                router,
-                uint64(block.timestamp)
-            );
-        }
-        // Snapshot current on-chain liquidity
-        uint128 liq = poolManager.getPositionLiquidity(
-            corePoolId,
-            PositionId.unwrap(positionId)
-        );
-        positionIndex.updateLiquidity(positionId, liq);
     }
 
     /**
@@ -228,12 +177,9 @@ abstract contract VTSManager is IVTSManager {
      */
     function _trackCommitment(
         address router,
-        PoolId corePoolId,
         ModifyLiquidityParams calldata params
     ) internal {
         PositionId positionId = PositionLibrary.generateId(router, params);
-        // Associate position with its core pool id for later reads
-        positionPoolId[positionId] = corePoolId;
 
         // Current tracked maxima for this position
         uint256 currentC0 = commitmentMaxima[positionId][0];
@@ -276,6 +222,27 @@ abstract contract VTSManager is IVTSManager {
         }
     }
 
+    /// @dev Override to set active flag based on actual pool liquidity
+    function _touchPosition(
+        address owner,
+        PoolId poolId,
+        ModifyLiquidityParams calldata params
+    ) internal override {
+        // Call base to register/update basic fields
+        PositionIndex._touchPosition(owner, poolId, params);
+        // Determine actual position liquidity post-modify
+        PositionId id = PositionLibrary.generateId(owner, params);
+        uint128 liq = poolManager.getPositionLiquidity(
+            poolId,
+            PositionId.unwrap(id)
+        );
+        if (liq == 0) {
+            meta[id].isActive = false;
+        } else {
+            meta[id].isActive = true;
+        }
+    }
+
     /**
      * @notice Records the settlement of assets on a position
      * @dev make sure this function can only be called by the position manager since that is the interface through which settlements are going to be made
@@ -285,7 +252,7 @@ abstract contract VTSManager is IVTSManager {
     function onMMLiquidityModify(
         PositionId positionId,
         BalanceDelta balanceDelta
-    ) external onlyMMP isPositionValid(positionId) {
+    ) external onlyMMP onlyPositionValid(positionId) {
         // First, settle both growths since last touch
         _settlePositionGrowths(positionId);
 
@@ -319,14 +286,6 @@ abstract contract VTSManager is IVTSManager {
         _settlePositionDeficitGrowth(positionId);
         _settlePositionInflowGrowth(positionId);
     }
-
-    // /// @notice External poke to settle both deficit and inflow growth for a position
-    // /// @dev Can be called by anyone; settles growth to keep S and D up to date before reads
-    // function pokePosition(
-    //     PositionId positionId
-    // ) external isPositionValid(positionId) {
-    //     _settlePositionGrowths(positionId);
-    // }
 
     /// @notice Called by the hook on tick cross to flip outside growth for a tick
     function _onTickCross(PoolId corePoolId, int24 tick, uint8 token) internal {
@@ -403,15 +362,15 @@ abstract contract VTSManager is IVTSManager {
 
     /// @dev Settle deficit growth for a position into cumulativeDeficit in raw token units
     function _settlePositionDeficitGrowth(PositionId positionId) internal {
-        PositionMeta memory meta = positionIndex.getMeta(positionId);
-        PoolId corePoolId = meta.poolId;
+        PositionMeta memory m = meta[positionId];
+        PoolId corePoolId = m.poolId;
         if (PoolId.unwrap(corePoolId) == bytes32(0)) {
             return;
         }
         (uint256 inside0, uint256 inside1) = _deficitGrowthInside(
             corePoolId,
-            meta.tickLower,
-            meta.tickUpper
+            m.tickLower,
+            m.tickUpper
         );
         uint256 last0 = deficitGrowthInsideLast[positionId][0];
         uint256 last1 = deficitGrowthInsideLast[positionId][1];
@@ -502,15 +461,15 @@ abstract contract VTSManager is IVTSManager {
 
     /// @dev Settle inflow growth for a position into totalSettlementAmount in raw token units
     function _settlePositionInflowGrowth(PositionId positionId) internal {
-        PositionMeta memory meta = positionIndex.getMeta(positionId);
-        PoolId corePoolId = meta.poolId;
+        PositionMeta memory m = meta[positionId];
+        PoolId corePoolId = m.poolId;
         if (PoolId.unwrap(corePoolId) == bytes32(0)) {
             return;
         }
         (uint256 inside0, uint256 inside1) = _inflowGrowthInside(
             corePoolId,
-            meta.tickLower,
-            meta.tickUpper
+            m.tickLower,
+            m.tickUpper
         );
         uint256 last0 = inflowGrowthInsideLast[positionId][0];
         uint256 last1 = inflowGrowthInsideLast[positionId][1];
@@ -610,10 +569,38 @@ abstract contract VTSManager is IVTSManager {
      * @return balanceDelta The balance delta of the amount of required to be settled or allowed to be withdrawn depending on if it is negative or positive
      */
     function calcRFS(
-        PositionId _positionId
-    ) external isPositionValid(_positionId) returns (bool, BalanceDelta) {
+        PositionId _positionId,
+        bool requireClosedRfS
+    ) external onlyPositionValid(_positionId) returns (bool, BalanceDelta) {
         _settlePositionGrowths(_positionId);
-        return getRFS(_positionId);
+        (bool rfsOpen, BalanceDelta balanceDelta) = _getRFS(_positionId);
+        if (requireClosedRfS) {
+            if (rfsOpen) {
+                revert RFSOpenForPosition(_positionId);
+            }
+        }
+        return (rfsOpen, balanceDelta);
+    }
+
+    function prepareLiquidation(
+        PositionId _positionId,
+        bool requireClosedRfS
+    )
+        external
+        onlyMMP
+        onlyPositionValid(_positionId)
+        returns (uint256, uint256)
+    {
+        _settlePositionGrowths(_positionId);
+        (bool rfsOpen, ) = _getRFS(_positionId);
+        if (rfsOpen && requireClosedRfS) {
+            revert RFSOpenForPosition(_positionId);
+        }
+
+        // get total amount settled from the VTS manager
+        // important to do this before removing the liquidity from the pool
+        // because the position information is cleared after removing the liquidity
+        return getPositionSettledAmounts(_positionId);
     }
 
     /**
@@ -622,9 +609,14 @@ abstract contract VTSManager is IVTSManager {
      * @return rfsOpen Whether the RFS is open
      * @return balanceDelta The balance delta of the amount of required to be settled or allowed to be withdrawn depending on if it is negative or positive
      */
-    function getRFS(
+    function _getRFS(
         PositionId _positionId
-    ) public view isPositionValid(_positionId) returns (bool, BalanceDelta) {
+    )
+        internal
+        view
+        onlyPositionValid(_positionId)
+        returns (bool, BalanceDelta)
+    {
         // Commitment caps
         (uint256 c0, uint256 c1) = _getCommitment(_positionId);
 

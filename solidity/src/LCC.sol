@@ -499,14 +499,9 @@ contract LiquidityCommitmentCertificate is
     function _isLCCSupportedByMarket(
         bytes32 marketId
     ) internal view returns (bool) {
-        // get the core pool from the market factory
-        PoolId corePool = IMarketFactory(marketFactory).coreToProxy(
-            PoolId.wrap(marketId)
-        );
-
         // get the two currencies that the core pool is trading
         address[2] memory currencies = IMarketFactory(marketFactory)
-            .corePoolToCurrencyPair(corePool);
+            .corePoolToCurrencyPair(PoolId.wrap(marketId));
 
         // Check if this LCC contract matches either currency in the core pool
         address lccAddress = address(this);
