@@ -6,10 +6,13 @@ import {PositionId} from "../types/Position.sol";
 import {PositionMeta} from "../types/Position.sol";
 
 interface IPositionIndex {
-    /// @notice Checks if a position is valid (exists and optionally active)
-    function isPositionValid(PositionId id) external view returns (bool);
     function getPosition(
         PositionId id,
         bool revertIfInvalid
     ) external view returns (PositionMeta memory);
+
+    function isPositionValid(
+        PositionId id,
+        bool requireActive
+    ) external view returns (bool);
 }

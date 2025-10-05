@@ -111,10 +111,9 @@ contract MockVTSManager is VTSManager {
 
     function trackCommitment(
         address router,
-        PoolId corePoolId,
         ModifyLiquidityParams calldata params
     ) external {
-        _trackCommitment(router, corePoolId, params);
+        _trackCommitment(router, params);
     }
 
     // since this is a mock contract, we need to overrride the function to get the current vts for a given position

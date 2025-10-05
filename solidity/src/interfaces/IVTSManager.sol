@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+pragma solidity ^0.8.26;
 
 import {MarketVTSConfiguration} from "../types/VTS.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
@@ -27,10 +27,6 @@ interface IVTSManager {
         bool requireClosedRfS
     ) external returns (bool, BalanceDelta);
 
-    function getRFS(
-        PositionId positionId
-    ) external view returns (bool, BalanceDelta);
-
     function getVTSCurrent(
         PositionId positionId
     ) external view returns (uint256 vtsCurrent0, uint256 vtsCurrent1);
@@ -45,16 +41,5 @@ interface IVTSManager {
 
     function prepareLiquidation(
         PositionId positionId
-    ) external view returns (uint256 amount0, uint256 amount1);
-
-    /// View accessors from PositionIndex (inherited by VTSManager)
-    function getPosition(
-        PositionId id,
-        bool revertIfInvalid
-    ) external view returns (PositionMeta memory);
-
-    function isPositionValid(
-        PositionId id,
-        bool requireActive
-    ) external view returns (bool);
+    ) external returns (uint256 amount0, uint256 amount1);
 }

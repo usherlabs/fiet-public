@@ -141,11 +141,7 @@ contract VTSManagerTest is Test, MarketTestBase {
             salt: salt
         });
 
-        vtsManager.trackCommitment(
-            router,
-            PoolIdLibrary.toId(corePoolKey),
-            paramsAdd
-        );
+        vtsManager.trackCommitment(router, paramsAdd);
 
         (uint256 expectedAddC0, uint256 expectedAddC1) = vtsManager
             .calculateCommitmentMaxima(tickLower, tickUpper, addLiq);
@@ -170,11 +166,7 @@ contract VTSManagerTest is Test, MarketTestBase {
             liquidityDelta: -int256(uint256(removePart)),
             salt: salt
         });
-        vtsManager.trackCommitment(
-            router,
-            PoolIdLibrary.toId(corePoolKey),
-            paramsRemPart
-        );
+        vtsManager.trackCommitment(router, paramsRemPart);
 
         (uint256 subPartC0, uint256 subPartC1) = vtsManager
             .calculateCommitmentMaxima(tickLower, tickUpper, removePart);
@@ -201,11 +193,7 @@ contract VTSManagerTest is Test, MarketTestBase {
             liquidityDelta: -int256(uint256(removeRest)),
             salt: salt
         });
-        vtsManager.trackCommitment(
-            router,
-            PoolIdLibrary.toId(corePoolKey),
-            paramsRemAll
-        );
+        vtsManager.trackCommitment(router, paramsRemAll);
 
         (trackedC0, trackedC1) = vtsManager.getTrackedCommitmentFor(
             router,

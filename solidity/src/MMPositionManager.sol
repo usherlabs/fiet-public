@@ -24,6 +24,7 @@ import {IMMPositionManager} from "./interfaces/IMMPositionManager.sol";
 import {IProxyHook} from "./interfaces/IProxyHook.sol";
 import {ILCC} from "./interfaces/ILCC.sol";
 import {IVRLSpokeReceiver} from "./interfaces/IVRLSpokeReciever.sol";
+import {IPositionIndex} from "./interfaces/IPositionIndex.sol";
 
 contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
     error InvalidTicker(string ticker);
@@ -87,8 +88,12 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         revert("Metadata not implemented");
     }
 
-    function getVTSManager() internal view returns (IVTSManager) {
+    function _getVTSManager() internal view returns (IVTSManager) {
         return IVTSManager(coreHook);
+    }
+
+    function _getPositionIndex() internal view returns (IPositionIndex) {
+        return IPositionIndex(coreHook);
     }
 
     function getPositionId(
@@ -146,7 +151,10 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         if (PositionId.unwrap(positionId) == bytes32(0)) {
             revert InvalidPositionId(positionId);
         }
-        PositionMeta memory m = getVTSManager().getPosition(positionId, true);
+        PositionMeta memory m = _getPositionIndex().getPosition(
+            positionId,
+            true
+        );
 
         if (!_isMMPosition(positionId, m)) {
             revert InvalidPositionId(positionId);
@@ -164,7 +172,6 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
      * @param amount1 The amount of token1 to settle
      */
     function settle(
-        PoolKey memory poolKey,
         uint256 tokenId,
         uint256 positionIndex,
         uint256 amount0,
@@ -198,7 +205,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         PositionMeta memory position = getPosition(tokenId, positionIndex);
 
         // validate that there is no open RFS for this position
-        (, BalanceDelta balanceDelta) = getVTSManager().calcRFS(
+        (, BalanceDelta balanceDelta) = _getVTSManager().calcRFS(
             positionId,
             true
         );
@@ -291,7 +298,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
 
         // calcualte the total LCC USD value and confirm it is less than the total signal usd value
         // TODO: Use a standard registry that internally maps markets to oracle factories -> oracles.
-        address marketOracleFactory = getVTSManager()
+        address marketOracleFactory = _getVTSManager()
             .getMarketVTSConfiguration(poolKey.toId())
             .oracleFactory;
 
@@ -405,7 +412,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         PositionId positionId = getPositionId(tokenId, positionIndex);
 
         // check if RFS is open
-        (uint256 s0, uint256 s1) = getVTSManager().prepareLiquidation(
+        (uint256 s0, uint256 s1) = _getVTSManager().prepareLiquidation(
             positionId
         );
 
@@ -465,7 +472,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         returns (uint256 lccUnderlyingAmount0, uint256 lccUnderlyingAmount1)
     {
         // get the base vts of the currencies from the pool configuration
-        MarketVTSConfiguration memory vtsConfiguration = getVTSManager()
+        MarketVTSConfiguration memory vtsConfiguration = _getVTSManager()
             .getMarketVTSConfiguration(poolKey.toId());
 
         // get the amount of underlying liquidity to transfer from the issuer to the lcc
@@ -608,7 +615,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         );
 
         // notify the vts manager of the settlement made for this position
-        getVTSManager().onMMLiquidityModify(positionId, balanceDelta);
+        _getVTSManager().onMMLiquidityModify(positionId, balanceDelta);
 
         // transfer from this contract to the actual recipient
         IERC20Minimal(lcc0.underlyingAsset()).transfer(sender, amount0);

@@ -3,7 +3,7 @@
 pragma solidity ^0.8.26;
 
 import {MarketVTSConfiguration} from "../types/VTS.sol";
-import {PositionIndex} from "../PositionIndex.sol";
+import {PositionIndex} from "../modules/PositionIndex.sol";
 import {PositionMeta} from "../types/Position.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
@@ -104,7 +104,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     function setMarketVTSConfiguration(
         PoolId corePoolId,
         MarketVTSConfiguration memory vtsConfiguration
-    ) public onlyMarketFactory {
+    ) public override onlyMarketFactory {
         corePoolToVTSConfiguration[corePoolId] = vtsConfiguration;
 
         emit MarketVTSConfigurationSet(corePoolId, vtsConfiguration);
@@ -112,7 +112,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
 
     function getPositionSettledAmounts(
         PositionId positionId
-    ) public view returns (uint256 amount0, uint256 amount1) {
+    ) public view override returns (uint256 amount0, uint256 amount1) {
         return (
             totalSettlementAmount[positionId][0],
             totalSettlementAmount[positionId][1]
@@ -126,7 +126,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
      */
     function getMarketVTSConfiguration(
         PoolId corePoolId
-    ) public view returns (MarketVTSConfiguration memory) {
+    ) public view override returns (MarketVTSConfiguration memory) {
         return corePoolToVTSConfiguration[corePoolId];
     }
 
@@ -161,6 +161,31 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
             liquidity,
             true
         );
+    }
+
+    function _touchPosition(
+        address owner,
+        PoolId poolId,
+        ModifyLiquidityParams calldata params
+    ) internal virtual {
+        PositionId id = PositionLibrary.generateId(owner, params);
+        PositionMeta memory m = meta[id];
+        if (m.owner == address(0)) {
+            _registerPosition(owner, poolId, params);
+        } else if (m.isActive == true) {
+            meta[id].liquidity = params.liquidityDelta;
+        } else {
+            revert NotActive(id);
+        }
+        uint128 liq = poolManager.getPositionLiquidity(
+            poolId,
+            PositionId.unwrap(id)
+        );
+        if (liq == 0) {
+            meta[id].isActive = false;
+        } else {
+            meta[id].isActive = true;
+        }
     }
 
     /**
@@ -212,27 +237,6 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         } else {
             // No-op if liquidityDelta == 0 (poke)
             return;
-        }
-    }
-
-    /// @dev Override to set active flag based on actual pool liquidity
-    function _touchPosition(
-        address owner,
-        PoolId poolId,
-        ModifyLiquidityParams calldata params
-    ) internal override {
-        // Call base to register/update basic fields
-        PositionIndex._touchPosition(owner, poolId, params);
-        // Determine actual position liquidity post-modify
-        PositionId id = PositionLibrary.generateId(owner, params);
-        uint128 liq = poolManager.getPositionLiquidity(
-            poolId,
-            PositionId.unwrap(id)
-        );
-        if (liq == 0) {
-            meta[id].isActive = false;
-        } else {
-            meta[id].isActive = true;
         }
     }
 
@@ -493,20 +497,20 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
 
     /**
      * @notice Gets the required vts for a position using cumulative deficits
-     * @param _positionId The position id
+     * @param positionId The position id
      * @return vtsRequired0 The required vts for token0 (1e18 scale)
      * @return vtsRequired1 The required vts for token1 (1e18 scale)
      */
     function getVTSRequired(
-        PositionId _positionId
+        PositionId positionId
     ) public view virtual returns (uint256 vtsRequired0, uint256 vtsRequired1) {
         // If external calculator is configured, defer
         if (address(calculator) != address(0)) {
             return (0, 0);
         }
-        (uint256 c0, uint256 c1) = _getCommitment(_positionId);
-        uint256 d0 = cumulativeDeficit[_positionId][0];
-        uint256 d1 = cumulativeDeficit[_positionId][1];
+        (uint256 c0, uint256 c1) = _getCommitment(positionId);
+        uint256 d0 = cumulativeDeficit[positionId][0];
+        uint256 d1 = cumulativeDeficit[positionId][1];
         uint256 one = 1e18;
         vtsRequired0 = c0 == 0 ? 0 : (d0 >= c0 ? one : (d0 * one) / c0);
         vtsRequired1 = c1 == 0 ? 0 : (d1 >= c1 ? one : (d1 * one) / c1);
@@ -557,7 +561,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
 
     /**
      * @notice Calculates the RFS for a position (settles growths and calls getRFS)
-     * @param _positionId The position id
+     * @param positionId The position id
      * @return rfsOpen Whether the RFS is open
      * @return balanceDelta The balance delta of the amount of required to be settled or allowed to be withdrawn depending on if it is negative or positive
      */
