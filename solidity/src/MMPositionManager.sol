@@ -172,7 +172,12 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         PositionMeta memory m = getPosition(tokenId, positionIndex); // Validate the position by fetching it.
 
         // settle the underlying assets to the proxy hook
-        _settleUnderlyingAssetToMarket(m, amount0, amount1);
+        _settleUnderlyingAssetToMarket(
+            getPositionId(tokenId, positionIndex),
+            m.poolId,
+            amount0,
+            amount1
+        );
     }
 
     /**
@@ -221,7 +226,13 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         }
 
         // withdraw the amounts from the position
-        _takeUnderlyingAssetFromMarket(positionId, amount0, amount1);
+        _takeUnderlyingAssetFromMarket(
+            positionId,
+            position.poolId,
+            amount0,
+            amount1,
+            false
+        );
     }
 
     /**
