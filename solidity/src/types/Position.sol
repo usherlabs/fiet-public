@@ -18,8 +18,6 @@ struct PositionMeta {
     int256 liquidity;
     // the owner of the position -- ie. the router, mm position manager, native Uv4, etc.
     address owner;
-    // the prover of the liquidity signal verified to create this position
-    address prover; // by default, this is address(0). However, if owner = mm position manager, then this is the prover of the liquidity signal verified to create this position
     // whether the position is active
     bool isActive;
     // the core pool id for this position (immutable after registration)

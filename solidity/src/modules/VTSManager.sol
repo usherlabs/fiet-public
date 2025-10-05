@@ -119,13 +119,6 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         );
     }
 
-    // Expose PositionIndex view functions via IVTSManager
-    function getPosition(
-        PositionId id
-    ) external view returns (PositionMeta memory) {
-        return meta[id];
-    }
-
     /**
      * @notice Gets the VTS configuration for a core pool
      * @param corePoolId The core pool ID
@@ -569,38 +562,28 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
      * @return balanceDelta The balance delta of the amount of required to be settled or allowed to be withdrawn depending on if it is negative or positive
      */
     function calcRFS(
-        PositionId _positionId,
+        PositionId positionId,
         bool requireClosedRfS
-    ) external onlyPositionValid(_positionId) returns (bool, BalanceDelta) {
-        _settlePositionGrowths(_positionId);
-        (bool rfsOpen, BalanceDelta balanceDelta) = _getRFS(_positionId);
+    ) public onlyPositionValid(positionId) returns (bool, BalanceDelta) {
+        _settlePositionGrowths(positionId);
+        (bool rfsOpen, BalanceDelta balanceDelta) = _getRFS(positionId);
         if (requireClosedRfS) {
             if (rfsOpen) {
-                revert RFSOpenForPosition(_positionId);
+                revert RFSOpenForPosition(positionId);
             }
         }
         return (rfsOpen, balanceDelta);
     }
 
     function prepareLiquidation(
-        PositionId _positionId,
-        bool requireClosedRfS
-    )
-        external
-        onlyMMP
-        onlyPositionValid(_positionId)
-        returns (uint256, uint256)
-    {
-        _settlePositionGrowths(_positionId);
-        (bool rfsOpen, ) = _getRFS(_positionId);
-        if (rfsOpen && requireClosedRfS) {
-            revert RFSOpenForPosition(_positionId);
-        }
+        PositionId positionId
+    ) external onlyMMP returns (uint256, uint256) {
+        calcRFS(positionId, true);
 
         // get total amount settled from the VTS manager
         // important to do this before removing the liquidity from the pool
         // because the position information is cleared after removing the liquidity
-        return getPositionSettledAmounts(_positionId);
+        return getPositionSettledAmounts(positionId);
     }
 
     /**

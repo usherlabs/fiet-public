@@ -35,8 +35,7 @@ abstract contract PositionIndex is IPositionIndex, MarketHandler {
             liquidity: params.liquidityDelta,
             owner: owner,
             isActive: true,
-            poolId: poolId,
-            prover: address(0) // Set later within MMPositionManager
+            poolId: poolId
         });
     }
 

@@ -23,7 +23,8 @@ interface IVTSManager {
     ) external view returns (MarketVTSConfiguration memory);
 
     function calcRFS(
-        PositionId positionId
+        PositionId positionId,
+        bool requireClosedRfS
     ) external returns (bool, BalanceDelta);
 
     function getRFS(
@@ -42,7 +43,18 @@ interface IVTSManager {
         PositionId positionId
     ) external view returns (uint256 amount0, uint256 amount1);
 
+    function prepareLiquidation(
+        PositionId positionId
+    ) external view returns (uint256 amount0, uint256 amount1);
+
     /// View accessors from PositionIndex (inherited by VTSManager)
-    function getPosition(PositionId id) external view returns (PositionMeta memory);
-    function isPositionValid(PositionId id, bool requireActive) external view returns (bool);
+    function getPosition(
+        PositionId id,
+        bool revertIfInvalid
+    ) external view returns (PositionMeta memory);
+
+    function isPositionValid(
+        PositionId id,
+        bool requireActive
+    ) external view returns (bool);
 }

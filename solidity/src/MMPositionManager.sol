@@ -12,7 +12,7 @@ import {BalanceDelta} from "v4-periphery/lib/v4-core/src/types/BalanceDelta.sol"
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {PoolId} from "v4-periphery/lib/v4-core/src/types/PoolId.sol";
 import {ERC721} from "solmate/tokens/ERC721.sol";
-import {PositionInfo, PositionId, PositionLibrary} from "./types/Position.sol";
+import {PositionMeta, PositionId, PositionLibrary} from "./types/Position.sol";
 import {LiquiditySignal} from "./types/Position.sol";
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 import {IERC20Minimal} from "@uniswap/v4-core/src/interfaces/external/IERC20Minimal.sol";
@@ -44,13 +44,15 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
 
     event SignalCommitted(
         address indexed mm,
-        PositionId positionId,
+        uint256 tokenId,
+        uint256 positionIndex,
         uint256 amount0,
         uint256 amount1
     );
     event SignalDecommitted(
         address indexed mm,
-        PositionId positionId,
+        uint256 tokenId,
+        uint256 positionIndex,
         uint256 amount0,
         uint256 amount1
     );
@@ -59,8 +61,8 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
     uint256 private nextTokenId = 1;
     IVRLSpokeReceiver public immutable spokeReceiver;
     mapping(uint256 => mapping(uint256 => PositionId)) public nftToPositionId;
-
     mapping(uint256 => uint256) public nftToPositionCount;
+    mapping(PositionId => address) public proverOfPosition;
 
     address private immutable coreHook;
 
@@ -96,8 +98,14 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         return nftToPositionId[tokenId][positionIndex];
     }
 
-    function _isMMPosition(PositionMeta memory m) internal view returns (bool) {
-        return m.owner == address(this) && m.isActive && m.prover != address(0);
+    function _isMMPosition(
+        PositionId positionId,
+        PositionMeta memory m
+    ) internal view returns (bool) {
+        return
+            m.owner == address(this) &&
+            m.isActive &&
+            proverOfPosition[positionId] != address(0);
     }
 
     /**
@@ -126,53 +134,51 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
 
     /**
      * Gets information about a position using the token id and position index
-     * @param positionId The position id to get the position info for
+     * @param tokenId The token id to get the position info for
+     * @param positionIndex The position index to get the position info for
      * @return positionInfo The position info
      */
     function getPosition(
         uint256 tokenId,
         uint256 positionIndex
     ) public view returns (PositionMeta memory) {
-        // Bridge PositionIndex meta to PositionInfo for legacy callers
         PositionId positionId = getPositionId(tokenId, positionIndex);
-        if (positionId == PositionId.wrap(0)) {
+        if (PositionId.unwrap(positionId) == bytes32(0)) {
             revert InvalidPositionId(positionId);
         }
         PositionMeta memory m = getVTSManager().getPosition(positionId, true);
+
+        if (!_isMMPosition(positionId, m)) {
+            revert InvalidPositionId(positionId);
+        }
 
         return m;
     }
 
     /**
      * @dev This function is used to settle more underlying assets for a particular position
-     * @param positionId The position id to settle the position for
+     * @param tokenId The token id to settle the position for
+     * @param positionIndex The position index to settle the position for
      * @param amount0 The amount of token0 to settle
      * @param amount1 The amount of token1 to settle
      */
     function settle(
+        PoolKey memory poolKey,
         uint256 tokenId,
         uint256 positionIndex,
         uint256 amount0,
         uint256 amount1
     ) public onlyNFTOwner(tokenId) {
-        PositionMeta memory position = getPosition(tokenId, positionIndex);
-        // make sure only the owner can settle the position
-        if (position.owner != msg.sender || !position.isActive) {
-            revert InvalidPositionId(positionId);
-        }
+        PositionMeta memory m = getPosition(tokenId, positionIndex); // Validate the position by fetching it.
 
         // settle the underlying assets to the proxy hook
-        _settleUnderlyingAssetToMarket(
-            position.poolKey,
-            position.positionId,
-            amount0,
-            amount1
-        );
+        _settleUnderlyingAssetToMarket(m, amount0, amount1);
     }
 
     /**
      * @dev This function is used to withdraw settled liquidity from a position
-     * @param positionId The position id to withdraw the position for
+     * @param tokenId The token id to withdraw the position for
+     * @param positionIndex The position index to withdraw the position for
      * @param amount0 The amount of token0 to withdraw
      * @param amount1 The amount of token1 to withdraw
      */
@@ -184,14 +190,11 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
     ) public onlyNFTOwner(tokenId) {
         PositionId positionId = getPositionId(tokenId, positionIndex);
         PositionMeta memory position = getPosition(tokenId, positionIndex);
-        if (!_isMMPosition(position)) {
-            revert InvalidPositionId(positionId);
-        }
 
         // validate that there is no open RFS for this position
         (, BalanceDelta balanceDelta) = getVTSManager().calcRFS(
             positionId,
-            true // ensures that revert if rfs is open
+            true
         );
 
         // validate the amounts to be withdrawn is within limits
@@ -269,6 +272,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         ) = calculateTokenAmountsFromPositionParams(_poolKey, _liquidityParams);
 
         // calcualte the total LCC USD value and confirm it is less than the total signal usd value
+        // TODO: Use a standard registry that internally maps markets to oracle factories -> oracles.
         address marketOracleFactory = getVTSManager()
             .getMarketVTSConfiguration(_poolKey.toId())
             .oracleFactory;
@@ -298,15 +302,14 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
 
         // Mint nft representing this position
         // ? under which condition will the tokenId be reused across multiple positions
+        // TODO: Currently, this mints NFT for every commit(). Maybe we can re-use the NFT between signal verifications for quicker position management.
         uint256 tokenId = _createCommitmentNFT(owner);
 
         // add liquidity to the pool using the token id and position index to generate a unique salt
         uint256 positionIndex = nftToPositionCount[tokenId];
         (PositionId positionId, ) = _callModifyLiquidity(
             _poolKey,
-            _liquidityParams,
-            tokenId,
-            positionIndex
+            _liquidityParams
         );
 
         // use the position id to make the initial settlement of the underlying tokens to the proxy hook
@@ -323,8 +326,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         // settle the underlying tokens to the proxy hook
         // By calling VTSManager.onMMLiquidityModify, we are also settling the position growths for new MMPosition.
         _settleUnderlyingAssetToMarket(
-            _poolKey,
-            positionId,
+            getPosition(tokenId, positionIndex),
             underlyingLiquidityFraction0,
             underlyingLiquidityFraction1
         );
@@ -336,6 +338,9 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         // Position metadata is managed centrally via PositionIndex/VTSManager
         // increment the number of positions for the nft
         nftToPositionCount[tokenId]++;
+        // the prover of the liquidity signal verified to create this position
+        // by default, this is address(0). However, if owner = mm position manager, then this is the prover of the liquidity signal verified to create this position
+        proverOfPosition[positionId] = issuer;
 
         emit SignalCommitted(
             msg.sender,
@@ -355,10 +360,9 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         // get all positions attached to this token id
         uint256 positionCount = nftToPositionCount[tokenId];
         for (uint256 i = 0; i < positionCount; i++) {
-            PositionId positionId = nftToPositionId[tokenId][i];
-            PositionInfo memory position = getPosition(tokenId, positionId);
+            PositionMeta memory position = getPosition(tokenId, i);
             if (position.isActive) {
-                decommitPosition(tokenId, positionId);
+                decommitPosition(tokenId, i);
             }
         }
 
@@ -368,10 +372,12 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
 
     /**
      * @dev This function is used to decommit a position for a given position id
-     * @param positionId The position id to decommit the position for
+     * @param tokenId The token id to decommit the position for
+     * @param positionIndex The position index to decommit the position for
      * @return balanceDelta The balance delta
      */
     function decommitPosition(
+        PoolKey memory poolKey,
         uint256 tokenId,
         uint256 positionIndex
     ) public onlyNFTOwner(tokenId) returns (BalanceDelta) {
@@ -380,14 +386,13 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
 
         // check if RFS is open
         (uint256 s0, uint256 s1) = getVTSManager().prepareLiquidation(
-            positionId,
-            true
+            positionId
         );
 
         // liquidiate the position
         // Liquidate position will call VTSManager.onMMLiquidityModify, which will settle the position growths for the new MMPosition.
         // The kicker is that it's called after getRFS, so inflows haven't been settled.
-        _liquidatePosition(position, s0, s1);
+        _liquidatePosition(poolKey, position, s0, s1);
 
         emit SignalDecommitted(
             msg.sender,
@@ -396,7 +401,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
             uint256(uint128(s1))
         );
 
-        return balanceDelta;
+        return toBalanceDelta(s0, s1);
     }
 
     /**
@@ -411,8 +416,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         uint256 positionCount = nftToPositionCount[tokenId];
 
         for (uint256 i = 0; i < positionCount; i++) {
-            PositionId positionId = nftToPositionId[tokenId][i];
-            PositionInfo memory position = positions[positionId];
+            PositionMeta memory position = getPosition(tokenId, i);
             if (position.isActive) {
                 totalLiquidity += position.liquidity;
                 activePositionCount++;
@@ -452,6 +456,13 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         return (underlyingLiquidityFraction0, underlyingLiquidityFraction1);
     }
 
+    function _positionSalt(
+        uint256 tokenId,
+        uint256 positionIndex
+    ) internal pure returns (bytes32) {
+        return keccak256(abi.encodePacked(tokenId, positionIndex));
+    }
+
     /**
      * @dev This function is used to modify liquidity for a given pool key, token id and position index and generates a unique salt using the token id and position index
      * @param poolKey The pool key to modify liquidity for
@@ -463,20 +474,8 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
      */
     function _callModifyLiquidity(
         PoolKey memory poolKey,
-        ModifyLiquidityParams memory liquidityParams,
-        uint256 tokenId,
-        uint256 positionIndex
+        ModifyLiquidityParams memory params
     ) internal returns (PositionId positionId, BalanceDelta balanceDelta) {
-        // generate salt using tokenId and identifier of the position
-        bytes32 salt = keccak256(abi.encodePacked(tokenId, positionIndex));
-        // use salt to create a unique params for the modify liquidity operation
-        // @dev do not use the direct liqidity params because we generate a new salt and the one passed in is not used
-        ModifyLiquidityParams memory params = ModifyLiquidityParams({
-            tickLower: liquidityParams.tickLower,
-            tickUpper: liquidityParams.tickUpper,
-            liquidityDelta: int256(liquidityParams.liquidityDelta),
-            salt: salt
-        });
         // use param to modify liquidity
         balanceDelta = _modifyLiquidity(poolKey, params, Constants.ZERO_BYTES);
         // generate unique position id using the params which contains the salt making this unique across all positions
@@ -497,24 +496,20 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
 
     /**
      * @dev This function is used to settle some assets to the proxy hook of a market specified by the pool key provided
-     * @param poolKey The pool key to settle the underlying assets to the proxy hook
+     * @param positionId The position id to settle the underlying assets to the proxy hook
      * @param underlyingLCC0AmountToSettle The amount of underlying token0 to settle to the proxy hook
      * @param underlyingLCC1AmountToSettle The amount of underlying token1 to settle to the proxy hook
      */
     function _settleUnderlyingAssetToMarket(
         PositionId positionId,
+        PositionMeta memory position,
         uint256 underlyingLCC0AmountToSettle,
         uint256 underlyingLCC1AmountToSettle
     ) internal {
         address sender = msg.sender;
-        PositionMeta memory position = getPosition(positionId);
         IMarketFactory mf = IMarketFactory(marketFactory);
-        ILCC lcc0 = ILCC(
-            Currency.unwrap(mf.corePoolToCurrencyPair(position.poolId)[0])
-        );
-        ILCC lcc1 = ILCC(
-            Currency.unwrap(mf.corePoolToCurrencyPair(position.poolId)[1])
-        );
+        ILCC lcc0 = ILCC(mf.corePoolToCurrencyPair(position.poolId)[0]);
+        ILCC lcc1 = ILCC(mf.corePoolToCurrencyPair(position.poolId)[1]);
 
         // Transfer the underlying tokens amount based on the vts to the market in the proxy hook
         // using the core pool key, get the corresponding proxy hook
@@ -523,7 +518,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         PoolId proxyPoolId = mf.coreToProxy(position.poolId);
         address proxyHook = mf.proxyToHook(proxyPoolId);
 
-        // transfer the underlying tokens to the proxy hook
+        // transfer the underlying tokens to the Market Vault (proxy hook)
         IERC20Minimal(lcc0.underlyingAsset()).transferFrom(
             sender,
             proxyHook,
@@ -561,22 +556,17 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
      */
     function _takeUnderlyingAssetFromMarket(
         PositionId positionId,
+        PositionMeta memory position,
         uint256 underlyingLCC0AmountToTake,
         uint256 underlyingLCC1AmountToTake
     ) internal {
         address sender = msg.sender;
 
-        PositionMeta memory position = getPosition(positionId);
-
         IMarketFactory mf = IMarketFactory(marketFactory);
-        ILCC lcc0 = ILCC(
-            Currency.unwrap(mf.corePoolToCurrencyPair(position.poolId)[0])
-        );
-        ILCC lcc1 = ILCC(
-            Currency.unwrap(mf.corePoolToCurrencyPair(position.poolId)[1])
-        );
+        ILCC lcc0 = ILCC(mf.corePoolToCurrencyPair(position.poolId)[0]);
+        ILCC lcc1 = ILCC(mf.corePoolToCurrencyPair(position.poolId)[1]);
 
-        PoolId proxyPoolId = mf.coreToProxy(poolId);
+        PoolId proxyPoolId = mf.coreToProxy(position.poolId);
         address proxyHook = mf.proxyToHook(proxyPoolId);
 
         // a negative balance delta means we are taking underlying tokens from the proxy hook similar to having a negative liquidity delta
@@ -615,6 +605,9 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
      * @param settledAmount1 The amount of token1 to settle
      */
     function _liquidatePosition(
+        PoolKey memory poolKey,
+        uint256 tokenId,
+        uint256 positionIndex,
         PositionMeta memory position,
         uint256 settledAmount0,
         uint256 settledAmount1
@@ -626,15 +619,13 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         // remove the liquidity from the pool
         // By calling this, CoreHook afterRemoveLiquidity will be called to deactivate the position.
         (, BalanceDelta balanceDelta) = _callModifyLiquidity(
-            position.poolKey,
+            poolKey,
             ModifyLiquidityParams({
                 tickLower: position.tickLower,
                 tickUpper: position.tickUpper,
                 liquidityDelta: -int256(position.liquidity),
-                salt: bytes32(0)
-            }),
-            position.tokenId,
-            position.positionIndex
+                salt: _positionSalt(tokenId, positionIndex)
+            })
         );
         // ? Now the MMPositionManager has LCCs that are capitalised to the max they can be.
 
@@ -652,7 +643,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
 
         // take amount settled from the proxy hook
         _takeUnderlyingAssetFromMarket(
-            positionId,
+            getPositionId(tokenId, positionIndex),
             settledAmount0,
             settledAmount1
         );
