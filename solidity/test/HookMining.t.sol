@@ -67,7 +67,7 @@ contract HookTest is Test, Deployers {
         assertTrue(perms.afterAddLiquidity);
         assertFalse(perms.beforeRemoveLiquidity);
         assertTrue(perms.afterRemoveLiquidity);
-        assertFalse(perms.beforeSwap);
+        assertTrue(perms.beforeSwap);
         assertTrue(perms.afterSwap);
     }
 

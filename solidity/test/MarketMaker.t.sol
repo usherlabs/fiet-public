@@ -50,7 +50,7 @@ contract MarketMakerTest is MarketMakerTestBase, Test {
         // ? might have to globally change this to include the owner address, it must have been an oversight
         // ? to change on the prover generating the state
         string memory expected =
-            "reserves:bybit:BTC:1000|reserves:bybit:USDT:50000|prover:0xprover1234567890|nonce:nonce123";
+            "reserves:bybit:BTC:1000|reserves:bybit:USDT:50000|prover:0x39E7b9A0E61dc09980858c20481C3273E1dAaa9C|nonce:nonce123";
 
         assertEq(result, expected);
     }
@@ -71,7 +71,7 @@ contract MarketMakerTest is MarketMakerTestBase, Test {
 
         // Verify the hash is equal to the expected value
         // this value was generated using the rust counter part code for the above parameters
-        bytes32 expected_leaf_hash = bytes32(0xc7575a618fa9773c29d24f6302671fc475931325176c750bd3248f1b6bf3221e);
+        bytes32 expected_leaf_hash = bytes32(0x29153f453f6fbd819b81b87259c0d16516765faa3350af02d2c15c460c2cdb81);
         assertEq(leafHash, expected_leaf_hash);
     }
 
