@@ -165,7 +165,6 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
 
     /**
      * @dev This function is used to settle more underlying assets for a particular position
-     * @param poolKey The pool key for the position
      * @param tokenId The token id to settle the position for
      * @param positionIndex The position index to settle the position for
      * @param amount0 The amount of token0 to settle

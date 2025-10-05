@@ -346,7 +346,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         );
         // -- make a settlement to the created position
         positionManager.settle(
-            corePoolKey,
             tokenId,
             0,
             underlyingLiquidityFraction0,

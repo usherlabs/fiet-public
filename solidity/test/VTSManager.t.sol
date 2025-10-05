@@ -88,8 +88,9 @@ contract VTSManagerTest is Test, MarketTestBase {
         vtsManager.setMockVTSRequired(positionId, 800, 800);
 
         // Calculate the RFS
-        (bool rfsOpen, BalanceDelta balanceDelta) = vtsManager.getRFS(
-            positionId
+        (bool rfsOpen, BalanceDelta balanceDelta) = vtsManager.calcRFS(
+            positionId,
+            false
         );
         uint256 balanceDelta0 = uint256(uint128(balanceDelta.amount0()));
         uint256 balanceDelta1 = uint256(uint128(balanceDelta.amount1()));
@@ -115,8 +116,9 @@ contract VTSManagerTest is Test, MarketTestBase {
         vtsManager.setMockVTSRequired(positionId, 1500, 1500);
 
         // Calculate the RFS
-        (bool rfsOpen, BalanceDelta balanceDelta) = vtsManager.getRFS(
-            positionId
+        (bool rfsOpen, BalanceDelta balanceDelta) = vtsManager.calcRFS(
+            positionId,
+            false
         );
 
         // Assert that the RFS is  open
