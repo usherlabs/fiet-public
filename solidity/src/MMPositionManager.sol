@@ -110,7 +110,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
 
     /**
      * @dev Check if the LCC is supported by the market i.e if the LCC is either token0 or token1 for a given core pool
-     * @param marketId The ID of the market i.e for uniswap v4 it is the core pool id
+     * @param _poolKey The pool key to check market validity for
      * @return bool True if the LCC is supported by the market, false otherwise
      */
     function _isValidMarket(
@@ -157,6 +157,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
 
     /**
      * @dev This function is used to settle more underlying assets for a particular position
+     * @param poolKey The pool key for the position
      * @param tokenId The token id to settle the position for
      * @param positionIndex The position index to settle the position for
      * @param amount0 The amount of token0 to settle
@@ -237,9 +238,11 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
 
     /**
      * @dev This function is used to commit a liquidity signal to the position manager
-     * @param _poolKey The pool key to commit the liquidity signal to
-     * @param _liquidityParams The liquidity parameters to commit the liquidity signal to
-     * @param _liquiditySignal The liquidity signal to commit to the position manager
+     * @param poolKey The pool key to commit the liquidity signal to
+     * @param tickLower The lower tick of the position
+     * @param tickUpper The upper tick of the position
+     * @param liquidity The liquidity amount to add
+     * @param liquiditySignal The liquidity signal to commit to the position manager
      * @return positionId The unique identifier of the position created
      */
     function commit(
@@ -367,6 +370,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
 
     /**
      * @dev This function is used to decommit a position for a given token id
+     * @param poolKey The pool key for the position
      * @param tokenId The token id to decommit the position for
      */
     function decommit(
@@ -388,6 +392,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
 
     /**
      * @dev This function is used to decommit a position for a given position id
+     * @param poolKey The pool key for the position
      * @param tokenId The token id to decommit the position for
      * @param positionIndex The position index to decommit the position for
      * @return balanceDelta The balance delta
@@ -480,11 +485,9 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
     }
 
     /**
-     * @dev This function is used to modify liquidity for a given pool key, token id and position index and generates a unique salt using the token id and position index
+     * @dev This function is used to modify liquidity for a given pool key and parameters
      * @param poolKey The pool key to modify liquidity for
-     * @param liquidityParams The liquidity parameters to modify liquidity for
-     * @param tokenId The token id to modify liquidity for
-     * @param positionIndex The position index to modify liquidity for
+     * @param params The liquidity parameters to modify liquidity for
      * @return positionId The position id
      * @return balanceDelta The balance delta
      */
@@ -511,10 +514,11 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
     }
 
     /**
-     * @dev This function is used to settle some assets to the proxy hook of a market specified by the pool key provided
+     * @dev This function is used to settle some assets to the proxy hook of a market specified by the pool id provided
      * @param positionId The position id to settle the underlying assets to the proxy hook
-     * @param underlyingLCC0AmountToSettle The amount of underlying token0 to settle to the proxy hook
-     * @param underlyingLCC1AmountToSettle The amount of underlying token1 to settle to the proxy hook
+     * @param poolId The pool id specifying the market
+     * @param amount0 The amount of underlying token0 to settle to the proxy hook
+     * @param amount1 The amount of underlying token1 to settle to the proxy hook
      */
     function _settleUnderlyingAssetToMarket(
         PositionId positionId,
@@ -565,10 +569,12 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
     }
 
     /**
-     * @dev This function is used to take some assets from the proxy hook of a market specified by the pool key provided
-     * @param poolKey The pool key to take the underlying assets from the proxy hook
-     * @param underlyingLCC0AmountToTake The amount of underlying token0 to take from the proxy hook
-     * @param underlyingLCC1AmountToTake The amount of underlying token1 to take from the proxy hook
+     * @dev This function is used to take some assets from the proxy hook of a market specified by the pool id provided
+     * @param positionId The position id for the assets being taken
+     * @param poolId The pool id specifying the market
+     * @param amount0 The amount of underlying token0 to take from the proxy hook
+     * @param amount1 The amount of underlying token1 to take from the proxy hook
+     * @param burnLCCs Whether to burn the LCC tokens after taking the assets
      */
     function _takeUnderlyingAssetFromMarket(
         PositionId positionId,
@@ -615,7 +621,9 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
 
     /**
      * @dev This function is used to liquidate a position for a given token id and position index
-     * @param position The position to liquidate
+     * @param poolKey The pool key for the position
+     * @param tokenId The token id of the position to liquidate
+     * @param positionIndex The position index to liquidate
      * @param settledAmount0 The amount of token0 to settle
      * @param settledAmount1 The amount of token1 to settle
      */
