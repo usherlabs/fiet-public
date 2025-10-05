@@ -604,16 +604,27 @@ abstract contract VTSManager is IVTSManager {
     }
 
     /**
-     * @notice Gets the RFS for a position
+     * @notice Calculates the RFS for a position (settles growths and calls getRFS)
+     * @param _positionId The position id
+     * @return rfsOpen Whether the RFS is open
+     * @return balanceDelta The balance delta of the amount of required to be settled or allowed to be withdrawn depending on if it is negative or positive
+     */
+    function calcRFS(
+        PositionId _positionId
+    ) external isPositionValid(_positionId) returns (bool, BalanceDelta) {
+        _settlePositionGrowths(_positionId);
+        return getRFS(_positionId);
+    }
+
+    /**
+     * @notice Gets (view) the RFS for a position
      * @param _positionId The position id
      * @return rfsOpen Whether the RFS is open
      * @return balanceDelta The balance delta of the amount of required to be settled or allowed to be withdrawn depending on if it is negative or positive
      */
     function getRFS(
         PositionId _positionId
-    ) public isPositionValid(_positionId) returns (bool, BalanceDelta) {
-        // Settle both growths to ensure up-to-date S and D before evaluating RFS
-        _settlePositionGrowths(_positionId); // TODO: once all position liquidity modifications trigger this, we can return getRFS as a view.
+    ) public view isPositionValid(_positionId) returns (bool, BalanceDelta) {
         // Commitment caps
         (uint256 c0, uint256 c1) = _getCommitment(_positionId);
 

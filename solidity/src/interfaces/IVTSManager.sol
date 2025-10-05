@@ -23,6 +23,10 @@ interface IVTSManager {
 
     function getRFS(
         PositionId positionId
+    ) public view returns (bool, BalanceDelta);
+
+    function calcRFS(
+        PositionId positionId
     ) external returns (bool, BalanceDelta);
 
     function getVTSCurrent(

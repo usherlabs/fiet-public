@@ -142,7 +142,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         // validate that there is no open RFS for this position
         address vtsManager = _getCoreHook();
         (bool rfsOpen, BalanceDelta balanceDelta) = IVTSManager(vtsManager)
-            .getRFS(positionId);
+            .calcRFS(positionId);
         if (rfsOpen) {
             revert RFSOpenForPosition(positionId);
         }
@@ -275,14 +275,13 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
             );
 
         // settle the underlying tokens to the proxy hook
+        // By calling VTSManager.onMMLiquidityModify, we are also settling the position growths for new MMPosition.
         _settleUnderlyingAssetToMarket(
             _poolKey,
             positionId,
             underlyingLiquidityFraction0,
             underlyingLiquidityFraction1
         );
-
-        // TODO: settle position growths here... for new MMPosition.
 
         // Attach position to this nft
         // make sure to add the position only after modifying the liquidity
@@ -351,16 +350,16 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
             revert InvalidPositionId(positionId);
         }
 
-        // TODO: settle position growths here... for new MMPosition.
-
         // check if RFS is open
         address vtsManager = _getCoreHook();
-        (bool rfsOpen, ) = IVTSManager(vtsManager).getRFS(positionId);
+        (bool rfsOpen, ) = IVTSManager(vtsManager).calcRFS(positionId);
         if (rfsOpen) {
             revert RFSOpenForPosition(positionId);
         }
 
         // liquidiate the position
+        // Liquidate position will call VTSManager.onMMLiquidityModify, which will settle the position growths for the new MMPosition.
+        // The kicker is that it's called after getRFS, so inflows haven't been settled.
         BalanceDelta balanceDelta = _liquidatePosition(positionId);
 
         emit SignalDecommitted(
