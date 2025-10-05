@@ -24,7 +24,7 @@ library MarketMaker {
         /// Hash of state of sources
         string sourceState;
         /// Prover for the state of this market maker.
-        string prover;
+        address prover;
         /// Unique nonce derived from proofs.
         string nonce;
     }
@@ -59,7 +59,9 @@ library MarketMaker {
      * @return tickers The tickers of the reserves
      * @return amounts The amounts of the reserves
      */
-    function getReserves(State memory state)
+    function getReserves(
+        State memory state
+    )
         internal
         pure
         returns (string[] memory tickers, uint256[] memory amounts)
@@ -79,7 +81,9 @@ library MarketMaker {
      * @param state The state to convert to a string
      * @return The string representation of the state
      */
-    function toString(State memory state) internal pure returns (string memory) {
+    function toString(
+        State memory state
+    ) internal pure returns (string memory) {
         // Start with the reserves strings
         string memory result = "";
 
@@ -88,7 +92,9 @@ library MarketMaker {
             if (i > 0) {
                 result = string(abi.encodePacked(result, "|"));
             }
-            result = string(abi.encodePacked(result, _reserveToString(state.reserves[i])));
+            result = string(
+                abi.encodePacked(result, _reserveToString(state.reserves[i]))
+            );
         }
 
         // Add prover
@@ -135,7 +141,7 @@ library MarketMaker {
 
         while (_i != 0) {
             currentPosition -= 1;
-            uint8 digit = (48 + uint8(_i - _i / 10 * 10));
+            uint8 digit = (48 + uint8(_i - (_i / 10) * 10));
             bytes1 char = bytes1(digit);
             resultBytes[currentPosition] = char;
             _i /= 10;
@@ -148,9 +154,19 @@ library MarketMaker {
      * @param reserve The reserve to convert to a string
      * @return The string representation of the reserve
      */
-    function _reserveToString(Reserve memory reserve) internal pure returns (string memory) {
-        return string(
-            abi.encodePacked("reserves:", reserve.source, ":", reserve.asset, ":", _uintToString(reserve.amount))
-        );
+    function _reserveToString(
+        Reserve memory reserve
+    ) internal pure returns (string memory) {
+        return
+            string(
+                abi.encodePacked(
+                    "reserves:",
+                    reserve.source,
+                    ":",
+                    reserve.asset,
+                    ":",
+                    _uintToString(reserve.amount)
+                )
+            );
     }
 }
