@@ -8,7 +8,7 @@ import {MarketMaker} from "./libraries/MarketMaker.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {ModifyLiquidityParams} from "v4-periphery/lib/v4-core/src/types/PoolOperation.sol";
 import {Constants} from "v4-periphery/lib/v4-core/test/utils/Constants.sol";
-import {BalanceDelta} from "v4-periphery/lib/v4-core/src/types/BalanceDelta.sol";
+import {BalanceDelta, BalanceDeltaLibrary} from "v4-periphery/lib/v4-core/src/types/BalanceDelta.sol";
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {PoolId} from "v4-periphery/lib/v4-core/src/types/PoolId.sol";
 import {ERC721} from "solmate/tokens/ERC721.sol";
@@ -238,7 +238,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
             position.poolId,
             amount0,
             amount1,
-            false
+            BalanceDeltaLibrary.ZERO_DELTA
         );
     }
 
@@ -578,16 +578,16 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
      * @dev This function is used to take some assets from the proxy hook of a market specified by the pool id provided
      * @param positionId The position id for the assets being taken
      * @param poolId The pool id specifying the market
-     * @param amount0 The amount of underlying token0 to take from the proxy hook
-     * @param amount1 The amount of underlying token1 to take from the proxy hook
-     * @param burnLCCs Whether to burn the LCC tokens after taking the assets
+     * @param takeAmount0 The amount of underlying token0 to take from the proxy hook
+     * @param takeAmount1 The amount of underlying token1 to take from the proxy hook
+     * @param deltaToBurn The balance delta to burn the LCC tokens after taking the assets
      */
     function _takeUnderlyingAssetFromMarket(
         PositionId positionId,
         PoolId poolId,
-        uint256 amount0,
-        uint256 amount1,
-        bool burnLCCs
+        uint256 takeAmount0,
+        uint256 takeAmount1,
+        BalanceDelta deltaToBurn
     ) internal {
         address sender = msg.sender;
 
@@ -600,8 +600,8 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
 
         // a negative balance delta means we are taking underlying tokens from the proxy hook similar to having a negative liquidity delta
         BalanceDelta balanceDelta = toBalanceDelta(
-            -int128(uint128(amount0)),
-            -int128(uint128(amount1))
+            -int128(uint128(takeAmount0)),
+            -int128(uint128(takeAmount1))
         );
 
         // notify the proxy hook of the underlying tokens we just took from it
@@ -617,12 +617,21 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         _getVTSManager().onMMLiquidityModify(positionId, balanceDelta);
 
         // transfer from this contract to the actual recipient
-        IERC20Minimal(lcc0.underlyingAsset()).transfer(sender, amount0);
-        IERC20Minimal(lcc1.underlyingAsset()).transfer(sender, amount1);
+        IERC20Minimal(lcc0.underlyingAsset()).transfer(sender, takeAmount0);
+        IERC20Minimal(lcc1.underlyingAsset()).transfer(sender, takeAmount1);
 
-        // burn the LCC gotten back from the pool
-        lcc0.cancel(amount0);
-        lcc1.cancel(amount1);
+        if (
+            BalanceDelta.unwrap(deltaToBurn) !=
+            BalanceDelta.unwrap(BalanceDeltaLibrary.ZERO_DELTA)
+        ) {
+            // burn the LCC gotten back from the pool
+            lcc0.cancel(
+                LiquidityUtils.safeInt128ToUint256(deltaToBurn.amount0())
+            );
+            lcc1.cancel(
+                LiquidityUtils.safeInt128ToUint256(deltaToBurn.amount1())
+            );
+        }
     }
 
     /**
@@ -641,8 +650,6 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         uint256 settledAmount1
     ) internal {
         PositionMeta memory position = getPosition(tokenId, positionIndex);
-        IMarketFactory mf = IMarketFactory(marketFactory);
-
         // remove the liquidity from the pool
         // By calling this, CoreHook afterRemoveLiquidity will be called to deactivate the position.
         (, BalanceDelta balanceDelta) = _callModifyLiquidity(
@@ -654,15 +661,6 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
                 salt: _positionSalt(tokenId, positionIndex)
             })
         );
-        // ? Now the MMPositionManager has LCCs that are capitalised to the max they can be.
-
-        // get the amounts removed from the pool
-        uint256 amount0 = LiquidityUtils.safeInt128ToUint256(
-            balanceDelta.amount0()
-        );
-        uint256 amount1 = LiquidityUtils.safeInt128ToUint256(
-            balanceDelta.amount1()
-        );
 
         // take amount settled from the proxy hook
         _takeUnderlyingAssetFromMarket(
@@ -670,7 +668,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
             position.poolId,
             settledAmount0,
             settledAmount1,
-            true
+            balanceDelta
         );
     }
 }

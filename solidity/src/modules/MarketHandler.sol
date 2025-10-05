@@ -1,3 +1,5 @@
+pragma solidity ^0.8.26;
+
 import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 
