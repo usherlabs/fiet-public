@@ -1,5 +1,15 @@
 # Solidity Development Rules for Cursor
 
+## Preparation
+
+- Please review the technical specification and latest research within the `static/spec/` folder.
+- Note the dates, and creation times of these files to determine the order from earlier to latest research.
+- Please use the content of these files to support decision making around code edits, action plans, and general implementation. 
+
+## Tooling
+
+- Use Foundry Forge - eg. `forge build`
+
 ## Code Style
 
 - Use explicit function visibility modifiers (public, private, internal, external)

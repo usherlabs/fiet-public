@@ -93,7 +93,7 @@ contract MarketLiquidityTest is MarketTestBase {
         bytes32 marketId = PoolId.unwrap(corePoolKey.toId());
 
         // validate that the amount of token1 that was swapped out is equal to the amount of token1 that is in the market sub-balance
-        assertEq(lcc1.userMarketBalances(test_user_1, marketId), amount1);
+        assertEq(lcc1.getBalanceOfUserFromMarket(test_user_1, marketId), amount1);
         vm.stopPrank();
     }
 
@@ -202,8 +202,8 @@ contract MarketLiquidityTest is MarketTestBase {
         lcc1.unwrap(amountOut);
 
         // validate an entry into the settlement queue was created and the balance of the user remains unchanged
-        assertEq(lcc1.marketUserSettlement(marketId, test_user_1), amountOut);
-        assertEq(lcc1.marketTotalSettlement(marketId), amountOut);
+        assertEq(lcc1.getSettlementAmountOwedTo(marketId, test_user_1), amountOut);
+        assertEq(lcc1.getMarketTotalSettlementDeficit(marketId), amountOut);
 
         // update call to pool manager to have some liquidity now so we can further test functions that add liquidity and trigger settlement
         address ua = lcc1.underlyingAsset();
@@ -251,8 +251,8 @@ contract MarketLiquidityTest is MarketTestBase {
         assertEq(lccBalanceRightAfterSettlement, lccBalanceRightAfterSwap - amountOut);
 
         // validate that the settlement was paid off and the rest of the liquidity is in the pool manager
-        assertEq(lcc1.marketUserSettlement(marketId, test_user_1), 0);
-        assertEq(lcc1.marketTotalSettlement(marketId), 0);
+        assertEq(lcc1.getSettlementAmountOwedTo(marketId, test_user_1), 0);
+        assertEq(lcc1.getMarketTotalSettlementDeficit(marketId), 0);
 
         uint256 underlyingBalanceRightAfterModifyLiquidity =
             IERC20Minimal(lcc1.underlyingAsset()).balanceOf(test_user_1);
@@ -309,8 +309,8 @@ contract MarketLiquidityTest is MarketTestBase {
         vm.startPrank(test_user_1);
 
         // validate that the pending settlement was paid off and the rest of the liquidity is in the pool manager
-        assertEq(lcc1.marketUserSettlement(marketId, test_user_1), 0);
-        assertEq(lcc1.marketTotalSettlement(marketId), 0);
+        assertEq(lcc1.getSettlementAmountOwedTo(marketId, test_user_1), 0);
+        assertEq(lcc1.getMarketTotalSettlementDeficit(marketId), 0);
 
         // validate that lcc was burned only after pending settlement was paid off
         uint256 lccBalanceRightAfterSettlement = lcc1.balanceOf(test_user_1);
@@ -335,7 +335,7 @@ contract MarketLiquidityTest is MarketTestBase {
         uint256 amountOut = LiquidityUtils.safeInt128ToUint256(delta.amount1());
 
         // validate that the pending settlement exists and is equal to the amount unwrapped
-        assertEq(lcc1.marketUserSettlement(marketId, test_user_1), amountOut);
+        assertEq(lcc1.getSettlementAmountOwedTo(marketId, test_user_1), amountOut);
 
         // get the user's LCC balance
         uint256 lccBalanceRightBeforeTransfer = lcc1.balanceOf(test_user_1);
@@ -345,8 +345,8 @@ contract MarketLiquidityTest is MarketTestBase {
         lcc1.transfer(address(manager), lccBalanceRightBeforeTransfer);
 
         // validate that the pending settlement was annulled and the user's LCC balance is zero
-        assertEq(lcc1.marketUserSettlement(marketId, test_user_1), 0);
-        assertEq(lcc1.marketTotalSettlement(marketId), 0);
+        assertEq(lcc1.getSettlementAmountOwedTo(marketId, test_user_1), 0);
+        assertEq(lcc1.getMarketTotalSettlementDeficit(marketId), 0);
         assertEq(lcc1.balanceOf(test_user_1), 0);
 
         vm.stopPrank();
@@ -364,7 +364,7 @@ contract MarketLiquidityTest is MarketTestBase {
         uint256 amountOut = LiquidityUtils.safeInt128ToUint256(delta.amount1());
 
         // validate that the pending settlement exists and is equal to the amount unwrapped
-        assertEq(lcc1.marketUserSettlement(marketId, test_user_1), amountOut);
+        assertEq(lcc1.getSettlementAmountOwedTo(marketId, test_user_1), amountOut);
 
         // get the user's LCC balance
         uint256 lccBalanceRightBeforeTransfer = lcc1.balanceOf(test_user_1);
@@ -376,8 +376,8 @@ contract MarketLiquidityTest is MarketTestBase {
         lcc1.transfer(address(manager), amountTransferred);
 
         // validate that the pending settlement was partially annulled and the user's LCC balance is the expected settlement left
-        assertEq(lcc1.marketUserSettlement(marketId, test_user_1), expectedSettlementLeft);
-        assertEq(lcc1.marketTotalSettlement(marketId), expectedSettlementLeft);
+        assertEq(lcc1.getSettlementAmountOwedTo(marketId, test_user_1), expectedSettlementLeft);
+        assertEq(lcc1.getMarketTotalSettlementDeficit(marketId), expectedSettlementLeft);
         assertEq(lcc1.balanceOf(test_user_1), expectedSettlementLeft);
 
         uint256 underlyingBalanceRightBeforeSwap = IERC20Minimal(lcc1.underlyingAsset()).balanceOf(test_user_1);
@@ -402,8 +402,8 @@ contract MarketLiquidityTest is MarketTestBase {
         assertEq(lcc1.balanceOf(test_user_1), 0);
         assertEq(underlyingBalanceRightAfterSwap - underlyingBalanceRightBeforeSwap, expectedSettlementLeft);
         // validate that the pending settlement is zero after the swap
-        assertEq(lcc1.marketUserSettlement(marketId, test_user_1), 0);
-        assertEq(lcc1.marketTotalSettlement(marketId), 0);
+        assertEq(lcc1.getSettlementAmountOwedTo(marketId, test_user_1), 0);
+        assertEq(lcc1.getMarketTotalSettlementDeficit(marketId), 0);
 
         vm.stopPrank();
     }
@@ -418,7 +418,7 @@ contract MarketLiquidityTest is MarketTestBase {
         uint256 pendingAmountToSettle = LiquidityUtils.safeInt128ToUint256(delta.amount1());
 
         // validate that the pending settlement exists and is equal to the amount unwrapped
-        assertEq(lcc1.marketUserSettlement(marketId, test_user_1), pendingAmountToSettle);
+        assertEq(lcc1.getSettlementAmountOwedTo(marketId, test_user_1), pendingAmountToSettle);
 
         // get the user's LCC balance
         uint256 lccBalanceRightBeforeTransfer = lcc1.balanceOf(test_user_1);
@@ -429,8 +429,8 @@ contract MarketLiquidityTest is MarketTestBase {
 
         // validate that the pending settlement was not annulled and the user's LCC balance is the pending settlement amount left
         // i.e as long as a user has equivalent LCC balance to the pending settlement amount, the pending settlement will not be annulled
-        assertEq(lcc1.marketUserSettlement(marketId, test_user_1), pendingAmountToSettle);
-        assertEq(lcc1.marketTotalSettlement(marketId), pendingAmountToSettle);
+        assertEq(lcc1.getSettlementAmountOwedTo(marketId, test_user_1), pendingAmountToSettle);
+        assertEq(lcc1.getMarketTotalSettlementDeficit(marketId), pendingAmountToSettle);
         assertEq(lcc1.balanceOf(test_user_1), pendingAmountToSettle);
     }
 }

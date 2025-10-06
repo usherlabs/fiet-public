@@ -304,6 +304,7 @@ $$
 - $VTS_{\text{base}, A}$: Base VTS rate set at market launch (e.g., 0.02 for USDC, 0.05 for ckBTC)
 - $I_A(t)$: Pool-wide market demand indicator for token $A$, capturing recent trading activity over the time window $[t−T,t]$.
 - $\sum_{\text{in-range } r} L(r)$: Total liquidity of in-range positions, used to weight the demand indicator.
+- $min(1, ...)$: Prevents settling beyond the size of each in-range position. The Excess Liquidity in Soon-to-Be In-Range Positions is the difference between the Sum of Uncapped to Capped projections, i.e., Excess is all the projections remaining after we cap against in-range positions.
 
 **Soon-to-Be In-Range Positions:**
 

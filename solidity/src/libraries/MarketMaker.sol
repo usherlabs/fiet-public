@@ -135,7 +135,7 @@ library MarketMaker {
 
         while (_i != 0) {
             currentPosition -= 1;
-            uint8 digit = (48 + uint8(_i - _i / 10 * 10));
+            uint8 digit = (48 + uint8(_i - (_i / 10) * 10));
             bytes1 char = bytes1(digit);
             resultBytes[currentPosition] = char;
             _i /= 10;

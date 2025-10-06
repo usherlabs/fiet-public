@@ -43,19 +43,19 @@ contract MarketFactoryTest is Test, Deployers {
 
         address[] memory bounds = new address[](0);
 
-        vm.prank(owner);
-        factory = new MarketFactory(address(poolManager), makeAddr("oracleRegistry"), bounds);
-        positionManager = new MMPositionManager(
-            address(poolManager), makeAddr("oracleRegistry"), makeAddr("verifier"), address(factory)
-        );
-
         // Compute flags for CoreHook
         uint160 coreFlags = HookFlags.CORE_HOOK_FLAGS;
         coreHookAddr = address(coreFlags);
 
+        vm.prank(owner);
+        factory = new MarketFactory(address(poolManager), makeAddr("oracleRegistry"), bounds);
+        positionManager = new MMPositionManager(address(poolManager), makeAddr("spokeReceiver"), address(factory));
+
         // Deploy CoreHook at computed address
         deployCodeTo(
-            "CoreHook.sol:CoreHook", abi.encode(poolManager, address(factory), address(positionManager)), coreHookAddr
+            "CoreHook.sol:CoreHook",
+            abi.encode(poolManager, address(factory), address(positionManager), address(0)),
+            coreHookAddr
         );
 
         address proxyDeployer = MarketFactory(address(factory)).marketDeployer();

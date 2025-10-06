@@ -20,6 +20,7 @@ import {MMPositionManager} from "../src/MMPositionManager.sol";
 import {StubSpokeVerifier} from "../src/modules/StubSpokeVerifier.sol";
 import {OracleRegistry} from "../src/OracleRegistry.sol";
 import {ChainlinkFactory} from "../src/oracles/chainlink/ChainlinkFactory.sol";
+import {VRLSpokeReceiver} from "../src/modules/VRLSpokeReceiver.sol";
 
 /**
  * @title CompleteDeployScript
@@ -76,23 +77,23 @@ contract CompleteDeployScript is ScriptHelper {
         marketFactory = _deployMarketFactory();
         console.log("MarketFactory deployed at:", marketFactory);
 
-        // Step 3: Deploy MMPositionManager
-        console.log("\n=== Deploying MMPositionManager ===");
-        mmPositionManager = _deployMMPositionManager();
-        console.log("MMPositionManager deployed at:", mmPositionManager);
-
-        // Step 4: Deploy CoreHook
+        // Step 3: Deploy CoreHook
         console.log("\n=== Deploying CoreHook ===");
         coreHook = _deployCoreHook();
         console.log("CoreHook deployed at:", coreHook);
 
-        // Step 5: Set hooks in MarketFactory
+        // Step 4: Set hooks in MarketFactory
         console.log("\n=== Setting Hooks in MarketFactory ===");
         _setHooksInFactory();
 
-        // Step 6: Verify hooks addresses across the contracts
+        // Step 5: Verify hooks addresses across the contracts
         console.log("\n=== Verifying Hooks ===");
         _verifyHooks();
+
+        // Step 6: Deploy MMPositionManager
+        console.log("\n=== Deploying MMPositionManager ===");
+        mmPositionManager = _deployMMPositionManager();
+        console.log("MMPositionManager deployed at:", mmPositionManager);
 
         // Step 7: Add all the protocol addresses expected to hold LCC as a protocol bound address in the market factory
         console.log("\n=== Adding addresses to bounds array ===");
@@ -116,7 +117,9 @@ contract CompleteDeployScript is ScriptHelper {
     function _deployCoreHook() internal returns (address) {
         // CoreHook constructor takes (poolManager, marketFactory)
         // Now we pass the actual marketFactory address
-        bytes memory constructorArgs = abi.encode(poolManagerAddress, marketFactory, address(mmPositionManager));
+        address calculator = address(0);
+        bytes memory constructorArgs =
+            abi.encode(poolManagerAddress, marketFactory, address(mmPositionManager), calculator);
 
         // Mine the correct address with proper flags
         (address hookAddress, bytes32 salt) =
@@ -126,7 +129,8 @@ contract CompleteDeployScript is ScriptHelper {
         console.log("CoreHook salt:", vm.toString(salt));
 
         // Deploy the hook
-        CoreHook deployedHook = new CoreHook{salt: salt}(poolManagerAddress, marketFactory, address(mmPositionManager));
+        CoreHook deployedHook =
+            new CoreHook{salt: salt}(poolManagerAddress, marketFactory, address(mmPositionManager), calculator);
         require(address(deployedHook) == hookAddress, "CoreHook: address mismatch");
 
         return address(deployedHook);
@@ -165,8 +169,9 @@ contract CompleteDeployScript is ScriptHelper {
         // ? deploy a stub verifier for now
         address stubVerifier = address(new StubSpokeVerifier());
         console.log("StubSpokeVerifier deployed at:", stubVerifier);
-        MMPositionManager positionManager =
-            new MMPositionManager(poolManagerAddress, oracleRegistry, stubVerifier, marketFactory);
+        address spokeReceiver = address(new VRLSpokeReceiver(stubVerifier, oracleRegistry));
+        console.log("SpokeReceiver deployed at:", spokeReceiver);
+        MMPositionManager positionManager = new MMPositionManager(poolManagerAddress, spokeReceiver, marketFactory);
         console.log("MMPositionManager deployed at:", address(positionManager));
         return address(positionManager);
     }

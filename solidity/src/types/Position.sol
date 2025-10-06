@@ -4,29 +4,24 @@ pragma solidity ^0.8.20;
 import {MarketMaker} from "../libraries/MarketMaker.sol";
 import {ModifyLiquidityParams} from "v4-periphery/lib/v4-core/src/types/PoolOperation.sol";
 import {Position} from "v4-periphery/lib/v4-core/src/libraries/Position.sol";
-import {PoolId} from "v4-periphery/lib/v4-core/src/types/PoolId.sol";
+import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 
 type PositionId is bytes32;
 
-struct PositionInfo {
-    // the id of the position
-    PositionId positionId;
-    // the pool key of the position
-    PoolId poolId;
+struct PositionMeta {
     // the lower tick of the position
     int24 tickLower;
     // the upper tick of the position
     int24 tickUpper;
     // the liquidity of the position
     int256 liquidity;
-    // the owner of the position
+    // the owner of the position -- ie. the router, mm position manager, native Uv4, etc.
     address owner;
-    // the issuer of the position
-    string issuer;
-    // the index of the position in the mapping
-    uint256 positionIndex;
     // whether the position is active
     bool isActive;
+    // the core pool id for this position (immutable after registration)
+    PoolId poolId;
 }
 
 /// @dev The parameters of the proof to verify the state of the market maker
@@ -50,13 +45,16 @@ library PositionLibrary {
      * @param params The params of the modify liquidity operation
      * @return id The id of the position
      */
-    function generateId(address modifyLiquidityRouter, ModifyLiquidityParams memory params)
-        internal
-        pure
-        returns (PositionId id)
-    {
-        bytes32 positionKey =
-            Position.calculatePositionKey(modifyLiquidityRouter, params.tickLower, params.tickUpper, params.salt);
+    function generateId(
+        address modifyLiquidityRouter,
+        ModifyLiquidityParams memory params
+    ) internal pure returns (PositionId id) {
+        bytes32 positionKey = Position.calculatePositionKey(
+            modifyLiquidityRouter,
+            params.tickLower,
+            params.tickUpper,
+            params.salt
+        );
 
         id = PositionId.wrap(positionKey);
     }

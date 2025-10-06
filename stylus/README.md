@@ -4,29 +4,11 @@ This directory contains the Stylus contracts for the Fiet Protocol, written in R
 
 ## Overview
 
-The Stylus contracts provide the core functionality of the Fiet Protocol, including staking, token management, settlement, and liquidity verification. The system consists of:
-
-- **DeltaManager**: Tracks participant deltas and manages protocol state
-- **FietStake**: Handles token staking and slashing mechanisms
-- **SettlementManager**: Manages off-chain fiat settlements
-- **LiquidityVerifier**: Verifies deposits and signals liquidity
-- **Token**: ERC-20 token implementation
-- **VRLManager**: Handles Verified Reserve Liquidity management
-- **Library**: Core utilities and helper traits
+The Stylus contracts/libraries provide the a super-set of functionality for the Fiet Protocol. They function to improve the gas efficiency of operations on the Fiet Protocol. Their inclusion in the Protocol is modular by nature, meaning Fiet Protocol is native to pure Solidity implementations but empowered by Stylus capabilities.
 
 ## Directory Structure
 
-```
-stylus/
-├── delta_manager/           # Delta tracking and management
-├── fiet_stake/             # Token staking and slashing
-├── library/                # Core utilities and traits
-├── liquidity_verifier/     # Liquidity verification
-├── settlement_manager/     # Settlement management
-├── token/                  # ERC-20 token implementation
-├── vrl_manager/           # VRL management
-└── README.md              # This file
-```
+TODO:
 
 ## Prerequisites
 
@@ -62,6 +44,31 @@ Check if Cargo Stylus is installed correctly:
 cargo stylus --help
 ```
 
+### 5. Install [ArbOS-enabled Foundry](https://github.com/iosiro/arbos-foundry)
+
+To learn more about ArbOS Foundry, [please see the repository](https://github.com/iosiro/arbos-foundry).
+
+```bash
+# Build the fork
+cd <path-to>/arbos-foundry
+cargo build --release --locked
+
+# Put symlinks somewhere on your PATH (keeps them updated after rebuilds)
+mkdir -p "$HOME/.local/bin"
+
+# Link whatever arbos-* tools exist
+for f in /Users/ryansoury/dev/arbos-foundry/target/release/arbos-*; do
+  [ -x "$f" ] && ln -sf "$f" "$HOME/.local/bin/$(basename "$f")"
+done
+
+# Ensure on PATH
+grep -q '\.local/bin' "$HOME/.zshrc" || echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.zshrc"
+exec zsh
+
+# Verify
+arbos-forge --version
+```
+
 ## Quick Start
 
 ### 1. Build Contracts
@@ -87,91 +94,17 @@ cargo stylus export-abi
 
 ```bash
 # Run unit tests for specific contract
-cd stylus/delta_manager
+cd stylus/...
 cargo test
 
 # Run integration tests
-cd tests/integration
+cd tests/...
 cargo test
 ```
 
-## Contract Details
+## Contract/Library Details
 
-### DeltaManager
-
-Tracks the deltas of each participant in the protocol.
-
-**Key Functions:**
-- `initialize()` - Initialize the contract
-- `update_delta(participant, delta)` - Update participant delta
-- `get_delta(participant)` - Get participant delta
-- `is_active(participant)` - Check if participant is active
-
-### FietStake
-
-Handles token staking for participants in the Fiet Protocol.
-
-**Key Functions:**
-- `initialize(stake_token, delta_manager, settlement_manager, min_stake)`
-- `stake(amount)` - Stake tokens
-- `unstake(amount)` - Unstake tokens (only if inactive)
-- `slash(owner, bps)` - Slash staker by basis points
-- `withdraw(amount, to)` - Withdraw slashed tokens
-
-**Features:**
-- Enforces minimum stake requirement
-- Integrates with DeltaManager for activity validation
-- Supports admin-controlled slashing
-- Owner can withdraw slashed tokens
-
-### SettlementManager
-
-Manages and tracks off-chain fiat settlements.
-
-**Key Functions:**
-- `create_settlement_request(amount, currency)` - Create settlement request
-- `approve_settlement(request_id)` - Approve settlement
-- `complete_settlement(request_id)` - Complete settlement
-- `get_settlement_status(request_id)` - Get settlement status
-
-### LiquidityVerifier
-
-Verifies deposits and signals liquidity to VRL contracts and delta manager.
-
-**Key Functions:**
-- `verify_deposit(amount, token)` - Verify deposit
-- `signal_liquidity(amount, token)` - Signal liquidity
-- `get_verification_status(deposit_id)` - Get verification status
-
-### Token
-
-ERC-20 token implementation for the Fiet Protocol.
-
-**Key Functions:**
-- `mint(to, amount)` - Mint tokens
-- `burn(from, amount)` - Burn tokens
-- `transfer(to, amount)` - Transfer tokens
-- `approve(spender, amount)` - Approve spender
-
-### VRLManager
-
-Handles Verified Reserve Liquidity (VRL) management and tracks balances.
-
-**Key Functions:**
-- `register_vrl(amount, token)` - Register VRL
-- `verify_vrl(vrl_id)` - Verify VRL
-- `get_vrl_balance(token)` - Get VRL balance
-- `withdraw_vrl(amount, token)` - Withdraw VRL
-
-### Library
-
-Core utilities and helper traits for the Fiet Protocol.
-
-**Features:**
-- **Currency Enum**: Hardcoded ISO 4217 currency support (`NGN`, `AUD`)
-- **Role Enum**: Defines participant roles (`Custodian`, `LP`)
-- **RFS Stages**: Enum for Request For Settlement lifecycle stages
-- **Hashable Trait**: Generic trait for Keccak256 hashing
+TODO: 
 
 ## Deployment
 
@@ -181,66 +114,19 @@ All testnet information, including faucets and RPC endpoints, can be found [here
 
 ### Deploy Individual Contract
 
-```bash
-# Navigate to contract directory
-cd stylus/delta_manager
-
-# Check compilation
-cargo stylus check
-
-# Estimate gas
-cargo stylus deploy \
-  --private-key-path=<PRIVKEY_FILE_PATH> \
-  --estimate-gas
-
-# Deploy contract
-cargo stylus deploy \
-  --private-key-path=<PRIVKEY_FILE_PATH>
-```
+TODO: 
 
 ### Deploy All Contracts
 
-```bash
-# Deploy all contracts using scripts
-bash scripts/1_deploy.sh
-```
+TODO: 
 
 ## Testing
 
-### Unit Tests
-
-Run unit tests for individual contracts:
-
-```bash
-# Test DeltaManager
-cd stylus/delta_manager
-cargo test
-
-# Test FietStake
-cd stylus/fiet_stake
-cargo test
-
-# Test other contracts similarly
-```
+TODO: 
 
 ### Integration Tests
 
-Integration tests are located in `tests/integration/` and test the interaction between multiple components.
-
-**Important**: Run each integration test block individually to avoid nonce errors:
-
-```bash
-cd tests/integration
-
-# Run delta tests
-cargo test --test delta
-
-# Run RFS tests
-cargo test --test rfs
-
-# Run stake tests
-cargo test --test stake
-```
+TODO: 
 
 **Note**: Running integration tests concurrently can lead to race conditions with nonces. Always run each test block individually.
 
@@ -285,6 +171,7 @@ cargo expand --all-features --release --target=<YOUR_ARCHITECTURE>
 ```
 
 Find your architecture with:
+
 ```bash
 rustc -vV | grep host
 ```
@@ -298,6 +185,7 @@ cargo stylus export-abi
 ```
 
 This requires the export-abi feature in `Cargo.toml`:
+
 ```toml
 [features]
 export-abi = ["stylus-sdk/export-abi"]
@@ -350,6 +238,7 @@ cargo test --test <name> # Run specific integration test
 ### Common Issues
 
 1. **WASM Compilation Errors**
+
    ```bash
    # Ensure WASM target is installed
    rustup target add wasm32-unknown-unknown

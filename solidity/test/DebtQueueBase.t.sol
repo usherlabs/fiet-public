@@ -21,7 +21,7 @@ contract MarketSettlementQueueTest is Test {
     function testAddMarketSettlementRequest() public {
         settlementQueue.addMarketSettlementRequest(market1, user1, 100);
 
-        assertEq(settlementQueue.getMarketTotalSettlement(market1), 100);
+        assertEq(settlementQueue.getMarketTotalSettlementDeficit(market1), 100);
         assertEq(settlementQueue.getUserSettlement(market1, user1), 100);
         assertTrue(settlementQueue.userHasPendingSettlement(market1, user1));
     }
@@ -31,7 +31,7 @@ contract MarketSettlementQueueTest is Test {
         settlementQueue.addMarketSettlementRequest(market1, user1, 100);
         settlementQueue.addMarketSettlementRequest(market1, user1, 50);
 
-        assertEq(settlementQueue.getMarketTotalSettlement(market1), 150);
+        assertEq(settlementQueue.getMarketTotalSettlementDeficit(market1), 150);
         assertEq(settlementQueue.getUserSettlement(market1, user1), 150);
     }
 
@@ -41,8 +41,8 @@ contract MarketSettlementQueueTest is Test {
         settlementQueue.addMarketSettlementRequest(market1, user2, 50);
         settlementQueue.addMarketSettlementRequest(market2, user3, 75);
 
-        assertEq(settlementQueue.getMarketTotalSettlement(market1), 150);
-        assertEq(settlementQueue.getMarketTotalSettlement(market2), 75);
+        assertEq(settlementQueue.getMarketTotalSettlementDeficit(market1), 150);
+        assertEq(settlementQueue.getMarketTotalSettlementDeficit(market2), 75);
         assertEq(settlementQueue.getNumPendingSettlementOwners(market1), 2);
         assertEq(settlementQueue.getNumPendingSettlementOwners(market2), 1);
     }
@@ -56,7 +56,7 @@ contract MarketSettlementQueueTest is Test {
         uint256 processed = settlementQueue.processMarketSettlementQueue(market1, 25);
 
         assertEq(processed, 25);
-        assertEq(settlementQueue.getMarketTotalSettlement(market1), 125); // 150 - 25
+        assertEq(settlementQueue.getMarketTotalSettlementDeficit(market1), 125); // 150 - 25
         assertEq(settlementQueue.getUserSettlement(market1, user2), 25); // 50 - 25 partial payment
         assertEq(settlementQueue.getUserSettlement(market1, user1), 100); // Untouched
         assertTrue(settlementQueue.userHasPendingSettlement(market1, user2)); // Still has pending settlement
@@ -71,7 +71,7 @@ contract MarketSettlementQueueTest is Test {
         uint256 processed = settlementQueue.processMarketSettlementQueue(market1, 200);
 
         assertEq(processed, 150); // Only processes actual pending settlement
-        assertEq(settlementQueue.getMarketTotalSettlement(market1), 0);
+        assertEq(settlementQueue.getMarketTotalSettlementDeficit(market1), 0);
         assertEq(settlementQueue.getUserSettlement(market1, user1), 0);
         assertEq(settlementQueue.getUserSettlement(market1, user2), 0);
         assertFalse(settlementQueue.userHasPendingSettlement(market1, user1));
@@ -83,8 +83,8 @@ contract MarketSettlementQueueTest is Test {
         settlementQueue.trackMarketAcquisition(user1, market1, 100);
         settlementQueue.trackMarketAcquisition(user1, market2, 50);
 
-        assertEq(settlementQueue.getUserMarketBalance(user1, market1), 100);
-        assertEq(settlementQueue.getUserMarketBalance(user1, market2), 50);
+        assertEq(settlementQueue.getBalanceOfUserFromMarket(user1, market1), 100);
+        assertEq(settlementQueue.getBalanceOfUserFromMarket(user1, market2), 50);
     }
 
     /// @notice Tests that different markets have isolated settlement queues
@@ -92,13 +92,13 @@ contract MarketSettlementQueueTest is Test {
         settlementQueue.addMarketSettlementRequest(market1, user1, 100);
         settlementQueue.addMarketSettlementRequest(market2, user1, 50);
 
-        assertEq(settlementQueue.getMarketTotalSettlement(market1), 100);
-        assertEq(settlementQueue.getMarketTotalSettlement(market2), 50);
+        assertEq(settlementQueue.getMarketTotalSettlementDeficit(market1), 100);
+        assertEq(settlementQueue.getMarketTotalSettlementDeficit(market2), 50);
 
         // Process only market1 settlement queue
         uint256 processed = settlementQueue.processMarketSettlementQueue(market1, 100);
         assertEq(processed, 100);
-        assertEq(settlementQueue.getMarketTotalSettlement(market1), 0);
-        assertEq(settlementQueue.getMarketTotalSettlement(market2), 50);
+        assertEq(settlementQueue.getMarketTotalSettlementDeficit(market1), 0);
+        assertEq(settlementQueue.getMarketTotalSettlementDeficit(market2), 50);
     }
 }

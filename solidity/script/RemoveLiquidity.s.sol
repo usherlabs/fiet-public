@@ -144,7 +144,7 @@ contract RemoveLiquidityScript is ScriptHelper {
         setupPoolKeys(coreHookAddr, coreFee, tickSpacingVal);
 
         vm.startBroadcast(lpPrivateKey);
-        // burnPosition(tokenId, lpAddress);
+        burnPosition(tokenId, lpAddress);
         vm.stopBroadcast();
     }
 

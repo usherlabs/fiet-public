@@ -15,12 +15,6 @@ struct MarketVTSConfiguration {
     TokenConfiguration token0;
     // Token configuration for token1
     TokenConfiguration token1;
-    // Time t
-    uint256 timeWindow;
-    // Alpha scaling parameter
-    uint256 boostTerm;
-    // Lambda — ln(2) / (amount of time in seconds)
-    uint256 decayTerm;
     // oracle address for this market, can be address(0) to use the default oracle
     address oracleFactory;
 }

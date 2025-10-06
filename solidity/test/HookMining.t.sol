@@ -34,8 +34,7 @@ contract HookTest is Test, Deployers {
         vm.prank(owner);
 
         factory = new MarketFactory(address(poolManager), address(oracleRegistry), bounds);
-        mmPositionManager =
-            new MMPositionManager(address(poolManager), address(oracleRegistry), makeAddr("verifier"), address(factory));
+        mmPositionManager = new MMPositionManager(address(poolManager), makeAddr("spokeReceiver"), address(factory));
 
         // Compute flags for CoreHook
         uint160 coreFlags = HookFlags.CORE_HOOK_FLAGS;
@@ -43,7 +42,7 @@ contract HookTest is Test, Deployers {
 
         deployCodeTo(
             "CoreHook.sol:CoreHook",
-            abi.encode(poolManager, address(factory), address(mmPositionManager)),
+            abi.encode(poolManager, address(factory), address(mmPositionManager), address(0)),
             coreHookAddrComputed
         );
         coreHook = CoreHook(coreHookAddrComputed);
@@ -68,7 +67,7 @@ contract HookTest is Test, Deployers {
         assertTrue(perms.afterAddLiquidity);
         assertFalse(perms.beforeRemoveLiquidity);
         assertTrue(perms.afterRemoveLiquidity);
-        assertFalse(perms.beforeSwap);
+        assertTrue(perms.beforeSwap);
         assertTrue(perms.afterSwap);
     }
 

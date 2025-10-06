@@ -3,41 +3,29 @@
 pragma solidity ^0.8.20;
 
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {IMarketLiquidity} from "../interfaces/IMarketLiquidity.sol";
 
-abstract contract MarketLiquidity {
-    // When a settlement request is added to the queue
-    event SettlementRequestQueued(
-        bytes32 indexed marketId, address indexed recipient, uint256 amount, uint256 timestamp
-    );
-
-    // When a settlement request is settled/cleared
-    event SettlementRequestCleared(
-        bytes32 indexed marketId,
-        address indexed recipient,
-        uint256 amount,
-        uint256 queueIndex,
-        uint256 timestamp,
-        bool tokensBurned
-    );
-
+abstract contract MarketLiquidity is IMarketLiquidity {
     // Events for market tracking
     event MarketRegistered(bytes32 indexed marketId);
     event MarketLiquidityAdded(bytes32 indexed marketId, uint256 amount);
     event MarketLiquidityUsed(bytes32 indexed marketId, uint256 amount);
 
     // Market tracking state variables
-    bytes32[] public knownMarkets; // List of known markets
-    mapping(bytes32 => bool) public isMarketKnown; // Quick lookup for market existence
-    mapping(bytes32 => uint256) public marketLiquidityReserves; // Market-specific underlying liquidity
+    bytes32[] internal knownMarkets; // List of known markets
+    mapping(bytes32 => bool) internal isMarketKnown; // Quick lookup for market existence
+    mapping(bytes32 => uint256) internal marketLiquidityReserves; // Market-specific underlying liquidity
 
     // Market-specific settlement queues
-    mapping(bytes32 => mapping(address => uint256)) public marketUserSettlement; // marketId => recipient => amount we owe them
-    mapping(bytes32 => uint256) public marketTotalSettlement; // Total amount we owe per market
-    mapping(bytes32 => address[]) public marketSettlementRecipients; // List of addresses with pending settlements to per market
-    mapping(bytes32 => mapping(address => bool)) public hasPendingSettlement; // Quick lookup for who has a pending settlement with the market
+    mapping(bytes32 => mapping(address => uint256))
+        internal marketUserSettlement; // marketId => recipient => amount we owe them
+    mapping(bytes32 => uint256) internal marketTotalSettlementDeficit; // Total amount we owe per market
+    mapping(bytes32 => address[]) internal marketSettlementRecipients; // List of addresses with pending settlements to per market
+    mapping(bytes32 => mapping(address => bool)) internal hasPendingSettlement; // Quick lookup for who has a pending settlement with the market
 
     // Market specific balances for each user
-    mapping(address => mapping(bytes32 => uint256)) public userMarketBalances; // User balance per market
+    mapping(address => mapping(bytes32 => uint256))
+        internal balanceOfUserFromMarket; // User balance per market. Independent of the settlement queue. Used for tracing before settlements are processed.
 
     /**
      * @dev Gets the total pending settlement for a specific market
@@ -45,8 +33,10 @@ abstract contract MarketLiquidity {
      * @return The total pending settlement for this market
      *
      */
-    function getMarketTotalSettlement(bytes32 marketId) external view returns (uint256) {
-        return marketTotalSettlement[marketId];
+    function getMarketTotalSettlementDeficit(
+        bytes32 marketId
+    ) external view returns (uint256) {
+        return marketTotalSettlementDeficit[marketId];
     }
 
     /**
@@ -55,7 +45,9 @@ abstract contract MarketLiquidity {
      * @return The amount of liquidity reserves for this market
      *
      */
-    function getMarketLiquidityReserves(bytes32 marketId) external view returns (uint256) {
+    function getMarketLiquidityReserves(
+        bytes32 marketId
+    ) external view returns (uint256) {
         return marketLiquidityReserves[marketId];
     }
 
@@ -66,8 +58,11 @@ abstract contract MarketLiquidity {
      * @return The user's balance from this market
      *
      */
-    function getUserMarketBalance(address user, bytes32 marketId) external view returns (uint256) {
-        return userMarketBalances[user][marketId];
+    function getBalanceOfUserFromMarket(
+        address user,
+        bytes32 marketId
+    ) external view returns (uint256) {
+        return balanceOfUserFromMarket[user][marketId];
     }
 
     /**
@@ -75,8 +70,23 @@ abstract contract MarketLiquidity {
      * @param marketId The market ID
      * @return The number of pending settlement holders in this market
      */
-    function getNumPendingSettlementOwners(bytes32 marketId) external view returns (uint256) {
+    function getNumPendingSettlementOwners(
+        bytes32 marketId
+    ) external view returns (uint256) {
         return marketSettlementRecipients[marketId].length;
+    }
+
+    /**
+     * @dev Gets the amount of settlement owed to a recipient for a specific market
+     * @param marketId The market ID
+     * @param recipient The recipient address
+     * @return The amount of settlement owed to the recipient
+     */
+    function getSettlementAmountOwedTo(
+        bytes32 marketId,
+        address recipient
+    ) external view returns (uint256) {
+        return marketUserSettlement[marketId][recipient];
     }
 
     /**
@@ -99,7 +109,10 @@ abstract contract MarketLiquidity {
      * @param marketId The market that received liquidity
      * @param amount The amount of liquidity added
      */
-    function _trackMarketLiquidity(bytes32 marketId, uint256 amount) internal {
+    function _trackReceivedLiquidity(
+        bytes32 marketId,
+        uint256 amount
+    ) internal {
         // Auto-register Market if new
         _registerMarket(marketId);
         marketLiquidityReserves[marketId] += amount;
@@ -113,12 +126,22 @@ abstract contract MarketLiquidity {
      * @param amount The amount of liquidity to use
      * @return actualAmount The actual amount used (may be less if insufficient liquidity is present)
      */
-    function _useMarketLiquidity(bytes32 marketId, uint256 amount) internal returns (uint256 actualAmount) {
+    function _useMarketLiquidity(
+        bytes32 marketId,
+        uint256 amount,
+        address from
+    ) internal returns (uint256 actualAmount) {
         uint256 available = marketLiquidityReserves[marketId];
         actualAmount = Math.min(amount, available);
 
         if (actualAmount > 0) {
             marketLiquidityReserves[marketId] -= actualAmount;
+
+            if (address(from) != address(0)) {
+                // Update user's market balance if we're using liquidity from a specific user
+                balanceOfUserFromMarket[from][marketId] -= actualAmount;
+            }
+
             emit MarketLiquidityUsed(marketId, actualAmount);
         }
     }
@@ -141,7 +164,11 @@ abstract contract MarketLiquidity {
      * @param recipient The address with pending settlements
      * @param amount The amount to eventually settle
      */
-    function _addToSettlementQueue(bytes32 marketId, address recipient, uint256 amount) internal {
+    function _addToSettlementQueue(
+        bytes32 marketId,
+        address recipient,
+        uint256 amount
+    ) internal {
         // Add to amount we owe this recipient for this market
         if (marketUserSettlement[marketId][recipient] == 0) {
             // First settlement to this recipient in this market
@@ -150,23 +177,7 @@ abstract contract MarketLiquidity {
         }
 
         marketUserSettlement[marketId][recipient] += amount;
-        marketTotalSettlement[marketId] += amount;
-
-        emit SettlementRequestQueued(marketId, recipient, amount, block.timestamp);
-    }
-
-    /**
-     * @dev Removes a settlement request from record
-     */
-    function _removeSettlementRequest(bytes32 marketId, address user) internal {
-        address[] storage settlementRecipients = marketSettlementRecipients[marketId];
-        for (uint256 i = 0; i < settlementRecipients.length; i++) {
-            if (settlementRecipients[i] == user) {
-                settlementRecipients[i] = settlementRecipients[settlementRecipients.length - 1];
-                settlementRecipients.pop();
-                break;
-            }
-        }
+        marketTotalSettlementDeficit[marketId] += amount;
     }
 
     /**
@@ -174,10 +185,12 @@ abstract contract MarketLiquidity {
      * @param user The user address
      * @return The total balance across all markets
      */
-    function _getUserTotalMarketBalance(address user) internal view returns (uint256) {
+    function _getUserTotalMarketBalance(
+        address user
+    ) internal view returns (uint256) {
         uint256 total = 0;
         for (uint256 i = 0; i < knownMarkets.length; i++) {
-            total += userMarketBalances[user][knownMarkets[i]];
+            total += balanceOfUserFromMarket[user][knownMarkets[i]];
         }
         return total;
     }
@@ -187,7 +200,9 @@ abstract contract MarketLiquidity {
      * @param recipient The address to check
      * @return totalUserSettlement The total pending settlements across all markets
      */
-    function _getUserPendingSettlement(address recipient) internal view returns (uint256 totalUserSettlement) {
+    function _getUserPendingSettlement(
+        address recipient
+    ) internal view returns (uint256 totalUserSettlement) {
         totalUserSettlement = 0;
 
         for (uint256 i = 0; i < knownMarkets.length; i++) {
@@ -202,11 +217,15 @@ abstract contract MarketLiquidity {
      * @param marketId The market ID they acquired from
      * @param amount The amount of LCC acquired
      */
-    function _trackMarketAcquisition(address user, bytes32 marketId, uint256 amount) internal {
+    function _trackMarketAcquisition(
+        address user,
+        bytes32 marketId,
+        uint256 amount
+    ) internal {
         // Register the market if it is not already registered
         _registerMarket(marketId);
 
-        userMarketBalances[user][marketId] += amount;
+        balanceOfUserFromMarket[user][marketId] += amount;
     }
 
     /**
@@ -214,13 +233,15 @@ abstract contract MarketLiquidity {
      * @param user The user address
      * @return Array of market IDs the user has balances in
      */
-    function _getUserMarkets(address user) public view returns (bytes32[] memory) {
+    function _getUserMarkets(
+        address user
+    ) public view returns (bytes32[] memory) {
         bytes32[] memory userMarkets = new bytes32[](knownMarkets.length);
         uint256 count = 0;
 
         for (uint256 i = 0; i < knownMarkets.length; i++) {
             bytes32 marketId = knownMarkets[i];
-            if (userMarketBalances[user][marketId] > 0) {
+            if (balanceOfUserFromMarket[user][marketId] > 0) {
                 userMarkets[count] = marketId;
                 count++;
             }
@@ -229,50 +250,142 @@ abstract contract MarketLiquidity {
     }
 
     /**
-     * @dev Partially or Completely Process the market settlement queue
+     * @dev Partially or Completely process the market settlement queue
      * @param marketId The market to process the settlement queue for
      * @param availableLiquidity The available liquidity in the market
      * @param burnTokens Whether to burn the equivalent LCC tokens for the settlement settled
      * @return processedAmount The amount processed from the settlement queue
      */
-    function _processSettlementQueue(bytes32 marketId, uint256 availableLiquidity, bool burnTokens)
-        internal
-        returns (uint256 processedAmount)
-    {
-        uint256 remainingLiquidity = Math.min(availableLiquidity, marketTotalSettlement[marketId]);
+    function _processSettlementQueue(
+        bytes32 marketId,
+        uint256 availableLiquidity,
+        bool burnTokens
+    ) internal returns (uint256 processedAmount) {
+        uint256 remainingLiquidity = Math.min(
+            availableLiquidity,
+            marketTotalSettlementDeficit[marketId]
+        );
 
-        address[] memory settlementRecipients = marketSettlementRecipients[marketId];
+        address[] memory settlementRecipients = marketSettlementRecipients[
+            marketId
+        ];
 
-        for (uint256 i = 0; i < settlementRecipients.length && remainingLiquidity > 0; i++) {
+        for (
+            uint256 i = 0;
+            i < settlementRecipients.length && remainingLiquidity > 0;
+            i++
+        ) {
             address recipient = settlementRecipients[i];
             uint256 amount = marketUserSettlement[marketId][recipient];
 
             if (amount == 0) continue; // Skip fully paid settlements
 
             uint256 amountToSettle = Math.min(remainingLiquidity, amount);
-
-            // Update amount we owe
-            marketUserSettlement[marketId][recipient] -= amountToSettle;
-            marketTotalSettlement[marketId] -= amountToSettle;
-
-            // Update the remaining liquidity and processed amount for this iteration
+            _processSettlementQueueForRecipient(
+                marketId,
+                recipient,
+                amountToSettle,
+                burnTokens
+            );
             remainingLiquidity -= amountToSettle;
             processedAmount += amountToSettle;
+        }
+    }
 
-            // If amount fully paid, remove from pending settlement holders list
-            if (marketUserSettlement[marketId][recipient] == 0) {
-                hasPendingSettlement[marketId][recipient] = false;
-                _removeSettlementRequest(marketId, recipient);
+    function _processSettlementQueueForAllRecipientMarkets(
+        address recipient,
+        uint256 amountToProcess,
+        bool burnTokens
+    ) internal {
+        uint256 remainingLiquidity = amountToProcess;
+        bytes32[] memory userMarkets = _getUserMarkets(recipient);
+        for (uint256 i = 0; i < userMarkets.length; i++) {
+            bytes32 marketId = userMarkets[i];
+            uint256 amountInMarket = marketUserSettlement[marketId][recipient];
+            if (amountInMarket == 0) continue;
+            uint256 amount = Math.min(remainingLiquidity, amountInMarket);
+
+            remainingLiquidity -= amount; // Math.min ensures that the amount is always less than or equal to the remaining liquidity to process
+
+            _processSettlementQueueForRecipient(
+                marketId,
+                recipient,
+                amount,
+                burnTokens
+            );
+
+            if (remainingLiquidity == 0) break;
+        }
+    }
+
+    /**
+     * @dev Process all the market settlement queues for a user partially or completely clearing out their pending settlements
+     * @param fromUser The user who's settlements are being cleared
+     * @param amountToClear The amount of pending settlements to clear
+     */
+    function _annulUserSettlement(
+        address fromUser,
+        uint256 amountToClear
+    ) internal {
+        _processSettlementQueueForAllRecipientMarkets(
+            fromUser,
+            amountToClear,
+            false
+        );
+    }
+
+    /**
+     * @dev Removes a settlement recipient from market record
+     * @dev Called specifically by _processSettlementQueueForRecipient to remove the recipient from the market.
+     * @param marketId The market ID to remove the settlement request from
+     * @param recipient The recipient to remove the settlement request from
+     */
+    function _removeMarketRecipientRecord(
+        bytes32 marketId,
+        address recipient
+    ) private {
+        address[] storage settlementRecipients = marketSettlementRecipients[
+            marketId
+        ];
+        for (uint256 i = 0; i < settlementRecipients.length; i++) {
+            if (settlementRecipients[i] == recipient) {
+                settlementRecipients[i] = settlementRecipients[
+                    settlementRecipients.length - 1
+                ];
+                settlementRecipients.pop();
+                break;
             }
+        }
+    }
 
-            // burn the equivalent LCC Tokens for this user's amount that was just paid off
-            // and transfer the underlying assets to the recipient of the settlement
-            // if burn is false, it means we are clearing a settlement we did not pay off
-            if (burnTokens) {
-                _payOutstandingSettlementToUser(recipient, amountToSettle);
-            }
+    /**
+     * @dev Processes a settlement queue for a recipient
+     * @param marketId The market ID to process the settlement queue for
+     * @param recipient The recipient to process the settlement queue for
+     * @param amount The amount to process
+     * @param burnTokens Whether to burn the equivalent LCC tokens for the settlement settled
+     */
+    function _processSettlementQueueForRecipient(
+        bytes32 marketId,
+        address recipient,
+        uint256 amount,
+        bool burnTokens
+    ) internal {
+        // Update amount we owe
+        marketUserSettlement[marketId][recipient] -= amount;
+        marketTotalSettlementDeficit[marketId] -= amount;
 
-            emit SettlementRequestCleared(marketId, recipient, amountToSettle, 0, block.timestamp, burnTokens);
+        // If amount fully paid, remove from pending settlement holders list
+        if (marketUserSettlement[marketId][recipient] == 0) {
+            hasPendingSettlement[marketId][recipient] = false;
+            _removeMarketRecipientRecord(marketId, recipient);
+        }
+
+        // burn the equivalent LCC Tokens for this user's amount that was just paid off
+        // and transfer the underlying assets to the recipient of the settlement
+        // if burn is false, it means we are clearing a settlement we did not pay off
+        if (burnTokens) {
+            _payOutstandingSettlementToUser(recipient, amount);
         }
     }
 
@@ -281,5 +394,8 @@ abstract contract MarketLiquidity {
      * @param user The user to settle an outstanding amount to
      * @param amount The amount to settle
      */
-    function _payOutstandingSettlementToUser(address user, uint256 amount) internal virtual;
+    function _payOutstandingSettlementToUser(
+        address user,
+        uint256 amount
+    ) internal virtual;
 }

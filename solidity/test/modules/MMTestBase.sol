@@ -45,7 +45,7 @@ abstract contract MarketMakerTestBase {
         MarketMaker.State memory state;
         state.owner = address(0x39E7b9A0E61dc09980858c20481C3273E1dAaa9C);
         state.sourceState = "0xabcdef1234567890";
-        state.prover = "0xprover1234567890";
+        state.prover = "0x39E7b9A0E61dc09980858c20481C3273E1dAaa9C";
         state.nonce = "nonce123";
 
         // Add reserves
