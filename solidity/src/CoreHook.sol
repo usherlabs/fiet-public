@@ -49,19 +49,9 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
     }
 
     // Owner will be set to MarketFactory
-    constructor(
-        address _poolManager,
-        address _marketFactory,
-        address _mmPositionManager,
-        address _calculator
-    )
+    constructor(address _poolManager, address _marketFactory, address _mmPositionManager, address _calculator)
         BaseHook(IPoolManager(_poolManager))
-        VTSManager(
-            _poolManager,
-            _marketFactory,
-            _mmPositionManager,
-            _calculator
-        )
+        VTSManager(_poolManager, _marketFactory, _mmPositionManager, _calculator)
     {
         marketFactory = _marketFactory;
         mmPositionManager = _mmPositionManager;
@@ -79,53 +69,45 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
         _unpause(poolId);
     }
 
-    function getHookPermissions()
-        public
-        pure
-        override
-        returns (Hooks.Permissions memory)
-    {
-        return
-            Hooks.Permissions({
-                beforeInitialize: true, // Validate and set global parameters
-                afterInitialize: false,
-                beforeAddLiquidity: false,
-                afterAddLiquidity: true, // Intercept liquidity modifications
-                beforeRemoveLiquidity: false,
-                afterRemoveLiquidity: true, // Intercept liquidity modifications
-                beforeSwap: true,
-                afterSwap: true,
-                beforeDonate: false,
-                afterDonate: false,
-                beforeSwapReturnDelta: false,
-                afterSwapReturnDelta: false,
-                afterAddLiquidityReturnDelta: false,
-                afterRemoveLiquidityReturnDelta: false
-            });
+    function getHookPermissions() public pure override returns (Hooks.Permissions memory) {
+        return Hooks.Permissions({
+            beforeInitialize: true, // Validate and set global parameters
+            afterInitialize: false,
+            beforeAddLiquidity: false,
+            afterAddLiquidity: true, // Intercept liquidity modifications
+            beforeRemoveLiquidity: false,
+            afterRemoveLiquidity: true, // Intercept liquidity modifications
+            beforeSwap: true,
+            afterSwap: true,
+            beforeDonate: false,
+            afterDonate: false,
+            beforeSwapReturnDelta: false,
+            afterSwapReturnDelta: false,
+            afterAddLiquidityReturnDelta: false,
+            afterRemoveLiquidityReturnDelta: false
+        });
     }
 
-    function _beforeInitialize(
-        address sender,
-        PoolKey calldata,
-        uint160
-    ) internal view virtual override returns (bytes4) {
+    function _beforeInitialize(address sender, PoolKey calldata, uint160)
+        internal
+        view
+        virtual
+        override
+        returns (bytes4)
+    {
         if (sender != marketFactory) {
             revert InvalidInitialiser();
         }
         return this.beforeInitialize.selector;
     }
 
-    function _beforeSwap(
-        address,
-        PoolKey calldata key,
-        SwapParams calldata,
-        bytes calldata
-    ) internal override returns (bytes4, BeforeSwapDelta, uint24) {
+    function _beforeSwap(address, PoolKey calldata key, SwapParams calldata, bytes calldata)
+        internal
+        override
+        returns (bytes4, BeforeSwapDelta, uint24)
+    {
         // store sqrtP_before and liquidity in transient storage for segment processing
-        (uint160 sqrtPBefore, , , ) = StateLibrary.getSlot0(
-            poolManager,
-            key.toId()
-        );
+        (uint160 sqrtPBefore,,,) = StateLibrary.getSlot0(poolManager, key.toId());
         uint128 liqBefore = StateLibrary.getLiquidity(poolManager, key.toId());
         bytes32 slot = TransientSlots.SQRTP_BEFORE_SLOT;
         assembly ("memory-safe") {
@@ -138,13 +120,7 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
         return (this.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
     }
 
-    function _afterSwap(
-        address,
-        PoolKey calldata key,
-        SwapParams calldata,
-        BalanceDelta delta,
-        bytes calldata
-    )
+    function _afterSwap(address, PoolKey calldata key, SwapParams calldata, BalanceDelta delta, bytes calldata)
         internal
         virtual
         override
@@ -159,10 +135,7 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
             assembly ("memory-safe") {
                 sqrtPBefore := tload(slot)
             }
-            (uint160 sqrtPAfter, int24 tickAfter, , ) = StateLibrary.getSlot0(
-                poolManager,
-                key.toId()
-            );
+            (uint160 sqrtPAfter, int24 tickAfter,,) = StateLibrary.getSlot0(poolManager, key.toId());
             int24 tickBefore = TickMath.getTickAtSqrtPrice(sqrtPBefore);
 
             if (tickAfter != tickBefore) {
@@ -180,14 +153,9 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
                 int24 stepTick = tickBefore;
                 while (true) {
                     // next initialised tick in the direction of the swap
-                    (int24 next, bool initialized) = TickUtils
-                        .nextInitializedTickWithinOneWord(
-                            poolManager,
-                            key.toId(),
-                            stepTick,
-                            key.tickSpacing,
-                            zeroForOne
-                        );
+                    (int24 next, bool initialized) = TickUtils.nextInitializedTickWithinOneWord(
+                        poolManager, key.toId(), stepTick, key.tickSpacing, zeroForOne
+                    );
                     // compute target sqrt for this segment (either next tick or final price)
                     uint160 sqrtNext = TickMath.getSqrtPriceAtTick(next);
                     uint160 sqrtTarget = zeroForOne
@@ -197,48 +165,20 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
                         // amountOut per segment from price delta and liquidity
                         // see reference: https://github.com/Uniswap/v4-core/blob/0f17b65aa61edee384d5129b7ea080f22905faa0/src/libraries/SwapMath.sol#L88
                         uint256 outSeg = zeroForOne
-                            ? SqrtPriceMath.getAmount1Delta(
-                                sqrtTarget,
-                                sqrtCurrent,
-                                segmentLiquidity,
-                                false
-                            )
-                            : SqrtPriceMath.getAmount0Delta(
-                                sqrtCurrent,
-                                sqrtTarget,
-                                segmentLiquidity,
-                                false
-                            );
+                            ? SqrtPriceMath.getAmount1Delta(sqrtTarget, sqrtCurrent, segmentLiquidity, false)
+                            : SqrtPriceMath.getAmount0Delta(sqrtCurrent, sqrtTarget, segmentLiquidity, false);
                         if (outSeg > 0) {
                             // token index: zeroForOne -> token1, else token0
-                            _accrueDeficitGrowth(
-                                key.toId(),
-                                zeroForOne ? 1 : 0,
-                                outSeg
-                            );
+                            _accrueDeficitGrowth(key.toId(), zeroForOne ? 1 : 0, outSeg);
                         }
                         // Inflow accrual per segment using no-fee input (net of LP/protocol fees)
                         {
                             uint8 tokenIn = zeroForOne ? 0 : 1;
                             uint256 inNoFee = zeroForOne
-                                ? SqrtPriceMath.getAmount0Delta(
-                                    sqrtCurrent,
-                                    sqrtTarget,
-                                    segmentLiquidity,
-                                    true
-                                )
-                                : SqrtPriceMath.getAmount1Delta(
-                                    sqrtTarget,
-                                    sqrtCurrent,
-                                    segmentLiquidity,
-                                    true
-                                );
+                                ? SqrtPriceMath.getAmount0Delta(sqrtCurrent, sqrtTarget, segmentLiquidity, true)
+                                : SqrtPriceMath.getAmount1Delta(sqrtTarget, sqrtCurrent, segmentLiquidity, true);
                             if (inNoFee > 0) {
-                                _accrueInflowGrowth(
-                                    key.toId(),
-                                    tokenIn,
-                                    inNoFee
-                                );
+                                _accrueInflowGrowth(key.toId(), tokenIn, inNoFee);
                             }
                         }
                         sqrtCurrent = sqrtTarget;
@@ -252,23 +192,13 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
                         _onTickCross(key.toId(), next, 0);
                         _onTickCross(key.toId(), next, 1);
                         // apply liquidity net change for subsequent segments (direction-aware)
-                        (, int128 liquidityNet) = StateLibrary.getTickLiquidity(
-                            poolManager,
-                            key.toId(),
-                            next
-                        );
+                        (, int128 liquidityNet) = StateLibrary.getTickLiquidity(poolManager, key.toId(), next);
                         if (zeroForOne) liquidityNet = -liquidityNet;
                         unchecked {
                             if (liquidityNet < 0) {
-                                segmentLiquidity = uint128(
-                                    uint256(segmentLiquidity) -
-                                        uint256(uint128(-liquidityNet))
-                                );
+                                segmentLiquidity = uint128(uint256(segmentLiquidity) - uint256(uint128(-liquidityNet)));
                             } else if (liquidityNet > 0) {
-                                segmentLiquidity = uint128(
-                                    uint256(segmentLiquidity) +
-                                        uint256(uint128(liquidityNet))
-                                );
+                                segmentLiquidity = uint128(uint256(segmentLiquidity) + uint256(uint128(liquidityNet)));
                             }
                         }
                     }
@@ -288,41 +218,17 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
                 }
                 if (segmentLiquidity > 0 && sqrtPAfter != sqrtPBefore) {
                     uint256 outSeg = zeroForOne
-                        ? SqrtPriceMath.getAmount1Delta(
-                            sqrtPAfter,
-                            sqrtPBefore,
-                            segmentLiquidity,
-                            false
-                        )
-                        : SqrtPriceMath.getAmount0Delta(
-                            sqrtPBefore,
-                            sqrtPAfter,
-                            segmentLiquidity,
-                            false
-                        );
+                        ? SqrtPriceMath.getAmount1Delta(sqrtPAfter, sqrtPBefore, segmentLiquidity, false)
+                        : SqrtPriceMath.getAmount0Delta(sqrtPBefore, sqrtPAfter, segmentLiquidity, false);
                     if (outSeg > 0) {
-                        _accrueDeficitGrowth(
-                            key.toId(),
-                            zeroForOne ? 1 : 0,
-                            outSeg
-                        );
+                        _accrueDeficitGrowth(key.toId(), zeroForOne ? 1 : 0, outSeg);
                     }
                     // Inflow accrual for intra-tick segment (no-fee input)
                     {
                         uint8 tokenIn = zeroForOne ? 0 : 1;
                         uint256 inNoFee = zeroForOne
-                            ? SqrtPriceMath.getAmount0Delta(
-                                sqrtPBefore,
-                                sqrtPAfter,
-                                segmentLiquidity,
-                                true
-                            )
-                            : SqrtPriceMath.getAmount1Delta(
-                                sqrtPAfter,
-                                sqrtPBefore,
-                                segmentLiquidity,
-                                true
-                            );
+                            ? SqrtPriceMath.getAmount0Delta(sqrtPBefore, sqrtPAfter, segmentLiquidity, true)
+                            : SqrtPriceMath.getAmount1Delta(sqrtPAfter, sqrtPBefore, segmentLiquidity, true);
                         if (inNoFee > 0) {
                             _accrueInflowGrowth(key.toId(), tokenIn, inNoFee);
                         }
@@ -334,11 +240,7 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
         address proxyHook = _getProxyHook(key);
 
         // Check if this is a direct core pool swap, and if it is, call the proxy hook
-        if (
-            IExttload(proxyHook).exttload(
-                TransientSlots.PROXY_SWAP_FLAG_SLOT
-            ) == bytes32(0)
-        ) {
+        if (IExttload(proxyHook).exttload(TransientSlots.PROXY_SWAP_FLAG_SLOT) == bytes32(0)) {
             ProxyHook(proxyHook).onCorePoolDirectSwap(delta);
         }
 
@@ -356,13 +258,7 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
         BalanceDelta delta,
         BalanceDelta,
         bytes calldata
-    )
-        internal
-        virtual
-        override
-        whenNotPaused(key.toId())
-        returns (bytes4, BalanceDelta)
-    {
+    ) internal virtual override whenNotPaused(key.toId()) returns (bytes4, BalanceDelta) {
         // Track maximum potemtial commitment for both tokens in the position
         _trackCommitment(sender, params);
         // Update PositionIndex with registration/update based on actual pool id
@@ -370,16 +266,10 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
 
         // only add direct liquidity if the sender is not the market maker position manager/router
         if (sender != address(mmPositionManager)) {
-            ProxyHook(_getProxyHook(key)).onDirectLP(
-                delta,
-                LiquidityUtils.ActionType.DirectLPAddLiquidity
-            ); // Fetching ProxyHook by corePoolKey, therefore no need to pass again.
+            ProxyHook(_getProxyHook(key)).onDirectLP(delta, LiquidityUtils.ActionType.DirectLPAddLiquidity); // Fetching ProxyHook by corePoolKey, therefore no need to pass again.
         }
 
-        return (
-            this.afterAddLiquidity.selector,
-            BalanceDeltaLibrary.ZERO_DELTA
-        );
+        return (this.afterAddLiquidity.selector, BalanceDeltaLibrary.ZERO_DELTA);
     }
 
     function _afterRemoveLiquidity(
@@ -398,26 +288,16 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
         // Allow removal of liquidity even when the market is paused.
         // only remove direct liquidity if the sender is the pool manager
         if (sender != address(mmPositionManager)) {
-            ProxyHook(_getProxyHook(key)).onDirectLP(
-                delta,
-                LiquidityUtils.ActionType.DirectLPRemoveLiquidity
-            );
+            ProxyHook(_getProxyHook(key)).onDirectLP(delta, LiquidityUtils.ActionType.DirectLPRemoveLiquidity);
         }
 
-        return (
-            this.afterRemoveLiquidity.selector,
-            BalanceDeltaLibrary.ZERO_DELTA
-        );
+        return (this.afterRemoveLiquidity.selector, BalanceDeltaLibrary.ZERO_DELTA);
     }
 
     // Helper function to get the proxy hook address from the core pool key
-    function _getProxyHook(
-        PoolKey calldata corePoolKey
-    ) internal view returns (address) {
+    function _getProxyHook(PoolKey calldata corePoolKey) internal view returns (address) {
         PoolId corePoolId = corePoolKey.toId();
-        PoolId proxyPoolId = IMarketFactory(marketFactory).coreToProxy(
-            corePoolId
-        );
+        PoolId proxyPoolId = IMarketFactory(marketFactory).coreToProxy(corePoolId);
 
         return IMarketFactory(marketFactory).proxyToHook(proxyPoolId);
     }
