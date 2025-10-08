@@ -45,16 +45,13 @@ library PositionLibrary {
      * @param params The params of the modify liquidity operation
      * @return id The id of the position
      */
-    function generateId(
-        address modifyLiquidityRouter,
-        ModifyLiquidityParams memory params
-    ) internal pure returns (PositionId id) {
-        bytes32 positionKey = Position.calculatePositionKey(
-            modifyLiquidityRouter,
-            params.tickLower,
-            params.tickUpper,
-            params.salt
-        );
+    function generateId(address modifyLiquidityRouter, ModifyLiquidityParams memory params)
+        internal
+        pure
+        returns (PositionId id)
+    {
+        bytes32 positionKey =
+            Position.calculatePositionKey(modifyLiquidityRouter, params.tickLower, params.tickUpper, params.salt);
 
         id = PositionId.wrap(positionKey);
     }

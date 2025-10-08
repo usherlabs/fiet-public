@@ -19,16 +19,17 @@ abstract contract MarketHandler {
     }
 
     modifier onlyBounds() {
-        if (!IMarketFactory(marketFactory).bounds(msg.sender))
+        if (!IMarketFactory(marketFactory).bounds(msg.sender)) {
             revert InvalidCaller();
+        }
         _;
     }
 
     modifier onlyMarketAssets(PoolId poolId) {
-        address[2] memory currencies = IMarketFactory(marketFactory)
-            .corePoolToCurrencyPair(poolId);
-        if (msg.sender != currencies[0] && msg.sender != currencies[1])
+        address[2] memory currencies = IMarketFactory(marketFactory).corePoolToCurrencyPair(poolId);
+        if (msg.sender != currencies[0] && msg.sender != currencies[1]) {
             revert InvalidCaller();
+        }
         _;
     }
 }

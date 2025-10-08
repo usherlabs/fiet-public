@@ -27,10 +27,7 @@ contract MockSettlementQueue is MarketLiquidity {
      * @param user user
      * @param amount amount
      */
-    function _payOutstandingSettlementToUser(
-        address user,
-        uint256 amount
-    ) internal override {
+    function _payOutstandingSettlementToUser(address user, uint256 amount) internal override {
         totalTransferred += amount;
         // burn tokens
         emit MockTransfer(user, amount);
@@ -42,11 +39,7 @@ contract MockSettlementQueue is MarketLiquidity {
      * @param user The user to add the settlement for
      * @param amount The amount to add
      */
-    function addMarketSettlementRequest(
-        bytes32 marketId,
-        address user,
-        uint256 amount
-    ) external {
+    function addMarketSettlementRequest(bytes32 marketId, address user, uint256 amount) external {
         _addToSettlementQueue(marketId, user, amount);
     }
 
@@ -56,10 +49,7 @@ contract MockSettlementQueue is MarketLiquidity {
      * @param availableLiquidity The available liquidity in the market
      * @return The amount processed from the settlement queue
      */
-    function processMarketSettlementQueue(
-        bytes32 marketId,
-        uint256 availableLiquidity
-    ) external returns (uint256) {
+    function processMarketSettlementQueue(bytes32 marketId, uint256 availableLiquidity) external returns (uint256) {
         return _processSettlementQueue(marketId, availableLiquidity, true);
     }
 
@@ -69,11 +59,7 @@ contract MockSettlementQueue is MarketLiquidity {
      * @param marketId The market ID
      * @param amount The amount of LCC acquired
      */
-    function trackMarketAcquisition(
-        address user,
-        bytes32 marketId,
-        uint256 amount
-    ) external {
+    function trackMarketAcquisition(address user, bytes32 marketId, uint256 amount) external {
         _trackMarketAcquisition(user, marketId, amount);
     }
 
@@ -83,10 +69,7 @@ contract MockSettlementQueue is MarketLiquidity {
      * @param user The user to get the settlement for
      * @return The amount owed to the user
      */
-    function getUserSettlement(
-        bytes32 marketId,
-        address user
-    ) external view returns (uint256) {
+    function getUserSettlement(bytes32 marketId, address user) external view returns (uint256) {
         return marketUserSettlement[marketId][user];
     }
 
@@ -96,10 +79,7 @@ contract MockSettlementQueue is MarketLiquidity {
      * @param user The user to check the pending settlement for
      * @return Whether the user has pending settlement in the market
      */
-    function userHasPendingSettlement(
-        bytes32 marketId,
-        address user
-    ) external view returns (bool) {
+    function userHasPendingSettlement(bytes32 marketId, address user) external view returns (bool) {
         return hasPendingSettlement[marketId][user];
     }
 }

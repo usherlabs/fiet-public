@@ -11,14 +11,8 @@ contract MockPositionIndex is IPositionIndex {
     mapping(PositionId => uint128) public liq;
 
     function register(PositionId id, PoolId poolId, int24 tl, int24 tu, address owner) external {
-        meta[id] = PositionMeta({
-            tickLower: tl,
-            tickUpper: tu,
-            liquidity: 0,
-            owner: owner,
-            isActive: true,
-            poolId: poolId
-        });
+        meta[id] =
+            PositionMeta({tickLower: tl, tickUpper: tu, liquidity: 0, owner: owner, isActive: true, poolId: poolId});
     }
 
     function deactivate(PositionId id) external {

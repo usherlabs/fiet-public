@@ -42,17 +42,9 @@ abstract contract MarketVault is IMarketVault {
     event MarketRegistered(bytes32 indexed marketId);
     event MarketLiquidityAdded(bytes32 indexed marketId, uint256 amount);
     event MarketLiquidityUsed(bytes32 indexed marketId, uint256 amount);
-    event LiquidityAddedToVault(
-        address indexed sender,
-        address indexed from,
-        address indexed currency,
-        uint256 amount
-    );
+    event LiquidityAddedToVault(address indexed sender, address indexed from, address indexed currency, uint256 amount);
     event LiquidityTakenFromVault(
-        address indexed sender,
-        address indexed recipient,
-        address indexed currency,
-        uint256 amount
+        address indexed sender, address indexed recipient, address indexed currency, uint256 amount
     );
 
     struct CallbackData {
@@ -67,9 +59,7 @@ abstract contract MarketVault is IMarketVault {
      * @param currency The currency in market vault
      * @return The balance of the currency in the market vault
      */
-    function inMarketBalanceOf(
-        Currency currency
-    ) public view returns (uint256) {
+    function inMarketBalanceOf(Currency currency) public view returns (uint256) {
         return vaultPoolManager.balanceOf(address(this), currency.toId());
     }
 
@@ -79,11 +69,7 @@ abstract contract MarketVault is IMarketVault {
      * @param recipient The recipient of the underlying asset
      * @param amount The amount of the underlying asset to take from the vault
      */
-    function _takeAssetFromVault(
-        Currency assetCurrency,
-        address recipient,
-        uint256 amount
-    ) internal {
+    function _takeAssetFromVault(Currency assetCurrency, address recipient, uint256 amount) internal {
         // verify that the vault/proxy hook has enough liquidity to take for the underlying asset
         uint256 availableLiquidity = inMarketBalanceOf(assetCurrency);
         if (availableLiquidity < amount) {
@@ -103,12 +89,7 @@ abstract contract MarketVault is IMarketVault {
             amount,
             false // mint` = `true` i.e. we're  claiming erc20
         );
-        emit LiquidityTakenFromVault(
-            msg.sender,
-            recipient,
-            Currency.unwrap(assetCurrency),
-            amount
-        );
+        emit LiquidityTakenFromVault(msg.sender, recipient, Currency.unwrap(assetCurrency), amount);
     }
 
     /**
@@ -118,11 +99,10 @@ abstract contract MarketVault is IMarketVault {
      * @param amount The amount of the underlying asset to take from the vault
      *
      */
-    function _tryTakeAssetFromVault(
-        Currency assetCurrency,
-        address recipient,
-        uint256 amount
-    ) internal returns (uint256) {
+    function _tryTakeAssetFromVault(Currency assetCurrency, address recipient, uint256 amount)
+        internal
+        returns (uint256)
+    {
         // verify that the vault/proxy hook has enough liquidity to take for the underlying asset
         uint256 availableLiquidity = inMarketBalanceOf(assetCurrency);
         uint256 amountToTake = Math.min(availableLiquidity, amount);
@@ -138,18 +118,10 @@ abstract contract MarketVault is IMarketVault {
      * @param amount The amount of the underlying asset to take from the vault
      * @return The amount of the underlying asset that was taken from the vault
      */
-    function _tryTakeFromVaultToLCC(
-        bytes32 marketId,
-        ILCC lccToken,
-        uint256 amount
-    ) internal returns (uint256) {
+    function _tryTakeFromVaultToLCC(bytes32 marketId, ILCC lccToken, uint256 amount) internal returns (uint256) {
         Currency uaCurrency = Currency.wrap(lccToken.underlyingAsset());
         // Take the asset from the vault to the LCC
-        uint256 amountTaken = _tryTakeAssetFromVault(
-            uaCurrency,
-            address(lccToken),
-            amount
-        );
+        uint256 amountTaken = _tryTakeAssetFromVault(uaCurrency, address(lccToken), amount);
         // Confirm the take of the underlying liquidity to the LCC to let the LCC know about the new balance
         if (amountTaken > 0) {
             lccToken.confirmTake(marketId, amountTaken, false);
@@ -162,12 +134,9 @@ abstract contract MarketVault is IMarketVault {
      * @param lccToken The LCC token
      * @param amount The amount of the underlying asset to take from the vault
      */
-    function _takeFromVaultAndSettle(
-        bytes32 marketId,
-        ILCC lccToken,
-        uint256 amount,
-        bool shouldProcessQueue
-    ) internal {
+    function _takeFromVaultAndSettle(bytes32 marketId, ILCC lccToken, uint256 amount, bool shouldProcessQueue)
+        internal
+    {
         if (amount == 0) revert InvalidAmount();
         Currency uaCurrency = Currency.wrap(lccToken.underlyingAsset());
         // Take the asset from the vault to the LCC
@@ -182,11 +151,7 @@ abstract contract MarketVault is IMarketVault {
      * @param sender The owner of the underlying asset sending to the vault
      * @param amount The amount of the underlying asset to settle to the vault
      */
-    function _settleAssetToVault(
-        Currency assetCurrency,
-        address sender,
-        uint256 amount
-    ) internal {
+    function _settleAssetToVault(Currency assetCurrency, address sender, uint256 amount) internal {
         // validate that the owner has enough balance of underlying token to take from
         uint256 ownerBalance = assetCurrency.balanceOf(sender);
         if (ownerBalance < amount) {
@@ -210,12 +175,7 @@ abstract contract MarketVault is IMarketVault {
             true // `mint` = `true` i.e. we're minting claim tokens for the vault, equivalent to money we just deposited to the PM
         );
 
-        emit LiquidityAddedToVault(
-            msg.sender,
-            sender,
-            Currency.unwrap(assetCurrency),
-            amount
-        );
+        emit LiquidityAddedToVault(msg.sender, sender, Currency.unwrap(assetCurrency), amount);
     }
 
     /**
@@ -259,13 +219,9 @@ abstract contract MarketVault is IMarketVault {
      * @param lccToken The LCC token
      * @param marketId The market ID
      */
-    function _settleObligationsForLCC(
-        ILCC lccToken,
-        bytes32 marketId
-    ) internal {
+    function _settleObligationsForLCC(ILCC lccToken, bytes32 marketId) internal {
         // Check how much pending settlements this LCC has for this market
-        uint256 totalPendingSettlement = IMarketLiquidity(address(lccToken))
-            .getMarketTotalSettlementDeficit(marketId);
+        uint256 totalPendingSettlement = IMarketLiquidity(address(lccToken)).getMarketTotalSettlementDeficit(marketId);
         if (totalPendingSettlement == 0) return; // No pending settlements to fill
 
         // Check how much liquidity ProxyHook has available
@@ -273,10 +229,7 @@ abstract contract MarketVault is IMarketVault {
         uint256 availableLiquidity = inMarketBalanceOf(uaCurrency);
 
         // Calculate how much we can settle
-        uint256 amountToSettle = Math.min(
-            totalPendingSettlement,
-            availableLiquidity
-        );
+        uint256 amountToSettle = Math.min(totalPendingSettlement, availableLiquidity);
         if (amountToSettle == 0) return; // No liquidity available
 
         // Move liquidity from PoolManager to LCC (this triggers settlement process)
@@ -289,56 +242,35 @@ abstract contract MarketVault is IMarketVault {
      * @param data The data that was passed to the call to unlock
      * @return The data that was passed to the call to unlock
      */
-    function unlockCallback(
-        bytes calldata data
-    ) external returns (bytes memory) {
+    function unlockCallback(bytes calldata data) external returns (bytes memory) {
         if (msg.sender != address(vaultPoolManager)) {
             revert InvalidSender();
         }
         // decode the callback data to determine the important parameters
         CallbackData memory callbackData = abi.decode(data, (CallbackData));
         // get the amount0 and amount1 from the balance delta
-        (int128 amount0, int128 amount1) = (
-            callbackData.balanceDelta.amount0(),
-            callbackData.balanceDelta.amount1()
-        );
+        (int128 amount0, int128 amount1) = (callbackData.balanceDelta.amount0(), callbackData.balanceDelta.amount1());
 
         // if the delta of amount0 is negative, then we need to take equivalent tokens from the vault
         if (amount0 < 0) {
             // take asset from vault
             // ? This function will fail if the amounts provided are greater than the available liquidity in the vault. This is purposeful. Callers must ensure they have sufficient liquidity in the vault.
-            _takeAssetFromVault(
-                callbackData.currency0,
-                callbackData.sender,
-                uint256(int256(-amount0))
-            );
+            _takeAssetFromVault(callbackData.currency0, callbackData.sender, uint256(int256(-amount0)));
         }
         // if the delta of amount1 is negative, then we need to take equivalent tokens from the vault
         if (amount1 < 0) {
             // take asset from vault
-            _takeAssetFromVault(
-                callbackData.currency1,
-                callbackData.sender,
-                uint256(int256(-amount1))
-            );
+            _takeAssetFromVault(callbackData.currency1, callbackData.sender, uint256(int256(-amount1)));
         }
         // if the delta of amount0 is positive, then we need to settle equivalent tokens to the vault
         if (amount0 > 0) {
             // settle asset to vault
-            _settleAssetToVault(
-                callbackData.currency0,
-                address(this),
-                uint256(int256(amount0))
-            );
+            _settleAssetToVault(callbackData.currency0, address(this), uint256(int256(amount0)));
         }
         // if the delta of amount1 is positive, then we need to settle equivalent tokens to the vault
         if (amount1 > 0) {
             // settle asset to vault
-            _settleAssetToVault(
-                callbackData.currency1,
-                address(this),
-                uint256(int256(amount1))
-            );
+            _settleAssetToVault(callbackData.currency1, address(this), uint256(int256(amount1)));
         }
 
         return "";
@@ -350,20 +282,9 @@ abstract contract MarketVault is IMarketVault {
      * @param currency1 The currency 1
      * @param balanceDelta The balance delta of the currency 0 and currency 1
      */
-    function _modifyVaultLiquidity(
-        address currency0,
-        address currency1,
-        BalanceDelta balanceDelta
-    ) internal {
+    function _modifyVaultLiquidity(address currency0, address currency1, BalanceDelta balanceDelta) internal {
         vaultPoolManager.unlock(
-            abi.encode(
-                CallbackData(
-                    msg.sender,
-                    Currency.wrap(currency0),
-                    Currency.wrap(currency1),
-                    balanceDelta
-                )
-            )
+            abi.encode(CallbackData(msg.sender, Currency.wrap(currency0), Currency.wrap(currency1), balanceDelta))
         );
     }
 }

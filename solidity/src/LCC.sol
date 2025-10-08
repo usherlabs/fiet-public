@@ -19,12 +19,7 @@ import {IVTSManager} from "./interfaces/IVTSManager.sol";
 import {console} from "forge-std/console.sol";
 import {ILCC} from "./interfaces/ILCC.sol";
 
-contract LiquidityCommitmentCertificate is
-    ERC20,
-    MarketLiquidity,
-    Ownable,
-    ILCC
-{
+contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC {
     using SafeTransferLib for ERC20;
 
     error SenderNotIssuer(address sender);
@@ -48,10 +43,8 @@ contract LiquidityCommitmentCertificate is
         // Get if the caller is a registered proxy hook
         // If it is, then we need to get the two currencies it proxies
         // Then check if the underlying asset falls under any of the two currencies it supports
-        address[2] memory currencies = IMarketFactory(marketFactory)
-            .proxyHookToCurrencyPair(caller);
-        bool isAssetProxyPool = (currencies[0] == underlyingAsset ||
-            currencies[1] == underlyingAsset);
+        address[2] memory currencies = IMarketFactory(marketFactory).proxyHookToCurrencyPair(caller);
+        bool isAssetProxyPool = (currencies[0] == underlyingAsset || currencies[1] == underlyingAsset);
         bool isValidIssuer = issuers[caller] || isAssetProxyPool;
 
         // if caller is not a valid issuer then revert
@@ -89,16 +82,9 @@ contract LiquidityCommitmentCertificate is
      * @param _issuers The issuers of the LCC. ProxyHook, and MMPositionManager
      * @param _marketFactory The MarketFactory contract that manages this LCC.
      */
-    constructor(
-        address _underlyingAsset,
-        address[] memory _issuers,
-        address _marketFactory
-    )
+    constructor(address _underlyingAsset, address[] memory _issuers, address _marketFactory)
         ERC20(
-            string.concat(
-                "Fiet Liquidity Commitment Certificate for ",
-                IERC20Metadata(_underlyingAsset).name()
-            ),
+            string.concat("Fiet Liquidity Commitment Certificate for ", IERC20Metadata(_underlyingAsset).name()),
             string.concat("lcc-", IERC20Metadata(_underlyingAsset).symbol()),
             IERC20Metadata(_underlyingAsset).decimals()
         )
@@ -158,11 +144,7 @@ contract LiquidityCommitmentCertificate is
 
     // Called by Issuer after taking liquidity from the market to LCC.
     // Accounts for Vault -> LCC. if shouldProcessQueue is true, Vault -> Recipients.
-    function confirmTake(
-        bytes32 marketId,
-        uint256 amount,
-        bool shouldProcessQueue
-    ) external onlyIssuer {
+    function confirmTake(bytes32 marketId, uint256 amount, bool shouldProcessQueue) external onlyIssuer {
         // Track which market this underlying asset liquidity derived from.
         _trackReceivedLiquidity(marketId, amount);
         // Track total underlying asset supply
@@ -194,12 +176,10 @@ contract LiquidityCommitmentCertificate is
      * @param amount The amount to unwrap from this market
      * @return The amount actually unwrapped from this market
      */
-    function _unwrapFromMarketLiquidity(
-        bytes32 marketId,
-        address from,
-        address to,
-        uint256 amount
-    ) internal returns (uint256) {
+    function _unwrapFromMarketLiquidity(bytes32 marketId, address from, address to, uint256 amount)
+        internal
+        returns (uint256)
+    {
         // Use market liquidity
         uint256 amountAvailable = _useMarketLiquidity(marketId, amount, from);
 
@@ -220,9 +200,7 @@ contract LiquidityCommitmentCertificate is
      * @param amount The amount to unwrap from general pool
      * @return The amount actually unwrapped
      */
-    function _unwrapFromOOMLiquidity(
-        uint256 amount
-    ) internal view returns (uint256) {
+    function _unwrapFromOOMLiquidity(uint256 amount) internal view returns (uint256) {
         // Wrapped LCC should always be fully backed by uaSupply
         // No settlement queue needed ? - this should always succeed
 
@@ -265,29 +243,17 @@ contract LiquidityCommitmentCertificate is
         // any amount not wrapped should be unwrapped from the market
         uint256 remainingToUnwrap = amount - totalAmountUnwrapped;
 
-        for (
-            uint256 i = 0;
-            i < userMarkets.length && remainingToUnwrap > 0;
-            i++
-        ) {
+        for (uint256 i = 0; i < userMarkets.length && remainingToUnwrap > 0; i++) {
             bytes32 marketId = userMarkets[i];
             uint256 userMarketBalance = balanceOfUserFromMarket[from][marketId]; // inherited from MarketLiquidity
 
             if (userMarketBalance == 0) continue;
 
             // get the max amount that can be unwrapped from this market
-            uint256 amountFromThisMarket = Math.min(
-                remainingToUnwrap,
-                userMarketBalance
-            );
+            uint256 amountFromThisMarket = Math.min(remainingToUnwrap, userMarketBalance);
 
             // unwrap from this market's liquidity
-            uint256 amountUnwrapped = _unwrapFromMarketLiquidity(
-                marketId,
-                from,
-                to,
-                amountFromThisMarket
-            );
+            uint256 amountUnwrapped = _unwrapFromMarketLiquidity(marketId, from, to, amountFromThisMarket);
 
             totalAmountUnwrapped += amountUnwrapped;
             remainingToUnwrap -= amountFromThisMarket;
@@ -321,20 +287,13 @@ contract LiquidityCommitmentCertificate is
     }
 
     // Pay an outstanding settlement to a user and burn their underlying tokens
-    function _payOutstandingSettlementToUser(
-        address user,
-        uint256 amount
-    ) internal override {
+    function _payOutstandingSettlementToUser(address user, uint256 amount) internal override {
         _burn(user, amount);
         _transferUnderlyingAssets(user, amount);
     }
 
     // On transfer hook
-    function onTransfer(
-        address from,
-        address to,
-        uint256 amount
-    ) internal onlyProtocolTransfer(msg.sender, to) {
+    function onTransfer(address from, address to, uint256 amount) internal onlyProtocolTransfer(msg.sender, to) {
         // clear any outstanding settlement in all markets to be paid to the sender initiating the transfer
         _annulUserSettlementBeforeTransfer(from, amount);
 
@@ -342,19 +301,12 @@ contract LiquidityCommitmentCertificate is
         _processMarketTracing(to, amount);
     }
 
-    function transfer(
-        address to,
-        uint256 amount
-    ) public virtual override returns (bool) {
+    function transfer(address to, uint256 amount) public virtual override returns (bool) {
         onTransfer(msg.sender, to, amount);
         return super.transfer(to, amount);
     }
 
-    function transferFrom(
-        address from,
-        address to,
-        uint256 amount
-    ) public virtual override returns (bool) {
+    function transferFrom(address from, address to, uint256 amount) public virtual override returns (bool) {
         onTransfer(from, to, amount);
         return super.transferFrom(from, to, amount);
     }
@@ -364,9 +316,7 @@ contract LiquidityCommitmentCertificate is
      * @return The price of the asset
      * @return The decimals of the asset
      */
-    function usdPrice(
-        address marketOracleFactory
-    ) public view returns (uint256, uint256) {
+    function usdPrice(address marketOracleFactory) public view returns (uint256, uint256) {
         string memory quoteTicker = "USD";
         address oracleRegistry = IMarketFactory(marketFactory).oracleRegistry();
         // get the ticker of the underlying asset
@@ -374,10 +324,7 @@ contract LiquidityCommitmentCertificate is
         // asspend /quote to it eg /USDT
         string memory pricePair = string.concat(ticker, "/", quoteTicker);
         // get the price of the asset using oracle
-        address oracle = IOracleRegistry(oracleRegistry).getOracle(
-            pricePair,
-            marketOracleFactory
-        );
+        address oracle = IOracleRegistry(oracleRegistry).getOracle(pricePair, marketOracleFactory);
 
         // get the price of the asset
         uint256 assetPrice = IOracle(oracle).getPrice();
@@ -391,21 +338,13 @@ contract LiquidityCommitmentCertificate is
      * @return isTracingActive Whether tracing is active
      * @return currentMarket The current market if any is set
      */
-    function _getCoreHookFlags()
-        internal
-        view
-        returns (bool isTracingActive, bytes32 currentMarket)
-    {
+    function _getCoreHookFlags() internal view returns (bool isTracingActive, bytes32 currentMarket) {
         // get the core hook from the market factory
         address coreHook = IMarketFactory(marketFactory).getCoreHook();
 
         // read in all the bytes from the transient storage of the hook contract
-        bytes32 tracingFlagBytes = IExttload(coreHook).exttload(
-            TransientSlots.TRACING_FLAG_SLOT
-        );
-        bytes32 currentMarketBytes = IExttload(coreHook).exttload(
-            TransientSlots.CURRENT_MARKET_SLOT
-        );
+        bytes32 tracingFlagBytes = IExttload(coreHook).exttload(TransientSlots.TRACING_FLAG_SLOT);
+        bytes32 currentMarketBytes = IExttload(coreHook).exttload(TransientSlots.CURRENT_MARKET_SLOT);
 
         // set the tracing flag and current market
         isTracingActive = tracingFlagBytes != bytes32(0);
@@ -418,10 +357,7 @@ contract LiquidityCommitmentCertificate is
      * @param fromUser The user to annul the pending settlements for
      * @param amountToTransfer The amount to transfer
      */
-    function _annulUserSettlementBeforeTransfer(
-        address fromUser,
-        uint256 amountToTransfer
-    ) internal {
+    function _annulUserSettlementBeforeTransfer(address fromUser, uint256 amountToTransfer) internal {
         // get the markets the user has LCC from
         // get their balance
         // get their total market pending settlements
@@ -443,12 +379,10 @@ contract LiquidityCommitmentCertificate is
             return;
         }
 
-        uint256 maxAmountCanTransferWithoutClearing = userBalance -
-            userPendingSettlement;
+        uint256 maxAmountCanTransferWithoutClearing = userBalance - userPendingSettlement;
 
         if (amountToTransfer > maxAmountCanTransferWithoutClearing) {
-            uint256 amountToAnnul = amountToTransfer -
-                maxAmountCanTransferWithoutClearing;
+            uint256 amountToAnnul = amountToTransfer - maxAmountCanTransferWithoutClearing;
             // annull the equivalent pending settlements
 
             // If a transaction to process settlements occurs before the transfer. In that case, the user's LCC transfer will revert, and they'll have native assets in their wallet instead.
@@ -467,12 +401,8 @@ contract LiquidityCommitmentCertificate is
 
         // read in all the bytes from the transient storage of the hook contract
         // Read transient storage from CoreHook
-        bytes32 tracingFlagBytes = IExttload(coreHook).exttload(
-            TransientSlots.TRACING_FLAG_SLOT
-        );
-        bytes32 currentMarketBytes = IExttload(coreHook).exttload(
-            TransientSlots.CURRENT_MARKET_SLOT
-        );
+        bytes32 tracingFlagBytes = IExttload(coreHook).exttload(TransientSlots.TRACING_FLAG_SLOT);
+        bytes32 currentMarketBytes = IExttload(coreHook).exttload(TransientSlots.CURRENT_MARKET_SLOT);
 
         // Tracing is active if this flag has been set by the core hook right after a swap
         bool isTracingActive = tracingFlagBytes != bytes32(0);
@@ -496,12 +426,9 @@ contract LiquidityCommitmentCertificate is
      * @param marketId The ID of the market i.e for uniswap v4 it is the core pool id
      * @return bool True if the LCC is supported by the market, false otherwise
      */
-    function _isLCCSupportedByMarket(
-        bytes32 marketId
-    ) internal view returns (bool) {
+    function _isLCCSupportedByMarket(bytes32 marketId) internal view returns (bool) {
         // get the two currencies that the core pool is trading
-        address[2] memory currencies = IMarketFactory(marketFactory)
-            .corePoolToCurrencyPair(PoolId.wrap(marketId));
+        address[2] memory currencies = IMarketFactory(marketFactory).corePoolToCurrencyPair(PoolId.wrap(marketId));
 
         // Check if this LCC contract matches either currency in the core pool
         address lccAddress = address(this);

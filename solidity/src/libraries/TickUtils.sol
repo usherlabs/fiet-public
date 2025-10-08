@@ -37,49 +37,31 @@ library TickUtils {
                 (int16 wordPos, uint8 bitPos) = TickBitmap.position(compressed);
 
                 // Create mask for bits at or to the right of current position
-                uint256 mask = type(uint256).max >>
-                    (uint256(type(uint8).max) - bitPos);
-                uint256 masked = StateLibrary.getTickBitmap(
-                    poolManager,
-                    poolId,
-                    wordPos
-                ) & mask;
+                uint256 mask = type(uint256).max >> (uint256(type(uint8).max) - bitPos);
+                uint256 masked = StateLibrary.getTickBitmap(poolManager, poolId, wordPos) & mask;
 
                 // Check if there are initialized ticks in this direction
                 initialized = masked != 0;
 
                 // Calculate next tick position
                 next = initialized
-                    ? (compressed -
-                        int24(
-                            uint24(bitPos - BitMath.mostSignificantBit(masked))
-                        )) * tickSpacing
+                    ? (compressed - int24(uint24(bitPos - BitMath.mostSignificantBit(masked)))) * tickSpacing
                     : (compressed - int24(uint24(bitPos))) * tickSpacing;
             } else {
                 // Search rightward (increasing ticks)
-                (int16 wordPos, uint8 bitPos) = TickBitmap.position(
-                    ++compressed
-                );
+                (int16 wordPos, uint8 bitPos) = TickBitmap.position(++compressed);
 
                 // Create mask for bits at or to the left of current position
                 uint256 mask = ~((1 << bitPos) - 1);
-                uint256 masked = StateLibrary.getTickBitmap(
-                    poolManager,
-                    poolId,
-                    wordPos
-                ) & mask;
+                uint256 masked = StateLibrary.getTickBitmap(poolManager, poolId, wordPos) & mask;
 
                 // Check if there are initialized ticks in this direction
                 initialized = masked != 0;
 
                 // Calculate next tick position
                 next = initialized
-                    ? (compressed +
-                        int24(
-                            uint24(BitMath.leastSignificantBit(masked) - bitPos)
-                        )) * tickSpacing
-                    : (compressed + int24(uint24(type(uint8).max - bitPos))) *
-                        tickSpacing;
+                    ? (compressed + int24(uint24(BitMath.leastSignificantBit(masked) - bitPos))) * tickSpacing
+                    : (compressed + int24(uint24(type(uint8).max - bitPos))) * tickSpacing;
             }
         }
     }

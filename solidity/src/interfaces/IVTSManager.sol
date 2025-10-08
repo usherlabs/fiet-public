@@ -8,38 +8,22 @@ import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {PositionMeta} from "../types/Position.sol";
 
 interface IVTSManager {
-    function setMarketVTSConfiguration(
-        PoolId corePoolId,
-        MarketVTSConfiguration memory vtsConfiguration
-    ) external;
+    function setMarketVTSConfiguration(PoolId corePoolId, MarketVTSConfiguration memory vtsConfiguration) external;
 
-    function onMMLiquidityModify(
-        PositionId positionId,
-        BalanceDelta balanceDelta
-    ) external;
+    function onMMLiquidityModify(PositionId positionId, BalanceDelta balanceDelta) external;
 
-    function getMarketVTSConfiguration(
-        PoolId corePoolId
-    ) external view returns (MarketVTSConfiguration memory);
+    function getMarketVTSConfiguration(PoolId corePoolId) external view returns (MarketVTSConfiguration memory);
 
-    function calcRFS(
-        PositionId positionId,
-        bool requireClosedRfS
-    ) external returns (bool, BalanceDelta);
+    function calcRFS(PositionId positionId, bool requireClosedRfS) external returns (bool, BalanceDelta);
 
-    function getVTSCurrent(
-        PositionId positionId
-    ) external view returns (uint256 vtsCurrent0, uint256 vtsCurrent1);
+    function getVTSCurrent(PositionId positionId) external view returns (uint256 vtsCurrent0, uint256 vtsCurrent1);
 
-    function getVTSRequired(
-        PositionId positionId
-    ) external view returns (uint256 vtsRequired0, uint256 vtsRequired1);
+    function getVTSRequired(PositionId positionId) external view returns (uint256 vtsRequired0, uint256 vtsRequired1);
 
-    function getPositionSettledAmounts(
-        PositionId positionId
-    ) external view returns (uint256 amount0, uint256 amount1);
+    function getPositionSettledAmounts(PositionId positionId)
+        external
+        view
+        returns (uint256 amount0, uint256 amount1);
 
-    function prepareLiquidation(
-        PositionId positionId
-    ) external returns (uint256 amount0, uint256 amount1);
+    function prepareLiquidation(PositionId positionId) external returns (uint256 amount0, uint256 amount1);
 }

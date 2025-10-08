@@ -9,9 +9,7 @@ abstract contract ScriptHelper is Script {
 
     string file = "";
 
-    function _getPrefix(
-        string memory name
-    ) internal view returns (string memory) {
+    function _getPrefix(string memory name) internal view returns (string memory) {
         // INSERT_YOUR_CODE
         string memory mode;
         try vm.envString("MODE") returns (string memory envMode) {
@@ -35,10 +33,7 @@ abstract contract ScriptHelper is Script {
         file = string.concat(FILE_START, prefix, name, FILE_END);
     }
 
-    function _setFilenameWithSuffix(
-        string memory name,
-        string memory suffix
-    ) internal {
+    function _setFilenameWithSuffix(string memory name, string memory suffix) internal {
         string memory prefix = _getPrefix(name);
         file = string.concat(FILE_START, prefix, name, suffix, FILE_END);
     }
@@ -47,10 +42,7 @@ abstract contract ScriptHelper is Script {
         return file;
     }
 
-    function writeAddress(
-        string memory name,
-        address contractAddress
-    ) internal {
+    function writeAddress(string memory name, address contractAddress) internal {
         string memory contents;
         try vm.readFile(file) returns (string memory data) {
             contents = data;
@@ -59,11 +51,7 @@ abstract contract ScriptHelper is Script {
         }
 
         string memory tempNS = "temp";
-        string memory newData = vm.serializeAddress(
-            tempNS,
-            name,
-            contractAddress
-        );
+        string memory newData = vm.serializeAddress(tempNS, name, contractAddress);
 
         string memory merged = _mergeJson(contents, newData);
         vm.writeJson(merged, file);
@@ -99,10 +87,7 @@ abstract contract ScriptHelper is Script {
         vm.writeJson(merged, file);
     }
 
-    function _mergeJson(
-        string memory a,
-        string memory b
-    ) private pure returns (string memory) {
+    function _mergeJson(string memory a, string memory b) private pure returns (string memory) {
         bytes memory ba = bytes(a);
         bytes memory bb = bytes(b);
 
@@ -136,17 +121,13 @@ abstract contract ScriptHelper is Script {
         return vm.parseJsonAddress(contents, path);
     }
 
-    function readBytes(
-        string memory name
-    ) internal view returns (bytes memory) {
+    function readBytes(string memory name) internal view returns (bytes memory) {
         string memory path = string.concat(".", name);
         string memory contents = vm.readFile(file);
         return vm.parseJsonBytes(contents, path);
     }
 
-    function readString(
-        string memory name
-    ) internal view returns (string memory) {
+    function readString(string memory name) internal view returns (string memory) {
         string memory path = string.concat(".", name);
         string memory contents = vm.readFile(file);
         return vm.parseJsonString(contents, path);
