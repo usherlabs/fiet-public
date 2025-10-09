@@ -169,6 +169,12 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
         _wrap(msg.sender, msg.sender, amount);
     }
 
+    function _incrementProtocolCoverage(bytes32 marketId, uint256 amount) internal {
+        IVTSManager(IMarketFactory(marketFactory).getCoreHook()).incrementProtocolCoverage(
+            PoolId.wrap(marketId), amount
+        );
+    }
+
     /**
      * @dev Unwraps LCC from a specific market's liquidity reserves
      * @param marketId The market to unwrap from
@@ -190,6 +196,8 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
         if (deficit > 0) {
             _addToSettlementQueue(marketId, to, deficit);
         }
+
+        _incrementProtocolCoverage(marketId, amountAvailable);
 
         return amountAvailable;
     }
@@ -331,24 +339,6 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
         uint256 decimals = IOracle(oracle).decimals();
 
         return (assetPrice, decimals);
-    }
-
-    /**
-     * @dev Get the tracing flag and current market from the core hook
-     * @return isTracingActive Whether tracing is active
-     * @return currentMarket The current market if any is set
-     */
-    function _getCoreHookFlags() internal view returns (bool isTracingActive, bytes32 currentMarket) {
-        // get the core hook from the market factory
-        address coreHook = IMarketFactory(marketFactory).getCoreHook();
-
-        // read in all the bytes from the transient storage of the hook contract
-        bytes32 tracingFlagBytes = IExttload(coreHook).exttload(TransientSlots.TRACING_FLAG_SLOT);
-        bytes32 currentMarketBytes = IExttload(coreHook).exttload(TransientSlots.CURRENT_MARKET_SLOT);
-
-        // set the tracing flag and current market
-        isTracingActive = tracingFlagBytes != bytes32(0);
-        currentMarket = currentMarketBytes;
     }
 
     /**

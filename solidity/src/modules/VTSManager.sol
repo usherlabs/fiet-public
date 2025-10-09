@@ -252,6 +252,12 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         }
     }
 
+    function incrementProtocolCoverage(PoolId poolId, uint256 amount) external {
+        uint8 tokenIndex = _getTokenIndexFromCaller(poolId); // ensures msg.sender is a valid LCC for the pool id.
+
+        _incrementProtocolCoverage(poolId, tokenIndex, amount);
+    }
+
     function _handleMMSettlementForToken(PositionId positionId, PoolId poolId, uint8 tokenIndex, uint256 settledAmount)
         internal
     {

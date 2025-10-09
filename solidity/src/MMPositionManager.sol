@@ -597,6 +597,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         // and we can validate if the tokens are handled by the proxy hook in the `onMMLiquidityModify` function
         // a positive balance delta means we are settling underlying tokens to the proxy hook similar to having a positive liquidity delta
         IProxyHook(proxyHook).onMMLiquidityModify(balanceDelta);
+
         _getVTSManager().onMMLiquidityModify(positionId, balanceDelta);
 
         // if it is a take, then transfer the underlying tokens from the contract to the actual recipient

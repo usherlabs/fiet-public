@@ -26,10 +26,22 @@ abstract contract MarketHandler {
     }
 
     modifier onlyMarketAssets(PoolId poolId) {
+        _getTokenIndexFromCaller(poolId);
+        _;
+    }
+
+    function _getTokenIndexFromCaller(PoolId poolId) internal view returns (uint8) {
+        return _getTokenIndex(poolId, msg.sender);
+    }
+
+    function _getTokenIndex(PoolId poolId, address token) internal view returns (uint8) {
         address[2] memory currencies = IMarketFactory(marketFactory).corePoolToCurrencyPair(poolId);
-        if (msg.sender != currencies[0] && msg.sender != currencies[1]) {
+        if (token == currencies[0]) {
+            return 0;
+        } else if (token == currencies[1]) {
+            return 1;
+        } else {
             revert InvalidCaller();
         }
-        _;
     }
 }
