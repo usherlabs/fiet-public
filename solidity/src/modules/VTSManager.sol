@@ -245,14 +245,14 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         // and since they are settling the position, we need to reduce the deficit
         // if the amount being settled is greater than teh deficit, then we need to set the deficit to 0
         if (amount0 > 0) {
-            _handleMMLiquidityForToken(positionId, poolId, 0, uint256(uint128(amount0)));
+            _handleMMSettlementForToken(positionId, poolId, 0, uint256(uint128(amount0)));
         }
         if (amount1 > 0) {
-            _handleMMLiquidityForToken(positionId, poolId, 1, uint256(uint128(amount1)));
+            _handleMMSettlementForToken(positionId, poolId, 1, uint256(uint128(amount1)));
         }
     }
 
-    function _handleMMLiquidityForToken(PositionId positionId, PoolId poolId, uint8 tokenIndex, uint256 settledAmount)
+    function _handleMMSettlementForToken(PositionId positionId, PoolId poolId, uint8 tokenIndex, uint256 settledAmount)
         internal
     {
         uint256 dBefore = cumulativeDeficit[positionId][tokenIndex];
@@ -282,9 +282,12 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
                         share = FullMath.mulDiv(share, bps, 10000);
                         if (share > 0 && share <= fees) {
                             if (liq > 0) {
+                                // It’s not allocating to the position; it’s “burning” their claimable fees by advancing feeGrowthInsideLast by the share-equivalent growth.
+                                // In Uniswap-style accounting, a position’s owed fees = (feeGrowthInside − feeGrowthInsideLast) × liquidity. By increasing feeGrowthInsideLast by share/Q128/liquidity, we reduce their future fee delta exactly by share.
                                 uint256 growthInc = FullMath.mulDiv(share, FixedPoint128.Q128, liq);
                                 feeGrowthInsideLast[positionId][tokenIndex] += growthInc;
                             }
+                            // The “value” of the share is accrued to protocolFeeAccrued[...], so the MM loses that amount and the protocol/other LPs gain it.
                             protocolFeeAccrued[poolId][tokenIndex] += share;
                         }
                     }
