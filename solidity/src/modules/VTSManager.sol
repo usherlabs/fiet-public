@@ -241,80 +241,49 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         // and since they are settling the position, we need to reduce the deficit
         // if the amount being settled is greater than teh deficit, then we need to set the deficit to 0
         if (amount0 > 0) {
-            uint256 settled0 = uint256(uint128(amount0));
-            uint256 dBefore0 = cumulativeDeficit[positionId][0];
-            uint256 d0 = settled0 >= dBefore0 ? dBefore0 : settled0; // extinguished deficit this tx
-            // d computed as the minimum of the settled amount and the cumulative deficit for the position.
-            // therefore, attribution is based on the deficit amount being covered in this transaction.
-            if (d0 > 0) {
-                cumulativeDeficit[positionId][0] = dBefore0 - d0;
-                uint256 G0 = globalDeficit[poolId][0];
-                uint256 C0 = protocolCoverage[poolId][0];
-                if (G0 > 0) {
-                    globalDeficit[poolId][0] = G0 - d0;
-                    if (C0 > 0) {
-                        uint256 attributed0 = FullMath.mulDiv(d0, C0, G0);
-                        protocolCoverage[poolId][0] = C0 - attributed0;
-
-                        // fees accrued since last checkpoint
-                        uint256 fees0 = _feesAccruedOf(positionId, 0);
-                        uint256 bps = corePoolToVTSConfiguration[poolId].coverageFeeShare;
-                        if (bps > 0 && d0 > 0 && fees0 > 0) {
-                            uint256 share0 = FullMath.mulDiv(fees0, attributed0, d0);
-                            share0 = FullMath.mulDiv(share0, bps, 10000);
-                            if (share0 > 0 && share0 <= fees0) {
-                                uint128 liq0 = poolManager.getPositionLiquidity(poolId, PositionId.unwrap(positionId));
-                                if (liq0 > 0) {
-                                    uint256 growthInc0 = FullMath.mulDiv(share0, FixedPoint128.Q128, liq0);
-                                    feeGrowthInsideLast[positionId][0] += growthInc0;
-                                }
-                                address asset0 = Currency.unwrap(poolManager.getPoolCurrency0(poolId)); // TODO: this function doesn't exist.
-                                protocolFeeAccrued[poolId][0] += share0;
-                            }
-                        }
-                    }
-                }
-            }
-            // proactive excess (if any) increases proactive pool
-            if (settled0 > d0) {
-                proactivePoolBalance[poolId][0] += (settled0 - d0);
-            }
+            _handleMMLiquidityForToken(positionId, poolId, 0, uint256(uint128(amount0)));
         }
         if (amount1 > 0) {
-            uint256 settled1 = uint256(uint128(amount1));
-            uint256 dBefore1 = cumulativeDeficit[positionId][1];
-            uint256 d1 = settled1 >= dBefore1 ? dBefore1 : settled1;
-            if (d1 > 0) {
-                cumulativeDeficit[positionId][1] = dBefore1 - d1;
-                uint256 G1 = globalDeficit[poolId][1];
-                uint256 C1 = protocolCoverage[poolId][1];
-                if (G1 > 0) {
-                    globalDeficit[poolId][1] = G1 - d1;
-                    if (C1 > 0) {
-                        uint256 attributed1 = FullMath.mulDiv(d1, C1, G1);
-                        protocolCoverage[poolId][1] = C1 - attributed1;
+            _handleMMLiquidityForToken(positionId, poolId, 1, uint256(uint128(amount1)));
+        }
+    }
 
-                        uint256 fees1 = _feesAccruedOf(positionId, 1);
-                        uint256 bps = corePoolToVTSConfiguration[poolId].coverageFeeShare;
-                        if (bps > 0 && d1 > 0 && fees1 > 0) {
-                            uint256 share1 = FullMath.mulDiv(fees1, attributed1, d1);
-                            share1 = FullMath.mulDiv(share1, bps, 10000);
-                            if (share1 > 0 && share1 <= fees1) {
-                                uint128 liq1 = poolManager.getPositionLiquidity(poolId, PositionId.unwrap(positionId));
-                                if (liq1 > 0) {
-                                    uint256 growthInc1 = FullMath.mulDiv(share1, FixedPoint128.Q128, liq1);
-                                    feeGrowthInsideLast[positionId][1] += growthInc1;
-                                }
-                                address asset1 = Currency.unwrap(poolManager.getPoolCurrency1(poolId));
-                                protocolFeeAccrued[poolId][1] += share1;
+    function _handleMMLiquidityForToken(PositionId positionId, PoolId poolId, uint8 tokenIndex, uint256 settledAmount)
+        internal
+    {
+        uint256 dBefore = cumulativeDeficit[positionId][tokenIndex];
+        uint256 d = settledAmount >= dBefore ? dBefore : settledAmount; // extinguished deficit this tx
+        // d computed as the minimum of the settled amount and the cumulative deficit for the position.
+        // therefore, attribution is based on the deficit amount being covered in this transaction.
+        if (d > 0) {
+            cumulativeDeficit[positionId][tokenIndex] = dBefore - d;
+            uint256 G = globalDeficit[poolId][tokenIndex];
+            uint256 C = protocolCoverage[poolId][tokenIndex];
+            if (G > 0) {
+                globalDeficit[poolId][tokenIndex] = G - d;
+                if (C > 0) {
+                    uint256 attributed = FullMath.mulDiv(d, C, G);
+                    protocolCoverage[poolId][tokenIndex] = C - attributed;
+
+                    uint256 fees = _feesAccruedOf(positionId, tokenIndex);
+                    uint256 bps = corePoolToVTSConfiguration[poolId].coverageFeeShare;
+                    if (bps > 0 && d > 0 && fees > 0) {
+                        uint256 share = FullMath.mulDiv(fees, attributed, d); // TODO: Is this correct?
+                        share = FullMath.mulDiv(share, bps, 10000);
+                        if (share > 0 && share <= fees) {
+                            uint128 liq = poolManager.getPositionLiquidity(poolId, PositionId.unwrap(positionId));
+                            if (liq > 0) {
+                                uint256 growthInc = FullMath.mulDiv(share, FixedPoint128.Q128, liq);
+                                feeGrowthInsideLast[positionId][tokenIndex] += growthInc;
                             }
+                            protocolFeeAccrued[poolId][tokenIndex] += share;
                         }
                     }
                 }
             }
-            if (settled1 > d1) {
-                proactivePoolBalance[poolId][1] += (settled1 - d1);
-            }
+        }
+        if (settledAmount > d) {
+            proactivePoolBalance[poolId][tokenIndex] += (settledAmount - d);
         }
     }
 
