@@ -269,20 +269,18 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
                     uint256 attributed = FullMath.mulDiv(d, C, G); // deficit / globalDeficit * protocolCoverage
                     protocolCoverage[poolId][tokenIndex] = C - attributed;
 
-                    uint256 fees = _feesAccruedOf(positionId, tokenIndex);
                     uint256 bps = corePoolToVTSConfiguration[poolId].coverageFeeShare;
+                    uint128 liq = poolManager.getPositionLiquidity(poolId, PositionId.unwrap(positionId));
+                    (uint256 fees, uint256 ofDelta) = _readFeesAndCheckpoint(positionId, poolId, tokenIndex, liq);
                     // Fees accrue continuously over time; deficits arise from outflows.
                     // To share “fees on the deficit amount exclusively,” normalise fees by the same window’s position-attributed outflows.
                     // New calc: share = fees * (attributed / outflowDelta) * coverageFeeShare_bps/10000, where:
                     // outflowDelta = cumulativeOutflows - outflowsAtFeeSnap (same checkpoint window as feeGrowth).
                     // This ties fee sharing to the outflow volume that generated the obligation, not just the settlement amount.
-                    uint256 cf = cumulativeOutflows[positionId][tokenIndex];
-                    uint256 ofDelta = cf - outflowsAtFeeSnap[positionId][tokenIndex];
                     if (bps > 0 && fees > 0 && ofDelta > 0 && attributed > 0) {
                         uint256 share = FullMath.mulDiv(fees, attributed, ofDelta);
                         share = FullMath.mulDiv(share, bps, 10000);
                         if (share > 0 && share <= fees) {
-                            uint128 liq = poolManager.getPositionLiquidity(poolId, PositionId.unwrap(positionId));
                             if (liq > 0) {
                                 uint256 growthInc = FullMath.mulDiv(share, FixedPoint128.Q128, liq);
                                 feeGrowthInsideLast[positionId][tokenIndex] += growthInc;
@@ -296,15 +294,27 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         if (settledAmount > d) {
             proactivePoolBalance[poolId][tokenIndex] += (settledAmount - d);
         }
-        // checkpoint fee and outflow snapshots for this token
+    }
+
+    /// @dev Reads fees since last snapshot and checkpoints fee growth and outflow snapshots atomically.
+    function _readFeesAndCheckpoint(PositionId positionId, PoolId poolId, uint8 tokenIndex, uint128 positionLiquidity)
+        internal
+        returns (uint256 fees, uint256 ofDelta)
+    {
         PositionMeta memory m = meta[positionId];
         (uint256 fg0, uint256 fg1) = poolManager.getFeeGrowthInside(poolId, m.tickLower, m.tickUpper);
-        if (tokenIndex == 0) {
-            feeGrowthInsideLast[positionId][0] = fg0;
+        uint256 fg = tokenIndex == 0 ? fg0 : fg1;
+        uint256 last = feeGrowthInsideLast[positionId][tokenIndex];
+        if (positionLiquidity > 0 && fg > last) {
+            fees = FullMath.mulDiv(fg - last, positionLiquidity, FixedPoint128.Q128);
         } else {
-            feeGrowthInsideLast[positionId][1] = fg1;
+            fees = 0;
         }
-        outflowsAtFeeSnap[positionId][tokenIndex] = cumulativeOutflows[positionId][tokenIndex];
+        // compute outflow window and checkpoint both snapshots
+        uint256 cf = cumulativeOutflows[positionId][tokenIndex];
+        ofDelta = cf - outflowsAtFeeSnap[positionId][tokenIndex];
+        feeGrowthInsideLast[positionId][tokenIndex] = fg; // snapshot fees here.
+        outflowsAtFeeSnap[positionId][tokenIndex] = cf;
     }
 
     /// @dev Internal helper to settle both deficit and inflow growth for a position
