@@ -67,6 +67,10 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     mapping(PoolId => uint256[2]) internal protocolFeeAccrued;
     // Per-position last inside fee growth snapshot per token (for fee sharing)
     mapping(PositionId => uint256[2]) internal feeGrowthInsideLast;
+    // Per-position cumulative attributed outflows (raw units), per token
+    mapping(PositionId => uint256[2]) internal cumulativeOutflows;
+    // Per-position outflow snapshot taken when feeGrowthInsideLast is checkpointed, per token
+    mapping(PositionId => uint256[2]) internal outflowsAtFeeSnap;
 
     error InvalidMarketVTSConfiguration(PoolId corePoolId);
     error NotEnoughSettlementBalance(uint256 amount0, uint256 amount1);
@@ -262,13 +266,20 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
             if (G > 0) {
                 globalDeficit[poolId][tokenIndex] = G - d;
                 if (C > 0) {
-                    uint256 attributed = FullMath.mulDiv(d, C, G);
+                    uint256 attributed = FullMath.mulDiv(d, C, G); // deficit / globalDeficit * protocolCoverage
                     protocolCoverage[poolId][tokenIndex] = C - attributed;
 
                     uint256 fees = _feesAccruedOf(positionId, tokenIndex);
                     uint256 bps = corePoolToVTSConfiguration[poolId].coverageFeeShare;
-                    if (bps > 0 && d > 0 && fees > 0) {
-                        uint256 share = FullMath.mulDiv(fees, attributed, d); // TODO: Is this correct?
+                    // Fees accrue continuously over time; deficits arise from outflows.
+                    // To share “fees on the deficit amount exclusively,” normalise fees by the same window’s position-attributed outflows.
+                    // New calc: share = fees * (attributed / outflowDelta) * coverageFeeShare_bps/10000, where:
+                    // outflowDelta = cumulativeOutflows - outflowsAtFeeSnap (same checkpoint window as feeGrowth).
+                    // This ties fee sharing to the outflow volume that generated the obligation, not just the settlement amount.
+                    uint256 cf = cumulativeOutflows[positionId][tokenIndex];
+                    uint256 ofDelta = cf - outflowsAtFeeSnap[positionId][tokenIndex];
+                    if (bps > 0 && fees > 0 && ofDelta > 0 && attributed > 0) {
+                        uint256 share = FullMath.mulDiv(fees, attributed, ofDelta);
                         share = FullMath.mulDiv(share, bps, 10000);
                         if (share > 0 && share <= fees) {
                             uint128 liq = poolManager.getPositionLiquidity(poolId, PositionId.unwrap(positionId));
@@ -285,6 +296,15 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         if (settledAmount > d) {
             proactivePoolBalance[poolId][tokenIndex] += (settledAmount - d);
         }
+        // checkpoint fee and outflow snapshots for this token
+        PositionMeta memory m = meta[positionId];
+        (uint256 fg0, uint256 fg1) = poolManager.getFeeGrowthInside(poolId, m.tickLower, m.tickUpper);
+        if (tokenIndex == 0) {
+            feeGrowthInsideLast[positionId][0] = fg0;
+        } else {
+            feeGrowthInsideLast[positionId][1] = fg1;
+        }
+        outflowsAtFeeSnap[positionId][tokenIndex] = cumulativeOutflows[positionId][tokenIndex];
     }
 
     /// @dev Internal helper to settle both deficit and inflow growth for a position
@@ -413,6 +433,8 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
             uint256 add0 = (delta0 * uint256(liq)) >> 128;
             uint256 add1 = (delta1 * uint256(liq)) >> 128;
             if (add0 > 0) {
+                // track full attributed outflows for fee sharing normalisation window
+                cumulativeOutflows[positionId][0] += add0;
                 // consume settled coverage first, then accrue shortfall to deficit
                 // MM deficits account for liquidity no longer theirs. Settled liquidity must not include amounts that cover deficits. The counterparty token inflow amounts are accrued to the position's settled amounts to compensate.
                 uint256 s0 = totalSettlementAmount[positionId][0];
@@ -426,6 +448,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
                 }
             }
             if (add1 > 0) {
+                cumulativeOutflows[positionId][1] += add1;
                 uint256 s1 = totalSettlementAmount[positionId][1];
                 if (s1 >= add1) {
                     totalSettlementAmount[positionId][1] = s1 - add1;
