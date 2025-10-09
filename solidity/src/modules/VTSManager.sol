@@ -18,11 +18,12 @@ import {TickMath} from "v4-periphery/lib/v4-core/src/libraries/TickMath.sol";
 import {SqrtPriceMath} from "v4-periphery/lib/v4-core/src/libraries/SqrtPriceMath.sol";
 import {toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
-import {console} from "forge-std/console.sol";
 import {LiquidityUtils} from "../libraries/LiquidityUtils.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {ILCC} from "../interfaces/ILCC.sol";
 import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
+import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint128.sol";
+import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 
 abstract contract VTSManager is IVTSManager, PositionIndex {
     using SafeCastLib for *;
@@ -55,6 +56,18 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     // Per-position last inside inflow growth snapshot per token
     mapping(PositionId => uint256[2]) internal inflowGrowthInsideLast;
 
+    // Protocol coverage & fee sharing accounting
+    // Total protocol-covered unwraps (net of proactive pool usage)
+    mapping(PoolId => uint256[2]) internal protocolCoverage;
+    // Sum of all position cumulative deficits per market/token
+    mapping(PoolId => uint256[2]) internal globalDeficit;
+    // Global proactive liquidity available to offset future unwraps
+    mapping(PoolId => uint256[2]) internal proactivePoolBalance;
+    // Protocol/LPs fee pot accrued from fee sharing (per token index)
+    mapping(PoolId => uint256[2]) internal protocolFeeAccrued;
+    // Per-position last inside fee growth snapshot per token (for fee sharing)
+    mapping(PositionId => uint256[2]) internal feeGrowthInsideLast;
+
     error InvalidMarketVTSConfiguration(PoolId corePoolId);
     error NotEnoughSettlementBalance(uint256 amount0, uint256 amount1);
     error InvalidPosition(PositionId positionId);
@@ -70,7 +83,6 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
 
     modifier onlyPositionValid(PositionId _positionId) {
         if (!isPositionValid(_positionId, true)) {
-            console.log("invalid position");
             revert InvalidPosition(_positionId);
         }
         _;
@@ -217,22 +229,92 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         int128 amount0 = balanceDelta.amount0();
         int128 amount1 = balanceDelta.amount1();
 
+        // TODO: We must consider that Market Makers deficits account for liquidity no longer theirs. This means settled liquidity must not include amounts that cover deficits. The counterparty token inflow amounts are accrued to the position's settled amounts to compensate.
+        // totalSettlementAmount is set inside of _settlePositionGrowths
         totalSettlementAmount[positionId][0] = _updateSettlement(totalSettlementAmount[positionId][0], amount0);
         totalSettlementAmount[positionId][1] = _updateSettlement(totalSettlementAmount[positionId][1], amount1);
+
+        PoolId poolId = meta[positionId].poolId;
 
         // Net settlements against cumulative deficit (reduce debt when MM settles)
         // if the delta is positive, then it means the MM is settling the position
         // and since they are settling the position, we need to reduce the deficit
         // if the amount being settled is greater than teh deficit, then we need to set the deficit to 0
         if (amount0 > 0) {
-            uint256 a0 = uint256(uint128(amount0));
-            uint256 cur0 = cumulativeDeficit[positionId][0];
-            cumulativeDeficit[positionId][0] = a0 >= cur0 ? 0 : (cur0 - a0);
+            uint256 settled0 = uint256(uint128(amount0));
+            uint256 dBefore0 = cumulativeDeficit[positionId][0];
+            uint256 d0 = settled0 >= dBefore0 ? dBefore0 : settled0; // extinguished deficit this tx
+            // d computed as the minimum of the settled amount and the cumulative deficit for the position.
+            // therefore, attribution is based on the deficit amount being covered in this transaction.
+            if (d0 > 0) {
+                cumulativeDeficit[positionId][0] = dBefore0 - d0;
+                uint256 G0 = globalDeficit[poolId][0];
+                uint256 C0 = protocolCoverage[poolId][0];
+                if (G0 > 0) {
+                    globalDeficit[poolId][0] = G0 - d0;
+                    if (C0 > 0) {
+                        uint256 attributed0 = FullMath.mulDiv(d0, C0, G0);
+                        protocolCoverage[poolId][0] = C0 - attributed0;
+
+                        // fees accrued since last checkpoint
+                        uint256 fees0 = _feesAccruedOf(positionId, 0);
+                        uint256 bps = corePoolToVTSConfiguration[poolId].coverageFeeShare;
+                        if (bps > 0 && d0 > 0 && fees0 > 0) {
+                            uint256 share0 = FullMath.mulDiv(fees0, attributed0, d0);
+                            share0 = FullMath.mulDiv(share0, bps, 10000);
+                            if (share0 > 0 && share0 <= fees0) {
+                                uint128 liq0 = poolManager.getPositionLiquidity(poolId, PositionId.unwrap(positionId));
+                                if (liq0 > 0) {
+                                    uint256 growthInc0 = FullMath.mulDiv(share0, FixedPoint128.Q128, liq0);
+                                    feeGrowthInsideLast[positionId][0] += growthInc0;
+                                }
+                                address asset0 = Currency.unwrap(poolManager.getPoolCurrency0(poolId)); // TODO: this function doesn't exist.
+                                protocolFeeAccrued[poolId][0] += share0;
+                            }
+                        }
+                    }
+                }
+            }
+            // proactive excess (if any) increases proactive pool
+            if (settled0 > d0) {
+                proactivePoolBalance[poolId][0] += (settled0 - d0);
+            }
         }
         if (amount1 > 0) {
-            uint256 a1 = uint256(uint128(amount1));
-            uint256 cur1 = cumulativeDeficit[positionId][1];
-            cumulativeDeficit[positionId][1] = a1 >= cur1 ? 0 : (cur1 - a1);
+            uint256 settled1 = uint256(uint128(amount1));
+            uint256 dBefore1 = cumulativeDeficit[positionId][1];
+            uint256 d1 = settled1 >= dBefore1 ? dBefore1 : settled1;
+            if (d1 > 0) {
+                cumulativeDeficit[positionId][1] = dBefore1 - d1;
+                uint256 G1 = globalDeficit[poolId][1];
+                uint256 C1 = protocolCoverage[poolId][1];
+                if (G1 > 0) {
+                    globalDeficit[poolId][1] = G1 - d1;
+                    if (C1 > 0) {
+                        uint256 attributed1 = FullMath.mulDiv(d1, C1, G1);
+                        protocolCoverage[poolId][1] = C1 - attributed1;
+
+                        uint256 fees1 = _feesAccruedOf(positionId, 1);
+                        uint256 bps = corePoolToVTSConfiguration[poolId].coverageFeeShare;
+                        if (bps > 0 && d1 > 0 && fees1 > 0) {
+                            uint256 share1 = FullMath.mulDiv(fees1, attributed1, d1);
+                            share1 = FullMath.mulDiv(share1, bps, 10000);
+                            if (share1 > 0 && share1 <= fees1) {
+                                uint128 liq1 = poolManager.getPositionLiquidity(poolId, PositionId.unwrap(positionId));
+                                if (liq1 > 0) {
+                                    uint256 growthInc1 = FullMath.mulDiv(share1, FixedPoint128.Q128, liq1);
+                                    feeGrowthInsideLast[positionId][1] += growthInc1;
+                                }
+                                address asset1 = Currency.unwrap(poolManager.getPoolCurrency1(poolId));
+                                protocolFeeAccrued[poolId][1] += share1;
+                            }
+                        }
+                    }
+                }
+            }
+            if (settled1 > d1) {
+                proactivePoolBalance[poolId][1] += (settled1 - d1);
+            }
         }
     }
 
@@ -242,10 +324,40 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         _settlePositionInflowGrowth(positionId);
     }
 
+    /// @dev Increment protocol coverage on unwrap, consuming proactive pool first
+    function _incrementProtocolCoverage(PoolId poolId, uint8 tokenIndex, uint256 coveredAmount) internal {
+        if (tokenIndex > 1 || coveredAmount == 0) return;
+        uint256 available = proactivePoolBalance[poolId][tokenIndex];
+        if (available > 0) {
+            uint256 use = coveredAmount <= available ? coveredAmount : available;
+            proactivePoolBalance[poolId][tokenIndex] = available - use;
+            coveredAmount -= use;
+        }
+        if (coveredAmount > 0) {
+            protocolCoverage[poolId][tokenIndex] += coveredAmount;
+        }
+    }
+
+    /// @dev Compute accrued LP fees since last checkpoint for a position/token
+    function _feesAccruedOf(PositionId positionId, uint8 tokenIndex) internal view returns (uint256 fees) {
+        PositionMeta memory m = meta[positionId];
+        PoolId poolId = m.poolId;
+        (uint256 fg0, uint256 fg1) = poolManager.getFeeGrowthInside(poolId, m.tickLower, m.tickUpper);
+        uint256 fg = tokenIndex == 0 ? fg0 : fg1;
+        uint256 last = feeGrowthInsideLast[positionId][tokenIndex];
+        if (fg <= last) return 0;
+        uint128 liq = poolManager.getPositionLiquidity(poolId, PositionId.unwrap(positionId));
+        if (liq == 0) return 0;
+        unchecked {
+            fees = FullMath.mulDiv(fg - last, liq, FixedPoint128.Q128);
+        }
+    }
+
     /// @notice Called by the hook on tick cross to flip outside growth for a tick
     function _onTickCross(PoolId corePoolId, int24 tick, uint8 token) internal {
         _flipDeficitGrowthOutside(corePoolId, tick, token);
         _flipInflowGrowthOutside(corePoolId, tick, token);
+        // proactive usage growth flip added later if proactive attribution is implemented
     }
 
     /// @dev Accrue deficit growth to the global accumulator (per token) using current in-range liquidity
@@ -333,11 +445,14 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
             uint256 add1 = (delta1 * uint256(liq)) >> 128;
             if (add0 > 0) {
                 // consume settled coverage first, then accrue shortfall to deficit
+                // MM deficits account for liquidity no longer theirs. Settled liquidity must not include amounts that cover deficits. The counterparty token inflow amounts are accrued to the position's settled amounts to compensate.
                 uint256 s0 = totalSettlementAmount[positionId][0];
                 if (s0 >= add0) {
                     totalSettlementAmount[positionId][0] = s0 - add0;
                 } else {
-                    cumulativeDeficit[positionId][0] += (add0 - s0);
+                    uint256 netAdd0 = add0 - s0;
+                    cumulativeDeficit[positionId][0] += netAdd0;
+                    globalDeficit[corePoolId][0] += netAdd0;
                     totalSettlementAmount[positionId][0] = 0;
                 }
             }
@@ -346,7 +461,9 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
                 if (s1 >= add1) {
                     totalSettlementAmount[positionId][1] = s1 - add1;
                 } else {
-                    cumulativeDeficit[positionId][1] += (add1 - s1);
+                    uint256 netAdd1 = add1 - s1;
+                    cumulativeDeficit[positionId][1] += netAdd1;
+                    globalDeficit[corePoolId][1] += netAdd1;
                     totalSettlementAmount[positionId][1] = 0;
                 }
             }

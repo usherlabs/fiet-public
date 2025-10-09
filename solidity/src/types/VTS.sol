@@ -20,6 +20,8 @@ struct MarketVTSConfiguration {
     TokenConfiguration token1;
     // oracle address for this market, can be address(0) to use the default oracle
     address oracleFactory;
+    // Fee share applied to LP fees when protocol covers deficits (in basis points)
+    uint16 coverageFeeShare;
 }
 
 library MarketVTSConfigurationLibrary {
