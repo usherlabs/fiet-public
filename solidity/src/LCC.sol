@@ -123,16 +123,47 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
         // This is because the PoolManager will custody the difference.
     }
 
-    function cancel(uint256 amount) external onlyIssuer {
-        address issuer = msg.sender;
-
+    function _cancel(address issuer, uint256 amount) internal {
         if (amount == 0) {
             revert InvalidAmount();
         }
 
         _burn(issuer, amount);
+    }
+
+    function cancel(uint256 amount) external onlyIssuer {
+        address issuer = msg.sender;
+
+        _cancel(issuer, amount);
 
         // totalSupply will return back to uaSupply now that the surplus LCC managed by the issuer engagin the PoolManager has been cancelled.
+    }
+
+    /**
+     * @dev Unwraps LCC from the Market Vault. Called exclusively by the Market Vault / Proxy Hook.
+     * @param marketId The market ID
+     * @param amount The amount to unwrap from the vault
+     * @param deficitAmount The amount of the underlying asset to unwrap from the vault
+     * @param excessLCCRecipient The recipient of the underlying asset
+     */
+    function unwrapFromVault(bytes32 marketId, uint256 amount, uint256 deficitAmount, address excessLCCRecipient)
+        external
+        onlyIssuer
+    {
+        // On PH .cancel, market liquidity is utilised to cover swaps.
+        // On MMP .cancel, market liquidity (MM Positions) are removed first, and therefore in-market settled liquidity is isolated for withdrawal...
+        if (amount == 0) {
+            revert InvalidAmount();
+        }
+
+        _cancel(msg.sender, amount);
+
+        if (deficitAmount > 0 && excessLCCRecipient != address(0)) {
+            // Transfer to recipient. Tracing should be triggered via the flag on afterSwap on Core Hook executed by the Proxy Hook.
+            transfer(excessLCCRecipient, deficitAmount); // msg.sender is the issuer.
+        }
+
+        _incrementProtocolCoverage(marketId, amount);
     }
 
     // Called by Issuer before settling liquidity from LCCs to the market.
@@ -177,6 +208,7 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
 
     /**
      * @dev Unwraps LCC from a specific market's liquidity reserves
+     * @notice OOM vs IM Distinction: When acquiring LCCs from a market, it's underlying liquidity either in the market, or to be settled to the market.
      * @param marketId The market to unwrap from
      * @param to The recipient of underlying assets
      * @param amount The amount to unwrap from this market

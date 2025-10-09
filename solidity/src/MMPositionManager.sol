@@ -614,6 +614,13 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
                 IERC20Minimal(lcc1.underlyingAsset()).transfer(sender, takeAmount1);
             }
         }
+
+        // TODO: Re-add after rebase.
+        // if (BalanceDelta.unwrap(deltaToBurn) != BalanceDelta.unwrap(BalanceDeltaLibrary.ZERO_DELTA)) {
+        //     // burn the LCC originally committed to the position. This may be greater than the amount of underlying asset tokens in the position.
+        //     lcc0.cancel(LiquidityUtils.safeInt128ToUint256(deltaToBurn.amount0()));
+        //     lcc1.cancel(LiquidityUtils.safeInt128ToUint256(deltaToBurn.amount1()));
+        // }
     }
 
     /**

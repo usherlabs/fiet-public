@@ -673,7 +673,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     }
 
     function prepareLiquidation(PositionId positionId) external onlyMMP returns (uint256, uint256) {
-        calcRFS(positionId, true);
+        calcRFS(positionId, true); // revert if RFS is open
 
         // get total amount settled from the VTS manager
         // important to do this before removing the liquidity from the pool

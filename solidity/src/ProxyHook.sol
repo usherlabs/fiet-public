@@ -16,25 +16,13 @@ import {ILCC} from "./interfaces/ILCC.sol";
 import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
-import {Pool} from "@uniswap/v4-core/src/libraries/Pool.sol";
 import {ProtocolFeeLibrary} from "@uniswap/v4-core/src/libraries/ProtocolFeeLibrary.sol";
-import {SwapMath} from "@uniswap/v4-core/src/libraries/SwapMath.sol";
-import {BalanceDeltaLibrary} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
-import {CustomRevert} from "@uniswap/v4-core/src/libraries/CustomRevert.sol";
-import {TickBitmap} from "@uniswap/v4-core/src/libraries/TickBitmap.sol";
-import {BitMath} from "@uniswap/v4-core/src/libraries/BitMath.sol";
-import {UnsafeMath} from "@uniswap/v4-core/src/libraries/UnsafeMath.sol";
-import {FixedPoint128} from "@uniswap/v4-core/src/libraries/FixedPoint128.sol";
-import {LiquidityMath} from "@uniswap/v4-core/src/libraries/LiquidityMath.sol";
 import {SwapSimulator} from "./libraries/SwapSimulator.sol";
 import {MarketVault} from "./modules/MarketVault.sol";
 import {ProxySwapFlag} from "./libraries/ProxySwapFlag.sol";
 import {LiquidityUtils} from "../src/libraries/LiquidityUtils.sol";
 import {Exttload} from "v4-periphery/lib/v4-core/src/Exttload.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
-import {PositionId} from "./types/Position.sol";
-import {IVTSManager} from "./interfaces/IVTSManager.sol";
-import {console} from "forge-std/console.sol";
 
 contract ProxyHook is BaseHook, MarketVault, Exttload {
     using CurrencySettler for Currency;
@@ -501,7 +489,7 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         return (this.beforeSwap.selector, newDelta, 0); // last param is lpFeeOverride
     }
 
-    function _cancelLCCWithDeficit(PoolKey calldata key, ILCC lccToken, uint256 amount, address deficitRecipient)
+    function _cancelLCCWithDeficit(PoolKey calldata key, ILCC lccToken, uint256 amount, address excessLCCRecipient)
         internal
         returns (uint256 amountToCancel)
     {
@@ -514,15 +502,13 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
             amountToCancel = amount;
         }
 
-        lccToken.cancel(amountToCancel); // we only cancel what native asset we distribute via the swap mechanism.
-
-        if (deficitAmount > 0 && deficitRecipient != address(0)) {
-            // ? we do not need to mint the full amount... because the ProxyHook will have already taken the full LCC amount from the PoolManager.
-            // Furthermore, if we simply transfer to recipient, tracing should be triggered via the flag on afterSwap on Core Hook executed by the Proxy Hook.
-            lccToken.toERC20().transfer(deficitRecipient, deficitAmount);
-            emit SwapDeficit(key.toId(), corePoolKey.toId(), address(lccToken), deficitRecipient, deficitAmount);
+        if (deficitAmount > 0 && excessLCCRecipient != address(0)) {
+            emit SwapDeficit(key.toId(), corePoolKey.toId(), address(lccToken), excessLCCRecipient, deficitAmount);
         }
         // if deficit recipient is not specified, but a deficit > 0, then excess will accumulate. This means prior swap amount restriction must therefore be broken, which should never happen...
+
+        // Here, outflow is essentially unwrapped, and transfers are handled by Uniswap.
+        lccToken.unwrapFromVault(PoolId.unwrap(key.toId()), amountToCancel, deficitAmount, excessLCCRecipient); // we only cancel what native asset we distribute via the swap mechanism.
     }
 
     // Adjust the swap params to execute the swap to fully execute with the available liquidity

@@ -17,5 +17,6 @@ interface ILCC {
 
     function prepareSettle(uint256 amount) external;
 
-    function toERC20() external view returns (ERC20);
+    function unwrapFromVault(bytes32 marketId, uint256 amount, uint256 deficitAmount, address excessLCCRecipient)
+        external;
 }
