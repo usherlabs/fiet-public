@@ -296,7 +296,8 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
         uint256 userWrappedBalance = balanceOf[from] - userMarketsTotalBalance;
         // if the user has wrapped balance, then we need to unwrap from the market first
         if (userWrappedBalance > 0) {
-            uint256 amountUnwrapped = _unwrapFromOOMLiquidity(amount);
+            // Only unwrapFromOOMLiquidity if the amount to unwrap is greater than the user's wrapped balance
+            uint256 amountUnwrapped = _unwrapFromOOMLiquidity(Math.min(amount, userWrappedBalance));
             totalAmountUnwrapped += amountUnwrapped;
         }
 

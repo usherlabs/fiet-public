@@ -276,13 +276,13 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
 
         if (d > 0) {
             cumulativeDeficit[positionId][tokenIndex] = dBefore - d;
-            uint256 G = globalDeficit[poolId][tokenIndex];
-            uint256 C = protocolCoverage[poolId][tokenIndex];
-            if (G > 0) {
-                globalDeficit[poolId][tokenIndex] = G - d;
-                if (C > 0) {
-                    uint256 attributed = FullMath.mulDiv(d, C, G); // deficit / globalDeficit * protocolCoverage
-                    protocolCoverage[poolId][tokenIndex] = C - attributed;
+            uint256 gD = globalDeficit[poolId][tokenIndex];
+            uint256 pC = protocolCoverage[poolId][tokenIndex];
+            if (gD > 0) {
+                globalDeficit[poolId][tokenIndex] = gD - d;
+                if (pC > 0) {
+                    uint256 attributed = FullMath.mulDiv(d, pC, gD); // deficit / globalDeficit * protocolCoverage
+                    protocolCoverage[poolId][tokenIndex] = pC - attributed;
 
                     uint256 bps = corePoolToVTSConfiguration[poolId].coverageFeeShare;
                     uint128 liq = poolManager.getPositionLiquidity(poolId, PositionId.unwrap(positionId));
@@ -356,6 +356,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         uint256 available = proactivePoolBalance[poolId][tokenIndex];
         if (available > 0) {
             // As we increment protocol coverage, we consume proactive pool balance first. This is excess liquidity settled by MMs across positions.
+            // protocolCoverage therefore is derived from DirectLPs - exclusively.
             // crossPositionTotalSettledAmount - proactivePoolBalance[poolId][tokenIndex] = the amount covering outflows.
             // Weighting totalSettledAmount[positionId][tokenIndex] by the result gives a weight of positions excess contributions to outflows before protocol coverage.
             uint256 use = coveredAmount <= available ? coveredAmount : available;
