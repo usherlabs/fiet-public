@@ -58,13 +58,13 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
 
     // Protocol coverage & fee sharing accounting
     // Total protocol-covered unwraps (net of proactive pool usage)
-    mapping(PoolId => uint256[2]) internal protocolCoverage;
+    mapping(PoolId => uint256[2]) public protocolCoverage;
     // Sum of all position cumulative deficits per market/token
-    mapping(PoolId => uint256[2]) internal globalDeficit;
+    mapping(PoolId => uint256[2]) public globalDeficit;
     // Global proactive liquidity available to offset future unwraps
-    mapping(PoolId => uint256[2]) internal proactivePoolBalance;
+    mapping(PoolId => uint256[2]) public proactivePoolBalance;
     // Protocol/LPs fee pot accrued from fee sharing (per token index)
-    mapping(PoolId => uint256[2]) internal protocolFeeAccrued;
+    mapping(PoolId => uint256[2]) public protocolFeeAccrued;
     // Per-position last inside fee growth snapshot per token (for fee sharing)
     mapping(PositionId => uint256[2]) internal feeGrowthInsideLast;
     // Per-position cumulative attributed outflows (raw units), per token
@@ -79,7 +79,12 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
 
     // Event to notify that the VTS configuration has been set/initialized for a core pool
     event MarketVTSConfigurationSet(PoolId indexed corePoolId, MarketVTSConfiguration indexed vtsConfiguration);
-    // Per-entry events are declared in VTSEvents
+    event FeeShareHandled(
+        PoolId indexed poolId, PositionId indexed positionId, uint8 indexed tokenIndex, uint256 share, uint256 growthInc
+    );
+    event MMPositionLiquidityUpdated(
+        PoolId indexed poolId, PositionId indexed positionId, int128 amount0, int128 amount1
+    );
 
     address private immutable mmPositionManager;
     IPoolManager private immutable poolManager;
@@ -250,6 +255,8 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         if (amount1 > 0) {
             _handleMMSettlementForToken(positionId, poolId, 1, uint256(uint128(amount1)));
         }
+
+        emit MMPositionLiquidityUpdated(poolId, positionId, amount0, amount1);
     }
 
     function incrementProtocolCoverage(PoolId poolId, uint256 amount) external {
@@ -287,14 +294,17 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
                         uint256 share = FullMath.mulDiv(fees, attributed, ofDelta);
                         share = FullMath.mulDiv(share, bps, 10000);
                         if (share > 0 && share <= fees) {
+                            uint256 growthInc = 0;
                             if (liq > 0) {
-                                // It’s not allocating to the position; it’s “burning” their claimable fees by advancing feeGrowthInsideLast by the share-equivalent growth.
+                                // The following is “burning” their claimable fees by advancing feeGrowthInsideLast by the share-equivalent growth.
                                 // In Uniswap-style accounting, a position’s owed fees = (feeGrowthInside − feeGrowthInsideLast) × liquidity. By increasing feeGrowthInsideLast by share/Q128/liquidity, we reduce their future fee delta exactly by share.
-                                uint256 growthInc = FullMath.mulDiv(share, FixedPoint128.Q128, liq);
+                                growthInc = FullMath.mulDiv(share, FixedPoint128.Q128, liq);
                                 feeGrowthInsideLast[positionId][tokenIndex] += growthInc;
                             }
                             // The “value” of the share is accrued to protocolFeeAccrued[...], so the MM loses that amount and the protocol/other LPs gain it.
                             protocolFeeAccrued[poolId][tokenIndex] += share;
+
+                            emit FeeShareHandled(poolId, positionId, tokenIndex, share, growthInc);
                         }
                     }
                 }
