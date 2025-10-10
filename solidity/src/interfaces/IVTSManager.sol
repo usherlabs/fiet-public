@@ -5,7 +5,6 @@ import {MarketVTSConfiguration} from "../types/VTS.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {PositionId} from "../types/Position.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
-import {PositionMeta} from "../types/Position.sol";
 
 interface IVTSManager {
     function setMarketVTSConfiguration(PoolId corePoolId, MarketVTSConfiguration memory vtsConfiguration) external;
@@ -26,4 +25,6 @@ interface IVTSManager {
         returns (uint256 amount0, uint256 amount1);
 
     function prepareLiquidation(PositionId positionId) external returns (uint256 amount0, uint256 amount1);
+
+    function getSeizureAmount(PositionId positionId) external view returns (uint256 siezureFractionBPS);
 }

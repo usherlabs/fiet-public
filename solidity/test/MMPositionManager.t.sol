@@ -4,7 +4,7 @@ pragma solidity ^0.8.0;
 import "forge-std/Test.sol";
 // solhint-disable max-line-length
 
-import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {BalanceDelta, toBalanceDelta, add} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {CurrencyLibrary, Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
@@ -23,9 +23,15 @@ import {IOracle} from "../src/interfaces/IOracle.sol";
 import {PositionId} from "../src/types/Position.sol";
 import {IVTSManager} from "../src/interfaces/IVTSManager.sol";
 import {MarketVTSConfiguration} from "../src/types/VTS.sol";
+import {MockERC20} from "solmate/test/utils/mocks/MockERC20.sol";
 import {LiquidityUtils} from "../src/libraries/LiquidityUtils.sol";
+import {PositionMeta} from "../src/types/Position.sol";
+import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
+import {IPositionIndex} from "../src/interfaces/IPositionIndex.sol";
+import {LiquiditySignal} from "../src/types/Position.sol";
 
 contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
+    using SafeCast for *;
     using PoolIdLibrary for PoolId;
     using CurrencyLibrary for Currency;
     using MarketMaker for MarketMaker.State;
@@ -38,6 +44,9 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
     address internal mockOracleBTC = makeAddr("mockOracleBTC");
     address internal mockOracleUSDT = makeAddr("mockOracleUSDT");
+
+    address guarantor = makeAddr("guarantor");
+    uint256 guarantorInitialBalance = 10000e18;
 
     function setUp() public {
         _setupMarket();
@@ -211,8 +220,8 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         // VTS current from the `IVTSManager` is expressed in 1e18
         // VTS base in the market configuration is expressed in bips
-        uint256 vtsCurrent0BeforeSettlementBips = vtsCurrent0BeforeSettlement * LiquidityUtils.ONE_BIP / 1e18;
-        uint256 vtsCurrent1BeforeSettlementBips = vtsCurrent1BeforeSettlement * LiquidityUtils.ONE_BIP / 1e18;
+        uint256 vtsCurrent0BeforeSettlementBips = (vtsCurrent0BeforeSettlement * LiquidityUtils.ONE_BIP) / 1e18;
+        uint256 vtsCurrent1BeforeSettlementBips = (vtsCurrent1BeforeSettlement * LiquidityUtils.ONE_BIP) / 1e18;
 
         // assert the vts before further settlement is equal to the base vts
         assertApproxEqRel(
@@ -233,8 +242,8 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             IVTSManager(coreHookAddress).getVTSCurrent(positionId);
         // assert the vts after settlement is equal to the base vts * 2
         // since we basically just made another settlement equal to the base vts, the vts should be doubled
-        uint256 vtsCurrent0AfterSettlementBips = vtsCurrent0AfterSettlement * LiquidityUtils.ONE_BIP / 1e18;
-        uint256 vtsCurrent1AfterSettlementBips = vtsCurrent1AfterSettlement * LiquidityUtils.ONE_BIP / 1e18;
+        uint256 vtsCurrent0AfterSettlementBips = (vtsCurrent0AfterSettlement * LiquidityUtils.ONE_BIP) / 1e18;
+        uint256 vtsCurrent1AfterSettlementBips = (vtsCurrent1AfterSettlement * LiquidityUtils.ONE_BIP) / 1e18;
 
         assertApproxEqRel(
             vtsCurrent0AfterSettlementBips, marketVTSConfiguration.token0.baseVTSRate * 2, 1e16, "Price within 1%"
@@ -394,5 +403,489 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         assertGt(token0BalanceAfter, token0BalanceBefore);
         assertGt(token1BalanceAfter, token1BalanceBefore);
+    }
+
+    // can partially seize a position while not being a market maker
+    function test_canPartially_seizePosition_asNoneMM() public {
+        // commit to a position
+        bytes memory liquiditySignal = abi.encode(liquiditySignal);
+
+        uint256 siezureFractionBPS = 1000;
+
+        BalanceDelta rfsDelta = toBalanceDelta(-100, 0);
+
+        ModifyLiquidityParams memory liquidityParams =
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
+
+        // Get amount of underlying liquidity to transfer from the issuer to the lcc
+        (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) =
+            LiquidityUtils.getBaseSettlementAmounts(liquidityParams, marketVTSConfiguration);
+
+        // Approve the position manager to take the base/minimum underlying liquidity to create to the position
+        ERC20(lcc0.underlyingAsset()).approve(address(mmPositionManager), underlyingLiquidityFraction0);
+        ERC20(lcc1.underlyingAsset()).approve(address(mmPositionManager), underlyingLiquidityFraction1);
+
+        // commit the position
+        PositionId positionId = positionManager.commit(
+            corePoolKey,
+            liquidityParams.tickLower,
+            liquidityParams.tickUpper,
+            liquidityParams.liquidityDelta,
+            liquiditySignal
+        );
+        uint256 tokenId = 1;
+
+        // Mock the RFS for this position
+        vm.mockCall(
+            address(IVTSManager(coreHookAddress)),
+            abi.encodeWithSelector(IVTSManager.calcRFS.selector),
+            // mock the RFS for this position to be open and the balanceDelta to be negative to indicate pending amount to be settled by the mm
+            abi.encode(true, rfsDelta)
+        );
+
+        // mock the siezure amount for this position
+        vm.mockCall(
+            address(IVTSManager(coreHookAddress)),
+            abi.encodeWithSelector(IVTSManager.getSeizureAmount.selector),
+            abi.encode(siezureFractionBPS) //10% of the position is up for seizure
+        );
+
+        // mint the underlying assets to the guarantor, and approve the  position manager to take the underlying assets
+        MockERC20(lcc0.underlyingAsset()).mint(guarantor, guarantorInitialBalance);
+        MockERC20(lcc1.underlyingAsset()).mint(guarantor, guarantorInitialBalance);
+
+        // act as the guarantor who wants to seize the position partially
+        vm.startPrank(guarantor);
+        ERC20(lcc0.underlyingAsset()).approve(address(mmPositionManager), 100);
+        ERC20(lcc1.underlyingAsset()).approve(address(mmPositionManager), 100);
+
+        // --- seize the position ---
+        PositionMeta memory positionBeforeSeizure = positionManager.getPosition(tokenId, 0);
+        // uint256 token1UABeforeSeizure = Currency.wrap(lcc1.underlyingAsset()).balanceOf(address(guarantor));
+        uint256 token0UABeforeSeizure = Currency.wrap(lcc0.underlyingAsset()).balanceOf(address(guarantor));
+        // get the initial settled balance delta
+        (uint256 initialSettledAmount0, uint256 initialSettledAmount1) =
+            IVTSManager(coreHookAddress).getPositionSettledAmounts(positionId);
+        BalanceDelta initialSettledBalanceDelta =
+            toBalanceDelta(initialSettledAmount0.toInt128(), initialSettledAmount1.toInt128());
+
+        // during seizure, the outstanding amount will be settled, so that would be the total settled amount to use to calculate the fraction to return back
+        BalanceDelta settledBalanceDelta = add(initialSettledBalanceDelta, LiquidityUtils.negateBalanceDelta(rfsDelta));
+        // this is how much would be realized from the liquidation, which is basically the fraction of the position that can be seized multiplied by the settled balance delta
+        BalanceDelta expectedSettlementFractionDelta =
+            LiquidityUtils.calculateLiquidityFraction(settledBalanceDelta, siezureFractionBPS);
+
+        // seize the position
+        // settle all the outstanding rfs of token 0
+        positionManager.seize(tokenId, 0, LiquidityUtils.safeInt128ToUint256(rfsDelta.amount0()), 0);
+
+        // get the balance of the underlying assets after seizure
+        uint256 token0UAAfterSeizure = Currency.wrap(lcc0.underlyingAsset()).balanceOf(address(guarantor));
+
+        // get the expected balance of the underlying assets after seizure
+        uint256 expectedGuarantorToken0UAAfterSeizure = token0UABeforeSeizure
+            + LiquidityUtils.safeInt128ToUint256(expectedSettlementFractionDelta.amount0())
+            - LiquidityUtils.safeInt128ToUint256(rfsDelta.amount0());
+
+        PositionMeta memory positionAfterSeizure = positionManager.getPosition(tokenId, 0);
+
+        uint256 expectedLiquidityAfterSeizure =
+            (uint256(positionBeforeSeizure.liquidity) * (10000 - siezureFractionBPS)) / 10000;
+
+        // validate liquidity in the position is reduced
+        assertEq(uint256(positionAfterSeizure.liquidity), expectedLiquidityAfterSeizure);
+
+        // validate that part of the position's settlement has been taken out, and
+        assertEq(token0UAAfterSeizure, expectedGuarantorToken0UAAfterSeizure);
+
+        // expected settlement = initial settlement + rfs delta -  settlement fraction seized
+        (uint256 finalSettledAmount0, uint256 finalSettledAmount1) =
+            IVTSManager(coreHookAddress).getPositionSettledAmounts(positionId);
+        BalanceDelta finalSettledBalanceDelta =
+            toBalanceDelta(finalSettledAmount0.toInt128(), finalSettledAmount1.toInt128());
+        uint256 expectedRemainingSettlement0ForPosition = LiquidityUtils.safeInt128ToUint256(
+            initialSettledBalanceDelta.amount0()
+        ) + LiquidityUtils.safeInt128ToUint256(rfsDelta.amount0())
+            - LiquidityUtils.safeInt128ToUint256(expectedSettlementFractionDelta.amount0());
+
+        // validate the remaining settlement for the position is as expected
+        assertEq(
+            LiquidityUtils.safeInt128ToUint256(finalSettledBalanceDelta.amount0()),
+            expectedRemainingSettlement0ForPosition
+        );
+    }
+
+    // can partially seize a position while not being a market maker and settling more than the outstanding RFS amount
+    function test_canPartially_seizePosition_asNoneMM_withPartialSettlement() public {
+        // commit to a position
+        bytes memory liquiditySignal = abi.encode(liquiditySignal);
+
+        uint256 seizureFractionBPS = 1000;
+
+        BalanceDelta rfsDelta = toBalanceDelta(-100, 0);
+
+        ModifyLiquidityParams memory liquidityParams =
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
+
+        // Get amount of underlying liquidity to transfer from the issuer to the lcc
+        (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) =
+            LiquidityUtils.getBaseSettlementAmounts(liquidityParams, marketVTSConfiguration);
+
+        // Approve the position manager to take the base/minimum underlying liquidity to create to the position
+        ERC20(lcc0.underlyingAsset()).approve(address(mmPositionManager), underlyingLiquidityFraction0);
+        ERC20(lcc1.underlyingAsset()).approve(address(mmPositionManager), underlyingLiquidityFraction1);
+
+        PositionId positionId = positionManager.commit(
+            corePoolKey,
+            liquidityParams.tickLower,
+            liquidityParams.tickUpper,
+            liquidityParams.liquidityDelta,
+            liquiditySignal
+        );
+        uint256 tokenId = 1;
+
+        // Mock the RFS for this position
+        vm.mockCall(
+            address(IVTSManager(coreHookAddress)),
+            abi.encodeWithSelector(IVTSManager.calcRFS.selector),
+            // mock the RFS for this position to be open and the balanceDelta to be negative to indicate pending amount to be settled by the mm
+            abi.encode(true, rfsDelta)
+        );
+
+        // mock the siezure amount for this position
+        vm.mockCall(
+            address(IVTSManager(coreHookAddress)),
+            abi.encodeWithSelector(IVTSManager.getSeizureAmount.selector),
+            abi.encode(seizureFractionBPS) //10% of the position is up for seizure
+        );
+
+        // mint the underlying assets to the guarantor, and approve the  position manager to take the underlying assets
+        MockERC20(lcc0.underlyingAsset()).mint(guarantor, guarantorInitialBalance);
+        MockERC20(lcc1.underlyingAsset()).mint(guarantor, guarantorInitialBalance);
+
+        // act as the guarantor who wants to seize the position partially
+        vm.startPrank(guarantor);
+        ERC20(lcc0.underlyingAsset()).approve(address(mmPositionManager), 100);
+        ERC20(lcc1.underlyingAsset()).approve(address(mmPositionManager), 100);
+
+        PositionMeta memory positionBeforeSeizure = positionManager.getPosition(tokenId, 0);
+        // uint256 token1UABeforeSeizure = Currency.wrap(lcc1.underlyingAsset()).balanceOf(address(guarantor));
+        uint256 token0UABeforeSeizure = Currency.wrap(lcc0.underlyingAsset()).balanceOf(address(guarantor));
+        (uint256 initialSettledAmount0, uint256 initialSettledAmount1) =
+            IVTSManager(coreHookAddress).getPositionSettledAmounts(positionId);
+        BalanceDelta initialSettledBalanceDelta =
+            toBalanceDelta(initialSettledAmount0.toInt128(), initialSettledAmount1.toInt128());
+        // during seizure, the outstanding amount will be settled, so that would be the total settled amount to use to calculate the fraction to return back
+
+        // ---- seize the position
+        // settle all the outstanding rfs of token 0
+        uint256 amount0ToSettle = LiquidityUtils.safeInt128ToUint256(rfsDelta.amount0()) / 2;
+        BalanceDelta settledBalanceDelta =
+            add(initialSettledBalanceDelta, toBalanceDelta(amount0ToSettle.toInt128(), 0));
+        positionManager.seize(tokenId, 0, amount0ToSettle, 0);
+        seizureFractionBPS = LiquidityUtils.calculateSiezureFraction(
+            toBalanceDelta(amount0ToSettle.toInt128(), 0), rfsDelta, seizureFractionBPS
+        );
+        // this is how much would be realized from the liquidation, which is basically the fraction of the position that can be seized multiplied by the settled balance delta
+        BalanceDelta expectedSettlementFractionDelta =
+            LiquidityUtils.calculateLiquidityFraction(settledBalanceDelta, seizureFractionBPS);
+        // get the balance of the underlying assets after seizure
+        uint256 token0UAAfterSeizure = Currency.wrap(lcc0.underlyingAsset()).balanceOf(address(guarantor));
+
+        // get the expected balance of the underlying assets after seizure
+        uint256 expectedGuarantorToken0UAAfterSeizure = token0UABeforeSeizure
+            + LiquidityUtils.safeInt128ToUint256(expectedSettlementFractionDelta.amount0()) - amount0ToSettle;
+
+        PositionMeta memory positionAfterSeizure = positionManager.getPosition(tokenId, 0);
+
+        uint256 expectedLiquidityAfterSeizure =
+            (uint256(positionBeforeSeizure.liquidity) * (10000 - seizureFractionBPS)) / 10000;
+
+        // validate liquidity in the position is reduced
+        assertEq(uint256(positionAfterSeizure.liquidity), expectedLiquidityAfterSeizure);
+
+        // validate that part of the position's settlement has been taken out, and
+        assertEq(token0UAAfterSeizure, expectedGuarantorToken0UAAfterSeizure);
+
+        // expected settlement = initial settlement + rfs delta -  settlement fraction seized
+        (uint256 finalSettledAmount0, uint256 finalSettledAmount1) =
+            IVTSManager(coreHookAddress).getPositionSettledAmounts(positionId);
+        BalanceDelta finalSettledBalanceDelta =
+            toBalanceDelta(finalSettledAmount0.toInt128(), finalSettledAmount1.toInt128());
+
+        uint256 expectedRemainingSettlement0ForPosition = LiquidityUtils.safeInt128ToUint256(
+            initialSettledBalanceDelta.amount0()
+        ) + amount0ToSettle - LiquidityUtils.safeInt128ToUint256(expectedSettlementFractionDelta.amount0());
+
+        // validate the remaining settlement for the position is as expected
+        assertEq(
+            LiquidityUtils.safeInt128ToUint256(finalSettledBalanceDelta.amount0()),
+            expectedRemainingSettlement0ForPosition
+        );
+    }
+
+    // can fully seize a position while not being a market maker
+    function test_canFully_seizePosition_asNoneMM_withEnoughSettlement() public {
+        // commit to a position
+        bytes memory liquiditySignal = abi.encode(liquiditySignal);
+
+        uint256 siezureFractionBPS = 10000;
+
+        BalanceDelta rfsDelta = toBalanceDelta(-100, 0);
+
+        ModifyLiquidityParams memory liquidityParams =
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
+
+        // Get amount of underlying liquidity to transfer from the issuer to the lcc
+        (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) =
+            LiquidityUtils.getBaseSettlementAmounts(liquidityParams, marketVTSConfiguration);
+
+        // Approve the position manager to take the base/minimum underlying liquidity to create to the position
+        ERC20(lcc0.underlyingAsset()).approve(address(mmPositionManager), underlyingLiquidityFraction0);
+        ERC20(lcc1.underlyingAsset()).approve(address(mmPositionManager), underlyingLiquidityFraction1);
+
+        PositionId positionId = positionManager.commit(
+            corePoolKey,
+            liquidityParams.tickLower,
+            liquidityParams.tickUpper,
+            liquidityParams.liquidityDelta,
+            liquiditySignal
+        );
+        uint256 tokenId = 1;
+        // Mock the RFS for this position
+        vm.mockCall(
+            address(IVTSManager(coreHookAddress)),
+            abi.encodeWithSelector(IVTSManager.calcRFS.selector),
+            // mock the RFS for this position to be open and the balanceDelta to be negative to indicate pending amount to be settled by the mm
+            abi.encode(true, rfsDelta)
+        );
+
+        // mock the siezure amount for this position
+        vm.mockCall(
+            address(IVTSManager(coreHookAddress)),
+            abi.encodeWithSelector(IVTSManager.getSeizureAmount.selector),
+            abi.encode(siezureFractionBPS) //10% of the position is up for seizure
+        );
+
+        // mint the underlying assets to the guarantor, and approve the  position manager to take the underlying assets
+        MockERC20(lcc0.underlyingAsset()).mint(guarantor, guarantorInitialBalance);
+        // MockERC20(lcc1.underlyingAsset()).mint(guarantor, guarantorInitialBalance);
+
+        // act as the guarantor who wants to seize the position partially
+        vm.startPrank(guarantor);
+        ERC20(lcc0.underlyingAsset()).approve(address(mmPositionManager), 100);
+        // ERC20(lcc1.underlyingAsset()).approve(address(mmPositionManager), 100);
+
+        // seize the position by settling all of the outstanding RFS amount
+        positionManager.seize(
+            tokenId,
+            0,
+            LiquidityUtils.safeInt128ToUint256(rfsDelta.amount0()),
+            LiquidityUtils.safeInt128ToUint256(rfsDelta.amount1())
+        );
+
+        // get the total settlement amount for the position after seizure
+        (uint256 finalSettledAmount0, uint256 finalSettledAmount1) =
+            IVTSManager(coreHookAddress).getPositionSettledAmounts(positionId);
+        BalanceDelta finalSettledBalanceDelta =
+            toBalanceDelta(finalSettledAmount0.toInt128(), finalSettledAmount1.toInt128());
+
+        // get the position info after seizure
+        PositionMeta memory positionAfterSeizure = IPositionIndex(coreHookAddress).getPosition(positionId, false);
+
+        // validate the position is marked as inactive
+        assertEq(positionAfterSeizure.isActive, false);
+        // validate all the settled amount is seized
+        assertEq(LiquidityUtils.safeInt128ToUint256(finalSettledBalanceDelta.amount0()), 0);
+    }
+
+    // can seize a position while not being a market maker and settling more than the outstanding RFS amount
+    function test_canFully_seizePosition_asNoneMM_withOverSettlement() public {
+        // commit to a position
+        bytes memory liquiditySignal = abi.encode(liquiditySignal);
+
+        uint256 siezureFractionBPS = 10000;
+
+        BalanceDelta rfsDelta = toBalanceDelta(-100, 0);
+
+        ModifyLiquidityParams memory liquidityParams =
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
+
+        // Get amount of underlying liquidity to transfer from the issuer to the lcc
+        (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) =
+            LiquidityUtils.getBaseSettlementAmounts(liquidityParams, marketVTSConfiguration);
+
+        // Approve the position manager to take the base/minimum underlying liquidity to create to the position
+        ERC20(lcc0.underlyingAsset()).approve(address(mmPositionManager), underlyingLiquidityFraction0);
+        ERC20(lcc1.underlyingAsset()).approve(address(mmPositionManager), underlyingLiquidityFraction1);
+
+        PositionId positionId = positionManager.commit(
+            corePoolKey,
+            liquidityParams.tickLower,
+            liquidityParams.tickUpper,
+            liquidityParams.liquidityDelta,
+            liquiditySignal
+        );
+        uint256 tokenId = 1;
+        // Mock the RFS for this position
+        vm.mockCall(
+            address(IVTSManager(coreHookAddress)),
+            abi.encodeWithSelector(IVTSManager.calcRFS.selector),
+            // mock the RFS for this position to be open and the balanceDelta to be negative to indicate pending amount to be settled by the mm
+            abi.encode(true, rfsDelta)
+        );
+
+        // mock the siezure amount for this position
+        vm.mockCall(
+            address(IVTSManager(coreHookAddress)),
+            abi.encodeWithSelector(IVTSManager.getSeizureAmount.selector),
+            abi.encode(siezureFractionBPS) //10% of the position is up for seizure
+        );
+
+        // mint the underlying assets to the guarantor, and approve the  position manager to take the underlying assets
+        MockERC20(lcc0.underlyingAsset()).mint(guarantor, guarantorInitialBalance);
+        // MockERC20(lcc1.underlyingAsset()).mint(guarantor, guarantorInitialBalance);
+
+        // act as the guarantor who wants to seize the position partially
+        vm.startPrank(guarantor);
+        // seize the position by settling more than the outstanding RFS amount
+        uint256 amount0ToSettle = LiquidityUtils.safeInt128ToUint256(rfsDelta.amount0()) + 100;
+        ERC20(lcc0.underlyingAsset()).approve(address(mmPositionManager), amount0ToSettle);
+        // ERC20(lcc1.underlyingAsset()).approve(address(mmPositionManager), 100);
+        positionManager.seize(tokenId, 0, amount0ToSettle, 0);
+        siezureFractionBPS = LiquidityUtils.calculateSiezureFraction(
+            toBalanceDelta(amount0ToSettle.toInt128(), 0), rfsDelta, siezureFractionBPS
+        );
+        // get the total settlement amount for the position after seizure
+        (uint256 finalSettledAmount0, uint256 finalSettledAmount1) =
+            IVTSManager(coreHookAddress).getPositionSettledAmounts(positionId);
+        BalanceDelta finalSettledBalanceDelta =
+            toBalanceDelta(finalSettledAmount0.toInt128(), finalSettledAmount1.toInt128());
+
+        // get the position info after seizure
+        PositionMeta memory positionAfterSeizure = IPositionIndex(coreHookAddress).getPosition(positionId, false);
+
+        // validate the position is marked as inactive
+        assertEq(positionAfterSeizure.isActive, false);
+        // validate all the settled amount is seized
+        assertEq(LiquidityUtils.safeInt128ToUint256(finalSettledBalanceDelta.amount0()), 0);
+    }
+
+    // can partially seize a position while being a market maker
+    function test_canPartially_seizePosition_asMM() public {
+        LiquiditySignal[] memory liquiditySignals = generateLiquiditySignals(2);
+        // Generate the liquidity signals
+        bytes memory liquiditySignalOne = abi.encode(liquiditySignals[0]);
+        bytes memory liquiditySignalTwo = abi.encode(liquiditySignals[1]);
+
+        uint256 siezureFractionBPS = 5000; // 50% of the position in bps is up for seizure
+
+        BalanceDelta rfsDelta = toBalanceDelta(0, -100);
+
+        ModifyLiquidityParams memory liquidityParams =
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
+
+        // Get amount of underlying liquidity to transfer from the issuer to the lcc
+        (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) =
+            LiquidityUtils.getBaseSettlementAmounts(liquidityParams, marketVTSConfiguration);
+
+        // Approve the position manager to take the base/minimum underlying liquidity to create to the position
+        ERC20(lcc0.underlyingAsset()).approve(address(mmPositionManager), underlyingLiquidityFraction0);
+        ERC20(lcc1.underlyingAsset()).approve(address(mmPositionManager), underlyingLiquidityFraction1);
+
+        // make a commitment to a position in order to be an mm
+        positionManager.commit(
+            corePoolKey,
+            liquidityParams.tickLower,
+            liquidityParams.tickUpper,
+            liquidityParams.liquidityDelta,
+            liquiditySignalOne
+        );
+
+        // mock the seizure amount for this position
+        vm.mockCall(
+            address(IVTSManager(coreHookAddress)),
+            abi.encodeWithSelector(IVTSManager.getSeizureAmount.selector),
+            abi.encode(siezureFractionBPS) //10% of the position is up for seizure
+        );
+
+        // mint the underlying assets to the guarantor, and approve the  position manager to take the underlying assets
+        MockERC20(lcc0.underlyingAsset()).mint(guarantor, guarantorInitialBalance);
+        MockERC20(lcc1.underlyingAsset()).mint(guarantor, guarantorInitialBalance);
+
+        // create another position to seize
+        vm.startPrank(guarantor);
+        // approve the position manager to take the underlying assets
+        (underlyingLiquidityFraction0, underlyingLiquidityFraction1) =
+            LiquidityUtils.getBaseSettlementAmounts(liquidityParams, marketVTSConfiguration);
+        // Approve the position manager to take the base/minimum underlying liquidity to create to the position
+        ERC20(lcc0.underlyingAsset()).approve(address(mmPositionManager), underlyingLiquidityFraction0);
+        ERC20(lcc1.underlyingAsset()).approve(address(mmPositionManager), underlyingLiquidityFraction1);
+
+        // make a commitment to a position in order to be an mm
+        PositionId newPositionId = positionManager.commit(
+            corePoolKey,
+            liquidityParams.tickLower,
+            liquidityParams.tickUpper,
+            liquidityParams.liquidityDelta,
+            liquiditySignalTwo
+        );
+        uint256 tokenId = 2; //second token generated
+        vm.stopPrank();
+
+        // approve the amount to be deposited to the new position to make rfs
+        ERC20(lcc0.underlyingAsset()).approve(
+            address(mmPositionManager), LiquidityUtils.safeInt128ToUint256(rfsDelta.amount0())
+        );
+        ERC20(lcc1.underlyingAsset()).approve(
+            address(mmPositionManager), LiquidityUtils.safeInt128ToUint256(rfsDelta.amount1())
+        );
+
+        PositionMeta memory positionToSeize = positionManager.getPosition(tokenId, 0);
+        // get the total settlement amount for the position to seize
+        (uint256 initialSettledAmount0, uint256 initialSettledAmount1) =
+            IVTSManager(coreHookAddress).getPositionSettledAmounts(newPositionId);
+        BalanceDelta initialSettledBalanceDelta =
+            toBalanceDelta(initialSettledAmount0.toInt128(), initialSettledAmount1.toInt128());
+        // during seizure, the outstanding RFS amount will be settled, so that would be the total settled amount to use to calculate the fraction to return back as settled amount for the new/liquidated position
+        BalanceDelta settledBalanceDeltaForNewPosition =
+            add(initialSettledBalanceDelta, LiquidityUtils.negateBalanceDelta(rfsDelta));
+        // this is how much would be realized from the seizure, which is basically the fraction of the position that can be seized multiplied by the settled balance delta
+        BalanceDelta expectedSettlementFractionDelta =
+            LiquidityUtils.calculateLiquidityFraction(settledBalanceDeltaForNewPosition, siezureFractionBPS);
+        // Mock the RFS for this position
+        vm.mockCall(
+            address(IVTSManager(coreHookAddress)),
+            abi.encodeWithSelector(IVTSManager.calcRFS.selector, newPositionId),
+            // mock the RFS for this position to be open and the balanceDelta to be negative to indicate pending amount to be settled by the mm
+            abi.encode(true, rfsDelta)
+        );
+
+        // -- seize the new position
+        PositionId newPositionIdSeized = positionManager.seize(
+            tokenId,
+            0,
+            LiquidityUtils.safeInt128ToUint256(rfsDelta.amount0()),
+            LiquidityUtils.safeInt128ToUint256(rfsDelta.amount1())
+        );
+        // get the token associated with the new position
+        uint256 newTokenId = 3; //third token generated
+
+        PositionMeta memory createdPositionAfterSeizure = positionManager.getPosition(newTokenId, 0);
+        uint256 expectedLiquiditySeized = (uint256(positionToSeize.liquidity) * siezureFractionBPS) / 10000;
+
+        // assert that the liquidity of the position to seize is equal to the liquidity of the created position after seizure
+        assertEq(expectedLiquiditySeized, uint256(createdPositionAfterSeizure.liquidity));
+
+        // assert that the settlement amount was transferred to the new position
+        // get the total settlement amount for the new position
+        (uint256 finalSettledAmount0, uint256 finalSettledAmount1) =
+            IVTSManager(coreHookAddress).getPositionSettledAmounts(newPositionIdSeized);
+        BalanceDelta finalSettledBalanceDeltaForNewPosition =
+            toBalanceDelta(finalSettledAmount0.toInt128(), finalSettledAmount1.toInt128());
+
+        // validate the equivalent seized settled liquidity was transferred to the new position's settled amount
+        assertEq(finalSettledBalanceDeltaForNewPosition.amount0(), expectedSettlementFractionDelta.amount0());
+        assertEq(finalSettledBalanceDeltaForNewPosition.amount1(), expectedSettlementFractionDelta.amount1());
     }
 }

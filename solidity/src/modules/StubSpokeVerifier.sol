@@ -9,11 +9,14 @@ import {MarketMaker} from "../libraries/MarketMaker.sol";
 import {ISpokeVerifier} from "../interfaces/ISpokeVerifier.sol";
 
 contract StubSpokeVerifier is ISpokeVerifier {
-    function verifyProof(bytes32, bytes calldata, bytes calldata, MarketMaker.State calldata, bytes32[] calldata)
-        external
-        pure
-        returns (bool)
-    {
+    function verifyProof(
+        uint256,
+        bytes32,
+        bytes calldata,
+        bytes calldata,
+        MarketMaker.State calldata,
+        bytes32[] calldata
+    ) external pure returns (bool) {
         return true;
     }
 }

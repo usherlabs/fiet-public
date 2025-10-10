@@ -54,6 +54,8 @@ contract MarketFactory is IMarketFactory, Ownable2Step {
 
     mapping(PoolId => address[2]) private _corePoolToCurrencyPair;
 
+    mapping(PoolId => PoolKey) private _poolIdToPoolKey;
+
     constructor(address poolManagerAddr, address _oracleRegistry, address[] memory _bounds) Ownable(msg.sender) {
         if (poolManagerAddr == address(0)) {
             revert InvalidPoolParameters();
@@ -245,6 +247,7 @@ contract MarketFactory is IMarketFactory, Ownable2Step {
         });
 
         PoolId poolId = poolKey.toId();
+        _poolIdToPoolKey[poolId] = poolKey;
 
         // Check if pool already exists
         if (PoolId.unwrap(coreToProxy[poolId]) != bytes32(0)) {
@@ -280,6 +283,8 @@ contract MarketFactory is IMarketFactory, Ownable2Step {
             tickSpacing: proxyPoolTickSpacing,
             hooks: IHooks(proxyHookInstance)
         });
+
+        _poolIdToPoolKey[poolKey.toId()] = poolKey;
 
         // Initialize the pool
         _poolManager.initialize(poolKey, initialSqrtPriceX96); // Use provided initial price instead of 0
@@ -333,6 +338,23 @@ contract MarketFactory is IMarketFactory, Ownable2Step {
     }
 
     // ============ VIEW FUNCTIONS ============
+    /**
+     * @notice Gets the proxy hook address for a given core pool ID
+     * @param corePoolId The core pool ID
+     * @return The proxy hook address
+     */
+    function corePoolToProxyHook(PoolId corePoolId) external view returns (address) {
+        return _proxyToHook[coreToProxy[corePoolId]];
+    }
+
+    /**
+     * @notice Gets the pool key for a given pool ID
+     * @param poolId The pool ID
+     * @return The pool key
+     */
+    function poolIdToPoolKey(PoolId poolId) external view returns (PoolKey memory) {
+        return _poolIdToPoolKey[poolId];
+    }
 
     /**
      * @notice Gets the LCC token for a given underlying asset

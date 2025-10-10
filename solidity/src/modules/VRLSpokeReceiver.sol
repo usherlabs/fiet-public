@@ -51,9 +51,10 @@ contract VRLSpokeReceiver is Ownable {
         // verify the proofs associated with the state
         if (
             !verifier.verifyProof(
+                liquiditySignal.nonce,
                 liquiditySignal.rootHash,
                 liquiditySignal.rootHashSignature,
-                liquiditySignal.signature,
+                liquiditySignal.mmSignature,
                 liquiditySignal.mmState,
                 liquiditySignal.merkleProof
             )

@@ -219,28 +219,17 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
 
     /**
      * @dev This function is called by the MMPositionManager to add liquidity directly to the vault
-     * @param currency0 The currency0 to add to the vault
-     * @param currency1 The currency1 to add to the vault
      * @param balanceDelta The balance delta of the currency0 and currency1
      */
-    function onMMLiquidityModify(address currency0, address currency1, BalanceDelta balanceDelta) external {
+    function onMMLiquidityModify(BalanceDelta balanceDelta) external {
         address mmpmAddr = IMarketFactory(marketFactory).mmPositionManager();
         if (msg.sender != mmpmAddr) {
             revert InvalidSender();
         }
-        // make sure both currencies are valid for this proxy hook
-        // i.e make sure both currencies are either currency0 or currency1 of the proxy pool key
-        // to ensure we do not add liquidity to the vault with an invalid currency
-        if (
-            Currency.unwrap(proxyPoolKey.currency0) != currency0 && Currency.unwrap(proxyPoolKey.currency1) != currency0
-        ) {
-            revert InvalidCurrency(currency0);
-        }
-        if (
-            Currency.unwrap(proxyPoolKey.currency0) != currency1 && Currency.unwrap(proxyPoolKey.currency1) != currency1
-        ) {
-            revert InvalidCurrency(currency1);
-        }
+
+        address currency0 = Currency.unwrap(proxyPoolKey.currency0);
+        address currency1 = Currency.unwrap(proxyPoolKey.currency1);
+
         // add the assets to the pool manager and claim the underlying tokens for the proxy hook
         _modifyVaultLiquidity(currency0, currency1, balanceDelta);
         // if there was an addition, then settle the obligations to the lcc tokens

@@ -37,7 +37,7 @@ struct LiquiditySignal {
     /// The state of the market maker
     MarketMaker.State mmState;
     /// The signature of the state of the market maker
-    bytes signature;
+    bytes mmSignature;
 }
 
 library PositionLibrary {

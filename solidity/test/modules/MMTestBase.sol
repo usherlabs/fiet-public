@@ -41,9 +41,9 @@ abstract contract MarketMakerTestBase is Test {
         bytes32[] memory merkleLeaves = new bytes32[](numOfMarketMakers);
 
         for (uint256 i = 0; i < numOfMarketMakers; i++) {
-            // generate a private key to serve as the signature
+            // generate a private key to serve as the signer
             uint256 uniquePrivateKey = uint256(keccak256(abi.encodePacked(i)));
-            // append the market maker state to the liqudity signals
+            // append the market maker state to the liqudity signals generated so far
             MarketMaker.State memory state = _createMarketMakerState(uniquePrivateKey).state;
             // append the state to the array of merkle leaves, and store the mm state and private key info
             merkleLeaves[i] = state.toLeafHash();
@@ -52,30 +52,33 @@ abstract contract MarketMakerTestBase is Test {
 
         // using the states, generate the merkle root hash for the states
         bytes32 merkleRootHash = ShaMerkle.generateMerkleRoot(merkleLeaves);
-        // generate a canister signature of the merkle root hash
-        bytes memory icCanisterMerkleRootHashSignature = _signEthMessage(icCanisterPrivateKey, merkleRootHash);
 
         // generate liquidity signals for each market maker
         LiquiditySignal[] memory liquiditySignals = new LiquiditySignal[](numOfMarketMakers);
         for (uint256 i = 0; i < numOfMarketMakers; i++) {
             // generate liquidity payload to sign
-            bytes32 liquidityPayload = _generateLiquidityPayload(marketMakerStates[i], nonce);
+            // bytes32 liquidityPayload = _generateLiquidityPayload(marketMakerStates[i], nonce);
             // generate the signature of the liquidity payload
-            bytes memory liquidityPayloadSignature = _signEthMessage(marketMakerStates[i].privateKey, liquidityPayload);
+            bytes memory liquidityPayloadSignature =
+                _signEthMessage(marketMakerStates[i].privateKey, marketMakerStates[i].state.toLeafHash());
+
+            // generate a canister signature of the payload(merkle root hash and signature)
+            bytes32 canisterSignaturePayload = sha256(abi.encodePacked(nonce, merkleRootHash));
+            bytes memory icCanisterMerkleRootHashSignature =
+                _signEthMessage(icCanisterPrivateKey, canisterSignaturePayload);
             // generate the liquidity signal
             liquiditySignals[i] = LiquiditySignal({
                 // the merkle root hash of the merkle tree generated from the states
                 rootHash: merkleRootHash,
-                // the ic canister's signature of the merkle root hash
+                // the ic canister's signature of the payload(merkle root hash and the nonce)
                 rootHashSignature: icCanisterMerkleRootHashSignature,
                 // the merkle proof of the market maker state
                 merkleProof: ShaMerkle.generateProof(merkleLeaves, i),
                 // the market maker state
                 mmState: marketMakerStates[i].state,
                 // the signature of the market maker state and the nonce
-                signature: liquidityPayloadSignature,
-                // the nonce, since all leaves are from different market makers, the nonce can be the same.
-                // however users cannot reuse a nonce, and the nonce must always be incrementing.
+                mmSignature: liquidityPayloadSignature,
+                // The nonce must always be incrementing.
                 nonce: nonce
             });
         }
@@ -120,21 +123,5 @@ abstract contract MarketMakerTestBase is Test {
 
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, ethSignedMessageHash);
         return abi.encodePacked(r, s, v);
-    }
-
-    /**
-     * @dev combine the mm state and the nonce to generate the liquidity payload
-     * @param marketMakerState The market maker state
-     * @param _nonce The nonce
-     * @return The liquidity payload
-     */
-    function _generateLiquidityPayload(StatePayload memory marketMakerState, uint256 _nonce)
-        internal
-        pure
-        returns (bytes32)
-    {
-        // use sha256 to hash to maintain consistency with the merkle tree generation/processing
-        // but could potentially be combined any other way to generate the payload
-        return sha256(abi.encodePacked(marketMakerState.state.toLeafHash(), _nonce));
     }
 }
