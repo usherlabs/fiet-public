@@ -273,10 +273,15 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         emit MMPositionLiquidityUpdated(poolId, positionId, amount0, amount1);
     }
 
-    function incrementProtocolCoverage(PoolId poolId, uint256 amount) external {
+    /**
+     * @dev Called by LCC to increment unwrap coverage of the pool
+     * @param poolId The pool id
+     * @param amount The amount to increment the coverage by
+     */
+    function incrementCoverage(PoolId poolId, uint256 amount) external {
         uint8 tokenIndex = _getTokenIndexFromCaller(poolId); // ensures msg.sender is a valid LCC for the pool id.
 
-        _incrementProtocolCoverage(poolId, tokenIndex, amount);
+        _incrementCoverage(poolId, tokenIndex, amount);
     }
 
     function _handleMMSettlementForToken(PositionId positionId, PoolId poolId, uint8 tokenIndex, uint256 settledAmount)
@@ -356,11 +361,14 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         _settlePositionInflowGrowth(positionId);
     }
 
-    /// @dev Increment protocol coverage on unwrap, consuming proactive pool first
-    function _incrementProtocolCoverage(PoolId poolId, uint8 tokenIndex, uint256 coveredAmount) internal {
+    /// @dev Increment protocol or proactive excess liquidity coverage on unwrap, consuming proactive pool first
+    function _incrementCoverage(PoolId poolId, uint8 tokenIndex, uint256 coveredAmount) internal {
         if (tokenIndex > 1 || coveredAmount == 0) return;
         uint256 available = proactivePoolBalance[poolId][tokenIndex];
         if (available > 0) {
+            // As we increment protocol coverage, we consume proactive pool balance first. This is excess liquidity settled by MMs across positions.
+            // crossPositionTotalSettledAmount - proactivePoolBalance[poolId][tokenIndex] = the amount covering outflows.
+            // Weighting totalSettledAmount[positionId][tokenIndex] by the result gives a weight of positions excess contributions to outflows before protocol coverage.
             uint256 use = coveredAmount <= available ? coveredAmount : available;
             proactivePoolBalance[poolId][tokenIndex] = available - use;
             coveredAmount -= use;

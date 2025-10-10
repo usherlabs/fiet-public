@@ -180,7 +180,7 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
             transfer(excessLCCRecipient, deficitAmount); // msg.sender is the issuer.
         }
 
-        _incrementProtocolCoverage(marketId, amount);
+        _incrementCoverage(marketId, amount);
     }
 
     // Called by Issuer before settling liquidity from LCCs to the market.
@@ -217,10 +217,13 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
         _wrap(msg.sender, msg.sender, amount);
     }
 
-    function _incrementProtocolCoverage(bytes32 marketId, uint256 amount) internal {
-        IVTSManager(IMarketFactory(marketFactory).getCoreHook()).incrementProtocolCoverage(
-            PoolId.wrap(marketId), amount
-        );
+    /**
+     * @dev Increment the LCC unwrap coverage of the market
+     * @param marketId The market id
+     * @param amount The amount to increment the coverage by
+     */
+    function _incrementCoverage(bytes32 marketId, uint256 amount) internal {
+        IVTSManager(IMarketFactory(marketFactory).getCoreHook()).incrementCoverage(PoolId.wrap(marketId), amount);
     }
 
     /**
@@ -246,7 +249,7 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
             _addToSettlementQueue(marketId, to, deficit);
         }
 
-        _incrementProtocolCoverage(marketId, amountAvailable);
+        _incrementCoverage(marketId, amountAvailable);
 
         return amountAvailable;
     }
