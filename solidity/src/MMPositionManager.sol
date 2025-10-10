@@ -353,17 +353,24 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
      * @param tokenId The token id to decommit the position for
      */
     function decommit(PoolKey memory poolKey, uint256 tokenId) public onlyNFTOwner(tokenId) {
+        uint256 totalS0 = 0;
+        uint256 totalS1 = 0;
+
         // get all positions attached to this token id
         uint256 positionCount = nftToPositionCount[tokenId];
         for (uint256 i = 0; i < positionCount; i++) {
             PositionMeta memory position = getPosition(tokenId, i);
             if (position.isActive) {
-                burn(poolKey, tokenId, i);
+                BalanceDelta balanceDelta = burn(poolKey, tokenId, i);
+                totalS0 += uint256(uint128(balanceDelta.amount0()));
+                totalS1 += uint256(uint128(balanceDelta.amount1()));
             }
         }
 
         // burn the nft after removing all of the liquidity
         _burn(tokenId);
+
+        emit SignalDecommitted(msg.sender, tokenId, positionCount, totalS0, totalS1);
     }
 
     /**
@@ -382,15 +389,6 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         // The kicker is that it's called after getRFS, so inflows haven't been settled.
         uint256 completeLiquidity = uint256(getPosition(tokenId, positionIndex).liquidity);
         BalanceDelta balanceDelta = _liquidatePosition(poolKey, tokenId, positionIndex, completeLiquidity);
-
-        emit SignalDecommitted(
-            msg.sender,
-            tokenId,
-            positionIndex,
-            uint256(uint128(balanceDelta.amount0())),
-            uint256(uint128(balanceDelta.amount1()))
-        );
-
         return balanceDelta;
     }
 
