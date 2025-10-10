@@ -38,18 +38,15 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
     uint256 public uaSupply; // underlying asset supply ONLY within the LCC.
 
     modifier onlyIssuer() {
-        address caller = msg.sender;
-        // Check the caller if they are a trusted proxy hook
-        // Get if the caller is a registered proxy hook
-        // If it is, then we need to get the two currencies it proxies
-        // Then check if the underlying asset falls under any of the two currencies it supports
-        address[2] memory currencies = IMarketFactory(marketFactory).proxyHookToCurrencyPair(caller);
-        bool isAssetProxyPool = (currencies[0] == underlyingAsset || currencies[1] == underlyingAsset);
-        bool isValidIssuer = issuers[caller] || isAssetProxyPool;
+        if (!_isCallerIssuer(false)) {
+            revert SenderNotIssuer(msg.sender);
+        }
+        _;
+    }
 
-        // if caller is not a valid issuer then revert
-        if (!isValidIssuer) {
-            revert SenderNotIssuer(caller);
+    modifier onlyMarketVault() {
+        if (!_isCallerIssuer(true)) {
+            revert SenderNotIssuer(msg.sender);
         }
         _;
     }
@@ -108,6 +105,26 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
         // Note: bounds are managed by the MarketFactory, not set in constructor
     }
 
+    /**
+     * @dev Check if the caller is a valid issuer
+     * @param isMarketVaultExclusive Whether the caller is a market vault
+     * @return bool True if the caller is a valid issuer, false otherwise
+     */
+    function _isCallerIssuer(bool isMarketVaultExclusive) internal view returns (bool) {
+        address caller = msg.sender;
+        // Check the caller if they are a trusted proxy hook
+        // Get if the caller is a registered proxy hook
+        // If it is, then we need to get the two currencies it proxies
+        // Then check if the underlying asset falls under any of the two currencies it supports
+        address[2] memory currencies = IMarketFactory(marketFactory).proxyHookToCurrencyPair(caller);
+        bool isAssetProxyPool = (currencies[0] == underlyingAsset || currencies[1] == underlyingAsset);
+        if (isMarketVaultExclusive) {
+            return isAssetProxyPool;
+        }
+        bool isValidIssuer = issuers[caller] || isAssetProxyPool;
+        return isValidIssuer;
+    }
+
     // some trusted issuer Smart Contracts can be allowed to mint tokens and hold the liquidity
     // this minting provides tokens at a 1:1 ratio and intended for onchain preswap wrapping
     function issue(uint256 amount) external onlyIssuer {
@@ -148,7 +165,7 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
      */
     function unwrapFromVault(bytes32 marketId, uint256 amount, uint256 deficitAmount, address excessLCCRecipient)
         external
-        onlyIssuer
+        onlyMarketVault
     {
         // On PH .cancel, market liquidity is utilised to cover swaps.
         // On MMP .cancel, market liquidity (MM Positions) are removed first, and therefore in-market settled liquidity is isolated for withdrawal...
@@ -167,7 +184,7 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
     }
 
     // Called by Issuer before settling liquidity from LCCs to the market.
-    function prepareSettle(uint256 amount) external onlyIssuer {
+    function prepareSettle(uint256 amount) external onlyMarketVault {
         // Allow issuer to facilitate direct liquidity provision transfer of underlying tokens
         ERC20(underlyingAsset).approve(msg.sender, amount);
         uaSupply -= amount;
@@ -175,7 +192,7 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
 
     // Called by Issuer after taking liquidity from the market to LCC.
     // Accounts for Vault -> LCC. if shouldProcessQueue is true, Vault -> Recipients.
-    function confirmTake(bytes32 marketId, uint256 amount, bool shouldProcessQueue) external onlyIssuer {
+    function confirmTake(bytes32 marketId, uint256 amount, bool shouldProcessQueue) external onlyMarketVault {
         // Track which market this underlying asset liquidity derived from.
         _trackReceivedLiquidity(marketId, amount);
         // Track total underlying asset supply
