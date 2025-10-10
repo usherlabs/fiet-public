@@ -242,29 +242,11 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         // - Positive amounts: add only proactive excess (portion not used to extinguish deficit).
         // - Negative amounts: apply full withdrawal.
         if (amount0 > 0) {
-            uint256 settled0Local = uint256(uint128(amount0));
-            uint256 dBefore0Local = cumulativeDeficit[positionId][0];
-            uint256 d0Local = settled0Local >= dBefore0Local ? dBefore0Local : settled0Local;
-            uint256 proactive0 = settled0Local - d0Local;
-            if (proactive0 > 0) {
-                totalSettlementAmount[positionId][0] =
-                    _updateSettlement(totalSettlementAmount[positionId][0], int256(proactive0));
-            }
-
             _handleMMSettlementForToken(positionId, poolId, 0, uint256(uint128(amount0)));
         } else if (amount0 < 0) {
             totalSettlementAmount[positionId][0] = _updateSettlement(totalSettlementAmount[positionId][0], amount0);
         }
         if (amount1 > 0) {
-            uint256 settled1Local = uint256(uint128(amount1));
-            uint256 dBefore1Local = cumulativeDeficit[positionId][1];
-            uint256 d1Local = settled1Local >= dBefore1Local ? dBefore1Local : settled1Local;
-            uint256 proactive1 = settled1Local - d1Local;
-            if (proactive1 > 0) {
-                totalSettlementAmount[positionId][1] =
-                    _updateSettlement(totalSettlementAmount[positionId][1], int256(proactive1));
-            }
-
             _handleMMSettlementForToken(positionId, poolId, 1, uint256(uint128(amount1)));
         } else if (amount1 < 0) {
             totalSettlementAmount[positionId][1] = _updateSettlement(totalSettlementAmount[positionId][1], amount1);
@@ -291,6 +273,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         uint256 d = settledAmount >= dBefore ? dBefore : settledAmount; // extinguished deficit this tx
         // d computed as the minimum of the settled amount and the cumulative deficit for the position.
         // therefore, attribution is based on the deficit amount being covered in this transaction.
+
         if (d > 0) {
             cumulativeDeficit[positionId][tokenIndex] = dBefore - d;
             uint256 G = globalDeficit[poolId][tokenIndex];
@@ -329,8 +312,14 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
                 }
             }
         }
-        if (settledAmount > d) {
-            proactivePoolBalance[poolId][tokenIndex] += (settledAmount - d);
+
+        uint256 proactive = settledAmount - d;
+        if (proactive > 0) {
+            totalSettlementAmount[positionId][tokenIndex] =
+                _updateSettlement(totalSettlementAmount[positionId][tokenIndex], int256(proactive));
+
+            // currently, the proactive pool balance includes all MM positions.
+            proactivePoolBalance[poolId][tokenIndex] += proactive;
         }
     }
 
