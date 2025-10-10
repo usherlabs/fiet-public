@@ -72,6 +72,18 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     // Per-position outflow snapshot taken when feeGrowthInsideLast is checkpointed, per token
     mapping(PositionId => uint256[2]) internal outflowsAtFeeSnap;
 
+    // Proactive liquidity accounting (tick-indexed, Q128 per-liquidity growth)
+    // Proactive excess credited while in-range
+    mapping(PoolId => uint256[2]) internal proactiveExcessGrowthGlobal;
+    mapping(PoolId => mapping(int24 => uint256[2])) internal proactiveExcessGrowthOutside;
+    mapping(PositionId => uint256[2]) internal proactiveExcessGrowthInsideLast;
+    // Proactive usage consumed at unwrap while in-range
+    mapping(PoolId => uint256[2]) internal proactiveUseGrowthGlobal;
+    mapping(PoolId => mapping(int24 => uint256[2])) internal proactiveUseGrowthOutside;
+    mapping(PositionId => uint256[2]) internal proactiveUseGrowthInsideLast;
+    // Per-position accumulated obligation arising from proactive usage attribution
+    mapping(PositionId => uint256[2]) internal proactiveObligation;
+
     error InvalidMarketVTSConfiguration(PoolId corePoolId);
     error NotEnoughSettlementBalance(uint256 amount0, uint256 amount1);
     error InvalidPosition(PositionId positionId);
@@ -85,6 +97,8 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     event MMPositionLiquidityUpdated(
         PoolId indexed poolId, PositionId indexed positionId, int128 amount0, int128 amount1
     );
+    event ProactiveCredited(PoolId indexed poolId, uint8 indexed tokenIndex, uint256 amount, int24 tick);
+    event ProactiveUsed(PoolId indexed poolId, uint8 indexed tokenIndex, uint256 used, uint256 residual);
 
     address private immutable mmPositionManager;
     IPoolManager private immutable poolManager;
@@ -317,9 +331,14 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         if (proactive > 0) {
             totalSettlementAmount[positionId][tokenIndex] =
                 _updateSettlement(totalSettlementAmount[positionId][tokenIndex], int256(proactive));
-
-            // currently, the proactive pool balance includes all MM positions.
-            proactivePoolBalance[poolId][tokenIndex] += proactive;
+            // Credit proactive excess only if in-range at settlement
+            (, int24 tick,,) = poolManager.getSlot0(poolId);
+            PositionMeta memory m = meta[positionId];
+            bool inRange = (tick >= m.tickLower && tick < m.tickUpper);
+            if (inRange) {
+                _accrueProactiveExcessGrowth(poolId, tokenIndex, proactive);
+                emit ProactiveCredited(poolId, tokenIndex, proactive, tick);
+            }
         }
     }
 
@@ -348,23 +367,32 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     function _settlePositionGrowths(PositionId positionId) internal {
         _settlePositionDeficitGrowth(positionId);
         _settlePositionInflowGrowth(positionId);
+        _settlePositionProactiveUseGrowth(positionId);
     }
 
     /// @dev Increment protocol or proactive excess liquidity coverage on unwrap, consuming proactive pool first
     function _incrementCoverage(PoolId poolId, uint8 tokenIndex, uint256 coveredAmount) internal {
         if (tokenIndex > 1 || coveredAmount == 0) return;
-        uint256 available = proactivePoolBalance[poolId][tokenIndex];
-        if (available > 0) {
-            // As we increment protocol coverage, we consume proactive pool balance first. This is excess liquidity settled by MMs across positions.
-            // protocolCoverage therefore is derived from DirectLPs - exclusively.
-            // crossPositionTotalSettledAmount - proactivePoolBalance[poolId][tokenIndex] = the amount covering outflows.
-            // Weighting totalSettledAmount[positionId][tokenIndex] by the result gives a weight of positions excess contributions to outflows before protocol coverage.
-            uint256 use = coveredAmount <= available ? coveredAmount : available;
-            proactivePoolBalance[poolId][tokenIndex] = available - use;
-            coveredAmount -= use;
+        // Use proactive availability based on current in-range liquidity
+        uint128 liq = poolManager.getLiquidity(poolId);
+        uint256 residual = coveredAmount;
+        if (liq > 0) {
+            uint256 gEx = proactiveExcessGrowthGlobal[poolId][tokenIndex];
+            uint256 gUse = proactiveUseGrowthGlobal[poolId][tokenIndex];
+            uint256 available = ((gEx - gUse) * uint256(liq)) >> 128;
+            if (available > 0) {
+                uint256 use = residual <= available ? residual : available;
+                if (use > 0) {
+                    // consume: add per-liquidity growth
+                    uint256 deltaG = (use * Q128) / uint256(liq);
+                    proactiveUseGrowthGlobal[poolId][tokenIndex] = gUse + deltaG;
+                    residual -= use;
+                    emit ProactiveUsed(poolId, tokenIndex, use, residual);
+                }
+            }
         }
-        if (coveredAmount > 0) {
-            protocolCoverage[poolId][tokenIndex] += coveredAmount;
+        if (residual > 0) {
+            protocolCoverage[poolId][tokenIndex] += residual;
         }
     }
 
@@ -387,7 +415,8 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     function _onTickCross(PoolId corePoolId, int24 tick, uint8 token) internal {
         _flipDeficitGrowthOutside(corePoolId, tick, token);
         _flipInflowGrowthOutside(corePoolId, tick, token);
-        // proactive usage growth flip added later if proactive attribution is implemented
+        _flipProactiveExcessGrowthOutside(corePoolId, tick, token);
+        _flipProactiveUseGrowthOutside(corePoolId, tick, token);
     }
 
     /// @dev Accrue deficit growth to the global accumulator (per token) using current in-range liquidity
@@ -517,6 +546,87 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         uint256 deltaG = (inflowAmount * Q128) / uint256(liq);
         uint256[2] storage g = inflowGrowthGlobal[corePoolId];
         g[token] = g[token] + deltaG;
+    }
+
+    /// @dev Accrue proactive excess growth to global accumulator (per token)
+    function _accrueProactiveExcessGrowth(PoolId corePoolId, uint8 token, uint256 proactiveAmount) internal {
+        if (token > 1) return;
+        uint128 liq = poolManager.getLiquidity(corePoolId);
+        if (liq == 0 || proactiveAmount == 0) return;
+        uint256 deltaG = (proactiveAmount * Q128) / uint256(liq);
+        proactiveExcessGrowthGlobal[corePoolId][token] += deltaG;
+    }
+
+    /// @dev Flip proactive excess outside accumulator for a tick
+    function _flipProactiveExcessGrowthOutside(PoolId corePoolId, int24 tick, uint8 token) internal {
+        if (token > 1) return;
+        uint256 g = proactiveExcessGrowthGlobal[corePoolId][token];
+        uint256 o = proactiveExcessGrowthOutside[corePoolId][tick][token];
+        proactiveExcessGrowthOutside[corePoolId][tick][token] = g - o;
+    }
+
+    /// @dev Flip proactive use outside accumulator for a tick
+    function _flipProactiveUseGrowthOutside(PoolId corePoolId, int24 tick, uint8 token) internal {
+        if (token > 1) return;
+        uint256 g = proactiveUseGrowthGlobal[corePoolId][token];
+        uint256 o = proactiveUseGrowthOutside[corePoolId][tick][token];
+        proactiveUseGrowthOutside[corePoolId][tick][token] = g - o;
+    }
+
+    /// @dev Compute proactive excess inside accumulator for a position bounds
+    function _proactiveExcessGrowthInside(PoolId corePoolId, int24 tickLower, int24 tickUpper)
+        internal
+        view
+        returns (uint256 inside0, uint256 inside1)
+    {
+        uint256 g0 = proactiveExcessGrowthGlobal[corePoolId][0];
+        uint256 g1 = proactiveExcessGrowthGlobal[corePoolId][1];
+        uint256 l0 = proactiveExcessGrowthOutside[corePoolId][tickLower][0];
+        uint256 l1 = proactiveExcessGrowthOutside[corePoolId][tickLower][1];
+        uint256 u0 = proactiveExcessGrowthOutside[corePoolId][tickUpper][0];
+        uint256 u1 = proactiveExcessGrowthOutside[corePoolId][tickUpper][1];
+        inside0 = g0 - l0 - u0;
+        inside1 = g1 - l1 - u1;
+    }
+
+    /// @dev Compute proactive use inside accumulator for a position bounds
+    function _proactiveUseGrowthInside(PoolId corePoolId, int24 tickLower, int24 tickUpper)
+        internal
+        view
+        returns (uint256 inside0, uint256 inside1)
+    {
+        uint256 g0 = proactiveUseGrowthGlobal[corePoolId][0];
+        uint256 g1 = proactiveUseGrowthGlobal[corePoolId][1];
+        uint256 l0 = proactiveUseGrowthOutside[corePoolId][tickLower][0];
+        uint256 l1 = proactiveUseGrowthOutside[corePoolId][tickLower][1];
+        uint256 u0 = proactiveUseGrowthOutside[corePoolId][tickUpper][0];
+        uint256 u1 = proactiveUseGrowthOutside[corePoolId][tickUpper][1];
+        inside0 = g0 - l0 - u0;
+        inside1 = g1 - l1 - u1;
+    }
+
+    /// @dev Settle proactive use growth into per-position obligation
+    function _settlePositionProactiveUseGrowth(PositionId positionId) internal {
+        PositionMeta memory m = meta[positionId];
+        PoolId corePoolId = m.poolId;
+        if (PoolId.unwrap(corePoolId) == bytes32(0)) return;
+        (uint256 inside0, uint256 inside1) = _proactiveUseGrowthInside(corePoolId, m.tickLower, m.tickUpper);
+        uint256 last0 = proactiveUseGrowthInsideLast[positionId][0];
+        uint256 last1 = proactiveUseGrowthInsideLast[positionId][1];
+        uint256 d0 = inside0 - last0;
+        uint256 d1 = inside1 - last1;
+        if (d0 == 0 && d1 == 0) {
+            return;
+        }
+        uint128 liq = poolManager.getPositionLiquidity(corePoolId, PositionId.unwrap(positionId));
+        if (liq > 0) {
+            uint256 add0 = (d0 * uint256(liq)) >> 128;
+            uint256 add1 = (d1 * uint256(liq)) >> 128;
+            if (add0 > 0) proactiveObligation[positionId][0] += add0;
+            if (add1 > 0) proactiveObligation[positionId][1] += add1;
+        }
+        proactiveUseGrowthInsideLast[positionId][0] = inside0;
+        proactiveUseGrowthInsideLast[positionId][1] = inside1;
     }
 
     /// @dev Flip the inflow outside accumulator for a tick (like feeGrowthOutside flip)
@@ -737,12 +847,16 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         (uint256 vtsCurrent0, uint256 vtsCurrent1) = getVTSCurrent(_positionId);
         (uint256 vtsRequired0, uint256 vtsRequired1) = getVTSRequired(_positionId);
 
-        bool open = (vtsCurrent0 < vtsRequired0) || (vtsCurrent1 < vtsRequired1);
-
-        int128 deltaBps0 = int128(int256(vtsCurrent0) - int256(vtsRequired0));
-        int128 deltaBps1 = int128(int256(vtsCurrent1) - int256(vtsRequired1));
-
         uint256 one = 1e18;
+        // Clamp RfS delta to be the target VTS (required + proactive utilisation) minus the current VTS
+        uint256 vtsTarget0 = FullMath.mulDiv(proactiveObligation[_positionId][0], one, c0) + vtsRequired0;
+        uint256 vtsTarget1 = FullMath.mulDiv(proactiveObligation[_positionId][1], one, c1) + vtsRequired1;
+
+        bool open = (vtsCurrent0 < vtsTarget0) || (vtsCurrent1 < vtsTarget1);
+
+        int128 deltaBps0 = int128(int256(vtsCurrent0) - int256(vtsTarget0));
+        int128 deltaBps1 = int128(int256(vtsCurrent1) - int256(vtsTarget1));
+
         int128 amount0 = (int128(int256(c0)) * deltaBps0) / int128(int256(one));
         int128 amount1 = (int128(int256(c1)) * deltaBps1) / int128(int256(one));
 
