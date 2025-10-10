@@ -73,10 +73,9 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     mapping(PositionId => uint256[2]) internal outflowsAtFeeSnap;
 
     // Proactive liquidity accounting (tick-indexed, Q128 per-liquidity growth)
-    // Proactive excess credited while in-range
+    // Proactive excess credited while in-range, accumulates in pool-wide storage.
     mapping(PoolId => uint256[2]) internal proactiveExcessGrowthGlobal;
     mapping(PoolId => mapping(int24 => uint256[2])) internal proactiveExcessGrowthOutside;
-    mapping(PositionId => uint256[2]) internal proactiveExcessGrowthInsideLast;
     // Proactive usage consumed at unwrap while in-range
     mapping(PoolId => uint256[2]) internal proactiveUseGrowthGlobal;
     mapping(PoolId => mapping(int24 => uint256[2])) internal proactiveUseGrowthOutside;
@@ -106,6 +105,9 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
 
     modifier onlyPositionValid(PositionId _positionId) {
         if (!isPositionValid(_positionId, true)) {
+            revert InvalidPosition(_positionId);
+        }
+        if (commitmentMaxima[_positionId][0] == 0 || commitmentMaxima[_positionId][1] == 0) {
             revert InvalidPosition(_positionId);
         }
         _;
@@ -198,16 +200,16 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         } else {
             meta[id].isActive = true;
         }
+
+        _trackCommitment(id, params);
     }
 
     /**
      * @notice Tracks the maximum potential commitment for both tokens in a position
-     * @param router The sender of the transaction
+     * @param positionId The ascribed id of the position
      * @param params The parameters of the transaction
      */
-    function _trackCommitment(address router, ModifyLiquidityParams calldata params) internal {
-        PositionId positionId = PositionLibrary.generateId(router, params);
-
+    function _trackCommitment(PositionId positionId, ModifyLiquidityParams calldata params) internal {
         // Current tracked maxima for this position
         uint256 currentC0 = commitmentMaxima[positionId][0];
         uint256 currentC1 = commitmentMaxima[positionId][1];
@@ -751,9 +753,6 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     {
         uint256 c0 = commitmentMaxima[positionId][0];
         uint256 c1 = commitmentMaxima[positionId][1];
-        if (c0 == 0 && c1 == 0) {
-            revert InvalidPosition(positionId);
-        }
 
         uint256 s0 = totalSettlementAmount[positionId][0];
         uint256 s1 = totalSettlementAmount[positionId][1];
@@ -830,12 +829,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
      * @return rfsOpen Whether the RFS is open
      * @return balanceDelta The balance delta of the amount of required to be settled or allowed to be withdrawn depending on if it is negative or positive
      */
-    function _getRFS(PositionId _positionId)
-        internal
-        view
-        onlyPositionValid(_positionId)
-        returns (bool, BalanceDelta)
-    {
+    function _getRFS(PositionId _positionId) internal view returns (bool, BalanceDelta) {
         // Commitment caps
         (uint256 c0, uint256 c1) = _getCommitment(_positionId);
 

@@ -266,8 +266,6 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
         BalanceDelta,
         bytes calldata
     ) internal virtual override whenNotPaused(key.toId()) returns (bytes4, BalanceDelta) {
-        // Track maximum potemtial commitment for both tokens in the position
-        _trackCommitment(sender, params);
         // Update PositionIndex with registration/update based on actual pool id
         _touchPosition(sender, key.toId(), params);
 
@@ -287,8 +285,6 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
         BalanceDelta,
         bytes calldata
     ) internal virtual override returns (bytes4, BalanceDelta) {
-        // Track maximum potential commitment for both tokens in the position
-        _trackCommitment(sender, params);
         // Update PositionIndex with registration/update based on actual pool id
         _touchPosition(sender, key.toId(), params);
 
