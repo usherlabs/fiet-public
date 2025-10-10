@@ -24,8 +24,10 @@ struct PositionMeta {
     PoolId poolId;
 }
 
-/// @dev The parameters of the proof to verify the state of the market maker
+/// The parameters of the proof to verify the state of the market maker
 struct LiquiditySignal {
+    /// The nonce of the liquidity signal which should always be incrementing
+    uint256 nonce;
     /// The hash of the root merkle tree
     bytes32 rootHash;
     /// The canister's signature of the root state hash
@@ -35,7 +37,7 @@ struct LiquiditySignal {
     /// The state of the market maker
     MarketMaker.State mmState;
     /// The signature of the state of the market maker
-    bytes mmStateHashSignature;
+    bytes signature;
 }
 
 library PositionLibrary {

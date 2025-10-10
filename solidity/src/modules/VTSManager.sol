@@ -18,6 +18,8 @@ import {TickMath} from "v4-periphery/lib/v4-core/src/libraries/TickMath.sol";
 import {SqrtPriceMath} from "v4-periphery/lib/v4-core/src/libraries/SqrtPriceMath.sol";
 import {toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
+import {console} from "forge-std/console.sol";
+import {LiquidityUtils} from "../libraries/LiquidityUtils.sol";
 
 abstract contract VTSManager is IVTSManager, PositionIndex {
     using SafeCastLib for *;
@@ -65,6 +67,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
 
     modifier onlyPositionValid(PositionId _positionId) {
         if (!isPositionValid(_positionId, true)) {
+            console.log("invalid position");
             revert InvalidPosition(_positionId);
         }
         _;
@@ -126,29 +129,6 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         return corePoolToVTSConfiguration[corePoolId];
     }
 
-    /**
-     * @notice Calculates the maximum potential commitment for both tokens over a tick range for a given liquidity
-     * @dev Uses CLMM formulas based on tick bounds and liquidity. Results are in raw token units.
-     * @param tickLower The lower tick bound of the position
-     * @param tickUpper The upper tick bound of the position
-     * @param liquidity The position liquidity to evaluate against the tick range
-     * @return c0 The maximum potential commitment for token0 over [tickLower, tickUpper]
-     * @return c1 The maximum potential commitment for token1 over [tickLower, tickUpper]
-     */
-    function calculateCommitmentMaxima(int24 tickLower, int24 tickUpper, uint128 liquidity)
-        public
-        pure
-        returns (uint256 c0, uint256 c1)
-    {
-        uint160 sqrtPriceLowerX96 = TickMath.getSqrtPriceAtTick(tickLower);
-        uint160 sqrtPriceUpperX96 = TickMath.getSqrtPriceAtTick(tickUpper);
-
-        // Token0 amount across the full range for this liquidity
-        c0 = SqrtPriceMath.getAmount0Delta(sqrtPriceLowerX96, sqrtPriceUpperX96, liquidity, true);
-        // Token1 amount across the full range for this liquidity
-        c1 = SqrtPriceMath.getAmount1Delta(sqrtPriceLowerX96, sqrtPriceUpperX96, liquidity, true);
-    }
-
     function _touchPosition(address owner, PoolId poolId, ModifyLiquidityParams calldata params) internal virtual {
         PositionId id = PositionLibrary.generateId(owner, params);
         PositionMeta memory m = meta[id];
@@ -183,7 +163,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
             // Liquidity added: increase tracked maxima by the delta's maxima over the tick range
             uint128 liquidityAdded = SafeCastLib.safeCastTo128(uint256(params.liquidityDelta));
             (uint256 addC0, uint256 addC1) =
-                calculateCommitmentMaxima(params.tickLower, params.tickUpper, liquidityAdded);
+                LiquidityUtils.calculateCommitmentMaxima(params.tickLower, params.tickUpper, liquidityAdded);
 
             commitmentMaxima[positionId][0] = currentC0 + addC0;
             commitmentMaxima[positionId][1] = currentC1 + addC1;
@@ -191,7 +171,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
             // Liquidity removed: decrease tracked maxima by the delta's maxima over the tick range
             uint128 liquidityRemoved = SafeCastLib.safeCastTo128(uint256(-params.liquidityDelta));
             (uint256 subC0, uint256 subC1) =
-                calculateCommitmentMaxima(params.tickLower, params.tickUpper, liquidityRemoved);
+                LiquidityUtils.calculateCommitmentMaxima(params.tickLower, params.tickUpper, liquidityRemoved);
 
             // Clamp at zero to avoid underflow; if fully removed, both become zero
             commitmentMaxima[positionId][0] = currentC0 > subC0 ? (currentC0 - subC0) : 0;
@@ -223,6 +203,9 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         totalSettlementAmount[positionId][1] = _updateSettlement(totalSettlementAmount[positionId][1], amount1);
 
         // Net settlements against cumulative deficit (reduce debt when MM settles)
+        // if the delta is positive, then it means the MM is settling the position
+        // and since they are settling the position, we need to reduce the deficit
+        // if the amount being settled is greater than teh deficit, then we need to set the deficit to 0
         if (amount0 > 0) {
             uint256 a0 = uint256(uint128(amount0));
             uint256 cur0 = cumulativeDeficit[positionId][0];
@@ -305,6 +288,11 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     }
 
     /// @dev Settle deficit growth for a position into cumulativeDeficit in raw token units
+    // get the previously snapshotted values gotten from _deficitGrowthInside
+    // compare them with the current values and calculate the delta
+    // get the fraction of the liquidity represented by delta
+    // deduct it from user settled balance
+    // if debt ensues, then we create the variable in the `cumulativeDeficit` variable
     function _settlePositionDeficitGrowth(PositionId positionId) internal {
         PositionMeta memory m = meta[positionId];
         PoolId corePoolId = m.poolId;

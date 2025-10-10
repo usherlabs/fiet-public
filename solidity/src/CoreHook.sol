@@ -25,6 +25,7 @@ import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "@uniswap/v4-core/src/type
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {SqrtPriceMath} from "@uniswap/v4-core/src/libraries/SqrtPriceMath.sol";
 import {TickUtils} from "./libraries/TickUtils.sol";
+import {console} from "forge-std/console.sol";
 // import {SwapMath} from "@uniswap/v4-core/src/libraries/SwapMath.sol";
 
 /**
@@ -157,7 +158,15 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
                         poolManager, key.toId(), stepTick, key.tickSpacing, zeroForOne
                     );
                     // compute target sqrt for this segment (either next tick or final price)
-                    uint160 sqrtNext = TickMath.getSqrtPriceAtTick(next);
+                    // Ensure we don't go beyond valid tick bounds
+                    int24 boundedNext = next;
+                    if (boundedNext <= TickMath.MIN_TICK) {
+                        boundedNext = TickMath.MIN_TICK;
+                    }
+                    if (boundedNext >= TickMath.MAX_TICK) {
+                        boundedNext = TickMath.MAX_TICK;
+                    }
+                    uint160 sqrtNext = TickMath.getSqrtPriceAtTick(boundedNext);
                     uint160 sqrtTarget = zeroForOne
                         ? (sqrtPAfter < sqrtNext ? sqrtPAfter : sqrtNext)
                         : (sqrtPAfter > sqrtNext ? sqrtPAfter : sqrtNext);

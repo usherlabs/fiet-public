@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// This contract is used by the VRLSpokeReceiver contract to verify the root state hash and the mm state data
+// This contract is used by the VRLSignalManager contract to verify the root state hash and the mm state data
 pragma solidity ^0.8.0;
 
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
@@ -42,8 +42,11 @@ contract ICSpokeVerifier is ISpokeVerifier {
             isCallerAuthorized = caller == mmStateData.owner;
         } else {
             // if the signature is valid, set isCallerAuthorized to true
-            address recovered =
-                MessageHashUtils.toEthSignedMessageHash(mmStateData.toLeafHash()).recover(mmStateHashSignature);
+            // generate the message hash to sign from the leafhash and the nonce
+            console.log("here");
+            bytes32 message = sha256(abi.encodePacked(mmStateData.toLeafHash(), mmStateData.nonce));
+            address recovered = MessageHashUtils.toEthSignedMessageHash(message).recover(mmStateHashSignature);
+            console.log("recovered:", recovered);
             isCallerAuthorized = recovered == mmStateData.owner;
         }
 
@@ -54,7 +57,7 @@ contract ICSpokeVerifier is ISpokeVerifier {
         }
 
         // verify the merkle proof
-        bool isProofValid = merkleProof.verifyMerkleTreeInclusion(rootStateHash, mmStateHash);
+        bool isProofValid = merkleProof.verify(rootStateHash, mmStateHash);
         if (!isProofValid) {
             // revert InvalidMerkleProof();
             return false;
