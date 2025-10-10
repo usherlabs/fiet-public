@@ -234,26 +234,40 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     {
         // First, settle both growths since last touch
         _settlePositionGrowths(positionId);
-
+        PoolId poolId = meta[positionId].poolId;
         int128 amount0 = balanceDelta.amount0();
         int128 amount1 = balanceDelta.amount1();
 
-        // TODO: We must consider that Market Makers deficits account for liquidity no longer theirs. This means settled liquidity must not include amounts that cover deficits. The counterparty token inflow amounts are accrued to the position's settled amounts to compensate.
-        // totalSettlementAmount is set inside of _settlePositionGrowths
-        totalSettlementAmount[positionId][0] = _updateSettlement(totalSettlementAmount[positionId][0], amount0);
-        totalSettlementAmount[positionId][1] = _updateSettlement(totalSettlementAmount[positionId][1], amount1);
-
-        PoolId poolId = meta[positionId].poolId;
-
-        // Net settlements against cumulative deficit (reduce debt when MM settles)
-        // if the delta is positive, then it means the MM is settling the position
-        // and since they are settling the position, we need to reduce the deficit
-        // if the amount being settled is greater than teh deficit, then we need to set the deficit to 0
+        // NOTE: Only apply explicit MM actions to totalSettlementAmount here.
+        // - Positive amounts: add only proactive excess (portion not used to extinguish deficit).
+        // - Negative amounts: apply full withdrawal.
         if (amount0 > 0) {
+            uint256 settled0Local = uint256(uint128(amount0));
+            uint256 dBefore0Local = cumulativeDeficit[positionId][0];
+            uint256 d0Local = settled0Local >= dBefore0Local ? dBefore0Local : settled0Local;
+            uint256 proactive0 = settled0Local - d0Local;
+            if (proactive0 > 0) {
+                totalSettlementAmount[positionId][0] =
+                    _updateSettlement(totalSettlementAmount[positionId][0], int256(proactive0));
+            }
+
             _handleMMSettlementForToken(positionId, poolId, 0, uint256(uint128(amount0)));
+        } else if (amount0 < 0) {
+            totalSettlementAmount[positionId][0] = _updateSettlement(totalSettlementAmount[positionId][0], amount0);
         }
         if (amount1 > 0) {
+            uint256 settled1Local = uint256(uint128(amount1));
+            uint256 dBefore1Local = cumulativeDeficit[positionId][1];
+            uint256 d1Local = settled1Local >= dBefore1Local ? dBefore1Local : settled1Local;
+            uint256 proactive1 = settled1Local - d1Local;
+            if (proactive1 > 0) {
+                totalSettlementAmount[positionId][1] =
+                    _updateSettlement(totalSettlementAmount[positionId][1], int256(proactive1));
+            }
+
             _handleMMSettlementForToken(positionId, poolId, 1, uint256(uint128(amount1)));
+        } else if (amount1 < 0) {
+            totalSettlementAmount[positionId][1] = _updateSettlement(totalSettlementAmount[positionId][1], amount1);
         }
 
         emit MMPositionLiquidityUpdated(poolId, positionId, amount0, amount1);
