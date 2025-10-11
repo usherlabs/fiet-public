@@ -420,7 +420,8 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         }
         // compute outflow window and checkpoint both snapshots
         uint256 cf = cumulativeOutflows[positionId][tokenIndex];
-        ofDelta = cf - outflowsAtFeeSnap[positionId][tokenIndex];
+        uint256 snap = outflowsAtFeeSnap[positionId][tokenIndex];
+        ofDelta = cf >= snap ? (cf - snap) : 0;
         feeGrowthInsideLast[positionId][tokenIndex] = fg; // snapshot fees here.
         outflowsAtFeeSnap[positionId][tokenIndex] = cf;
     }
@@ -438,22 +439,26 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         PositionMeta memory m = meta[id];
         PoolId p = m.poolId;
 
-        (uint256 in0, uint256 in1) =
-            GrowthAccounting.inside(feePotGrowthGlobal, feePotGrowthOutside, p, m.tickLower, m.tickUpper);
+        uint256 in0 = 0;
+        uint256 in1 = 0;
 
         // DirectLPs always eligible (no inside exclusion)
-        if (isDirectLP[id]) {
-            in0 = 0;
-            in1 = 0;
+        if (!isDirectLP[id]) {
+            (in0, in1) = GrowthAccounting.inside(feePotGrowthGlobal, feePotGrowthOutside, p, m.tickLower, m.tickUpper);
         }
 
         uint256 g0 = feePotGrowthGlobal[p][0];
         uint256 g1 = feePotGrowthGlobal[p][1];
 
-        uint256 dIn0 = in0 - feePotGrowthInsideLast[id][0];
-        uint256 dIn1 = in1 - feePotGrowthInsideLast[id][1];
-        uint256 dG0 = g0 - feePotGlobalLast[id][0];
-        uint256 dG1 = g1 - feePotGlobalLast[id][1];
+        uint256 lastIn0 = feePotGrowthInsideLast[id][0];
+        uint256 lastIn1 = feePotGrowthInsideLast[id][1];
+        uint256 lastG0 = feePotGlobalLast[id][0];
+        uint256 lastG1 = feePotGlobalLast[id][1];
+
+        uint256 dIn0 = in0 >= lastIn0 ? in0 - lastIn0 : 0;
+        uint256 dIn1 = in1 >= lastIn1 ? in1 - lastIn1 : 0;
+        uint256 dG0 = g0 >= lastG0 ? g0 - lastG0 : 0;
+        uint256 dG1 = g1 >= lastG1 ? g1 - lastG1 : 0;
 
         uint256 out0 = dG0 > dIn0 ? dG0 - dIn0 : 0;
         uint256 out1 = dG1 > dIn1 ? dG1 - dIn1 : 0;
@@ -482,7 +487,10 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
             // Natural/inherited clamp: proactive usage is bounded by current in-range liquidity.
             // available = floor((excessGrowth - useGrowth) * L / Q128), so "use" is min(requested, available).
             // Any remainder after this in-range clamp is recorded as protocolCoverage (the unmet portion).
-            uint256 available = FullMath.mulDiv(gEx - gUse, uint256(liq), FixedPoint128.Q128);
+            uint256 available = 0;
+            if (gEx > gUse) {
+                available = FullMath.mulDiv(gEx - gUse, uint256(liq), FixedPoint128.Q128);
+            }
             if (available > 0) {
                 uint256 use = residual <= available ? residual : available;
                 if (use > 0) {
@@ -756,8 +764,8 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         uint256 s1 = totalSettlementAmount[positionId][1];
 
         uint256 one = 1e18;
-        uint256 v0 = FullMath.mulDiv(s0, one, c0);
-        uint256 v1 = FullMath.mulDiv(s1, one, c1);
+        uint256 v0 = c0 > 0 ? FullMath.mulDiv(s0, one, c0) : 0;
+        uint256 v1 = c1 > 0 ? FullMath.mulDiv(s1, one, c1) : 0;
         return (v0, v1);
     }
 
@@ -919,8 +927,10 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         if (afterU == beforeU) return;
         if (afterU > beforeU) {
             totalCoverageUnits[poolid][tokenIndex] += (afterU - beforeU);
-        } else {
-            totalCoverageUnits[poolid][tokenIndex] -= (beforeU - afterU);
+        } else if (beforeU > afterU) {
+            uint256 dec = beforeU - afterU;
+            uint256 cur = totalCoverageUnits[poolid][tokenIndex];
+            totalCoverageUnits[poolid][tokenIndex] = dec > cur ? 0 : cur - dec;
         }
         lastCoverageUnits[posId][tokenIndex] = afterU;
     }
