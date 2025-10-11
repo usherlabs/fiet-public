@@ -23,7 +23,7 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {ILCC} from "../interfaces/ILCC.sol";
 import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
 import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint128.sol";
-import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {SafeCast as OZSafeCast} from "openzeppelin-contracts/contracts/utils/math/SafeCast.sol";
 
 abstract contract VTSManager is IVTSManager, PositionIndex {
     using SafeCastLib for *;
@@ -39,6 +39,8 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     mapping(PositionId => uint256[2]) internal totalSettlementAmount;
     // Deficit growth accounting (Uniswap v3-style growth per liquidity unit, Q128)
     uint256 internal constant Q128 = 1 << 128;
+    // Maximum positive magnitude representable in int128
+    uint256 internal constant INT128_MAX_U = uint256(type(uint128).max) >> 1;
     // Per-market (pool) global deficit growth per token (token0, token1)
     mapping(PoolId => uint256[2]) internal deficitGrowthGlobal;
     // Per-market per-tick outside deficit growth per token
@@ -61,8 +63,6 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     mapping(PoolId => uint256[2]) public protocolCoverage;
     // Sum of all position cumulative deficits per market/token
     mapping(PoolId => uint256[2]) public globalDeficit;
-    // Global proactive liquidity available to offset future unwraps
-    mapping(PoolId => uint256[2]) public proactivePoolBalance;
     // Protocol/LPs fee pot accrued from fee sharing (per token index)
     mapping(PoolId => uint256[2]) public protocolFeeAccrued;
     // Per-position last inside fee growth snapshot per token (for fee sharing)
@@ -258,12 +258,12 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         // - Positive amounts: add only proactive excess (portion not used to extinguish deficit).
         // - Negative amounts: apply full withdrawal.
         if (amount0 > 0) {
-            _handleMMSettlementForToken(positionId, poolId, 0, uint256(uint128(amount0)));
+            _handleMMSettlementForToken(positionId, poolId, 0, OZSafeCast.toUint256(int256(amount0)));
         } else if (amount0 < 0) {
             totalSettlementAmount[positionId][0] = _updateSettlement(totalSettlementAmount[positionId][0], amount0);
         }
         if (amount1 > 0) {
-            _handleMMSettlementForToken(positionId, poolId, 1, uint256(uint128(amount1)));
+            _handleMMSettlementForToken(positionId, poolId, 1, OZSafeCast.toUint256(int256(amount1)));
         } else if (amount1 < 0) {
             totalSettlementAmount[positionId][1] = _updateSettlement(totalSettlementAmount[positionId][1], amount1);
         }
@@ -395,21 +395,6 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         }
         if (residual > 0) {
             protocolCoverage[poolId][tokenIndex] += residual;
-        }
-    }
-
-    /// @dev Compute accrued LP fees since last checkpoint for a position/token
-    function _feesAccruedOf(PositionId positionId, uint8 tokenIndex) internal view returns (uint256 fees) {
-        PositionMeta memory m = meta[positionId];
-        PoolId poolId = m.poolId;
-        (uint256 fg0, uint256 fg1) = poolManager.getFeeGrowthInside(poolId, m.tickLower, m.tickUpper);
-        uint256 fg = tokenIndex == 0 ? fg0 : fg1;
-        uint256 last = feeGrowthInsideLast[positionId][tokenIndex];
-        if (fg <= last) return 0;
-        uint128 liq = poolManager.getPositionLiquidity(poolId, PositionId.unwrap(positionId));
-        if (liq == 0) return 0;
-        unchecked {
-            fees = FullMath.mulDiv(fg - last, liq, FixedPoint128.Q128);
         }
     }
 
@@ -794,13 +779,13 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         returns (bool, BalanceDelta)
     {
         _settlePositionGrowths(positionId);
-        (bool rfsOpen, BalanceDelta balanceDelta) = _getRFS(positionId);
+        (bool rfsOpen, BalanceDelta delta) = _getRFS(positionId);
         if (requireClosedRfS) {
             if (rfsOpen) {
                 revert RFSOpenForPosition(positionId);
             }
         }
-        return (rfsOpen, balanceDelta);
+        return (rfsOpen, delta);
     }
 
     function prepareLiquidation(PositionId positionId) external onlyMMP returns (uint256, uint256) {
@@ -838,23 +823,36 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
             return (false, toBalanceDelta(0, 0));
         }
 
-        (uint256 vtsCurrent0, uint256 vtsCurrent1) = getVTSCurrent(_positionId);
-        (uint256 vtsRequired0, uint256 vtsRequired1) = getVTSRequired(_positionId);
+        // Compute raw deltas directly in token units
+        uint256 s0 = totalSettlementAmount[_positionId][0];
+        uint256 s1 = totalSettlementAmount[_positionId][1];
+        uint256 d0 = cumulativeDeficit[_positionId][0];
+        uint256 d1 = cumulativeDeficit[_positionId][1];
+        uint256 o0 = proactiveObligation[_positionId][0];
+        uint256 o1 = proactiveObligation[_positionId][1];
+        uint256 req0 = d0 < c0 ? d0 : c0; // cap deficit by commitment
+        uint256 req1 = d1 < c1 ? d1 : c1;
 
-        uint256 one = 1e18;
-        // Clamp RfS delta to be the target VTS (required + proactive utilisation) minus the current VTS
-        uint256 vtsTarget0 = FullMath.mulDiv(proactiveObligation[_positionId][0], one, c0) + vtsRequired0;
-        uint256 vtsTarget1 = FullMath.mulDiv(proactiveObligation[_positionId][1], one, c1) + vtsRequired1;
+        int128 amount0 = _rfsDeltaRaw(s0, req0, o0);
+        int128 amount1 = _rfsDeltaRaw(s1, req1, o1);
 
-        bool open = (vtsCurrent0 < vtsTarget0) || (vtsCurrent1 < vtsTarget1);
-
-        int128 deltaBps0 = int128(int256(vtsCurrent0) - int256(vtsTarget0));
-        int128 deltaBps1 = int128(int256(vtsCurrent1) - int256(vtsTarget1));
-
-        int128 amount0 = (int128(int256(c0)) * deltaBps0) / int128(int256(one));
-        int128 amount1 = (int128(int256(c1)) * deltaBps1) / int128(int256(one));
-
+        // Spec: amount > 0 => settlement required (RfS open); amount < 0 => withdraw allowed
+        bool open = (amount0 > 0) || (amount1 > 0);
         return (open, toBalanceDelta(amount0, amount1));
+    }
+
+    /// @dev Return signed delta in raw units: positive => needs settlement, negative => withdrawable
+    function _rfsDeltaRaw(uint256 settled, uint256 required, uint256 obligation) internal pure returns (int128) {
+        uint256 need = required + obligation; // safe add (Solidity 0.8 checks overflow)
+        if (need >= settled) {
+            uint256 pos = need - settled; // requires settlement
+            if (pos > INT128_MAX_U) return type(int128).max;
+            return OZSafeCast.toInt128(int256(pos));
+        }
+        uint256 neg = settled - need; // withdrawable
+        if (neg > INT128_MAX_U) return type(int128).min;
+        int128 magnitude = OZSafeCast.toInt128(int256(neg));
+        return -magnitude;
     }
 
     /**

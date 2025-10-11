@@ -185,11 +185,11 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         PositionMeta memory position = getPosition(tokenId, positionIndex);
 
         // validate that there is no open RFS for this position
-        (, BalanceDelta balanceDelta) = _getVTSManager().calcRFS(positionId, true);
+        (, BalanceDelta delta) = _getVTSManager().calcRFS(positionId, true); // second param is true to revert if RFS is open
 
         // validate the amounts to be withdrawn is within limits
-        uint256 maxAmount0ToWithdraw = LiquidityUtils.safeInt128ToUint256(balanceDelta.amount0());
-        uint256 maxAmount1ToWithdraw = LiquidityUtils.safeInt128ToUint256(balanceDelta.amount1());
+        uint256 maxAmount0ToWithdraw = LiquidityUtils.safeInt128ToUint256(delta.amount0()); // essentially the absolute (originally native if rfs closed) value of the max withdrawable amount.
+        uint256 maxAmount1ToWithdraw = LiquidityUtils.safeInt128ToUint256(delta.amount1());
 
         if (amount0 > maxAmount0ToWithdraw) {
             revert InsufficientAmountToWithdraw(positionId, amount0, maxAmount0ToWithdraw);
