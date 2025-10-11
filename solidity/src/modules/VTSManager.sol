@@ -501,6 +501,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         return (feePotBaseline[id][0], feePotBaseline[id][1]);
     }
 
+    // TODO: determine if we include in fee management of core hook.
     function claimFeePot(PositionId id) external override onlyPositionValid(id) returns (uint256 c0, uint256 c1) {
         if (meta[id].owner != msg.sender) revert InvalidCaller();
         _settlePositionGrowths(id);
@@ -580,12 +581,12 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
             // MM deficits account for liquidity no longer theirs. Settled liquidity must not include amounts that cover deficits. The counterparty token inflow amounts are accrued to the position's settled amounts to compensate.
             uint256 s0 = totalSettlementAmount[positionId][0];
             if (s0 >= add0) {
-                totalSettlementAmount[positionId][0] = s0 - add0;
+                _updateSettlement(corePoolId, positionId, 0, -(OZSafeCast.toInt256(add0))); // reduce total settlement amount by add0
             } else {
                 uint256 netAdd0 = add0 - s0;
                 cumulativeDeficit[positionId][0] += netAdd0;
                 globalDeficit[corePoolId][0] += netAdd0;
-                totalSettlementAmount[positionId][0] = 0;
+                _updateSettlement(corePoolId, positionId, 0, -(OZSafeCast.toInt256(s0))); // set total settlement amount to 0
             }
         }
         if (add1 > 0) {
@@ -593,12 +594,12 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
 
             uint256 s1 = totalSettlementAmount[positionId][1];
             if (s1 >= add1) {
-                totalSettlementAmount[positionId][1] = s1 - add1;
+                _updateSettlement(corePoolId, positionId, 1, -(OZSafeCast.toInt256(add1))); // reduce total settlement amount by add1
             } else {
                 uint256 netAdd1 = add1 - s1;
                 cumulativeDeficit[positionId][1] += netAdd1;
                 globalDeficit[corePoolId][1] += netAdd1;
-                totalSettlementAmount[positionId][1] = 0;
+                _updateSettlement(corePoolId, positionId, 1, -(OZSafeCast.toInt256(s1))); // set total settlement amount to 0
             }
         }
     }
