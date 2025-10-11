@@ -434,6 +434,43 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         _settleFeePotGrowth(positionId);
     }
 
+    /// @dev Settle inverted fee-pot growth for a position into feePotBaseline
+    function _settleFeePotGrowth(PositionId id) internal {
+        PositionMeta memory m = meta[id];
+        PoolId p = m.poolId;
+
+        (uint256 in0, uint256 in1) =
+            GrowthAccounting.inside(feePotGrowthGlobal, feePotGrowthOutside, p, m.tickLower, m.tickUpper);
+
+        // DirectLPs always eligible (no inside exclusion)
+        if (isDirectLP[id]) {
+            in0 = 0;
+            in1 = 0;
+        }
+
+        uint256 g0 = feePotGrowthGlobal[p][0];
+        uint256 g1 = feePotGrowthGlobal[p][1];
+
+        uint256 dIn0 = in0 - feePotGrowthInsideLast[id][0];
+        uint256 dIn1 = in1 - feePotGrowthInsideLast[id][1];
+        uint256 dG0 = g0 - feePotGlobalLast[id][0];
+        uint256 dG1 = g1 - feePotGlobalLast[id][1];
+
+        uint256 out0 = dG0 > dIn0 ? dG0 - dIn0 : 0;
+        uint256 out1 = dG1 > dIn1 ? dG1 - dIn1 : 0;
+
+        uint256 u0 = _coverageUnits(id, 0);
+        uint256 u1 = _coverageUnits(id, 1);
+
+        if (out0 > 0 && u0 > 0) feePotBaseline[id][0] += FullMath.mulDiv(out0, u0, FixedPoint128.Q128);
+        if (out1 > 0 && u1 > 0) feePotBaseline[id][1] += FullMath.mulDiv(out1, u1, FixedPoint128.Q128);
+
+        feePotGrowthInsideLast[id][0] = in0;
+        feePotGrowthInsideLast[id][1] = in1;
+        feePotGlobalLast[id][0] = g0;
+        feePotGlobalLast[id][1] = g1;
+    }
+
     /// @dev Increment protocol or proactive excess liquidity coverage on unwrap, consuming proactive pool first
     function _incrementCoverage(PoolId poolId, uint8 tokenIndex, uint256 coveredAmount) internal {
         if (tokenIndex > 1 || coveredAmount == 0) return;
@@ -458,6 +495,37 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         if (residual > 0) {
             protocolCoverage[poolId][tokenIndex] += residual;
         }
+    }
+
+    function pendingFeePot(PositionId id) external view override returns (uint256, uint256) {
+        return (feePotBaseline[id][0], feePotBaseline[id][1]);
+    }
+
+    function claimFeePot(PositionId id) external override onlyPositionValid(id) returns (uint256 c0, uint256 c1) {
+        if (meta[id].owner != msg.sender) revert InvalidCaller();
+        _settlePositionGrowths(id);
+        PoolId p = meta[id].poolId;
+
+        uint256 pay0 = feePotBaseline[id][0];
+        uint256 pay1 = feePotBaseline[id][1];
+
+        if (pay0 > 0) {
+            if (pay0 > protocolFeeAccrued[p][0]) pay0 = protocolFeeAccrued[p][0];
+            if (pay0 > 0) {
+                _updateSettlement(p, id, 0, int256(pay0));
+                protocolFeeAccrued[p][0] -= pay0;
+                feePotBaseline[id][0] -= pay0;
+            }
+        }
+        if (pay1 > 0) {
+            if (pay1 > protocolFeeAccrued[p][1]) pay1 = protocolFeeAccrued[p][1];
+            if (pay1 > 0) {
+                _updateSettlement(p, id, 1, int256(pay1));
+                protocolFeeAccrued[p][1] -= pay1;
+                feePotBaseline[id][1] -= pay1;
+            }
+        }
+        return (pay0, pay1);
     }
 
     /// @notice Called by the hook on tick cross to flip outside growth for a tick
@@ -814,9 +882,10 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
 
     /**
      * @notice Updates the settlement amount by a delta which could be positive or negative
-     * @param currentSettled The current settlement amount
+     * @param poolId The pool id
+     * @param id The position id
+     * @param tokenIndex The token index
      * @param delta The delta of the settlement
-     * @return The updated settlement amount
      */
     function _updateSettlement(PoolId poolId, PositionId id, uint8 tokenIndex, int256 delta) internal {
         uint256 cur = totalSettlementAmount[id][tokenIndex];
