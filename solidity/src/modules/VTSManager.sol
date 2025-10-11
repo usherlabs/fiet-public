@@ -93,8 +93,6 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     mapping(PoolId => uint256[2]) internal totalCoverageUnits;
     // Per-position last cached coverage units
     mapping(PositionId => uint256[2]) internal lastCoverageUnits;
-    // Mark positions that are DirectLPs (always eligible for pot regardless of range)
-    mapping(PositionId => bool) internal isDirectLP;
 
     error InvalidMarketVTSConfiguration(PoolId corePoolId);
     error NotEnoughSettlementBalance(PositionId id, uint8 tokenIndex, uint256 amount0, uint256 amount1);
@@ -126,8 +124,8 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         _;
     }
 
-    modifier onlyMMP() {
-        if (msg.sender != mmPositionManager) {
+    modifier onlyMMP(PositionId _positionId) {
+        if (msg.sender != mmPositionManager || _isDirectLP(_positionId)) {
             revert InvalidCaller();
         }
         _;
@@ -184,7 +182,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
 
     /**
      * @notice Touches a position, registers it if it doesn't exist, updates it if it does, and tracks the commitment
-     * @param owner The owner of the position
+     * @param owner The owner of the position - ie. the Smart Contract managing positions.
      * @param poolId The pool id
      * @param params The parameters of the transaction
      */
@@ -299,7 +297,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
      */
     function onMMLiquidityModify(PositionId positionId, BalanceDelta balanceDelta)
         external
-        onlyMMP
+        onlyMMP(positionId)
         onlyPositionValid(positionId)
     {
         // First, settle both growths since last touch
@@ -443,7 +441,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         uint256 in1 = 0;
 
         // DirectLPs always eligible (no inside exclusion)
-        if (!isDirectLP[id]) {
+        if (!_isDirectLP(id)) {
             (in0, in1) = GrowthAccounting.inside(feePotGrowthGlobal, feePotGrowthOutside, p, m.tickLower, m.tickUpper);
         }
 
@@ -821,7 +819,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         return (rfsOpen, delta);
     }
 
-    function prepareLiquidation(PositionId positionId) external onlyMMP returns (uint256, uint256) {
+    function prepareLiquidation(PositionId positionId) external onlyMMP(positionId) returns (uint256, uint256) {
         calcRFS(positionId, true); // revert if RFS is open
 
         // get total amount settled from the VTS manager
