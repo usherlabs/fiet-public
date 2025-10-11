@@ -209,7 +209,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         // get the current vts for this position
         // TODO: Change these tests to either depend on VTSCalculator, or ...
         (uint256 vtsCurrent0BeforeSettlement, uint256 vtsCurrent1BeforeSettlement) =
-            IVTSManager(coreHookAddress).getVTSCurrent(positionId);
+            IVTSManager(coreHookAddress).calcVTSCurrent(positionId);
 
         // VTS current from the `IVTSManager` is expressed in 1e18
         // VTS base in the market configuration is expressed in bips
@@ -232,7 +232,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         // get the current vts for this position
         (uint256 vtsCurrent0AfterSettlement, uint256 vtsCurrent1AfterSettlement) =
-            IVTSManager(coreHookAddress).getVTSCurrent(positionId);
+            IVTSManager(coreHookAddress).calcVTSCurrent(positionId);
         // assert the vts after settlement is equal to the base vts * 2
         // since we basically just made another settlement equal to the base vts, the vts should be doubled
         uint256 vtsCurrent0AfterSettlementBips = (vtsCurrent0AfterSettlement * LiquidityUtils.ONE_BIP) / 1e18;
@@ -272,7 +272,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         // get current VTS
         (uint256 vtsCurrent0BeforeWithdrawal, uint256 vtsCurrent1BeforeWithdrawal) =
-            IVTSManager(coreHookAddress).getVTSCurrent(positionId);
+            IVTSManager(coreHookAddress).calcVTSCurrent(positionId);
 
         // Mock the RFS for this position
         // this means RFS for this position is not open and the user can withdraw 1000 & 500 units of each token
@@ -301,7 +301,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         // validate vts current reduces after withdrawal
         (uint256 vtsCurrent0AfterWithdrawal, uint256 vtsCurrent1AfterWithdrawal) =
-            IVTSManager(coreHookAddress).getVTSCurrent(positionId);
+            IVTSManager(coreHookAddress).calcVTSCurrent(positionId);
 
         assertGt(vtsCurrent0BeforeWithdrawal, vtsCurrent0AfterWithdrawal);
         assertGt(vtsCurrent1BeforeWithdrawal, vtsCurrent1AfterWithdrawal);

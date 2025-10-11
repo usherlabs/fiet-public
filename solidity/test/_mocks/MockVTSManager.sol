@@ -53,7 +53,7 @@ contract MockVTSManager is VTSManager {
 
     // increase the VTS for a position by the provided value in bps
     function increaseVTS(PositionId positionId, uint256 vtsIncreaseBps) public {
-        (uint256 currentVts0, uint256 currentVts1) = getVTSRequired(positionId);
+        (uint256 currentVts0, uint256 currentVts1) = _getVTSRequired(positionId);
 
         // increase VTS by the provided bps value, ensuring it doesn't exceed 10000 bps (100%)
         uint256 newVts0 = currentVts0 + vtsIncreaseBps;
@@ -68,7 +68,7 @@ contract MockVTSManager is VTSManager {
 
     // decrease the VTS for a position by the provided value in bps
     function decreaseVTS(PositionId positionId, uint256 vtsDecreaseBps) public {
-        (uint256 currentVts0, uint256 currentVts1) = getVTSRequired(positionId);
+        (uint256 currentVts0, uint256 currentVts1) = _getVTSRequired(positionId);
 
         // decrease VTS by the provided bps value, ensuring it doesn't go below 0
         uint256 newVts0 = currentVts0 > vtsDecreaseBps ? currentVts0 - vtsDecreaseBps : 0;
@@ -78,13 +78,14 @@ contract MockVTSManager is VTSManager {
     }
 
     function trackCommitment(address router, ModifyLiquidityParams calldata params) external {
-        _trackCommitment(router, params);
+        PositionId positionId = PositionLibrary.generateId(router, params);
+        _trackCommitment(positionId, params);
     }
 
     // since this is a mock contract, we need to overrride the function to get the current vts for a given position
     // this way we can easily set a mock vts required for a given position
-    function getVTSRequired(PositionId positionId)
-        public
+    function _getVTSRequired(PositionId positionId)
+        internal
         view
         override
         returns (uint256 vtsRequired0, uint256 vtsRequired1)
@@ -97,8 +98,8 @@ contract MockVTSManager is VTSManager {
 
     // since this is a mock contract, we need to overrride the function to get the current vts for a given position
     // this way we can easily set a mock vts current for a given position
-    function getVTSCurrent(PositionId positionId)
-        public
+    function _getVTSCurrent(PositionId positionId)
+        internal
         view
         override
         returns (uint256 vtsCurrent0, uint256 vtsCurrent1)

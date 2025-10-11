@@ -52,7 +52,9 @@ abstract contract PositionIndex is IPositionIndex, MarketHandler {
     /// @notice Checks if a position is valid (exists and optionally active)
     function isPositionValid(PositionId id, bool requireActive) public view returns (bool) {
         PositionMeta memory m = meta[id];
-        if (m.owner == address(0)) {
+        PoolId _poolId = m.poolId;
+        // Ensure the position has a valid poolId assigned
+        if (m.owner == address(0) || PoolId.unwrap(_poolId) == bytes32(0)) {
             return false;
         }
         if (requireActive && !m.isActive) {
