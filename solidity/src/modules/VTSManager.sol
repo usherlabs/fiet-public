@@ -480,6 +480,9 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         if (liq > 0) {
             uint256 gEx = proactiveExcessGrowthGlobal[poolId][tokenIndex];
             uint256 gUse = proactiveUseGrowthGlobal[poolId][tokenIndex];
+            // Natural/inherited clamp: proactive usage is bounded by current in-range liquidity.
+            // available = (excessGrowth - useGrowth) * L >> 128, so "use" is min(requested, available).
+            // Any remainder after this in-range clamp is recorded as protocolCoverage (the unmet portion).
             uint256 available = ((gEx - gUse) * uint256(liq)) >> 128;
             if (available > 0) {
                 uint256 use = residual <= available ? residual : available;
@@ -493,12 +496,9 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
             }
         }
         if (residual > 0) {
+            // Residual here is the post-clamp remainder (unmet by in-range proactive liquidity).
             protocolCoverage[poolId][tokenIndex] += residual;
         }
-    }
-
-    function pendingFeePot(PositionId id) external view override returns (uint256, uint256) {
-        return (feePotBaseline[id][0], feePotBaseline[id][1]);
     }
 
     // TODO: determine if we include in fee management of core hook.

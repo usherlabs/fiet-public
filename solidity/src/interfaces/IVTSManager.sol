@@ -33,7 +33,5 @@ interface IVTSManager {
 
     function getCommitment(PositionId positionId) external view returns (uint256 commitment0, uint256 commitment1);
 
-    // Fee-pot API
-    function pendingFeePot(PositionId id) external view returns (uint256, uint256);
     function claimFeePot(PositionId id) external returns (uint256, uint256);
 }
