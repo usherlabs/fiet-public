@@ -15,9 +15,9 @@ interface IVTSManager {
 
     function calcRFS(PositionId positionId, bool requireClosedRfS) external returns (bool, BalanceDelta);
 
-    function getVTSCurrent(PositionId positionId) external view returns (uint256 vtsCurrent0, uint256 vtsCurrent1);
+    function calcVTSRequired(PositionId positionId) external returns (uint256 vtsRequired0, uint256 vtsRequired1);
 
-    function getVTSRequired(PositionId positionId) external view returns (uint256 vtsRequired0, uint256 vtsRequired1);
+    function calcVTSCurrent(PositionId positionId) external returns (uint256 vtsCurrent0, uint256 vtsCurrent1);
 
     function getPositionSettledAmounts(PositionId positionId)
         external
@@ -30,4 +30,6 @@ interface IVTSManager {
 
     function getPositionUnsettledUSDValue(PoolId marketId, PositionId positionId) external view returns (uint256);
     function incrementCoverage(PoolId poolId, uint256 amount) external;
+
+    function getCommitment(PositionId positionId) external view returns (uint256 commitment0, uint256 commitment1);
 }

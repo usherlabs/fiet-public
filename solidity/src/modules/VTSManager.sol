@@ -674,13 +674,28 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     }
 
     /**
+     * @notice Calculates the required vts for a position
+     * @param positionId The position id
+     * @return vtsRequired0 The required vts for token0 (1e18 scale)
+     * @return vtsRequired1 The required vts for token1 (1e18 scale)
+     */
+    function calcVTSRequired(PositionId positionId)
+        public
+        onlyPositionValid(positionId)
+        returns (uint256 vtsRequired0, uint256 vtsRequired1)
+    {
+        _settlePositionGrowths(positionId);
+        return _getVTSRequired(positionId);
+    }
+
+    /**
      * @notice Gets the required vts for a position using cumulative deficits
      * @param positionId The position id
      * @return vtsRequired0 The required vts for token0 (1e18 scale)
      * @return vtsRequired1 The required vts for token1 (1e18 scale)
      */
-    function getVTSRequired(PositionId positionId)
-        public
+    function _getVTSRequired(PositionId positionId)
+        internal
         view
         virtual
         returns (uint256 vtsRequired0, uint256 vtsRequired1)
@@ -724,14 +739,23 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         return totalLCCValue;
     }
 
+    function calcVTSCurrent(PositionId positionId)
+        public
+        onlyPositionValid(positionId)
+        returns (uint256 vtsCurrent0, uint256 vtsCurrent1)
+    {
+        _settlePositionGrowths(positionId);
+        return _getVTSCurrent(positionId);
+    }
+
     /**
      * @notice Gets the current vts for a position
      * @param positionId The position id
      * @return vtsCurrent0 The current vts for token0
      * @return vtsCurrent1 The current vts for token1
      */
-    function getVTSCurrent(PositionId positionId)
-        public
+    function _getVTSCurrent(PositionId positionId)
+        internal
         view
         virtual
         returns (uint256 vtsCurrent0, uint256 vtsCurrent1)
@@ -754,6 +778,21 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
      * @return commitment0 The commitment for token0
      * @return commitment1 The commitment for token1
      */
+    function getCommitment(PositionId positionId)
+        external
+        view
+        onlyPositionValid(positionId)
+        returns (uint256 commitment0, uint256 commitment1)
+    {
+        return _getCommitment(positionId);
+    }
+
+    /**
+     * @notice Gets the commitment for a position
+     * @param positionId The position id
+     * @return commitment0 The commitment for token0
+     * @return commitment1 The commitment for token1
+     */
     function _getCommitment(PositionId positionId)
         internal
         view
@@ -761,9 +800,6 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         returns (uint256 commitment0, uint256 commitment1)
     {
         (uint256 c0, uint256 c1) = (commitmentMaxima[positionId][0], commitmentMaxima[positionId][1]);
-        if (c0 == 0 && c1 == 0) {
-            revert InvalidPosition(positionId);
-        }
         return (c0, c1);
     }
 
