@@ -39,7 +39,6 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     // Mapping to store the total settlement amount for each position
     mapping(PositionId => uint256[2]) internal totalSettlementAmount;
     // Deficit growth accounting (Uniswap v3-style growth per liquidity unit, Q128)
-    uint256 internal constant Q128 = 1 << 128;
     // Maximum positive magnitude representable in int128
     uint256 internal constant INT128_MAX_U = uint256(type(uint128).max) >> 1;
     // Per-market (pool) global deficit growth per token (token0, token1)
@@ -481,14 +480,14 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
             uint256 gEx = proactiveExcessGrowthGlobal[poolId][tokenIndex];
             uint256 gUse = proactiveUseGrowthGlobal[poolId][tokenIndex];
             // Natural/inherited clamp: proactive usage is bounded by current in-range liquidity.
-            // available = (excessGrowth - useGrowth) * L >> 128, so "use" is min(requested, available).
+            // available = floor((excessGrowth - useGrowth) * L / Q128), so "use" is min(requested, available).
             // Any remainder after this in-range clamp is recorded as protocolCoverage (the unmet portion).
-            uint256 available = ((gEx - gUse) * uint256(liq)) >> 128;
+            uint256 available = FullMath.mulDiv(gEx - gUse, uint256(liq), FixedPoint128.Q128);
             if (available > 0) {
                 uint256 use = residual <= available ? residual : available;
                 if (use > 0) {
                     // consume: add per-liquidity growth
-                    uint256 deltaG = (use * Q128) / uint256(liq);
+                    uint256 deltaG = FullMath.mulDiv(use, FixedPoint128.Q128, uint256(liq));
                     proactiveUseGrowthGlobal[poolId][tokenIndex] = gUse + deltaG;
                     residual -= use;
                     emit ProactiveUsed(poolId, tokenIndex, use, residual);

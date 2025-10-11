@@ -3,6 +3,7 @@ pragma solidity ^0.8.26;
 
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
+import {FixedPoint128} from "@uniswap/v4-core/src/libraries/FixedPoint128.sol";
 
 /**
  * @title GrowthAccounting
@@ -26,8 +27,6 @@ import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
  * - This library is internal and intended to be inlined by the optimizer
  */
 library GrowthAccounting {
-    uint256 internal constant Q128 = 1 << 128;
-
     /**
      * - Growth accrues globally per swap as a per‑liquidity‑unit increment. Bound (initialised) ticks are only the partition points we flip at to compute “inside” for any range.
      *     - “Normalise over liquidity depth” happens implicitly: growth is per unit liquidity, then you multiply by the position’s liquidity to get raw token units; you don’t divide by L again.
@@ -53,7 +52,7 @@ library GrowthAccounting {
         uint128 liquidity
     ) internal {
         if (token > 1 || amount == 0 || liquidity == 0) return;
-        uint256 deltaG = FullMath.mulDiv(amount, Q128, uint256(liquidity));
+        uint256 deltaG = FullMath.mulDiv(amount, FixedPoint128.Q128, uint256(liquidity));
         uint256[2] storage g = gmap[poolId];
         g[token] = g[token] + deltaG;
     }
@@ -108,8 +107,8 @@ library GrowthAccounting {
         uint256 d0 = inside0 - lastSnap[0];
         uint256 d1 = inside1 - lastSnap[1];
         if (liquidity > 0) {
-            if (d0 > 0) add0 = (d0 * uint256(liquidity)) >> 128; // TODO: is there a safer way to do this?
-            if (d1 > 0) add1 = (d1 * uint256(liquidity)) >> 128;
+            if (d0 > 0) add0 = FullMath.mulDiv(d0, uint256(liquidity), FixedPoint128.Q128);
+            if (d1 > 0) add1 = FullMath.mulDiv(d1, uint256(liquidity), FixedPoint128.Q128);
         }
         lastSnap[0] = inside0;
         lastSnap[1] = inside1;
