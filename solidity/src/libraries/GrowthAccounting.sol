@@ -2,6 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 
 /**
  * @title GrowthAccounting
@@ -52,7 +53,7 @@ library GrowthAccounting {
         uint128 liquidity
     ) internal {
         if (token > 1 || amount == 0 || liquidity == 0) return;
-        uint256 deltaG = (amount * Q128) / uint256(liquidity);
+        uint256 deltaG = FullMath.mulDiv(amount, Q128, uint256(liquidity));
         uint256[2] storage g = gmap[poolId];
         g[token] = g[token] + deltaG;
     }
@@ -107,7 +108,7 @@ library GrowthAccounting {
         uint256 d0 = inside0 - lastSnap[0];
         uint256 d1 = inside1 - lastSnap[1];
         if (liquidity > 0) {
-            if (d0 > 0) add0 = (d0 * uint256(liquidity)) >> 128;
+            if (d0 > 0) add0 = (d0 * uint256(liquidity)) >> 128; // TODO: is there a safer way to do this?
             if (d1 > 0) add1 = (d1 * uint256(liquidity)) >> 128;
         }
         lastSnap[0] = inside0;
