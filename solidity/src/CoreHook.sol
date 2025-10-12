@@ -260,11 +260,17 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
         BalanceDelta,
         bytes calldata
     ) internal virtual override whenNotPaused(key.toId()) returns (bytes4, BalanceDelta) {
+        // For DirectLPs, if the position already exists, settle growths BEFORE changing units
+        PositionId id = PositionLibrary.generateId(sender, params);
+        if (!_isCallerMMP(sender) && meta[id].owner != address(0) && !_isMMPosition(id)) {
+            _settlePositionGrowths(id);
+        }
+
         // Update PositionIndex with registration/update based on actual pool id
         _touchPosition(sender, key.toId(), params);
 
         // only add direct liquidity if the sender is not the market maker position manager/router
-        if (!_isCallerMMP(sender)) {
+        if (!_isCallerMMP(sender) && !_isMMPosition(id)) {
             ProxyHook(_getProxyHook(key)).onDirectLP(delta, LiquidityUtils.ActionType.DirectLPAddLiquidity); // Fetching ProxyHook by corePoolKey, therefore no need to pass again.
         }
 

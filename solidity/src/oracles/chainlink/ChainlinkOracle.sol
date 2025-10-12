@@ -7,7 +7,6 @@ pragma solidity ^0.8.0;
 import {ChainlinkDataFeedLib} from "../../libraries/ChainlinkDataFeedLib.sol";
 import {AggregatorV3Interface} from "../../interfaces/AggregatorV3Interface.sol";
 import {IOracle} from "../../interfaces/IOracle.sol";
-import {console} from "forge-std/console.sol";
 
 contract ChainlinkOracle is IOracle {
     using ChainlinkDataFeedLib for AggregatorV3Interface;

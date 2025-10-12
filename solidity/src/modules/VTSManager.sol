@@ -144,6 +144,23 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     }
 
     /**
+     * @notice Checks if the caller is the MM Position Manager
+     * @return True if the caller is the MM Position Manager, false otherwise
+     */
+    function _isCallerMMP(address caller) internal view returns (bool) {
+        return caller == mmPositionManager;
+    }
+
+    /**
+     * @notice Checks if a position is a DirectLP - all positions not owned by the MM Position Manager are DirectLPs - ie. handled natively, or by third-party contracts.
+     * @param positionId The id of the position
+     * @return True if the position is a DirectLP, false otherwise
+     */
+    function _isMMPosition(PositionId positionId) internal view returns (bool) {
+        return meta[positionId].owner == mmPositionManager;
+    }
+
+    /**
      * @notice Sets the VTS configuration for a core pool
      * @param corePoolId The core pool ID
      * @param vtsConfiguration The VTS configuration
@@ -182,20 +199,74 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     }
 
     /**
-     * @notice Checks if the caller is the MM Position Manager
-     * @return True if the caller is the MM Position Manager, false otherwise
+     * @notice Gets the commitment for a position
+     * @param positionId The position id
+     * @return commitment0 The commitment for token0
+     * @return commitment1 The commitment for token1
      */
-    function _isCallerMMP(address caller) internal view returns (bool) {
-        return caller == mmPositionManager;
+    function getCommitment(PositionId positionId)
+        external
+        view
+        onlyPositionValid(positionId)
+        returns (uint256 commitment0, uint256 commitment1)
+    {
+        return _getCommitment(positionId);
     }
 
     /**
-     * @notice Checks if a position is a DirectLP - all positions not owned by the MM Position Manager are DirectLPs - ie. handled natively, or by third-party contracts.
-     * @param positionId The id of the position
-     * @return True if the position is a DirectLP, false otherwise
+     * @notice Gets the commitment for a position
+     * @param positionId The position id
+     * @return commitment0 The commitment for token0
+     * @return commitment1 The commitment for token1
      */
-    function _isMMPosition(PositionId positionId) internal view returns (bool) {
-        return meta[positionId].owner == mmPositionManager;
+    function _getCommitment(PositionId positionId)
+        internal
+        view
+        virtual
+        returns (uint256 commitment0, uint256 commitment1)
+    {
+        (uint256 c0, uint256 c1) = (commitmentMaxima[positionId][0], commitmentMaxima[positionId][1]);
+        return (c0, c1);
+    }
+
+    /**
+     * @notice Checks if fee sharing is enabled for a core pool
+     * @param p The core pool ID
+     * @return True if fee sharing is enabled, false otherwise
+     */
+    function _isFeeSharingEnabled(PoolId p) internal view returns (bool) {
+        return corePoolToVTSConfiguration[p].coverageFeeShare > 0;
+    }
+
+    /**
+     * @notice Gets the pending fee pot baseline for a position
+     * @param id The id of the position
+     * @return pay0 The pending fee pot baseline for token0
+     * @return pay1 The pending fee pot baseline for token1
+     */
+    function pendingFeePotBaseline(PositionId id) external view override returns (uint256 pay0, uint256 pay1) {
+        return (feePotBaseline[id][0], feePotBaseline[id][1]);
+    }
+
+    /**
+     * @notice Gets the fee pot snapshots for a position
+     * @param id The id of the position
+     * @return baseline The baseline for token0
+     * @return insideLast The inside last for token0
+     * @return globalLast The global last for token0
+     */
+    function feePotSnapshots(PositionId id)
+        external
+        view
+        override
+        returns (uint256[2] memory baseline, uint256[2] memory insideLast, uint256[2] memory globalLast)
+    {
+        baseline[0] = feePotBaseline[id][0];
+        baseline[1] = feePotBaseline[id][1];
+        insideLast[0] = feePotGrowthInsideLast[id][0];
+        insideLast[1] = feePotGrowthInsideLast[id][1];
+        globalLast[0] = feePotGlobalLast[id][0];
+        globalLast[1] = feePotGlobalLast[id][1];
     }
 
     /**
@@ -502,6 +573,9 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     function _settleFeePotGrowth(PositionId id) internal {
         PositionMeta memory m = meta[id];
         PoolId p = m.poolId;
+        if (!_isFeeSharingEnabled(p)) {
+            return;
+        }
 
         uint256 in0 = 0;
         uint256 in1 = 0;
@@ -614,9 +688,11 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     function _onTickCross(PoolId corePoolId, int24 tick, uint8 token) internal {
         GrowthAccounting.flipOutside(deficitGrowthGlobal, deficitGrowthOutside, corePoolId, tick, token);
         GrowthAccounting.flipOutside(inflowGrowthGlobal, inflowGrowthOutside, corePoolId, tick, token);
-        GrowthAccounting.flipOutside(proactiveUseGrowthGlobal, proactiveUseGrowthOutside, corePoolId, tick, token);
-        // Flip fee-pot outside accumulator (inverted growth over backing units)
-        GrowthAccounting.flipOutside(feePotGrowthGlobal, feePotGrowthOutside, corePoolId, tick, token);
+        if (_isFeeSharingEnabled(corePoolId)) {
+            GrowthAccounting.flipOutside(proactiveUseGrowthGlobal, proactiveUseGrowthOutside, corePoolId, tick, token);
+            // Flip fee-pot outside accumulator (inverted growth over backing units)
+            GrowthAccounting.flipOutside(feePotGrowthGlobal, feePotGrowthOutside, corePoolId, tick, token);
+        }
     }
 
     /// @dev Accrue deficit growth to the global accumulator (per token) using current in-range liquidity
@@ -694,14 +770,20 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
 
     /// @dev Accrue proactive excess growth to global accumulator (per token)
     function _accrueProactiveExcessGrowth(PoolId corePoolId, uint8 token, uint256 proactiveAmount) internal {
+        if (!_isFeeSharingEnabled(corePoolId)) {
+            return;
+        }
         uint128 liq = poolManager.getLiquidity(corePoolId);
         GrowthAccounting.accrue(proactiveExcessGrowthGlobal, corePoolId, token, proactiveAmount, liq);
     }
 
     /// @dev Settle proactive use growth into per-position obligation
     function _settlePositionProactiveUseGrowth(PositionId positionId) internal {
+        PoolId corePoolId = meta[positionId].poolId;
+        if (!_isFeeSharingEnabled(corePoolId)) {
+            return;
+        }
         PositionMeta memory m = meta[positionId];
-        PoolId corePoolId = m.poolId;
         uint128 liq = poolManager.getPositionLiquidity(corePoolId, PositionId.unwrap(positionId));
         (uint256 add0, uint256 add1) = GrowthAccounting.deltaAndCheckpoint(
             proactiveUseGrowthGlobal,
@@ -841,37 +923,6 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         uint256 v0 = c0 > 0 ? FullMath.mulDiv(s0, one, c0) : 0;
         uint256 v1 = c1 > 0 ? FullMath.mulDiv(s1, one, c1) : 0;
         return (v0, v1);
-    }
-
-    /**
-     * @notice Gets the commitment for a position
-     * @param positionId The position id
-     * @return commitment0 The commitment for token0
-     * @return commitment1 The commitment for token1
-     */
-    function getCommitment(PositionId positionId)
-        external
-        view
-        onlyPositionValid(positionId)
-        returns (uint256 commitment0, uint256 commitment1)
-    {
-        return _getCommitment(positionId);
-    }
-
-    /**
-     * @notice Gets the commitment for a position
-     * @param positionId The position id
-     * @return commitment0 The commitment for token0
-     * @return commitment1 The commitment for token1
-     */
-    function _getCommitment(PositionId positionId)
-        internal
-        view
-        virtual
-        returns (uint256 commitment0, uint256 commitment1)
-    {
-        (uint256 c0, uint256 c1) = (commitmentMaxima[positionId][0], commitmentMaxima[positionId][1]);
-        return (c0, c1);
     }
 
     /**

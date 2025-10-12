@@ -17,7 +17,6 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {IMarketVault} from "../interfaces/IMarketVault.sol";
-import {console} from "forge-std/console.sol";
 
 abstract contract MarketVault is IMarketVault {
     using CurrencySettler for Currency;

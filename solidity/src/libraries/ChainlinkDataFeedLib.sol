@@ -2,7 +2,6 @@
 pragma solidity ^0.8.0;
 
 import {AggregatorV3Interface} from "../interfaces/AggregatorV3Interface.sol";
-import {console} from "forge-std/console.sol";
 
 /// @title ChainlinkDataFeedLib
 /// @author Morpho Labs
@@ -22,7 +21,6 @@ library ChainlinkDataFeedLib {
         if (address(feed) == address(0)) return 1;
 
         (, int256 answer,,,) = feed.latestRoundData();
-        console.log("answer", answer);
         if (answer < 0) revert NegativeAnswer();
 
         return uint256(answer);

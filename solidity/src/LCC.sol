@@ -16,7 +16,6 @@ import {IOracle} from "./interfaces/IOracle.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {IOracleRegistry} from "./interfaces/IOracleRegistry.sol";
 import {IVTSManager} from "./interfaces/IVTSManager.sol";
-import {console} from "forge-std/console.sol";
 import {ILCC} from "./interfaces/ILCC.sol";
 
 contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC {

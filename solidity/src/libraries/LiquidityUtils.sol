@@ -11,7 +11,6 @@ import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
 import {TransientStateLibrary} from "v4-periphery/lib/v4-core/src/libraries/TransientStateLibrary.sol";
 import {MarketVTSConfiguration} from "../types/VTS.sol";
-import {SafeCast} from "openzeppelin-contracts/contracts/utils/math/SafeCast.sol";
 import {BalanceDelta, toBalanceDelta} from "v4-periphery/lib/v4-core/src/types/BalanceDelta.sol";
 
 /// @notice Library for liquidity utility functions
@@ -236,8 +235,8 @@ library LiquidityUtils {
         returns (BalanceDelta)
     {
         return toBalanceDelta(
-            isNegative0 ? -SafeCast.toInt128(SafeCast.toInt256(amount0)) : SafeCast.toInt128(SafeCast.toInt256(amount0)),
-            isNegative1 ? -SafeCast.toInt128(SafeCast.toInt256(amount1)) : SafeCast.toInt128(SafeCast.toInt256(amount1))
+            isNegative0 ? -(amount0.toInt256().toInt128()) : amount0.toInt256().toInt128(),
+            isNegative1 ? -(amount1.toInt256().toInt128()) : amount1.toInt256().toInt128()
         );
     }
 }

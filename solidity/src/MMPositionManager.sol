@@ -8,7 +8,7 @@ import {MarketMaker} from "./libraries/MarketMaker.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {ModifyLiquidityParams} from "v4-periphery/lib/v4-core/src/types/PoolOperation.sol";
 import {Constants} from "v4-periphery/lib/v4-core/test/utils/Constants.sol";
-import {BalanceDelta, BalanceDeltaLibrary} from "v4-periphery/lib/v4-core/src/types/BalanceDelta.sol";
+import {BalanceDelta, BalanceDeltaLibrary, toBalanceDelta} from "v4-periphery/lib/v4-core/src/types/BalanceDelta.sol";
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {PoolId} from "v4-periphery/lib/v4-core/src/types/PoolId.sol";
 import {ERC721} from "solmate/tokens/ERC721.sol";
@@ -562,6 +562,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
      * @param positionId The position id to modify the underlying assets for
      * @param poolId The pool id to modify the underlying assets for
      * @param balanceDelta The balance delta of the underlying assets to modify
+     * @return returnDelta The balance delta of the underlying assets modified
      */
     function _modifyMarketUnderlyingAsset(PositionId positionId, PoolId poolId, BalanceDelta balanceDelta)
         internal
@@ -604,9 +605,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         }
 
         // notify the vts manager of the settlement made for this position
-        BalanceDelta returnDelta = _getVTSManager().onMMLiquidityModify(
-            positionId, LiquidityUtils.safeToBalanceDelta(amount0, amount1, false, false)
-        );
+        returnDelta = _getVTSManager().onMMLiquidityModify(positionId, balanceDelta);
 
         // TODO: ZeroDelta to result in full take. Requires validation.
         // BalanceDelta balanceDelta = _getVTSManager().onMMLiquidityModify(

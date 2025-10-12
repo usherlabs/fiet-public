@@ -7,7 +7,6 @@ import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/Messa
 
 import {ISpokeVerifier} from "../interfaces/ISpokeVerifier.sol";
 import {MarketMaker} from "../libraries/MarketMaker.sol";
-import {console} from "forge-std/console.sol";
 import {ShaMerkle} from "../libraries/ShaMerkle.sol";
 
 contract ICSpokeVerifier is ISpokeVerifier {

@@ -8,7 +8,6 @@ import {IPositionIndex} from "../interfaces/IPositionIndex.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {PositionMeta} from "../types/Position.sol";
 import {MarketHandler} from "../modules/MarketHandler.sol";
-import {console} from "forge-std/console.sol";
 
 /// @notice Central index for position metadata
 abstract contract PositionIndex is IPositionIndex, MarketHandler {
