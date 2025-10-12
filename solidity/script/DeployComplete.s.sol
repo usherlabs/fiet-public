@@ -28,11 +28,13 @@ import {VRLSpokeReceiver} from "../src/modules/VRLSpokeReceiver.sol";
  * @dev Deploys contracts in the correct order with proper HookMiner logic
  *
  * Deployment Order:
- * 1. Deploy MarketFactory (without hooks)
- * 2. Deploy CoreHook (with proper flags and MarketFactory address)
- * 3. Deploy ProxyHook (with proper flags and MarketFactory address)
- * 4. Set hooks in MarketFactory using setHooks()
- * 5. Activate hooks (set cross-references)
+ * 1. Deploy OracleRegistry and ChainlinkFactory
+ * 2. Deploy MarketFactory (without hooks)
+ * 3. Deploy MMPositionManager (must be deployed before CoreHook)
+ * 4. Deploy CoreHook (with proper flags and MarketFactory address)
+ * 5. Set hooks in MarketFactory using setHooks()
+ * 6. Verify hooks (set cross-references)
+ * 7. Add protocol addresses to bounds array
  */
 contract CompleteDeployScript is ScriptHelper {
     // Deployed contract addresses
@@ -77,23 +79,23 @@ contract CompleteDeployScript is ScriptHelper {
         marketFactory = _deployMarketFactory();
         console.log("MarketFactory deployed at:", marketFactory);
 
-        // Step 3: Deploy CoreHook
+        // Step 3: Deploy MMPositionManager (must be before CoreHook)
+        console.log("\n=== Deploying MMPositionManager ===");
+        mmPositionManager = _deployMMPositionManager();
+        console.log("MMPositionManager deployed at:", mmPositionManager);
+
+        // Step 4: Deploy CoreHook
         console.log("\n=== Deploying CoreHook ===");
         coreHook = _deployCoreHook();
         console.log("CoreHook deployed at:", coreHook);
 
-        // Step 4: Set hooks in MarketFactory
+        // Step 5: Set hooks in MarketFactory
         console.log("\n=== Setting Hooks in MarketFactory ===");
         _setHooksInFactory();
 
-        // Step 5: Verify hooks addresses across the contracts
+        // Step 6: Verify hooks addresses across the contracts
         console.log("\n=== Verifying Hooks ===");
         _verifyHooks();
-
-        // Step 6: Deploy MMPositionManager
-        console.log("\n=== Deploying MMPositionManager ===");
-        mmPositionManager = _deployMMPositionManager();
-        console.log("MMPositionManager deployed at:", mmPositionManager);
 
         // Step 7: Add all the protocol addresses expected to hold LCC as a protocol bound address in the market factory
         console.log("\n=== Adding addresses to bounds array ===");
@@ -166,7 +168,7 @@ contract CompleteDeployScript is ScriptHelper {
      * @return The deployed MMPositionManager address
      */
     function _deployMMPositionManager() internal returns (address) {
-        // ? deploy a stub verifier for now
+        // ? deploy a stub verifier for now, would eventually be an IC verifier
         address stubVerifier = address(new StubSpokeVerifier());
         console.log("StubSpokeVerifier deployed at:", stubVerifier);
         address spokeReceiver = address(new VRLSpokeReceiver(stubVerifier, oracleRegistry));
