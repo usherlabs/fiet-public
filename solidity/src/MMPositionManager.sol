@@ -258,8 +258,8 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
 
         // use the position id to make the initial settlement of the underlying tokens to the proxy hook
         // Get amount of underlying liquidity to transfer from the issuer to the lcc
-        (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) =
-            LiquidityUtils.getBaseSettlementAmounts(liquidityParams, vtsManager.getMarketVTSConfiguration(poolKey.toId()));
+        (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) = LiquidityUtils
+            .getBaseSettlementAmounts(liquidityParams, vtsManager.getMarketVTSConfiguration(poolKey.toId()));
 
         // settle the underlying tokens to the proxy hook
         // By calling VTSManager.onMMLiquidityModify, we are also settling the position growths for new MMPosition.
@@ -328,7 +328,6 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
 
         return toBalanceDelta(int128(uint128(s0)), int128(uint128(s1)));
     }
-
 
     function _createPosition(
         PoolKey memory poolKey,
