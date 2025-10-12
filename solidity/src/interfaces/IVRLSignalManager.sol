@@ -3,7 +3,7 @@ pragma solidity ^0.8.0;
 
 import {LiquiditySignal} from "../types/Position.sol";
 
-interface IVRLSpokeReceiver {
+interface IVRLSignalManager {
     // Events
     event VerifierChanged(address indexed oldVerifier, address indexed newVerifier);
 
@@ -21,6 +21,5 @@ interface IVRLSpokeReceiver {
     // Internal functions (for contracts that inherit from VRLSpokeReceiver)
     function verifyLiquiditySignal(LiquiditySignal memory liquiditySignal)
         external
-        view
         returns (string[] memory tickers, uint256[] memory amounts);
 }

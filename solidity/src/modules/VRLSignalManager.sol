@@ -13,7 +13,7 @@ import {IOracleRegistry} from "../interfaces/IOracleRegistry.sol";
 import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
 import {console} from "forge-std/console.sol";
 
-contract VRLSpokeReceiver is Ownable {
+contract VRLSignalManager is Ownable {
     ISpokeVerifier public verifier;
     IOracleRegistry public oracleRegistry;
 
@@ -50,6 +50,7 @@ contract VRLSpokeReceiver is Ownable {
         public
         returns (string[] memory tickers, uint256[] memory amounts)
     {
+        console.log("verifyLiquiditySignal", liquiditySignal.nonce, liquiditySignal.mmState.owner);
         // validate the new nonce is greater than than the previous nonce
         if (liquiditySignal.nonce <= mmNonce[liquiditySignal.mmState.owner]) {
             revert InvalidNonce(liquiditySignal.nonce, mmNonce[liquiditySignal.mmState.owner]);

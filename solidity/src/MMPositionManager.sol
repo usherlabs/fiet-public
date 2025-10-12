@@ -24,7 +24,7 @@ import {toBalanceDelta} from "v4-periphery/lib/v4-core/src/types/BalanceDelta.so
 import {IMMPositionManager} from "./interfaces/IMMPositionManager.sol";
 import {IProxyHook} from "./interfaces/IProxyHook.sol";
 import {ILCC} from "./interfaces/ILCC.sol";
-import {IVRLSpokeReceiver} from "./interfaces/IVRLSpokeReciever.sol";
+import {IVRLSignalManager} from "./interfaces/IVRLSignalManager.sol";
 import {IPositionIndex} from "./interfaces/IPositionIndex.sol";
 import {console} from "forge-std/console.sol";
 import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
@@ -54,7 +54,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
 
     address public immutable marketFactory;
     uint256 private nextTokenId = 1;
-    IVRLSpokeReceiver public immutable spokeReceiver;
+    IVRLSignalManager public immutable signalManager;
     mapping(PositionId => RFSCheckpoint) public positionToCheckpoint;
     mapping(uint256 => mapping(uint256 => PositionId)) public nftToPositionId;
     mapping(uint256 => uint256) public nftToPositionCount;
@@ -67,12 +67,12 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         _;
     }
 
-    constructor(address _manager, address _spokeReceiver, address _marketFactory)
+    constructor(address _manager, address _signalManager, address _marketFactory)
         LiquidityRouter(_manager)
         ERC721("MMPositionManager", "MMPM")
     {
         marketFactory = _marketFactory;
-        spokeReceiver = IVRLSpokeReceiver(_spokeReceiver);
+        signalManager = IVRLSignalManager(_signalManager);
     }
 
     function tokenURI(uint256) public pure override returns (string memory) {
@@ -219,10 +219,10 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         }
         LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
         (string[] memory reservesTickers, uint256[] memory reservesAmounts) =
-            spokeReceiver.verifyLiquiditySignal(signal);
+            signalManager.verifyLiquiditySignal(signal);
 
         // calculate the total signal usd value
-        uint256 totalSignalUsdValue = spokeReceiver.getTotalUsdValue(reservesTickers, reservesAmounts);
+        uint256 totalSignalUsdValue = signalManager.getTotalUsdValue(reservesTickers, reservesAmounts);
 
         // calculate the token0 and token1 amounts to mint to create the position
         ModifyLiquidityParams memory liquidityParams = ModifyLiquidityParams({
@@ -233,7 +233,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         });
 
         (uint256 lcc0AmountToMint, uint256 lcc1AmountToMint) =
-            calculateTokenAmountsFromPositionParams(poolKey, liquidityParams);
+            LiquidityUtils.calculateTokenAmountsFromPositionParams(manager, poolKey, liquidityParams);
 
         // calcualte the total LCC USD value and confirm it is less than the total signal usd value
         IVTSManager vtsManager = _getVTSManager();
@@ -326,30 +326,6 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         emit SignalDecommitted(msg.sender, tokenId, positionIndex, uint256(uint128(s0)), uint256(uint128(s1)));
 
         return toBalanceDelta(int128(uint128(s0)), int128(uint128(s1)));
-    }
-
-    /**
-     * @dev Get the total liquidity across all active positions for an NFT
-     * @param tokenId The NFT token ID
-     * @return totalLiquidity The sum of all active position liquidity
-     * @return activePositionCount The number of active positions
-     */
-    function getTotalNFTLiquidity(uint256 tokenId)
-        public
-        view
-        returns (int256 totalLiquidity, uint256 activePositionCount)
-    {
-        uint256 positionCount = nftToPositionCount[tokenId];
-
-        for (uint256 i = 0; i < positionCount; i++) {
-            PositionMeta memory position = getPosition(tokenId, i);
-            if (position.isActive) {
-                totalLiquidity += position.liquidity;
-                activePositionCount++;
-            }
-        }
-
-        return (totalLiquidity, activePositionCount);
     }
 
     /**
@@ -543,12 +519,16 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         );
 
         IMarketFactory mf = IMarketFactory(marketFactory);
-        ILCC lcc0 = ILCC(mf.corePoolToCurrencyPair(position.poolId)[0]);
-        ILCC lcc1 = ILCC(mf.corePoolToCurrencyPair(position.poolId)[1]);
+        ILCC(mf.corePoolToCurrencyPair(position.poolId)[0]).cancel(
+            LiquidityUtils.safeInt128ToUint256(balanceDelta.amount0())
+        );
+        ILCC(mf.corePoolToCurrencyPair(position.poolId)[1]).cancel(
+            LiquidityUtils.safeInt128ToUint256(balanceDelta.amount1())
+        );
 
-        // burn the LCC tokens gotten from the position
-        lcc0.cancel(LiquidityUtils.safeInt128ToUint256(balanceDelta.amount0()));
-        lcc1.cancel(LiquidityUtils.safeInt128ToUint256(balanceDelta.amount1()));
+        // // burn the LCC tokens gotten from the position
+        //     lcc0.cancel(LiquidityUtils.safeInt128ToUint256(balanceDelta.amount0()));
+        //     lcc1.cancel(LiquidityUtils.safeInt128ToUint256(balanceDelta.amount1()));
     }
 
     /**
@@ -576,8 +556,9 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
 
         // get grace period for this position from market vts configuration
         IVTSManager vtsManager = _getVTSManager();
-        MarketVTSConfiguration memory vtsConfiguration = vtsManager.getMarketVTSConfiguration(position.poolId);
-        vtsConfiguration.validateGracePeriod(positionId, positionToCheckpoint[positionId]);
+        vtsManager.getMarketVTSConfiguration(position.poolId).validateGracePeriod(
+            positionId, positionToCheckpoint[positionId]
+        );
 
         uint256 maxSiezureFractionBPS = vtsManager.getSeizureAmount(positionId);
         // based on the amount they are choosing to settle, calculate how much of the total siezable amount to be seized by the caller

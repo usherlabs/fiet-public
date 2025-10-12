@@ -51,55 +51,6 @@ contract LiquidityRouter is IUnlockCallback {
         bool takeClaims;
     }
 
-    /// calculate the deposit amounts from the position params
-    function calculateTokenAmountsFromPositionParams(
-        PoolKey memory poolKey,
-        ModifyLiquidityParams memory positionParams
-    ) public view returns (uint256 depositAmount0, uint256 depositAmount1) {
-        (uint160 sqrtPriceX96, int24 currentTick,,) = manager.getSlot0(poolKey.toId());
-        BalanceDelta delta;
-
-        if (currentTick < positionParams.tickLower) {
-            // current tick is below the passed range; liquidity can only become in range by crossing from left to
-            // right, when we'll need _more_ currency0 (it's becoming more valuable) so user must provide it
-            delta = toBalanceDelta(
-                SqrtPriceMath.getAmount0Delta(
-                    TickMath.getSqrtPriceAtTick(positionParams.tickLower),
-                    TickMath.getSqrtPriceAtTick(positionParams.tickUpper),
-                    positionParams.liquidityDelta.toInt128()
-                ).toInt128(),
-                0
-            );
-        } else if (currentTick < positionParams.tickUpper) {
-            delta = toBalanceDelta(
-                SqrtPriceMath.getAmount0Delta(
-                    sqrtPriceX96,
-                    TickMath.getSqrtPriceAtTick(positionParams.tickUpper),
-                    positionParams.liquidityDelta.toInt128()
-                ).toInt128(),
-                SqrtPriceMath.getAmount1Delta(
-                    TickMath.getSqrtPriceAtTick(positionParams.tickLower),
-                    sqrtPriceX96,
-                    positionParams.liquidityDelta.toInt128()
-                ).toInt128()
-            );
-        } else {
-            // current tick is above the passed range; liquidity can only become in range by crossing from right to
-            // left, when we'll need _more_ currency1 (it's becoming more valuable) so user must provide it
-            delta = toBalanceDelta(
-                0,
-                SqrtPriceMath.getAmount1Delta(
-                    TickMath.getSqrtPriceAtTick(positionParams.tickLower),
-                    TickMath.getSqrtPriceAtTick(positionParams.tickUpper),
-                    positionParams.liquidityDelta.toInt128()
-                ).toInt128()
-            );
-        }
-
-        return
-            (LiquidityUtils.safeInt128ToUint256(delta.amount0()), LiquidityUtils.safeInt128ToUint256(delta.amount1()));
-    }
-
     /// callback function to modify the liquidity of the pool after the pool manager is unlocked
     function unlockCallback(bytes calldata rawData) external returns (bytes memory) {
         require(msg.sender == address(manager));
