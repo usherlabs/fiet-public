@@ -17,7 +17,8 @@ import {LiquiditySignal} from "./types/Position.sol";
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 import {IERC20Minimal} from "@uniswap/v4-core/src/interfaces/external/IERC20Minimal.sol";
 import {IVTSManager} from "./interfaces/IVTSManager.sol";
-import {MarketVTSConfiguration} from "./types/VTS.sol";
+import {MarketVTSConfiguration, MarketVTSConfigurationLibrary} from "./types/VTS.sol";
+import {RFSCheckpoint, RFSCheckpointLibrary} from "./types/Checkpoint.sol";
 import {LiquidityUtils} from "./libraries/LiquidityUtils.sol";
 import {toBalanceDelta} from "v4-periphery/lib/v4-core/src/types/BalanceDelta.sol";
 import {IMMPositionManager} from "./interfaces/IMMPositionManager.sol";
@@ -30,6 +31,9 @@ import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
 
 contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
     using SafeCast for *;
+    using RFSCheckpointLibrary for RFSCheckpoint;
+    using MarketVTSConfigurationLibrary for MarketVTSConfiguration;
+    using PositionLibrary for PositionId;
 
     error InvalidDelta(int128 amount0, int128 amount1);
     error InvalidAmount(uint256 amount, uint256 maxAmount);
@@ -51,6 +55,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
     address public immutable marketFactory;
     uint256 private nextTokenId = 1;
     IVRLSpokeReceiver public immutable spokeReceiver;
+    mapping(PositionId => RFSCheckpoint) public positionToCheckpoint;
     mapping(uint256 => mapping(uint256 => PositionId)) public nftToPositionId;
     mapping(uint256 => uint256) public nftToPositionCount;
     mapping(PositionId => string) public proverOfPosition; //? is this necessary?
@@ -148,6 +153,8 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         _modifyMarketUnderlyingAsset(
             getPositionId(tokenId, positionIndex), m.poolId, toBalanceDelta(amount0.toInt128(), amount1.toInt128())
         );
+        // mark RFS checkpoint
+        _checkpoint(getPositionId(tokenId, positionIndex).toArray());
     }
 
     /**
@@ -182,6 +189,9 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         _modifyMarketUnderlyingAsset(
             positionId, position.poolId, toBalanceDelta(-amount0.toInt128(), -amount1.toInt128())
         );
+
+        // mark RFS checkpoint
+        _checkpoint(positionId.toArray());
     }
 
     /**
@@ -559,16 +569,15 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         // make sure at least one of the amounts is zero and the other is not zero
         require((amount0 == 0) != (amount1 == 0), "InvalidBalanceDelta");
         // make sure there is an open RFS for this position
-        (bool rfsOpen, BalanceDelta rfsBalanceDelta) = _getVTSManager().calcRFS(positionId, false);
-        if (!rfsOpen) revert RFSNotOpen(positionId);
+        (, BalanceDelta rfsBalanceDelta) = _getVTSManager().calcRFS(positionId, true);
 
         // create a balance delta of the amounts to settle
         BalanceDelta settleBalanceDelta = toBalanceDelta(amount0.toInt128(), amount1.toInt128());
 
         // get grace period for this position from market vts configuration
         IVTSManager vtsManager = _getVTSManager();
-        // MarketVTSConfiguration memory vtsConfiguration = vtsManager.getMarketVTSConfiguration(position.poolId);
-        // vtsConfiguration.validateGracePeriod(positionId, positionToCheckpoint[positionId]);
+        MarketVTSConfiguration memory vtsConfiguration = vtsManager.getMarketVTSConfiguration(position.poolId);
+        vtsConfiguration.validateGracePeriod(positionId, positionToCheckpoint[positionId]);
 
         uint256 maxSiezureFractionBPS = vtsManager.getSeizureAmount(positionId);
         // based on the amount they are choosing to settle, calculate how much of the total siezable amount to be seized by the caller
@@ -644,5 +653,28 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         // -- Liquidate the position partially or fully
         // do this last because it counld potentially mark the position as inactive and cause some of the above calls to fail as they require an active position
         _liquidatePosition(positionPoolKey, tokenId, positionIndex, liquidityToSeize);
+    }
+
+    /**
+     * @dev This function is used to mark the checkpoint of the RFS for a given position
+     * @param positionIds The position ids to mark the checkpoint of the RFS for
+     */
+    function checkpoint(PositionId[] memory positionIds) public {
+        _checkpoint(positionIds);
+    }
+
+    /**
+     * @dev This function is used to mark the checkpoint of the RFS for a given position
+     * @param positionIds The position ids to mark the checkpoint of the RFS for
+     */
+    function _checkpoint(PositionId[] memory positionIds) internal {
+        IVTSManager vtsManager = _getVTSManager();
+        for (uint256 i = 0; i < positionIds.length; i++) {
+            PositionId positionId = positionIds[i];
+            // check if rfs is open for this position
+            (bool rfsOpen,) = vtsManager.calcRFS(positionId, false);
+            // mark the checkpoint with the state of the rfs of the position
+            positionToCheckpoint[positionId].mark(rfsOpen);
+        }
     }
 }
