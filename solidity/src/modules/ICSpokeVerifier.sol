@@ -26,6 +26,7 @@ contract ICSpokeVerifier is ISpokeVerifier {
     }
 
     function verifyProof(
+        uint256 nonce,
         bytes32 rootStateHash,
         bytes calldata rootStateHashSignature,
         bytes calldata mmStateHashSignature,
@@ -43,10 +44,8 @@ contract ICSpokeVerifier is ISpokeVerifier {
         } else {
             // if the signature is valid, set isCallerAuthorized to true
             // generate the message hash to sign from the leafhash and the nonce
-            console.log("here");
-            bytes32 message = sha256(abi.encodePacked(mmStateData.toLeafHash(), mmStateData.nonce));
-            address recovered = MessageHashUtils.toEthSignedMessageHash(message).recover(mmStateHashSignature);
-            console.log("recovered:", recovered);
+            address recovered =
+                MessageHashUtils.toEthSignedMessageHash(mmStateData.toLeafHash()).recover(mmStateHashSignature);
             isCallerAuthorized = recovered == mmStateData.owner;
         }
 
@@ -64,8 +63,9 @@ contract ICSpokeVerifier is ISpokeVerifier {
         }
 
         // verify signature of the canister on the root state hash
+        bytes32 message = sha256(abi.encodePacked(nonce, rootStateHash));
         bool isRootStateHashValid =
-            MessageHashUtils.toEthSignedMessageHash(rootStateHash).recover(rootStateHashSignature) == canisterAddress;
+            MessageHashUtils.toEthSignedMessageHash(message).recover(rootStateHashSignature) == canisterAddress;
         if (!isRootStateHashValid) {
             // revert InvalidRootStateHashSignature();
             return false;

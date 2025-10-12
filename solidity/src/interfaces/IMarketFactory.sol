@@ -2,6 +2,7 @@
 pragma solidity ^0.8.20;
 
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {MarketVTSConfiguration} from "../types/VTS.sol";
 
 /**
@@ -38,6 +39,19 @@ interface IMarketFactory {
     error InvalidBound();
 
     // ============ VIEW FUNCTIONS ============
+    /**
+     * @notice Gets the pool key for a given pool ID
+     * @param poolId The pool ID
+     * @return The pool key
+     */
+    function poolIdToPoolKey(PoolId poolId) external view returns (PoolKey memory);
+
+    /**
+     * @notice Gets the proxy hook address for a given core pool ID
+     * @param corePoolId The core pool ID
+     * @return The proxy hook address
+     */
+    function corePoolToProxyHook(PoolId corePoolId) external view returns (address);
 
     /**
      * @notice Gets the LCC token for a given underlying asset

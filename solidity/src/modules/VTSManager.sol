@@ -129,13 +129,29 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         return corePoolToVTSConfiguration[corePoolId];
     }
 
+    /**
+     * @notice Upsert a position and its Metadata
+     * @param owner The owner of the position
+     * @param poolId The pool id of the position
+     * @param params The parameters of the position
+     */
     function _touchPosition(address owner, PoolId poolId, ModifyLiquidityParams calldata params) internal virtual {
         PositionId id = PositionLibrary.generateId(owner, params);
         PositionMeta memory m = meta[id];
         if (m.owner == address(0)) {
+            // new position, initialize the liquidity to the liquidity delta, assuming it will always be positive
             _registerPosition(owner, poolId, params);
         } else if (m.isActive == true) {
-            meta[id].liquidity = params.liquidityDelta;
+            // existing position, update the liquidity by the liquidity delta
+
+            int256 newLiquidity = meta[id].liquidity += params.liquidityDelta;
+            if (newLiquidity < 0) {
+                // this should never happen in theory but check is performed to be safe since it is a uint256 and a position musst not have a negative liquidity
+                // revert InvalidLiquidityDelta(newLiquidity);
+                meta[id].liquidity = 0;
+            } else {
+                meta[id].liquidity = newLiquidity;
+            }
         } else {
             revert NotActive(id);
         }
@@ -506,6 +522,17 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         // important to do this before removing the liquidity from the pool
         // because the position information is cleared after removing the liquidity
         return getPositionSettledAmounts(positionId);
+    }
+
+    /**
+     * @notice Gets the amount of assets that can be seized from a position using the linked library
+     * @param _positionId The position id
+     * @return siezureFractionBPS The amount of position that can be seized in bps
+     */
+    function getSeizureAmount(PositionId _positionId) public view virtual returns (uint256 siezureFractionBPS) {
+        // TODO: derive the amount of assets that can be seized from a position
+        _positionId;
+        return 0;
     }
 
     /**

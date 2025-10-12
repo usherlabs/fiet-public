@@ -17,7 +17,7 @@ contract MarketMakerTest is MarketMakerTestBase {
     function setUp() public {
         // Create and fill in the test state
         _setUpMM();
-        icVerifier = new ICSpokeVerifier(makeAddr("icCanister"));
+        icVerifier = new ICSpokeVerifier(icCanister);
     }
 
     /// Test the to_string function against a string generated using the rust code
@@ -77,12 +77,13 @@ contract MarketMakerTest is MarketMakerTestBase {
     function test_marketMaker_canICSpokeVerifierVerifyProof() public view {
         // Verify the signatures and merkle proof
         bool success = icVerifier.verifyProof(
+            liquiditySignal.nonce,
             liquiditySignal.rootHash,
             liquiditySignal.rootHashSignature,
-            liquiditySignal.signature,
+            liquiditySignal.mmSignature,
             liquiditySignal.mmState,
             liquiditySignal.merkleProof
         );
-        console.log("success:", success);
+        require(success, "Failed to verify proof");
     }
 }
