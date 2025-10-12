@@ -214,7 +214,8 @@ library LiquidityUtils {
 
         // get the amount of underlying liquidity to transfer from the issuer to the lcc
         // divide by 10000 to convert to a percentage from bips
-        underlyingLiquidityFraction0 = Math.ceilDiv(lccAmount0 * vtsConfiguration.token0.baseVTSRate, 10000);
-        underlyingLiquidityFraction1 = Math.ceilDiv(lccAmount1 * vtsConfiguration.token1.baseVTSRate, 10000);
+        uint256 oneBip = 10000;
+        underlyingLiquidityFraction0 = Math.ceilDiv(lccAmount0 * vtsConfiguration.token0.baseVTSRate, oneBip);
+        underlyingLiquidityFraction1 = Math.ceilDiv(lccAmount1 * vtsConfiguration.token1.baseVTSRate, oneBip);
     }
 }

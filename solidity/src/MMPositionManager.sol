@@ -153,6 +153,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         _modifyMarketUnderlyingAsset(
             getPositionId(tokenId, positionIndex), m.poolId, toBalanceDelta(amount0.toInt128(), amount1.toInt128())
         );
+
         // mark RFS checkpoint
         _checkpoint(getPositionId(tokenId, positionIndex).toArray());
     }
@@ -258,7 +259,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         // use the position id to make the initial settlement of the underlying tokens to the proxy hook
         // Get amount of underlying liquidity to transfer from the issuer to the lcc
         (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) =
-            getBaseSettlementAmounts(poolKey, liquidityParams);
+            LiquidityUtils.getBaseSettlementAmounts(liquidityParams, vtsManager.getMarketVTSConfiguration(poolKey.toId()));
 
         // settle the underlying tokens to the proxy hook
         // By calling VTSManager.onMMLiquidityModify, we are also settling the position growths for new MMPosition.
@@ -328,32 +329,6 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         return toBalanceDelta(int128(uint128(s0)), int128(uint128(s1)));
     }
 
-    /**
-     * @dev This utility function is used to get the base settlement amounts using the base vts for a given pool key and lcc amounts
-     * @param poolKey The pool key to get the base settlement amounts for
-     * @param liquidityParams The liquidity parameters to get the base settlement amounts for
-     * @return underlyingLiquidityFraction0 The amount of underlying liquidity to transfer from the issuer to the lcc0
-     * @return underlyingLiquidityFraction1 The amount of underlying liquidity to transfer from the issuer to the lcc1
-     */
-    function getBaseSettlementAmounts(PoolKey memory poolKey, ModifyLiquidityParams memory liquidityParams)
-        public
-        view
-        returns (uint256, uint256)
-    {
-        // get the base vts of the currencies from the pool configuration
-        MarketVTSConfiguration memory vtsConfiguration = _getVTSManager().getMarketVTSConfiguration(poolKey.toId());
-        (uint256 c0, uint256 c1) = LiquidityUtils.calculateCommitmentMaxima(
-            liquidityParams.tickLower, liquidityParams.tickUpper, uint128(int128(liquidityParams.liquidityDelta))
-        );
-
-        // get the amount of underlying liquidity to transfer from the issuer to the lcc
-        // divide by 10000 to convert to a percentage from bips
-        uint256 oneBip = 10000;
-        uint256 underlyingLiquidityFraction0 = (c0 * vtsConfiguration.token0.baseVTSRate) / oneBip;
-        uint256 underlyingLiquidityFraction1 = (c1 * vtsConfiguration.token1.baseVTSRate) / oneBip;
-
-        return (underlyingLiquidityFraction0, underlyingLiquidityFraction1);
-    }
 
     function _createPosition(
         PoolKey memory poolKey,

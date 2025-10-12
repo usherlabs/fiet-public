@@ -143,7 +143,6 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
             _registerPosition(owner, poolId, params);
         } else if (m.isActive == true) {
             // existing position, update the liquidity by the liquidity delta
-
             int256 newLiquidity = meta[id].liquidity += params.liquidityDelta;
             if (newLiquidity < 0) {
                 // this should never happen in theory but check is performed to be safe since it is a uint256 and a position musst not have a negative liquidity

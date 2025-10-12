@@ -147,7 +147,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         uint256 proxyCurrency0BalanceBefore = manager.balanceOf(address(proxyHook), proxyPoolKey.currency0.toId());
         uint256 proxyCurrency1BalanceBefore = manager.balanceOf(address(proxyHook), proxyPoolKey.currency1.toId());
-
         positionManager.commit(
             corePoolKey,
             liquidityParams.tickLower,
@@ -184,8 +183,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
     }
 
     function testCanSettleToCreatedPosition() public {
-        // get the default market confiration so we can tweak it
-
         bytes memory liquiditySignal = abi.encode(liquiditySignal);
         ModifyLiquidityParams memory liquidityParams =
             ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});

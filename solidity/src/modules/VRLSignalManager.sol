@@ -50,7 +50,6 @@ contract VRLSignalManager is Ownable {
         public
         returns (string[] memory tickers, uint256[] memory amounts)
     {
-        console.log("verifyLiquiditySignal", liquiditySignal.nonce, liquiditySignal.mmState.owner);
         // validate the new nonce is greater than than the previous nonce
         if (liquiditySignal.nonce <= mmNonce[liquiditySignal.mmState.owner]) {
             revert InvalidNonce(liquiditySignal.nonce, mmNonce[liquiditySignal.mmState.owner]);
