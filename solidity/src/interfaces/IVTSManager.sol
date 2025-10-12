@@ -9,7 +9,7 @@ import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 interface IVTSManager {
     function setMarketVTSConfiguration(PoolId corePoolId, MarketVTSConfiguration memory vtsConfiguration) external;
 
-    function onMMLiquidityModify(PositionId positionId, BalanceDelta balanceDelta) external;
+    function onMMLiquidityModify(PositionId positionId, BalanceDelta balanceDelta) external returns (BalanceDelta);
 
     function getMarketVTSConfiguration(PoolId corePoolId) external view returns (MarketVTSConfiguration memory);
 
@@ -23,8 +23,6 @@ interface IVTSManager {
         external
         view
         returns (uint256 amount0, uint256 amount1);
-
-    function prepareLiquidation(PositionId positionId) external returns (uint256 amount0, uint256 amount1);
 
     function getSeizureAmount(PositionId positionId) external view returns (uint256 siezureFractionBPS);
 

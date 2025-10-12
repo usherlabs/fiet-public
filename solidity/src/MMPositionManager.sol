@@ -20,7 +20,6 @@ import {IVTSManager} from "./interfaces/IVTSManager.sol";
 import {MarketVTSConfiguration, MarketVTSConfigurationLibrary} from "./types/VTS.sol";
 import {RFSCheckpoint, RFSCheckpointLibrary} from "./types/Checkpoint.sol";
 import {LiquidityUtils} from "./libraries/LiquidityUtils.sol";
-import {toBalanceDelta} from "v4-periphery/lib/v4-core/src/types/BalanceDelta.sol";
 import {IMMPositionManager} from "./interfaces/IMMPositionManager.sol";
 import {IProxyHook} from "./interfaces/IProxyHook.sol";
 import {ILCC} from "./interfaces/ILCC.sol";
@@ -373,8 +372,8 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
             PositionMeta memory position = getPosition(tokenId, i);
             if (position.isActive) {
                 BalanceDelta balanceDelta = burn(poolKey, tokenId, i);
-                totalS0 += uint256(uint128(balanceDelta.amount0()));
-                totalS1 += uint256(uint128(balanceDelta.amount1()));
+                totalS0 += LiquidityUtils.safeInt128ToUint256(balanceDelta.amount0());
+                totalS1 += LiquidityUtils.safeInt128ToUint256(balanceDelta.amount1());
             }
         }
 
@@ -398,8 +397,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
     {
         // Liquidate position will call VTSManager.onMMLiquidityModify, which will settle the position growths for the new MMPosition.
         uint256 completeLiquidity = uint256(getPosition(tokenId, positionIndex).liquidity);
-        BalanceDelta balanceDelta = _liquidatePosition(poolKey, tokenId, positionIndex, completeLiquidity);
-        return balanceDelta;
+        return _liquidatePosition(poolKey, tokenId, positionIndex, completeLiquidity);
     }
 
     function modify(PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex, int256 liquidity)
@@ -565,7 +563,10 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
      * @param poolId The pool id to modify the underlying assets for
      * @param balanceDelta The balance delta of the underlying assets to modify
      */
-    function _modifyMarketUnderlyingAsset(PositionId positionId, PoolId poolId, BalanceDelta balanceDelta) internal {
+    function _modifyMarketUnderlyingAsset(PositionId positionId, PoolId poolId, BalanceDelta balanceDelta)
+        internal
+        returns (BalanceDelta returnDelta)
+    {
         // TODO: BalanceDelta deltaToBurn to be added here
 
         address sender = msg.sender;
@@ -603,7 +604,9 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         }
 
         // notify the vts manager of the settlement made for this position
-        BalanceDelta balanceDelta = _getVTSManager().onMMLiquidityModify(positionId, balanceDelta);
+        BalanceDelta returnDelta = _getVTSManager().onMMLiquidityModify(
+            positionId, LiquidityUtils.safeToBalanceDelta(amount0, amount1, false, false)
+        );
 
         // TODO: ZeroDelta to result in full take. Requires validation.
         // BalanceDelta balanceDelta = _getVTSManager().onMMLiquidityModify(
@@ -616,12 +619,12 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
 
         // notify the proxy hook of the settled underlying tokens
         // a positive balance delta means we are settling underlying tokens to the proxy hook, negative means withdrawing.
-        IProxyHook(proxyHook).onMMLiquidityModify(balanceDelta);
+        IProxyHook(proxyHook).onMMLiquidityModify(returnDelta);
         // if it is a take, then transfer the underlying tokens from the contract to the actual recipient
         if (!isSettle) {
             // transfer from this contract to the actual recipient
-            uint256 takeAmount0 = LiquidityUtils.safeInt128ToUint256(balanceDelta.amount0());
-            uint256 takeAmount1 = LiquidityUtils.safeInt128ToUint256(balanceDelta.amount1());
+            uint256 takeAmount0 = LiquidityUtils.safeInt128ToUint256(returnDelta.amount0());
+            uint256 takeAmount1 = LiquidityUtils.safeInt128ToUint256(returnDelta.amount1());
             if (takeAmount0 > 0) {
                 // transfer from this contract to the actual recipient
                 IERC20Minimal(lcc0.underlyingAsset()).transfer(sender, takeAmount0);

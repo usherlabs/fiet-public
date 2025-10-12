@@ -338,8 +338,8 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         uint256 s1 = 5;
         vm.mockCall(
             address(IVTSManager(coreHookAddress)),
-            abi.encodeWithSelector(IVTSManager.prepareLiquidation.selector),
-            abi.encode(s0, s1)
+            abi.encodeWithSelector(IVTSManager.onMMLiquidityModify.selector),
+            abi.encode(LiquidityUtils.safeToBalanceDelta(s0, s1, false, false))
         );
         BalanceDelta balanceDelta = positionManager.burn(corePoolKey, tokenId, 0);
 
@@ -384,8 +384,8 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         // Mock the liquidation preparation for this position
         vm.mockCall(
             address(IVTSManager(coreHookAddress)),
-            abi.encodeWithSelector(IVTSManager.prepareLiquidation.selector),
-            abi.encode(uint256(3), uint256(2))
+            abi.encodeWithSelector(IVTSManager.onMMLiquidityModify.selector),
+            abi.encode(LiquidityUtils.safeToBalanceDelta(3, 2, false, false))
         );
 
         positionManager.decommit(corePoolKey, tokenId);

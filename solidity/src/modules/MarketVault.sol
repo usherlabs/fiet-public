@@ -12,7 +12,6 @@ import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {CurrencySettler} from "@uniswap/v4-core/test/utils/CurrencySettler.sol";
 import {ILCC} from "../interfaces/ILCC.sol";
 import {IMarketLiquidity} from "../interfaces/IMarketLiquidity.sol";
-import {LiquidityUtils} from "../libraries/LiquidityUtils.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";

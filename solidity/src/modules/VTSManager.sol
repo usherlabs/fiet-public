@@ -25,6 +25,7 @@ import {ILCC} from "../interfaces/ILCC.sol";
 import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
 import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint128.sol";
 import {SafeCast as OZSafeCast} from "openzeppelin-contracts/contracts/utils/math/SafeCast.sol";
+import {LiquidityUtils} from "../libraries/LiquidityUtils.sol";
 
 abstract contract VTSManager is IVTSManager, PositionIndex {
     using SafeCastLib for *;
@@ -314,7 +315,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
      * @notice Records the settlement of assets on a position
      * @dev make sure this function can only be called by the position manager since that is the interface through which settlements are going to be made
      * @param positionId The id of the position
-     * @param balanceDelta The balance delta of the settlement
+     * @param modifyDelta The balance delta of the settlement
      */
     function onMMLiquidityModify(PositionId positionId, BalanceDelta modifyDelta)
         external

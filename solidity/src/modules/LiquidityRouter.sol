@@ -28,7 +28,7 @@ import {SqrtPriceMath} from "v4-periphery/lib/v4-core/src/libraries/SqrtPriceMat
 import {toBalanceDelta} from "v4-periphery/lib/v4-core/src/types/BalanceDelta.sol";
 import {LiquidityUtils} from "../libraries/LiquidityUtils.sol";
 
-contract LiquidityRouter is IUnlockCallback {
+abstract contract LiquidityRouter is IUnlockCallback {
     using SafeCast for *;
     using CurrencySettler for Currency;
     using Hooks for IHooks;
