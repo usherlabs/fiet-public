@@ -124,8 +124,8 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         _;
     }
 
-    modifier onlyMMP(PositionId _positionId) {
-        if (msg.sender != mmPositionManager || _isDirectLP(_positionId)) {
+    modifier onlyMMPosition(PositionId _positionId) {
+        if (!_isCallerMMP(msg.sender) || !_isMMPosition(_positionId)) {
             revert InvalidCaller();
         }
         _;
@@ -181,6 +181,23 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     }
 
     /**
+     * @notice Checks if the caller is the MM Position Manager
+     * @return True if the caller is the MM Position Manager, false otherwise
+     */
+    function _isCallerMMP(address caller) internal view returns (bool) {
+        return caller == mmPositionManager;
+    }
+
+    /**
+     * @notice Checks if a position is a DirectLP - all positions not owned by the MM Position Manager are DirectLPs - ie. handled natively, or by third-party contracts.
+     * @param positionId The id of the position
+     * @return True if the position is a DirectLP, false otherwise
+     */
+    function _isMMPosition(PositionId positionId) internal view returns (bool) {
+        return meta[positionId].owner == mmPositionManager;
+    }
+
+    /**
      * @notice Touches a position, registers it if it doesn't exist, updates it if it does, and tracks the commitment
      * @param owner The owner of the position - ie. the Smart Contract managing positions.
      * @param poolId The pool id
@@ -216,6 +233,10 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         _trackCommitment(id, params);
     }
 
+    /**
+     * @notice Initializes the snapshots for a position. Prevents new positions from inheriting historical tick-indexed growths.
+     * @param id The id of the position
+     */
     function _initPositionSnapshots(PositionId id) internal {
         PositionMeta memory m = meta[id];
         PoolId p = m.poolId;
@@ -297,7 +318,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
      */
     function onMMLiquidityModify(PositionId positionId, BalanceDelta balanceDelta)
         external
-        onlyMMP(positionId)
+        onlyMMPosition(positionId)
         onlyPositionValid(positionId)
     {
         // First, settle both growths since last touch
@@ -320,6 +341,8 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
             _updateSettlement(poolId, positionId, 1, int256(amount1));
         }
 
+        // Auto-redeem fee pot to settlement credits for immediate RfS accessibility
+        _redeemFeePot(positionId, false); // TODO: should this not be before the settlement mechanics, however, it'll likely need to be called before calcRfS?
         emit MMPositionLiquidityUpdated(poolId, positionId, amount0, amount1);
     }
 
@@ -440,8 +463,8 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         uint256 in0 = 0;
         uint256 in1 = 0;
 
-        // DirectLPs always eligible (no inside exclusion)
-        if (!_isDirectLP(id)) {
+        // DirectLPs always eligible (no inside exclusion), where as MMs are conditionally eligible.
+        if (_isMMPosition(id)) {
             (in0, in1) = GrowthAccounting.inside(feePotGrowthGlobal, feePotGrowthOutside, p, m.tickLower, m.tickUpper);
         }
 
@@ -464,8 +487,12 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         uint256 u0 = _coverageUnits(id, 0);
         uint256 u1 = _coverageUnits(id, 1);
 
-        if (out0 > 0 && u0 > 0) feePotBaseline[id][0] += FullMath.mulDiv(out0, u0, FixedPoint128.Q128);
-        if (out1 > 0 && u1 > 0) feePotBaseline[id][1] += FullMath.mulDiv(out1, u1, FixedPoint128.Q128);
+        if (out0 > 0 && u0 > 0) {
+            feePotBaseline[id][0] += FullMath.mulDiv(out0, u0, FixedPoint128.Q128);
+        }
+        if (out1 > 0 && u1 > 0) {
+            feePotBaseline[id][1] += FullMath.mulDiv(out1, u1, FixedPoint128.Q128);
+        }
 
         feePotGrowthInsideLast[id][0] = in0;
         feePotGrowthInsideLast[id][1] = in1;
@@ -506,19 +533,24 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         }
     }
 
-    // TODO: determine if we include in fee management of core hook.
-    function claimFeePot(PositionId id) external override onlyPositionValid(id) returns (uint256 c0, uint256 c1) {
-        if (meta[id].owner != msg.sender) revert InvalidCaller();
-        _settlePositionGrowths(id);
+    /**
+     * @notice Internal redemption to settlement credit (used by MMs and external claim)
+     * @param id The id of the position
+     * @param forReturnDelta Whether the redemption is for return delta in the CoreHook. Default is false, meaning it's for MM withdrawals.
+     * @return pay0 The amount of token0 to pay
+     * @return pay1 The amount of token1 to pay
+     */
+    function _redeemFeePot(PositionId id, bool forReturnDelta) internal returns (uint256 pay0, uint256 pay1) {
         PoolId p = meta[id].poolId;
-
-        uint256 pay0 = feePotBaseline[id][0];
-        uint256 pay1 = feePotBaseline[id][1];
+        pay0 = feePotBaseline[id][0];
+        pay1 = feePotBaseline[id][1];
 
         if (pay0 > 0) {
             if (pay0 > protocolFeeAccrued[p][0]) pay0 = protocolFeeAccrued[p][0];
             if (pay0 > 0) {
-                _updateSettlement(p, id, 0, int256(pay0));
+                if (!forReturnDelta) {
+                    _updateSettlement(p, id, 0, int256(pay0));
+                }
                 protocolFeeAccrued[p][0] -= pay0;
                 feePotBaseline[id][0] -= pay0;
             }
@@ -526,12 +558,13 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         if (pay1 > 0) {
             if (pay1 > protocolFeeAccrued[p][1]) pay1 = protocolFeeAccrued[p][1];
             if (pay1 > 0) {
-                _updateSettlement(p, id, 1, int256(pay1));
+                if (!forReturnDelta) {
+                    _updateSettlement(p, id, 1, int256(pay1));
+                }
                 protocolFeeAccrued[p][1] -= pay1;
                 feePotBaseline[id][1] -= pay1;
             }
         }
-        return (pay0, pay1);
     }
 
     /// @notice Called by the hook on tick cross to flip outside growth for a tick
@@ -819,7 +852,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         return (rfsOpen, delta);
     }
 
-    function prepareLiquidation(PositionId positionId) external onlyMMP(positionId) returns (uint256, uint256) {
+    function prepareLiquidation(PositionId positionId) external onlyMMPosition(positionId) returns (uint256, uint256) {
         calcRFS(positionId, true); // revert if RFS is open
 
         // get total amount settled from the VTS manager

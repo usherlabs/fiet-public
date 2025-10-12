@@ -6,6 +6,7 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {BaseHook} from "v4-periphery/src/utils/BaseHook.sol";
 import {BalanceDelta, BalanceDeltaLibrary} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
@@ -38,9 +39,6 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
     error InvalidInitialiser();
     error InvalidSender();
 
-    // MarketHandler already defines marketFactory; remove duplicate
-    address public immutable mmPositionManager;
-
     modifier onlyFactory() {
         if (msg.sender != marketFactory) {
             revert InvalidSender();
@@ -54,11 +52,6 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
         VTSManager(_poolManager, _marketFactory, _mmPositionManager, _calculator)
     {
         marketFactory = _marketFactory;
-        mmPositionManager = _mmPositionManager;
-    }
-
-    function getMMPositionManager() public view returns (address) {
-        return IMarketFactory(marketFactory).mmPositionManager();
     }
 
     function pause(PoolId poolId) external onlyFactory {
@@ -84,7 +77,7 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
             beforeSwapReturnDelta: false,
             afterSwapReturnDelta: false,
             afterAddLiquidityReturnDelta: false,
-            afterRemoveLiquidityReturnDelta: false
+            afterRemoveLiquidityReturnDelta: true
         });
     }
 
@@ -271,7 +264,7 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
         _touchPosition(sender, key.toId(), params);
 
         // only add direct liquidity if the sender is not the market maker position manager/router
-        if (sender != address(mmPositionManager)) {
+        if (!_isCallerMMP(sender)) {
             ProxyHook(_getProxyHook(key)).onDirectLP(delta, LiquidityUtils.ActionType.DirectLPAddLiquidity); // Fetching ProxyHook by corePoolKey, therefore no need to pass again.
         }
 
@@ -291,8 +284,17 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
 
         // Allow removal of liquidity even when the market is paused.
         // only remove direct liquidity if the sender is the pool manager
-        if (sender != address(mmPositionManager)) {
-            ProxyHook(_getProxyHook(key)).onDirectLP(delta, LiquidityUtils.ActionType.DirectLPRemoveLiquidity);
+        if (!_isCallerMMP(sender)) {
+            PositionId id = PositionLibrary.generateId(sender, params);
+            if (!_isMMPosition(id)) {
+                // Redeem fee-pot baseline into return-delta for DirectLPs
+                _settlePositionGrowths(id);
+                (uint256 pay0, uint256 pay1) = _redeemFeePot(id, true);
+                BalanceDelta bonus = toBalanceDelta(int128(uint128(pay0)), int128(uint128(pay1)));
+                BalanceDelta combined = delta + bonus;
+                ProxyHook(_getProxyHook(key)).onDirectLP(combined, LiquidityUtils.ActionType.DirectLPRemoveLiquidity);
+                return (this.afterRemoveLiquidity.selector, combined);
+            }
         }
 
         return (this.afterRemoveLiquidity.selector, BalanceDeltaLibrary.ZERO_DELTA);

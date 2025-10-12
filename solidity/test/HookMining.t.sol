@@ -69,6 +69,7 @@ contract HookTest is Test, Deployers {
         assertTrue(perms.afterRemoveLiquidity);
         assertTrue(perms.beforeSwap);
         assertTrue(perms.afterSwap);
+        assertTrue(perms.afterRemoveLiquidityReturnDelta);
     }
 
     function testProxyHookPermissions() public view {
