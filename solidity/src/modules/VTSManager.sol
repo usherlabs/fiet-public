@@ -490,35 +490,37 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
                     protocolCoverage[poolId][tokenIndex] = pC - attributed;
 
                     uint256 bps = corePoolToVTSConfiguration[poolId].coverageFeeShare;
-                    uint128 liq = poolManager.getPositionLiquidity(poolId, PositionId.unwrap(positionId));
-                    (uint256 fees, uint256 ofDelta) = _readFeesAndCheckpoint(positionId, poolId, tokenIndex, liq);
-                    // Fees accrue continuously over time; deficits arise from outflows.
-                    // To share “fees on the deficit amount exclusively,” normalise fees by the same window’s position-attributed outflows.
-                    // New calc: share = fees * (attributed / outflowDelta) * coverageFeeShare_bps/10000, where:
-                    // outflowDelta = cumulativeOutflows - outflowsAtFeeSnap (same checkpoint window as feeGrowth).
-                    // This ties fee sharing to the outflow volume that generated the obligation, not just the settlement amount.
-                    if (bps > 0 && fees > 0 && ofDelta > 0 && attributed > 0) {
-                        uint256 share = FullMath.mulDiv(fees, attributed, ofDelta);
-                        share = FullMath.mulDiv(share, bps, 10000);
-                        if (share > 0 && share <= fees) {
-                            uint256 growthInc = 0;
-                            if (liq > 0) {
-                                // The following is “burning” their claimable fees by advancing feeGrowthInsideLast by the share-equivalent growth.
-                                // In Uniswap-style accounting, a position’s owed fees = (feeGrowthInside − feeGrowthInsideLast) × liquidity. By increasing feeGrowthInsideLast by share/Q128/liquidity, we reduce their future fee delta exactly by share.
-                                growthInc = FullMath.mulDiv(share, FixedPoint128.Q128, liq);
-                                feeGrowthInsideLast[positionId][tokenIndex] += growthInc;
-                            }
-                            // The “value” of the share is accrued to protocolFeeAccrued[...], so the MM loses that amount and the protocol/other LPs gain it.
-                            protocolFeeAccrued[poolId][tokenIndex] += share; // utilised to clamp fee claims
+                    if (bps > 0) {
+                        uint128 liq = poolManager.getPositionLiquidity(poolId, PositionId.unwrap(positionId));
+                        (uint256 fees, uint256 ofDelta) = _readFeesAndCheckpoint(positionId, poolId, tokenIndex, liq);
+                        // Fees accrue continuously over time; deficits arise from outflows.
+                        // To share “fees on the deficit amount exclusively,” normalise fees by the same window’s position-attributed outflows.
+                        // New calc: share = fees * (attributed / outflowDelta) * coverageFeeShare_bps/10000, where:
+                        // outflowDelta = cumulativeOutflows - outflowsAtFeeSnap (same checkpoint window as feeGrowth).
+                        // This ties fee sharing to the outflow volume that generated the obligation, not just the settlement amount.
+                        if (fees > 0 && ofDelta > 0 && attributed > 0) {
+                            uint256 share = FullMath.mulDiv(fees, attributed, ofDelta);
+                            share = FullMath.mulDiv(share, bps, 10000);
+                            if (share > 0 && share <= fees) {
+                                uint256 growthInc = 0;
+                                if (liq > 0) {
+                                    // The following is “burning” their claimable fees by advancing feeGrowthInsideLast by the share-equivalent growth.
+                                    // In Uniswap-style accounting, a position’s owed fees = (feeGrowthInside − feeGrowthInsideLast) × liquidity. By increasing feeGrowthInsideLast by share/Q128/liquidity, we reduce their future fee delta exactly by share.
+                                    growthInc = FullMath.mulDiv(share, FixedPoint128.Q128, liq);
+                                    feeGrowthInsideLast[positionId][tokenIndex] += growthInc;
+                                }
+                                // The “value” of the share is accrued to protocolFeeAccrued[...], so the MM loses that amount and the protocol/other LPs gain it.
+                                protocolFeeAccrued[poolId][tokenIndex] += share; // utilised to clamp fee claims
 
-                            // Inverted fee-pot growth: accrue per backing unit
-                            uint256 denom = totalCoverageUnits[poolId][tokenIndex];
-                            if (denom > 0) {
-                                uint256 dG = FullMath.mulDiv(share, FixedPoint128.Q128, denom);
-                                feePotGrowthGlobal[poolId][tokenIndex] += dG;
-                            }
+                                // Inverted fee-pot growth: accrue per backing unit
+                                uint256 denom = totalCoverageUnits[poolId][tokenIndex];
+                                if (denom > 0) {
+                                    uint256 dG = FullMath.mulDiv(share, FixedPoint128.Q128, denom);
+                                    feePotGrowthGlobal[poolId][tokenIndex] += dG;
+                                }
 
-                            emit FeeShareHandled(poolId, positionId, tokenIndex, share, growthInc);
+                                emit FeeShareHandled(poolId, positionId, tokenIndex, share, growthInc);
+                            }
                         }
                     }
                 }
@@ -528,13 +530,15 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         uint256 proactive = settledAmount - d;
         if (proactive > 0) {
             _updateSettlement(poolId, positionId, tokenIndex, int256(proactive));
-            // Credit proactive excess only if in-range at settlement
-            (, int24 tick,,) = poolManager.getSlot0(poolId);
-            PositionMeta memory m = meta[positionId];
-            bool inRange = (tick >= m.tickLower && tick < m.tickUpper);
-            if (inRange) {
-                _accrueProactiveExcessGrowth(poolId, tokenIndex, proactive);
-                emit ProactiveCredited(poolId, tokenIndex, proactive, tick);
+            if (_isFeeSharingEnabled(poolId)) {
+                // Credit proactive excess only if in-range at settlement
+                (, int24 tick,,) = poolManager.getSlot0(poolId);
+                PositionMeta memory m = meta[positionId];
+                bool inRange = (tick >= m.tickLower && tick < m.tickUpper);
+                if (inRange) {
+                    _accrueProactiveExcessGrowth(poolId, tokenIndex, proactive);
+                    emit ProactiveCredited(poolId, tokenIndex, proactive, tick);
+                }
             }
         }
     }
@@ -769,10 +773,8 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     }
 
     /// @dev Accrue proactive excess growth to global accumulator (per token)
+    /// @notice Gated by _isFeeSharingEnabled before being called.
     function _accrueProactiveExcessGrowth(PoolId corePoolId, uint8 token, uint256 proactiveAmount) internal {
-        if (!_isFeeSharingEnabled(corePoolId)) {
-            return;
-        }
         uint128 liq = poolManager.getLiquidity(corePoolId);
         GrowthAccounting.accrue(proactiveExcessGrowthGlobal, corePoolId, token, proactiveAmount, liq);
     }
