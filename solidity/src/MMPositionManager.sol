@@ -38,12 +38,9 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
 
     error InvalidDelta(int128 amount0, int128 amount1);
     error InvalidAmount(uint256 amount, uint256 maxAmount);
-    error InvalidTicker(string ticker);
-    error InvalidPositionId(PositionId positionId);
-    error InvalidTokenId(uint256 tokenId);
     error InvalidLiquiditySignalEncoding();
-    error InactivePosition(PositionId positionId);
-    error InsufficientAmountToWithdraw(PositionId positionId, uint256 amount, uint256 maxAmount);
+    error InsufficientLiquidityInSignal(uint256 totalSignalUsdValue, uint256 totalLCCValue);
+    error InvalidPosition(uint256 tokenId, uint256 positionIndex, PositionId positionId);
     error InvalidMarket(PoolKey poolKey);
     error RFSNotOpen(PositionId positionId);
     error SignalExpired(uint256 tokenId);
@@ -69,7 +66,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
 
     modifier onlyNFTOwner(uint256 tokenId) {
         if (ownerOf(tokenId) != msg.sender) {
-            revert InvalidTokenId(tokenId);
+            revert InvalidPosition(tokenId, 0, PositionId.wrap(0));
         }
         _;
     }
@@ -137,12 +134,12 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
     function getPosition(uint256 tokenId, uint256 positionIndex) public view returns (PositionMeta memory) {
         PositionId positionId = getPositionId(tokenId, positionIndex);
         if (PositionId.unwrap(positionId) == bytes32(0)) {
-            revert InvalidPositionId(positionId);
+            revert InvalidPosition(tokenId, positionIndex, positionId);
         }
         PositionMeta memory m = _getPositionIndex().getPosition(positionId, true);
 
         if (!_isMMPosition(positionId, m)) {
-            revert InvalidPositionId(positionId);
+            revert InvalidPosition(tokenId, positionIndex, positionId);
         }
 
         return m;
@@ -160,6 +157,11 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         onlyNFTOwner(tokenId)
     {
         PositionMeta memory m = getPosition(tokenId, positionIndex); // Validate the position by fetching it.
+
+        if (amount0 == 0 && amount1 == 0) {
+            // Cannot settle 0 amounts
+            revert InvalidDelta(0, 0);
+        }
 
         // settle the underlying assets to the proxy hook
         _modifyMarketUnderlyingAsset(
@@ -184,18 +186,10 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         PositionId positionId = getPositionId(tokenId, positionIndex);
         PositionMeta memory position = getPosition(tokenId, positionIndex);
 
-        // validate that there is no open RFS for this position
-        (, BalanceDelta delta) = _getVTSManager().calcRFS(positionId, true); // second param is true to revert if RFS is open
-
-        // validate the amounts to be withdrawn is within limits
-        uint256 maxAmount0ToWithdraw = LiquidityUtils.safeInt128ToUint256(delta.amount0()); // essentially the absolute (originally native if rfs closed) value of the max withdrawable amount.
-        uint256 maxAmount1ToWithdraw = LiquidityUtils.safeInt128ToUint256(delta.amount1());
-
-        if (amount0 > maxAmount0ToWithdraw) {
-            revert InsufficientAmountToWithdraw(positionId, amount0, maxAmount0ToWithdraw);
-        }
-        if (amount1 > maxAmount1ToWithdraw) {
-            revert InsufficientAmountToWithdraw(positionId, amount1, maxAmount1ToWithdraw);
+        if (amount0 == 0 && amount1 == 0) {
+            // Cannot withdraw 0 amounts
+            // 0, 0 amounts reserved for defaulting to totalSettledAmounts during liquidation.
+            revert InvalidDelta(0, 0);
         }
 
         // withdraw the amounts from the position
@@ -225,7 +219,24 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         int256 liquidity,
         bytes memory liquiditySignal
     ) external onlyValidMarket(poolKey) returns (PositionId) {
-        // derive the liquidity modification parameters
+        ILCC lcc0 = ILCC(Currency.unwrap(poolKey.currency0));
+        ILCC lcc1 = ILCC(Currency.unwrap(poolKey.currency1));
+
+        // verify the liquidity signal, this will return the validated reserves
+        if (liquiditySignal.length == 0) {
+            revert InvalidLiquiditySignalEncoding();
+        }
+        if (liquidity == 0) {
+            revert InvalidDelta(0, 0);
+        }
+        LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
+        (string[] memory reservesTickers, uint256[] memory reservesAmounts) =
+            signalManager.verifyLiquiditySignal(signal);
+
+        // calculate the total signal usd value
+        uint256 totalSignalUsdValue = signalManager.getTotalUsdValue(reservesTickers, reservesAmounts);
+
+        // calculate the token0 and token1 amounts to mint to create the position
         ModifyLiquidityParams memory liquidityParams = ModifyLiquidityParams({
             tickLower: tickLower,
             tickUpper: tickUpper,
@@ -386,7 +397,6 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         returns (BalanceDelta)
     {
         // Liquidate position will call VTSManager.onMMLiquidityModify, which will settle the position growths for the new MMPosition.
-        // The kicker is that it's called after getRFS, so inflows haven't been settled.
         uint256 completeLiquidity = uint256(getPosition(tokenId, positionIndex).liquidity);
         BalanceDelta balanceDelta = _liquidatePosition(poolKey, tokenId, positionIndex, completeLiquidity);
         return balanceDelta;
@@ -556,6 +566,8 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
      * @param balanceDelta The balance delta of the underlying assets to modify
      */
     function _modifyMarketUnderlyingAsset(PositionId positionId, PoolId poolId, BalanceDelta balanceDelta) internal {
+        // TODO: BalanceDelta deltaToBurn to be added here
+
         address sender = msg.sender;
         IMarketFactory mf = IMarketFactory(marketFactory);
         ILCC lcc0 = ILCC(mf.corePoolToCurrencyPair(poolId)[0]);
@@ -590,14 +602,21 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
             }
         }
 
-        // notify the proxy hook of the settled underlying tokens we just sent to it
-        // specify token0, amount0 and token1, amount1 it is important to specify the token1 and token0 here because order is important to know
-        // and we can validate if the tokens are handled by the proxy hook in the `onMMLiquidityModify` function
-        // a positive balance delta means we are settling underlying tokens to the proxy hook similar to having a positive liquidity delta
+        // notify the vts manager of the settlement made for this position
+        BalanceDelta balanceDelta = _getVTSManager().onMMLiquidityModify(positionId, balanceDelta);
+
+        // TODO: ZeroDelta to result in full take. Requires validation.
+        // BalanceDelta balanceDelta = _getVTSManager().onMMLiquidityModify(
+        //     positionId,
+        //     takeAmount0 == 0 && takeAmount1 == 0
+        //         ? BalanceDeltaLibrary.ZERO_DELTA
+        //         // a negative balance delta means we are taking underlying tokens from the proxy hook similar to having a negative liquidity delta
+        //         : toBalanceDelta(-int128(uint128(takeAmount0)), -int128(uint128(takeAmount1)))
+        // );
+
+        // notify the proxy hook of the settled underlying tokens
+        // a positive balance delta means we are settling underlying tokens to the proxy hook, negative means withdrawing.
         IProxyHook(proxyHook).onMMLiquidityModify(balanceDelta);
-
-        _getVTSManager().onMMLiquidityModify(positionId, balanceDelta);
-
         // if it is a take, then transfer the underlying tokens from the contract to the actual recipient
         if (!isSettle) {
             // transfer from this contract to the actual recipient
@@ -664,7 +683,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
 
         // remove the liquidity from the pool
         // By calling this, CoreHook afterRemoveLiquidity will be called to deactivate the position.
-        (, BalanceDelta liquidityBalanceDelta) = _callModifyLiquidity(
+        (, BalanceDelta positionDelta) = _callModifyLiquidity(
             poolKey,
             ModifyLiquidityParams({
                 tickLower: position.tickLower,
@@ -676,8 +695,8 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         // after removing the liquidity above, we get some lccs back, we need to burn(cancel) them
         IMarketFactory mf = IMarketFactory(marketFactory);
         address[2] memory currencies = mf.corePoolToCurrencyPair(position.poolId);
-        ILCC(currencies[0]).cancel(LiquidityUtils.safeInt128ToUint256(liquidityBalanceDelta.amount0()));
-        ILCC(currencies[1]).cancel(LiquidityUtils.safeInt128ToUint256(liquidityBalanceDelta.amount1()));
+        ILCC(currencies[0]).cancel(LiquidityUtils.safeInt128ToUint256(positionDelta.amount0()));
+        ILCC(currencies[1]).cancel(LiquidityUtils.safeInt128ToUint256(positionDelta.amount1()));
     }
 
     /**

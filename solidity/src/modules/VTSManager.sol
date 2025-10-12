@@ -9,7 +9,7 @@ import {GrowthAccounting} from "../libraries/GrowthAccounting.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
-import {SafeCastLib} from "v4-periphery/lib/v4-core/lib/solmate/src/utils/SafeCastLib.sol";
+import {SafeCastLib} from "solmate/utils/SafeCastLib.sol";
 import {PositionLibrary, PositionId} from "../types/Position.sol";
 import {IVTSManager} from "../interfaces/IVTSManager.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
@@ -95,7 +95,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     mapping(PositionId => uint256[2]) internal lastCoverageUnits;
 
     error InvalidMarketVTSConfiguration(PoolId corePoolId);
-    error NotEnoughSettlementBalance(PositionId id, uint8 tokenIndex, uint256 amount0, uint256 amount1);
+    error NotEnoughSettlementBalance(PositionId id, uint8 tokenIndex, uint256 currentAmount, uint256 attemptedAmount);
     error InvalidPosition(PositionId positionId);
     error RFSOpenForPosition(PositionId positionId);
 
@@ -316,34 +316,74 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
      * @param positionId The id of the position
      * @param balanceDelta The balance delta of the settlement
      */
-    function onMMLiquidityModify(PositionId positionId, BalanceDelta balanceDelta)
+    function onMMLiquidityModify(PositionId positionId, BalanceDelta modifyDelta)
         external
         onlyMMPosition(positionId)
         onlyPositionValid(positionId)
+        returns (BalanceDelta)
     {
         // First, settle both growths since last touch
         _settlePositionGrowths(positionId);
         PoolId poolId = meta[positionId].poolId;
-        int128 amount0 = balanceDelta.amount0();
-        int128 amount1 = balanceDelta.amount1();
+        int128 amount0 = modifyDelta.amount0();
+        int128 amount1 = modifyDelta.amount1();
+
+        if (amount0 == 0 && amount1 == 0) {
+            (uint256 s0, uint256 s1) = getPositionSettledAmounts(positionId);
+            // Default to withdraw the total amount settled
+            amount0 = -OZSafeCast.toInt128(OZSafeCast.toInt256(s0));
+            amount1 = -OZSafeCast.toInt128(OZSafeCast.toInt256(s1));
+        }
+
+        BalanceDelta returnDelta = toBalanceDelta(amount0, amount1);
+
+        bool rfsOpen;
+        BalanceDelta rfsDelta;
+        if (amount0 < 0 || amount1 < 0) {
+            // validate that there is no open RFS for this position
+            // positions settled above, therefore _getRFS
+            (rfsOpen, rfsDelta) = _getRFS(positionId); // second param is true to revert if RFS is open
+            if (rfsOpen) {
+                revert RFSOpenForPosition(positionId);
+            }
+        }
 
         // NOTE: Only apply explicit MM actions to totalSettlementAmount here.
         // - Positive amounts: add only proactive excess (portion not used to extinguish deficit).
-        // - Negative amounts: apply full withdrawal.
+        // - Negative amounts: first calc RfS, and then apply the withdrawal.
         if (amount0 > 0) {
             _handleMMSettlementForToken(positionId, poolId, 0, OZSafeCast.toUint256(int256(amount0)));
         } else if (amount0 < 0) {
+            // Validate that amount to be withdrawn is within limits
+            if (amount0 < rfsDelta.amount0()) {
+                revert NotEnoughSettlementBalance(
+                    positionId,
+                    0,
+                    LiquidityUtils.safeInt128ToUint256(rfsDelta.amount0()),
+                    LiquidityUtils.safeInt128ToUint256(amount0)
+                );
+            }
             _updateSettlement(poolId, positionId, 0, int256(amount0));
         }
         if (amount1 > 0) {
             _handleMMSettlementForToken(positionId, poolId, 1, OZSafeCast.toUint256(int256(amount1)));
         } else if (amount1 < 0) {
+            if (amount1 < rfsDelta.amount1()) {
+                revert NotEnoughSettlementBalance(
+                    positionId,
+                    1,
+                    LiquidityUtils.safeInt128ToUint256(rfsDelta.amount1()),
+                    LiquidityUtils.safeInt128ToUint256(amount1)
+                );
+            }
             _updateSettlement(poolId, positionId, 1, int256(amount1));
         }
 
         // Auto-redeem fee pot to settlement credits for immediate RfS accessibility
         _redeemFeePot(positionId, false); // TODO: should this not be before the settlement mechanics, however, it'll likely need to be called before calcRfS?
         emit MMPositionLiquidityUpdated(poolId, positionId, amount0, amount1);
+
+        return returnDelta;
     }
 
     /**
@@ -395,7 +435,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
                                 feeGrowthInsideLast[positionId][tokenIndex] += growthInc;
                             }
                             // The “value” of the share is accrued to protocolFeeAccrued[...], so the MM loses that amount and the protocol/other LPs gain it.
-                            protocolFeeAccrued[poolId][tokenIndex] += share; // TODO: Is this still required now that we feePotGrowth?
+                            protocolFeeAccrued[poolId][tokenIndex] += share; // utilised to clamp fee claims
 
                             // Inverted fee-pot growth: accrue per backing unit
                             uint256 denom = totalCoverageUnits[poolId][tokenIndex];
@@ -850,15 +890,6 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
             }
         }
         return (rfsOpen, delta);
-    }
-
-    function prepareLiquidation(PositionId positionId) external onlyMMPosition(positionId) returns (uint256, uint256) {
-        calcRFS(positionId, true); // revert if RFS is open
-
-        // get total amount settled from the VTS manager
-        // important to do this before removing the liquidity from the pool
-        // because the position information is cleared after removing the liquidity
-        return getPositionSettledAmounts(positionId);
     }
 
     /**
