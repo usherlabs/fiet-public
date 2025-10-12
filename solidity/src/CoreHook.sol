@@ -290,7 +290,7 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
                 // Redeem fee-pot baseline into return-delta for DirectLPs
                 _settlePositionGrowths(id);
                 (uint256 pay0, uint256 pay1) = _redeemFeePot(id, true);
-                BalanceDelta bonus = toBalanceDelta(int128(uint128(pay0)), int128(uint128(pay1)));
+                BalanceDelta bonus = LiquidityUtils.safeToBalanceDelta(pay0, pay1, false, false);
                 BalanceDelta combined = delta + bonus;
                 ProxyHook(_getProxyHook(key)).onDirectLP(combined, LiquidityUtils.ActionType.DirectLPRemoveLiquidity);
                 return (this.afterRemoveLiquidity.selector, combined);

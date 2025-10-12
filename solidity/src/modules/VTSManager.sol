@@ -325,6 +325,10 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     {
         // First, settle both growths since last touch
         _settlePositionGrowths(positionId);
+        // Auto-redeem fee pot to settlement credits BEFORE deriving defaults and RfS,
+        // so newly allocated fees are available to this operation
+        _redeemFeePot(positionId, false);
+
         PoolId poolId = meta[positionId].poolId;
         int128 amount0 = modifyDelta.amount0();
         int128 amount1 = modifyDelta.amount1();
@@ -380,8 +384,6 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
             _updateSettlement(poolId, positionId, 1, int256(amount1));
         }
 
-        // Auto-redeem fee pot to settlement credits for immediate RfS accessibility
-        _redeemFeePot(positionId, false); // TODO: should this not be before the settlement mechanics, however, it'll likely need to be called before calcRfS?
         emit MMPositionLiquidityUpdated(poolId, positionId, amount0, amount1);
 
         return returnDelta;
