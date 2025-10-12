@@ -9,7 +9,6 @@ import {GrowthAccounting} from "../libraries/GrowthAccounting.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
-import {SafeCastLib} from "solmate/utils/SafeCastLib.sol";
 import {PositionLibrary, PositionId} from "../types/Position.sol";
 import {IVTSManager} from "../interfaces/IVTSManager.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
@@ -24,11 +23,10 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {ILCC} from "../interfaces/ILCC.sol";
 import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
 import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint128.sol";
-import {SafeCast as OZSafeCast} from "openzeppelin-contracts/contracts/utils/math/SafeCast.sol";
+import {SafeCast} from "openzeppelin-contracts/contracts/utils/math/SafeCast.sol";
 import {LiquidityUtils} from "../libraries/LiquidityUtils.sol";
 
 abstract contract VTSManager is IVTSManager, PositionIndex {
-    using SafeCastLib for *;
     using StateLibrary for IPoolManager;
     using TransientStateLibrary for IPoolManager;
 
@@ -357,7 +355,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
 
         if (params.liquidityDelta > 0) {
             // Liquidity added: increase tracked maxima by the delta's maxima over the tick range
-            uint128 liquidityAdded = SafeCastLib.safeCastTo128(uint256(params.liquidityDelta));
+            uint128 liquidityAdded = SafeCast.toUint128(uint256(params.liquidityDelta));
             (uint256 addC0, uint256 addC1) =
                 LiquidityUtils.calculateCommitmentMaxima(params.tickLower, params.tickUpper, liquidityAdded);
 
@@ -367,7 +365,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
             _refreshCoverageUnits(positionId, pId, 1);
         } else if (params.liquidityDelta < 0) {
             // Liquidity removed: decrease tracked maxima by the delta's maxima over the tick range
-            uint128 liquidityRemoved = SafeCastLib.safeCastTo128(uint256(-params.liquidityDelta));
+            uint128 liquidityRemoved = SafeCast.toUint128(uint256(-params.liquidityDelta));
             (uint256 subC0, uint256 subC1) =
                 LiquidityUtils.calculateCommitmentMaxima(params.tickLower, params.tickUpper, liquidityRemoved);
 
@@ -407,8 +405,8 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         if (amount0 == 0 && amount1 == 0) {
             (uint256 s0, uint256 s1) = getPositionSettledAmounts(positionId);
             // Default to withdraw the total amount settled
-            amount0 = -OZSafeCast.toInt128(OZSafeCast.toInt256(s0));
-            amount1 = -OZSafeCast.toInt128(OZSafeCast.toInt256(s1));
+            amount0 = -SafeCast.toInt128(SafeCast.toInt256(s0));
+            amount1 = -SafeCast.toInt128(SafeCast.toInt256(s1));
         }
 
         BalanceDelta returnDelta = toBalanceDelta(amount0, amount1);
@@ -428,7 +426,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         // - Positive amounts: add only proactive excess (portion not used to extinguish deficit).
         // - Negative amounts: first calc RfS, and then apply the withdrawal.
         if (amount0 > 0) {
-            _handleMMSettlementForToken(positionId, poolId, 0, OZSafeCast.toUint256(int256(amount0)));
+            _handleMMSettlementForToken(positionId, poolId, 0, SafeCast.toUint256(int256(amount0)));
         } else if (amount0 < 0) {
             // Validate that amount to be withdrawn is within limits
             if (amount0 < rfsDelta.amount0()) {
@@ -442,7 +440,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
             _updateSettlement(poolId, positionId, 0, int256(amount0));
         }
         if (amount1 > 0) {
-            _handleMMSettlementForToken(positionId, poolId, 1, OZSafeCast.toUint256(int256(amount1)));
+            _handleMMSettlementForToken(positionId, poolId, 1, SafeCast.toUint256(int256(amount1)));
         } else if (amount1 < 0) {
             if (amount1 < rfsDelta.amount1()) {
                 revert NotEnoughSettlementBalance(
@@ -529,7 +527,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
 
         uint256 proactive = settledAmount - d;
         if (proactive > 0) {
-            _updateSettlement(poolId, positionId, tokenIndex, int256(proactive));
+            _updateSettlement(poolId, positionId, tokenIndex, SafeCast.toInt256(proactive));
             if (_isFeeSharingEnabled(poolId)) {
                 // Credit proactive excess only if in-range at settlement
                 (, int24 tick,,) = poolManager.getSlot0(poolId);
@@ -670,7 +668,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
             if (pay0 > protocolFeeAccrued[p][0]) pay0 = protocolFeeAccrued[p][0];
             if (pay0 > 0) {
                 if (!forReturnDelta) {
-                    _updateSettlement(p, id, 0, int256(pay0));
+                    _updateSettlement(p, id, 0, SafeCast.toInt256(pay0));
                 }
                 protocolFeeAccrued[p][0] -= pay0;
                 feePotBaseline[id][0] -= pay0;
@@ -680,7 +678,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
             if (pay1 > protocolFeeAccrued[p][1]) pay1 = protocolFeeAccrued[p][1];
             if (pay1 > 0) {
                 if (!forReturnDelta) {
-                    _updateSettlement(p, id, 1, int256(pay1));
+                    _updateSettlement(p, id, 1, SafeCast.toInt256(pay1));
                 }
                 protocolFeeAccrued[p][1] -= pay1;
                 feePotBaseline[id][1] -= pay1;
@@ -742,12 +740,12 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
             // MM deficits account for liquidity no longer theirs. Settled liquidity must not include amounts that cover deficits. The counterparty token inflow amounts are accrued to the position's settled amounts to compensate.
             uint256 s0 = totalSettlementAmount[positionId][0];
             if (s0 >= add0) {
-                _updateSettlement(corePoolId, positionId, 0, -(OZSafeCast.toInt256(add0))); // reduce total settlement amount by add0
+                _updateSettlement(corePoolId, positionId, 0, -(SafeCast.toInt256(add0))); // reduce total settlement amount by add0
             } else {
                 uint256 netAdd0 = add0 - s0;
                 cumulativeDeficit[positionId][0] += netAdd0;
                 globalDeficit[corePoolId][0] += netAdd0;
-                _updateSettlement(corePoolId, positionId, 0, -(OZSafeCast.toInt256(s0))); // set total settlement amount to 0
+                _updateSettlement(corePoolId, positionId, 0, -(SafeCast.toInt256(s0))); // set total settlement amount to 0
             }
         }
         if (add1 > 0) {
@@ -755,12 +753,12 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
 
             uint256 s1 = totalSettlementAmount[positionId][1];
             if (s1 >= add1) {
-                _updateSettlement(corePoolId, positionId, 1, -(OZSafeCast.toInt256(add1))); // reduce total settlement amount by add1
+                _updateSettlement(corePoolId, positionId, 1, -(SafeCast.toInt256(add1))); // reduce total settlement amount by add1
             } else {
                 uint256 netAdd1 = add1 - s1;
                 cumulativeDeficit[positionId][1] += netAdd1;
                 globalDeficit[corePoolId][1] += netAdd1;
-                _updateSettlement(corePoolId, positionId, 1, -(OZSafeCast.toInt256(s1))); // set total settlement amount to 0
+                _updateSettlement(corePoolId, positionId, 1, -(SafeCast.toInt256(s1))); // set total settlement amount to 0
             }
         }
     }
@@ -821,10 +819,10 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
             liq
         );
         if (add0 > 0) {
-            _updateSettlement(corePoolId, positionId, 0, int256(add0));
+            _updateSettlement(corePoolId, positionId, 0, SafeCast.toInt256(add0));
         }
         if (add1 > 0) {
-            _updateSettlement(corePoolId, positionId, 1, int256(add1));
+            _updateSettlement(corePoolId, positionId, 1, SafeCast.toInt256(add1));
         }
     }
 
@@ -998,11 +996,11 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         if (need >= settled) {
             uint256 pos = need - settled; // requires settlement
             if (pos > INT128_MAX_U) return type(int128).max;
-            return OZSafeCast.toInt128(int256(pos));
+            return SafeCast.toInt128(SafeCast.toInt256(pos));
         }
         uint256 neg = settled - need; // withdrawable
         if (neg > INT128_MAX_U) return type(int128).min;
-        int128 magnitude = OZSafeCast.toInt128(int256(neg));
+        int128 magnitude = SafeCast.toInt128(SafeCast.toInt256(neg));
         return -magnitude;
     }
 
