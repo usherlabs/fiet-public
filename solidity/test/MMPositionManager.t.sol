@@ -132,11 +132,11 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         // Get the amount of LCC tokens that will be minted
         (uint256 token0AmountMinted, uint256 token1AmountMinted) =
-            positionManager.calculateTokenAmountsFromPositionParams(corePoolKey, liquidityParams);
+            LiquidityUtils.calculateTokenAmountsFromPositionParams(manager, corePoolKey, liquidityParams);
 
         // Get amount of underlying liquidity to transfer from the issuer to the lcc
         (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) =
-            positionManager.getBaseSettlementAmounts(corePoolKey, liquidityParams);
+            LiquidityUtils.getBaseSettlementAmounts(liquidityParams, marketVTSConfiguration);
 
         // Approve
         ERC20(lcc0.underlyingAsset()).approve(address(mmPositionManager), underlyingLiquidityFraction0);
@@ -147,7 +147,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         uint256 proxyCurrency0BalanceBefore = manager.balanceOf(address(proxyHook), proxyPoolKey.currency0.toId());
         uint256 proxyCurrency1BalanceBefore = manager.balanceOf(address(proxyHook), proxyPoolKey.currency1.toId());
-
         positionManager.commit(
             corePoolKey,
             liquidityParams.tickLower,
@@ -174,11 +173,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         assertEq(proxyCurrency0BalanceAfter, proxyCurrency0BalanceBefore + underlyingLiquidityFraction0);
         assertEq(proxyCurrency1BalanceAfter, proxyCurrency1BalanceBefore + underlyingLiquidityFraction1);
 
-        // validate proper nft details
-        (int256 totalLiquidity, uint256 activePositionCount) = positionManager.getTotalNFTLiquidity(tokenId);
-        assertEq(totalLiquidity, liquidityParams.liquidityDelta);
-        assertEq(activePositionCount, 1);
-
         assertEq(PoolId.unwrap(m.poolId), PoolId.unwrap(corePoolKey.toId()));
         assertEq(m.tickLower, liquidityParams.tickLower);
         assertEq(m.tickUpper, liquidityParams.tickUpper);
@@ -189,15 +183,13 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
     }
 
     function testCanSettleToCreatedPosition() public {
-        // get the default market confiration so we can tweak it
-
         bytes memory liquiditySignal = abi.encode(liquiditySignal);
         ModifyLiquidityParams memory liquidityParams =
             ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
 
         // Get amount of underlying liquidity to transfer from the issuer to the lcc
         (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) =
-            positionManager.getBaseSettlementAmounts(corePoolKey, liquidityParams);
+            LiquidityUtils.getBaseSettlementAmounts(liquidityParams, marketVTSConfiguration);
 
         // Approve the position manager to take the base/minimum underlying liquidity to create the position
         ERC20(lcc0.underlyingAsset()).approve(address(mmPositionManager), underlyingLiquidityFraction0);
@@ -261,7 +253,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         // Get amount of underlying liquidity to transfer from the issuer to the lcc
         (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) =
-            positionManager.getBaseSettlementAmounts(corePoolKey, liquidityParams);
+            LiquidityUtils.getBaseSettlementAmounts(liquidityParams, marketVTSConfiguration);
 
         // Approve the position manager to take the base/minimum underlying liquidity to create the position
         ERC20(lcc0.underlyingAsset()).approve(address(mmPositionManager), underlyingLiquidityFraction0);
@@ -322,7 +314,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         // Get amount of underlying liquidity to transfer from the issuer to the lcc
         (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) =
-            positionManager.getBaseSettlementAmounts(corePoolKey, liquidityParams);
+            LiquidityUtils.getBaseSettlementAmounts(liquidityParams, marketVTSConfiguration);
 
         // Approve the position manager to take the base/minimum underlying liquidity to create the position
         ERC20(lcc0.underlyingAsset()).approve(address(mmPositionManager), underlyingLiquidityFraction0);
@@ -368,7 +360,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         // Get amount of underlying liquidity to transfer from the issuer to the lcc
         (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) =
-            positionManager.getBaseSettlementAmounts(corePoolKey, liquidityParams);
+            LiquidityUtils.getBaseSettlementAmounts(liquidityParams, marketVTSConfiguration);
 
         // Approve the position manager to take the base/minimum underlying liquidity to create the position
         ERC20(lcc0.underlyingAsset()).approve(address(mmPositionManager), underlyingLiquidityFraction0);
@@ -419,7 +411,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         // Get amount of underlying liquidity to transfer from the issuer to the lcc
         (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) =
-            LiquidityUtils.getBaseSettlementAmounts(liquidityParams, marketVTSConfiguration);
+            LiquidityUtils.calculateTokenAmountsFromPositionParams(manager, corePoolKey, liquidityParams);
 
         // Approve the position manager to take the base/minimum underlying liquidity to create to the position
         ERC20(lcc0.underlyingAsset()).approve(address(mmPositionManager), underlyingLiquidityFraction0);

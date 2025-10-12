@@ -17,19 +17,23 @@ import {LiquiditySignal} from "./types/Position.sol";
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 import {IERC20Minimal} from "@uniswap/v4-core/src/interfaces/external/IERC20Minimal.sol";
 import {IVTSManager} from "./interfaces/IVTSManager.sol";
-import {MarketVTSConfiguration} from "./types/VTS.sol";
+import {MarketVTSConfiguration, MarketVTSConfigurationLibrary} from "./types/VTS.sol";
+import {RFSCheckpoint, RFSCheckpointLibrary} from "./types/Checkpoint.sol";
 import {LiquidityUtils} from "./libraries/LiquidityUtils.sol";
 import {toBalanceDelta} from "v4-periphery/lib/v4-core/src/types/BalanceDelta.sol";
 import {IMMPositionManager} from "./interfaces/IMMPositionManager.sol";
 import {IProxyHook} from "./interfaces/IProxyHook.sol";
 import {ILCC} from "./interfaces/ILCC.sol";
-import {IVRLSpokeReceiver} from "./interfaces/IVRLSpokeReciever.sol";
+import {IVRLSignalManager} from "./interfaces/IVRLSignalManager.sol";
 import {IPositionIndex} from "./interfaces/IPositionIndex.sol";
 import {console} from "forge-std/console.sol";
 import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
 
 contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
     using SafeCast for *;
+    using RFSCheckpointLibrary for RFSCheckpoint;
+    using MarketVTSConfigurationLibrary for MarketVTSConfiguration;
+    using PositionLibrary for PositionId;
 
     error InvalidDelta(int128 amount0, int128 amount1);
     error InvalidAmount(uint256 amount, uint256 maxAmount);
@@ -50,7 +54,8 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
 
     address public immutable marketFactory;
     uint256 private nextTokenId = 1;
-    IVRLSpokeReceiver public immutable spokeReceiver;
+    IVRLSignalManager public immutable signalManager;
+    mapping(PositionId => RFSCheckpoint) public positionToCheckpoint;
     mapping(uint256 => mapping(uint256 => PositionId)) public nftToPositionId;
     mapping(uint256 => uint256) public nftToPositionCount;
     mapping(PositionId => string) public proverOfPosition; //? is this necessary?
@@ -62,12 +67,12 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         _;
     }
 
-    constructor(address _manager, address _spokeReceiver, address _marketFactory)
+    constructor(address _manager, address _signalManager, address _marketFactory)
         LiquidityRouter(_manager)
         ERC721("MMPositionManager", "MMPM")
     {
         marketFactory = _marketFactory;
-        spokeReceiver = IVRLSpokeReceiver(_spokeReceiver);
+        signalManager = IVRLSignalManager(_signalManager);
     }
 
     function tokenURI(uint256) public pure override returns (string memory) {
@@ -148,6 +153,9 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         _modifyMarketUnderlyingAsset(
             getPositionId(tokenId, positionIndex), m.poolId, toBalanceDelta(amount0.toInt128(), amount1.toInt128())
         );
+
+        // mark RFS checkpoint
+        _checkpoint(getPositionId(tokenId, positionIndex).toArray());
     }
 
     /**
@@ -182,6 +190,9 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         _modifyMarketUnderlyingAsset(
             positionId, position.poolId, toBalanceDelta(-amount0.toInt128(), -amount1.toInt128())
         );
+
+        // mark RFS checkpoint
+        _checkpoint(positionId.toArray());
     }
 
     /**
@@ -209,10 +220,10 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         }
         LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
         (string[] memory reservesTickers, uint256[] memory reservesAmounts) =
-            spokeReceiver.verifyLiquiditySignal(signal);
+            signalManager.verifyLiquiditySignal(signal);
 
         // calculate the total signal usd value
-        uint256 totalSignalUsdValue = spokeReceiver.getTotalUsdValue(reservesTickers, reservesAmounts);
+        uint256 totalSignalUsdValue = signalManager.getTotalUsdValue(reservesTickers, reservesAmounts);
 
         // calculate the token0 and token1 amounts to mint to create the position
         ModifyLiquidityParams memory liquidityParams = ModifyLiquidityParams({
@@ -223,7 +234,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         });
 
         (uint256 lcc0AmountToMint, uint256 lcc1AmountToMint) =
-            calculateTokenAmountsFromPositionParams(poolKey, liquidityParams);
+            LiquidityUtils.calculateTokenAmountsFromPositionParams(manager, poolKey, liquidityParams);
 
         // calcualte the total LCC USD value and confirm it is less than the total signal usd value
         IVTSManager vtsManager = _getVTSManager();
@@ -247,8 +258,8 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
 
         // use the position id to make the initial settlement of the underlying tokens to the proxy hook
         // Get amount of underlying liquidity to transfer from the issuer to the lcc
-        (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) =
-            getBaseSettlementAmounts(poolKey, liquidityParams);
+        (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) = LiquidityUtils
+            .getBaseSettlementAmounts(liquidityParams, vtsManager.getMarketVTSConfiguration(poolKey.toId()));
 
         // settle the underlying tokens to the proxy hook
         // By calling VTSManager.onMMLiquidityModify, we are also settling the position growths for new MMPosition.
@@ -316,57 +327,6 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         emit SignalDecommitted(msg.sender, tokenId, positionIndex, uint256(uint128(s0)), uint256(uint128(s1)));
 
         return toBalanceDelta(int128(uint128(s0)), int128(uint128(s1)));
-    }
-
-    /**
-     * @dev Get the total liquidity across all active positions for an NFT
-     * @param tokenId The NFT token ID
-     * @return totalLiquidity The sum of all active position liquidity
-     * @return activePositionCount The number of active positions
-     */
-    function getTotalNFTLiquidity(uint256 tokenId)
-        public
-        view
-        returns (int256 totalLiquidity, uint256 activePositionCount)
-    {
-        uint256 positionCount = nftToPositionCount[tokenId];
-
-        for (uint256 i = 0; i < positionCount; i++) {
-            PositionMeta memory position = getPosition(tokenId, i);
-            if (position.isActive) {
-                totalLiquidity += position.liquidity;
-                activePositionCount++;
-            }
-        }
-
-        return (totalLiquidity, activePositionCount);
-    }
-
-    /**
-     * @dev This utility function is used to get the base settlement amounts using the base vts for a given pool key and lcc amounts
-     * @param poolKey The pool key to get the base settlement amounts for
-     * @param liquidityParams The liquidity parameters to get the base settlement amounts for
-     * @return underlyingLiquidityFraction0 The amount of underlying liquidity to transfer from the issuer to the lcc0
-     * @return underlyingLiquidityFraction1 The amount of underlying liquidity to transfer from the issuer to the lcc1
-     */
-    function getBaseSettlementAmounts(PoolKey memory poolKey, ModifyLiquidityParams memory liquidityParams)
-        public
-        view
-        returns (uint256, uint256)
-    {
-        // get the base vts of the currencies from the pool configuration
-        MarketVTSConfiguration memory vtsConfiguration = _getVTSManager().getMarketVTSConfiguration(poolKey.toId());
-        (uint256 c0, uint256 c1) = LiquidityUtils.calculateCommitmentMaxima(
-            liquidityParams.tickLower, liquidityParams.tickUpper, uint128(int128(liquidityParams.liquidityDelta))
-        );
-
-        // get the amount of underlying liquidity to transfer from the issuer to the lcc
-        // divide by 10000 to convert to a percentage from bips
-        uint256 oneBip = 10000;
-        uint256 underlyingLiquidityFraction0 = (c0 * vtsConfiguration.token0.baseVTSRate) / oneBip;
-        uint256 underlyingLiquidityFraction1 = (c1 * vtsConfiguration.token1.baseVTSRate) / oneBip;
-
-        return (underlyingLiquidityFraction0, underlyingLiquidityFraction1);
     }
 
     function _createPosition(
@@ -533,12 +493,16 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         );
 
         IMarketFactory mf = IMarketFactory(marketFactory);
-        ILCC lcc0 = ILCC(mf.corePoolToCurrencyPair(position.poolId)[0]);
-        ILCC lcc1 = ILCC(mf.corePoolToCurrencyPair(position.poolId)[1]);
+        ILCC(mf.corePoolToCurrencyPair(position.poolId)[0]).cancel(
+            LiquidityUtils.safeInt128ToUint256(balanceDelta.amount0())
+        );
+        ILCC(mf.corePoolToCurrencyPair(position.poolId)[1]).cancel(
+            LiquidityUtils.safeInt128ToUint256(balanceDelta.amount1())
+        );
 
-        // burn the LCC tokens gotten from the position
-        lcc0.cancel(LiquidityUtils.safeInt128ToUint256(balanceDelta.amount0()));
-        lcc1.cancel(LiquidityUtils.safeInt128ToUint256(balanceDelta.amount1()));
+        // // burn the LCC tokens gotten from the position
+        //     lcc0.cancel(LiquidityUtils.safeInt128ToUint256(balanceDelta.amount0()));
+        //     lcc1.cancel(LiquidityUtils.safeInt128ToUint256(balanceDelta.amount1()));
     }
 
     /**
@@ -559,16 +523,16 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         // make sure at least one of the amounts is zero and the other is not zero
         require((amount0 == 0) != (amount1 == 0), "InvalidBalanceDelta");
         // make sure there is an open RFS for this position
-        (bool rfsOpen, BalanceDelta rfsBalanceDelta) = _getVTSManager().calcRFS(positionId, false);
-        if (!rfsOpen) revert RFSNotOpen(positionId);
+        (, BalanceDelta rfsBalanceDelta) = _getVTSManager().calcRFS(positionId, true);
 
         // create a balance delta of the amounts to settle
         BalanceDelta settleBalanceDelta = toBalanceDelta(amount0.toInt128(), amount1.toInt128());
 
         // get grace period for this position from market vts configuration
         IVTSManager vtsManager = _getVTSManager();
-        // MarketVTSConfiguration memory vtsConfiguration = vtsManager.getMarketVTSConfiguration(position.poolId);
-        // vtsConfiguration.validateGracePeriod(positionId, positionToCheckpoint[positionId]);
+        vtsManager.getMarketVTSConfiguration(position.poolId).validateGracePeriod(
+            positionId, positionToCheckpoint[positionId]
+        );
 
         uint256 maxSiezureFractionBPS = vtsManager.getSeizureAmount(positionId);
         // based on the amount they are choosing to settle, calculate how much of the total siezable amount to be seized by the caller
@@ -644,5 +608,28 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         // -- Liquidate the position partially or fully
         // do this last because it counld potentially mark the position as inactive and cause some of the above calls to fail as they require an active position
         _liquidatePosition(positionPoolKey, tokenId, positionIndex, liquidityToSeize);
+    }
+
+    /**
+     * @dev This function is used to mark the checkpoint of the RFS for a given position
+     * @param positionIds The position ids to mark the checkpoint of the RFS for
+     */
+    function checkpoint(PositionId[] memory positionIds) public {
+        _checkpoint(positionIds);
+    }
+
+    /**
+     * @dev This function is used to mark the checkpoint of the RFS for a given position
+     * @param positionIds The position ids to mark the checkpoint of the RFS for
+     */
+    function _checkpoint(PositionId[] memory positionIds) internal {
+        IVTSManager vtsManager = _getVTSManager();
+        for (uint256 i = 0; i < positionIds.length; i++) {
+            PositionId positionId = positionIds[i];
+            // check if rfs is open for this position
+            (bool rfsOpen,) = vtsManager.calcRFS(positionId, false);
+            // mark the checkpoint with the state of the rfs of the position
+            positionToCheckpoint[positionId].mark(rfsOpen);
+        }
     }
 }

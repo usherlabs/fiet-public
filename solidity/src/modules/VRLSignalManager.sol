@@ -13,13 +13,16 @@ import {IOracleRegistry} from "../interfaces/IOracleRegistry.sol";
 import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
 import {console} from "forge-std/console.sol";
 
-contract VRLSpokeReceiver is Ownable {
+contract VRLSignalManager is Ownable {
     ISpokeVerifier public verifier;
     IOracleRegistry public oracleRegistry;
 
     event VerifierChanged(address indexed oldVerifier, address indexed newVerifier);
 
     error InvalidProof();
+    error InvalidNonce(uint256 newNonce, uint256 prevNonce);
+
+    mapping(address => uint256) public mmNonce;
 
     constructor(address _verifier, address _oracleRegistry) Ownable(msg.sender) {
         verifier = ISpokeVerifier(_verifier);
@@ -45,9 +48,13 @@ contract VRLSpokeReceiver is Ownable {
      */
     function verifyLiquiditySignal(LiquiditySignal memory liquiditySignal)
         public
-        view
         returns (string[] memory tickers, uint256[] memory amounts)
     {
+        // validate the new nonce is greater than than the previous nonce
+        if (liquiditySignal.nonce <= mmNonce[liquiditySignal.mmState.owner]) {
+            revert InvalidNonce(liquiditySignal.nonce, mmNonce[liquiditySignal.mmState.owner]);
+        }
+
         // verify the proofs associated with the state
         if (
             !verifier.verifyProof(
@@ -62,6 +69,9 @@ contract VRLSpokeReceiver is Ownable {
             // if the proof is invalid, revert
             revert InvalidProof();
         }
+
+        // update the nonce for the mm
+        mmNonce[liquiditySignal.mmState.owner] = liquiditySignal.nonce;
 
         // get the reserves from the mm state
         (tickers, amounts) = MarketMaker.getReserves(liquiditySignal.mmState);

@@ -32,7 +32,7 @@ import {ICSpokeVerifier} from "../../src/modules/ICSpokeVerifier.sol";
 import {OracleRegistry} from "../../src/OracleRegistry.sol";
 import {VTSConfigs} from "../../src/libraries/VTSConfigs.sol";
 import {IVTSManager} from "../../src/interfaces/IVTSManager.sol";
-import {VRLSpokeReceiver} from "../../src/modules/VRLSpokeReceiver.sol";
+import {VRLSignalManager} from "../../src/modules/VRLSignalManager.sol";
 import {IMarketVault} from "../../src/interfaces/IMarketVault.sol";
 
 abstract contract MarketTestBase is Test, Deployers {
@@ -60,7 +60,7 @@ abstract contract MarketTestBase is Test, Deployers {
     OracleRegistry oracleRegistry;
     ICSpokeVerifier icVerifier;
     StubSpokeVerifier stubSpokeVerifier;
-    VRLSpokeReceiver spokeReceiver;
+    VRLSignalManager spokeReceiver;
     address mmPositionManager;
     IMarketVault mv;
 
@@ -138,7 +138,7 @@ abstract contract MarketTestBase is Test, Deployers {
         // deploy custom router and verifier
         icVerifier = new ICSpokeVerifier(makeAddr("icCanister"));
         stubSpokeVerifier = new StubSpokeVerifier();
-        spokeReceiver = new VRLSpokeReceiver(address(stubSpokeVerifier), address(oracleRegistry));
+        spokeReceiver = new VRLSignalManager(address(stubSpokeVerifier), address(oracleRegistry));
         mmPositionManager =
             address(new MMPositionManager(address(manager), address(spokeReceiver), address(marketFactory)));
     }

@@ -57,4 +57,15 @@ library PositionLibrary {
 
         id = PositionId.wrap(positionKey);
     }
+
+    /**
+     * @dev This function is used to convert a PositionId to an array of PositionIds
+     * @param self The PositionId to convert to an array
+     * @return positionIds The array of PositionIds
+     */
+    function toArray(PositionId self) internal pure returns (PositionId[] memory) {
+        PositionId[] memory positionIds = new PositionId[](1);
+        positionIds[0] = self;
+        return positionIds;
+    }
 }
