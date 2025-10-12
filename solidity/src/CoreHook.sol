@@ -260,7 +260,14 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
         BalanceDelta,
         bytes calldata
     ) internal virtual override whenNotPaused(key.toId()) returns (bytes4, BalanceDelta) {
-        // For DirectLPs, if the position already exists, settle growths BEFORE changing units
+        // Important: settle growths BEFORE changing units for existing DirectLP positions.
+        // Rationale:
+        // - In Uniswap-style accounting, a position's owed fees are (feeGrowthInside - feeGrowthInsideLast) * liquidity.
+        // - If we change liquidity/commitment/coverage units first, any pre-add growth would be multiplied by the larger
+        //   post-add units, which unfairly dilutes attribution and lets new units capture past accrual.
+        // - By settling first, we checkpoint fee/deficit/inflow/proactive/fee-pot growth so all pre-add accrual is
+        //   attributed to the pre-add units. Post-add accrual then starts against the updated units.
+        // - This preserves fairness and prevents gaming (e.g. adding liquidity just before redeeming to amplify claims).
         PositionId id = PositionLibrary.generateId(sender, params);
         if (!_isCallerMMP(sender) && meta[id].owner != address(0) && !_isMMPosition(id)) {
             _settlePositionGrowths(id);
