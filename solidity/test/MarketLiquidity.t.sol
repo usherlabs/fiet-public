@@ -128,16 +128,11 @@ contract MarketLiquidityTest is MarketTestBase {
         uint256 lccBalanceRightBeforeUnwrap = lcc1.balanceOf(test_user_1);
         uint256 underlyingBalanceRightBeforeUnwrap = IERC20Minimal(lcc1.underlyingAsset()).balanceOf(test_user_1);
 
-        console.log("lcc balance right before unwrap", lccBalanceRightBeforeUnwrap);
-        console.log("underlying balance right before unwrap", underlyingBalanceRightBeforeUnwrap);
         // unwrap from the market
         lcc1.unwrap(marketReservesAmount);
         // check underlying asset and lcc balance after unwrap
         uint256 underlyingBalanceRightAfterUnwrap = IERC20Minimal(lcc1.underlyingAsset()).balanceOf(test_user_1);
         uint256 lccBalanceRightAfterUnwrap = lcc1.balanceOf(test_user_1);
-
-        console.log("lcc balance right after unwrap", lccBalanceRightAfterUnwrap);
-        console.log("underlying balance right after unwrap", underlyingBalanceRightAfterUnwrap);
 
         // validate that the market reserves are now 0 as we have taken all the liquidity this market contributed to the LCC
         assertEq(lcc1.getMarketLiquidityReserves(marketId), 0);
@@ -294,13 +289,15 @@ contract MarketLiquidityTest is MarketTestBase {
         // because it will if they were to add liquidity, however if they dont add, it should reduce the pending settlement amount by the amount unwrapped
         vm.stopPrank();
 
-        // Conduct a swap and validate the pending settlement was paid off and the rest of the liquidty is in the pool manager
+        uint256 selfBalanceOfLCC1 = lcc1.balanceOf(address(this));
+        lcc1.approve(address(swapRouter), selfBalanceOfLCC1);
+        // approve swap router to take our lcc 1
         swapRouter.swap(
             corePoolKey,
             SwapParams({
-                zeroForOne: true,
+                zeroForOne: false,
                 amountSpecified: int256(ZERO_FOR_ONE_SWAP_AMOUNT),
-                sqrtPriceLimitX96: ZERO_FOR_ONE_LIMIT
+                sqrtPriceLimitX96: ONE_FOR_ZERO_LIMIT
             }),
             settings,
             ZERO_BYTES
@@ -384,13 +381,15 @@ contract MarketLiquidityTest is MarketTestBase {
 
         // clear the pending settlement and validate LCC balance is zero by permorming a swap as another user
         vm.stopPrank();
-        // Conduct a swap and validate the pending settlement was paid off and the rest of the liquidty is in the pool manager
+        // Conduct a swap and validate the pending settlement was paid off and the rest of the liquidity is in the pool manager
+        // perform a one for zero swap, to inject token 1 liquidity into the pool manager
+        // we need to ineject token 1 liquidity bwcause that is the token that an unwrap was performed on
         swapRouter.swap(
             corePoolKey,
             SwapParams({
-                zeroForOne: true,
+                zeroForOne: false,
                 amountSpecified: int256(ZERO_FOR_ONE_SWAP_AMOUNT),
-                sqrtPriceLimitX96: ZERO_FOR_ONE_LIMIT
+                sqrtPriceLimitX96: ONE_FOR_ZERO_LIMIT
             }),
             settings,
             ZERO_BYTES

@@ -25,6 +25,7 @@ import {IProxyHook} from "./interfaces/IProxyHook.sol";
 import {ILCC} from "./interfaces/ILCC.sol";
 import {IVRLSpokeReceiver} from "./interfaces/IVRLSpokeReciever.sol";
 import {IPositionIndex} from "./interfaces/IPositionIndex.sol";
+import {console} from "forge-std/console.sol";
 
 contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
     error InvalidTicker(string ticker);
@@ -80,7 +81,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
     }
 
     function _isMMPosition(PositionId positionId, PositionMeta memory m) internal view returns (bool) {
-        return m.owner == address(this) && m.isActive && bytes(proverOfPosition[positionId]).length == 0;
+        return m.owner == address(this) && m.isActive && bytes(proverOfPosition[positionId]).length != 0;
     }
 
     /**
@@ -170,7 +171,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         }
 
         // withdraw the amounts from the position
-        _takeUnderlyingAssetFromMarket(positionId, position.poolId, amount0, amount1, BalanceDeltaLibrary.ZERO_DELTA);
+        _takeUnderlyingAssetFromMarket(positionId, position.poolId, amount0, amount1);
     }
 
     /**
@@ -217,8 +218,9 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
             calculateTokenAmountsFromPositionParams(poolKey, liquidityParams);
 
         // calcualte the total LCC USD value and confirm it is less than the total signal usd value
+        IVTSManager vtsManager = _getVTSManager();
         // TODO: Use a standard registry that internally maps markets to oracle factories -> oracles.
-        address marketOracleFactory = _getVTSManager().getMarketVTSConfiguration(poolKey.toId()).oracleFactory;
+        address marketOracleFactory = vtsManager.getMarketVTSConfiguration(poolKey.toId()).oracleFactory;
 
         (uint256 lcc0Price, uint256 lcc0Decimals) = lcc0.usdPrice(marketOracleFactory);
         (uint256 lcc1Price, uint256 lcc1Decimals) = lcc1.usdPrice(marketOracleFactory);
@@ -248,7 +250,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         // use the position id to make the initial settlement of the underlying tokens to the proxy hook
         // Get amount of underlying liquidity to transfer from the issuer to the lcc
         (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) =
-            getBaseSettlementAmounts(poolKey, lcc0AmountToMint, lcc1AmountToMint);
+            getBaseSettlementAmounts(poolKey, liquidityParams);
 
         // settle the underlying tokens to the proxy hook
         // By calling VTSManager.onMMLiquidityModify, we are also settling the position growths for new MMPosition.
@@ -301,6 +303,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         onlyNFTOwner(tokenId)
         returns (BalanceDelta)
     {
+        console.log("decommitPosition");
         PositionId positionId = getPositionId(tokenId, positionIndex);
 
         // check if RFS is open
@@ -343,23 +346,27 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
     /**
      * @dev This utility function is used to get the base settlement amounts using the base vts for a given pool key and lcc amounts
      * @param poolKey The pool key to get the base settlement amounts for
-     * @param lccAmount0 The amount of lcc0 to get the base settlement amounts for
-     * @param lccAmount1 The amount of lcc1 to get the base settlement amounts for
-     * @return lccUnderlyingAmount0 The amount of underlying liquidity to transfer from the issuer to the lcc0
-     * @return lccUnderlyingAmount1 The amount of underlying liquidity to transfer from the issuer to the lcc1
+     * @param liquidityParams The liquidity parameters to get the base settlement amounts for
+     * @return underlyingLiquidityFraction0 The amount of underlying liquidity to transfer from the issuer to the lcc0
+     * @return underlyingLiquidityFraction1 The amount of underlying liquidity to transfer from the issuer to the lcc1
      */
-    function getBaseSettlementAmounts(PoolKey memory poolKey, uint256 lccAmount0, uint256 lccAmount1)
+    function getBaseSettlementAmounts(PoolKey memory poolKey, ModifyLiquidityParams memory liquidityParams)
         public
         view
-        returns (uint256 lccUnderlyingAmount0, uint256 lccUnderlyingAmount1)
+        returns (uint256, uint256)
     {
         // get the base vts of the currencies from the pool configuration
         MarketVTSConfiguration memory vtsConfiguration = _getVTSManager().getMarketVTSConfiguration(poolKey.toId());
+        (uint256 c0, uint256 c1) = LiquidityUtils.calculateCommitmentMaxima(
+            liquidityParams.tickLower, liquidityParams.tickUpper, uint128(int128(liquidityParams.liquidityDelta))
+        );
 
         // get the amount of underlying liquidity to transfer from the issuer to the lcc
         // divide by 10000 to convert to a percentage from bips
-        uint256 underlyingLiquidityFraction0 = (lccAmount0 * vtsConfiguration.token0.baseVTSRate) / 10000;
-        uint256 underlyingLiquidityFraction1 = (lccAmount1 * vtsConfiguration.token1.baseVTSRate) / 10000;
+        uint256 oneBip = 10000;
+        uint256 underlyingLiquidityFraction0 = (c0 * vtsConfiguration.token0.baseVTSRate) / oneBip;
+        uint256 underlyingLiquidityFraction1 = (c1 * vtsConfiguration.token1.baseVTSRate) / oneBip;
+
         return (underlyingLiquidityFraction0, underlyingLiquidityFraction1);
     }
 
@@ -437,17 +444,16 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
      * @param poolId The pool id specifying the market
      * @param takeAmount0 The amount of underlying token0 to take from the proxy hook
      * @param takeAmount1 The amount of underlying token1 to take from the proxy hook
-     * @param deltaToBurn The balance delta to burn the LCC tokens after taking the assets
      */
     function _takeUnderlyingAssetFromMarket(
         PositionId positionId,
         PoolId poolId,
         uint256 takeAmount0,
-        uint256 takeAmount1,
-        BalanceDelta deltaToBurn
+        uint256 takeAmount1
     ) internal {
         address sender = msg.sender;
 
+        // TODO: sort assets and take out lcc provided
         IMarketFactory mf = IMarketFactory(marketFactory);
         ILCC lcc0 = ILCC(mf.corePoolToCurrencyPair(poolId)[0]);
         ILCC lcc1 = ILCC(mf.corePoolToCurrencyPair(poolId)[1]);
@@ -469,12 +475,6 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         // transfer from this contract to the actual recipient
         IERC20Minimal(lcc0.underlyingAsset()).transfer(sender, takeAmount0);
         IERC20Minimal(lcc1.underlyingAsset()).transfer(sender, takeAmount1);
-
-        if (BalanceDelta.unwrap(deltaToBurn) != BalanceDelta.unwrap(BalanceDeltaLibrary.ZERO_DELTA)) {
-            // burn the LCC gotten back from the pool
-            lcc0.cancel(LiquidityUtils.safeInt128ToUint256(deltaToBurn.amount0()));
-            lcc1.cancel(LiquidityUtils.safeInt128ToUint256(deltaToBurn.amount1()));
-        }
     }
 
     /**
@@ -493,6 +493,14 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         uint256 settledAmount1
     ) internal {
         PositionMeta memory position = getPosition(tokenId, positionIndex);
+
+        // take amount settled from the proxy hook
+        // ? if this is called after removing liquidity we will get an error
+        // ? because the position is will have been deactivated
+        _takeUnderlyingAssetFromMarket(
+            getPositionId(tokenId, positionIndex), position.poolId, settledAmount0, settledAmount1
+        );
+
         // remove the liquidity from the pool
         // By calling this, CoreHook afterRemoveLiquidity will be called to deactivate the position.
         (, BalanceDelta balanceDelta) = _callModifyLiquidity(
@@ -505,9 +513,12 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
             })
         );
 
-        // take amount settled from the proxy hook
-        _takeUnderlyingAssetFromMarket(
-            getPositionId(tokenId, positionIndex), position.poolId, settledAmount0, settledAmount1, balanceDelta
-        );
+        IMarketFactory mf = IMarketFactory(marketFactory);
+        ILCC lcc0 = ILCC(mf.corePoolToCurrencyPair(position.poolId)[0]);
+        ILCC lcc1 = ILCC(mf.corePoolToCurrencyPair(position.poolId)[1]);
+
+        // burn the LCC tokens
+        lcc0.cancel(LiquidityUtils.safeInt128ToUint256(balanceDelta.amount0()));
+        lcc1.cancel(LiquidityUtils.safeInt128ToUint256(balanceDelta.amount1()));
     }
 }

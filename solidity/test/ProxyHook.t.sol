@@ -358,26 +358,31 @@ contract ProxyHookTest is MarketTestBase {
 
     // Test that a swap with limited liquidity on the proxy pool works as expected
     // when no hook data is provided, the swap with adjust the swap params to use the max available liquidity
-    function test_swap_exactInput_oneForZeroOnProxy_withLimitedLiquidity_withHookData() public {
+    function test_swap_exactInput_zeroForOneOnProxy_withLimitedLiquidity_withHookData() public {
         bytes32 marketId = PoolId.unwrap(corePoolKey.toId());
         address lcc_recipient = makeAddr("lcc_recipient");
-        console.log("lcc_recipient", lcc_recipient);
-        console.log("marketId");
+        // mock the call to the factory to return false for protocol bound
+        // i.e make sure that in this function the lcc_recipient is not marked as a protocol bound address
+        // this would enable market tracing for lcc gotten
+        vm.mockCall(
+            address(marketFactory),
+            abi.encodeWithSelector(IMarketFactory.bounds.selector, lcc_recipient),
+            abi.encode(false)
+        );
+        console.log("excess lcc_recipient", lcc_recipient);
+        console.log("marketId:");
         console.logBytes32(marketId);
 
-        uint256 mockAvailableLiquidity = 50;
+        // this means we are mocking the available liquidity of the output token to be 50
+        // i.e less than output swap amount in order to simulate the liquidity queue functionality
+        uint256 mockAvailableOutputLiquidity = 50;
 
-        // use  mock call to make poolmanager balance of currency1 return a mock value
-        // this way it appears as if there is no liquidity in the pool manager for output token
+        // use mock call to make poolmanager balance of currency1 return a mock value
+        // this way it appears as if there is little liquidity in the pool manager for output token
         vm.mockCall(
             address(manager),
-            abi.encodeWithSelector(
-                // to do
-                manager.balanceOf.selector,
-                address(proxyHook),
-                _currency1.toId()
-            ),
-            abi.encode(mockAvailableLiquidity) // Return 0 liquidity
+            abi.encodeWithSelector(manager.balanceOf.selector, address(proxyHook), _currency1.toId()),
+            abi.encode(mockAvailableOutputLiquidity)
         );
 
         uint256 ua0Balance = mv.inMarketBalanceOf(proxyPoolKey.currency0);
@@ -400,8 +405,6 @@ contract ProxyHookTest is MarketTestBase {
 
         uint256 swapAmount = 100;
         bytes memory hookData = abi.encode(lcc_recipient);
-        console.log("hookData");
-        console.logBytes(hookData);
         (BalanceDelta simulatedSwapDelta,,,) = SwapSimulator.simulateSwap(
             manager,
             corePoolKey,
@@ -419,6 +422,7 @@ contract ProxyHookTest is MarketTestBase {
             settings,
             hookData
         );
+
         console.log("====== actual deltas =======");
         console.log("delta 0:", swapDelta.amount0());
         console.log("delta 1:", swapDelta.amount1());
@@ -429,21 +433,35 @@ contract ProxyHookTest is MarketTestBase {
         console.log("selfBalanceOfTokenAAfter", selfBalanceOfTokenAAfter);
         console.log("selfBalanceOfTokenBAfter", selfBalanceOfTokenBAfter);
 
-        // diff
+        // check how much the balance of the tokens have changed
+        // this should be equal to the swap amount
         console.log("diff0", int256(selfBalanceOfTokenAAfter) - int256(selfBalanceOfTokenABefore));
+        // validate that the balance of the output token has increased by the output of the swap
         console.log("diff1", int256(selfBalanceOfTokenBAfter) - int256(selfBalanceOfTokenBBefore));
 
         // check settlement queue for lcc_recipient in LCC token
         LiquidityCommitmentCertificate lccOut = lcc1.underlyingAsset() == Currency.unwrap(_currency1) ? lcc1 : lcc0;
 
         // validate user got lcc tokens and a pending settlement from this market
-        uint256 deficit = expectedOutput - mockAvailableLiquidity;
-        console.log("deficit", deficit);
-        assertEq(lccOut.getSettlementAmountOwedTo(marketId, lcc_recipient), deficit);
-        assertEq(lccOut.getMarketTotalSettlementDeficit(marketId), deficit);
-        assertEq(lccOut.balanceOf(lcc_recipient), deficit);
+        uint256 deficit = expectedOutput - mockAvailableOutputLiquidity;
 
-        assertEq(_currency1.balanceOf(lcc_recipient), 0);
+        // validate the market tracking logic works and the lcc is mapped to the current market
+        uint256 marketBalance = lccOut.getBalanceOfUserFromMarket(lcc_recipient, marketId);
+        assertEq(marketBalance, deficit);
+
+        // mock as the lcc recipient
+        // unwrap the lcc tokens to get the underlying asseet
+        vm.prank(lcc_recipient);
+        lccOut.unwrap(deficit);
+        vm.stopPrank();
+
+        // get amount owed to this particular recipient
+        uint256 amountOwedToRecipient = lccOut.getSettlementAmountOwedTo(marketId, lcc_recipient);
+
+        // validate the amount owed to the recipient is the attempted unwrap amount
+        // and that the user still has their LCC tokens
+        assertEq(amountOwedToRecipient, deficit);
+        assertEq(lccOut.balanceOf(lcc_recipient), deficit);
 
         // add some liquidity to the core pool to attempt to clear pending settlements
         modifyLiquidityRouter.modifyLiquidity(
