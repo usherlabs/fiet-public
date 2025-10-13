@@ -773,13 +773,16 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         // get the pool key from the market factory
         IMarketFactory mf = IMarketFactory(marketFactory);
         PoolKey memory positionPoolKey = mf.poolIdToPoolKey(position.poolId);
+        // TODO: Rather than passing deriving the poolKey internally... which is gas expensive,
+        // TODO: We can allow the Guarantors to provide the poolKey -- as following approach of Uv4, decommit, etc.
+        // TODO: Then validate that the position resides within the poolKey before proceeding.
 
         // -- Liquidate the position partially or fully
         settlementFractionDelta = _liquidatePosition(positionPoolKey, tokenId, positionIndex, liquidityToSeize);
     }
 
     /**
-     * @dev This function is used to mark the checkpoint of the RFS for a given position
+     * @dev This function is used to mark the checkpoint of the RFS for a given position. Called by MMs, and Guarantors incentivised to ensure open RfS is tracked.
      * @param positionIds The position ids to mark the checkpoint of the RFS for
      */
     function checkpoint(PositionId[] memory positionIds) public {
