@@ -949,9 +949,9 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     /**
      * @notice Gets the amount of assets that can be seized from a position using the linked library
      * @param _positionId The position id
-     * @return siezureFractionBPS The amount of position that can be seized in bps
+     * @return seizureFractionBPS The amount of position that can be seized in bps
      */
-    function getSeizureAmount(PositionId _positionId) public view virtual returns (uint256 siezureFractionBPS) {
+    function getSeizureAmount(PositionId _positionId) public view virtual returns (uint256 seizureFractionBPS) {
         // TODO: derive the amount of assets that can be seized from a position
         _positionId;
         return 0;

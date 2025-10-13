@@ -11,7 +11,7 @@ import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
 import {TransientStateLibrary} from "v4-periphery/lib/v4-core/src/libraries/TransientStateLibrary.sol";
 import {MarketVTSConfiguration} from "../types/VTS.sol";
-import {BalanceDelta, toBalanceDelta} from "v4-periphery/lib/v4-core/src/types/BalanceDelta.sol";
+import {BalanceDelta, toBalanceDelta, BalanceDeltaLibrary} from "v4-periphery/lib/v4-core/src/types/BalanceDelta.sol";
 
 /// @notice Library for liquidity utility functions
 library LiquidityUtils {
@@ -85,14 +85,14 @@ library LiquidityUtils {
      *      and it represents the amount of the total available seizeable balance that is being seized
      * @param settleBalanceDelta The balance delta of the seizure
      * @param rfsBalanceDelta The balance delta of the rfs
-     * @param maxSiezureFractionBPS The max siezure fraction in bps
-     * @return siezureFractionBPS The seizure fraction in bps
+     * @param maxSeizureFractionBPS The max seizure fraction in bps
+     * @return seizureFractionBPS The seizure fraction in bps
      */
-    function calculateSiezureFraction(
+    function calculateSeizureFraction(
         BalanceDelta settleBalanceDelta,
         BalanceDelta rfsBalanceDelta,
-        uint256 maxSiezureFractionBPS
-    ) internal pure returns (uint256 siezureFractionBPS) {
+        uint256 maxSeizureFractionBPS
+    ) internal pure returns (uint256 seizureFractionBPS) {
         uint256 rfsAmount;
         uint256 settleAmount;
         if (settleBalanceDelta.amount0() > 0) {
@@ -106,9 +106,9 @@ library LiquidityUtils {
         }
 
         // calculate the fraction of the rfs amount that is settled, if more than the  rfs amount is settled,
-        // then cap the max siezure percentage to 10000 bps(100%)
-        uint256 calculatedFraction = Math.ceilDiv(settleAmount * maxSiezureFractionBPS, rfsAmount);
-        siezureFractionBPS = calculatedFraction > 10000 ? 10000 : calculatedFraction;
+        // then cap the max seizure percentage to 10000 bps(100%)
+        uint256 calculatedFraction = Math.ceilDiv(settleAmount * maxSeizureFractionBPS, rfsAmount);
+        seizureFractionBPS = calculatedFraction > 10000 ? 10000 : calculatedFraction;
     }
 
     /**
@@ -238,5 +238,14 @@ library LiquidityUtils {
             isNegative0 ? -(amount0.toInt256().toInt128()) : amount0.toInt256().toInt128(),
             isNegative1 ? -(amount1.toInt256().toInt128()) : amount1.toInt256().toInt128()
         );
+    }
+
+    /**
+     * @dev This function is used to check if a balance delta is zero
+     * @param delta The balance delta to check
+     * @return True if the balance delta is zero, false otherwise
+     */
+    function isZeroDelta(BalanceDelta delta) internal pure returns (bool) {
+        return BalanceDelta.unwrap(delta) == BalanceDelta.unwrap(BalanceDeltaLibrary.ZERO_DELTA);
     }
 }

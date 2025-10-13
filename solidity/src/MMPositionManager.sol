@@ -164,7 +164,10 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
 
         // settle the underlying assets to the proxy hook
         _modifyMarketUnderlyingAsset(
-            getPositionId(tokenId, positionIndex), m.poolId, toBalanceDelta(amount0.toInt128(), amount1.toInt128())
+            getPositionId(tokenId, positionIndex),
+            m.poolId,
+            toBalanceDelta(amount0.toInt128(), amount1.toInt128()),
+            BalanceDeltaLibrary.ZERO_DELTA
         );
 
         // mark RFS checkpoint
@@ -193,7 +196,10 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
 
         // withdraw the amounts from the position
         _modifyMarketUnderlyingAsset(
-            positionId, position.poolId, toBalanceDelta(-amount0.toInt128(), -amount1.toInt128())
+            positionId,
+            position.poolId,
+            toBalanceDelta(-amount0.toInt128(), -amount1.toInt128()),
+            BalanceDeltaLibrary.ZERO_DELTA
         );
 
         // mark RFS checkpoint
@@ -266,7 +272,8 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         _modifyMarketUnderlyingAsset(
             positionId,
             poolKey.toId(),
-            toBalanceDelta(underlyingLiquidityFraction0.toInt128(), underlyingLiquidityFraction1.toInt128())
+            toBalanceDelta(underlyingLiquidityFraction0.toInt128(), underlyingLiquidityFraction1.toInt128()),
+            BalanceDeltaLibrary.ZERO_DELTA
         );
 
         emit SignalCommitted(msg.sender, tokenId, positionIndex);
@@ -561,39 +568,34 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
      * @dev This function is used to modify the underlying assets for a given position
      * @param positionId The position id to modify the underlying assets for
      * @param poolId The pool id to modify the underlying assets for
-     * @param balanceDelta The balance delta of the underlying assets to modify
-     * @return returnDelta The balance delta of the underlying assets modified
+     * @param targetDelta The target balance delta amount to modify for the underlying assets to modify
+     * @param deltaToBurn The balance delta of the LCCs to burn
+     * @return modifiedDelta The balance delta of the underlying assets modified
      */
-    function _modifyMarketUnderlyingAsset(PositionId positionId, PoolId poolId, BalanceDelta balanceDelta)
-        internal
-        returns (BalanceDelta returnDelta)
-    {
-        // TODO: BalanceDelta deltaToBurn to be added here
-
+    function _modifyMarketUnderlyingAsset(
+        PositionId positionId,
+        PoolId poolId,
+        BalanceDelta targetDelta,
+        BalanceDelta deltaToBurn
+    ) internal returns (BalanceDelta modifiedDelta) {
         address sender = msg.sender;
         IMarketFactory mf = IMarketFactory(marketFactory);
-        ILCC lcc0 = ILCC(mf.corePoolToCurrencyPair(poolId)[0]);
-        ILCC lcc1 = ILCC(mf.corePoolToCurrencyPair(poolId)[1]);
+        address[2] memory lccAddr = mf.corePoolToCurrencyPair(poolId);
+        ILCC lcc0 = ILCC(lccAddr[0]);
+        ILCC lcc1 = ILCC(lccAddr[1]);
 
-        int128 amount0 = balanceDelta.amount0();
-        int128 amount1 = balanceDelta.amount1();
+        int128 amount0 = targetDelta.amount0();
+        int128 amount1 = targetDelta.amount1();
 
-        // make sure at least one of the amounts is not zero
-        require(amount0 != 0 || amount1 != 0, InvalidDelta(amount0, amount1));
-        // make sure the amounts are either both positive or both negative
-        require((amount0 >= 0 && amount1 >= 0) || (amount0 <= 0 && amount1 <= 0), InvalidDelta(amount0, amount1));
-        // if at least one is positive, then it is a settle, otherwise it is a take
-        bool isSettle = amount0 >= 0 && amount1 >= 0;
+        // ? delta can be zero. If zero, then VTSManager.onMMLiquidityModify utilises totalSettledAmounts for position.
 
-        // Transfer the underlying tokens amount based on the vts to the market in the proxy hook
-        // using the core pool key, get the corresponding proxy hook
-        // transfer token1 and token0 to the proxy hook
-        // call the proxy hook specifying the amount of underlying tokens transferred so it can get claim tokens for them
+        // If Settlement, Transfer the underlying tokens amount based on the VTS calc to the MarketVault
         address proxyHook = mf.corePoolToProxyHook(poolId);
 
-        if (isSettle) {
-            uint256 settleAmount0 = LiquidityUtils.safeInt128ToUint256(balanceDelta.amount0());
-            uint256 settleAmount1 = LiquidityUtils.safeInt128ToUint256(balanceDelta.amount1());
+        if (amount0 > 0 && amount1 > 0) {
+            // settlement does not include validation in onMMLiquidityModify, therefore transfer can occur here.
+            uint256 settleAmount0 = LiquidityUtils.safeInt128ToUint256(targetDelta.amount0());
+            uint256 settleAmount1 = LiquidityUtils.safeInt128ToUint256(targetDelta.amount1());
 
             // transfer the underlying tokens to the Market Vault (proxy hook)
             if (settleAmount0 > 0) {
@@ -605,25 +607,21 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         }
 
         // notify the vts manager of the settlement made for this position
-        returnDelta = _getVTSManager().onMMLiquidityModify(positionId, balanceDelta);
-
-        // TODO: ZeroDelta to result in full take. Requires validation.
-        // BalanceDelta balanceDelta = _getVTSManager().onMMLiquidityModify(
-        //     positionId,
-        //     takeAmount0 == 0 && takeAmount1 == 0
-        //         ? BalanceDeltaLibrary.ZERO_DELTA
-        //         // a negative balance delta means we are taking underlying tokens from the proxy hook similar to having a negative liquidity delta
-        //         : toBalanceDelta(-int128(uint128(takeAmount0)), -int128(uint128(takeAmount1)))
-        // );
+        modifiedDelta = _getVTSManager().onMMLiquidityModify(positionId, targetDelta);
 
         // notify the proxy hook of the settled underlying tokens
         // a positive balance delta means we are settling underlying tokens to the proxy hook, negative means withdrawing.
-        IProxyHook(proxyHook).onMMLiquidityModify(returnDelta);
+        IProxyHook(proxyHook).onMMLiquidityModify(modifiedDelta);
+
+        // Overwrite the amount0 and amount1 with the actual modified delta amounts
+        amount0 = modifiedDelta.amount0();
+        amount1 = modifiedDelta.amount1();
+
         // if it is a take, then transfer the underlying tokens from the contract to the actual recipient
-        if (!isSettle) {
+        if (amount0 < 0 && amount1 < 0) {
             // transfer from this contract to the actual recipient
-            uint256 takeAmount0 = LiquidityUtils.safeInt128ToUint256(returnDelta.amount0());
-            uint256 takeAmount1 = LiquidityUtils.safeInt128ToUint256(returnDelta.amount1());
+            uint256 takeAmount0 = LiquidityUtils.safeInt128ToUint256(amount0);
+            uint256 takeAmount1 = LiquidityUtils.safeInt128ToUint256(amount1);
             if (takeAmount0 > 0) {
                 // transfer from this contract to the actual recipient
                 IERC20Minimal(lcc0.underlyingAsset()).transfer(sender, takeAmount0);
@@ -634,12 +632,12 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
             }
         }
 
-        // TODO: Re-add after rebase.
-        // if (BalanceDelta.unwrap(deltaToBurn) != BalanceDelta.unwrap(BalanceDeltaLibrary.ZERO_DELTA)) {
-        //     // burn the LCC originally committed to the position. This may be greater than the amount of underlying asset tokens in the position.
-        //     lcc0.cancel(LiquidityUtils.safeInt128ToUint256(deltaToBurn.amount0()));
-        //     lcc1.cancel(LiquidityUtils.safeInt128ToUint256(deltaToBurn.amount1()));
-        // }
+        if (!LiquidityUtils.isZeroDelta(deltaToBurn)) {
+            // ? we execute this here to minimise external contract calls for lcc handlers.
+            // burn the LCC originally committed to the position. This may be greater than the amount of underlying asset tokens in the position.
+            lcc0.cancel(LiquidityUtils.safeInt128ToUint256(deltaToBurn.amount0()));
+            lcc1.cancel(LiquidityUtils.safeInt128ToUint256(deltaToBurn.amount1()));
+        }
     }
 
     /**
@@ -752,16 +750,19 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
             positionId, positionToCheckpoint[positionId]
         );
 
-        uint256 maxSiezureFractionBPS = vtsManager.getSeizureAmount(positionId);
-        // based on the amount they are choosing to settle, calculate how much of the total siezable amount to be seized by the caller
+        uint256 maxSeizureFractionBPS = vtsManager.getSeizureAmount(positionId);
+        // based on the amount they are choosing to settle, calculate how much of the total seizable amount to be seized by the caller
         uint256 seizureFractionBPS =
-            LiquidityUtils.calculateSiezureFraction(settleBalanceDelta, rfsBalanceDelta, maxSiezureFractionBPS);
+            LiquidityUtils.calculateSeizureFraction(settleBalanceDelta, rfsBalanceDelta, maxSeizureFractionBPS);
 
         // -- Settle the position to meet rfs requirements
 
         // settle underlying assets to the position to make it meet rfs requirements
         _modifyMarketUnderlyingAsset(
-            positionId, position.poolId, toBalanceDelta(amount0.toInt128(), amount1.toInt128())
+            positionId,
+            position.poolId,
+            toBalanceDelta(amount0.toInt128(), amount1.toInt128()),
+            BalanceDeltaLibrary.ZERO_DELTA
         );
 
         // -- Move the underlying liquidity to the to the seizer/caller or to the new position
