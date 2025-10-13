@@ -60,9 +60,11 @@ abstract contract MarketTestBase is Test, Deployers {
     OracleRegistry oracleRegistry;
     ICSpokeVerifier icVerifier;
     StubSpokeVerifier stubSpokeVerifier;
-    VRLSignalManager spokeReceiver;
+    VRLSignalManager signalManager;
     address mmPositionManager;
     IMarketVault mv;
+
+    uint256 signalExpiryInSeconds = 3600;
 
     function approveLCCForMarketUse(LiquidityCommitmentCertificate token) internal returns (Currency currency) {
         address underlyingAsset = token.underlyingAsset();
@@ -138,9 +140,11 @@ abstract contract MarketTestBase is Test, Deployers {
         // deploy custom router and verifier
         icVerifier = new ICSpokeVerifier(makeAddr("icCanister"));
         stubSpokeVerifier = new StubSpokeVerifier();
-        spokeReceiver = new VRLSignalManager(address(stubSpokeVerifier), address(oracleRegistry));
+        signalManager = new VRLSignalManager(
+            address(stubSpokeVerifier), address(oracleRegistry), address(marketFactory), signalExpiryInSeconds
+        );
         mmPositionManager =
-            address(new MMPositionManager(address(manager), address(spokeReceiver), address(marketFactory)));
+            address(new MMPositionManager(address(manager), address(signalManager), address(marketFactory)));
     }
 
     function _setupMarket() internal {

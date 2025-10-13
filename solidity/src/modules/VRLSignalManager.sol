@@ -5,28 +5,47 @@
 pragma solidity ^0.8.0;
 
 import {MarketMaker} from "../libraries/MarketMaker.sol";
+import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
 import {ISpokeVerifier} from "../interfaces/ISpokeVerifier.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {LiquiditySignal} from "../types/Position.sol";
 import {IOracle} from "../interfaces/IOracle.sol";
 import {IOracleRegistry} from "../interfaces/IOracleRegistry.sol";
 import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
-import {console} from "forge-std/console.sol";
+import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {BalanceDelta, BalanceDeltaLibrary} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {ILCC} from "../interfaces/ILCC.sol";
+import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
+import {LiquidityUtils} from "../libraries/LiquidityUtils.sol";
+import {IVTSManager} from "../interfaces/IVTSManager.sol";
 
 contract VRLSignalManager is Ownable {
     ISpokeVerifier public verifier;
     IOracleRegistry public oracleRegistry;
+    IMarketFactory public marketFactory;
+
+    using MarketMaker for MarketMaker.State;
 
     event VerifierChanged(address indexed oldVerifier, address indexed newVerifier);
 
     error InvalidProof();
+    error InvalidDelta(int128 amount0, int128 amount1);
     error InvalidNonce(uint256 newNonce, uint256 prevNonce);
+    error InvalidLiquiditySignalEncoding();
+    error InvalidLiquiditySignal();
+    error InsufficientLiquidityInSignal();
 
     mapping(address => uint256) public mmNonce;
+    uint256 public signalExpiryInSeconds;
 
-    constructor(address _verifier, address _oracleRegistry) Ownable(msg.sender) {
+    constructor(address _verifier, address _oracleRegistry, address _marketFactory, uint256 _signalExpiryInSeconds)
+        Ownable(msg.sender)
+    {
         verifier = ISpokeVerifier(_verifier);
         oracleRegistry = IOracleRegistry(_oracleRegistry);
+        marketFactory = IMarketFactory(_marketFactory);
+        signalExpiryInSeconds = _signalExpiryInSeconds;
     }
 
     /**
@@ -41,40 +60,136 @@ contract VRLSignalManager is Ownable {
     }
 
     /**
-     * @dev This function is used to verify the liquidity signal and return the tickers and amounts of the assets
-     * @param liquiditySignal The liquidity signal to verify
-     * @return tickers The tickers of the assets
-     * @return amounts The amounts of the assets
+     * @dev This function is used to set the expiry in seconds for the liquidity signal
+     * @param _signalExpiryInSeconds The new expiry in seconds to set
      */
-    function verifyLiquiditySignal(LiquiditySignal memory liquiditySignal)
-        public
-        returns (string[] memory tickers, uint256[] memory amounts)
-    {
-        // validate the new nonce is greater than than the previous nonce
-        if (liquiditySignal.nonce <= mmNonce[liquiditySignal.mmState.owner]) {
-            revert InvalidNonce(liquiditySignal.nonce, mmNonce[liquiditySignal.mmState.owner]);
-        }
+    function setSignalExpiryInSeconds(uint256 _signalExpiryInSeconds) external onlyOwner {
+        signalExpiryInSeconds = _signalExpiryInSeconds;
+    }
+
+    /**
+     * @dev This function is used to verify the liquidity signal and makes sure it updates the nonce for the mm
+     * @param liquiditySignal The liquidity signal to verify
+     */
+    function verifyLiquiditySignalSolvency(
+        PoolKey calldata poolKey,
+        bytes memory liquiditySignal,
+        ModifyLiquidityParams memory liquidityParams
+    ) public returns (uint256, uint256, uint256) {
+        LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
 
         // verify the proofs associated with the state
-        if (
-            !verifier.verifyProof(
-                liquiditySignal.nonce,
-                liquiditySignal.rootHash,
-                liquiditySignal.rootHashSignature,
-                liquiditySignal.mmSignature,
-                liquiditySignal.mmState,
-                liquiditySignal.merkleProof
-            )
-        ) {
-            // if the proof is invalid, revert
+        bool isSignalValid = verifyLiquiditySignal(signal);
+        // if the proof is invalid, revert
+        if (!isSignalValid) {
             revert InvalidProof();
         }
 
-        // update the nonce for the mm
-        mmNonce[liquiditySignal.mmState.owner] = liquiditySignal.nonce;
+        // check the solvency of the signal
+        // reverts if insolvent
+        return checkSignalSolvency(poolKey, liquiditySignal, liquidityParams);
+    }
 
-        // get the reserves from the mm state
-        (tickers, amounts) = MarketMaker.getReserves(liquiditySignal.mmState);
+    /**
+     * @dev This function is used to verify the liquidity signal and return the tickers and amounts of the assets
+     * @param signal The liquidity signal to verify
+     * @return isProofValid Whether the proof is valid
+     */
+    function verifyLiquiditySignal(LiquiditySignal memory signal) public returns (bool isProofValid) {
+        // derive the liquidity signal
+        // validate the new nonce is greater than than the previous nonce
+        if (signal.nonce <= mmNonce[signal.mmState.owner]) {
+            revert InvalidNonce(signal.nonce, mmNonce[signal.mmState.owner]);
+        }
+
+        // verify the proofs associated with the state
+        isProofValid = verifier.verifyProof(
+            signal.nonce,
+            signal.rootHash,
+            signal.rootHashSignature,
+            signal.mmSignature,
+            signal.mmState,
+            signal.merkleProof
+        );
+
+        if (isProofValid) {
+            // update the nonce for the mm if the proof is valid
+            mmNonce[signal.mmState.owner] = signal.nonce;
+        }
+    }
+
+    /**
+     * Renew a liquidity signal by verifying it and returning the usd value of the signal
+     * @param liquiditySignal the signal encoded in bytes
+     */
+    function renewLiquiditySignal(bytes memory liquiditySignal) public returns (uint256, uint256) {
+        LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
+
+        bool isSignalValid = verifyLiquiditySignal(signal);
+        if (!isSignalValid) {
+            revert InvalidProof();
+        }
+        // get usd value of signal
+        (string[] memory tickers, uint256[] memory amounts) = signal.mmState.getReserves();
+        uint256 totalSignalUsdValue = getTotalUsdValue(tickers, amounts);
+
+        return (totalSignalUsdValue, signalExpiryInSeconds);
+    }
+
+    /**
+     * @dev This function is used to calculate the solvency of the liquidity signal against the value of the provided lccs
+     *      This function will compare the total USD value of the LCC's to the total USD value of the assets in the liquidity signal
+     *      This function does not verify the signal
+     * @param poolKey The pool key of the liquidity signal
+     * @param liquiditySignal The liquidity signal to calculate the solvency of
+     * @param liquidityParams The liquidity parameters of the liquidity signal
+     * @return totalLCCValue The total USD value of the LCC's
+     * @return totalSignalUsdValue The total USD value of the assets in the liquidity signal
+     * @return signalExpiryInSeconds The expiry in seconds of the liquidity signal
+     */
+    function checkSignalSolvency(
+        PoolKey calldata poolKey,
+        bytes memory liquiditySignal,
+        ModifyLiquidityParams memory liquidityParams
+    ) public view returns (uint256, uint256, uint256) {
+        ILCC lcc0 = ILCC(Currency.unwrap(poolKey.currency0));
+        ILCC lcc1 = ILCC(Currency.unwrap(poolKey.currency1));
+
+        // if the signal is zero bytes then revert
+        if (liquiditySignal.length == 0) {
+            revert InvalidLiquiditySignal();
+        }
+        LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
+
+        // --- Calculate the total USD value of the LCC's ---
+
+        // get the price of the LCC's
+        address coreHook = IMarketFactory(marketFactory).getCoreHook();
+        address marketOracleFactory = IVTSManager(coreHook).getMarketVTSConfiguration(poolKey.toId()).oracleFactory;
+
+        (uint256 lcc0Amount, uint256 lcc1Amount) = LiquidityUtils.calculateCommitmentMaxima(
+            liquidityParams.tickLower, liquidityParams.tickUpper, uint128(uint256(liquidityParams.liquidityDelta))
+        );
+
+        (uint256 lcc0Price, uint256 lcc0Decimals) = lcc0.usdPrice(marketOracleFactory);
+        (uint256 lcc1Price, uint256 lcc1Decimals) = lcc1.usdPrice(marketOracleFactory);
+
+        uint256 totalLCCValue =
+            ((lcc0Price * lcc0Amount) / 10 ** lcc0Decimals) + ((lcc1Price * lcc1Amount) / 10 ** lcc1Decimals);
+
+        // --- Calculate the total USD value of the assets in the liquidity signal ---
+        (string[] memory tickers, uint256[] memory amounts) = signal.mmState.getReserves();
+        uint256 totalSignalUsdValue = getTotalUsdValue(tickers, amounts);
+
+        //  Position is solvent if the total LCC value is greater than or equal to the total signal usd value
+        bool isSolvent = totalSignalUsdValue >= totalLCCValue;
+
+        // if the position is not solvent, revert
+        if (!isSolvent) {
+            revert InsufficientLiquidityInSignal();
+        }
+
+        return (totalLCCValue, totalSignalUsdValue, signalExpiryInSeconds);
     }
 
     /**

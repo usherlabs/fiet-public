@@ -16,6 +16,7 @@ abstract contract MarketMakerTestBase is Test {
     using MessageHashUtils for bytes32;
 
     LiquiditySignal liquiditySignal;
+    LiquiditySignal renewSignal;
 
     uint256 nonce = 1;
 
@@ -31,7 +32,9 @@ abstract contract MarketMakerTestBase is Test {
     function _setUpMM() public {
         icCanister = vm.addr(icCanisterPrivateKey);
         // Create a liquidity signal
-        liquiditySignal = generateLiquiditySignals(1)[0];
+        LiquiditySignal[] memory signals = generateLiquiditySignals(2);
+        liquiditySignal = signals[0];
+        renewSignal = signals[1];
     }
 
     function generateLiquiditySignals(uint256 numOfMarketMakers) internal returns (LiquiditySignal[] memory) {
@@ -79,12 +82,10 @@ abstract contract MarketMakerTestBase is Test {
                 // the signature of the market maker state and the nonce
                 mmSignature: liquidityPayloadSignature,
                 // The nonce must always be incrementing.
-                nonce: nonce
+                nonce: ++nonce
             });
         }
 
-        // increment the nonce
-        nonce++;
         // return the liquidity signals
         return liquiditySignals;
     }
@@ -106,8 +107,8 @@ abstract contract MarketMakerTestBase is Test {
 
         // Add reserves
         state.reserves = new MarketMaker.Reserve[](2);
-        state.reserves[0] = MarketMaker.Reserve({source: "bybit", asset: "BTC", amount: 1000});
-        state.reserves[1] = MarketMaker.Reserve({source: "bybit", asset: "USDT", amount: 50000});
+        state.reserves[0] = MarketMaker.Reserve({source: "bybit", asset: "BTC", amount: 1e20});
+        state.reserves[1] = MarketMaker.Reserve({source: "bybit", asset: "USDT", amount: 5e18});
 
         return StatePayload({privateKey: privateKey, state: state});
     }

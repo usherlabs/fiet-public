@@ -20,6 +20,9 @@ import {toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {console} from "forge-std/console.sol";
 import {LiquidityUtils} from "../libraries/LiquidityUtils.sol";
+import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {ILCC} from "../interfaces/ILCC.sol";
+import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
 
 abstract contract VTSManager is IVTSManager, PositionIndex {
     using SafeCastLib for *;
@@ -445,6 +448,33 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         uint256 one = 1e18;
         vtsRequired0 = c0 == 0 ? 0 : (d0 >= c0 ? one : (d0 * one) / c0);
         vtsRequired1 = c1 == 0 ? 0 : (d1 >= c1 ? one : (d1 * one) / c1);
+    }
+
+    function getPositionUnsettledUSDValue(PoolId poolId, PositionId positionId) public view returns (uint256) {
+        address[2] memory currencyPair = IMarketFactory(marketFactory).corePoolToCurrencyPair(poolId);
+        address lcc0 = currencyPair[0];
+        address lcc1 = currencyPair[1];
+        // get the total usd value of all the commitments under this position
+        // get the total usd value of all the settlements under this position
+        // return the difference between the two
+
+        (uint256 commitmentTotal0, uint256 commitmentTotal1) = _getCommitment(positionId);
+        // get the total amount settled
+        uint256 settlementTotal0 = totalSettlementAmount[positionId][0];
+        uint256 settlementTotal1 = totalSettlementAmount[positionId][1];
+
+        // the position's value is the commitments minus settlements
+        uint256 unsettledAmount0 = commitmentTotal0 > settlementTotal0 ? commitmentTotal0 - settlementTotal0 : 0;
+        uint256 unsettledAmount1 = commitmentTotal1 > settlementTotal1 ? commitmentTotal1 - settlementTotal1 : 0;
+
+        // return the total usd value of the position
+        (uint256 lcc0Price, uint256 price0Decimal) = ILCC(lcc0).usdPrice(address(0));
+        (uint256 lcc1Price, uint256 price1Decimal) = ILCC(lcc1).usdPrice(address(0));
+
+        uint256 totalLCCValue = ((lcc0Price * unsettledAmount0) / 10 ** price0Decimal)
+            + ((lcc1Price * unsettledAmount1) / 10 ** price1Decimal);
+
+        return totalLCCValue;
     }
 
     /**

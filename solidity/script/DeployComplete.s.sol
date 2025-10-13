@@ -168,10 +168,12 @@ contract CompleteDeployScript is ScriptHelper {
      * @return The deployed MMPositionManager address
      */
     function _deployMMPositionManager() internal returns (address) {
+        uint256 signalExpiryInSeconds = 3600;
         // ? deploy a stub verifier for now, would eventually be an IC verifier
         address stubVerifier = address(new StubSpokeVerifier());
         console.log("StubSpokeVerifier deployed at:", stubVerifier);
-        address signalManager = address(new VRLSignalManager(stubVerifier, oracleRegistry));
+        address signalManager =
+            address(new VRLSignalManager(stubVerifier, oracleRegistry, marketFactory, signalExpiryInSeconds));
         console.log("SignalManager deployed at:", signalManager);
         MMPositionManager positionManager = new MMPositionManager(poolManagerAddress, signalManager, marketFactory);
         console.log("MMPositionManager deployed at:", address(positionManager));
