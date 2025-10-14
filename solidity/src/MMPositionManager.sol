@@ -3,12 +3,10 @@ pragma solidity ^0.8.0;
 
 import {LiquidityRouter} from "./modules/LiquidityRouter.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
-import {ISpokeVerifier} from "./interfaces/ISpokeVerifier.sol";
-import {MarketMaker} from "./libraries/MarketMaker.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {ModifyLiquidityParams} from "v4-periphery/lib/v4-core/src/types/PoolOperation.sol";
 import {Constants} from "v4-periphery/lib/v4-core/test/utils/Constants.sol";
-import {BalanceDelta, BalanceDeltaLibrary, toBalanceDelta} from "v4-periphery/lib/v4-core/src/types/BalanceDelta.sol";
+import {BalanceDelta, toBalanceDelta} from "v4-periphery/lib/v4-core/src/types/BalanceDelta.sol";
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {PoolId} from "v4-periphery/lib/v4-core/src/types/PoolId.sol";
 import {ERC721} from "solmate/tokens/ERC721.sol";
@@ -27,7 +25,6 @@ import {IVRLSignalManager} from "./interfaces/IVRLSignalManager.sol";
 import {IPositionIndex} from "./interfaces/IPositionIndex.sol";
 import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
 import {FullMath} from "v4-periphery/lib/v4-core/src/libraries/FullMath.sol";
-import {console} from "forge-std/console.sol";
 
 contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
     using SafeCast for *;
@@ -251,11 +248,6 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         int256 liquidity,
         bytes memory liquiditySignal
     ) external onlyValidMarket(poolKey) returns (PositionId) {
-        address lccAddr0 = Currency.unwrap(poolKey.currency0);
-        address lccAddr1 = Currency.unwrap(poolKey.currency1);
-        ILCC lcc0 = ILCC(lccAddr0);
-        ILCC lcc1 = ILCC(lccAddr1);
-
         // verify the liquidity signal, this will return the validated reserves
         if (liquiditySignal.length == 0) {
             revert InvalidLiquiditySignal(0, 0);
@@ -263,12 +255,6 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         if (liquidity == 0) {
             revert InvalidDelta(0, 0);
         }
-        LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
-        (string[] memory reservesTickers, uint256[] memory reservesAmounts) =
-            signalManager.verifyLiquiditySignal(signal);
-
-        // calculate the total signal usd value
-        uint256 totalSignalUsdValue = signalManager.getTotalUsdValue(reservesTickers, reservesAmounts);
 
         // calculate the token0 and token1 amounts to mint to create the position
         ModifyLiquidityParams memory liquidityParams = ModifyLiquidityParams({
@@ -277,6 +263,11 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
             liquidityDelta: liquidity,
             salt: bytes32(0) // safe to set to zero because the salt is generated based on paramaters
         });
+
+        address lccAddr0 = Currency.unwrap(poolKey.currency0);
+        address lccAddr1 = Currency.unwrap(poolKey.currency1);
+        ILCC lcc0 = ILCC(lccAddr0);
+        ILCC lcc1 = ILCC(lccAddr1);
 
         // calculate the total LCC USD value and confirm it is less than the total signal usd value
 
@@ -325,6 +316,17 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         onlyValidSignal(tokenId)
         returns (uint256)
     {
+        uint256 posCount = nftToPositionCount[tokenId];
+        if (posCount == 0) {
+            // should never be reached, however validate that nft has an existing position attached to it
+            revert InvalidPosition(tokenId, 0, PositionId.wrap(0));
+        }
+
+        PositionMeta memory lastPos = getPosition(tokenId, posCount - 1); // get existingPos
+        if (!_isValidPositionForPool(poolKey, lastPos)) {
+            // validate that provided poolKey belongs to the tokenId.
+            revert InvalidMarket(poolKey);
+        }
         // derive the liquidity modification parameters
         ModifyLiquidityParams memory liquidityParams = ModifyLiquidityParams({
             tickLower: tickLower,
@@ -337,7 +339,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         uint256 currentUnsettledUSDValue = getTokenUnsettledUSDValue(tokenId);
         // get the total usd value of the new commitment
         (uint256 newCommitmentsUSDValue, uint256 totalSignalUsdValue,) =
-            signalManager.checkSignalSolvency(poolKey, abi.encode(signalState.signal), liquidityParams);
+            signalManager.checkSignalSolvency(poolKey, abi.encode(tokenIdToSignal[tokenId].signal), liquidityParams);
 
         // validate that the total usd value of outstanding commitments + new commitment < total usd value of signal
         uint256 sumOfValues = currentUnsettledUSDValue + newCommitmentsUSDValue;
@@ -358,10 +360,14 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         _modifyMarketUnderlyingAsset(
             positionId,
             poolKey.toId(),
-            toBalanceDelta(underlyingLiquidityFraction0.toInt128(), underlyingLiquidityFraction1.toInt128())
+            toBalanceDelta(underlyingLiquidityFraction0.toInt128(), underlyingLiquidityFraction1.toInt128()),
+            ILCC(Currency.unwrap(poolKey.currency0)).underlyingAsset(),
+            ILCC(Currency.unwrap(poolKey.currency1)).underlyingAsset()
         );
+        // by validating the provided pooKey, we can rely securely on the currency0,1
 
-        emit SignalCommitted(msg.sender, tokenId, positionIndex);
+        // No event emitted here. Uniswap will emit a new position event.
+        // Ref https://github.com/Uniswap/v4-core/blob/a7cf038cd568801a79a9b4cf92cd5b52c95c8585/src/PoolManager.sol#L175
 
         return positionIndex;
     }
@@ -436,6 +442,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         }
 
         // Liquidate position will call VTSManager.onMMLiquidityModify, which will settle the position growths for the new MMPosition.
+        // _modifyMarketUnderlyingAsset will be called inside of _liquidatePosition.
         uint256 completeLiquidity = uint256(pos.liquidity);
         return _liquidatePosition(poolKey, pos, _positionSalt(tokenId, positionIndex), completeLiquidity);
     }
@@ -448,11 +455,6 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         IVTSManager vtsManager = _getVTSManager();
         PositionMeta memory position = getPosition(tokenId, positionIndex);
         PositionId positionId = getPositionId(tokenId, positionIndex);
-        // validate that the signal has not expired yet
-        SignalState memory signalState = tokenIdToSignal[tokenId];
-        if (signalState.expiresAt < block.timestamp) {
-            revert SignalExpired(tokenId);
-        }
 
         ModifyLiquidityParams memory modifyLiquidityParams = ModifyLiquidityParams({
             tickLower: position.tickLower,

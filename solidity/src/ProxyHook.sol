@@ -297,7 +297,6 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         bool isHookExcessRecipientSpecified = excessRecipient != address(0);
 
         uint256 maxOutputTokenAvailable = inMarketBalanceOf(params.zeroForOne ? key.currency1 : key.currency0);
-        // console.log("Max token output available: ", maxOutputTokenAvailable);
 
         bool coreZeroForOne;
         PoolKey memory coreKey = corePoolKey;
@@ -388,19 +387,11 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
 
         BalanceDelta delta = poolManager.swap(coreKey, coreSwapParams, bytes(""));
 
-        // console.log("Core Pool Delta amount0: ", delta.amount0());
-        // console.log("Core Pool Delta amount1: ", delta.amount1());
-        // console.log("coreZeroForOne: ", coreZeroForOne);
-        // console.log("params.zeroForOne: ", params.zeroForOne);
-
         /// The desired input amount and output amount
         // the deltas should be the source of truth since input and output amounts are potentially modified if no hook data is provided
         uint256 amountIn = LiquidityUtils.safeInt128ToUint256(coreZeroForOne ? delta.amount0() : delta.amount1());
         uint256 amountOut = LiquidityUtils.safeInt128ToUint256(coreZeroForOne ? delta.amount1() : delta.amount0());
         bool isExactInput = params.amountSpecified < 0;
-
-        // console.log("amountIn: ", amountIn / 1e18);
-        // console.log("amountOut: ", amountOut / 1e18);
 
         uint256 amountToSettle;
 
