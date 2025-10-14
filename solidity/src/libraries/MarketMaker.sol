@@ -5,7 +5,6 @@ import {console} from "forge-std/console.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {HexStrings} from "v4-periphery/src/libraries/HexStrings.sol";
 
-
 library MarketMaker {
     /// @dev The reserve of the market maker
     struct Reserve {
@@ -89,7 +88,6 @@ library MarketMaker {
 
         result = string(abi.encodePacked(result, "owner:", _addressToString(state.owner)));
 
-
         // Add all reserves strings
         for (uint256 i = 0; i < state.reserves.length; i++) {
             if (i > 0) {
@@ -108,8 +106,7 @@ library MarketMaker {
         result = string(abi.encodePacked(result, "|nonce:", state.nonce));
 
         // Add advancer
-        result = string(abi.encodePacked(result, "|advancer:",_addressToString(state.advancer)));
-
+        result = string(abi.encodePacked(result, "|advancer:", _addressToString(state.advancer)));
     }
 
     /**

@@ -49,7 +49,8 @@ contract MarketMakerTest is MarketMakerTestBase {
         // Verify the result
         // ? might have to globally change this to include the owner address, it must have been an oversight
         // ? to change on the prover generating the state
-        string memory expected = "owner:0xa433f323541cf82f97395076b5f83a7a06f1646creserves:bybit:BTC:100000000000000000000|reserves:bybit:USDT:5000000000000000000|prover:state.prover|nonce:nonce123|advancer:0xa433f323541cf82f97395076b5f83a7a06f1646c";
+        string memory expected =
+            "owner:0xa433f323541cf82f97395076b5f83a7a06f1646creserves:bybit:BTC:100000000000000000000|reserves:bybit:USDT:5000000000000000000|prover:state.prover|nonce:nonce123|advancer:0xa433f323541cf82f97395076b5f83a7a06f1646c";
 
         assertEq(result, expected);
     }

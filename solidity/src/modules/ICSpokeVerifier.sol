@@ -44,9 +44,8 @@ contract ICSpokeVerifier is ISpokeVerifier {
         } else {
             // if the signature is valid, set isCallerAuthorized to true
             // generate the message hash to sign from the leafhash and the nonce
-            address recovered = MessageHashUtils
-                .toEthSignedMessageHash(mmStateData.toLeafHash())
-                .recover(mmStateHashSignature);
+            address recovered =
+                MessageHashUtils.toEthSignedMessageHash(mmStateData.toLeafHash()).recover(mmStateHashSignature);
             isCallerAuthorized = recovered == mmStateData.owner;
         }
 
@@ -65,10 +64,8 @@ contract ICSpokeVerifier is ISpokeVerifier {
 
         // verify signature of the canister on the root state hash
         bytes32 message = sha256(abi.encodePacked(nonce, rootStateHash));
-        bool isRootStateHashValid = MessageHashUtils
-            .toEthSignedMessageHash(message)
-            .recover(rootStateHashSignature) == canisterAddress;
-
+        bool isRootStateHashValid =
+            MessageHashUtils.toEthSignedMessageHash(message).recover(rootStateHashSignature) == canisterAddress;
 
         if (!isRootStateHashValid) {
             // revert InvalidRootStateHashSignature();
