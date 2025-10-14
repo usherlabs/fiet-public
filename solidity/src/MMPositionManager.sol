@@ -456,6 +456,16 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         PositionMeta memory position = getPosition(tokenId, positionIndex);
         PositionId positionId = getPositionId(tokenId, positionIndex);
 
+        // Validate poolKey
+        if (!_isValidPositionForPool(poolKey, position)) {
+            revert InvalidMarket(poolKey);
+        }
+
+        ILCC lcc0 = ILCC(Currency.unwrap(poolKey.currency0));
+        ILCC lcc1 = ILCC(Currency.unwrap(poolKey.currency1));
+        address ua0 = lcc0.underlyingAsset();
+        address ua1 = lcc1.underlyingAsset();
+
         ModifyLiquidityParams memory modifyLiquidityParams = ModifyLiquidityParams({
             tickLower: position.tickLower,
             tickUpper: position.tickUpper,
@@ -477,17 +487,20 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
             _modifyMarketUnderlyingAsset(
                 getPositionId(tokenId, positionIndex),
                 poolKey.toId(),
-                toBalanceDelta(underlyingLiquidityFraction0.toInt128(), underlyingLiquidityFraction1.toInt128())
+                toBalanceDelta(underlyingLiquidityFraction0.toInt128(), underlyingLiquidityFraction1.toInt128()),
+                ua0,
+                ua1
             );
 
-            ILCC(Currency.unwrap(poolKey.currency0)).issue(lcc0Amount);
-            ILCC(Currency.unwrap(poolKey.currency1)).issue(lcc1Amount);
+            lcc0.issue(lcc0Amount);
+            lcc1.issue(lcc1Amount);
 
             // actually modify the liquidity
             _modifyLiquidity(poolKey, modifyLiquidityParams, Constants.ZERO_BYTES);
         } else {
             // validate that the liquidity being removed is less than the total liquidity in the position
             // validate that rfs is not open for the position
+            // TODO: Replace with latest VTS.onMMLiquidityModify
             (uint256 s0, uint256 s1) = vtsManager.prepareLiquidation(positionId);
 
             //  get the fraction of the liquidity to take out of the position
@@ -501,15 +514,15 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
             // withdraw settlement relative to the liquidity delta
             // negate balance delta to 'take' the settlement amount
             _modifyMarketUnderlyingAsset(
-                positionId, poolKey.toId(), LiquidityUtils.negateBalanceDelta(underlyingAssetFraction)
+                positionId, poolKey.toId(), LiquidityUtils.negateBalanceDelta(underlyingAssetFraction), ua0, ua1
             );
 
             // remove liquidity from the position
             _modifyLiquidity(poolKey, modifyLiquidityParams, Constants.ZERO_BYTES);
 
             // burn the output tokens
-            ILCC(Currency.unwrap(poolKey.currency0)).cancel(lcc0Amount);
-            ILCC(Currency.unwrap(poolKey.currency1)).cancel(lcc1Amount);
+            lcc0.cancel(lcc0Amount);
+            lcc1.cancel(lcc1Amount);
         }
     }
 
