@@ -769,7 +769,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         IVTSManager vtsManager = _getVTSManager();
 
         // make sure there is an open RFS for this position
-        (bool rfsOpen, BalanceDelta rfsBalanceDelta) = vtsManager.calcRFS(positionId, false); // do not require a closed RfS.
+        (bool rfsOpen, BalanceDelta rfsBalanceDelta) = vtsManager.calcRFS(positionId, false);
         if (!rfsOpen) {
             revert InvalidPosition(tokenId, positionIndex, positionId);
         }
@@ -784,6 +784,8 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         ) {
             revert InvalidDelta(settleBalanceDelta.amount0(), settleBalanceDelta.amount1());
         }
+
+        // vtsManager.calcSeizure(positionId); // TODO: Move validation of grace period and seizure calculation over time window, utilising an alpha senisitivity parameter to VTSManager.
 
         // get grace period for this position from market vts configuration
         vtsManager.getMarketVTSConfiguration(position.poolId).validateGracePeriod(

@@ -243,18 +243,6 @@ abstract contract MarketTestBase is Test, Deployers {
             abi.encodeWithSelector(IMarketFactory.corePoolToProxyHook.selector),
             abi.encode(proxyHookAddress)
         );
-        // Mock different responses based on the poolId parameter
-        vm.mockCall(
-            marketFactory,
-            abi.encodeWithSelector(IMarketFactory.poolIdToPoolKey.selector, corePoolKey.toId()),
-            abi.encode(corePoolKey)
-        );
-
-        vm.mockCall(
-            marketFactory,
-            abi.encodeWithSelector(IMarketFactory.poolIdToPoolKey.selector, proxyPoolKey.toId()),
-            abi.encode(proxyPoolKey)
-        );
 
         modifyLiquidityRouter.modifyLiquidity(
             corePoolKey,

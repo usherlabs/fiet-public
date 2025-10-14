@@ -99,7 +99,8 @@ library LiquidityUtils {
             // validate seizure amount is not more than rfs amount by using the min of both values
             rfsAmount = safeInt128ToUint256(rfsBalanceDelta.amount0());
             settleAmount = Math.min(rfsAmount, safeInt128ToUint256(settleBalanceDelta.amount0()));
-        } else if (settleBalanceDelta.amount1() > 0) {
+        }
+        if (settleBalanceDelta.amount1() > 0) {
             rfsAmount = safeInt128ToUint256(rfsBalanceDelta.amount1());
             // validate seizure amount is not more than rfs amount by using the min of both values
             settleAmount = Math.min(rfsAmount, safeInt128ToUint256(settleBalanceDelta.amount1()));
@@ -108,7 +109,7 @@ library LiquidityUtils {
         // calculate the fraction of the rfs amount that is settled, if more than the  rfs amount is settled,
         // then cap the max seizure percentage to 10000 bps(100%)
         uint256 calculatedFraction = Math.ceilDiv(settleAmount * maxSeizureFractionBPS, rfsAmount);
-        seizureFractionBPS = calculatedFraction > 10000 ? 10000 : calculatedFraction;
+        seizureFractionBPS = calculatedFraction > ONE_BIP ? ONE_BIP : calculatedFraction;
     }
 
     /**
@@ -216,9 +217,8 @@ library LiquidityUtils {
 
         // get the amount of underlying liquidity to transfer from the issuer to the lcc
         // divide by 10000 to convert to a percentage from bips
-        uint256 oneBip = 10000;
-        underlyingLiquidityFraction0 = Math.ceilDiv(lccAmount0 * vtsConfiguration.token0.baseVTSRate, oneBip);
-        underlyingLiquidityFraction1 = Math.ceilDiv(lccAmount1 * vtsConfiguration.token1.baseVTSRate, oneBip);
+        underlyingLiquidityFraction0 = Math.ceilDiv(lccAmount0 * vtsConfiguration.token0.baseVTSRate, ONE_BIP);
+        underlyingLiquidityFraction1 = Math.ceilDiv(lccAmount1 * vtsConfiguration.token1.baseVTSRate, ONE_BIP);
     }
 
     /**
