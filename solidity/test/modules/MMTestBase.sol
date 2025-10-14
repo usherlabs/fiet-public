@@ -82,7 +82,7 @@ abstract contract MarketMakerTestBase is Test {
                 // the signature of the market maker state and the nonce
                 mmSignature: liquidityPayloadSignature,
                 // The nonce must always be incrementing.
-                nonce: ++nonce
+                nonce: nonce++
             });
         }
 
@@ -104,6 +104,9 @@ abstract contract MarketMakerTestBase is Test {
         state.sourceState = "0xstate.sourceState";
         state.prover = "state.prover";
         state.nonce = "nonce123";
+        // this field could potentially be a zero address
+        // it signifies who requests for the proof advance
+        state.advancer = owner;
 
         // Add reserves
         state.reserves = new MarketMaker.Reserve[](2);

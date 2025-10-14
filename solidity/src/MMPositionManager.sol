@@ -406,6 +406,11 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         IVTSManager vtsManager = _getVTSManager();
         PositionMeta memory position = getPosition(tokenId, positionIndex);
         PositionId positionId = getPositionId(tokenId, positionIndex);
+        // validate that the signal has not expired yet
+        SignalState memory signalState = tokenIdToSignal[tokenId];
+        if (signalState.expiresAt < block.timestamp) {
+            revert SignalExpired(tokenId);
+        }
 
         ModifyLiquidityParams memory modifyLiquidityParams = ModifyLiquidityParams({
             tickLower: position.tickLower,

@@ -66,6 +66,7 @@ contract ICSpokeVerifier is ISpokeVerifier {
         bytes32 message = sha256(abi.encodePacked(nonce, rootStateHash));
         bool isRootStateHashValid =
             MessageHashUtils.toEthSignedMessageHash(message).recover(rootStateHashSignature) == canisterAddress;
+
         if (!isRootStateHashValid) {
             // revert InvalidRootStateHashSignature();
             return false;
