@@ -49,7 +49,7 @@ contract MarketMakerTest is MarketMakerTestBase {
         // Verify the result
         // ? might have to globally change this to include the owner address, it must have been an oversight
         // ? to change on the prover generating the state
-        string memory expected = "reserves:bybit:BTC:1000|reserves:bybit:USDT:50000|prover:state.prover|nonce:nonce123";
+        string memory expected = "owner:0xa433f323541cf82f97395076b5f83a7a06f1646creserves:bybit:BTC:100000000000000000000|reserves:bybit:USDT:5000000000000000000|prover:state.prover|nonce:nonce123|advancer:0xa433f323541cf82f97395076b5f83a7a06f1646c";
 
         assertEq(result, expected);
     }
@@ -70,7 +70,7 @@ contract MarketMakerTest is MarketMakerTestBase {
 
         // Verify the hash is equal to the expected value
         // this value was generated using the rust counter part code for the above parameters
-        bytes32 expected_leaf_hash = bytes32(0x809d9123d423de8ea553c918c0f80880db7e12f2f909cd2cae4c18de1ed16c2d);
+        bytes32 expected_leaf_hash = bytes32(0x26a0a297556cc3d9844355528f53687532fffe959f37d8ba4725001e96d667fc);
         assertEq(leafHash, expected_leaf_hash);
     }
 
@@ -84,6 +84,7 @@ contract MarketMakerTest is MarketMakerTestBase {
             liquiditySignal.mmState,
             liquiditySignal.merkleProof
         );
+
         require(success, "Failed to verify proof");
     }
 }

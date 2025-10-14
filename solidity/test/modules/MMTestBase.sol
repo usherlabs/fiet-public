@@ -21,7 +21,8 @@ abstract contract MarketMakerTestBase is Test {
     uint256 nonce = 1;
 
     // mock details about the ic canister
-    uint256 icCanisterPrivateKey = uint256(keccak256(abi.encodePacked(makeAddr("icCanisterPrivateKey"))));
+    uint256 icCanisterPrivateKey =
+        uint256(keccak256(abi.encodePacked(makeAddr("icCanisterPrivateKey"))));
     address icCanister;
 
     struct StatePayload {
@@ -37,9 +38,13 @@ abstract contract MarketMakerTestBase is Test {
         renewSignal = signals[1];
     }
 
-    function generateLiquiditySignals(uint256 numOfMarketMakers) internal returns (LiquiditySignal[] memory) {
+    function generateLiquiditySignals(
+        uint256 numOfMarketMakers
+    ) internal returns (LiquiditySignal[] memory) {
         // store the states of the market makers
-        StatePayload[] memory marketMakerStates = new StatePayload[](numOfMarketMakers);
+        StatePayload[] memory marketMakerStates = new StatePayload[](
+            numOfMarketMakers
+        );
         // store the merkle leaves of the market makers
         bytes32[] memory merkleLeaves = new bytes32[](numOfMarketMakers);
 
@@ -47,28 +52,41 @@ abstract contract MarketMakerTestBase is Test {
             // generate a private key to serve as the signer
             uint256 uniquePrivateKey = uint256(keccak256(abi.encodePacked(i)));
             // append the market maker state to the liqudity signals generated so far
-            MarketMaker.State memory state = _createMarketMakerState(uniquePrivateKey).state;
+            MarketMaker.State memory state = _createMarketMakerState(
+                uniquePrivateKey
+            ).state;
             // append the state to the array of merkle leaves, and store the mm state and private key info
             merkleLeaves[i] = state.toLeafHash();
-            marketMakerStates[i] = StatePayload({privateKey: uniquePrivateKey, state: state});
+            marketMakerStates[i] = StatePayload({
+                privateKey: uniquePrivateKey,
+                state: state
+            });
         }
 
         // using the states, generate the merkle root hash for the states
         bytes32 merkleRootHash = ShaMerkle.generateMerkleRoot(merkleLeaves);
 
         // generate liquidity signals for each market maker
-        LiquiditySignal[] memory liquiditySignals = new LiquiditySignal[](numOfMarketMakers);
+        LiquiditySignal[] memory liquiditySignals = new LiquiditySignal[](
+            numOfMarketMakers
+        );
         for (uint256 i = 0; i < numOfMarketMakers; i++) {
             // generate liquidity payload to sign
             // bytes32 liquidityPayload = _generateLiquidityPayload(marketMakerStates[i], nonce);
             // generate the signature of the liquidity payload
-            bytes memory liquidityPayloadSignature =
-                _signEthMessage(marketMakerStates[i].privateKey, marketMakerStates[i].state.toLeafHash());
+            bytes memory liquidityPayloadSignature = _signEthMessage(
+                marketMakerStates[i].privateKey,
+                marketMakerStates[i].state.toLeafHash()
+            );
 
             // generate a canister signature of the payload(merkle root hash and signature)
-            bytes32 canisterSignaturePayload = sha256(abi.encodePacked(nonce, merkleRootHash));
-            bytes memory icCanisterMerkleRootHashSignature =
-                _signEthMessage(icCanisterPrivateKey, canisterSignaturePayload);
+            bytes32 canisterSignaturePayload = sha256(
+                abi.encodePacked(nonce, merkleRootHash)
+            );
+            bytes memory icCanisterMerkleRootHashSignature = _signEthMessage(
+                icCanisterPrivateKey,
+                canisterSignaturePayload
+            );
             // generate the liquidity signal
             liquiditySignals[i] = LiquiditySignal({
                 // the merkle root hash of the merkle tree generated from the states
@@ -82,7 +100,7 @@ abstract contract MarketMakerTestBase is Test {
                 // the signature of the market maker state and the nonce
                 mmSignature: liquidityPayloadSignature,
                 // The nonce must always be incrementing.
-                nonce: ++nonce
+                nonce: nonce++
             });
         }
 
@@ -95,7 +113,9 @@ abstract contract MarketMakerTestBase is Test {
      * @param privateKey The private key to generate the state for
      * @return The state payload
      */
-    function _createMarketMakerState(uint256 privateKey) internal pure returns (StatePayload memory) {
+    function _createMarketMakerState(
+        uint256 privateKey
+    ) internal pure returns (StatePayload memory) {
         // use private key to get the address of the owner
         address owner = vm.addr(privateKey);
         // create a state for the owner
@@ -104,11 +124,22 @@ abstract contract MarketMakerTestBase is Test {
         state.sourceState = "0xstate.sourceState";
         state.prover = "state.prover";
         state.nonce = "nonce123";
+        // this field could potentially be a zero address
+        // it signifies who requests for the proof advance
+        state.advancer = owner;
 
         // Add reserves
         state.reserves = new MarketMaker.Reserve[](2);
-        state.reserves[0] = MarketMaker.Reserve({source: "bybit", asset: "BTC", amount: 1e20});
-        state.reserves[1] = MarketMaker.Reserve({source: "bybit", asset: "USDT", amount: 5e18});
+        state.reserves[0] = MarketMaker.Reserve({
+            source: "bybit",
+            asset: "BTC",
+            amount: 1e20
+        });
+        state.reserves[1] = MarketMaker.Reserve({
+            source: "bybit",
+            asset: "USDT",
+            amount: 5e18
+        });
 
         return StatePayload({privateKey: privateKey, state: state});
     }
@@ -119,10 +150,18 @@ abstract contract MarketMakerTestBase is Test {
      * @param messageHash The message to sign
      * @return The compressed signature
      */
-    function _signEthMessage(uint256 privateKey, bytes32 messageHash) internal pure returns (bytes memory) {
-        bytes32 ethSignedMessageHash = MessageHashUtils.toEthSignedMessageHash(messageHash);
+    function _signEthMessage(
+        uint256 privateKey,
+        bytes32 messageHash
+    ) internal pure returns (bytes memory) {
+        bytes32 ethSignedMessageHash = MessageHashUtils.toEthSignedMessageHash(
+            messageHash
+        );
 
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, ethSignedMessageHash);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(
+            privateKey,
+            ethSignedMessageHash
+        );
         return abi.encodePacked(r, s, v);
     }
 }

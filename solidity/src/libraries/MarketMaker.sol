@@ -3,6 +3,8 @@ pragma solidity ^0.8.0;
 
 import {console} from "forge-std/console.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {HexStrings} from "v4-periphery/src/libraries/HexStrings.sol";
+
 
 library MarketMaker {
     /// @dev The reserve of the market maker
@@ -27,6 +29,8 @@ library MarketMaker {
         string prover;
         /// Unique nonce derived from proofs.
         string nonce;
+        /// The advancer of the request for the state of the market maker
+        address advancer;
     }
 
     /// @dev The parameters of the proof to verify the state of the market maker
@@ -77,11 +81,14 @@ library MarketMaker {
     /**
      * @dev This function is used to convert the state of the market maker to a string
      * @param state The state to convert to a string
-     * @return The string representation of the state
+     * @return result The string representation of the state
      */
-    function toString(State memory state) internal pure returns (string memory) {
+    function toString(State memory state) internal pure returns (string memory result) {
         // Start with the reserves strings
-        string memory result = "";
+        result = "";
+
+        result = string(abi.encodePacked(result, "owner:", _addressToString(state.owner)));
+
 
         // Add all reserves strings
         for (uint256 i = 0; i < state.reserves.length; i++) {
@@ -100,7 +107,9 @@ library MarketMaker {
         // Add nonce
         result = string(abi.encodePacked(result, "|nonce:", state.nonce));
 
-        return result;
+        // Add advancer
+        result = string(abi.encodePacked(result, "|advancer:",_addressToString(state.advancer)));
+
     }
 
     /**
@@ -142,6 +151,11 @@ library MarketMaker {
         }
 
         return string(resultBytes);
+    }
+
+    function _addressToString(address _address) internal pure returns (string memory) {
+        string memory addressStr = HexStrings.toHexStringNoPrefix(uint256(uint160(_address)), 20);
+        return string(abi.encodePacked("0x", addressStr));
     }
 
     /**
