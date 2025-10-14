@@ -26,8 +26,9 @@ import {IProxyHook} from "./interfaces/IProxyHook.sol";
 import {ILCC} from "./interfaces/ILCC.sol";
 import {IVRLSignalManager} from "./interfaces/IVRLSignalManager.sol";
 import {IPositionIndex} from "./interfaces/IPositionIndex.sol";
-import {console} from "forge-std/console.sol";
 import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
+import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
+import {console} from "forge-std/console.sol";
 
 contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
     using SafeCast for *;
@@ -55,6 +56,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
 
     address public immutable marketFactory;
     uint256 private nextTokenId = 1;
+    IPoolManager private poolManager;
     IVRLSignalManager public immutable signalManager;
     mapping(PositionId => RFSCheckpoint) public positionToCheckpoint;
     mapping(uint256 => mapping(uint256 => PositionId)) public nftToPositionId;
@@ -74,6 +76,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         ERC721("MMPositionManager", "MMPM")
     {
         marketFactory = _marketFactory;
+        poolManager = IPoolManager(_manager);
         signalManager = IVRLSignalManager(_signalManager);
     }
 
@@ -266,7 +269,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
      * @param tickUpper The upper tick of the position
      * @param liquidity The liquidity amount to mint
      */
-    function mintPosition(PoolKey calldata poolKey, uint256 tokenId, int24 tickLower, int24 tickUpper, int256 liquidity)
+    function mint(PoolKey calldata poolKey, uint256 tokenId, int24 tickLower, int24 tickUpper, int256 liquidity)
         public
         onlyNFTOwner(tokenId)
         returns (uint256)
@@ -317,6 +320,12 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         return positionIndex;
     }
 
+    /**
+     * @dev This function is used to get the total unsettled USD value for a given token id
+     *      I.e it provides the value of this position which has not been settled
+     * @param tokenId The token id to get the total unsettled USD value for
+     * @return totalUSDValue The total unsettled USD value
+     */
     function getTokenUnsettledUSDValue(uint256 tokenId) public view returns (uint256) {
         // get all positions attached to this token id
         uint256 totalUSDValue = 0;
@@ -390,6 +399,79 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         return toBalanceDelta(int128(uint128(s0)), int128(uint128(s1)));
     }
 
+    function modify(PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex, int256 liquidity)
+        public
+        onlyNFTOwner(tokenId)
+    {
+        IVTSManager vtsManager = _getVTSManager();
+        PositionMeta memory position = getPosition(tokenId, positionIndex);
+        PositionId positionId = getPositionId(tokenId, positionIndex);
+
+        ModifyLiquidityParams memory modifyLiquidityParams = ModifyLiquidityParams({
+            tickLower: position.tickLower,
+            tickUpper: position.tickUpper,
+            liquidityDelta: liquidity,
+            salt: _positionSalt(tokenId, positionIndex)
+        });
+        // mint the tokens required to facilitate this liquidity addition
+        (uint256 lcc0Amount, uint256 lcc1Amount) =
+            LiquidityUtils.calculateTokenAmountsFromPositionParams(poolManager, poolKey, modifyLiquidityParams);
+
+        // get the liquidity delta
+        // if it is positive add liquidity to the position
+        if (liquidity > 0) {
+            // get the base settlements to make based on the liquidity to be added
+            (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) = LiquidityUtils
+                .getBaseSettlementAmounts(modifyLiquidityParams, vtsManager.getMarketVTSConfiguration(poolKey.toId()));
+
+            // settle the underlying tokens to the proxy hook
+            _modifyMarketUnderlyingAsset(
+                getPositionId(tokenId, positionIndex),
+                poolKey.toId(),
+                toBalanceDelta(underlyingLiquidityFraction0.toInt128(), underlyingLiquidityFraction1.toInt128())
+            );
+
+            ILCC(Currency.unwrap(poolKey.currency0)).issue(lcc0Amount);
+            ILCC(Currency.unwrap(poolKey.currency1)).issue(lcc1Amount);
+
+            // actually modify the liquidity
+            _modifyLiquidity(poolKey, modifyLiquidityParams, Constants.ZERO_BYTES);
+        } else {
+            // validate that the liquidity being removed is less than the total liquidity in the position
+            // validate that rfs is not open for the position
+            (uint256 s0, uint256 s1) = vtsManager.prepareLiquidation(positionId);
+
+            //  get the fraction of the liquidity to take out of the position
+            uint256 liquidityFraction =
+                Math.mulDiv(uint256(-liquidity), LiquidityUtils.ONE_WAD, uint256(position.liquidity));
+            // calculate the fraction of the rfs amount that is settled, if more than the  rfs amount is settled,
+            BalanceDelta underlyingAssetFraction = LiquidityUtils.calculateLiquidityFraction(
+                toBalanceDelta(s0.toInt128(), s1.toInt128()), uint256(liquidityFraction), LiquidityUtils.ONE_WAD
+            );
+
+            // withdraw settlement relative to the liquidity delta
+            // negate balance delta to 'take' the settlement amount
+            _modifyMarketUnderlyingAsset(
+                positionId, poolKey.toId(), LiquidityUtils.negateBalanceDelta(underlyingAssetFraction)
+            );
+
+            // remove liquidity from the position
+            _modifyLiquidity(poolKey, modifyLiquidityParams, Constants.ZERO_BYTES);
+
+            // burn the output tokens
+            ILCC(Currency.unwrap(poolKey.currency0)).cancel(lcc0Amount);
+            ILCC(Currency.unwrap(poolKey.currency1)).cancel(lcc1Amount);
+        }
+    }
+
+    /**
+     * @dev This function is used to create a new position
+     * @param tokenId The token id to create the position for
+     * @param poolKey The pool key to create the position for
+     * @param liquidityParams The liquidity parameters to create the position for
+     * @return positionId The position id
+     * @return positionIndex The position index
+     */
     function _createPosition(uint256 tokenId, PoolKey memory poolKey, ModifyLiquidityParams memory liquidityParams)
         internal
         returns (PositionId positionId, uint256 positionIndex)
@@ -424,6 +506,12 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         proverOfPosition[positionId] = tokenIdToSignal[tokenId].signal.mmState.prover;
     }
 
+    /**
+     * @dev This function is used to generate a unique salt for a given token id and position index
+     * @param tokenId The token id to generate the salt for
+     * @param positionIndex The position index to generate the salt for
+     * @return salt The unique salt
+     */
     function _positionSalt(uint256 tokenId, uint256 positionIndex) internal pure returns (bytes32) {
         return keccak256(abi.encodePacked(tokenId, positionIndex));
     }
@@ -569,6 +657,11 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         //     lcc1.cancel(LiquidityUtils.safeInt128ToUint256(balanceDelta.amount1()));
     }
 
+    /**
+     * @dev This function is used to renew a liquidity signal for a given token id
+     * @param tokenId The token id to renew the liquidity signal for
+     * @param liquiditySignal The liquidity signal to renew the liquidity signal for
+     */
     function renew(uint256 tokenId, bytes memory liquiditySignal) public onlyNFTOwner(tokenId) {
         // get the total outstanding usd value for all existing positions
         uint256 positionTotalCommitmentsUSDValue = getTokenUnsettledUSDValue(tokenId);
@@ -644,7 +737,9 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
             _getVTSManager().getPositionSettledAmounts(positionId);
         // based on the amount of the position liquidated, calculate the fraction of the underlying assets to liquidate
         settlementFractionDelta = LiquidityUtils.calculateLiquidityFraction(
-            toBalanceDelta(totalSettlementAmount0.toInt128(), totalSettlementAmount1.toInt128()), seizureFractionBPS
+            toBalanceDelta(totalSettlementAmount0.toInt128(), totalSettlementAmount1.toInt128()),
+            seizureFractionBPS,
+            LiquidityUtils.ONE_BIP
         );
 
         // this would reduce the settlement amount on the position
