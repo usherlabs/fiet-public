@@ -385,6 +385,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
      * @dev make sure this function can only be called by the position manager since that is the interface through which settlements are going to be made
      * @param positionId The id of the position
      * @param modifyDelta The balance delta of the settlement
+     * @dev During seizure, Guarantor must settle in advance of calling onMMLiquidityModify to close RfS before modification of liquidity.
      */
     function onMMLiquidityModify(PositionId positionId, BalanceDelta modifyDelta)
         external
@@ -401,15 +402,6 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         PoolId poolId = meta[positionId].poolId;
         int128 amount0 = modifyDelta.amount0();
         int128 amount1 = modifyDelta.amount1();
-
-        if (amount0 == 0 && amount1 == 0) {
-            (uint256 s0, uint256 s1) = getPositionSettledAmounts(positionId);
-            // Default to withdraw the total amount settled
-            amount0 = -SafeCast.toInt128(SafeCast.toInt256(s0));
-            amount1 = -SafeCast.toInt128(SafeCast.toInt256(s1));
-        }
-
-        BalanceDelta returnDelta = toBalanceDelta(amount0, amount1);
 
         bool rfsOpen;
         BalanceDelta rfsDelta;
@@ -430,12 +422,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         } else if (amount0 < 0) {
             // Validate that amount to be withdrawn is within limits
             if (amount0 < rfsDelta.amount0()) {
-                revert NotEnoughSettlementBalance(
-                    positionId,
-                    0,
-                    LiquidityUtils.safeInt128ToUint256(rfsDelta.amount0()),
-                    LiquidityUtils.safeInt128ToUint256(amount0)
-                );
+                amount0 = rfsDelta.amount0();
             }
             _updateSettlement(poolId, positionId, 0, int256(amount0));
         }
@@ -443,19 +430,14 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
             _handleMMSettlementForToken(positionId, poolId, 1, SafeCast.toUint256(int256(amount1)));
         } else if (amount1 < 0) {
             if (amount1 < rfsDelta.amount1()) {
-                revert NotEnoughSettlementBalance(
-                    positionId,
-                    1,
-                    LiquidityUtils.safeInt128ToUint256(rfsDelta.amount1()),
-                    LiquidityUtils.safeInt128ToUint256(amount1)
-                );
+                amount1 = rfsDelta.amount1();
             }
             _updateSettlement(poolId, positionId, 1, int256(amount1));
         }
 
         emit MMPositionLiquidityUpdated(poolId, positionId, amount0, amount1);
 
-        return returnDelta;
+        return toBalanceDelta(amount0, amount1);
     }
 
     /**
