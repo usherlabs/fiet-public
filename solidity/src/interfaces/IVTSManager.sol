@@ -27,6 +27,7 @@ interface IVTSManager {
     function getSeizureAmount(PositionId positionId) external view returns (uint256 seizureFractionBPS);
 
     function getPositionUnsettledUSDValue(PoolId marketId, PositionId positionId) external view returns (uint256);
+
     function incrementCoverage(PoolId poolId, uint256 amount) external;
 
     function getCommitment(PositionId positionId) external view returns (uint256 commitment0, uint256 commitment1);

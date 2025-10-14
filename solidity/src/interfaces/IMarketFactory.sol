@@ -40,13 +40,6 @@ interface IMarketFactory {
 
     // ============ VIEW FUNCTIONS ============
     /**
-     * @notice Gets the pool key for a given pool ID
-     * @param poolId The pool ID
-     * @return The pool key
-     */
-    function poolIdToPoolKey(PoolId poolId) external view returns (PoolKey memory);
-
-    /**
      * @notice Gets the proxy hook address for a given core pool ID
      * @param corePoolId The core pool ID
      * @return The proxy hook address

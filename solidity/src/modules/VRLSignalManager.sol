@@ -174,6 +174,7 @@ contract VRLSignalManager is Ownable {
         (uint256 lcc0Price, uint256 lcc0Decimals) = lcc0.usdPrice(marketOracleFactory);
         (uint256 lcc1Price, uint256 lcc1Decimals) = lcc1.usdPrice(marketOracleFactory);
 
+        // total normalised to USD value of the LCCs
         uint256 totalLCCValue =
             ((lcc0Price * lcc0Amount) / 10 ** lcc0Decimals) + ((lcc1Price * lcc1Amount) / 10 ** lcc1Decimals);
 

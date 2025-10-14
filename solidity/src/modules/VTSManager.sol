@@ -847,6 +847,8 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         vtsRequired1 = c1 == 0 ? 0 : (d1 >= c1 ? one : (d1 * one) / c1);
     }
 
+    // TODO: There may be a logic flaw here. New positions are based on if unsettledValue + newPosCommittedValue <= totalSignalValue.
+    // TODO: However, what we haven't included, is sharing the commitmentMaxima across positions of the same signal. In essence, what we're introducing is either Splitting, or Sharing commitmentMaxima across positions with the same signal.
     function getPositionUnsettledUSDValue(PoolId poolId, PositionId positionId) public view returns (uint256) {
         address[2] memory currencyPair = IMarketFactory(marketFactory).corePoolToCurrencyPair(poolId);
         address lcc0 = currencyPair[0];
