@@ -26,7 +26,7 @@ import {ILCC} from "./interfaces/ILCC.sol";
 import {IVRLSignalManager} from "./interfaces/IVRLSignalManager.sol";
 import {IPositionIndex} from "./interfaces/IPositionIndex.sol";
 import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
-import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
+import {FullMath} from "v4-periphery/lib/v4-core/src/libraries/FullMath.sol";
 import {console} from "forge-std/console.sol";
 
 contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
@@ -64,6 +64,13 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
     modifier onlyNFTOwner(uint256 tokenId) {
         if (ownerOf(tokenId) != msg.sender) {
             revert InvalidPosition(tokenId, 0, PositionId.wrap(0));
+        }
+        _;
+    }
+
+    modifier onlyValidSignal(uint256 tokenId) {
+        if (tokenIdToSignal[tokenId].expiresAt < block.timestamp) {
+            revert SignalExpired(tokenId);
         }
         _;
     }
@@ -315,14 +322,9 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
     function mint(PoolKey calldata poolKey, uint256 tokenId, int24 tickLower, int24 tickUpper, int256 liquidity)
         public
         onlyNFTOwner(tokenId)
+        onlyValidSignal(tokenId)
         returns (uint256)
     {
-        // validate that the signal has not expired yet
-        SignalState memory signalState = tokenIdToSignal[tokenId];
-        if (signalState.expiresAt < block.timestamp) {
-            revert SignalExpired(tokenId);
-        }
-
         // derive the liquidity modification parameters
         ModifyLiquidityParams memory liquidityParams = ModifyLiquidityParams({
             tickLower: tickLower,
@@ -424,6 +426,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
     function burn(PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex)
         public
         onlyNFTOwner(tokenId)
+        onlyValidSignal(tokenId)
         returns (BalanceDelta)
     {
         // -- Validate the poolKey
@@ -440,6 +443,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
     function modify(PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex, int256 liquidity)
         public
         onlyNFTOwner(tokenId)
+        onlyValidSignal(tokenId)
     {
         IVTSManager vtsManager = _getVTSManager();
         PositionMeta memory position = getPosition(tokenId, positionIndex);
@@ -486,7 +490,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
 
             //  get the fraction of the liquidity to take out of the position
             uint256 liquidityFraction =
-                Math.mulDiv(uint256(-liquidity), LiquidityUtils.ONE_WAD, uint256(position.liquidity));
+                FullMath.mulDiv(uint256(-liquidity), LiquidityUtils.ONE_WAD, uint256(position.liquidity));
             // calculate the fraction of the rfs amount that is settled, if more than the  rfs amount is settled,
             BalanceDelta underlyingAssetFraction = LiquidityUtils.calculateLiquidityFraction(
                 toBalanceDelta(s0.toInt128(), s1.toInt128()), uint256(liquidityFraction), LiquidityUtils.ONE_WAD
