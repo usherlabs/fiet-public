@@ -48,6 +48,9 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
     error RFSNotOpen(PositionId positionId);
     error SignalExpired(uint256 tokenId);
     error InsufficientLiquidityInSignal();
+    error SignalIsSolvent();
+    error UnauthorizedSignalOwner();
+    error UnauthorizedAdvancer();
 
     event SignalCommitted(address indexed mm, uint256 tokenId, uint256 positionIndex);
     event SignalDecommitted(
@@ -375,28 +378,20 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         onlyNFTOwner(tokenId)
         returns (BalanceDelta)
     {
-        PositionId positionId = getPositionId(tokenId, positionIndex);
-
-        // check if RFS is open
-        (uint256 s0, uint256 s1) = _getVTSManager().prepareLiquidation(positionId);
-        // take all the settled underlying assets from the position to the caller
-        _modifyMarketUnderlyingAsset(
-            getPositionId(tokenId, positionIndex), poolKey.toId(), toBalanceDelta(-s0.toInt128(), -s1.toInt128())
-        );
-
-        // different things are done with the outcome from liquidating a position partially or fully
-        // during decommitment, full liquidation is done
-        // during seizure, underlying liquidity is either moved to a new position if liquidated by an mm
-        // so its best to handle underlying liquidity outside the liquidation logic
-
         // Liquidate position will call VTSManager.onMMLiquidityModify, which will settle the position growths for the new MMPosition.
         // The kicker is that it's called after getRFS, so inflows haven't been settled.
         uint256 completeLiquidity = uint256(getPosition(tokenId, positionIndex).liquidity);
-        _liquidatePosition(poolKey, tokenId, positionIndex, completeLiquidity);
+        BalanceDelta balanceDelta = _liquidatePosition(poolKey, tokenId, positionIndex, completeLiquidity);
 
-        emit SignalDecommitted(msg.sender, tokenId, positionIndex, uint256(uint128(s0)), uint256(uint128(s1)));
+        emit SignalDecommitted(
+            msg.sender,
+            tokenId,
+            positionIndex,
+            uint256(uint128(balanceDelta.amount0())),
+            uint256(uint128(balanceDelta.amount1()))
+        );
 
-        return toBalanceDelta(int128(uint128(s0)), int128(uint128(s1)));
+        return balanceDelta;
     }
 
     function modify(PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex, int256 liquidity)
@@ -622,6 +617,8 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
 
     /**
      * @dev This function is used to liquidate a position for a given token id and position index
+     *      it removes the underlying liquidity from the position to the caller firstly
+     *      then it removes the liquidity from the position and burns the tokens
      * @param poolKey The pool key for the position
      * @param tokenId The token id of the position to liquidate
      * @param positionIndex The position index to liquidate
@@ -634,12 +631,34 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         uint256 tokenId,
         uint256 positionIndex,
         uint256 amountToLiquidate
-    ) internal returns (BalanceDelta balanceDelta) {
+    ) internal returns (BalanceDelta settlementFractionDelta) {
+        PositionId positionId = getPositionId(tokenId, positionIndex);
         PositionMeta memory position = getPosition(tokenId, positionIndex);
+        // validate liquidity is not over available
+        if (uint256(position.liquidity) < amountToLiquidate) {
+            revert InvalidAmount(amountToLiquidate, uint256(position.liquidity));
+        }
+
+        uint256 liquidatedFraction = Math.mulDiv(amountToLiquidate, LiquidityUtils.ONE_WAD, uint256(position.liquidity));
+        // remove the underlying liquidity from the position based on the fraction of liquidity to liquidate
+        // get the total settlement amount for this position
+        (uint256 totalSettlementAmount0, uint256 totalSettlementAmount1) =
+            _getVTSManager().prepareLiquidation(positionId);
+        BalanceDelta totalSettlementBalanceDelta =
+            toBalanceDelta(totalSettlementAmount0.toInt128(), totalSettlementAmount1.toInt128());
+        // get the fraction of the underlying assets to liquidate
+        settlementFractionDelta = LiquidityUtils.calculateLiquidityFraction(
+            totalSettlementBalanceDelta, liquidatedFraction, LiquidityUtils.ONE_WAD
+        );
+
+        // remove the underlying liquidity from the position
+        _modifyMarketUnderlyingAsset(
+            positionId, poolKey.toId(), LiquidityUtils.negateBalanceDelta(settlementFractionDelta)
+        );
 
         // remove the liquidity from the pool
         // By calling this, CoreHook afterRemoveLiquidity will be called to deactivate the position.
-        (, balanceDelta) = _callModifyLiquidity(
+        (, BalanceDelta liquidityBalanceDelta) = _callModifyLiquidity(
             poolKey,
             ModifyLiquidityParams({
                 tickLower: position.tickLower,
@@ -648,18 +667,11 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
                 salt: _positionSalt(tokenId, positionIndex)
             })
         );
-
+        // after removing the liquidity above, we get some lccs back, we need to burn(cancel) them
         IMarketFactory mf = IMarketFactory(marketFactory);
-        ILCC(mf.corePoolToCurrencyPair(position.poolId)[0]).cancel(
-            LiquidityUtils.safeInt128ToUint256(balanceDelta.amount0())
-        );
-        ILCC(mf.corePoolToCurrencyPair(position.poolId)[1]).cancel(
-            LiquidityUtils.safeInt128ToUint256(balanceDelta.amount1())
-        );
-
-        // // burn the LCC tokens gotten from the position
-        //     lcc0.cancel(LiquidityUtils.safeInt128ToUint256(balanceDelta.amount0()));
-        //     lcc1.cancel(LiquidityUtils.safeInt128ToUint256(balanceDelta.amount1()));
+        address[2] memory currencies = mf.corePoolToCurrencyPair(position.poolId);
+        ILCC(currencies[0]).cancel(LiquidityUtils.safeInt128ToUint256(liquidityBalanceDelta.amount0()));
+        ILCC(currencies[1]).cancel(LiquidityUtils.safeInt128ToUint256(liquidityBalanceDelta.amount1()));
     }
 
     /**
@@ -734,29 +746,8 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         IMarketFactory mf = IMarketFactory(marketFactory);
         PoolKey memory positionPoolKey = mf.poolIdToPoolKey(position.poolId);
 
-        // the amount to transfer is based on the amount already liquidated in bps
-        // get the fraction of underlying assets to transfer to the caller/liquidator
-        // get the total settlement amount for the position from the vts manager
-        // both amount0 and amount1 are positive
-        (uint256 totalSettlementAmount0, uint256 totalSettlementAmount1) =
-            _getVTSManager().getPositionSettledAmounts(positionId);
-        // based on the amount of the position liquidated, calculate the fraction of the underlying assets to liquidate
-        settlementFractionDelta = LiquidityUtils.calculateLiquidityFraction(
-            toBalanceDelta(totalSettlementAmount0.toInt128(), totalSettlementAmount1.toInt128()),
-            seizureFractionBPS,
-            LiquidityUtils.ONE_BIP
-        );
-
-        // this would reduce the settlement amount on the position
-        _modifyMarketUnderlyingAsset(
-            positionId,
-            position.poolId,
-            toBalanceDelta(-settlementFractionDelta.amount0(), -settlementFractionDelta.amount1())
-        );
-
         // -- Liquidate the position partially or fully
-        // do this last because it counld potentially mark the position as inactive and cause some of the above calls to fail as they require an active position
-        _liquidatePosition(positionPoolKey, tokenId, positionIndex, liquidityToSeize);
+        settlementFractionDelta = _liquidatePosition(positionPoolKey, tokenId, positionIndex, liquidityToSeize);
     }
 
     /**
@@ -779,6 +770,58 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
             (bool rfsOpen,) = vtsManager.calcRFS(positionId, false);
             // mark the checkpoint with the state of the rfs of the position
             positionToCheckpoint[positionId].mark(rfsOpen);
+        }
+    }
+
+    /**
+     * @dev This function is used to sieze a portion of an insolvent position
+     * @param poolKey The pool key to reallocate the position for
+     * @param tokenId The token id to reallocate the position for
+     * @param liquiditySignal The liquidity signal to reallocate the position for
+     */
+    function reallocate(PoolKey memory poolKey, uint256 tokenId, bytes memory liquiditySignal)
+        public
+        returns (uint256 deficitFractionInBips)
+    {
+        // verify the new liquidity signal(this increases the nonce of the mm's signals)
+        // get the total usd value of the signal and its expiry time
+        (uint256 totalSignalUsdValue, uint256 signalExpiryInSeconds) =
+            signalManager.renewLiquiditySignal(liquiditySignal);
+        // get the total unsettled value of the position
+        uint256 positionTotalCommitmentsUSDValue = getTokenUnsettledUSDValue(tokenId);
+        // make sure the new signal is insolvent before it can be reallocated
+        if (totalSignalUsdValue >= positionTotalCommitmentsUSDValue) {
+            revert SignalIsSolvent();
+        }
+        LiquiditySignal memory newSignal = abi.decode(liquiditySignal, (LiquiditySignal));
+        LiquiditySignal memory oldSignal = tokenIdToSignal[tokenId].signal;
+        // validate that new signal belongs to the same mm as the old signal
+        if (newSignal.mmState.owner != oldSignal.mmState.owner) {
+            revert UnauthorizedSignalOwner();
+        }
+        // require caller is advancer
+        if (msg.sender != newSignal.mmState.advancer) {
+            revert UnauthorizedAdvancer();
+        }
+        // PositionMeta memory position = getPosition(tokenId, positionIndex);
+        // update the signal state
+        tokenIdToSignal[tokenId] = SignalState({signal: newSignal, expiresAt: block.timestamp + signalExpiryInSeconds});
+        // get the difference in the usd value of the signal and the position
+        // get the fraction of the deficit of the position, unit is in wad(1e18) for better precision
+        deficitFractionInBips = Math.mulDiv(
+            positionTotalCommitmentsUSDValue - totalSignalUsdValue,
+            LiquidityUtils.ONE_BIP,
+            positionTotalCommitmentsUSDValue
+        );
+
+        // iterate through all the positions using the position index, then liquidate a percentage given by the deficit fraction
+        uint256 positionCount = nftToPositionCount[tokenId];
+        for (uint256 i = 0; i < positionCount; i++) {
+            PositionMeta memory position = getPosition(tokenId, i);
+            // liquidate a percentage given by the deficit fraction
+            uint256 liquidityToSeize =
+                Math.mulDiv(uint256(position.liquidity), deficitFractionInBips, LiquidityUtils.ONE_BIP);
+            _liquidatePosition(poolKey, tokenId, i, liquidityToSeize);
         }
     }
 }
