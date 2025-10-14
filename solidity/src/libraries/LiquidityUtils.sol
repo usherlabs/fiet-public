@@ -30,6 +30,7 @@ library LiquidityUtils {
     uint160 constant ZERO_FOR_ONE_LIMIT = TickMath.MIN_SQRT_PRICE + 1;
     uint160 constant ONE_FOR_ZERO_LIMIT = TickMath.MAX_SQRT_PRICE - 1;
     uint256 constant ONE_BIP = 10000;
+    uint256 constant ONE_WAD = 1e18;
 
     /**
      * @dev Safely converts int128 to uint256, handling negative values by taking absolute value
@@ -113,10 +114,11 @@ library LiquidityUtils {
     /**
      * @dev This function is used to calculate the liquidity fraction for a given balance delta and fraction in bps
      * @param balanceDelta The balance delta to calculate the liquidity fraction for
-     * @param fractionINBPS The fraction in bps to calculate the liquidity fraction for
+     * @param fraction The fraction to calculate the liquidity fraction for
+     * @param unit The unit to use for the calculation default should be in bps
      * @return The liquidity fraction for the given balance delta and fraction in bps
      */
-    function calculateLiquidityFraction(BalanceDelta balanceDelta, uint256 fractionINBPS)
+    function calculateLiquidityFraction(BalanceDelta balanceDelta, uint256 fraction, uint256 unit)
         internal
         pure
         returns (BalanceDelta)
@@ -125,8 +127,8 @@ library LiquidityUtils {
         uint256 amount1 = safeInt128ToUint256(balanceDelta.amount1());
 
         // calculate the liquidity fraction for the amount0 and amount1
-        uint256 liquidityFraction0 = Math.ceilDiv(amount0 * fractionINBPS, 10000);
-        uint256 liquidityFraction1 = Math.ceilDiv(amount1 * fractionINBPS, 10000);
+        uint256 liquidityFraction0 = Math.ceilDiv(amount0 * fraction, unit);
+        uint256 liquidityFraction1 = Math.ceilDiv(amount1 * fraction, unit);
 
         return toBalanceDelta(liquidityFraction0.toInt128(), liquidityFraction1.toInt128());
     }

@@ -27,4 +27,6 @@ interface IVTSManager {
     function prepareLiquidation(PositionId positionId) external returns (uint256 amount0, uint256 amount1);
 
     function getSeizureAmount(PositionId positionId) external view returns (uint256 siezureFractionBPS);
+
+    function getPositionUnsettledUSDValue(PoolId marketId, PositionId positionId) external view returns (uint256);
 }
