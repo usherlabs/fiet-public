@@ -764,7 +764,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         assertEq(LiquidityUtils.safeInt128ToUint256(finalSettledBalanceDelta.amount0()), 0);
     }
 
-    // can partially seize a position while being a market maker
+    // can mint new positions to an existing token id
     function test_canMintPositions_usingExistingTokenId() public {
         // commit to a position
         bytes memory liquiditySignal = abi.encode(liquiditySignal);
@@ -1003,5 +1003,58 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             positionManager.getPosition(tokenId, positionIndex).liquidity,
             positionAfterCommit.liquidity + liquidityDelta
         );
+    }
+
+    function test_canReallocateInsolventPosition() public {
+        // make a commitment to a position
+        bytes memory encodedLiquiditySignal = abi.encode(liquiditySignal);
+
+        ModifyLiquidityParams memory liquidityParams =
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
+
+        // Get amount of underlying liquidity to transfer from the issuer to the lcc
+        (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) =
+            LiquidityUtils.getBaseSettlementAmounts(liquidityParams, marketVTSConfiguration);
+
+        // Approve the position manager to take the base/minimum underlying liquidity to create to the position
+        ERC20(lcc0.underlyingAsset()).approve(address(mmPositionManager), underlyingLiquidityFraction0);
+        ERC20(lcc1.underlyingAsset()).approve(address(mmPositionManager), underlyingLiquidityFraction1);
+
+        positionManager.commit(
+            corePoolKey,
+            liquidityParams.tickLower,
+            liquidityParams.tickUpper,
+            liquidityParams.liquidityDelta,
+            encodedLiquiditySignal
+        );
+        uint256 tokenId = 1;
+
+        // get the position before reallocation
+        PositionMeta memory positionBeforeReallocation = positionManager.getPosition(tokenId, 0);
+        // get the total usd value of the commitment
+        uint256 positionTotalCommitmentsUSDValue = positionManager.getTokenUnsettledUSDValue(tokenId);
+
+        // reduce it by 20% to make the position insolvent by 20% of its original value
+        uint256 newSignalUSDValue = Math.mulDiv(positionTotalCommitmentsUSDValue, 80, 100);
+
+        // mock the signal manager to return an insolvent response
+        vm.mockCall(
+            address(signalManager),
+            abi.encodeWithSelector(signalManager.renewLiquiditySignal.selector),
+            abi.encode(newSignalUSDValue, signalExpiryInSeconds)
+        );
+
+        address advancer = liquiditySignal.mmState.advancer;
+        vm.prank(address(advancer));
+        // reallocate the position by mocking an insolvent(by 20%) response from the signal manager
+        uint256 deficitFraction = positionManager.reallocate(corePoolKey, tokenId, encodedLiquiditySignal);
+        vm.stopPrank();
+
+        // get the position after reallocation
+        PositionMeta memory positionAfterReallocation = positionManager.getPosition(tokenId, 0);
+        // validate the liquidity in the position is reduced by 20%
+        uint256 expectedLiquidityAfterReallocation = uint256(positionBeforeReallocation.liquidity)
+            - Math.mulDiv(uint256(positionBeforeReallocation.liquidity), deficitFraction, LiquidityUtils.ONE_BIP);
+        assertEq(uint256(positionAfterReallocation.liquidity), expectedLiquidityAfterReallocation);
     }
 }
