@@ -107,7 +107,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
 
     function _isValidPositionForPool(PoolKey memory poolKey, PositionMeta memory position)
         internal
-        view
+        pure
         returns (bool)
     {
         return PoolId.unwrap(position.poolId) == PoolId.unwrap(poolKey.toId());
@@ -710,6 +710,11 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         );
 
         // take all the settled underlying assets from the position to the caller
+        // ? _modifyMarketUnderlyingAsset will transfer assets based on modifiedDelta returned by VTSManager.onMMLiquidityModify.
+        // TODO: On Seizure, this amount should be the seizureSettled + (portion of position settled relative to seizuredLiquidityUnits/liquidity)
+        // TODO: On burn (decommitPosition), this amount should be the total settled amount in the position.
+        // TODO: In all other cases, (modify, withdraw, seizeCommitment), clamp by RfS
+        // ----- By checking if position.isActive == false, we can determine if full position is liquidated.
         returnDelta = _modifyMarketUnderlyingAsset(posId, poolKey.toId(), targetDelta, ua0, ua1);
 
         // ? we execute this here to minimise external contract calls for lcc handlers.
@@ -838,6 +843,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
      * @param tokenId The token id to sieze the commitment for
      * @param liquiditySignal The liquidity signal to sieze the commitment for
      */
+    // TODO: Ensure seizeCommitment maths is correct.
     function seizeCommitment(PoolKey memory poolKey, uint256 tokenId, bytes memory liquiditySignal)
         public
         returns (uint256 deficitFractionInBips)
