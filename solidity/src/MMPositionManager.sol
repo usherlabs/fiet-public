@@ -44,6 +44,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
     event SignalDecommitted(
         address indexed mm, uint256 tokenId, uint256 positionIndex, uint256 amount0, uint256 amount1
     );
+    event Checkpointed(uint256 tokenId, uint256 positionIndex, RFSCheckpoint checkpoint);
 
     address public immutable marketFactory;
     uint256 private nextTokenId = 1;
@@ -186,7 +187,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         );
 
         // mark RFS checkpoint
-        _checkpoint(getPositionId(tokenId, positionIndex).toArray());
+        _checkpoint(tokenId, positionIndex);
     }
 
     /**
@@ -224,7 +225,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         );
 
         // mark RFS checkpoint
-        _checkpoint(positionId.toArray());
+        _checkpoint(tokenId, positionIndex);
     }
 
     /**
@@ -777,7 +778,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         PositionId positionId = getPositionId(tokenId, positionIndex);
 
         // -- Validate that caller is not position owner
-        if (msg.sender == position.owner) {
+        if (msg.sender == position.owner || position.isActive == false) {
             revert InvalidPosition(tokenId, positionIndex, positionId);
         }
 
@@ -792,27 +793,21 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
             revert InvalidDelta(0, 0);
         }
 
+        // create a balance delta of the amounts to settle
+        BalanceDelta settleBalanceDelta = toBalanceDelta(amount0.toInt128(), amount1.toInt128());
+
         IVTSManager vtsManager = _getVTSManager();
+
+        // TODO: Move validation of grace period and seizure calculation over time window, utilising an alpha senisitivity parameter to VTSManager.
+        // 1. Validates that RfS is open - settled amounts do not need to close the RfS.
+        // 2. Clamp settle amounts by RfS amount. Ensure that amounts settled are seizureAmount
+        BalanceDelta seizureDelta = vtsManager.calcSeizure(positionId, settleBalanceDelta);
 
         // make sure there is an open RFS for this position
         (bool rfsOpen, BalanceDelta rfsBalanceDelta) = vtsManager.calcRFS(positionId, false);
         if (!rfsOpen) {
             revert InvalidPosition(tokenId, positionIndex, positionId);
         }
-
-        // create a balance delta of the amounts to settle
-        BalanceDelta settleBalanceDelta = toBalanceDelta(amount0.toInt128(), amount1.toInt128());
-
-        // validate that settled balance closes the RfS.
-        // rfsBalanceDelta is positive when the RfS is open. Check that the settleBalanceDelta is greater than or equal to rfsBalanceDelta
-        if (
-            settleBalanceDelta.amount0() < rfsBalanceDelta.amount0()
-                || settleBalanceDelta.amount1() < rfsBalanceDelta.amount1()
-        ) {
-            revert InvalidDelta(settleBalanceDelta.amount0(), settleBalanceDelta.amount1());
-        }
-
-        // vtsManager.calcSeizure(positionId); // TODO: Move validation of grace period and seizure calculation over time window, utilising an alpha senisitivity parameter to VTSManager.
 
         // get grace period for this position from market vts configuration
         vtsManager.getMarketVTSConfiguration(position.poolId).validateGracePeriod(
@@ -845,25 +840,39 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
 
     /**
      * @dev This function is used to mark the checkpoint of the RFS for a given position. Called by MMs, and Guarantors incentivised to ensure open RfS is tracked.
-     * @param positionIds The position ids to mark the checkpoint of the RFS for
+     * @param tokenId The token id to mark the checkpoint of the RFS for
+     * @param positionIndex The position index to mark the checkpoint of the RFS for
      */
-    function checkpoint(PositionId[] memory positionIds) public {
-        _checkpoint(positionIds);
+    function checkpoint(uint256 tokenId, uint256 positionIndex) public {
+        _checkpoint(tokenId, positionIndex);
+    }
+
+    /**
+     * @dev This function is used to mark the checkpoint of the RFS for all positions of a given token id
+     * @param tokenId The token id to mark the checkpoint of the RFS for
+     * @dev Same name as checkpoint(uint256, uint256), but different selector/parameters.
+     */
+    function checkpoint(uint256 tokenId) public {
+        for (uint256 i = 0; i < nftToPositionCount[tokenId]; i++) {
+            _checkpoint(tokenId, i);
+        }
     }
 
     /**
      * @dev This function is used to mark the checkpoint of the RFS for a given position
-     * @param positionIds The position ids to mark the checkpoint of the RFS for
+     * @param tokenId The token id to mark the checkpoint of the RFS for
+     * @param positionIndex The position index to mark the checkpoint of the RFS for
      */
-    function _checkpoint(PositionId[] memory positionIds) internal {
+    function _checkpoint(uint256 tokenId, uint256 positionIndex) internal {
+        // validate the position
+        getPosition(tokenId, positionIndex);
+        PositionId positionId = getPositionId(tokenId, positionIndex);
         IVTSManager vtsManager = _getVTSManager();
-        for (uint256 i = 0; i < positionIds.length; i++) {
-            PositionId positionId = positionIds[i];
-            // check if rfs is open for this position
-            (bool rfsOpen,) = vtsManager.calcRFS(positionId, false);
-            // mark the checkpoint with the state of the rfs of the position
-            positionToCheckpoint[positionId].mark(rfsOpen);
-        }
+        // check if rfs is open for this position
+        (bool rfsOpen,) = vtsManager.calcRFS(positionId, false);
+        // mark the checkpoint with the state of the rfs of the position
+        positionToCheckpoint[positionId].mark(rfsOpen);
+        emit Checkpointed(tokenId, positionIndex, positionToCheckpoint[positionId]);
     }
 
     /**

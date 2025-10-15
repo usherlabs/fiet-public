@@ -387,7 +387,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
      * @param modifyDelta The balance delta of the settlement
      * @dev During seizure, Guarantor must settle in advance of calling onMMLiquidityModify to close RfS before modification of liquidity.
      */
-    function onMMLiquidityModify(PositionId positionId, BalanceDelta modifyDelta, bool liquidate)
+    function onMMLiquidityModify(PositionId positionId, BalanceDelta modifyDelta)
         external
         onlyMMPosition(positionId)
         onlyPositionValid(positionId)
@@ -405,44 +405,22 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
 
         BalanceDelta clampDelta;
         if (amount0 < 0 || amount1 < 0) {
-            if (liquidate) {
-                PositionMeta memory m = meta[positionId];
-                (uint256 s0, uint256 s1) = getPositionSettledAmounts(positionId);
-                if (m.isActive == false) {
-                    // This hook is called by the MMPositionManager, after the position was modified by the modifyDelta. Therefore, if the result _touchPosition was called, and deactivated the position, then it's a FULL liquidation.
-                    clampDelta = LiquidityUtils.safeToBalanceDelta(s0, s1, true, true);
-                }
-                // ! The following is NOT even necessary.
-                // ! During a liqudated position's modification of underlying settled liquidity, the clamp the ALWAYS remain calculated per the RfS UNLESS the full position is deactivated, and therefore the entire settled position can be withdrawn.
-                //  else {
-                //     // It's a partial liquidation.
-                //     // The clamp is determined by the modifyDelta over the effective LCC balances in the position.
-                //     // the result is the amount liquidated relative to the total position.
-                //     // Then we can apply this rate to settlement amounts as a withdrawal clamp.
-                //     uint256 mDeltaAmount0 = LiquidityUtils.safeInt128ToUint256(modifyDelta.amount0());
-                //     uint256 mDeltaAmount1 = LiquidityUtils.safeInt128ToUint256(modifyDelta.amount1());
-                //     (uint160 sqrtPriceX96, int24 currentTick,,) = poolManager.getSlot0(m.poolId);
-                //     (uint256 effectiveLiquidityAmount0, uint256 effectiveLiquidityAmount1) = LiquidityUtils
-                //         .calculateTokenAmountsFromPositionParams(
-                //         sqrtPriceX96,
-                //         currentTick,
-                //         ModifyLiquidityParams({
-                //             tickLower: m.tickLower,
-                //             tickUpper: m.tickUpper,
-                //             liquidityDelta: m.liquidity, // TODO: this is going to be the new delta, after the liquidation.
-                //             salt: bytes32(0)
-                //         })
-                //     );
-                //     clampDelta = LiquidityUtils.safeToBalanceDelta(
-                //         FullMath.mulDiv(mDeltaAmount0, effectiveLiquidityAmount0, s0),
-                //         FullMath.mulDiv(mDeltaAmount1, effectiveLiquidityAmount1, s1),
-                //         true,
-                //         true
-                //     );
-                // }
+            PositionMeta memory m = meta[positionId];
+            (uint256 s0, uint256 s1) = getPositionSettledAmounts(positionId);
+            if (m.isActive == false) {
+                // This hook is called by the MMPositionManager, after the position was modified by the modifyDelta.
+                // Therefore, if the result _touchPosition was called, and deactivated the position, then it's a FULL liquidation.
+                clampDelta = LiquidityUtils.safeToBalanceDelta(s0, s1, true, true);
             } else {
-                // validate that there is no open RFS for this position
-                // positions settled above, therefore _getRFS
+                // TODO: we cannot clamp by the RfS, otherwise during seizures, the full settled amount up to the RfS is utilised instead of the fraction of settled liquidity relative to the amount seized.
+                // ? The counterargument is a seizure requires closing RfS. Therefore, seized amounts should equal settled amounts...
+                // If I've only settled 10% of Token A, and more RfS exposure is 0.3% more, then seizure at scaled allocation results in settling 30%, but being rewarded 0.26% of liquidty position if 20% timewindow passes.
+                // therefore, there's no incentive to seize prior to t = timeWindow...
+                // Closing the RfS means seizing the full position ONLY when the full time window has passed.
+
+                // Otherwise, always clamp withdrawal of liquidity by the RfS.
+                // validate that there is no open RFS for this position - as RfS is closed through settlement... well not necessarily... TODO: looping does not close the RFS.
+                // growth accounting settled above, therefore _getRFS
                 (bool rfsOpen, clampDelta) = _getRFS(positionId); // second param is true to revert if RFS is open
                 if (rfsOpen) {
                     revert RFSOpenForPosition(positionId);

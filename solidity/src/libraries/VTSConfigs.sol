@@ -9,12 +9,10 @@ library VTSConfigs {
         return MarketVTSConfiguration({
             token0: TokenConfiguration({
                 gracePeriodTime: 1800, // 30 minutes
-                seizureUnlockTime: 3600, // 1 hour
                 baseVTSRate: 1000 // 10% (1000 bips)
             }),
             token1: TokenConfiguration({
                 gracePeriodTime: 1800, // 30 minutes
-                seizureUnlockTime: 3600, // 1 hour
                 baseVTSRate: 1000 // 10% (1000 bips)
             }),
             oracleFactory: address(0), // address(0) to use the default oracle factory // TODO: replace with the oracle registry.

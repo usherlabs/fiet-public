@@ -7,8 +7,6 @@ import {PositionId} from "./Position.sol";
 struct TokenConfiguration {
     // Grace period time
     uint256 gracePeriodTime;
-    // Seizure unlock time
-    uint256 seizureUnlockTime;
     // Base VTS Rate
     uint256 baseVTSRate;
 }
