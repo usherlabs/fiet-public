@@ -25,12 +25,14 @@ import {IVRLSignalManager} from "./interfaces/IVRLSignalManager.sol";
 import {IPositionIndex} from "./interfaces/IPositionIndex.sol";
 import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
 import {FullMath} from "v4-periphery/lib/v4-core/src/libraries/FullMath.sol";
+import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
 
 contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
     using SafeCast for *;
     using RFSCheckpointLibrary for RFSCheckpoint;
     using MarketVTSConfigurationLibrary for MarketVTSConfiguration;
     using PositionLibrary for PositionId;
+    using StateLibrary for IPoolManager;
 
     error InvalidDelta(int128 amount0, int128 amount1);
     error InvalidAmount(uint256 amount, uint256 maxAmount);
@@ -452,7 +454,6 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
     {
         IVTSManager vtsManager = _getVTSManager();
         PositionMeta memory position = getPosition(tokenId, positionIndex);
-        PositionId positionId = getPositionId(tokenId, positionIndex);
 
         // Validate poolKey
         if (!_isValidPositionForPool(poolKey, position)) {
@@ -497,31 +498,9 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
             // actually modify the liquidity
             _modifyLiquidity(poolKey, modifyLiquidityParams, Constants.ZERO_BYTES);
         } else {
-            // validate that the liquidity being removed is less than the total liquidity in the position
-            // validate that rfs is not open for the position
-            // TODO: Replace with latest VTS.onMMLiquidityModify
-            (uint256 s0, uint256 s1) = vtsManager.prepareLiquidation(positionId);
-
-            //  get the fraction of the liquidity to take out of the position
-            uint256 liquidityFraction =
-                FullMath.mulDiv(uint256(-liquidity), LiquidityUtils.ONE_WAD, uint256(position.liquidity));
-            // calculate the fraction of the rfs amount that is settled, if more than the  rfs amount is settled,
-            BalanceDelta underlyingAssetFraction = LiquidityUtils.calculateLiquidityFraction(
-                toBalanceDelta(s0.toInt128(), s1.toInt128()), uint256(liquidityFraction), LiquidityUtils.ONE_WAD
-            );
-
-            // withdraw settlement relative to the liquidity delta
-            // negate balance delta to 'take' the settlement amount
-            _modifyMarketUnderlyingAsset(
-                positionId, poolKey.toId(), LiquidityUtils.negateBalanceDelta(underlyingAssetFraction), ua0, ua1
-            );
-
-            // remove liquidity from the position
-            _modifyLiquidity(poolKey, modifyLiquidityParams, Constants.ZERO_BYTES);
-
-            // burn the output tokens
-            lcc0.cancel(lcc0Amount);
-            lcc1.cancel(lcc1Amount);
+            // Direct partial liquidation with minimal calls
+            uint256 amountToLiquidate = uint256(-liquidity);
+            _liquidatePosition(poolKey, position, _positionSalt(tokenId, positionIndex), amountToLiquidate);
         }
     }
 
@@ -716,8 +695,8 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
             })
         );
 
-        address lcc0 = ILCC(Currency.unwrap(poolKey.currency0));
-        address lcc1 = ILCC(Currency.unwrap(poolKey.currency1));
+        ILCC lcc0 = ILCC(Currency.unwrap(poolKey.currency0));
+        ILCC lcc1 = ILCC(Currency.unwrap(poolKey.currency1));
 
         address ua0 = lcc0.underlyingAsset();
         address ua1 = lcc1.underlyingAsset();
@@ -771,7 +750,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
      */
     function seize(PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex, uint256 amount0, uint256 amount1)
         public
-        returns (BalanceDelta settlementFractionDelta)
+        returns (BalanceDelta seizedPositionDelta)
     {
         // -- Validate the position
         PositionMeta memory position = getPosition(tokenId, positionIndex);
@@ -787,9 +766,8 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
             revert InvalidMarket(poolKey);
         }
 
-        // make sure at the either amount0 or amount1 is not zero
-        // In order to close the RfS, the both amounts can be above 0.
-        if ((amount0 == 0) || (amount1 == 0)) {
+        // require at least one side is settled
+        if (amount0 == 0 && amount1 == 0) {
             revert InvalidDelta(0, 0);
         }
 
@@ -798,26 +776,9 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
 
         IVTSManager vtsManager = _getVTSManager();
 
-        // TODO: Move validation of grace period and seizure calculation over time window, utilising an alpha senisitivity parameter to VTSManager.
-        // 1. Validates that RfS is open - settled amounts do not need to close the RfS.
-        // 2. Clamp settle amounts by RfS amount. Ensure that amounts settled are seizureAmount
-        BalanceDelta seizureDelta = vtsManager.calcSeizure(positionId, settleBalanceDelta);
-
-        // make sure there is an open RFS for this position
-        (bool rfsOpen, BalanceDelta rfsBalanceDelta) = vtsManager.calcRFS(positionId, false);
-        if (!rfsOpen) {
-            revert InvalidPosition(tokenId, positionIndex, positionId);
-        }
-
-        // get grace period for this position from market vts configuration
-        vtsManager.getMarketVTSConfiguration(position.poolId).validateGracePeriod(
-            positionId, positionToCheckpoint[positionId]
-        );
-
-        uint256 maxSeizureFractionBPS = vtsManager.getSeizureAmount(positionId);
-        // based on the amount they are choosing to settle, calculate how much of the total seizable amount to be seized by the caller
-        uint256 seizureFractionBPS =
-            LiquidityUtils.calculateSeizureFraction(settleBalanceDelta, rfsBalanceDelta, maxSeizureFractionBPS);
+        // Validate grace (using last checkpoint) and derive liquidity to seize
+        uint256 seizedLiquidityUnits =
+            vtsManager.calcSeizure(positionId, settleBalanceDelta, positionToCheckpoint[positionId]);
 
         // -- Settle the position to meet rfs requirements
         address ua0 = ILCC(Currency.unwrap(poolKey.currency0)).underlyingAsset();
@@ -828,14 +789,10 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
 
         // -- Move the underlying liquidity to the to the seizer/caller or to the new position
 
-        // transfer or liquidate all or part of the position
-        uint256 liquidityToSeize =
-            FullMath.mulDiv(uint256(position.liquidity), seizureFractionBPS, LiquidityUtils.ONE_BIP);
-
         // -- Liquidate the position partially or fully
         // do this last because it counld potentially mark the position as inactive and cause some of the above calls to fail as they require an active position
         // ? _liquidatePosition will utilise the removed liquidity BalanceDelta, forward it to VTSManager.onMMLiquidityModify, where it will tryTake relative to the amount settled.
-        _liquidatePosition(poolKey, position, _positionSalt(tokenId, positionIndex), liquidityToSeize);
+        return _liquidatePosition(poolKey, position, _positionSalt(tokenId, positionIndex), seizedLiquidityUnits);
     }
 
     /**

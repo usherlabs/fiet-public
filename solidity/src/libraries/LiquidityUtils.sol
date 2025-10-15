@@ -88,7 +88,7 @@ library LiquidityUtils {
      * @param maxSeizureFractionBPS The max seizure fraction in bps
      * @return seizureFractionBPS The seizure fraction in bps
      */
-    function calculateSeizureFraction(
+    function calculateSeizure(
         BalanceDelta settleBalanceDelta,
         BalanceDelta rfsBalanceDelta,
         uint256 maxSeizureFractionBPS
@@ -110,6 +110,45 @@ library LiquidityUtils {
         // then cap the max seizure percentage to 10000 bps(100%)
         uint256 calculatedFraction = Math.ceilDiv(settleAmount * maxSeizureFractionBPS, rfsAmount);
         seizureFractionBPS = calculatedFraction > ONE_BIP ? ONE_BIP : calculatedFraction;
+    }
+
+    /**
+     * @dev Computes the RfS exposure ratio e_A in basis points.
+     *      Formula: e_A = min(1, a_A / C_A) where a_A is RfS amount for token A and C_A is commitment for token A.
+     *      - Returns e_A scaled to ONE_BIP (1e4).
+     *      - Uses ceilDiv to avoid underestimation (round up), ensuring obligations are not under-accounted.
+     */
+    function exposureBps(uint256 rfsAmount, uint256 commitment) internal pure returns (uint256) {
+        if (commitment == 0) return 0;
+        uint256 bps = Math.ceilDiv(rfsAmount * ONE_BIP, commitment);
+        return bps > ONE_BIP ? ONE_BIP : bps;
+    }
+
+    /**
+     * @dev Computes the portion of RfS settled this tx (\phi_settle) in basis points.
+     *      Formula: \phi_settle = min(1, settled / a_A), scaled to ONE_BIP (1e4).
+     *      - Uses ceilDiv to round up, so a settlement does not leave dust deficit due to flooring.
+     */
+    function settleOfRfsBps(uint256 settleAmount, uint256 rfsAmount) internal pure returns (uint256) {
+        if (rfsAmount == 0) return 0;
+        uint256 bps = Math.ceilDiv(settleAmount * ONE_BIP, rfsAmount);
+        return bps > ONE_BIP ? ONE_BIP : bps;
+    }
+
+    /**
+     * @dev Computes seized liquidity units for a single token contribution.
+     *      Formula: L_s,A = L * e_A * \phi_settle, with e_A and \phi_settle provided in basis points.
+     *      - Multiplies two bps ratios, rescales back to bps once, then to units, rounding up at each step.
+     */
+    function seizedUnitsFromBps(uint256 liquidityUnits, uint256 exposureBps_, uint256 settleOfRfsBps_)
+        internal
+        pure
+        returns (uint256)
+    {
+        if (exposureBps_ == 0 || settleOfRfsBps_ == 0 || liquidityUnits == 0) return 0;
+        // product of two bps values -> scale back to bps once, then to units
+        uint256 fracBps = Math.ceilDiv(exposureBps_ * settleOfRfsBps_, ONE_BIP);
+        return Math.ceilDiv(liquidityUnits * fracBps, ONE_BIP);
     }
 
     /**

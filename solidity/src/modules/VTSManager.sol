@@ -2,7 +2,8 @@
 // This contract is inherited by the core hook contract and it is responsible for tracking state wide variables for the VTS
 pragma solidity ^0.8.26;
 
-import {MarketVTSConfiguration} from "../types/VTS.sol";
+import {MarketVTSConfiguration, MarketVTSConfigurationLibrary} from "../types/VTS.sol";
+import {RFSCheckpoint} from "../types/Checkpoint.sol";
 import {PositionIndex} from "../modules/PositionIndex.sol";
 import {PositionMeta} from "../types/Position.sol";
 import {GrowthAccounting} from "../libraries/GrowthAccounting.sol";
@@ -419,12 +420,10 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
                 // Closing the RfS means seizing the full position ONLY when the full time window has passed.
 
                 // Otherwise, always clamp withdrawal of liquidity by the RfS.
-                // validate that there is no open RFS for this position - as RfS is closed through settlement... well not necessarily... TODO: looping does not close the RFS.
+                // validate that there is no open RFS for this position - as RfS is closed through settlement... well not necessarily... TODO: seizure looping does not close the RFS.
                 // growth accounting settled above, therefore _getRFS
-                (bool rfsOpen, clampDelta) = _getRFS(positionId); // second param is true to revert if RFS is open
-                if (rfsOpen) {
-                    revert RFSOpenForPosition(positionId);
-                }
+                (, BalanceDelta rfsClamp) = _getRFS(positionId);
+                clampDelta = rfsClamp;
             }
         }
 
@@ -945,14 +944,66 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     }
 
     /**
-     * @notice Gets the amount of assets that can be seized from a position using the linked library
-     * @param _positionId The position id
-     * @return seizureFractionBPS The amount of position that can be seized in bps
+     * @notice Gets the liquidity amount to be seized from a position
+     * @dev This method is called BEFORE the position is modified by the seizure.
+     * @param positionId The position id
+     * @param settleDelta The balance delta of the amounts settled during seizure.
+     * @return seizedLiquidityUnits The amount of position liquidity units that can be seized
      */
-    function getSeizureAmount(PositionId _positionId) public view virtual returns (uint256 seizureFractionBPS) {
-        // TODO: derive the amount of assets that can be seized from a position
-        _positionId;
-        return 0;
+    function calcSeizure(PositionId positionId, BalanceDelta settleDelta, RFSCheckpoint calldata checkpoint)
+        public
+        virtual
+        onlyMMPosition(positionId)
+        onlyPositionValid(positionId)
+        returns (uint256 seizedLiquidityUnits)
+    {
+        _settlePositionGrowths(positionId);
+        PositionMeta memory m = meta[positionId];
+        (bool rfsOpen, BalanceDelta rfsDelta) = _getRFS(positionId);
+        if (!rfsOpen) {
+            revert InvalidPosition(positionId);
+        }
+
+        // Commitments and RfS amounts
+        uint256 c0 = commitmentMaxima[positionId][0];
+        uint256 c1 = commitmentMaxima[positionId][1];
+        uint256 r0 = LiquidityUtils.safeInt128ToUint256(rfsDelta.amount0());
+        uint256 r1 = LiquidityUtils.safeInt128ToUint256(rfsDelta.amount1());
+        uint256 s0 = LiquidityUtils.safeInt128ToUint256(settleDelta.amount0());
+        uint256 s1 = LiquidityUtils.safeInt128ToUint256(settleDelta.amount1());
+
+        // Grace gating per token being intervened
+        MarketVTSConfiguration memory cfg = getMarketVTSConfiguration(m.poolId);
+        uint256 openAt = checkpoint.timeOfLastTransition;
+        if (r0 > 0 && s0 > 0) {
+            if (block.timestamp < openAt + cfg.token0.gracePeriodTime) {
+                revert MarketVTSConfigurationLibrary.GracePeriodNotElapsed(positionId);
+            }
+        }
+        if (r1 > 0 && s1 > 0) {
+            if (block.timestamp < openAt + cfg.token1.gracePeriodTime) {
+                revert MarketVTSConfigurationLibrary.GracePeriodNotElapsed(positionId);
+            }
+        }
+
+        // Exposures and settle proportions (apply base VTS as minimum buffer)
+        uint256 e0bps = LiquidityUtils.exposureBps(r0, c0);
+        uint256 e1bps = LiquidityUtils.exposureBps(r1, c1);
+        if (cfg.token0.baseVTSRate > e0bps) {
+            e0bps = cfg.token0.baseVTSRate;
+        }
+        if (cfg.token1.baseVTSRate > e1bps) {
+            e1bps = cfg.token1.baseVTSRate;
+        }
+        // \phi_settle ensures seizure calculation is proportional to the settled amount in this transaction.
+        uint256 p0bps = LiquidityUtils.settleOfRfsBps(s0, r0);
+        uint256 p1bps = LiquidityUtils.settleOfRfsBps(s1, r1);
+
+        uint256 liq = uint256(m.liquidity);
+        uint256 u0 = LiquidityUtils.seizedUnitsFromBps(liq, e0bps, p0bps);
+        uint256 u1 = LiquidityUtils.seizedUnitsFromBps(liq, e1bps, p1bps);
+        uint256 total = u0 + u1;
+        return total > liq ? liq : total;
     }
 
     /**

@@ -5,6 +5,7 @@ import {MarketVTSConfiguration} from "../types/VTS.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {PositionId} from "../types/Position.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {RFSCheckpoint} from "../types/Checkpoint.sol";
 
 interface IVTSManager {
     function setMarketVTSConfiguration(PoolId corePoolId, MarketVTSConfiguration memory vtsConfiguration) external;
@@ -24,7 +25,10 @@ interface IVTSManager {
         view
         returns (uint256 amount0, uint256 amount1);
 
-    function getSeizureAmount(PositionId positionId) external view returns (uint256 seizureFractionBPS);
+    function calcSeizure(PositionId positionId, BalanceDelta settleDelta, RFSCheckpoint calldata checkpoint)
+        external
+        view
+        returns (uint256 seizedLiquidityUnits);
 
     function getPositionUnsettledUSDValue(PoolId marketId, PositionId positionId) external view returns (uint256);
 
