@@ -38,10 +38,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
     error InvalidPosition(uint256 tokenId, uint256 positionIndex, PositionId positionId);
     error InvalidMarket(PoolKey poolKey);
     error SignalExpired(uint256 tokenId);
-    error InsufficientLiquidityInSignal();
-    error SignalIsSolvent();
     error UnauthorizedSignalOwner();
-    error UnauthorizedAdvancer();
 
     event SignalCommitted(address indexed mm, uint256 tokenId, uint256 positionIndex);
     event SignalDecommitted(
@@ -473,8 +470,9 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
             salt: _positionSalt(tokenId, positionIndex)
         });
         // mint the tokens required to facilitate this liquidity addition
+        (uint160 sqrtPriceX96, int24 currentTick,,) = poolManager.getSlot0(poolKey.toId());
         (uint256 lcc0Amount, uint256 lcc1Amount) =
-            LiquidityUtils.calculateTokenAmountsFromPositionParams(poolManager, poolKey, modifyLiquidityParams);
+            LiquidityUtils.calculateTokenAmountsFromPositionParams(sqrtPriceX96, currentTick, modifyLiquidityParams);
 
         // get the liquidity delta
         // if it is positive add liquidity to the position
@@ -542,8 +540,9 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         ILCC lcc1 = ILCC(Currency.unwrap(poolKey.currency1));
 
         // derive the LCC amounts to mint to facilitate the commitment
+        (uint160 sqrtPriceX96, int24 currentTick,,) = poolManager.getSlot0(poolKey.toId());
         (uint256 lcc0AmountToMint, uint256 lcc1AmountToMint) =
-            LiquidityUtils.calculateTokenAmountsFromPositionParams(manager, poolKey, liquidityParams);
+            LiquidityUtils.calculateTokenAmountsFromPositionParams(sqrtPriceX96, currentTick, liquidityParams);
 
         // Mint the tokens required for the liquidity commitment
         lcc0.issue(lcc0AmountToMint);
@@ -716,8 +715,11 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
             })
         );
 
-        address ua0 = Currency.unwrap(poolKey.currency0);
-        address ua1 = Currency.unwrap(poolKey.currency1);
+        address lcc0 = ILCC(Currency.unwrap(poolKey.currency0));
+        address lcc1 = ILCC(Currency.unwrap(poolKey.currency1));
+
+        address ua0 = lcc0.underlyingAsset();
+        address ua1 = lcc1.underlyingAsset();
 
         // This target delta may be negative beyond what is capable of being withdrawn. ie. target < rfs - however, VTSManager.onMMLiquidityModify will handle the clamp. ie. it's a try withdraw to this amounnt.
         BalanceDelta targetDelta = LiquidityUtils.safeToBalanceDelta(
@@ -732,8 +734,8 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
 
         // ? we execute this here to minimise external contract calls for lcc handlers.
         // burn the LCC originally committed to the position. This may be greater than the amount of underlying asset tokens in the position.
-        ILCC(Currency.unwrap(poolKey.currency0)).cancel(LiquidityUtils.safeInt128ToUint256(positionDelta.amount0()));
-        ILCC(Currency.unwrap(poolKey.currency1)).cancel(LiquidityUtils.safeInt128ToUint256(positionDelta.amount1()));
+        lcc0.cancel(LiquidityUtils.safeInt128ToUint256(positionDelta.amount0()));
+        lcc1.cancel(LiquidityUtils.safeInt128ToUint256(positionDelta.amount1()));
     }
 
     /**
@@ -749,7 +751,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
             signalManager.renewLiquiditySignal(liquiditySignal);
         // make sure signal is solvent
         if (positionTotalCommitmentsUSDValue > totalSignalUsdValue) {
-            revert InsufficientLiquidityInSignal();
+            revert InvalidLiquiditySignal(totalSignalUsdValue, positionTotalCommitmentsUSDValue);
         }
 
         LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
@@ -759,7 +761,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
     }
 
     /**
-     * @dev This function is used to settle more underlying assets for a particular position
+     * @dev Seizure of a position by a guarantor (other MM)
      * @param poolKey The pool key for the position
      * @param tokenId The token id to settle the position for
      * @param positionIndex The position index to settle the position for
@@ -773,6 +775,11 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         // -- Validate the position
         PositionMeta memory position = getPosition(tokenId, positionIndex);
         PositionId positionId = getPositionId(tokenId, positionIndex);
+
+        // -- Validate that caller is not position owner
+        if (msg.sender == position.owner) {
+            revert InvalidPosition(tokenId, positionIndex, positionId);
+        }
 
         // -- Validate the poolKey
         if (!_isValidPositionForPool(poolKey, position)) {
@@ -797,6 +804,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         BalanceDelta settleBalanceDelta = toBalanceDelta(amount0.toInt128(), amount1.toInt128());
 
         // validate that settled balance closes the RfS.
+        // rfsBalanceDelta is positive when the RfS is open. Check that the settleBalanceDelta is greater than or equal to rfsBalanceDelta
         if (
             settleBalanceDelta.amount0() < rfsBalanceDelta.amount0()
                 || settleBalanceDelta.amount1() < rfsBalanceDelta.amount1()
@@ -826,30 +834,12 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         // -- Move the underlying liquidity to the to the seizer/caller or to the new position
 
         // transfer or liquidate all or part of the position
-        uint256 liquidityToSeize = (uint256(position.liquidity) / 10000) * seizureFractionBPS;
-
-        // the amount to transfer is based on the amount already liquidated in bps
-        // get the fraction of underlying assets to transfer to the caller/liquidator
-        // get the total settlement amount for the position from the vts manager
-        // both amount0 and amount1 are positive
-        (uint256 totalSettlementAmount0, uint256 totalSettlementAmount1) =
-            _getVTSManager().getPositionSettledAmounts(positionId);
-        // based on the amount of the position liquidated, calculate the fraction of the underlying assets to liquidate
-        settlementFractionDelta = LiquidityUtils.calculateLiquidityFraction(
-            toBalanceDelta(totalSettlementAmount0.toInt128(), totalSettlementAmount1.toInt128()),
-            seizureFractionBPS,
-            LiquidityUtils.ONE_BIP
-        );
-
-        // Always decommit of capture a fraction of the position.
-        // take some position from the owner to the caller
-        // this would reduce the settlement amount on the position
-        _modifyMarketUnderlyingAsset(
-            positionId, position.poolId, LiquidityUtils.negateBalanceDelta(settlementFractionDelta), ua0, ua1
-        );
+        uint256 liquidityToSeize =
+            FullMath.mulDiv(uint256(position.liquidity), seizureFractionBPS, LiquidityUtils.ONE_BIP);
 
         // -- Liquidate the position partially or fully
         // do this last because it counld potentially mark the position as inactive and cause some of the above calls to fail as they require an active position
+        // ? _liquidatePosition will utilise the removed liquidity BalanceDelta, forward it to VTSManager.onMMLiquidityModify, where it will tryTake relative to the amount settled.
         _liquidatePosition(poolKey, position, _positionSalt(tokenId, positionIndex), liquidityToSeize);
     }
 
@@ -877,12 +867,12 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
     }
 
     /**
-     * @dev This function is used to sieze a portion of an insolvent position
-     * @param poolKey The pool key to reallocate the position for
-     * @param tokenId The token id to reallocate the position for
-     * @param liquiditySignal The liquidity signal to reallocate the position for
+     * @dev Sieze a portion of an insolvent commitment
+     * @param poolKey The pool key to sieze the commitment for
+     * @param tokenId The token id to sieze the commitment for
+     * @param liquiditySignal The liquidity signal to sieze the commitment for
      */
-    function reallocate(PoolKey memory poolKey, uint256 tokenId, bytes memory liquiditySignal)
+    function seizeCommitment(PoolKey memory poolKey, uint256 tokenId, bytes memory liquiditySignal)
         public
         returns (uint256 deficitFractionInBips)
     {
@@ -894,7 +884,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         uint256 positionTotalCommitmentsUSDValue = getTokenUnsettledUSDValue(tokenId);
         // make sure the new signal is insolvent before it can be reallocated
         if (totalSignalUsdValue >= positionTotalCommitmentsUSDValue) {
-            revert SignalIsSolvent();
+            revert InvalidLiquiditySignal(totalSignalUsdValue, positionTotalCommitmentsUSDValue);
         }
         LiquiditySignal memory newSignal = abi.decode(liquiditySignal, (LiquiditySignal));
         LiquiditySignal memory oldSignal = tokenIdToSignal[tokenId].signal;
@@ -902,16 +892,16 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         if (newSignal.mmState.owner != oldSignal.mmState.owner) {
             revert UnauthorizedSignalOwner();
         }
-        // require caller is advancer
-        if (msg.sender != newSignal.mmState.advancer) {
-            revert UnauthorizedAdvancer();
+        // require caller is advancer, and ensures that the advancer is not the owner of the signal.
+        if (msg.sender != newSignal.mmState.advancer && newSignal.mmState.advancer == newSignal.mmState.owner) {
+            revert UnauthorizedSignalOwner();
         }
         // PositionMeta memory position = getPosition(tokenId, positionIndex);
         // update the signal state
         tokenIdToSignal[tokenId] = SignalState({signal: newSignal, expiresAt: block.timestamp + signalExpiryInSeconds});
         // get the difference in the usd value of the signal and the position
         // get the fraction of the deficit of the position, unit is in wad(1e18) for better precision
-        deficitFractionInBips = Math.mulDiv(
+        deficitFractionInBips = FullMath.mulDiv(
             positionTotalCommitmentsUSDValue - totalSignalUsdValue,
             LiquidityUtils.ONE_BIP,
             positionTotalCommitmentsUSDValue
@@ -923,8 +913,8 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
             PositionMeta memory position = getPosition(tokenId, i);
             // liquidate a percentage given by the deficit fraction
             uint256 liquidityToSeize =
-                Math.mulDiv(uint256(position.liquidity), deficitFractionInBips, LiquidityUtils.ONE_BIP);
-            _liquidatePosition(poolKey, tokenId, i, liquidityToSeize);
+                FullMath.mulDiv(uint256(position.liquidity), deficitFractionInBips, LiquidityUtils.ONE_BIP);
+            _liquidatePosition(poolKey, position, _positionSalt(tokenId, i), liquidityToSeize);
         }
     }
 }

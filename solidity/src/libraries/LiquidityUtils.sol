@@ -145,18 +145,17 @@ library LiquidityUtils {
 
     /**
      * @dev This function is used to calculate the token amounts to deposit for a given position params
-     * @param manager The pool manager
-     * @param poolKey The pool key
-     * @param positionParams The position params
+     * @param sqrtPriceX96 The sqrt price x96 of the pool
+     * @param currentTick The current tick of the pool
+     * @param positionParams The position params - No Salt required, can be bytes32(0) for this function.
      * @return depositAmount0 The amount of token0 to deposit
      * @return depositAmount1 The amount of token1 to deposit
      */
     function calculateTokenAmountsFromPositionParams(
-        IPoolManager manager,
-        PoolKey memory poolKey,
+        uint160 sqrtPriceX96,
+        int24 currentTick,
         ModifyLiquidityParams memory positionParams
     ) internal view returns (uint256 depositAmount0, uint256 depositAmount1) {
-        (uint160 sqrtPriceX96, int24 currentTick,,) = manager.getSlot0(poolKey.toId());
         BalanceDelta delta;
 
         if (currentTick < positionParams.tickLower) {

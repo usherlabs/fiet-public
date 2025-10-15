@@ -387,7 +387,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
      * @param modifyDelta The balance delta of the settlement
      * @dev During seizure, Guarantor must settle in advance of calling onMMLiquidityModify to close RfS before modification of liquidity.
      */
-    function onMMLiquidityModify(PositionId positionId, BalanceDelta modifyDelta)
+    function onMMLiquidityModify(PositionId positionId, BalanceDelta modifyDelta, bool liquidate)
         external
         onlyMMPosition(positionId)
         onlyPositionValid(positionId)
@@ -403,14 +403,50 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         int128 amount0 = modifyDelta.amount0();
         int128 amount1 = modifyDelta.amount1();
 
-        bool rfsOpen;
-        BalanceDelta rfsDelta;
+        BalanceDelta clampDelta;
         if (amount0 < 0 || amount1 < 0) {
-            // validate that there is no open RFS for this position
-            // positions settled above, therefore _getRFS
-            (rfsOpen, rfsDelta) = _getRFS(positionId); // second param is true to revert if RFS is open
-            if (rfsOpen) {
-                revert RFSOpenForPosition(positionId);
+            if (liquidate) {
+                PositionMeta memory m = meta[positionId];
+                (uint256 s0, uint256 s1) = getPositionSettledAmounts(positionId);
+                if (m.isActive == false) {
+                    // This hook is called by the MMPositionManager, after the position was modified by the modifyDelta. Therefore, if the result _touchPosition was called, and deactivated the position, then it's a FULL liquidation.
+                    clampDelta = LiquidityUtils.safeToBalanceDelta(s0, s1, true, true);
+                }
+                // ! The following is NOT even necessary.
+                // ! During a liqudated position's modification of underlying settled liquidity, the clamp the ALWAYS remain calculated per the RfS UNLESS the full position is deactivated, and therefore the entire settled position can be withdrawn.
+                //  else {
+                //     // It's a partial liquidation.
+                //     // The clamp is determined by the modifyDelta over the effective LCC balances in the position.
+                //     // the result is the amount liquidated relative to the total position.
+                //     // Then we can apply this rate to settlement amounts as a withdrawal clamp.
+                //     uint256 mDeltaAmount0 = LiquidityUtils.safeInt128ToUint256(modifyDelta.amount0());
+                //     uint256 mDeltaAmount1 = LiquidityUtils.safeInt128ToUint256(modifyDelta.amount1());
+                //     (uint160 sqrtPriceX96, int24 currentTick,,) = poolManager.getSlot0(m.poolId);
+                //     (uint256 effectiveLiquidityAmount0, uint256 effectiveLiquidityAmount1) = LiquidityUtils
+                //         .calculateTokenAmountsFromPositionParams(
+                //         sqrtPriceX96,
+                //         currentTick,
+                //         ModifyLiquidityParams({
+                //             tickLower: m.tickLower,
+                //             tickUpper: m.tickUpper,
+                //             liquidityDelta: m.liquidity, // TODO: this is going to be the new delta, after the liquidation.
+                //             salt: bytes32(0)
+                //         })
+                //     );
+                //     clampDelta = LiquidityUtils.safeToBalanceDelta(
+                //         FullMath.mulDiv(mDeltaAmount0, effectiveLiquidityAmount0, s0),
+                //         FullMath.mulDiv(mDeltaAmount1, effectiveLiquidityAmount1, s1),
+                //         true,
+                //         true
+                //     );
+                // }
+            } else {
+                // validate that there is no open RFS for this position
+                // positions settled above, therefore _getRFS
+                (bool rfsOpen, clampDelta) = _getRFS(positionId); // second param is true to revert if RFS is open
+                if (rfsOpen) {
+                    revert RFSOpenForPosition(positionId);
+                }
             }
         }
 
@@ -421,16 +457,16 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
             _handleMMSettlementForToken(positionId, poolId, 0, SafeCast.toUint256(int256(amount0)));
         } else if (amount0 < 0) {
             // Validate that amount to be withdrawn is within limits
-            if (amount0 < rfsDelta.amount0()) {
-                amount0 = rfsDelta.amount0();
+            if (amount0 < clampDelta.amount0()) {
+                amount0 = clampDelta.amount0();
             }
             _updateSettlement(poolId, positionId, 0, int256(amount0));
         }
         if (amount1 > 0) {
             _handleMMSettlementForToken(positionId, poolId, 1, SafeCast.toUint256(int256(amount1)));
         } else if (amount1 < 0) {
-            if (amount1 < rfsDelta.amount1()) {
-                amount1 = rfsDelta.amount1();
+            if (amount1 < clampDelta.amount1()) {
+                amount1 = clampDelta.amount1();
             }
             _updateSettlement(poolId, positionId, 1, int256(amount1));
         }

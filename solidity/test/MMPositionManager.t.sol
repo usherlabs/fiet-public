@@ -1047,7 +1047,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         address advancer = liquiditySignal.mmState.advancer;
         vm.prank(address(advancer));
         // reallocate the position by mocking an insolvent(by 20%) response from the signal manager
-        uint256 deficitFraction = positionManager.reallocate(corePoolKey, tokenId, encodedLiquiditySignal);
+        uint256 deficitFraction = positionManager.seizeCommitment(corePoolKey, tokenId, encodedLiquiditySignal);
         vm.stopPrank();
 
         // get the position after reallocation
