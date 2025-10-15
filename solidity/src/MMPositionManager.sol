@@ -701,7 +701,8 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         address ua0 = lcc0.underlyingAsset();
         address ua1 = lcc1.underlyingAsset();
 
-        // This target delta may be negative beyond what is capable of being withdrawn. ie. target < rfs - however, VTSManager.onMMLiquidityModify will handle the clamp. ie. it's a try withdraw to this amounnt.
+        // This target delta may be negative beyond what is capable of being withdrawn. ie. target < rfs
+        // ? VTSManager.onMMLiquidityModify will handle the clamp. ie. it's a "try withdraw" to this amounnt.
         BalanceDelta targetDelta = LiquidityUtils.safeToBalanceDelta(
             LiquidityUtils.safeInt128ToUint256(positionDelta.amount0()),
             LiquidityUtils.safeInt128ToUint256(positionDelta.amount1()),
@@ -713,12 +714,16 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         // ? _modifyMarketUnderlyingAsset will transfer assets based on modifiedDelta returned by VTSManager.onMMLiquidityModify.
         // TODO: On Seizure, this amount should be the seizureSettled + (portion of position settled relative to seizuredLiquidityUnits/liquidity)
         // TODO: On burn (decommitPosition), this amount should be the total settled amount in the position.
-        // TODO: In all other cases, (modify, withdraw, seizeCommitment), clamp by RfS
         // ----- By checking if position.isActive == false, we can determine if full position is liquidated.
+        // TODO: In all other cases where liquidity position is modified, (modify, seizeCommitment), only facilitate a portion of the settledAmounts AND then clamp by RfS.
+        // ----- This can be done by comparing the targetDelta with effectiveLiquidity amounts in position to derive a portion of the settled amounts to impact.
+        // ----- This can be determined, by calling onMMLiquidityModify within the _touchPosition, revealing the before/after liquidity amounts.
+        // ----- Otherwise, we can utilise transient storage cached in _touchPosition (beforeLiquidityUnits) to maintain unified the interface, and check within the onMMLiquidityModify, revealing the before/after liquidity amounts.
+        // TODO: On withdraw (default), simply clamp by RfS.
         returnDelta = _modifyMarketUnderlyingAsset(posId, poolKey.toId(), targetDelta, ua0, ua1);
 
-        // ? we execute this here to minimise external contract calls for lcc handlers.
-        // burn the LCC originally committed to the position. This may be greater than the amount of underlying asset tokens in the position.
+        // burn the LCC originally committed to the position.
+        // This may be greater than the amount of underlying asset tokens in the position.
         lcc0.cancel(LiquidityUtils.safeInt128ToUint256(positionDelta.amount0()));
         lcc1.cancel(LiquidityUtils.safeInt128ToUint256(positionDelta.amount1()));
     }

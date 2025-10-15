@@ -384,9 +384,10 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     /**
      * @notice Records the settlement of assets on a position
      * @dev make sure this function can only be called by the position manager since that is the interface through which settlements are going to be made
+     * @dev This function is called only AFTER any position modifications. Position data modifications are handled in _touchPosition.
      * @param positionId The id of the position
      * @param modifyDelta The balance delta of the settlement
-     * @dev During seizure, Guarantor must settle in advance of calling onMMLiquidityModify to close RfS before modification of liquidity.
+     * @return modifiedDelta The balance delta of the settlement amounts relative to the position that was actually modified. The amount of underlying native assets actually reallocated/adjusted.
      */
     function onMMLiquidityModify(PositionId positionId, BalanceDelta modifyDelta)
         external
