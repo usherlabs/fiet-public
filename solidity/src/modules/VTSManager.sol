@@ -856,8 +856,8 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         uint256 d0 = cumulativeDeficit[positionId][0];
         uint256 d1 = cumulativeDeficit[positionId][1];
         uint256 one = 1e18;
-        vtsRequired0 = c0 == 0 ? 0 : (d0 >= c0 ? one : (d0 * one) / c0);
-        vtsRequired1 = c1 == 0 ? 0 : (d1 >= c1 ? one : (d1 * one) / c1);
+        vtsRequired0 = c0 == 0 ? 0 : (d0 >= c0 ? one : FullMath.mulDiv(d0, one, c0));
+        vtsRequired1 = c1 == 0 ? 0 : (d1 >= c1 ? one : FullMath.mulDiv(d1, one, c1));
     }
 
     // TODO: There may be a logic flaw here. New positions are based on if unsettledValue + newPosCommittedValue <= totalSignalValue.
@@ -951,8 +951,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
      * @return seizedLiquidityUnits The amount of position liquidity units that can be seized
      */
     function calcSeizure(PositionId positionId, BalanceDelta settleDelta, RFSCheckpoint calldata checkpoint)
-        public
-        virtual
+        external
         onlyMMPosition(positionId)
         onlyPositionValid(positionId)
         returns (uint256 seizedLiquidityUnits)
