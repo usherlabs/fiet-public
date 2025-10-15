@@ -8,6 +8,7 @@ import {FixedPoint128} from "@uniswap/v4-core/src/libraries/FixedPoint128.sol";
 /**
  * @title GrowthAccounting
  * @notice Shared helpers for tick-indexed, per-liquidity growth accounting used by VTS.
+ * @dev Much of the methodology and implementation is adapted from Uniswap v3/v4 - https://github.com/Uniswap/v4-core/blob/e5547d021f0e6d0df2d675822830a4df5be3d429/src/libraries/Pool.sol#L488
  *
  * This library centralises the common mechanics adopted from Uniswap v3/v4:
  * - Global per-liquidity growth accumulators per token (Q128 scaling)
