@@ -712,18 +712,19 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
 
         // take all the settled underlying assets from the position to the caller
         // ? _modifyMarketUnderlyingAsset will transfer assets based on modifiedDelta returned by VTSManager.onMMLiquidityModify.
-        // TODO: On Seizure, this amount should be the seizureSettled + (portion of position settled relative to seizuredLiquidityUnits/liquidity)
         // TODO: On burn (decommitPosition), this amount should be the total settled amount in the position.
         // ----- By checking if position.isActive == false, we can determine if full position is liquidated.
-        // TODO: In all other cases where liquidity position is modified, (modify, seizeCommitment), only facilitate a portion of the settledAmounts AND then clamp by RfS.
+        // TODO: In all other cases where liquidity position is modified, (modify, seize, seizeCommitment), only facilitate a portion of the settledAmounts AND then clamp by RfS.
         // ----- This can be done by comparing the targetDelta with effectiveLiquidity amounts in position to derive a portion of the settled amounts to impact.
         // ----- This can be determined, by calling onMMLiquidityModify within the _touchPosition, revealing the before/after liquidity amounts.
         // ----- Otherwise, we can utilise transient storage cached in _touchPosition (beforeLiquidityUnits) to maintain unified the interface, and check within the onMMLiquidityModify, revealing the before/after liquidity amounts.
+        // ----- The reason why this works for seizure is because the LCCs acquired by the seizing party are NOT cancelled, rather transferred for unwrap, or subsequent swaps.
         // TODO: On withdraw (default), simply clamp by RfS.
         returnDelta = _modifyMarketUnderlyingAsset(posId, poolKey.toId(), targetDelta, ua0, ua1);
 
         // burn the LCC originally committed to the position.
         // This may be greater than the amount of underlying asset tokens in the position.
+        // TODO: LCC cancellation in burn() as this is the ONLY case where LCCs can be cancelled.
         lcc0.cancel(LiquidityUtils.safeInt128ToUint256(positionDelta.amount0()));
         lcc1.cancel(LiquidityUtils.safeInt128ToUint256(positionDelta.amount1()));
     }
@@ -795,6 +796,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         address ua1 = ILCC(Currency.unwrap(poolKey.currency1)).underlyingAsset();
 
         // settle underlying assets to the position to ensure it now meets rfs requirements
+        // ? settlement is necessary because the seizing party is covering the deficit (settlement queue) in exchange for LCCs.
         _modifyMarketUnderlyingAsset(positionId, position.poolId, settleBalanceDelta, ua0, ua1);
 
         // -- Move the underlying liquidity to the to the seizer/caller or to the new position
