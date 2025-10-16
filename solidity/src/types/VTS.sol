@@ -38,8 +38,12 @@ library MarketVTSConfigurationLibrary {
     ) internal view {
         uint256 timeSinceLastCheckpoint = block.timestamp - checkpoint.timeOfLastTransition;
 
-        bool gracePeriod0Elapsed = vtsConfiguration.token0.gracePeriodTime > timeSinceLastCheckpoint;
-        bool gracePeriod1Elapsed = vtsConfiguration.token1.gracePeriodTime > timeSinceLastCheckpoint;
+        uint256 gracePeriodExtension = checkpoint.gracePeriodExtension;
+
+        bool gracePeriod0Elapsed =
+            vtsConfiguration.token0.gracePeriodTime + gracePeriodExtension > timeSinceLastCheckpoint;
+        bool gracePeriod1Elapsed =
+            vtsConfiguration.token1.gracePeriodTime + gracePeriodExtension > timeSinceLastCheckpoint;
 
         if (!gracePeriod0Elapsed || !gracePeriod1Elapsed) {
             revert GracePeriodNotElapsed(positionId);

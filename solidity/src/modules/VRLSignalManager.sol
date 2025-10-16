@@ -19,8 +19,9 @@ import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {LiquidityUtils} from "../libraries/LiquidityUtils.sol";
 import {IVTSManager} from "../interfaces/IVTSManager.sol";
+import {ISettlementVerifier} from "../interfaces/ISettlementVerifier.sol";
 
-contract VRLSignalManager is Ownable {
+contract VRLSignalManager is Ownable, ISettlementVerifier {
     ISpokeVerifier public verifier;
     IOracleRegistry public oracleRegistry;
     IMarketFactory public marketFactory;
@@ -116,6 +117,15 @@ contract VRLSignalManager is Ownable {
             // update the nonce for the mm if the proof is valid
             mmNonce[signal.mmState.owner] = signal.nonce;
         }
+    }
+
+    /**
+     * @dev This function is used to verify the settlement proof and return the grace period extension
+     *      This function is yet to be implemented
+     * @return gracePeriodExtension The grace period extension
+     */
+    function verifySettlementProof(bytes memory) public pure returns (uint256 gracePeriodExtension) {
+        return 0;
     }
 
     /**

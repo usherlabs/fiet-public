@@ -29,6 +29,7 @@ import {IPositionIndex} from "./interfaces/IPositionIndex.sol";
 import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {console} from "forge-std/console.sol";
+import {ISettlementVerifier} from "./interfaces/ISettlementVerifier.sol";
 
 contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
     using SafeCast for *;
@@ -44,6 +45,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
     error InvalidLiquiditySignalEncoding();
     error InactivePosition(PositionId positionId);
     error InsufficientAmountToWithdraw(PositionId positionId, uint256 amount, uint256 maxAmount);
+    event GracePeriodExtended(PositionId indexed positionId, uint256 extension, uint256 timestamp);
     error InvalidMarket(PoolKey poolKey);
     error RFSNotOpen(PositionId positionId);
     error SignalExpired(uint256 tokenId);
@@ -61,6 +63,9 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
     uint256 private nextTokenId = 1;
     IPoolManager private poolManager;
     IVRLSignalManager public immutable signalManager;
+    ISettlementVerifier public immutable settlementVerifier;
+    address[] public settlementVerifiers;
+
     mapping(PositionId => RFSCheckpoint) public positionToCheckpoint;
     mapping(uint256 => mapping(uint256 => PositionId)) public nftToPositionId;
     mapping(uint256 => uint256) public nftToPositionCount;
@@ -168,6 +173,27 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
 
         // mark RFS checkpoint
         _checkpoint(getPositionId(tokenId, positionIndex).toArray());
+    }
+
+    /**
+     * @notice Extends the grace period for a position by providing a settlement proof
+     * @dev This function allows market makers to extend their grace period by providing
+     *      a valid settlement proof that gets verified against the settlement verifier
+     * @param tokenId The token id of the position
+     * @param positionIndex The position index
+     * @param settlementProof The settlement signal containing the proof
+     */
+    function extendGracePeriod(uint256 tokenId, uint256 positionIndex, bytes memory settlementProof) public {
+        PositionId positionId = getPositionId(tokenId, positionIndex);
+
+        // verify the settlement proof and get the grace period extension
+        uint256 gracePeriodExtension = signalManager.verifySettlementProof(settlementProof);
+
+        // extend the grace period for the position
+        positionToCheckpoint[positionId].extendGracePeriod(gracePeriodExtension);
+
+        // emit an event to notify the market maker that the grace period has been extended
+        emit GracePeriodExtended(positionId, gracePeriodExtension, block.timestamp);
     }
 
     /**

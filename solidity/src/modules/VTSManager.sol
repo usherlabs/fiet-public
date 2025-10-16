@@ -65,7 +65,6 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     // Per-entry events are declared in VTSEvents
     // Array of approved settlement verifier contracts
 
-    address[] public settlementVerifiers;
     address private immutable mmPositionManager;
     IPoolManager private immutable poolManager;
     address private calculator; // optional external calculator (Stylus or pure)

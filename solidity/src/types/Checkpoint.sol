@@ -7,6 +7,8 @@ struct RFSCheckpoint {
     uint256 timeOfLastTransition;
     // whether the RFS is open or close
     bool isOpen;
+    // the grace period extension
+    uint256 gracePeriodExtension;
 }
 
 // initially the checkpoint wouls be set to (0,false)
@@ -19,6 +21,14 @@ library RFSCheckpointLibrary {
         if (self.isOpen != isOpen) {
             self.timeOfLastTransition = block.timestamp;
             self.isOpen = isOpen;
+            // reset the grace period extension when  RFS state opens or closes
+            self.gracePeriodExtension = 0;
         }
+    }
+
+    // this function is used to extend the grace period for a position
+    // it adds the extension time to the current grace period extension
+    function extendGracePeriod(RFSCheckpoint storage self, uint256 extension) internal {
+        self.gracePeriodExtension += extension;
     }
 }
