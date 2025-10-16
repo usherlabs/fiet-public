@@ -2,6 +2,7 @@
 pragma solidity ^0.8.0;
 
 import {TransientSlots} from "./TransientSlots.sol";
+import {TransientSlot} from "openzeppelin-contracts/contracts/utils/TransientSlot.sol";
 
 /**
  * @title SwapTracking
@@ -9,26 +10,21 @@ import {TransientSlots} from "./TransientSlots.sol";
  * @dev Uses transient storage to minimize gas costs for inter-contract state management
  */
 library ProxySwapFlag {
+    using TransientSlot for *;
     // Transient storage slot for proxy swap flag
 
     /**
      * @notice Set the proxy swap flag to indicate a swap initiated by the proxy hook is in progress
      */
     function setProxySwapFlag() internal {
-        bytes32 PROXY_SWAP_FLAG_SLOT = TransientSlots.PROXY_SWAP_FLAG_SLOT;
-        assembly {
-            tstore(PROXY_SWAP_FLAG_SLOT, true)
-        }
+        TransientSlot.asBoolean(TransientSlots.PROXY_SWAP_FLAG_SLOT).tstore(true);
     }
 
     /**
      * @notice Clears the state of the proxy swap flag
      */
     function clearProxySwapFlag() internal {
-        bytes32 PROXY_SWAP_FLAG_SLOT = TransientSlots.PROXY_SWAP_FLAG_SLOT;
-        assembly {
-            tstore(PROXY_SWAP_FLAG_SLOT, false)
-        }
+        TransientSlot.asBoolean(TransientSlots.PROXY_SWAP_FLAG_SLOT).tstore(false);
     }
 
     /**
@@ -36,11 +32,7 @@ library ProxySwapFlag {
      * @return flag True if a proxy swap is in progress, false otherwise
      */
     function isProxySwapInProgress() internal view returns (bool flag) {
-        bytes32 PROXY_SWAP_FLAG_SLOT = TransientSlots.PROXY_SWAP_FLAG_SLOT;
-
-        assembly {
-            flag := tload(PROXY_SWAP_FLAG_SLOT)
-        }
+        flag = TransientSlot.asBoolean(TransientSlots.PROXY_SWAP_FLAG_SLOT).tload();
     }
 
     /**

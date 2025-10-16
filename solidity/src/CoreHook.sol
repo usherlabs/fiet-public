@@ -19,6 +19,7 @@ import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Exttload} from "v4-periphery/lib/v4-core/src/Exttload.sol";
 import {IExttload} from "v4-periphery/lib/v4-core/src/interfaces/IExttload.sol";
 import {TransientSlots} from "./libraries/TransientSlots.sol";
+import {TransientSlot} from "openzeppelin-contracts/contracts/utils/TransientSlot.sol";
 import {LiquidityUtils} from "./libraries/LiquidityUtils.sol";
 import {VTSManager} from "./modules/VTSManager.sol";
 import {PositionLibrary, PositionId} from "./types/Position.sol";
@@ -34,6 +35,7 @@ import {TickUtils} from "./libraries/TickUtils.sol";
  * Furthermore, we need to know when Direct LP occurs, as this determines whether the underlying native tokens are settled to the Pool Manager.
  */
 contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
+    using TransientSlot for *;
     using CurrencySettler for Currency;
 
     error InvalidInitialiser();
@@ -102,14 +104,8 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
         // store sqrtP_before and liquidity in transient storage for segment processing
         (uint160 sqrtPBefore,,,) = StateLibrary.getSlot0(poolManager, key.toId());
         uint128 liqBefore = StateLibrary.getLiquidity(poolManager, key.toId());
-        bytes32 slot = TransientSlots.SQRTP_BEFORE_SLOT;
-        assembly ("memory-safe") {
-            tstore(slot, sqrtPBefore)
-        }
-        bytes32 slotL = TransientSlots.LIQ_BEFORE_SLOT;
-        assembly ("memory-safe") {
-            tstore(slotL, liqBefore)
-        }
+        TransientSlot.asUint256(TransientSlots.SQRTP_BEFORE_SLOT).tstore(uint256(sqrtPBefore));
+        TransientSlot.asUint256(TransientSlots.LIQ_BEFORE_SLOT).tstore(uint256(liqBefore));
         return (this.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
     }
 
@@ -123,11 +119,7 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
         // Tick cross flips + per-segment accrual: iterate initialised ticks crossed during the swap
         {
             // read start tick from transient sqrtP_before and end tick from state
-            uint160 sqrtPBefore;
-            bytes32 slot = TransientSlots.SQRTP_BEFORE_SLOT;
-            assembly ("memory-safe") {
-                sqrtPBefore := tload(slot)
-            }
+            uint160 sqrtPBefore = uint160(TransientSlot.asUint256(TransientSlots.SQRTP_BEFORE_SLOT).tload());
             (uint160 sqrtPAfter, int24 tickAfter,,) = StateLibrary.getSlot0(poolManager, key.toId());
             int24 tickBefore = TickMath.getTickAtSqrtPrice(sqrtPBefore);
 
@@ -136,13 +128,7 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
                 // running sqrt for segment starts
                 uint160 sqrtCurrent = sqrtPBefore;
                 // running segment liquidity snapshot (from beforeSwap)
-                uint128 segmentLiquidity;
-                {
-                    bytes32 sL = TransientSlots.LIQ_BEFORE_SLOT;
-                    assembly ("memory-safe") {
-                        segmentLiquidity := tload(sL)
-                    }
-                }
+                uint128 segmentLiquidity = uint128(TransientSlot.asUint256(TransientSlots.LIQ_BEFORE_SLOT).tload());
                 int24 stepTick = tickBefore;
                 while (true) {
                     // next initialised tick in the direction of the swap
@@ -210,13 +196,7 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
                 // Determine direction by price movement
                 bool zeroForOne = sqrtPAfter < sqrtPBefore;
                 // Load liquidity snapshot from beforeSwap
-                uint128 segmentLiquidity;
-                {
-                    bytes32 sL = TransientSlots.LIQ_BEFORE_SLOT;
-                    assembly ("memory-safe") {
-                        segmentLiquidity := tload(sL)
-                    }
-                }
+                uint128 segmentLiquidity = uint128(TransientSlot.asUint256(TransientSlots.LIQ_BEFORE_SLOT).tload());
                 if (segmentLiquidity > 0 && sqrtPAfter != sqrtPBefore) {
                     uint256 outSeg = zeroForOne
                         ? SqrtPriceMath.getAmount1Delta(sqrtPAfter, sqrtPBefore, segmentLiquidity, false)
@@ -330,12 +310,7 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
     function _triggerInternalTracingFlag(PoolId corePoolId) internal {
         // Trigger flag within the core hook to indicate that a swap has occurred
         // Set some variables that would be read by the corresponding recipient LCC contract
-        bytes32 tracingFlagSlot = TransientSlots.TRACING_FLAG_SLOT;
-        bytes32 currentMarketSlot = TransientSlots.CURRENT_MARKET_SLOT;
-
-        assembly ("memory-safe") {
-            tstore(tracingFlagSlot, 1) // true
-            tstore(currentMarketSlot, corePoolId)
-        }
+        TransientSlot.asBoolean(TransientSlots.TRACING_FLAG_SLOT).tstore(true);
+        TransientSlot.asBytes32(TransientSlots.CURRENT_MARKET_SLOT).tstore(bytes32(PoolId.unwrap(corePoolId)));
     }
 }

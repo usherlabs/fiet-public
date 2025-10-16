@@ -725,7 +725,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
 
         // burn the LCC originally committed to the position.
         // This may be greater than the amount of underlying asset tokens in the position.
-        // TODO: LCC cancellation in burn() as this is the ONLY case where LCCs can be cancelled.
+        // TODO: LCC cancellation ONLY in burn() and modify() when RfS is closed.
         lcc0.cancel(LiquidityUtils.safeInt128ToUint256(positionDelta.amount0()));
         lcc1.cancel(LiquidityUtils.safeInt128ToUint256(positionDelta.amount1()));
     }

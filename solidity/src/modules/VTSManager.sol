@@ -20,6 +20,8 @@ import {SqrtPriceMath} from "v4-periphery/lib/v4-core/src/libraries/SqrtPriceMat
 import {toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {LiquidityUtils} from "../libraries/LiquidityUtils.sol";
+import {TransientSlots} from "../libraries/TransientSlots.sol";
+import {TransientSlot} from "openzeppelin-contracts/contracts/utils/TransientSlot.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {ILCC} from "../interfaces/ILCC.sol";
 import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
@@ -30,6 +32,7 @@ import {LiquidityUtils} from "../libraries/LiquidityUtils.sol";
 abstract contract VTSManager is IVTSManager, PositionIndex {
     using StateLibrary for IPoolManager;
     using TransientStateLibrary for IPoolManager;
+    using TransientSlot for *;
 
     // Mapping from core pool ID to VTS configuration
     mapping(PoolId => MarketVTSConfiguration) public corePoolToVTSConfiguration;
@@ -283,6 +286,12 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
             _initPositionSnapshots(id);
         } else if (m.isActive == true) {
             // existing position, update the liquidity by the liquidity delta
+            // cache previous liquidity in transient storage (CoreHook already does this for swap; mirror here for modify)
+            if (params.liquidityDelta < 0) {
+                // only set the liqBefore slot if liquidity is decreasing - gas optimal.
+                uint128 liqBefore = SafeCast.toUint128(uint256(meta[id].liquidity));
+                TransientSlot.asUint256(TransientSlots.LIQ_BEFORE_SLOT).tstore(uint256(liqBefore));
+            }
             int256 newLiquidity = meta[id].liquidity += params.liquidityDelta;
             if (newLiquidity < 0) {
                 // this should never happen in theory but check is performed to be safe since it is a uint256 and a position musst not have a negative liquidity
@@ -410,21 +419,40 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
             PositionMeta memory m = meta[positionId];
             (uint256 s0, uint256 s1) = getPositionSettledAmounts(positionId);
             if (m.isActive == false) {
-                // This hook is called by the MMPositionManager, after the position was modified by the modifyDelta.
-                // Therefore, if the result _touchPosition was called, and deactivated the position, then it's a FULL liquidation.
+                // FULL liquidation: withdraw all settlements
                 clampDelta = LiquidityUtils.safeToBalanceDelta(s0, s1, true, true);
             } else {
-                // TODO: we cannot clamp by the RfS, otherwise during seizures, the full settled amount up to the RfS is utilised instead of the fraction of settled liquidity relative to the amount seized.
-                // ? The counterargument is a seizure requires closing RfS. Therefore, seized amounts should equal settled amounts...
-                // If I've only settled 10% of Token A, and more RfS exposure is 0.3% more, then seizure at scaled allocation results in settling 30%, but being rewarded 0.26% of liquidty position if 20% timewindow passes.
-                // therefore, there's no incentive to seize prior to t = timeWindow...
-                // Closing the RfS means seizing the full position ONLY when the full time window has passed.
-
-                // Otherwise, always clamp withdrawal of liquidity by the RfS.
-                // validate that there is no open RFS for this position - as RfS is closed through settlement... well not necessarily... TODO: seizure looping does not close the RFS.
-                // growth accounting settled above, therefore _getRFS
+                // Proportional clamp by liquidity removed, then RfS clamp
                 (, BalanceDelta rfsClamp) = _getRFS(positionId);
-                clampDelta = rfsClamp;
+                uint128 afterLiq = SafeCast.toUint128(uint256(m.liquidity));
+                uint128 beforeLiq = SafeCast.toUint128(TransientSlot.asUint256(TransientSlots.LIQ_BEFORE_SLOT).tload());
+                // If not set this tx (e.g., liquidity increased or different path), fall back to current
+                if (beforeLiq == 0) {
+                    beforeLiq = afterLiq;
+                }
+                if (beforeLiq > afterLiq) {
+                    // position liquidity has decreased
+                    // calculate the liquidity difference fraction
+                    uint256 liquidityDifferenceFraction =
+                        FullMath.mulDiv(uint256(beforeLiq - afterLiq), LiquidityUtils.ONE_WAD, uint256(beforeLiq));
+                    // calculate the settlement portion relative to the liquidity difference
+                    BalanceDelta settlementPortion = LiquidityUtils.calculateLiquidityFraction(
+                        LiquidityUtils.safeToBalanceDelta(s0, s1, true, true),
+                        liquidityDifferenceFraction,
+                        LiquidityUtils.ONE_WAD
+                    );
+                    // this clamp ensures only the portion of settlement proportional to liquidity difference is utilised.
+                    int128 clamp0 = settlementPortion.amount0() > rfsClamp.amount0()
+                        ? rfsClamp.amount0()
+                        : settlementPortion.amount0();
+                    int128 clamp1 = settlementPortion.amount1() > rfsClamp.amount1()
+                        ? rfsClamp.amount1()
+                        : settlementPortion.amount1();
+                    clampDelta = toBalanceDelta(clamp0, clamp1);
+                } else {
+                    // position liquidity has not decreased, so we can simply clamp by RfS
+                    clampDelta = rfsClamp;
+                }
             }
         }
 
