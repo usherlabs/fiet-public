@@ -64,6 +64,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     event MarketVTSConfigurationSet(PoolId indexed corePoolId, MarketVTSConfiguration indexed vtsConfiguration);
     // Per-entry events are declared in VTSEvents
     // Array of approved settlement verifier contracts
+
     address[] public settlementVerifiers;
     address private immutable mmPositionManager;
     IPoolManager private immutable poolManager;
