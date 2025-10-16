@@ -106,7 +106,9 @@ contract ProxyHookTest is MarketTestBase {
         uint256 swapAmount = 100;
         swapRouter.swap(
             proxyPoolKey,
-            SwapParams({zeroForOne: false, amountSpecified: -int256(swapAmount), sqrtPriceLimitX96: ONE_FOR_ZERO_LIMIT}),
+            SwapParams({
+                zeroForOne: false, amountSpecified: -int256(swapAmount), sqrtPriceLimitX96: ONE_FOR_ZERO_LIMIT
+            }),
             settings,
             ZERO_BYTES
         );
@@ -483,11 +485,7 @@ contract ProxyHookTest is MarketTestBase {
 
     function test_beforeInitialize_revertIfNotFactory() public {
         PoolKey memory testKey = PoolKey({
-            currency0: _currency0,
-            currency1: _currency1,
-            fee: 3000,
-            tickSpacing: 60,
-            hooks: IHooks(proxyHook)
+            currency0: _currency0, currency1: _currency1, fee: 3000, tickSpacing: 60, hooks: IHooks(proxyHook)
         });
 
         vm.prank(address(manager));

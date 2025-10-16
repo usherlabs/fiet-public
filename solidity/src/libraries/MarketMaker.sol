@@ -62,11 +62,7 @@ library MarketMaker {
      * @return tickers The tickers of the reserves
      * @return amounts The amounts of the reserves
      */
-    function getReserves(State memory state)
-        internal
-        pure
-        returns (string[] memory tickers, uint256[] memory amounts)
-    {
+    function getReserves(State memory state) internal pure returns (string[] memory tickers, uint256[] memory amounts) {
         // get the tickers and amounts from the reserves
         tickers = new string[](state.reserves.length);
         amounts = new uint256[](state.reserves.length);
@@ -160,8 +156,9 @@ library MarketMaker {
      * @return The string representation of the reserve
      */
     function _reserveToString(Reserve memory reserve) internal pure returns (string memory) {
-        return string(
-            abi.encodePacked("reserves:", reserve.source, ":", reserve.asset, ":", _uintToString(reserve.amount))
-        );
+        return
+            string(
+                abi.encodePacked("reserves:", reserve.source, ":", reserve.asset, ":", _uintToString(reserve.amount))
+            );
     }
 }
