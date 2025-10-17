@@ -33,7 +33,10 @@ import {OracleRegistry} from "../../src/OracleRegistry.sol";
 import {VTSConfigs} from "../../src/libraries/VTSConfigs.sol";
 import {IVTSManager} from "../../src/interfaces/IVTSManager.sol";
 import {VRLSignalManager} from "../../src/modules/VRLSignalManager.sol";
+import {VRLSettlementObserver} from "../../src/modules/VRLSettlementObserver.sol";
+import {StubSettlementVerifier} from "../../src/modules/StubSettlementVerifier.sol";
 import {IMarketVault} from "../../src/interfaces/IMarketVault.sol";
+import {IVRLSettlementObserver} from "../../src/interfaces/IVRLSettlementObserver.sol";
 
 abstract contract MarketTestBase is Test, Deployers {
     using PoolIdLibrary for PoolId;
@@ -62,6 +65,7 @@ abstract contract MarketTestBase is Test, Deployers {
     StubSpokeVerifier stubSpokeVerifier;
     VRLSignalManager signalManager;
     address mmPositionManager;
+    IVRLSettlementObserver settlementObserver;
     IMarketVault mv;
 
     uint256 signalExpiryInSeconds = 3600;
@@ -143,8 +147,18 @@ abstract contract MarketTestBase is Test, Deployers {
         signalManager = new VRLSignalManager(
             address(stubSpokeVerifier), address(oracleRegistry), address(marketFactory), signalExpiryInSeconds
         );
-        mmPositionManager =
-            address(new MMPositionManager(address(manager), address(signalManager), address(marketFactory)));
+
+        // deploy the settlement observer
+        uint256 gracePeriodExtension = 3600;
+        uint256 maxGracePeriodExtension = 18000;
+        address[] memory verifiers = new address[](1);
+        verifiers[0] = address(new StubSettlementVerifier());
+        settlementObserver = new VRLSettlementObserver(verifiers, gracePeriodExtension, maxGracePeriodExtension);
+        mmPositionManager = address(
+            new MMPositionManager(
+                address(manager), address(signalManager), address(marketFactory), address(settlementObserver)
+            )
+        );
     }
 
     function _setupMarket() internal {

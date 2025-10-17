@@ -9,7 +9,7 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {ModifyLiquidityParams} from "v4-periphery/lib/v4-core/src/types/PoolOperation.sol";
 import {Constants} from "v4-periphery/lib/v4-core/test/utils/Constants.sol";
 import {BalanceDelta, BalanceDeltaLibrary} from "v4-periphery/lib/v4-core/src/types/BalanceDelta.sol";
-import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
+import {Currency, CurrencyLibrary} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {PoolId} from "v4-periphery/lib/v4-core/src/types/PoolId.sol";
 import {ERC721} from "solmate/tokens/ERC721.sol";
 import {PositionMeta, PositionId, PositionLibrary} from "./types/Position.sol";
@@ -30,12 +30,14 @@ import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {console} from "forge-std/console.sol";
 import {ISettlementVerifier} from "./interfaces/ISettlementVerifier.sol";
+import {IVRLSettlementObserver} from "./interfaces/IVRLSettlementObserver.sol";
 
 contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
     using SafeCast for *;
     using RFSCheckpointLibrary for RFSCheckpoint;
     using MarketVTSConfigurationLibrary for MarketVTSConfiguration;
     using PositionLibrary for PositionId;
+    using CurrencyLibrary for Currency;
 
     error InvalidDelta(int128 amount0, int128 amount1);
     error InvalidAmount(uint256 amount, uint256 maxAmount);
@@ -63,7 +65,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
     uint256 private nextTokenId = 1;
     IPoolManager private poolManager;
     IVRLSignalManager public immutable signalManager;
-    ISettlementVerifier public immutable settlementVerifier;
+    IVRLSettlementObserver public immutable settlementObserver;
     address[] public settlementVerifiers;
 
     mapping(PositionId => RFSCheckpoint) public positionToCheckpoint;
@@ -79,13 +81,14 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         _;
     }
 
-    constructor(address _manager, address _signalManager, address _marketFactory)
+    constructor(address _manager, address _signalManager, address _marketFactory, address _settlementObserver)
         LiquidityRouter(_manager)
         ERC721("MMPositionManager", "MMPM")
     {
         marketFactory = _marketFactory;
         poolManager = IPoolManager(_manager);
         signalManager = IVRLSignalManager(_signalManager);
+        settlementObserver = IVRLSettlementObserver(_settlementObserver);
     }
 
     function tokenURI(uint256) public pure override returns (string memory) {
@@ -183,14 +186,23 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
      * @param positionIndex The position index
      * @param settlementProof The settlement signal containing the proof
      */
-    function extendGracePeriod(uint256 tokenId, uint256 positionIndex, bytes memory settlementProof) public {
+    function extendGracePeriod(
+        PoolKey memory poolKey,
+        uint256 tokenId,
+        uint256 positionIndex,
+        uint256 verifierIndex,
+        bytes memory settlementProof
+    ) public onlyNFTOwner(tokenId) {
         PositionId positionId = getPositionId(tokenId, positionIndex);
+        // TODO: use the pool key to derive the market information
+        poolKey;
 
         // verify the settlement proof and get the grace period extension
-        uint256 gracePeriodExtension = signalManager.verifySettlementProof(settlementProof);
+        (uint256 gracePeriodExtension, uint256 maxGracePeriodExtension) =
+            settlementObserver.verifySettlementProof(verifierIndex, settlementProof);
 
         // extend the grace period for the position
-        positionToCheckpoint[positionId].extendGracePeriod(gracePeriodExtension);
+        positionToCheckpoint[positionId].extendGracePeriod(gracePeriodExtension, maxGracePeriodExtension);
 
         // emit an event to notify the market maker that the grace period has been extended
         emit GracePeriodExtended(positionId, gracePeriodExtension, block.timestamp);
@@ -589,6 +601,10 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         ILCC lcc0 = ILCC(mf.corePoolToCurrencyPair(poolId)[0]);
         ILCC lcc1 = ILCC(mf.corePoolToCurrencyPair(poolId)[1]);
 
+        // Wrap underlying assets as Currency types for unified handling
+        Currency underlyingCurrency0 = Currency.wrap(lcc0.underlyingAsset());
+        Currency underlyingCurrency1 = Currency.wrap(lcc1.underlyingAsset());
+
         int128 amount0 = balanceDelta.amount0();
         int128 amount1 = balanceDelta.amount1();
 
@@ -610,11 +626,13 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
             uint256 settleAmount1 = LiquidityUtils.safeInt128ToUint256(balanceDelta.amount1());
 
             // transfer the underlying tokens to the Market Vault (proxy hook)
+            // For ERC-20: uses transferFrom
+            // For native ETH: requires msg.value to be sent and this function to be payable
             if (settleAmount0 > 0) {
-                IERC20Minimal(lcc0.underlyingAsset()).transferFrom(sender, proxyHook, settleAmount0);
+                _transferFrom(underlyingCurrency0, sender, proxyHook, settleAmount0);
             }
             if (settleAmount1 > 0) {
-                IERC20Minimal(lcc1.underlyingAsset()).transferFrom(sender, proxyHook, settleAmount1);
+                _transferFrom(underlyingCurrency1, sender, proxyHook, settleAmount1);
             }
         }
 
@@ -632,12 +650,33 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
             uint256 takeAmount1 = LiquidityUtils.safeInt128ToUint256(balanceDelta.amount1());
             if (takeAmount0 > 0) {
                 // transfer from this contract to the actual recipient
-                IERC20Minimal(lcc0.underlyingAsset()).transfer(sender, takeAmount0);
+                // Uses Currency.transfer which handles both ERC-20 and native ETH
+                underlyingCurrency0.transfer(sender, takeAmount0);
             }
             if (takeAmount1 > 0) {
                 // transfer from this contract to the actual recipient
-                IERC20Minimal(lcc1.underlyingAsset()).transfer(sender, takeAmount1);
+                underlyingCurrency1.transfer(sender, takeAmount1);
             }
+        }
+    }
+
+    /**
+     * @dev Helper function to transfer currency from one address to another
+     * @param currency The currency to transfer (can be native ETH or ERC-20)
+     * @param from The address to transfer from
+     * @param to The address to transfer to
+     * @param amount The amount to transfer
+     */
+    function _transferFrom(Currency currency, address from, address to, uint256 amount) internal {
+        if (currency.isAddressZero()) {
+            // For native ETH, verify msg.value and forward it
+            require(msg.value >= amount, "Insufficient ETH sent");
+            // Transfer ETH to the destination
+            (bool success,) = to.call{value: amount}("");
+            require(success, "ETH transfer failed");
+        } else {
+            // For ERC-20 tokens, use standard transferFrom
+            IERC20Minimal(Currency.unwrap(currency)).transferFrom(from, to, amount);
         }
     }
 

@@ -21,6 +21,8 @@ import {StubSpokeVerifier} from "../src/modules/StubSpokeVerifier.sol";
 import {OracleRegistry} from "../src/OracleRegistry.sol";
 import {ChainlinkFactory} from "../src/oracles/chainlink/ChainlinkFactory.sol";
 import {VRLSignalManager} from "../src/modules/VRLSignalManager.sol";
+import {VRLSettlementObserver} from "../src/modules/VRLSettlementObserver.sol";
+import {StubSettlementVerifier} from "../src/modules/StubSettlementVerifier.sol";
 
 /**
  * @title CompleteDeployScript
@@ -43,6 +45,8 @@ contract CompleteDeployScript is ScriptHelper {
     address public marketFactory;
     address public mmPositionManager;
     address public oracleRegistry;
+    address public signalManager;
+    address public settlementObserver;
     // Network-specific constants set from environment
     address public poolManagerAddress;
     address public create2Deployer;
@@ -79,25 +83,31 @@ contract CompleteDeployScript is ScriptHelper {
         marketFactory = _deployMarketFactory();
         console.log("MarketFactory deployed at:", marketFactory);
 
-        // Step 3: Deploy MMPositionManager (must be before CoreHook)
+        // Step 3: Deploy Verifiers
+        console.log("\n=== Deploying Verifiers ===");
+        _deployVerifiers();
+        console.log("SignalManager deployed at:", signalManager);
+        console.log("SettlementObserver deployed at:", settlementObserver);
+
+        // Step 4: Deploy MMPositionManager (must be before CoreHook)
         console.log("\n=== Deploying MMPositionManager ===");
         mmPositionManager = _deployMMPositionManager();
         console.log("MMPositionManager deployed at:", mmPositionManager);
 
-        // Step 4: Deploy CoreHook
+        // Step 5: Deploy CoreHook
         console.log("\n=== Deploying CoreHook ===");
         coreHook = _deployCoreHook();
         console.log("CoreHook deployed at:", coreHook);
 
-        // Step 5: Set hooks in MarketFactory
+        // Step 6: Set hooks in MarketFactory
         console.log("\n=== Setting Hooks in MarketFactory ===");
         _setHooksInFactory();
 
-        // Step 6: Verify hooks addresses across the contracts
+        // Step 7: Verify hooks addresses across the contracts
         console.log("\n=== Verifying Hooks ===");
         _verifyHooks();
 
-        // Step 7: Add all the protocol addresses expected to hold LCC as a protocol bound address in the market factory
+        // Step 8: Add all the protocol addresses expected to hold LCC as a protocol bound address in the market factory
         console.log("\n=== Adding addresses to bounds array ===");
         _addAddressesToBounds();
 
@@ -164,18 +174,38 @@ contract CompleteDeployScript is ScriptHelper {
     }
 
     /**
+     * @dev Deploys Verifiers
+     */
+    function _deployVerifiers() internal {
+        uint256 signalExpiryInSeconds = 3600;
+        uint256 gracePeriodExtension = 3600;
+        uint256 maxGracePeriodExtension = 36000;
+
+        // deploy the proof verifiers
+        // ? deploy a stub verifier for now, would eventually be an IC verifier
+        address stubVerifier = address(new StubSpokeVerifier());
+        console.log("StubSpokeVerifier deployed at:", stubVerifier);
+        signalManager =
+            address(new VRLSignalManager(stubVerifier, oracleRegistry, marketFactory, signalExpiryInSeconds));
+        console.log("SignalManager deployed at:", signalManager);
+
+        // deploy the settlement observer
+        address stubSettlementVerifierAddress = address(new StubSettlementVerifier());
+        console.log("StubSettlementVerifier deployed at:", stubSettlementVerifierAddress);
+        // create an array of verifiers and set the stub one as the first verifier
+        address[] memory verifiers = new address[](1);
+        verifiers[0] = stubSettlementVerifierAddress;
+        settlementObserver =
+            address(new VRLSettlementObserver(verifiers, gracePeriodExtension, maxGracePeriodExtension));
+    }
+
+    /**
      * @dev Deploys MMPositionManager with a stub verifier
      * @return The deployed MMPositionManager address
      */
     function _deployMMPositionManager() internal returns (address) {
-        uint256 signalExpiryInSeconds = 3600;
-        // ? deploy a stub verifier for now, would eventually be an IC verifier
-        address stubVerifier = address(new StubSpokeVerifier());
-        console.log("StubSpokeVerifier deployed at:", stubVerifier);
-        address signalManager =
-            address(new VRLSignalManager(stubVerifier, oracleRegistry, marketFactory, signalExpiryInSeconds));
-        console.log("SignalManager deployed at:", signalManager);
-        MMPositionManager positionManager = new MMPositionManager(poolManagerAddress, signalManager, marketFactory);
+        MMPositionManager positionManager =
+            new MMPositionManager(poolManagerAddress, signalManager, marketFactory, settlementObserver);
         console.log("MMPositionManager deployed at:", address(positionManager));
         return address(positionManager);
     }

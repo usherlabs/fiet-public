@@ -28,7 +28,13 @@ library RFSCheckpointLibrary {
 
     // this function is used to extend the grace period for a position
     // it adds the extension time to the current grace period extension
-    function extendGracePeriod(RFSCheckpoint storage self, uint256 extension) internal {
+    function extendGracePeriod(RFSCheckpoint storage self, uint256 extension, uint256 maxGracePeriodExtension)
+        internal
+    {
         self.gracePeriodExtension += extension;
+        // cap the total grace period extension to the max grace period extension
+        if (self.gracePeriodExtension > maxGracePeriodExtension) {
+            self.gracePeriodExtension = maxGracePeriodExtension;
+        }
     }
 }

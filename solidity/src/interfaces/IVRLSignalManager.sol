@@ -40,7 +40,5 @@ interface IVRLSignalManager {
         ModifyLiquidityParams memory liquidityParams
     ) external returns (uint256, uint256, uint256);
 
-    function verifySettlementProof(bytes memory settlementSignal) external returns (uint256 gracePeriodExtension);
-
     function renewLiquiditySignal(bytes memory liquiditySignal) external returns (uint256, uint256);
 }
