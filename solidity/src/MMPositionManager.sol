@@ -71,7 +71,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, RFSCheckpointModule, IMMP
 
     constructor(address _manager, address _signalManager, address _marketFactory)
         LiquidityRouter(_manager)
-        ERC721("Fiet VRL Commitments", "FVC")
+        ERC721("Fiet VRL Commitment Positions Manager", "FIET-VRL-MMP")
     {
         marketFactory = _marketFactory;
         poolManager = IPoolManager(_manager);
@@ -348,7 +348,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, RFSCheckpointModule, IMMP
         // ? ----- ----- Assuming that the full commitment is utilised in positions, then 80% of the commitment is insolvent, what occurs?
         // ? ----- ----- What if proving insolvency results in unlocking seizure across positions in an intra-transaction process - raising the a position specific-deficit by the diff in signal -> commit values, and skipping the gracePeriod validation for X amount.
         // ? ----- ----- This could allow re-use of position seizure, and for all MMs/Guarantors to paritipate on the seizure. The advancer can be given a share of the seized outcome.
-        // ? ----- ----- If we adopt a action-dispatcher model as per the Native PositionManager, then MM's can chain actions together, ie. proveInsolvency, seize position, mint position, etc.
+        // ? ----- ----- If we adopt an action-dispatcher model as per the Native PositionManager, then MM's can chain actions together, ie. insolvent (prove insolvency), seize position, mint position, etc.
 
         // if (cancelLCCs) {
         // burn the LCC originally committed to the position.
