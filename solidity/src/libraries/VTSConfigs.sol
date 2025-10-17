@@ -17,7 +17,8 @@ library VTSConfigs {
                 seizureUnlockTime: 3600, // 1 hour
                 baseVTSRate: 1000 // 10% (1000 bips)
             }),
-            oracleFactory: address(0) // address(0) to use the default oracle factory // TODO: replace with the oracle registry.
+            oracleFactory: address(0), // address(0) to use the default oracle factory // TODO: replace with the oracle registry.
+            maxgracePeriod: 36000 // 10 hours
         });
     }
 }

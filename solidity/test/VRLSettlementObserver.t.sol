@@ -13,8 +13,7 @@ contract VRLSettlementObserverTest is Test {
     address public verifier1 = makeAddr("verifier1");
     address public verifier2 = makeAddr("verifier2");
 
-    uint256 public gracePeriodExtension = 1 days;
-    uint256 public maxGracePeriodExtension = 7 days;
+    uint256 public gracePeriod = 1 days;
 
     function setUp() public {
         // Initialize with one verifier
@@ -22,7 +21,7 @@ contract VRLSettlementObserverTest is Test {
         initialVerifiers[0] = verifier1;
 
         vm.prank(owner);
-        observer = new VRLSettlementObserver(initialVerifiers, gracePeriodExtension, maxGracePeriodExtension);
+        observer = new VRLSettlementObserver(initialVerifiers, gracePeriod);
     }
 
     function test_AddVerifier() public {

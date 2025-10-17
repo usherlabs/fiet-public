@@ -20,6 +20,8 @@ struct MarketVTSConfiguration {
     TokenConfiguration token1;
     // oracle address for this market, can be address(0) to use the default oracle
     address oracleFactory;
+    // Max grace period extension
+    uint256 maxgracePeriod;
 }
 
 library MarketVTSConfigurationLibrary {
@@ -38,12 +40,10 @@ library MarketVTSConfigurationLibrary {
     ) internal view {
         uint256 timeSinceLastCheckpoint = block.timestamp - checkpoint.timeOfLastTransition;
 
-        uint256 gracePeriodExtension = checkpoint.gracePeriodExtension;
+        uint256 gracePeriod = checkpoint.gracePeriod;
 
-        bool gracePeriod0Elapsed =
-            vtsConfiguration.token0.gracePeriodTime + gracePeriodExtension > timeSinceLastCheckpoint;
-        bool gracePeriod1Elapsed =
-            vtsConfiguration.token1.gracePeriodTime + gracePeriodExtension > timeSinceLastCheckpoint;
+        bool gracePeriod0Elapsed = vtsConfiguration.token0.gracePeriodTime + gracePeriod > timeSinceLastCheckpoint;
+        bool gracePeriod1Elapsed = vtsConfiguration.token1.gracePeriodTime + gracePeriod > timeSinceLastCheckpoint;
 
         if (!gracePeriod0Elapsed || !gracePeriod1Elapsed) {
             revert GracePeriodNotElapsed(positionId);

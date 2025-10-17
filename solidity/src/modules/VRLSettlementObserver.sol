@@ -7,39 +7,36 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
 contract VRLSettlementObserver is Ownable, IVRLSettlementObserver {
     address[] public verifiers;
-    uint256 public gracePeriodExtension;
-    uint256 public maxGracePeriodExtension;
+    uint256 public gracePeriod;
 
     error VerifierNotFound();
     error InvalidVerifierAddress();
     error InvalidSettlementProof();
 
     event VerifierAdded(address indexed verifier, uint256 indexed index);
-    event VerifierRemoved(address indexed verifier, uint256 indexed index);
+    event VerifierRemoved(
+        address indexed verifier, uint256 indexed removedIndex, address swappedVerifier, uint256 swappedFromIndex
+    );
 
-    constructor(address[] memory _verifiers, uint256 _gracePeriodExtension, uint256 _maxGracePeriodExtension)
-        Ownable(msg.sender)
-    {
+    constructor(address[] memory _verifiers, uint256 _gracePeriod) Ownable(msg.sender) {
         verifiers = _verifiers;
-        gracePeriodExtension = _gracePeriodExtension;
-        maxGracePeriodExtension = _maxGracePeriodExtension;
+        gracePeriod = _gracePeriod;
     }
 
     /**
      * @dev This function is used to verify the settlement proof and return the grace period extension
      * @param verifierIndex The index of the verifier to use
      * @param settlementProof The settlement proof to verify
-     * @return gracePeriodExtension The grace period extension
-     * @return maxGracePeriodExtension The max grace period extension
+     * @return gracePeriod The grace period extension
      */
     function verifySettlementProof(uint256 verifierIndex, bytes memory settlementProof)
         external
         view
-        returns (uint256, uint256)
+        returns (uint256)
     {
         address verifierAddress = verifiers[verifierIndex];
         if (verifierAddress == address(0)) {
-            return (0, maxGracePeriodExtension);
+            return 0;
         }
         // verify the settlement proof
         ISettlementVerifier verifier = ISettlementVerifier(verifierAddress);
@@ -48,7 +45,7 @@ contract VRLSettlementObserver is Ownable, IVRLSettlementObserver {
             revert InvalidSettlementProof();
         }
 
-        return (gracePeriodExtension, maxGracePeriodExtension);
+        return gracePeriod;
     }
 
     /**
@@ -74,10 +71,15 @@ contract VRLSettlementObserver is Ownable, IVRLSettlementObserver {
 
         for (uint256 i = 0; i < verifiers.length; i++) {
             if (verifiers[i] == _verifier) {
+                // Capture the element being swapped
+                uint256 lastIndex = verifiers.length - 1;
+                address swappedVerifier = verifiers[lastIndex];
+
                 // Swap with last element and pop
-                verifiers[i] = verifiers[verifiers.length - 1];
+                verifiers[i] = swappedVerifier;
                 verifiers.pop();
-                emit VerifierRemoved(_verifier, i);
+
+                emit VerifierRemoved(_verifier, i, swappedVerifier, lastIndex);
                 return;
             }
         }

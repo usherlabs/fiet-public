@@ -20,6 +20,7 @@ import {IVTSManager} from "./interfaces/IVTSManager.sol";
 import {MarketVTSConfiguration, MarketVTSConfigurationLibrary} from "./types/VTS.sol";
 import {RFSCheckpoint, RFSCheckpointLibrary} from "./types/Checkpoint.sol";
 import {LiquidityUtils} from "./libraries/LiquidityUtils.sol";
+import {CurrencyTransfer} from "./libraries/CurrencyTransfer.sol";
 import {toBalanceDelta} from "v4-periphery/lib/v4-core/src/types/BalanceDelta.sol";
 import {IMMPositionManager} from "./interfaces/IMMPositionManager.sol";
 import {IProxyHook} from "./interfaces/IProxyHook.sol";
@@ -38,6 +39,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
     using MarketVTSConfigurationLibrary for MarketVTSConfiguration;
     using PositionLibrary for PositionId;
     using CurrencyLibrary for Currency;
+    using CurrencyTransfer for Currency;
 
     error InvalidDelta(int128 amount0, int128 amount1);
     error InvalidAmount(uint256 amount, uint256 maxAmount);
@@ -47,7 +49,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
     error InvalidLiquiditySignalEncoding();
     error InactivePosition(PositionId positionId);
     error InsufficientAmountToWithdraw(PositionId positionId, uint256 amount, uint256 maxAmount);
-    event GracePeriodExtended(PositionId indexed positionId, uint256 extension, uint256 timestamp);
+    event GracePeriodExtended(PositionId indexed positionId, uint256 extension);
     error InvalidMarket(PoolKey poolKey);
     error RFSNotOpen(PositionId positionId);
     error SignalExpired(uint256 tokenId);
@@ -194,18 +196,18 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         bytes memory settlementProof
     ) public onlyNFTOwner(tokenId) {
         PositionId positionId = getPositionId(tokenId, positionIndex);
-        // TODO: use the pool key to derive the market information
-        poolKey;
+
+        // get the max grace period extension from the market vts configuration
+        uint256 maxgracePeriod = _getVTSManager().getMarketVTSConfiguration(poolKey.toId()).maxgracePeriod;
 
         // verify the settlement proof and get the grace period extension
-        (uint256 gracePeriodExtension, uint256 maxGracePeriodExtension) =
-            settlementObserver.verifySettlementProof(verifierIndex, settlementProof);
+        uint256 gracePeriod = settlementObserver.verifySettlementProof(verifierIndex, settlementProof);
 
         // extend the grace period for the position
-        positionToCheckpoint[positionId].extendGracePeriod(gracePeriodExtension, maxGracePeriodExtension);
+        positionToCheckpoint[positionId].extendGracePeriod(gracePeriod, maxgracePeriod);
 
         // emit an event to notify the market maker that the grace period has been extended
-        emit GracePeriodExtended(positionId, gracePeriodExtension, block.timestamp);
+        emit GracePeriodExtended(positionId, positionToCheckpoint[positionId].gracePeriod);
     }
 
     /**
@@ -629,10 +631,10 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
             // For ERC-20: uses transferFrom
             // For native ETH: requires msg.value to be sent and this function to be payable
             if (settleAmount0 > 0) {
-                _transferFrom(underlyingCurrency0, sender, proxyHook, settleAmount0);
+                underlyingCurrency0.transferFrom(sender, proxyHook, settleAmount0);
             }
             if (settleAmount1 > 0) {
-                _transferFrom(underlyingCurrency1, sender, proxyHook, settleAmount1);
+                underlyingCurrency1.transferFrom(sender, proxyHook, settleAmount1);
             }
         }
 
@@ -657,26 +659,6 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
                 // transfer from this contract to the actual recipient
                 underlyingCurrency1.transfer(sender, takeAmount1);
             }
-        }
-    }
-
-    /**
-     * @dev Helper function to transfer currency from one address to another
-     * @param currency The currency to transfer (can be native ETH or ERC-20)
-     * @param from The address to transfer from
-     * @param to The address to transfer to
-     * @param amount The amount to transfer
-     */
-    function _transferFrom(Currency currency, address from, address to, uint256 amount) internal {
-        if (currency.isAddressZero()) {
-            // For native ETH, verify msg.value and forward it
-            require(msg.value >= amount, "Insufficient ETH sent");
-            // Transfer ETH to the destination
-            (bool success,) = to.call{value: amount}("");
-            require(success, "ETH transfer failed");
-        } else {
-            // For ERC-20 tokens, use standard transferFrom
-            IERC20Minimal(Currency.unwrap(currency)).transferFrom(from, to, amount);
         }
     }
 
