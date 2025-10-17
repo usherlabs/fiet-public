@@ -33,7 +33,7 @@ contract VRLSettlementObserver is Ownable, IVRLSettlementObserver {
         uint256 verifierIndex,
         address tokenToSettleFor,
         bytes memory settlementProof
-    ) external view{
+    ) external view {
         address verifierAddress = verifiers[verifierIndex];
         if (verifierAddress == address(0)) {
             revert InvalidVerifierIndex();
@@ -44,7 +44,7 @@ contract VRLSettlementObserver is Ownable, IVRLSettlementObserver {
         ISettlementVerifier verifier = ISettlementVerifier(verifierAddress);
         bool isProofValid = verifier.verifySettlementProof(settlementProof);
 
-        if(!isProofValid) {
+        if (!isProofValid) {
             revert InvalidSettlementProof();
         }
     }

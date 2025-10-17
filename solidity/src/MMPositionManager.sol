@@ -216,7 +216,9 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         positionToCheckpoint[positionId].extendGracePeriod(vtsConfiguration, isTokenZero);
 
         // emit an event to notify the market maker that the grace period has been extended
-        emit GracePeriodExtended(positionId, positionToCheckpoint[positionId].gracePeriod0, positionToCheckpoint[positionId].gracePeriod1);
+        emit GracePeriodExtended(
+            positionId, positionToCheckpoint[positionId].gracePeriod0, positionToCheckpoint[positionId].gracePeriod1
+        );
     }
 
     /**
