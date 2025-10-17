@@ -4,6 +4,7 @@ pragma solidity ^0.8.26;
 import {IVTSManager} from "../interfaces/IVTSManager.sol";
 import {PositionMeta, PositionId} from "../types/Position.sol";
 import {RFSCheckpoint, RFSCheckpointLibrary} from "../types/Checkpoint.sol";
+import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 
 // NOTE: Contract name intentionally not `RFSCheckpoint` to avoid a name clash with the struct `RFSCheckpoint`.
 abstract contract RFSCheckpointModule {
@@ -11,19 +12,16 @@ abstract contract RFSCheckpointModule {
 
     event Checkpointed(uint256 tokenId, uint256 positionIndex, RFSCheckpoint checkpoint);
 
-    error InvalidAmount(uint256 amount, uint256 maxAmount);
-
     // PositionId => rolling RFS checkpoint state
     mapping(PositionId => RFSCheckpoint) public positionToCheckpoint;
 
     // ----- Required hooks to be implemented by inheritors -----
-    function _getVTSManager() internal view virtual returns (IVTSManager);
-
-    function getPosition(uint256 tokenId, uint256 positionIndex) public view virtual returns (PositionMeta memory);
-
-    function getPositionId(uint256 tokenId, uint256 positionIndex) public view virtual returns (PositionId);
-
     function _positionCountOf(uint256 tokenId) internal view virtual returns (uint256);
+
+    function calcRFS(uint256 tokenId, uint256 positionIndex, bool requireClosedRfS)
+        public
+        virtual
+        returns (PositionId positionId, bool rfsOpen, BalanceDelta rfsDelta);
 
     // ----- Internal helpers -----
     function _markCheckpoint(PositionId positionId, bool isOpen) internal {
@@ -32,11 +30,7 @@ abstract contract RFSCheckpointModule {
 
     // ----- Checkpoint API -----
     function _checkpoint(uint256 tokenId, uint256 positionIndex) internal {
-        // Validate position by reading it
-        getPosition(tokenId, positionIndex);
-        PositionId positionId = getPositionId(tokenId, positionIndex);
-        IVTSManager vtsManager = _getVTSManager();
-        (bool rfsOpen,) = vtsManager.calcRFS(positionId, false);
+        (PositionId positionId, bool rfsOpen,) = calcRFS(tokenId, positionIndex, false);
         _markCheckpoint(positionId, rfsOpen);
         emit Checkpointed(tokenId, positionIndex, positionToCheckpoint[positionId]);
     }
@@ -46,9 +40,7 @@ abstract contract RFSCheckpointModule {
     }
 
     function checkpoint(uint256[] memory tokenIds, uint256[] memory positionIndexes) public {
-        if (tokenIds.length != positionIndexes.length) {
-            revert InvalidAmount(positionIndexes.length, tokenIds.length);
-        }
+        require(tokenIds.length == positionIndexes.length, "Invalid input lengths");
         for (uint256 i = 0; i < tokenIds.length; i++) {
             _checkpoint(tokenIds[i], positionIndexes[i]);
         }

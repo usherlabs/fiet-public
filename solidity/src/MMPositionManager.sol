@@ -27,7 +27,7 @@ import {FullMath} from "v4-periphery/lib/v4-core/src/libraries/FullMath.sol";
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
 import {RFSCheckpointModule} from "./modules/RFSCheckpoint.sol";
 
-contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager, RFSCheckpointModule {
+contract MMPositionManager is LiquidityRouter, ERC721, RFSCheckpointModule, IMMPositionManager {
     using SafeCast for *;
     using MarketVTSConfigurationLibrary for MarketVTSConfiguration;
     using PositionLibrary for PositionId;
@@ -82,7 +82,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager, RFSCh
         revert("Metadata not implemented");
     }
 
-    function _getVTSManager() internal view override returns (IVTSManager) {
+    function _getVTSManager() internal view returns (IVTSManager) {
         return IVTSManager(IMarketFactory(marketFactory).getCoreHook());
     }
 
@@ -90,7 +90,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager, RFSCh
         return IPositionIndex(IMarketFactory(marketFactory).getCoreHook());
     }
 
-    function getPositionId(uint256 tokenId, uint256 positionIndex) public view override returns (PositionId) {
+    function getPositionId(uint256 tokenId, uint256 positionIndex) public view returns (PositionId) {
         return nftToPositionId[tokenId][positionIndex];
     }
 
@@ -330,11 +330,17 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager, RFSCh
         returnDelta = _settleUnderlying(posId, poolKey.toId(), BalanceDeltaLibrary.ZERO_DELTA, ua0, ua1);
 
         // TODO: LCC cancellation should only occur on signal decommit or LCC unwrap. Once we Commitment -> LCC restructure, this because simpler to manage.
-        // ----- During decommit, signal value must match LCC value in vault (no positions). ie. "LCCs are solvent, and entirely in my possession (In Commit Vault), and therefore I cancel/burn LCCs".
-        // ----- During seize, Guarantor acquires LCCs from MM, whereby the value backing those LCCs becomes the seizure settlement amount + counterparty LCCs backed by original MM commitment/settlement. By settling first, the Protocol ensures deficits are covered first and liquidity integrity is maintained.
-        // ----- -----  The outcome is that Guarantors force settlement, because unwrap of LCCs acquired via the position will draw on the MM's reserve liquidity.
-        // ----- -----  This also means we need to track LCCs acquired by seizure from a market in _marketLiquidity. OR that we attribute deficit to the original MM? Well the original deficit will not be covered?
-        // ----- During seizeCommitment, Guarantor must ensure closure of all positions (including RfS)
+        // ? ----- During decommit, signal value must match LCC value in vault (no positions). ie. "LCCs are solvent, and entirely in my possession (In Commit Vault), and therefore I cancel/burn LCCs".
+        // ? ----- During seize, Guarantor acquires LCCs from MM. Guarantor will settle the position, covering the MM's deficit, receiving their portioned position, and liquidating it.
+        // // ? ----- -----  The outcome is that Guarantors force settlement, because unwrap of LCCs acquired via the position will draw on the MM's reserve liquidity.
+        // // ? ----- -----  This also means we need to track LCCs acquired by seizure from a market in _marketLiquidity. OR that we attribute deficit to the original MM? Well the original deficit will not be covered?
+        // ? ----- ----- Guarantor receives LCCs for this liquidation, NOT underlying assets (as the settlement covers deficits). However, on LCC unwrap, it must know which market (or position/commitment) it derived from.
+        // ? ----- ----- LCCs acquired by seizure from a market must be tracked in _marketLiquidity. Otherwise, how will we know which market to attribute the settlement queue of unwrap to?
+        // ? ----- ----- Original MMs will NOT accrue a deficit, as Guarantor has already settled it. Rather, protocol, proactive liquidity, or settlement queue will cover the seizure unwrap.
+        // ? ----- ----- Is there a math problem here, where inflows attribute to positions, but also cover settlement queue? Inflows/Deficits accrue to the tick.
+        // ? ----- During seizeCommitment, Guarantor must ensure closure of all positions (including RfS).
+        // ? ----- ----- Despite the signal value no longer matching LCC value, the open RfS + settled liquidity expresses utilised liquidity.
+        // ? ----- ----- Rather than apportioning the commitment, the entire commitment should be seized.
 
         // if (cancelLCCs) {
         // burn the LCC originally committed to the position.
@@ -346,12 +352,31 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager, RFSCh
     // ----- MM POSITION MANAGER FUNCTIONS -----
 
     /**
+     * @dev This function is used to calculate the RFS for a given token id and position index.
+     * @dev Utilised within RFSCheckpointModule.
+     * @param tokenId The token id to calculate the RFS for
+     * @param positionIndex The position index to calculate the RFS for
+     * @param requireClosedRfS Whether to require the RFS to be closed
+     * @return positionId The position id
+     * @return rfsOpen Whether the RFS is open
+     * @return rfsDelta The balance delta of the RFS
+     */
+    function calcRFS(uint256 tokenId, uint256 positionIndex, bool requireClosedRfS)
+        public
+        override
+        returns (PositionId positionId, bool rfsOpen, BalanceDelta rfsDelta)
+    {
+        positionId = getPositionId(tokenId, positionIndex);
+        (rfsOpen, rfsDelta) = _getVTSManager().calcRFS(positionId, requireClosedRfS);
+    }
+
+    /**
      * Gets information about a position using the token id and position index
      * @param tokenId The token id to get the position info for
      * @param positionIndex The position index to get the position info for
      * @return positionInfo The position info
      */
-    function getPosition(uint256 tokenId, uint256 positionIndex) public view override returns (PositionMeta memory) {
+    function getPosition(uint256 tokenId, uint256 positionIndex) public view returns (PositionMeta memory) {
         PositionId positionId = getPositionId(tokenId, positionIndex);
         if (PositionId.unwrap(positionId) == bytes32(0)) {
             revert InvalidPosition(tokenId, positionIndex, positionId);
