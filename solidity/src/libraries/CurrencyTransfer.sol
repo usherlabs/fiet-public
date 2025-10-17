@@ -6,15 +6,18 @@ import {IERC20Minimal} from "@uniswap/v4-core/src/interfaces/external/IERC20Mini
 
 /// @title CurrencyTransfer
 /// @notice Library for handling transfers of both native ETH and ERC-20 tokens
+
 library CurrencyTransfer {
     error InsufficientETH();
     error ETHTransferFailed();
 
-    /// @notice Transfer currency from one address to another
-    /// @param currency The currency to transfer (can be native ETH or ERC-20)
-    /// @param from The address to transfer from
-    /// @param to The address to transfer to
-    /// @param amount The amount to transfer
+    /**
+     * @notice Transfer currency from one address to another
+     * @param currency The currency to transfer (can be native ETH or ERC-20)
+     * @param from The address to transfer from
+     * @param to The address to transfer to
+     * @param amount The amount to transfer
+     */
     function transferFrom(Currency currency, address from, address to, uint256 amount) internal {
         if (currency.isAddressZero()) {
             // For native ETH, verify msg.value and forward it
