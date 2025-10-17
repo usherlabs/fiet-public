@@ -162,6 +162,14 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         return meta[positionId].owner == mmPositionManager;
     }
 
+    function _setSettlementDelta(BalanceDelta settlementDelta) internal {
+        TransientSlot.asInt256(TransientSlots.SETTLEMENT_DELTA_SLOT).tstore(BalanceDelta.unwrap(settlementDelta));
+    }
+
+    function _getSettlementDelta() internal view returns (BalanceDelta) {
+        return BalanceDelta.wrap(TransientSlot.asInt256(TransientSlots.SETTLEMENT_DELTA_SLOT).tload());
+    }
+
     /**
      * @notice Sets the VTS configuration for a core pool
      * @param corePoolId The core pool ID
@@ -280,18 +288,55 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     function _touchPosition(address owner, PoolId poolId, ModifyLiquidityParams calldata params) internal virtual {
         PositionId id = PositionLibrary.generateId(owner, params);
         PositionMeta memory m = meta[id];
+
         if (m.owner == address(0)) {
-            // new position, initialize the liquidity to the liquidity delta, assuming it will always be positive
+            // NEW POSITION: initialize the liquidity to the liquidity delta, assuming it will always be positive
             _registerPosition(owner, poolId, params);
             _initPositionSnapshots(id);
+            _trackCommitment(id, params);
+
+            // New positions mean base settlement.
+            // If the modifyDelta is 0 AND the position is active (created), then default settlement to base amounts
+            MarketVTSConfiguration memory vtsConfiguration = getMarketVTSConfiguration(poolId);
+            (uint256 amountToSettle0, uint256 amountToSettle1) = LiquidityUtils.getBaseSettlementAmounts(
+                commitmentMaxima[id][0],
+                commitmentMaxima[id][1],
+                vtsConfiguration.token0.baseVTSRate,
+                vtsConfiguration.token1.baseVTSRate
+            );
+            _setSettlementDelta(LiquidityUtils.safeToBalanceDelta(amountToSettle0, amountToSettle1, false, false));
         } else if (m.isActive == true) {
-            // existing position, update the liquidity by the liquidity delta
-            // cache previous liquidity in transient storage (CoreHook already does this for swap; mirror here for modify)
+            // EXISTING POSITION: update the liquidity by the liquidity delta
             if (params.liquidityDelta < 0) {
-                // only set the liqBefore slot if liquidity is decreasing - gas optimal.
-                uint128 liqBefore = SafeCast.toUint128(uint256(meta[id].liquidity));
-                TransientSlot.asUint256(TransientSlots.LIQ_BEFORE_SLOT).tstore(uint256(liqBefore));
+                // FULL or PARTIAL LIQUIDATION:
+
+                // validate that RfS is closed before we track position param updates.
+                calcRFS(id, true);
+                _trackCommitment(id, params);
+                // active position is being liquidated.
+                if (_isMMPosition(id)) {
+                    // a partial liquidation results in removal of the settlements above the new commitment maxima.
+                    uint256 s0 = totalSettlementAmount[id][0];
+                    uint256 s1 = totalSettlementAmount[id][1];
+                    uint256 excess0 = 0;
+                    uint256 excess1 = 0;
+                    if (s0 > commitmentMaxima[id][0]) {
+                        excess0 = s0 - commitmentMaxima[id][0];
+                        _updateSettlement(poolId, id, 0, -int256(excess0));
+                    }
+                    if (s1 > commitmentMaxima[id][1]) {
+                        excess1 = s1 - commitmentMaxima[id][1];
+                        _updateSettlement(poolId, id, 1, -int256(excess1));
+                    }
+                    // this sets the required settlement because we changes the position.
+                    _setSettlementDelta(LiquidityUtils.safeToBalanceDelta(excess0, excess1, true, true));
+                }
+            } else {
+                // POSITION DELTA INCREASE:
+
+                _trackCommitment(id, params);
             }
+
             int256 newLiquidity = meta[id].liquidity += params.liquidityDelta;
             if (newLiquidity < 0) {
                 // this should never happen in theory but check is performed to be safe since it is a uint256 and a position musst not have a negative liquidity
@@ -309,8 +354,6 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         } else {
             meta[id].isActive = true;
         }
-
-        _trackCommitment(id, params);
     }
 
     /**
@@ -396,90 +439,57 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
      * @dev This function is called only AFTER any position modifications. Position data modifications are handled in _touchPosition.
      * @param positionId The id of the position
      * @param modifyDelta The balance delta of the settlement
-     * @return modifiedDelta The balance delta of the settlement amounts relative to the position that was actually modified. The amount of underlying native assets actually reallocated/adjusted.
+     * @return settlementDelta The balance delta of the settlement amounts relative to the position that was actually modified. The amount of underlying native assets actually reallocated/adjusted.
      */
     function onMMLiquidityModify(PositionId positionId, BalanceDelta modifyDelta)
         external
         onlyMMPosition(positionId)
         onlyPositionValid(positionId)
-        returns (BalanceDelta)
+        returns (BalanceDelta settlementDelta)
     {
         // First, settle both growths since last touch
-        _settlePositionGrowths(positionId);
+        _settlePositionGrowths(positionId); // TODO: if we call on separate calcSeizure, then we use transient to cache action.
         // Auto-redeem fee pot to settlement credits BEFORE deriving defaults and RfS,
         // so newly allocated fees are available to this operation
         _redeemFeePot(positionId, false);
 
-        PoolId poolId = meta[positionId].poolId;
-        int128 amount0 = modifyDelta.amount0();
-        int128 amount1 = modifyDelta.amount1();
+        PositionMeta memory m = meta[positionId];
+        PoolId poolId = m.poolId;
 
-        BalanceDelta clampDelta;
-        if (amount0 < 0 || amount1 < 0) {
-            PositionMeta memory m = meta[positionId];
-            (uint256 s0, uint256 s1) = getPositionSettledAmounts(positionId);
-            if (m.isActive == false) {
-                // FULL liquidation: withdraw all settlements
-                clampDelta = LiquidityUtils.safeToBalanceDelta(s0, s1, true, true);
-            } else {
-                // Proportional clamp by liquidity removed, then RfS clamp
-                (, BalanceDelta rfsClamp) = _getRFS(positionId);
-                uint128 afterLiq = SafeCast.toUint128(uint256(m.liquidity));
-                uint128 beforeLiq = SafeCast.toUint128(TransientSlot.asUint256(TransientSlots.LIQ_BEFORE_SLOT).tload());
-                // If not set this tx (e.g., liquidity increased or different path), fall back to current
-                if (beforeLiq == 0) {
-                    beforeLiq = afterLiq;
-                }
-                if (beforeLiq > afterLiq) {
-                    // position liquidity has decreased
-                    // calculate the liquidity difference fraction
-                    uint256 liquidityDifferenceFraction =
-                        FullMath.mulDiv(uint256(beforeLiq - afterLiq), LiquidityUtils.ONE_WAD, uint256(beforeLiq));
-                    // calculate the settlement portion relative to the liquidity difference
-                    BalanceDelta settlementPortion = LiquidityUtils.calculateLiquidityFraction(
-                        LiquidityUtils.safeToBalanceDelta(s0, s1, true, true),
-                        liquidityDifferenceFraction,
-                        LiquidityUtils.ONE_WAD
-                    );
-                    // this clamp ensures only the portion of settlement proportional to liquidity difference is utilised.
-                    int128 clamp0 = settlementPortion.amount0() > rfsClamp.amount0()
-                        ? rfsClamp.amount0()
-                        : settlementPortion.amount0();
-                    int128 clamp1 = settlementPortion.amount1() > rfsClamp.amount1()
-                        ? rfsClamp.amount1()
-                        : settlementPortion.amount1();
-                    clampDelta = toBalanceDelta(clamp0, clamp1);
-                } else {
-                    // position liquidity has not decreased, so we can simply clamp by RfS
-                    clampDelta = rfsClamp;
-                }
+        // get the cached required settlement amounts
+        BalanceDelta requiredSettlementDelta = _getSettlementDelta();
+
+        if (
+            LiquidityUtils.isZeroDelta(requiredSettlementDelta)
+                && (modifyDelta.amount0() < 0 || modifyDelta.amount1() < 1)
+        ) {
+            // If requiredSettlementDelta is 0, then no position changes were made. Pure UA movement. Otherwise, RfS already checked on position param update - _touchPosition.
+            // validate RfS is closed if amount is being withdrawn.
+            (bool rfsOpen,) = _getRFS(positionId);
+            if (rfsOpen) {
+                revert RFSOpenForPosition(positionId);
             }
         }
 
-        // NOTE: Only apply explicit MM actions to totalSettlementAmount here.
-        // - Positive amounts: add only proactive excess (portion not used to extinguish deficit).
-        // - Negative amounts: first calc RfS, and then apply the withdrawal.
+        // during withdrawals, delta 0 - negative modifyDelta < 0. during deposits, delta 0 + positive modifyDelta > 0. //
+        settlementDelta = requiredSettlementDelta + modifyDelta; //  equivalent to doing (delta1.amount0 + delta2.amount0, delta1.amount1 + delta2.amount1)
+        // If the position has been untouched, then requiredSettlementDelta is 0.
+
+        int128 amount0 = settlementDelta.amount0();
+        int128 amount1 = settlementDelta.amount1();
+
         if (amount0 > 0) {
             _handleMMSettlementForToken(positionId, poolId, 0, SafeCast.toUint256(int256(amount0)));
         } else if (amount0 < 0) {
-            // Validate that amount to be withdrawn is within limits
-            if (amount0 < clampDelta.amount0()) {
-                amount0 = clampDelta.amount0();
-            }
             _updateSettlement(poolId, positionId, 0, int256(amount0));
         }
         if (amount1 > 0) {
             _handleMMSettlementForToken(positionId, poolId, 1, SafeCast.toUint256(int256(amount1)));
         } else if (amount1 < 0) {
-            if (amount1 < clampDelta.amount1()) {
-                amount1 = clampDelta.amount1();
-            }
             _updateSettlement(poolId, positionId, 1, int256(amount1));
         }
 
         emit MMPositionLiquidityUpdated(poolId, positionId, amount0, amount1);
-
-        return toBalanceDelta(amount0, amount1);
     }
 
     /**

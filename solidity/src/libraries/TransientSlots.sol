@@ -6,6 +6,6 @@ library TransientSlots {
     bytes32 internal constant CURRENT_MARKET_SLOT = keccak256("CURRENT_MARKET");
     bytes32 internal constant PROXY_SWAP_FLAG_SLOT = keccak256("PROXY_SWAP_FLAG");
     bytes32 internal constant SQRTP_BEFORE_SLOT = keccak256("SQRTP_BEFORE");
-    // Following slot is shared between CoreHook and VTSManager, but cannot conflict as used in different hooks - beforeSwap and afterAdd/RemoveLiquidity.
     bytes32 internal constant LIQ_BEFORE_SLOT = keccak256("LIQ_BEFORE");
+    bytes32 internal constant SETTLEMENT_DELTA_SLOT = keccak256("SETTLEMENT_DELTA");
 }

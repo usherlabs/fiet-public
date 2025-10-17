@@ -7,8 +7,8 @@ import {PositionId} from "./Position.sol";
 struct TokenConfiguration {
     // Grace period time
     uint256 gracePeriodTime;
-    // Base VTS Rate
-    uint256 baseVTSRate;
+    // Base VTS Rate in bps (basis points)
+    uint16 baseVTSRate; // 1000 = 10% | 10000 = 100%
 }
 
 struct MarketVTSConfiguration {

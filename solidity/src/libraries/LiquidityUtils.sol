@@ -239,24 +239,22 @@ library LiquidityUtils {
 
     /**
      * @dev This function is used to get the base settlement amounts for a commitment
-     * @param positionParams The position params
-     * @param vtsConfiguration The vts configuration
-     * @return underlyingLiquidityFraction0 The amount of underlying liquidity to transfer from the issuer to the lcc0
-     * @return underlyingLiquidityFraction1 The amount of underlying liquidity to transfer from the issuer to the lcc1
+     * @param commitment0 The commitment for token0
+     * @param commitment1 The commitment for token1
+     * @param baseVTSRate0 The base vts rate for token0
+     * @param baseVTSRate1 The base vts rate for token1
+     * @return settlementAmount0 The amount of token0 to settle
+     * @return settlementAmount1 The amount of token1 to settle
      */
     function getBaseSettlementAmounts(
-        ModifyLiquidityParams memory positionParams,
-        MarketVTSConfiguration memory vtsConfiguration
-    ) internal pure returns (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) {
-        // get the amount c0 and amount c1, which is used in calculating the VTS
-        (uint256 lccAmount0, uint256 lccAmount1) = calculateCommitmentMaxima(
-            positionParams.tickLower, positionParams.tickUpper, uint128(int128(positionParams.liquidityDelta))
-        );
-
-        // get the amount of underlying liquidity to transfer from the issuer to the lcc
+        uint256 commitment0,
+        uint256 commitment1,
+        uint256 baseVTSRate0,
+        uint256 baseVTSRate1
+    ) internal pure returns (uint256 settlementAmount0, uint256 settlementAmount1) {
         // divide by 10000 to convert to a percentage from bips
-        underlyingLiquidityFraction0 = Math.ceilDiv(lccAmount0 * vtsConfiguration.token0.baseVTSRate, ONE_BIP);
-        underlyingLiquidityFraction1 = Math.ceilDiv(lccAmount1 * vtsConfiguration.token1.baseVTSRate, ONE_BIP);
+        settlementAmount0 = Math.ceilDiv(commitment0 * baseVTSRate0, ONE_BIP);
+        settlementAmount1 = Math.ceilDiv(commitment1 * baseVTSRate1, ONE_BIP);
     }
 
     /**
