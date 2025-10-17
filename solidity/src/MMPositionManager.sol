@@ -331,16 +331,24 @@ contract MMPositionManager is LiquidityRouter, ERC721, RFSCheckpointModule, IMMP
 
         // TODO: LCC cancellation should only occur on signal decommit or LCC unwrap. Once we Commitment -> LCC restructure, this because simpler to manage.
         // ? ----- During decommit, signal value must match LCC value in vault (no positions). ie. "LCCs are solvent, and entirely in my possession (In Commit Vault), and therefore I cancel/burn LCCs".
-        // ? ----- During seize, Guarantor acquires LCCs from MM. Guarantor will settle the position, covering the MM's deficit, receiving their portioned position, and liquidating it.
+        // ? ----- ----- By minting all LCCs upfront, and issue/cancel in bulk, rather than per position, we minimise dependency on Oracle value normalisation, and can utilise total LCCs minted per commitment to restrict position management.
+        // ? ----- ----- However, it causes LCCs issued to be 1:1 with committed amounts, rather than 1:1 with the commitment utilised amounts. The latter allows us to burn without total signal value matching. Only the the value of the amount issued needs solvency before decommit.
+        // ? ----- During seize, Guarantor acquires LCCs from MM. Guarantor will settle the position, covering the MM's deficit, receiving their portioned position, and then liquidating it.
         // // ? ----- -----  The outcome is that Guarantors force settlement, because unwrap of LCCs acquired via the position will draw on the MM's reserve liquidity.
         // // ? ----- -----  This also means we need to track LCCs acquired by seizure from a market in _marketLiquidity. OR that we attribute deficit to the original MM? Well the original deficit will not be covered?
         // ? ----- ----- Guarantor receives LCCs for this liquidation, NOT underlying assets (as the settlement covers deficits). However, on LCC unwrap, it must know which market (or position/commitment) it derived from.
         // ? ----- ----- LCCs acquired by seizure from a market must be tracked in _marketLiquidity. Otherwise, how will we know which market to attribute the settlement queue of unwrap to?
         // ? ----- ----- Original MMs will NOT accrue a deficit, as Guarantor has already settled it. Rather, protocol, proactive liquidity, or settlement queue will cover the seizure unwrap.
-        // ? ----- ----- Is there a math problem here, where inflows attribute to positions, but also cover settlement queue? Inflows/Deficits accrue to the tick.
-        // ? ----- During seizeCommitment, Guarantor must ensure closure of all positions (including RfS).
-        // ? ----- ----- Despite the signal value no longer matching LCC value, the open RfS + settled liquidity expresses utilised liquidity.
-        // ? ----- ----- Rather than apportioning the commitment, the entire commitment should be seized.
+        // ? ----- ----- Is there a math problem here, where inflows attribute to positions, but also cover settlement queue? Inflows/Deficits accrue to the tick. Inflows settle to positions' totalSettledAmount, but also automatically cover settlement queue requirements.
+        // ? ----- ----- This logic should work - as regular settlements to positions also cover settlement queue requirements. Therefore inflows are basically MM-triggered settlements but from traders, in exchange for the position's deficit.
+        // ? ----- During seizeCommitment, issued LCCs must remained solvent. RfS positions must be closed across the commitment. Identifying insolvency essentially enables seizure with a skip on gracePeriod validation.
+        // // ? ----- ----- Despite the signal value no longer matching LCC value, the open RfS + settled liquidity expresses utilised liquidity.
+        // // ? ----- ----- Rather than apportioning the commitment, the entire commitment should be seized.
+        // ? ----- ----- As per the second point under decommit, LCCs issued during position management rather than for entire commitment reduces the solvency requirement before seizeCommitment and decommit.
+        // ? ----- ----- Assuming that the full commitment is utilised in positions, then 80% of the commitment is insolvent, what occurs?
+        // ? ----- ----- What if proving insolvency results in unlocking seizure across positions in an intra-transaction process - raising the a position specific-deficit by the diff in signal -> commit values, and skipping the gracePeriod validation for X amount.
+        // ? ----- ----- This could allow re-use of position seizure, and for all MMs/Guarantors to paritipate on the seizure. The advancer can be given a share of the seized outcome.
+        // ? ----- ----- If we adopt a action-dispatcher model as per the Native PositionManager, then MM's can chain actions together, ie. proveInsolvency, seize position, mint position, etc.
 
         // if (cancelLCCs) {
         // burn the LCC originally committed to the position.
