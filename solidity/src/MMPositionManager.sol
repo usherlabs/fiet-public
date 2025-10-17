@@ -248,7 +248,11 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
 
         // notify the vts manager of the settlement made for this position
         // returns the delta of required settlements IN or OUT
-        settlementDelta = _getVTSManager().onMMLiquidityModify(positionId, modifyDelta);
+        bool rfsOpen = false;
+        (settlementDelta, rfsOpen) = _getVTSManager().onMMLiquidityModify(positionId, modifyDelta);
+
+        // mark RFS checkpoint
+        positionToCheckpoint[positionId].mark(rfsOpen); // checkpoint directly on the _settleUnderlying call.
 
         // for deposits, transfer to the Market Vault (proxy hook)
         if (settlementDelta.amount0() > 0) {
@@ -315,8 +319,6 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         address ua0 = lcc0.underlyingAsset();
         address ua1 = lcc1.underlyingAsset();
 
-        // take all the settled underlying assets from the position to the caller
-        // ? _modifyMarketUnderlyingAsset will transfer assets based on modifiedDelta returned by VTSManager.onMMLiquidityModify.
         // TODO: On Seizure, this amount should be the seizureSettled + (portion of position settled relative to seizuredLiquidityUnits/liquidity)
         // ----- LCCs acquired by the seizing party are NOT cancelled, rather transferred for unwrap, or subsequent swaps. VTSManager.onMMLiquidityModify coordinates position settlement amounts, whereas Market Vault aggregates them and coordinates LCC queue clearance.
         // TODO: On burn (decommitPosition), this amount should be the total settled amount in the position.
@@ -326,19 +328,23 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         // ----- This can be determined, by calling onMMLiquidityModify within the _touchPosition, revealing the before/after liquidity amounts.
         // ----- Otherwise, we can utilise transient storage cached in _touchPosition (beforeLiquidityUnits) to maintain unified the interface, and check within the onMMLiquidityModify, revealing the before/after liquidity amounts.
         // TODO: On withdraw (default), simply clamp by RfS.
-        returnDelta = _settleUnderlying(posId, poolKey.toId(), BalanceDeltaLibrary.ZERO_DELTA, ua0, ua1); // pass zero delta because caller is not explicitly settling anything IN or OUT. However, settlements may occur as a reaction to position modification.
 
+        // pass zero delta because caller is not explicitly settling anything IN or OUT. However, settlements may occur as a reaction to position modification.
+        // reference: solidity/src/modules/VTSManager.sol _touchPosition
+        returnDelta = _settleUnderlying(posId, poolKey.toId(), BalanceDeltaLibrary.ZERO_DELTA, ua0, ua1);
+
+        // TODO: LCC cancellation should only occur on commit signal decommit or LCC unwrap. Once we Commitment -> LCC restructure, this because simpler to manage.
+        // if (cancelLCCs) {
         // burn the LCC originally committed to the position.
-        // This may be greater than the amount of underlying asset tokens in the position.
-        // TODO: LCC cancellation ONLY in burn() and modify() when RfS is closed.
-        lcc0.cancel(LiquidityUtils.safeInt128ToUint256(positionDelta.amount0()));
-        lcc1.cancel(LiquidityUtils.safeInt128ToUint256(positionDelta.amount1()));
+        // lcc0.cancel(LiquidityUtils.safeInt128ToUint256(positionDelta.amount0()));
+        // lcc1.cancel(LiquidityUtils.safeInt128ToUint256(positionDelta.amount1()));
+        // }
     }
 
     // ----- CHECKPOINT FUNCTIONS -----
 
     /**
-     * @dev This function is used to mark the checkpoint of the RFS for a given position
+     * @dev For explicit RFS checkpointing of the RFS for a given position
      * @param tokenId The token id to mark the checkpoint of the RFS for
      * @param positionIndex The position index to mark the checkpoint of the RFS for
      */
@@ -349,7 +355,6 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         IVTSManager vtsManager = _getVTSManager();
         // check if rfs is open for this position
         (bool rfsOpen,) = vtsManager.calcRFS(positionId, false);
-        // mark the checkpoint with the state of the rfs of the position
         positionToCheckpoint[positionId].mark(rfsOpen);
         emit Checkpointed(tokenId, positionIndex, positionToCheckpoint[positionId]);
     }
@@ -372,11 +377,6 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         }
     }
 
-    /**
-     * @dev This function is used to mark the checkpoint of the RFS for all positions of a given token id
-     * @param tokenId The token id to mark the checkpoint of the RFS for
-     * @dev Same name as checkpoint(uint256, uint256), but different selector/parameters.
-     */
     function checkpoint(uint256 tokenId) public {
         for (uint256 i = 0; i < nftToPositionCount[tokenId]; i++) {
             _checkpoint(tokenId, i);
@@ -444,9 +444,6 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
             ILCC(Currency.unwrap(poolKey.currency0)).underlyingAsset(),
             ILCC(Currency.unwrap(poolKey.currency1)).underlyingAsset()
         );
-
-        // mark RFS checkpoint
-        _checkpoint(tokenId, positionIndex);
     }
 
     /**
@@ -550,6 +547,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
             salt: bytes32(0) // safe to set to zero because the salt is generated based on paramaters
         });
 
+        // TODO: replace following logic with Commitment -> LCC restructure.
         // get the total usd value of all the commitments under this nft
         uint256 currentUnsettledUSDValue = getTokenUnsettledUSDValue(tokenId);
         // get the total usd value of the new commitment
@@ -567,7 +565,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
 
         // settle the underlying tokens to the proxy hook
         // By calling VTSManager.onMMLiquidityModify, we are also settling the position growths for new MMPosition.
-        _modifyMarketUnderlyingAsset(
+        _settleUnderlying(
             positionId,
             poolKey.toId(),
             BalanceDeltaLibrary.ZERO_DELTA, // default to base rate
@@ -587,7 +585,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
      * @param tokenId The token id to get the total unsettled USD value for
      * @return totalUSDValue The total unsettled USD value
      */
-    function getTokenUnsettledUSDValue(uint256 tokenId) public view returns (uint256) {
+    function inReserveUSDValue(uint256 tokenId) public view returns (uint256) {
         // get all positions attached to this token id
         uint256 totalUSDValue = 0;
         IVTSManager vtsManager = _getVTSManager();
@@ -661,7 +659,6 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         onlyNFTOwner(tokenId)
         onlyValidSignal(tokenId)
     {
-        IVTSManager vtsManager = _getVTSManager();
         PositionMeta memory position = getPosition(tokenId, positionIndex);
 
         // Validate poolKey
@@ -669,43 +666,37 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
             revert InvalidMarket(poolKey);
         }
 
-        ILCC lcc0 = ILCC(Currency.unwrap(poolKey.currency0));
-        ILCC lcc1 = ILCC(Currency.unwrap(poolKey.currency1));
-        address ua0 = lcc0.underlyingAsset();
-        address ua1 = lcc1.underlyingAsset();
-
-        ModifyLiquidityParams memory modifyLiquidityParams = ModifyLiquidityParams({
-            tickLower: position.tickLower,
-            tickUpper: position.tickUpper,
-            liquidityDelta: liquidity,
-            salt: _positionSalt(tokenId, positionIndex)
-        });
-        // mint the tokens required to facilitate this liquidity addition
-        (uint160 sqrtPriceX96, int24 currentTick,,) = poolManager.getSlot0(poolKey.toId());
-        (uint256 lcc0Amount, uint256 lcc1Amount) =
-            LiquidityUtils.calculateTokenAmountsFromPositionParams(sqrtPriceX96, currentTick, modifyLiquidityParams);
-
         // get the liquidity delta
         // if it is positive add liquidity to the position
         if (liquidity > 0) {
-            // get the base settlements to make based on the liquidity to be added
-            (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) = LiquidityUtils
-                .getBaseSettlementAmounts(modifyLiquidityParams, vtsManager.getMarketVTSConfiguration(poolKey.toId()));
+            ILCC lcc0 = ILCC(Currency.unwrap(poolKey.currency0));
+            ILCC lcc1 = ILCC(Currency.unwrap(poolKey.currency1));
+            address ua0 = lcc0.underlyingAsset();
+            address ua1 = lcc1.underlyingAsset();
 
-            // settle the underlying tokens to the proxy hook
-            _modifyMarketUnderlyingAsset(
-                getPositionId(tokenId, positionIndex),
-                poolKey.toId(),
-                toBalanceDelta(underlyingLiquidityFraction0.toInt128(), underlyingLiquidityFraction1.toInt128()),
-                ua0,
-                ua1
-            );
+            ModifyLiquidityParams memory modifyLiquidityParams = ModifyLiquidityParams({
+                tickLower: position.tickLower,
+                tickUpper: position.tickUpper,
+                liquidityDelta: liquidity,
+                salt: _positionSalt(tokenId, positionIndex)
+            });
 
+            // mint the tokens required to facilitate this liquidity addition
+            (uint160 sqrtPriceX96, int24 currentTick,,) = poolManager.getSlot0(poolKey.toId());
+            (uint256 lcc0Amount, uint256 lcc1Amount) =
+                LiquidityUtils.calculateTokenAmountsFromPositionParams(sqrtPriceX96, currentTick, modifyLiquidityParams);
+
+            // TODO: replace in Commitment -> LCC restructure.
             lcc0.issue(lcc0Amount);
             lcc1.issue(lcc1Amount);
 
-            // actually modify the liquidity
+            // modify the liquidity first
             _modifyLiquidity(poolKey, modifyLiquidityParams, Constants.ZERO_BYTES);
+
+            // settle the underlying tokens to the proxy hook
+            _settleUnderlying(
+                getPositionId(tokenId, positionIndex), poolKey.toId(), BalanceDeltaLibrary.ZERO_DELTA, ua0, ua1
+            );
         } else {
             // Direct partial liquidation with minimal calls
             uint256 amountToLiquidate = uint256(-liquidity);
@@ -720,13 +711,13 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
      */
     function renew(uint256 tokenId, bytes memory liquiditySignal) public onlyNFTOwner(tokenId) {
         // get the total outstanding usd value for all existing positions
-        uint256 positionTotalCommitmentsUSDValue = getTokenUnsettledUSDValue(tokenId);
+        uint256 _inReserveUSDValue = inReserveUSDValue(tokenId);
         // verify signal and get total usd value as well
         (uint256 totalSignalUsdValue, uint256 signalExpiryInSeconds) =
             signalManager.renewLiquiditySignal(liquiditySignal);
         // make sure signal is solvent
-        if (positionTotalCommitmentsUSDValue > totalSignalUsdValue) {
-            revert InvalidLiquiditySignal(totalSignalUsdValue, positionTotalCommitmentsUSDValue);
+        if (_inReserveUSDValue > totalSignalUsdValue) {
+            revert InvalidLiquiditySignal(totalSignalUsdValue, _inReserveUSDValue);
         }
 
         LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));

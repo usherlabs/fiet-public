@@ -10,7 +10,9 @@ import {RFSCheckpoint} from "../types/Checkpoint.sol";
 interface IVTSManager {
     function setMarketVTSConfiguration(PoolId corePoolId, MarketVTSConfiguration memory vtsConfiguration) external;
 
-    function onMMLiquidityModify(PositionId positionId, BalanceDelta balanceDelta) external returns (BalanceDelta);
+    function onMMLiquidityModify(PositionId positionId, BalanceDelta balanceDelta)
+        external
+        returns (BalanceDelta settlementDelta, bool rfsOpen);
 
     function getMarketVTSConfiguration(PoolId corePoolId) external view returns (MarketVTSConfiguration memory);
 

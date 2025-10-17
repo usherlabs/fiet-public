@@ -289,6 +289,8 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         PositionId id = PositionLibrary.generateId(owner, params);
         PositionMeta memory m = meta[id];
 
+        uint128 liq = poolManager.getPositionLiquidity(poolId, PositionId.unwrap(id));
+
         if (m.owner == address(0)) {
             // NEW POSITION: initialize the liquidity to the liquidity delta, assuming it will always be positive
             _registerPosition(owner, poolId, params);
@@ -310,23 +312,33 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
             if (params.liquidityDelta < 0) {
                 // FULL or PARTIAL LIQUIDATION:
 
-                // validate that RfS is closed before we track position param updates.
+                // validate that RfS is closed before we track position param (commitment maxima) updates.
                 calcRFS(id, true);
                 _trackCommitment(id, params);
                 // active position is being liquidated.
                 if (_isMMPosition(id)) {
-                    // a partial liquidation results in removal of the settlements above the new commitment maxima.
                     uint256 s0 = totalSettlementAmount[id][0];
                     uint256 s1 = totalSettlementAmount[id][1];
                     uint256 excess0 = 0;
                     uint256 excess1 = 0;
-                    if (s0 > commitmentMaxima[id][0]) {
-                        excess0 = s0 - commitmentMaxima[id][0];
-                        _updateSettlement(poolId, id, 0, -int256(excess0));
+                    if (liq == 0) {
+                        // full liquidation
+                        excess0 = s0;
+                        excess1 = s1;
+                    } else {
+                        // a partial liquidation results in removal of the settlements above the NEW commitment maxima.
+                        if (s0 > commitmentMaxima[id][0]) {
+                            excess0 = s0 - commitmentMaxima[id][0];
+                        }
+                        if (s1 > commitmentMaxima[id][1]) {
+                            excess1 = s1 - commitmentMaxima[id][1];
+                        }
                     }
-                    if (s1 > commitmentMaxima[id][1]) {
-                        excess1 = s1 - commitmentMaxima[id][1];
-                        _updateSettlement(poolId, id, 1, -int256(excess1));
+                    if (excess0 > 0) {
+                        _updateSettlement(poolId, id, 0, -SafeCast.toInt256(excess0));
+                    }
+                    if (excess1 > 0) {
+                        _updateSettlement(poolId, id, 1, -SafeCast.toInt256(excess1));
                     }
                     // this sets the required settlement because we changes the position.
                     _setSettlementDelta(LiquidityUtils.safeToBalanceDelta(excess0, excess1, true, true));
@@ -335,6 +347,21 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
                 // POSITION DELTA INCREASE:
 
                 _trackCommitment(id, params);
+
+                // commitment maxima increases, and therefore base settlement requirements do too.
+                // Therefore, recalculate the base settlement requirements, and determine excess over s0,s1 to settle IN.
+                MarketVTSConfiguration memory vtsConfiguration = getMarketVTSConfiguration(poolId);
+                uint256 s0 = totalSettlementAmount[id][0];
+                uint256 s1 = totalSettlementAmount[id][1];
+                (uint256 baseAmountToSettle0, uint256 baseAmountToSettle1) = LiquidityUtils.getBaseSettlementAmounts(
+                    commitmentMaxima[id][0],
+                    commitmentMaxima[id][1],
+                    vtsConfiguration.token0.baseVTSRate,
+                    vtsConfiguration.token1.baseVTSRate
+                );
+                uint256 excess0 = baseAmountToSettle0 > s0 ? baseAmountToSettle0 - s0 : 0;
+                uint256 excess1 = baseAmountToSettle1 > s1 ? baseAmountToSettle1 - s1 : 0;
+                _setSettlementDelta(LiquidityUtils.safeToBalanceDelta(excess0, excess1, false, false));
             }
 
             int256 newLiquidity = meta[id].liquidity += params.liquidityDelta;
@@ -348,7 +375,6 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         } else {
             revert NotActive(id);
         }
-        uint128 liq = poolManager.getPositionLiquidity(poolId, PositionId.unwrap(id));
         if (liq == 0) {
             meta[id].isActive = false;
         } else {
@@ -445,7 +471,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         external
         onlyMMPosition(positionId)
         onlyPositionValid(positionId)
-        returns (BalanceDelta settlementDelta)
+        returns (BalanceDelta settlementDelta, bool rfsOpen)
     {
         // First, settle both growths since last touch
         _settlePositionGrowths(positionId); // TODO: if we call on separate calcSeizure, then we use transient to cache action.
@@ -459,13 +485,13 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         // get the cached required settlement amounts
         BalanceDelta requiredSettlementDelta = _getSettlementDelta();
 
+        (rfsOpen,) = _getRFS(positionId);
         if (
             LiquidityUtils.isZeroDelta(requiredSettlementDelta)
                 && (modifyDelta.amount0() < 0 || modifyDelta.amount1() < 1)
         ) {
             // If requiredSettlementDelta is 0, then no position changes were made. Pure UA movement. Otherwise, RfS already checked on position param update - _touchPosition.
             // validate RfS is closed if amount is being withdrawn.
-            (bool rfsOpen,) = _getRFS(positionId);
             if (rfsOpen) {
                 revert RFSOpenForPosition(positionId);
             }
