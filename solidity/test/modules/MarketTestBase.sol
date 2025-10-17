@@ -149,10 +149,9 @@ abstract contract MarketTestBase is Test, Deployers {
         );
 
         // deploy the settlement observer
-        uint256 gracePeriod = 3600;
         address[] memory verifiers = new address[](1);
         verifiers[0] = address(new StubSettlementVerifier());
-        settlementObserver = new VRLSettlementObserver(verifiers, gracePeriod);
+        settlementObserver = new VRLSettlementObserver(verifiers);
         mmPositionManager = address(
             new MMPositionManager(
                 address(manager), address(signalManager), address(marketFactory), address(settlementObserver)

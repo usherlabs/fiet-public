@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
+import {MarketVTSConfiguration} from "./VTS.sol";
+
 /// The checkpoint of the RFS for a position
 struct RFSCheckpoint {
     // the time of the open or close of the RFS for this position
@@ -8,7 +10,9 @@ struct RFSCheckpoint {
     // whether the RFS is open or close
     bool isOpen;
     // the grace period extension
-    uint256 gracePeriod;
+    uint256 gracePeriod0;
+    // the grace period extension for token1
+    uint256 gracePeriod1;
 }
 
 // initially the checkpoint wouls be set to (0,false)
@@ -22,17 +26,30 @@ library RFSCheckpointLibrary {
             self.timeOfLastTransition = block.timestamp;
             self.isOpen = isOpen;
             // reset the grace period when  RFS state opens or closes
-            self.gracePeriod = 0;
+            self.gracePeriod0 = 0;
+            self.gracePeriod1 = 0;
         }
     }
 
     // this function is used to extend the grace period for a position
     // it adds the extension time to the current grace period extension
-    function extendGracePeriod(RFSCheckpoint storage self, uint256 extension, uint256 maxgracePeriod) internal {
-        self.gracePeriod += extension;
+    function extendGracePeriod(
+        RFSCheckpoint storage self,
+        MarketVTSConfiguration memory vtsConfiguration,
+        bool isTokenZero
+    ) internal {
+        // update the grace period
+        if (isTokenZero) {
+            self.gracePeriod0 += vtsConfiguration.token0.gracePeriodTime;
+        } else {
+            self.gracePeriod1 += vtsConfiguration.token1.gracePeriodTime;
+        }
         // cap the total grace period extension to the max grace period extension
-        if (self.gracePeriod > maxgracePeriod) {
-            self.gracePeriod = maxgracePeriod;
+        if (self.gracePeriod0 > vtsConfiguration.token0.maxgracePeriodTime) {
+            self.gracePeriod0 = vtsConfiguration.token0.maxgracePeriodTime;
+        }
+        if (self.gracePeriod1 > vtsConfiguration.token1.maxgracePeriodTime) {
+            self.gracePeriod1 = vtsConfiguration.token1.maxgracePeriodTime;
         }
     }
 }

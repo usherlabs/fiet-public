@@ -47,9 +47,10 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
     error InvalidPositionId(PositionId positionId);
     error InvalidTokenId(uint256 tokenId);
     error InvalidLiquiditySignalEncoding();
+    error InvalidToken(address tokenAddr);
     error InactivePosition(PositionId positionId);
     error InsufficientAmountToWithdraw(PositionId positionId, uint256 amount, uint256 maxAmount);
-    event GracePeriodExtended(PositionId indexed positionId, uint256 extension);
+    event GracePeriodExtended(PositionId indexed positionId, uint256 extension0, uint256 extension1);
     error InvalidMarket(PoolKey poolKey);
     error RFSNotOpen(PositionId positionId);
     error SignalExpired(uint256 tokenId);
@@ -193,21 +194,29 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         uint256 tokenId,
         uint256 positionIndex,
         uint256 verifierIndex,
+        address tokenToSettleFor,
         bytes memory settlementProof
     ) public onlyNFTOwner(tokenId) {
         PositionId positionId = getPositionId(tokenId, positionIndex);
+        if (
+            tokenToSettleFor != Currency.unwrap(poolKey.currency0)
+                && tokenToSettleFor != Currency.unwrap(poolKey.currency1)
+        ) {
+            revert InvalidToken(tokenToSettleFor);
+        }
 
         // get the max grace period extension from the market vts configuration
-        uint256 maxgracePeriod = _getVTSManager().getMarketVTSConfiguration(poolKey.toId()).maxgracePeriod;
+        MarketVTSConfiguration memory vtsConfiguration = _getVTSManager().getMarketVTSConfiguration(poolKey.toId());
 
         // verify the settlement proof and get the grace period extension
-        uint256 gracePeriod = settlementObserver.verifySettlementProof(verifierIndex, settlementProof);
+        settlementObserver.verifySettlementProof(poolKey, verifierIndex, tokenToSettleFor, settlementProof);
+        bool isTokenZero = tokenToSettleFor == Currency.unwrap(poolKey.currency0);
 
         // extend the grace period for the position
-        positionToCheckpoint[positionId].extendGracePeriod(gracePeriod, maxgracePeriod);
+        positionToCheckpoint[positionId].extendGracePeriod(vtsConfiguration, isTokenZero);
 
         // emit an event to notify the market maker that the grace period has been extended
-        emit GracePeriodExtended(positionId, positionToCheckpoint[positionId].gracePeriod);
+        emit GracePeriodExtended(positionId, positionToCheckpoint[positionId].gracePeriod0, positionToCheckpoint[positionId].gracePeriod1);
     }
 
     /**
@@ -769,7 +778,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         // get grace period for this position from market vts configuration
         IVTSManager vtsManager = _getVTSManager();
         vtsManager.getMarketVTSConfiguration(position.poolId)
-            .validateGracePeriod(positionId, positionToCheckpoint[positionId]);
+            .validateGracePeriodHasElapsed(positionId, positionToCheckpoint[positionId]);
 
         uint256 maxSiezureFractionBPS = vtsManager.getSeizureAmount(positionId);
         // based on the amount they are choosing to settle, calculate how much of the total siezable amount to be seized by the caller

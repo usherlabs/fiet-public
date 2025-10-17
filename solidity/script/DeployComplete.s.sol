@@ -178,7 +178,6 @@ contract CompleteDeployScript is ScriptHelper {
      */
     function _deployVerifiers() internal {
         uint256 signalExpiryInSeconds = 3600;
-        uint256 gracePeriod = 3600;
 
         // deploy the proof verifiers
         // ? deploy a stub verifier for now, would eventually be an IC verifier
@@ -194,7 +193,7 @@ contract CompleteDeployScript is ScriptHelper {
         // create an array of verifiers and set the stub one as the first verifier
         address[] memory verifiers = new address[](1);
         verifiers[0] = stubSettlementVerifierAddress;
-        settlementObserver = address(new VRLSettlementObserver(verifiers, gracePeriod));
+        settlementObserver = address(new VRLSettlementObserver(verifiers));
     }
 
     /**
