@@ -136,7 +136,7 @@ contract RemoveLiquidityScript is ScriptHelper {
 
         PoolId proxyPoolId = factory.coreToProxy(corePoolKey.toId());
         address proxyHookAddr = factory.proxyToHook(proxyPoolId);
-        proxyHook = ProxyHook(proxyHookAddr);
+        proxyHook = ProxyHook(payable(proxyHookAddr));
 
         lcc0 = LiquidityCommitmentCertificate(factory.getLCC(token0));
         lcc1 = LiquidityCommitmentCertificate(factory.getLCC(token1));

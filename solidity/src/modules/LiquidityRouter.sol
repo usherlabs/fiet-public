@@ -112,9 +112,9 @@ contract LiquidityRouter is IUnlockCallback {
             (BalanceDelta)
         );
         uint256 ethBalance = address(this).balance;
-        if (ethBalance > 0) {
-            CurrencyLibrary.ADDRESS_ZERO.transfer(msg.sender, ethBalance);
-        }
+        // if (ethBalance > 0) {
+        //     CurrencyLibrary.ADDRESS_ZERO.transfer(msg.sender, ethBalance);
+        // }
     }
 
     /// fetch the balances of the user and the pool

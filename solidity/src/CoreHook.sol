@@ -251,7 +251,7 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
 
         // Check if this is a direct core pool swap, and if it is, call the proxy hook
         if (IExttload(proxyHook).exttload(TransientSlots.PROXY_SWAP_FLAG_SLOT) == bytes32(0)) {
-            ProxyHook(proxyHook).onCorePoolDirectSwap(delta);
+            ProxyHook(payable(proxyHook)).onCorePoolDirectSwap(delta);
         }
 
         _triggerInternalTracingFlag(key.toId());
@@ -276,7 +276,8 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
 
         // only add direct liquidity if the sender is not the market maker position manager/router
         if (sender != address(mmPositionManager)) {
-            ProxyHook(_getProxyHook(key)).onDirectLP(delta, LiquidityUtils.ActionType.DirectLPAddLiquidity); // Fetching ProxyHook by corePoolKey, therefore no need to pass again.
+            ProxyHook(payable(address(_getProxyHook(key))))
+                .onDirectLP(delta, LiquidityUtils.ActionType.DirectLPAddLiquidity); // Fetching ProxyHook by corePoolKey, therefore no need to pass again.
         }
 
         return (this.afterAddLiquidity.selector, BalanceDeltaLibrary.ZERO_DELTA);
@@ -298,7 +299,7 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
         // Allow removal of liquidity even when the market is paused.
         // only remove direct liquidity if the sender is the pool manager
         if (sender != address(mmPositionManager)) {
-            ProxyHook(_getProxyHook(key)).onDirectLP(delta, LiquidityUtils.ActionType.DirectLPRemoveLiquidity);
+            ProxyHook(payable(_getProxyHook(key))).onDirectLP(delta, LiquidityUtils.ActionType.DirectLPRemoveLiquidity);
         }
 
         return (this.afterRemoveLiquidity.selector, BalanceDeltaLibrary.ZERO_DELTA);

@@ -17,15 +17,19 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {IOracleRegistry} from "./interfaces/IOracleRegistry.sol";
 import {IVTSManager} from "./interfaces/IVTSManager.sol";
 import {console} from "forge-std/console.sol";
+import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {ILCC} from "./interfaces/ILCC.sol";
+import {CurrencyTransfer} from "./libraries/CurrencyTransfer.sol";
 
 contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC {
     using SafeTransferLib for ERC20;
+    using CurrencyTransfer for Currency;
 
     error SenderNotIssuer(address sender);
     error InvalidUnderlyingAsset();
     error TransferNotAllowed();
     error InvalidAmount();
+    error InsufficientETH();
     error InvalidMarketFactory();
     error InsufficientWrappedLiquidity(uint256 requested, uint256 available);
 
@@ -83,17 +87,13 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
      * @param _marketFactory The MarketFactory contract that manages this LCC.
      */
     constructor(address _underlyingAsset, address[] memory _issuers, address _marketFactory)
-        ERC20(
-            string.concat("Fiet Liquidity Commitment Certificate for ", IERC20Metadata(_underlyingAsset).name()),
-            string.concat("lcc-", IERC20Metadata(_underlyingAsset).symbol()),
-            IERC20Metadata(_underlyingAsset).decimals()
-        )
+        ERC20(_getLCCName(_underlyingAsset), _getLCCSymbol(_underlyingAsset), _getLCCDecimals(_underlyingAsset))
         Ownable(msg.sender)
     {
-        // TODO: handle ETH native token
-        if (_underlyingAsset == address(0)) {
-            revert InvalidUnderlyingAsset();
-        }
+        // // TODO: handle ETH native token
+        // if (_underlyingAsset == address(0)) {
+        //     revert InvalidUnderlyingAsset();
+        // }
         if (_marketFactory == address(0)) {
             revert InvalidMarketFactory();
         }
@@ -137,8 +137,17 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
 
     // Called by Issuer before settling liquidity from LCCs to the market.
     function prepareSettle(uint256 amount) external onlyIssuer {
+        address sender = msg.sender;
+        Currency underlyingAssetCurrency = Currency.wrap(underlyingAsset);
         // Allow issuer to facilitate direct liquidity provision transfer of underlying tokens
-        ERC20(underlyingAsset).approve(msg.sender, amount);
+        // approval does nothing if we are using ETH(address(0)) as the underlying asset
+        // so to prepare settle, we simply transfer the ETH to the issuer calling this function
+        // so that way the caller can then transfer the ETH on the behalf of the LCC contract since there is no native  `transferFrom`
+        if (underlyingAssetCurrency.isAddressZero()) {
+            underlyingAssetCurrency.transfer(sender, amount);
+        } else {
+            underlyingAssetCurrency.approve(sender, amount);
+        }
         uaSupply -= amount;
     }
 
@@ -156,16 +165,25 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
 
     // DirectLPs and Traders engaging the CorePool directly will need LCC. LCC is 1:1 with the underlying asset.
     function _wrap(address from, address to, uint256 amount) internal {
+        bool isNativeETHAsset = underlyingAsset == address(0);
+        // throw error if the native ETH is insufficient and it is a native ETH backed LCC
+        if (isNativeETHAsset && msg.value != amount) {
+            revert InvalidAmount();
+        }
+
         // mint some tokens
         _mint(to, amount);
 
-        // transfer the equivalent of the underlying asset from the recipient
-        ERC20(underlyingAsset).safeTransferFrom(from, address(this), amount);
+        // transfer the underlying asset from the recipient if it is not a native ETH backed LCC
+        if (!isNativeETHAsset) {
+            // safe to make ERC20 call here since we have verified that from address is not a native asset
+            ERC20(underlyingAsset).safeTransferFrom(from, address(this), amount);
+        }
 
         uaSupply += amount;
     }
 
-    function wrap(uint256 amount) external {
+    function wrap(uint256 amount) external payable {
         _wrap(msg.sender, msg.sender, amount);
     }
 
@@ -270,7 +288,7 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
         _unwrap(msg.sender, msg.sender, amount);
     }
 
-    function wrapTo(address to, uint256 amount) external {
+    function wrapTo(address to, uint256 amount) external payable {
         _wrap(msg.sender, to, amount);
     }
 
@@ -280,10 +298,12 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
 
     function _transferUnderlyingAssets(address user, uint256 amount) internal {
         // confirm the amount is valid and not greater than the uaSupply
-        require(amount > 0 && amount <= uaSupply, "invalid amount");
+        if (amount == 0 || amount > uaSupply) {
+            revert InvalidAmount();
+        }
         uaSupply -= amount;
 
-        ERC20(underlyingAsset).safeTransfer(user, amount);
+        Currency.wrap(underlyingAsset).transfer(user, amount);
     }
 
     // Pay an outstanding settlement to a user and burn their underlying tokens
@@ -437,5 +457,26 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
 
     function toERC20() external view returns (ERC20) {
         return ERC20(address(this));
+    }
+
+    function _getLCCName(address asset) private view returns (string memory) {
+        if (asset == address(0)) {
+            return "Fiet Liquidity Commitment Certificate for Ether";
+        }
+        return string.concat("Fiet Liquidity Commitment Certificate for ", IERC20Metadata(asset).name());
+    }
+
+    function _getLCCSymbol(address asset) private view returns (string memory) {
+        if (asset == address(0)) {
+            return "lcc-ETH";
+        }
+        return string.concat("lcc-", IERC20Metadata(asset).symbol());
+    }
+
+    function _getLCCDecimals(address asset) private view returns (uint8) {
+        if (asset == address(0)) {
+            return 18;
+        }
+        return IERC20Metadata(asset).decimals();
     }
 }

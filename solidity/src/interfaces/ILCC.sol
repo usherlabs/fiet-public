@@ -18,4 +18,6 @@ interface ILCC {
     function prepareSettle(uint256 amount) external;
 
     function toERC20() external view returns (ERC20);
+
+    function wrap(uint256 amount) external payable;
 }

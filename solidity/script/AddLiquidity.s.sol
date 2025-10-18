@@ -141,7 +141,7 @@ contract AddLiquidityScript is ScriptHelper {
         // Get the proxy pool id and hook from the core pool id just created
         PoolId proxyPoolId = factory.coreToProxy(corePoolKey.toId());
         address proxyHookAddr = factory.proxyToHook(proxyPoolId);
-        proxyHook = ProxyHook(proxyHookAddr);
+        proxyHook = ProxyHook(payable(proxyHookAddr));
 
         if (isSepolia && isLocal) {
             vm.startBroadcast(deployerPrivateKey);
@@ -187,7 +187,7 @@ contract AddLiquidityScript is ScriptHelper {
         console.logBytes32(PoolId.unwrap(proxyPoolId));
         address proxyHookAddr = factory.proxyToHook(proxyPoolId);
         console.log("Proxy Hook Address: ", proxyHookAddr);
-        proxyHook = ProxyHook(proxyHookAddr);
+        proxyHook = ProxyHook(payable(proxyHookAddr));
 
         console.log(" coore fee: ", coreFee);
 

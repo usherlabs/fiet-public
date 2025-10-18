@@ -282,6 +282,7 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         // Get the amount of the token that is being swapped in based on if this is a zero one swap or one for zero swap
         uint256 amountIn = isZeroForOne ? amount0 : amount1;
         // Deposit underlying liquidity to pool manager from lcc token
+
         _settleFromLCCToVault(lccTokenIn, amountIn);
 
         // Handle Token OUT liquidity (move from PoolManager into LCC token)

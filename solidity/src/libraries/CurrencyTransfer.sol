@@ -10,6 +10,7 @@ import {IERC20Minimal} from "@uniswap/v4-core/src/interfaces/external/IERC20Mini
 library CurrencyTransfer {
     error InsufficientETH();
     error ETHTransferFailed();
+    error NotNativeETH();
 
     /**
      * @notice Transfer currency from one address to another
@@ -30,5 +31,32 @@ library CurrencyTransfer {
             IERC20Minimal(Currency.unwrap(currency)).transferFrom(from, to, amount);
         }
     }
-}
 
+    /**
+     * @notice Approves an address for a potential ERC20 transfer
+     * @param currency the Currency
+     * @param user the address to approve
+     * @param amount the amount to approve
+     */
+    function approve(Currency currency, address user, uint256 amount) internal {
+        // do nothing if the currency is native ETH
+        // @dev potentially we could do the sync step here if we were to ever want to implement a 'sync' and 'settle' mechanism for LCC's
+        if (currency.isAddressZero()) return;
+
+        IERC20Minimal(Currency.unwrap(currency)).approve(user, amount);
+    }
+
+    /**
+     * @notice Refund ETH to the caller
+     * @param currency the Currency
+     * @param amountSpent the amount spent
+     */
+    function refundETH(Currency currency, uint256 amountSpent) internal {
+        uint256 totalAmountSentToContract = msg.value;
+        if (amountSpent == 0 || totalAmountSentToContract == 0) return;
+        if (!currency.isAddressZero()) revert NotNativeETH();
+
+        // transfer the left over amount to the caller
+        currency.transfer(msg.sender, totalAmountSentToContract - amountSpent);
+    }
+}

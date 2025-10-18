@@ -218,6 +218,7 @@ contract MarketLiquidityTest is MarketTestBase {
 
         // create a settlement queue entry i.e. unwrap from the market enough to get an entry into the settlement queue for the given market for the specified user
         BalanceDelta delta = _createSettlementQueueEntry(marketId);
+
         uint256 amountOut = LiquidityUtils.safeInt128ToUint256(delta.amount1());
         uint256 underlyingBalanceRightAfterSwap = IERC20Minimal(lcc1.underlyingAsset()).balanceOf(test_user_1);
 
@@ -238,7 +239,7 @@ contract MarketLiquidityTest is MarketTestBase {
 
         vm.startPrank(test_user_1);
 
-        // Validate that LSS was burned as user's settlement was settled
+        // Validate that LCC was burned as user's settlement was settled
         uint256 lccBalanceRightAfterSettlement = lcc1.balanceOf(test_user_1);
         assertEq(lccBalanceRightAfterSettlement, lccBalanceRightAfterSwap - amountOut);
 

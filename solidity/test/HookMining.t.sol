@@ -54,7 +54,7 @@ contract HookTest is Test, Deployers {
         address proxyHookAddrComputed = address(proxyFlags);
 
         deployCodeTo("ProxyHook.sol:ProxyHook", abi.encode(poolManager, address(factory)), proxyHookAddrComputed);
-        proxyHook = ProxyHook(proxyHookAddrComputed);
+        proxyHook = ProxyHook(payable(proxyHookAddrComputed));
 
         // Activate proxy hook
         vm.prank(address(factory));

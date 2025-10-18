@@ -185,8 +185,8 @@ abstract contract MarketVault is IMarketVault {
      * @param amount The amount of the underlying asset to settle from the LCC to the vault
      */
     function _settleFromLCCToVault(ILCC lccToken, uint256 amount) internal {
-        // Prepare the settle of the LCC to the vault,
-        // this authorizes us to transfer from
+        // Prepare the settle of the LCC to the vault
+        // this calls approve for ERC20 underlying assets and transfers ETH to the market vault for remittance when the underlying asset is ETH
         lccToken.prepareSettle(amount);
 
         // Get the underlying asset of the LCC
@@ -286,5 +286,10 @@ abstract contract MarketVault is IMarketVault {
         vaultPoolManager.unlock(
             abi.encode(CallbackData(msg.sender, Currency.wrap(currency0), Currency.wrap(currency1), balanceDelta))
         );
+    }
+
+    // Best practice: be explicit about intent
+    receive() external payable {
+        // Handle plain ETH transfers
     }
 }
