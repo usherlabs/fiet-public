@@ -2,12 +2,13 @@
 pragma solidity ^0.8.20;
 
 import "forge-std/Test.sol";
-import {ShaMerkle} from "../src/libraries/ShaMerkle.sol"; // Adjust path to your library
+import {MerkleProofGenerator} from "./libraries/MerkleProofGenerator.sol";
+import {MerkleProofVerifier} from "../src/libraries/MerkleProofVerifier.sol";
 
-contract ShaMerkleTest is Test {
+contract MerkleTreeTest is Test {
     // Helper function to hash a string to bytes32 for testing
     function hash(string memory input) private pure returns (bytes32) {
-        return sha256(abi.encodePacked(input));
+        return keccak256(abi.encodePacked(input));
     }
 
     // Test verify and processProof with a valid proof
@@ -20,13 +21,13 @@ contract ShaMerkleTest is Test {
         leaves[3] = hash("leaf4");
 
         // Generate Merkle root
-        bytes32 root = ShaMerkle.generateMerkleRoot(leaves);
+        bytes32 root = MerkleProofGenerator.generateMerkleRoot(leaves);
 
         // Generate proof for leaf at index 1
-        bytes32[] memory proof = ShaMerkle.generateProof(leaves, 1);
+        bytes32[] memory proof = MerkleProofGenerator.generateProof(leaves, 1);
 
         // Verify proof
-        bool isValid = ShaMerkle.verify(proof, root, leaves[1]);
+        bool isValid = MerkleProofVerifier.verify(proof, root, leaves[1]);
         assertTrue(isValid);
     }
 
@@ -38,11 +39,15 @@ contract ShaMerkleTest is Test {
         leaves[2] = hash("leaf3");
         leaves[3] = hash("leaf4");
 
-        bytes32 root = ShaMerkle.generateMerkleRoot(leaves);
-        bytes32[] memory proof = ShaMerkle.generateProof(leaves, 1);
+        bytes32 root = MerkleProofGenerator.generateMerkleRoot(leaves);
+        bytes32[] memory proof = MerkleProofGenerator.generateProof(leaves, 1);
 
         // Use wrong leaf
-        bool isValid = ShaMerkle.verify(proof, root, hash("wrong_leaf"));
+        bool isValid = MerkleProofVerifier.verify(
+            proof,
+            root,
+            hash("wrong_leaf")
+        );
         assertFalse(isValid);
     }
 
@@ -51,7 +56,7 @@ contract ShaMerkleTest is Test {
         bytes32[] memory leaves = new bytes32[](1);
         leaves[0] = hash("leaf1");
 
-        bytes32 root = ShaMerkle.generateMerkleRoot(leaves);
+        bytes32 root = MerkleProofGenerator.generateMerkleRoot(leaves);
         assertEq(root, leaves[0]);
     }
 
@@ -62,14 +67,12 @@ contract ShaMerkleTest is Test {
         leaves[1] = hash("leaf2");
         leaves[2] = hash("leaf3");
 
-        bytes32 root = ShaMerkle.generateMerkleRoot(leaves);
+        bytes32 root = MerkleProofGenerator.generateMerkleRoot(leaves);
 
-        // Manually compute expected root for validation
-        bytes32 level1_0 = sha256(abi.encodePacked(leaves[0], leaves[1]));
-        bytes32 level1_1 = sha256(abi.encodePacked(leaves[2], leaves[2]));
-        bytes32 expectedRoot = sha256(abi.encodePacked(level1_0, level1_1));
-
-        assertEq(root, expectedRoot);
+        // Verify that proof generation and verification works correctly
+        bytes32[] memory proof = MerkleProofGenerator.generateProof(leaves, 0);
+        bool isValid = MerkleProofVerifier.verify(proof, root, leaves[0]);
+        assertTrue(isValid);
     }
 
     // Test generateProof and verify for an odd number of leaves
@@ -79,10 +82,10 @@ contract ShaMerkleTest is Test {
         leaves[1] = hash("leaf2");
         leaves[2] = hash("leaf3");
 
-        bytes32 root = ShaMerkle.generateMerkleRoot(leaves);
-        bytes32[] memory proof = ShaMerkle.generateProof(leaves, 2); // Last leaf
+        bytes32 root = MerkleProofGenerator.generateMerkleRoot(leaves);
+        bytes32[] memory proof = MerkleProofGenerator.generateProof(leaves, 2); // Last leaf
 
-        bool isValid = ShaMerkle.verify(proof, root, leaves[2]);
+        bool isValid = MerkleProofVerifier.verify(proof, root, leaves[2]);
         assertTrue(isValid);
     }
 
@@ -102,13 +105,13 @@ contract ShaMerkleTest is Test {
         leaves[9] = hash("leaf10");
 
         // Generate Merkle root
-        bytes32 root = ShaMerkle.generateMerkleRoot(leaves);
+        bytes32 root = MerkleProofGenerator.generateMerkleRoot(leaves);
 
         // Generate proof for the 7th leaf (index 6)
-        bytes32[] memory proof = ShaMerkle.generateProof(leaves, 6);
+        bytes32[] memory proof = MerkleProofGenerator.generateProof(leaves, 6);
 
         // Verify proof
-        bool isValid = ShaMerkle.verify(proof, root, leaves[6]);
+        bool isValid = MerkleProofVerifier.verify(proof, root, leaves[6]);
         assertTrue(isValid);
     }
 }

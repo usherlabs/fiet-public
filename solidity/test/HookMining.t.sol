@@ -8,7 +8,7 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {BalanceDelta, BalanceDeltaLibrary} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
-import {PausablePool} from "../src/modules/PausablePool.sol";
+import {Pausable} from "openzeppelin-contracts/contracts/utils/Pausable.sol";
 import {Deployers} from "@uniswap/v4-core/test/utils/Deployers.sol";
 
 import {CoreHook} from "../src/CoreHook.sol";
@@ -107,7 +107,7 @@ contract HookTest is Test, Deployers {
 
         // Cannot re-pause
         vm.prank(address(factory));
-        vm.expectRevert(abi.encodeWithSelector(PausablePool.EnforcedPause.selector));
+        vm.expectRevert(abi.encodeWithSelector(Pausable.EnforcedPause.selector));
         coreHook.pause(poolId);
     }
 
@@ -129,7 +129,7 @@ contract HookTest is Test, Deployers {
 
         // Cannot re-unpause
         vm.prank(address(factory));
-        vm.expectRevert(abi.encodeWithSelector(PausablePool.ExpectedPause.selector));
+        vm.expectRevert(abi.encodeWithSelector(Pausable.ExpectedPause.selector));
         coreHook.unpause(poolId);
     }
 

@@ -73,37 +73,6 @@ library MarketMaker {
         return (tickers, amounts);
     }
 
-    /**
-     * @dev This function is used to convert the state of the market maker to a string
-     * @param state The state to convert to a string
-     * @return result The string representation of the state
-     */
-    function toString(State memory state) internal pure returns (string memory result) {
-        // Start with the reserves strings
-        result = "";
-
-        result = string(abi.encodePacked(result, "owner:", _addressToString(state.owner)));
-
-        // Add all reserves strings
-        for (uint256 i = 0; i < state.reserves.length; i++) {
-            if (i > 0) {
-                result = string(abi.encodePacked(result, "|"));
-            }
-            result = string(abi.encodePacked(result, _reserveToString(state.reserves[i])));
-        }
-
-        // Add prover
-        if (state.reserves.length > 0) {
-            result = string(abi.encodePacked(result, "|"));
-        }
-        result = string(abi.encodePacked(result, "prover:", state.prover));
-
-        // Add nonce
-        result = string(abi.encodePacked(result, "|nonce:", state.nonce));
-
-        // Add advancer
-        result = string(abi.encodePacked(result, "|advancer:", _addressToString(state.advancer)));
-    }
 
     /**
      * @dev This function is used to convert the state of the market maker to a leaf hash
@@ -111,7 +80,7 @@ library MarketMaker {
      * @return The leaf hash of the state
      */
     function toLeafHash(State memory state) internal pure returns (bytes32) {
-        return sha256(abi.encodePacked(toString(state)));
+        return sha256(abi.encode(state));
     }
 
     /**
@@ -151,14 +120,4 @@ library MarketMaker {
         return string(abi.encodePacked("0x", addressStr));
     }
 
-    /**
-     * @param reserve The reserve to convert to a string
-     * @return The string representation of the reserve
-     */
-    function _reserveToString(Reserve memory reserve) internal pure returns (string memory) {
-        return
-            string(
-                abi.encodePacked("reserves:", reserve.source, ":", reserve.asset, ":", _uintToString(reserve.amount))
-            );
-    }
 }

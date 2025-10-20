@@ -14,7 +14,7 @@ import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
 import {CoreHook} from "../src/CoreHook.sol";
 import {ProxyHook} from "../src/ProxyHook.sol";
 import {LiquidityCommitmentCertificate} from "../src/LCC.sol";
-import {PausablePool} from "../src/modules/PausablePool.sol";
+import {Pausable} from "openzeppelin-contracts/contracts/utils/Pausable.sol";
 import {Deployers} from "@uniswap/v4-core/test/utils/Deployers.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
@@ -212,7 +212,7 @@ contract MarketFactoryTest is Test, Deployers {
 
         // Cannot re-pause
         vm.prank(owner);
-        vm.expectRevert(abi.encodeWithSelector(PausablePool.EnforcedPause.selector));
+        vm.expectRevert(abi.encodeWithSelector(Pausable.EnforcedPause.selector));
         factory.pause(coreId);
     }
 
@@ -247,7 +247,7 @@ contract MarketFactoryTest is Test, Deployers {
 
         // Cannot re-unpause
         vm.prank(owner);
-        vm.expectRevert(abi.encodeWithSelector(PausablePool.ExpectedPause.selector));
+        vm.expectRevert(abi.encodeWithSelector(Pausable.ExpectedPause.selector));
         factory.unpause(coreId);
     }
 

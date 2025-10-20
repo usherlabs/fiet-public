@@ -5,13 +5,15 @@ import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 import {MarketMaker} from "../../src/libraries/MarketMaker.sol";
 import {console} from "forge-std/console.sol";
-import {ShaMerkle} from "../../src/libraries/ShaMerkle.sol";
+import {MerkleProofVerifier} from "../../src/libraries/MerkleProofVerifier.sol";
+import {MerkleProofGenerator} from "../libraries/MerkleProofGenerator.sol";
 import {LiquiditySignal} from "../../src/types/Position.sol";
 import {Test} from "forge-std/Test.sol";
 
 abstract contract MarketMakerTestBase is Test {
     using MarketMaker for MarketMaker.State;
-    using ShaMerkle for bytes32[];
+    using MerkleProofVerifier for bytes32[];
+    using MerkleProofGenerator for bytes32[];
     using ECDSA for bytes32;
     using MessageHashUtils for bytes32;
 
@@ -54,7 +56,7 @@ abstract contract MarketMakerTestBase is Test {
         }
 
         // using the states, generate the merkle root hash for the states
-        bytes32 merkleRootHash = ShaMerkle.generateMerkleRoot(merkleLeaves);
+        bytes32 merkleRootHash = merkleLeaves.generateMerkleRoot();
 
         // generate liquidity signals for each market maker
         LiquiditySignal[] memory liquiditySignals = new LiquiditySignal[](numOfMarketMakers);
@@ -76,7 +78,7 @@ abstract contract MarketMakerTestBase is Test {
                 // the ic canister's signature of the payload(merkle root hash and the nonce)
                 rootHashSignature: icCanisterMerkleRootHashSignature,
                 // the merkle proof of the market maker state
-                merkleProof: ShaMerkle.generateProof(merkleLeaves, i),
+                merkleProof: merkleLeaves.generateProof(i),
                 // the market maker state
                 mmState: marketMakerStates[i].state,
                 // the signature of the market maker state and the nonce
