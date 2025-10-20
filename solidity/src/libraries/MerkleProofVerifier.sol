@@ -19,5 +19,4 @@ library MerkleProofVerifier {
         // return processProof(proof, leaf) == root;
         return MerkleProofLib.verify(proof, root, leaf);
     }
-
 }

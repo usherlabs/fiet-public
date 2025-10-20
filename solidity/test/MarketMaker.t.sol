@@ -20,7 +20,6 @@ contract MarketMakerTest is MarketMakerTestBase {
         icVerifier = new ICSpokeVerifier(icCanister);
     }
 
-
     function test_marketMaker_toLeafHash() public view {
         // Test to_leaf_hash function
         bytes32 leafHash = liquiditySignal.mmState.toLeafHash();

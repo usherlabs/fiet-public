@@ -73,7 +73,6 @@ library MarketMaker {
         return (tickers, amounts);
     }
 
-
     /**
      * @dev This function is used to convert the state of the market maker to a leaf hash
      * @param state The state to convert to a leaf hash
@@ -119,5 +118,4 @@ library MarketMaker {
         string memory addressStr = HexStrings.toHexStringNoPrefix(uint256(uint160(_address)), 20);
         return string(abi.encodePacked("0x", addressStr));
     }
-
 }

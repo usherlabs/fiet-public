@@ -43,11 +43,7 @@ contract MerkleTreeTest is Test {
         bytes32[] memory proof = MerkleProofGenerator.generateProof(leaves, 1);
 
         // Use wrong leaf
-        bool isValid = MerkleProofVerifier.verify(
-            proof,
-            root,
-            hash("wrong_leaf")
-        );
+        bool isValid = MerkleProofVerifier.verify(proof, root, hash("wrong_leaf"));
         assertFalse(isValid);
     }
 
