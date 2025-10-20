@@ -467,8 +467,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         (uint256 lcc0Price, uint256 price0Decimal) = ILCC(lcc0).usdPrice(address(0));
         (uint256 lcc1Price, uint256 price1Decimal) = ILCC(lcc1).usdPrice(address(0));
 
-        uint256 totalLCCValue =
-            ((lcc0Price * unsettledAmount0) / 10 ** price0Decimal)
+        uint256 totalLCCValue = ((lcc0Price * unsettledAmount0) / 10 ** price0Decimal)
             + ((lcc1Price * unsettledAmount1) / 10 ** price1Decimal);
 
         return totalLCCValue;

@@ -476,8 +476,8 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         uint256 token0UAAfterSeizure = Currency.wrap(lcc0.underlyingAsset()).balanceOf(address(guarantor));
 
         // get the expected balance of the underlying assets after seizure
-        uint256 expectedGuarantorToken0UAAfterSeizure =
-            token0UABeforeSeizure + LiquidityUtils.safeInt128ToUint256(expectedSettlementFractionDelta.amount0())
+        uint256 expectedGuarantorToken0UAAfterSeizure = token0UABeforeSeizure
+            + LiquidityUtils.safeInt128ToUint256(expectedSettlementFractionDelta.amount0())
             - LiquidityUtils.safeInt128ToUint256(rfsDelta.amount0());
 
         PositionMeta memory positionAfterSeizure = positionManager.getPosition(tokenId, 0);
@@ -498,8 +498,8 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             toBalanceDelta(finalSettledAmount0.toInt128(), finalSettledAmount1.toInt128());
         uint256 expectedRemainingSettlement0ForPosition =
             LiquidityUtils.safeInt128ToUint256(initialSettledBalanceDelta.amount0())
-            + LiquidityUtils.safeInt128ToUint256(rfsDelta.amount0())
-            - LiquidityUtils.safeInt128ToUint256(expectedSettlementFractionDelta.amount0());
+                + LiquidityUtils.safeInt128ToUint256(rfsDelta.amount0())
+                - LiquidityUtils.safeInt128ToUint256(expectedSettlementFractionDelta.amount0());
 
         // validate the remaining settlement for the position is as expected
         assertEq(
@@ -586,9 +586,8 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         uint256 token0UAAfterSeizure = Currency.wrap(lcc0.underlyingAsset()).balanceOf(address(guarantor));
 
         // get the expected balance of the underlying assets after seizure
-        uint256 expectedGuarantorToken0UAAfterSeizure =
-            token0UABeforeSeizure + LiquidityUtils.safeInt128ToUint256(expectedSettlementFractionDelta.amount0())
-            - amount0ToSettle;
+        uint256 expectedGuarantorToken0UAAfterSeizure = token0UABeforeSeizure
+            + LiquidityUtils.safeInt128ToUint256(expectedSettlementFractionDelta.amount0()) - amount0ToSettle;
 
         PositionMeta memory positionAfterSeizure = positionManager.getPosition(tokenId, 0);
 
@@ -609,7 +608,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         uint256 expectedRemainingSettlement0ForPosition =
             LiquidityUtils.safeInt128ToUint256(initialSettledBalanceDelta.amount0()) + amount0ToSettle
-            - LiquidityUtils.safeInt128ToUint256(expectedSettlementFractionDelta.amount0());
+                - LiquidityUtils.safeInt128ToUint256(expectedSettlementFractionDelta.amount0());
 
         // validate the remaining settlement for the position is as expected
         assertEq(
@@ -1054,8 +1053,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         // get the position after reallocation
         PositionMeta memory positionAfterReallocation = positionManager.getPosition(tokenId, 0);
         // validate the liquidity in the position is reduced by 20%
-        uint256 expectedLiquidityAfterReallocation =
-            uint256(positionBeforeReallocation.liquidity)
+        uint256 expectedLiquidityAfterReallocation = uint256(positionBeforeReallocation.liquidity)
             - Math.mulDiv(uint256(positionBeforeReallocation.liquidity), deficitFraction, LiquidityUtils.ONE_BIP);
         assertEq(uint256(positionAfterReallocation.liquidity), expectedLiquidityAfterReallocation);
     }
