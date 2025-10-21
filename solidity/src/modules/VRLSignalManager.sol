@@ -11,12 +11,7 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {LiquiditySignal} from "../types/Position.sol";
 import {IOracle} from "../interfaces/IOracle.sol";
 import {IOracleRegistry} from "../interfaces/IOracleRegistry.sol";
-import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
-import {ILCC} from "../interfaces/ILCC.sol";
-import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
-import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
-import {LiquidityUtils} from "../libraries/LiquidityUtils.sol";
-import {IVTSManager} from "../interfaces/IVTSManager.sol";
+// removed unused imports after solvency removal
 
 contract VRLSignalManager is Ownable {
     ISpokeVerifier public verifier;
@@ -69,24 +64,7 @@ contract VRLSignalManager is Ownable {
      * @dev This function is used to verify the liquidity signal and makes sure it updates the nonce for the mm
      * @param liquiditySignal The liquidity signal to verify
      */
-    function verifyLiquiditySignalSolvency(
-        PoolKey calldata poolKey,
-        bytes memory liquiditySignal,
-        ModifyLiquidityParams memory liquidityParams
-    ) public returns (uint256, uint256, uint256) {
-        LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
-
-        // verify the proofs associated with the state
-        bool isSignalValid = verifyLiquiditySignal(signal);
-        // if the proof is invalid, revert
-        if (!isSignalValid) {
-            revert InvalidProof();
-        }
-
-        // check the solvency of the signal
-        // reverts if insolvent
-        return checkSignalSolvency(poolKey, liquiditySignal, liquidityParams);
-    }
+    // removed: verifyLiquiditySignalSolvency
 
     /**
      * @dev This function is used to verify the liquidity signal and return the tickers and amounts of the assets
@@ -116,9 +94,17 @@ contract VRLSignalManager is Ownable {
         }
     }
 
+    // bytes overload to match interface (non-reverting version)
+    function verifyLiquiditySignal(bytes memory liquiditySignal) external returns (bool ok) {
+        LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
+        ok = verifyLiquiditySignal(signal);
+    }
+
     /**
      * Renew a liquidity signal by verifying it and returning the usd value of the signal
      * @param liquiditySignal the signal encoded in bytes
+     * @return totalSignalUsdValue USD value of reserves in the signal
+     * @return expirySeconds seconds until signal expiry from now
      */
     function renewLiquiditySignal(bytes memory liquiditySignal) public returns (uint256, uint256) {
         LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
@@ -134,61 +120,12 @@ contract VRLSignalManager is Ownable {
         return (totalSignalUsdValue, signalExpiryInSeconds);
     }
 
-    /**
-     * @dev This function is used to calculate the solvency of the liquidity signal against the value of the provided lccs
-     *      This function will compare the total USD value of the LCC's to the total USD value of the assets in the liquidity signal
-     *      This function does not verify the signal
-     * @param poolKey The pool key of the liquidity signal
-     * @param liquiditySignal The liquidity signal to calculate the solvency of
-     * @param liquidityParams The liquidity parameters of the liquidity signal
-     * @return totalLCCValue The total USD value of the LCC's
-     * @return totalSignalUsdValue The total USD value of the assets in the liquidity signal
-     * @return signalExpiryInSeconds The expiry in seconds of the liquidity signal
-     */
-    function checkSignalSolvency(
-        PoolKey calldata poolKey,
-        bytes memory liquiditySignal,
-        ModifyLiquidityParams memory liquidityParams
-    ) public view returns (uint256, uint256, uint256) {
-        ILCC lcc0 = ILCC(Currency.unwrap(poolKey.currency0));
-        ILCC lcc1 = ILCC(Currency.unwrap(poolKey.currency1));
+    // removed: checkSignalSolvency (documentation cleaned up)
 
-        // if the signal is zero bytes then revert
-        if (liquiditySignal.length == 0) {
-            revert InvalidLiquiditySignal();
-        }
+    function verifyLiquiditySignal(bytes memory liquiditySignal, bool revertOnInvalid) external returns (bool ok) {
         LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
-
-        // --- Calculate the total USD value of the LCC's ---
-
-        // get the price of the LCC's
-        address coreHook = IMarketFactory(marketFactory).getCoreHook();
-        address marketOracleFactory = IVTSManager(coreHook).getMarketVTSConfiguration(poolKey.toId()).oracleFactory;
-
-        (uint256 lcc0Amount, uint256 lcc1Amount) = LiquidityUtils.calculateCommitmentMaxima(
-            liquidityParams.tickLower, liquidityParams.tickUpper, uint128(uint256(liquidityParams.liquidityDelta))
-        );
-
-        (uint256 lcc0Price, uint256 lcc0Decimals) = lcc0.usdPrice(marketOracleFactory);
-        (uint256 lcc1Price, uint256 lcc1Decimals) = lcc1.usdPrice(marketOracleFactory);
-
-        // total normalised to USD value of the LCCs
-        uint256 totalLCCValue =
-            ((lcc0Price * lcc0Amount) / 10 ** lcc0Decimals) + ((lcc1Price * lcc1Amount) / 10 ** lcc1Decimals);
-
-        // --- Calculate the total USD value of the assets in the liquidity signal ---
-        (string[] memory tickers, uint256[] memory amounts) = signal.mmState.getReserves();
-        uint256 totalSignalUsdValue = getTotalUsdValue(tickers, amounts);
-
-        //  Position is solvent if the total LCC value is greater than or equal to the total signal usd value
-        bool isSolvent = totalSignalUsdValue >= totalLCCValue;
-
-        // if the position is not solvent, revert
-        if (!isSolvent) {
-            revert InsufficientLiquidityInSignal();
-        }
-
-        return (totalLCCValue, totalSignalUsdValue, signalExpiryInSeconds);
+        ok = verifyLiquiditySignal(signal);
+        if (revertOnInvalid && !ok) revert InvalidProof();
     }
 
     /**

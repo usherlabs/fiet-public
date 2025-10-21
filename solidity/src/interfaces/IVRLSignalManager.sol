@@ -1,10 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import {LiquiditySignal} from "../types/Position.sol";
-import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
-import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
-import {ModifyLiquidityParams} from "v4-periphery/lib/v4-core/src/types/PoolOperation.sol";
+// trimmed imports after interface clean-up
 
 interface IVRLSignalManager {
     // Events
@@ -22,23 +19,18 @@ interface IVRLSignalManager {
     function verifier() external view returns (address);
 
     function oracleRegistry() external view returns (address);
+    function signalExpiryInSeconds() external view returns (uint256);
 
     function getTotalUsdValue(string[] memory tickers, uint256[] memory amounts) external view returns (uint256);
 
     // External functions
     function setVerifier(address _newVerifier) external;
 
-    function checkSignalSolvency(
-        PoolKey calldata poolKey,
-        bytes memory liquiditySignal,
-        ModifyLiquidityParams memory liquidityParams
-    ) external returns (uint256, uint256, uint256);
+    // Verify a signal (bytes-encoded). Returns true on success.
+    function verifyLiquiditySignal(bytes memory liquiditySignal) external returns (bool);
 
-    function verifyLiquiditySignalSolvency(
-        PoolKey calldata poolKey,
-        bytes memory liquiditySignal,
-        ModifyLiquidityParams memory liquidityParams
-    ) external returns (uint256, uint256, uint256);
+    // Verify a signal and optionally revert on invalid.
+    function verifyLiquiditySignal(bytes memory liquiditySignal, bool revertOnInvalid) external returns (bool);
 
     function renewLiquiditySignal(bytes memory liquiditySignal) external returns (uint256, uint256);
 }
