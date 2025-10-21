@@ -309,3 +309,22 @@ forge script script/DeployComplete.s.sol --sig "verifyDeployment()" --rpc-url <r
 4. Run tests: `forge test`
 5. Run quality checks: `make quality`
 6. Submit a pull request
+
+# README UPDATES
+
+MMPositionManager actions:
+
+```solidity
+// INCREASE
+bytes memory incParams = abi.encode(poolKey, tokenId, positionIndex, uint256(1e18));
+bytes memory decParams = abi.encode(poolKey, tokenId, positionIndex, uint256(5e17));
+bytes memory actions = abi.encodePacked(
+    bytes1(uint8(MMAction.INCREASE_LIQUIDITY)),
+    bytes1(uint8(MMAction.DECREASE_LIQUIDITY))
+);
+bytes[] memory params = new bytes[](2);
+params[0] = incParams;
+params[1] = decParams;
+
+mmp.modifyLiquiditiesWithoutUnlock(actions, params);
+```
