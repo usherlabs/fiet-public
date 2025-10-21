@@ -29,6 +29,12 @@ import {MarketTestBase} from "./modules/MarketTestBase.sol";
 import {SwapSimulator} from "../src/libraries/SwapSimulator.sol";
 import {IMarketVault} from "../src/interfaces/IMarketVault.sol";
 
+/**
+ * 22nd October 2025 - ProxyHookTest.sol
+ *     - Fail signature shows wrapper from ProxyHook address. With verbosity logs earlier, we saw SenderNotIssuer when ProxyHook called LCC.unwrapFromVault due to proxyHookToCurrencyPair returning 0,0 — we’ve corrected that in MarketTestBase to map to the LCCs’ underlying asset addresses. After that change, the suite progressed further but setUp moved to passing and individual proxy swap tests still revert.
+ *     - The remaining Proxy swap test reverts are thrown by ProxyHook, likely on deficit recipient or flow guards. But the error selector in the latest runs shows generic revert without decoded custom error. We’ll address them next by ensuring the excess-recipient hookData is valid or by letting swaps operate without overflow. Given determineExcessRecipient returns address(0) by default, ProxyHook’s logic already guards to not emit and not set deficit recipient. The more likely culprit is insufficient available inMarket balances causing internal steps to underflow flow constraints.
+ *     - We already mocked proxyHookToCurrencyPair correctly and MarketVault is active; next fix is to ensure balances in ProxyHook’s MarketVault are sufficient before proxy swaps. In these tests, initial inMarket balances exist via initial core LP providing LCC backing and on-direct LP path; however, ProxyHook’s settlement path first calls settleFromLCCToVault on direct LP events only. The proxy swap tests don’t perform direct LP and rely on pre-seeded inMarket balances from the setup. The harness has lcc0.wrap/lcc1.wrap(initialLiquidity) followed by core pool add-liquidity and ProxyHook._onDirectLP crediting vault from LCC on direct LP. That flow is working for “core” swap tests (they pass), but proxy swap is still reverting.
+ */
 contract ProxyHookTest is MarketTestBase {
     using PoolIdLibrary for PoolId;
     using CurrencyLibrary for Currency;

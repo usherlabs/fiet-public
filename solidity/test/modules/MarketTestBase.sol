@@ -152,15 +152,21 @@ abstract contract MarketTestBase is Test, Deployers {
         uint160 coreFlags = HookFlags.CORE_HOOK_FLAGS;
         coreHookAddress = address(coreFlags);
 
-        // Deploy CoreHook (calculator set to address(0))
-        deployCodeTo("CoreHook.sol", abi.encode(manager, marketFactory, mmPositionManager, address(0)), coreHookAddress);
+        // Deploy CoreHook (calculator set to address(0)) if not already deployed at flagged address
+        if (coreHookAddress.code.length == 0) {
+            deployCodeTo(
+                "CoreHook.sol", abi.encode(manager, marketFactory, mmPositionManager, address(0)), coreHookAddress
+            );
+        }
 
         // Compute proxy hook address
         uint160 proxyFlags = HookFlags.PROXY_HOOK_FLAGS;
         address proxyHookAddress = address(proxyFlags);
 
-        // Deploy ProxyHook
-        deployCodeTo("ProxyHook.sol", abi.encode(manager, marketFactory), proxyHookAddress);
+        // Deploy ProxyHook if not already deployed at flagged address
+        if (proxyHookAddress.code.length == 0) {
+            deployCodeTo("ProxyHook.sol", abi.encode(manager, marketFactory), proxyHookAddress);
+        }
         proxyHook = ProxyHook(proxyHookAddress);
         mv = IMarketVault(address(proxyHook));
 
@@ -176,10 +182,12 @@ abstract contract MarketTestBase is Test, Deployers {
         // LCC makes a call onTransfer to check if transfer is within bounds
         // set it to true i.e Market Tracking would be disabled since we do not track addresses that are within bounds
         vm.mockCall(marketFactory, abi.encodeWithSelector(IMarketFactory.bounds.selector), abi.encode(true));
+        // Note: proxyHookToCurrencyPair mock is configured after LCC deployment below
+        // Ensure LCC.usdPrice() resolves the Oracle Registry via MarketFactory
         vm.mockCall(
             marketFactory,
-            abi.encodeWithSelector(IMarketFactory.proxyHookToCurrencyPair.selector),
-            abi.encode(Currency.unwrap(_currency2), Currency.unwrap(_currency3))
+            abi.encodeWithSelector(IMarketFactory.oracleRegistry.selector),
+            abi.encode(address(oracleRegistry))
         );
         // mock the call to get the market VTS configuration
         vm.mockCall(
@@ -211,8 +219,23 @@ abstract contract MarketTestBase is Test, Deployers {
         LiquidityCommitmentCertificate lcc0 = LiquidityCommitmentCertificate(Currency.unwrap(_currency2));
         LiquidityCommitmentCertificate lcc1 = LiquidityCommitmentCertificate(Currency.unwrap(_currency3));
 
+        // Ensure ProxyHook recognised as market vault by returning underlying assets for the proxy's pool
+        vm.mockCall(
+            marketFactory,
+            abi.encodeWithSelector(IMarketFactory.proxyHookToCurrencyPair.selector, proxyHookAddress),
+            abi.encode(lcc0.underlyingAsset(), lcc1.underlyingAsset())
+        );
+
         _currency0.transfer(address(this), initialLiquidity);
         _currency1.transfer(address(this), initialLiquidity);
+
+        // Ensure ProxyHook is recognised as the market vault for the LCC's underlying assets
+        // Return the underlying asset pair for the proxy hook (not the LCC token addresses)
+        vm.mockCall(
+            marketFactory,
+            abi.encodeWithSelector(IMarketFactory.proxyHookToCurrencyPair.selector, proxyHookAddress),
+            abi.encode(lcc0.underlyingAsset(), lcc1.underlyingAsset())
+        );
 
         IERC20Minimal(lcc0.underlyingAsset()).approve(address(lcc0), initialLiquidity);
         lcc0.wrap(initialLiquidity);
@@ -226,7 +249,7 @@ abstract contract MarketTestBase is Test, Deployers {
         );
         vm.mockCall(
             marketFactory,
-            abi.encodeWithSelector(IMarketFactory.corePoolToCurrencyPair.selector),
+            abi.encodeWithSelector(IMarketFactory.corePoolToCurrencyPair.selector, PoolId.unwrap(corePoolKey.toId())),
             abi.encode(Currency.unwrap(_currency2), Currency.unwrap(_currency3))
         );
 

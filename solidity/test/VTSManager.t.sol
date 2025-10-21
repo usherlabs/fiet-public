@@ -34,6 +34,7 @@ contract VTSManagerTest is Test, MarketTestBase {
 
     function setUp() public {
         _setupMarket();
+        // Updated MockVTSManager constructor includes calculator (passed as address(0) in the mock's base)
         vtsManager = new MockVTSManager(address(manager), MOCK_MARKET_FACTORY, MOCK_MM_POSITION_MANAGER);
     }
 

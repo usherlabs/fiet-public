@@ -51,7 +51,8 @@ library MMActionAdapter {
         bytes1[] memory acts = new bytes1[](1);
         acts[0] = bytes1(uint8(MMPositionManager.MMAction.DECREASE_LIQUIDITY));
         bytes[] memory params = new bytes[](1);
-        params[0] = abi.encode(poolKey, tokenId, idx, tu, tl, amt);
+        // New signature expects only (PoolKey, tokenId, positionIndex, amountToDecrease)
+        params[0] = abi.encode(poolKey, tokenId, idx, amt);
         mmpm.modifyLiquiditiesWithoutUnlock(_concat(acts), params);
     }
 
