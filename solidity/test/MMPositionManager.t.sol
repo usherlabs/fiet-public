@@ -134,7 +134,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         // Get the amount of LCC tokens that will be minted
         (uint256 token0AmountMinted, uint256 token1AmountMinted) =
-            LiquidityUtils.calculateTokenAmountsFromPositionParams(manager, corePoolKey, liquidityParams);
+            LiquidityUtils.calculateEffectiveTokenAmounts(manager, corePoolKey, liquidityParams);
 
         // Get amount of underlying liquidity to transfer from the issuer to the lcc
         (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) =
@@ -434,7 +434,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         // Get amount of underlying liquidity to transfer from the issuer to the lcc
         (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) =
-            LiquidityUtils.calculateTokenAmountsFromPositionParams(manager, corePoolKey, liquidityParams);
+            LiquidityUtils.calculateEffectiveTokenAmounts(manager, corePoolKey, liquidityParams);
 
         // Approve the position manager to take the base/minimum underlying liquidity to create to the position
         ERC20(lcc0.underlyingAsset()).approve(address(mmPositionManager), underlyingLiquidityFraction0);

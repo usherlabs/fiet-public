@@ -182,14 +182,14 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
         _incrementCoverage(marketId, amount);
     }
 
-    // Called by Issuer before settling liquidity from LCCs to the market.
+    // Called by Issuer before settling underlying liquidity from LCCs to the market.
     function prepareSettle(uint256 amount) external onlyMarketVault {
         // Allow issuer to facilitate direct liquidity provision transfer of underlying tokens
         ERC20(underlyingAsset).approve(msg.sender, amount);
         uaSupply -= amount;
     }
 
-    // Called by Issuer after taking liquidity from the market to LCC.
+    // Called by MarketVault after taking underlying liquidity from the market to LCC.
     // Accounts for Vault -> LCC. if shouldProcessQueue is true, Vault -> Recipients.
     function confirmTake(bytes32 marketId, uint256 amount, bool shouldProcessQueue) external onlyMarketVault {
         // Track which market this underlying asset liquidity derived from.
@@ -199,6 +199,12 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
         if (shouldProcessQueue) {
             _processSettlementQueue(marketId, amount, true);
         }
+    }
+
+    // Called by MMP to transfer LLCs and track market source.
+    function transferAndTrack(address to, bytes32 marketId, uint256 amount) external onlyIssuer {
+        transfer(to, amount);
+        _trackMarketAcquisition(to, marketId, amount);
     }
 
     // DirectLPs and Traders engaging the CorePool directly will need LCC. LCC is 1:1 with the underlying asset.

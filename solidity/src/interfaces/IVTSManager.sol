@@ -27,11 +27,14 @@ interface IVTSManager {
         view
         returns (uint256 amount0, uint256 amount1);
 
+    function getPositionSettledAmounts(PositionId[] calldata positionIds)
+        external
+        view
+        returns (uint256 amount0, uint256 amount1);
+
     function calcSeizure(PositionId positionId, BalanceDelta settleDelta, RFSCheckpoint calldata checkpoint)
         external
         returns (uint256 seizedLiquidityUnits);
-
-    function getPositionUnsettledUSDValue(PoolId marketId, PositionId positionId) external view returns (uint256);
 
     function incrementCoverage(PoolId poolId, uint256 amount) external;
 

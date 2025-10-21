@@ -29,8 +29,10 @@ import {IPositionIndex} from "./interfaces/IPositionIndex.sol";
 import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
 import {FullMath} from "v4-periphery/lib/v4-core/src/libraries/FullMath.sol";
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
+import {TransientStateLibrary} from "v4-periphery/lib/v4-core/src/libraries/TransientStateLibrary.sol";
 import {RFSCheckpointModule} from "./modules/RFSCheckpoint.sol";
 import {Strings} from "openzeppelin-contracts/contracts/utils/Strings.sol";
+import {IPositionManager} from "v4-periphery/src/interfaces/IPositionManager.sol";
 
 interface ICommitmentDescriptor {
     function tokenURI(address manager, uint256 tokenId) external view returns (string memory);
@@ -45,11 +47,12 @@ contract MMPositionManager is
     Multicall_v4,
     BaseActionsRouter
 {
-    using SafeCast for *;
+    using SafeCast for uint256;
     using MarketVTSConfigurationLibrary for MarketVTSConfiguration;
     using PositionLibrary for PositionId;
-    using StateLibrary for IPoolManager;
     using MarketMaker for MarketMaker.State;
+    using StateLibrary for IPoolManager;
+    using TransientStateLibrary for IPoolManager;
 
     error InvalidDelta(int128 amount0, int128 amount1);
     error InvalidAmount(uint256 amount, uint256 maxAmount);
@@ -67,7 +70,6 @@ contract MMPositionManager is
     address public immutable marketFactory;
     address public immutable commitmentDescriptor;
     uint256 private nextTokenId = 1;
-    IPoolManager private poolManager;
     IVRLSignalManager public immutable signalManager;
     mapping(uint256 => mapping(uint256 => PositionId)) public commitToPosition;
     mapping(uint256 => uint256) public commitToPositionCount;
@@ -93,12 +95,10 @@ contract MMPositionManager is
     }
 
     constructor(address _manager, address _signalManager, address _marketFactory, address _descriptor)
-        LiquidityRouter(_manager)
         ERC721Permit_v4("Fiet VRL Commitment Positions Manager", "FIET-VRL-MMP")
         BaseActionsRouter(IPoolManager(_manager))
     {
         marketFactory = _marketFactory;
-        poolManager = IPoolManager(_manager);
         signalManager = IVRLSignalManager(_signalManager);
         commitmentDescriptor = _descriptor;
     }
@@ -114,14 +114,14 @@ contract MMPositionManager is
     /// @param tokenId the unique identifier of the ERC721 token
     /// @dev either msg.sender or msgSender() is passed in as the caller
     /// msgSender() should ONLY be used if this is called from within the unlockCallback, unless the codepath has reentrancy protection
-    modifier onlyIfApproved(address caller, uint256 tokenId) override {
-        if (!_isApprovedOrOwner(caller, tokenId)) revert NotApproved(caller);
+    modifier onlyIfApproved(address caller, uint256 tokenId) {
+        _assertApprovedOrOwner(caller, tokenId);
         _;
     }
 
     /// @notice Enforces that the PoolManager is locked.
-    modifier onlyIfPoolManagerLocked() override {
-        if (poolManager.isUnlocked()) revert PoolManagerMustBeLocked();
+    modifier onlyIfPoolManagerLocked() {
+        if (poolManager.isUnlocked()) revert IPositionManager.PoolManagerMustBeLocked();
         _;
     }
 
@@ -190,6 +190,10 @@ contract MMPositionManager is
         return m.owner == address(this) && m.isActive;
     }
 
+    function _assertApprovedOrOwner(address caller, uint256 tokenId) internal view {
+        if (!_isApprovedOrOwner(caller, tokenId)) revert NotApproved(caller);
+    }
+
     function _assertSignalValid(uint256 tokenId) internal view {
         if (commitOf[tokenId].state.expiresAt < block.timestamp) {
             revert SignalExpired(tokenId);
@@ -203,7 +207,7 @@ contract MMPositionManager is
     }
 
     /// @inheritdoc BaseActionsRouter
-    function msgSender() public view override returns (address) {
+    function msgSender() public view override(BaseActionsRouter, LiquidityRouter) returns (address) {
         return _getLocker();
     }
 
@@ -252,8 +256,8 @@ contract MMPositionManager is
             return;
         }
         if (action == uint256(MMAction.MINT_POSITION)) {
-            (PoolKey memory poolKey, uint256 tokenId, int24 tickLower, int24 tickUpper, int256 liquidity) =
-                abi.decode(params, (PoolKey, uint256, int24, int24, int256));
+            (PoolKey memory poolKey, uint256 tokenId, int24 tickLower, int24 tickUpper, uint256 liquidity) =
+                abi.decode(params, (PoolKey, uint256, int24, int24, uint256));
             _mintPosition(poolKey, tokenId, tickLower, tickUpper, liquidity);
             return;
         }
@@ -281,7 +285,8 @@ contract MMPositionManager is
             PositionMeta memory position = getPosition(tokenId, positionIndex);
             _assertSignalValid(tokenId);
             _assertCommitForPool(poolKey, tokenId);
-            _decrease(poolKey, position, _positionSalt(tokenId, positionIndex), amountToDecrease);
+            _assertApprovedOrOwner(msgSender(), tokenId);
+            _decrease(poolKey, position, _positionSalt(tokenId, positionIndex), amountToDecrease, true);
             return;
         }
         if (action == uint256(MMAction.BURN_POSITION)) {
@@ -289,6 +294,7 @@ contract MMPositionManager is
                 abi.decode(params, (PoolKey, uint256, uint256));
             _assertSignalValid(tokenId);
             _assertCommitForPool(poolKey, tokenId);
+            _assertApprovedOrOwner(msgSender(), tokenId);
             _burnPosition(poolKey, tokenId, positionIndex);
             return;
         }
@@ -378,7 +384,7 @@ contract MMPositionManager is
                 sender, proxyHook, LiquidityUtils.safeInt128ToUint256(settlementDelta.amount0())
             );
         }
-        if (settlementDelta.amount0() > 0) {
+        if (settlementDelta.amount1() > 0) {
             IERC20Minimal(ua1).transferFrom(
                 sender, proxyHook, LiquidityUtils.safeInt128ToUint256(settlementDelta.amount1())
             );
@@ -468,12 +474,12 @@ contract MMPositionManager is
     function _sumSettledAmountsForCommit(uint256 tokenId) internal view returns (uint256 s0, uint256 s1) {
         uint256 n = commitToPositionCount[tokenId];
         IVTSManager vts = _getVTSManager();
+        PositionId[] memory pids = new PositionId[](n);
         for (uint256 i = 0; i < n; i++) {
             PositionId pid = getPositionId(tokenId, i);
-            (uint256 a0, uint256 a1) = vts.getPositionSettledAmounts(pid);
-            s0 += a0;
-            s1 += a1;
+            pids[i] = pid;
         }
+        (s0, s1) = vts.getPositionSettledAmounts(pids);
     }
 
     /// @dev Re-composes effective LCC amounts across all positions at the current pool price.
@@ -664,7 +670,7 @@ contract MMPositionManager is
         PositionMeta memory pos = getPosition(tokenId, positionIndex);
         uint256 completeLiquidity = uint256(pos.liquidity);
         PositionId pid = getPositionId(tokenId, positionIndex);
-        BalanceDelta ret = _decrease(poolKey, pos, _positionSalt(tokenId, positionIndex), completeLiquidity);
+        BalanceDelta ret = _decrease(poolKey, pos, _positionSalt(tokenId, positionIndex), completeLiquidity, true);
         return ret;
     }
 
@@ -689,8 +695,9 @@ contract MMPositionManager is
 
         // mint the tokens required to facilitate this liquidity addition
         (uint160 sqrtPriceX96, int24 currentTick,,) = poolManager.getSlot0(poolKey.toId());
-        (uint256 lcc0AmountToMint, uint256 lcc1AmountToMint) =
-            LiquidityUtils.calculateEffectiveTokenAmounts(sqrtPriceX96, currentTick, tickLower, tickUpper, liquidity);
+        (uint256 lcc0AmountToMint, uint256 lcc1AmountToMint) = LiquidityUtils.calculateEffectiveTokenAmounts(
+            sqrtPriceX96, currentTick, tickLower, tickUpper, liquidity.toInt256()
+        );
 
         // Solvency gate: effective LCC (including prospective) <= signal + settled
         _assertCommitmentSolventStored(tokenId, lcc0AmountToMint, lcc1AmountToMint);
@@ -728,16 +735,22 @@ contract MMPositionManager is
      * @param position The position to liquidate
      * @param salt The salt of the position
      * @param amountToLiquidate The amount of liquidity to liquidate
+     * @param byApprovedOrOwner Whether the caller is the approved or owner of the Commit (therefore, the position)
+     * @return returnDelta The balance delta of excess (above new lower commitmentMaxima) settlement returned.
      * @dev make sure to settle the underlying assets before calling this function
      *      because this function could potentially mark the position as inactive
      *      and if the position is inactive, then the call to modify the underlying assets will fail
      */
     /// @dev Decrease position liquidity by amountToDecrease and settle underlying changes.
     ///      Mirrors native PositionManager _decrease semantics (first modify, then settle flows).
-    function _decrease(PoolKey memory poolKey, PositionMeta memory position, bytes32 salt, uint256 amountToDecrease)
-        internal
-        returns (BalanceDelta returnDelta)
-    {
+    ///      Returns the balance delta of excess (above new lower commitmentMaxima) settlement returned.
+    function _decrease(
+        PoolKey memory poolKey,
+        PositionMeta memory position,
+        bytes32 salt,
+        uint256 amountToDecrease,
+        bool byApprovedOrOwner
+    ) internal returns (BalanceDelta returnDelta) {
         // validate liquidity is not over available
         if (uint256(position.liquidity) < amountToDecrease) {
             revert InvalidAmount(amountToDecrease, uint256(position.liquidity));
@@ -745,7 +758,7 @@ contract MMPositionManager is
 
         // remove the liquidity from the pool
         // By calling this, CoreHook afterRemoveLiquidity will be called to deactivate the position.
-        (PositionId posId,) = _callModifyLiquidity(
+        (PositionId posId, BalanceDelta positionDelta) = _callModifyLiquidity(
             poolKey,
             ModifyLiquidityParams({
                 tickLower: position.tickLower,
@@ -768,18 +781,6 @@ contract MMPositionManager is
         // reference: solidity/src/modules/VTSManager.sol _touchPosition
         returnDelta = _settleUnderlying(posId, poolKey.toId(), BalanceDeltaLibrary.ZERO_DELTA, ua0, ua1);
 
-        // TODO: LCC cancellation should only occur on signal decommit or LCC unwrap. Once we Commitment -> LCC restructure, this because simpler to manage.
-        // ? ----- During decommit, signal value must match LCC value in vault (no positions). ie. "LCCs are solvent, and entirely in my possession (In Commit Vault), and therefore I cancel/burn LCCs".
-        // ? ----- ----- By minting all LCCs upfront, and issue/cancel in bulk, rather than per position, we minimise dependency on Oracle value normalisation, and can utilise total LCCs minted per commitment to restrict position management.
-        // ? ----- ----- However, it causes LCCs issued to be 1:1 with committed amounts, rather than 1:1 with the commitment utilised amounts. The latter allows us to burn without total signal value matching. Only the the value of the amount issued needs solvency before decommit.
-        // ? ----- During seize, Guarantor acquires LCCs from MM. Guarantor will settle the position, covering the MM's deficit, receiving their portioned position, and then liquidating it.
-        // // ? ----- -----  The outcome is that Guarantors force settlement, because unwrap of LCCs acquired via the position will draw on the MM's reserve liquidity.
-        // // ? ----- -----  This also means we need to track LCCs acquired by seizure from a market in _marketLiquidity. OR that we attribute deficit to the original MM? Well the original deficit will not be covered?
-        // ? ----- ----- Guarantor receives LCCs for this liquidation, NOT underlying assets (as the settlement covers deficits). However, on LCC unwrap, it must know which market (or position/commitment) it derived from.
-        // ? ----- ----- LCCs acquired by seizure from a market must be tracked in _marketLiquidity. Otherwise, how will we know which market to attribute the settlement queue of unwrap to?
-        // ? ----- ----- Original MMs will NOT accrue a deficit, as Guarantor has already settled it. Rather, protocol, proactive liquidity, or settlement queue will cover the seizure unwrap.
-        // ? ----- ----- Is there a math problem here, where inflows attribute to positions, but also cover settlement queue? Inflows/Deficits accrue to the tick. Inflows settle to positions' totalSettledAmount, but also automatically cover settlement queue requirements.
-        // ? ----- ----- This logic should work - as regular settlements to positions also cover settlement queue requirements. Therefore inflows are basically MM-triggered settlements but from traders, in exchange for the position's deficit.
         // ? ----- During seizeCommitment, issued LCCs must remained solvent. RfS positions must be closed across the commitment. Identifying insolvency essentially enables seizure with a skip on gracePeriod validation.
         // // ? ----- ----- Despite the signal value no longer matching LCC value, the open RfS + settled liquidity expresses utilised liquidity.
         // // ? ----- ----- Rather than apportioning the commitment, the entire commitment should be seized.
@@ -789,11 +790,28 @@ contract MMPositionManager is
         // ? ----- ----- This could allow re-use of position seizure, and for all MMs/Guarantors to paritipate on the seizure. The advancer can be given a share of the seized outcome.
         // ? ----- ----- If we adopt an action-dispatcher model as per the Native PositionManager, then MM's can chain actions together, ie. insolvent (prove insolvency), seize position, mint position, etc.
 
-        // if (cancelLCCs) {
-        // burn the LCC originally committed to the position.
-        // lcc0.cancel(LiquidityUtils.safeInt128ToUint256(positionDelta.amount0()));
-        // lcc1.cancel(LiquidityUtils.safeInt128ToUint256(positionDelta.amount1()));
-        // }
+        uint256 a0 = LiquidityUtils.safeInt128ToUint256(positionDelta.amount0());
+        uint256 a1 = LiquidityUtils.safeInt128ToUint256(positionDelta.amount1());
+        if (byApprovedOrOwner) {
+            // burn the LCC originally committed to the position.
+            // VTSManager._touchPosition will assert calcRFS is closed before position modification.
+            if (a0 > 0) {
+                lcc0.cancel(a0);
+            }
+            if (a1 > 0) {
+                lcc1.cancel(a1);
+            }
+        } else {
+            // If we get here, then the position is being seized by a non-approved or owner.
+            // Therefore, we transfer instead of cancel.
+            bytes32 marketId = PoolId.unwrap(poolKey.toId());
+            if (a0 > 0) {
+                lcc0.transferAndTrack(msgSender(), marketId, a0);
+            }
+            if (a1 > 0) {
+                lcc1.transferAndTrack(msgSender(), marketId, a1);
+            }
+        }
     }
 
     /**
@@ -830,22 +848,20 @@ contract MMPositionManager is
         uint256 amount0,
         uint256 amount1
     ) internal returns (BalanceDelta seizedPositionDelta) {
+        // -- Validate the poolKey
+        _assertCommitForPool(poolKey, tokenId);
+
+        // require at least one side is settled
+        if (amount0 == 0 && amount1 == 0) {
+            revert InvalidDelta(0, 0);
+        }
+
         PositionMeta memory position = getPosition(tokenId, positionIndex);
         PositionId positionId = getPositionId(tokenId, positionIndex);
 
         // -- Validate that caller is not position owner
         if (msgSender() == position.owner || position.isActive == false) {
             revert InvalidPosition(tokenId, positionIndex, positionId);
-        }
-
-        // -- Validate the poolKey
-        if (!_isValidPositionForPool(poolKey, position)) {
-            revert InvalidMarket(poolKey);
-        }
-
-        // require at least one side is settled
-        if (amount0 == 0 && amount1 == 0) {
-            revert InvalidDelta(0, 0);
         }
 
         // create a balance delta of the amounts to settle
@@ -868,9 +884,9 @@ contract MMPositionManager is
         // -- Move the underlying liquidity to the to the seizer/caller or to the new position
 
         // -- Liquidate the position partially or fully
-        // do this last because it counld potentially mark the position as inactive and cause some of the above calls to fail as they require an active position
-        // ? _liquidatePosition will utilise the removed liquidity BalanceDelta, forward it to VTSManager.onMMLiquidityModify, where it will tryTake relative to the amount settled.
-        return _liquidatePosition(poolKey, position, _positionSalt(tokenId, positionIndex), seizedLiquidityUnits);
+        // do this last because it could potentially mark the position as inactive and cause some of the above calls to fail as they require an active position
+        // Mirror liquidate by decreasing liquidity by seized units and letting settle logic handle deltas
+        return _decrease(poolKey, position, _positionSalt(tokenId, positionIndex), seizedLiquidityUnits, false);
     }
 
     /**
@@ -884,80 +900,75 @@ contract MMPositionManager is
         internal
         returns (uint256 deficitFractionInBips)
     {
-        assertCommitForPool(poolKey, tokenId);
+        _assertCommitForPool(poolKey, tokenId);
 
-        // verify the new liquidity signal(this increases the nonce of the mm's signals)
-        // get the total usd value of the signal and its expiry time
-        (uint256 totalSignalUsdValue, uint256 signalExpiryInSeconds) =
-            signalManager.renewLiquiditySignal(liquiditySignal);
-        // get the total unsettled value of the position
-        // replaced by effective recomposition solvency; keep legacy math for seizeCommitment path
-        uint256 positionTotalCommitmentsUSDValue = 0;
-        {
-            PoolId poolId = commitOf[tokenId].poolId;
-            (address oracleFactory, address l0, address l1) = _marketOracleFactoryAndPair(poolId);
-            (uint256 e0, uint256 e1) = _effectiveIssuedAmountsForCommit(tokenId);
-            (uint256 s0, uint256 s1) = _sumSettledAmountsForCommit(tokenId);
-            uint256 issuedUsd = _usdValueLccPair(l0, e0, l1, e1, oracleFactory);
-            uint256 settledUsd = _usdValueLccPair(l0, s0, l1, s1, oracleFactory);
-            // Effective commitments = issuedUsd; legacy path used this as “position value”
-            positionTotalCommitmentsUSDValue = issuedUsd > settledUsd ? (issuedUsd - settledUsd) : 0;
-        }
-        // make sure the new signal is insolvent before it can be reallocated
-        if (totalSignalUsdValue >= positionTotalCommitmentsUSDValue) {
-            revert InvalidLiquiditySignal(totalSignalUsdValue, positionTotalCommitmentsUSDValue);
-        }
-        LiquiditySignal memory newSignal = abi.decode(liquiditySignal, (LiquiditySignal));
-        LiquiditySignal memory oldSignal = commitOf[tokenId].state.signal;
-        // validate that new signal belongs to the same mm as the old signal
-        // require caller is advancer, and ensures that the advancer is not the owner of the signal.
-        if (
-            newSignal.mmState.owner != oldSignal.mmState.owner && msgSender() != newSignal.mmState.advancer
-                && newSignal.mmState.advancer == newSignal.mmState.owner
-        ) {
-            revert UnauthorizedSignalOwner();
-        }
-        SignalState memory s = SignalState({signal: newSignal, expiresAt: block.timestamp + signalExpiryInSeconds});
-        commitOf[tokenId].state = s;
+        // // verify the new liquidity signal(this increases the nonce of the mm's signals)
+        // // get the total usd value of the signal and its expiry time
+        // (uint256 totalSignalUsdValue, uint256 signalExpiryInSeconds) =
+        //     signalManager.verifyLiquiditySignal(liquiditySignal, true);
+        // // get the total unsettled value of the position
+        // // replaced by effective recomposition solvency; keep legacy math for seizeCommitment path
+        // uint256 positionTotalCommitmentsUSDValue = 0;
+        // {
+        //     PoolId poolId = commitOf[tokenId].poolId;
+        //     (address oracleFactory, address l0, address l1) = _marketOracleFactoryAndPair(poolId);
+        //     (uint256 e0, uint256 e1) = _effectiveIssuedAmountsForCommit(tokenId);
+        //     (uint256 s0, uint256 s1) = _sumSettledAmountsForCommit(tokenId);
+        //     uint256 issuedUsd = _usdValueLccPair(l0, e0, l1, e1, oracleFactory);
+        //     uint256 settledUsd = _usdValueLccPair(l0, s0, l1, s1, oracleFactory);
+        //     // Effective commitments = issuedUsd; legacy path used this as “position value”
+        //     positionTotalCommitmentsUSDValue = issuedUsd > settledUsd ? (issuedUsd - settledUsd) : 0;
+        // }
+        // // make sure the new signal is insolvent before it can be reallocated
+        // if (totalSignalUsdValue >= positionTotalCommitmentsUSDValue) {
+        //     revert InvalidLiquiditySignal(totalSignalUsdValue, positionTotalCommitmentsUSDValue);
+        // }
+        // LiquiditySignal memory newSignal = abi.decode(liquiditySignal, (LiquiditySignal));
+        // LiquiditySignal memory oldSignal = commitOf[tokenId].state.signal;
+        // // validate that new signal belongs to the same mm as the old signal
+        // // require caller is advancer, and ensures that the advancer is not the owner of the signal.
+        // if (
+        //     newSignal.mmState.owner != oldSignal.mmState.owner && msgSender() != newSignal.mmState.advancer
+        //         && newSignal.mmState.advancer == newSignal.mmState.owner
+        // ) {
+        //     revert UnauthorizedSignalOwner();
+        // }
+        // SignalState memory s = SignalState({signal: newSignal, expiresAt: block.timestamp + signalExpiryInSeconds});
+        // commitOf[tokenId].state = s;
 
-        // get the difference in the usd value of the signal and the position
-        // get the fraction of the deficit of the position, unit is in wad(1e18) for better precision
-        deficitFractionInBips = FullMath.mulDiv(
-            positionTotalCommitmentsUSDValue - totalSignalUsdValue,
-            LiquidityUtils.ONE_BIP,
-            positionTotalCommitmentsUSDValue
-        );
+        // // get the difference in the usd value of the signal and the position
+        // // get the fraction of the deficit of the position, unit is in wad(1e18) for better precision
+        // deficitFractionInBips = FullMath.mulDiv(
+        //     positionTotalCommitmentsUSDValue - totalSignalUsdValue,
+        //     LiquidityUtils.ONE_BIP,
+        //     positionTotalCommitmentsUSDValue
+        // );
 
-        // iterate through all the positions using the position index, then liquidate a percentage given by the deficit fraction
-        uint256 positionCount = commitToPositionCount[tokenId];
-        for (uint256 i = 0; i < positionCount; i++) {
-            PositionMeta memory position = getPosition(tokenId, i);
-            // liquidate a percentage given by the deficit fraction
-            uint256 liquidityToSeize =
-                FullMath.mulDiv(uint256(position.liquidity), deficitFractionInBips, LiquidityUtils.ONE_BIP);
-            _liquidatePosition(poolKey, position, _positionSalt(tokenId, i), liquidityToSeize);
-        }
+        // // iterate through all the positions using the position index, then liquidate a percentage given by the deficit fraction
+        // uint256 positionCount = commitToPositionCount[tokenId];
+        // for (uint256 i = 0; i < positionCount; i++) {
+        //     PositionMeta memory position = getPosition(tokenId, i);
+        //     // liquidate a percentage given by the deficit fraction
+        //     uint256 liquidityToSeize =
+        //         FullMath.mulDiv(uint256(position.liquidity), deficitFractionInBips, LiquidityUtils.ONE_BIP);
+        //     _decrease(poolKey, position, _positionSalt(tokenId, i), liquidityToSeize, false);
+        // }
     }
 
     /**
-     * @dev This function is used to commit a liquidity signal to the position manager
-     *      Commitment creates a new position and attaches it to a token id
-     *      A token id represents a liquidity signal and its validity(before it expires)
-     * @param poolKey The pool key to commit the liquidity signal to
-     * @param tickLower The lower tick of the position
-     * @param tickUpper The upper tick of the position
-     * @param liquidity The liquidity amount to add
-     * @param liquiditySignal The liquidity signal to commit to the position manager
-     * @return positionId The unique identifier of the position created
+     * @dev This function commits a liquidity signal and mints a commitment NFT.
+     * @param poolKey The pool key the commitment binds to.
+     * @param liquiditySignal The ABI-encoded LiquiditySignal to verify and record.
+     * @return tokenId The commitment NFT id created.
      */
     function _commitSignal(PoolKey memory poolKey, bytes memory liquiditySignal) internal returns (uint256 tokenId) {
         if (liquiditySignal.length == 0) {
             revert InvalidLiquiditySignal(0, 0);
         }
 
-        // LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
+        LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
         // verify the proofs associated with the state
-        (bool isSignalValid, uint256 expirySeconds) = signalManager.verifyLiquiditySignal(liquiditySignal);
+        (bool isSignalValid, uint256 expirySeconds) = signalManager.verifyLiquiditySignal(signal);
         // if the proof is invalid, revert
         if (!isSignalValid) {
             revert InvalidLiquiditySignal(0, 0);

@@ -12,81 +12,22 @@ import {Hooks} from "v4-periphery/lib/v4-core/src/libraries/Hooks.sol";
 import {LPFeeLibrary} from "v4-periphery/lib/v4-core/src/libraries/LPFeeLibrary.sol";
 import {CurrencySettler} from "v4-periphery/lib/v4-core/test/utils/CurrencySettler.sol";
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
-import {IUnlockCallback} from "v4-periphery/lib/v4-core/src/interfaces/callback/IUnlockCallback.sol";
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {CurrencyLibrary} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {TransientStateLibrary} from "v4-periphery/lib/v4-core/src/libraries/TransientStateLibrary.sol";
-import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
+import {IImmutableState} from "v4-periphery/src/interfaces/IImmutableState.sol";
 
-abstract contract LiquidityRouter is IUnlockCallback {
-    using SafeCast for *;
+abstract contract LiquidityRouter is IImmutableState {
     using CurrencySettler for Currency;
     using Hooks for IHooks;
     using LPFeeLibrary for uint24;
     using StateLibrary for IPoolManager;
     using TransientStateLibrary for IPoolManager;
 
-    IPoolManager public immutable manager;
+    function msgSender() public view virtual returns (address);
 
-    constructor(address _manager) {
-        manager = IPoolManager(_manager);
-    }
-
-    struct CallbackData {
-        address sender;
-        PoolKey key;
-        ModifyLiquidityParams params;
-        bytes hookData;
-        bool settleUsingBurn;
-        bool takeClaims;
-    }
-
-    /// callback function to modify the liquidity of the pool after the pool manager is unlocked
-    function unlockCallback(bytes calldata rawData) external returns (bytes memory) {
-        require(msg.sender == address(manager));
-
-        CallbackData memory data = abi.decode(rawData, (CallbackData));
-        address self = address(this);
-
-        (uint128 liquidityBefore,,) = manager.getPositionInfo(
-            data.key.toId(), self, data.params.tickLower, data.params.tickUpper, data.params.salt
-        );
-
-        (BalanceDelta delta,) = manager.modifyLiquidity(data.key, data.params, data.hookData);
-
-        (uint128 liquidityAfter,,) = manager.getPositionInfo(
-            data.key.toId(), self, data.params.tickLower, data.params.tickUpper, data.params.salt
-        );
-
-        (, int256 delta0) = _fetchBalances(data.key.currency0, self);
-        (, int256 delta1) = _fetchBalances(data.key.currency1, self);
-
-        require(
-            int128(liquidityBefore) + data.params.liquidityDelta == int128(liquidityAfter), "liquidity change incorrect"
-        );
-
-        if (data.params.liquidityDelta < 0) {
-            assert(delta0 > 0 || delta1 > 0);
-            assert(!(delta0 < 0 || delta1 < 0));
-        } else if (data.params.liquidityDelta > 0) {
-            assert(delta0 < 0 || delta1 < 0);
-            assert(!(delta0 > 0 || delta1 > 0));
-        }
-
-        if (delta0 < 0) {
-            data.key.currency0.settle(manager, self, uint256(-delta0), data.settleUsingBurn);
-        }
-        if (delta1 < 0) {
-            data.key.currency1.settle(manager, self, uint256(-delta1), data.settleUsingBurn);
-        }
-        if (delta0 > 0) {
-            data.key.currency0.take(manager, self, uint256(delta0), data.takeClaims);
-        }
-        if (delta1 > 0) {
-            data.key.currency1.take(manager, self, uint256(delta1), data.takeClaims);
-        }
-
-        return abi.encode(delta);
+    function _pm() internal view returns (IPoolManager) {
+        return IImmutableState(address(this)).poolManager();
     }
 
     /// unlock the pool manager and use the callback to modify the liquidity
@@ -94,16 +35,54 @@ abstract contract LiquidityRouter is IUnlockCallback {
         internal
         returns (BalanceDelta delta)
     {
+        IPoolManager poolManager = _pm();
         bool settleUsingBurn = false;
         bool takeClaims = false;
 
-        delta = abi.decode(
-            manager.unlock(abi.encode(CallbackData(msg.sender, key, params, hookData, settleUsingBurn, takeClaims))),
-            (BalanceDelta)
-        );
+        // ? already unlocked in new action dispatcher MMP structure
+
+        address self = address(this);
+
+        (uint128 liquidityBefore,,) =
+            poolManager.getPositionInfo(key.toId(), self, params.tickLower, params.tickUpper, params.salt);
+
+        (delta,) = poolManager.modifyLiquidity(key, params, hookData);
+
+        (uint128 liquidityAfter,,) =
+            poolManager.getPositionInfo(key.toId(), self, params.tickLower, params.tickUpper, params.salt);
+
+        (, int256 delta0) = _fetchBalances(key.currency0, self);
+        (, int256 delta1) = _fetchBalances(key.currency1, self);
+
+        require(int128(liquidityBefore) + params.liquidityDelta == int128(liquidityAfter), "liquidity change incorrect");
+
+        if (params.liquidityDelta < 0) {
+            assert(delta0 > 0 || delta1 > 0);
+            assert(!(delta0 < 0 || delta1 < 0));
+        } else if (params.liquidityDelta > 0) {
+            assert(delta0 < 0 || delta1 < 0);
+            assert(!(delta0 > 0 || delta1 > 0));
+        }
+
+        if (delta0 < 0) {
+            key.currency0.settle(poolManager, self, uint256(-delta0), settleUsingBurn);
+        }
+        if (delta1 < 0) {
+            key.currency1.settle(poolManager, self, uint256(-delta1), settleUsingBurn);
+        }
+        if (delta0 > 0) {
+            key.currency0.take(poolManager, self, uint256(delta0), takeClaims);
+        }
+        if (delta1 > 0) {
+            key.currency1.take(poolManager, self, uint256(delta1), takeClaims);
+        }
+
+        // Dust guard
+        // forward any stray native ETH held by the router (e.g. native-currency pools, or flows that momentarily leave ETH on the router) back to the logical caller at the end of the action.
+        // If you keep it, send to your router’s logical caller (your msgSender() override), not raw msg.sender.
         uint256 ethBalance = address(this).balance;
         if (ethBalance > 0) {
-            CurrencyLibrary.ADDRESS_ZERO.transfer(msg.sender, ethBalance);
+            CurrencyLibrary.ADDRESS_ZERO.transfer(msgSender(), ethBalance);
         }
     }
 
@@ -113,7 +92,9 @@ abstract contract LiquidityRouter is IUnlockCallback {
         view
         returns (uint256 poolBalance, int256 delta)
     {
-        poolBalance = currency.balanceOf(address(manager));
-        delta = manager.currencyDelta(deltaHolder, currency);
+        IPoolManager poolManager = _pm();
+        poolBalance = currency.balanceOf(address(poolManager));
+        // currencyDelta is a net including fee accrual plus any hook-side fee-sharing that’s already been applied at modification time.
+        delta = poolManager.currencyDelta(deltaHolder, currency);
     }
 }

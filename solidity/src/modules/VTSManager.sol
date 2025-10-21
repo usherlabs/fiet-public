@@ -194,6 +194,24 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         return (totalSettlementAmount[positionId][0], totalSettlementAmount[positionId][1]);
     }
 
+    function getPositionSettledAmounts(PositionId[] calldata positionIds)
+        public
+        view
+        override
+        returns (uint256 amount0, uint256 amount1)
+    {
+        uint256 len = positionIds.length;
+        for (uint256 i = 0; i < len;) {
+            PositionId id = positionIds[i];
+            uint256[2] storage s = totalSettlementAmount[id];
+            amount0 += s[0];
+            amount1 += s[1];
+            unchecked {
+                i++;
+            }
+        }
+    }
+
     /**
      * @notice Gets the VTS configuration for a core pool
      * @param corePoolId The core pool ID

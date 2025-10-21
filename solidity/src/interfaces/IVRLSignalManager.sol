@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-// trimmed imports after interface clean-up
+import {LiquiditySignal} from "../types/Position.sol";
 
 interface IVRLSignalManager {
     // Events
@@ -26,9 +26,14 @@ interface IVRLSignalManager {
     // External functions
     function setVerifier(address _newVerifier) external;
 
-    // Verify a signal (bytes-encoded). Returns true on success.
-    function verifyLiquiditySignal(bytes memory liquiditySignal) external returns (bool);
+    // signal overload to match interface (non-reverting version)
+    function verifyLiquiditySignal(LiquiditySignal memory signal) external returns (bool, uint256);
 
-    // Verify a signal and optionally revert on invalid.
-    function verifyLiquiditySignal(bytes memory liquiditySignal, bool revertOnInvalid) external returns (bool);
+    // bytes overload to match interface (non-reverting version)
+    function verifyLiquiditySignal(bytes memory liquiditySignal) external returns (bool, uint256);
+
+    // bytes overload to match interface (reverting version)
+    function verifyLiquiditySignal(bytes memory liquiditySignal, bool revertOnInvalid)
+        external
+        returns (bool, uint256);
 }
