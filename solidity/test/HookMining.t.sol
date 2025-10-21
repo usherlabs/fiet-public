@@ -34,7 +34,8 @@ contract HookTest is Test, Deployers {
         vm.prank(owner);
 
         factory = new MarketFactory(address(poolManager), address(oracleRegistry), bounds);
-        mmPositionManager = new MMPositionManager(address(poolManager), makeAddr("spokeReceiver"), address(factory));
+        mmPositionManager =
+            new MMPositionManager(address(poolManager), makeAddr("spokeReceiver"), address(factory), address(0));
 
         // Compute flags for CoreHook
         uint160 coreFlags = HookFlags.CORE_HOOK_FLAGS;

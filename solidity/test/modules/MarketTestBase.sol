@@ -144,7 +144,7 @@ abstract contract MarketTestBase is Test, Deployers {
             address(stubSpokeVerifier), address(oracleRegistry), address(marketFactory), signalExpiryInSeconds
         );
         mmPositionManager =
-            address(new MMPositionManager(address(manager), address(signalManager), address(marketFactory)));
+            address(new MMPositionManager(address(manager), address(signalManager), address(marketFactory), address(0)));
     }
 
     function _setupMarket() internal {

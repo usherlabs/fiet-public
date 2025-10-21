@@ -171,6 +171,11 @@ contract MMPositionManager is
         return commitToPosition[tokenId][positionIndex];
     }
 
+    /// @notice Returns the next tokenId that will be minted on the next commit
+    function getNextTokenId() external view returns (uint256) {
+        return nextTokenId;
+    }
+
     function getSignalState(uint256 tokenId) public view returns (SignalState memory) {
         return commitOf[tokenId].state;
     }

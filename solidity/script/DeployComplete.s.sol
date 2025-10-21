@@ -175,7 +175,8 @@ contract CompleteDeployScript is ScriptHelper {
         address signalManager =
             address(new VRLSignalManager(stubVerifier, oracleRegistry, marketFactory, signalExpiryInSeconds));
         console.log("SignalManager deployed at:", signalManager);
-        MMPositionManager positionManager = new MMPositionManager(poolManagerAddress, signalManager, marketFactory);
+        MMPositionManager positionManager =
+            new MMPositionManager(poolManagerAddress, signalManager, marketFactory, address(0));
         console.log("MMPositionManager deployed at:", address(positionManager));
         return address(positionManager);
     }
