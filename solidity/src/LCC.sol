@@ -376,6 +376,7 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
      * @return The price of the asset
      * @return The decimals of the asset
      */
+    // TODO: Should this exist here?
     function usdPrice(address marketOracleFactory) public view returns (uint256, uint256) {
         string memory quoteTicker = "USD";
         address oracleRegistry = IMarketFactory(marketFactory).oracleRegistry();
