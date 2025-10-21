@@ -3,7 +3,7 @@ pragma solidity ^0.8.0;
 
 import {MarketMaker} from "../src/libraries/MarketMaker.sol";
 import {console} from "forge-std/console.sol";
-import {ICSpokeVerifier} from "../src/modules/ICSpokeVerifier.sol";
+import {ICSpokeVerifier} from "../src/verifiers/ICSpokeVerifier.sol";
 import {Test} from "forge-std/Test.sol";
 import {ShaMerkle} from "../src/libraries/ShaMerkle.sol";
 import {MarketMakerTestBase} from "./modules/MMTestBase.sol";

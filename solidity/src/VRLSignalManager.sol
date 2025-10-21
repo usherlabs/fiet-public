@@ -4,13 +4,13 @@
 // and to ensure that the MM has enough reserves in their signal to cover their liquidity commitment to the Market
 pragma solidity ^0.8.0;
 
-import {MarketMaker} from "../libraries/MarketMaker.sol";
-import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
-import {ISpokeVerifier} from "../interfaces/ISpokeVerifier.sol";
+import {MarketMaker} from "./libraries/MarketMaker.sol";
+import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
+import {ISpokeVerifier} from "./interfaces/ISpokeVerifier.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
-import {LiquiditySignal} from "../types/Position.sol";
-import {IOracle} from "../interfaces/IOracle.sol";
-import {IOracleRegistry} from "../interfaces/IOracleRegistry.sol";
+import {LiquiditySignal} from "./types/Position.sol";
+import {IOracle} from "./interfaces/IOracle.sol";
+import {IOracleRegistry} from "./interfaces/IOracleRegistry.sol";
 // removed unused imports after solvency removal
 
 contract VRLSignalManager is Ownable {

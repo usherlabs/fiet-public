@@ -28,11 +28,11 @@ import {console} from "forge-std/console.sol";
 import {HookFlags} from "../../src/libraries/HookFlags.sol";
 import {MMPositionManager} from "../../src/MMPositionManager.sol";
 import {StubSpokeVerifier} from "../../src/modules/StubSpokeVerifier.sol";
-import {ICSpokeVerifier} from "../../src/modules/ICSpokeVerifier.sol";
+import {ICSpokeVerifier} from "../../src/verifiers/ICSpokeVerifier.sol";
 import {OracleRegistry} from "../../src/OracleRegistry.sol";
 import {VTSConfigs} from "../../src/libraries/VTSConfigs.sol";
 import {IVTSManager} from "../../src/interfaces/IVTSManager.sol";
-import {VRLSignalManager} from "../../src/modules/VRLSignalManager.sol";
+import {VRLSignalManager} from "../../src/VRLSignalManager.sol";
 import {IMarketVault} from "../../src/interfaces/IMarketVault.sol";
 
 abstract contract MarketTestBase is Test, Deployers {

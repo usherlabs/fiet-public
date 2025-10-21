@@ -20,7 +20,7 @@ import {MMPositionManager} from "../src/MMPositionManager.sol";
 import {StubSpokeVerifier} from "../src/modules/StubSpokeVerifier.sol";
 import {OracleRegistry} from "../src/OracleRegistry.sol";
 import {ChainlinkFactory} from "../src/oracles/chainlink/ChainlinkFactory.sol";
-import {VRLSignalManager} from "../src/modules/VRLSignalManager.sol";
+import {VRLSignalManager} from "../src/VRLSignalManager.sol";
 
 /**
  * @title CompleteDeployScript
