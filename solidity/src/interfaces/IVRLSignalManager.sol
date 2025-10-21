@@ -31,6 +31,4 @@ interface IVRLSignalManager {
 
     // Verify a signal and optionally revert on invalid.
     function verifyLiquiditySignal(bytes memory liquiditySignal, bool revertOnInvalid) external returns (bool);
-
-    function renewLiquiditySignal(bytes memory liquiditySignal) external returns (uint256, uint256);
 }

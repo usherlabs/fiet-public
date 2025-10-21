@@ -21,6 +21,9 @@ contract VRLSignalManager is Ownable {
     using MarketMaker for MarketMaker.State;
 
     event VerifierChanged(address indexed oldVerifier, address indexed newVerifier);
+    event SignalExpiryInSecondsChanged(
+        uint256 indexed oldSignalExpiryInSeconds, uint256 indexed newSignalExpiryInSeconds
+    );
 
     error InvalidProof();
     error InvalidDelta(int128 amount0, int128 amount1);
@@ -57,21 +60,20 @@ contract VRLSignalManager is Ownable {
      * @param _signalExpiryInSeconds The new expiry in seconds to set
      */
     function setSignalExpiryInSeconds(uint256 _signalExpiryInSeconds) external onlyOwner {
+        uint256 _oldSignalExpiryInSeconds = signalExpiryInSeconds;
         signalExpiryInSeconds = _signalExpiryInSeconds;
+        emit SignalExpiryInSecondsChanged(_oldSignalExpiryInSeconds, _signalExpiryInSeconds);
     }
-
-    /**
-     * @dev This function is used to verify the liquidity signal and makes sure it updates the nonce for the mm
-     * @param liquiditySignal The liquidity signal to verify
-     */
-    // removed: verifyLiquiditySignalSolvency
 
     /**
      * @dev This function is used to verify the liquidity signal and return the tickers and amounts of the assets
      * @param signal The liquidity signal to verify
      * @return isProofValid Whether the proof is valid
      */
-    function verifyLiquiditySignal(LiquiditySignal memory signal) public returns (bool isProofValid) {
+    function verifyLiquiditySignal(LiquiditySignal memory signal)
+        public
+        returns (bool isProofValid, uint256 _signalExpiryInSeconds)
+    {
         // derive the liquidity signal
         // validate the new nonce is greater than than the previous nonce
         if (signal.nonce <= mmNonce[signal.mmState.owner]) {
@@ -92,39 +94,27 @@ contract VRLSignalManager is Ownable {
             // update the nonce for the mm if the proof is valid
             mmNonce[signal.mmState.owner] = signal.nonce;
         }
+
+        _signalExpiryInSeconds = signalExpiryInSeconds;
     }
 
     // bytes overload to match interface (non-reverting version)
-    function verifyLiquiditySignal(bytes memory liquiditySignal) external returns (bool ok) {
+    function verifyLiquiditySignal(bytes memory liquiditySignal)
+        external
+        returns (bool ok, uint256 _signalExpiryInSeconds)
+    {
         LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
-        ok = verifyLiquiditySignal(signal);
-    }
-
-    /**
-     * Renew a liquidity signal by verifying it and returning the usd value of the signal
-     * @param liquiditySignal the signal encoded in bytes
-     * @return totalSignalUsdValue USD value of reserves in the signal
-     * @return expirySeconds seconds until signal expiry from now
-     */
-    function renewLiquiditySignal(bytes memory liquiditySignal) public returns (uint256, uint256) {
-        LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
-
-        bool isSignalValid = verifyLiquiditySignal(signal);
-        if (!isSignalValid) {
-            revert InvalidProof();
-        }
-        // get usd value of signal
-        (string[] memory tickers, uint256[] memory amounts) = signal.mmState.getReserves();
-        uint256 totalSignalUsdValue = getTotalUsdValue(tickers, amounts);
-
-        return (totalSignalUsdValue, signalExpiryInSeconds);
+        (ok, _signalExpiryInSeconds) = verifyLiquiditySignal(signal);
     }
 
     // removed: checkSignalSolvency (documentation cleaned up)
 
-    function verifyLiquiditySignal(bytes memory liquiditySignal, bool revertOnInvalid) external returns (bool ok) {
+    function verifyLiquiditySignal(bytes memory liquiditySignal, bool revertOnInvalid)
+        external
+        returns (bool ok, uint256 _signalExpiryInSeconds)
+    {
         LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
-        ok = verifyLiquiditySignal(signal);
+        (ok, _signalExpiryInSeconds) = verifyLiquiditySignal(signal);
         if (revertOnInvalid && !ok) revert InvalidProof();
     }
 
