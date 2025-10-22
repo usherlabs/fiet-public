@@ -1,0 +1,156 @@
+---
+description: Comprehensive rules for working with Rust smart contracts for Arbitrum Stylus in this project, incorporating best practices, security, testing, and workflow guidelines adapted for WASM-based execution.
+globs:
+  - "*.rs"
+---
+
+# Rust Stylus Development Rules for Cursor
+
+## Preparation
+
+- Review the technical specification and latest research within the `static/spec/` folder.
+- Note the dates and creation times of these files to determine the order from earlier to latest research.
+- Use the content of these files to support decision making around code edits, action plans, and general implementation.
+- Familiarize with Stylus documentation for WASM constraints, such as no floating-point operations and efficient memory usage.
+
+## Tooling
+
+- Use Cargo for building, testing, and dependency management (e.g., `cargo build`, `cargo test`).
+- Install and use `cargo stylus` for compiling, deploying, and interacting with Stylus contracts (e.g., `cargo stylus deploy`).
+- Use `wasm-opt` for optimizing compiled WASM binaries to reduce size and improve performance.
+- Require Rust nightly toolchain with `wasm32-unknown-unknown` target; pin via `rust-toolchain.toml`.
+- Set `RUSTFLAGS="-C link-args=-rdynamic"` for Stylus CLI installation if needed.
+- Implement scripts for deployment and verification using Cargo run configurations.
+- Use a robust CI/CD pipeline for smart contract deployments.
+- Utilize `rustfmt` if prompted about consistent code formatting.
+
+## Code Style
+
+- Use snake_case for variables, functions, and modules.
+- Use PascalCase for types, traits, and enums.
+- Use UPPER_SNAKE_CASE for constants.
+- Prefer immutable references (&self) over mutable (&mut self) when possible.
+- Use Result and Option types for error handling instead of panicking.
+- Follow Rust's ownership and borrowing rules strictly.
+- Use explicit types when it improves clarity.
+- Document all public items with `///` doc comments.
+- Organize code into modular crates: common utilities, core logic (VM-agnostic), and Stylus-specific (VM-dependent).
+- Use Stylus SDK macros like `#[entrypoint]` for public functions.
+- Implement traits for contract interfaces (e.g., IErc20).
+
+## Security Best Practices
+
+- Validate all inputs, even from trusted sources.
+- Use safe abstractions over unsafe code; avoid unsafe unless necessary and document why it's safe.
+- Implement proper access control using patterns like Owned or Auth from Rustmate.
+- Handle errors with Result types and propagate them effectively.
+- Use debug_assert! for development-time checks.
+- Ensure WASM compatibility: avoid runtime-dependent features; use `no_std` environments.
+- Follow Checks-Effects-Interactions pattern adapted for Rust.
+- Use libraries like OpenZeppelin Stylus for secure implementations (e.g., ERC20 with allowances and transfers).
+- Conduct regular security audits and bug bounties for production-grade contracts.
+- Implement rate limiting and pause mechanisms where appropriate.
+
+## Gas and Performance Optimization
+
+- Use references instead of copying data when possible.
+- Prefer &str over String for string slices.
+- Use appropriate collection types (Vec, HashMap, etc.) based on use case.
+- Avoid unnecessary allocations; optimize for WASM efficiency.
+- Use profiling tools to identify bottlenecks.
+- Leverage Rustmate for gas-efficient implementations (e.g., ERC20, ERC721).
+- Pack data structures efficiently to minimize storage costs.
+- Use assembly sparingly via SDK if needed, but prefer high-level optimizations.
+- Compile with flags for size reduction: `-Z build-std=std,panic_abort -Z build-std-features=panic_immediate_abort`.
+- Optimize for memory-intensive operations, as Stylus offers lower fees for compute-heavy tasks.
+
+## Testing and Quality Assurance
+
+- Write unit tests for all public functions; run with `cargo test` on common and core crates.
+- Use integration tests for complex interactions against a local Arbitrum Nitro devnet.
+- Test both happy path and error conditions.
+- Use #[should_panic] for expected panics.
+- Keep tests focused and independent.
+- Implement fuzz testing where applicable to uncover edge cases.
+- Use Stylus SDK testing helpers for unit and integration.
+- Aim for high test coverage, especially for critical paths.
+- Mock external dependencies in tests.
+- For deterministic testing, configure environment with fixed block numbers/timestamps if needed.
+- Run full integration suites after deployment to devnet.
+
+## Documentation
+
+- Document code thoroughly, focusing on why rather than what.
+- Use examples in documentation when helpful.
+- Document error types and their conditions.
+- Keep documentation concise but informative.
+- Maintain up-to-date API documentation for smart contracts.
+- Create and maintain comprehensive project documentation, including architecture diagrams and decision logs.
+- Document test scenarios and their purpose clearly.
+- Document any assumptions made in the contract design.
+- Document complex business logic.
+- Keep documentation up to date with code changes.
+
+## Dependencies
+
+- Use Stylus SDK (`stylus-sdk`) as the core dependency for contract development.
+- Use OpenZeppelin Stylus (`openzeppelin-stylus`) for secure token and utility implementations (e.g., ERC20, AccessControl).
+- Use Rustmate (`rustmate`) for optimized building blocks like ERC20, ERC721, WETH, and utils like CREATE3.
+- Use Alloy primitives (`alloy-primitives`) in `no_std` mode for types like Address, U256.
+- Ensure libraries are installed via Cargo and support `no_std` for WASM.
+- Pin versions in Cargo.toml for stability.
+
+## Configuring Environment
+
+- Use `rust-toolchain.toml` to pin nightly Rust with necessary components.
+- For WASM compilation:
+  
+```
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "link-arg=--export-table"]
+```
+
+- Set up local Arbitrum Nitro devnet for testing; use prefunded accounts.
+- For deployment scripts, use environment variables for private keys, RPC URLs, and output paths (e.g., deployments.json).
+
+## Conditional Rules
+
+- If: "working with contracts"
+Description: Guidelines for developing or modifying contracts.
+- Implement traits for standard interfaces (e.g., from OpenZeppelin or Rustmate).
+- Use entrypoint macros for exposed functions.
+- Separate VM-agnostic logic from Stylus-specific state access.
+- Emit events for state changes to support off-chain indexing.
+
+- If: "auditing or scanning code"
+Description: Focus on vulnerabilities and quality checks.
+- Check for ownership/borrowing issues, unsafe code, and input validation.
+- Ensure no_std compliance and WASM constraints (e.g., no floats).
+- Use static analysis tools if available for Rust WASM.
+
+- If: "creating a new contract"
+Description: Starting points for new files.
+- Start with a template from Rustmate or OpenZeppelin examples.
+- Define storage structs and implement necessary traits.
+- Add doc comments and error types.
+- Target wasm32-unknown-unknown.
+- Use `cargo stylus new` for minimal project setup.
+
+- If: "optimizing code"
+Description: Apply gas and performance tweaks.
+- Profile with tools and optimize allocations.
+- Use Rustmate's gas-efficient implementations.
+- Run wasm-opt on binaries.
+- Benchmark against references like in Rustmate.
+
+- If: "testing code"
+Description: Ensure robust testing.
+- Write unit tests for core logic; integration for full deployment.
+- Use devnet for end-to-end; mock where possible.
+- Cover error paths and edge cases.
+
+- If: "documenting code"
+Description: Enhance readability and maintainability.
+- Focus on "why" in doc comments.
+- Update API docs and include examples.
+- Document WASM-specific constraints.

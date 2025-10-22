@@ -895,7 +895,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
 
     /// @dev Compute inflow inside accumulator for a position bounds
 
-    /// @dev Settle inflow growth for a position into totalSettlementAmount in raw token units
+    /// @dev Settle inflow growth for a position: first extinguish deficits, then credit remaining as proactive liquidity
     function _settlePositionInflowGrowth(PositionId positionId) internal {
         PositionMeta memory m = meta[positionId];
         PoolId corePoolId = m.poolId;
@@ -909,13 +909,56 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
             m.tickUpper,
             liq
         );
-        // TODO: Checking if deficit exists and deducting from there first?
-        // The same way: When deficits/outflows are settled, they're first deducted from already settled amounts before incrementing deficits.
+
+        // Token0: net against deficit first
         if (add0 > 0) {
-            _updateSettlement(corePoolId, positionId, 0, SafeCast.toInt256(add0));
+            uint256 d0 = cumulativeDeficit[positionId][0];
+            if (d0 > 0) {
+                uint256 cover0 = add0 > d0 ? d0 : add0;
+                cumulativeDeficit[positionId][0] = d0 - cover0;
+                // keep global deficit coherent (defensive clamp)
+                uint256 gD0 = globalDeficit[corePoolId][0];
+                globalDeficit[corePoolId][0] = cover0 <= gD0 ? (gD0 - cover0) : 0;
+                add0 -= cover0;
+            }
+            if (add0 > 0) {
+                // remaining inflow becomes proactive settlement
+                _updateSettlement(corePoolId, positionId, 0, SafeCast.toInt256(add0));
+
+                // TODO: May need to be removed... if we refactor the fee-share mechanic.
+                // if (_isFeeSharingEnabled(corePoolId)) {
+                //     // credit proactive pool only if currently in-range (matches MM settlement path)
+                //     (, int24 tick,,) = poolManager.getSlot0(corePoolId);
+                //     bool inRange = (tick >= m.tickLower && tick < m.tickUpper);
+                //     if (inRange) {
+                //         _accrueProactiveExcessGrowth(corePoolId, 0, add0);
+                //         emit ProactiveCredited(corePoolId, 0, add0, tick);
+                //     }
+                // }
+            }
         }
+
+        // Token1: net against deficit first
         if (add1 > 0) {
-            _updateSettlement(corePoolId, positionId, 1, SafeCast.toInt256(add1));
+            uint256 d1 = cumulativeDeficit[positionId][1];
+            if (d1 > 0) {
+                uint256 cover1 = add1 > d1 ? d1 : add1;
+                cumulativeDeficit[positionId][1] = d1 - cover1;
+                uint256 gD1 = globalDeficit[corePoolId][1];
+                globalDeficit[corePoolId][1] = cover1 <= gD1 ? (gD1 - cover1) : 0;
+                add1 -= cover1;
+            }
+            if (add1 > 0) {
+                _updateSettlement(corePoolId, positionId, 1, SafeCast.toInt256(add1));
+                // if (_isFeeSharingEnabled(corePoolId)) {
+                //     (, int24 tick,,) = poolManager.getSlot0(corePoolId);
+                //     bool inRange = (tick >= m.tickLower && tick < m.tickUpper);
+                //     if (inRange) {
+                //         _accrueProactiveExcessGrowth(corePoolId, 1, add1);
+                //         emit ProactiveCredited(corePoolId, 1, add1, tick);
+                //     }
+                // }
+            }
         }
     }
 
