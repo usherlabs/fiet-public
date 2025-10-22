@@ -202,7 +202,7 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
     }
 
     // Called by MMP to transfer LLCs and track market source.
-    function transferAndTrack(address to, bytes32 marketId, uint256 amount) external onlyIssuer {
+    function traceTransfer(address to, bytes32 marketId, uint256 amount) external onlyIssuer {
         transfer(to, amount);
         _trackMarketAcquisition(to, marketId, amount);
     }

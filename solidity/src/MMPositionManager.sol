@@ -806,10 +806,10 @@ contract MMPositionManager is
             // Therefore, we transfer instead of cancel.
             bytes32 marketId = PoolId.unwrap(poolKey.toId());
             if (a0 > 0) {
-                lcc0.transferAndTrack(msgSender(), marketId, a0);
+                lcc0.traceTransfer(msgSender(), marketId, a0);
             }
             if (a1 > 0) {
-                lcc1.transferAndTrack(msgSender(), marketId, a1);
+                lcc1.traceTransfer(msgSender(), marketId, a1);
             }
         }
     }

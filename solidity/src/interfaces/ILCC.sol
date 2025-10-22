@@ -20,5 +20,5 @@ interface ILCC {
     function unwrapFromVault(bytes32 marketId, uint256 amount, uint256 deficitAmount, address excessLCCRecipient)
         external;
 
-    function transferAndTrack(address to, bytes32 marketId, uint256 amount) external;
+    function traceTransfer(address to, bytes32 marketId, uint256 amount) external;
 }

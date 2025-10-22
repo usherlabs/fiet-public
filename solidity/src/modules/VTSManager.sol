@@ -864,7 +864,11 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     }
 
     /// @dev Settle proactive use growth into per-position obligation
-    ///      applies a share of proactive liquidity use to increase RfS of in-range liquidity.
+    ///      Applies a share of proactive liquidity use to increase RfS of in-range liquidity.
+    ///
+    ///      `proactiveObligation` tracks a position's share of "proactive liquidity usage" (e.g., when excess settled liquidity is consumed for unwraps via proactiveUseGrowth).
+    ///      It's accrued via tick-indexed growth (similar to deficits/inflows) in `_settlePositionProactiveUseGrowth`, where add0/add1 are deltas from global/inside growth scaled by position liquidity (liq).
+    ///      This creates an "obligation" that's added to the required settlement in RfS calculations (e.g., need = required + obligation in _getRFS).
     function _settlePositionProactiveUseGrowth(PositionId positionId) internal {
         PoolId corePoolId = meta[positionId].poolId;
         if (!_isFeeSharingEnabled(corePoolId)) {
@@ -905,6 +909,8 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
             m.tickUpper,
             liq
         );
+        // TODO: Checking if deficit exists and deducting from there first?
+        // The same way: When deficits/outflows are settled, they're first deducted from already settled amounts before incrementing deficits.
         if (add0 > 0) {
             _updateSettlement(corePoolId, positionId, 0, SafeCast.toInt256(add0));
         }
