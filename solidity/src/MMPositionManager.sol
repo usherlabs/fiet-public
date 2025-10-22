@@ -834,6 +834,64 @@ contract MMPositionManager is
     }
 
     /**
+     * @dev This function commits a liquidity signal and mints a commitment NFT.
+     * @param poolKey The pool key the commitment binds to.
+     * @param liquiditySignal The ABI-encoded LiquiditySignal to verify and record.
+     * @return tokenId The commitment NFT id created.
+     */
+    function _commitSignal(PoolKey memory poolKey, bytes memory liquiditySignal) internal returns (uint256 tokenId) {
+        if (liquiditySignal.length == 0) {
+            revert InvalidLiquiditySignal(0, 0);
+        }
+
+        LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
+        // verify the proofs associated with the state
+        (bool isSignalValid, uint256 expirySeconds) = signalManager.verifyLiquiditySignal(signal);
+        // if the proof is invalid, revert
+        if (!isSignalValid) {
+            revert InvalidLiquiditySignal(0, 0);
+        }
+
+        // ? -- Mint the Commitment NFT
+        address to = msgSender();
+        // get the token id
+        tokenId = nextTokenId++;
+        // mint the nft
+        _mint(to, tokenId);
+        // store the signal state (new + legacy for migration) and bind commit to pool
+        commitOf[tokenId].state = SignalState({signal: signal, expiresAt: block.timestamp + expirySeconds});
+        commitOf[tokenId].poolId = poolKey.toId();
+
+        emit SignalCommitted(tokenId);
+    }
+
+    /**
+     * @dev This function is used to mint a new position for a given token id
+     * @param poolKey The pool key to mint the position for
+     * @param tokenId The token id to mint the position for
+     * @param tickLower The lower tick of the position
+     * @param tickUpper The upper tick of the position
+     * @param liquidity The liquidity amount to mint
+     */
+    function _mintPosition(PoolKey memory poolKey, uint256 tokenId, int24 tickLower, int24 tickUpper, uint256 liquidity)
+        internal
+        returns (PositionId positionId, uint256 positionIndex)
+    {
+        // add liquidity to the pool using the token id and position index to generate a unique salt
+        positionIndex = commitToPositionCount[tokenId];
+
+        positionId = _increase(poolKey, tokenId, positionIndex, tickLower, tickUpper, liquidity);
+
+        // Attach position to this nft
+        // make sure to add the position only after modifying the liquidity
+        // because the number of positions is used to generate the salt for the position
+        commitToPosition[tokenId][positionIndex] = positionId;
+        // Position metadata is managed centrally via PositionIndex/VTSManager
+        // increment the number of positions for the nft
+        commitToPositionCount[tokenId]++;
+    }
+
+    /**
      * @dev Seizure of a position by a guarantor (other MM)
      * @param poolKey The pool key for the position
      * @param tokenId The token id to settle the position for
@@ -873,13 +931,13 @@ contract MMPositionManager is
         uint256 seizedLiquidityUnits =
             vtsManager.calcSeizure(positionId, settleBalanceDelta, positionToCheckpoint[positionId]);
 
-        // -- Settle the position to meet rfs requirements
+        // -- Settle the position to contribute to RfS closure, and seizure position for proportional amount.
         address ua0 = ILCC(Currency.unwrap(poolKey.currency0)).underlyingAsset();
         address ua1 = ILCC(Currency.unwrap(poolKey.currency1)).underlyingAsset();
 
-        // settle underlying assets to the position to ensure it now meets rfs requirements
         // ? settlement is necessary because the seizing party is covering the deficit (settlement queue) in exchange for LCCs.
-        _settleUnderlying(positionId, position.poolId, settleBalanceDelta, ua0, ua1);
+        // calcSeizure will internally manage the required settlement delta.
+        _settleUnderlying(positionId, position.poolId, BalanceDeltaLibrary.ZERO_DELTA, ua0, ua1);
 
         // -- Move the underlying liquidity to the to the seizer/caller or to the new position
 
@@ -953,64 +1011,6 @@ contract MMPositionManager is
         //         FullMath.mulDiv(uint256(position.liquidity), deficitFractionInBips, LiquidityUtils.ONE_BIP);
         //     _decrease(poolKey, position, _positionSalt(tokenId, i), liquidityToSeize, false);
         // }
-    }
-
-    /**
-     * @dev This function commits a liquidity signal and mints a commitment NFT.
-     * @param poolKey The pool key the commitment binds to.
-     * @param liquiditySignal The ABI-encoded LiquiditySignal to verify and record.
-     * @return tokenId The commitment NFT id created.
-     */
-    function _commitSignal(PoolKey memory poolKey, bytes memory liquiditySignal) internal returns (uint256 tokenId) {
-        if (liquiditySignal.length == 0) {
-            revert InvalidLiquiditySignal(0, 0);
-        }
-
-        LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
-        // verify the proofs associated with the state
-        (bool isSignalValid, uint256 expirySeconds) = signalManager.verifyLiquiditySignal(signal);
-        // if the proof is invalid, revert
-        if (!isSignalValid) {
-            revert InvalidLiquiditySignal(0, 0);
-        }
-
-        // ? -- Mint the Commitment NFT
-        address to = msgSender();
-        // get the token id
-        tokenId = nextTokenId++;
-        // mint the nft
-        _mint(to, tokenId);
-        // store the signal state (new + legacy for migration) and bind commit to pool
-        commitOf[tokenId].state = SignalState({signal: signal, expiresAt: block.timestamp + expirySeconds});
-        commitOf[tokenId].poolId = poolKey.toId();
-
-        emit SignalCommitted(tokenId);
-    }
-
-    /**
-     * @dev This function is used to mint a new position for a given token id
-     * @param poolKey The pool key to mint the position for
-     * @param tokenId The token id to mint the position for
-     * @param tickLower The lower tick of the position
-     * @param tickUpper The upper tick of the position
-     * @param liquidity The liquidity amount to mint
-     */
-    function _mintPosition(PoolKey memory poolKey, uint256 tokenId, int24 tickLower, int24 tickUpper, uint256 liquidity)
-        internal
-        returns (PositionId positionId, uint256 positionIndex)
-    {
-        // add liquidity to the pool using the token id and position index to generate a unique salt
-        positionIndex = commitToPositionCount[tokenId];
-
-        positionId = _increase(poolKey, tokenId, positionIndex, tickLower, tickUpper, liquidity);
-
-        // Attach position to this nft
-        // make sure to add the position only after modifying the liquidity
-        // because the number of positions is used to generate the salt for the position
-        commitToPosition[tokenId][positionIndex] = positionId;
-        // Position metadata is managed centrally via PositionIndex/VTSManager
-        // increment the number of positions for the nft
-        commitToPositionCount[tokenId]++;
     }
 
     /// @dev overrides solmate transferFrom to revert if pool manager is locked

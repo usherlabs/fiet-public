@@ -17,7 +17,7 @@ import {ArbitrumConstants} from "./constants/Arbitrum.sol";
 import {HookFlags} from "./constants/HookFlags.sol";
 import {EthSepoliaConstants} from "./constants/EthSepolia.sol";
 import {MMPositionManager} from "../src/MMPositionManager.sol";
-import {StubSpokeVerifier} from "../src/modules/StubSpokeVerifier.sol";
+import {StubSpokeVerifier} from "../src/verifiers/StubSpokeVerifier.sol";
 import {OracleRegistry} from "../src/OracleRegistry.sol";
 import {ChainlinkFactory} from "../src/oracles/chainlink/ChainlinkFactory.sol";
 import {VRLSignalManager} from "../src/VRLSignalManager.sol";

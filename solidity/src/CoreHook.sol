@@ -281,6 +281,8 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
             PositionId id = PositionLibrary.generateId(sender, params);
             if (!_isMMPosition(id)) {
                 // Redeem fee-pot baseline into return-delta for DirectLPs
+                // Example FeeTakingHook: https://github.com/Uniswap/v4-core/blob/a7cf038cd568801a79a9b4cf92cd5b52c95c8585/src/test/FeeTakingHook.sol#L14
+                // TODO: I'm unsure if this is correct.
                 _settlePositionGrowths(id);
                 (uint256 pay0, uint256 pay1) = _redeemFeePot(id, true);
                 BalanceDelta bonus = LiquidityUtils.safeToBalanceDelta(pay0, pay1, false, false);

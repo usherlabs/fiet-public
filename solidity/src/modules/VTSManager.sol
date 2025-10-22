@@ -508,7 +508,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
             LiquidityUtils.isZeroDelta(requiredSettlementDelta)
                 && (modifyDelta.amount0() < 0 || modifyDelta.amount1() < 1)
         ) {
-            // If requiredSettlementDelta is 0, then no position changes were made. Pure UA movement. Otherwise, RfS already checked on position param update - _touchPosition.
+            // If pure underlying liquidity withdrawal, check RfS. Otherwise, RfS check handled on position param update - _touchPosition, or omitted on seizure.
             // validate RfS is closed if amount is being withdrawn.
             if (rfsOpen) {
                 revert RFSOpenForPosition(positionId);
@@ -547,6 +547,14 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         _incrementCoverage(poolId, tokenIndex, amount);
     }
 
+    /**
+     * @dev Handles the positive settlement deposit of a token for a position.
+     * Covers deficits first, then credits position's fees accrued to protocol coverage, then excess proactive liquidity increase position settled amount.
+     * @param positionId The id of the position
+     * @param poolId The id of the pool
+     * @param tokenIndex The index of the token
+     * @param settledAmount The amount of the token to settle
+     */
     function _handleMMSettlementForToken(PositionId positionId, PoolId poolId, uint8 tokenIndex, uint256 settledAmount)
         internal
     {
@@ -556,7 +564,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         // therefore, attribution is based on the deficit amount being covered in this transaction.
 
         if (d > 0) {
-            cumulativeDeficit[positionId][tokenIndex] = dBefore - d;
+            cumulativeDeficit[positionId][tokenIndex] = dBefore - d; // TODO: should we be deducting from proactiveObligation first?
             uint256 gD = globalDeficit[poolId][tokenIndex];
             uint256 pC = protocolCoverage[poolId][tokenIndex];
             if (gD > 0) {
@@ -697,7 +705,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         feePotGlobalLast[id][1] = g1;
     }
 
-    /// @dev Increment protocol or proactive excess liquidity coverage on unwrap, consuming proactive pool first
+    /// @dev Increment protocol or proactive excess liquidity coverage on LCC unwrap, consuming proactive pool first
     function _incrementCoverage(PoolId poolId, uint8 tokenIndex, uint256 coveredAmount) internal {
         if (tokenIndex > 1 || coveredAmount == 0) return;
         // Use proactive availability based on current in-range liquidity
@@ -856,6 +864,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     }
 
     /// @dev Settle proactive use growth into per-position obligation
+    ///      applies a share of proactive liquidity use to increase RfS of in-range liquidity.
     function _settlePositionProactiveUseGrowth(PositionId positionId) internal {
         PoolId corePoolId = meta[positionId].poolId;
         if (!_isFeeSharingEnabled(corePoolId)) {
@@ -1025,6 +1034,14 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         uint256 s0 = LiquidityUtils.safeInt128ToUint256(settleDelta.amount0());
         uint256 s1 = LiquidityUtils.safeInt128ToUint256(settleDelta.amount1());
 
+        // Clamp settles by RfS per token to avoid over-seizure via over-settlement
+        if (s0 > r0) {
+            s0 = r0;
+        }
+        if (s1 > r1) {
+            s1 = r1;
+        }
+
         // Grace gating per token being intervened
         // TODO: update validation logic per ProofOfSettlement mechanic
         MarketVTSConfiguration memory cfg = getMarketVTSConfiguration(m.poolId);
@@ -1039,6 +1056,30 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
                 revert MarketVTSConfigurationLibrary.GracePeriodNotElapsed(positionId);
             }
         }
+
+        // Force the clamped settlement via transient slot; MMPositionManager._settleUnderlying will consume this
+        _setSettlementDelta(LiquidityUtils.safeToBalanceDelta(s0, s1, false, false));
+
+        // Pre-deduct the seizer's settlement from the position's settled amounts so the LCCs
+        // transferred on _decrease include claim to the newly funded underlying post-obligation.
+        // Clamp deductions to current settled balances to avoid underflow.
+        // TODO: settle in to the position, which closes the deficit and does NOT increase settled amount for deficit closed.
+        // TODO: Therefore, the seizure is paying back the protocol for the amount owed by the position.
+        // TODO: However, RfS is calced to include proactiveObligation (an amount distributed over weighted in-range liquidity, that shares where MM proactive liquidity is used to cover unwraps.)
+        // TODO: Positive settlement does not decreate this obligation.
+        // ? A seizure will be enabled up to the required (deficit) + proactiveObligation. Therefore, any settlment covers this deficit, and amounts are redistributed to the protocol.
+        // {
+        //     uint256 curS0 = totalSettlementAmount[positionId][0];
+        //     uint256 curS1 = totalSettlementAmount[positionId][1];
+        //     uint256 dec0 = s0 > curS0 ? curS0 : s0;
+        //     uint256 dec1 = s1 > curS1 ? curS1 : s1;
+        //     if (dec0 > 0) {
+        //         _updateSettlement(m.poolId, positionId, 0, -SafeCast.toInt256(dec0));
+        //     }
+        //     if (dec1 > 0) {
+        //         _updateSettlement(m.poolId, positionId, 1, -SafeCast.toInt256(dec1));
+        //     }
+        // }
 
         // Exposures and settle proportions (apply base VTS as minimum buffer)
         uint256 e0bps = LiquidityUtils.exposureBps(r0, c0);
@@ -1080,7 +1121,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         uint256 s1 = totalSettlementAmount[_positionId][1];
         uint256 d0 = cumulativeDeficit[_positionId][0];
         uint256 d1 = cumulativeDeficit[_positionId][1];
-        uint256 o0 = proactiveObligation[_positionId][0];
+        uint256 o0 = proactiveObligation[_positionId][0]; // utilised proactive liquidity for position.
         uint256 o1 = proactiveObligation[_positionId][1];
         uint256 req0 = d0 < c0 ? d0 : c0; // cap deficit by commitment
         uint256 req1 = d1 < c1 ? d1 : c1;
@@ -1097,7 +1138,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     function _rfsDeltaRaw(uint256 settled, uint256 required, uint256 obligation) internal pure returns (int128) {
         uint256 need = required + obligation; // safe add (Solidity 0.8 checks overflow)
         if (need >= settled) {
-            uint256 pos = need - settled; // requires settlement
+            uint256 pos = need - settled; // rfs is the needed minus the already settled.
             if (pos > INT128_MAX_U) return type(int128).max;
             return SafeCast.toInt128(SafeCast.toInt256(pos));
         }

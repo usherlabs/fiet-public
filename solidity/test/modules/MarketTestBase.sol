@@ -26,7 +26,7 @@ import {LiquidityUtils} from "../../src/libraries/LiquidityUtils.sol";
 import {console} from "forge-std/console.sol";
 import {HookFlags} from "../../src/libraries/HookFlags.sol";
 import {MMPositionManager} from "../../src/MMPositionManager.sol";
-import {StubSpokeVerifier} from "../../src/modules/StubSpokeVerifier.sol";
+import {StubSpokeVerifier} from "../../src/verifiers/StubSpokeVerifier.sol";
 import {ICSpokeVerifier} from "../../src/verifiers/ICSpokeVerifier.sol";
 import {OracleRegistry} from "../../src/OracleRegistry.sol";
 import {VTSConfigs} from "../../src/libraries/VTSConfigs.sol";
