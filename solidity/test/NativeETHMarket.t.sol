@@ -25,11 +25,10 @@ import {CurrencyLibrary, Currency} from "@uniswap/v4-core/src/types/Currency.sol
 import {MarketMaker} from "../src/libraries/MarketMaker.sol";
 import {MMPositionManager} from "../src/MMPositionManager.sol";
 import {MarketVTSConfiguration} from "../src/types/VTS.sol";
-import {IOracleRegistry} from "../src/interfaces/IOracleRegistry.sol";
-import {IOracle} from "../src/interfaces/IOracle.sol";
 import {IVTSManager} from "../src/interfaces/IVTSManager.sol";
 import {LiquidityUtils} from "../src/libraries/LiquidityUtils.sol";
 import {ERC20} from "solmate/tokens/ERC20.sol";
+import {IOracleHelper} from "../src/interfaces/IOracleHelper.sol";
 import {PositionMeta} from "../src/types/Position.sol";
 
 contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
@@ -46,9 +45,6 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
 
     ILCC internal lccNativeETH;
     ILCC internal lccERC20;
-
-    address internal mockOracleBTC = makeAddr("mockOracleBTC");
-    address internal mockOracleUSDT = makeAddr("mockOracleUSDT");
 
     address guarantor = makeAddr("guarantor");
     uint256 guarantorInitialBalance = 10000e18;
@@ -83,9 +79,9 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
         lcc1 = LiquidityCommitmentCertificate(Currency.unwrap(_currency3));
 
         // get which lcc token represents lcc-eth
-        (lccNativeETH, lccERC20) = lcc0.underlyingAsset() == address(0) ? (lcc0, lcc1) : (lcc1, lcc0);
+        (lccNativeETH, lccERC20) = lcc0.underlying() == address(0) ? (lcc0, lcc1) : (lcc1, lcc0);
 
-        IERC20Minimal(lccERC20.underlyingAsset()).approve(address(lccERC20), initialLiquidity);
+        IERC20Minimal(lccERC20.underlying()).approve(address(lccERC20), initialLiquidity);
         lccERC20.wrap(initialLiquidity);
 
         lccNativeETH.wrap{value: initialLiquidity}(initialLiquidity);
@@ -120,7 +116,7 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
         // Mock the proxyHookToCurrencyPair function in order to make this caller appear to be an issuer
         // when deploying the factory the mmposiiton manager will be provided and thus whitelsited
         // but since we are mocking the factory, we need to mock a way to return the mmposition manager as an issuer
-        address[2] memory mockCurrencies = [address(lcc0.underlyingAsset()), address(lcc1.underlyingAsset())];
+        address[2] memory mockCurrencies = [address(lcc0.underlying()), address(lcc1.underlying())];
         vm.mockCall(
             marketFactory,
             abi.encodeWithSelector(IMarketFactory.proxyHookToCurrencyPair.selector, address(mmPositionManager)),
@@ -132,49 +128,19 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
         );
         // mock the factory to return the right proxy hook
         vm.mockCall(marketFactory, abi.encodeWithSelector(IMarketFactory.proxyToHook.selector), abi.encode(proxyHook));
-        // mock the oracle registry to return mock oracles for BTC/USD and USDT/USD which are the currencies in the user's signalled liquidity reserves
-        vm.mockCall(
-            address(oracleRegistry),
-            abi.encodeWithSelector(IOracleRegistry.getOracle.selector, "BTC/USD", address(0)),
-            abi.encode(mockOracleBTC)
-        );
-        vm.mockCall(
-            address(oracleRegistry),
-            abi.encodeWithSelector(IOracleRegistry.getOracle.selector, "USDT/USD", address(0)),
-            abi.encode(mockOracleUSDT)
-        );
 
-        // mock the price oracles to return prices and decimals numbers
-        // initialize the price feeds for the mock assets
-        // Create mock price feeds with 8 decimals (standard for Chainlink)
-        // these are the mock prices of the assets in the signal reserves, if more assets are added, we need to mock the prices for them her
-        // BTC/USD: ~$113,000 * 10^8 = 11300000000000
-        vm.mockCall(mockOracleBTC, abi.encodeWithSelector(IOracle.getPrice.selector), abi.encode(11300000000000));
-        // USDT/USD: ~$0.997 * 10^8 = 99700000
-        vm.mockCall(mockOracleUSDT, abi.encodeWithSelector(IOracle.getPrice.selector), abi.encode(99700000));
-        // set the decimals for the mock oracles
-        vm.mockCall(mockOracleBTC, abi.encodeWithSelector(IOracle.decimals.selector), abi.encode(8));
-        vm.mockCall(mockOracleUSDT, abi.encodeWithSelector(IOracle.decimals.selector), abi.encode(8));
-        // TODO: add mock prices for the other assets in the signal reserves
-
-        // Mock the getOraclePrice used to calculate the USD value of the LCCs total commitment
-        // LCC0: ~$0.997 * 10^8 = 99700000
+        // mock the signal manager to return the right total usd value
         vm.mockCall(
-            address(lcc0),
-            abi.encodeWithSelector(LiquidityCommitmentCertificate.usdPrice.selector),
-            abi.encode(uint256(99700000), 8)
+            address(oracleHelper), abi.encodeWithSelector(IOracleHelper.getLCCMarketUSDValue.selector), abi.encode(1)
         );
-        // LCC1: ~$0.999 * 10^8 = 99900000
         vm.mockCall(
-            address(lcc1),
-            abi.encodeWithSelector(LiquidityCommitmentCertificate.usdPrice.selector),
-            abi.encode(uint256(99900000), 8)
+            address(oracleHelper), abi.encodeWithSelector(IOracleHelper.getTotalUsdValue.selector), abi.encode(2)
         );
 
         console.log("lcc0", address(lcc0));
         console.log("lcc1", address(lcc1));
-        console.log("lcc0 underlying asset", lcc0.underlyingAsset());
-        console.log("lcc1 underlying asset", lcc1.underlyingAsset());
+        console.log("lcc0 underlying asset", lcc0.underlying());
+        console.log("lcc1 underlying asset", lcc1.underlying());
     }
 
     function test_canAddLiquidityToPoolWithNativeAsUnderlyingAsset() public {
@@ -263,8 +229,8 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
             LiquidityUtils.getBaseSettlementAmounts(liquidityParams, marketVTSConfiguration);
 
         // Approve
-        ERC20(lccERC20.underlyingAsset()).approve(address(mmPositionManager), underlyingLiquidityFraction0);
-        // ERC20(lcc1.underlyingAsset()).approve(address(mmPositionManager), underlyingLiquidityFraction1);
+        ERC20(lccERC20.underlying()).approve(address(mmPositionManager), underlyingLiquidityFraction0);
+        // ERC20(lcc1.underlying()).approve(address(mmPositionManager), underlyingLiquidityFraction1);
 
         uint256 pmLcc0BalanceBefore = ERC20(address(lcc0)).balanceOf(address(manager));
         uint256 pmLcc1BalanceBefore = ERC20(address(lcc1)).balanceOf(address(manager));
@@ -272,8 +238,8 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
         uint256 proxyCurrency0BalanceBefore = manager.balanceOf(address(proxyHook), proxyPoolKey.currency0.toId());
         uint256 proxyCurrency1BalanceBefore = manager.balanceOf(address(proxyHook), proxyPoolKey.currency1.toId());
 
-        uint256 lcc0UnderlyingAssetBalanceBefore = Currency.wrap(lcc0.underlyingAsset()).balanceOfSelf();
-        uint256 lcc1UnderlyingAssetBalanceBefore = Currency.wrap(lcc1.underlyingAsset()).balanceOfSelf();
+        uint256 lcc0UnderlyingAssetBalanceBefore = Currency.wrap(lcc0.underlying()).balanceOfSelf();
+        uint256 lcc1UnderlyingAssetBalanceBefore = Currency.wrap(lcc1.underlying()).balanceOfSelf();
 
         // get the amount of ETH to send over
         // eth is zero address, so it will always be token0
@@ -302,8 +268,8 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
 
         // get user balances of underlying assets
 
-        uint256 lcc0UnderlyingAssetBalanceAfter = Currency.wrap(lcc0.underlyingAsset()).balanceOfSelf();
-        uint256 lcc1UnderlyingAssetBalanceAfter = Currency.wrap(lcc1.underlyingAsset()).balanceOfSelf();
+        uint256 lcc0UnderlyingAssetBalanceAfter = Currency.wrap(lcc0.underlying()).balanceOfSelf();
+        uint256 lcc1UnderlyingAssetBalanceAfter = Currency.wrap(lcc1.underlying()).balanceOfSelf();
 
         console.log("lcc0UnderlyingAssetBalanceBefore", lcc0UnderlyingAssetBalanceBefore);
         console.log("lcc0UnderlyingAssetBalanceAfter", lcc0UnderlyingAssetBalanceAfter);

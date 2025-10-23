@@ -22,6 +22,7 @@ import {HookFlags} from "../src/libraries/HookFlags.sol";
 import {HookMiner} from "v4-periphery/src/utils/HookMiner.sol";
 import {MMPositionManager} from "../src/MMPositionManager.sol";
 import {VTSConfigs} from "../src/libraries/VTSConfigs.sol";
+import {IOracleHelper} from "../src/interfaces/IOracleHelper.sol";
 
 contract MarketFactoryTest is Test, Deployers {
     using PoolIdLibrary for PoolKey;
@@ -48,7 +49,8 @@ contract MarketFactoryTest is Test, Deployers {
         coreHookAddr = address(coreFlags);
 
         vm.prank(owner);
-        factory = new MarketFactory(address(poolManager), makeAddr("oracleRegistry"), bounds);
+        address oracleHelperAddress = makeAddr("oracleHelper");
+        factory = new MarketFactory(address(poolManager), oracleHelperAddress, bounds);
         positionManager = new MMPositionManager(
             address(poolManager), makeAddr("spokeReceiver"), address(factory), makeAddr("settlementObserver")
         );
@@ -56,7 +58,7 @@ contract MarketFactoryTest is Test, Deployers {
         // Deploy CoreHook at computed address
         deployCodeTo(
             "CoreHook.sol:CoreHook",
-            abi.encode(poolManager, address(factory), address(positionManager), address(0)),
+            abi.encode(poolManager, address(factory), address(positionManager), oracleHelperAddress, address(0)),
             coreHookAddr
         );
 
@@ -67,6 +69,14 @@ contract MarketFactoryTest is Test, Deployers {
 
         vm.prank(owner);
         factory.setHooks(coreHookAddr);
+
+        // Mock calls made to external contracts over the cause of the test
+        // Mock the validateMarketOraclesExist call
+        vm.mockCall(
+            oracleHelperAddress,
+            abi.encodeWithSelector(IOracleHelper.validateMarketOraclesExist.selector),
+            abi.encode() // Empty return (function is view, returns nothing)
+        );
     }
 
     function testCreateMarket() public {

@@ -16,11 +16,9 @@ import {ProxyHook} from "../src/ProxyHook.sol";
 import {MarketFactory} from "../src/MarketFactory.sol";
 import {HookFlags} from "../src/libraries/HookFlags.sol";
 import {MMPositionManager} from "../src/MMPositionManager.sol";
-import {IOracleRegistry} from "../src/interfaces/IOracleRegistry.sol";
 
 contract HookTest is Test, Deployers {
     IPoolManager poolManager;
-    IOracleRegistry oracleRegistry;
     MMPositionManager mmPositionManager;
     MarketFactory factory;
     CoreHook coreHook;
@@ -29,11 +27,10 @@ contract HookTest is Test, Deployers {
 
     function setUp() public {
         poolManager = IPoolManager(makeAddr("poolManager"));
-        oracleRegistry = IOracleRegistry(makeAddr("oracleRegistry"));
         address[] memory bounds = new address[](0);
         vm.prank(owner);
 
-        factory = new MarketFactory(address(poolManager), address(oracleRegistry), bounds);
+        factory = new MarketFactory(address(poolManager), address(makeAddr("OracleHelper")), bounds);
         mmPositionManager = new MMPositionManager(
             address(poolManager), makeAddr("spokeReceiver"), address(factory), makeAddr("settlementObserver")
         );
@@ -44,7 +41,7 @@ contract HookTest is Test, Deployers {
 
         deployCodeTo(
             "CoreHook.sol:CoreHook",
-            abi.encode(poolManager, address(factory), address(mmPositionManager), address(0)),
+            abi.encode(poolManager, address(factory), address(mmPositionManager), address(0), address(0)),
             coreHookAddrComputed
         );
         coreHook = CoreHook(coreHookAddrComputed);
