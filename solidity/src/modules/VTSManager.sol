@@ -64,6 +64,12 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     // Protocol coverage & fee sharing accounting
     // Total protocol-covered unwraps (net of proactive pool usage)
     mapping(PoolId => uint256[2]) public protocolCoverage;
+    // Tick-indexed coverage usage growth (per token) accrued at unwrap time
+    mapping(PoolId => uint256[2]) internal coverageUseGrowthGlobal;
+    mapping(PoolId => mapping(int24 => uint256[2])) internal coverageUseGrowthOutside;
+    mapping(PositionId => uint256[2]) internal coverageUseGrowthInsideLast;
+    // Residual coverage when no in-range liquidity; applied on next activation
+    mapping(PoolId => uint256[2]) internal coverageResidual;
     // Sum of all position cumulative deficits per market/token
     mapping(PoolId => uint256[2]) public globalDeficit;
     // Protocol/LPs fee pot accrued from fee sharing (per token index)
@@ -78,7 +84,6 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     // (legacy proactive and fee-pot accounting removed)
 
     error InvalidMarketVTSConfiguration(PoolId corePoolId);
-    error NotEnoughSettlementBalance(PositionId id, uint8 tokenIndex, uint256 currentAmount, uint256 attemptedAmount);
     error InvalidPosition(PositionId positionId);
     error RFSOpenForPosition(PositionId positionId);
 
@@ -315,33 +320,32 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
                 calcRFS(id, true);
                 _trackCommitment(id, params);
                 // active position is being liquidated.
-                if (_isMMPosition(id)) {
-                    uint256 s0 = totalSettlementAmount[id][0];
-                    uint256 s1 = totalSettlementAmount[id][1];
-                    uint256 excess0 = 0;
-                    uint256 excess1 = 0;
-                    if (liq == 0) {
-                        // full liquidation
-                        excess0 = s0;
-                        excess1 = s1;
-                    } else {
-                        // a partial liquidation results in removal of the settlements above the NEW commitment maxima.
-                        if (s0 > commitmentMaxima[id][0]) {
-                            excess0 = s0 - commitmentMaxima[id][0];
-                        }
-                        if (s1 > commitmentMaxima[id][1]) {
-                            excess1 = s1 - commitmentMaxima[id][1];
-                        }
+                uint256 s0 = totalSettlementAmount[id][0];
+                uint256 s1 = totalSettlementAmount[id][1];
+                uint256 excess0 = 0;
+                uint256 excess1 = 0;
+                if (liq == 0) {
+                    // full liquidation
+                    excess0 = s0;
+                    excess1 = s1;
+                } else {
+                    // a partial liquidation results in removal of the settlements above the NEW commitment maxima.
+                    if (s0 > commitmentMaxima[id][0]) {
+                        excess0 = s0 - commitmentMaxima[id][0];
                     }
-                    if (excess0 > 0) {
-                        _updateSettlement(poolId, id, 0, -SafeCast.toInt256(excess0));
+                    if (s1 > commitmentMaxima[id][1]) {
+                        excess1 = s1 - commitmentMaxima[id][1];
                     }
-                    if (excess1 > 0) {
-                        _updateSettlement(poolId, id, 1, -SafeCast.toInt256(excess1));
-                    }
-                    // this sets the required settlement because we changes the position.
-                    _setSettlementDelta(LiquidityUtils.safeToBalanceDelta(excess0, excess1, true, true));
                 }
+                if (excess0 > 0) {
+                    _updateSettlement(poolId, id, 0, -SafeCast.toInt256(excess0));
+                }
+                if (excess1 > 0) {
+                    _updateSettlement(poolId, id, 1, -SafeCast.toInt256(excess1));
+                }
+                // this sets the required settlement because we changes the position.
+                _setSettlementDelta(LiquidityUtils.safeToBalanceDelta(excess0, excess1, true, true));
+                // TODO: use this delta to determine what amount of MarketVault liquidity to return to LPs?
             } else {
                 // POSITION DELTA INCREASE:
 
@@ -402,7 +406,12 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         (uint256 fg0, uint256 fg1) = poolManager.getFeeGrowthInside(p, m.tickLower, m.tickUpper);
         feeGrowthInsideLast[id][0] = fg0;
         feeGrowthInsideLast[id][1] = fg1;
-        // (legacy proactive/fee-pot snapshot removals)
+
+        // Coverage usage snapshot
+        (uint256 cu0, uint256 cu1) =
+            GrowthAccounting.inside(coverageUseGrowthGlobal, coverageUseGrowthOutside, p, m.tickLower, m.tickUpper);
+        coverageUseGrowthInsideLast[id][0] = cu0;
+        coverageUseGrowthInsideLast[id][1] = cu1;
     }
 
     /**
@@ -482,21 +491,23 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         settlementDelta = requiredSettlementDelta + modifyDelta; //  equivalent to doing (delta1.amount0 + delta2.amount0, delta1.amount1 + delta2.amount1)
         // If the position has been untouched, then requiredSettlementDelta is 0.
 
-        int128 amount0 = settlementDelta.amount0();
-        int128 amount1 = settlementDelta.amount1();
-
+        int256 amount0 = int256(settlementDelta.amount0());
+        int256 amount1 = int256(settlementDelta.amount1());
         if (amount0 > 0) {
-            _handleMMSettlementForToken(positionId, poolId, 0, SafeCast.toUint256(int256(amount0)));
+            amount0 = _handleMMSettlementForToken(positionId, poolId, 0, SafeCast.toUint256(int256(amount0)));
         } else if (amount0 < 0) {
-            _updateSettlement(poolId, positionId, 0, int256(amount0));
+            amount0 = _updateSettlement(poolId, positionId, 0, int256(amount0));
         }
         if (amount1 > 0) {
-            _handleMMSettlementForToken(positionId, poolId, 1, SafeCast.toUint256(int256(amount1)));
+            amount1 = _handleMMSettlementForToken(positionId, poolId, 1, SafeCast.toUint256(int256(amount1)));
         } else if (amount1 < 0) {
-            _updateSettlement(poolId, positionId, 1, int256(amount1));
+            amount1 = _updateSettlement(poolId, positionId, 1, int256(amount1));
         }
 
-        emit MMPositionLiquidityUpdated(poolId, positionId, amount0, amount1);
+        // Clamps within _updateSettlement may modify the return delta.
+        settlementDelta = toBalanceDelta(SafeCast.toInt128(amount0), SafeCast.toInt128(amount1));
+
+        emit MMPositionLiquidityUpdated(poolId, positionId, settlementDelta.amount0(), settlementDelta.amount1());
     }
 
     /**
@@ -520,6 +531,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
      */
     function _handleMMSettlementForToken(PositionId positionId, PoolId poolId, uint8 tokenIndex, uint256 settledAmount)
         internal
+        returns (int256 outDelta)
     {
         uint256 dBefore = cumulativeDeficit[positionId][tokenIndex];
         uint256 d = settledAmount >= dBefore ? dBefore : settledAmount; // extinguished deficit this tx
@@ -537,7 +549,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
 
         uint256 proactive = settledAmount - d;
         if (proactive > 0) {
-            _updateSettlement(poolId, positionId, tokenIndex, SafeCast.toInt256(proactive));
+            outDelta = _updateSettlement(poolId, positionId, tokenIndex, SafeCast.toInt256(proactive));
         }
     }
 
@@ -567,7 +579,68 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     function _settlePositionGrowths(PositionId positionId) internal {
         _settlePositionDeficitGrowth(positionId);
         _settlePositionInflowGrowth(positionId);
-        // (legacy proactive use and fee-pot growth settlement removed)
+        _settleCoverageUsage(positionId);
+    }
+
+    /// @dev Settle coverage-usage growth and burn fees only on exercised deficits
+    function _settleCoverageUsage(PositionId positionId) internal {
+        PositionMeta memory m = meta[positionId];
+        PoolId poolId = m.poolId;
+        uint128 liq = poolManager.getPositionLiquidity(poolId, PositionId.unwrap(positionId));
+
+        (uint256 cov0, uint256 cov1) = GrowthAccounting.deltaAndCheckpoint(
+            coverageUseGrowthGlobal,
+            coverageUseGrowthOutside,
+            coverageUseGrowthInsideLast[positionId],
+            poolId,
+            m.tickLower,
+            m.tickUpper,
+            liq
+        );
+
+        if (cov0 > 0) {
+            _applyCoverageBurn(positionId, poolId, 0, cov0, liq);
+        }
+        if (cov1 > 0) {
+            _applyCoverageBurn(positionId, poolId, 1, cov1, liq);
+        }
+    }
+
+    function _applyCoverageBurn(PositionId id, PoolId p, uint8 tokenIndex, uint256 cov, uint128 positionLiquidity)
+        internal
+    {
+        uint256 d = cumulativeDeficit[id][tokenIndex];
+        uint256 s = totalSettlementAmount[id][tokenIndex];
+        if (cov == 0 || (d == 0 && s == 0)) return;
+
+        // Enforce c <= d + s, then burn only deficit portion
+        uint256 cEff = cov <= (d + s) ? cov : (d + s);
+        if (cEff == 0 || d == 0) return;
+        uint256 burnBase = cEff <= d ? cEff : d; // min(coverage, deficit)
+
+        (uint256 fees, uint256 ofDelta) = _readFeesAndCheckpoint(id, p, tokenIndex, positionLiquidity);
+        if (fees == 0 || ofDelta == 0) return;
+
+        uint256 bps = corePoolToVTSConfiguration[p].coverageFeeShare;
+        if (bps == 0) return;
+
+        // feesBurn = fees * (burnBase / ofDelta) * bps/10000
+        uint256 feesBurn = FullMath.mulDiv(fees, burnBase, ofDelta);
+        feesBurn = FullMath.mulDiv(feesBurn, bps, LiquidityUtils.ONE_BIP);
+        if (feesBurn == 0) return;
+        if (feesBurn > fees) feesBurn = fees; // clamp to fees accrued
+
+        uint256 growthInc = 0;
+        if (positionLiquidity > 0) {
+            growthInc = FullMath.mulDiv(feesBurn, FixedPoint128.Q128, positionLiquidity);
+            // Burn by advancing fee growth baseline
+            // The following is “burning” their claimable fees by advancing feeGrowthInsideLast by the share-equivalent growth.
+            // In Uniswap-style accounting, a position’s owed fees = (feeGrowthInside − feeGrowthInsideLast) × liquidity.
+            // By increasing feeGrowthInsideLast by share/Q128/liquidity, we reduce their future fee delta exactly by share.
+            feeGrowthInsideLast[id][tokenIndex] += growthInc;
+        }
+        protocolFeeAccrued[p][tokenIndex] += feesBurn; // TODO: we need to share fees to all other liquidity except this position.
+        emit FeeShareHandled(p, id, tokenIndex, feesBurn, growthInc);
     }
 
     // (legacy fee-pot settlement removed)
@@ -575,8 +648,15 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     /// @dev Increment protocol or proactive excess liquidity coverage on LCC unwrap, consuming proactive pool first
     function _incrementCoverage(PoolId poolId, uint8 tokenIndex, uint256 coveredAmount) internal {
         if (tokenIndex > 1 || coveredAmount == 0) return;
-        // Temporarily: just accrue to protocolCoverage (new tick-indexed attribution to be added in next steps)
-        protocolCoverage[poolId][tokenIndex] += coveredAmount;
+        uint128 liq = poolManager.getLiquidity(poolId);
+        if (liq > 0) {
+            // Accrue coverage usage growth per-liquidity (outflow weight basis at current tick)
+            uint256 deltaG = FullMath.mulDiv(coveredAmount, FixedPoint128.Q128, uint256(liq));
+            coverageUseGrowthGlobal[poolId][tokenIndex] += deltaG;
+        } else {
+            // No in-range liquidity; defer to residual
+            coverageResidual[poolId][tokenIndex] += coveredAmount;
+        }
     }
 
     // (legacy fee-pot redemption removed)
@@ -585,7 +665,18 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     function _onTickCross(PoolId corePoolId, int24 tick, uint8 token) internal {
         GrowthAccounting.flipOutside(deficitGrowthGlobal, deficitGrowthOutside, corePoolId, tick, token);
         GrowthAccounting.flipOutside(inflowGrowthGlobal, inflowGrowthOutside, corePoolId, tick, token);
-        // (legacy proactive/fee-pot flips removed)
+        GrowthAccounting.flipOutside(coverageUseGrowthGlobal, coverageUseGrowthOutside, corePoolId, tick, token);
+
+        // Apply residual if any when liquidity becomes active
+        uint256 residual = coverageResidual[corePoolId][token];
+        if (residual > 0) {
+            uint128 liq = poolManager.getLiquidity(corePoolId);
+            if (liq > 0) {
+                uint256 deltaG = FullMath.mulDiv(residual, FixedPoint128.Q128, uint256(liq));
+                coverageUseGrowthGlobal[corePoolId][token] += deltaG;
+                coverageResidual[corePoolId][token] = 0;
+            }
+        }
     }
 
     /// @dev Accrue deficit growth to the global accumulator (per token) using current in-range liquidity
@@ -970,21 +1061,31 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
      * @param tokenIndex The token index
      * @param delta The delta of the settlement
      */
-    function _updateSettlement(PoolId poolId, PositionId id, uint8 tokenIndex, int256 delta) internal {
+    function _updateSettlement(PoolId poolId, PositionId id, uint8 tokenIndex, int256 delta)
+        internal
+        returns (int256)
+    {
         uint256 cur = totalSettlementAmount[id][tokenIndex];
-        uint256 next;
+        if (delta == 0) {
+            return 0;
+        }
+        uint256 next = cur;
+        uint256 c = commitmentMaxima[id][tokenIndex];
         if (delta > 0) {
             next = cur + uint256(delta);
-        } else if (delta < 0) {
+            if (next > c) {
+                // clamp to commitment maxima
+                next = c;
+            }
+        } else {
             uint256 subtract = uint256(-delta);
             if (cur < subtract) {
-                revert NotEnoughSettlementBalance(id, tokenIndex, cur, subtract);
+                subtract = cur;
             }
             next = cur - subtract;
-        } else {
-            return;
         }
         totalSettlementAmount[id][tokenIndex] = next;
+        return SafeCast.toInt256(next) - SafeCast.toInt256(cur); // output delta
     }
 
     /// @dev Coverage units are proactively settled amounts capped by commitment for the given token.
