@@ -15,16 +15,16 @@ import {IVTSManager} from "../interfaces/IVTSManager.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
 import {TransientStateLibrary} from "v4-periphery/lib/v4-core/src/libraries/TransientStateLibrary.sol";
-import {TickMath} from "v4-periphery/lib/v4-core/src/libraries/TickMath.sol";
-import {SqrtPriceMath} from "v4-periphery/lib/v4-core/src/libraries/SqrtPriceMath.sol";
+// import {TickMath} from "v4-periphery/lib/v4-core/src/libraries/TickMath.sol";
+// import {SqrtPriceMath} from "v4-periphery/lib/v4-core/src/libraries/SqrtPriceMath.sol";
 import {toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {LiquidityUtils} from "../libraries/LiquidityUtils.sol";
 import {TransientSlots} from "../libraries/TransientSlots.sol";
 import {TransientSlot} from "openzeppelin-contracts/contracts/utils/TransientSlot.sol";
-import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
-import {ILCC} from "../interfaces/ILCC.sol";
-import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
+// import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+// import {ILCC} from "../interfaces/ILCC.sol";
+// import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
 import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint128.sol";
 import {SafeCast} from "openzeppelin-contracts/contracts/utils/math/SafeCast.sol";
 import {LiquidityUtils} from "../libraries/LiquidityUtils.sol";
@@ -75,27 +75,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     // Per-position outflow snapshot taken when feeGrowthInsideLast is checkpointed, per token
     mapping(PositionId => uint256[2]) internal outflowsAtFeeSnap;
 
-    // Proactive liquidity accounting (tick-indexed, Q128 per-liquidity growth)
-    // Proactive excess credited while in-range, accumulates in pool-wide storage.
-    mapping(PoolId => uint256[2]) internal proactiveExcessGrowthGlobal;
-    // Proactive usage consumed at unwrap while in-range
-    mapping(PoolId => uint256[2]) internal proactiveUseGrowthGlobal;
-    mapping(PoolId => mapping(int24 => uint256[2])) internal proactiveUseGrowthOutside;
-    mapping(PositionId => uint256[2]) internal proactiveUseGrowthInsideLast;
-    // Per-position accumulated obligation arising from proactive usage attribution
-    mapping(PositionId => uint256[2]) internal proactiveObligation;
-
-    // Inverted fee-pot growth accounting over proactively settled backing units
-    mapping(PoolId => uint256[2]) internal feePotGrowthGlobal;
-    mapping(PoolId => mapping(int24 => uint256[2])) internal feePotGrowthOutside;
-    mapping(PositionId => uint256[2]) internal feePotGrowthInsideLast;
-    mapping(PositionId => uint256[2]) internal feePotGlobalLast;
-    // Per-position settled baseline (claimable tally)
-    mapping(PositionId => uint256[2]) internal feePotBaseline;
-    // Pool-wide sum of coverage units (per token)
-    mapping(PoolId => uint256[2]) internal totalCoverageUnits;
-    // Per-position last cached coverage units
-    mapping(PositionId => uint256[2]) internal lastCoverageUnits;
+    // (legacy proactive and fee-pot accounting removed)
 
     error InvalidMarketVTSConfiguration(PoolId corePoolId);
     error NotEnoughSettlementBalance(PositionId id, uint8 tokenIndex, uint256 currentAmount, uint256 attemptedAmount);
@@ -110,8 +90,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     event MMPositionLiquidityUpdated(
         PoolId indexed poolId, PositionId indexed positionId, int128 amount0, int128 amount1
     );
-    event ProactiveCredited(PoolId indexed poolId, uint8 indexed tokenIndex, uint256 amount, int24 tick);
-    event ProactiveUsed(PoolId indexed poolId, uint8 indexed tokenIndex, uint256 used, uint256 residual);
+    // (legacy proactive events removed)
 
     address private immutable mmPositionManager;
     IPoolManager private immutable poolManager;
@@ -259,11 +238,10 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
 
     /**
      * @notice Checks if fee sharing is enabled for a core pool
-     * @param p The core pool ID
      * @return True if fee sharing is enabled, false otherwise
      */
-    function _isFeeSharingEnabled(PoolId p) internal view returns (bool) {
-        return corePoolToVTSConfiguration[p].coverageFeeShare > 0;
+    function _isFeeSharingEnabled(PoolId /*p*/ ) internal pure returns (bool) {
+        return true; // placeholder; will be used in future fee-share steps
     }
 
     /**
@@ -273,7 +251,8 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
      * @return pay1 The pending fee pot baseline for token1
      */
     function pendingFeePotBaseline(PositionId id) external view override returns (uint256 pay0, uint256 pay1) {
-        return (feePotBaseline[id][0], feePotBaseline[id][1]);
+        id; // silence unused
+        return (0, 0);
     }
 
     /**
@@ -289,12 +268,14 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         override
         returns (uint256[2] memory baseline, uint256[2] memory insideLast, uint256[2] memory globalLast)
     {
-        baseline[0] = feePotBaseline[id][0];
-        baseline[1] = feePotBaseline[id][1];
-        insideLast[0] = feePotGrowthInsideLast[id][0];
-        insideLast[1] = feePotGrowthInsideLast[id][1];
-        globalLast[0] = feePotGlobalLast[id][0];
-        globalLast[1] = feePotGlobalLast[id][1];
+        id; // silence unused
+        baseline[0] = 0;
+        baseline[1] = 0;
+        insideLast[0] = 0;
+        insideLast[1] = 0;
+        globalLast[0] = 0;
+        globalLast[1] = 0;
+        return (baseline, insideLast, globalLast);
     }
 
     /**
@@ -418,24 +399,10 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         inflowGrowthInsideLast[id][0] = i0;
         inflowGrowthInsideLast[id][1] = i1;
 
-        (uint256 u0, uint256 u1) =
-            GrowthAccounting.inside(proactiveUseGrowthGlobal, proactiveUseGrowthOutside, p, m.tickLower, m.tickUpper);
-        proactiveUseGrowthInsideLast[id][0] = u0;
-        proactiveUseGrowthInsideLast[id][1] = u1;
-
         (uint256 fg0, uint256 fg1) = poolManager.getFeeGrowthInside(p, m.tickLower, m.tickUpper);
         feeGrowthInsideLast[id][0] = fg0;
         feeGrowthInsideLast[id][1] = fg1;
-
-        (uint256 fp0, uint256 fp1) =
-            GrowthAccounting.inside(feePotGrowthGlobal, feePotGrowthOutside, p, m.tickLower, m.tickUpper);
-        feePotGrowthInsideLast[id][0] = fp0;
-        feePotGrowthInsideLast[id][1] = fp1;
-        feePotGlobalLast[id][0] = feePotGrowthGlobal[p][0];
-        feePotGlobalLast[id][1] = feePotGrowthGlobal[p][1];
-
-        lastCoverageUnits[id][0] = _coverageUnits(id, 0);
-        lastCoverageUnits[id][1] = _coverageUnits(id, 1);
+        // (legacy proactive/fee-pot snapshot removals)
     }
 
     /**
@@ -448,7 +415,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         uint256 currentC0 = commitmentMaxima[positionId][0];
         uint256 currentC1 = commitmentMaxima[positionId][1];
 
-        PoolId pId = meta[positionId].poolId;
+        // PoolId pId = meta[positionId].poolId; // unused after coverage units removal
 
         if (params.liquidityDelta > 0) {
             // Liquidity added: increase tracked maxima by the delta's maxima over the tick range
@@ -458,8 +425,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
 
             commitmentMaxima[positionId][0] = currentC0 + addC0;
             commitmentMaxima[positionId][1] = currentC1 + addC1;
-            _refreshCoverageUnits(positionId, pId, 0);
-            _refreshCoverageUnits(positionId, pId, 1);
+            // (coverage units removed)
         } else if (params.liquidityDelta < 0) {
             // Liquidity removed: decrease tracked maxima by the delta's maxima over the tick range
             uint128 liquidityRemoved = SafeCast.toUint128(uint256(-params.liquidityDelta));
@@ -469,8 +435,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
             // Clamp at zero to avoid underflow; if fully removed, both become zero
             commitmentMaxima[positionId][0] = currentC0 > subC0 ? (currentC0 - subC0) : 0;
             commitmentMaxima[positionId][1] = currentC1 > subC1 ? (currentC1 - subC1) : 0;
-            _refreshCoverageUnits(positionId, pId, 0);
-            _refreshCoverageUnits(positionId, pId, 1);
+            // (coverage units removed)
         } else {
             // No-op if liquidityDelta == 0 (poke)
             return;
@@ -493,9 +458,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     {
         // First, settle both growths since last touch
         _settlePositionGrowths(positionId); // TODO: if we call on separate calcSeizure, then we use transient to cache action.
-        // Auto-redeem fee pot to settlement credits BEFORE deriving defaults and RfS,
-        // so newly allocated fees are available to this operation
-        _redeemFeePot(positionId, false);
+        // (fee-pot redemption removed)
 
         PositionMeta memory m = meta[positionId];
         PoolId poolId = m.poolId;
@@ -564,66 +527,17 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         // therefore, attribution is based on the deficit amount being covered in this transaction.
 
         if (d > 0) {
-            cumulativeDeficit[positionId][tokenIndex] = dBefore - d; // TODO: should we be deducting from proactiveObligation first?
+            cumulativeDeficit[positionId][tokenIndex] = dBefore - d;
             uint256 gD = globalDeficit[poolId][tokenIndex];
-            uint256 pC = protocolCoverage[poolId][tokenIndex];
             if (gD > 0) {
                 globalDeficit[poolId][tokenIndex] = gD - d;
-                if (pC > 0) {
-                    uint256 attributed = FullMath.mulDiv(d, pC, gD); // deficit / globalDeficit * protocolCoverage
-                    protocolCoverage[poolId][tokenIndex] = pC - attributed;
-
-                    uint256 bps = corePoolToVTSConfiguration[poolId].coverageFeeShare;
-                    if (bps > 0) {
-                        uint128 liq = poolManager.getPositionLiquidity(poolId, PositionId.unwrap(positionId));
-                        (uint256 fees, uint256 ofDelta) = _readFeesAndCheckpoint(positionId, poolId, tokenIndex, liq);
-                        // Fees accrue continuously over time; deficits arise from outflows.
-                        // To share “fees on the deficit amount exclusively,” normalise fees by the same window’s position-attributed outflows.
-                        // New calc: share = fees * (attributed / outflowDelta) * coverageFeeShare_bps/10000, where:
-                        // outflowDelta = cumulativeOutflows - outflowsAtFeeSnap (same checkpoint window as feeGrowth).
-                        // This ties fee sharing to the outflow volume that generated the obligation, not just the settlement amount.
-                        if (fees > 0 && ofDelta > 0 && attributed > 0) {
-                            uint256 share = FullMath.mulDiv(fees, attributed, ofDelta);
-                            share = FullMath.mulDiv(share, bps, 10000);
-                            if (share > 0 && share <= fees) {
-                                uint256 growthInc = 0;
-                                if (liq > 0) {
-                                    // The following is “burning” their claimable fees by advancing feeGrowthInsideLast by the share-equivalent growth.
-                                    // In Uniswap-style accounting, a position’s owed fees = (feeGrowthInside − feeGrowthInsideLast) × liquidity. By increasing feeGrowthInsideLast by share/Q128/liquidity, we reduce their future fee delta exactly by share.
-                                    growthInc = FullMath.mulDiv(share, FixedPoint128.Q128, liq);
-                                    feeGrowthInsideLast[positionId][tokenIndex] += growthInc;
-                                }
-                                // The “value” of the share is accrued to protocolFeeAccrued[...], so the MM loses that amount and the protocol/other LPs gain it.
-                                protocolFeeAccrued[poolId][tokenIndex] += share; // utilised to clamp fee claims
-
-                                // Inverted fee-pot growth: accrue per backing unit
-                                uint256 denom = totalCoverageUnits[poolId][tokenIndex];
-                                if (denom > 0) {
-                                    uint256 dG = FullMath.mulDiv(share, FixedPoint128.Q128, denom);
-                                    feePotGrowthGlobal[poolId][tokenIndex] += dG;
-                                }
-
-                                emit FeeShareHandled(poolId, positionId, tokenIndex, share, growthInc);
-                            }
-                        }
-                    }
-                }
+                // (legacy protocolCoverage fee-share coupling removed; protocolCoverage updated elsewhere)
             }
         }
 
         uint256 proactive = settledAmount - d;
         if (proactive > 0) {
             _updateSettlement(poolId, positionId, tokenIndex, SafeCast.toInt256(proactive));
-            if (_isFeeSharingEnabled(poolId)) {
-                // Credit proactive excess only if in-range at settlement
-                (, int24 tick,,) = poolManager.getSlot0(poolId);
-                PositionMeta memory m = meta[positionId];
-                bool inRange = (tick >= m.tickLower && tick < m.tickUpper);
-                if (inRange) {
-                    _accrueProactiveExcessGrowth(poolId, tokenIndex, proactive);
-                    emit ProactiveCredited(poolId, tokenIndex, proactive, tick);
-                }
-            }
         }
     }
 
@@ -653,134 +567,25 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     function _settlePositionGrowths(PositionId positionId) internal {
         _settlePositionDeficitGrowth(positionId);
         _settlePositionInflowGrowth(positionId);
-        _settlePositionProactiveUseGrowth(positionId);
-        _settleFeePotGrowth(positionId);
+        // (legacy proactive use and fee-pot growth settlement removed)
     }
 
-    /// @dev Settle inverted fee-pot growth for a position into feePotBaseline
-    function _settleFeePotGrowth(PositionId id) internal {
-        PositionMeta memory m = meta[id];
-        PoolId p = m.poolId;
-        if (!_isFeeSharingEnabled(p)) {
-            return;
-        }
-
-        uint256 in0 = 0;
-        uint256 in1 = 0;
-
-        // DirectLPs always eligible (no inside exclusion), where as MMs are conditionally eligible.
-        if (_isMMPosition(id)) {
-            (in0, in1) = GrowthAccounting.inside(feePotGrowthGlobal, feePotGrowthOutside, p, m.tickLower, m.tickUpper);
-        }
-
-        uint256 g0 = feePotGrowthGlobal[p][0];
-        uint256 g1 = feePotGrowthGlobal[p][1];
-
-        uint256 lastIn0 = feePotGrowthInsideLast[id][0];
-        uint256 lastIn1 = feePotGrowthInsideLast[id][1];
-        uint256 lastG0 = feePotGlobalLast[id][0];
-        uint256 lastG1 = feePotGlobalLast[id][1];
-
-        uint256 dIn0 = in0 >= lastIn0 ? in0 - lastIn0 : 0;
-        uint256 dIn1 = in1 >= lastIn1 ? in1 - lastIn1 : 0;
-        uint256 dG0 = g0 >= lastG0 ? g0 - lastG0 : 0;
-        uint256 dG1 = g1 >= lastG1 ? g1 - lastG1 : 0;
-
-        uint256 out0 = dG0 > dIn0 ? dG0 - dIn0 : 0;
-        uint256 out1 = dG1 > dIn1 ? dG1 - dIn1 : 0;
-
-        uint256 u0 = _coverageUnits(id, 0);
-        uint256 u1 = _coverageUnits(id, 1);
-
-        if (out0 > 0 && u0 > 0) {
-            feePotBaseline[id][0] += FullMath.mulDiv(out0, u0, FixedPoint128.Q128);
-        }
-        if (out1 > 0 && u1 > 0) {
-            feePotBaseline[id][1] += FullMath.mulDiv(out1, u1, FixedPoint128.Q128);
-        }
-
-        feePotGrowthInsideLast[id][0] = in0;
-        feePotGrowthInsideLast[id][1] = in1;
-        feePotGlobalLast[id][0] = g0;
-        feePotGlobalLast[id][1] = g1;
-    }
+    // (legacy fee-pot settlement removed)
 
     /// @dev Increment protocol or proactive excess liquidity coverage on LCC unwrap, consuming proactive pool first
     function _incrementCoverage(PoolId poolId, uint8 tokenIndex, uint256 coveredAmount) internal {
         if (tokenIndex > 1 || coveredAmount == 0) return;
-        // Use proactive availability based on current in-range liquidity
-        uint128 liq = poolManager.getLiquidity(poolId);
-        uint256 residual = coveredAmount;
-        if (liq > 0) {
-            uint256 gEx = proactiveExcessGrowthGlobal[poolId][tokenIndex];
-            uint256 gUse = proactiveUseGrowthGlobal[poolId][tokenIndex];
-            // Natural/inherited clamp: proactive usage is bounded by current in-range liquidity.
-            // available = floor((excessGrowth - useGrowth) * L / Q128), so "use" is min(requested, available).
-            // Any remainder after this in-range clamp is recorded as protocolCoverage (the unmet portion).
-            uint256 available = 0;
-            if (gEx > gUse) {
-                available = FullMath.mulDiv(gEx - gUse, uint256(liq), FixedPoint128.Q128);
-            }
-            if (available > 0) {
-                uint256 use = residual <= available ? residual : available;
-                if (use > 0) {
-                    // consume: add per-liquidity growth
-                    uint256 deltaG = FullMath.mulDiv(use, FixedPoint128.Q128, uint256(liq));
-                    proactiveUseGrowthGlobal[poolId][tokenIndex] = gUse + deltaG;
-                    residual -= use;
-                    emit ProactiveUsed(poolId, tokenIndex, use, residual);
-                }
-            }
-        }
-        if (residual > 0) {
-            // Residual here is the post-clamp remainder (unmet by in-range proactive liquidity).
-            protocolCoverage[poolId][tokenIndex] += residual;
-        }
+        // Temporarily: just accrue to protocolCoverage (new tick-indexed attribution to be added in next steps)
+        protocolCoverage[poolId][tokenIndex] += coveredAmount;
     }
 
-    /**
-     * @notice Internal redemption to settlement credit (used by MMs and external claim)
-     * @param id The id of the position
-     * @param forReturnDelta Whether the redemption is for return delta in the CoreHook. Default is false, meaning it's for MM withdrawals.
-     * @return pay0 The amount of token0 to pay
-     * @return pay1 The amount of token1 to pay
-     */
-    function _redeemFeePot(PositionId id, bool forReturnDelta) internal returns (uint256 pay0, uint256 pay1) {
-        PoolId p = meta[id].poolId;
-        pay0 = feePotBaseline[id][0];
-        pay1 = feePotBaseline[id][1];
-
-        if (pay0 > 0) {
-            if (pay0 > protocolFeeAccrued[p][0]) pay0 = protocolFeeAccrued[p][0];
-            if (pay0 > 0) {
-                if (!forReturnDelta) {
-                    _updateSettlement(p, id, 0, SafeCast.toInt256(pay0));
-                }
-                protocolFeeAccrued[p][0] -= pay0;
-                feePotBaseline[id][0] -= pay0;
-            }
-        }
-        if (pay1 > 0) {
-            if (pay1 > protocolFeeAccrued[p][1]) pay1 = protocolFeeAccrued[p][1];
-            if (pay1 > 0) {
-                if (!forReturnDelta) {
-                    _updateSettlement(p, id, 1, SafeCast.toInt256(pay1));
-                }
-                protocolFeeAccrued[p][1] -= pay1;
-                feePotBaseline[id][1] -= pay1;
-            }
-        }
-    }
+    // (legacy fee-pot redemption removed)
 
     /// @notice Called by the hook on tick cross to flip outside growth for a tick
     function _onTickCross(PoolId corePoolId, int24 tick, uint8 token) internal {
         GrowthAccounting.flipOutside(deficitGrowthGlobal, deficitGrowthOutside, corePoolId, tick, token);
         GrowthAccounting.flipOutside(inflowGrowthGlobal, inflowGrowthOutside, corePoolId, tick, token);
-        if (_isFeeSharingEnabled(corePoolId)) {
-            GrowthAccounting.flipOutside(proactiveUseGrowthGlobal, proactiveUseGrowthOutside, corePoolId, tick, token);
-            // Flip fee-pot outside accumulator (inverted growth over backing units)
-            GrowthAccounting.flipOutside(feePotGrowthGlobal, feePotGrowthOutside, corePoolId, tick, token);
-        }
+        // (legacy proactive/fee-pot flips removed)
     }
 
     /// @dev Accrue deficit growth to the global accumulator (per token) using current in-range liquidity
@@ -856,42 +661,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         GrowthAccounting.accrue(inflowGrowthGlobal, corePoolId, token, inflowAmount, liq);
     }
 
-    /// @dev Accrue proactive excess growth to global accumulator (per token)
-    /// @notice Gated by _isFeeSharingEnabled before being called.
-    function _accrueProactiveExcessGrowth(PoolId corePoolId, uint8 token, uint256 proactiveAmount) internal {
-        uint128 liq = poolManager.getLiquidity(corePoolId);
-        GrowthAccounting.accrue(proactiveExcessGrowthGlobal, corePoolId, token, proactiveAmount, liq);
-    }
-
-    /// @dev Settle proactive use growth into per-position obligation
-    ///      Applies a share of proactive liquidity use to increase RfS of in-range liquidity.
-    ///
-    ///      `proactiveObligation` tracks a position's share of "proactive liquidity usage" (e.g., when excess settled liquidity is consumed for unwraps via proactiveUseGrowth).
-    ///      It's accrued via tick-indexed growth (similar to deficits/inflows) in `_settlePositionProactiveUseGrowth`, where add0/add1 are deltas from global/inside growth scaled by position liquidity (liq).
-    ///      This creates an "obligation" that's added to the required settlement in RfS calculations (e.g., need = required + obligation in _getRFS).
-    function _settlePositionProactiveUseGrowth(PositionId positionId) internal {
-        PoolId corePoolId = meta[positionId].poolId;
-        if (!_isFeeSharingEnabled(corePoolId)) {
-            return;
-        }
-        PositionMeta memory m = meta[positionId];
-        uint128 liq = poolManager.getPositionLiquidity(corePoolId, PositionId.unwrap(positionId));
-        (uint256 add0, uint256 add1) = GrowthAccounting.deltaAndCheckpoint(
-            proactiveUseGrowthGlobal,
-            proactiveUseGrowthOutside,
-            proactiveUseGrowthInsideLast[positionId],
-            corePoolId,
-            m.tickLower,
-            m.tickUpper,
-            liq
-        );
-        if (add0 > 0) {
-            proactiveObligation[positionId][0] += add0;
-        }
-        if (add1 > 0) {
-            proactiveObligation[positionId][1] += add1;
-        }
-    }
+    // (legacy proactive accrual and settlement removed)
 
     /// @dev Compute inflow inside accumulator for a position bounds
 
@@ -1114,9 +884,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         // Clamp deductions to current settled balances to avoid underflow.
         // TODO: settle in to the position, which closes the deficit and does NOT increase settled amount for deficit closed.
         // TODO: Therefore, the seizure is paying back the protocol for the amount owed by the position.
-        // TODO: However, RfS is calced to include proactiveObligation (an amount distributed over weighted in-range liquidity, that shares where MM proactive liquidity is used to cover unwraps.)
-        // TODO: Positive settlement does not decreate this obligation.
-        // ? A seizure will be enabled up to the required (deficit) + proactiveObligation. Therefore, any settlment covers this deficit, and amounts are redistributed to the protocol.
+        // (legacy references to proactive obligation removed)
         // {
         //     uint256 curS0 = totalSettlementAmount[positionId][0];
         //     uint256 curS1 = totalSettlementAmount[positionId][1];
@@ -1170,13 +938,11 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         uint256 s1 = totalSettlementAmount[_positionId][1];
         uint256 d0 = cumulativeDeficit[_positionId][0];
         uint256 d1 = cumulativeDeficit[_positionId][1];
-        uint256 o0 = proactiveObligation[_positionId][0]; // utilised proactive liquidity for position.
-        uint256 o1 = proactiveObligation[_positionId][1];
         uint256 req0 = d0 < c0 ? d0 : c0; // cap deficit by commitment
         uint256 req1 = d1 < c1 ? d1 : c1;
 
-        int128 amount0 = _rfsDeltaRaw(s0, req0, o0);
-        int128 amount1 = _rfsDeltaRaw(s1, req1, o1);
+        int128 amount0 = _rfsDeltaRaw(s0, req0, 0);
+        int128 amount1 = _rfsDeltaRaw(s1, req1, 0);
 
         // Spec: amount > 0 => settlement required (RfS open); amount < 0 => withdraw allowed
         bool open = (amount0 > 0) || (amount1 > 0);
@@ -1219,28 +985,25 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
             return;
         }
         totalSettlementAmount[id][tokenIndex] = next;
-        _refreshCoverageUnits(id, poolId, tokenIndex);
     }
 
     /// @dev Coverage units are proactively settled amounts capped by commitment for the given token.
-    function _coverageUnits(PositionId id, uint8 t) internal view returns (uint256) {
-        uint256 c = commitmentMaxima[id][t];
-        uint256 s = totalSettlementAmount[id][t];
-        return s < c ? s : c;
-    }
-
-    /// @dev Refresh pool-wide coverage units when a position's units change.
-    function _refreshCoverageUnits(PositionId posId, PoolId poolid, uint8 tokenIndex) internal {
-        uint256 beforeU = lastCoverageUnits[posId][tokenIndex];
-        uint256 afterU = _coverageUnits(posId, tokenIndex);
-        if (afterU == beforeU) return;
-        if (afterU > beforeU) {
-            totalCoverageUnits[poolid][tokenIndex] += (afterU - beforeU);
-        } else if (beforeU > afterU) {
-            uint256 dec = beforeU - afterU;
-            uint256 cur = totalCoverageUnits[poolid][tokenIndex];
-            totalCoverageUnits[poolid][tokenIndex] = dec > cur ? 0 : cur - dec;
-        }
-        lastCoverageUnits[posId][tokenIndex] = afterU;
-    }
+    /**
+     *    Coverage units (CU_A(r)) are the proactively settled backing eligible to cover unwraps for token A on position r:
+     *     CU_A(r) := min(S_A(r), C_A(r))
+     *
+     *     Where:
+     *     - S_A(r): current totalSettlementAmount for token A
+     *     - C_A(r): commitmentMaxima for token A
+     *
+     *     We accrue tick-indexed coverage-usage growth per CU, not per liquidity, so only proactively-backed, in-range positions supply coverage.
+     *     At an unwrap of U_A units:
+     *     SumCU := sum of CU_A(r) over in-range positions at the current tick
+     *     if SumCU > 0:
+     *         deltaG := U_A * Q128 / SumCU
+     *         coverage_r := deltaG * CU_A(r) / Q128  // self-contributed coverage for r
+     *     else:
+     *         Entire U_A is protocol residual (no in-range proactive backing)
+     */
+    // (coverage units helpers removed)
 }
