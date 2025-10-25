@@ -215,10 +215,25 @@ library LiquidityUtils {
         pure
         returns (BalanceDelta)
     {
-        return toBalanceDelta(
-            isNegative0 ? -(amount0.toInt256().toInt128()) : amount0.toInt256().toInt128(),
-            isNegative1 ? -(amount1.toInt256().toInt128()) : amount1.toInt256().toInt128()
+        return LiquidityUtils.safeToBalanceDelta(
+            isNegative0 ? -(amount0.toInt256()) : amount0.toInt256(),
+            isNegative1 ? -(amount1.toInt256()) : amount1.toInt256()
         );
+    }
+
+    /**
+     * @dev Safely converts int256 to BalanceDelta, handling overflow by clamping to int128.
+     * @param amount0 The amount0 to convert
+     * @param amount1 The amount1 to convert
+     * @return The BalanceDelta representation
+     */
+    function safeToBalanceDelta(int256 amount0, int256 amount1) internal pure returns (BalanceDelta) {
+        // Ensure we never overflow int128 when constructing BalanceDelta.
+        if (amount0 > type(int128).max) amount0 = type(int128).max;
+        if (amount0 < type(int128).min) amount0 = type(int128).min;
+        if (amount1 > type(int128).max) amount1 = type(int128).max;
+        if (amount1 < type(int128).min) amount1 = type(int128).min;
+        return toBalanceDelta(amount0.toInt128(), amount1.toInt128());
     }
 
     /**

@@ -304,14 +304,13 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
                     }
                 }
                 if (excess0 > 0) {
-                    _updateSettlement(poolId, id, 0, -SafeCast.toInt256(excess0));
+                    _updateSettlement(id, 0, -SafeCast.toInt256(excess0));
                 }
                 if (excess1 > 0) {
-                    _updateSettlement(poolId, id, 1, -SafeCast.toInt256(excess1));
+                    _updateSettlement(id, 1, -SafeCast.toInt256(excess1));
                 }
                 // this sets the required settlement because we changes the position.
                 _setSettlementDelta(LiquidityUtils.safeToBalanceDelta(excess0, excess1, true, true));
-                // TODO: use this delta to determine what amount of MarketVault liquidity to return to LPs?
             } else {
                 // POSITION DELTA INCREASE:
 
@@ -462,16 +461,16 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         if (amount0 > 0) {
             amount0 = _handleMMSettlementForToken(positionId, poolId, 0, SafeCast.toUint256(int256(amount0)));
         } else if (amount0 < 0) {
-            amount0 = _updateSettlement(poolId, positionId, 0, int256(amount0));
+            amount0 = _updateSettlement(positionId, 0, int256(amount0));
         }
         if (amount1 > 0) {
             amount1 = _handleMMSettlementForToken(positionId, poolId, 1, SafeCast.toUint256(int256(amount1)));
         } else if (amount1 < 0) {
-            amount1 = _updateSettlement(poolId, positionId, 1, int256(amount1));
+            amount1 = _updateSettlement(positionId, 1, int256(amount1));
         }
 
         // Clamps within _updateSettlement may modify the return delta.
-        settlementDelta = toBalanceDelta(SafeCast.toInt128(amount0), SafeCast.toInt128(amount1));
+        settlementDelta = LiquidityUtils.safeToBalanceDelta(amount0, amount1);
 
         emit MMPositionLiquidityUpdated(poolId, positionId, settlementDelta.amount0(), settlementDelta.amount1());
     }
@@ -509,13 +508,12 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
             uint256 gD = globalDeficit[poolId][tokenIndex];
             if (gD > 0) {
                 globalDeficit[poolId][tokenIndex] = gD - d;
-                // (legacy protocolCoverage fee-share coupling removed; protocolCoverage updated elsewhere)
             }
         }
 
         uint256 proactive = settledAmount - d;
         if (proactive > 0) {
-            outDelta = _updateSettlement(poolId, positionId, tokenIndex, SafeCast.toInt256(proactive));
+            outDelta = _updateSettlement(positionId, tokenIndex, SafeCast.toInt256(proactive));
         }
     }
 
@@ -688,12 +686,12 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
             // MM deficits account for liquidity no longer theirs. Settled liquidity must not include amounts that cover deficits. The counterparty token inflow amounts are accrued to the position's settled amounts to compensate.
             uint256 s0 = totalSettlementAmount[positionId][0];
             if (s0 >= add0) {
-                _updateSettlement(corePoolId, positionId, 0, -(SafeCast.toInt256(add0))); // reduce total settlement amount by add0
+                _updateSettlement(positionId, 0, -(SafeCast.toInt256(add0))); // reduce total settlement amount by add0
             } else {
                 uint256 netAdd0 = add0 - s0;
                 cumulativeDeficit[positionId][0] += netAdd0;
                 globalDeficit[corePoolId][0] += netAdd0;
-                _updateSettlement(corePoolId, positionId, 0, -(SafeCast.toInt256(s0))); // set total settlement amount to 0
+                _updateSettlement(positionId, 0, -(SafeCast.toInt256(s0))); // set total settlement amount to 0
             }
         }
         if (add1 > 0) {
@@ -701,12 +699,12 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
 
             uint256 s1 = totalSettlementAmount[positionId][1];
             if (s1 >= add1) {
-                _updateSettlement(corePoolId, positionId, 1, -(SafeCast.toInt256(add1))); // reduce total settlement amount by add1
+                _updateSettlement(positionId, 1, -(SafeCast.toInt256(add1))); // reduce total settlement amount by add1
             } else {
                 uint256 netAdd1 = add1 - s1;
                 cumulativeDeficit[positionId][1] += netAdd1;
                 globalDeficit[corePoolId][1] += netAdd1;
-                _updateSettlement(corePoolId, positionId, 1, -(SafeCast.toInt256(s1))); // set total settlement amount to 0
+                _updateSettlement(positionId, 1, -(SafeCast.toInt256(s1))); // set total settlement amount to 0
             }
         }
     }
@@ -750,7 +748,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
             }
             if (add0 > 0) {
                 // remaining inflow becomes proactive settlement
-                _updateSettlement(corePoolId, positionId, 0, SafeCast.toInt256(add0));
+                _updateSettlement(positionId, 0, SafeCast.toInt256(add0));
 
                 // TODO: May need to be removed... if we refactor the fee-share mechanic.
                 // if (_isFeeSharingEnabled(corePoolId)) {
@@ -776,7 +774,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
                 add1 -= cover1;
             }
             if (add1 > 0) {
-                _updateSettlement(corePoolId, positionId, 1, SafeCast.toInt256(add1));
+                _updateSettlement(positionId, 1, SafeCast.toInt256(add1));
                 // if (_isFeeSharingEnabled(corePoolId)) {
                 //     (, int24 tick,,) = poolManager.getSlot0(corePoolId);
                 //     bool inRange = (tick >= m.tickLower && tick < m.tickUpper);
@@ -1022,15 +1020,11 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
 
     /**
      * @notice Updates the settlement amount by a delta which could be positive or negative
-     * @param poolId The pool id
      * @param id The position id
      * @param tokenIndex The token index
      * @param delta The delta of the settlement
      */
-    function _updateSettlement(PoolId poolId, PositionId id, uint8 tokenIndex, int256 delta)
-        internal
-        returns (int256)
-    {
+    function _updateSettlement(PositionId id, uint8 tokenIndex, int256 delta) internal returns (int256) {
         uint256 cur = totalSettlementAmount[id][tokenIndex];
         if (delta == 0) {
             return 0;
