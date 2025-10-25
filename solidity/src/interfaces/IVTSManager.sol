@@ -39,12 +39,4 @@ interface IVTSManager {
     function incrementCoverage(PoolId poolId, uint256 amount) external;
 
     function getCommitment(PositionId positionId) external view returns (uint256 commitment0, uint256 commitment1);
-
-    // Fee pot views
-    function pendingFeePotBaseline(PositionId id) external view returns (uint256 pay0, uint256 pay1);
-
-    function feePotSnapshots(PositionId id)
-        external
-        view
-        returns (uint256[2] memory baseline, uint256[2] memory insideLast, uint256[2] memory globalLast);
 }

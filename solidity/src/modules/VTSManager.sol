@@ -245,42 +245,8 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
      * @notice Checks if fee sharing is enabled for a core pool
      * @return True if fee sharing is enabled, false otherwise
      */
-    function _isFeeSharingEnabled(PoolId /*p*/ ) internal pure returns (bool) {
-        return true; // placeholder; will be used in future fee-share steps
-    }
-
-    /**
-     * @notice Gets the pending fee pot baseline for a position
-     * @param id The id of the position
-     * @return pay0 The pending fee pot baseline for token0
-     * @return pay1 The pending fee pot baseline for token1
-     */
-    function pendingFeePotBaseline(PositionId id) external view override returns (uint256 pay0, uint256 pay1) {
-        id; // silence unused
-        return (0, 0);
-    }
-
-    /**
-     * @notice Gets the fee pot snapshots for a position
-     * @param id The id of the position
-     * @return baseline The baseline for token0
-     * @return insideLast The inside last for token0
-     * @return globalLast The global last for token0
-     */
-    function feePotSnapshots(PositionId id)
-        external
-        view
-        override
-        returns (uint256[2] memory baseline, uint256[2] memory insideLast, uint256[2] memory globalLast)
-    {
-        id; // silence unused
-        baseline[0] = 0;
-        baseline[1] = 0;
-        insideLast[0] = 0;
-        insideLast[1] = 0;
-        globalLast[0] = 0;
-        globalLast[1] = 0;
-        return (baseline, insideLast, globalLast);
+    function _isFeeSharingEnabled(PoolId p) internal view returns (bool) {
+        return corePoolToVTSConfiguration[p].coverageFeeShare > 0;
     }
 
     /**
