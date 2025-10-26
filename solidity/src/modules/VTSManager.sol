@@ -15,19 +15,15 @@ import {IVTSManager} from "../interfaces/IVTSManager.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
 import {TransientStateLibrary} from "v4-periphery/lib/v4-core/src/libraries/TransientStateLibrary.sol";
-// import {TickMath} from "v4-periphery/lib/v4-core/src/libraries/TickMath.sol";
-// import {SqrtPriceMath} from "v4-periphery/lib/v4-core/src/libraries/SqrtPriceMath.sol";
 import {toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {LiquidityUtils} from "../libraries/LiquidityUtils.sol";
 import {TransientSlots} from "../libraries/TransientSlots.sol";
 import {TransientSlot} from "openzeppelin-contracts/contracts/utils/TransientSlot.sol";
-// import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
-// import {ILCC} from "../interfaces/ILCC.sol";
-// import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
 import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint128.sol";
 import {SafeCast} from "openzeppelin-contracts/contracts/utils/math/SafeCast.sol";
 import {LiquidityUtils} from "../libraries/LiquidityUtils.sol";
+import {BalanceDeltaLibrary} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 
 abstract contract VTSManager is IVTSManager, PositionIndex {
     using StateLibrary for IPoolManager;
@@ -82,6 +78,13 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     mapping(PositionId => uint256[2]) internal outflowsAtFeeSnap;
 
     // (legacy proactive and fee-pot accounting removed)
+
+    // Sum of totalSettlementAmount across all positions per pool/token (pure contribution basis)
+    mapping(PoolId => uint256[2]) internal totalSettledAllPositions;
+    // Per-position fees contributed to the pot via slashes (for self-exclusion in bonus)
+    mapping(PositionId => uint256[2]) internal feesSharedByPosition;
+    // Per-position signed pending fee adjustment: +slash (reduces payout), -bonus (increases payout)
+    mapping(PositionId => int256[2]) internal pendingFeeAdj;
 
     error InvalidMarketVTSConfiguration(PoolId corePoolId);
     error InvalidPosition(PositionId positionId);
@@ -340,6 +343,18 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
             } else {
                 meta[id].liquidity = newLiquidity;
             }
+
+            // For active positions - settle position growths, and queue contribution-based bonuses at hook-time (liquidity modification event)
+            // Rationale:
+            // - In Uniswap-style accounting, a position's owed fees are (feeGrowthInside - feeGrowthInsideLast) * liquidity.
+            // - If we change liquidity/commitment/coverage units first, any pre-add growth would be multiplied by the larger
+            //   post-add units, which unfairly dilutes attribution and lets new units capture past accrual.
+            // - By settling first, we checkpoint fee/deficit/inflow/proactive/fee-pot growth so all pre-add accrual is
+            //   attributed to the pre-add units. Post-add accrual then starts against the updated units.
+            // - This preserves fairness and prevents gaming (e.g. adding liquidity just before redeeming to amplify claims).
+            _settlePositionGrowths(id);
+            _queueBonusForPosition(id, 0);
+            _queueBonusForPosition(id, 1);
         } else {
             revert NotActive(id);
         }
@@ -472,6 +487,10 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         // Clamps within _updateSettlement may modify the return delta.
         settlementDelta = LiquidityUtils.safeToBalanceDelta(amount0, amount1);
 
+        // Queue bonuses based on updated settled contributions (materialised at hooks only)
+        _queueBonusForPosition(positionId, 0);
+        _queueBonusForPosition(positionId, 1);
+
         emit MMPositionLiquidityUpdated(poolId, positionId, settlementDelta.amount0(), settlementDelta.amount1());
     }
 
@@ -506,6 +525,42 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         ofDelta = cf >= snap ? (cf - snap) : 0;
         feeGrowthInsideLast[positionId][tokenIndex] = fg; // snapshot fees here.
         outflowsAtFeeSnap[positionId][tokenIndex] = cf;
+    }
+
+    /// @dev Queue contribution-based bonus for a position/token, excluding own contributed slashes from the pot.
+    function _queueBonusForPosition(PositionId id, uint8 tIndex) internal {
+        PositionMeta memory m = meta[id];
+        PoolId p = m.poolId;
+
+        uint256 pot = protocolFeeAccrued[p][tIndex];
+        uint256 selfContrib = feesSharedByPosition[id][tIndex];
+        uint256 potAvail = pot > selfContrib ? (pot - selfContrib) : 0;
+
+        uint256 selfS = totalSettlementAmount[id][tIndex];
+        uint256 totalS = totalSettledAllPositions[p][tIndex];
+        if (potAvail == 0 || selfS == 0 || totalS == 0) return;
+
+        uint256 bonus = FullMath.mulDiv(potAvail, selfS, totalS);
+        if (bonus > potAvail) bonus = potAvail;
+
+        // deduct from pot, keep selfContrib excluded
+        protocolFeeAccrued[p][tIndex] = potAvail - bonus + selfContrib;
+
+        // queue negative pending (bonus increases payout at materialisation)
+        pendingFeeAdj[id][tIndex] -= SafeCast.toInt256(bonus);
+    }
+
+    /// @dev Consume the net pending fee adjustment (slash minus bonus) and return hook delta.
+    function _consumeFeeAdjustmentDelta(PositionId id) internal returns (BalanceDelta feeAdjDelta) {
+        int256 adj0 = pendingFeeAdj[id][0];
+        int256 adj1 = pendingFeeAdj[id][1];
+        if (adj0 == 0 && adj1 == 0) {
+            return BalanceDeltaLibrary.ZERO_DELTA;
+        }
+        // No sign flip: +adj (slash) => positive delta (hook takes), -adj (bonus) => negative delta (hook gives)
+        feeAdjDelta = LiquidityUtils.safeToBalanceDelta(adj0, adj1);
+        pendingFeeAdj[id][0] = 0;
+        pendingFeeAdj[id][1] = 0;
     }
 
     /// @dev Internal helper to settle both deficit and inflow growth for a position
@@ -573,6 +628,10 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
             feeGrowthInsideLast[id][tokenIndex] += growthInc;
         }
         protocolFeeAccrued[p][tokenIndex] += feesBurn; // TODO: we need to share fees to all other liquidity except this position.
+        // Record contributor’s share for self-exclusion and queue pending slash (reduces payout at hook materialisation)
+        feesSharedByPosition[id][tokenIndex] += feesBurn;
+        // Fee sharing/slashing is applied to the pending fee adjustment mapping to be consumed at the point of position modification.
+        pendingFeeAdj[id][tokenIndex] += SafeCast.toInt256(feesBurn);
         emit FeeShareHandled(p, id, tokenIndex, feesBurn, growthInc);
     }
 
@@ -994,6 +1053,20 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         }
 
         totalSettlementAmount[id][tokenIndex] = next;
-        return SafeCast.toInt256(next) - SafeCast.toInt256(cur); // output delta
+        int256 applied = SafeCast.toInt256(next) - SafeCast.toInt256(cur); // output delta
+
+        // Maintain global sum of settled contributions for pure contribution-based bonus weighting
+        {
+            PoolId p = meta[id].poolId;
+            uint256 curTotal = totalSettledAllPositions[p][tokenIndex];
+            if (applied >= 0) {
+                totalSettledAllPositions[p][tokenIndex] = curTotal + uint256(applied);
+            } else {
+                uint256 dec = uint256(-applied);
+                totalSettledAllPositions[p][tokenIndex] = dec > curTotal ? 0 : (curTotal - dec);
+            }
+        }
+
+        return applied;
     }
 }

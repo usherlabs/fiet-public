@@ -78,7 +78,7 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
             afterDonate: false,
             beforeSwapReturnDelta: false,
             afterSwapReturnDelta: false,
-            afterAddLiquidityReturnDelta: false,
+            afterAddLiquidityReturnDelta: true,
             afterRemoveLiquidityReturnDelta: true
         });
     }
@@ -232,6 +232,15 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
         return (this.afterSwap.selector, 0);
     }
 
+    /// @notice The hook called after liquidity is added
+    /// @param sender The initial msg.sender for the add liquidity call
+    /// @param key The key for the pool
+    /// @param params The parameters for adding liquidity
+    /// @param delta The caller's balance delta after adding liquidity; the sum of principal delta, fees accrued, and hook delta
+    /// @param feesAccrued The fees accrued since the last time fees were collected from this position
+    /// @param hookData Arbitrary data handed into the PoolManager by the liquidity provider to be passed on to the hook
+    /// @return bytes4 The function selector for the hook
+    /// @return BalanceDelta The hook's delta in token0 and token1. Positive: the hook is owed/took currency, negative: the hook owes/sent currency
     function _afterAddLiquidity(
         address sender,
         PoolKey calldata key,
@@ -240,30 +249,32 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
         BalanceDelta,
         bytes calldata
     ) internal virtual override whenNotPaused(key.toId()) returns (bytes4, BalanceDelta) {
-        // Important: settle growths BEFORE changing units for existing DirectLP positions.
-        // Rationale:
-        // - In Uniswap-style accounting, a position's owed fees are (feeGrowthInside - feeGrowthInsideLast) * liquidity.
-        // - If we change liquidity/commitment/coverage units first, any pre-add growth would be multiplied by the larger
-        //   post-add units, which unfairly dilutes attribution and lets new units capture past accrual.
-        // - By settling first, we checkpoint fee/deficit/inflow/proactive/fee-pot growth so all pre-add accrual is
-        //   attributed to the pre-add units. Post-add accrual then starts against the updated units.
-        // - This preserves fairness and prevents gaming (e.g. adding liquidity just before redeeming to amplify claims).
-        PositionId id = PositionLibrary.generateId(sender, params);
-        if (!_isCallerMMP(sender) && meta[id].owner != address(0) && !_isMMPosition(id)) {
-            _settlePositionGrowths(id);
-        }
-
         // Update PositionIndex with registration/update based on actual pool id
         _touchPosition(sender, key.toId(), params);
 
+        // Consume net pending fee adjustments (slash minus bonus) to materialise via return delta
+        BalanceDelta feeAdj = _consumeFeeAdjustmentDelta(id);
+
         // only add direct liquidity if the sender is not the market maker position manager/router
         if (!_isCallerMMP(sender) && !_isMMPosition(id)) {
-            ProxyHook(_getProxyHook(key)).onDirectLP(delta, LiquidityUtils.ActionType.DirectLPAddLiquidity); // Fetching ProxyHook by corePoolKey, therefore no need to pass again.
+            // Forward effective caller delta including fee adjustment (Uniswap will apply callerDelta - hookDelta)
+            BalanceDelta effective = delta - feeAdj;
+            ProxyHook(_getProxyHook(key)).onDirectLP(effective, LiquidityUtils.ActionType.DirectLPAddLiquidity); // Fetching ProxyHook by corePoolKey, therefore no need to pass again.
         }
 
-        return (this.afterAddLiquidity.selector, BalanceDeltaLibrary.ZERO_DELTA);
+        return (this.afterAddLiquidity.selector, feeAdj);
     }
 
+    /// @notice The hook called after liquidity is removed
+    /// @dev Allow removal of liquidity even when the market is paused.
+    /// @param sender The initial msg.sender for the remove liquidity call
+    /// @param key The key for the pool
+    /// @param params The parameters for removing liquidity
+    /// @param delta The caller's balance delta after removing liquidity; the sum of principal delta, fees accrued, and hook delta
+    /// @param feesAccrued The fees accrued since the last time fees were collected from this position
+    /// @param hookData Arbitrary data handed into the PoolManager by the liquidity provider to be be passed on to the hook
+    /// @return bytes4 The function selector for the hook
+    /// @return BalanceDelta The hook's delta in token0 and token1. Positive: the hook is owed/took currency, negative: the hook owes/sent currency
     function _afterRemoveLiquidity(
         address sender,
         PoolKey calldata key,
@@ -275,24 +286,20 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
         // Update PositionIndex with registration/update based on actual pool id
         _touchPosition(sender, key.toId(), params);
 
-        // Allow removal of liquidity even when the market is paused.
-        // only remove direct liquidity if the sender is the pool manager
-        if (!_isCallerMMP(sender)) {
-            PositionId id = PositionLibrary.generateId(sender, params);
-            if (!_isMMPosition(id)) {
-                // Redeem fee-pot baseline into return-delta for DirectLPs
-                // Example FeeTakingHook: https://github.com/Uniswap/v4-core/blob/a7cf038cd568801a79a9b4cf92cd5b52c95c8585/src/test/FeeTakingHook.sol#L14
-                // TODO: I'm unsure if this is correct.
-                _settlePositionGrowths(id);
-                (uint256 pay0, uint256 pay1) = _redeemFeePot(id, true);
-                BalanceDelta bonus = LiquidityUtils.safeToBalanceDelta(pay0, pay1, false, false);
-                BalanceDelta combined = delta + bonus;
-                ProxyHook(_getProxyHook(key)).onDirectLP(combined, LiquidityUtils.ActionType.DirectLPRemoveLiquidity);
-                return (this.afterRemoveLiquidity.selector, combined);
-            }
+        // Handle fee-share mechanics
+        // Example FeeTakingHook: https://github.com/Uniswap/v4-core/blob/a7cf038cd568801a79a9b4cf92cd5b52c95c8585/src/test/FeeTakingHook.sol#L14
+        PositionId id = PositionLibrary.generateId(sender, params);
+
+        // Consume net pending fee adjustments (slash minus bonus) to materialise via return delta
+        BalanceDelta feeAdj = _consumeFeeAdjustmentDelta(id);
+
+        if (!_isCallerMMP(sender) || !_isMMPosition(id)) {
+            // Forward effective caller delta including fee adjustment (Uniswap will apply callerDelta - hookDelta)
+            BalanceDelta effective = delta - feeAdj;
+            ProxyHook(_getProxyHook(key)).onDirectLP(effective, LiquidityUtils.ActionType.DirectLPRemoveLiquidity);
         }
 
-        return (this.afterRemoveLiquidity.selector, BalanceDeltaLibrary.ZERO_DELTA);
+        return (this.afterRemoveLiquidity.selector, feeAdj);
     }
 
     // Helper function to get the proxy hook address from the core pool key
