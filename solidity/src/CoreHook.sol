@@ -262,6 +262,8 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
             ProxyHook(_getProxyHook(key)).onDirectLP(effective, LiquidityUtils.ActionType.DirectLPAddLiquidity); // Fetching ProxyHook by corePoolKey, therefore no need to pass again.
         }
 
+        // TODO: Ensure LCCs are available LP to claim in bonus.
+
         return (this.afterAddLiquidity.selector, feeAdj);
     }
 
