@@ -329,7 +329,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
                 );
                 uint256 excess0 = baseAmountToSettle0 > s0 ? baseAmountToSettle0 - s0 : 0;
                 uint256 excess1 = baseAmountToSettle1 > s1 ? baseAmountToSettle1 - s1 : 0;
-                _setSettlementDelta(LiquidityUtils.safeToBalanceDelta(excess0, excess1, false, false));
+                _setSettlementDelta(LiquidityUtils.safeToBalanceDelta(excess0, excess1, false, false)); // TODO: Should we restrict this to MMPs?
             }
 
             int256 newLiquidity = meta[id].liquidity += params.liquidityDelta;
@@ -459,12 +459,12 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         int256 amount0 = int256(settlementDelta.amount0());
         int256 amount1 = int256(settlementDelta.amount1());
         if (amount0 > 0) {
-            amount0 = _handleMMSettlementForToken(positionId, poolId, 0, SafeCast.toUint256(int256(amount0)));
+            amount0 = _updateSettlement(positionId, 0, int256(amount0));
         } else if (amount0 < 0) {
             amount0 = _updateSettlement(positionId, 0, int256(amount0));
         }
         if (amount1 > 0) {
-            amount1 = _handleMMSettlementForToken(positionId, poolId, 1, SafeCast.toUint256(int256(amount1)));
+            amount1 = _updateSettlement(positionId, 1, int256(amount1));
         } else if (amount1 < 0) {
             amount1 = _updateSettlement(positionId, 1, int256(amount1));
         }
@@ -484,37 +484,6 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         uint8 tokenIndex = _getTokenIndexFromCaller(poolId); // ensures msg.sender is a valid LCC for the pool id.
 
         _incrementCoverage(poolId, tokenIndex, amount);
-    }
-
-    /**
-     * @dev Handles the positive settlement deposit of a token for a position.
-     * Covers deficits first, then credits position's fees accrued to protocol coverage, then excess proactive liquidity increase position settled amount.
-     * @param positionId The id of the position
-     * @param poolId The id of the pool
-     * @param tokenIndex The index of the token
-     * @param settledAmount The amount of the token to settle
-     */
-    function _handleMMSettlementForToken(PositionId positionId, PoolId poolId, uint8 tokenIndex, uint256 settledAmount)
-        internal
-        returns (int256 outDelta)
-    {
-        uint256 dBefore = cumulativeDeficit[positionId][tokenIndex];
-        uint256 d = settledAmount >= dBefore ? dBefore : settledAmount; // extinguished deficit this tx
-        // d computed as the minimum of the settled amount and the cumulative deficit for the position.
-        // therefore, attribution is based on the deficit amount being covered in this transaction.
-
-        if (d > 0) {
-            cumulativeDeficit[positionId][tokenIndex] = dBefore - d;
-            uint256 gD = globalDeficit[poolId][tokenIndex];
-            if (gD > 0) {
-                globalDeficit[poolId][tokenIndex] = gD - d;
-            }
-        }
-
-        uint256 proactive = settledAmount - d;
-        if (proactive > 0) {
-            outDelta = _updateSettlement(positionId, tokenIndex, SafeCast.toInt256(proactive));
-        }
     }
 
     /// @dev Reads fees since last snapshot and checkpoints fee growth and outflow snapshots atomically.
@@ -737,53 +706,14 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
 
         // Token0: net against deficit first
         if (add0 > 0) {
-            uint256 d0 = cumulativeDeficit[positionId][0];
-            if (d0 > 0) {
-                uint256 cover0 = add0 > d0 ? d0 : add0;
-                cumulativeDeficit[positionId][0] = d0 - cover0;
-                // keep global deficit coherent (defensive clamp)
-                uint256 gD0 = globalDeficit[corePoolId][0];
-                globalDeficit[corePoolId][0] = cover0 <= gD0 ? (gD0 - cover0) : 0;
-                add0 -= cover0;
-            }
-            if (add0 > 0) {
-                // remaining inflow becomes proactive settlement
-                _updateSettlement(positionId, 0, SafeCast.toInt256(add0));
-
-                // TODO: May need to be removed... if we refactor the fee-share mechanic.
-                // if (_isFeeSharingEnabled(corePoolId)) {
-                //     // credit proactive pool only if currently in-range (matches MM settlement path)
-                //     (, int24 tick,,) = poolManager.getSlot0(corePoolId);
-                //     bool inRange = (tick >= m.tickLower && tick < m.tickUpper);
-                //     if (inRange) {
-                //         _accrueProactiveExcessGrowth(corePoolId, 0, add0);
-                //         emit ProactiveCredited(corePoolId, 0, add0, tick);
-                //     }
-                // }
-            }
+            // Auto-net and apply via centralised updater
+            _updateSettlement(positionId, 0, SafeCast.toInt256(add0));
         }
 
         // Token1: net against deficit first
         if (add1 > 0) {
-            uint256 d1 = cumulativeDeficit[positionId][1];
-            if (d1 > 0) {
-                uint256 cover1 = add1 > d1 ? d1 : add1;
-                cumulativeDeficit[positionId][1] = d1 - cover1;
-                uint256 gD1 = globalDeficit[corePoolId][1];
-                globalDeficit[corePoolId][1] = cover1 <= gD1 ? (gD1 - cover1) : 0;
-                add1 -= cover1;
-            }
-            if (add1 > 0) {
-                _updateSettlement(positionId, 1, SafeCast.toInt256(add1));
-                // if (_isFeeSharingEnabled(corePoolId)) {
-                //     (, int24 tick,,) = poolManager.getSlot0(corePoolId);
-                //     bool inRange = (tick >= m.tickLower && tick < m.tickUpper);
-                //     if (inRange) {
-                //         _accrueProactiveExcessGrowth(corePoolId, 1, add1);
-                //         emit ProactiveCredited(corePoolId, 1, add1, tick);
-                //     }
-                // }
-            }
+            // Auto-net and apply via centralised updater
+            _updateSettlement(positionId, 1, SafeCast.toInt256(add1));
         }
     }
 
@@ -1031,40 +961,39 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         }
         uint256 next = cur;
         uint256 c = commitmentMaxima[id][tokenIndex];
+
         if (delta > 0) {
-            next = cur + uint256(delta);
-            if (next > c) {
-                // clamp to commitment maxima
-                next = c;
+            // Auto-net any lingering deficit first
+            uint256 def = cumulativeDeficit[id][tokenIndex];
+            if (def > 0) {
+                uint256 cover = uint256(delta) > def ? def : uint256(delta);
+                if (cover > 0) {
+                    cumulativeDeficit[id][tokenIndex] = def - cover;
+                    // keep global coherent
+                    PoolId p = meta[id].poolId;
+                    uint256 gD = globalDeficit[p][tokenIndex];
+                    globalDeficit[p][tokenIndex] = cover <= gD ? (gD - cover) : 0;
+                    delta -= int256(cover);
+                }
+            }
+
+            if (delta > 0) {
+                next = cur + uint256(delta);
+                if (next > c) {
+                    // clamp to commitment maxima
+                    next = c;
+                }
             }
         } else {
+            // Negative delta: reduce settled, never create deficit here
             uint256 subtract = uint256(-delta);
             if (cur < subtract) {
                 subtract = cur;
             }
             next = cur - subtract;
         }
+
         totalSettlementAmount[id][tokenIndex] = next;
         return SafeCast.toInt256(next) - SafeCast.toInt256(cur); // output delta
     }
-
-    /// @dev Coverage units are proactively settled amounts capped by commitment for the given token.
-    /**
-     *    Coverage units (CU_A(r)) are the proactively settled backing eligible to cover unwraps for token A on position r:
-     *     CU_A(r) := min(S_A(r), C_A(r))
-     *
-     *     Where:
-     *     - S_A(r): current totalSettlementAmount for token A
-     *     - C_A(r): commitmentMaxima for token A
-     *
-     *     We accrue tick-indexed coverage-usage growth per CU, not per liquidity, so only proactively-backed, in-range positions supply coverage.
-     *     At an unwrap of U_A units:
-     *     SumCU := sum of CU_A(r) over in-range positions at the current tick
-     *     if SumCU > 0:
-     *         deltaG := U_A * Q128 / SumCU
-     *         coverage_r := deltaG * CU_A(r) / Q128  // self-contributed coverage for r
-     *     else:
-     *         Entire U_A is protocol residual (no in-range proactive backing)
-     */
-    // (coverage units helpers removed)
 }
