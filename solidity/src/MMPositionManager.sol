@@ -918,7 +918,8 @@ contract MMPositionManager is
         PositionId positionId = getPositionId(tokenId, positionIndex);
 
         // -- Validate that caller is not position owner
-        if (msgSender() == position.owner || position.isActive == false) {
+        // use _isApprovedOrOwner to get the owner/approved wallets of the token id, as position.owner is address(this).
+        if (_isApprovedOrOwner(msgSender(), tokenId) || position.isActive == false) {
             revert InvalidPosition(tokenId, positionIndex, positionId);
         }
 
