@@ -23,12 +23,15 @@ import {TransientSlot} from "openzeppelin-contracts/contracts/utils/TransientSlo
 import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint128.sol";
 import {SafeCast} from "openzeppelin-contracts/contracts/utils/math/SafeCast.sol";
 import {LiquidityUtils} from "../libraries/LiquidityUtils.sol";
-import {BalanceDeltaLibrary} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
+import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {CurrencySettler} from "@uniswap/v4-core/test/utils/CurrencySettler.sol";
 
 abstract contract VTSManager is IVTSManager, PositionIndex {
     using StateLibrary for IPoolManager;
     using TransientStateLibrary for IPoolManager;
     using TransientSlot for *;
+    using CurrencySettler for Currency;
 
     // Mapping from core pool ID to VTS configuration
     mapping(PoolId => MarketVTSConfiguration) public corePoolToVTSConfiguration;
@@ -86,6 +89,22 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     // Per-position signed pending fee adjustment: +slash (reduces payout), -bonus (increases payout)
     mapping(PositionId => int256[2]) internal pendingFeeAdj;
 
+    // Slashed pot per market/token: LCC balances held by CoreHook (this) extracted via take(),
+    // used to fund bonus materialisation. Index 0 => token0 pot, 1 => token1 pot.
+    mapping(PoolId => uint256[2]) internal slashedPot;
+
+    /// @notice Emitted when slashed fees are extracted into the pot
+    event PotFunded(PoolId indexed poolId, uint8 indexed tokenIndex, uint256 amount);
+
+    /// @notice Emitted when a bonus is paid out (materialised) from the pot
+    event BonusPaid(
+        PoolId indexed poolId,
+        PositionId indexed positionId,
+        uint8 indexed tokenIndex,
+        uint256 amount,
+        uint256 remainingPendingAdjAbs
+    );
+
     error InvalidMarketVTSConfiguration(PoolId corePoolId);
     error InvalidPosition(PositionId positionId);
     error RFSOpenForPosition(PositionId positionId);
@@ -131,6 +150,10 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
             calculator = _calculator;
         }
     }
+
+    // --------------------------------------------------
+    // Helper Functions
+    // --------------------------------------------------
 
     /**
      * @notice Checks if the caller is the MM Position Manager
@@ -251,6 +274,10 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     function _isFeeSharingEnabled(PoolId p) internal view returns (bool) {
         return corePoolToVTSConfiguration[p].coverageFeeShare > 0;
     }
+
+    // --------------------------------------------------
+    // Position Management Functions
+    // --------------------------------------------------
 
     /**
      * @notice Touches a position, registers it if it doesn't exist, updates it if it does, and tracks the commitment
@@ -487,12 +514,36 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         // Clamps within _updateSettlement may modify the return delta.
         settlementDelta = LiquidityUtils.safeToBalanceDelta(amount0, amount1);
 
+        // Proactive extraction: if pending fee adjustment indicates a slash (+ve),
+        // take LCC from PoolManager into CoreHook (this) and fund the per-pool pot.
+        // manager.take/settle can be called here as onMMLiquidityModify is called from MMPositionManager in unlockCallback of PoolManager.
+        {
+            (int256 adj0, int256 adj1) = _peekFeeAdjustment(positionId);
+            if (adj0 > 0 || adj1 > 0) {
+                address[2] memory ccys = IMarketFactory(marketFactory).corePoolToCurrencyPair(poolId);
+                if (adj0 > 0) {
+                    uint256 amt0 = uint256(adj0);
+                    Currency.wrap(ccys[0]).take(poolManager, address(this), amt0, true);
+                    _fundPot(poolId, 0, amt0);
+                }
+                if (adj1 > 0) {
+                    uint256 amt1 = uint256(adj1);
+                    Currency.wrap(ccys[1]).take(poolManager, address(this), amt1, true);
+                    _fundPot(poolId, 1, amt1);
+                }
+            }
+        }
+
         // Queue bonuses based on updated settled contributions (materialised at hooks only)
         _queueBonusForPosition(positionId, 0);
         _queueBonusForPosition(positionId, 1);
 
         emit MMPositionLiquidityUpdated(poolId, positionId, settlementDelta.amount0(), settlementDelta.amount1());
     }
+
+    // --------------------------------------------------
+    // Fee-Share and Coverage Management Functions
+    // --------------------------------------------------
 
     /**
      * @dev Called by LCC to increment unwrap coverage of the pool
@@ -550,18 +601,67 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         pendingFeeAdj[id][tIndex] -= SafeCast.toInt256(bonus);
     }
 
-    /// @dev Consume the net pending fee adjustment (slash minus bonus) and return hook delta.
-    function _consumeFeeAdjustmentDelta(PositionId id) internal returns (BalanceDelta feeAdjDelta) {
-        int256 adj0 = pendingFeeAdj[id][0];
-        int256 adj1 = pendingFeeAdj[id][1];
-        if (adj0 == 0 && adj1 == 0) {
-            return BalanceDeltaLibrary.ZERO_DELTA;
-        }
-        // No sign flip: +adj (slash) => positive delta (hook takes), -adj (bonus) => negative delta (hook gives)
-        feeAdjDelta = LiquidityUtils.safeToBalanceDelta(adj0, adj1);
-        pendingFeeAdj[id][0] = 0;
-        pendingFeeAdj[id][1] = 0;
+    /// @dev Peek the current pending fee adjustments for a position without mutating state.
+    ///      Returns signed adjustments per token: +slash (hook takes), -bonus (hook gives).
+    function _peekFeeAdjustment(PositionId id) internal view returns (int256 adj0, int256 adj1) {
+        adj0 = pendingFeeAdj[id][0];
+        adj1 = pendingFeeAdj[id][1];
     }
+
+    /// @dev Finalise a portion of the pending fee adjustment as materialised in the current hook call.
+    ///      Materialised values are signed and MUST be bounded by the current pending values.
+    ///      Any non-materialised remainder stays in pending to be retried on future hook calls.
+    ///      Returns the materialised delta as BalanceDelta for the hook to apply this call only.
+    function _finaliseFeeAdjustment(PositionId id, int256 materialised0, int256 materialised1)
+        internal
+        returns (BalanceDelta)
+    {
+        // Clamp materialised values to current pending to avoid over-finalisation.
+        int256 p0 = pendingFeeAdj[id][0];
+        int256 p1 = pendingFeeAdj[id][1];
+
+        // For positive pending, materialised must be in [0, p]; for negative pending, in [p, 0].
+        if (p0 >= 0) {
+            if (materialised0 < 0) materialised0 = 0;
+            if (materialised0 > p0) materialised0 = p0;
+        } else {
+            if (materialised0 > 0) materialised0 = 0;
+            if (materialised0 < p0) materialised0 = p0;
+        }
+        if (p1 >= 0) {
+            if (materialised1 < 0) materialised1 = 0;
+            if (materialised1 > p1) materialised1 = p1;
+        } else {
+            if (materialised1 > 0) materialised1 = 0;
+            if (materialised1 < p1) materialised1 = p1;
+        }
+
+        // Subtract the materialised portion from pending (note: signed arithmetic).
+        pendingFeeAdj[id][0] = p0 - materialised0;
+        pendingFeeAdj[id][1] = p1 - materialised1;
+
+        return LiquidityUtils.safeToBalanceDelta(materialised0, materialised1);
+    }
+
+    /// @dev Increase the slashed pot for a pool/token when a take() succeeds.
+    function _fundPot(PoolId poolId, uint8 tokenIndex, uint256 amount) internal {
+        if (amount == 0) return;
+        slashedPot[poolId][tokenIndex] += amount;
+        emit PotFunded(poolId, tokenIndex, amount);
+    }
+
+    /// @dev Decrease the slashed pot when settling bonuses (giving out from CoreHook to PoolManager).
+    function _drainPot(PoolId poolId, uint8 tokenIndex, uint256 amount) internal {
+        if (amount == 0) return;
+        uint256 pot = slashedPot[poolId][tokenIndex];
+        // Clamp to available pot to avoid underflow; caller must have already bounded the amount.
+        if (amount > pot) amount = pot;
+        slashedPot[poolId][tokenIndex] = pot - amount;
+    }
+
+    // --------------------------------------------------
+    // Growth Accounting Functions
+    // --------------------------------------------------
 
     /// @dev Internal helper to settle both deficit and inflow growth for a position
     function _settlePositionGrowths(PositionId positionId) internal {
@@ -650,8 +750,6 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
             coverageResidual[poolId][tokenIndex] += coveredAmount;
         }
     }
-
-    // (legacy fee-pot redemption removed)
 
     /// @notice Called by the hook on tick cross to flip outside growth for a tick
     function _onTickCross(PoolId corePoolId, int24 tick, uint8 token) internal {
@@ -775,6 +873,10 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
             _updateSettlement(positionId, 1, SafeCast.toInt256(add1));
         }
     }
+
+    // --------------------------------------------------
+    // Lens Functions
+    // --------------------------------------------------
 
     /**
      * @notice Calculates the required vts for a position
@@ -1006,6 +1108,10 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         int128 magnitude = SafeCast.toInt128(SafeCast.toInt256(neg));
         return -magnitude;
     }
+
+    // --------------------------------------------------
+    // Core Accounting Functions
+    // --------------------------------------------------
 
     /**
      * @notice Updates the settlement amount by a delta which could be positive or negative
