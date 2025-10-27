@@ -919,6 +919,7 @@ contract MMPositionManager is
 
         // -- Validate that caller is not position owner
         // use _isApprovedOrOwner to get the owner/approved wallets of the token id, as position.owner is address(this).
+        // Technically, seizing your own position cannot be stopped (via proxy wallets), but there should be no incentive.
         if (_isApprovedOrOwner(msgSender(), tokenId) || position.isActive == false) {
             revert InvalidPosition(tokenId, positionIndex, positionId);
         }
