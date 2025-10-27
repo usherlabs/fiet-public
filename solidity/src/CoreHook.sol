@@ -28,6 +28,7 @@ import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "@uniswap/v4-core/src/type
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {SqrtPriceMath} from "@uniswap/v4-core/src/libraries/SqrtPriceMath.sol";
 import {TickUtils} from "./libraries/TickUtils.sol";
+import {SafeCast} from "openzeppelin-contracts/contracts/utils/math/SafeCast.sol";
 
 /**
  * Core Pool should be aware of Positions.
@@ -37,6 +38,7 @@ import {TickUtils} from "./libraries/TickUtils.sol";
 contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
     using TransientSlot for *;
     using CurrencySettler for Currency;
+    using SafeCast for int256;
 
     error InvalidInitialiser();
     error InvalidSender();
@@ -116,6 +118,8 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
         whenNotPaused(key.toId())
         returns (bytes4, int128)
     {
+        // Inflow growth is net of (excludes) LP/protocol fees.
+
         // Tick cross flips + per-segment accrual: iterate initialised ticks crossed during the swap
         {
             // read start tick from transient sqrtP_before and end tick from state
@@ -237,8 +241,8 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
     /// @param key The key for the pool
     /// @param params The parameters for adding liquidity
     /// @param delta The caller's balance delta after adding liquidity; the sum of principal delta, fees accrued, and hook delta
-    /// @param feesAccrued The fees accrued since the last time fees were collected from this position
-    /// @param hookData Arbitrary data handed into the PoolManager by the liquidity provider to be passed on to the hook
+    // /// @param feesAccrued The fees accrued since the last time fees were collected from this position
+    // /// @param hookData Arbitrary data handed into the PoolManager by the liquidity provider to be passed on to the hook
     /// @return bytes4 The function selector for the hook
     /// @return BalanceDelta The hook's delta in token0 and token1. Positive: the hook is owed/took currency, negative: the hook owes/sent currency
     function _afterAddLiquidity(
@@ -252,6 +256,8 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
         // Update PositionIndex with registration/update based on actual pool id
         _touchPosition(sender, key.toId(), params);
 
+        PositionId id = PositionLibrary.generateId(sender, params);
+
         // Consume net pending fee adjustments (slash minus bonus) to materialise via return delta
         BalanceDelta feeAdj = _consumeFeeAdjustmentDelta(id);
 
@@ -263,6 +269,31 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
         }
 
         // TODO: Ensure LCCs are available LP to claim in bonus.
+        // If a bonus is being claimed, the core hook should settle this.
+        // However, it must derive this bonus by taking from fee-slashed positions.
+        // We can do this by prematurely taking during MM settlements where pendingFeeAdj > 0
+        // We also be able to leave all tokens in the poolManager, and by adjusting the deltas here resolve outcomes mathematically.
+
+        // Settle/take claim tokens
+        /**
+         * Fees accrue to reserves but are attributed via growth globals (not directly to deltas). If you don't take() them (like in FeeTakingHook.sol), they stay in reserves and could:
+         * Be claimed by any in-range LP (not just intended positions), leading to misattribution. Your delta adjustments don't prevent this— they only tweak the caller's owed/receivable, not who claims the reserves.
+         * Cause reserve "bloat": Fees accumulate without being extracted, in flating pool reserves. This might skew sqrtPrice, liquidity calcs, or VTS commitments (e.g., LCCs overstate value if unclaimed fees aren't netted out).
+         * In FeeTakingHook.sol, take() is used precisely to extract and control fees—without it, fees aren't "left" in a way that auto-nets; they just sit there, potentially claimable by others.
+         */
+        if (feeAdj.amount0() > 0) {
+            key.currency0.take(poolManager, address(this), int256(feeAdj.amount0()).toUint256(), true);
+        }
+        if (feeAdj.amount1() > 0) {
+            key.currency1.take(poolManager, address(this), int256(feeAdj.amount1()).toUint256(), true);
+        }
+        if (feeAdj.amount0() < 0) {
+            // TODO: where are we getting these LCCs from?
+            key.currency0.settle(poolManager, address(this), int256(-feeAdj.amount0()).toUint256(), true);
+        }
+        if (feeAdj.amount1() < 0) {
+            key.currency1.settle(poolManager, address(this), int256(-feeAdj.amount1()).toUint256(), true);
+        }
 
         return (this.afterAddLiquidity.selector, feeAdj);
     }
@@ -273,8 +304,8 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
     /// @param key The key for the pool
     /// @param params The parameters for removing liquidity
     /// @param delta The caller's balance delta after removing liquidity; the sum of principal delta, fees accrued, and hook delta
-    /// @param feesAccrued The fees accrued since the last time fees were collected from this position
-    /// @param hookData Arbitrary data handed into the PoolManager by the liquidity provider to be be passed on to the hook
+    // /// @param feesAccrued The fees accrued since the last time fees were collected from this position
+    // /// @param hookData Arbitrary data handed into the PoolManager by the liquidity provider to be be passed on to the hook
     /// @return bytes4 The function selector for the hook
     /// @return BalanceDelta The hook's delta in token0 and token1. Positive: the hook is owed/took currency, negative: the hook owes/sent currency
     function _afterRemoveLiquidity(

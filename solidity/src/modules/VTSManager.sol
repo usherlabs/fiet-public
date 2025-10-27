@@ -314,7 +314,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
                 }
                 // this sets the required settlement because we changes the position.
                 _setSettlementDelta(LiquidityUtils.safeToBalanceDelta(excess0, excess1, true, true));
-            } else {
+            } else if (params.liquidityDelta > 0) {
                 // POSITION DELTA INCREASE:
 
                 _trackCommitment(id, params);

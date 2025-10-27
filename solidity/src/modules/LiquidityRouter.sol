@@ -24,6 +24,8 @@ abstract contract LiquidityRouter is IImmutableState {
     using StateLibrary for IPoolManager;
     using TransientStateLibrary for IPoolManager;
 
+    error InvariantViolated(string message);
+
     function msgSender() public view virtual returns (address);
 
     function _pm() internal view returns (IPoolManager) {
@@ -51,15 +53,21 @@ abstract contract LiquidityRouter is IImmutableState {
         (uint128 liquidityAfter,,) =
             poolManager.getPositionInfo(key.toId(), self, params.tickLower, params.tickUpper, params.salt);
 
-        (, int256 delta0) = _fetchBalances(key.currency0, self);
-        (, int256 delta1) = _fetchBalances(key.currency1, self);
+        // currencyDelta is a net including fee accrual plus any hook-side fee-sharing that’s already been applied at modification time.
+        // TODO: this doesn't consider prior actions relative caller, that could cause the currencyDelta > modifyLiquidity[tokenIndex]
+        int256 delta0 = poolManager.currencyDelta(self, key.currency0);
+        int256 delta1 = poolManager.currencyDelta(self, key.currency1);
 
-        require(int128(liquidityBefore) + params.liquidityDelta == int128(liquidityAfter), "liquidity change incorrect");
+        if (int128(liquidityBefore) + params.liquidityDelta != int128(liquidityAfter)) {
+            revert InvariantViolated("liquidity change incorrect");
+        }
 
         if (params.liquidityDelta < 0) {
+            // If negative liquidity (removing liquidity), then delta is positive - PoolManager owes the LP.
             assert(delta0 > 0 || delta1 > 0);
             assert(!(delta0 < 0 || delta1 < 0));
         } else if (params.liquidityDelta > 0) {
+            // If positive liquidity (adding liquidity), then delta is negative - LP owes the PoolManager.
             assert(delta0 < 0 || delta1 < 0);
             assert(!(delta0 > 0 || delta1 > 0));
         }
@@ -84,17 +92,5 @@ abstract contract LiquidityRouter is IImmutableState {
         if (ethBalance > 0) {
             CurrencyLibrary.ADDRESS_ZERO.transfer(msgSender(), ethBalance);
         }
-    }
-
-    /// fetch the balances of the user and the pool
-    function _fetchBalances(Currency currency, address deltaHolder)
-        internal
-        view
-        returns (uint256 poolBalance, int256 delta)
-    {
-        IPoolManager poolManager = _pm();
-        poolBalance = currency.balanceOf(address(poolManager));
-        // currencyDelta is a net including fee accrual plus any hook-side fee-sharing that’s already been applied at modification time.
-        delta = poolManager.currencyDelta(deltaHolder, currency);
     }
 }
