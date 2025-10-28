@@ -3,6 +3,7 @@ pragma solidity ^0.8.0;
 
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {TransientSlot} from "openzeppelin-contracts/contracts/utils/TransientSlot.sol";
+import {IExttload} from "v4-periphery/lib/v4-core/src/interfaces/IExttload.sol";
 
 library TransientSlots {
     using TransientSlot for *;
@@ -22,5 +23,16 @@ library TransientSlots {
 
     function getPositionRequiredSettlementDelta() internal view returns (BalanceDelta) {
         return BalanceDelta.wrap(TransientSlot.asInt256(TransientSlots.POSITION_REQUIRED_SETTLEMENT_DELTA_SLOT).tload());
+    }
+
+    function getPositionRequiredSettlementDelta(address sourceAddress) internal view returns (BalanceDelta) {
+        // Read the raw bytes32 from the source contract's transient storage via exttload,
+        // and interpret it as a signed int256 preserving two's-complement representation.
+        bytes32 raw = IExttload(sourceAddress).exttload(TransientSlots.POSITION_REQUIRED_SETTLEMENT_DELTA_SLOT);
+        int256 signedValue;
+        assembly ("memory-safe") {
+            signedValue := raw
+        }
+        return BalanceDelta.wrap(signedValue);
     }
 }
