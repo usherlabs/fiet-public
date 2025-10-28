@@ -48,6 +48,7 @@ abstract contract LiquidityRouter is IImmutableState {
         (uint128 liquidityBefore,,) =
             poolManager.getPositionInfo(key.toId(), self, params.tickLower, params.tickUpper, params.salt);
 
+        // Fees are included in BalanceDelta from PoolManager, but _settleUnderlying (called after) uses ZERO_DELTA—fees aren't converted to LCCs; they're settled as underlying assets.
         (delta,) = poolManager.modifyLiquidity(key, params, hookData);
 
         (uint128 liquidityAfter,,) =

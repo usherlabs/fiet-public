@@ -33,6 +33,7 @@ import {TransientStateLibrary} from "v4-periphery/lib/v4-core/src/libraries/Tran
 import {RFSCheckpointModule} from "./modules/RFSCheckpoint.sol";
 import {Strings} from "openzeppelin-contracts/contracts/utils/Strings.sol";
 import {IPositionManager} from "v4-periphery/src/interfaces/IPositionManager.sol";
+import {NativeWrapper} from "v4-periphery/src/base/NativeWrapper.sol";
 
 interface ICommitmentDescriptor {
     function tokenURI(address manager, uint256 tokenId) external view returns (string memory);
@@ -45,7 +46,8 @@ contract MMPositionManager is
     IMMPositionManager,
     ReentrancyLock,
     Multicall_v4,
-    BaseActionsRouter
+    BaseActionsRouter,
+    NativeWrapper
 {
     using SafeCast for uint256;
     using MarketVTSConfigurationLibrary for MarketVTSConfiguration;
@@ -94,9 +96,10 @@ contract MMPositionManager is
         DECOMMIT
     }
 
-    constructor(address _manager, address _signalManager, address _marketFactory, address _descriptor)
+    constructor(address _manager, address _signalManager, address _marketFactory, address _descriptor, IWETH9 _weth9)
         ERC721Permit_v4("Fiet VRL Commitment Positions Manager", "FIET-VRL-MMP")
         BaseActionsRouter(IPoolManager(_manager))
+        NativeWrapper(_weth9)
     {
         marketFactory = _marketFactory;
         signalManager = IVRLSignalManager(_signalManager);
