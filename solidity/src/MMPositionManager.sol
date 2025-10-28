@@ -398,9 +398,8 @@ contract MMPositionManager is
         (positionDelta, feesAccrued) = _modifyLiquidity(poolKey, params, Constants.ZERO_BYTES);
         // generate unique position id using the params which contains the salt making this unique across all positions
         positionId = PositionLibrary.generateId(address(this), params);
-        // Read the required settlement delta from CoreHook's transient storage via TransientSlots helper
-        // VTSManager (on CoreHook) set this during the hook callbacks in _modifyLiquidity above
-        requiredSettlementDelta = TransientSlots.getPositionRequiredSettlementDelta(address(_getVTSManager()));
+        // Consume the aggregated required settlement delta from CoreHook (VTSManager) and clear it
+        requiredSettlementDelta = TransientSlots.consumePositionRequiredSettlementDelta(address(_getVTSManager()));
     }
 
     /**

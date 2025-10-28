@@ -299,7 +299,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
                     vtsConfiguration.token0.baseVTSRate,
                     vtsConfiguration.token1.baseVTSRate
                 );
-                TransientSlots.setPositionRequiredSettlementDelta(
+                TransientSlots.addPositionRequiredSettlementDelta(
                     LiquidityUtils.safeToBalanceDelta(amountToSettle0, amountToSettle1, false, false)
                 );
             }
@@ -339,7 +339,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
                 // ? Only save the settlement delta for MMPs.
                 if (isMMPosition) {
                     // this sets the required settlement because we changes the position.
-                    TransientSlots.setPositionRequiredSettlementDelta(
+                    TransientSlots.addPositionRequiredSettlementDelta(
                         LiquidityUtils.safeToBalanceDelta(excess0, excess1, true, true)
                     );
                 }
@@ -362,7 +362,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
                     );
                     uint256 excess0 = baseAmountToSettle0 > s0 ? baseAmountToSettle0 - s0 : 0;
                     uint256 excess1 = baseAmountToSettle1 > s1 ? baseAmountToSettle1 - s1 : 0;
-                    TransientSlots.setPositionRequiredSettlementDelta(
+                    TransientSlots.addPositionRequiredSettlementDelta(
                         LiquidityUtils.safeToBalanceDelta(excess0, excess1, false, false)
                     );
                 }
@@ -1013,7 +1013,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         }
 
         // Force the clamped settlement via transient slot; MMPositionManager._settleUnderlying will consume this
-        TransientSlots.setSettlementDelta(LiquidityUtils.safeToBalanceDelta(s0, s1, false, false));
+        // TransientSlots.setSettlementDelta(LiquidityUtils.safeToBalanceDelta(s0, s1, false, false));
 
         // Pre-deduct the seizer's settlement from the position's settled amounts so the LCCs
         // transferred on _decrease include claim to the newly funded underlying post-obligation.
