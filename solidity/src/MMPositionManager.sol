@@ -34,6 +34,7 @@ import {RFSCheckpointModule} from "./modules/RFSCheckpoint.sol";
 import {Strings} from "openzeppelin-contracts/contracts/utils/Strings.sol";
 import {IPositionManager} from "v4-periphery/src/interfaces/IPositionManager.sol";
 import {NativeWrapper} from "v4-periphery/src/base/NativeWrapper.sol";
+import {LCCWrapper} from "./modules/LCCWrapper.sol";
 
 interface ICommitmentDescriptor {
     function tokenURI(address manager, uint256 tokenId) external view returns (string memory);
@@ -47,7 +48,8 @@ contract MMPositionManager is
     ReentrancyLock,
     Multicall_v4,
     BaseActionsRouter,
-    NativeWrapper
+    NativeWrapper,
+    LCCWrapper
 {
     using SafeCast for uint256;
     using MarketVTSConfigurationLibrary for MarketVTSConfiguration;
@@ -93,7 +95,11 @@ contract MMPositionManager is
         RENEW_SIGNAL,
         SEIZE_POSITION,
         SEIZE_COMMITMENT,
-        DECOMMIT
+        DECOMMIT,
+        UNWRAP_LCC, // params: (address lcc, uint256 amount)
+        WRAP_NATIVE, // params: (uint256 amount)
+        UNWRAP_NATIVE // params: (uint256 amount)
+
     }
 
     constructor(address _manager, address _signalManager, address _marketFactory, address _descriptor, IWETH9 _weth9)
@@ -168,6 +174,12 @@ contract MMPositionManager is
 
     function _getPositionIndex() internal view returns (IPositionIndex) {
         return IPositionIndex(IMarketFactory(marketFactory).getCoreHook());
+    }
+
+    /// @dev Internal helper to unwrap an arbitrary LCC (pair-agnostic) to msgSender().
+    ///      Non-reverting best-effort: clamps to manager-held balance; used by UNWRAP_LCC action.
+    function _unwrapLCCInternal(address lccAddr, uint256 amount) internal returns (uint256 unwrapped) {
+        unwrapped = _unwrapLCC(ILCC(lccAddr), msgSender(), amount);
     }
 
     function getPositionId(uint256 tokenId, uint256 positionIndex) public view returns (PositionId) {
@@ -325,6 +337,38 @@ contract MMPositionManager is
             _decommitSignal(poolKey, tokenId);
             return;
         }
+        if (action == uint256(MMAction.UNWRAP_LCC)) {
+            // params: (address lcc, uint256 amount)
+            (address lccAddr, uint256 amount) = abi.decode(params, (address, uint256));
+            // Pair-agnostic: accept any LCC address. Governance/guards can be added if needed.
+            // Unwrap best-effort to msgSender(); non-reverting, clamps to available manager-held LCC.
+            _unwrapLCCInternal(lccAddr, amount);
+            return;
+        }
+        if (action == uint256(MMAction.WRAP_NATIVE)) {
+            // Reference: https://github.com/Uniswap/v4-periphery/blob/444c526b77d804590f0d7bc5a481af5a3277c952/src/PositionManager.sol#L275
+            // params: (uint256 amount)
+            uint256 amount = abi.decode(params, (uint256));
+            uint256 wrapAmt = amount > address(this).balance ? address(this).balance : amount;
+            if (wrapAmt > 0) {
+                _wrap(wrapAmt); // deposit ETH to WETH into this contract
+                // forward WETH to logical caller
+                IERC20Minimal(address(WETH9)).transfer(msgSender(), wrapAmt);
+            }
+            return;
+        }
+        if (action == uint256(MMAction.UNWRAP_NATIVE)) {
+            // params: (uint256 amount)
+            uint256 amount = abi.decode(params, (uint256));
+            uint256 wethBal = IERC20Minimal(address(WETH9)).balanceOf(address(this));
+            uint256 unwrapAmt = amount > wethBal ? wethBal : amount;
+            if (unwrapAmt > 0) {
+                _unwrap(unwrapAmt); // withdraw WETH to ETH into this contract
+                // forward ETH to logical caller
+                CurrencyLibrary.ADDRESS_ZERO.transfer(msgSender(), unwrapAmt);
+            }
+            return;
+        }
         revert("UnsupportedAction");
     }
 
@@ -341,10 +385,10 @@ contract MMPositionManager is
      */
     function _callModifyLiquidity(PoolKey memory poolKey, ModifyLiquidityParams memory params)
         internal
-        returns (PositionId positionId, BalanceDelta balanceDelta)
+        returns (PositionId positionId, BalanceDelta balanceDelta, BalanceDelta feesAccrued)
     {
         // use param to modify liquidity
-        balanceDelta = _modifyLiquidity(poolKey, params, Constants.ZERO_BYTES);
+        (balanceDelta, feesAccrued) = _modifyLiquidity(poolKey, params, Constants.ZERO_BYTES);
         // generate unique position id using the params which contains the salt making this unique across all positions
         positionId = PositionLibrary.generateId(address(this), params);
     }
@@ -714,7 +758,7 @@ contract MMPositionManager is
         lcc1.issue(lcc1AmountToMint);
 
         // mint or modify liquidity. If the position is not minted, this will mint it. If the position is already minted, this will modify it.
-        (positionId,) = _callModifyLiquidity(
+        (positionId,,) = _callModifyLiquidity(
             poolKey,
             ModifyLiquidityParams({
                 tickLower: tickLower,
@@ -747,6 +791,7 @@ contract MMPositionManager is
     /// @dev Decrease position liquidity by amountToDecrease and settle underlying changes.
     ///      Mirrors native PositionManager _decrease semantics (first modify, then settle flows).
     ///      Returns the balance delta of excess (above new lower commitmentMaxima) settlement returned.
+    /// @dev Passing liqudity delta 0 will still surface feesAccrued, and therefore transfer (fee sweep) functionality.
     function _decrease(
         PoolKey memory poolKey,
         PositionMeta memory position,
@@ -761,7 +806,7 @@ contract MMPositionManager is
 
         // remove the liquidity from the pool
         // By calling this, CoreHook afterRemoveLiquidity will be called to deactivate the position.
-        (PositionId posId, BalanceDelta positionDelta) = _callModifyLiquidity(
+        (PositionId posId, BalanceDelta positionDelta, BalanceDelta feesAccrued) = _callModifyLiquidity(
             poolKey,
             ModifyLiquidityParams({
                 tickLower: position.tickLower,
@@ -793,21 +838,41 @@ contract MMPositionManager is
         // ? ----- ----- This could allow re-use of position seizure, and for all MMs/Guarantors to paritipate on the seizure. The advancer can be given a share of the seized outcome.
         // ? ----- ----- If we adopt an action-dispatcher model as per the Native PositionManager, then MM's can chain actions together, ie. insolvent (prove insolvency), seize position, mint position, etc.
 
+        // Distinguish raw position deltas (a0/a1) from feesAccrued, then derive principal (after deducting fees).
+        // a0/a1 are the gross amounts returned by the PoolManager for position modification.
+        // principal0/principal1 = a{0,1} - fees{0,1} (clamped at zero) reflect the true principal liquidity change
+        // that maps to LCC cancellation. fees are trader-derived, wrapped LCC value and must remain wrapped.
         uint256 a0 = LiquidityUtils.safeInt128ToUint256(positionDelta.amount0());
         uint256 a1 = LiquidityUtils.safeInt128ToUint256(positionDelta.amount1());
+
+        // CoreHook applies a feeAdj to the callerDelta - ie. callerDelta = principal0 - feesAccrued - feeAdj.
+        uint256 fees0 = LiquidityUtils.safeInt128ToUint256(feesAccrued.amount0());
+        uint256 fees1 = LiquidityUtils.safeInt128ToUint256(feesAccrued.amount1());
+
+        // Cancel only the principal portion (clamp to zero to avoid underflow if fees > raw delta due to intra-batch effects)
+        uint256 principal0 = a0 > fees0 ? (a0 - fees0) : 0;
+        uint256 principal1 = a1 > fees1 ? (a1 - fees1) : 0;
+        bytes32 marketId = PoolId.unwrap(poolKey.toId());
         if (byApprovedOrOwner) {
-            // burn the LCC originally committed to the position.
-            // VTSManager._touchPosition will assert calcRFS is closed before position modification.
-            if (a0 > 0) {
-                lcc0.cancel(a0);
+            // Burn only principal LCC that was originally issued for the position's liquidity.
+            // feesAccrued (from trader flows) stays wrapped and can be unwrapped via UNWRAP_LCC.
+            if (principal0 > 0) {
+                lcc0.cancel(principal0);
             }
-            if (a1 > 0) {
-                lcc1.cancel(a1);
+            if (principal1 > 0) {
+                lcc1.cancel(principal1);
+            }
+            // Transfer residual LCC fees (wrapped via trader flows) to the logical caller.
+            // These fees are not principal-issued LCC and must not be cancelled; the MM may later unwrap them explicitly.
+            if (fees0 > 0) {
+                lcc0.traceTransfer(msgSender(), marketId, fees0);
+            }
+            if (fees1 > 0) {
+                lcc1.traceTransfer(msgSender(), marketId, fees1);
             }
         } else {
             // If we get here, then the position is being seized by a non-approved or owner.
             // Therefore, we transfer instead of cancel.
-            bytes32 marketId = PoolId.unwrap(poolKey.toId());
             if (a0 > 0) {
                 lcc0.traceTransfer(msgSender(), marketId, a0);
             }

@@ -35,7 +35,7 @@ abstract contract LiquidityRouter is IImmutableState {
     /// unlock the pool manager and use the callback to modify the liquidity
     function _modifyLiquidity(PoolKey memory key, ModifyLiquidityParams memory params, bytes memory hookData)
         internal
-        returns (BalanceDelta delta)
+        returns (BalanceDelta delta, BalanceDelta feesAccrued)
     {
         IPoolManager poolManager = _pm();
         bool settleUsingBurn = false;
@@ -48,8 +48,12 @@ abstract contract LiquidityRouter is IImmutableState {
         (uint128 liquidityBefore,,) =
             poolManager.getPositionInfo(key.toId(), self, params.tickLower, params.tickUpper, params.salt);
 
-        // Fees are included in BalanceDelta from PoolManager, but _settleUnderlying (called after) uses ZERO_DELTA—fees aren't converted to LCCs; they're settled as underlying assets.
-        (delta,) = poolManager.modifyLiquidity(key, params, hookData);
+        // PoolManager returns two deltas:
+        // - delta (callerDelta): principal liquidity change plus any immediate fee/hook deltas applied to the caller
+        // - feesAccrued: informational delta of fee growth in the modified range for this call
+        // Downstream, MMPositionManager treats principal vs feesAccrued differently: principal maps to LCC issue/cancel, while
+        // feesAccrued (originating from trader flows, wrapped into LCCs) must remain wrapped until explicitly unwrapped.
+        (delta, feesAccrued) = poolManager.modifyLiquidity(key, params, hookData);
 
         (uint128 liquidityAfter,,) =
             poolManager.getPositionInfo(key.toId(), self, params.tickLower, params.tickUpper, params.salt);

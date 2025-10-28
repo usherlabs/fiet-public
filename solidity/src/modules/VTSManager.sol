@@ -291,22 +291,26 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
 
         uint128 liq = poolManager.getPositionLiquidity(poolId, PositionId.unwrap(id));
 
+        bool isMMPosition = _isCallerMMP(owner) && _isMMPosition(id);
+
         if (m.owner == address(0)) {
             // NEW POSITION: initialize the liquidity to the liquidity delta, assuming it will always be positive
             _registerPosition(owner, poolId, params);
             _initPositionSnapshots(id);
             _trackCommitment(id, params);
 
-            // New positions mean base settlement.
-            // If the modifyDelta is 0 AND the position is active (created), then default settlement to base amounts
-            MarketVTSConfiguration memory vtsConfiguration = getMarketVTSConfiguration(poolId);
-            (uint256 amountToSettle0, uint256 amountToSettle1) = LiquidityUtils.getBaseSettlementAmounts(
-                commitmentMaxima[id][0],
-                commitmentMaxima[id][1],
-                vtsConfiguration.token0.baseVTSRate,
-                vtsConfiguration.token1.baseVTSRate
-            );
-            _setSettlementDelta(LiquidityUtils.safeToBalanceDelta(amountToSettle0, amountToSettle1, false, false));
+            if (isMMPosition) {
+                // New positions mean base settlement.
+                // If the modifyDelta is 0 AND the position is active (created), then default settlement to base amounts
+                MarketVTSConfiguration memory vtsConfiguration = getMarketVTSConfiguration(poolId);
+                (uint256 amountToSettle0, uint256 amountToSettle1) = LiquidityUtils.getBaseSettlementAmounts(
+                    commitmentMaxima[id][0],
+                    commitmentMaxima[id][1],
+                    vtsConfiguration.token0.baseVTSRate,
+                    vtsConfiguration.token1.baseVTSRate
+                );
+                _setSettlementDelta(LiquidityUtils.safeToBalanceDelta(amountToSettle0, amountToSettle1, false, false));
+            }
         } else if (m.isActive == true) {
             // EXISTING POSITION: update the liquidity by the liquidity delta
             if (params.liquidityDelta < 0) {
@@ -333,45 +337,51 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
                         excess1 = s1 - commitmentMaxima[id][1];
                     }
                 }
+                // ? Update settlement for all positions.
                 if (excess0 > 0) {
                     _updateSettlement(id, 0, -SafeCast.toInt256(excess0));
                 }
                 if (excess1 > 0) {
                     _updateSettlement(id, 1, -SafeCast.toInt256(excess1));
                 }
-                // this sets the required settlement because we changes the position.
-                _setSettlementDelta(LiquidityUtils.safeToBalanceDelta(excess0, excess1, true, true));
+                // ? Only save the settlement delta for MMPs.
+                if (isMMPosition) {
+                    // this sets the required settlement because we changes the position.
+                    _setSettlementDelta(LiquidityUtils.safeToBalanceDelta(excess0, excess1, true, true));
+                }
             } else if (params.liquidityDelta > 0) {
                 // POSITION DELTA INCREASE:
 
                 _trackCommitment(id, params);
 
-                // commitment maxima increases, and therefore base settlement requirements do too.
-                // Therefore, recalculate the base settlement requirements, and determine excess over s0,s1 to settle IN.
-                MarketVTSConfiguration memory vtsConfiguration = getMarketVTSConfiguration(poolId);
-                uint256 s0 = totalSettlementAmount[id][0];
-                uint256 s1 = totalSettlementAmount[id][1];
-                (uint256 baseAmountToSettle0, uint256 baseAmountToSettle1) = LiquidityUtils.getBaseSettlementAmounts(
-                    commitmentMaxima[id][0],
-                    commitmentMaxima[id][1],
-                    vtsConfiguration.token0.baseVTSRate,
-                    vtsConfiguration.token1.baseVTSRate
-                );
-                uint256 excess0 = baseAmountToSettle0 > s0 ? baseAmountToSettle0 - s0 : 0;
-                uint256 excess1 = baseAmountToSettle1 > s1 ? baseAmountToSettle1 - s1 : 0;
-                _setSettlementDelta(LiquidityUtils.safeToBalanceDelta(excess0, excess1, false, false)); // TODO: Should we restrict this to MMPs?
+                if (isMMPosition) {
+                    // commitment maxima increases, and therefore base settlement requirements do too.
+                    // Therefore, recalculate the base settlement requirements, and determine excess over s0,s1 to settle IN.
+                    MarketVTSConfiguration memory vtsConfiguration = getMarketVTSConfiguration(poolId);
+                    uint256 s0 = totalSettlementAmount[id][0];
+                    uint256 s1 = totalSettlementAmount[id][1];
+                    (uint256 baseAmountToSettle0, uint256 baseAmountToSettle1) = LiquidityUtils.getBaseSettlementAmounts(
+                        commitmentMaxima[id][0],
+                        commitmentMaxima[id][1],
+                        vtsConfiguration.token0.baseVTSRate,
+                        vtsConfiguration.token1.baseVTSRate
+                    );
+                    uint256 excess0 = baseAmountToSettle0 > s0 ? baseAmountToSettle0 - s0 : 0;
+                    uint256 excess1 = baseAmountToSettle1 > s1 ? baseAmountToSettle1 - s1 : 0;
+                    _setSettlementDelta(LiquidityUtils.safeToBalanceDelta(excess0, excess1, false, false));
+                }
             }
 
             int256 newLiquidity = meta[id].liquidity += params.liquidityDelta;
             if (newLiquidity < 0) {
-                // this should never happen in theory but check is performed to be safe since it is a uint256 and a position musst not have a negative liquidity
+                // this should never happen in theory but check is performed to be safe since it is a uint256 and a position must not have a negative liquidity
                 // revert InvalidLiquidityDelta(newLiquidity);
                 meta[id].liquidity = 0;
             } else {
                 meta[id].liquidity = newLiquidity;
             }
 
-            // For active positions - settle position growths, and queue contribution-based bonuses at hook-time (liquidity modification event)
+            // For ALL active positions - settle position growths, and queue contribution-based bonuses at hook-time (liquidity modification event)
             // Rationale:
             // - In Uniswap-style accounting, a position's owed fees are (feeGrowthInside - feeGrowthInsideLast) * liquidity.
             // - If we change liquidity/commitment/coverage units first, any pre-add growth would be multiplied by the larger
@@ -480,6 +490,9 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         PoolId poolId = m.poolId;
 
         // get the cached required settlement amounts
+        // TODO: Are we doing this wrong? If this exists... the totalSettlementAmounts are already updated in _touchPosition.
+        // Furthermore on _decrease, _touchPosition handles calcRFS with revert if RfS is open.
+        // In other words, this function should only be called for MMP _settle.
         BalanceDelta requiredSettlementDelta = _getSettlementDelta();
 
         (rfsOpen,) = _getRFS(positionId);
