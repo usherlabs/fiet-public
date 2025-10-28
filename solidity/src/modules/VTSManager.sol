@@ -114,9 +114,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     event FeeShareHandled(
         PoolId indexed poolId, PositionId indexed positionId, uint8 indexed tokenIndex, uint256 share, uint256 growthInc
     );
-    event MMPositionLiquidityUpdated(
-        PoolId indexed poolId, PositionId indexed positionId, int128 amount0, int128 amount1
-    );
+    event MMPositionSettle(PoolId indexed poolId, PositionId indexed positionId, int128 amount0, int128 amount1);
     // (legacy proactive events removed)
 
     address private immutable mmPositionManager;
@@ -170,14 +168,6 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
      */
     function _isMMPosition(PositionId positionId) internal view returns (bool) {
         return meta[positionId].owner == mmPositionManager;
-    }
-
-    function _setSettlementDelta(BalanceDelta settlementDelta) internal {
-        TransientSlot.asInt256(TransientSlots.SETTLEMENT_DELTA_SLOT).tstore(BalanceDelta.unwrap(settlementDelta));
-    }
-
-    function _getSettlementDelta() internal view returns (BalanceDelta) {
-        return BalanceDelta.wrap(TransientSlot.asInt256(TransientSlots.SETTLEMENT_DELTA_SLOT).tload());
     }
 
     /**
@@ -309,7 +299,9 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
                     vtsConfiguration.token0.baseVTSRate,
                     vtsConfiguration.token1.baseVTSRate
                 );
-                _setSettlementDelta(LiquidityUtils.safeToBalanceDelta(amountToSettle0, amountToSettle1, false, false));
+                TransientSlots.setPositionRequiredSettlementDelta(
+                    LiquidityUtils.safeToBalanceDelta(amountToSettle0, amountToSettle1, false, false)
+                );
             }
         } else if (m.isActive == true) {
             // EXISTING POSITION: update the liquidity by the liquidity delta
@@ -347,7 +339,9 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
                 // ? Only save the settlement delta for MMPs.
                 if (isMMPosition) {
                     // this sets the required settlement because we changes the position.
-                    _setSettlementDelta(LiquidityUtils.safeToBalanceDelta(excess0, excess1, true, true));
+                    TransientSlots.setPositionRequiredSettlementDelta(
+                        LiquidityUtils.safeToBalanceDelta(excess0, excess1, true, true)
+                    );
                 }
             } else if (params.liquidityDelta > 0) {
                 // POSITION DELTA INCREASE:
@@ -368,7 +362,9 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
                     );
                     uint256 excess0 = baseAmountToSettle0 > s0 ? baseAmountToSettle0 - s0 : 0;
                     uint256 excess1 = baseAmountToSettle1 > s1 ? baseAmountToSettle1 - s1 : 0;
-                    _setSettlementDelta(LiquidityUtils.safeToBalanceDelta(excess0, excess1, false, false));
+                    TransientSlots.setPositionRequiredSettlementDelta(
+                        LiquidityUtils.safeToBalanceDelta(excess0, excess1, false, false)
+                    );
                 }
             }
 
@@ -469,50 +465,31 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     }
 
     /**
-     * @notice Records the settlement of assets on a position
-     * @dev make sure this function can only be called by the position manager since that is the interface through which settlements are going to be made
-     * @dev This function is called only AFTER any position modifications. Position data modifications are handled in _touchPosition.
+     * @notice Records the settlement of underlying assets on a position. Occurs entirely independently of position-required settlements. Never to be called alongside MMPositionManager.callModifyLiquidity.
+     * @dev make sure this function can only be called by the MMPositionManager since it is the interface through which underlying asset settlements are going to be made.
      * @param positionId The id of the position
-     * @param modifyDelta The balance delta of the settlement
+     * @param lccCurrency0 The pool currency of the LCC token for token0
+     * @param lccCurrency1 The pool currency of the LCC token for token1
+     * @param delta The balance delta of the settlement
      * @return settlementDelta The balance delta of the settlement amounts relative to the position that was actually modified. The amount of underlying native assets actually reallocated/adjusted.
+     * @return rfsOpen Whether the RfS is open for the position
      */
-    function onMMLiquidityModify(PositionId positionId, BalanceDelta modifyDelta)
+    function onMMSettle(PositionId positionId, Currency lccCurrency0, Currency lccCurrency1, BalanceDelta delta)
         external
         onlyMMPosition(positionId)
         onlyPositionValid(positionId)
         returns (BalanceDelta settlementDelta, bool rfsOpen)
     {
-        // First, settle both growths since last touch
-        _settlePositionGrowths(positionId); // TODO: if we call on separate calcSeizure, then we use transient to cache action.
-        // (fee-pot redemption removed)
-
         PositionMeta memory m = meta[positionId];
         PoolId poolId = m.poolId;
 
-        // get the cached required settlement amounts
-        // TODO: Are we doing this wrong? If this exists... the totalSettlementAmounts are already updated in _touchPosition.
-        // Furthermore on _decrease, _touchPosition handles calcRFS with revert if RfS is open.
-        // In other words, this function should only be called for MMP _settle.
-        BalanceDelta requiredSettlementDelta = _getSettlementDelta();
-
-        (rfsOpen,) = _getRFS(positionId);
-        if (
-            LiquidityUtils.isZeroDelta(requiredSettlementDelta)
-                && (modifyDelta.amount0() < 0 || modifyDelta.amount1() < 1)
-        ) {
-            // If pure underlying liquidity withdrawal, check RfS. Otherwise, RfS check handled on position param update - _touchPosition, or omitted on seizure.
-            // validate RfS is closed if amount is being withdrawn.
-            if (rfsOpen) {
-                revert RFSOpenForPosition(positionId);
-            }
-        }
+        // Only assert closed RfS if pure underlying liquidity WITHDRAWAL. calcRFS includes settle growth accounting since last touch
+        bool isWithdrawal = delta.amount0() < 0 || delta.amount1() < 0;
+        (rfsOpen,) = calcRFS(positionId, isWithdrawal);
 
         // during withdrawals, delta 0 - negative modifyDelta < 0. during deposits, delta 0 + positive modifyDelta > 0. //
-        settlementDelta = requiredSettlementDelta + modifyDelta; //  equivalent to doing (delta1.amount0 + delta2.amount0, delta1.amount1 + delta2.amount1)
-        // If the position has been untouched, then requiredSettlementDelta is 0.
-
-        int256 amount0 = int256(settlementDelta.amount0());
-        int256 amount1 = int256(settlementDelta.amount1());
+        int256 amount0 = int256(delta.amount0());
+        int256 amount1 = int256(delta.amount1());
         if (amount0 > 0) {
             amount0 = _updateSettlement(positionId, 0, int256(amount0));
         } else if (amount0 < 0) {
@@ -533,15 +510,14 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         {
             (int256 adj0, int256 adj1) = _peekFeeAdjustment(positionId);
             if (adj0 > 0 || adj1 > 0) {
-                address[2] memory ccys = IMarketFactory(marketFactory).corePoolToCurrencyPair(poolId);
                 if (adj0 > 0) {
                     uint256 amt0 = uint256(adj0);
-                    Currency.wrap(ccys[0]).take(poolManager, address(this), amt0, true);
+                    lccCurrency0.take(poolManager, address(this), amt0, true);
                     _fundPot(poolId, 0, amt0);
                 }
                 if (adj1 > 0) {
                     uint256 amt1 = uint256(adj1);
-                    Currency.wrap(ccys[1]).take(poolManager, address(this), amt1, true);
+                    lccCurrency1.take(poolManager, address(this), amt1, true);
                     _fundPot(poolId, 1, amt1);
                 }
             }
@@ -551,7 +527,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         _queueBonusForPosition(positionId, 0);
         _queueBonusForPosition(positionId, 1);
 
-        emit MMPositionLiquidityUpdated(poolId, positionId, settlementDelta.amount0(), settlementDelta.amount1());
+        emit MMPositionSettle(poolId, positionId, settlementDelta.amount0(), settlementDelta.amount1());
     }
 
     // --------------------------------------------------
@@ -593,6 +569,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
 
     /// @dev Queue contribution-based bonus for a position/token, excluding own contributed slashes from the pot.
     function _queueBonusForPosition(PositionId id, uint8 tIndex) internal {
+        // TODO: What happens if this called multiple times in a single transaction? May need transient storage to memoize state diff. eg. _decrease, _settle, _increase, _decrease.
         PositionMeta memory m = meta[id];
         PoolId p = m.poolId;
 
@@ -1036,7 +1013,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         }
 
         // Force the clamped settlement via transient slot; MMPositionManager._settleUnderlying will consume this
-        _setSettlementDelta(LiquidityUtils.safeToBalanceDelta(s0, s1, false, false));
+        TransientSlots.setSettlementDelta(LiquidityUtils.safeToBalanceDelta(s0, s1, false, false));
 
         // Pre-deduct the seizer's settlement from the position's settled amounts so the LCCs
         // transferred on _decrease include claim to the newly funded underlying post-obligation.

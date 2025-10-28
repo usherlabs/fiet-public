@@ -381,16 +381,24 @@ contract MMPositionManager is
      * @param poolKey The pool key to modify liquidity for
      * @param params The liquidity parameters to modify liquidity for
      * @return positionId The position id
-     * @return balanceDelta The balance delta
+     * @return requiredSettlementDelta The balance delta of the required settlements
+     * @return positionDelta The balance delta of the position caller delta
+     * @return feesAccrued The balance delta of the fees accrued
      */
     function _callModifyLiquidity(PoolKey memory poolKey, ModifyLiquidityParams memory params)
         internal
-        returns (PositionId positionId, BalanceDelta balanceDelta, BalanceDelta feesAccrued)
+        returns (
+            PositionId positionId,
+            BalanceDelta requiredSettlementDelta,
+            BalanceDelta positionDelta,
+            BalanceDelta feesAccrued
+        )
     {
         // use param to modify liquidity
-        (balanceDelta, feesAccrued) = _modifyLiquidity(poolKey, params, Constants.ZERO_BYTES);
+        (positionDelta, feesAccrued) = _modifyLiquidity(poolKey, params, Constants.ZERO_BYTES);
         // generate unique position id using the params which contains the salt making this unique across all positions
         positionId = PositionLibrary.generateId(address(this), params);
+        requiredSettlementDelta = TransientSlots.getPositionRequiredSettlementDelta(positionId);
     }
 
     /**
@@ -399,48 +407,31 @@ contract MMPositionManager is
      * which may differ from modifyDelta (e.g., due to clamping or adjustments).
      * The appropriate underlying assets are then transferred or withdrawn, and the proxy hook is notified.
      * In essence, the MM is providing a modifyDelta what default settlements apply.
-     * @param positionId The position id for which to settle underlying assets
      * @param poolId The pool id associated with the position
-     * @param modifyDelta The requested balance delta for underlying asset settlement (input)
+     * @param settlementDelta The balance delta for underlying asset settlement. Either direct via _settle, or position-required via _callModifyLiquidity
      * @param ua0 The address of underlying asset 0
      * @param ua1 The address of underlying asset 1
-     * @return settlementDelta The actual balance delta of underlying assets settled, as determined by settlement logic
      */
-    function _settleUnderlying(
-        PositionId positionId,
-        PoolId poolId,
-        BalanceDelta modifyDelta, // amount we want to modify default deltas by - ie. amount to settle IN or OUT (purely UA)
-        address ua0,
-        address ua1
-    ) internal returns (BalanceDelta settlementDelta) {
+    function _settleUnderlying(PoolId poolId, BalanceDelta settlementDelta, address ua0, address ua1) internal {
         address sender = msgSender();
 
-        address proxyHook = IMarketFactory(marketFactory).corePoolToProxyHook(poolId);
-
-        // notify the vts manager of the settlement made for this position
-        // returns the delta of required settlements IN or OUT
-        bool rfsOpen = false;
-        (settlementDelta, rfsOpen) = _getVTSManager().onMMLiquidityModify(positionId, modifyDelta);
-
-        // mark RFS checkpoint
-        _markCheckpoint(positionId, rfsOpen); // checkpoint directly on the _settleUnderlying call.
+        address marketVault = IMarketFactory(marketFactory).corePoolToProxyHook(poolId);
 
         // for deposits, transfer to the Market Vault (proxy hook)
         if (settlementDelta.amount0() > 0) {
             IERC20Minimal(ua0).transferFrom(
-                sender, proxyHook, LiquidityUtils.safeInt128ToUint256(settlementDelta.amount0())
+                sender, marketVault, LiquidityUtils.safeInt128ToUint256(settlementDelta.amount0())
             );
         }
         if (settlementDelta.amount1() > 0) {
             IERC20Minimal(ua1).transferFrom(
-                sender, proxyHook, LiquidityUtils.safeInt128ToUint256(settlementDelta.amount1())
+                sender, marketVault, LiquidityUtils.safeInt128ToUint256(settlementDelta.amount1())
             );
         }
-
         // notify the proxy hook of the settled underlying tokens
         // a positive balance delta means we are settling underlying tokens to the proxy hook, negative means withdrawing to the MMP.
         // Call after deposits, but before withdrawals.
-        IProxyHook(proxyHook).onMMLiquidityModify(settlementDelta);
+        IProxyHook(marketVault).onMMLiquidityModify(settlementDelta);
 
         // for withdrawals, transfer to the caller/sender/MM.
         if (settlementDelta.amount0() < 0) {
@@ -663,11 +654,19 @@ contract MMPositionManager is
 
         PositionId positionId = getPositionId(tokenId, positionIndex);
 
+        // notify the vts manager of the settlement made for this position
+        // returns the delta of required settlements IN or OUT
+        (BalanceDelta settlementDelta, bool rfsOpen) = _getVTSManager().onMMSettle(
+            positionId, poolKey.currency0, poolKey.currency1, toBalanceDelta(amount0, amount1)
+        );
+
+        // mark RFS checkpoint
+        _markCheckpoint(positionId, rfsOpen); // checkpoint directly on the _settleUnderlying call.
+
         // settle the underlying assets to the proxy hook
         _settleUnderlying(
-            positionId,
             commitOf[tokenId].poolId,
-            toBalanceDelta(amount0, amount1),
+            settlementDelta,
             ILCC(Currency.unwrap(poolKey.currency0)).underlyingAsset(),
             ILCC(Currency.unwrap(poolKey.currency1)).underlyingAsset()
         );
@@ -758,7 +757,7 @@ contract MMPositionManager is
         lcc1.issue(lcc1AmountToMint);
 
         // mint or modify liquidity. If the position is not minted, this will mint it. If the position is already minted, this will modify it.
-        (positionId,,) = _callModifyLiquidity(
+        (positionId, requiredSettlementDelta,,) = _callModifyLiquidity(
             poolKey,
             ModifyLiquidityParams({
                 tickLower: tickLower,
@@ -769,9 +768,7 @@ contract MMPositionManager is
         );
 
         // settle the underlying tokens to the proxy hook
-        _settleUnderlying(
-            getPositionId(tokenId, positionIndex), poolKey.toId(), BalanceDeltaLibrary.ZERO_DELTA, ua0, ua1
-        );
+        _settleUnderlying(poolKey.toId(), requiredSettlementDelta, ua0, ua1);
     }
 
     /**
@@ -806,7 +803,8 @@ contract MMPositionManager is
 
         // remove the liquidity from the pool
         // By calling this, CoreHook afterRemoveLiquidity will be called to deactivate the position.
-        (PositionId posId, BalanceDelta positionDelta, BalanceDelta feesAccrued) = _callModifyLiquidity(
+        (, BalanceDelta requiredSettlementDelta, BalanceDelta positionDelta, BalanceDelta feesAccrued) =
+        _callModifyLiquidity(
             poolKey,
             ModifyLiquidityParams({
                 tickLower: position.tickLower,
@@ -827,7 +825,8 @@ contract MMPositionManager is
 
         // pass zero delta because caller is not explicitly settling anything IN or OUT. However, settlements may occur as a reaction to position modification.
         // reference: solidity/src/modules/VTSManager.sol _touchPosition
-        returnDelta = _settleUnderlying(posId, poolKey.toId(), BalanceDeltaLibrary.ZERO_DELTA, ua0, ua1);
+        _settleUnderlying(poolKey.toId(), requiredSettlementDelta, ua0, ua1);
+        returnDelta = requiredSettlementDelta;
 
         // ? ----- During seizeCommitment, issued LCCs must remained solvent. RfS positions must be closed across the commitment. Identifying insolvency essentially enables seizure with a skip on gracePeriod validation.
         // // ? ----- ----- Despite the signal value no longer matching LCC value, the open RfS + settled liquidity expresses utilised liquidity.
@@ -842,6 +841,7 @@ contract MMPositionManager is
         // a0/a1 are the gross amounts returned by the PoolManager for position modification.
         // principal0/principal1 = a{0,1} - fees{0,1} (clamped at zero) reflect the true principal liquidity change
         // that maps to LCC cancellation. fees are trader-derived, wrapped LCC value and must remain wrapped.
+        // TODO: Include feeAdj
         uint256 a0 = LiquidityUtils.safeInt128ToUint256(positionDelta.amount0());
         uint256 a1 = LiquidityUtils.safeInt128ToUint256(positionDelta.amount1());
 
@@ -993,21 +993,19 @@ contract MMPositionManager is
         }
 
         // create a balance delta of the amounts to settle
-        BalanceDelta settleBalanceDelta = toBalanceDelta(amount0.toInt128(), amount1.toInt128());
+        BalanceDelta settlementDelta = toBalanceDelta(amount0.toInt128(), amount1.toInt128());
 
         IVTSManager vtsManager = _getVTSManager();
 
         // Validate grace (using last checkpoint) and derive liquidity to seize
         uint256 seizedLiquidityUnits =
-            vtsManager.calcSeizure(positionId, settleBalanceDelta, positionToCheckpoint[positionId]);
-
-        // -- Settle the position to contribute to RfS closure, and seizure position for proportional amount.
-        address ua0 = ILCC(Currency.unwrap(poolKey.currency0)).underlyingAsset();
-        address ua1 = ILCC(Currency.unwrap(poolKey.currency1)).underlyingAsset();
+            vtsManager.calcSeizure(positionId, settlementDelta, positionToCheckpoint[positionId]);
 
         // ? settlement is necessary because the seizing party is covering the deficit (settlement queue) in exchange for LCCs.
         // calcSeizure will internally manage the required settlement delta.
-        _settleUnderlying(positionId, position.poolId, BalanceDeltaLibrary.ZERO_DELTA, ua0, ua1);
+        // _settle();
+        // TODO: What if we do a _seize, _settle - where if failure to settle, then revert. This could ensure _settle occurs to a new position owned by the seizing party, intra-transaction.
+        require(false == true, "TODO: Seize Position needs an independent refactor.");
 
         // -- Move the underlying liquidity to the to the seizer/caller or to the new position
 

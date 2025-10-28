@@ -312,7 +312,7 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
         // only add direct liquidity if the sender is not the market maker position manager/router
         if (!_isCallerMMP(sender) && !_isMMPosition(id)) {
             // Forward effective caller delta including fee adjustment (Uniswap will apply callerDelta - hookDelta)
-            BalanceDelta effective = delta - feeAdj;
+            BalanceDelta effective = delta - feeAdj; //  equivalent to doing (delta1.amount0 + delta2.amount0, delta1.amount1 + delta2.amount1)
             ProxyHook(_getProxyHook(key)).onDirectLP(effective, LiquidityUtils.ActionType.DirectLPAddLiquidity); // Fetching ProxyHook by corePoolKey, therefore no need to pass again.
         }
 

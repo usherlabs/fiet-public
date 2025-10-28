@@ -6,11 +6,12 @@ import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {PositionId} from "../types/Position.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {RFSCheckpoint} from "../types/Checkpoint.sol";
+import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 
 interface IVTSManager {
     function setMarketVTSConfiguration(PoolId corePoolId, MarketVTSConfiguration memory vtsConfiguration) external;
 
-    function onMMLiquidityModify(PositionId positionId, BalanceDelta balanceDelta)
+    function onMMSettle(PositionId positionId, Currency lccCurrency0, Currency lccCurrency1, BalanceDelta delta)
         external
         returns (BalanceDelta settlementDelta, bool rfsOpen);
 
