@@ -717,7 +717,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
             // By increasing feeGrowthInsideLast by share/Q128/liquidity, we reduce their future fee delta exactly by share.
             feeGrowthInsideLast[id][tokenIndex] += growthInc;
         }
-        protocolFeeAccrued[p][tokenIndex] += feesBurn; // TODO: we need to share fees to all other liquidity except this position.
+        protocolFeeAccrued[p][tokenIndex] += feesBurn;
         // Record contributor’s share for self-exclusion and queue pending slash (reduces payout at hook materialisation)
         feesSharedByPosition[id][tokenIndex] += feesBurn;
         // Fee sharing/slashing is applied to the pending fee adjustment mapping to be consumed at the point of position modification.
