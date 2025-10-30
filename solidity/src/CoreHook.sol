@@ -248,17 +248,14 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
         // token0
         if (p0 > 0) {
             uint256 take0 = uint256(p0);
-            key.currency0.take(poolManager, address(this), take0, true);
-            _fundPot(key.toId(), 0, take0);
+            _fundSharedFeePot(key.toId(), key.currency0, 0, take0);
             mat0 = p0;
         } else if (p0 < 0) {
             uint256 need0 = uint256(-p0);
             uint256 pot0 = slashedPot[key.toId()][0];
             uint256 pay0 = pot0 < need0 ? pot0 : need0;
             if (pay0 > 0) {
-                key.currency0.settle(poolManager, address(this), pay0, true);
-                _drainPot(key.toId(), 0, pay0);
-                emit BonusPaid(key.toId(), id, 0, pay0, need0 - pay0);
+                _drainSharedFeePot(key.toId(), key.currency0, 0, pay0);
                 mat0 = -SafeCast.toInt256(pay0);
             }
         }
@@ -266,17 +263,14 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
         // token1
         if (p1 > 0) {
             uint256 take1 = uint256(p1);
-            key.currency1.take(poolManager, address(this), take1, true);
-            _fundPot(key.toId(), 1, take1);
+            _fundSharedFeePot(key.toId(), key.currency1, 1, take1);
             mat1 = p1;
         } else if (p1 < 0) {
             uint256 need1 = uint256(-p1);
             uint256 pot1 = slashedPot[key.toId()][1];
             uint256 pay1 = pot1 < need1 ? pot1 : need1;
             if (pay1 > 0) {
-                key.currency1.settle(poolManager, address(this), pay1, true);
-                _drainPot(key.toId(), 1, pay1);
-                emit BonusPaid(key.toId(), id, 1, pay1, need1 - pay1);
+                _drainSharedFeePot(key.toId(), key.currency1, 1, pay1);
                 mat1 = -SafeCast.toInt256(pay1);
             }
         }

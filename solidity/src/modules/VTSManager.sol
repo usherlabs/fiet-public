@@ -93,18 +93,6 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     // used to fund bonus materialisation. Index 0 => token0 pot, 1 => token1 pot.
     mapping(PoolId => uint256[2]) internal slashedPot;
 
-    /// @notice Emitted when slashed fees are extracted into the pot
-    event PotFunded(PoolId indexed poolId, uint8 indexed tokenIndex, uint256 amount);
-
-    /// @notice Emitted when a bonus is paid out (materialised) from the pot
-    event BonusPaid(
-        PoolId indexed poolId,
-        PositionId indexed positionId,
-        uint8 indexed tokenIndex,
-        uint256 amount,
-        uint256 remainingPendingAdjAbs
-    );
-
     error InvalidMarketVTSConfiguration(PoolId corePoolId);
     error InvalidPosition(PositionId positionId);
     error RFSOpenForPosition(PositionId positionId);
@@ -386,8 +374,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
             //   attributed to the pre-add units. Post-add accrual then starts against the updated units.
             // - This preserves fairness and prevents gaming (e.g. adding liquidity just before redeeming to amplify claims).
             _settlePositionGrowths(id);
-            _queueBonusForPosition(id, 0);
-            _queueBonusForPosition(id, 1);
+            _queueBonusForPosition(id);
         } else {
             revert NotActive(id);
         }
@@ -511,21 +498,16 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
             (int256 adj0, int256 adj1) = _peekFeeAdjustment(positionId);
             if (adj0 > 0 || adj1 > 0) {
                 if (adj0 > 0) {
-                    uint256 amt0 = uint256(adj0);
-                    lccCurrency0.take(poolManager, address(this), amt0, true);
-                    _fundPot(poolId, 0, amt0);
+                    _fundSharedFeePot(poolId, lccCurrency0, 0, uint256(adj0));
                 }
                 if (adj1 > 0) {
-                    uint256 amt1 = uint256(adj1);
-                    lccCurrency1.take(poolManager, address(this), amt1, true);
-                    _fundPot(poolId, 1, amt1);
+                    _fundSharedFeePot(poolId, lccCurrency1, 1, uint256(adj1));
                 }
             }
         }
 
         // Queue bonuses based on updated settled contributions (materialised at hooks only)
-        _queueBonusForPosition(positionId, 0);
-        _queueBonusForPosition(positionId, 1);
+        _queueBonusForPosition(positionId);
 
         emit MMPositionSettle(poolId, positionId, settlementDelta.amount0(), settlementDelta.amount1());
     }
@@ -567,9 +549,16 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         outflowsAtFeeSnap[positionId][tokenIndex] = cf;
     }
 
+    /// @dev Queue contribution-based bonus for a position. Applies to both tokens, if no token index is present.
+    function _queueBonusForPosition(PositionId id) internal {
+        _queueBonusForPosition(id, 0);
+        _queueBonusForPosition(id, 1);
+    }
+
     /// @dev Queue contribution-based bonus for a position/token, excluding own contributed slashes from the pot.
     function _queueBonusForPosition(PositionId id, uint8 tIndex) internal {
         // TODO: What happens if this called multiple times in a single transaction? May need transient storage to memoize state diff. eg. _decrease, _settle, _increase, _decrease.
+        // However, since _finaliseFeeAdjustment is called after the liquidity modification hook, we can assume that the pending fee adjustment is already finalised.
         PositionMeta memory m = meta[id];
         PoolId p = m.poolId;
 
@@ -579,7 +568,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
 
         uint256 selfS = totalSettlementAmount[id][tIndex];
         uint256 totalS = totalSettledAllPositions[p][tIndex];
-        if (potAvail == 0 || selfS == 0 || totalS == 0) return;
+        if (potAvail == 0 || selfS == 0 || totalS == 0) return; // if position in deficit, then  selfS = 0
 
         uint256 bonus = FullMath.mulDiv(potAvail, selfS, totalS);
         if (bonus > potAvail) bonus = potAvail;
@@ -634,15 +623,16 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     }
 
     /// @dev Increase the slashed pot for a pool/token when a take() succeeds.
-    function _fundPot(PoolId poolId, uint8 tokenIndex, uint256 amount) internal {
+    function _fundSharedFeePot(PoolId poolId, Currency lccCurrency, uint8 tokenIndex, uint256 amount) internal {
         if (amount == 0) return;
+        lccCurrency.take(poolManager, address(this), amount, true);
         slashedPot[poolId][tokenIndex] += amount;
-        emit PotFunded(poolId, tokenIndex, amount);
     }
 
     /// @dev Decrease the slashed pot when settling bonuses (giving out from CoreHook to PoolManager).
-    function _drainPot(PoolId poolId, uint8 tokenIndex, uint256 amount) internal {
+    function _drainSharedFeePot(PoolId poolId, Currency lccCurrency, uint8 tokenIndex, uint256 amount) internal {
         if (amount == 0) return;
+        lccCurrency.settle(poolManager, address(this), amount, true);
         uint256 pot = slashedPot[poolId][tokenIndex];
         // Clamp to available pot to avoid underflow; caller must have already bounded the amount.
         if (amount > pot) amount = pot;
