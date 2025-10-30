@@ -235,51 +235,6 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
         return (this.afterSwap.selector, 0);
     }
 
-    /// @dev Centralised fee materialisation for both add/remove liquidity flows.
-    ///      - Positive pending: extract LCCs from PoolManager into CoreHook and fund the slashed pot.
-    ///      - Negative pending: settle out of CoreHook up to available pot; leave remainder pending.
-    ///      Returns only this-call materialised delta via _finaliseFeeAdjustment.
-    function _handleFeePot(PoolKey calldata key, PositionId id) internal returns (BalanceDelta) {
-        (int256 p0, int256 p1) = _peekFeeAdjustment(id);
-
-        int256 mat0 = 0;
-        int256 mat1 = 0;
-
-        // token0
-        if (p0 > 0) {
-            uint256 take0 = uint256(p0);
-            _fundSharedFeePot(key.toId(), key.currency0, 0, take0);
-            mat0 = p0;
-        } else if (p0 < 0) {
-            uint256 need0 = uint256(-p0);
-            uint256 pot0 = slashedPot[key.toId()][0];
-            uint256 pay0 = pot0 < need0 ? pot0 : need0;
-            if (pay0 > 0) {
-                _drainSharedFeePot(key.toId(), key.currency0, 0, pay0);
-                mat0 = -SafeCast.toInt256(pay0);
-            }
-        }
-
-        // token1
-        if (p1 > 0) {
-            uint256 take1 = uint256(p1);
-            _fundSharedFeePot(key.toId(), key.currency1, 1, take1);
-            mat1 = p1;
-        } else if (p1 < 0) {
-            uint256 need1 = uint256(-p1);
-            uint256 pot1 = slashedPot[key.toId()][1];
-            uint256 pay1 = pot1 < need1 ? pot1 : need1;
-            if (pay1 > 0) {
-                _drainSharedFeePot(key.toId(), key.currency1, 1, pay1);
-                mat1 = -SafeCast.toInt256(pay1);
-            }
-        }
-
-        // Finalise this-call adjustment. Publication to transient storage is handled in VTSManager._finaliseFeeAdjustment
-        // for MM-managed positions only.
-        return _finaliseFeeAdjustment(id, mat0, mat1);
-    }
-
     /// @notice The hook called after liquidity is added
     /// @param sender The initial msg.sender for the add liquidity call
     /// @param key The key for the pool
@@ -302,8 +257,8 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
 
         PositionId id = PositionLibrary.generateId(sender, params);
 
-        // Materialise fee adjustments via pot-aware handler
-        BalanceDelta feeAdj = _handleFeePot(key, id);
+        // Consolidated fee processing: apply nets, queue bonus, fund/drain pot, and finalise
+        BalanceDelta feeAdj = _processPositionFees(id, key.currency0, key.currency1);
 
         // only add direct liquidity if the sender is not the market maker position manager/router
         if (!_isCallerMMP(sender) && !_isMMPosition(id)) {
@@ -340,8 +295,8 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
         // Example FeeTakingHook: https://github.com/Uniswap/v4-core/blob/a7cf038cd568801a79a9b4cf92cd5b52c95c8585/src/test/FeeTakingHook.sol#L14
         PositionId id = PositionLibrary.generateId(sender, params);
 
-        // Materialise fee adjustments via pot-aware handler
-        BalanceDelta feeAdj = _handleFeePot(key, id);
+        // Consolidated fee processing: apply nets, queue bonus, fund/drain pot, and finalise
+        BalanceDelta feeAdj = _processPositionFees(id, key.currency0, key.currency1);
 
         if (!_isCallerMMP(sender) || !_isMMPosition(id)) {
             // Forward effective caller delta including fee adjustment (Uniswap will apply callerDelta - hookDelta)

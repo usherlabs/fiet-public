@@ -93,6 +93,12 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     // used to fund bonus materialisation. Index 0 => token0 pot, 1 => token1 pot.
     mapping(PoolId => uint256[2]) internal slashedPot;
 
+    // Persistent nets since last fee finalisation (position modification)
+    // Per-position net settlement delta (signed) per token
+    mapping(PositionId => int256[2]) internal netSettlementSinceLastMod;
+    // Per-pool sum of positive nets per token (used for net-weighted bonus allocation)
+    mapping(PoolId => uint256[2]) internal poolNetSinceLastMod;
+
     error InvalidMarketVTSConfiguration(PoolId corePoolId);
     error InvalidPosition(PositionId positionId);
     error RFSOpenForPosition(PositionId positionId);
@@ -397,7 +403,6 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
             //   attributed to the pre-add units. Post-add accrual then starts against the updated units.
             // - This preserves fairness and prevents gaming (e.g. adding liquidity just before redeeming to amplify claims).
             _settlePositionGrowths(id);
-            _queueBonusForPosition(id);
         } else {
             revert NotActive(id);
         }
@@ -517,20 +522,18 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         // Proactive extraction: if pending fee adjustment indicates a slash (+ve),
         // take LCC from PoolManager into CoreHook (this) and fund the per-pool pot.
         // manager.take/settle can be called here as onMMLiquidityModify is called from MMPositionManager in unlockCallback of PoolManager.
+        // TODO: This may result in perpetually sharing to the fee pot.
         {
             (int256 adj0, int256 adj1) = _peekFeeAdjustment(positionId);
             if (adj0 > 0 || adj1 > 0) {
                 if (adj0 > 0) {
-                    _fundSharedFeePot(poolId, lccCurrency0, 0, uint256(adj0));
+                    _fundFeePot(poolId, lccCurrency0, 0, uint256(adj0));
                 }
                 if (adj1 > 0) {
-                    _fundSharedFeePot(poolId, lccCurrency1, 1, uint256(adj1));
+                    _fundFeePot(poolId, lccCurrency1, 1, uint256(adj1));
                 }
             }
         }
-
-        // Queue bonuses based on updated settled contributions (materialised at hooks only)
-        _queueBonusForPosition(positionId);
 
         emit MMPositionSettle(poolId, positionId, settlementDelta.amount0(), settlementDelta.amount1());
     }
@@ -570,37 +573,6 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         ofDelta = cf >= snap ? (cf - snap) : 0;
         feeGrowthInsideLast[positionId][tokenIndex] = fg; // snapshot fees here.
         outflowsAtFeeSnap[positionId][tokenIndex] = cf;
-    }
-
-    /// @dev Queue contribution-based bonus for a position. Applies to both tokens, if no token index is present.
-    function _queueBonusForPosition(PositionId id) internal {
-        _queueBonusForPosition(id, 0);
-        _queueBonusForPosition(id, 1);
-    }
-
-    /// @dev Queue contribution-based bonus for a position/token, excluding own contributed slashes from the pot.
-    function _queueBonusForPosition(PositionId id, uint8 tIndex) internal {
-        // TODO: What happens if this called multiple times in a single transaction? May need transient storage to memoize state diff. eg. _decrease, _settle, _increase, _decrease.
-        // However, since _finaliseFeeAdjustment is called after the liquidity modification hook, we can assume that the pending fee adjustment is already finalised.
-        PositionMeta memory m = meta[id];
-        PoolId p = m.poolId;
-
-        uint256 pot = protocolFeeAccrued[p][tIndex];
-        uint256 selfContrib = feesSharedByPosition[id][tIndex];
-        uint256 potAvail = pot > selfContrib ? (pot - selfContrib) : 0;
-
-        uint256 selfS = totalSettlementAmount[id][tIndex];
-        uint256 totalS = totalSettledAllPositions[p][tIndex];
-        if (potAvail == 0 || selfS == 0 || totalS == 0) return; // if position in deficit, then  selfS = 0
-
-        uint256 bonus = FullMath.mulDiv(potAvail, selfS, totalS);
-        if (bonus > potAvail) bonus = potAvail;
-
-        // deduct from pot, keep selfContrib excluded
-        protocolFeeAccrued[p][tIndex] = potAvail - bonus + selfContrib;
-
-        // queue negative pending (bonus increases payout at materialisation)
-        pendingFeeAdj[id][tIndex] -= SafeCast.toInt256(bonus);
     }
 
     /// @dev Peek the current pending fee adjustments for a position without mutating state.
@@ -651,15 +623,102 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         return adj;
     }
 
+    /// @dev Consolidated fee processing for a position during modification: applies and zeros nets, queues bonus using net weighting,
+    ///      funds/drains pot based on pending adjustments, and finalises materialised delta for this call.
+    function _processPositionFees(PositionId id, Currency currency0, Currency currency1)
+        internal
+        returns (BalanceDelta)
+    {
+        PoolId p = meta[id].poolId;
+
+        // Apply and zero per-position nets (nets already applied to totalSettlementAmount via _updateSettlement)
+        int256 selfNet0 = netSettlementSinceLastMod[id][0];
+        int256 selfNet1 = netSettlementSinceLastMod[id][1];
+        if (selfNet0 != 0) {
+            netSettlementSinceLastMod[id][0] = 0;
+            if (selfNet0 > 0) {
+                uint256 cur0 = poolNetSinceLastMod[p][0];
+                uint256 dec0 = uint256(selfNet0);
+                poolNetSinceLastMod[p][0] = dec0 > cur0 ? 0 : (cur0 - dec0);
+            }
+        }
+        if (selfNet1 != 0) {
+            netSettlementSinceLastMod[id][1] = 0;
+            if (selfNet1 > 0) {
+                uint256 cur1 = poolNetSinceLastMod[p][1];
+                uint256 dec1 = uint256(selfNet1);
+                poolNetSinceLastMod[p][1] = dec1 > cur1 ? 0 : (cur1 - dec1);
+            }
+        }
+
+        // Queue bonuses using positive nets since last modification
+        for (uint8 t = 0; t < 2; t++) {
+            int256 selfNet = (t == 0) ? selfNet0 : selfNet1;
+            if (selfNet <= 0) continue;
+
+            uint256 pot = protocolFeeAccrued[p][t];
+            uint256 selfContrib = feesSharedByPosition[id][t];
+            uint256 potAvail = pot > selfContrib ? (pot - selfContrib) : 0;
+            if (potAvail == 0) continue;
+
+            uint256 totalNet = poolNetSinceLastMod[p][t];
+            if (totalNet == 0) continue;
+
+            // Dust guard
+            if (uint256(selfNet) < 1e12) continue;
+
+            uint256 bonus = FullMath.mulDiv(potAvail, uint256(selfNet), totalNet);
+            if (bonus > potAvail) bonus = potAvail;
+
+            // Deduct from pot, keep self-contrib excluded
+            protocolFeeAccrued[p][t] = potAvail - bonus + selfContrib;
+            // Queue negative pending (bonus increases payout at materialisation)
+            pendingFeeAdj[id][t] -= SafeCast.toInt256(bonus);
+        }
+
+        // Materialise pending: fund slashed pot for +ve; drain to LP for -ve
+        (int256 pend0, int256 pend1) = _peekFeeAdjustment(id);
+        int256 mat0 = 0;
+        int256 mat1 = 0;
+
+        if (pend0 > 0) {
+            _fundFeePot(p, currency0, 0, uint256(pend0));
+            mat0 = pend0;
+        } else if (pend0 < 0) {
+            uint256 need0 = uint256(-pend0);
+            uint256 pot0 = slashedPot[p][0];
+            uint256 pay0 = pot0 < need0 ? pot0 : need0;
+            if (pay0 > 0) {
+                _drainFeePot(p, currency0, 0, pay0);
+                mat0 = -SafeCast.toInt256(pay0);
+            }
+        }
+
+        if (pend1 > 0) {
+            _fundFeePot(p, currency1, 1, uint256(pend1));
+            mat1 = pend1;
+        } else if (pend1 < 0) {
+            uint256 need1 = uint256(-pend1);
+            uint256 pot1 = slashedPot[p][1];
+            uint256 pay1 = pot1 < need1 ? pot1 : need1;
+            if (pay1 > 0) {
+                _drainFeePot(p, currency1, 1, pay1);
+                mat1 = -SafeCast.toInt256(pay1);
+            }
+        }
+
+        return _finaliseFeeAdjustment(id, mat0, mat1);
+    }
+
     /// @dev Increase the slashed pot for a pool/token when a take() succeeds.
-    function _fundSharedFeePot(PoolId poolId, Currency lccCurrency, uint8 tokenIndex, uint256 amount) internal {
+    function _fundFeePot(PoolId poolId, Currency lccCurrency, uint8 tokenIndex, uint256 amount) internal {
         if (amount == 0) return;
         lccCurrency.take(poolManager, address(this), amount, true);
         slashedPot[poolId][tokenIndex] += amount;
     }
 
     /// @dev Decrease the slashed pot when settling bonuses (giving out from CoreHook to PoolManager).
-    function _drainSharedFeePot(PoolId poolId, Currency lccCurrency, uint8 tokenIndex, uint256 amount) internal {
+    function _drainFeePot(PoolId poolId, Currency lccCurrency, uint8 tokenIndex, uint256 amount) internal {
         if (amount == 0) return;
         lccCurrency.settle(poolManager, address(this), amount, true);
         uint256 pot = slashedPot[poolId][tokenIndex];
@@ -1170,15 +1229,18 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         totalSettlementAmount[id][tokenIndex] = next;
         int256 applied = SafeCast.toInt256(next) - SafeCast.toInt256(cur); // output delta
 
-        // Maintain global sum of settled contributions for pure contribution-based bonus weighting
+        // Accrue persistent nets since last fee finalisation
         {
             PoolId p = meta[id].poolId;
-            uint256 curTotal = totalSettledAllPositions[p][tokenIndex];
+            // Track per-position net
+            netSettlementSinceLastMod[id][tokenIndex] += applied;
+            // Track pool-wide sum of positive nets (used for net-weighted bonus allocation)
             if (applied >= 0) {
-                totalSettledAllPositions[p][tokenIndex] = curTotal + uint256(applied);
+                poolNetSinceLastMod[p][tokenIndex] += uint256(applied);
             } else {
                 uint256 dec = uint256(-applied);
-                totalSettledAllPositions[p][tokenIndex] = dec > curTotal ? 0 : (curTotal - dec);
+                uint256 curPoolNet = poolNetSinceLastMod[p][tokenIndex];
+                poolNetSinceLastMod[p][tokenIndex] = dec > curPoolNet ? 0 : (curPoolNet - dec);
             }
         }
 

@@ -12,7 +12,7 @@ import {PoolId} from "v4-periphery/lib/v4-core/src/types/PoolId.sol";
 import {ERC721Permit_v4} from "v4-periphery/src/base/ERC721Permit_v4.sol";
 import {ReentrancyLock} from "v4-periphery/src/base/ReentrancyLock.sol";
 import {Multicall_v4} from "v4-periphery/src/base/Multicall_v4.sol";
-import {MMActionRouter} from "./modules/MMActionRouter.sol";
+import {BaseActionsRouter} from "v4-periphery/src/base/BaseActionsRouter.sol";
 import {PositionMeta, PositionId, PositionLibrary} from "./types/Position.sol";
 import {LiquiditySignal, SignalState} from "./types/Position.sol";
 import {MarketMaker} from "./libraries/MarketMaker.sol";
@@ -47,7 +47,7 @@ contract MMPositionManager is
     IMMPositionManager,
     ReentrancyLock,
     Multicall_v4,
-    MMActionRouter,
+    BaseActionsRouter,
     NativeWrapper,
     LCCWrapper
 {
@@ -104,7 +104,7 @@ contract MMPositionManager is
 
     constructor(address _manager, address _signalManager, address _marketFactory, address _descriptor, IWETH9 _weth9)
         ERC721Permit_v4("Fiet VRL Commitment Positions Manager", "FIET-VRL-MMP")
-        MMActionRouter(IPoolManager(_manager))
+        BaseActionsRouter(IPoolManager(_manager))
         NativeWrapper(_weth9)
     {
         marketFactory = _marketFactory;
@@ -221,16 +221,9 @@ contract MMPositionManager is
         }
     }
 
-    /// @inheritdoc MMActionRouter
-    function msgSender() public view override(MMActionRouter, LiquidityRouter) returns (address) {
+    /// @inheritdoc BaseActionsRouter
+    function msgSender() public view override(BaseActionsRouter, LiquidityRouter) returns (address) {
         return _getLocker();
-    }
-
-    /// @inheritdoc MMActionRouter
-    function _finaliseBatch() internal override {
-        // Hook for post-batch finalisation: consume/settle any transient nets as needed.
-        // Currently, feeAdj and position-required-settlement are consumed per action, so no-op here.
-        // Keep for future consolidation if required.
     }
 
     /**
