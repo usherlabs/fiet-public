@@ -511,6 +511,21 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         settlementDelta = LiquidityUtils.safeToBalanceDelta(amount0, amount1);
 
         // Proactive extraction (incremental): fund only increases in pending slashes since last observation to avoid over-funding.
+        /**
+         * Proactive extraction rationale:
+         * We fund the fee pot here (onMMSettle) only for newly accrued pending slashes since the last observation.
+         * Slashes arise when protocol coverage is exercised against positions (via coverage-usage settlement and fee burn),
+         * and onMMSettle calls into growth settlement so pending slashes can increase between position modifications.
+         * To ensure there is sufficient LCC in the shared pot to pay bonuses to contributing positions, we proactively
+         * take only the incremental increase in pending slashes (vs lastFundedPendingAdj). This avoids double-funding
+         * when multiple settles occur before the next position modification.
+         *
+         * We intentionally do NOT fund inside _updateSettlement: it is a core storage routine called from many paths,
+         * and slashing is not linearly tied to every settlement delta. Position modifications will also handle pot
+         * funding/draining and finalisation atomically via _processPositionFees. Thus, pot operations live only in:
+         *  - onMMSettle: incremental funding of new pending slashes, and
+         *  - _processPositionFees: final funding/draining and fee adjustment finalisation during modification.
+         */
         {
             (int256 adj0, int256 adj1) = _peekFeeAdjustment(positionId);
             int256 prev0 = lastFundedPendingAdj[positionId][0];
@@ -624,9 +639,37 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     {
         PoolId p = meta[id].poolId;
 
-        // Apply and zero per-position nets (nets already applied to totalSettlementAmount via _updateSettlement)
+        // Read per-position nets (already applied to totalSettlementAmount via _updateSettlement). Do not mutate yet.
         int256 selfNet0 = netSettlementSinceLastMod[id][0];
         int256 selfNet1 = netSettlementSinceLastMod[id][1];
+
+        // Queue bonuses using positive nets since last modification
+        // TODO: Should be positive nets where totalSettlementAmount > 0 - preventing positive nets that cover deficits from being used.
+        for (uint8 t = 0; t < 2; t++) {
+            int256 selfNet = (t == 0) ? selfNet0 : selfNet1;
+            if (selfNet <= 0) continue;
+
+            uint256 pot = protocolFeeAccrued[p][t];
+            uint256 selfContrib = feesSharedByPosition[id][t];
+            uint256 potAvail = pot > selfContrib ? (pot - selfContrib) : 0;
+            if (potAvail == 0) continue;
+
+            uint256 totalNetBefore = poolNetSinceLastMod[p][t];
+            if (totalNetBefore == 0) continue;
+
+            // Dust guard
+            if (uint256(selfNet) < 1e12) continue;
+
+            uint256 bonus = FullMath.mulDiv(potAvail, uint256(selfNet), totalNetBefore);
+            if (bonus > potAvail) bonus = potAvail;
+
+            // Deduct from pot, keep self-contrib excluded
+            protocolFeeAccrued[p][t] = potAvail - bonus + selfContrib;
+            // Queue negative pending (bonus increases payout at materialisation)
+            pendingFeeAdj[id][t] -= SafeCast.toInt256(bonus);
+        }
+
+        // After allocation, zero/decrement nets so future allocations don't double-count
         if (selfNet0 != 0) {
             netSettlementSinceLastMod[id][0] = 0;
             if (selfNet0 > 0) {
@@ -642,32 +685,6 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
                 uint256 dec1 = uint256(selfNet1);
                 poolNetSinceLastMod[p][1] = dec1 > cur1 ? 0 : (cur1 - dec1);
             }
-        }
-
-        // Queue bonuses using positive nets since last modification
-        // TODO: Should be positive nets where totalSettlementAmount > 0 - preventing positive nets that cover deficits from being used.
-        for (uint8 t = 0; t < 2; t++) {
-            int256 selfNet = (t == 0) ? selfNet0 : selfNet1;
-            if (selfNet <= 0) continue;
-
-            uint256 pot = protocolFeeAccrued[p][t];
-            uint256 selfContrib = feesSharedByPosition[id][t];
-            uint256 potAvail = pot > selfContrib ? (pot - selfContrib) : 0;
-            if (potAvail == 0) continue;
-
-            uint256 totalNet = poolNetSinceLastMod[p][t];
-            if (totalNet == 0) continue;
-
-            // Dust guard
-            if (uint256(selfNet) < 1e12) continue;
-
-            uint256 bonus = FullMath.mulDiv(potAvail, uint256(selfNet), totalNet);
-            if (bonus > potAvail) bonus = potAvail;
-
-            // Deduct from pot, keep self-contrib excluded
-            protocolFeeAccrued[p][t] = potAvail - bonus + selfContrib;
-            // Queue negative pending (bonus increases payout at materialisation)
-            pendingFeeAdj[id][t] -= SafeCast.toInt256(bonus);
         }
 
         // Materialise pending: fund slashed pot for +ve; drain to LP for -ve
@@ -1238,6 +1255,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
             // Track per-position net
             netSettlementSinceLastMod[id][tokenIndex] += applied;
             // Track pool-wide sum of positive nets (used for net-weighted bonus allocation)
+            // applied > 0 means UNSIGNED totalSettlementAmount > 0 - preventing positive nets that cover deficits from being used.
             if (applied >= 0) {
                 poolNetSinceLastMod[p][tokenIndex] += uint256(applied);
             } else {
