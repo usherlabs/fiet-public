@@ -287,9 +287,17 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
                     vtsConfiguration.token0.baseVTSRate,
                     vtsConfiguration.token1.baseVTSRate
                 );
+                // Set the settlement amounts to the total commitment amounts for DirectLPs.
+                _updateSettlement(id, 0, SafeCast.toInt256(amountToSettle0));
+                _updateSettlement(id, 1, SafeCast.toInt256(amountToSettle1));
+
                 TransientSlots.addPositionRequiredSettlementDelta(
                     LiquidityUtils.safeToBalanceDelta(amountToSettle0, amountToSettle1, false, false)
                 );
+            } else {
+                // Set the settlement amounts to the total commitment amounts for DirectLPs.
+                _updateSettlement(id, 0, SafeCast.toInt256(commitmentMaxima[id][0]));
+                _updateSettlement(id, 1, SafeCast.toInt256(commitmentMaxima[id][1]));
             }
         } else if (m.isActive == true) {
             // EXISTING POSITION: update the liquidity by the liquidity delta
@@ -297,7 +305,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
                 // FULL or PARTIAL LIQUIDATION:
 
                 // validate that RfS is closed before we track position param (commitment maxima) updates.
-                calcRFS(id, true);
+                calcRFS(id, true); // rfs is always closed for DirectLPs.
                 _trackCommitment(id, params);
                 // active position is being liquidated.
                 uint256 s0 = totalSettlementAmount[id][0];
@@ -336,12 +344,13 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
 
                 _trackCommitment(id, params);
 
+                uint256 s0 = totalSettlementAmount[id][0];
+                uint256 s1 = totalSettlementAmount[id][1];
+
                 if (isMMPosition) {
                     // commitment maxima increases, and therefore base settlement requirements do too.
                     // Therefore, recalculate the base settlement requirements, and determine excess over s0,s1 to settle IN.
                     MarketVTSConfiguration memory vtsConfiguration = getMarketVTSConfiguration(poolId);
-                    uint256 s0 = totalSettlementAmount[id][0];
-                    uint256 s1 = totalSettlementAmount[id][1];
                     (uint256 baseAmountToSettle0, uint256 baseAmountToSettle1) = LiquidityUtils.getBaseSettlementAmounts(
                         commitmentMaxima[id][0],
                         commitmentMaxima[id][1],
@@ -350,9 +359,23 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
                     );
                     uint256 excess0 = baseAmountToSettle0 > s0 ? baseAmountToSettle0 - s0 : 0;
                     uint256 excess1 = baseAmountToSettle1 > s1 ? baseAmountToSettle1 - s1 : 0;
+
+                    // Instruct MMP to source underlying for the excess
                     TransientSlots.addPositionRequiredSettlementDelta(
                         LiquidityUtils.safeToBalanceDelta(excess0, excess1, false, false)
                     );
+
+                    // Apply the increase to the position’s settled amounts immediately so bonus weights reflect net state.
+                    if (excess0 > 0) {
+                        _updateSettlement(id, 0, SafeCast.toInt256(excess0));
+                    }
+                    if (excess1 > 0) {
+                        _updateSettlement(id, 1, SafeCast.toInt256(excess1));
+                    }
+                } else {
+                    // Increase DirectLPs settlement amounts by the difference between the commitment maxima and the last settled amounts.
+                    _updateSettlement(id, 0, SafeCast.toInt256(commitmentMaxima[id][0] - s0));
+                    _updateSettlement(id, 1, SafeCast.toInt256(commitmentMaxima[id][1] - s1));
                 }
             }
 
