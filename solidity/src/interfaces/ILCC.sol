@@ -22,6 +22,11 @@ interface ILCC {
 
     function traceTransfer(address to, bytes32 marketId, uint256 amount) external;
 
-    // Optional convenience for manager-side unwrap; concrete LCC exposes unwrap flows.
     function unwrapTo(address to, uint256 amount) external;
+
+    function unwrap(uint256 amount) external;
+
+    function wrap(uint256 amount) external;
+
+    function wrapTo(address to, uint256 amount) external;
 }

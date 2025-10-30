@@ -450,6 +450,7 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
 
         // read in all the bytes from the transient storage of the hook contract
         // Read transient storage from CoreHook
+        // TODO: Bug: Only aware of the last swap's market...
         bytes32 tracingFlagBytes = IExttload(coreHook).exttload(TransientSlots.TRACING_FLAG_SLOT);
         bytes32 currentMarketBytes = IExttload(coreHook).exttload(TransientSlots.CURRENT_MARKET_SLOT);
 
