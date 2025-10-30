@@ -275,6 +275,8 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
             }
         }
 
+        // Finalise this-call adjustment. Publication to transient storage is handled in VTSManager._finaliseFeeAdjustment
+        // for MM-managed positions only.
         return _finaliseFeeAdjustment(id, mat0, mat1);
     }
 

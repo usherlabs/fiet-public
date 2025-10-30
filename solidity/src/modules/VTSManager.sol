@@ -619,7 +619,13 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         pendingFeeAdj[id][0] = p0 - materialised0;
         pendingFeeAdj[id][1] = p1 - materialised1;
 
-        return LiquidityUtils.safeToBalanceDelta(materialised0, materialised1);
+        BalanceDelta adj = LiquidityUtils.safeToBalanceDelta(materialised0, materialised1);
+        // Publish this-call adjustment to transient storage for MM-managed positions only;
+        // MMPositionManager will consume it to classify principal vs effective fees.
+        if (_isMMPosition(id)) {
+            TransientSlots.addFeeAdjDelta(adj);
+        }
+        return adj;
     }
 
     /// @dev Increase the slashed pot for a pool/token when a take() succeeds.

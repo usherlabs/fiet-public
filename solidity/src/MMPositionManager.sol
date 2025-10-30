@@ -12,7 +12,7 @@ import {PoolId} from "v4-periphery/lib/v4-core/src/types/PoolId.sol";
 import {ERC721Permit_v4} from "v4-periphery/src/base/ERC721Permit_v4.sol";
 import {ReentrancyLock} from "v4-periphery/src/base/ReentrancyLock.sol";
 import {Multicall_v4} from "v4-periphery/src/base/Multicall_v4.sol";
-import {BaseActionsRouter} from "v4-periphery/src/base/BaseActionsRouter.sol";
+import {MMActionRouter} from "./modules/MMActionRouter.sol";
 import {PositionMeta, PositionId, PositionLibrary} from "./types/Position.sol";
 import {LiquiditySignal, SignalState} from "./types/Position.sol";
 import {MarketMaker} from "./libraries/MarketMaker.sol";
@@ -47,7 +47,7 @@ contract MMPositionManager is
     IMMPositionManager,
     ReentrancyLock,
     Multicall_v4,
-    BaseActionsRouter,
+    MMActionRouter,
     NativeWrapper,
     LCCWrapper
 {
@@ -104,7 +104,7 @@ contract MMPositionManager is
 
     constructor(address _manager, address _signalManager, address _marketFactory, address _descriptor, IWETH9 _weth9)
         ERC721Permit_v4("Fiet VRL Commitment Positions Manager", "FIET-VRL-MMP")
-        BaseActionsRouter(IPoolManager(_manager))
+        MMActionRouter(IPoolManager(_manager))
         NativeWrapper(_weth9)
     {
         marketFactory = _marketFactory;
@@ -221,9 +221,16 @@ contract MMPositionManager is
         }
     }
 
-    /// @inheritdoc BaseActionsRouter
-    function msgSender() public view override(BaseActionsRouter, LiquidityRouter) returns (address) {
+    /// @inheritdoc MMActionRouter
+    function msgSender() public view override(MMActionRouter, LiquidityRouter) returns (address) {
         return _getLocker();
+    }
+
+    /// @inheritdoc MMActionRouter
+    function _finaliseBatch() internal override {
+        // Hook for post-batch finalisation: consume/settle any transient nets as needed.
+        // Currently, feeAdj and position-required-settlement are consumed per action, so no-op here.
+        // Keep for future consolidation if required.
     }
 
     /**
@@ -391,7 +398,8 @@ contract MMPositionManager is
             PositionId positionId,
             BalanceDelta requiredSettlementDelta,
             BalanceDelta positionDelta,
-            BalanceDelta feesAccrued
+            BalanceDelta feesAccrued,
+            BalanceDelta feeAdj
         )
     {
         // use param to modify liquidity
@@ -400,6 +408,8 @@ contract MMPositionManager is
         positionId = PositionLibrary.generateId(address(this), params);
         // Consume the aggregated required settlement delta from CoreHook (VTSManager) and clear it
         requiredSettlementDelta = TransientSlots.consumePositionRequiredSettlementDelta(address(_getVTSManager()));
+        // Consume fee adjustment materialised by CoreHook for this call
+        feeAdj = TransientSlots.consumeFeeAdjDelta(address(_getVTSManager()));
     }
 
     /**
@@ -758,7 +768,7 @@ contract MMPositionManager is
         lcc1.issue(lcc1AmountToMint);
 
         // mint or modify liquidity. If the position is not minted, this will mint it. If the position is already minted, this will modify it.
-        (positionId, requiredSettlementDelta,,) = _callModifyLiquidity(
+        (positionId, requiredSettlementDelta,,,) = _callModifyLiquidity(
             poolKey,
             ModifyLiquidityParams({
                 tickLower: tickLower,
@@ -804,8 +814,13 @@ contract MMPositionManager is
 
         // remove the liquidity from the pool
         // By calling this, CoreHook afterRemoveLiquidity will be called to deactivate the position.
-        (, BalanceDelta requiredSettlementDelta, BalanceDelta positionDelta, BalanceDelta feesAccrued) =
-        _callModifyLiquidity(
+        (
+            ,
+            BalanceDelta requiredSettlementDelta,
+            BalanceDelta positionDelta,
+            BalanceDelta feesAccrued,
+            BalanceDelta feeAdj
+        ) = _callModifyLiquidity(
             poolKey,
             ModifyLiquidityParams({
                 tickLower: position.tickLower,
@@ -842,17 +857,20 @@ contract MMPositionManager is
         // a0/a1 are the gross amounts returned by the PoolManager for position modification.
         // principal0/principal1 = a{0,1} - fees{0,1} (clamped at zero) reflect the true principal liquidity change
         // that maps to LCC cancellation. fees are trader-derived, wrapped LCC value and must remain wrapped.
-        // TODO: Include feeAdj
         uint256 a0 = LiquidityUtils.safeInt128ToUint256(positionDelta.amount0());
         uint256 a1 = LiquidityUtils.safeInt128ToUint256(positionDelta.amount1());
-
-        // CoreHook applies a feeAdj to the callerDelta - ie. callerDelta = principal0 - feesAccrued - feeAdj.
+        // CoreHook applies a feeAdj to the callerDelta. ie.  callerDelta = principalDelta - feesAccrued - feeAdj.
+        // Treat feeAdj as part of fees for cancel/transfer purposes.
         uint256 fees0 = LiquidityUtils.safeInt128ToUint256(feesAccrued.amount0());
         uint256 fees1 = LiquidityUtils.safeInt128ToUint256(feesAccrued.amount1());
-
-        // Cancel only the principal portion (clamp to zero to avoid underflow if fees > raw delta due to intra-batch effects)
-        uint256 principal0 = a0 > fees0 ? (a0 - fees0) : 0;
-        uint256 principal1 = a1 > fees1 ? (a1 - fees1) : 0;
+        uint256 adj0 = LiquidityUtils.safeInt128ToUint256(feeAdj.amount0());
+        uint256 adj1 = LiquidityUtils.safeInt128ToUint256(feeAdj.amount1());
+        // feesEffective = max(0, feesAccrued - feeAdj)
+        uint256 feesEff0 = fees0 > adj0 ? (fees0 - adj0) : 0;
+        uint256 feesEff1 = fees1 > adj1 ? (fees1 - adj1) : 0;
+        // principal = max(0, a - feesEffective)
+        uint256 principal0 = a0 > feesEff0 ? (a0 - feesEff0) : 0;
+        uint256 principal1 = a1 > feesEff1 ? (a1 - feesEff1) : 0;
         bytes32 marketId = PoolId.unwrap(poolKey.toId());
         if (byApprovedOrOwner) {
             // Burn only principal LCC that was originally issued for the position's liquidity.
