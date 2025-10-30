@@ -69,9 +69,9 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
         return Hooks.Permissions({
             beforeInitialize: true, // Validate and set global parameters
             afterInitialize: false,
-            beforeAddLiquidity: false,
+            beforeAddLiquidity: true,
             afterAddLiquidity: true, // Intercept liquidity modifications
-            beforeRemoveLiquidity: false,
+            beforeRemoveLiquidity: true,
             afterRemoveLiquidity: true, // Intercept liquidity modifications
             beforeSwap: true,
             afterSwap: true,
@@ -95,6 +95,44 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
             revert InvalidInitialiser();
         }
         return this.beforeInitialize.selector;
+    }
+
+    /**
+     * For ALL active positions - settle position growths, and queue contribution-based bonuses at hook-time (liquidity modification event)
+     * Rationale:
+     * - In Uniswap-style accounting, a position's owed fees are (feeGrowthInside - feeGrowthInsideLast) * liquidity.
+     * - If we change liquidity/commitment/coverage units first, any pre-add growth would be multiplied by the larger
+     *   post-add units, which unfairly dilutes attribution and lets new units capture past accrual.
+     * - By settling first, we checkpoint fee/deficit/inflow/proactive/fee-pot growth so all pre-add accrual is
+     *   attributed to the pre-add units. Post-add accrual then starts against the updated units.
+     * - This preserves fairness and prevents gaming (e.g. adding liquidity just before redeeming to amplify claims).
+     */
+    function _beforeAddLiquidity(
+        address sender,
+        PoolKey calldata,
+        ModifyLiquidityParams calldata params,
+        bytes calldata
+    ) internal override returns (bytes4) {
+        // Settle growths using pre-modification liquidity so prior accruals are not attributed to new units.
+        PositionId id = PositionLibrary.generateId(sender, params);
+        if (meta[id].owner != address(0)) {
+            _settlePositionGrowths(id);
+        }
+        return this.beforeAddLiquidity.selector;
+    }
+
+    function _beforeRemoveLiquidity(
+        address sender,
+        PoolKey calldata,
+        ModifyLiquidityParams calldata params,
+        bytes calldata
+    ) internal override returns (bytes4) {
+        // Always an existing position; settle growths against pre-modification liquidity
+        PositionId id = PositionLibrary.generateId(sender, params);
+        if (meta[id].owner != address(0)) {
+            _settlePositionGrowths(id);
+        }
+        return this.beforeRemoveLiquidity.selector;
     }
 
     function _beforeSwap(address, PoolKey calldata key, SwapParams calldata, bytes calldata)

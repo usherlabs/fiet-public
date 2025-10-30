@@ -82,8 +82,6 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
 
     // (legacy proactive and fee-pot accounting removed)
 
-    // Sum of totalSettlementAmount across all positions per pool/token (pure contribution basis)
-    mapping(PoolId => uint256[2]) internal totalSettledAllPositions;
     // Per-position fees contributed to the pot via slashes (for self-exclusion in bonus)
     mapping(PositionId => uint256[2]) internal feesSharedByPosition;
     // Per-position signed pending fee adjustment: +slash (reduces payout), -bonus (increases payout)
@@ -393,16 +391,6 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
             } else {
                 meta[id].liquidity = newLiquidity;
             }
-
-            // For ALL active positions - settle position growths, and queue contribution-based bonuses at hook-time (liquidity modification event)
-            // Rationale:
-            // - In Uniswap-style accounting, a position's owed fees are (feeGrowthInside - feeGrowthInsideLast) * liquidity.
-            // - If we change liquidity/commitment/coverage units first, any pre-add growth would be multiplied by the larger
-            //   post-add units, which unfairly dilutes attribution and lets new units capture past accrual.
-            // - By settling first, we checkpoint fee/deficit/inflow/proactive/fee-pot growth so all pre-add accrual is
-            //   attributed to the pre-add units. Post-add accrual then starts against the updated units.
-            // - This preserves fairness and prevents gaming (e.g. adding liquidity just before redeeming to amplify claims).
-            _settlePositionGrowths(id);
         } else {
             revert NotActive(id);
         }
