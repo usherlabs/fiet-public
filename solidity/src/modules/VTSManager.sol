@@ -97,6 +97,9 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     // Per-pool sum of positive nets per token (used for net-weighted bonus allocation)
     mapping(PoolId => uint256[2]) internal poolNetSinceLastMod;
 
+    // Snapshot of last funded pending fee adjustments per position/token to avoid over-funding across multiple settles
+    mapping(PositionId => int256[2]) internal lastFundedPendingAdj;
+
     error InvalidMarketVTSConfiguration(PoolId corePoolId);
     error InvalidPosition(PositionId positionId);
     error RFSOpenForPosition(PositionId positionId);
@@ -507,20 +510,22 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         // Clamps within _updateSettlement may modify the return delta.
         settlementDelta = LiquidityUtils.safeToBalanceDelta(amount0, amount1);
 
-        // Proactive extraction: if pending fee adjustment indicates a slash (+ve),
-        // take LCC from PoolManager into CoreHook (this) and fund the per-pool pot.
-        // manager.take/settle can be called here as onMMLiquidityModify is called from MMPositionManager in unlockCallback of PoolManager.
-        // TODO: This may result in perpetually sharing to the fee pot.
+        // Proactive extraction (incremental): fund only increases in pending slashes since last observation to avoid over-funding.
         {
             (int256 adj0, int256 adj1) = _peekFeeAdjustment(positionId);
-            if (adj0 > 0 || adj1 > 0) {
-                if (adj0 > 0) {
-                    _fundFeePot(poolId, lccCurrency0, 0, uint256(adj0));
-                }
-                if (adj1 > 0) {
-                    _fundFeePot(poolId, lccCurrency1, 1, uint256(adj1));
-                }
+            int256 prev0 = lastFundedPendingAdj[positionId][0];
+            int256 prev1 = lastFundedPendingAdj[positionId][1];
+
+            if (adj0 > prev0) {
+                _fundFeePot(poolId, lccCurrency0, 0, uint256(adj0 - prev0));
             }
+            if (adj1 > prev1) {
+                _fundFeePot(poolId, lccCurrency1, 1, uint256(adj1 - prev1));
+            }
+
+            // snapshot current pending as baseline for the next settle
+            lastFundedPendingAdj[positionId][0] = adj0;
+            lastFundedPendingAdj[positionId][1] = adj1;
         }
 
         emit MMPositionSettle(poolId, positionId, settlementDelta.amount0(), settlementDelta.amount1());
@@ -640,6 +645,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         }
 
         // Queue bonuses using positive nets since last modification
+        // TODO: Should be positive nets where totalSettlementAmount > 0 - preventing positive nets that cover deficits from being used.
         for (uint8 t = 0; t < 2; t++) {
             int256 selfNet = (t == 0) ? selfNet0 : selfNet1;
             if (selfNet <= 0) continue;
@@ -695,7 +701,16 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
             }
         }
 
-        return _finaliseFeeAdjustment(id, mat0, mat1);
+        BalanceDelta ret = _finaliseFeeAdjustment(id, mat0, mat1);
+
+        // Snapshot current pending after finalisation to keep future settle-time funding incremental
+        {
+            (int256 cur0, int256 cur1) = _peekFeeAdjustment(id);
+            lastFundedPendingAdj[id][0] = cur0;
+            lastFundedPendingAdj[id][1] = cur1;
+        }
+
+        return ret;
     }
 
     /// @dev Increase the slashed pot for a pool/token when a take() succeeds.
