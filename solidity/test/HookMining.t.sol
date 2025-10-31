@@ -17,6 +17,8 @@ import {MarketFactory} from "../src/MarketFactory.sol";
 import {HookFlags} from "../src/libraries/HookFlags.sol";
 import {MMPositionManager} from "../src/MMPositionManager.sol";
 import {IOracleRegistry} from "../src/interfaces/IOracleRegistry.sol";
+import {WETH} from "solmate/src/tokens/WETH.sol";
+import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
 
 contract HookTest is Test, Deployers {
     IPoolManager poolManager;
@@ -34,8 +36,9 @@ contract HookTest is Test, Deployers {
         vm.prank(owner);
 
         factory = new MarketFactory(address(poolManager), address(oracleRegistry), bounds);
+        IWETH9 weth9 = IWETH9(address(new WETH()));
         mmPositionManager =
-            new MMPositionManager(address(poolManager), makeAddr("spokeReceiver"), address(factory), address(0));
+            new MMPositionManager(address(poolManager), makeAddr("spokeReceiver"), address(factory), address(0), weth9);
 
         // Compute flags for CoreHook
         uint160 coreFlags = HookFlags.CORE_HOOK_FLAGS;
@@ -43,7 +46,7 @@ contract HookTest is Test, Deployers {
 
         deployCodeTo(
             "CoreHook.sol:CoreHook",
-            abi.encode(poolManager, address(factory), address(mmPositionManager), address(0)),
+            abi.encode(poolManager, address(factory), address(mmPositionManager)),
             coreHookAddrComputed
         );
         coreHook = CoreHook(coreHookAddrComputed);

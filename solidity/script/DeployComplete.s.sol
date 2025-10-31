@@ -21,6 +21,8 @@ import {StubSpokeVerifier} from "../src/verifiers/StubSpokeVerifier.sol";
 import {OracleRegistry} from "../src/OracleRegistry.sol";
 import {ChainlinkFactory} from "../src/oracles/chainlink/ChainlinkFactory.sol";
 import {VRLSignalManager} from "../src/VRLSignalManager.sol";
+import {WETH} from "solmate/src/tokens/WETH.sol";
+import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
 
 /**
  * @title CompleteDeployScript
@@ -117,22 +119,15 @@ contract CompleteDeployScript is ScriptHelper {
      * @return The deployed CoreHook address
      */
     function _deployCoreHook() internal returns (address) {
-        // CoreHook constructor takes (poolManager, marketFactory)
-        // Now we pass the actual marketFactory address
-        address calculator = address(0);
-        bytes memory constructorArgs =
-            abi.encode(poolManagerAddress, marketFactory, address(mmPositionManager), calculator);
+        bytes memory constructorArgs = abi.encode(poolManagerAddress, marketFactory, address(mmPositionManager));
 
-        // Mine the correct address with proper flags
         (address hookAddress, bytes32 salt) =
             HookMiner.find(create2Deployer, HookFlags.CORE_HOOK_FLAGS, type(CoreHook).creationCode, constructorArgs);
 
         console.log("CoreHook will be deployed to:", hookAddress);
         console.log("CoreHook salt:", vm.toString(salt));
 
-        // Deploy the hook
-        CoreHook deployedHook =
-            new CoreHook{salt: salt}(poolManagerAddress, marketFactory, address(mmPositionManager), calculator);
+        CoreHook deployedHook = new CoreHook{salt: salt}(poolManagerAddress, marketFactory, address(mmPositionManager));
         require(address(deployedHook) == hookAddress, "CoreHook: address mismatch");
 
         return address(deployedHook);
@@ -175,8 +170,10 @@ contract CompleteDeployScript is ScriptHelper {
         address signalManager =
             address(new VRLSignalManager(stubVerifier, oracleRegistry, marketFactory, signalExpiryInSeconds));
         console.log("SignalManager deployed at:", signalManager);
+        IWETH9 weth9 = IWETH9(address(new WETH()));
+        console.log("WETH9 deployed at:", address(weth9));
         MMPositionManager positionManager =
-            new MMPositionManager(poolManagerAddress, signalManager, marketFactory, address(0));
+            new MMPositionManager(poolManagerAddress, signalManager, marketFactory, address(0), weth9);
         console.log("MMPositionManager deployed at:", address(positionManager));
         return address(positionManager);
     }

@@ -39,19 +39,12 @@ library MMActionAdapter {
         mmpm.modifyLiquiditiesWithoutUnlock(_concat(acts), params);
     }
 
-    function decrease(
-        MMPositionManager mmpm,
-        PoolKey memory poolKey,
-        uint256 tokenId,
-        uint256 idx,
-        int24 tu,
-        int24 tl,
-        uint256 amt
-    ) internal {
+    function decrease(MMPositionManager mmpm, PoolKey memory poolKey, uint256 tokenId, uint256 idx, uint256 amt)
+        internal
+    {
         bytes1[] memory acts = new bytes1[](1);
         acts[0] = bytes1(uint8(MMPositionManager.MMAction.DECREASE_LIQUIDITY));
         bytes[] memory params = new bytes[](1);
-        // New signature expects only (PoolKey, tokenId, positionIndex, amountToDecrease)
         params[0] = abi.encode(poolKey, tokenId, idx, amt);
         mmpm.modifyLiquiditiesWithoutUnlock(_concat(acts), params);
     }

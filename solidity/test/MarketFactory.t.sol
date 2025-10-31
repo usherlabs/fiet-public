@@ -22,6 +22,8 @@ import {HookFlags} from "../src/libraries/HookFlags.sol";
 import {HookMiner} from "v4-periphery/src/utils/HookMiner.sol";
 import {MMPositionManager} from "../src/MMPositionManager.sol";
 import {VTSConfigs} from "../src/libraries/VTSConfigs.sol";
+import {WETH} from "solmate/src/tokens/WETH.sol";
+import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
 
 contract MarketFactoryTest is Test, Deployers {
     using PoolIdLibrary for PoolKey;
@@ -49,14 +51,13 @@ contract MarketFactoryTest is Test, Deployers {
 
         vm.prank(owner);
         factory = new MarketFactory(address(poolManager), makeAddr("oracleRegistry"), bounds);
+        IWETH9 weth9 = IWETH9(address(new WETH()));
         positionManager =
-            new MMPositionManager(address(poolManager), makeAddr("spokeReceiver"), address(factory), address(0));
+            new MMPositionManager(address(poolManager), makeAddr("spokeReceiver"), address(factory), address(0), weth9);
 
         // Deploy CoreHook at computed address
         deployCodeTo(
-            "CoreHook.sol:CoreHook",
-            abi.encode(poolManager, address(factory), address(positionManager), address(0)),
-            coreHookAddr
+            "CoreHook.sol:CoreHook", abi.encode(poolManager, address(factory), address(positionManager)), coreHookAddr
         );
 
         address proxyDeployer = MarketFactory(address(factory)).marketDeployer();

@@ -33,6 +33,8 @@ import {VTSConfigs} from "../../src/libraries/VTSConfigs.sol";
 import {IVTSManager} from "../../src/interfaces/IVTSManager.sol";
 import {VRLSignalManager} from "../../src/VRLSignalManager.sol";
 import {IMarketVault} from "../../src/interfaces/IMarketVault.sol";
+import {WETH} from "solmate/src/tokens/WETH.sol";
+import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
 
 abstract contract MarketTestBase is Test, Deployers {
     using PoolIdLibrary for PoolId;
@@ -62,6 +64,7 @@ abstract contract MarketTestBase is Test, Deployers {
     VRLSignalManager signalManager;
     address mmPositionManager;
     IMarketVault mv;
+    IWETH9 public weth9;
 
     uint256 signalExpiryInSeconds = 3600;
 
@@ -136,14 +139,17 @@ abstract contract MarketTestBase is Test, Deployers {
         oracleRegistry = new OracleRegistry();
         marketFactory = makeAddr("marketFactory");
 
+        weth9 = IWETH9(address(new WETH()));
+
         // deploy custom router and verifier
         icVerifier = new ICSpokeVerifier(makeAddr("icCanister"));
         stubSpokeVerifier = new StubSpokeVerifier();
         signalManager = new VRLSignalManager(
             address(stubSpokeVerifier), address(oracleRegistry), address(marketFactory), signalExpiryInSeconds
         );
-        mmPositionManager =
-            address(new MMPositionManager(address(manager), address(signalManager), address(marketFactory), address(0)));
+        mmPositionManager = address(
+            new MMPositionManager(address(manager), address(signalManager), address(marketFactory), address(0), weth9)
+        );
     }
 
     function _setupMarket() internal {
@@ -152,11 +158,9 @@ abstract contract MarketTestBase is Test, Deployers {
         uint160 coreFlags = HookFlags.CORE_HOOK_FLAGS;
         coreHookAddress = address(coreFlags);
 
-        // Deploy CoreHook (calculator set to address(0)) if not already deployed at flagged address
+        // Deploy CoreHook if not already deployed at flagged address
         if (coreHookAddress.code.length == 0) {
-            deployCodeTo(
-                "CoreHook.sol", abi.encode(manager, marketFactory, mmPositionManager, address(0)), coreHookAddress
-            );
+            deployCodeTo("CoreHook.sol", abi.encode(manager, marketFactory, mmPositionManager), coreHookAddress);
         }
 
         // Compute proxy hook address

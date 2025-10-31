@@ -35,6 +35,9 @@ import {Strings} from "openzeppelin-contracts/contracts/utils/Strings.sol";
 import {IPositionManager} from "v4-periphery/src/interfaces/IPositionManager.sol";
 import {NativeWrapper} from "v4-periphery/src/base/NativeWrapper.sol";
 import {LCCWrapper} from "./modules/LCCWrapper.sol";
+import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
+import {TransientSlots} from "./libraries/TransientSlots.sol";
+import {CurrencyLibrary} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 
 interface ICommitmentDescriptor {
     function tokenURI(address manager, uint256 tokenId) external view returns (string memory);
@@ -199,7 +202,7 @@ contract MMPositionManager is
         return commitToPositionCount[tokenId];
     }
 
-    function _isMMPosition(PositionId positionId, PositionMeta memory m) internal view returns (bool) {
+    function _isMMPosition(PositionMeta memory m) internal view returns (bool) {
         // MM-managed positions are those owned by this manager and active.
         // Prover metadata can be read from commit state if needed; not required to validate MM ownership.
         return m.owner == address(this) && m.isActive;
@@ -482,7 +485,7 @@ contract MMPositionManager is
         }
         PositionMeta memory m = _getPositionIndex().getPosition(positionId, true);
 
-        if (!_isMMPosition(positionId, m)) {
+        if (!_isMMPosition(m)) {
             revert InvalidPosition(tokenId, positionIndex, positionId);
         }
 
@@ -592,7 +595,7 @@ contract MMPositionManager is
     /// @param tokenId The commit NFT id.
     /// @param extraIssue0 Prospective token0 LCC to add to effective amounts (e.g., for a new mint).
     /// @param extraIssue1 Prospective token1 LCC to add to effective amounts (e.g., for a new mint).
-    function _assertCommitmentSolventStored(uint256 tokenId, uint256 extraIssue0, uint256 extraIssue1) internal {
+    function _assertCommitmentSolventStored(uint256 tokenId, uint256 extraIssue0, uint256 extraIssue1) internal view {
         PoolId poolId = commitOf[tokenId].poolId;
         (address oracleFactory, address l0, address l1) = _marketOracleFactoryAndPair(poolId);
 
@@ -719,7 +722,6 @@ contract MMPositionManager is
     {
         PositionMeta memory pos = getPosition(tokenId, positionIndex);
         uint256 completeLiquidity = uint256(pos.liquidity);
-        PositionId pid = getPositionId(tokenId, positionIndex);
         BalanceDelta ret = _decrease(poolKey, pos, _positionSalt(tokenId, positionIndex), completeLiquidity, true);
         return ret;
     }
@@ -761,7 +763,7 @@ contract MMPositionManager is
         lcc1.issue(lcc1AmountToMint);
 
         // mint or modify liquidity. If the position is not minted, this will mint it. If the position is already minted, this will modify it.
-        (positionId, requiredSettlementDelta,,,) = _callModifyLiquidity(
+        (PositionId pId, BalanceDelta requiredSettlementDelta,,,) = _callModifyLiquidity(
             poolKey,
             ModifyLiquidityParams({
                 tickLower: tickLower,
@@ -770,6 +772,8 @@ contract MMPositionManager is
                 salt: _positionSalt(tokenId, positionIndex)
             })
         );
+
+        positionId = pId;
 
         // settle the underlying tokens to the proxy hook
         _settleUnderlying(poolKey.toId(), requiredSettlementDelta, ua0, ua1);
@@ -1036,6 +1040,7 @@ contract MMPositionManager is
     // TODO: Ensure seizeCommitment maths is correct.
     function _seizeCommitment(PoolKey memory poolKey, uint256 tokenId, bytes memory liquiditySignal)
         internal
+        view
         returns (uint256 deficitFractionInBips)
     {
         _assertCommitForPool(poolKey, tokenId);

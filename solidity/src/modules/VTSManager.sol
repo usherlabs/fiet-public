@@ -114,7 +114,6 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
 
     address private immutable mmPositionManager;
     IPoolManager private immutable poolManager;
-    address private calculator; // optional external calculator (Stylus or pure)
 
     modifier onlyPositionValid(PositionId _positionId) {
         if (!isPositionValid(_positionId, true)) {
@@ -133,15 +132,11 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         _;
     }
 
-    constructor(address _poolManager, address _marketFactory, address _mmPositionManager, address _calculator)
+    constructor(address _poolManager, address _marketFactory, address _mmPositionManager)
         PositionIndex(_marketFactory)
     {
         poolManager = IPoolManager(_poolManager);
         mmPositionManager = _mmPositionManager;
-        if (_calculator != address(0)) {
-            // calculator = IVTSCalculator(_calculator);
-            calculator = _calculator;
-        }
     }
 
     // --------------------------------------------------
@@ -993,10 +988,6 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         virtual
         returns (uint256 vtsRequired0, uint256 vtsRequired1)
     {
-        // If external calculator is configured, defer
-        if (address(calculator) != address(0)) {
-            return (0, 0);
-        }
         (uint256 c0, uint256 c1) = _getCommitment(positionId);
         uint256 d0 = cumulativeDeficit[positionId][0];
         uint256 d1 = cumulativeDeficit[positionId][1];
@@ -1159,15 +1150,8 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
      * @return balanceDelta The balance delta of the amount of required to be settled or allowed to be withdrawn depending on if it is negative or positive
      */
     function _getRFS(PositionId _positionId) internal view returns (bool, BalanceDelta) {
-        // Commitment caps
         (uint256 c0, uint256 c1) = _getCommitment(_positionId);
 
-        // If calculator is set, try calculator first (not implemented here)
-        if (address(calculator) != address(0)) {
-            return (false, toBalanceDelta(0, 0));
-        }
-
-        // Compute raw deltas directly in token units
         uint256 s0 = totalSettlementAmount[_positionId][0];
         uint256 s1 = totalSettlementAmount[_positionId][1];
         uint256 d0 = cumulativeDeficit[_positionId][0];

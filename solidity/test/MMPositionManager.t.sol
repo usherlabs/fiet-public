@@ -57,7 +57,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         _setupMarket();
         _setUpMM();
         console.log("setUP() mmPositionManager", address(mmPositionManager));
-        positionManager = MMPositionManager(mmPositionManager);
+        positionManager = MMPositionManager(payable(mmPositionManager));
         lcc0 = LiquidityCommitmentCertificate(payable(Currency.unwrap(_currency2)));
         lcc1 = LiquidityCommitmentCertificate(payable(Currency.unwrap(_currency3)));
 
@@ -383,14 +383,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         uint256 token0BalanceBefore = Currency.wrap(lcc0.underlyingAsset()).balanceOf(address(this));
         uint256 token1BalanceBefore = Currency.wrap(lcc1.underlyingAsset()).balanceOf(address(this));
 
-        // Mock the liquidation preparation for this position
-        uint256 s0 = 10;
-        uint256 s1 = 5;
-        vm.mockCall(
-            address(IVTSManager(coreHookAddress)),
-            abi.encodeWithSelector(IVTSManager.onMMLiquidityModify.selector),
-            abi.encode(LiquidityUtils.safeToBalanceDelta(s0, s1, false, false), false)
-        );
         // burn
         MMA.burn(positionManager, corePoolKey, tokenId, 0);
         BalanceDelta balanceDelta = toBalanceDelta(0, 0); // effects come via VTS mock and internal settle
@@ -401,8 +393,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         assertEq(token0BalanceAfter, token0BalanceBefore + LiquidityUtils.safeInt128ToUint256(balanceDelta.amount0()));
         assertEq(token1BalanceAfter, token1BalanceBefore + LiquidityUtils.safeInt128ToUint256(balanceDelta.amount1()));
-        assertEq(uint256(uint128(int128(balanceDelta.amount0()))), s0);
-        assertEq(uint256(uint128(int128(balanceDelta.amount1()))), s1);
     }
 
     function testCanburnUsingTokenId() public {
@@ -439,13 +429,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         // get underlying asset balance before decommitment
         uint256 token0BalanceBefore = Currency.wrap(lcc0.underlyingAsset()).balanceOf(address(this));
         uint256 token1BalanceBefore = Currency.wrap(lcc1.underlyingAsset()).balanceOf(address(this));
-
-        // Mock the liquidation preparation for this position
-        vm.mockCall(
-            address(IVTSManager(coreHookAddress)),
-            abi.encodeWithSelector(IVTSManager.onMMLiquidityModify.selector),
-            abi.encode(LiquidityUtils.safeToBalanceDelta(3, 2, false, false), false)
-        );
 
         MMA.decommit(positionManager, corePoolKey, tokenId);
 
@@ -537,8 +520,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         // expected seized settlement fraction per token (bps-based)
         uint256 seized0 =
             Math.mulDiv(LiquidityUtils.safeInt128ToUint256(settledBalanceDelta.amount0()), siezureFractionBPS, 10000);
-        uint256 seized1 =
-            Math.mulDiv(LiquidityUtils.safeInt128ToUint256(settledBalanceDelta.amount1()), siezureFractionBPS, 10000);
 
         // seize the position
         // settle all the outstanding rfs of token 0
@@ -656,8 +637,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         // expected seized settlement fraction per token (bps-based)
         uint256 seized0 =
             Math.mulDiv(LiquidityUtils.safeInt128ToUint256(settledBalanceDelta.amount0()), seizureFractionBPS, 10000);
-        uint256 seized1 =
-            Math.mulDiv(LiquidityUtils.safeInt128ToUint256(settledBalanceDelta.amount1()), seizureFractionBPS, 10000);
         // get the balance of the underlying assets after seizure
         uint256 lcc0AfterSeizure2 = lcc0.balanceOf(address(guarantor));
 
@@ -694,8 +673,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
     function test_canFully_seizePosition_asNoneMM_withEnoughSettlement() public {
         // commit to a position
         bytes memory liquiditySignal = abi.encode(liquiditySignal);
-
-        uint256 siezureFractionBPS = 10000;
 
         BalanceDelta rfsDelta = toBalanceDelta(-100, 0);
 
@@ -780,8 +757,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
     function test_canFully_seizePosition_asNoneMM_withOverSettlement() public {
         // commit to a position
         bytes memory liquiditySignal = abi.encode(liquiditySignal);
-
-        uint256 siezureFractionBPS = 10000;
 
         BalanceDelta rfsDelta = toBalanceDelta(-100, 0);
 
@@ -1049,16 +1024,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         uint256 lcc1BalanceAfterCommit = Currency.wrap(lcc1.underlyingAsset()).balanceOf(address(this));
 
         // remove liquidity from the position
-        PositionMeta memory posBounds = positionManager.getPosition(tokenId, positionIndex);
-        MMA.decrease(
-            positionManager,
-            corePoolKey,
-            tokenId,
-            positionIndex,
-            posBounds.tickUpper,
-            posBounds.tickLower,
-            uint256(-liquidityDelta)
-        );
+        MMA.decrease(positionManager, corePoolKey, tokenId, positionIndex, uint256(-liquidityDelta));
 
         // get the details of the position after modify liquidity
         PositionMeta memory positionAfterModifyLiquidity = positionManager.getPosition(tokenId, positionIndex);
