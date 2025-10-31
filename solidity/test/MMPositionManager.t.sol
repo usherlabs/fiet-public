@@ -131,7 +131,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
     function testCanCommitPosition() public {
         ModifyLiquidityParams memory liquidityParams =
-            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e18, salt: bytes32(0)});
 
         bytes memory liquiditySignal = abi.encode(liquiditySignal);
 

@@ -290,11 +290,11 @@ contract MMPositionManager is
                 PoolKey memory poolKey,
                 uint256 tokenId,
                 uint256 positionIndex,
-                int24 tickUpper,
                 int24 tickLower,
+                int24 tickUpper,
                 uint256 liquidity
             ) = abi.decode(params, (PoolKey, uint256, uint256, int24, int24, uint256));
-            _increase(poolKey, tokenId, positionIndex, tickUpper, tickLower, liquidity);
+            _increase(poolKey, tokenId, positionIndex, tickLower, tickUpper, liquidity);
             return;
         }
         if (action == uint256(MMAction.DECREASE_LIQUIDITY)) {
@@ -737,12 +737,17 @@ contract MMPositionManager is
         PoolKey memory poolKey,
         uint256 tokenId,
         uint256 positionIndex,
-        int24 tickUpper,
         int24 tickLower,
+        int24 tickUpper,
         uint256 liquidity
     ) internal onlyIfApproved(msgSender(), tokenId) onlyValidCommit(poolKey, tokenId) returns (PositionId positionId) {
         if (liquidity == 0) {
             revert InvalidDelta(0, 0);
+        }
+
+        // Prevent overflow when converting to int256/int128 for modifyLiquidity
+        if (liquidity > type(uint128).max) {
+            revert InvalidAmount(liquidity, type(uint128).max);
         }
 
         // mint the tokens required to facilitate this liquidity addition
@@ -759,8 +764,13 @@ contract MMPositionManager is
         address ua0 = lcc0.underlyingAsset();
         address ua1 = lcc1.underlyingAsset();
 
-        lcc0.issue(lcc0AmountToMint);
-        lcc1.issue(lcc1AmountToMint);
+        // Only issue LCC if amount > 0 to avoid InvalidAmount revert
+        if (lcc0AmountToMint > 0) {
+            lcc0.issue(lcc0AmountToMint);
+        }
+        if (lcc1AmountToMint > 0) {
+            lcc1.issue(lcc1AmountToMint);
+        }
 
         // mint or modify liquidity. If the position is not minted, this will mint it. If the position is already minted, this will modify it.
         (PositionId pId, BalanceDelta requiredSettlementDelta,,,) = _callModifyLiquidity(

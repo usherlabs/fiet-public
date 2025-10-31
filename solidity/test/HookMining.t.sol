@@ -67,9 +67,9 @@ contract HookTest is Test, Deployers {
         Hooks.Permissions memory perms = coreHook.getHookPermissions();
         assertTrue(perms.beforeInitialize);
         assertFalse(perms.afterInitialize);
-        assertFalse(perms.beforeAddLiquidity);
+        assertTrue(perms.beforeAddLiquidity); // CoreHook has BEFORE_ADD_LIQUIDITY_FLAG
         assertTrue(perms.afterAddLiquidity);
-        assertFalse(perms.beforeRemoveLiquidity);
+        assertTrue(perms.beforeRemoveLiquidity); // CoreHook has BEFORE_REMOVE_LIQUIDITY_FLAG
         assertTrue(perms.afterRemoveLiquidity);
         assertTrue(perms.beforeSwap);
         assertTrue(perms.afterSwap);

@@ -127,11 +127,11 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
     // some trusted issuer Smart Contracts can be allowed to mint tokens and hold the liquidity
     // this minting provides tokens at a 1:1 ratio and intended for onchain preswap wrapping
     function issue(uint256 amount) external onlyIssuer {
-        address issuer = msg.sender;
-
         if (amount == 0) {
             revert InvalidAmount();
         }
+
+        address issuer = msg.sender;
 
         _mint(issuer, amount);
 
@@ -139,18 +139,14 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
         // This is because the PoolManager will custody the difference.
     }
 
-    function _cancel(address issuer, uint256 amount) internal {
+    function cancel(uint256 amount) external onlyIssuer {
         if (amount == 0) {
             revert InvalidAmount();
         }
 
-        _burn(issuer, amount);
-    }
-
-    function cancel(uint256 amount) external onlyIssuer {
         address issuer = msg.sender;
 
-        _cancel(issuer, amount);
+        _burn(issuer, amount);
 
         // totalSupply will return back to uaSupply now that the surplus LCC managed by the issuer engagin the PoolManager has been cancelled.
     }
@@ -172,14 +168,17 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
             revert InvalidAmount();
         }
 
-        _cancel(msg.sender, amount);
+        address sender = msg.sender;
+
+        _burn(sender, amount);
+        _incrementCoverage(marketId, amount);
 
         if (deficitAmount > 0 && excessLCCRecipient != address(0)) {
-            // Transfer to recipient. Tracing should be triggered via the flag on afterSwap on Core Hook executed by the Proxy Hook.
+            // Transfer to recipient.
+            // CoreHook.afterSwap will automatically trigger tracing, therefore transfer here is already traced to source market.
+            // Calling transfer here is as though it was called externally by the issuer. The proxy hook calls take on LCC before this function called.
             transfer(excessLCCRecipient, deficitAmount); // msg.sender is the issuer.
         }
-
-        _incrementCoverage(marketId, amount);
     }
 
     // Called by Issuer before settling underlying liquidity from LCCs to the market.
@@ -460,7 +459,7 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
         bytes32 currentMarket = currentMarketBytes;
 
         if (isTracingActive && !isProtocolBound) {
-            // ? !isProtocolBound is to ensure that we only process the market tracing logic for non-protocol bounds (ie. transfer to EOAs.)
+            // ? !isProtocolBound is to ensure that we only process the market tracing logic for non-protocol bounds (ie. transfer to external-contracts/EOAs.)
             // CRITICAL CHECK: Ensure this LCC belongs to the active market
             if (!_isLCCSupportedByMarket(currentMarket)) {
                 return; // This LCC doesn't belong to the active market

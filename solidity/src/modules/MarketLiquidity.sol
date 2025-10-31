@@ -5,6 +5,10 @@ pragma solidity ^0.8.20;
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {IMarketLiquidity} from "../interfaces/IMarketLiquidity.sol";
 
+/**
+ * MarketLiquidity is an abstract contract that is inherited by the Liquidity Commitment Certificate contract to handle the portion of collateral liquidity backing LCCs that is in-market.
+ * This includes the movement and queue of underlying native assets that are in-market.
+ */
 abstract contract MarketLiquidity is IMarketLiquidity {
     // Events for market tracking
     event MarketRegistered(bytes32 indexed marketId);
