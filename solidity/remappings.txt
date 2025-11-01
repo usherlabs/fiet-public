@@ -17,4 +17,3 @@ solmate/tokens/=lib/solmate/src/tokens/
 solmate/test/=lib/solmate/src/test/
 v4-core/=lib/v4-periphery/lib/v4-core/src/
 v4-periphery/=lib/v4-periphery/
-solady/=lib/solady/src/

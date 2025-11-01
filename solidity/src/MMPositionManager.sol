@@ -50,7 +50,9 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
     error InvalidToken(address tokenAddr);
     error InactivePosition(PositionId positionId);
     error InsufficientAmountToWithdraw(PositionId positionId, uint256 amount, uint256 maxAmount);
+
     event GracePeriodExtended(PositionId indexed positionId, uint256 extension0, uint256 extension1);
+
     error InvalidMarket(PoolKey poolKey);
     error RFSNotOpen(PositionId positionId);
     error SignalExpired(uint256 tokenId);
@@ -318,7 +320,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         // return left over ETH to the caller
         uint256 ethAmountToSettle =
             LiquidityUtils.getETHAmount(poolKey, underlyingLiquidityFraction0, underlyingLiquidityFraction1);
-        Currency.wrap(address(0)).refundETH(ethAmountToSettle);
+        Currency.wrap(address(0)).refundNative(ethAmountToSettle);
 
         return positionId;
     }
@@ -386,7 +388,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         // return left over ETH to the caller
         uint256 ethAmountSpent =
             LiquidityUtils.getETHAmount(poolKey, underlyingLiquidityFraction0, underlyingLiquidityFraction1);
-        Currency.wrap(address(0)).refundETH(ethAmountSpent);
+        Currency.wrap(address(0)).refundNative(ethAmountSpent);
 
         emit SignalCommitted(msg.sender, tokenId, positionIndex);
 
@@ -512,7 +514,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
             // return left over ETH to the caller
             uint256 ethAmountSpent =
                 LiquidityUtils.getETHAmount(poolKey, underlyingLiquidityFraction0, underlyingLiquidityFraction1);
-            Currency.wrap(address(0)).refundETH(ethAmountSpent);
+            Currency.wrap(address(0)).refundNative(ethAmountSpent);
         } else {
             // validate that the liquidity being removed is less than the total liquidity in the position
             // validate that rfs is not open for the position

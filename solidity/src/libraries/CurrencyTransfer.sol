@@ -1,18 +1,13 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
+import {Currency, CurrencyLibrary} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {IERC20Minimal} from "@uniswap/v4-core/src/interfaces/external/IERC20Minimal.sol";
-import {Pausable} from "openzeppelin-contracts/contracts/utils/Pausable.sol";
 
 /// @title CurrencyTransfer
 /// @notice Library for handling transfers of both native ETH and ERC-20 tokens
 
 library CurrencyTransfer {
-    error InsufficientETH();
-    error ETHTransferFailed();
-    error NotNativeETH();
-
     /**
      * @notice Transfer currency from one address to another
      * @param currency The currency to transfer (can be native ETH or ERC-20)
@@ -23,10 +18,9 @@ library CurrencyTransfer {
     function transferFrom(Currency currency, address from, address to, uint256 amount) internal {
         if (currency.isAddressZero()) {
             // For native ETH, verify msg.value and forward it
-            if (msg.value < amount) revert InsufficientETH();
+            if (msg.value < amount) revert CurrencyLibrary.NativeTransferFailed();
             // Transfer ETH to the destination
-            (bool success,) = to.call{value: amount}("");
-            if (!success) revert ETHTransferFailed();
+            currency.transfer(to, amount); // TODO: Odd... since it doesn't transferFrom. A true transferFrom is a cross-contract call to the (from) that performs a transfer (to)
         } else {
             // For ERC-20 tokens, use standard transferFrom
             IERC20Minimal(Currency.unwrap(currency)).transferFrom(from, to, amount);
@@ -52,10 +46,10 @@ library CurrencyTransfer {
      * @param currency the Currency
      * @param amountSpent the amount spent
      */
-    function refundETH(Currency currency, uint256 amountSpent) internal {
+    function refundNative(Currency currency, uint256 amountSpent) internal {
         uint256 totalAmountSentToContract = msg.value;
         if (amountSpent == 0 || totalAmountSentToContract == 0) return;
-        if (!currency.isAddressZero()) revert NotNativeETH();
+        if (!currency.isAddressZero()) revert CurrencyLibrary.NativeTransferFailed();
 
         // transfer the left over amount to the caller
         currency.transfer(msg.sender, totalAmountSentToContract - amountSpent);

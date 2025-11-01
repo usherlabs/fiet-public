@@ -3,7 +3,7 @@ pragma solidity ^0.8.20;
 
 import "forge-std/Test.sol";
 import {MerkleProofGenerator} from "./libraries/MerkleProofGenerator.sol";
-import {MerkleProofVerifier} from "../src/libraries/MerkleProofVerifier.sol";
+import {MerkleProofLib} from "solady/utils/MerkleProofLib.sol";
 
 contract MerkleTreeTest is Test {
     // Helper function to hash a string to bytes32 for testing
@@ -27,7 +27,7 @@ contract MerkleTreeTest is Test {
         bytes32[] memory proof = MerkleProofGenerator.generateProof(leaves, 1);
 
         // Verify proof
-        bool isValid = MerkleProofVerifier.verify(proof, root, leaves[1]);
+        bool isValid = MerkleProofLib.verify(proof, root, leaves[1]);
         assertTrue(isValid);
     }
 
@@ -43,7 +43,7 @@ contract MerkleTreeTest is Test {
         bytes32[] memory proof = MerkleProofGenerator.generateProof(leaves, 1);
 
         // Use wrong leaf
-        bool isValid = MerkleProofVerifier.verify(proof, root, hash("wrong_leaf"));
+        bool isValid = MerkleProofLib.verify(proof, root, hash("wrong_leaf"));
         assertFalse(isValid);
     }
 
@@ -67,7 +67,7 @@ contract MerkleTreeTest is Test {
 
         // Verify that proof generation and verification works correctly
         bytes32[] memory proof = MerkleProofGenerator.generateProof(leaves, 0);
-        bool isValid = MerkleProofVerifier.verify(proof, root, leaves[0]);
+        bool isValid = MerkleProofLib.verify(proof, root, leaves[0]);
         assertTrue(isValid);
     }
 
@@ -81,7 +81,7 @@ contract MerkleTreeTest is Test {
         bytes32 root = MerkleProofGenerator.generateMerkleRoot(leaves);
         bytes32[] memory proof = MerkleProofGenerator.generateProof(leaves, 2); // Last leaf
 
-        bool isValid = MerkleProofVerifier.verify(proof, root, leaves[2]);
+        bool isValid = MerkleProofLib.verify(proof, root, leaves[2]);
         assertTrue(isValid);
     }
 
@@ -107,7 +107,7 @@ contract MerkleTreeTest is Test {
         bytes32[] memory proof = MerkleProofGenerator.generateProof(leaves, 6);
 
         // Verify proof
-        bool isValid = MerkleProofVerifier.verify(proof, root, leaves[6]);
+        bool isValid = MerkleProofLib.verify(proof, root, leaves[6]);
         assertTrue(isValid);
     }
 }

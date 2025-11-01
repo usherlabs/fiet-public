@@ -5,6 +5,7 @@ import {IResilientOracle} from "../interfaces/IResilientOracle.sol";
 
 library OracleUtils {
     address public constant PROTOCOL_NATIVE_TOKEN_ADDR = address(0);
+    // Value originates from: https://github.com/VenusProtocol/oracle/blob/develop/contracts/ResilientOracle.sol#L85
     address public constant RESILIENT_ORACLE_NATIVE_TOKEN_ADDR = 0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB;
 
     /**

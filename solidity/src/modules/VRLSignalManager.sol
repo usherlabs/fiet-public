@@ -35,6 +35,23 @@ contract VRLSignalManager is Ownable {
     error InvalidLiquiditySignal();
     error InsufficientLiquidityInSignal();
 
+    /**
+     * @dev Tracks the latest nonce per Market Maker (MM) address.
+     *
+     * IMPORTANT: A single nonce is generated (off Market Chain) once for an array of MMState covering the entire VRL
+     * (Verification Root Ledger) for all Market Makers. This means:
+     *
+     * - The nonce represents a shared state advancement across all MMs in a VRL batch
+     * - When submitting a proof, it must represent a state advancement over the last proof
+     *   submitted for that specific MM (enforced by requiring signal.nonce > mmNonce[mmState.owner])
+     * - Verification of a single MMState does NOT invalidate the nonce for another MMState
+     * - Each MMState progresses independently until it reaches the latest nonce
+     * - Multiple MMs can be verified at the same nonce level, but each MM's nonce must be
+     *   monotonically increasing
+     *
+     * Example: If VRL nonce is 5, MM A can submit nonce 5 even if MM B has already submitted
+     * nonce 5, but MM A cannot submit nonce 4 if they've already submitted nonce 5.
+     */
     mapping(address => uint256) public mmNonce;
     uint256 public signalExpiryInSeconds;
 
