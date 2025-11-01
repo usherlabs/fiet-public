@@ -6,7 +6,7 @@ import {PositionId} from "../../src/types/Position.sol";
 
 contract TestVTSManager is VTSManager {
     constructor(address _poolManager, address _marketFactory, address _mmPositionManager)
-        VTSManager(_poolManager, _marketFactory, _mmPositionManager, address(0))
+        VTSManager(_poolManager, _marketFactory, _mmPositionManager, address(0), address(0))
     {}
 
     // recordSwap removed with EventRing; this mock no longer exposes it

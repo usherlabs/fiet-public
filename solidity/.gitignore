@@ -183,3 +183,6 @@ anvil.toml
 .local/
 
 identity.txt
+
+# Oracle local deployments
+deployments/oracle_deployments/development/

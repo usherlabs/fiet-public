@@ -13,7 +13,6 @@ import {ProxyHook} from "./ProxyHook.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {CurrencySettler} from "@uniswap/v4-core/test/utils/CurrencySettler.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
-import {PausablePool} from "./modules/PausablePool.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Exttload} from "v4-periphery/lib/v4-core/src/Exttload.sol";
 import {IExttload} from "v4-periphery/lib/v4-core/src/interfaces/IExttload.sol";
@@ -26,8 +25,7 @@ import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {SqrtPriceMath} from "@uniswap/v4-core/src/libraries/SqrtPriceMath.sol";
 import {TickUtils} from "./libraries/TickUtils.sol";
 import {console} from "forge-std/console.sol";
-
-// import {SwapMath} from "@uniswap/v4-core/src/libraries/SwapMath.sol";
+import {PausablePool} from "./modules/PausablePool.sol";
 
 /**
  * Core Pool should be aware of Positions.
@@ -51,9 +49,15 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
     }
 
     // Owner will be set to MarketFactory
-    constructor(address _poolManager, address _marketFactory, address _mmPositionManager, address _calculator)
+    constructor(
+        address _poolManager,
+        address _marketFactory,
+        address _mmPositionManager,
+        address _oracleHelper,
+        address _calculator
+    )
         BaseHook(IPoolManager(_poolManager))
-        VTSManager(_poolManager, _marketFactory, _mmPositionManager, _calculator)
+        VTSManager(_poolManager, _marketFactory, _mmPositionManager, _oracleHelper, _calculator)
     {
         marketFactory = _marketFactory;
         mmPositionManager = _mmPositionManager;
@@ -251,7 +255,7 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
 
         // Check if this is a direct core pool swap, and if it is, call the proxy hook
         if (IExttload(proxyHook).exttload(TransientSlots.PROXY_SWAP_FLAG_SLOT) == bytes32(0)) {
-            ProxyHook(proxyHook).onCorePoolDirectSwap(delta);
+            ProxyHook(payable(proxyHook)).onCorePoolDirectSwap(delta);
         }
 
         _triggerInternalTracingFlag(key.toId());
@@ -276,7 +280,8 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
 
         // only add direct liquidity if the sender is not the market maker position manager/router
         if (sender != address(mmPositionManager)) {
-            ProxyHook(_getProxyHook(key)).onDirectLP(delta, LiquidityUtils.ActionType.DirectLPAddLiquidity); // Fetching ProxyHook by corePoolKey, therefore no need to pass again.
+            ProxyHook(payable(address(_getProxyHook(key))))
+                .onDirectLP(delta, LiquidityUtils.ActionType.DirectLPAddLiquidity); // Fetching ProxyHook by corePoolKey, therefore no need to pass again.
         }
 
         return (this.afterAddLiquidity.selector, BalanceDeltaLibrary.ZERO_DELTA);
@@ -298,7 +303,7 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
         // Allow removal of liquidity even when the market is paused.
         // only remove direct liquidity if the sender is the pool manager
         if (sender != address(mmPositionManager)) {
-            ProxyHook(_getProxyHook(key)).onDirectLP(delta, LiquidityUtils.ActionType.DirectLPRemoveLiquidity);
+            ProxyHook(payable(_getProxyHook(key))).onDirectLP(delta, LiquidityUtils.ActionType.DirectLPRemoveLiquidity);
         }
 
         return (this.afterRemoveLiquidity.selector, BalanceDeltaLibrary.ZERO_DELTA);

@@ -20,8 +20,6 @@ struct MarketVTSConfiguration {
     TokenConfiguration token0;
     // Token configuration for token1
     TokenConfiguration token1;
-    // oracle address for this market, can be address(0) to use the default oracle
-    address oracleFactory;
 }
 
 library MarketVTSConfigurationLibrary {

@@ -58,6 +58,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
     error SignalIsSolvent();
     error UnauthorizedSignalOwner();
     error UnauthorizedAdvancer();
+    error InsufficientETHSent();
 
     event SignalCommitted(address indexed mm, uint256 tokenId, uint256 positionIndex);
     event SignalDecommitted(
@@ -168,6 +169,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
      */
     function settle(uint256 tokenId, uint256 positionIndex, uint256 amount0, uint256 amount1)
         public
+        payable
         onlyNFTOwner(tokenId)
     {
         PositionMeta memory m = getPosition(tokenId, positionIndex); // Validate the position by fetching it.
@@ -275,7 +277,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         int24 tickUpper,
         int256 liquidity,
         bytes memory liquiditySignal
-    ) external onlyValidMarket(poolKey) returns (PositionId) {
+    ) external payable onlyValidMarket(poolKey) returns (PositionId) {
         // derive the liquidity modification parameters
         ModifyLiquidityParams memory liquidityParams = ModifyLiquidityParams({
             tickLower: tickLower,
@@ -313,6 +315,11 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
 
         emit SignalCommitted(msg.sender, tokenId, positionIndex);
 
+        // return left over ETH to the caller
+        uint256 ethAmountToSettle =
+            LiquidityUtils.getETHAmount(poolKey, underlyingLiquidityFraction0, underlyingLiquidityFraction1);
+        Currency.wrap(address(0)).refundETH(ethAmountToSettle);
+
         return positionId;
     }
 
@@ -326,6 +333,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
      */
     function mint(PoolKey calldata poolKey, uint256 tokenId, int24 tickLower, int24 tickUpper, int256 liquidity)
         public
+        payable
         onlyNFTOwner(tokenId)
         returns (uint256)
     {
@@ -349,6 +357,10 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         (uint256 totalCommitmentsLCCValue, uint256 totalSignalUsdValue,) =
             signalManager.checkSignalSolvency(poolKey, abi.encode(signalState.signal), liquidityParams);
 
+        console.log("totalCommitmentsLCCValue", totalCommitmentsLCCValue);
+        console.log("totalSignalUsdValue", totalSignalUsdValue);
+        console.log("positionTotalCommitmentsUSDValue", positionTotalCommitmentsUSDValue);
+
         // validate that the total usd value of outstanding commitments + new commitment < total usd value of signal
         if (positionTotalCommitmentsUSDValue + totalCommitmentsLCCValue > totalSignalUsdValue) {
             revert InsufficientLiquidityInSignal();
@@ -370,6 +382,11 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
             poolKey.toId(),
             toBalanceDelta(underlyingLiquidityFraction0.toInt128(), underlyingLiquidityFraction1.toInt128())
         );
+
+        // return left over ETH to the caller
+        uint256 ethAmountSpent =
+            LiquidityUtils.getETHAmount(poolKey, underlyingLiquidityFraction0, underlyingLiquidityFraction1);
+        Currency.wrap(address(0)).refundETH(ethAmountSpent);
 
         emit SignalCommitted(msg.sender, tokenId, positionIndex);
 
@@ -449,6 +466,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
 
     function modify(PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex, int256 liquidity)
         public
+        payable
         onlyNFTOwner(tokenId)
     {
         IVTSManager vtsManager = _getVTSManager();
@@ -490,6 +508,11 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
 
             // actually modify the liquidity
             _modifyLiquidity(poolKey, modifyLiquidityParams, Constants.ZERO_BYTES);
+
+            // return left over ETH to the caller
+            uint256 ethAmountSpent =
+                LiquidityUtils.getETHAmount(poolKey, underlyingLiquidityFraction0, underlyingLiquidityFraction1);
+            Currency.wrap(address(0)).refundETH(ethAmountSpent);
         } else {
             // validate that the liquidity being removed is less than the total liquidity in the position
             // validate that rfs is not open for the position
@@ -615,8 +638,8 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         ILCC lcc1 = ILCC(mf.corePoolToCurrencyPair(poolId)[1]);
 
         // Wrap underlying assets as Currency types for unified handling
-        Currency underlyingCurrency0 = Currency.wrap(lcc0.underlyingAsset());
-        Currency underlyingCurrency1 = Currency.wrap(lcc1.underlyingAsset());
+        Currency underlyingCurrency0 = Currency.wrap(lcc0.underlying());
+        Currency underlyingCurrency1 = Currency.wrap(lcc1.underlying());
 
         int128 amount0 = balanceDelta.amount0();
         int128 amount1 = balanceDelta.amount1();
@@ -763,6 +786,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
      */
     function seize(uint256 tokenId, uint256 positionIndex, uint256 amount0, uint256 amount1)
         public
+        payable
         returns (BalanceDelta settlementFractionDelta)
     {
         PositionMeta memory position = getPosition(tokenId, positionIndex);

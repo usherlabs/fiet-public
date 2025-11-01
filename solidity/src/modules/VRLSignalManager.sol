@@ -9,9 +9,7 @@ import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
 import {ISpokeVerifier} from "../interfaces/ISpokeVerifier.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {LiquiditySignal} from "../types/Position.sol";
-import {IOracle} from "../interfaces/IOracle.sol";
-import {IOracleRegistry} from "../interfaces/IOracleRegistry.sol";
-import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
+import {IResilientOracle} from "../interfaces/IResilientOracle.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {BalanceDelta, BalanceDeltaLibrary} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {ILCC} from "../interfaces/ILCC.sol";
@@ -19,10 +17,11 @@ import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {LiquidityUtils} from "../libraries/LiquidityUtils.sol";
 import {IVTSManager} from "../interfaces/IVTSManager.sol";
+import {IOracleHelper} from "../interfaces/IOracleHelper.sol";
 
 contract VRLSignalManager is Ownable {
     ISpokeVerifier public verifier;
-    IOracleRegistry public oracleRegistry;
+    IOracleHelper public oracleHelper;
     IMarketFactory public marketFactory;
 
     using MarketMaker for MarketMaker.State;
@@ -39,11 +38,11 @@ contract VRLSignalManager is Ownable {
     mapping(address => uint256) public mmNonce;
     uint256 public signalExpiryInSeconds;
 
-    constructor(address _verifier, address _oracleRegistry, address _marketFactory, uint256 _signalExpiryInSeconds)
+    constructor(address _verifier, address _oracleHelper, address _marketFactory, uint256 _signalExpiryInSeconds)
         Ownable(msg.sender)
     {
         verifier = ISpokeVerifier(_verifier);
-        oracleRegistry = IOracleRegistry(_oracleRegistry);
+        oracleHelper = IOracleHelper(_oracleHelper);
         marketFactory = IMarketFactory(_marketFactory);
         signalExpiryInSeconds = _signalExpiryInSeconds;
     }
@@ -131,7 +130,7 @@ contract VRLSignalManager is Ownable {
         }
         // get usd value of signal
         (string[] memory tickers, uint256[] memory amounts) = signal.mmState.getReserves();
-        uint256 totalSignalUsdValue = getTotalUsdValue(tickers, amounts);
+        uint256 totalSignalUsdValue = oracleHelper.getTotalUsdValue(tickers, amounts);
 
         return (totalSignalUsdValue, signalExpiryInSeconds);
     }
@@ -152,34 +151,24 @@ contract VRLSignalManager is Ownable {
         bytes memory liquiditySignal,
         ModifyLiquidityParams memory liquidityParams
     ) public view returns (uint256, uint256, uint256) {
-        ILCC lcc0 = ILCC(Currency.unwrap(poolKey.currency0));
-        ILCC lcc1 = ILCC(Currency.unwrap(poolKey.currency1));
-
         // if the signal is zero bytes then revert
         if (liquiditySignal.length == 0) {
             revert InvalidLiquiditySignal();
         }
         LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
 
-        // --- Calculate the total USD value of the LCC's ---
-
-        // get the price of the LCC's
-        address coreHook = IMarketFactory(marketFactory).getCoreHook();
-        address marketOracleFactory = IVTSManager(coreHook).getMarketVTSConfiguration(poolKey.toId()).oracleFactory;
-
+        // get the commitment maxima for the liquidity params i.e the amount of tokens that will be committed to the position for each token
         (uint256 lcc0Amount, uint256 lcc1Amount) = LiquidityUtils.calculateCommitmentMaxima(
             liquidityParams.tickLower, liquidityParams.tickUpper, uint128(uint256(liquidityParams.liquidityDelta))
         );
 
-        (uint256 lcc0Price, uint256 lcc0Decimals) = lcc0.usdPrice(marketOracleFactory);
-        (uint256 lcc1Price, uint256 lcc1Decimals) = lcc1.usdPrice(marketOracleFactory);
-
-        uint256 totalLCCValue =
-            ((lcc0Price * lcc0Amount) / 10 ** lcc0Decimals) + ((lcc1Price * lcc1Amount) / 10 ** lcc1Decimals);
+        uint256 totalLCCValue = oracleHelper.getLCCMarketUSDValue(
+            Currency.unwrap(poolKey.currency0), Currency.unwrap(poolKey.currency1), lcc0Amount, lcc1Amount
+        );
 
         // --- Calculate the total USD value of the assets in the liquidity signal ---
         (string[] memory tickers, uint256[] memory amounts) = signal.mmState.getReserves();
-        uint256 totalSignalUsdValue = getTotalUsdValue(tickers, amounts);
+        uint256 totalSignalUsdValue = oracleHelper.getTotalUsdValue(tickers, amounts);
 
         //  Position is solvent if the total LCC value is greater than or equal to the total signal usd value
         bool isSolvent = totalSignalUsdValue >= totalLCCValue;
@@ -190,41 +179,5 @@ contract VRLSignalManager is Ownable {
         }
 
         return (totalLCCValue, totalSignalUsdValue, signalExpiryInSeconds);
-    }
-
-    /**
-     * @dev This function is used to get the total USD value of the assets provided identified by their tickers and scaled by the amounts
-     * @param tickers The tickers of the assets
-     * @param amounts The amounts of the assets
-     * @return totalUsdValue The total USD value of the assets
-     */
-    function getTotalUsdValue(string[] memory tickers, uint256[] memory amounts) public view returns (uint256) {
-        uint256 totalUsdValue = 0;
-        for (uint256 i = 0; i < tickers.length; i++) {
-            totalUsdValue += _getAssetUsdValue(tickers[i], amounts[i]);
-        }
-        return totalUsdValue;
-    }
-
-    /**
-     * @dev This function is used to get the USD value of an asset provided identified by its ticker and scaled by the amount
-     * @param ticker The ticker of the asset
-     * @param amount The amount of the asset
-     * @return usdValue The USD value of the asset
-     */
-    function _getAssetUsdValue(string memory ticker, uint256 amount) internal view returns (uint256) {
-        // get the price from the price oracle registry
-        string memory pricePair = string.concat(ticker, "/", "USD");
-        // use the default market oracle factory when calculating value of assets in signal reserves
-        address marketOracleFactory = address(0);
-
-        address priceOracle = IOracleRegistry(oracleRegistry).getOracle(pricePair, marketOracleFactory);
-        // convert the price to USD value
-        // assume each oracle provides a decimal interface to incerase precision
-        uint256 decimals = IOracle(priceOracle).decimals();
-        uint256 price = IOracle(priceOracle).getPrice();
-        uint256 usdValue = (uint256(price) * amount) / 10 ** decimals;
-        // return the USD value
-        return usdValue;
     }
 }

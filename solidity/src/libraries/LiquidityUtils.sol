@@ -12,6 +12,8 @@ import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
 import {TransientStateLibrary} from "v4-periphery/lib/v4-core/src/libraries/TransientStateLibrary.sol";
 import {MarketVTSConfiguration} from "../types/VTS.sol";
+import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
+import {ILCC} from "../interfaces/ILCC.sol";
 
 /// @notice Library for liquidity utility functions
 library LiquidityUtils {
@@ -216,8 +218,25 @@ library LiquidityUtils {
 
         // get the amount of underlying liquidity to transfer from the issuer to the lcc
         // divide by 10000 to convert to a percentage from bips
-        uint256 oneBip = 10000;
-        underlyingLiquidityFraction0 = Math.ceilDiv(lccAmount0 * vtsConfiguration.token0.baseVTSRate, oneBip);
-        underlyingLiquidityFraction1 = Math.ceilDiv(lccAmount1 * vtsConfiguration.token1.baseVTSRate, oneBip);
+        underlyingLiquidityFraction0 = Math.ceilDiv(lccAmount0 * vtsConfiguration.token0.baseVTSRate, ONE_BIP);
+        underlyingLiquidityFraction1 = Math.ceilDiv(lccAmount1 * vtsConfiguration.token1.baseVTSRate, ONE_BIP);
+    }
+
+    /**
+     * @dev This function is used to get the amount of ETH if any of the tokens is native ETH
+     * @param poolKey The pool key
+     * @param amount0 The amount of token0
+     * @param amount1 The amount of token1
+     * @return The amount of ETH to send
+     */
+    function getETHAmount(PoolKey memory poolKey, uint256 amount0, uint256 amount1) internal view returns (uint256) {
+        uint256 ethAmount = 0;
+        if (ILCC(Currency.unwrap(poolKey.currency0)).underlying() == address(0)) {
+            ethAmount = amount0;
+        }
+        if (ILCC(Currency.unwrap(poolKey.currency1)).underlying() == address(0)) {
+            ethAmount = amount1;
+        }
+        return ethAmount;
     }
 }
