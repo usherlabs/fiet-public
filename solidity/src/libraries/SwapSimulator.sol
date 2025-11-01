@@ -208,7 +208,7 @@ library SwapSimulator {
 
             // If protocol fees are enabled, calculate and track them
             if (protocolFee > 0) {
-                uint256 delta = (swapFee == protocolFee)  // Entire fee goes to protocol if LP fee is 0
+                uint256 delta = (swapFee == protocolFee) // Entire fee goes to protocol if LP fee is 0
                     ? step.feeAmount
                     : ((step.amountIn + step.feeAmount) * protocolFee) / ProtocolFeeLibrary.PIPS_DENOMINATOR;
 
@@ -222,9 +222,8 @@ library SwapSimulator {
 
             // Update global fee growth tracker for this step
             if (result.liquidity > 0) {
-                step.feeGrowthGlobalX128 += UnsafeMath.simpleMulDiv(
-                    step.feeAmount, FixedPoint128.Q128, result.liquidity
-                );
+                step.feeGrowthGlobalX128 +=
+                    UnsafeMath.simpleMulDiv(step.feeAmount, FixedPoint128.Q128, result.liquidity);
             }
 
             // ============ TICK TRANSITION HANDLING ============

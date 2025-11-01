@@ -63,7 +63,10 @@ contract VTSManagerTest is Test, MarketTestBase {
         // 1) Add liquidity: track maxima equals computed maxima for added liquidity
         uint128 addLiq = 1000e6; // arbitrary
         ModifyLiquidityParams memory paramsAdd = ModifyLiquidityParams({
-            tickLower: tickLower, tickUpper: tickUpper, liquidityDelta: int256(uint256(addLiq)), salt: salt
+            tickLower: tickLower,
+            tickUpper: tickUpper,
+            liquidityDelta: int256(uint256(addLiq)),
+            salt: salt
         });
 
         vtsManager.trackCommitment(router, paramsAdd);
@@ -77,7 +80,10 @@ contract VTSManagerTest is Test, MarketTestBase {
         // 2) Partial remove: tracked maxima decrease proportionally
         uint128 removePart = 400e6; // partial
         ModifyLiquidityParams memory paramsRemPart = ModifyLiquidityParams({
-            tickLower: tickLower, tickUpper: tickUpper, liquidityDelta: -int256(uint256(removePart)), salt: salt
+            tickLower: tickLower,
+            tickUpper: tickUpper,
+            liquidityDelta: -int256(uint256(removePart)),
+            salt: salt
         });
         vtsManager.trackCommitment(router, paramsRemPart);
 
@@ -90,7 +96,10 @@ contract VTSManagerTest is Test, MarketTestBase {
         // 3) Full remove: remaining liquidity removed => tracked maxima reset to zero
         uint128 removeRest = addLiq - removePart; // remove all remaining
         ModifyLiquidityParams memory paramsRemAll = ModifyLiquidityParams({
-            tickLower: tickLower, tickUpper: tickUpper, liquidityDelta: -int256(uint256(removeRest)), salt: salt
+            tickLower: tickLower,
+            tickUpper: tickUpper,
+            liquidityDelta: -int256(uint256(removeRest)),
+            salt: salt
         });
         vtsManager.trackCommitment(router, paramsRemAll);
 

@@ -163,7 +163,11 @@ contract RemoveLiquidityScript is ScriptHelper {
 
         (Currency currency0Proxy, Currency currency1Proxy) = CurrencySortHelper.sortAddresses(token0, token1);
         proxyPoolKey = PoolKey({
-            currency0: currency0Proxy, currency1: currency1Proxy, fee: 0, tickSpacing: tickSpacingVal, hooks: proxyHook
+            currency0: currency0Proxy,
+            currency1: currency1Proxy,
+            fee: 0,
+            tickSpacing: tickSpacingVal,
+            hooks: proxyHook
         });
         console.log(" ");
         console.log("Core Pool (receives liquidity):");

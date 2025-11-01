@@ -280,8 +280,9 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
 
         // only add direct liquidity if the sender is not the market maker position manager/router
         if (sender != address(mmPositionManager)) {
-            ProxyHook(payable(address(_getProxyHook(key))))
-                .onDirectLP(delta, LiquidityUtils.ActionType.DirectLPAddLiquidity); // Fetching ProxyHook by corePoolKey, therefore no need to pass again.
+            ProxyHook(payable(address(_getProxyHook(key)))).onDirectLP(
+                delta, LiquidityUtils.ActionType.DirectLPAddLiquidity
+            ); // Fetching ProxyHook by corePoolKey, therefore no need to pass again.
         }
 
         return (this.afterAddLiquidity.selector, BalanceDeltaLibrary.ZERO_DELTA);

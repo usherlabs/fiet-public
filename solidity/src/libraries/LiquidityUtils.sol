@@ -165,24 +165,24 @@ library LiquidityUtils {
             // right, when we'll need _more_ currency0 (it's becoming more valuable) so user must provide it
             delta = toBalanceDelta(
                 SqrtPriceMath.getAmount0Delta(
-                        TickMath.getSqrtPriceAtTick(positionParams.tickLower),
-                        TickMath.getSqrtPriceAtTick(positionParams.tickUpper),
-                        positionParams.liquidityDelta.toInt128()
-                    ).toInt128(),
+                    TickMath.getSqrtPriceAtTick(positionParams.tickLower),
+                    TickMath.getSqrtPriceAtTick(positionParams.tickUpper),
+                    positionParams.liquidityDelta.toInt128()
+                ).toInt128(),
                 0
             );
         } else if (currentTick < positionParams.tickUpper) {
             delta = toBalanceDelta(
                 SqrtPriceMath.getAmount0Delta(
-                        sqrtPriceX96,
-                        TickMath.getSqrtPriceAtTick(positionParams.tickUpper),
-                        positionParams.liquidityDelta.toInt128()
-                    ).toInt128(),
+                    sqrtPriceX96,
+                    TickMath.getSqrtPriceAtTick(positionParams.tickUpper),
+                    positionParams.liquidityDelta.toInt128()
+                ).toInt128(),
                 SqrtPriceMath.getAmount1Delta(
-                        TickMath.getSqrtPriceAtTick(positionParams.tickLower),
-                        sqrtPriceX96,
-                        positionParams.liquidityDelta.toInt128()
-                    ).toInt128()
+                    TickMath.getSqrtPriceAtTick(positionParams.tickLower),
+                    sqrtPriceX96,
+                    positionParams.liquidityDelta.toInt128()
+                ).toInt128()
             );
         } else {
             // current tick is above the passed range; liquidity can only become in range by crossing from right to
@@ -190,10 +190,10 @@ library LiquidityUtils {
             delta = toBalanceDelta(
                 0,
                 SqrtPriceMath.getAmount1Delta(
-                        TickMath.getSqrtPriceAtTick(positionParams.tickLower),
-                        TickMath.getSqrtPriceAtTick(positionParams.tickUpper),
-                        positionParams.liquidityDelta.toInt128()
-                    ).toInt128()
+                    TickMath.getSqrtPriceAtTick(positionParams.tickLower),
+                    TickMath.getSqrtPriceAtTick(positionParams.tickUpper),
+                    positionParams.liquidityDelta.toInt128()
+                ).toInt128()
             );
         }
 

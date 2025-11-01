@@ -176,9 +176,9 @@ contract CompleteDeployScript is ScriptHelper {
         console.log("CoreHook salt:", vm.toString(salt));
 
         // Deploy the hook
-        CoreHook deployedHook = new CoreHook{
-            salt: salt
-        }(poolManagerAddress, marketFactory, address(mmPositionManager), oracleHelper, calculator);
+        CoreHook deployedHook = new CoreHook{salt: salt}(
+            poolManagerAddress, marketFactory, address(mmPositionManager), oracleHelper, calculator
+        );
         require(address(deployedHook) == hookAddress, "CoreHook: address mismatch");
 
         return address(deployedHook);
