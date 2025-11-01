@@ -11,6 +11,8 @@ struct TokenConfiguration {
     uint256 seizureUnlockTime;
     // Base VTS Rate
     uint256 baseVTSRate;
+    // Max grace period time
+    uint256 maxgracePeriodTime;
 }
 
 struct MarketVTSConfiguration {
@@ -18,8 +20,6 @@ struct MarketVTSConfiguration {
     TokenConfiguration token0;
     // Token configuration for token1
     TokenConfiguration token1;
-    // oracle address for this market, can be address(0) to use the default oracle
-    address oracleFactory;
 }
 
 library MarketVTSConfigurationLibrary {
@@ -31,15 +31,17 @@ library MarketVTSConfigurationLibrary {
      * @param positionId The position id
      * @param checkpoint The checkpoint of the RFS
      */
-    function validateGracePeriod(
+    function validateGracePeriodHasElapsed(
         MarketVTSConfiguration memory vtsConfiguration,
         PositionId positionId,
         RFSCheckpoint memory checkpoint
     ) internal view {
         uint256 timeSinceLastCheckpoint = block.timestamp - checkpoint.timeOfLastTransition;
 
-        bool gracePeriod0Elapsed = vtsConfiguration.token0.gracePeriodTime > timeSinceLastCheckpoint;
-        bool gracePeriod1Elapsed = vtsConfiguration.token1.gracePeriodTime > timeSinceLastCheckpoint;
+        bool gracePeriod0Elapsed =
+            vtsConfiguration.token0.gracePeriodTime + checkpoint.gracePeriod0 > timeSinceLastCheckpoint;
+        bool gracePeriod1Elapsed =
+            vtsConfiguration.token1.gracePeriodTime + checkpoint.gracePeriod1 > timeSinceLastCheckpoint;
 
         if (!gracePeriod0Elapsed || !gracePeriod1Elapsed) {
             revert GracePeriodNotElapsed(positionId);

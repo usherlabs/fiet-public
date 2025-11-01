@@ -111,10 +111,10 @@ contract LiquidityRouter is IUnlockCallback {
             manager.unlock(abi.encode(CallbackData(msg.sender, key, params, hookData, settleUsingBurn, takeClaims))),
             (BalanceDelta)
         );
-        uint256 ethBalance = address(this).balance;
-        if (ethBalance > 0) {
-            CurrencyLibrary.ADDRESS_ZERO.transfer(msg.sender, ethBalance);
-        }
+        // uint256 ethBalance = address(this).balance;
+        // if (ethBalance > 0) {
+        //     CurrencyLibrary.ADDRESS_ZERO.transfer(msg.sender, ethBalance);
+        // }
     }
 
     /// fetch the balances of the user and the pool

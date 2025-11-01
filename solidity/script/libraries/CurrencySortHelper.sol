@@ -11,7 +11,7 @@ library CurrencySortHelper {
         returns (Currency currency0, Currency currency1)
     {
         require(tokenA != tokenB, "CurrencySortHelper: IDENTICAL_ADDRESSES");
-        require(tokenA != address(0) && tokenB != address(0), "CurrencySortHelper: ZERO_ADDRESS");
+        // require(tokenA != address(0) && tokenB != address(0), "CurrencySortHelper: ZERO_ADDRESS");
 
         (address token0, address token1) = tokenA < tokenB ? (tokenA, tokenB) : (tokenB, tokenA);
         currency0 = Currency.wrap(token0);

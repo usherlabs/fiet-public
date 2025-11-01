@@ -23,6 +23,7 @@ import {LiquidityUtils} from "../libraries/LiquidityUtils.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {ILCC} from "../interfaces/ILCC.sol";
 import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
+import {IOracleHelper} from "../interfaces/IOracleHelper.sol";
 
 abstract contract VTSManager is IVTSManager, PositionIndex {
     using SafeCastLib for *;
@@ -63,9 +64,11 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     // Event to notify that the VTS configuration has been set/initialized for a core pool
     event MarketVTSConfigurationSet(PoolId indexed corePoolId, MarketVTSConfiguration indexed vtsConfiguration);
     // Per-entry events are declared in VTSEvents
+    // Array of approved settlement verifier contracts
 
     address private immutable mmPositionManager;
     IPoolManager private immutable poolManager;
+    IOracleHelper private immutable oracleHelper;
     address private calculator; // optional external calculator (Stylus or pure)
 
     modifier onlyPositionValid(PositionId _positionId) {
@@ -83,10 +86,15 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         _;
     }
 
-    constructor(address _poolManager, address _marketFactory, address _mmPositionManager, address _calculator)
-        PositionIndex(_marketFactory)
-    {
+    constructor(
+        address _poolManager,
+        address _marketFactory,
+        address _mmPositionManager,
+        address _oracleHelper,
+        address _calculator
+    ) PositionIndex(_marketFactory) {
         poolManager = IPoolManager(_poolManager);
+        oracleHelper = IOracleHelper(_oracleHelper);
         mmPositionManager = _mmPositionManager;
         if (_calculator != address(0)) {
             // calculator = IVTSCalculator(_calculator);
@@ -123,12 +131,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
      * @param corePoolId The core pool ID
      * @return The VTS configuration
      */
-    function getMarketVTSConfiguration(PoolId corePoolId)
-        public
-        view
-        override
-        returns (MarketVTSConfiguration memory)
-    {
+    function getMarketVTSConfiguration(PoolId corePoolId) public view override returns (MarketVTSConfiguration memory) {
         return corePoolToVTSConfiguration[corePoolId];
     }
 
@@ -451,9 +454,6 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     }
 
     function getPositionUnsettledUSDValue(PoolId poolId, PositionId positionId) public view returns (uint256) {
-        address[2] memory currencyPair = IMarketFactory(marketFactory).corePoolToCurrencyPair(poolId);
-        address lcc0 = currencyPair[0];
-        address lcc1 = currencyPair[1];
         // get the total usd value of all the commitments under this position
         // get the total usd value of all the settlements under this position
         // return the difference between the two
@@ -468,11 +468,9 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         uint256 unsettledAmount1 = commitmentTotal1 > settlementTotal1 ? commitmentTotal1 - settlementTotal1 : 0;
 
         // return the total usd value of the position
-        (uint256 lcc0Price, uint256 price0Decimal) = ILCC(lcc0).usdPrice(address(0));
-        (uint256 lcc1Price, uint256 price1Decimal) = ILCC(lcc1).usdPrice(address(0));
-
-        uint256 totalLCCValue = ((lcc0Price * unsettledAmount0) / 10 ** price0Decimal)
-            + ((lcc1Price * unsettledAmount1) / 10 ** price1Decimal);
+        address[2] memory currencyPair = IMarketFactory(marketFactory).corePoolToCurrencyPair(poolId);
+        uint256 totalLCCValue =
+            oracleHelper.getLCCMarketUSDValue(currencyPair[0], currencyPair[1], unsettledAmount0, unsettledAmount1);
 
         return totalLCCValue;
     }
@@ -570,12 +568,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
      * @return rfsOpen Whether the RFS is open
      * @return balanceDelta The balance delta of the amount of required to be settled or allowed to be withdrawn depending on if it is negative or positive
      */
-    function _getRFS(PositionId _positionId)
-        internal
-        view
-        onlyPositionValid(_positionId)
-        returns (bool, BalanceDelta)
-    {
+    function _getRFS(PositionId _positionId) internal view onlyPositionValid(_positionId) returns (bool, BalanceDelta) {
         // Commitment caps
         (uint256 c0, uint256 c1) = _getCommitment(_positionId);
 

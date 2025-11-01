@@ -9,7 +9,7 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {ModifyLiquidityParams} from "v4-periphery/lib/v4-core/src/types/PoolOperation.sol";
 import {Constants} from "v4-periphery/lib/v4-core/test/utils/Constants.sol";
 import {BalanceDelta, BalanceDeltaLibrary} from "v4-periphery/lib/v4-core/src/types/BalanceDelta.sol";
-import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
+import {Currency, CurrencyLibrary} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {PoolId} from "v4-periphery/lib/v4-core/src/types/PoolId.sol";
 import {ERC721} from "solmate/tokens/ERC721.sol";
 import {PositionMeta, PositionId, PositionLibrary} from "./types/Position.sol";
@@ -20,6 +20,7 @@ import {IVTSManager} from "./interfaces/IVTSManager.sol";
 import {MarketVTSConfiguration, MarketVTSConfigurationLibrary} from "./types/VTS.sol";
 import {RFSCheckpoint, RFSCheckpointLibrary} from "./types/Checkpoint.sol";
 import {LiquidityUtils} from "./libraries/LiquidityUtils.sol";
+import {CurrencyTransfer} from "./libraries/CurrencyTransfer.sol";
 import {toBalanceDelta} from "v4-periphery/lib/v4-core/src/types/BalanceDelta.sol";
 import {IMMPositionManager} from "./interfaces/IMMPositionManager.sol";
 import {IProxyHook} from "./interfaces/IProxyHook.sol";
@@ -29,12 +30,16 @@ import {IPositionIndex} from "./interfaces/IPositionIndex.sol";
 import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {console} from "forge-std/console.sol";
+import {ISettlementVerifier} from "./interfaces/ISettlementVerifier.sol";
+import {IVRLSettlementObserver} from "./interfaces/IVRLSettlementObserver.sol";
 
 contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
     using SafeCast for *;
     using RFSCheckpointLibrary for RFSCheckpoint;
     using MarketVTSConfigurationLibrary for MarketVTSConfiguration;
     using PositionLibrary for PositionId;
+    using CurrencyLibrary for Currency;
+    using CurrencyTransfer for Currency;
 
     error InvalidDelta(int128 amount0, int128 amount1);
     error InvalidAmount(uint256 amount, uint256 maxAmount);
@@ -42,8 +47,10 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
     error InvalidPositionId(PositionId positionId);
     error InvalidTokenId(uint256 tokenId);
     error InvalidLiquiditySignalEncoding();
+    error InvalidToken(address tokenAddr);
     error InactivePosition(PositionId positionId);
     error InsufficientAmountToWithdraw(PositionId positionId, uint256 amount, uint256 maxAmount);
+    event GracePeriodExtended(PositionId indexed positionId, uint256 extension0, uint256 extension1);
     error InvalidMarket(PoolKey poolKey);
     error RFSNotOpen(PositionId positionId);
     error SignalExpired(uint256 tokenId);
@@ -51,6 +58,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
     error SignalIsSolvent();
     error UnauthorizedSignalOwner();
     error UnauthorizedAdvancer();
+    error InsufficientETHSent();
 
     event SignalCommitted(address indexed mm, uint256 tokenId, uint256 positionIndex);
     event SignalDecommitted(
@@ -61,6 +69,9 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
     uint256 private nextTokenId = 1;
     IPoolManager private poolManager;
     IVRLSignalManager public immutable signalManager;
+    IVRLSettlementObserver public immutable settlementObserver;
+    address[] public settlementVerifiers;
+
     mapping(PositionId => RFSCheckpoint) public positionToCheckpoint;
     mapping(uint256 => mapping(uint256 => PositionId)) public nftToPositionId;
     mapping(uint256 => uint256) public nftToPositionCount;
@@ -74,13 +85,14 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         _;
     }
 
-    constructor(address _manager, address _signalManager, address _marketFactory)
+    constructor(address _manager, address _signalManager, address _marketFactory, address _settlementObserver)
         LiquidityRouter(_manager)
         ERC721("MMPositionManager", "MMPM")
     {
         marketFactory = _marketFactory;
         poolManager = IPoolManager(_manager);
         signalManager = IVRLSignalManager(_signalManager);
+        settlementObserver = IVRLSettlementObserver(_settlementObserver);
     }
 
     function tokenURI(uint256) public pure override returns (string memory) {
@@ -157,6 +169,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
      */
     function settle(uint256 tokenId, uint256 positionIndex, uint256 amount0, uint256 amount1)
         public
+        payable
         onlyNFTOwner(tokenId)
     {
         PositionMeta memory m = getPosition(tokenId, positionIndex); // Validate the position by fetching it.
@@ -168,6 +181,46 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
 
         // mark RFS checkpoint
         _checkpoint(getPositionId(tokenId, positionIndex).toArray());
+    }
+
+    /**
+     * @notice Extends the grace period for a position by providing a settlement proof
+     * @dev This function allows market makers to extend their grace period by providing
+     *      a valid settlement proof that gets verified against the settlement verifier
+     * @param tokenId The token id of the position
+     * @param positionIndex The position index
+     * @param settlementProof The settlement signal containing the proof
+     */
+    function extendGracePeriod(
+        PoolKey memory poolKey,
+        uint256 tokenId,
+        uint256 positionIndex,
+        uint256 verifierIndex,
+        address tokenToSettleFor,
+        bytes memory settlementProof
+    ) public onlyNFTOwner(tokenId) {
+        PositionId positionId = getPositionId(tokenId, positionIndex);
+        if (
+            tokenToSettleFor != Currency.unwrap(poolKey.currency0)
+                && tokenToSettleFor != Currency.unwrap(poolKey.currency1)
+        ) {
+            revert InvalidToken(tokenToSettleFor);
+        }
+
+        // get the max grace period extension from the market vts configuration
+        MarketVTSConfiguration memory vtsConfiguration = _getVTSManager().getMarketVTSConfiguration(poolKey.toId());
+
+        // verify the settlement proof and get the grace period extension
+        settlementObserver.verifySettlementProof(poolKey, verifierIndex, tokenToSettleFor, settlementProof);
+        bool isTokenZero = tokenToSettleFor == Currency.unwrap(poolKey.currency0);
+
+        // extend the grace period for the position
+        positionToCheckpoint[positionId].extendGracePeriod(vtsConfiguration, isTokenZero);
+
+        // emit an event to notify the market maker that the grace period has been extended
+        emit GracePeriodExtended(
+            positionId, positionToCheckpoint[positionId].gracePeriod0, positionToCheckpoint[positionId].gracePeriod1
+        );
     }
 
     /**
@@ -224,7 +277,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         int24 tickUpper,
         int256 liquidity,
         bytes memory liquiditySignal
-    ) external onlyValidMarket(poolKey) returns (PositionId) {
+    ) external payable onlyValidMarket(poolKey) returns (PositionId) {
         // derive the liquidity modification parameters
         ModifyLiquidityParams memory liquidityParams = ModifyLiquidityParams({
             tickLower: tickLower,
@@ -248,8 +301,9 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
 
         // use the position id to make the initial settlement of the underlying tokens to the proxy hook
         // Get amount of underlying liquidity to transfer from the issuer to the lcc
-        (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) = LiquidityUtils
-            .getBaseSettlementAmounts(liquidityParams, _getVTSManager().getMarketVTSConfiguration(poolKey.toId()));
+        (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) = LiquidityUtils.getBaseSettlementAmounts(
+            liquidityParams, _getVTSManager().getMarketVTSConfiguration(poolKey.toId())
+        );
 
         // settle the underlying tokens to the proxy hook
         // By calling VTSManager.onMMLiquidityModify, we are also settling the position growths for new MMPosition.
@@ -260,6 +314,11 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         );
 
         emit SignalCommitted(msg.sender, tokenId, positionIndex);
+
+        // return left over ETH to the caller
+        uint256 ethAmountToSettle =
+            LiquidityUtils.getETHAmount(poolKey, underlyingLiquidityFraction0, underlyingLiquidityFraction1);
+        Currency.wrap(address(0)).refundETH(ethAmountToSettle);
 
         return positionId;
     }
@@ -274,6 +333,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
      */
     function mint(PoolKey calldata poolKey, uint256 tokenId, int24 tickLower, int24 tickUpper, int256 liquidity)
         public
+        payable
         onlyNFTOwner(tokenId)
         returns (uint256)
     {
@@ -297,6 +357,10 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         (uint256 totalCommitmentsLCCValue, uint256 totalSignalUsdValue,) =
             signalManager.checkSignalSolvency(poolKey, abi.encode(signalState.signal), liquidityParams);
 
+        console.log("totalCommitmentsLCCValue", totalCommitmentsLCCValue);
+        console.log("totalSignalUsdValue", totalSignalUsdValue);
+        console.log("positionTotalCommitmentsUSDValue", positionTotalCommitmentsUSDValue);
+
         // validate that the total usd value of outstanding commitments + new commitment < total usd value of signal
         if (positionTotalCommitmentsUSDValue + totalCommitmentsLCCValue > totalSignalUsdValue) {
             revert InsufficientLiquidityInSignal();
@@ -307,8 +371,9 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
 
         // settle base for the position
         // Get amount of underlying liquidity to transfer from the issuer to the lcc
-        (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) = LiquidityUtils
-            .getBaseSettlementAmounts(liquidityParams, _getVTSManager().getMarketVTSConfiguration(poolKey.toId()));
+        (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) = LiquidityUtils.getBaseSettlementAmounts(
+            liquidityParams, _getVTSManager().getMarketVTSConfiguration(poolKey.toId())
+        );
 
         // settle the underlying tokens to the proxy hook
         // By calling VTSManager.onMMLiquidityModify, we are also settling the position growths for new MMPosition.
@@ -317,6 +382,11 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
             poolKey.toId(),
             toBalanceDelta(underlyingLiquidityFraction0.toInt128(), underlyingLiquidityFraction1.toInt128())
         );
+
+        // return left over ETH to the caller
+        uint256 ethAmountSpent =
+            LiquidityUtils.getETHAmount(poolKey, underlyingLiquidityFraction0, underlyingLiquidityFraction1);
+        Currency.wrap(address(0)).refundETH(ethAmountSpent);
 
         emit SignalCommitted(msg.sender, tokenId, positionIndex);
 
@@ -396,6 +466,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
 
     function modify(PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex, int256 liquidity)
         public
+        payable
         onlyNFTOwner(tokenId)
     {
         IVTSManager vtsManager = _getVTSManager();
@@ -421,8 +492,9 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         // if it is positive add liquidity to the position
         if (liquidity > 0) {
             // get the base settlements to make based on the liquidity to be added
-            (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) = LiquidityUtils
-                .getBaseSettlementAmounts(modifyLiquidityParams, vtsManager.getMarketVTSConfiguration(poolKey.toId()));
+            (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) = LiquidityUtils.getBaseSettlementAmounts(
+                modifyLiquidityParams, vtsManager.getMarketVTSConfiguration(poolKey.toId())
+            );
 
             // settle the underlying tokens to the proxy hook
             _modifyMarketUnderlyingAsset(
@@ -436,6 +508,11 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
 
             // actually modify the liquidity
             _modifyLiquidity(poolKey, modifyLiquidityParams, Constants.ZERO_BYTES);
+
+            // return left over ETH to the caller
+            uint256 ethAmountSpent =
+                LiquidityUtils.getETHAmount(poolKey, underlyingLiquidityFraction0, underlyingLiquidityFraction1);
+            Currency.wrap(address(0)).refundETH(ethAmountSpent);
         } else {
             // validate that the liquidity being removed is less than the total liquidity in the position
             // validate that rfs is not open for the position
@@ -538,10 +615,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
      * @param to The address of the user who is creating the commitment
      * @return tokenId The id of the nft created
      */
-    function _createCommitmentForSignal(address to, SignalState memory signalState)
-        internal
-        returns (uint256 tokenId)
-    {
+    function _createCommitmentForSignal(address to, SignalState memory signalState) internal returns (uint256 tokenId) {
         // get the token id
         tokenId = nextTokenId++;
         // mint the nft
@@ -562,6 +636,10 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         IMarketFactory mf = IMarketFactory(marketFactory);
         ILCC lcc0 = ILCC(mf.corePoolToCurrencyPair(poolId)[0]);
         ILCC lcc1 = ILCC(mf.corePoolToCurrencyPair(poolId)[1]);
+
+        // Wrap underlying assets as Currency types for unified handling
+        Currency underlyingCurrency0 = Currency.wrap(lcc0.underlying());
+        Currency underlyingCurrency1 = Currency.wrap(lcc1.underlying());
 
         int128 amount0 = balanceDelta.amount0();
         int128 amount1 = balanceDelta.amount1();
@@ -584,11 +662,13 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
             uint256 settleAmount1 = LiquidityUtils.safeInt128ToUint256(balanceDelta.amount1());
 
             // transfer the underlying tokens to the Market Vault (proxy hook)
+            // For ERC-20: uses transferFrom
+            // For native ETH: requires msg.value to be sent and this function to be payable
             if (settleAmount0 > 0) {
-                IERC20Minimal(lcc0.underlyingAsset()).transferFrom(sender, proxyHook, settleAmount0);
+                underlyingCurrency0.transferFrom(sender, proxyHook, settleAmount0);
             }
             if (settleAmount1 > 0) {
-                IERC20Minimal(lcc1.underlyingAsset()).transferFrom(sender, proxyHook, settleAmount1);
+                underlyingCurrency1.transferFrom(sender, proxyHook, settleAmount1);
             }
         }
 
@@ -606,11 +686,12 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
             uint256 takeAmount1 = LiquidityUtils.safeInt128ToUint256(balanceDelta.amount1());
             if (takeAmount0 > 0) {
                 // transfer from this contract to the actual recipient
-                IERC20Minimal(lcc0.underlyingAsset()).transfer(sender, takeAmount0);
+                // Uses Currency.transfer which handles both ERC-20 and native ETH
+                underlyingCurrency0.transfer(sender, takeAmount0);
             }
             if (takeAmount1 > 0) {
                 // transfer from this contract to the actual recipient
-                IERC20Minimal(lcc1.underlyingAsset()).transfer(sender, takeAmount1);
+                underlyingCurrency1.transfer(sender, takeAmount1);
             }
         }
     }
@@ -705,6 +786,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
      */
     function seize(uint256 tokenId, uint256 positionIndex, uint256 amount0, uint256 amount1)
         public
+        payable
         returns (BalanceDelta settlementFractionDelta)
     {
         PositionMeta memory position = getPosition(tokenId, positionIndex);
@@ -721,9 +803,8 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
 
         // get grace period for this position from market vts configuration
         IVTSManager vtsManager = _getVTSManager();
-        vtsManager.getMarketVTSConfiguration(position.poolId).validateGracePeriod(
-            positionId, positionToCheckpoint[positionId]
-        );
+        vtsManager.getMarketVTSConfiguration(position.poolId)
+            .validateGracePeriodHasElapsed(positionId, positionToCheckpoint[positionId]);
 
         uint256 maxSiezureFractionBPS = vtsManager.getSeizureAmount(positionId);
         // based on the amount they are choosing to settle, calculate how much of the total siezable amount to be seized by the caller

@@ -30,7 +30,14 @@ contract MockPositionIndex is IPositionIndex {
         return true;
     }
 
-    function getPosition(PositionId id, bool /*revertIfInvalid*/ ) external view returns (PositionMeta memory) {
+    function getPosition(
+        PositionId id,
+        bool /*revertIfInvalid*/
+    )
+        external
+        view
+        returns (PositionMeta memory)
+    {
         return meta[id];
     }
 }

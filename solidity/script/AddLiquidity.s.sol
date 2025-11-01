@@ -141,7 +141,7 @@ contract AddLiquidityScript is ScriptHelper {
         // Get the proxy pool id and hook from the core pool id just created
         PoolId proxyPoolId = factory.coreToProxy(corePoolKey.toId());
         address proxyHookAddr = factory.proxyToHook(proxyPoolId);
-        proxyHook = ProxyHook(proxyHookAddr);
+        proxyHook = ProxyHook(payable(proxyHookAddr));
 
         if (isSepolia && isLocal) {
             vm.startBroadcast(deployerPrivateKey);
@@ -187,7 +187,7 @@ contract AddLiquidityScript is ScriptHelper {
         console.logBytes32(PoolId.unwrap(proxyPoolId));
         address proxyHookAddr = factory.proxyToHook(proxyPoolId);
         console.log("Proxy Hook Address: ", proxyHookAddr);
-        proxyHook = ProxyHook(proxyHookAddr);
+        proxyHook = ProxyHook(payable(proxyHookAddr));
 
         console.log(" coore fee: ", coreFee);
 
@@ -195,11 +195,7 @@ contract AddLiquidityScript is ScriptHelper {
         (Currency currency0Proxy, Currency currency1Proxy) =
             CurrencySortHelper.sortAddresses(address(token0), address(token1));
         proxyPoolKey = PoolKey({
-            currency0: currency0Proxy,
-            currency1: currency1Proxy,
-            fee: 0,
-            tickSpacing: tickSpacingVal,
-            hooks: proxyHook
+            currency0: currency0Proxy, currency1: currency1Proxy, fee: 0, tickSpacing: tickSpacingVal, hooks: proxyHook
         });
         console.log(" ");
         console.log("Core Pool (receives liquidity):");
@@ -307,8 +303,8 @@ contract AddLiquidityScript is ScriptHelper {
         uint256 current = lccToken.balanceOf(user);
         if (current < desired) {
             uint256 needed = desired - current;
-            uint256 available = IERC20(lccToken.underlyingAsset()).balanceOf(user);
-            string memory name = IERC20Metadata(lccToken.underlyingAsset()).name();
+            uint256 available = IERC20(lccToken.underlying()).balanceOf(user);
+            string memory name = IERC20Metadata(lccToken.underlying()).name();
             require(available >= needed, string(abi.encodePacked(name, " insufficient")));
             lccToken.wrap(needed);
         }
@@ -395,8 +391,8 @@ contract AddLiquidityScript is ScriptHelper {
         LiquidityCommitmentCertificate lccToken0 = LiquidityCommitmentCertificate(lccTokenAddr0);
         LiquidityCommitmentCertificate lccToken1 = LiquidityCommitmentCertificate(lccTokenAddr1);
 
-        address underlyingToken0 = lccToken0.underlyingAsset();
-        address underlyingToken1 = lccToken1.underlyingAsset();
+        address underlyingToken0 = lccToken0.underlying();
+        address underlyingToken1 = lccToken1.underlying();
 
         checkAndApproveErc20(user, address(permit2), IERC20(lccTokenAddr0), amount0Desired);
         checkAndApproveErc20(user, address(permit2), IERC20(lccTokenAddr1), amount1Desired);

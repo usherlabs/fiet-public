@@ -282,6 +282,7 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         // Get the amount of the token that is being swapped in based on if this is a zero one swap or one for zero swap
         uint256 amountIn = isZeroForOne ? amount0 : amount1;
         // Deposit underlying liquidity to pool manager from lcc token
+
         _settleFromLCCToVault(lccTokenIn, amountIn);
 
         // Handle Token OUT liquidity (move from PoolManager into LCC token)
@@ -319,8 +320,8 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         ILCC lccToken1 = ILCC(payable(Currency.unwrap(coreKey.currency1)));
 
         if (
-            Currency.unwrap(key.currency0) == lccToken0.underlyingAsset()
-                && Currency.unwrap(key.currency1) == lccToken1.underlyingAsset()
+            Currency.unwrap(key.currency0) == lccToken0.underlying()
+                && Currency.unwrap(key.currency1) == lccToken1.underlying()
         ) {
             // If tokens match order, then Proxy matches Core
             coreZeroForOne = params.zeroForOne;
@@ -507,7 +508,7 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         returns (uint256 amountToCancel)
     {
         uint256 deficitAmount = 0;
-        uint256 availableLiquidity = inMarketBalanceOf(Currency.wrap(lccToken.underlyingAsset()));
+        uint256 availableLiquidity = inMarketBalanceOf(Currency.wrap(lccToken.underlying()));
         if (amount > availableLiquidity) {
             amountToCancel = availableLiquidity; // amount to cancel becomes what ever is in custody.
             deficitAmount = amount - availableLiquidity; // deficit amount becomes the difference between the amount to cancel and the amount in custody.

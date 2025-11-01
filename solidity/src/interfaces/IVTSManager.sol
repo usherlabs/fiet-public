@@ -19,10 +19,7 @@ interface IVTSManager {
 
     function getVTSRequired(PositionId positionId) external view returns (uint256 vtsRequired0, uint256 vtsRequired1);
 
-    function getPositionSettledAmounts(PositionId positionId)
-        external
-        view
-        returns (uint256 amount0, uint256 amount1);
+    function getPositionSettledAmounts(PositionId positionId) external view returns (uint256 amount0, uint256 amount1);
 
     function prepareLiquidation(PositionId positionId) external returns (uint256 amount0, uint256 amount1);
 

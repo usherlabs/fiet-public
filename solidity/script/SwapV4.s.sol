@@ -215,11 +215,7 @@ contract SwapV4 is ScriptHelper {
         // Proxy pools are created with fee = 0 in MarketFactory
         uint24 proxyFee = 0;
         PoolKey memory poolKey = PoolKey({
-            currency0: currencyA,
-            currency1: currencyB,
-            fee: proxyFee,
-            tickSpacing: tickSpacing,
-            hooks: proxyHook
+            currency0: currencyA, currency1: currencyB, fee: proxyFee, tickSpacing: tickSpacing, hooks: proxyHook
         });
         console.log("Checking balances...");
         uint256 balanceBeforeCurrency1;

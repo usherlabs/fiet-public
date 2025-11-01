@@ -29,15 +29,20 @@ import {HookFlags} from "../../src/libraries/HookFlags.sol";
 import {MMPositionManager} from "../../src/MMPositionManager.sol";
 import {StubSpokeVerifier} from "../../src/modules/StubSpokeVerifier.sol";
 import {ICSpokeVerifier} from "../../src/modules/ICSpokeVerifier.sol";
-import {OracleRegistry} from "../../src/OracleRegistry.sol";
 import {VTSConfigs} from "../../src/libraries/VTSConfigs.sol";
 import {IVTSManager} from "../../src/interfaces/IVTSManager.sol";
 import {VRLSignalManager} from "../../src/modules/VRLSignalManager.sol";
+import {VRLSettlementObserver} from "../../src/modules/VRLSettlementObserver.sol";
+import {StubSettlementVerifier} from "../../src/modules/StubSettlementVerifier.sol";
 import {IMarketVault} from "../../src/interfaces/IMarketVault.sol";
+import {IVRLSettlementObserver} from "../../src/interfaces/IVRLSettlementObserver.sol";
+import {CurrencyTransfer} from "../../src/libraries/CurrencyTransfer.sol";
+import {OracleHelper} from "../../src/modules/OracleHelper.sol";
 
 abstract contract MarketTestBase is Test, Deployers {
     using PoolIdLibrary for PoolId;
     using CurrencyLibrary for Currency;
+    using CurrencyTransfer for Currency;
 
     // Provide initial liquidity to core pool
     uint256 initialLiquidity = 10000e18;
@@ -57,17 +62,20 @@ abstract contract MarketTestBase is Test, Deployers {
     address marketFactory;
     address coreHookAddress;
 
-    OracleRegistry oracleRegistry;
+    address resilientOracle = makeAddr("ResilientOracleAddr");
     ICSpokeVerifier icVerifier;
     StubSpokeVerifier stubSpokeVerifier;
     VRLSignalManager signalManager;
     address mmPositionManager;
+    IVRLSettlementObserver settlementObserver;
     IMarketVault mv;
+    OracleHelper oracleHelper;
 
     uint256 signalExpiryInSeconds = 3600;
 
     function approveLCCForMarketUse(LiquidityCommitmentCertificate token) internal returns (Currency currency) {
-        address underlyingAsset = token.underlyingAsset();
+        Currency underlyingAsset = Currency.wrap(token.underlying());
+
         address[10] memory toApprove = [
             address(swapRouter),
             address(swapRouterNoChecks),
@@ -83,10 +91,11 @@ abstract contract MarketTestBase is Test, Deployers {
 
         for (uint256 i = 0; i < toApprove.length; i++) {
             token.approve(toApprove[i], Constants.MAX_UINT256);
-            IERC20Minimal(underlyingAsset).approve(toApprove[i], Constants.MAX_UINT256);
+            underlyingAsset.approve(toApprove[i], Constants.MAX_UINT256);
         }
 
-        IERC20Minimal(underlyingAsset).approve(address(token), Constants.MAX_UINT256);
+        underlyingAsset.approve(address(token), Constants.MAX_UINT256);
+
         return Currency.wrap(address(token));
     }
 
@@ -103,7 +112,7 @@ abstract contract MarketTestBase is Test, Deployers {
         return Currency.wrap(address(token));
     }
 
-    function deployCurrencies(address hookAddr) internal {
+    function _deployCurrencies(address hookAddr) internal virtual {
         Currency _currencyA = deployMintAndApproveCurrency();
         Currency _currencyB = deployMintAndApproveCurrency();
 
@@ -117,7 +126,7 @@ abstract contract MarketTestBase is Test, Deployers {
             CurrencySortHelper.sortAddresses(Currency.unwrap(_currencyC), Currency.unwrap(_currencyD));
     }
 
-    function deployCorePool() internal {
+    function _deployCorePool(uint160 sqrtPriceX96) internal {
         Currency currencyA = _currency2;
         Currency currencyB = _currency3;
         if (Currency.unwrap(currencyA) > Currency.unwrap(currencyB)) {
@@ -125,36 +134,56 @@ abstract contract MarketTestBase is Test, Deployers {
         }
         corePoolKey = PoolKey(currencyA, currencyB, 3000, 60, IHooks(coreHookAddress));
         vm.prank(marketFactory);
-        manager.initialize(corePoolKey, SQRT_PRICE_1_1);
+        manager.initialize(corePoolKey, sqrtPriceX96);
     }
 
-    function deployProxyPool(address proxyHookAddress) internal {
-        // Deployment and activation moved to setUp
+    function _deployProxyPool(uint160 sqrtPriceX96) internal {
+        // Initialize proxy pool
+        Currency currencyA = _currency0;
+        Currency currencyB = _currency1;
+        if (Currency.unwrap(currencyA) > Currency.unwrap(currencyB)) {
+            (currencyA, currencyB) = (currencyB, currencyA);
+        }
+        proxyPoolKey = PoolKey(currencyA, currencyB, 3000, 60, IHooks(address(proxyHook)));
+        vm.prank(marketFactory);
+        manager.initialize(proxyPoolKey, sqrtPriceX96);
     }
 
     function _deployFreshManagerAndRouters() internal {
         deployFreshManagerAndRouters();
-        oracleRegistry = new OracleRegistry();
+        oracleHelper = new OracleHelper(resilientOracle);
         marketFactory = makeAddr("marketFactory");
 
         // deploy custom router and verifier
         icVerifier = new ICSpokeVerifier(makeAddr("icCanister"));
         stubSpokeVerifier = new StubSpokeVerifier();
         signalManager = new VRLSignalManager(
-            address(stubSpokeVerifier), address(oracleRegistry), address(marketFactory), signalExpiryInSeconds
+            address(stubSpokeVerifier), address(oracleHelper), address(marketFactory), signalExpiryInSeconds
         );
-        mmPositionManager =
-            address(new MMPositionManager(address(manager), address(signalManager), address(marketFactory)));
+
+        // deploy the settlement observer
+        address[] memory verifiers = new address[](1);
+        verifiers[0] = address(new StubSettlementVerifier());
+        settlementObserver = new VRLSettlementObserver(verifiers);
+        mmPositionManager = address(
+            new MMPositionManager(
+                address(manager), address(signalManager), address(marketFactory), address(settlementObserver)
+            )
+        );
     }
 
-    function _setupMarket() internal {
-        _deployFreshManagerAndRouters();
+    function _deployHooks() internal {
         // Compute core hook address
         uint160 coreFlags = HookFlags.CORE_HOOK_FLAGS;
         coreHookAddress = address(coreFlags);
 
         // Deploy CoreHook (calculator set to address(0))
-        deployCodeTo("CoreHook.sol", abi.encode(manager, marketFactory, mmPositionManager, address(0)), coreHookAddress);
+        address oracleHelperAddress = address(oracleHelper);
+        deployCodeTo(
+            "CoreHook.sol",
+            abi.encode(manager, marketFactory, mmPositionManager, oracleHelperAddress, address(0)),
+            coreHookAddress
+        );
 
         // Compute proxy hook address
         uint160 proxyFlags = HookFlags.PROXY_HOOK_FLAGS;
@@ -162,13 +191,19 @@ abstract contract MarketTestBase is Test, Deployers {
 
         // Deploy ProxyHook
         deployCodeTo("ProxyHook.sol", abi.encode(manager, marketFactory), proxyHookAddress);
-        proxyHook = ProxyHook(proxyHookAddress);
+        proxyHook = ProxyHook(payable(proxyHookAddress));
         mv = IMarketVault(address(proxyHook));
 
-        // Mock factory calls
+        // Mock factor calls to get `IMarketFactory(marketFactory).getCoreHook()` when we activate a proxyhook as below
         vm.mockCall(
             marketFactory, abi.encodeWithSelector(IMarketFactory.getCoreHook.selector), abi.encode(coreHookAddress)
         );
+        // Activate proxy hooks
+        vm.prank(marketFactory);
+        proxyHook.activate();
+    }
+
+    function _mockFactoryCalls() internal {
         vm.mockCall(
             marketFactory,
             abi.encodeWithSelector(IMarketFactory.mmPositionManager.selector),
@@ -188,39 +223,6 @@ abstract contract MarketTestBase is Test, Deployers {
             abi.encodeWithSelector(IVTSManager.getMarketVTSConfiguration.selector),
             abi.encode(VTSConfigs.getDefaultConfig())
         );
-        // Activate proxy hooks
-        vm.prank(marketFactory);
-        proxyHook.activate();
-
-        deployCurrencies(proxyHookAddress);
-        deployCorePool();
-
-        // Initialize proxy pool
-        Currency currencyA = _currency0;
-        Currency currencyB = _currency1;
-        if (Currency.unwrap(currencyA) > Currency.unwrap(currencyB)) {
-            (currencyA, currencyB) = (currencyB, currencyA);
-        }
-        proxyPoolKey = PoolKey(currencyA, currencyB, 3000, 60, IHooks(proxyHookAddress));
-        vm.prank(marketFactory);
-        manager.initialize(proxyPoolKey, SQRT_PRICE_1_1);
-
-        // Set core pool key against the proxy pool key id.
-        vm.prank(marketFactory);
-        proxyHook.setCorePoolKey(corePoolKey);
-
-        LiquidityCommitmentCertificate lcc0 = LiquidityCommitmentCertificate(Currency.unwrap(_currency2));
-        LiquidityCommitmentCertificate lcc1 = LiquidityCommitmentCertificate(Currency.unwrap(_currency3));
-
-        _currency0.transfer(address(this), initialLiquidity);
-        _currency1.transfer(address(this), initialLiquidity);
-
-        IERC20Minimal(lcc0.underlyingAsset()).approve(address(lcc0), initialLiquidity);
-        lcc0.wrap(initialLiquidity);
-
-        IERC20Minimal(lcc1.underlyingAsset()).approve(address(lcc1), initialLiquidity);
-        lcc1.wrap(initialLiquidity);
-
         // Mock factory calls made by LCC contract when it is transferred to a non-protocol bound address and tracking is activated
         vm.mockCall(
             marketFactory, abi.encodeWithSelector(IMarketFactory.coreToProxy.selector), abi.encode(proxyPoolKey.toId())
@@ -236,12 +238,12 @@ abstract contract MarketTestBase is Test, Deployers {
             marketFactory, abi.encodeWithSelector(IMarketFactory.coreToProxy.selector), abi.encode(proxyPoolKey.toId())
         );
         vm.mockCall(
-            marketFactory, abi.encodeWithSelector(IMarketFactory.proxyToHook.selector), abi.encode(proxyHookAddress)
+            marketFactory, abi.encodeWithSelector(IMarketFactory.proxyToHook.selector), abi.encode(address(proxyHook))
         );
         vm.mockCall(
             marketFactory,
             abi.encodeWithSelector(IMarketFactory.corePoolToProxyHook.selector),
-            abi.encode(proxyHookAddress)
+            abi.encode(address(proxyHook))
         );
         // Mock different responses based on the poolId parameter
         vm.mockCall(
@@ -255,14 +257,37 @@ abstract contract MarketTestBase is Test, Deployers {
             abi.encodeWithSelector(IMarketFactory.poolIdToPoolKey.selector, proxyPoolKey.toId()),
             abi.encode(proxyPoolKey)
         );
+    }
 
+    function _setupMarket() internal {
+        _deployFreshManagerAndRouters();
+        _deployHooks();
+        _deployCurrencies(address(proxyHook));
+        _deployCorePool(SQRT_PRICE_1_1);
+        _deployProxyPool(SQRT_PRICE_1_1);
+
+        // Set core pool key against the proxy pool key id.
+        vm.prank(marketFactory);
+        proxyHook.setCorePoolKey(corePoolKey);
+
+        // wrap enough lcc tokens by providing the underlying asset to the lcc contract as 'collateral'
+        LiquidityCommitmentCertificate lcc0 = LiquidityCommitmentCertificate(Currency.unwrap(_currency2));
+        LiquidityCommitmentCertificate lcc1 = LiquidityCommitmentCertificate(Currency.unwrap(_currency3));
+
+        IERC20Minimal(lcc0.underlying()).approve(address(lcc0), initialLiquidity);
+        lcc0.wrap(initialLiquidity);
+
+        IERC20Minimal(lcc1.underlying()).approve(address(lcc1), initialLiquidity);
+        lcc1.wrap(initialLiquidity);
+
+        // mock the calls that would be made to the factory when we interact with the market
+        _mockFactoryCalls();
+
+        // add some liquidity to the pool
         modifyLiquidityRouter.modifyLiquidity(
             corePoolKey,
             ModifyLiquidityParams({
-                tickLower: -60,
-                tickUpper: 60,
-                liquidityDelta: int256(initialLiquidity),
-                salt: bytes32(0)
+                tickLower: -60, tickUpper: 60, liquidityDelta: int256(initialLiquidity), salt: bytes32(0)
             }),
             ZERO_BYTES
         );

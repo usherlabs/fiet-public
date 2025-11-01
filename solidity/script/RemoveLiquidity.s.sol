@@ -136,7 +136,7 @@ contract RemoveLiquidityScript is ScriptHelper {
 
         PoolId proxyPoolId = factory.coreToProxy(corePoolKey.toId());
         address proxyHookAddr = factory.proxyToHook(proxyPoolId);
-        proxyHook = ProxyHook(proxyHookAddr);
+        proxyHook = ProxyHook(payable(proxyHookAddr));
 
         lcc0 = LiquidityCommitmentCertificate(factory.getLCC(token0));
         lcc1 = LiquidityCommitmentCertificate(factory.getLCC(token1));
@@ -163,11 +163,7 @@ contract RemoveLiquidityScript is ScriptHelper {
 
         (Currency currency0Proxy, Currency currency1Proxy) = CurrencySortHelper.sortAddresses(token0, token1);
         proxyPoolKey = PoolKey({
-            currency0: currency0Proxy,
-            currency1: currency1Proxy,
-            fee: 0,
-            tickSpacing: tickSpacingVal,
-            hooks: proxyHook
+            currency0: currency0Proxy, currency1: currency1Proxy, fee: 0, tickSpacing: tickSpacingVal, hooks: proxyHook
         });
         console.log(" ");
         console.log("Core Pool (receives liquidity):");

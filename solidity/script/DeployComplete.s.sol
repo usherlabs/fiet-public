@@ -6,6 +6,7 @@ import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {HookMiner} from "v4-periphery/src/utils/HookMiner.sol";
+import {IOwnable} from "@chainlink/contracts/shared/interfaces/IOwnable.sol";
 
 import {CoreHook} from "../src/CoreHook.sol";
 import {ProxyHook} from "../src/ProxyHook.sol";
@@ -18,9 +19,11 @@ import {HookFlags} from "./constants/HookFlags.sol";
 import {EthSepoliaConstants} from "./constants/EthSepolia.sol";
 import {MMPositionManager} from "../src/MMPositionManager.sol";
 import {StubSpokeVerifier} from "../src/modules/StubSpokeVerifier.sol";
-import {OracleRegistry} from "../src/OracleRegistry.sol";
-import {ChainlinkFactory} from "../src/oracles/chainlink/ChainlinkFactory.sol";
 import {VRLSignalManager} from "../src/modules/VRLSignalManager.sol";
+import {VRLSettlementObserver} from "../src/modules/VRLSettlementObserver.sol";
+import {StubSettlementVerifier} from "../src/modules/StubSettlementVerifier.sol";
+import {OracleHelper} from "../src/modules/OracleHelper.sol";
+import {GlobalConfig} from "../src/GlobalConfig.sol";
 
 /**
  * @title CompleteDeployScript
@@ -42,7 +45,10 @@ contract CompleteDeployScript is ScriptHelper {
     address public proxyHook;
     address public marketFactory;
     address public mmPositionManager;
-    address public oracleRegistry;
+    address public oracleHelper;
+    address public signalManager;
+    address public settlementObserver;
+    address public globalConfig;
     // Network-specific constants set from environment
     address public poolManagerAddress;
     address public create2Deployer;
@@ -69,37 +75,49 @@ contract CompleteDeployScript is ScriptHelper {
 
         vm.startBroadcast(deployerPrivateKey);
 
-        // Step 1: Deploy OracleRegistry and chainlink oracle factory
-        console.log("\n=== Deploying OracleRegistry and Chainlink Oracle Factory ===");
-        oracleRegistry = _deployOracleRegistry();
-        console.log("OracleRegistry deployed at:", oracleRegistry);
+        // Step 1: Deploy OracleHelper
+        // @dev the ResilientOracle would have been deployed and provided as an env var `RESILIENT_ORACLE_ADDRESS`
+        console.log("\n=== Deploying OracleHelper ===");
+        oracleHelper = _deployOracleHelper();
+        console.log("OracleHelper deployed at:", oracleHelper);
 
         // Step 2: Deploy MarketFactory
         console.log("\n=== Deploying MarketFactory ===");
         marketFactory = _deployMarketFactory();
         console.log("MarketFactory deployed at:", marketFactory);
 
-        // Step 3: Deploy MMPositionManager (must be before CoreHook)
+        // Step 3: Deploy Verifiers
+        console.log("\n=== Deploying Verifiers ===");
+        _deployVerifiers();
+        console.log("SignalManager deployed at:", signalManager);
+        console.log("SettlementObserver deployed at:", settlementObserver);
+
+        // Step 4: Deploy MMPositionManager (must be before CoreHook)
         console.log("\n=== Deploying MMPositionManager ===");
         mmPositionManager = _deployMMPositionManager();
         console.log("MMPositionManager deployed at:", mmPositionManager);
 
-        // Step 4: Deploy CoreHook
+        // Step 5: Deploy CoreHook
         console.log("\n=== Deploying CoreHook ===");
         coreHook = _deployCoreHook();
         console.log("CoreHook deployed at:", coreHook);
 
-        // Step 5: Set hooks in MarketFactory
+        // Step 6: Set hooks in MarketFactory
         console.log("\n=== Setting Hooks in MarketFactory ===");
         _setHooksInFactory();
 
-        // Step 6: Verify hooks addresses across the contracts
+        // Step 7: Verify hooks addresses across the contracts
         console.log("\n=== Verifying Hooks ===");
         _verifyHooks();
 
-        // Step 7: Add all the protocol addresses expected to hold LCC as a protocol bound address in the market factory
+        // Step 8: Add all the protocol addresses expected to hold LCC as a protocol bound address in the market factory
         console.log("\n=== Adding addresses to bounds array ===");
         _addAddressesToBounds();
+
+        // Step 9: Deploy GlobalConfig and assign ownership to the market factory
+        console.log("\n=== Deploying GlobalConfig ===");
+        globalConfig = _setupGlobalConfig();
+        console.log("GlobalConfig deployed at:", globalConfig);
 
         vm.stopBroadcast();
 
@@ -110,6 +128,33 @@ contract CompleteDeployScript is ScriptHelper {
         console.log("CoreHook:", coreHook);
         console.log("MarketFactory:", marketFactory);
         console.log("MMPositionManager:", mmPositionManager);
+    }
+
+    function _setupGlobalConfig() internal returns (address) {
+        // deploy the global config
+        GlobalConfig config = new GlobalConfig();
+        console.log("GlobalConfig deployed at:", address(config));
+
+        // Populate the owned contracts array with the contracts that need to be owned by the global config
+        address[] memory ownedContracts = new address[](1);
+        ownedContracts[0] = marketFactory;
+
+        // Transfer ownership of the contracts to the global config
+        uint256 len = ownedContracts.length;
+        for (uint256 i = 0; i < len; i++) {
+            IOwnable(ownedContracts[i]).transferOwnership(address(config));
+        }
+        return address(config);
+    }
+
+    function _deployOracleHelper() internal returns (address) {
+        // read in the predeployed address of the resilient oracle from the env
+        address resilientOracleAddress = vm.envAddress("RESILIENT_ORACLE_ADDRESS");
+        console.log("Oracle loaded at address:", resilientOracleAddress);
+        OracleHelper helper = new OracleHelper(resilientOracleAddress);
+        console.log("OracleHelper deployed at:", address(helper));
+
+        return address(helper);
     }
 
     /**
@@ -131,8 +176,9 @@ contract CompleteDeployScript is ScriptHelper {
         console.log("CoreHook salt:", vm.toString(salt));
 
         // Deploy the hook
-        CoreHook deployedHook =
-            new CoreHook{salt: salt}(poolManagerAddress, marketFactory, address(mmPositionManager), calculator);
+        CoreHook deployedHook = new CoreHook{
+            salt: salt
+        }(poolManagerAddress, marketFactory, address(mmPositionManager), oracleHelper, calculator);
         require(address(deployedHook) == hookAddress, "CoreHook: address mismatch");
 
         return address(deployedHook);
@@ -146,21 +192,31 @@ contract CompleteDeployScript is ScriptHelper {
         // Initial bounds array (empty for now, can be updated later)
         address[] memory initialBounds = new address[](0);
 
-        MarketFactory factory = new MarketFactory(poolManagerAddress, oracleRegistry, initialBounds);
+        MarketFactory factory = new MarketFactory(poolManagerAddress, oracleHelper, initialBounds);
 
         return address(factory);
     }
 
-    function _deployOracleRegistry() internal returns (address) {
-        uint256 decimals = 18;
-        OracleRegistry registry = new OracleRegistry();
-        console.log("OracleRegistry deployed at:", address(registry));
-        // deploy and set the chainlink oracle factory
-        ChainlinkFactory factory = new ChainlinkFactory(address(registry), decimals);
-        console.log("Chainlink Oracle Factory deployed at:", address(factory));
-        registry.setDefaultFactory(address(factory));
-        console.log("Chainlink Oracle Factory set in OracleRegistry");
-        return address(registry);
+    /**
+     * @dev Deploys Verifiers
+     */
+    function _deployVerifiers() internal {
+        uint256 signalExpiryInSeconds = 3600;
+
+        // deploy the proof verifiers
+        // ? deploy a stub verifier for now, would eventually be an IC verifier
+        address stubVerifier = address(new StubSpokeVerifier());
+        console.log("StubSpokeVerifier deployed at:", stubVerifier);
+        signalManager = address(new VRLSignalManager(stubVerifier, oracleHelper, marketFactory, signalExpiryInSeconds));
+        console.log("SignalManager deployed at:", signalManager);
+
+        // deploy the settlement observer
+        address stubSettlementVerifierAddress = address(new StubSettlementVerifier());
+        console.log("StubSettlementVerifier deployed at:", stubSettlementVerifierAddress);
+        // create an array of verifiers and set the stub one as the first verifier
+        address[] memory verifiers = new address[](1);
+        verifiers[0] = stubSettlementVerifierAddress;
+        settlementObserver = address(new VRLSettlementObserver(verifiers));
     }
 
     /**
@@ -168,14 +224,8 @@ contract CompleteDeployScript is ScriptHelper {
      * @return The deployed MMPositionManager address
      */
     function _deployMMPositionManager() internal returns (address) {
-        uint256 signalExpiryInSeconds = 3600;
-        // ? deploy a stub verifier for now, would eventually be an IC verifier
-        address stubVerifier = address(new StubSpokeVerifier());
-        console.log("StubSpokeVerifier deployed at:", stubVerifier);
-        address signalManager =
-            address(new VRLSignalManager(stubVerifier, oracleRegistry, marketFactory, signalExpiryInSeconds));
-        console.log("SignalManager deployed at:", signalManager);
-        MMPositionManager positionManager = new MMPositionManager(poolManagerAddress, signalManager, marketFactory);
+        MMPositionManager positionManager =
+            new MMPositionManager(poolManagerAddress, signalManager, marketFactory, settlementObserver);
         console.log("MMPositionManager deployed at:", address(positionManager));
         return address(positionManager);
     }
@@ -235,7 +285,8 @@ contract CompleteDeployScript is ScriptHelper {
         writeAddress("coreHook", coreHook);
         writeAddress("marketFactory", marketFactory);
         writeAddress("positionManager", mmPositionManager);
-        writeAddress("oracleRegistry", oracleRegistry);
+        writeAddress("oracleHelper", oracleHelper);
+        writeAddress("globalConfig", globalConfig);
 
         console.log("Deployment addresses written to deployments/%s_deployments.json", networkName);
     }
@@ -285,15 +336,17 @@ contract CompleteDeployScript is ScriptHelper {
     function readDeploymentAddresses()
         external
         view
-        returns (address coreHookAddr, address proxyHookAddr, address marketFactoryAddr)
+        returns (address coreHookAddr, address proxyHookAddr, address marketFactoryAddr, address globalConfigAddr)
     {
         coreHookAddr = readAddress("coreHook");
         proxyHookAddr = readAddress("proxyHook");
         marketFactoryAddr = readAddress("marketFactory");
+        globalConfigAddr = readAddress("globalConfig");
 
         console.log("Deployment addresses from JSON:");
         console.log("CoreHook:", coreHookAddr);
         console.log("ProxyHook:", proxyHookAddr);
         console.log("MarketFactory:", marketFactoryAddr);
+        console.log("GlobalConfig:", globalConfigAddr);
     }
 }

@@ -8,11 +8,11 @@ import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/Messa
 import {ISpokeVerifier} from "../interfaces/ISpokeVerifier.sol";
 import {MarketMaker} from "../libraries/MarketMaker.sol";
 import {console} from "forge-std/console.sol";
-import {ShaMerkle} from "../libraries/ShaMerkle.sol";
+import {MerkleProofVerifier} from "../libraries/MerkleProofVerifier.sol";
 
 contract ICSpokeVerifier is ISpokeVerifier {
     using ECDSA for bytes32;
-    using ShaMerkle for bytes32[];
+    using MerkleProofVerifier for bytes32[];
     using MarketMaker for MarketMaker.State;
 
     error UnauthorizedCaller();

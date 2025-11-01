@@ -12,24 +12,26 @@ import {PoolId} from "v4-periphery/lib/v4-core/src/types/PoolId.sol";
 import {IProxyHook} from "./interfaces/IProxyHook.sol";
 import {MarketVault} from "./modules/MarketVault.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
-import {IOracle} from "./interfaces/IOracle.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
-import {IOracleRegistry} from "./interfaces/IOracleRegistry.sol";
 import {IVTSManager} from "./interfaces/IVTSManager.sol";
 import {console} from "forge-std/console.sol";
+import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {ILCC} from "./interfaces/ILCC.sol";
+import {CurrencyTransfer} from "./libraries/CurrencyTransfer.sol";
 
 contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC {
     using SafeTransferLib for ERC20;
+    using CurrencyTransfer for Currency;
 
     error SenderNotIssuer(address sender);
     error InvalidUnderlyingAsset();
     error TransferNotAllowed();
     error InvalidAmount();
+    error InsufficientETH();
     error InvalidMarketFactory();
     error InsufficientWrappedLiquidity(uint256 requested, uint256 available);
 
-    address public immutable underlyingAsset;
+    address private immutable underlyingAsset;
     address public immutable marketFactory;
 
     // All native underlying liquidity will either be
@@ -83,17 +85,13 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
      * @param _marketFactory The MarketFactory contract that manages this LCC.
      */
     constructor(address _underlyingAsset, address[] memory _issuers, address _marketFactory)
-        ERC20(
-            string.concat("Fiet Liquidity Commitment Certificate for ", IERC20Metadata(_underlyingAsset).name()),
-            string.concat("lcc-", IERC20Metadata(_underlyingAsset).symbol()),
-            IERC20Metadata(_underlyingAsset).decimals()
-        )
+        ERC20(_getLCCName(_underlyingAsset), _getLCCSymbol(_underlyingAsset), _getLCCDecimals(_underlyingAsset))
         Ownable(msg.sender)
     {
-        // TODO: handle ETH native token
-        if (_underlyingAsset == address(0)) {
-            revert InvalidUnderlyingAsset();
-        }
+        // // TODO: handle ETH native token
+        // if (_underlyingAsset == address(0)) {
+        //     revert InvalidUnderlyingAsset();
+        // }
         if (_marketFactory == address(0)) {
             revert InvalidMarketFactory();
         }
@@ -106,6 +104,17 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
         }
 
         // Note: bounds are managed by the MarketFactory, not set in constructor
+    }
+
+    function underlying() external view returns (address) {
+        // the `ResilientOracle` might call underlying()
+        // if it calls underlying for lcc-eth
+        // it will return address(0) which would cause an erc20 error as it tried to call .decimals() on it
+        // so there is an edge case for the oracles for getting the underlying price of lcc-eth
+        // a solution could be to modify the asset being returned to the oracle's native address
+        // if the caller is the resilient oracle
+
+        return underlyingAsset;
     }
 
     // some trusted issuer Smart Contracts can be allowed to mint tokens and hold the liquidity
@@ -137,8 +146,17 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
 
     // Called by Issuer before settling liquidity from LCCs to the market.
     function prepareSettle(uint256 amount) external onlyIssuer {
+        address sender = msg.sender;
+        Currency underlyingAssetCurrency = Currency.wrap(underlyingAsset);
         // Allow issuer to facilitate direct liquidity provision transfer of underlying tokens
-        ERC20(underlyingAsset).approve(msg.sender, amount);
+        // approval does nothing if we are using ETH(address(0)) as the underlying asset
+        // so to prepare settle, we simply transfer the ETH to the issuer calling this function
+        // so that way the caller can then transfer the ETH on the behalf of the LCC contract since there is no native  `transferFrom`
+        if (underlyingAssetCurrency.isAddressZero()) {
+            underlyingAssetCurrency.transfer(sender, amount);
+        } else {
+            underlyingAssetCurrency.approve(sender, amount);
+        }
         uaSupply -= amount;
     }
 
@@ -156,16 +174,25 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
 
     // DirectLPs and Traders engaging the CorePool directly will need LCC. LCC is 1:1 with the underlying asset.
     function _wrap(address from, address to, uint256 amount) internal {
+        bool isNativeETHAsset = underlyingAsset == address(0);
+        // throw error if the native ETH is insufficient and it is a native ETH backed LCC
+        if (isNativeETHAsset && msg.value != amount) {
+            revert InvalidAmount();
+        }
+
         // mint some tokens
         _mint(to, amount);
 
-        // transfer the equivalent of the underlying asset from the recipient
-        ERC20(underlyingAsset).safeTransferFrom(from, address(this), amount);
+        // transfer the underlying asset from the recipient if it is not a native ETH backed LCC
+        if (!isNativeETHAsset) {
+            // safe to make ERC20 call here since we have verified that from address is not a native asset
+            ERC20(underlyingAsset).safeTransferFrom(from, address(this), amount);
+        }
 
         uaSupply += amount;
     }
 
-    function wrap(uint256 amount) external {
+    function wrap(uint256 amount) external payable {
         _wrap(msg.sender, msg.sender, amount);
     }
 
@@ -270,7 +297,7 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
         _unwrap(msg.sender, msg.sender, amount);
     }
 
-    function wrapTo(address to, uint256 amount) external {
+    function wrapTo(address to, uint256 amount) external payable {
         _wrap(msg.sender, to, amount);
     }
 
@@ -280,10 +307,12 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
 
     function _transferUnderlyingAssets(address user, uint256 amount) internal {
         // confirm the amount is valid and not greater than the uaSupply
-        require(amount > 0 && amount <= uaSupply, "invalid amount");
+        if (amount == 0 || amount > uaSupply) {
+            revert InvalidAmount();
+        }
         uaSupply -= amount;
 
-        ERC20(underlyingAsset).safeTransfer(user, amount);
+        Currency.wrap(underlyingAsset).transfer(user, amount);
     }
 
     // Pay an outstanding settlement to a user and burn their underlying tokens
@@ -309,28 +338,6 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
     function transferFrom(address from, address to, uint256 amount) public virtual override returns (bool) {
         onTransfer(from, to, amount);
         return super.transferFrom(from, to, amount);
-    }
-
-    /**
-     * @dev Get the price of the underlying asset
-     * @return The price of the asset
-     * @return The decimals of the asset
-     */
-    function usdPrice(address marketOracleFactory) public view returns (uint256, uint256) {
-        string memory quoteTicker = "USD";
-        address oracleRegistry = IMarketFactory(marketFactory).oracleRegistry();
-        // get the ticker of the underlying asset
-        string memory ticker = IERC20Metadata(underlyingAsset).symbol();
-        // asspend /quote to it eg /USDT
-        string memory pricePair = string.concat(ticker, "/", quoteTicker);
-        // get the price of the asset using oracle
-        address oracle = IOracleRegistry(oracleRegistry).getOracle(pricePair, marketOracleFactory);
-
-        // get the price of the asset
-        uint256 assetPrice = IOracle(oracle).getPrice();
-        uint256 decimals = IOracle(oracle).decimals();
-
-        return (assetPrice, decimals);
     }
 
     /**
@@ -437,5 +444,26 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
 
     function toERC20() external view returns (ERC20) {
         return ERC20(address(this));
+    }
+
+    function _getLCCName(address asset) private view returns (string memory) {
+        if (asset == address(0)) {
+            return "Fiet Liquidity Commitment Certificate for Ether";
+        }
+        return string.concat("Fiet Liquidity Commitment Certificate for ", IERC20Metadata(asset).name());
+    }
+
+    function _getLCCSymbol(address asset) private view returns (string memory) {
+        if (asset == address(0)) {
+            return "lcc-ETH";
+        }
+        return string.concat("lcc-", IERC20Metadata(asset).symbol());
+    }
+
+    function _getLCCDecimals(address asset) private view returns (uint8) {
+        if (asset == address(0)) {
+            return 18;
+        }
+        return IERC20Metadata(asset).decimals();
     }
 }
