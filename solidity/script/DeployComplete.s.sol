@@ -207,8 +207,7 @@ contract CompleteDeployScript is ScriptHelper {
         address publicKeyAddress = vm.envAddress("PUBLIC_KEY_SIGNAL_VERIFIER_ADDRESS");
         address signalVerifier = address(new ECDSASignatureSignalVerifier(publicKeyAddress));
 
-        signalManager =
-            address(new VRLSignalManager(marketFactory, oracleHelper, signalVerifier, signalExpiryInSeconds));
+        signalManager = address(new VRLSignalManager(marketFactory, signalVerifier, signalExpiryInSeconds));
         console.log("SignalManager deployed at:", signalManager);
 
         // ? deploy settlement observer without verifiers. No verifiers developed yet.

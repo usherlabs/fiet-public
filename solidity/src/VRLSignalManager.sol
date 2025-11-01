@@ -9,15 +9,7 @@ import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 import {ISignalVerifier} from "./interfaces/ISignalVerifier.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {LiquiditySignal} from "./types/Position.sol";
-import {IResilientOracle} from "../interfaces/IResilientOracle.sol";
-import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
-import {BalanceDelta, BalanceDeltaLibrary} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
-import {ILCC} from "../interfaces/ILCC.sol";
-import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
-import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
-import {LiquidityUtils} from "../libraries/LiquidityUtils.sol";
-import {IVTSManager} from "../interfaces/IVTSManager.sol";
-import {IOracleHelper} from "../interfaces/IOracleHelper.sol";
+import {IOracleHelper} from "./interfaces/IOracleHelper.sol";
 
 contract VRLSignalManager is Ownable {
     ISignalVerifier public verifier;
@@ -58,11 +50,8 @@ contract VRLSignalManager is Ownable {
     mapping(address => uint256) public mmNonce;
     uint256 public signalExpiryInSeconds;
 
-    constructor(address _marketFactory, address _oracleHelper, address _verifier, uint256 _signalExpiryInSeconds)
-        Ownable(msg.sender)
-    {
+    constructor(address _marketFactory, address _verifier, uint256 _signalExpiryInSeconds) Ownable(msg.sender) {
         verifier = ISignalVerifier(_verifier);
-        oracleHelper = IOracleHelper(_oracleHelper);
         marketFactory = IMarketFactory(_marketFactory);
         signalExpiryInSeconds = _signalExpiryInSeconds;
     }

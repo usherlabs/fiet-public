@@ -1,24 +1,14 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import {IVRLSettlementObserver} from "../interfaces/IVRLSettlementObserver.sol";
-import {ISettlementVerifier} from "../interfaces/ISettlementVerifier.sol";
+import {IVRLSettlementObserver} from "./interfaces/IVRLSettlementObserver.sol";
+import {ISettlementVerifier} from "./interfaces/ISettlementVerifier.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 
 contract VRLSettlementObserver is Ownable, IVRLSettlementObserver {
-    error InvalidVerifierAddress();
-    error InvalidSettlementProof();
-    error InvalidVerifierIndex();
-    error VerifierNotMapped();
-
-    event VerifierAdded(address indexed verifier, uint256 indexed index);
-    event VerifierRemoved(address indexed verifier, uint256 indexed removedIndex);
-    event VerifierAllowed(address indexed token, uint32 indexed verifierIndex);
-    event VerifierDisallowed(address indexed token, uint32 indexed verifierIndex);
-
     mapping(uint32 => address) public verifiers;
     uint32 public nextVerifierIndex;
     mapping(address => mapping(uint32 => bool)) public allowedVerifiersForToken;
@@ -67,8 +57,12 @@ contract VRLSettlementObserver is Ownable, IVRLSettlementObserver {
 
     /**
      * @dev This function is used to verify the settlement proof and return the grace period extension
+     * @param poolKey The pool key of the pool to verify the settlement proof for
+     * @param tokenIndex The index of the token to verify the settlement proof for
      * @param verifierIndex The index of the verifier to use
      * @param settlementProof The settlement proof to verify
+     * @param revertOnInvalid Whether to revert if the settlement proof is invalid
+     * @return isProofValid Whether the settlement proof is valid
      */
     function verifySettlementProof(
         PoolKey memory poolKey,
