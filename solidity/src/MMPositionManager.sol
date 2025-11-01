@@ -50,7 +50,9 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
     error InvalidToken(address tokenAddr);
     error InactivePosition(PositionId positionId);
     error InsufficientAmountToWithdraw(PositionId positionId, uint256 amount, uint256 maxAmount);
+
     event GracePeriodExtended(PositionId indexed positionId, uint256 extension0, uint256 extension1);
+
     error InvalidMarket(PoolKey poolKey);
     error RFSNotOpen(PositionId positionId);
     error SignalExpired(uint256 tokenId);
@@ -301,9 +303,8 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
 
         // use the position id to make the initial settlement of the underlying tokens to the proxy hook
         // Get amount of underlying liquidity to transfer from the issuer to the lcc
-        (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) = LiquidityUtils.getBaseSettlementAmounts(
-            liquidityParams, _getVTSManager().getMarketVTSConfiguration(poolKey.toId())
-        );
+        (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) = LiquidityUtils
+            .getBaseSettlementAmounts(liquidityParams, _getVTSManager().getMarketVTSConfiguration(poolKey.toId()));
 
         // settle the underlying tokens to the proxy hook
         // By calling VTSManager.onMMLiquidityModify, we are also settling the position growths for new MMPosition.
@@ -318,7 +319,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         // return left over ETH to the caller
         uint256 ethAmountToSettle =
             LiquidityUtils.getETHAmount(poolKey, underlyingLiquidityFraction0, underlyingLiquidityFraction1);
-        Currency.wrap(address(0)).refundETH(ethAmountToSettle);
+        Currency.wrap(address(0)).refundNative(ethAmountToSettle);
 
         return positionId;
     }
@@ -371,9 +372,8 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
 
         // settle base for the position
         // Get amount of underlying liquidity to transfer from the issuer to the lcc
-        (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) = LiquidityUtils.getBaseSettlementAmounts(
-            liquidityParams, _getVTSManager().getMarketVTSConfiguration(poolKey.toId())
-        );
+        (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) = LiquidityUtils
+            .getBaseSettlementAmounts(liquidityParams, _getVTSManager().getMarketVTSConfiguration(poolKey.toId()));
 
         // settle the underlying tokens to the proxy hook
         // By calling VTSManager.onMMLiquidityModify, we are also settling the position growths for new MMPosition.
@@ -386,7 +386,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         // return left over ETH to the caller
         uint256 ethAmountSpent =
             LiquidityUtils.getETHAmount(poolKey, underlyingLiquidityFraction0, underlyingLiquidityFraction1);
-        Currency.wrap(address(0)).refundETH(ethAmountSpent);
+        Currency.wrap(address(0)).refundNative(ethAmountSpent);
 
         emit SignalCommitted(msg.sender, tokenId, positionIndex);
 
@@ -492,9 +492,8 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         // if it is positive add liquidity to the position
         if (liquidity > 0) {
             // get the base settlements to make based on the liquidity to be added
-            (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) = LiquidityUtils.getBaseSettlementAmounts(
-                modifyLiquidityParams, vtsManager.getMarketVTSConfiguration(poolKey.toId())
-            );
+            (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) = LiquidityUtils
+                .getBaseSettlementAmounts(modifyLiquidityParams, vtsManager.getMarketVTSConfiguration(poolKey.toId()));
 
             // settle the underlying tokens to the proxy hook
             _modifyMarketUnderlyingAsset(
@@ -512,7 +511,7 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
             // return left over ETH to the caller
             uint256 ethAmountSpent =
                 LiquidityUtils.getETHAmount(poolKey, underlyingLiquidityFraction0, underlyingLiquidityFraction1);
-            Currency.wrap(address(0)).refundETH(ethAmountSpent);
+            Currency.wrap(address(0)).refundNative(ethAmountSpent);
         } else {
             // validate that the liquidity being removed is less than the total liquidity in the position
             // validate that rfs is not open for the position
@@ -615,7 +614,10 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
      * @param to The address of the user who is creating the commitment
      * @return tokenId The id of the nft created
      */
-    function _createCommitmentForSignal(address to, SignalState memory signalState) internal returns (uint256 tokenId) {
+    function _createCommitmentForSignal(address to, SignalState memory signalState)
+        internal
+        returns (uint256 tokenId)
+    {
         // get the token id
         tokenId = nextTokenId++;
         // mint the nft
@@ -803,8 +805,9 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
 
         // get grace period for this position from market vts configuration
         IVTSManager vtsManager = _getVTSManager();
-        vtsManager.getMarketVTSConfiguration(position.poolId)
-            .validateGracePeriodHasElapsed(positionId, positionToCheckpoint[positionId]);
+        vtsManager.getMarketVTSConfiguration(position.poolId).validateGracePeriodHasElapsed(
+            positionId, positionToCheckpoint[positionId]
+        );
 
         uint256 maxSiezureFractionBPS = vtsManager.getSeizureAmount(positionId);
         // based on the amount they are choosing to settle, calculate how much of the total siezable amount to be seized by the caller

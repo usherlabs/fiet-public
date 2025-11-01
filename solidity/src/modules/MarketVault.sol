@@ -289,6 +289,7 @@ abstract contract MarketVault is IMarketVault {
     }
 
     // Best practice: be explicit about intent
+    // TODO: Do we wnat to do anything here?
     receive() external payable {
         // Handle plain ETH transfers
     }

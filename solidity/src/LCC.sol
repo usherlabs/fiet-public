@@ -88,10 +88,6 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
         ERC20(_getLCCName(_underlyingAsset), _getLCCSymbol(_underlyingAsset), _getLCCDecimals(_underlyingAsset))
         Ownable(msg.sender)
     {
-        // // TODO: handle ETH native token
-        // if (_underlyingAsset == address(0)) {
-        //     revert InvalidUnderlyingAsset();
-        // }
         if (_marketFactory == address(0)) {
             revert InvalidMarketFactory();
         }

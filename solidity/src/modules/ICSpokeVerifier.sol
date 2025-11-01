@@ -7,24 +7,32 @@ import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/Messa
 
 import {ISpokeVerifier} from "../interfaces/ISpokeVerifier.sol";
 import {MarketMaker} from "../libraries/MarketMaker.sol";
-import {console} from "forge-std/console.sol";
-import {MerkleProofVerifier} from "../libraries/MerkleProofVerifier.sol";
+import {MerkleProofLib} from "solmate/utils/MerkleProofLib.sol";
 
 contract ICSpokeVerifier is ISpokeVerifier {
     using ECDSA for bytes32;
-    using MerkleProofVerifier for bytes32[];
     using MarketMaker for MarketMaker.State;
 
     error UnauthorizedCaller();
     error InvalidMerkleProof();
     error InvalidRootStateHashSignature();
 
-    address public canisterAddress;
+    address public immutable canisterAddress; // Threshold signature scheme (TSS) (tECDSA via MPC) address used to decentralise this signer.
 
     constructor(address _canisterAddress) {
         canisterAddress = _canisterAddress;
     }
 
+    /**
+     * @dev Verifies the proof of the market maker state
+     * @param nonce The nonce of the market maker
+     * @param rootStateHash The root state hash of the market maker
+     * @param rootStateHashSignature The signature of the root state hash
+     * @param mmStateHashSignature The signature of the market maker state
+     * @param mmStateData The market maker state data
+     * @param merkleProof The merkle proof of the market maker state
+     * @return True if the proof is valid, false otherwise
+     */
     function verifyProof(
         uint256 nonce,
         bytes32 rootStateHash,
@@ -56,14 +64,14 @@ contract ICSpokeVerifier is ISpokeVerifier {
         }
 
         // verify the merkle proof
-        bool isProofValid = merkleProof.verify(rootStateHash, mmStateHash);
+        bool isProofValid = MerkleProofLib.verify(merkleProof, rootStateHash, mmStateHash);
         if (!isProofValid) {
             // revert InvalidMerkleProof();
             return false;
         }
 
         // verify signature of the canister on the root state hash
-        bytes32 message = sha256(abi.encodePacked(nonce, rootStateHash));
+        bytes32 message = keccak256(abi.encodePacked(nonce, rootStateHash));
         bool isRootStateHashValid =
             MessageHashUtils.toEthSignedMessageHash(message).recover(rootStateHashSignature) == canisterAddress;
 

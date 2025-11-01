@@ -5,14 +5,12 @@ import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 import {MarketMaker} from "../../src/libraries/MarketMaker.sol";
 import {console} from "forge-std/console.sol";
-import {MerkleProofVerifier} from "../../src/libraries/MerkleProofVerifier.sol";
 import {MerkleProofGenerator} from "../libraries/MerkleProofGenerator.sol";
 import {LiquiditySignal} from "../../src/types/Position.sol";
 import {Test} from "forge-std/Test.sol";
 
 abstract contract MarketMakerTestBase is Test {
     using MarketMaker for MarketMaker.State;
-    using MerkleProofVerifier for bytes32[];
     using MerkleProofGenerator for bytes32[];
     using ECDSA for bytes32;
     using MessageHashUtils for bytes32;
@@ -76,7 +74,7 @@ abstract contract MarketMakerTestBase is Test {
                 _signEthMessage(marketMakerStates[i].privateKey, marketMakerStates[i].state.toLeafHash());
 
             // generate a canister signature of the payload(merkle root hash and signature)
-            bytes32 canisterSignaturePayload = sha256(abi.encodePacked(nonce, merkleRootHash));
+            bytes32 canisterSignaturePayload = keccak256(abi.encodePacked(nonce, merkleRootHash));
             bytes memory icCanisterMerkleRootHashSignature =
                 _signEthMessage(icCanisterPrivateKey, canisterSignaturePayload);
             // generate the liquidity signal

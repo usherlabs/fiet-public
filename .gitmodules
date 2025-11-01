@@ -16,9 +16,6 @@
 [submodule "solidity/lib/chainlink-brownie-contracts"]
 	path = solidity/lib/chainlink-brownie-contracts
 	url = https://github.com/smartcontractkit/chainlink-brownie-contracts
-[submodule "solidity/lib/solady"]
-	path = solidity/lib/solady
-	url = https://github.com/vectorized/solady
 [submodule "solidity/oracle-scripts/oracle"]
 	path = solidity/oracle-scripts/oracle
 	url = https://github.com/VenusProtocol/oracle
