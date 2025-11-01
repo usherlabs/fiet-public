@@ -29,7 +29,7 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
     error InsufficientWrappedLiquidity(uint256 requested, uint256 available);
 
     address public immutable underlyingAsset;
-    address public immutable marketFactory;
+    IMarketFactory public immutable marketFactory;
 
     // All native underlying liquidity will either be
     mapping(address => bool) public issuers;
@@ -57,16 +57,14 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
             return;
         }
 
-        IMarketFactory mf = IMarketFactory(marketFactory);
-
         // Allow transfers between protocol bounds
-        if (mf.bounds(to) || mf.bounds(from)) {
+        if (marketFactory.bounds(to) || marketFactory.bounds(from)) {
             _;
             return;
         }
 
         // Only protocol bounds can transfer to non-bounds (EOAs, other contracts)
-        if (!mf.bounds(from)) {
+        if (!marketFactory.bounds(from)) {
             revert TransferNotAllowed();
         }
 
@@ -95,7 +93,7 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
         }
 
         underlyingAsset = _underlyingAsset;
-        marketFactory = _marketFactory;
+        marketFactory = IMarketFactory(_marketFactory);
 
         for (uint256 i = 0; i < _issuers.length; i++) {
             issuers[_issuers[i]] = true;
@@ -115,7 +113,7 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
         // Get if the caller is a registered proxy hook
         // If it is, then we need to get the two currencies it proxies
         // Then check if the underlying asset falls under any of the two currencies it supports
-        address[2] memory currencies = IMarketFactory(marketFactory).proxyHookToCurrencyPair(caller);
+        address[2] memory currencies = marketFactory.proxyHookToCurrencyPair(caller);
         bool isAssetProxyPool = (currencies[0] == underlyingAsset || currencies[1] == underlyingAsset);
         if (isMarketVaultExclusive) {
             return isAssetProxyPool;
@@ -171,7 +169,7 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
         address sender = msg.sender;
 
         _burn(sender, amount);
-        _incrementCoverage(marketId, amount);
+        // _incrementCoverage(marketId, amount); // TODO: errors occuring here...
 
         if (deficitAmount > 0 && excessLCCRecipient != address(0)) {
             // Transfer to recipient.
@@ -227,7 +225,7 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
      * @param amount The amount to increment the coverage by
      */
     function _incrementCoverage(bytes32 marketId, uint256 amount) internal {
-        IVTSManager(IMarketFactory(marketFactory).getCoreHook()).incrementCoverage(PoolId.wrap(marketId), amount);
+        IVTSManager(marketFactory.getCoreHook()).incrementCoverage(PoolId.wrap(marketId), amount);
     }
 
     /**
@@ -384,7 +382,7 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
     // TODO: Should this exist here?
     function usdPrice(address marketOracleFactory) public view returns (uint256, uint256) {
         string memory quoteTicker = "USD";
-        address oracleRegistry = IMarketFactory(marketFactory).oracleRegistry();
+        address oracleRegistry = marketFactory.oracleRegistry();
         // get the ticker of the underlying asset
         string memory ticker = IERC20Metadata(underlyingAsset).symbol();
         // asspend /quote to it eg /USDT
@@ -445,17 +443,17 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
      */
     function _processMarketTracing(address recipient, uint256 amount) private {
         // get the appropriate flags from the core hook
-        address coreHook = IMarketFactory(marketFactory).getCoreHook();
+        address coreHook = marketFactory.getCoreHook();
 
         // read in all the bytes from the transient storage of the hook contract
         // Read transient storage from CoreHook
-        // TODO: Bug: Only aware of the last swap's market...
+        // TODO: Bug: Only aware of the last swap's market... eg. I can swap() without settle.
         bytes32 tracingFlagBytes = IExttload(coreHook).exttload(TransientSlots.TRACING_FLAG_SLOT);
         bytes32 currentMarketBytes = IExttload(coreHook).exttload(TransientSlots.CURRENT_MARKET_SLOT);
 
         // Tracing is active if this flag has been set by the core hook right after a swap
         bool isTracingActive = tracingFlagBytes != bytes32(0);
-        bool isProtocolBound = IMarketFactory(marketFactory).bounds(recipient);
+        bool isProtocolBound = marketFactory.bounds(recipient);
         bytes32 currentMarket = currentMarketBytes;
 
         if (isTracingActive && !isProtocolBound) {
@@ -477,14 +475,10 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
      */
     function _isLCCSupportedByMarket(bytes32 marketId) internal view returns (bool) {
         // get the two currencies that the core pool is trading
-        address[2] memory currencies = IMarketFactory(marketFactory).corePoolToCurrencyPair(PoolId.wrap(marketId));
+        address[2] memory currencies = marketFactory.corePoolToCurrencyPair(PoolId.wrap(marketId));
 
         // Check if this LCC contract matches either currency in the core pool
         address lccAddress = address(this);
         return (lccAddress == currencies[0] || lccAddress == currencies[1]);
-    }
-
-    function toERC20() external view returns (ERC20) {
-        return ERC20(address(this));
     }
 }

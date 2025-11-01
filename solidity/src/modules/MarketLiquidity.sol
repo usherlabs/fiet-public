@@ -6,7 +6,8 @@ import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {IMarketLiquidity} from "../interfaces/IMarketLiquidity.sol";
 
 /**
- * MarketLiquidity is an abstract contract that is inherited by the Liquidity Commitment Certificate contract to handle the portion of collateral liquidity backing LCCs that is in-market.
+ * MarketLiquidity is an abstract contract that is inherited by the Liquidity Commitment Certificate contract.
+ * It handles the portion of underlying liquidity inside of LCCs that is considered market-derived.
  * This includes the movement and queue of underlying native assets that are in-market.
  */
 abstract contract MarketLiquidity is IMarketLiquidity {

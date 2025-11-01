@@ -211,12 +211,17 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
             revert InvalidSender();
         }
         // add the assets to the pool manager and claim the underlying tokens for the proxy hook
-        _modifyVaultLiquidity(
-            Currency.unwrap(proxyPoolKey.currency0), Currency.unwrap(proxyPoolKey.currency1), balanceDelta
-        );
+        address addr0 = Currency.unwrap(proxyPoolKey.currency0);
+        address addr1 = Currency.unwrap(proxyPoolKey.currency1);
+        _modifyVaultLiquidity(addr0, addr1, balanceDelta);
         // if there was an addition, then settle the obligations to the lcc tokens
-        if (balanceDelta.amount0() > 0 || balanceDelta.amount1() > 0) {
-            _settleObligations(corePoolKey);
+        if (balanceDelta.amount0() > 0) {
+            bytes32 marketId = PoolId.unwrap(corePoolKey.toId());
+            _settleObligationsForLCC(ILCC(addr0), marketId);
+        }
+        if (balanceDelta.amount1() > 0) {
+            bytes32 marketId = PoolId.unwrap(corePoolKey.toId());
+            _settleObligationsForLCC(ILCC(addr1), marketId);
         }
     }
 
@@ -424,7 +429,8 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
             // ? In this case, there is insufficient liquidity to settle amountOut of output token.
             key.currency1.settle(poolManager, address(this), amountToSettle, true);
 
-            // Once LCC tokens settlements conducted for the Core Pool, settle underlying asset obligations relative to the amountIn LCC token
+            // Once LCC tokens settlements conducted for the Core Pool, utilise deposited underlying assets to settle obligations.
+            // Involves moving underlying assets from the ProxyHook/MarketVault to the LCC token.
             _settleObligationsForLCC(lccTokenForCurrency0, PoolId.unwrap(coreKey.toId()));
         } else {
             key.currency1.take(poolManager, address(this), amountIn, true);

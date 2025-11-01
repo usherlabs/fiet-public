@@ -639,7 +639,6 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         int256 selfNet1 = netSettlementSinceLastMod[id][1];
 
         // Queue bonuses using positive nets since last modification
-        // TODO: Should be positive nets where totalSettlementAmount > 0 - preventing positive nets that cover deficits from being used.
         for (uint8 t = 0; t < 2; t++) {
             int256 selfNet = (t == 0) ? selfNet0 : selfNet1;
             if (selfNet <= 0) continue;
@@ -650,6 +649,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
             if (potAvail == 0) continue;
 
             uint256 totalNetBefore = poolNetSinceLastMod[p][t];
+            // totalNetBefore is UNSIGNED. Only positive when totalSettlementAmount > 0 - preventing positive nets that cover deficits from being used.
             if (totalNetBefore == 0) continue;
 
             // Dust guard
