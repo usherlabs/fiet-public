@@ -3,6 +3,7 @@ pragma solidity ^0.8.0;
 
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {IERC20Minimal} from "@uniswap/v4-core/src/interfaces/external/IERC20Minimal.sol";
+import {Pausable} from "openzeppelin-contracts/contracts/utils/Pausable.sol";
 
 /// @title CurrencyTransfer
 /// @notice Library for handling transfers of both native ETH and ERC-20 tokens

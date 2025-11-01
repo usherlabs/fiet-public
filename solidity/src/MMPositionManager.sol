@@ -357,6 +357,10 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         (uint256 totalCommitmentsLCCValue, uint256 totalSignalUsdValue,) =
             signalManager.checkSignalSolvency(poolKey, abi.encode(signalState.signal), liquidityParams);
 
+        console.log("totalCommitmentsLCCValue", totalCommitmentsLCCValue);
+        console.log("totalSignalUsdValue", totalSignalUsdValue);
+        console.log("positionTotalCommitmentsUSDValue", positionTotalCommitmentsUSDValue);
+
         // validate that the total usd value of outstanding commitments + new commitment < total usd value of signal
         if (positionTotalCommitmentsUSDValue + totalCommitmentsLCCValue > totalSignalUsdValue) {
             revert InsufficientLiquidityInSignal();
@@ -634,8 +638,8 @@ contract MMPositionManager is LiquidityRouter, ERC721, IMMPositionManager {
         ILCC lcc1 = ILCC(mf.corePoolToCurrencyPair(poolId)[1]);
 
         // Wrap underlying assets as Currency types for unified handling
-        Currency underlyingCurrency0 = Currency.wrap(lcc0.underlyingAsset());
-        Currency underlyingCurrency1 = Currency.wrap(lcc1.underlyingAsset());
+        Currency underlyingCurrency0 = Currency.wrap(lcc0.underlying());
+        Currency underlyingCurrency1 = Currency.wrap(lcc1.underlying());
 
         int128 amount0 = balanceDelta.amount0();
         int128 amount1 = balanceDelta.amount1();

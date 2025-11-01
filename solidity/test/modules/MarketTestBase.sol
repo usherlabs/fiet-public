@@ -29,7 +29,6 @@ import {HookFlags} from "../../src/libraries/HookFlags.sol";
 import {MMPositionManager} from "../../src/MMPositionManager.sol";
 import {StubSpokeVerifier} from "../../src/modules/StubSpokeVerifier.sol";
 import {ICSpokeVerifier} from "../../src/modules/ICSpokeVerifier.sol";
-import {OracleRegistry} from "../../src/OracleRegistry.sol";
 import {VTSConfigs} from "../../src/libraries/VTSConfigs.sol";
 import {IVTSManager} from "../../src/interfaces/IVTSManager.sol";
 import {VRLSignalManager} from "../../src/modules/VRLSignalManager.sol";
@@ -38,6 +37,7 @@ import {StubSettlementVerifier} from "../../src/modules/StubSettlementVerifier.s
 import {IMarketVault} from "../../src/interfaces/IMarketVault.sol";
 import {IVRLSettlementObserver} from "../../src/interfaces/IVRLSettlementObserver.sol";
 import {CurrencyTransfer} from "../../src/libraries/CurrencyTransfer.sol";
+import {OracleHelper} from "../../src/modules/OracleHelper.sol";
 
 abstract contract MarketTestBase is Test, Deployers {
     using PoolIdLibrary for PoolId;
@@ -62,18 +62,19 @@ abstract contract MarketTestBase is Test, Deployers {
     address marketFactory;
     address coreHookAddress;
 
-    OracleRegistry oracleRegistry;
+    address resilientOracle = makeAddr("ResilientOracleAddr");
     ICSpokeVerifier icVerifier;
     StubSpokeVerifier stubSpokeVerifier;
     VRLSignalManager signalManager;
     address mmPositionManager;
     IVRLSettlementObserver settlementObserver;
     IMarketVault mv;
+    OracleHelper oracleHelper;
 
     uint256 signalExpiryInSeconds = 3600;
 
     function approveLCCForMarketUse(LiquidityCommitmentCertificate token) internal returns (Currency currency) {
-        Currency underlyingAsset = Currency.wrap(token.underlyingAsset());
+        Currency underlyingAsset = Currency.wrap(token.underlying());
 
         address[10] memory toApprove = [
             address(swapRouter),
@@ -106,7 +107,6 @@ abstract contract MarketTestBase is Test, Deployers {
         LiquidityCommitmentCertificate token =
             new LiquidityCommitmentCertificate(underlyingAsset, issuers, marketFactory);
 
-        bool approveUnderlyingAsset = underlyingAsset != address(0);
         approveLCCForMarketUse(token);
 
         return Currency.wrap(address(token));
@@ -151,14 +151,14 @@ abstract contract MarketTestBase is Test, Deployers {
 
     function _deployFreshManagerAndRouters() internal {
         deployFreshManagerAndRouters();
-        oracleRegistry = new OracleRegistry();
+        oracleHelper = new OracleHelper(resilientOracle);
         marketFactory = makeAddr("marketFactory");
 
         // deploy custom router and verifier
         icVerifier = new ICSpokeVerifier(makeAddr("icCanister"));
         stubSpokeVerifier = new StubSpokeVerifier();
         signalManager = new VRLSignalManager(
-            address(stubSpokeVerifier), address(oracleRegistry), address(marketFactory), signalExpiryInSeconds
+            address(stubSpokeVerifier), address(oracleHelper), address(marketFactory), signalExpiryInSeconds
         );
 
         // deploy the settlement observer
@@ -178,7 +178,12 @@ abstract contract MarketTestBase is Test, Deployers {
         coreHookAddress = address(coreFlags);
 
         // Deploy CoreHook (calculator set to address(0))
-        deployCodeTo("CoreHook.sol", abi.encode(manager, marketFactory, mmPositionManager, address(0)), coreHookAddress);
+        address oracleHelperAddress = address(oracleHelper);
+        deployCodeTo(
+            "CoreHook.sol",
+            abi.encode(manager, marketFactory, mmPositionManager, oracleHelperAddress, address(0)),
+            coreHookAddress
+        );
 
         // Compute proxy hook address
         uint160 proxyFlags = HookFlags.PROXY_HOOK_FLAGS;
@@ -269,10 +274,10 @@ abstract contract MarketTestBase is Test, Deployers {
         LiquidityCommitmentCertificate lcc0 = LiquidityCommitmentCertificate(Currency.unwrap(_currency2));
         LiquidityCommitmentCertificate lcc1 = LiquidityCommitmentCertificate(Currency.unwrap(_currency3));
 
-        IERC20Minimal(lcc0.underlyingAsset()).approve(address(lcc0), initialLiquidity);
+        IERC20Minimal(lcc0.underlying()).approve(address(lcc0), initialLiquidity);
         lcc0.wrap(initialLiquidity);
 
-        IERC20Minimal(lcc1.underlyingAsset()).approve(address(lcc1), initialLiquidity);
+        IERC20Minimal(lcc1.underlying()).approve(address(lcc1), initialLiquidity);
         lcc1.wrap(initialLiquidity);
 
         // mock the calls that would be made to the factory when we interact with the market

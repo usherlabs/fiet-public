@@ -320,8 +320,8 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         ILCC lccToken1 = ILCC(payable(Currency.unwrap(coreKey.currency1)));
 
         if (
-            Currency.unwrap(key.currency0) == lccToken0.underlyingAsset()
-                && Currency.unwrap(key.currency1) == lccToken1.underlyingAsset()
+            Currency.unwrap(key.currency0) == lccToken0.underlying()
+                && Currency.unwrap(key.currency1) == lccToken1.underlying()
         ) {
             // If tokens match order, then Proxy matches Core
             coreZeroForOne = params.zeroForOne;
@@ -508,7 +508,7 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         returns (uint256 amountToCancel)
     {
         uint256 deficitAmount = 0;
-        uint256 availableLiquidity = inMarketBalanceOf(Currency.wrap(lccToken.underlyingAsset()));
+        uint256 availableLiquidity = inMarketBalanceOf(Currency.wrap(lccToken.underlying()));
         if (amount > availableLiquidity) {
             amountToCancel = availableLiquidity; // amount to cancel becomes what ever is in custody.
             deficitAmount = amount - availableLiquidity; // deficit amount becomes the difference between the amount to cancel and the amount in custody.

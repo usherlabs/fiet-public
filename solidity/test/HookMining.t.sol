@@ -8,7 +8,7 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {BalanceDelta, BalanceDeltaLibrary} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
-import {PausablePool} from "../src/modules/PausablePool.sol";
+import {Pausable} from "openzeppelin-contracts/contracts/utils/Pausable.sol";
 import {Deployers} from "@uniswap/v4-core/test/utils/Deployers.sol";
 
 import {CoreHook} from "../src/CoreHook.sol";
@@ -16,11 +16,9 @@ import {ProxyHook} from "../src/ProxyHook.sol";
 import {MarketFactory} from "../src/MarketFactory.sol";
 import {HookFlags} from "../src/libraries/HookFlags.sol";
 import {MMPositionManager} from "../src/MMPositionManager.sol";
-import {IOracleRegistry} from "../src/interfaces/IOracleRegistry.sol";
 
 contract HookTest is Test, Deployers {
     IPoolManager poolManager;
-    IOracleRegistry oracleRegistry;
     MMPositionManager mmPositionManager;
     MarketFactory factory;
     CoreHook coreHook;
@@ -29,11 +27,10 @@ contract HookTest is Test, Deployers {
 
     function setUp() public {
         poolManager = IPoolManager(makeAddr("poolManager"));
-        oracleRegistry = IOracleRegistry(makeAddr("oracleRegistry"));
         address[] memory bounds = new address[](0);
         vm.prank(owner);
 
-        factory = new MarketFactory(address(poolManager), address(oracleRegistry), bounds);
+        factory = new MarketFactory(address(poolManager), address(makeAddr("OracleHelper")), bounds);
         mmPositionManager = new MMPositionManager(
             address(poolManager), makeAddr("spokeReceiver"), address(factory), makeAddr("settlementObserver")
         );
@@ -44,7 +41,7 @@ contract HookTest is Test, Deployers {
 
         deployCodeTo(
             "CoreHook.sol:CoreHook",
-            abi.encode(poolManager, address(factory), address(mmPositionManager), address(0)),
+            abi.encode(poolManager, address(factory), address(mmPositionManager), address(0), address(0)),
             coreHookAddrComputed
         );
         coreHook = CoreHook(coreHookAddrComputed);
@@ -107,7 +104,7 @@ contract HookTest is Test, Deployers {
 
         // Cannot re-pause
         vm.prank(address(factory));
-        vm.expectRevert(abi.encodeWithSelector(PausablePool.EnforcedPause.selector));
+        vm.expectRevert(abi.encodeWithSelector(Pausable.EnforcedPause.selector));
         coreHook.pause(poolId);
     }
 
@@ -129,7 +126,7 @@ contract HookTest is Test, Deployers {
 
         // Cannot re-unpause
         vm.prank(address(factory));
-        vm.expectRevert(abi.encodeWithSelector(PausablePool.ExpectedPause.selector));
+        vm.expectRevert(abi.encodeWithSelector(Pausable.ExpectedPause.selector));
         coreHook.unpause(poolId);
     }
 

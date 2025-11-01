@@ -14,22 +14,23 @@ import {ProxyHook} from "./ProxyHook.sol";
 import {MarketDeployer} from "./MarketDeployer.sol";
 import {IVTSManager} from "./interfaces/IVTSManager.sol";
 import {MarketVTSConfiguration} from "./types/VTS.sol";
+import {IOracleHelper} from "./interfaces/IOracleHelper.sol";
 
 /**
  * @title MarketFactory
  * @notice Factory contract for creating Fiet protocol markets with LCC tokens and pool management
  * @dev Manages LCC token creation, pool deployment, and protocol bounds administration
  */
-contract MarketFactory is IMarketFactory, Ownable2Step {
+contract MarketFactory is IMarketFactory, Ownable {
     using PoolIdLibrary for PoolKey;
 
     error InvalidVTSConfiguration();
 
     IPoolManager private immutable _poolManager;
+    IOracleHelper public oracleHelper;
     address public coreHook;
     address public marketDeployer;
     address public mmPositionManager;
-    address public oracleRegistry;
 
     // Mapping from underlying asset to LCC token
     mapping(address => address) public underlyingToLCC;
@@ -56,12 +57,12 @@ contract MarketFactory is IMarketFactory, Ownable2Step {
 
     mapping(PoolId => PoolKey) private _poolIdToPoolKey;
 
-    constructor(address poolManagerAddr, address _oracleRegistry, address[] memory _bounds) Ownable(msg.sender) {
+    constructor(address poolManagerAddr, address _oracleHelper, address[] memory _bounds) Ownable(msg.sender) {
         if (poolManagerAddr == address(0)) {
             revert InvalidPoolParameters();
         }
         _poolManager = IPoolManager(poolManagerAddr);
-        oracleRegistry = _oracleRegistry;
+        oracleHelper = IOracleHelper(_oracleHelper);
 
         // Set Protocol bounds addresses
         bounds[address(this)] = true;
@@ -130,6 +131,9 @@ contract MarketFactory is IMarketFactory, Ownable2Step {
         // Create LCC tokens if they don't exist
         address lccToken0 = _getOrCreateLCC(underlyingAsset0);
         address lccToken1 = _getOrCreateLCC(underlyingAsset1);
+
+        // Validate that oracles exist for both the LCC tokens underlying assets
+        IOracleHelper(oracleHelper).validateMarketOraclesExist(lccToken0, lccToken1);
 
         // Determine if orders match
         (Currency underlyingCurr0,) = _sortCurrencies(underlyingAsset0, underlyingAsset1);

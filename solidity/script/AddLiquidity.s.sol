@@ -303,8 +303,8 @@ contract AddLiquidityScript is ScriptHelper {
         uint256 current = lccToken.balanceOf(user);
         if (current < desired) {
             uint256 needed = desired - current;
-            uint256 available = IERC20(lccToken.underlyingAsset()).balanceOf(user);
-            string memory name = IERC20Metadata(lccToken.underlyingAsset()).name();
+            uint256 available = IERC20(lccToken.underlying()).balanceOf(user);
+            string memory name = IERC20Metadata(lccToken.underlying()).name();
             require(available >= needed, string(abi.encodePacked(name, " insufficient")));
             lccToken.wrap(needed);
         }
@@ -391,8 +391,8 @@ contract AddLiquidityScript is ScriptHelper {
         LiquidityCommitmentCertificate lccToken0 = LiquidityCommitmentCertificate(lccTokenAddr0);
         LiquidityCommitmentCertificate lccToken1 = LiquidityCommitmentCertificate(lccTokenAddr1);
 
-        address underlyingToken0 = lccToken0.underlyingAsset();
-        address underlyingToken1 = lccToken1.underlyingAsset();
+        address underlyingToken0 = lccToken0.underlying();
+        address underlyingToken1 = lccToken1.underlying();
 
         checkAndApproveErc20(user, address(permit2), IERC20(lccTokenAddr0), amount0Desired);
         checkAndApproveErc20(user, address(permit2), IERC20(lccTokenAddr1), amount1Desired);
