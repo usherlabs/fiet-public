@@ -1,0 +1,26 @@
+[profile.default]
+src = "src"
+out = "out"
+libs = ["lib"]
+ignored_error_codes = [2394, 5574, 3860]    # Silence transient storage composability warning and test code warnings
+
+# See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
+solc_version = '0.8.26'
+evm_version = "cancun"  # hard fork that enabled EIP-1153
+optimizer_runs = 20000
+optimizer = true
+via_ir = true
+ffi = true
+
+fs_permissions = [{ access = "read-write", path = "./deployments" }]
+
+[rpc_endpoints]
+local = "${ANVIL_FORK_URL}"
+sepolia = "${ARB_SEPOLIA_RPC_URL}"
+arbitrum = "${ARB_MAINNET_RPC_URL}"
+ethsepolia = "${ETH_SEPOLIA_RPC_URL}"
+
+# For some reason etherscan api is required for local anvil fork.
+[etherscan]
+sepolia = { key = "${ETHERSCAN_API_KEY}" }
+arbitrum = { key = "${ETHERSCAN_API_KEY}" }
