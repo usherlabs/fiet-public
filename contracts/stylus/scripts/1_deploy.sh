@@ -34,14 +34,14 @@ echo "Deploying VRL Manager          #"
 echo "--------------delta_manager---------------- #"
 
 # Move to vrl manager folder
-cd stylus/vrl_manager
+cd ./vrl_manager
 
 # Deploy contract
 cargo stylus deploy -e $RPC_URL --private-key $PRIVATE_KEY --no-verify | sed 's/[^a-zA-Z0-9 ]//g' | grep 'deployed code' | grep -oP '0x[0-9a-fA-F]{40}' > $FILE_KEY
 cargo stylus export-abi > $ABI_NAME
 
 # reset directory
-cd ../..
+cd ..
 
 
 # ---------------------------------- #
@@ -53,14 +53,14 @@ echo "Deploying Liquidity Verifier   #"
 echo "------------------------------ #"
 
 # Move to liquidity verifier folder
-cd stylus/liquidity_verifier
+cd ./liquidity_verifier
 
 # deploy contract
 cargo stylus deploy -e $RPC_URL --private-key $PRIVATE_KEY --no-verify | sed 's/[^a-zA-Z0-9 ]//g' | grep 'deployed code' | grep -oP '0x[0-9a-fA-F]{40}' > $FILE_KEY
 cargo stylus export-abi > $ABI_NAME
 
 # reset directory
-cd ../..
+cd ..
 
 
 # ---------------------------------- #
@@ -72,14 +72,14 @@ echo "Deploying FIET$ Token          #"
 echo "------------------------------ #"
 
 # Move to liquidity verifier folder
-cd stylus/token
+cd ./token
 
 # deploy contract
 cargo stylus deploy -e $RPC_URL --private-key $PRIVATE_KEY --no-verify | sed 's/[^a-zA-Z0-9 ]//g' | grep 'deployed code' | grep -oP '0x[0-9a-fA-F]{40}' > $FILE_KEY
 cargo stylus export-abi > $ABI_NAME
 
 # reset directory
-cd ../..
+cd ..
 
 # ---------------------------------- #
 # Deployment of Staking Contract     #
@@ -90,14 +90,14 @@ echo "Deploying Staking Contract     #"
 echo "------------------------------ #"
 
 # Move to liquidity verifier folder
-cd stylus/fiet_stake
+cd ./fiet_stake
 
 # deploy contract
 cargo stylus deploy -e $RPC_URL --private-key $PRIVATE_KEY --no-verify | sed 's/[^a-zA-Z0-9 ]//g' | grep 'deployed code' | grep -oP '0x[0-9a-fA-F]{40}' > $FILE_KEY
 cargo stylus export-abi > $ABI_NAME
 
 # reset directory
-cd ../..
+cd ..
 
 
 # ---------------------------------- #
@@ -109,14 +109,14 @@ echo "Deploying Delta Manager        #"
 echo "------------------------------ #"
 
 # Move to liquidity verifier folder
-cd stylus/delta_manager
+cd ./delta_manager
 
 # deploy contract
 cargo stylus deploy -e $RPC_URL --private-key $PRIVATE_KEY --no-verify | sed 's/[^a-zA-Z0-9 ]//g' | grep 'deployed code' | grep -oP '0x[0-9a-fA-F]{40}' > $FILE_KEY
 cargo stylus export-abi > $ABI_NAME
 
 # reset directory
-cd ../..
+cd ..
 
 # ---------------------------------- #
 # Deployment of Settlement Manager   #
@@ -127,11 +127,11 @@ echo "Deploying Settlement Manager   #"
 echo "------------------------------ #"
 
 # Move to liquidity verifier folder
-cd stylus/settlement_manager
+cd ./settlement_manager
 
 # deploy contract
 cargo stylus deploy -e $RPC_URL --private-key $PRIVATE_KEY --no-verify | sed 's/[^a-zA-Z0-9 ]//g' | grep 'deployed code' | grep -oP '0x[0-9a-fA-F]{40}' > $FILE_KEY
 cargo stylus export-abi > $ABI_NAME
 
 # reset directory
-cd ../..
+cd ..

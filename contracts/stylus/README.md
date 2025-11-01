@@ -78,7 +78,7 @@ arbos-forge --version
 cargo stylus check
 
 # Build specific contract
-cd stylus/delta_manager
+cd contracts/stylus/delta_manager
 cargo stylus check
 ```
 
@@ -86,7 +86,7 @@ cargo stylus check
 
 ```bash
 # Export ABI for specific contract
-cd stylus/delta_manager
+cd contracts/stylus/delta_manager
 cargo stylus export-abi
 ```
 
@@ -94,11 +94,11 @@ cargo stylus export-abi
 
 ```bash
 # Run unit tests for specific contract
-cd stylus/...
+cd contracts/stylus/...
 cargo test
 
 # Run integration tests
-cd tests/...
+cd contracts/stylus/tests/...
 cargo test
 ```
 

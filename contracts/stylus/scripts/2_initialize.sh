@@ -14,12 +14,12 @@ set +o allexport
 FILE_KEY="deployed_contract_address"
 
 # Read in contract addresses
-VRL_MANAGER_ADDRESS=$(cat "stylus/vrl_manager/$FILE_KEY")
-LIQUIDITY_VERIFIER_ADDRESS=$(cat "stylus/liquidity_verifier/$FILE_KEY")
-FIET_TOKEN_ADDRESS=$(cat "stylus/token/$FILE_KEY")
-FIET_STAKING_ADDRESS=$(cat "stylus/fiet_stake/$FILE_KEY")
-DELTA_MANAGER_ADDRESS=$(cat "stylus/delta_manager/$FILE_KEY")
-SETTLEMENT_MANAGER=$(cat "stylus/settlement_manager/$FILE_KEY")
+VRL_MANAGER_ADDRESS=$(cat "../vrl_manager/$FILE_KEY")
+LIQUIDITY_VERIFIER_ADDRESS=$(cat "../liquidity_verifier/$FILE_KEY")
+FIET_TOKEN_ADDRESS=$(cat "../token/$FILE_KEY")
+FIET_STAKING_ADDRESS=$(cat "../fiet_stake/$FILE_KEY")
+DELTA_MANAGER_ADDRESS=$(cat "../delta_manager/$FILE_KEY")
+SETTLEMENT_MANAGER=$(cat "../settlement_manager/$FILE_KEY")
 
 # For dev/testing purposes, this should be set to this value
 # as it is what is generated on the random wallet generator

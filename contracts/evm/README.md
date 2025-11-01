@@ -14,7 +14,7 @@ The Solidity contracts provide the automated market maker (AMM) functionality fo
 ## Directory Structure
 
 ```
-solidity/
+contracts/evm/
 ├── src/                    # Contract source files
 │   ├── CoreHook.sol       # Core pool hook implementation
 │   ├── ProxyHook.sol      # Proxy pool hook implementation

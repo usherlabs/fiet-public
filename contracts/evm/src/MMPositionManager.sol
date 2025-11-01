@@ -894,7 +894,7 @@ contract MMPositionManager is
         // ----- LCCs acquired by the seizing party are NOT cancelled, rather transferred for unwrap, or subsequent swaps. VTSManager.onMMLiquidityModify coordinates position settlement amounts, whereas Market Vault aggregates them and coordinates LCC queue clearance.
 
         // pass zero delta because caller is not explicitly settling anything IN or OUT. However, settlements may occur as a reaction to position modification.
-        // reference: solidity/src/modules/VTSManager.sol _touchPosition
+        // reference: contracts/evm/src/modules/VTSManager.sol _touchPosition
         _settleUnderlying(poolKey.toId(), requiredSettlementDelta, ua0, ua1);
         returnDelta = requiredSettlementDelta;
 

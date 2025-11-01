@@ -91,7 +91,6 @@ pub fn load_address(contract_folder_name: String) -> Result<String, Box<dyn Erro
         .unwrap()
         .parent()
         .unwrap()
-        .join("stylus")
         .join(contract_folder_name)
         .join("deployed_contract_address");
 

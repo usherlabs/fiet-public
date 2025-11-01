@@ -99,7 +99,7 @@ contract SwapV4 is ScriptHelper {
         console.log("Permit2 loaded");
 
         // if MODE="local" then do not load core pool id from env variable
-        // the address is hardcoded in the script solidity/make/exp.mk:111
+        // the address is hardcoded in the script contracts/evm/exp/Makefile:111
         // and it is overriding the core pool id and thus the proxy pool id
         // for a newly created market
         bool isLocalFork = keccak256(bytes(mode)) == keccak256(bytes("LOCAL"));
