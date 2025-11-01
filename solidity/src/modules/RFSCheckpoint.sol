@@ -107,6 +107,7 @@ abstract contract RFSCheckpointModule {
      * @param vtsConfiguration The VTS configuration
      * @param tokenId The token id of the position
      * @param positionIndex The position index
+     * @param revertOnFalse Whether to revert if the grace period has not elapsed
      * @return true if the position can be seized (grace period elapsed for either token), false otherwise
      */
     function _isSeizable(
