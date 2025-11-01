@@ -11,7 +11,7 @@ import {IVRLSettlementObserver} from "../interfaces/IVRLSettlementObserver.sol";
 abstract contract RFSCheckpointModule {
     using RFSCheckpointLibrary for RFSCheckpoint;
 
-    error GracePeriodNotElapsed(uint256 tokenId, uint256 positionIndex, uint8 tokenIndex);
+    error GracePeriodNotElapsed(uint256 tokenId, uint256 positionIndex, RFSCheckpoint checkpoint);
 
     event Checkpointed(uint256 tokenId, uint256 positionIndex, RFSCheckpoint checkpoint);
     event GracePeriodExtended(uint256 tokenId, uint256 positionIndex, uint8 tokenIndex, RFSCheckpoint checkpoint);
@@ -109,14 +109,18 @@ abstract contract RFSCheckpointModule {
      * @param positionIndex The position index
      * @return true if the position can be seized (grace period elapsed for either token), false otherwise
      */
-    function _isSeizable(MarketVTSConfiguration memory vtsConfiguration, uint256 tokenId, uint256 positionIndex)
-        internal
-        view
-        returns (bool)
-    {
+    function _isSeizable(
+        MarketVTSConfiguration memory vtsConfiguration,
+        uint256 tokenId,
+        uint256 positionIndex,
+        bool revertOnFalse
+    ) internal view returns (bool) {
         PositionId positionId = getPositionId(tokenId, positionIndex);
         RFSCheckpoint memory checkpoint = positionToCheckpoint[positionId];
         if (!checkpoint.isOpen) {
+            if (revertOnFalse) {
+                revert GracePeriodNotElapsed(tokenId, positionIndex, checkpoint);
+            }
             return false;
         }
         uint256 timeSinceLastCheckpoint = block.timestamp - checkpoint.timeOfLastTransition;
@@ -127,6 +131,11 @@ abstract contract RFSCheckpointModule {
         bool gracePeriod0Elapsed = timeSinceLastCheckpoint > totalGracePeriod0;
         bool gracePeriod1Elapsed = timeSinceLastCheckpoint > totalGracePeriod1;
 
-        return gracePeriod0Elapsed || gracePeriod1Elapsed;
+        bool isSeizable = gracePeriod0Elapsed || gracePeriod1Elapsed;
+        if (revertOnFalse && !isSeizable) {
+            revert GracePeriodNotElapsed(tokenId, positionIndex, checkpoint);
+        }
+
+        return isSeizable;
     }
 }
