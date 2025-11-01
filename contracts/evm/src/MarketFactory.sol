@@ -369,14 +369,6 @@ contract MarketFactory is IMarketFactory, Ownable {
     }
 
     /**
-     * @notice Gets the pool manager address
-     * @return The pool manager address
-     */
-    function poolManager() external view returns (address) {
-        return address(poolManager);
-    }
-
-    /**
      * @notice Gets the proxy hook address for a given proxy pool ID
      * @param proxyPoolId The proxy pool ID
      * @return The proxy hook address

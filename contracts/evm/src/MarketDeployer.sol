@@ -4,15 +4,7 @@ pragma solidity ^0.8.20;
 
 import {HookFlags} from "./libraries/HookFlags.sol";
 
-import {Ownable, Ownable2Step} from "openzeppelin-contracts/contracts/access/Ownable2Step.sol";
-import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
-import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
-import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
-import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
-import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
-import {LiquidityCommitmentCertificate} from "./LCC.sol";
-import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
-import {IHookPausable} from "./interfaces/IHookPausable.sol";
+import {Ownable} from "openzeppelin-contracts/contracts/access/Ownable.sol";
 import {ProxyHook} from "./ProxyHook.sol";
 
 // owned by `MarketFactory.sol`
