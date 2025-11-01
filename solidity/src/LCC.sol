@@ -12,9 +12,7 @@ import {PoolId} from "v4-periphery/lib/v4-core/src/types/PoolId.sol";
 import {IProxyHook} from "./interfaces/IProxyHook.sol";
 import {MarketVault} from "./modules/MarketVault.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
-import {IOracle} from "./interfaces/IOracle.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
-import {IOracleRegistry} from "./interfaces/IOracleRegistry.sol";
 import {IVTSManager} from "./interfaces/IVTSManager.sol";
 import {console} from "forge-std/console.sol";
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
@@ -33,7 +31,7 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
     error InvalidMarketFactory();
     error InsufficientWrappedLiquidity(uint256 requested, uint256 available);
 
-    address public immutable underlyingAsset;
+    address private immutable underlyingAsset;
     address public immutable marketFactory;
 
     // All native underlying liquidity will either be
@@ -106,6 +104,17 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
         }
 
         // Note: bounds are managed by the MarketFactory, not set in constructor
+    }
+
+    function underlying() external view returns (address) {
+        // the `ResilientOracle` might call underlying()
+        // if it calls underlying for lcc-eth
+        // it will return address(0) which would cause an erc20 error as it tried to call .decimals() on it
+        // so there is an edge case for the oracles for getting the underlying price of lcc-eth
+        // a solution could be to modify the asset being returned to the oracle's native address
+        // if the caller is the resilient oracle
+
+        return underlyingAsset;
     }
 
     // some trusted issuer Smart Contracts can be allowed to mint tokens and hold the liquidity
@@ -329,28 +338,6 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
     function transferFrom(address from, address to, uint256 amount) public virtual override returns (bool) {
         onTransfer(from, to, amount);
         return super.transferFrom(from, to, amount);
-    }
-
-    /**
-     * @dev Get the price of the underlying asset
-     * @return The price of the asset
-     * @return The decimals of the asset
-     */
-    function usdPrice(address marketOracleFactory) public view returns (uint256, uint256) {
-        string memory quoteTicker = "USD";
-        address oracleRegistry = IMarketFactory(marketFactory).oracleRegistry();
-        // get the ticker of the underlying asset
-        string memory ticker = IERC20Metadata(underlyingAsset).symbol();
-        // asspend /quote to it eg /USDT
-        string memory pricePair = string.concat(ticker, "/", quoteTicker);
-        // get the price of the asset using oracle
-        address oracle = IOracleRegistry(oracleRegistry).getOracle(pricePair, marketOracleFactory);
-
-        // get the price of the asset
-        uint256 assetPrice = IOracle(oracle).getPrice();
-        uint256 decimals = IOracle(oracle).decimals();
-
-        return (assetPrice, decimals);
     }
 
     /**

@@ -218,9 +218,8 @@ library LiquidityUtils {
 
         // get the amount of underlying liquidity to transfer from the issuer to the lcc
         // divide by 10000 to convert to a percentage from bips
-        uint256 oneBip = 10000;
-        underlyingLiquidityFraction0 = Math.ceilDiv(lccAmount0 * vtsConfiguration.token0.baseVTSRate, oneBip);
-        underlyingLiquidityFraction1 = Math.ceilDiv(lccAmount1 * vtsConfiguration.token1.baseVTSRate, oneBip);
+        underlyingLiquidityFraction0 = Math.ceilDiv(lccAmount0 * vtsConfiguration.token0.baseVTSRate, ONE_BIP);
+        underlyingLiquidityFraction1 = Math.ceilDiv(lccAmount1 * vtsConfiguration.token1.baseVTSRate, ONE_BIP);
     }
 
     /**
@@ -232,10 +231,10 @@ library LiquidityUtils {
      */
     function getETHAmount(PoolKey memory poolKey, uint256 amount0, uint256 amount1) internal view returns (uint256) {
         uint256 ethAmount = 0;
-        if (ILCC(Currency.unwrap(poolKey.currency0)).underlyingAsset() == address(0)) {
+        if (ILCC(Currency.unwrap(poolKey.currency0)).underlying() == address(0)) {
             ethAmount = amount0;
         }
-        if (ILCC(Currency.unwrap(poolKey.currency1)).underlyingAsset() == address(0)) {
+        if (ILCC(Currency.unwrap(poolKey.currency1)).underlying() == address(0)) {
             ethAmount = amount1;
         }
         return ethAmount;

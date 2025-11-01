@@ -120,7 +120,7 @@ abstract contract MarketVault is IMarketVault {
      * @return The amount of the underlying asset that was taken from the vault
      */
     function _tryTakeFromVaultToLCC(bytes32 marketId, ILCC lccToken, uint256 amount) internal returns (uint256) {
-        Currency uaCurrency = Currency.wrap(lccToken.underlyingAsset());
+        Currency uaCurrency = Currency.wrap(lccToken.underlying());
         // Take the asset from the vault to the LCC
         uint256 amountTaken = _tryTakeAssetFromVault(uaCurrency, address(lccToken), amount);
         // Confirm the take of the underlying liquidity to the LCC to let the LCC know about the new balance
@@ -139,7 +139,7 @@ abstract contract MarketVault is IMarketVault {
         internal
     {
         if (amount == 0) revert InvalidAmount();
-        Currency uaCurrency = Currency.wrap(lccToken.underlyingAsset());
+        Currency uaCurrency = Currency.wrap(lccToken.underlying());
         // Take the asset from the vault to the LCC
         _takeAssetFromVault(uaCurrency, address(lccToken), amount);
         // Confirm the take of the underlying liquidity to the LCC to let the LCC know about the new balance
@@ -190,7 +190,7 @@ abstract contract MarketVault is IMarketVault {
         lccToken.prepareSettle(amount);
 
         // Get the underlying asset of the LCC
-        Currency uaCurrency = Currency.wrap(lccToken.underlyingAsset());
+        Currency uaCurrency = Currency.wrap(lccToken.underlying());
 
         address sender = address(lccToken);
 
@@ -225,7 +225,7 @@ abstract contract MarketVault is IMarketVault {
         if (totalPendingSettlement == 0) return; // No pending settlements to fill
 
         // Check how much liquidity ProxyHook has available
-        Currency uaCurrency = Currency.wrap(lccToken.underlyingAsset());
+        Currency uaCurrency = Currency.wrap(lccToken.underlying());
         uint256 availableLiquidity = inMarketBalanceOf(uaCurrency);
 
         // Calculate how much we can settle

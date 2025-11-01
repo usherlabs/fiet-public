@@ -31,6 +31,9 @@ abstract contract MarketMakerTestBase is Test {
         MarketMaker.State state;
     }
 
+    /**
+     * @dev entrypoint function to set up the market makers and generate the liquidity signals
+     */
     function _setUpMM() public {
         icCanister = vm.addr(icCanisterPrivateKey);
         // Create a liquidity signal
@@ -39,6 +42,11 @@ abstract contract MarketMakerTestBase is Test {
         renewSignal = signals[1];
     }
 
+    /**
+     * @dev generate liquidity signals for n market makers, each with a unique private key
+     * @param numOfMarketMakers The number of market makers to generate signals for
+     * @return The liquidity signals
+     */
     function generateLiquiditySignals(uint256 numOfMarketMakers) internal returns (LiquiditySignal[] memory) {
         // store the states of the market makers
         StatePayload[] memory marketMakerStates = new StatePayload[](numOfMarketMakers);
