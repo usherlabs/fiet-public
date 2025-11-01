@@ -287,10 +287,7 @@ abstract contract MarketTestBase is Test, Deployers {
         modifyLiquidityRouter.modifyLiquidity(
             corePoolKey,
             ModifyLiquidityParams({
-                tickLower: -60,
-                tickUpper: 60,
-                liquidityDelta: int256(initialLiquidity),
-                salt: bytes32(0)
+                tickLower: -60, tickUpper: 60, liquidityDelta: int256(initialLiquidity), salt: bytes32(0)
             }),
             ZERO_BYTES
         );

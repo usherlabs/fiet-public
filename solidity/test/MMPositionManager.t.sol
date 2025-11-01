@@ -464,10 +464,10 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             IVTSManager(coreHookAddress).getPositionSettledAmounts(positionId);
         BalanceDelta finalSettledBalanceDelta =
             toBalanceDelta(finalSettledAmount0.toInt128(), finalSettledAmount1.toInt128());
-        uint256 expectedRemainingSettlement0ForPosition = LiquidityUtils.safeInt128ToUint256(
-            initialSettledBalanceDelta.amount0()
-        ) + LiquidityUtils.safeInt128ToUint256(rfsDelta.amount0())
-            - LiquidityUtils.safeInt128ToUint256(expectedSettlementFractionDelta.amount0());
+        uint256 expectedRemainingSettlement0ForPosition =
+            LiquidityUtils.safeInt128ToUint256(initialSettledBalanceDelta.amount0())
+                + LiquidityUtils.safeInt128ToUint256(rfsDelta.amount0())
+                - LiquidityUtils.safeInt128ToUint256(expectedSettlementFractionDelta.amount0());
 
         // validate the remaining settlement for the position is as expected
         assertEq(
@@ -574,9 +574,9 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         BalanceDelta finalSettledBalanceDelta =
             toBalanceDelta(finalSettledAmount0.toInt128(), finalSettledAmount1.toInt128());
 
-        uint256 expectedRemainingSettlement0ForPosition = LiquidityUtils.safeInt128ToUint256(
-            initialSettledBalanceDelta.amount0()
-        ) + amount0ToSettle - LiquidityUtils.safeInt128ToUint256(expectedSettlementFractionDelta.amount0());
+        uint256 expectedRemainingSettlement0ForPosition =
+            LiquidityUtils.safeInt128ToUint256(initialSettledBalanceDelta.amount0()) + amount0ToSettle
+                - LiquidityUtils.safeInt128ToUint256(expectedSettlementFractionDelta.amount0());
 
         // validate the remaining settlement for the position is as expected
         assertEq(

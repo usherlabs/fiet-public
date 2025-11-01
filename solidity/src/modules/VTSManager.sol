@@ -131,12 +131,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
      * @param corePoolId The core pool ID
      * @return The VTS configuration
      */
-    function getMarketVTSConfiguration(PoolId corePoolId)
-        public
-        view
-        override
-        returns (MarketVTSConfiguration memory)
-    {
+    function getMarketVTSConfiguration(PoolId corePoolId) public view override returns (MarketVTSConfiguration memory) {
         return corePoolToVTSConfiguration[corePoolId];
     }
 
@@ -573,12 +568,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
      * @return rfsOpen Whether the RFS is open
      * @return balanceDelta The balance delta of the amount of required to be settled or allowed to be withdrawn depending on if it is negative or positive
      */
-    function _getRFS(PositionId _positionId)
-        internal
-        view
-        onlyPositionValid(_positionId)
-        returns (bool, BalanceDelta)
-    {
+    function _getRFS(PositionId _positionId) internal view onlyPositionValid(_positionId) returns (bool, BalanceDelta) {
         // Commitment caps
         (uint256 c0, uint256 c1) = _getCommitment(_positionId);
 

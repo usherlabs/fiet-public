@@ -92,10 +92,7 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
         modifyLiquidityRouter.modifyLiquidity(
             corePoolKey,
             ModifyLiquidityParams({
-                tickLower: -60,
-                tickUpper: 60,
-                liquidityDelta: int256(initialLiquidity),
-                salt: bytes32(0)
+                tickLower: -60, tickUpper: 60, liquidityDelta: int256(initialLiquidity), salt: bytes32(0)
             }),
             ZERO_BYTES
         );
@@ -151,10 +148,7 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
         modifyLiquidityRouter.modifyLiquidity(
             corePoolKey,
             ModifyLiquidityParams({
-                tickLower: -60,
-                tickUpper: 60,
-                liquidityDelta: int256(initialLiquidity),
-                salt: bytes32(0)
+                tickLower: -60, tickUpper: 60, liquidityDelta: int256(initialLiquidity), salt: bytes32(0)
             }),
             ZERO_BYTES
         );
@@ -168,7 +162,9 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
         uint256 selfBalanceOfTokenBBefore = proxyPoolKey.currency1.balanceOfSelf();
 
         uint256 swapAmount = 1e18;
-        BalanceDelta delta = swapRouter.swap{value: swapAmount}(
+        BalanceDelta delta = swapRouter.swap{
+            value: swapAmount
+        }(
             proxyPoolKey,
             SwapParams({zeroForOne: true, amountSpecified: -int256(swapAmount), sqrtPriceLimitX96: ZERO_FOR_ONE_LIMIT}),
             settings,
@@ -204,7 +200,9 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
         uint256 swapAmount = 100;
         swapRouter.swap(
             proxyPoolKey,
-            SwapParams({zeroForOne: false, amountSpecified: -int256(swapAmount), sqrtPriceLimitX96: ONE_FOR_ZERO_LIMIT}),
+            SwapParams({
+                zeroForOne: false, amountSpecified: -int256(swapAmount), sqrtPriceLimitX96: ONE_FOR_ZERO_LIMIT
+            }),
             settings,
             ZERO_BYTES
         );
@@ -252,7 +250,9 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
         console.log("self eth balance", address(this).balance);
         // send the entire balance of ETH to the position manager
         // we should get a refund of the left over ETH
-        positionManager.commit{value: address(this).balance}(
+        positionManager.commit{
+            value: address(this).balance
+        }(
             corePoolKey,
             liquidityParams.tickLower,
             liquidityParams.tickUpper,
