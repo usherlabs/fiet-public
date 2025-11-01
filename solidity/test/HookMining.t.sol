@@ -16,12 +16,8 @@ import {ProxyHook} from "../src/ProxyHook.sol";
 import {MarketFactory} from "../src/MarketFactory.sol";
 import {HookFlags} from "../src/libraries/HookFlags.sol";
 import {MMPositionManager} from "../src/MMPositionManager.sol";
-<<<<<<< HEAD
-import {IOracleRegistry} from "../src/interfaces/IOracleRegistry.sol";
 import {WETH} from "solmate/src/tokens/WETH.sol";
 import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
-=======
->>>>>>> main
 
 contract HookTest is Test, Deployers {
     IPoolManager poolManager;
@@ -36,17 +32,16 @@ contract HookTest is Test, Deployers {
         address[] memory bounds = new address[](0);
         vm.prank(owner);
 
-<<<<<<< HEAD
-        factory = new MarketFactory(address(poolManager), address(oracleRegistry), bounds);
-        IWETH9 weth9 = IWETH9(address(new WETH()));
-        mmPositionManager =
-            new MMPositionManager(address(poolManager), makeAddr("spokeReceiver"), address(factory), address(0), weth9);
-=======
         factory = new MarketFactory(address(poolManager), address(makeAddr("OracleHelper")), bounds);
+        IWETH9 weth9 = IWETH9(address(new WETH()));
         mmPositionManager = new MMPositionManager(
-            address(poolManager), makeAddr("spokeReceiver"), address(factory), makeAddr("settlementObserver")
+            address(poolManager),
+            makeAddr("spokeReceiver"),
+            address(factory),
+            makeAddr("settlementObserver"),
+            makeAddr("descriptor"),
+            weth9
         );
->>>>>>> main
 
         // Compute flags for CoreHook
         uint160 coreFlags = HookFlags.CORE_HOOK_FLAGS;
@@ -54,11 +49,7 @@ contract HookTest is Test, Deployers {
 
         deployCodeTo(
             "CoreHook.sol:CoreHook",
-<<<<<<< HEAD
             abi.encode(poolManager, address(factory), address(mmPositionManager)),
-=======
-            abi.encode(poolManager, address(factory), address(mmPositionManager), address(0), address(0)),
->>>>>>> main
             coreHookAddrComputed
         );
         coreHook = CoreHook(coreHookAddrComputed);

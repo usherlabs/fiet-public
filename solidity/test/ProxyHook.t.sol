@@ -385,13 +385,8 @@ contract ProxyHookTest is MarketTestBase {
 
         // With no hookData, params are adjusted so output <= available; there should be no deficit minted
         bytes32 marketId = PoolId.unwrap(corePoolKey.toId());
-<<<<<<< HEAD
         LiquidityCommitmentCertificate lccOut = lcc1.underlyingAsset() == Currency.unwrap(_currency1) ? lcc1 : lcc0;
         assertEq(lccOut.getMarketTotalSettlementDeficit(marketId), 0, "No deficit should be created without recipient");
-=======
-        LiquidityCommitmentCertificate lccOut = lcc1.underlying() == Currency.unwrap(_currency1) ? lcc1 : lcc0;
-        assertEq(lccOut.getMarketTotalSettlementDeficit(marketId), 0);
->>>>>>> main
         // Locker (address(1)) should not hold LCC because no deficit
         assertEq(lccOut.balanceOf(address(1)), 0, "Locker should not receive LCC");
 
