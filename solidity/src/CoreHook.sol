@@ -50,9 +50,9 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
     }
 
     // Owner will be set to MarketFactory
-    constructor(address _poolManager, address _marketFactory, address _mmPositionManager, address _oracleHelper)
+    constructor(address _poolManager, address _marketFactory, address _mmPositionManager)
         BaseHook(IPoolManager(_poolManager))
-        VTSManager(_poolManager, _marketFactory, _mmPositionManager, _oracleHelper)
+        VTSManager(_poolManager, _marketFactory, _mmPositionManager)
     {
         marketFactory = _marketFactory;
     }

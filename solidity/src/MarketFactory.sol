@@ -56,6 +56,7 @@ contract MarketFactory is IMarketFactory, Ownable {
     constructor(address _poolManager, address _oracleHelper, address[] memory _bounds) Ownable(msg.sender) {
         poolManager = IPoolManager(_poolManager);
         oracleHelper = IOracleHelper(_oracleHelper);
+        // mmPositionManager = _mmPositionManager; // TODO: Set this to the MMPositionManager address - TBD in LCCHub
 
         // Set Protocol bounds addresses
         bounds[address(this)] = true;

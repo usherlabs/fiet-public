@@ -133,11 +133,11 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         _;
     }
 
-    constructor(address _poolManager, address _marketFactory, address _mmPositionManager, address _oracleHelper)
+    constructor(address _poolManager, address _marketFactory, address _mmPositionManager)
         PositionIndex(_marketFactory)
     {
         poolManager = IPoolManager(_poolManager);
-        oracleHelper = IOracleHelper(_oracleHelper);
+        oracleHelper = IMarketFactory(_marketFactory).oracleHelper(); // TODO: Do the same for MMP
         mmPositionManager = _mmPositionManager;
     }
 

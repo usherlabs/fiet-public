@@ -602,21 +602,34 @@ contract MMPositionManager is
         return oracleHelper.getTotalUsdValue(tickers, amounts);
     }
 
+    /// @dev Computes USD values for issued and settled amounts for a commit.
+    /// @param tokenId The commit NFT id.
+    /// @param extraIssue0 Additional token0 LCC to add to effective amounts (for prospective issuance).
+    /// @param extraIssue1 Additional token1 LCC to add to effective amounts (for prospective issuance).
+    /// @return issuedUsd Total USD value of effective issued LCC amounts.
+    /// @return settledUsd Total USD value of settled amounts.
+    function _computeCommitmentUsdValues(uint256 tokenId, uint256 extraIssue0, uint256 extraIssue1)
+        internal
+        view
+        returns (uint256 issuedUsd, uint256 settledUsd)
+    {
+        PoolId poolId = commitOf[tokenId].poolId;
+        (address l0, address l1) = _marketLccPair(poolId);
+
+        (uint256 e0, uint256 e1) = _effectiveIssuedAmountsForCommit(tokenId);
+        issuedUsd = _usdValueLccPair(l0, e0 + extraIssue0, l1, e1 + extraIssue1);
+
+        (uint256 s0, uint256 s1) = _sumSettledAmountsForCommit(tokenId);
+        settledUsd = _usdValueLccPair(l0, s0, l1, s1);
+    }
+
     /// @dev Asserts commit solvency against the currently stored signal.
     ///      Effective LCC (including any prospective issuance passed in) must be ≤ signal USD + settled USD.
     /// @param tokenId The commit NFT id.
     /// @param extraIssue0 Prospective token0 LCC to add to effective amounts (e.g., for a new mint).
     /// @param extraIssue1 Prospective token1 LCC to add to effective amounts (e.g., for a new mint).
     function _assertCommitmentSolventStored(uint256 tokenId, uint256 extraIssue0, uint256 extraIssue1) internal view {
-        PoolId poolId = commitOf[tokenId].poolId;
-        (address l0, address l1) = _marketLccPair(poolId);
-
-        (uint256 e0, uint256 e1) = _effectiveIssuedAmountsForCommit(tokenId);
-        uint256 issuedUsd = _usdValueLccPair(l0, e0 + extraIssue0, l1, e1 + extraIssue1);
-
-        (uint256 s0, uint256 s1) = _sumSettledAmountsForCommit(tokenId);
-        uint256 settledUsd = _usdValueLccPair(l0, s0, l1, s1);
-
+        (uint256 issuedUsd, uint256 settledUsd) = _computeCommitmentUsdValues(tokenId, extraIssue0, extraIssue1);
         uint256 signalUsd = _currentSignalUsdValue(tokenId);
 
         // Invariant: issued ≤ signal + settled (prevents over-issuance relative to backing)
@@ -630,15 +643,7 @@ contract MMPositionManager is
     /// @param tokenId The commit NFT id.
     /// @param liquiditySignal ABI-encoded LiquiditySignal (new state).
     function _assertCommitmentSolventWithNewSignal(uint256 tokenId, bytes memory liquiditySignal) internal {
-        PoolId poolId = commitOf[tokenId].poolId;
-        (address l0, address l1) = _marketLccPair(poolId);
-
-        (uint256 e0, uint256 e1) = _effectiveIssuedAmountsForCommit(tokenId);
-        uint256 issuedUsd = _usdValueLccPair(l0, e0, l1, e1);
-
-        (uint256 s0, uint256 s1) = _sumSettledAmountsForCommit(tokenId);
-        uint256 settledUsd = _usdValueLccPair(l0, s0, l1, s1);
-
+        (uint256 issuedUsd, uint256 settledUsd) = _computeCommitmentUsdValues(tokenId, 0, 0);
         uint256 signalUsd = _verifiedSignalUsdValue(liquiditySignal);
 
         // Invariant: issued ≤ signal + settled (post-verify renew path)
