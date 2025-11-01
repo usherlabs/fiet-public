@@ -3,7 +3,7 @@ pragma solidity ^0.8.0;
 
 import {MarketMaker} from "../libraries/MarketMaker.sol";
 
-interface ISpokeVerifier {
+interface ISignalVerifier {
     function verifyProof(
         uint256 nonce,
         bytes32 rootStateHash,

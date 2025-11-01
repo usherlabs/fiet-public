@@ -6,16 +6,22 @@ pragma solidity ^0.8.0;
 
 import {MarketMaker} from "./libraries/MarketMaker.sol";
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
-import {ISpokeVerifier} from "./interfaces/ISpokeVerifier.sol";
+import {ISignalVerifier} from "./interfaces/ISignalVerifier.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {LiquiditySignal} from "./types/Position.sol";
-import {IOracle} from "./interfaces/IOracle.sol";
-import {IOracleRegistry} from "./interfaces/IOracleRegistry.sol";
-// removed unused imports after solvency removal
+import {IResilientOracle} from "../interfaces/IResilientOracle.sol";
+import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {BalanceDelta, BalanceDeltaLibrary} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {ILCC} from "../interfaces/ILCC.sol";
+import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
+import {LiquidityUtils} from "../libraries/LiquidityUtils.sol";
+import {IVTSManager} from "../interfaces/IVTSManager.sol";
+import {IOracleHelper} from "../interfaces/IOracleHelper.sol";
 
 contract VRLSignalManager is Ownable {
-    ISpokeVerifier public verifier;
-    IOracleRegistry public oracleRegistry;
+    ISignalVerifier public verifier;
+    IOracleHelper public oracleHelper;
     IMarketFactory public marketFactory;
 
     using MarketMaker for MarketMaker.State;
@@ -32,14 +38,31 @@ contract VRLSignalManager is Ownable {
     error InvalidLiquiditySignal();
     error InsufficientLiquidityInSignal();
 
+    /**
+     * @dev Tracks the latest nonce per Market Maker (MM) address.
+     *
+     * IMPORTANT: A single nonce is generated (off Market Chain) once for an array of MMState covering the entire VRL
+     * (Verification Root Ledger) for all Market Makers. This means:
+     *
+     * - The nonce represents a shared state advancement across all MMs in a VRL batch
+     * - When submitting a proof, it must represent a state advancement over the last proof
+     *   submitted for that specific MM (enforced by requiring signal.nonce > mmNonce[mmState.owner])
+     * - Verification of a single MMState does NOT invalidate the nonce for another MMState
+     * - Each MMState progresses independently until it reaches the latest nonce
+     * - Multiple MMs can be verified at the same nonce level, but each MM's nonce must be
+     *   monotonically increasing
+     *
+     * Example: If VRL nonce is 5, MM A can submit nonce 5 even if MM B has already submitted
+     * nonce 5, but MM A cannot submit nonce 4 if they've already submitted nonce 5.
+     */
     mapping(address => uint256) public mmNonce;
     uint256 public signalExpiryInSeconds;
 
-    constructor(address _verifier, address _oracleRegistry, address _marketFactory, uint256 _signalExpiryInSeconds)
+    constructor(address _marketFactory, address _oracleHelper, address _verifier, uint256 _signalExpiryInSeconds)
         Ownable(msg.sender)
     {
-        verifier = ISpokeVerifier(_verifier);
-        oracleRegistry = IOracleRegistry(_oracleRegistry);
+        verifier = ISignalVerifier(_verifier);
+        oracleHelper = IOracleHelper(_oracleHelper);
         marketFactory = IMarketFactory(_marketFactory);
         signalExpiryInSeconds = _signalExpiryInSeconds;
     }
@@ -51,7 +74,7 @@ contract VRLSignalManager is Ownable {
      */
     function setVerifier(address _newVerifier) external onlyOwner {
         address oldVerifier = address(verifier);
-        verifier = ISpokeVerifier(_newVerifier);
+        verifier = ISignalVerifier(_newVerifier);
         emit VerifierChanged(oldVerifier, _newVerifier);
     }
 
@@ -116,41 +139,5 @@ contract VRLSignalManager is Ownable {
         LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
         (ok, _signalExpiryInSeconds) = verifyLiquiditySignal(signal);
         if (revertOnInvalid && !ok) revert InvalidProof();
-    }
-
-    /**
-     * @dev This function is used to get the total USD value of the assets provided identified by their tickers and scaled by the amounts
-     * @param tickers The tickers of the assets
-     * @param amounts The amounts of the assets
-     * @return totalUsdValue The total USD value of the assets
-     */
-    function getTotalUsdValue(string[] memory tickers, uint256[] memory amounts) public view returns (uint256) {
-        uint256 totalUsdValue = 0;
-        for (uint256 i = 0; i < tickers.length; i++) {
-            totalUsdValue += _getAssetUsdValue(tickers[i], amounts[i]);
-        }
-        return totalUsdValue;
-    }
-
-    /**
-     * @dev This function is used to get the USD value of an asset provided identified by its ticker and scaled by the amount
-     * @param ticker The ticker of the asset
-     * @param amount The amount of the asset
-     * @return usdValue The USD value of the asset
-     */
-    function _getAssetUsdValue(string memory ticker, uint256 amount) internal view returns (uint256) {
-        // get the price from the price oracle registry
-        string memory pricePair = string.concat(ticker, "/", "USD");
-        // use the default market oracle factory when calculating value of assets in signal reserves
-        address marketOracleFactory = address(0);
-
-        address priceOracle = IOracleRegistry(oracleRegistry).getOracle(pricePair, marketOracleFactory);
-        // convert the price to USD value
-        // assume each oracle provides a decimal interface to incerase precision
-        uint256 decimals = IOracle(priceOracle).decimals();
-        uint256 price = IOracle(priceOracle).getPrice();
-        uint256 usdValue = (uint256(price) * amount) / 10 ** decimals;
-        // return the USD value
-        return usdValue;
     }
 }

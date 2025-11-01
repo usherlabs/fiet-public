@@ -12,7 +12,6 @@ library EthSepoliaConstants {
     address constant STATE_VIEW = 0xE1Dd9c3fA50EDB962E442f60DfBc432e24537E4C;
 
     // Tokens
-    address constant WETH_ADDRESS = 0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9;
     address constant USDC_ADDRESS = 0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238;
     // address constant USDT_ADDRESS = 0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d;
     // address constant ARB_ADDRESS = 0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9;

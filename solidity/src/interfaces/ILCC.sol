@@ -5,9 +5,7 @@ import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {ERC20} from "solmate/tokens/ERC20.sol";
 
 interface ILCC {
-    function underlyingAsset() external view returns (address);
-
-    function usdPrice(address oracleFactory) external view returns (uint256, uint256);
+    function underlying() external view returns (address);
 
     function issue(uint256 amount) external;
 

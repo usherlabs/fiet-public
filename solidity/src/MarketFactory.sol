@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {Ownable, Ownable2Step} from "openzeppelin-contracts/contracts/access/Ownable2Step.sol";
+import {Ownable} from "openzeppelin-contracts/contracts/access/Ownable.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
@@ -14,22 +14,21 @@ import {ProxyHook} from "./ProxyHook.sol";
 import {MarketDeployer} from "./MarketDeployer.sol";
 import {IVTSManager} from "./interfaces/IVTSManager.sol";
 import {MarketVTSConfiguration} from "./types/VTS.sol";
+import {IOracleHelper} from "./interfaces/IOracleHelper.sol";
 
 /**
  * @title MarketFactory
  * @notice Factory contract for creating Fiet protocol markets with LCC tokens and pool management
  * @dev Manages LCC token creation, pool deployment, and protocol bounds administration
  */
-contract MarketFactory is IMarketFactory, Ownable2Step {
+contract MarketFactory is IMarketFactory, Ownable {
     using PoolIdLibrary for PoolKey;
 
-    error InvalidVTSConfiguration();
-
-    IPoolManager private immutable _poolManager;
+    IPoolManager public immutable poolManager;
+    IOracleHelper public immutable oracleHelper;
     address public coreHook;
     address public marketDeployer;
     address public mmPositionManager;
-    address public oracleRegistry;
 
     // Mapping from underlying asset to LCC token
     mapping(address => address) public underlyingToLCC;
@@ -54,12 +53,9 @@ contract MarketFactory is IMarketFactory, Ownable2Step {
 
     mapping(PoolId => address[2]) private _corePoolToCurrencyPair;
 
-    constructor(address poolManagerAddr, address _oracleRegistry, address[] memory _bounds) Ownable(msg.sender) {
-        if (poolManagerAddr == address(0)) {
-            revert InvalidPoolParameters();
-        }
-        _poolManager = IPoolManager(poolManagerAddr);
-        oracleRegistry = _oracleRegistry;
+    constructor(address _poolManager, address _oracleHelper, address[] memory _bounds) Ownable(msg.sender) {
+        poolManager = IPoolManager(_poolManager);
+        oracleHelper = IOracleHelper(_oracleHelper);
 
         // Set Protocol bounds addresses
         bounds[address(this)] = true;
@@ -76,7 +72,7 @@ contract MarketFactory is IMarketFactory, Ownable2Step {
         // Tie this factory to these hooks as LCCs/markets/hooks are tied to the factory.
         if (coreHook == address(0)) {
             if (_coreHook == address(0)) {
-                revert("Invalid hook addresses");
+                revert InvalidHookAddress();
             }
             coreHook = _coreHook;
         }
@@ -129,6 +125,9 @@ contract MarketFactory is IMarketFactory, Ownable2Step {
         address lccToken0 = _getOrCreateLCC(underlyingAsset0);
         address lccToken1 = _getOrCreateLCC(underlyingAsset1);
 
+        // Validate that oracles exist for both the LCC tokens underlying assets
+        oracleHelper.validateMarketOraclesExist(lccToken0, lccToken1);
+
         // Determine if orders match
         (Currency underlyingCurr0,) = _sortCurrencies(underlyingAsset0, underlyingAsset1);
         (Currency lccCurr0,) = _sortCurrencies(lccToken0, lccToken1);
@@ -167,7 +166,7 @@ contract MarketFactory is IMarketFactory, Ownable2Step {
             [Currency.unwrap(corePoolKey.currency0), Currency.unwrap(corePoolKey.currency1)];
 
         // Set the core pool key in the proxy hook for this new market
-        ProxyHook proxyHookInstance = ProxyHook(proxyHookAddress);
+        ProxyHook proxyHookInstance = ProxyHook(payable(proxyHookAddress));
         proxyHookInstance.setCorePoolKey(corePoolKey);
         proxyHookInstance.activate();
 
@@ -252,7 +251,7 @@ contract MarketFactory is IMarketFactory, Ownable2Step {
         }
 
         // Initialize the pool
-        _poolManager.initialize(poolKey, initialSqrtPriceX96);
+        poolManager.initialize(poolKey, initialSqrtPriceX96);
     }
 
     /**
@@ -282,7 +281,7 @@ contract MarketFactory is IMarketFactory, Ownable2Step {
         });
 
         // Initialize the pool
-        _poolManager.initialize(poolKey, initialSqrtPriceX96); // Use provided initial price instead of 0
+        poolManager.initialize(poolKey, initialSqrtPriceX96); // Use provided initial price instead of 0
     }
 
     /**
@@ -373,7 +372,7 @@ contract MarketFactory is IMarketFactory, Ownable2Step {
      * @return The pool manager address
      */
     function poolManager() external view returns (address) {
-        return address(_poolManager);
+        return address(poolManager);
     }
 
     /**

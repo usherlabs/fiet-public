@@ -485,7 +485,7 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         returns (uint256 amountToCancel)
     {
         uint256 deficitAmount = 0;
-        uint256 availableLiquidity = inMarketBalanceOf(Currency.wrap(lccToken.underlyingAsset()));
+        uint256 availableLiquidity = inMarketBalanceOf(Currency.wrap(lccToken.underlying()));
         if (amount > availableLiquidity) {
             amountToCancel = availableLiquidity; // amount to cancel becomes what ever is in custody.
             deficitAmount = amount - availableLiquidity; // deficit amount becomes the difference between the amount to cancel and the amount in custody.

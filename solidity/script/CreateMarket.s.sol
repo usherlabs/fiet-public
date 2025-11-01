@@ -5,6 +5,7 @@ import "forge-std/Script.sol";
 import {MarketFactory} from "../src/MarketFactory.sol";
 import {SepoliaConstants} from "./constants/ArbitrumSepolia.sol";
 import {ScriptHelper} from "./libraries/ScriptHelper.s.sol";
+import {PositionManager} from "v4-periphery/src/PositionManager.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {CurrencySortHelper} from "./libraries/CurrencySortHelper.sol";
@@ -52,6 +53,7 @@ contract CreateMarketScript is ScriptHelper {
     // Deployed contract addresses
     address public marketFactory;
     address public create2Deployer;
+    address public positionManagerAddress;
 
     // Created market details
     PoolId public corePoolId;
@@ -110,12 +112,15 @@ contract CreateMarketScript is ScriptHelper {
         if (keccak256(bytes(networkName)) == keccak256(bytes("arbitrum"))) {
             poolManager = ArbitrumConstants.POOL_MANAGER;
             create2Deployer = ArbitrumConstants.DEPLOYER_CREATE2;
+            positionManagerAddress = ArbitrumConstants.POSITION_MANAGER;
         } else if (keccak256(bytes(networkName)) == keccak256(bytes("sepolia"))) {
             poolManager = SepoliaConstants.POOL_MANAGER;
             create2Deployer = SepoliaConstants.DEPLOYER_CREATE2;
+            positionManagerAddress = SepoliaConstants.POSITION_MANAGER;
         } else if (keccak256(bytes(networkName)) == keccak256(bytes("ethsepolia"))) {
             poolManager = EthSepoliaConstants.POOL_MANAGER;
             create2Deployer = EthSepoliaConstants.DEPLOYER_CREATE2;
+            positionManagerAddress = EthSepoliaConstants.POSITION_MANAGER;
         } else {
             revert("Unsupported network");
         }
@@ -147,7 +152,8 @@ contract CreateMarketScript is ScriptHelper {
             if (keccak256(bytes(networkName)) == keccak256(bytes("sepolia"))) {
                 underlyingAsset1 = readAddress("usdcToken");
             } else if (keccak256(bytes(networkName)) == keccak256(bytes("ethsepolia"))) {
-                underlyingAsset1 = EthSepoliaConstants.WETH_ADDRESS;
+                // Query WETH9 from PositionManager instead of using constant
+                underlyingAsset1 = PositionManager(positionManagerAddress).WETH9();
             } else {
                 revert("Please specify UNDERLYING_ASSET_1 via environment variable for this network");
             }

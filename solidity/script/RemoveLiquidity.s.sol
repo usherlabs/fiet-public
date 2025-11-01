@@ -3,6 +3,7 @@ pragma solidity ^0.8.0;
 
 import "forge-std/Script.sol";
 import {IPositionManager} from "v4-periphery/src/interfaces/IPositionManager.sol";
+import {PositionManager} from "v4-periphery/src/PositionManager.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
@@ -105,7 +106,8 @@ contract RemoveLiquidityScript is ScriptHelper {
                 if (isSepolia) {
                     token1 = readAddress("usdtToken");
                 } else if (isEthSepolia) {
-                    token1 = EthSepoliaConstants.WETH_ADDRESS;
+                    // Query WETH9 from PositionManager instead of using constant
+                    token1 = PositionManager(positionManagerAddr).WETH9(); // WETH_ADDRESS
                 } else {
                     revert("Please specify UNDERLYING_ASSET_1 via environment variable");
                 }
@@ -136,7 +138,7 @@ contract RemoveLiquidityScript is ScriptHelper {
 
         PoolId proxyPoolId = factory.coreToProxy(corePoolKey.toId());
         address proxyHookAddr = factory.proxyToHook(proxyPoolId);
-        proxyHook = ProxyHook(proxyHookAddr);
+        proxyHook = ProxyHook(payable(proxyHookAddr));
 
         lcc0 = LiquidityCommitmentCertificate(factory.getLCC(token0));
         lcc1 = LiquidityCommitmentCertificate(factory.getLCC(token1));
@@ -163,11 +165,7 @@ contract RemoveLiquidityScript is ScriptHelper {
 
         (Currency currency0Proxy, Currency currency1Proxy) = CurrencySortHelper.sortAddresses(token0, token1);
         proxyPoolKey = PoolKey({
-            currency0: currency0Proxy,
-            currency1: currency1Proxy,
-            fee: 0,
-            tickSpacing: tickSpacingVal,
-            hooks: proxyHook
+            currency0: currency0Proxy, currency1: currency1Proxy, fee: 0, tickSpacing: tickSpacingVal, hooks: proxyHook
         });
         console.log(" ");
         console.log("Core Pool (receives liquidity):");

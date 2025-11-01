@@ -5,25 +5,34 @@ pragma solidity ^0.8.0;
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 
-import {ISpokeVerifier} from "../interfaces/ISpokeVerifier.sol";
+import {ISignalVerifier} from "../interfaces/ISignalVerifier.sol";
 import {MarketMaker} from "../libraries/MarketMaker.sol";
-import {ShaMerkle} from "../libraries/ShaMerkle.sol";
+import {MerkleProofLib} from "solady/utils/MerkleProofLib.sol";
 
-contract ICSpokeVerifier is ISpokeVerifier {
+contract ECDSASignatureSignalVerifier is ISignalVerifier {
     using ECDSA for bytes32;
-    using ShaMerkle for bytes32[];
     using MarketMaker for MarketMaker.State;
 
     error UnauthorizedCaller();
     error InvalidMerkleProof();
     error InvalidRootStateHashSignature();
 
-    address public canisterAddress;
+    address public immutable publicKeyAddress; // Threshold signature scheme (TSS) (tECDSA via MPC) address used to decentralise this signer.
 
-    constructor(address _canisterAddress) {
-        canisterAddress = _canisterAddress;
+    constructor(address _publicKeyAddress) {
+        publicKeyAddress = _publicKeyAddress;
     }
 
+    /**
+     * @dev Verifies the proof of the market maker state
+     * @param nonce The nonce of the market maker
+     * @param rootStateHash The root state hash of the market maker
+     * @param rootStateHashSignature The signature of the root state hash
+     * @param mmStateHashSignature The signature of the market maker state
+     * @param mmStateData The market maker state data
+     * @param merkleProof The merkle proof of the market maker state
+     * @return True if the proof is valid, false otherwise
+     */
     function verifyProof(
         uint256 nonce,
         bytes32 rootStateHash,
@@ -55,16 +64,16 @@ contract ICSpokeVerifier is ISpokeVerifier {
         }
 
         // verify the merkle proof
-        bool isProofValid = merkleProof.verify(rootStateHash, mmStateHash);
+        bool isProofValid = MerkleProofLib.verify(merkleProof, rootStateHash, mmStateHash);
         if (!isProofValid) {
             // revert InvalidMerkleProof();
             return false;
         }
 
         // verify signature of the canister on the root state hash
-        bytes32 message = sha256(abi.encodePacked(nonce, rootStateHash));
+        bytes32 message = keccak256(abi.encodePacked(nonce, rootStateHash));
         bool isRootStateHashValid =
-            MessageHashUtils.toEthSignedMessageHash(message).recover(rootStateHashSignature) == canisterAddress;
+            MessageHashUtils.toEthSignedMessageHash(message).recover(rootStateHashSignature) == publicKeyAddress;
 
         if (!isRootStateHashValid) {
             // revert InvalidRootStateHashSignature();

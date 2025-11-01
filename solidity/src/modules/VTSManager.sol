@@ -26,6 +26,7 @@ import {LiquidityUtils} from "../libraries/LiquidityUtils.sol";
 import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {CurrencySettler} from "@uniswap/v4-core/test/utils/CurrencySettler.sol";
+import {IOracleHelper} from "../interfaces/IOracleHelper.sol";
 
 abstract contract VTSManager is IVTSManager, PositionIndex {
     using StateLibrary for IPoolManager;
@@ -110,10 +111,10 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         PoolId indexed poolId, PositionId indexed positionId, uint8 indexed tokenIndex, uint256 share, uint256 growthInc
     );
     event MMPositionSettle(PoolId indexed poolId, PositionId indexed positionId, int128 amount0, int128 amount1);
-    // (legacy proactive events removed)
 
     address private immutable mmPositionManager;
     IPoolManager private immutable poolManager;
+    IOracleHelper private immutable oracleHelper;
 
     modifier onlyPositionValid(PositionId _positionId) {
         if (!isPositionValid(_positionId, true)) {
@@ -132,10 +133,11 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         _;
     }
 
-    constructor(address _poolManager, address _marketFactory, address _mmPositionManager)
+    constructor(address _poolManager, address _marketFactory, address _mmPositionManager, address _oracleHelper)
         PositionIndex(_marketFactory)
     {
         poolManager = IPoolManager(_poolManager);
+        oracleHelper = IOracleHelper(_oracleHelper);
         mmPositionManager = _mmPositionManager;
     }
 
@@ -207,12 +209,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
      * @param corePoolId The core pool ID
      * @return The VTS configuration
      */
-    function getMarketVTSConfiguration(PoolId corePoolId)
-        public
-        view
-        override
-        returns (MarketVTSConfiguration memory)
-    {
+    function getMarketVTSConfiguration(PoolId corePoolId) public view override returns (MarketVTSConfiguration memory) {
         return corePoolToVTSConfiguration[corePoolId];
     }
 
@@ -924,8 +921,6 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         uint128 liq = poolManager.getLiquidity(corePoolId);
         GrowthAccounting.accrue(inflowGrowthGlobal, corePoolId, token, inflowAmount, liq);
     }
-
-    // (legacy proactive accrual and settlement removed)
 
     /// @dev Compute inflow inside accumulator for a position bounds
 

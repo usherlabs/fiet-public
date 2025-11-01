@@ -23,7 +23,7 @@ import {LiquidityCommitmentCertificate} from "../src/LCC.sol";
 import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
 import {LiquidityUtils} from "../src/libraries/LiquidityUtils.sol";
 import {console} from "forge-std/console.sol";
-import {HookFlags} from "../script/constants/HookFlags.sol";
+import {HookFlags} from "../src/libraries/HookFlags.sol";
 // inherit from the MarketTestBase contract
 import {MarketTestBase} from "./modules/MarketTestBase.sol";
 import {SwapSimulator} from "../src/libraries/SwapSimulator.sol";
@@ -116,7 +116,9 @@ contract ProxyHookTest is MarketTestBase {
         uint256 swapAmount = 100;
         swapRouter.swap(
             proxyPoolKey,
-            SwapParams({zeroForOne: false, amountSpecified: -int256(swapAmount), sqrtPriceLimitX96: ONE_FOR_ZERO_LIMIT}),
+            SwapParams({
+                zeroForOne: false, amountSpecified: -int256(swapAmount), sqrtPriceLimitX96: ONE_FOR_ZERO_LIMIT
+            }),
             settings,
             ZERO_BYTES
         );
@@ -184,9 +186,9 @@ contract ProxyHookTest is MarketTestBase {
         // get balances of underlying token of the pool manager and lcc contracts
         // get the underlying asset of the lcc token A
         address underlyingAssetLCC0 =
-            LiquidityCommitmentCertificate(payable(Currency.unwrap(corePoolKey.currency0))).underlyingAsset();
+            LiquidityCommitmentCertificate(payable(Currency.unwrap(corePoolKey.currency0))).underlying();
         address underlyingAssetLCC1 =
-            LiquidityCommitmentCertificate(payable(Currency.unwrap(corePoolKey.currency1))).underlyingAsset();
+            LiquidityCommitmentCertificate(payable(Currency.unwrap(corePoolKey.currency1))).underlying();
 
         console.log("underlyingAsset-LCC0", underlyingAssetLCC0);
         console.log("underlyingAsset-LCC1", underlyingAssetLCC1);
@@ -257,9 +259,9 @@ contract ProxyHookTest is MarketTestBase {
         // get balances of underlying token of the pool manager and lcc contracts
         // get the underlying asset of the lcc token A
         address underlyingAssetLCC0 =
-            LiquidityCommitmentCertificate(Currency.unwrap(corePoolKey.currency0)).underlyingAsset();
+            LiquidityCommitmentCertificate(Currency.unwrap(corePoolKey.currency0)).underlying();
         address underlyingAssetLCC1 =
-            LiquidityCommitmentCertificate(Currency.unwrap(corePoolKey.currency1)).underlyingAsset();
+            LiquidityCommitmentCertificate(Currency.unwrap(corePoolKey.currency1)).underlying();
 
         console.log("underlyingAsset-LCC0", underlyingAssetLCC0);
         console.log("underlyingAsset-LCC1", underlyingAssetLCC1);
@@ -383,8 +385,13 @@ contract ProxyHookTest is MarketTestBase {
 
         // With no hookData, params are adjusted so output <= available; there should be no deficit minted
         bytes32 marketId = PoolId.unwrap(corePoolKey.toId());
+<<<<<<< HEAD
         LiquidityCommitmentCertificate lccOut = lcc1.underlyingAsset() == Currency.unwrap(_currency1) ? lcc1 : lcc0;
         assertEq(lccOut.getMarketTotalSettlementDeficit(marketId), 0, "No deficit should be created without recipient");
+=======
+        LiquidityCommitmentCertificate lccOut = lcc1.underlying() == Currency.unwrap(_currency1) ? lcc1 : lcc0;
+        assertEq(lccOut.getMarketTotalSettlementDeficit(marketId), 0);
+>>>>>>> main
         // Locker (address(1)) should not hold LCC because no deficit
         assertEq(lccOut.balanceOf(address(1)), 0, "Locker should not receive LCC");
 
@@ -490,7 +497,7 @@ contract ProxyHookTest is MarketTestBase {
         );
 
         // check settlement queue for lcc_recipient in LCC token
-        LiquidityCommitmentCertificate lccOut = lcc1.underlyingAsset() == Currency.unwrap(_currency1) ? lcc1 : lcc0;
+        LiquidityCommitmentCertificate lccOut = lcc1.underlying() == Currency.unwrap(_currency1) ? lcc1 : lcc0;
 
         // validate user got lcc tokens and a pending settlement from this market
         uint256 deficit = expectedOutput - mockAvailableOutputLiquidity;
@@ -627,11 +634,7 @@ contract ProxyHookTest is MarketTestBase {
     // Additional tests
     function test_beforeInitialize_revertIfNotFactory() public {
         PoolKey memory testKey = PoolKey({
-            currency0: _currency0,
-            currency1: _currency1,
-            fee: 3000,
-            tickSpacing: 60,
-            hooks: IHooks(proxyHook)
+            currency0: _currency0, currency1: _currency1, fee: 3000, tickSpacing: 60, hooks: IHooks(proxyHook)
         });
 
         vm.prank(address(manager));

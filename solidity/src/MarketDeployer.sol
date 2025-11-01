@@ -15,6 +15,7 @@ import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 import {IHookPausable} from "./interfaces/IHookPausable.sol";
 import {ProxyHook} from "./ProxyHook.sol";
 
+// owned by `MarketFactory.sol`
 contract MarketDeployer is Ownable {
     constructor() Ownable(msg.sender) {}
 

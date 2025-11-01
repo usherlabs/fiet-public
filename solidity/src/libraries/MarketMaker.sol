@@ -27,7 +27,7 @@ library MarketMaker {
         string prover;
         /// Unique nonce derived from proofs.
         string nonce;
-        /// The advancer of the request for the state of the market maker
+        /// The advancer (requestor for VRL state proof) of the market maker. Set to ensure state advancer is not spoofed on Market Chain verification.
         address advancer;
     }
 
@@ -61,11 +61,7 @@ library MarketMaker {
      * @return tickers The tickers of the reserves
      * @return amounts The amounts of the reserves
      */
-    function getReserves(State memory state)
-        internal
-        pure
-        returns (string[] memory tickers, uint256[] memory amounts)
-    {
+    function getReserves(State memory state) internal pure returns (string[] memory tickers, uint256[] memory amounts) {
         // get the tickers and amounts from the reserves
         tickers = new string[](state.reserves.length);
         amounts = new uint256[](state.reserves.length);
@@ -77,90 +73,11 @@ library MarketMaker {
     }
 
     /**
-     * @dev This function is used to convert the state of the market maker to a string
-     * @param state The state to convert to a string
-     * @return result The string representation of the state
-     */
-    function toString(State memory state) internal pure returns (string memory result) {
-        // Start with the reserves strings
-        result = "";
-
-        result = string(abi.encodePacked(result, "owner:", _addressToString(state.owner)));
-
-        // Add all reserves strings
-        for (uint256 i = 0; i < state.reserves.length; i++) {
-            if (i > 0) {
-                result = string(abi.encodePacked(result, "|"));
-            }
-            result = string(abi.encodePacked(result, _reserveToString(state.reserves[i])));
-        }
-
-        // Add prover
-        if (state.reserves.length > 0) {
-            result = string(abi.encodePacked(result, "|"));
-        }
-        result = string(abi.encodePacked(result, "prover:", state.prover));
-
-        // Add nonce
-        result = string(abi.encodePacked(result, "|nonce:", state.nonce));
-
-        // Add advancer
-        result = string(abi.encodePacked(result, "|advancer:", _addressToString(state.advancer)));
-    }
-
-    /**
      * @dev This function is used to convert the state of the market maker to a leaf hash
      * @param state The state to convert to a leaf hash
      * @return The leaf hash of the state
      */
     function toLeafHash(State memory state) internal pure returns (bytes32) {
-        return sha256(abi.encodePacked(toString(state)));
-    }
-
-    /**
-     * @dev This function is used to convert a uint256 to a string
-     * @param _i The uint256 to convert to a string
-     * @return The string representation of the uint256
-     */
-    function _uintToString(uint256 _i) internal pure returns (string memory) {
-        if (_i == 0) {
-            return "0";
-        }
-
-        uint256 number = _i;
-        uint256 digitCount;
-
-        while (number != 0) {
-            digitCount++;
-            number /= 10;
-        }
-
-        bytes memory resultBytes = new bytes(digitCount);
-        uint256 currentPosition = digitCount;
-
-        while (_i != 0) {
-            currentPosition -= 1;
-            uint8 digit = (48 + uint8(_i - (_i / 10) * 10));
-            bytes1 char = bytes1(digit);
-            resultBytes[currentPosition] = char;
-            _i /= 10;
-        }
-
-        return string(resultBytes);
-    }
-
-    function _addressToString(address _address) internal pure returns (string memory) {
-        string memory addressStr = HexStrings.toHexStringNoPrefix(uint256(uint160(_address)), 20);
-        return string(abi.encodePacked("0x", addressStr));
-    }
-
-    /**
-     * @param reserve The reserve to convert to a string
-     * @return The string representation of the reserve
-     */
-    function _reserveToString(Reserve memory reserve) internal pure returns (string memory) {
-        return string(
-            abi.encodePacked("reserves:", reserve.source, ":", reserve.asset, ":", _uintToString(reserve.amount))
-        );
+        return keccak256(abi.encode(state));
     }
 }

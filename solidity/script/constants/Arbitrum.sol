@@ -12,7 +12,6 @@ library ArbitrumConstants {
     address constant STATE_VIEW = 0x76Fd297e2D437cd7f76d50F01AfE6160f86e9990; // Replace if needed
 
     // Gas token (WETH) addresses
-    address constant WETH_ADDRESS = 0x82aF49447D8a07e3bd95BD0d56f35241523fBab1;
     address constant USDC_ADDRESS = 0xaf88d065e77c8cC2239327C5EDb3A432268e5831;
     address constant ARB_ADDRESS = 0x912CE59144191C1204E64559FE8253a0e49E6548;
 

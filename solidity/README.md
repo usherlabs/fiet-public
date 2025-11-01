@@ -45,7 +45,7 @@ solidity/
 curl -L https://foundry.paradigm.xyz | bash
 
 # Initialize Foundry
-foundryup
+foundryup -i 1.4.2
 
 # Verify installation
 forge --version
@@ -53,12 +53,16 @@ forge --version
 
 ### 2. Install Dependencies
 
+After cloning the repository, install dependencies and initialise git submodules:
+
 ```bash
 # Install Node.js dependencies
 pnpm install
 
 # Install Forge dependencies
 forge install
+
+git submodule update --init
 ```
 
 ## Environment Setup

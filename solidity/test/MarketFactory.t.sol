@@ -14,7 +14,7 @@ import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
 import {CoreHook} from "../src/CoreHook.sol";
 import {ProxyHook} from "../src/ProxyHook.sol";
 import {LiquidityCommitmentCertificate} from "../src/LCC.sol";
-import {PausablePool} from "../src/modules/PausablePool.sol";
+import {Pausable} from "openzeppelin-contracts/contracts/utils/Pausable.sol";
 import {Deployers} from "@uniswap/v4-core/test/utils/Deployers.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
@@ -24,6 +24,7 @@ import {MMPositionManager} from "../src/MMPositionManager.sol";
 import {VTSConfigs} from "../src/libraries/VTSConfigs.sol";
 import {WETH} from "solmate/src/tokens/WETH.sol";
 import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
+import {IOracleHelper} from "../src/interfaces/IOracleHelper.sol";
 
 contract MarketFactoryTest is Test, Deployers {
     using PoolIdLibrary for PoolKey;
@@ -50,14 +51,18 @@ contract MarketFactoryTest is Test, Deployers {
         coreHookAddr = address(coreFlags);
 
         vm.prank(owner);
-        factory = new MarketFactory(address(poolManager), makeAddr("oracleRegistry"), bounds);
+        address oracleHelperAddress = makeAddr("oracleHelper");
+        factory = new MarketFactory(address(poolManager), oracleHelperAddress, bounds);
         IWETH9 weth9 = IWETH9(address(new WETH()));
-        positionManager =
-            new MMPositionManager(address(poolManager), makeAddr("spokeReceiver"), address(factory), address(0), weth9);
+        positionManager = new MMPositionManager(
+            address(poolManager), makeAddr("spokeReceiver"), address(factory), makeAddr("settlementObserver"), weth9
+        );
 
         // Deploy CoreHook at computed address
         deployCodeTo(
-            "CoreHook.sol:CoreHook", abi.encode(poolManager, address(factory), address(positionManager)), coreHookAddr
+            "CoreHook.sol:CoreHook",
+            abi.encode(poolManager, address(factory), address(positionManager), oracleHelperAddress),
+            coreHookAddr
         );
 
         address proxyDeployer = MarketFactory(address(factory)).marketDeployer();
@@ -67,6 +72,14 @@ contract MarketFactoryTest is Test, Deployers {
 
         vm.prank(owner);
         factory.setHooks(coreHookAddr);
+
+        // Mock calls made to external contracts over the cause of the test
+        // Mock the validateMarketOraclesExist call
+        vm.mockCall(
+            oracleHelperAddress,
+            abi.encodeWithSelector(IOracleHelper.validateMarketOraclesExist.selector),
+            abi.encode() // Empty return (function is view, returns nothing)
+        );
     }
 
     function testCreateMarket() public {
@@ -212,7 +225,7 @@ contract MarketFactoryTest is Test, Deployers {
 
         // Cannot re-pause
         vm.prank(owner);
-        vm.expectRevert(abi.encodeWithSelector(PausablePool.EnforcedPause.selector));
+        vm.expectRevert(abi.encodeWithSelector(Pausable.EnforcedPause.selector));
         factory.pause(coreId);
     }
 
@@ -247,7 +260,7 @@ contract MarketFactoryTest is Test, Deployers {
 
         // Cannot re-unpause
         vm.prank(owner);
-        vm.expectRevert(abi.encodeWithSelector(PausablePool.ExpectedPause.selector));
+        vm.expectRevert(abi.encodeWithSelector(Pausable.ExpectedPause.selector));
         factory.unpause(coreId);
     }
 

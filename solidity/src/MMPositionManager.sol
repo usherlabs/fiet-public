@@ -7,7 +7,7 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {ModifyLiquidityParams} from "v4-periphery/lib/v4-core/src/types/PoolOperation.sol";
 import {Constants} from "v4-periphery/lib/v4-core/test/utils/Constants.sol";
 import {BalanceDelta, toBalanceDelta, BalanceDeltaLibrary} from "v4-periphery/lib/v4-core/src/types/BalanceDelta.sol";
-import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
+import {Currency, CurrencyLibrary} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {PoolId} from "v4-periphery/lib/v4-core/src/types/PoolId.sol";
 import {ERC721Permit_v4} from "v4-periphery/src/base/ERC721Permit_v4.sol";
 import {ReentrancyLock} from "v4-periphery/src/base/ReentrancyLock.sol";
@@ -21,7 +21,7 @@ import {IERC20Minimal} from "@uniswap/v4-core/src/interfaces/external/IERC20Mini
 import {IVTSManager} from "./interfaces/IVTSManager.sol";
 import {MarketVTSConfiguration, MarketVTSConfigurationLibrary} from "./types/VTS.sol";
 import {LiquidityUtils} from "./libraries/LiquidityUtils.sol";
-import {IMMPositionManager} from "./interfaces/IMMPositionManager.sol";
+import {CurrencyTransfer} from "./libraries/CurrencyTransfer.sol";
 import {IProxyHook} from "./interfaces/IProxyHook.sol";
 import {ILCC} from "./interfaces/ILCC.sol";
 import {IVRLSignalManager} from "./interfaces/IVRLSignalManager.sol";
@@ -37,7 +37,9 @@ import {NativeWrapper} from "v4-periphery/src/base/NativeWrapper.sol";
 import {LCCWrapper} from "./modules/LCCWrapper.sol";
 import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
 import {TransientSlots} from "./libraries/TransientSlots.sol";
-import {CurrencyLibrary} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
+import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
+import {ISettlementVerifier} from "./interfaces/ISettlementVerifier.sol";
+import {IVRLSettlementObserver} from "./interfaces/IVRLSettlementObserver.sol";
 
 interface ICommitmentDescriptor {
     function tokenURI(address manager, uint256 tokenId) external view returns (string memory);
@@ -70,6 +72,8 @@ contract MMPositionManager is
     error UnauthorizedSignalOwner();
     error DeadlinePassed(uint256 deadline);
     error NotApproved(address caller);
+    error UnauthorizedAdvancer();
+    error InsufficientETHSent();
 
     event SignalCommitted(uint256 tokenId);
     event SignalDecommitted(uint256 tokenId, uint256 positionIndex, uint256 amount0, uint256 amount1);
@@ -102,13 +106,20 @@ contract MMPositionManager is
         UNWRAP_LCC, // params: (address lcc, uint256 amount)
         WRAP_NATIVE, // params: (uint256 amount)
         UNWRAP_NATIVE // params: (uint256 amount)
-
     }
 
-    constructor(address _manager, address _signalManager, address _marketFactory, address _descriptor, IWETH9 _weth9)
+    constructor(
+        address _manager,
+        address _signalManager,
+        address _marketFactory,
+        address _settlementObserver,
+        address _descriptor,
+        IWETH9 _weth9
+    )
         ERC721Permit_v4("Fiet VRL Commitment Positions Manager", "FIET-VRL-MMP")
         BaseActionsRouter(IPoolManager(_manager))
         NativeWrapper(_weth9)
+        RFSCheckpointModule(_settlementObserver)
     {
         marketFactory = _marketFactory;
         signalManager = IVRLSignalManager(_signalManager);
@@ -185,7 +196,7 @@ contract MMPositionManager is
         unwrapped = _unwrapLCC(ILCC(lccAddr), msgSender(), amount);
     }
 
-    function getPositionId(uint256 tokenId, uint256 positionIndex) public view returns (PositionId) {
+    function getPositionId(uint256 tokenId, uint256 positionIndex) public view override returns (PositionId) {
         return commitToPosition[tokenId][positionIndex];
     }
 
@@ -426,14 +437,12 @@ contract MMPositionManager is
 
         // for deposits, transfer to the Market Vault (proxy hook)
         if (settlementDelta.amount0() > 0) {
-            IERC20Minimal(ua0).transferFrom(
-                sender, marketVault, LiquidityUtils.safeInt128ToUint256(settlementDelta.amount0())
-            );
+            IERC20Minimal(ua0)
+                .transferFrom(sender, marketVault, LiquidityUtils.safeInt128ToUint256(settlementDelta.amount0()));
         }
         if (settlementDelta.amount1() > 0) {
-            IERC20Minimal(ua1).transferFrom(
-                sender, marketVault, LiquidityUtils.safeInt128ToUint256(settlementDelta.amount1())
-            );
+            IERC20Minimal(ua1)
+                .transferFrom(sender, marketVault, LiquidityUtils.safeInt128ToUint256(settlementDelta.amount1()));
         }
         // notify the proxy hook of the settled underlying tokens
         // a positive balance delta means we are settling underlying tokens to the proxy hook, negative means withdrawing to the MMP.
@@ -663,9 +672,8 @@ contract MMPositionManager is
 
         // notify the vts manager of the settlement made for this position
         // returns the delta of required settlements IN or OUT
-        (BalanceDelta settlementDelta, bool rfsOpen) = _getVTSManager().onMMSettle(
-            positionId, poolKey.currency0, poolKey.currency1, toBalanceDelta(amount0, amount1)
-        );
+        (BalanceDelta settlementDelta, bool rfsOpen) = _getVTSManager()
+            .onMMSettle(positionId, poolKey.currency0, poolKey.currency1, toBalanceDelta(amount0, amount1));
 
         // mark RFS checkpoint
         _markCheckpoint(positionId, rfsOpen); // checkpoint directly on the _settleUnderlying call.
@@ -967,10 +975,13 @@ contract MMPositionManager is
      * @param tickUpper The upper tick of the position
      * @param liquidity The liquidity amount to mint
      */
-    function _mintPosition(PoolKey memory poolKey, uint256 tokenId, int24 tickLower, int24 tickUpper, uint256 liquidity)
-        internal
-        returns (PositionId positionId, uint256 positionIndex)
-    {
+    function _mintPosition(
+        PoolKey memory poolKey,
+        uint256 tokenId,
+        int24 tickLower,
+        int24 tickUpper,
+        uint256 liquidity
+    ) internal returns (PositionId positionId, uint256 positionIndex) {
         // add liquidity to the pool using the token id and position index to generate a unique salt
         positionIndex = commitToPositionCount[tokenId];
 

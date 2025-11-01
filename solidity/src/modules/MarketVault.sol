@@ -377,4 +377,10 @@ abstract contract MarketVault is IMarketVault {
             abi.encode(CallbackData(msg.sender, Currency.wrap(currency0), Currency.wrap(currency1), balanceDelta))
         );
     }
+
+    // Best practice: be explicit about intent
+    // TODO: Do we wnat to do anything here?
+    receive() external payable {
+        // Handle plain ETH transfers
+    }
 }

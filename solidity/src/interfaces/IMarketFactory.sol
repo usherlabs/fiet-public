@@ -29,7 +29,6 @@ interface IMarketFactory {
 
     // ============ ERRORS ============
 
-    error InvalidPoolParameters();
     error LCCAlreadyExists();
     error CorePoolAlreadyExists();
     error ProxyPoolAlreadyExists();
@@ -85,12 +84,6 @@ interface IMarketFactory {
      * @return The market maker position manager address
      */
     function mmPositionManager() external view returns (address);
-
-    /**
-     * @notice Gets the oracle registry address
-     * @return The oracle factory address
-     */
-    function oracleRegistry() external view returns (address);
 
     // ============ STATE CHANGING FUNCTIONS ============
 

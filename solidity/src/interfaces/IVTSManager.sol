@@ -23,10 +23,7 @@ interface IVTSManager {
 
     function calcVTSCurrent(PositionId positionId) external returns (uint256 vtsCurrent0, uint256 vtsCurrent1);
 
-    function getPositionSettledAmounts(PositionId positionId)
-        external
-        view
-        returns (uint256 amount0, uint256 amount1);
+    function getPositionSettledAmounts(PositionId positionId) external view returns (uint256 amount0, uint256 amount1);
 
     function getPositionSettledAmounts(PositionId[] calldata positionIds)
         external
