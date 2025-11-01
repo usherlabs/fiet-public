@@ -1,0 +1,37 @@
+---
+title: Verified Reserve Liquidity
+---
+
+Verified Reserve Liquidity (VRL) is liquidity held in sources like bank accounts or crypto exchanges, cryptographically verified by the Fiet Protocol to ensure it’s available for market makers to support trading. Unlike traditional DeFi, where funds are locked in AMMs, VRL remains off-chain or actively managed, enabling capital efficiency.
+
+<Card icon="lock" horizontal>
+VRL ensures trust in liquidity sources while preserving market maker flexibility and privacy.
+</Card>
+
+## How VRL Works
+
+Market makers connect financial sources (e.g., bank accounts, exchange wallets) to Fiet. Using zkTLS proofs from [Usher Labs’ Verity](/resources/cryptography), a selected Prover will source the liquidity reserve balance amounts, currency, and verify solvency without exposing sensitive data. These *liquidity signals* are recorded on-chain, allowing market makers to commit VRL to Fiet Markets.
+
+## Managing VRL
+
+To prevent liquidity shortages, market makers work with provers to maintain signal uptime through recurring proof generation. If signals expire or show insolvency, guarantors can seize committed positions. Market makers are advised to keep a 10% buffer between signalled and committed liquidity to account for price fluctuations or fees.
+
+<Note>
+VRL can be rehypothecated, allowing market makers to commit the same liquidity to multiple markets, boosting efficiency.
+</Note>
+
+## Prover Sequence Diagram
+
+<Frame caption="VRL Verification Process">
+  <img src="/images/Fiet-for-Provers---Sequence-Diagram.jpg" alt="VRL Verification Process and Prover Flow - Sequence Diagram" width="100%" height="auto" />
+</Frame>
+
+## Learn More
+
+Dive into related concepts and details:
+
+- **[Markets](/concepts/markets)**: See how VRL supports AMM pools.
+- **[Liquidity Commitment Certificates](/concepts/liquidity-commitment-certificates)**: Explore how VRL is represented in trading.
+- **[Cryptography](/resources/cryptography)**: Understand zkTLS verification.
+- **[Technical Specification](/resources/technical-specification)**: Review VRL mechanics.
+- **[Join the Community](https://go.usher.so/discord)**: Discuss VRL strategies on Discord.

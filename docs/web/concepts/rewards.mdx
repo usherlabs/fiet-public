@@ -1,0 +1,64 @@
+---
+title: Rewards
+---
+
+## What are Rewards?
+
+Rewards in the Fiet Protocol are incentives distributed to users to encourage behaviours such as market making, trading, or proving. These rewards, typically in the form of FIET tokens or other assets, are provided by:
+
+- The Fiet DAO.
+- Market creators incentivising MMs.
+- Token issuers promoting market usage.
+
+<Info>
+External incentives and points programs, managed outside the protocol in external applications, are not part of Fiet’s rewards. Their eligibility, computation, and distribution occur externally, and the Fiet interface may display them for informational purposes only.
+</Info>
+
+## Types of Reward Programs
+
+### Market Programs
+
+These programs encourage specific activities within individual markets:
+
+- **Maker Rewards**: Earned by MMs for facilitating liquidity in a market.
+- **Taker Rewards**: Earned by users for executing trades in a market.
+
+Rewards are distributed linearly over a defined period, with fixed amounts allocated for each activity type.
+
+<Card icon="gift" horizontal>
+Rewards motivate market makers, traders, and provers to power Fiet’s DeFi ecosystem.
+</Card>
+
+### Uniform Rate Programs
+
+Administered by the Fiet DAO for FIET token distribution, these programs apply a consistent reward rate per dollar exchanged across eligible markets:
+
+- All users receive the same base rate up to a predetermined supply limit.
+- If the total supply exceeds this limit, the rate adjusts to maintain a fixed daily distribution.
+- Multipliers or divisors may apply to specific tokens, detailed in the [Fiet forum](https://go.usher.so/discord).
+
+These programs ensure equitable and predictable reward distribution across market activities.
+
+## How Rewards Work
+
+The Fiet Protocol enables users to automatically earn rewards by participating in incentivised markets, such as through market making via settlements or trading. These activities are recorded on-chain, and reward amounts are calculated off-chain using this data. The Fiet DAO will elect a representative organisation to manage this computation process, submitting rewards on-chain weekly for verification and distribution.
+
+Rewards are made claimable approximately weekly through the Universal Rewards Distributor (URD). Users can claim their earned rewards via the Fiet interface without a deadline or directly through on-chain transactions on the URD using alternative methods. This structure ensures secure, transparent, and accessible reward distribution.
+
+<Note>
+The FIET token and Fiet DAO are planned for future launch, enhancing reward distribution.
+</Note>
+
+## Learn More
+
+Explore related concepts and details:
+
+- **[Roles](/roles)**: Understand market makers, traders, and provers.
+- **[Markets](/concepts/markets)**: See how rewards drive AMM pool activity.
+- **[Value-to-Signal](/concepts/value-to-signal)**: Learn how market activity influences rewards.
+- **[Technical Specification](/resources/technical-specification)**: Review reward mechanics.
+- **[Join the Community](https://go.usher.so/discord)**: Discuss rewards on Discord.
+
+<Frame caption="Reward Distribution Flow">
+  <img src="/images/fiet-reward-flow.jpg" alt="Reward Distribution Flow Diagram" width="100%" height="auto" />
+</Frame>
