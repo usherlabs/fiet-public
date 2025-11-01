@@ -109,6 +109,7 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
         // so there is an edge case for the oracles for getting the underlying price of lcc-eth
         // a solution could be to modify the asset being returned to the oracle's native address
         // if the caller is the resilient oracle
+        // TODO: (OPTIONAL) check if caller is ResilientOracle, and if underlying asset is native, and if so return RESILIENT_ORACLE_NATIVE_TOKEN_ADDR
 
         return underlyingAsset;
     }
