@@ -206,14 +206,13 @@ contract CompleteDeployScript is ScriptHelper {
         // deploy the proof verifiers
         address publicKeyAddress = vm.envAddress("PUBLIC_KEY_SIGNAL_VERIFIER_ADDRESS");
         address signalVerifier = address(new ECDSASignatureSignalVerifier(publicKeyAddress));
-        address[] memory settlementVerifiers = new address[](0);
 
         signalManager =
             address(new VRLSignalManager(marketFactory, oracleHelper, signalVerifier, signalExpiryInSeconds));
         console.log("SignalManager deployed at:", signalManager);
 
         // ? deploy settlement observer without verifiers. No verifiers developed yet.
-        settlementObserver = address(new VRLSettlementObserver(settlementVerifiers));
+        settlementObserver = address(new VRLSettlementObserver());
     }
 
     /**

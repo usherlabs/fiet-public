@@ -6,27 +6,63 @@ import {ISettlementVerifier} from "../interfaces/ISettlementVerifier.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 
 contract VRLSettlementObserver is Ownable, IVRLSettlementObserver {
-    address[] public verifiers;
-
-    error VerifierNotFound();
     error InvalidVerifierAddress();
     error InvalidSettlementProof();
     error InvalidVerifierIndex();
     error VerifierNotMapped();
-    error InvalidInputLengths();
 
     event VerifierAdded(address indexed verifier, uint256 indexed index);
-    event VerifierRemoved(
-        address indexed verifier, uint256 indexed removedIndex, address swappedVerifier, uint256 swappedFromIndex
-    );
-    event MarketTokenVerifierMapped(bytes32 indexed poolId, uint8 indexed tokenIndex, uint32 indexed verifierIndex);
+    event VerifierRemoved(address indexed verifier, uint256 indexed removedIndex);
+    event VerifierAllowed(address indexed token, uint32 indexed verifierIndex);
+    event VerifierDisallowed(address indexed token, uint32 indexed verifierIndex);
 
-    mapping(bytes32 => mapping(uint8 => uint32)) public marketTokenToVerifier;
+    mapping(uint32 => address) public verifiers;
+    uint32 public nextVerifierIndex;
+    mapping(address => mapping(uint32 => bool)) public allowedVerifiersForToken;
 
-    constructor(address[] memory _verifiers) Ownable(msg.sender) {
-        verifiers = _verifiers;
+    constructor() Ownable(msg.sender) {}
+
+    // New function to add a verifier
+    function addVerifier(address _verifier) external onlyOwner returns (uint32) {
+        if (_verifier == address(0)) {
+            revert InvalidVerifierAddress();
+        }
+        uint32 index = nextVerifierIndex++;
+        verifiers[index] = _verifier;
+        emit VerifierAdded(_verifier, index);
+        return index;
+    }
+
+    // New function to nullify a verifier globally
+    function nullifyVerifier(uint32 index) external onlyOwner {
+        address verifier = verifiers[index];
+        if (verifier == address(0)) {
+            revert InvalidVerifierAddress();
+        }
+        delete verifiers[index];
+        emit VerifierRemoved(verifier, index);
+    }
+
+    // New function to allow a verifier for tokens (batch)
+    function allowVerifierForTokens(uint32 verifierIndex, address[] memory tokens) external onlyOwner {
+        if (verifiers[verifierIndex] == address(0)) {
+            revert InvalidVerifierAddress();
+        }
+        for (uint256 i = 0; i < tokens.length; i++) {
+            allowedVerifiersForToken[tokens[i]][verifierIndex] = true;
+            emit VerifierAllowed(tokens[i], verifierIndex);
+        }
+    }
+
+    // New function to disallow a verifier for tokens (batch)
+    function disallowVerifierForTokens(uint32 verifierIndex, address[] memory tokens) external onlyOwner {
+        for (uint256 i = 0; i < tokens.length; i++) {
+            allowedVerifiersForToken[tokens[i]][verifierIndex] = false;
+            emit VerifierDisallowed(tokens[i], verifierIndex);
+        }
     }
 
     /**
@@ -34,13 +70,18 @@ contract VRLSettlementObserver is Ownable, IVRLSettlementObserver {
      * @param verifierIndex The index of the verifier to use
      * @param settlementProof The settlement proof to verify
      */
-    function verifySettlementProof(PoolId memory poolId, uint8 tokenIndex, bytes memory settlementProof) external view {
-        uint32 verifierIndex = marketTokenToVerifier[PoolId.unwrap(poolId)][tokenIndex];
+    function verifySettlementProof(
+        PoolKey memory poolKey,
+        uint8 tokenIndex,
+        uint32 verifierIndex,
+        bytes memory settlementProof,
+        bool revertOnInvalid
+    ) public view returns (bool isProofValid) {
+        require(tokenIndex == 0 || tokenIndex == 1, "Invalid token index");
+        address token = tokenIndex == 0 ? Currency.unwrap(poolKey.currency0) : Currency.unwrap(poolKey.currency1);
 
-        // Check if verifier is mapped (0 is not a valid index, as arrays are 0-indexed but we need explicit mapping)
-        // We'll check if verifierIndex is within bounds
-        if (verifierIndex >= verifiers.length) {
-            revert VerifierNotMapped();
+        if (settlementProof.length == 0) {
+            revert InvalidSettlementProof();
         }
 
         address verifierAddress = verifiers[verifierIndex];
@@ -48,68 +89,16 @@ contract VRLSettlementObserver is Ownable, IVRLSettlementObserver {
             revert InvalidVerifierAddress();
         }
 
+        if (!allowedVerifiersForToken[token][verifierIndex]) {
+            revert VerifierNotMapped();
+        }
+
         // Verify the settlement proof
         ISettlementVerifier verifier = ISettlementVerifier(verifierAddress);
-        bool isProofValid = verifier.verifySettlementProof(settlementProof);
-
-        if (!isProofValid) {
+        isProofValid =
+            verifier.verifySettlementProof(settlementProof, abi.encode(PoolId.unwrap(poolKey.toId()), tokenIndex));
+        if (revertOnInvalid && !isProofValid) {
             revert InvalidSettlementProof();
         }
-    }
-
-    function mapMarketTokenToVerifier(uint32 verifierIndex, PoolId memory poolId, uint8 tokenIndex) public onlyOwner {
-        if (verifierIndex >= verifiers.length) {
-            revert InvalidVerifierIndex();
-        }
-        if (verifiers[verifierIndex] == address(0)) {
-            revert InvalidVerifierAddress();
-        }
-        bytes32 marketId = PoolId.unwrap(poolId);
-        marketTokenToVerifier[marketId][tokenIndex] = verifierIndex;
-        emit MarketTokenVerifierMapped(marketId, tokenIndex, verifierIndex);
-    }
-
-    function mapMarketTokenToVerifier(uint32 verifierIndex, PoolId[] memory poolId, uint8[] memory tokenIndex)
-        public
-        onlyOwner
-    {
-        if (poolId.length != tokenIndex.length) {
-            revert InvalidInputLengths();
-        }
-        if (verifierIndex >= verifiers.length) {
-            revert InvalidVerifierIndex();
-        }
-        if (verifiers[verifierIndex] == address(0)) {
-            revert InvalidVerifierAddress();
-        }
-        for (uint256 i = 0; i < poolId.length; i++) {
-            bytes32 marketId = PoolId.unwrap(poolId[i]);
-            marketTokenToVerifier[marketId][tokenIndex[i]] = verifierIndex;
-            emit MarketTokenVerifierMapped(marketId, tokenIndex[i], verifierIndex);
-        }
-    }
-
-    function addVerifier(address _verifier, PoolId memory poolId, uint8 tokenIndex) public onlyOwner {
-        addVerifier(_verifier);
-        uint32 newVerifierIndex = uint32(verifiers.length - 1);
-        mapMarketTokenToVerifier(newVerifierIndex, poolId, tokenIndex);
-    }
-
-    function addVerifier(address _verifier, PoolId[] memory poolId, uint8[] memory tokenIndex) public onlyOwner {
-        addVerifier(_verifier);
-        uint32 newVerifierIndex = uint32(verifiers.length - 1);
-        mapMarketTokenToVerifier(newVerifierIndex, poolId, tokenIndex);
-    }
-
-    /**
-     * @dev This function is used to add a new verifier to the verifiers array
-     * @param _verifier The address of the verifier to add
-     */
-    function addVerifier(address _verifier) external onlyOwner {
-        if (_verifier == address(0)) {
-            revert InvalidVerifierAddress();
-        }
-        verifiers.push(_verifier);
-        emit VerifierAdded(_verifier, verifiers.length - 1);
     }
 }
