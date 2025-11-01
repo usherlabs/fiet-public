@@ -105,7 +105,8 @@ contract MMPositionManager is
         DECOMMIT,
         UNWRAP_LCC, // params: (address lcc, uint256 amount)
         WRAP_NATIVE, // params: (uint256 amount)
-        UNWRAP_NATIVE // params: (uint256 amount)
+        UNWRAP_NATIVE, // params: (uint256 amount)
+        EXTEND_GRACE_PERIOD // params: (PoolKey, uint256 tokenId, uint256 positionIndex, uint8 settlementTokenIndex, uint32 verifierIndex, bytes settlementProof)
     }
 
     constructor(
@@ -381,6 +382,18 @@ contract MMPositionManager is
                 // forward ETH to logical caller
                 CurrencyLibrary.ADDRESS_ZERO.transfer(msgSender(), unwrapAmt);
             }
+            return;
+        }
+        if (action == uint256(MMAction.EXTEND_GRACE_PERIOD)) {
+            (
+                PoolKey memory poolKey,
+                uint256 tokenId,
+                uint256 positionIndex,
+                uint8 settlementTokenIndex,
+                uint32 verifierIndex,
+                bytes memory settlementProof
+            ) = abi.decode(params, (PoolKey, uint256, uint256, uint8, uint32, bytes));
+            _extendGracePeriod(poolKey, tokenId, positionIndex, settlementTokenIndex, verifierIndex, settlementProof);
             return;
         }
         revert("UnsupportedAction");
@@ -684,6 +697,35 @@ contract MMPositionManager is
             settlementDelta,
             ILCC(Currency.unwrap(poolKey.currency0)).underlyingAsset(),
             ILCC(Currency.unwrap(poolKey.currency1)).underlyingAsset()
+        );
+    }
+
+    /**
+     * @dev This function is used to extend the grace period for a position by providing a settlement proof
+     * @param poolKey The pool key for the position
+     * @param tokenId The token id of the position
+     * @param positionIndex The position index
+     * @param settlementTokenIndex The index of the settlement token (0 or 1)
+     * @param verifierIndex The index of the verifier to use
+     * @param settlementProof The settlement proof containing the proof
+     */
+    function _extendGracePeriod(
+        PoolKey memory poolKey,
+        uint256 tokenId,
+        uint256 positionIndex,
+        uint8 settlementTokenIndex,
+        uint32 verifierIndex,
+        bytes memory settlementProof
+    ) internal onlyIfApproved(msgSender(), tokenId) onlyValidCommit(poolKey, tokenId) {
+        getPosition(tokenId, positionIndex); // Validate the position by fetching it.
+
+        // Get the VTS configuration for the pool
+        MarketVTSConfiguration memory vtsConfiguration = _getVTSManager().getMarketVTSConfiguration(poolKey.toId());
+
+        // Call the inherited function from RFSCheckpointModule
+        // Note: Different signature allows function overloading, but we use super to explicitly call parent
+        super._extendGracePeriod(
+            poolKey, vtsConfiguration, tokenId, positionIndex, settlementTokenIndex, verifierIndex, settlementProof
         );
     }
 
