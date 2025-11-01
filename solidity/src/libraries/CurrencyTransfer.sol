@@ -10,6 +10,9 @@ import {IERC20Minimal} from "@uniswap/v4-core/src/interfaces/external/IERC20Mini
 library CurrencyTransfer {
     /**
      * @notice Transfer currency from one address to another
+     * @dev If addressZero, then the transaction must include a transfer of ETH to address(this), allowing for forwarding to destination.
+     *     This emulates transferFrom. Native transferFrom does NOT include an initial inherited transfer for forwarding.
+     *
      * @param currency The currency to transfer (can be native ETH or ERC-20)
      * @param from The address to transfer from
      * @param to The address to transfer to
@@ -20,7 +23,7 @@ library CurrencyTransfer {
             // For native ETH, verify msg.value and forward it
             if (msg.value < amount) revert CurrencyLibrary.NativeTransferFailed();
             // Transfer ETH to the destination
-            currency.transfer(to, amount); // TODO: Odd... since it doesn't transferFrom. A true transferFrom is a cross-contract call to the (from) that performs a transfer (to)
+            currency.transfer(to, amount);
         } else {
             // For ERC-20 tokens, use standard transferFrom
             IERC20Minimal(Currency.unwrap(currency)).transferFrom(from, to, amount);
@@ -39,19 +42,5 @@ library CurrencyTransfer {
         if (currency.isAddressZero()) return;
 
         IERC20Minimal(Currency.unwrap(currency)).approve(user, amount);
-    }
-
-    /**
-     * @notice Refund ETH to the caller
-     * @param currency the Currency
-     * @param amountSpent the amount spent
-     */
-    function refundNative(Currency currency, uint256 amountSpent) internal {
-        uint256 totalAmountSentToContract = msg.value;
-        if (amountSpent == 0 || totalAmountSentToContract == 0) return;
-        if (!currency.isAddressZero()) revert CurrencyLibrary.NativeTransferFailed();
-
-        // transfer the left over amount to the caller
-        currency.transfer(msg.sender, totalAmountSentToContract - amountSpent);
     }
 }

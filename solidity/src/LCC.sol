@@ -191,16 +191,16 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
 
     // Called by Issuer before settling liquidity from LCCs to the market.
     function prepareSettle(uint256 amount) external onlyMarketVault {
-        address sender = msg.sender;
+        address vault = msg.sender;
         Currency underlyingAssetCurrency = Currency.wrap(underlyingAsset);
         // Allow issuer to facilitate direct liquidity provision transfer of underlying tokens
         // approval does nothing if we are using ETH(address(0)) as the underlying asset
         // so to prepare settle, we simply transfer the ETH to the issuer calling this function
         // so that way the caller can then transfer the ETH on the behalf of the LCC contract since there is no native  `transferFrom`
         if (underlyingAssetCurrency.isAddressZero()) {
-            underlyingAssetCurrency.transfer(sender, amount);
+            underlyingAssetCurrency.transfer(vault, amount);
         } else {
-            underlyingAssetCurrency.approve(sender, amount);
+            underlyingAssetCurrency.approve(vault, amount);
         }
         uaSupply -= amount;
     }
@@ -225,9 +225,9 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
 
     // DirectLPs and Traders engaging the CorePool directly will need LCC. LCC is 1:1 with the underlying asset.
     function _wrap(address from, address to, uint256 amount) internal {
-        bool isNativeETHAsset = underlyingAsset == address(0);
+        bool isNativeAsset = underlyingAsset == address(0);
         // throw error if the native ETH is insufficient and it is a native ETH backed LCC
-        if (isNativeETHAsset && msg.value != amount) {
+        if (isNativeAsset && msg.value != amount) {
             revert InvalidAmount();
         }
 
@@ -235,7 +235,7 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
         _mint(to, amount);
 
         // transfer the underlying asset from the recipient if it is not a native ETH backed LCC
-        if (!isNativeETHAsset) {
+        if (!isNativeAsset) {
             // safe to make ERC20 call here since we have verified that from address is not a native asset
             ERC20(underlyingAsset).safeTransferFrom(from, address(this), amount);
         }

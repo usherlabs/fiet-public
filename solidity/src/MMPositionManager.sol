@@ -63,6 +63,8 @@ contract MMPositionManager is
     using MarketMaker for MarketMaker.State;
     using StateLibrary for IPoolManager;
     using TransientStateLibrary for IPoolManager;
+    using CurrencyLibrary for Currency;
+    using CurrencyTransfer for Currency;
 
     error InvalidDelta(int128 amount0, int128 amount1);
     error InvalidAmount(uint256 amount, uint256 maxAmount);
@@ -453,11 +455,11 @@ contract MMPositionManager is
 
         // for deposits, transfer to the Market Vault (proxy hook)
         if (settlementDelta.amount0() > 0) {
-            IERC20Minimal(ua0)
+            Currency.wrap(ua0)
                 .transferFrom(sender, marketVault, LiquidityUtils.safeInt128ToUint256(settlementDelta.amount0()));
         }
         if (settlementDelta.amount1() > 0) {
-            IERC20Minimal(ua1)
+            Currency.wrap(ua1)
                 .transferFrom(sender, marketVault, LiquidityUtils.safeInt128ToUint256(settlementDelta.amount1()));
         }
         // notify the proxy hook of the settled underlying tokens
@@ -467,10 +469,10 @@ contract MMPositionManager is
 
         // for withdrawals, transfer to the caller/sender/MM.
         if (settlementDelta.amount0() < 0) {
-            IERC20Minimal(ua0).transfer(sender, LiquidityUtils.safeInt128ToUint256(settlementDelta.amount0()));
+            Currency.wrap(ua0).transfer(sender, LiquidityUtils.safeInt128ToUint256(settlementDelta.amount0()));
         }
         if (settlementDelta.amount1() < 0) {
-            IERC20Minimal(ua1).transfer(sender, LiquidityUtils.safeInt128ToUint256(settlementDelta.amount1()));
+            Currency.wrap(ua1).transfer(sender, LiquidityUtils.safeInt128ToUint256(settlementDelta.amount1()));
         }
     }
 

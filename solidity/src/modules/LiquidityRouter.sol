@@ -93,9 +93,9 @@ abstract contract LiquidityRouter is IImmutableState {
         // Dust guard
         // forward any stray native ETH held by the router (e.g. native-currency pools, or flows that momentarily leave ETH on the router) back to the logical caller at the end of the action.
         // If you keep it, send to your router’s logical caller (your msgSender() override), not raw msg.sender.
-        uint256 ethBalance = address(this).balance;
-        if (ethBalance > 0) {
-            CurrencyLibrary.ADDRESS_ZERO.transfer(msgSender(), ethBalance);
+        uint256 nativeBalance = address(this).balance;
+        if (nativeBalance > 0) {
+            CurrencyLibrary.ADDRESS_ZERO.transfer(msgSender(), nativeBalance);
         }
     }
 }
