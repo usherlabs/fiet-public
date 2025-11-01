@@ -13,9 +13,16 @@ interface IResilientOracle {
     }
 
     struct TokenConfig {
+        /// @notice asset address
         address asset;
+        /// @notice `oracles` stores the oracles based on their role in the following order:
+        /// [main, pivot, fallback],
+        /// It can be indexed with the corresponding enum OracleRole value
         address[3] oracles;
+        /// @notice `enableFlagsForOracles` stores the enabled state
+        /// for each oracle in the same order as `oracles`
         bool[3] enableFlagsForOracles;
+        /// @notice `cachingEnabled` is a flag that indicates whether the asset price should be cached
         bool cachingEnabled;
     }
 

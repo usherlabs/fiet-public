@@ -14,8 +14,6 @@ interface IOracleHelper {
 
     function tickerHashToAsset(bytes32 tickerHash) external view returns (address);
 
-    function setOracle(address _oracle) external;
-
     function registerTicker(string calldata ticker, address asset) external;
 
     function getAssetByTicker(string calldata ticker) external view returns (address);

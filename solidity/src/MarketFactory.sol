@@ -126,7 +126,7 @@ contract MarketFactory is IMarketFactory, Ownable {
         address lccToken1 = _getOrCreateLCC(underlyingAsset1);
 
         // Validate that oracles exist for both the LCC tokens underlying assets
-        oracleHelper.validateMarketOraclesExist(lccToken0, lccToken1);
+        oracleHelper.validateMarketOracles(lccToken0, lccToken1);
 
         // Determine if orders match
         (Currency underlyingCurr0,) = _sortCurrencies(underlyingAsset0, underlyingAsset1);

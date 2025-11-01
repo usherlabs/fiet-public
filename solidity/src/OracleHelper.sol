@@ -17,24 +17,11 @@ contract OracleHelper is Ownable {
     // Mapping of ticker hash to asset address
     mapping(bytes32 => address) public tickerHashToAsset;
 
-    event OracleUpdated(address indexed oldOracle, address indexed newOracle);
     event TickerUpdated(string indexed ticker, bytes32 indexed tickerHash, address indexed newAsset);
 
     constructor(address _oracle) Ownable(msg.sender) {
         if (_oracle == address(0)) revert InvalidOracleAddress();
         oracle = IResilientOracle(_oracle);
-    }
-
-    /**
-     * @notice Updates the oracle address
-     * @param _oracle New oracle address
-     * @custom:access Only owner
-     */
-    function setOracle(address _oracle) external onlyOwner {
-        if (_oracle == address(0)) revert InvalidOracleAddress();
-        address oldOracle = address(oracle);
-        oracle = IResilientOracle(_oracle);
-        emit OracleUpdated(oldOracle, _oracle);
     }
 
     /**
@@ -76,22 +63,24 @@ contract OracleHelper is Ownable {
     }
 
     /**
-     * @notice Validates that the oracles exist for the given LCC tokens
+     * @notice Validates that the oracles exist and are enabled for the given LCC tokens
      * @param lcc0 The address of the first LCC token
      * @param lcc1 The address of the second LCC token
      * @custom:error MarketOraclesNotConfigured if the oracles are not configured
      */
-    function validateMarketOraclesExist(address lcc0, address lcc1) external view {
+    function validateMarketOracles(address lcc0, address lcc1) external view {
         // make sure to check if the underlying asset is the native token and account for the representation difference
         // thus if it is the native token then use the resilient oracle native token address
         address underlying0 = OracleUtils.unifyNativeTokenAddress(ILCC(lcc0).underlying());
         address underlying1 = OracleUtils.unifyNativeTokenAddress(ILCC(lcc1).underlying());
-
+        TokenConfig memory tokenConfig0 = oracle.getTokenConfig(underlying0);
+        TokenConfig memory tokenConfig1 = oracle.getTokenConfig(underlying1);
         if (
-            oracle.getTokenConfig(underlying0).asset == address(0)
-                || oracle.getTokenConfig(underlying1).asset == address(0)
+            tokenConfig0.enableFlagsForOracles[uint256(OracleRole.MAIN)] == false
+                || tokenConfig1.enableFlagsForOracles[uint256(OracleRole.MAIN)] == false
+                || tokenConfig0.asset == address(0) || tokenConfig1.asset == address(0)
         ) {
-            revert MarketOraclesNotConfigured();
+            revert MarketOraclesNotEnabled();
         }
     }
 
