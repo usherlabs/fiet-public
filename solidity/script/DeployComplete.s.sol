@@ -20,11 +20,11 @@ import {EthSepoliaConstants} from "./constants/EthSepolia.sol";
 import {MMPositionManager} from "../src/MMPositionManager.sol";
 import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
 import {PositionManager} from "v4-periphery/src/PositionManager.sol";
-import {StubSpokeVerifier} from "../src/modules/StubSpokeVerifier.sol";
-import {VRLSignalManager} from "../src/modules/VRLSignalManager.sol";
+import {StubSpokeVerifier} from "../src/verifiers/StubSpokeVerifier.sol";
+import {VRLSignalManager} from "../src/VRLSignalManager.sol";
 import {VRLSettlementObserver} from "../src/VRLSettlementObserver.sol";
 import {StubSettlementVerifier} from "../src/verifiers/StubSettlementVerifier.sol";
-import {OracleHelper} from "../src/modules/OracleHelper.sol";
+import {OracleHelper} from "../src/OracleHelper.sol";
 import {GlobalConfig} from "../src/GlobalConfig.sol";
 
 /**

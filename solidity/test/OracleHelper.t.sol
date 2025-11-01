@@ -2,7 +2,7 @@
 pragma solidity ^0.8.20;
 
 import {Test} from "forge-std/Test.sol";
-import {OracleHelper} from "../src/modules/OracleHelper.sol";
+import {OracleHelper} from "../src/OracleHelper.sol";
 import {IResilientOracle} from "../src/interfaces/IResilientOracle.sol";
 import {ILCC} from "../src/interfaces/ILCC.sol";
 

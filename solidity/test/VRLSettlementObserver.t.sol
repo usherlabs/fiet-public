@@ -2,7 +2,7 @@
 pragma solidity ^0.8.20;
 
 import "forge-std/Test.sol";
-import {VRLSettlementObserver} from "../src/modules/VRLSettlementObserver.sol";
+import {VRLSettlementObserver} from "../src/VRLSettlementObserver.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
 contract VRLSettlementObserverTest is Test {

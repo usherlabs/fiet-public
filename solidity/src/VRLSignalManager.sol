@@ -24,11 +24,7 @@ contract VRLSignalManager is Ownable {
     );
 
     error InvalidProof();
-    error InvalidDelta(int128 amount0, int128 amount1);
     error InvalidNonce(uint256 newNonce, uint256 prevNonce);
-    error InvalidLiquiditySignalEncoding();
-    error InvalidLiquiditySignal();
-    error InsufficientLiquidityInSignal();
 
     /**
      * @dev Tracks the latest nonce per Market Maker (MM) address.

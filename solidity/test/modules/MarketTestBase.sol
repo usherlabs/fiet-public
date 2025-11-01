@@ -34,11 +34,11 @@ import {VTSConfigs} from "../../src/libraries/VTSConfigs.sol";
 import {IVTSManager} from "../../src/interfaces/IVTSManager.sol";
 import {VRLSignalManager} from "../../src/VRLSignalManager.sol";
 import {VRLSettlementObserver} from "../../src/VRLSettlementObserver.sol";
-import {StubSettlementVerifier} from "../../src/modules/StubSettlementVerifier.sol";
+import {StubSettlementVerifier} from "../../src/verifiers/StubSettlementVerifier.sol";
 import {IMarketVault} from "../../src/interfaces/IMarketVault.sol";
 import {IVRLSettlementObserver} from "../../src/interfaces/IVRLSettlementObserver.sol";
 import {CurrencyTransfer} from "../../src/libraries/CurrencyTransfer.sol";
-import {OracleHelper} from "../../src/modules/OracleHelper.sol";
+import {OracleHelper} from "../../src/OracleHelper.sol";
 
 abstract contract MarketTestBase is Test, Deployers {
     using PoolIdLibrary for PoolId;
