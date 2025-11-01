@@ -36,7 +36,7 @@ import {VRLSignalManager} from "../../src/VRLSignalManager.sol";
 import {VRLSettlementObserver} from "../../src/VRLSettlementObserver.sol";
 import {StubSettlementVerifier} from "../../src/verifiers/StubSettlementVerifier.sol";
 import {IMarketVault} from "../../src/interfaces/IMarketVault.sol";
-import {IVRLSettlementObserver} from "../../src/interfaces/IVRLSettlementObserver.sol";
+import {MMPCommitmentDescriptor} from "../../src/MMPCommitmentDescriptor.sol";
 import {CurrencyTransfer} from "../../src/libraries/CurrencyTransfer.sol";
 import {OracleHelper} from "../../src/OracleHelper.sol";
 
@@ -169,9 +169,18 @@ abstract contract MarketTestBase is Test, Deployers {
         address[] memory verifiers = new address[](1);
         verifiers[0] = address(new StubSettlementVerifier());
         settlementObserver = new VRLSettlementObserver(verifiers);
+
+        // deploy commitment descriptor
+        address commitmentDescriptor = address(new MMPCommitmentDescriptor());
+
         mmPositionManager = address(
             new MMPositionManager(
-                address(manager), address(signalManager), address(marketFactory), address(settlementObserver)
+                address(manager),
+                address(signalManager),
+                address(marketFactory),
+                address(settlementObserver),
+                commitmentDescriptor,
+                weth9
             )
         );
     }

@@ -25,7 +25,7 @@ import {VRLSignalManager} from "../src/VRLSignalManager.sol";
 import {VRLSettlementObserver} from "../src/VRLSettlementObserver.sol";
 import {StubSettlementVerifier} from "../src/verifiers/StubSettlementVerifier.sol";
 import {OracleHelper} from "../src/OracleHelper.sol";
-import {GlobalConfig} from "../src/GlobalConfig.sol";
+import {MMPCommitmentDescriptor} from "../src/MMPCommitmentDescriptor.sol";
 
 /**
  * @title CompleteDeployScript
@@ -51,6 +51,7 @@ contract CompleteDeployScript is ScriptHelper {
     address public signalManager;
     address public settlementObserver;
     address public globalConfig;
+    address public commitmentDescriptor;
     // Network-specific constants set from environment
     address public poolManagerAddress;
     address public create2Deployer;
@@ -213,6 +214,16 @@ contract CompleteDeployScript is ScriptHelper {
     }
 
     /**
+     * @dev Deploys MMPCommitmentDescriptor
+     * @return The deployed MMPCommitmentDescriptor address
+     */
+    function _deployCommitmentDescriptor() internal returns (address) {
+        MMPCommitmentDescriptor descriptor = new MMPCommitmentDescriptor();
+        console.log("MMPCommitmentDescriptor deployed at:", address(descriptor));
+        return address(descriptor);
+    }
+
+    /**
      * @dev Deploys MMPositionManager with a stub verifier
      * @return The deployed MMPositionManager address
      */
@@ -222,8 +233,10 @@ contract CompleteDeployScript is ScriptHelper {
         console.log("WETH9 queried from PositionManager:", wethAddress);
 
         IWETH9 weth9 = IWETH9(wethAddress);
-        MMPositionManager positionManager =
-            new MMPositionManager(poolManagerAddress, signalManager, marketFactory, settlementObserver, weth9);
+        address commitmentDescriptor = _deployCommitmentDescriptor();
+        MMPositionManager positionManager = new MMPositionManager(
+            poolManagerAddress, signalManager, marketFactory, settlementObserver, commitmentDescriptor, weth9
+        );
         console.log("MMPositionManager deployed at:", address(positionManager));
         return address(positionManager);
     }

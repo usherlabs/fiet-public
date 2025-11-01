@@ -24,7 +24,7 @@ import {MMPositionManager} from "../src/MMPositionManager.sol";
 import {VTSConfigs} from "../src/libraries/VTSConfigs.sol";
 import {WETH} from "solmate/src/tokens/WETH.sol";
 import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
-import {IOracleHelper} from "../src/interfaces/IOracleHelper.sol";
+import {MMPCommitmentDescriptor} from "../src/MMPCommitmentDescriptor.sol";
 
 contract MarketFactoryTest is Test, Deployers {
     using PoolIdLibrary for PoolKey;
@@ -54,8 +54,14 @@ contract MarketFactoryTest is Test, Deployers {
         address oracleHelperAddress = makeAddr("oracleHelper");
         factory = new MarketFactory(address(poolManager), oracleHelperAddress, bounds);
         IWETH9 weth9 = IWETH9(address(new WETH()));
+        address commitmentDescriptor = address(new MMPCommitmentDescriptor());
         positionManager = new MMPositionManager(
-            address(poolManager), makeAddr("spokeReceiver"), address(factory), makeAddr("settlementObserver"), weth9
+            address(poolManager),
+            makeAddr("spokeReceiver"),
+            address(factory),
+            makeAddr("settlementObserver"),
+            commitmentDescriptor,
+            weth9
         );
 
         // Deploy CoreHook at computed address

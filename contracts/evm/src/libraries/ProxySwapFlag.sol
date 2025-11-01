@@ -3,6 +3,7 @@ pragma solidity ^0.8.0;
 
 import {TransientSlots} from "./TransientSlots.sol";
 import {TransientSlot} from "openzeppelin-contracts/contracts/utils/TransientSlot.sol";
+import {IExttload} from "v4-periphery/lib/v4-core/src/interfaces/IExttload.sol";
 
 /**
  * @title SwapTracking
@@ -11,6 +12,7 @@ import {TransientSlot} from "openzeppelin-contracts/contracts/utils/TransientSlo
  */
 library ProxySwapFlag {
     using TransientSlot for *;
+
     // Transient storage slot for proxy swap flag
 
     /**
@@ -36,10 +38,28 @@ library ProxySwapFlag {
     }
 
     /**
+     * @notice Checks if a proxy swap is in progress
+     * @param sourceAddress The address of the source contract
+     * @return flag True if a proxy swap is in progress, false otherwise
+     */
+    function isProxySwapInProgress(address sourceAddress) internal view returns (bool) {
+        return IExttload(sourceAddress).exttload(TransientSlots.PROXY_SWAP_FLAG_SLOT) != bytes32(0);
+    }
+
+    /**
      * @notice Checks if a swap is direct (not initiated by the proxy hook)
      * @return True if the swap is direct, false otherwise
      */
     function isDirectSwap() internal view returns (bool) {
         return !isProxySwapInProgress();
+    }
+
+    /**
+     * @notice Checks if a swap is direct (not initiated by the proxy hook)
+     * @param sourceAddress The address of the source contract
+     * @return True if the swap is direct, false otherwise
+     */
+    function isDirectSwap(address sourceAddress) internal view returns (bool) {
+        return !isProxySwapInProgress(sourceAddress);
     }
 }

@@ -8,8 +8,6 @@ import {IExttload} from "v4-periphery/lib/v4-core/src/interfaces/IExttload.sol";
 library TransientSlots {
     using TransientSlot for *;
 
-    bytes32 internal constant TRACING_FLAG_SLOT = keccak256("TRACING_FLAG");
-    bytes32 internal constant CURRENT_MARKET_SLOT = keccak256("CURRENT_MARKET");
     bytes32 internal constant PROXY_SWAP_FLAG_SLOT = keccak256("PROXY_SWAP_FLAG");
     bytes32 internal constant SQRTP_BEFORE_SLOT = keccak256("SQRTP_BEFORE");
     bytes32 internal constant LIQ_BEFORE_SLOT = keccak256("LIQ_BEFORE");
@@ -25,9 +23,8 @@ library TransientSlots {
             BalanceDelta.wrap(TransientSlot.asInt256(TransientSlots.POSITION_REQUIRED_SETTLEMENT_DELTA_SLOT).tload());
         // pack with bounds to int128 via toBalanceDelta (will revert on overflow; expected not to overflow in practice)
         BalanceDelta total = current + settlementDelta;
-        TransientSlot.asInt256(TransientSlots.POSITION_REQUIRED_SETTLEMENT_DELTA_SLOT).tstore(
-            BalanceDelta.unwrap(total)
-        );
+        TransientSlot.asInt256(TransientSlots.POSITION_REQUIRED_SETTLEMENT_DELTA_SLOT)
+            .tstore(BalanceDelta.unwrap(total));
     }
 
     function consumePositionRequiredSettlementDelta() internal returns (BalanceDelta) {

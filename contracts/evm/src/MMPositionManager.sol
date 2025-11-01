@@ -33,7 +33,6 @@ import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.
 import {TransientStateLibrary} from "v4-periphery/lib/v4-core/src/libraries/TransientStateLibrary.sol";
 import {RFSCheckpointModule} from "./modules/RFSCheckpoint.sol";
 import {Strings} from "openzeppelin-contracts/contracts/utils/Strings.sol";
-import {IPositionManager} from "v4-periphery/src/interfaces/IPositionManager.sol";
 import {NativeWrapper} from "v4-periphery/src/base/NativeWrapper.sol";
 import {LCCWrapper} from "./modules/LCCWrapper.sol";
 import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
@@ -42,9 +41,7 @@ import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {ISettlementVerifier} from "./interfaces/ISettlementVerifier.sol";
 import {IVRLSettlementObserver} from "./interfaces/IVRLSettlementObserver.sol";
 
-interface ICommitmentDescriptor {
-    function tokenURI(address manager, uint256 tokenId) external view returns (string memory);
-}
+import {ICommitmentDescriptor} from "./interfaces/ICommitmentDescriptor.sol";
 
 contract MMPositionManager is
     LiquidityRouter,
@@ -77,6 +74,8 @@ contract MMPositionManager is
     error NotApproved(address caller);
     error UnauthorizedAdvancer();
     error InsufficientETHSent();
+    error CommitmentDescriptorNotSet();
+    error PoolManagerMustBeLocked();
 
     event SignalCommitted(uint256 tokenId);
     event SignalDecommitted(uint256 tokenId, uint256 positionIndex, uint256 amount0, uint256 amount1);
@@ -150,42 +149,15 @@ contract MMPositionManager is
 
     /// @notice Enforces that the PoolManager is locked.
     modifier onlyIfPoolManagerLocked() {
-        if (poolManager.isUnlocked()) revert IPositionManager.PoolManagerMustBeLocked();
+        if (poolManager.isUnlocked()) revert PoolManagerMustBeLocked();
         _;
     }
 
     function tokenURI(uint256 tokenId) public view override returns (string memory) {
-        if (commitmentDescriptor != address(0)) {
-            return ICommitmentDescriptor(commitmentDescriptor).tokenURI(address(this), tokenId);
+        if (commitmentDescriptor == address(0)) {
+            revert CommitmentDescriptorNotSet();
         }
-        uint256 posCount = commitToPositionCount[tokenId];
-        SignalState memory s = commitOf[tokenId].state;
-        string memory name = string(abi.encodePacked("Fiet Commitment #", Strings.toString(tokenId)));
-        string memory description = "Fiet VRL Commitment NFT granting position management rights.";
-        string memory attributes = string(
-            abi.encodePacked(
-                "[{\"trait_type\":\"positions\",\"value\":",
-                Strings.toString(posCount),
-                "},",
-                "{\"trait_type\":\"expiresAt\",\"value\":",
-                Strings.toString(s.expiresAt),
-                "}]"
-            )
-        );
-        string memory json = string(
-            abi.encodePacked(
-                "{\"name\":\"",
-                name,
-                "\",",
-                "\"description\":\"",
-                description,
-                "\",",
-                "\"attributes\":",
-                attributes,
-                "}"
-            )
-        );
-        return string(abi.encodePacked("data:application/json;utf8,", json));
+        return ICommitmentDescriptor(commitmentDescriptor).tokenURI(address(this), tokenId);
     }
 
     function _getVTSManager() internal view returns (IVTSManager) {

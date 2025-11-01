@@ -28,6 +28,7 @@ import {SqrtPriceMath} from "@uniswap/v4-core/src/libraries/SqrtPriceMath.sol";
 import {TickUtils} from "./libraries/TickUtils.sol";
 import {SafeCast} from "openzeppelin-contracts/contracts/utils/math/SafeCast.sol";
 import {PausablePool} from "./modules/PausablePool.sol";
+import {ProxySwapFlag} from "./libraries/ProxySwapFlag.sol";
 
 /**
  * Core Pool should be aware of Positions.
@@ -259,16 +260,11 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
             }
         }
 
-        address proxyHook = _getProxyHook(key);
-
         // Check if this is a direct core pool swap, and if it is, call the proxy hook
-        if (IExttload(proxyHook).exttload(TransientSlots.PROXY_SWAP_FLAG_SLOT) == bytes32(0)) {
+        address proxyHook = _getProxyHook(key);
+        if (ProxySwapFlag.isDirectSwap(proxyHook)) {
             ProxyHook(payable(proxyHook)).onCorePoolDirectSwap(delta);
         }
-
-        _triggerInternalTracingFlag(key.toId());
-
-        // per-swap accrual removed to avoid double-counting; accrual is done per segment above
 
         return (this.afterSwap.selector, 0);
     }
@@ -352,18 +348,5 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
         PoolId proxyPoolId = IMarketFactory(marketFactory).coreToProxy(corePoolId);
 
         return IMarketFactory(marketFactory).proxyToHook(proxyPoolId);
-    }
-
-    /**
-     * @notice Trigger the internal tracing flags that would be read by lcc tokens
-     * @dev This is used to indicate that a swap has occurred and the current market is the core pool
-     * @dev In order to help the lcc track markets transfers came from
-     * @param corePoolId The core pool id
-     */
-    function _triggerInternalTracingFlag(PoolId corePoolId) internal {
-        // Trigger flag within the core hook to indicate that a swap has occurred
-        // Set some variables that would be read by the corresponding recipient LCC contract
-        TransientSlot.asBoolean(TransientSlots.TRACING_FLAG_SLOT).tstore(true);
-        TransientSlot.asBytes32(TransientSlots.CURRENT_MARKET_SLOT).tstore(bytes32(PoolId.unwrap(corePoolId)));
     }
 }

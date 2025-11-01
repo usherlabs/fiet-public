@@ -18,7 +18,7 @@ import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {ILCC} from "./interfaces/ILCC.sol";
 import {CurrencyTransfer} from "./libraries/CurrencyTransfer.sol";
 
-contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC {
+contract LiquidityCommitmentCertificate is ERC20, Ownable, ILCC {
     using SafeTransferLib for ERC20;
     using CurrencyTransfer for Currency;
 
@@ -389,9 +389,6 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
     function onTransfer(address from, address to, uint256 amount) internal onlyProtocolTransfer(msg.sender, to) {
         // clear any outstanding settlement in all markets to be paid to the sender initiating the transfer
         _annulUserSettlementBeforeTransfer(from, amount);
-
-        // process the market tracing logic to find out which market the token transfer came from
-        _processMarketTracing(to, amount);
     }
 
     function transfer(address to, uint256 amount) public virtual override returns (bool) {
@@ -402,24 +399,6 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
     function transferFrom(address from, address to, uint256 amount) public virtual override returns (bool) {
         onTransfer(from, to, amount);
         return super.transferFrom(from, to, amount);
-    }
-
-    /**
-     * @dev Get the tracing flag and current market from the core hook
-     * @return isTracingActive Whether tracing is active
-     * @return currentMarket The current market if any is set
-     */
-    function _getCoreHookFlags() internal view returns (bool isTracingActive, bytes32 currentMarket) {
-        // get the core hook from the market factory
-        address coreHook = IMarketFactory(marketFactory).getCoreHook();
-
-        // read in all the bytes from the transient storage of the hook contract
-        bytes32 tracingFlagBytes = IExttload(coreHook).exttload(TransientSlots.TRACING_FLAG_SLOT);
-        bytes32 currentMarketBytes = IExttload(coreHook).exttload(TransientSlots.CURRENT_MARKET_SLOT);
-
-        // set the tracing flag and current market
-        isTracingActive = tracingFlagBytes != bytes32(0);
-        currentMarket = currentMarketBytes;
     }
 
     /**
@@ -461,71 +440,26 @@ contract LiquidityCommitmentCertificate is ERC20, MarketLiquidity, Ownable, ILCC
         }
     }
 
-    /**
-     * @dev Process the market tracing logic
-     * @param recipient The recipient of the transfer
-     * @param amount The amount of the transfer
-     */
-    function _processMarketTracing(address recipient, uint256 amount) private {
-        // get the appropriate flags from the core hook
-        address coreHook = marketFactory.getCoreHook();
-
-        // read in all the bytes from the transient storage of the hook contract
-        // Read transient storage from CoreHook
-        // TODO: Bug: Only aware of the last swap's market... eg. I can swap() without settle.
-        bytes32 tracingFlagBytes = IExttload(coreHook).exttload(TransientSlots.TRACING_FLAG_SLOT);
-        bytes32 currentMarketBytes = IExttload(coreHook).exttload(TransientSlots.CURRENT_MARKET_SLOT);
-
-        // Tracing is active if this flag has been set by the core hook right after a swap
-        bool isTracingActive = tracingFlagBytes != bytes32(0);
-        bool isProtocolBound = marketFactory.bounds(recipient);
-        bytes32 currentMarket = currentMarketBytes;
-
-        if (isTracingActive && !isProtocolBound) {
-            // ? !isProtocolBound is to ensure that we only process the market tracing logic for non-protocol bounds (ie. transfer to external-contracts/EOAs.)
-            // CRITICAL CHECK: Ensure this LCC belongs to the active market
-            if (!_isLCCSupportedByMarket(currentMarket)) {
-                return; // This LCC doesn't belong to the active market
-            }
-
-            // Process the market tracing logic, letting us know where this LCC came from for this particular user
-            _trackMarketAcquisition(recipient, currentMarket, amount);
-        }
-    }
-
-    /**
-     * @dev Check if the LCC is supported by the market i.e if the LCC is either token0 or token1 for a given core pool
-     * @param marketId The ID of the market i.e for uniswap v4 it is the core pool id
-     * @return bool True if the LCC is supported by the market, false otherwise
-     */
-    function _isLCCSupportedByMarket(bytes32 marketId) internal view returns (bool) {
-        // get the two currencies that the core pool is trading
-        address[2] memory currencies = marketFactory.corePoolToCurrencyPair(PoolId.wrap(marketId));
-
-        // Check if this LCC contract matches either currency in the core pool
-        address lccAddress = address(this);
-        return (lccAddress == currencies[0] || lccAddress == currencies[1]);
-    }
-
-    function toERC20() external view returns (ERC20) {
-        return ERC20(address(this));
-    }
-
-    function _getLCCName(address asset) private view returns (string memory) {
+    function _getName(address asset, string memory nativeAssetName, string memory marketName)
+        private
+        view
+        returns (string memory)
+    {
         if (asset == address(0)) {
-            return "Fiet Liquidity Commitment Certificate for Ether";
+            return string.concat("Fiet Liquidity Commitment Certificate of ", nativeAssetName, " in ", marketName);
         }
-        return string.concat("Fiet Liquidity Commitment Certificate for ", IERC20Metadata(asset).name());
+        return
+            string.concat("Fiet Liquidity Commitment Certificate of ", IERC20Metadata(asset).name(), " in ", marketName);
     }
 
-    function _getLCCSymbol(address asset) private view returns (string memory) {
+    function _getSymbol(address asset) private view returns (string memory) {
         if (asset == address(0)) {
             return "lcc-ETH";
         }
         return string.concat("lcc-", IERC20Metadata(asset).symbol());
     }
 
-    function _getLCCDecimals(address asset) private view returns (uint8) {
+    function _getDecimals(address asset) private view returns (uint8) {
         if (asset == address(0)) {
             return 18;
         }
