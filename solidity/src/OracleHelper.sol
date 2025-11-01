@@ -80,31 +80,8 @@ contract OracleHelper is Ownable {
                 || tokenConfig1.enableFlagsForOracles[uint256(OracleRole.MAIN)] == false
                 || tokenConfig0.asset == address(0) || tokenConfig1.asset == address(0)
         ) {
-            revert MarketOraclesNotEnabled();
+            revert MarketOraclesNotConfigured();
         }
-    }
-
-    /**
-     * @dev This function is used to get the USD value of a commitment
-     * @param lcc0 The LCC for token0
-     * @param lcc1 The LCC for token1
-     * @param amount0 The amount of token0
-     * @param amount1 The amount of token1
-     * @return The USD value of the commitment
-     */
-    function getLCCMarketUSDValue(address lcc0, address lcc1, uint256 amount0, uint256 amount1)
-        external
-        view
-        returns (uint256)
-    {
-        // get the underlying asset and account for the native token representation difference
-        address lcc0underlying = OracleUtils.unifyNativeTokenAddress(ILCC(lcc0).underlying());
-        address lcc1underlying = OracleUtils.unifyNativeTokenAddress(ILCC(lcc1).underlying());
-
-        uint256 lcc0Price = oracle.getPrice(lcc0underlying);
-        uint256 lcc1Price = oracle.getPrice(lcc1underlying);
-
-        return (lcc0Price * amount0) + (lcc1Price * amount1);
     }
 
     /**
@@ -120,5 +97,21 @@ contract OracleHelper is Ownable {
             totalUsdValue += price * amounts[i];
         }
         return totalUsdValue;
+    }
+
+    /**
+     * @notice Gets USD prices for an LCC pair (batched for efficiency).
+     * @param lcc0 Address of the first LCC.
+     * @param lcc1 Address of the second LCC.
+     * @return price0 USD price of lcc0's underlying (normalized by ResilientOracle).
+     * @return price1 USD price of lcc1's underlying (normalized by ResilientOracle).
+     */
+    function getPricesForLCCPair(address lcc0, address lcc1) external view returns (uint256 price0, uint256 price1) {
+        address underlying0 = OracleUtils.unifyNativeTokenAddress(ILCC(lcc0).underlying());
+        address underlying1 = OracleUtils.unifyNativeTokenAddress(ILCC(lcc1).underlying());
+
+        // Fetch from ResilientOracle, which handles decimals internally
+        price0 = oracle.getPrice(underlying0);
+        price1 = oracle.getPrice(underlying1);
     }
 }

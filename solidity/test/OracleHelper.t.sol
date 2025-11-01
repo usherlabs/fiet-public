@@ -75,8 +75,15 @@ contract OracleHelperTest is Test {
         assertEq(totalUsdValue, 2 * MOCK_ETH_PRICE);
     }
 
-    function test_canGetLCCMarketUSDValue() public view {
-        uint256 totalUsdValue = oracleHelper.getLCCMarketUSDValue(LCC0, LCC1, 2, 2);
+    function test_canGetPricesForLCCPair() public view {
+        (uint256 price0, uint256 price1) = oracleHelper.getPricesForLCCPair(LCC0, LCC1);
+        assertEq(price0, MOCK_ETH_PRICE);
+        assertEq(price1, MOCK_ETH_PRICE);
+    }
+
+    function test_canGetPricesForLCCPairAndCalculateUSDValue() public view {
+        (uint256 price0, uint256 price1) = oracleHelper.getPricesForLCCPair(LCC0, LCC1);
+        uint256 totalUsdValue = (price0 * 2) + (price1 * 2);
         assertEq(totalUsdValue, 4 * MOCK_ETH_PRICE);
     }
 }

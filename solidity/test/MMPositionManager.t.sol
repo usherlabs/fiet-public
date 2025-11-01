@@ -80,9 +80,11 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         // mock the factory to return the right proxy hook
         vm.mockCall(marketFactory, abi.encodeWithSelector(IMarketFactory.proxyToHook.selector), abi.encode(proxyHook));
 
-        // mock the price oracles to return prices and decimals numbers
+        // mock the price oracles to return prices
         vm.mockCall(
-            address(oracleHelper), abi.encodeWithSelector(IOracleHelper.getLCCMarketUSDValue.selector), abi.encode(1)
+            address(oracleHelper),
+            abi.encodeWithSelector(IOracleHelper.getPricesForLCCPair.selector),
+            abi.encode(uint256(1), uint256(1))
         );
         vm.mockCall(
             address(oracleHelper), abi.encodeWithSelector(IOracleHelper.getTotalUsdValue.selector), abi.encode(2)

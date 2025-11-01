@@ -26,6 +26,7 @@ import {IProxyHook} from "./interfaces/IProxyHook.sol";
 import {ILCC} from "./interfaces/ILCC.sol";
 import {IVRLSignalManager} from "./interfaces/IVRLSignalManager.sol";
 import {IPositionIndex} from "./interfaces/IPositionIndex.sol";
+import {IOracleHelper} from "./interfaces/IOracleHelper.sol";
 import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
 import {FullMath} from "v4-periphery/lib/v4-core/src/libraries/FullMath.sol";
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
@@ -82,6 +83,7 @@ contract MMPositionManager is
     address public immutable commitmentDescriptor;
     uint256 private nextTokenId = 1;
     IVRLSignalManager public immutable signalManager;
+    IOracleHelper public immutable oracleHelper;
     mapping(uint256 => mapping(uint256 => PositionId)) public commitToPosition;
     mapping(uint256 => uint256) public commitToPositionCount;
 
@@ -125,6 +127,7 @@ contract MMPositionManager is
         marketFactory = _marketFactory;
         signalManager = IVRLSignalManager(_signalManager);
         commitmentDescriptor = _descriptor;
+        oracleHelper = IMarketFactory(_marketFactory).oracleHelper();
     }
 
     modifier onlyValidCommit(PoolKey memory poolKey, uint256 tokenId) {
@@ -518,17 +521,11 @@ contract MMPositionManager is
     // Commit-level helpers
     // ------------------------
 
-    /// @dev Resolves the market's oracle factory and LCC pair addresses for a given pool.
+    /// @dev Resolves the market's LCC pair addresses for a given pool.
     /// @param poolId The core pool identifier for the market the commit is bound to.
-    /// @return oracleFactory Address of the oracle factory configured for this market.
     /// @return lcc0 Address of token0's LCC contract for the core pool.
     /// @return lcc1 Address of token1's LCC contract for the core pool.
-    function _marketOracleFactoryAndPair(PoolId poolId)
-        internal
-        view
-        returns (address oracleFactory, address lcc0, address lcc1)
-    {
-        oracleFactory = _getVTSManager().getMarketVTSConfiguration(poolId).oracleFactory;
+    function _marketLccPair(PoolId poolId) internal view returns (address lcc0, address lcc1) {
         address[2] memory pair = IMarketFactory(marketFactory).corePoolToCurrencyPair(poolId);
         lcc0 = pair[0];
         lcc1 = pair[1];
@@ -568,33 +565,26 @@ contract MMPositionManager is
         }
     }
 
-    /// @dev Values a pair of LCC amounts using USD prices from the market oracle factory.
-    ///      Uses FullMath.mulDiv to prevent overflow and ensure deterministic flooring.
+    /// @dev Values a pair of LCC amounts using USD prices from OracleHelper.
+    ///      Uses ResilientOracle normalization (handles decimals internally).
     /// @param lcc0 Address of token0 LCC.
     /// @param a0 Amount of token0 LCC (raw units).
     /// @param lcc1 Address of token1 LCC.
     /// @param a1 Amount of token1 LCC (raw units).
-    /// @param oracleFactory Oracle factory address to query prices from.
-    /// @return Total USD value of the two amounts (normalised by oracle decimals).
-    function _usdValueLccPair(address lcc0, uint256 a0, address lcc1, uint256 a1, address oracleFactory)
-        internal
-        view
-        returns (uint256)
-    {
-        (uint256 p0, uint256 d0) = ILCC(lcc0).usdPrice(oracleFactory);
-        (uint256 p1, uint256 d1) = ILCC(lcc1).usdPrice(oracleFactory);
-        uint256 v0 = a0 == 0 ? 0 : FullMath.mulDiv(p0, a0, 10 ** d0);
-        uint256 v1 = a1 == 0 ? 0 : FullMath.mulDiv(p1, a1, 10 ** d1);
-        return v0 + v1;
+    /// @return Total USD value of the two amounts (normalised by ResilientOracle).
+    function _usdValueLccPair(address lcc0, uint256 a0, address lcc1, uint256 a1) internal view returns (uint256) {
+        (uint256 p0, uint256 p1) = oracleHelper.getPricesForLCCPair(lcc0, lcc1);
+        // Rely on ResilientOracle normalization; direct computation
+        return (p0 * a0) + (p1 * a1);
     }
 
-    /// @dev Values the currently stored signal reserves in USD via the signal manager.
+    /// @dev Values the currently stored signal reserves in USD via OracleHelper.
     ///      This does not mutate the signal nonce; it is a pure view against the stored state.
     /// @param tokenId The commit NFT id.
     /// @return USD value of the stored signal reserves.
     function _currentSignalUsdValue(uint256 tokenId) internal view returns (uint256) {
         (string[] memory tickers, uint256[] memory amounts) = commitOf[tokenId].state.signal.mmState.getReserves();
-        return signalManager.getTotalUsdValue(tickers, amounts);
+        return oracleHelper.getTotalUsdValue(tickers, amounts);
     }
 
     /// @dev Verifies a new signal (nonce bump) and returns its USD value.
@@ -609,7 +599,7 @@ contract MMPositionManager is
             revert InvalidLiquiditySignal(0, 0);
         }
         (string[] memory tickers, uint256[] memory amounts) = sig.mmState.getReserves();
-        return signalManager.getTotalUsdValue(tickers, amounts);
+        return oracleHelper.getTotalUsdValue(tickers, amounts);
     }
 
     /// @dev Asserts commit solvency against the currently stored signal.
@@ -619,13 +609,13 @@ contract MMPositionManager is
     /// @param extraIssue1 Prospective token1 LCC to add to effective amounts (e.g., for a new mint).
     function _assertCommitmentSolventStored(uint256 tokenId, uint256 extraIssue0, uint256 extraIssue1) internal view {
         PoolId poolId = commitOf[tokenId].poolId;
-        (address oracleFactory, address l0, address l1) = _marketOracleFactoryAndPair(poolId);
+        (address l0, address l1) = _marketLccPair(poolId);
 
         (uint256 e0, uint256 e1) = _effectiveIssuedAmountsForCommit(tokenId);
-        uint256 issuedUsd = _usdValueLccPair(l0, e0 + extraIssue0, l1, e1 + extraIssue1, oracleFactory);
+        uint256 issuedUsd = _usdValueLccPair(l0, e0 + extraIssue0, l1, e1 + extraIssue1);
 
         (uint256 s0, uint256 s1) = _sumSettledAmountsForCommit(tokenId);
-        uint256 settledUsd = _usdValueLccPair(l0, s0, l1, s1, oracleFactory);
+        uint256 settledUsd = _usdValueLccPair(l0, s0, l1, s1);
 
         uint256 signalUsd = _currentSignalUsdValue(tokenId);
 
@@ -641,13 +631,13 @@ contract MMPositionManager is
     /// @param liquiditySignal ABI-encoded LiquiditySignal (new state).
     function _assertCommitmentSolventWithNewSignal(uint256 tokenId, bytes memory liquiditySignal) internal {
         PoolId poolId = commitOf[tokenId].poolId;
-        (address oracleFactory, address l0, address l1) = _marketOracleFactoryAndPair(poolId);
+        (address l0, address l1) = _marketLccPair(poolId);
 
         (uint256 e0, uint256 e1) = _effectiveIssuedAmountsForCommit(tokenId);
-        uint256 issuedUsd = _usdValueLccPair(l0, e0, l1, e1, oracleFactory);
+        uint256 issuedUsd = _usdValueLccPair(l0, e0, l1, e1);
 
         (uint256 s0, uint256 s1) = _sumSettledAmountsForCommit(tokenId);
-        uint256 settledUsd = _usdValueLccPair(l0, s0, l1, s1, oracleFactory);
+        uint256 settledUsd = _usdValueLccPair(l0, s0, l1, s1);
 
         uint256 signalUsd = _verifiedSignalUsdValue(liquiditySignal);
 

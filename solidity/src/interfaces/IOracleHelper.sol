@@ -22,10 +22,7 @@ interface IOracleHelper {
 
     function validateMarketOraclesExist(address lcc0, address lcc1) external view;
 
-    function getLCCMarketUSDValue(address lcc0, address lcc1, uint256 amount0, uint256 amount1)
-        external
-        view
-        returns (uint256);
-
     function getTotalUsdValue(string[] memory tickers, uint256[] memory amounts) external view returns (uint256);
+
+    function getPricesForLCCPair(address lcc0, address lcc1) external view returns (uint256 price0, uint256 price1);
 }
