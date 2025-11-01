@@ -45,7 +45,7 @@ solidity/
 curl -L https://foundry.paradigm.xyz | bash
 
 # Initialize Foundry
-foundryup
+foundryup -i 1.4.2
 
 # Verify installation
 forge --version
