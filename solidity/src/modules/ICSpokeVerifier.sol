@@ -7,7 +7,7 @@ import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/Messa
 
 import {ISpokeVerifier} from "../interfaces/ISpokeVerifier.sol";
 import {MarketMaker} from "../libraries/MarketMaker.sol";
-import {MerkleProofLib} from "solmate/utils/MerkleProofLib.sol";
+import {MerkleProofLib} from "solady/utils/MerkleProofLib.sol";
 
 contract ICSpokeVerifier is ISpokeVerifier {
     using ECDSA for bytes32;
