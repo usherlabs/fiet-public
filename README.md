@@ -8,8 +8,8 @@ The Fiet Protocol is a comprehensive DeFi solution combining automated market ma
 
 ```
 fiet-protocol/
-├── solidity/          # Uniswap V4 hooks and AMM contracts
-├── stylus/            # Core protocol contracts (Rust/WASM)
+├── contracts/evm/     # Uniswap V4 hooks and AMM contracts
+├── contracts/stylus/  # Core protocol contracts (Rust/WASM)
 ├── tests/             # Integration tests
 ├── scripts/           # Deployment scripts
 └── docs/              # Protocol documentation
@@ -19,17 +19,17 @@ fiet-protocol/
 
 ### For Solidity Development
 
-See [solidity/README.md](solidity/README.md) for comprehensive Solidity development documentation, including deployment, testing, and local development setup.
+See [contracts/evm/README.md](contracts/evm/README.md) for comprehensive Solidity development documentation, including deployment, testing, and local development setup.
 
 ### For Rust (Arbitrum Stylus) Development  
 
-See [stylus/README.md](stylus/README.md) for comprehensive Stylus development documentation, including deployment, testing, and local development setup.
+See [contracts/stylus/README.md](contracts/stylus/README.md) for comprehensive Stylus development documentation, including deployment, testing, and local development setup.
 
 ## Documentation
 
 - **Protocol Documentation**: [docs.fiet.finance](https://docs.fiet.finance)
-- **Solidity Contracts**: [solidity/README.md](solidity/README.md)
-- **Stylus Contracts**: [stylus/README.md](stylus/README.md)
+- **Solidity Contracts**: [contracts/evm/README.md](contracts/evm/README.md)
+- **Stylus Contracts**: [contracts/stylus/README.md](contracts/stylus/README.md)
 
 ## License
 
