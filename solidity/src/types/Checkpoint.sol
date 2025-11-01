@@ -10,9 +10,9 @@ struct RFSCheckpoint {
     // whether the RFS is open or close
     bool isOpen;
     // the grace period extension
-    uint256 gracePeriod0;
+    uint256 gracePeriodExtension0;
     // the grace period extension for token1
-    uint256 gracePeriod1;
+    uint256 gracePeriodExtension1;
 }
 
 // initially the checkpoint wouls be set to (0,false)
@@ -25,9 +25,9 @@ library RFSCheckpointLibrary {
         if (self.isOpen != isOpen) {
             self.timeOfLastTransition = block.timestamp;
             self.isOpen = isOpen;
-            // reset the grace period when  RFS state opens or closes
-            self.gracePeriod0 = 0;
-            self.gracePeriod1 = 0;
+            // reset the grace period when RFS state opens or closes
+            self.gracePeriodExtension0 = 0;
+            self.gracePeriodExtension1 = 0;
         }
     }
 
@@ -35,21 +35,21 @@ library RFSCheckpointLibrary {
     // it adds the extension time to the current grace period extension
     function extendGracePeriod(
         RFSCheckpoint storage self,
-        MarketVTSConfiguration memory vtsConfiguration,
-        bool isTokenZero
+        MarketVTSConfigurationLibrary.TokenConfiguration memory tokenConfiguration,
+        uint8 tokenIndex
     ) internal {
-        // update the grace period
-        if (isTokenZero) {
-            self.gracePeriod0 += vtsConfiguration.token0.gracePeriodTime;
-        } else {
-            self.gracePeriod1 += vtsConfiguration.token1.gracePeriodTime;
-        }
-        // cap the total grace period extension to the max grace period extension
-        if (self.gracePeriod0 > vtsConfiguration.token0.maxGracePeriodTime) {
-            self.gracePeriod0 = vtsConfiguration.token0.maxGracePeriodTime;
-        }
-        if (self.gracePeriod1 > vtsConfiguration.token1.maxGracePeriodTime) {
-            self.gracePeriod1 = vtsConfiguration.token1.maxGracePeriodTime;
+        if (tokenIndex == 0) {
+            self.gracePeriodExtension0 += tokenConfiguration.gracePeriodTime;
+            uint256 maxGracePeriodExtension = tokenConfiguration.maxGracePeriodTime - tokenConfiguration.gracePeriodTime;
+            if (self.gracePeriodExtension0 > maxGracePeriodExtension) {
+                self.gracePeriodExtension0 = maxGracePeriodExtension;
+            }
+        } else if (tokenIndex == 1) {
+            self.gracePeriodExtension1 += tokenConfiguration.gracePeriodTime;
+            uint256 maxGracePeriodExtension = tokenConfiguration.maxGracePeriodTime - tokenConfiguration.gracePeriodTime;
+            if (self.gracePeriodExtension1 > maxGracePeriodExtension) {
+                self.gracePeriodExtension1 = maxGracePeriodExtension;
+            }
         }
     }
 }

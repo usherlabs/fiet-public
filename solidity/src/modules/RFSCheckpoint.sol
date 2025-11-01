@@ -11,8 +11,10 @@ import {IVRLSettlementObserver} from "../interfaces/IVRLSettlementObserver.sol";
 abstract contract RFSCheckpointModule {
     using RFSCheckpointLibrary for RFSCheckpoint;
 
+    error GracePeriodNotElapsed(uint256 tokenId, uint256 positionIndex, uint8 tokenIndex);
+
     event Checkpointed(uint256 tokenId, uint256 positionIndex, RFSCheckpoint checkpoint);
-    event GracePeriodExtended(uint256 tokenId, uint256 positionIndex, RFSCheckpoint checkpoint);
+    event GracePeriodExtended(uint256 tokenId, uint256 positionIndex, uint8 tokenIndex, RFSCheckpoint checkpoint);
 
     IVRLSettlementObserver public immutable settlementObserver;
 
@@ -77,23 +79,54 @@ abstract contract RFSCheckpointModule {
      * @param settlementProof The settlement signal containing the proof
      */
     function _extendGracePeriod(
+        PoolKey memory poolKey,
         MarketVTSConfiguration memory vtsConfiguration,
         uint256 tokenId,
         uint256 positionIndex,
         uint8 settlementTokenIndex,
+        uint32 verifierIndex,
         bytes memory settlementProof
     ) internal {
         require(settlementTokenIndex == 0 || settlementTokenIndex == 1, "Invalid settlement token index");
         PositionId positionId = getPositionId(tokenId, positionIndex);
 
         // verify the settlement proof and get the grace period extension
-        settlementObserver.verifySettlementProof(positionId, settlementTokenIndex, settlementProof);
-        bool isTokenZero = settlementTokenIndex == 0;
-
+        settlementObserver.verifySettlementProof(poolKey, settlementTokenIndex, verifierIndex, settlementProof, true);
         // extend the grace period for the position
-        positionToCheckpoint[positionId].extendGracePeriod(vtsConfiguration, isTokenZero);
+        MarketVTSConfigurationLibrary.TokenConfiguration memory tokenConfiguration =
+            settlementTokenIndex == 0 ? vtsConfiguration.token0 : vtsConfiguration.token1;
+        positionToCheckpoint[positionId].extendGracePeriod(tokenConfiguration, settlementTokenIndex);
 
         // emit an event to notify the market maker that the grace period has been extended
-        emit GracePeriodExtended(positionId, positionToCheckpoint[positionId]);
+        emit GracePeriodExtended(tokenId, positionIndex, settlementTokenIndex, positionToCheckpoint[positionId]);
+    }
+
+    /**
+     * @notice Determines if a position is open for seizure by checking if the grace period has elapsed
+     * @dev Returns true if timeSinceLastCheckpoint > (gracePeriodTime + extension) for either token
+     * @param vtsConfiguration The VTS configuration
+     * @param tokenId The token id of the position
+     * @param positionIndex The position index
+     * @return true if the position can be seized (grace period elapsed for either token), false otherwise
+     */
+    function _isSeizable(MarketVTSConfiguration memory vtsConfiguration, uint256 tokenId, uint256 positionIndex)
+        internal
+        view
+        returns (bool)
+    {
+        PositionId positionId = getPositionId(tokenId, positionIndex);
+        RFSCheckpoint memory checkpoint = positionToCheckpoint[positionId];
+        if (!checkpoint.isOpen) {
+            return false;
+        }
+        uint256 timeSinceLastCheckpoint = block.timestamp - checkpoint.timeOfLastTransition;
+
+        uint256 totalGracePeriod0 = vtsConfiguration.token0.gracePeriodTime + checkpoint.gracePeriodExtension0;
+        uint256 totalGracePeriod1 = vtsConfiguration.token1.gracePeriodTime + checkpoint.gracePeriodExtension1;
+
+        bool gracePeriod0Elapsed = timeSinceLastCheckpoint > totalGracePeriod0;
+        bool gracePeriod1Elapsed = timeSinceLastCheckpoint > totalGracePeriod1;
+
+        return gracePeriod0Elapsed || gracePeriod1Elapsed;
     }
 }
