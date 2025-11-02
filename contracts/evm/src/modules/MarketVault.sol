@@ -31,6 +31,7 @@ import {IMarketVault} from "../interfaces/IMarketVault.sol";
 import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
 import {LiquidityUtils} from "../libraries/LiquidityUtils.sol";
 import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
+import {ILiquidityHub} from "../interfaces/ILiquidityHub.sol";
 
 abstract contract MarketVault is IMarketVault {
     using CurrencySettler for Currency;
@@ -42,17 +43,14 @@ abstract contract MarketVault is IMarketVault {
 
     IPoolManager public immutable vaultPoolManager;
     IMarketFactory public immutable marketFactory;
+    ILiquidityHub public immutable liquidityHub;
+    address public immutable mmPositionManager;
 
     constructor(address _poolManager, address _marketFactory) {
         vaultPoolManager = IPoolManager(_poolManager);
         marketFactory = IMarketFactory(_marketFactory);
-    }
-
-    modifier onlyFactory() {
-        if (msg.sender != address(marketFactory)) {
-            revert InvalidSender();
-        }
-        _;
+        liquidityHub = marketFactory.liquidityHub();
+        mmPositionManager = marketFactory.mmPositionManager();
     }
 
     // Market tracking state variables
@@ -82,6 +80,18 @@ abstract contract MarketVault is IMarketVault {
         Currency currency0;
         Currency currency1;
         BalanceDelta balanceDelta;
+    }
+
+    modifier onlyProtocolBounds() {
+        // authorises calls from protocol bounds (ie. MarketFactory, LiquidityHub, MMPositionManager, etc.)
+        // if (!marketFactory.bounds(msg.sender)) {
+        //     revert InvalidSender();
+        // }
+        // Being explicit witn these bounds to prevent leaks.
+        if(msg.sender != (address(marketFactory)) && msg.sender != (address(mmPositionManager))){
+            revert InvalidSender();
+        }
+        _;
     }
 
     function _underlying() internal view virtual returns (Currency currency0, Currency currency1);
@@ -183,7 +193,7 @@ abstract contract MarketVault is IMarketVault {
         // If we successfully took any amount, notify the LCC contract about the new balance
         // This allows the LCC to track market-specific liquidity and process settlement queues
         if (amountTaken > 0) {
-            lccToken.confirmTake(_marketId(), amountTaken, false);
+            liquidityHub.confirmTake(address(lccToken), amountTaken, false);
         }
 
         return amountTaken;
@@ -395,7 +405,7 @@ abstract contract MarketVault is IMarketVault {
      * @param balanceDelta The balance delta of the currency0 and currency1
      * @notice Derive the ProxyHook address from the Pool Id, assumes the (LCC underlying) currencies for the Proxy Pool.
      */
-    function modifyLiquidities(BalanceDelta balanceDelta) external onlyFactory {
+    function modifyLiquidities(BalanceDelta balanceDelta) external onlyProtocolBounds {
         (Currency currency0, Currency currency1) = _underlying();
         (ILCC lccToken0, ILCC lccToken1) = _lccs();
         _modifyVaultLiquidity(currency0, currency1, balanceDelta);
@@ -408,7 +418,7 @@ abstract contract MarketVault is IMarketVault {
         }
     }
 
-    function _tryModifyLiquidities(BalanceDelta balanceDelta) internal returns (BalanceDelta) {
+    function tryModifyLiquidities(BalanceDelta balanceDelta) external onlyProtocolBounds returns (BalanceDelta) {
         (Currency currency0, Currency currency1) = _underlying();
         (ILCC lccToken0, ILCC lccToken1) = _lccs();
         bytes32 marketId = _marketId();

@@ -280,9 +280,7 @@ contract CompleteDeployScript is ScriptHelper {
         MarketFactory factoryInstance = MarketFactory(marketFactory);
         address[] memory bounds = new address[](1);
         bounds[0] = mmPositionManager;
-        // bounds[1] = mmPositionManager;
-        // bounds[2] = coreHook;
-        // bounds[3] = proxyHook;
+        // bounds[1] = liquidityHub;
 
         factoryInstance.addBounds(bounds);
     }

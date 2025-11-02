@@ -66,6 +66,13 @@ abstract contract LCCFactory {
         _;
     }
 
+    modifier onlyIssuer(address lcc) {
+        if (!_isCallerIssuer(lcc)) {
+            revert SenderNotIssuer(msg.sender);
+        }
+        _;
+    }
+
     function _sortTokens(address token0, address token1)
         internal
         pure
@@ -181,8 +188,8 @@ abstract contract LCCFactory {
     ) internal returns (address lccToken) {
         address underlyingAsset = underlyingPair[index];
         // Check if LCC already exists for this underlying asset
-        if (underlyingToLCC[underlyingAsset] != address(0)) {
-            revert InvalidLcc(underlyingToLCC[underlyingAsset]);
+        if (marketUnderlyingToLCC[marketId][underlyingAsset] != address(0)) {
+            revert InvalidLcc(marketUnderlyingToLCC[marketId][underlyingAsset]);
         }
 
         // Get unique symbol with truncated marketRef
@@ -204,7 +211,7 @@ abstract contract LCCFactory {
                 symbol,
                 decimals,
                 marketVaultAddress,
-                address(oracleHelper.oracle())
+                address(IMarketFactory(marketFactory).oracleHelper().oracle())
             )
         );
 
@@ -339,6 +346,8 @@ abstract contract LCCFactory {
     {
         return ILCC(lccToken).balancesOf(account);
     }
+
+    // ============== ISSUER FUNCTIONS ==============
 
     /**
      * @notice Issues LCC tokens (mints to issuer)
