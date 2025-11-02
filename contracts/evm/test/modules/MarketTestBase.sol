@@ -4,14 +4,10 @@ pragma solidity ^0.8.0;
 
 import "forge-std/Test.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
-import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
-import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 
-import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {CurrencyLibrary, Currency} from "@uniswap/v4-core/src/types/Currency.sol";
-import {PoolSwapTest} from "@uniswap/v4-core/src/test/PoolSwapTest.sol";
 import {Deployers} from "@uniswap/v4-core/test/utils/Deployers.sol";
 import {Constants} from "@uniswap/v4-core/test/utils/Constants.sol";
 import {IERC20Minimal} from "@uniswap/v4-core/src/interfaces/external/IERC20Minimal.sol";
@@ -19,17 +15,14 @@ import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/Pool
 
 import {CurrencySortHelper} from "../../script/libraries/CurrencySortHelper.sol";
 import {ProxyHook} from "../../src/ProxyHook.sol";
-import {CoreHook} from "../../src/CoreHook.sol";
 import {LiquidityCommitmentCertificate} from "../../src/LCC.sol";
 import {IMarketFactory} from "../../src/interfaces/IMarketFactory.sol";
 import {LiquidityUtils} from "../../src/libraries/LiquidityUtils.sol";
-import {console} from "forge-std/console.sol";
 import {HookFlags} from "../../src/libraries/HookFlags.sol";
 import {MMPositionManager} from "../../src/MMPositionManager.sol";
 import {ECDSASignatureSignalVerifier} from "../../src/verifiers/ECDSASignatureSignalVerifier.sol";
-import {WETH} from "solmate/src/tokens/WETH.sol";
+import {WETH} from "@uniswap/v4-core/lib/solmate/src/tokens/WETH.sol";
 import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
-import {StubSignalVerifier} from "../../src/verifiers/StubSignalVerifier.sol";
 import {VTSConfigs} from "../../src/libraries/VTSConfigs.sol";
 import {IVTSManager} from "../../src/interfaces/IVTSManager.sol";
 import {VRLSignalManager} from "../../src/VRLSignalManager.sol";

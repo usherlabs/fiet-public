@@ -4,10 +4,7 @@ pragma solidity ^0.8.0;
 import "forge-std/Test.sol";
 
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
-import {HookFlags} from "../src/libraries/HookFlags.sol";
 import {MarketTestBase} from "./modules/MarketTestBase.sol";
-import {ProxyHook} from "../src/ProxyHook.sol";
-import {IMarketVault} from "../src/interfaces/IMarketVault.sol";
 import {ILCC} from "../src/interfaces/ILCC.sol";
 import {MarketMakerTestBase} from "./modules/MMTestBase.sol";
 
@@ -27,7 +24,7 @@ import {MMPositionManager} from "../src/MMPositionManager.sol";
 import {MarketVTSConfiguration} from "../src/types/VTS.sol";
 import {IVTSManager} from "../src/interfaces/IVTSManager.sol";
 import {LiquidityUtils} from "../src/libraries/LiquidityUtils.sol";
-import {ERC20} from "solmate/tokens/ERC20.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IOracleHelper} from "../src/interfaces/IOracleHelper.sol";
 import {PositionMeta} from "../src/types/Position.sol";
 
@@ -231,11 +228,11 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
             LiquidityUtils.getBaseSettlementAmounts(liquidityParams, marketVTSConfiguration);
 
         // Approve
-        ERC20(lccERC20.underlying()).approve(address(mmPositionManager), underlyingLiquidityFraction0);
-        // ERC20(lcc1.underlying()).approve(address(mmPositionManager), underlyingLiquidityFraction1);
+        IERC20(lccERC20.underlying()).approve(address(mmPositionManager), underlyingLiquidityFraction0);
+        // IERC20(lcc1.underlying()).approve(address(mmPositionManager), underlyingLiquidityFraction1);
 
-        uint256 pmLcc0BalanceBefore = ERC20(address(lcc0)).balanceOf(address(manager));
-        uint256 pmLcc1BalanceBefore = ERC20(address(lcc1)).balanceOf(address(manager));
+        uint256 pmLcc0BalanceBefore = IERC20(address(lcc0)).balanceOf(address(manager));
+        uint256 pmLcc1BalanceBefore = IERC20(address(lcc1)).balanceOf(address(manager));
 
         uint256 proxyCurrency0BalanceBefore = manager.balanceOf(address(proxyHook), proxyPoolKey.currency0.toId());
         uint256 proxyCurrency1BalanceBefore = manager.balanceOf(address(proxyHook), proxyPoolKey.currency1.toId());
@@ -265,8 +262,8 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
         uint256 tokenId = 1;
         PositionMeta memory m = positionManager.getPosition(tokenId, 0);
 
-        uint256 pmLcc0BalanceAfter = ERC20(address(lcc0)).balanceOf(address(manager));
-        uint256 pmLcc1BalanceAfter = ERC20(address(lcc1)).balanceOf(address(manager));
+        uint256 pmLcc0BalanceAfter = IERC20(address(lcc0)).balanceOf(address(manager));
+        uint256 pmLcc1BalanceAfter = IERC20(address(lcc1)).balanceOf(address(manager));
 
         // get user balances of underlying assets
 
