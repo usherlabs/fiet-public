@@ -14,7 +14,7 @@ contract LiquidityHub is Ownable, LCCFactory {
     IOracleHelper public immutable oracleHelper;
     address public mmPositionManager;
 
-    error NotFactory();
+    error InvalidCaller();
 
     // Map of market factories
     mapping(address => bool) public isFactory;
@@ -28,15 +28,27 @@ contract LiquidityHub is Ownable, LCCFactory {
         bool _marketRefIsValidIssuer
     )
         Ownable(msg.sender)
-        LCCFactory(_nativeAssetName, _nativeAssetSymbol, _nativeAssetDecimals, _marketRefIsValidIssuer)
+        LCCFactory(
+            _nativeAssetName,
+            _nativeAssetSymbol,
+            _nativeAssetDecimals,
+            _marketRefIsValidIssuer
+        )
     {
         oracleHelper = IOracleHelper(_oracleHelper);
         mmPositionManager = _mmPositionManager;
     }
 
-    modifier onlyFactory(address factory) {
-        if (!isFactory[factory]) {
-            revert NotFactory();
+    modifier onlyFactory() {
+        if (!isFactory[_msgSender()]) {
+            revert InvalidCaller();
+        }
+        _;
+    }
+
+    modifier onlyFactoryOrOwner() {
+        if (!isFactory[_msgSender()] && _msgSender() != owner()) {
+            revert InvalidCaller();
         }
         _;
     }
@@ -65,10 +77,26 @@ contract LiquidityHub is Ownable, LCCFactory {
         address underlyingAsset0,
         address underlyingAsset1,
         string memory marketName
-    ) external onlyFactory(factory) returns (address lccToken0, address lccToken1) {
+    )
+        external
+        onlyFactoryOrOwner
+        returns (address lccToken0, address lccToken1)
+    {
         address[2] memory underlyingPair = [underlyingAsset0, underlyingAsset1];
-        lccToken0 = _createLCC(factory, marketRef, underlyingPair, 0, marketName);
-        lccToken1 = _createLCC(factory, marketRef, underlyingPair, 1, marketName);
+        lccToken0 = _createLCC(
+            factory,
+            marketRef,
+            underlyingPair,
+            0,
+            marketName
+        );
+        lccToken1 = _createLCC(
+            factory,
+            marketRef,
+            underlyingPair,
+            1,
+            marketName
+        );
     }
 
     /**
@@ -78,7 +106,12 @@ contract LiquidityHub is Ownable, LCCFactory {
      * @param marketId The market ID (corePoolKey -> PoolID -> unwrap() to bytes32)
      * @param marketRef The market reference (bytes from proxyHookAddress)
      */
-    function initialize(address lccToken0, address lccToken1, bytes32 marketId, bytes memory marketRef) external {
+    function initialize(
+        address lccToken0,
+        address lccToken1,
+        bytes32 marketId,
+        bytes memory marketRef
+    ) external onlyFactory {
         _initialize(lccToken0, lccToken1, marketId, marketRef);
     }
 }

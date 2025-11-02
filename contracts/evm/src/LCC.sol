@@ -26,25 +26,12 @@ contract LiquidityCommitmentCertificate is ERC20, Ownable, ILCC {
 
     address public immutable underlyingAsset;
     IMarketFactory public immutable marketFactory;
+    address public immutable resilientOracleAddress;
 
     // All native underlying liquidity will either be
     mapping(address => bool) public issuers;
 
     uint256 public uaSupply; // underlying asset supply ONLY within the LCC.
-
-    modifier onlyIssuer() {
-        if (!_isCallerIssuer(false)) {
-            revert SenderNotIssuer(msg.sender);
-        }
-        _;
-    }
-
-    modifier onlyMarketVault() {
-        if (!_isCallerIssuer(true)) {
-            revert SenderNotIssuer(msg.sender);
-        }
-        _;
-    }
 
     modifier onlyProtocolTransfer(address from, address to) {
         // Allow transfers from/to zero address (minting/burning)
@@ -68,44 +55,28 @@ contract LiquidityCommitmentCertificate is ERC20, Ownable, ILCC {
     }
 
     /**
-     * @param marketId The market ID
      * @param _underlyingAsset The underlying asset of the LCC.
      * @param name The token name
      * @param symbol The token symbol
      * @param decimals The token decimals
+     * @param _resilientOracleAddress The address of the resilient oracle
      */
-    constructor(bytes32 marketId, address _underlyingAsset, string memory name, string memory symbol, uint8 decimals)
-        ERC20(name, symbol, decimals)
-        Ownable(msg.sender)
-    {
+    constructor(
+        address _underlyingAsset,
+        string memory name,
+        string memory symbol,
+        uint8 decimals,
+        address _resilientOracleAddress
+    ) ERC20(name, symbol, decimals) Ownable(msg.sender) {
         if (_underlyingAsset == address(0)) {
             revert InvalidUnderlyingAsset();
         }
 
         underlyingAsset = _underlyingAsset;
+        resilientOracleAddress = _resilientOracleAddress;
         marketFactory = IMarketFactory(msg.sender); // Set by factory during deployment
 
         // Note: bounds are managed by the MarketFactory, not set in constructor
-    }
-
-    /**
-     * @dev Check if the caller is a valid issuer
-     * @param isMarketVaultExclusive Whether the caller is a market vault
-     * @return bool True if the caller is a valid issuer, false otherwise
-     */
-    function _isCallerIssuer(bool isMarketVaultExclusive) internal view returns (bool) {
-        address caller = msg.sender;
-        // Check the caller if they are a trusted proxy hook
-        // Get if the caller is a registered proxy hook
-        // If it is, then we need to get the two currencies it proxies
-        // Then check if the underlying asset falls under any of the two currencies it supports
-        address[2] memory currencies = marketFactory.proxyHookToCurrencyPair(caller);
-        bool isAssetProxyPool = (currencies[0] == underlyingAsset || currencies[1] == underlyingAsset);
-        if (isMarketVaultExclusive) {
-            return isAssetProxyPool;
-        }
-        bool isValidIssuer = issuers[caller] || isAssetProxyPool;
-        return isValidIssuer;
     }
 
     /**
@@ -113,49 +84,20 @@ contract LiquidityCommitmentCertificate is ERC20, Ownable, ILCC {
      * @return The underlying asset of the LCC
      */
     function underlying() external view returns (address) {
-        // the `ResilientOracle` might call underlying()
-        // if it calls underlying for lcc-eth
-        // it will return address(0) which would cause an erc20 error as it tried to call .decimals() on it
-        // so there is an edge case for the oracles for getting the underlying price of lcc-eth
-        // a solution could be to modify the asset being returned to the oracle's native address
-        // if the caller is the resilient oracle
-        // TODO: (OPTIONAL) check if caller is ResilientOracle, and if underlying asset is native, and if so return RESILIENT_ORACLE_NATIVE_TOKEN_ADDR
+        // the `ResilientOracle` may call underlying() - https://github.com/VenusProtocol/oracle/blob/develop/contracts/ResilientOracle.sol#L279
+        // if it calls underlying for lcc-eth (where underlyingAsset is address(0))
+        // it will attempt to call erc20.decimals() which will error.
+        // To ensure full compatibility, we cover this edge case by observing if the caller is ResilientOracle, and modifying the response.
 
+        if (_msgSender() == resilientOracleAddress) {
+            return OracleUtils.unifyNativeTokenAddress(underlyingAsset);
+        }
         return underlyingAsset;
     }
 
-    // some trusted issuer Smart Contracts can be allowed to mint tokens and hold the liquidity
-    // this minting provides tokens at a 1:1 ratio and intended for onchain preswap wrapping
-    // DEPRECATED: Use LCCFactory.issue() instead
-    function issue(uint256 amount) external onlyIssuer {
-        if (amount == 0) {
-            revert InvalidAmount();
-        }
-
-        address issuer = msg.sender;
-
-        _mint(issuer, amount);
-
-        // totalSupply will be greater than uaSupply (supply of underlying asset in LCC)
-        // This is because the PoolManager will custody the difference.
-    }
-
-    // DEPRECATED: Use LCCFactory.cancel() instead
-    function cancel(uint256 amount) external onlyIssuer {
-        if (amount == 0) {
-            revert InvalidAmount();
-        }
-
-        address issuer = msg.sender;
-
-        _burn(issuer, amount);
-
-        // totalSupply will return back to uaSupply now that the surplus LCC managed by the issuer engagin the PoolManager has been cancelled.
-    }
-
     /**
-     * @notice Issues LCC tokens to an issuer (called by factory after validating permissions)
-     * @param issuer The issuer address to mint tokens to
+     * @notice Issues LCC tokens to an address (called by factory after validating permissions)
+     * @param to The address to mint tokens to
      * @param amount The amount to issue
      */
     function issueTo(address to, uint256 amount) external onlyOwner {
@@ -167,7 +109,7 @@ contract LiquidityCommitmentCertificate is ERC20, Ownable, ILCC {
 
     /**
      * @notice Cancels LCC tokens from an issuer (called by factory after validating permissions)
-     * @param issuer The issuer address to burn tokens from
+     * @param from The address to burn tokens from
      * @param amount The amount to cancel
      */
     function cancelFrom(address from, uint256 amount) external onlyOwner {

@@ -192,11 +192,10 @@ abstract contract LCCFactory {
         // Get decimals
         uint8 decimals = _getDecimals(underlyingAsset);
 
-        // Get marketId from marketRef mapping (temporary until initialize is called)
-        bytes32 marketId = keccak256(marketRef);
-
         // Create LCC token (still uses marketId bytes32 for internal tracking)
-        lccToken = address(new LiquidityCommitmentCertificate(marketId, underlyingAsset, name, symbol, decimals));
+        lccToken = address(
+            new LiquidityCommitmentCertificate(underlyingAsset, name, symbol, decimals, address(oracleHelper.oracle()))
+        );
 
         underlyingToLCC[underlyingAsset] = lccToken;
         lccToUnderlying[lccToken] = underlyingAsset;

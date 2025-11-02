@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import {IResilientOracle} from "../interfaces/IResilientOracle.sol";
-import {ILCC} from "../interfaces/ILCC.sol";
+import {IResilientOracle} from "./interfaces/IResilientOracle.sol";
+import {ILCC} from "./interfaces/ILCC.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
-import {OracleUtils} from "../libraries/OracleUtils.sol";
+import {OracleUtils} from "./libraries/OracleUtils.sol";
 
 contract OracleHelper is Ownable {
     error MarketOraclesNotConfigured();
