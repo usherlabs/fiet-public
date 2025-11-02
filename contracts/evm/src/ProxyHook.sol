@@ -41,8 +41,6 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         LiquidityUtils.ActionType actionType;
     }
 
-    address public immutable marketFactory;
-
     address public coreHook; // specific to proxy hook.
 
     PoolKey public corePoolKey;
@@ -51,13 +49,6 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
 
     modifier onlyCoreHook() {
         if (msg.sender != coreHook) {
-            revert InvalidSender();
-        }
-        _;
-    }
-
-    modifier onlyFactory() {
-        if (msg.sender != marketFactory) {
             revert InvalidSender();
         }
         _;
@@ -75,14 +66,27 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
 
     constructor(address _poolManager, address _marketFactory)
         BaseHook(IPoolManager(_poolManager))
-        MarketVault(IPoolManager(_poolManager))
-    {
-        marketFactory = _marketFactory;
+        MarketVault(_poolManager, _marketFactory)
+    {}
+
+    function _underlying() internal view override returns (Currency currency0, Currency currency1) {
+        return (proxyPoolKey.currency0, proxyPoolKey.currency1);
+    }
+
+    function _lccs() internal view override returns (ILCC lccToken0, ILCC lccToken1) {
+        return (
+            ILCC(payable(Currency.unwrap(proxyPoolKey.currency0))),
+            ILCC(payable(Currency.unwrap(proxyPoolKey.currency1)))
+        );
+    }
+
+    function _marketId() internal view override returns (bytes32) {
+        return PoolId.unwrap(corePoolKey.toId());
     }
 
     function activate() external onlyFactory {
         if (coreHook == address(0)) {
-            coreHook = IMarketFactory(marketFactory).getCoreHook();
+            coreHook = IMarketFactory(marketFactory).coreHook();
         }
     }
 
@@ -103,7 +107,7 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
      * @dev Returns the core pool id
      * @return The core pool id
      */
-    function getCorePoolId() external view returns (PoolId) {
+    function getCorePoolId() public view override returns (PoolId) {
         return corePoolKey.toId();
     }
 
@@ -197,31 +201,6 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
             if (amount1 > 0) {
                 _tryTakeUnderlyingFromVaultToLCC(marketId, lccToken1, amount1);
             }
-        }
-    }
-
-    /**
-     * @dev This function is called by the MMPositionManager to add liquidity directly to the vault
-     * @param balanceDelta The balance delta of the currency0 and currency1
-     * @notice Derive the ProxyHook address from the Pool Id, assumes the (LCC underlying) currencies for the Proxy Pool.
-     */
-    function onMMLiquidityModify(BalanceDelta balanceDelta) external {
-        address mmpmAddr = IMarketFactory(marketFactory).mmPositionManager();
-        if (msg.sender != mmpmAddr) {
-            revert InvalidSender();
-        }
-        // add the assets to the pool manager and claim the underlying tokens for the proxy hook
-        address addr0 = Currency.unwrap(proxyPoolKey.currency0);
-        address addr1 = Currency.unwrap(proxyPoolKey.currency1);
-        _modifyVaultLiquidity(addr0, addr1, balanceDelta);
-        // if there was an addition, then settle the obligations to the lcc tokens
-        if (balanceDelta.amount0() > 0) {
-            bytes32 marketId = PoolId.unwrap(corePoolKey.toId());
-            _settleObligationsForLCC(ILCC(addr0), marketId);
-        }
-        if (balanceDelta.amount1() > 0) {
-            bytes32 marketId = PoolId.unwrap(corePoolKey.toId());
-            _settleObligationsForLCC(ILCC(addr1), marketId);
         }
     }
 

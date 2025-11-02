@@ -16,6 +16,8 @@ import {MarketVTSConfiguration} from "./types/VTS.sol";
 import {IOracleHelper} from "./interfaces/IOracleHelper.sol";
 import {ILiquidityHub} from "./interfaces/ILiquidityHub.sol";
 import {IERC20Metadata} from "openzeppelin-contracts/contracts/token/ERC20/extensions/IERC20Metadata.sol";
+import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {LiquidityUtils} from "./libraries/LiquidityUtils.sol";
 
 /**
  * @title MarketFactory
@@ -332,9 +334,25 @@ contract MarketFactory is IMarketFactory, Ownable {
         onlyLiquidityHub
         returns (uint256 available, uint256 toUse)
     {
-        available = marketLiquidity(underlyingAsset, marketId);
-        toUse = Math.min(amount, available);
-        IVTSManager(coreHook).incrementCoverage(PoolId.wrap(marketId), toUse);
+        PoolId pId = PoolId.wrap(marketId);
+        address[2] memory currencies = _proxyHookToCurrencyPair[_proxyToHook[coreToProxy[pId]]];
+        uint256 amount0 = 0;
+        uint256 amount1 = 0;
+        if (currencies[0] == underlyingAsset) {
+            amount0 = amount;
+        } else if (currencies[1] == underlyingAsset) {
+            amount1 = amount;
+        } else {
+            revert InvalidUnderlyingAsset();
+        }
+        BalanceDelta usedDelta = IMarketVault(_proxyToHook[coreToProxy[pId]])
+            .tryModifyLiquidities(LiquidityUtils.safeToBalanceDelta(amount0, amount1, true, true));
+        IVTSManager(coreHook)
+            .incrementCoverage(
+                pId,
+                LiquidityUtils.safeInt128ToUint256(usedDelta.amount0()),
+                LiquidityUtils.safeInt128ToUint256(usedDelta.amount1())
+            );
     }
 
     // ============ VIEW FUNCTIONS ============
@@ -351,14 +369,6 @@ contract MarketFactory is IMarketFactory, Ownable {
      */
     function corePoolToProxyHook(PoolId corePoolId) external view returns (address) {
         return _proxyToHook[coreToProxy[corePoolId]];
-    }
-
-    /**
-     * @notice Gets the core hook address
-     * @return The core hook address
-     */
-    function getCoreHook() external view returns (address) {
-        return coreHook;
     }
 
     /**

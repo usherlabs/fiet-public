@@ -26,8 +26,11 @@ import {IMarketLiquidity} from "../interfaces/IMarketLiquidity.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
-import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {IMarketVault} from "../interfaces/IMarketVault.sol";
+import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
+import {LiquidityUtils} from "../libraries/LiquidityUtils.sol";
+import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
 
 abstract contract MarketVault is IMarketVault {
     using CurrencySettler for Currency;
@@ -38,9 +41,18 @@ abstract contract MarketVault is IMarketVault {
     error InvalidSender();
 
     IPoolManager public immutable vaultPoolManager;
+    IMarketFactory public immutable marketFactory;
 
-    constructor(IPoolManager _poolManager) {
-        vaultPoolManager = _poolManager;
+    constructor(address _poolManager, address _marketFactory) {
+        vaultPoolManager = IPoolManager(_poolManager);
+        marketFactory = IMarketFactory(_marketFactory);
+    }
+
+    modifier onlyFactory() {
+        if (msg.sender != address(marketFactory)) {
+            revert InvalidSender();
+        }
+        _;
     }
 
     // Market tracking state variables
@@ -71,6 +83,12 @@ abstract contract MarketVault is IMarketVault {
         Currency currency1;
         BalanceDelta balanceDelta;
     }
+
+    function _underlying() internal view virtual returns (Currency currency0, Currency currency1);
+
+    function _lccs() internal view virtual returns (ILCC lccToken0, ILCC lccToken1);
+
+    function _marketId() internal view virtual returns (bytes32);
 
     /**
      * @dev Get the balance of a token in the MarketVault
@@ -152,16 +170,12 @@ abstract contract MarketVault is IMarketVault {
      *         It takes available liquidity from the vault and transfers it to the LCC contract,
      *         then notifies the LCC about the new balance via confirmTake.
      *         Used when partial fulfillment is acceptable (e.g., fulfilling deficit settlements).
-     * @param marketId The market ID for tracking purposes
      * @param lccToken The LCC token contract that will receive the underlying asset
      * @param amount The maximum amount of underlying asset to attempt to take from the vault
      * @return The actual amount of underlying asset that was taken and confirmed to the LCC
      */
-    function _tryTakeUnderlyingFromVaultToLCC(bytes32 marketId, ILCC lccToken, uint256 amount)
-        internal
-        returns (uint256)
-    {
-        Currency uaCurrency = Currency.wrap(lccToken.underlyingAsset());
+    function _tryTakeUnderlyingFromVaultToHub(ILCC lccToken, uint256 amount) internal returns (uint256) {
+        Currency uaCurrency = Currency.wrap(lccToken.underlying());
 
         // Attempt to take the underlying asset from vault to the LCC contract address
         uint256 amountTaken = _tryTakeUnderlyingFromVaultToRecipient(uaCurrency, address(lccToken), amount);
@@ -169,7 +183,7 @@ abstract contract MarketVault is IMarketVault {
         // If we successfully took any amount, notify the LCC contract about the new balance
         // This allows the LCC to track market-specific liquidity and process settlement queues
         if (amountTaken > 0) {
-            lccToken.confirmTake(marketId, amountTaken, false);
+            lccToken.confirmTake(_marketId(), amountTaken, false);
         }
 
         return amountTaken;
@@ -195,7 +209,7 @@ abstract contract MarketVault is IMarketVault {
             revert InvalidAmount();
         }
 
-        Currency uaCurrency = Currency.wrap(lccToken.underlyingAsset());
+        Currency uaCurrency = Currency.wrap(lccToken.underlying());
 
         // Take the underlying asset from vault to the LCC contract address
         // This will revert if insufficient liquidity is available
@@ -258,7 +272,7 @@ abstract contract MarketVault is IMarketVault {
         // the underlying asset from the LCC contract. This also reduces the LCC's uaSupply.
         lccToken.prepareSettle(amount);
 
-        Currency uaCurrency = Currency.wrap(lccToken.underlyingAsset());
+        Currency uaCurrency = Currency.wrap(lccToken.underlying());
         address sender = address(lccToken);
 
         // Settle the underlying asset from the LCC contract to the vault
@@ -302,7 +316,7 @@ abstract contract MarketVault is IMarketVault {
         if (totalPendingSettlement == 0) return; // No pending settlements to fulfill
 
         // Check how much underlying liquidity is available in the vault for this LCC's underlying asset
-        Currency uaCurrency = Currency.wrap(lccToken.underlyingAsset());
+        Currency uaCurrency = Currency.wrap(lccToken.underlying());
         uint256 availableLiquidity = inMarketBalanceOf(uaCurrency);
 
         // Calculate how much we can actually settle (limited by available liquidity)
@@ -341,22 +355,22 @@ abstract contract MarketVault is IMarketVault {
 
         // Handle negative delta for currency0: take underlying tokens from vault to sender
         if (amount0 < 0) {
-            _takeUnderlyingFromVaultToRecipient(callbackData.currency0, callbackData.sender, uint256(int256(-amount0)));
+            _takeUnderlyingFromVaultToRecipient(callbackData.currency0, callbackData.sender, LiquidityUtils.safeInt128ToUint256(amount0)));
         }
 
         // Handle negative delta for currency1: take underlying tokens from vault to sender
         if (amount1 < 0) {
-            _takeUnderlyingFromVaultToRecipient(callbackData.currency1, callbackData.sender, uint256(int256(-amount1)));
+            _takeUnderlyingFromVaultToRecipient(callbackData.currency1, callbackData.sender, LiquidityUtils.safeInt128ToUint256(amount1)));
         }
 
         // Handle positive delta for currency0: settle underlying tokens from sender to vault
         if (amount0 > 0) {
-            _settleUnderlyingToVaultFromSender(callbackData.currency0, address(this), uint256(int256(amount0)));
+            _settleUnderlyingToVaultFromSender(callbackData.currency0, address(this), LiquidityUtils.safeInt128ToUint256(amount0)));
         }
 
         // Handle positive delta for currency1: settle underlying tokens from sender to vault
         if (amount1 > 0) {
-            _settleUnderlyingToVaultFromSender(callbackData.currency1, address(this), uint256(int256(amount1)));
+            _settleUnderlyingToVaultFromSender(callbackData.currency1, address(this), LiquidityUtils.safeInt128ToUint256(amount1)));
         }
 
         return "";
@@ -372,14 +386,82 @@ abstract contract MarketVault is IMarketVault {
      * @param currency1 The second currency address
      * @param balanceDelta The balance delta representing the desired liquidity changes
      */
-    function _modifyVaultLiquidity(address currency0, address currency1, BalanceDelta balanceDelta) internal {
-        vaultPoolManager.unlock(
-            abi.encode(CallbackData(msg.sender, Currency.wrap(currency0), Currency.wrap(currency1), balanceDelta))
-        );
+    function _modifyVaultLiquidity(Currency currency0, Currency currency1, BalanceDelta balanceDelta) internal {
+        vaultPoolManager.unlock(abi.encode(CallbackData(msg.sender, (currency0), (currency1), balanceDelta)));
+    }
+
+    /**
+     * @dev This function is called by the MMPositionManager to add liquidity directly to the vault
+     * @param balanceDelta The balance delta of the currency0 and currency1
+     * @notice Derive the ProxyHook address from the Pool Id, assumes the (LCC underlying) currencies for the Proxy Pool.
+     */
+    function modifyLiquidities(BalanceDelta balanceDelta) external onlyFactory {
+        (Currency currency0, Currency currency1) = _underlying();
+        (ILCC lccToken0, ILCC lccToken1) = _lccs();
+        _modifyVaultLiquidity(currency0, currency1, balanceDelta);
+        // if there was an addition, then settle the obligations to the lcc tokens
+        if (balanceDelta.amount0() > 0) {
+            _settleObligationsForLCC(lccToken0, _marketId());
+        }
+        if (balanceDelta.amount1() > 0) {
+            _settleObligationsForLCC(lccToken1, _marketId());
+        }
+    }
+
+    function _tryModifyLiquidities(BalanceDelta balanceDelta) internal returns (BalanceDelta) {
+        (Currency currency0, Currency currency1) = _underlying();
+        (ILCC lccToken0, ILCC lccToken1) = _lccs();
+        bytes32 marketId = _marketId();
+
+        int128 delta0 = balanceDelta.amount0();
+        int128 delta1 = balanceDelta.amount1();
+
+        // Track actual amounts withdrawn/added
+        int128 actualDelta0 = delta0;
+        int128 actualDelta1 = delta1;
+
+        // Handle withdrawals (negative deltas) - only withdraw what's available
+        if (delta0 < 0) {
+            uint256 requested0 = LiquidityUtils.safeInt128ToUint256(delta0);
+            uint256 available0 = inMarketBalanceOf(currency0);
+            uint256 amount0 = Math.min(requested0, available0);
+            // If we can't fulfill the full withdrawal, adjust the delta to what we can actually withdraw
+            if (amount0 < requested0) {
+                actualDelta0 = -SafeCast.toInt128(amount0);
+            }
+        }
+
+        if (delta1 < 0) {
+            uint256 requested1 = LiquidityUtils.safeInt128ToUint256(delta1);
+            uint256 available1 = inMarketBalanceOf(currency1);
+            uint256 amount1 = Math.min(requested1, available1);
+            // If we can't fulfill the full withdrawal, adjust the delta to what we can actually withdraw
+            if (amount1 < requested1) {
+                actualDelta1 = -SafeCast.toInt128(amount1);
+            }
+        }
+
+        // Only proceed with modifyVaultLiquidity if:
+        // 1. We have deposits (positive deltas) - proceed normally
+        // 2. We have withdrawals but sufficient balance available - proceed with adjusted deltas
+        // 3. For withdrawals, if we don't have enough, we still proceed with what we can withdraw
+        BalanceDelta usedDelta = toBalanceDelta(actualDelta0, actualDelta1);
+        _modifyVaultLiquidity(currency0, currency1, usedDelta);
+
+        // If there was an addition (deposit), then settle the obligations to the lcc tokens
+        if (delta0 > 0) {
+            _settleObligationsForLCC(lccToken0, marketId);
+        }
+        if (delta1 > 0) {
+            _settleObligationsForLCC(lccToken1, marketId);
+        }
+
+        return usedDelta;
     }
 
     // Best practice: be explicit about intent
-    // TODO: Do we wnat to do anything here?
+    // Only executes on plain transaction (no selector) (ie. poolManager or WETH9 transfer of assets) to the MarketVault.
+    // Mostly used to prevent accidental transfers to the vault.
     receive() external payable {
         // Handle plain ETH transfers
     }

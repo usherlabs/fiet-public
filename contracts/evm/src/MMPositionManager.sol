@@ -161,11 +161,11 @@ contract MMPositionManager is
     }
 
     function _getVTSManager() internal view returns (IVTSManager) {
-        return IVTSManager(IMarketFactory(marketFactory).getCoreHook());
+        return IVTSManager(IMarketFactory(marketFactory).coreHook());
     }
 
     function _getPositionIndex() internal view returns (IPositionIndex) {
-        return IPositionIndex(IMarketFactory(marketFactory).getCoreHook());
+        return IPositionIndex(IMarketFactory(marketFactory).coreHook());
     }
 
     /// @dev Internal helper to unwrap an arbitrary LCC (pair-agnostic) to msgSender().
@@ -437,7 +437,7 @@ contract MMPositionManager is
         // notify the proxy hook of the settled underlying tokens
         // a positive balance delta means we are settling underlying tokens to the proxy hook, negative means withdrawing to the MMP.
         // Call after deposits, but before withdrawals.
-        IProxyHook(marketVault).onMMLiquidityModify(settlementDelta);
+        IMarketVault(marketVault).modifyLiquidities(settlementDelta);
 
         // for withdrawals, transfer to the caller/sender/MM.
         if (settlementDelta.amount0() < 0) {

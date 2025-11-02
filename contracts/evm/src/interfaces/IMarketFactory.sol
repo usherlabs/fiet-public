@@ -35,6 +35,7 @@ interface IMarketFactory {
     error InvalidUnderlyingAsset();
     error InvalidIssuer();
     error InvalidBound();
+    error InvalidSender();
 
     // ============ VIEW FUNCTIONS ============
     /**
@@ -76,7 +77,7 @@ interface IMarketFactory {
      * @notice Gets the core hook address
      * @return The core hook address
      */
-    function getCoreHook() external view returns (address);
+    function coreHook() external view returns (address);
 
     /**
      * @notice Gets the market maker position manager address

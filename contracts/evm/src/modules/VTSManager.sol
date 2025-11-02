@@ -543,14 +543,17 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     // --------------------------------------------------
 
     /**
-     * @dev Called by LCC to increment unwrap coverage of the pool
+     * @dev Called by MarketFactory to increment unwrap coverage. (ie. if liquidity taken by LiquidityHub for unwraps)
      * @param poolId The pool id
      * @param amount The amount to increment the coverage by
      */
-    function incrementCoverage(PoolId poolId, uint256 amount) external {
-        uint8 tokenIndex = _getTokenIndexFromCaller(poolId); // ensures msg.sender is a valid LCC for the pool id.
-
-        _incrementCoverage(poolId, tokenIndex, amount);
+    function incrementCoverage(PoolId poolId, uint256 amount0, uint256 amount1) external onlyFactory {
+        if (amount0 > 0) {
+            _incrementCoverage(poolId, 0, amount0);
+        }
+        if (amount1 > 0) {
+            _incrementCoverage(poolId, 1, amount1);
+        }
     }
 
     /// @dev Reads fees since last snapshot and checkpoints fee growth and outflow snapshots atomically.
