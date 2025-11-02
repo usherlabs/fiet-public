@@ -11,7 +11,7 @@ interface ILiquidityHub {
     /**
      * @notice Creates LCC token pair for a market
      * @param factory The factory address calling this function
-     * @param marketId The market ID
+     * @param marketRef The market reference (bytes from proxyHookAddress)
      * @param underlyingAsset0 The first underlying asset address
      * @param underlyingAsset1 The second underlying asset address
      * @param marketName The market name
@@ -20,11 +20,34 @@ interface ILiquidityHub {
      */
     function createLCCPair(
         address factory,
-        bytes32 marketId,
+        bytes memory marketRef,
         address underlyingAsset0,
         address underlyingAsset1,
         string memory marketName
     ) external returns (address lccToken0, address lccToken1);
+
+    /**
+     * @notice Initializes the mapping from LCC tokens to Market (with ID and Ref)
+     * @param lccToken0 The first LCC token address
+     * @param lccToken1 The second LCC token address
+     * @param marketId The market ID (corePoolKey -> PoolID -> unwrap() to bytes32)
+     * @param marketRef The market reference (bytes from proxyHookAddress)
+     */
+    function initialize(address lccToken0, address lccToken1, bytes32 marketId, bytes memory marketRef) external;
+
+    /**
+     * @notice Issues LCC tokens (mints to issuer)
+     * @param lccToken The LCC token address to issue for
+     * @param amount The amount to issue
+     */
+    function issue(address lccToken, uint256 amount) external;
+
+    /**
+     * @notice Cancels LCC tokens (burns from issuer)
+     * @param lccToken The LCC token address to cancel for
+     * @param amount The amount to cancel
+     */
+    function cancel(address lccToken, uint256 amount) external;
 
     /**
      * @notice Gets the LCC token for a given underlying asset

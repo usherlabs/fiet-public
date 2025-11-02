@@ -2,9 +2,7 @@
 pragma solidity ^0.8.20;
 
 import {Ownable} from "openzeppelin-contracts/contracts/access/Ownable.sol";
-import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {IOracleHelper} from "./interfaces/IOracleHelper.sol";
-import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 import {LCCFactory} from "./modules/LCCFactory.sol";
 
 /**
@@ -26,8 +24,12 @@ contract LiquidityHub is Ownable, LCCFactory {
         address _mmPositionManager,
         string memory _nativeAssetName,
         string memory _nativeAssetSymbol,
-        uint8 _nativeAssetDecimals
-    ) Ownable(msg.sender) LCCFactory(_nativeAssetName, _nativeAssetSymbol, _nativeAssetDecimals) {
+        uint8 _nativeAssetDecimals,
+        bool _marketRefIsValidIssuer
+    )
+        Ownable(msg.sender)
+        LCCFactory(_nativeAssetName, _nativeAssetSymbol, _nativeAssetDecimals, _marketRefIsValidIssuer)
+    {
         oracleHelper = IOracleHelper(_oracleHelper);
         mmPositionManager = _mmPositionManager;
     }
@@ -50,21 +52,33 @@ contract LiquidityHub is Ownable, LCCFactory {
     /**
      * @notice Creates LCC token pair for a market
      * @param factory The factory address
-     * @param marketId The market ID
+     * @param marketRef The market reference (bytes from proxyHookAddress)
      * @param underlyingAsset0 The first underlying asset address
      * @param underlyingAsset1 The second underlying asset address
+     * @param marketName The market name
      * @return lccToken0 The first LCC token address
      * @return lccToken1 The second LCC token address
      */
     function createLCCPair(
         address factory,
-        bytes32 marketId,
+        bytes memory marketRef,
         address underlyingAsset0,
         address underlyingAsset1,
         string memory marketName
     ) external onlyFactory(factory) returns (address lccToken0, address lccToken1) {
         address[2] memory underlyingPair = [underlyingAsset0, underlyingAsset1];
-        lccToken0 = _createLCC(factory, marketId, underlyingPair, 0, marketName);
-        lccToken1 = _createLCC(factory, marketId, underlyingPair, 1, marketName);
+        lccToken0 = _createLCC(factory, marketRef, underlyingPair, 0, marketName);
+        lccToken1 = _createLCC(factory, marketRef, underlyingPair, 1, marketName);
+    }
+
+    /**
+     * @notice Initializes the mapping from LCC tokens to Market (with ID and Ref)
+     * @param lccToken0 The first LCC token address
+     * @param lccToken1 The second LCC token address
+     * @param marketId The market ID (corePoolKey -> PoolID -> unwrap() to bytes32)
+     * @param marketRef The market reference (bytes from proxyHookAddress)
+     */
+    function initialize(address lccToken0, address lccToken1, bytes32 marketId, bytes memory marketRef) external {
+        _initialize(lccToken0, lccToken1, marketId, marketRef);
     }
 }

@@ -15,6 +15,7 @@ import {IVTSManager} from "./interfaces/IVTSManager.sol";
 import {MarketVTSConfiguration} from "./types/VTS.sol";
 import {IOracleHelper} from "./interfaces/IOracleHelper.sol";
 import {ILiquidityHub} from "./interfaces/ILiquidityHub.sol";
+import {IERC20Metadata} from "openzeppelin-contracts/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 
 /**
  * @title MarketFactory
@@ -121,18 +122,15 @@ contract MarketFactory is IMarketFactory, Ownable {
         underlyingAsset0 = Currency.unwrap(underlyingCurr0);
         underlyingAsset1 = Currency.unwrap(underlyingCurr1);
 
-        // Compute deterministic marketId from pool parameters
-        // This will be used to create LCC tokens
-        bytes32 marketId =
-            keccak256(abi.encodePacked(underlyingAsset0, underlyingAsset1, corePoolFee, tickSpacing, salt));
-        // TODO: We'll need to redine what marketId means across the repo... current marketId is in fact marketCorePoolId
+        // Convert proxyHookAddress to bytes (marketRef)
+        // This will be used for LCC token symbol truncation
+        bytes memory marketRef = abi.encodePacked(proxyHookAddress);
 
-        string memory marketName = strings.concat(
-            "Uv4 ", IERC20Metadata(underlyingAsset0).symbol(), IERC20Metadata(underlyingAsset1).symbol()
-        );
+        string memory marketName =
+            string.concat("Uv4 ", IERC20Metadata(underlyingAsset0).symbol(), IERC20Metadata(underlyingAsset1).symbol());
 
         (address lccToken0, address lccToken1) =
-            liquidityHub.createLCCPair(address(this), marketId, underlyingAsset0, underlyingAsset1, marketName);
+            liquidityHub.createLCCPair(address(this), marketRef, underlyingAsset0, underlyingAsset1, marketName);
         (Currency lccCurr0, Currency lccCurr1) = _sortCurrencies(lccToken0, lccToken1);
         lccToken0 = Currency.unwrap(lccCurr0);
         lccToken1 = Currency.unwrap(lccCurr1);
@@ -179,6 +177,10 @@ contract MarketFactory is IMarketFactory, Ownable {
         ProxyHook proxyHookInstance = ProxyHook(payable(proxyHookAddress));
         proxyHookInstance.setCorePoolKey(corePoolKey);
         proxyHookInstance.activate();
+
+        // Initialize the mapping from LCC tokens to Market (with ID and Ref)
+        bytes32 marketId = PoolId.unwrap(corePoolId);
+        liquidityHub.initialize(lccToken0, lccToken1, marketId, marketRef);
 
         // Market was created then we call the VTS manager to store the configuration for the market
         IVTSManager(coreHook).setMarketVTSConfiguration(corePoolId, vtsConfiguration);

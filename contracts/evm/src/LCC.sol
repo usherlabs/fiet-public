@@ -1,16 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {IERC20Metadata} from "openzeppelin-contracts/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {SafeTransferLib} from "solmate/utils/SafeTransferLib.sol";
 import {ERC20} from "solmate/tokens/ERC20.sol";
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
-import {MarketLiquidity} from "./modules/MarketLiquidity.sol";
-import {IExttload} from "v4-periphery/lib/v4-core/src/interfaces/IExttload.sol";
-import {TransientSlots} from "./libraries/TransientSlots.sol";
 import {PoolId} from "v4-periphery/lib/v4-core/src/types/PoolId.sol";
-import {IProxyHook} from "./interfaces/IProxyHook.sol";
-import {MarketVault} from "./modules/MarketVault.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {IVTSManager} from "./interfaces/IVTSManager.sol";
@@ -74,19 +68,22 @@ contract LiquidityCommitmentCertificate is ERC20, Ownable, ILCC {
     }
 
     /**
+     * @param marketId The market ID
      * @param _underlyingAsset The underlying asset of the LCC.
-     * @param _issuers The issuers of the LCC. ProxyHook, and MMPositionManager
-     * @param _marketFactory The MarketFactory contract that manages this LCC.
+     * @param name The token name
+     * @param symbol The token symbol
+     * @param decimals The token decimals
      */
     constructor(bytes32 marketId, address _underlyingAsset, string memory name, string memory symbol, uint8 decimals)
         ERC20(name, symbol, decimals)
         Ownable(msg.sender)
     {
-        if (_marketFactory == address(0)) {
-            revert InvalidMarketFactory();
+        if (_underlyingAsset == address(0)) {
+            revert InvalidUnderlyingAsset();
         }
 
         underlyingAsset = _underlyingAsset;
+        marketFactory = IMarketFactory(msg.sender); // Set by factory during deployment
 
         // Note: bounds are managed by the MarketFactory, not set in constructor
     }
@@ -129,6 +126,7 @@ contract LiquidityCommitmentCertificate is ERC20, Ownable, ILCC {
 
     // some trusted issuer Smart Contracts can be allowed to mint tokens and hold the liquidity
     // this minting provides tokens at a 1:1 ratio and intended for onchain preswap wrapping
+    // DEPRECATED: Use LCCFactory.issue() instead
     function issue(uint256 amount) external onlyIssuer {
         if (amount == 0) {
             revert InvalidAmount();
@@ -142,6 +140,7 @@ contract LiquidityCommitmentCertificate is ERC20, Ownable, ILCC {
         // This is because the PoolManager will custody the difference.
     }
 
+    // DEPRECATED: Use LCCFactory.cancel() instead
     function cancel(uint256 amount) external onlyIssuer {
         if (amount == 0) {
             revert InvalidAmount();
@@ -152,6 +151,30 @@ contract LiquidityCommitmentCertificate is ERC20, Ownable, ILCC {
         _burn(issuer, amount);
 
         // totalSupply will return back to uaSupply now that the surplus LCC managed by the issuer engagin the PoolManager has been cancelled.
+    }
+
+    /**
+     * @notice Issues LCC tokens to an issuer (called by factory after validating permissions)
+     * @param issuer The issuer address to mint tokens to
+     * @param amount The amount to issue
+     */
+    function issueTo(address to, uint256 amount) external onlyOwner {
+        if (amount == 0) {
+            revert InvalidAmount();
+        }
+        _mint(to, amount);
+    }
+
+    /**
+     * @notice Cancels LCC tokens from an issuer (called by factory after validating permissions)
+     * @param issuer The issuer address to burn tokens from
+     * @param amount The amount to cancel
+     */
+    function cancelFrom(address from, uint256 amount) external onlyOwner {
+        if (amount == 0) {
+            revert InvalidAmount();
+        }
+        _burn(from, amount);
     }
 
     /**

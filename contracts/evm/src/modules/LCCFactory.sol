@@ -2,10 +2,11 @@
 pragma solidity ^0.8.20;
 
 import {LiquidityCommitmentCertificate} from "../LCC.sol";
-import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
 import {IERC20Metadata} from "openzeppelin-contracts/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {LibBytes} from "solady/src/utils/LibBytes.sol";
 import {LibString} from "solady/src/utils/LibString.sol";
+import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
+import {ILCC} from "../interfaces/ILCC.sol";
 
 /**
  * @title LCCFactory
@@ -14,9 +15,19 @@ import {LibString} from "solady/src/utils/LibString.sol";
  */
 abstract contract LCCFactory {
     error LCCAlreadyExists();
+    error UnableToGenerateUniqueSymbol();
+    error SenderNotIssuer(address sender);
+    error InvalidAmount();
+    error InvalidLCC();
 
     // Event from IMarketFactory interface
     event LCCCreated(address indexed underlyingAsset, address indexed lccToken);
+
+    // Market struct containing ID and Ref
+    struct Market {
+        bytes32 id; // core pool id as market
+        bytes ref; // proxy
+    }
 
     // Mapping from underlying asset to LCC token
     mapping(address => address) public underlyingToLCC;
@@ -27,19 +38,33 @@ abstract contract LCCFactory {
     // Mapping from LCC token to factory
     mapping(address => address) public lccToFactory;
 
-    // Single mapping: truncated marketId (bytes) -> underlying pair [asset0, asset1]
-    // This tracks truncated marketId collisions. Symbol hash uniqueness is guaranteed by
+    // Single mapping: truncated marketRef (bytes) -> underlying pair [asset0, asset1]
+    // This tracks truncated marketRef collisions. Symbol hash uniqueness is guaranteed by
     // the symbol construction (includes uaSymbol which differs per asset).
-    mapping(bytes => address[2]) private _truncatedMarketIdToUnderlyingPair;
+    mapping(bytes => address[2]) private _truncatedMarketRefToUnderlyingPair;
+
+    // Mapping from LCC token to Market (with ID and Ref)
+    mapping(address => Market) public lccToMarket;
+
+    // Mapping from LCC token to issuer addresses
+    mapping(address => mapping(address => bool)) public issuers;
+
+    bool public immutable marketRefIsValidIssuer;
 
     string private nativeAssetName;
     string private nativeAssetSymbol;
     uint8 private nativeAssetDecimals;
 
-    constructor(string memory _nativeAssetName, string memory _nativeAssetSymbol, uint8 _nativeAssetDecimals) {
+    constructor(
+        string memory _nativeAssetName,
+        string memory _nativeAssetSymbol,
+        uint8 _nativeAssetDecimals,
+        bool _marketRefIsValidIssuer
+    ) {
         nativeAssetName = _nativeAssetName;
         nativeAssetSymbol = _nativeAssetSymbol;
         nativeAssetDecimals = _nativeAssetDecimals;
+        marketRefIsValidIssuer = _marketRefIsValidIssuer;
     }
 
     function _sortTokens(address token0, address token1)
@@ -69,66 +94,63 @@ abstract contract LCCFactory {
     }
 
     /**
-     * @notice Gets a unique symbol for an LCC token using truncated marketId with collision handling
+     * @notice Gets a unique symbol for an LCC token using truncated marketRef with collision handling
      * @param asset The underlying asset address
-     * @param marketName The market name
-     * @param marketId The full market ID (bytes32)
+     * @param marketRef The market reference (bytes from proxyHookAddress)
      * @param underlyingPair The underlying pair [asset0, asset1] for this market
      * @return symbol The unique symbol string
-     * @return truncatedMarketIdStr The truncated market ID string used in the symbol
+     * @return truncatedMarketRefStr The truncated market reference string used in the symbol
      */
-    function _getSymbol(address asset, bytes32 marketId, address[2] memory underlyingPair)
+    function _getSymbol(address asset, bytes memory marketRef, address[2] memory underlyingPair)
         private
-        returns (string memory symbol, string memory truncatedMarketIdStr)
+        returns (string memory symbol, string memory truncatedMarketRefStr)
     {
         string memory uaSymbol = nativeAssetSymbol;
         if (asset != address(0)) {
             uaSymbol = IERC20Metadata(asset).symbol();
         }
 
-        // Convert marketId to bytes for truncation
-        bytes memory marketIdBytes = abi.encodePacked(marketId);
-
         // Start with minimum truncation length (4 bytes = 8 hex characters)
         uint256 length = 4;
+        uint256 maxLength = marketRef.length;
 
         // Ensure underlyingPair is sorted (smaller address first)
         address[2] memory sortedPair = _sortTokens(underlyingPair[0], underlyingPair[1]);
 
-        while (length <= 32) {
+        while (length <= maxLength) {
             // Truncate to first 'length' bytes
-            bytes memory truncated = LibBytes.slice(marketIdBytes, 0, length);
+            bytes memory truncated = LibBytes.slice(marketRef, 0, length);
 
             // Convert truncated bytes to hex string (no prefix)
-            truncatedMarketIdStr = LibString.toHexStringNoPrefix(truncated);
+            truncatedMarketRefStr = LibString.toHexStringNoPrefix(truncated);
 
             // Build full proposed symbol
-            symbol = string.concat("lcc-", uaSymbol, "-", truncatedMarketIdStr);
+            symbol = string.concat("lcc-", uaSymbol, "-", truncatedMarketRefStr);
 
-            // Check truncated marketId mapping for underlying pair collision
-            address[2] memory existingPair = _truncatedMarketIdToUnderlyingPair[truncated];
+            // Check truncated marketRef mapping for underlying pair collision
+            address[2] memory existingPair = _truncatedMarketRefToUnderlyingPair[truncated];
 
-            // If truncated marketId not mapped, or maps to same underlying pair, we can use it
+            // If truncated marketRef not mapped, or maps to same underlying pair, we can use it
             bool canUseTruncation = (existingPair[0] == address(0) && existingPair[1] == address(0))
                 || (existingPair[0] == sortedPair[0] && existingPair[1] == sortedPair[1]);
 
             if (canUseTruncation) {
-                // Store truncated marketId -> underlying pair mapping if not exists
+                // Store truncated marketRef -> underlying pair mapping if not exists
                 if (existingPair[0] == address(0) && existingPair[1] == address(0)) {
-                    _truncatedMarketIdToUnderlyingPair[truncated] = sortedPair;
+                    _truncatedMarketRefToUnderlyingPair[truncated] = sortedPair;
                 }
                 // Note: Symbol hash uniqueness is guaranteed by symbol construction
                 // (includes uaSymbol which differs per asset in the market)
-                return (symbol, truncatedMarketIdStr);
+                return (symbol, truncatedMarketRefStr);
             }
 
-            // Collision: truncated marketId maps to different underlying pair
+            // Collision: truncated marketRef maps to different underlying pair
             // Increase length and retry
             length++;
         }
 
         // This should never happen in practice, but revert if we can't find a unique symbol
-        revert("Unable to generate unique symbol");
+        revert UnableToGenerateUniqueSymbol();
     }
 
     function _getDecimals(address asset) private view returns (uint8) {
@@ -141,15 +163,15 @@ abstract contract LCCFactory {
     /**
      * @notice Creates an LCC token for the given underlying asset
      * @param factory The factory address
-     * @param marketId The market ID
-     * @param underlyingAsset The underlying asset address
+     * @param marketRef The market reference (bytes from proxyHookAddress)
      * @param underlyingPair The underlying pair [asset0, asset1] for this market
+     * @param index The index in the underlying pair (0 or 1)
      * @param marketName The market name (can be empty string)
      * @return lccToken The LCC token address
      */
     function _createLCC(
         address factory,
-        bytes32 marketId,
+        bytes memory marketRef,
         address[2] memory underlyingPair,
         uint8 index,
         string memory marketName
@@ -160,17 +182,20 @@ abstract contract LCCFactory {
             revert LCCAlreadyExists();
         }
 
-        // Get unique symbol with truncated marketId
-        (string memory symbol, string memory truncatedMarketIdStr) =
-            _getSymbol(underlyingAsset, marketId, underlyingPair);
+        // Get unique symbol with truncated marketRef
+        (string memory symbol, string memory truncatedMarketRefStr) =
+            _getSymbol(underlyingAsset, marketRef, underlyingPair);
 
-        // Get name using truncated marketId
-        string memory name = _getName(underlyingAsset, marketName, truncatedMarketIdStr);
+        // Get name using truncated marketRef
+        string memory name = _getName(underlyingAsset, marketName, truncatedMarketRefStr);
 
         // Get decimals
         uint8 decimals = _getDecimals(underlyingAsset);
 
-        // Create LCC token
+        // Get marketId from marketRef mapping (temporary until initialize is called)
+        bytes32 marketId = keccak256(marketRef);
+
+        // Create LCC token (still uses marketId bytes32 for internal tracking)
         lccToken = address(new LiquidityCommitmentCertificate(marketId, underlyingAsset, name, symbol, decimals));
 
         underlyingToLCC[underlyingAsset] = lccToken;
@@ -196,6 +221,122 @@ abstract contract LCCFactory {
      */
     function getUnderlyingAsset(address lccToken) external view returns (address) {
         return lccToUnderlying[lccToken];
+    }
+
+    /**
+     * @notice Initializes the mapping from LCC tokens to Market (with ID and Ref)
+     * @param lccToken0 The first LCC token address
+     * @param lccToken1 The second LCC token address
+     * @param marketId The market ID (corePoolKey -> PoolID -> unwrap() to bytes32)
+     * @param marketRef The market reference (bytes from proxyHookAddress)
+     */
+    function _initialize(address lccToken0, address lccToken1, bytes32 marketId, bytes memory marketRef) internal {
+        Market memory market = Market({id: marketId, ref: marketRef});
+        lccToMarket[lccToken0] = market;
+        lccToMarket[lccToken1] = market;
+    }
+
+    /**
+     * @notice Check if the caller is a valid issuer for the given LCC token
+     * @param lccToken The LCC token address
+     * @return bool True if the caller is a valid issuer, false otherwise
+     */
+    function _isCallerIssuer(address lccToken) internal view returns (bool) {
+        address caller = msg.sender;
+
+        // Check if caller is in the issuers mapping
+        if (issuers[lccToken][caller]) {
+            return true;
+        }
+
+        // Get the market for this LCC token
+        Market memory market = lccToMarket[lccToken];
+        if (market.id == bytes32(0) && market.ref.length == 0) {
+            return false; // Market not initialized
+        }
+
+        // Check if marketRefIsValidIssuer is enabled and caller matches the ref address
+        if (marketRefIsValidIssuer && market.ref.length >= 20) {
+            // Extract address from marketRef bytes (first 20 bytes)
+            // marketRef is bytes from abi.encodePacked(proxyHookAddress), so it's 20 bytes
+            bytes memory refBytes = LibBytes.slice(market.ref, 0, 20);
+            address refAddress;
+            assembly {
+                refAddress := mload(add(refBytes, 0x20))
+            }
+            if (caller == refAddress) {
+                if (isMarketVaultExclusive) {
+                    return true; // Market vault (proxy hook) is allowed
+                }
+                return true; // Regular issuer check
+            }
+        }
+
+        // Check if caller is a proxy hook for this LCC's underlying asset
+        address underlyingAsset = lccToUnderlying[lccToken];
+        address factory = lccToFactory[lccToken];
+        if (factory != address(0)) {
+            address[2] memory currencies = IMarketFactory(factory).proxyHookToCurrencyPair(caller);
+            bool isAssetProxyPool = (currencies[0] == underlyingAsset || currencies[1] == underlyingAsset);
+            if (isMarketVaultExclusive) {
+                return isAssetProxyPool;
+            }
+            return isAssetProxyPool;
+        }
+
+        return false;
+    }
+
+    /**
+     * @notice Sets an issuer for a specific LCC token
+     * @param lccToken The LCC token address
+     * @param issuer The issuer address to set
+     * @param isIssuer Whether the address should be an issuer
+     */
+    function _setIssuer(address lccToken, address issuer, bool isIssuer) internal {
+        issuers[lccToken][issuer] = isIssuer;
+    }
+
+    /**
+     * @notice Issues LCC tokens (mints to issuer)
+     * @param lccToken The LCC token address to issue for
+     * @param amount The amount to issue
+     */
+    function issue(address lccToken, uint256 amount) external {
+        if (amount == 0) {
+            revert InvalidAmount();
+        }
+        if (lccToken == address(0)) {
+            revert InvalidLCC();
+        }
+
+        if (!_isCallerIssuer(lccToken)) {
+            revert SenderNotIssuer(msg.sender);
+        }
+
+        address issuer = msg.sender;
+        ILCC(lccToken).issueTo(issuer, amount);
+    }
+
+    /**
+     * @notice Cancels LCC tokens (burns from issuer)
+     * @param lccToken The LCC token address to cancel for
+     * @param amount The amount to cancel
+     */
+    function cancel(address lccToken, uint256 amount) external {
+        if (amount == 0) {
+            revert InvalidAmount();
+        }
+        if (lccToken == address(0) || lccToMarket[lccToken].length == 0) {
+            revert InvalidLCC();
+        }
+
+        if (!_isCallerIssuer(lccToken)) {
+            revert SenderNotIssuer(msg.sender);
+        }
+
+        address issuer = msg.sender;
+        ILCC(lccToken).cancelFrom(issuer, amount);
     }
 }
 
