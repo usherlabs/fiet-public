@@ -301,36 +301,6 @@ contract LiquidityHub is Ownable, LCCFactory {
         _burn(issuer, amount);
     }
 
-    // /**
-    //  * @dev Unwraps LCC from the Market Vault. Called exclusively by the Market Vault / Proxy Hook.
-    //  * @param marketId The market ID
-    //  * @param amount The amount to unwrap from the vault
-    //  * @param deficitAmount The amount of the underlying asset to unwrap from the vault
-    //  * @param excessLCCRecipient The recipient of the underlying asset
-    //  */
-    // function unwrapFromVault(bytes32 marketId, uint256 amount, uint256 deficitAmount, address excessLCCRecipient)
-    //     external
-    //     onlyMarketVault
-    // {
-    //     // On PH .cancel, market liquidity is utilised to cover swaps.
-    //     // On MMP .cancel, market liquidity (MM Positions) are removed first, and therefore in-market settled liquidity is isolated for withdrawal...
-    //     if (amount == 0) {
-    //         revert InvalidAmount();
-    //     }
-
-    //     address sender = msg.sender;
-
-    //     _burn(sender, amount);
-    //     // _incrementCoverage(marketId, amount); // TODO: errors occuring here...
-
-    //     if (deficitAmount > 0 && excessLCCRecipient != address(0)) {
-    //         // Transfer to recipient.
-    //         // CoreHook.afterSwap will automatically trigger tracing, therefore transfer here is already traced to source market.
-    //         // Calling transfer here is as though it was called externally by the issuer. The proxy hook calls take on LCC before this function called.
-    //         transfer(excessLCCRecipient, deficitAmount); // msg.sender is the issuer.
-    //     }
-    // }
-
     /**
      * @notice Called by MarketVault after taking underlying liquidity from the market to LCC
      * @param lcc The LCC token address

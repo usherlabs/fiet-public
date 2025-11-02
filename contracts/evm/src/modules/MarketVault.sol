@@ -32,14 +32,20 @@ import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
 import {LiquidityUtils} from "../libraries/LiquidityUtils.sol";
 import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
 import {ILiquidityHub} from "../interfaces/ILiquidityHub.sol";
+import {SafeERC20} from "openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol";
 
 abstract contract MarketVault is IMarketVault {
     using CurrencySettler for Currency;
+    using SafeERC20 for ILCC;
 
     error InsufficientLiquidityToTake();
     error InsufficientLiquidityToSettle();
     error InvalidAmount();
     error InvalidSender();
+
+    event SwapDeficit(
+        PoolId indexed poolId, address lccToken, address deficitRecipient, uint256 deficitAmount
+    );
 
     IPoolManager public immutable vaultPoolManager;
     IMarketFactory public immutable marketFactory;
@@ -323,6 +329,49 @@ abstract contract MarketVault is IMarketVault {
         // Transfer liquidity from vault to Hub and emit event
         // This will trigger LiquidityAvailable event if shouldEmit is true
         _takeUnderlyingFromVaultToHub(lccToken, amountToSettle, true);
+    }
+
+    /**
+     * @dev Cancel an LCC token amount, handling deficit scenarios when insufficient liquidity is available
+     * @notice This function cancels LCC tokens for a given amount, but may only partially fulfill
+     *         the cancellation if the vault has insufficient underlying liquidity. When the requested
+     *         amount exceeds available liquidity, it cancels what's available and handles the deficit
+     *         by transferring the deficit amount to the deficit recipient (if provided).
+     *
+     *         The deficit scenario occurs when a swap operation requires more liquidity than is
+     *         currently available in the vault. The ProxyHook will have already taken the full
+     *         LCC amount from the PoolManager, so the deficit represents the shortfall that needs
+     *         to be handled separately.
+     * @param key The pool key identifying the market
+     * @param lccToken The LCC token contract to cancel
+     * @param amount The amount of LCC tokens requested to be cancelled
+     * @param deficitRecipient The address to receive any deficit amount (if insufficient liquidity)
+     * @return amountToCancel The actual amount of LCC tokens that were cancelled (may be less than requested)
+     * @custom:note If deficitRecipient is address(0) but deficitAmount > 0, the excess will accumulate.
+     *              This indicates that prior swap amount restrictions were broken, which should never happen.
+     */
+    function _cancelLCCWithDeficit(PoolId poolId, ILCC lccToken, uint256 amount, address deficitRecipient)
+        internal
+        returns (uint256 amountToCancel)
+    {
+        uint256 deficitAmount = 0;
+        uint256 available = inMarketBalanceOf(Currency.wrap(lccToken.underlying()));
+        if (amount > available) {
+            amountToCancel = available; // amount to cancel becomes what ever is in custody.
+            deficitAmount = amount - available; // deficit amount becomes the difference between the amount to cancel and the amount in custody.
+        } else {
+            amountToCancel = amount;
+        }
+
+        liquidityHub.cancel(address(lccToken), amountToCancel); // we only cancel what native asset we distribute via the swap mechanism.
+
+        if (deficitAmount > 0 && deficitRecipient != address(0)) {
+            // ? The MarketVault will have already taken the full LCC amount from the PoolManager.
+            lccToken.safeTransfer(deficitRecipient, deficitAmount);
+            emit SwapDeficit(poolId, address(lccToken), deficitRecipient, deficitAmount);
+        }
+        // Note: If deficit recipient is not specified, but a deficit > 0, then excess will accumulate.
+        // However, this means prior swap amount restriction in Proxy Hook must therefore be broken. This should never happen.
     }
 
     /**

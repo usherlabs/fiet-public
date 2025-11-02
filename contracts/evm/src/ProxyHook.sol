@@ -400,7 +400,7 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
             // * This deficit is then distributed to the excessRecipient.
             // * The excessRecipient is either specified, the Locker or the msg.sender.
             // This excess functionality is Proxy Pool specific.
-            amountToSettle = _cancelLCCWithDeficit(key, lccTokenForCurrency1, amountOut, excessRecipient);
+            amountToSettle = _cancelLCCWithDeficit(key.toId(), lccTokenForCurrency1, amountOut, excessRecipient);
 
             // Settle the output token to the PoolManager
             // Burn claim tokens to release output token to the Trader from the PoolManager.
@@ -457,24 +457,6 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         }
 
         return (this.beforeSwap.selector, newDelta, 0); // last param is lpFeeOverride
-    }
-
-    function _cancelLCCWithDeficit(PoolKey calldata key, ILCC lccToken, uint256 amount, address excessLCCRecipient)
-        internal
-        returns (uint256 amountToCancel)
-    {
-        uint256 deficitAmount = 0;
-        uint256 availableLiquidity = inMarketBalanceOf(Currency.wrap(lccToken.underlying()));
-        if (amount > availableLiquidity) {
-            amountToCancel = availableLiquidity; // amount to cancel becomes what ever is in custody.
-            deficitAmount = amount - availableLiquidity; // deficit amount becomes the difference between the amount to cancel and the amount in custody.
-        } else {
-            amountToCancel = amount;
-        }
-
-        // ? if deficit recipient is not specified, but a deficit > 0, then excess will accumulate. This means prior swap amount restriction must therefore be broken, which should never happen...
-        // Execute: outflow is unwrapped, and transfers are handled by Uniswap.
-        lccToken.unwrapFromVault(PoolId.unwrap(key.toId()), amountToCancel, deficitAmount, excessLCCRecipient); // we only cancel what native asset we distribute via the swap mechanism.
     }
 
     // Adjust the swap params to execute the swap to fully execute with the available liquidity
