@@ -1,18 +1,18 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {SafeTransferLib} from "solmate/utils/SafeTransferLib.sol";
-import {ERC20} from "solmate/tokens/ERC20.sol";
+import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {ILCC} from "./interfaces/ILCC.sol";
 import {ILiquidityHub} from "./interfaces/ILiquidityHub.sol";
 import {OracleUtils} from "./libraries/OracleUtils.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 contract LiquidityCommitmentCertificate is ERC20, Ownable, ILCC {
-    using SafeTransferLib for ERC20;
-
+    using SafeERC20 for IERC20;
     error SenderNotIssuer(address sender);
     error InvalidUnderlyingAsset();
     error TransferNotAllowed();
@@ -22,6 +22,7 @@ contract LiquidityCommitmentCertificate is ERC20, Ownable, ILCC {
     error InsufficientWrappedLiquidity(uint256 requested, uint256 available);
     error InsufficientBalance(address sender, uint256 balance, uint256 needed);
 
+    uint8 private immutable _decimals;
     address private immutable underlyingAsset;
     IMarketFactory private immutable marketFactory;
     address private immutable marketVaultAddress; // ie. the uniswap v4 pool manager
@@ -31,18 +32,11 @@ contract LiquidityCommitmentCertificate is ERC20, Ownable, ILCC {
     mapping(address => uint256) private wrappedBalances;
     mapping(address => uint256) private marketDerivedBalances;
 
-    modifier onlyProtocolTransfer(address from, address to) {
-        if (!_isProtocolTransfer(from, to)) {
-            revert TransferNotAllowed();
-        }
-        _;
-    }
-
     /**
      * @param _underlyingAsset The underlying asset of the LCC.
      * @param name The token name
      * @param symbol The token symbol
-     * @param decimals The token decimals
+     * @param __decimals The token decimals
      * @param _resilientOracleAddress The address of the resilient oracle
      */
     constructor(
@@ -50,13 +44,14 @@ contract LiquidityCommitmentCertificate is ERC20, Ownable, ILCC {
         address _underlyingAsset,
         string memory name,
         string memory symbol,
-        uint8 decimals,
+        uint8 __decimals,
         address _resilientOracleAddress
-    ) ERC20(name, symbol, decimals) Ownable(_msgSender()) {
+    ) ERC20(name, symbol) Ownable(_msgSender()) {
         if (_underlyingAsset == address(0)) {
             revert InvalidUnderlyingAsset();
         }
 
+        _decimals = __decimals;
         underlyingAsset = _underlyingAsset;
         resilientOracleAddress = _resilientOracleAddress;
         marketFactory = IMarketFactory(_marketFactory);
@@ -65,21 +60,33 @@ contract LiquidityCommitmentCertificate is ERC20, Ownable, ILCC {
         // Note: bounds are managed by the MarketFactory, not set in constructor
     }
 
-    function _isProtocolTransfer(address from, address to) internal view returns (bool) {
+    function _isProtocolTransfer(address from, address to, bool fromProtocol, bool toProtocol)
+        internal
+        pure
+        returns (bool)
+    {
         // Allow transfers from/to zero address (minting/burning)
         if (from == address(0) || to == address(0)) {
             return true;
         }
 
         // Allow transfers between protocol bounds
-        if (marketFactory.bounds(to) || marketFactory.bounds(from)) {
+        if (fromProtocol && toProtocol) {
             return true;
         }
 
-        // Only protocol bounds can transfer to non-bounds (EOAs, other contracts)
-        if (!marketFactory.bounds(from)) {
-            return false;
+        // Allow protocol -> non-protocol transfers
+        if (fromProtocol && !toProtocol) {
+            return true;
         }
+
+        // Allow non-protocol -> protocol transfers
+        if (!fromProtocol && toProtocol) {
+            return true;
+        }
+
+        // Block non-protocol -> non-protocol transfers
+        return false;
     }
 
     /**
@@ -89,6 +96,10 @@ contract LiquidityCommitmentCertificate is ERC20, Ownable, ILCC {
     function marketId() external view returns (bytes32) {
         (, bytes32 id,,) = hub.lccToMarket(address(this));
         return id;
+    }
+
+    function decimals() public view virtual override returns (uint8) {
+        return _decimals;
     }
 
     /**
@@ -157,14 +168,15 @@ contract LiquidityCommitmentCertificate is ERC20, Ownable, ILCC {
         }
     }
 
-    function _onTransfer(address from, address to, uint256 amount) internal onlyProtocolTransfer(from, to) {
-        // Allow transfers from/to zero address (minting/burning handled by parent)
-        if (from == address(0) || to == address(0)) {
-            return;
-        }
-
+    function _onTransfer(address from, address to, uint256 amount) internal {
         bool fromProtocol = marketFactory.bounds(from);
         bool toProtocol = marketFactory.bounds(to);
+        bool isProtocolTransfer = _isProtocolTransfer(from, to, fromProtocol, toProtocol);
+
+        if (!isProtocolTransfer) {
+            revert TransferNotAllowed();
+        }
+
         if (fromProtocol && toProtocol) {
             // Protocol -> Protocol: do not accrue buckets to protocol addresses
             return;
@@ -194,17 +206,18 @@ contract LiquidityCommitmentCertificate is ERC20, Ownable, ILCC {
         // Non-protocol -> Non-protocol: blocked by modifier, shouldn't reach here
     }
 
-    function transfer(address to, uint256 amount) public virtual override returns (bool) {
+    function transfer(address to, uint256 amount) public virtual override(ERC20, IERC20) returns (bool) {
         _onTransfer(_msgSender(), to, amount);
         return super.transfer(to, amount);
     }
 
-    function transferFrom(address from, address to, uint256 amount) public virtual override returns (bool) {
+    function transferFrom(address from, address to, uint256 amount)
+        public
+        virtual
+        override(ERC20, IERC20)
+        returns (bool)
+    {
         _onTransfer(from, to, amount);
         return super.transferFrom(from, to, amount);
-    }
-
-    function toERC20() external pure returns (ERC20) {
-        return ERC20(address(this));
     }
 }

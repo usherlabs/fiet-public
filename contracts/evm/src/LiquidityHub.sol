@@ -357,6 +357,8 @@ contract LiquidityHub is Ownable, LCCFactory {
         address underlying = lccToUnderlying[lcc];
         if (reserveOfUnderlying[underlying] < amount) revert InvalidAmount();
 
+        reserveOfUnderlying[underlying] -= amount;
+
         Currency underlyingCurrency = Currency.wrap(underlying);
         if (underlyingCurrency.isAddressZero()) {
             // For native, transfer ETH to MarketVault so it can settle to PoolManager
@@ -365,7 +367,6 @@ contract LiquidityHub is Ownable, LCCFactory {
             // Approve MarketVault to pull the ERC20 from the Hub and settle to PoolManager
             underlyingCurrency.approve(_msgSender(), amount);
         }
-        reserveOfUnderlying[underlying] -= amount;
     }
 
     /**

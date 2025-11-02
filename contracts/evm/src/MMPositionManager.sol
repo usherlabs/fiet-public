@@ -17,12 +17,11 @@ import {PositionMeta, PositionId, PositionLibrary} from "./types/Position.sol";
 import {LiquiditySignal, SignalState} from "./types/Position.sol";
 import {MarketMaker} from "./libraries/MarketMaker.sol";
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
-import {IERC20Minimal} from "@uniswap/v4-core/src/interfaces/external/IERC20Minimal.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IVTSManager} from "./interfaces/IVTSManager.sol";
 import {MarketVTSConfiguration, MarketVTSConfigurationLibrary} from "./types/VTS.sol";
 import {LiquidityUtils} from "./libraries/LiquidityUtils.sol";
 import {CurrencyTransfer} from "./libraries/CurrencyTransfer.sol";
-import {IProxyHook} from "./interfaces/IProxyHook.sol";
 import {ILCC} from "./interfaces/ILCC.sol";
 import {IVRLSignalManager} from "./interfaces/IVRLSignalManager.sol";
 import {IPositionIndex} from "./interfaces/IPositionIndex.sol";
@@ -32,17 +31,14 @@ import {FullMath} from "v4-periphery/lib/v4-core/src/libraries/FullMath.sol";
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
 import {TransientStateLibrary} from "v4-periphery/lib/v4-core/src/libraries/TransientStateLibrary.sol";
 import {RFSCheckpointModule} from "./modules/RFSCheckpoint.sol";
-import {Strings} from "openzeppelin-contracts/contracts/utils/Strings.sol";
 import {NativeWrapper} from "v4-periphery/src/base/NativeWrapper.sol";
 import {LCCWrapper} from "./modules/LCCWrapper.sol";
 import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
 import {TransientSlots} from "./libraries/TransientSlots.sol";
-import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
-import {ISettlementVerifier} from "./interfaces/ISettlementVerifier.sol";
-import {IVRLSettlementObserver} from "./interfaces/IVRLSettlementObserver.sol";
 
 import {ICommitmentDescriptor} from "./interfaces/ICommitmentDescriptor.sol";
 import {ILiquidityHub} from "./interfaces/ILiquidityHub.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 contract MMPositionManager is
     LiquidityRouter,
@@ -63,6 +59,8 @@ contract MMPositionManager is
     using TransientStateLibrary for IPoolManager;
     using CurrencyLibrary for Currency;
     using CurrencyTransfer for Currency;
+    using SafeERC20 for IERC20;
+    using SafeERC20 for ILCC;
 
     error InvalidDelta(int128 amount0, int128 amount1);
     error InvalidAmount(uint256 amount, uint256 maxAmount);
@@ -352,7 +350,7 @@ contract MMPositionManager is
             if (wrapAmt > 0) {
                 _wrap(wrapAmt); // deposit ETH to WETH into this contract
                 // forward WETH to logical caller
-                IERC20Minimal(address(WETH9)).transfer(msgSender(), wrapAmt);
+                IERC20(address(WETH9)).safeTransfer(msgSender(), wrapAmt);
             }
             return;
         }
@@ -917,19 +915,19 @@ contract MMPositionManager is
             // Transfer residual LCC fees (wrapped via trader flows) to the logical caller.
             // These fees are not principal-issued LCC and must not be cancelled; the MM may later unwrap them explicitly.
             if (fees0 > 0) {
-                lcc0.toERC20().transfer(msgSender(), fees0);
+                lcc0.safeTransfer(msgSender(), fees0);
             }
             if (fees1 > 0) {
-                lcc1.toERC20().transfer(msgSender(), fees1);
+                lcc1.safeTransfer(msgSender(), fees1);
             }
         } else {
             // If we get here, then the position is being seized by a non-approved or owner.
             // Therefore, we transfer instead of cancel.
             if (a0 > 0) {
-                lcc0.toERC20().transfer(msgSender(), a0);
+                lcc0.safeTransfer(msgSender(), a0);
             }
             if (a1 > 0) {
-                lcc1.toERC20().transfer(msgSender(), a1);
+                lcc1.safeTransfer(msgSender(), a1);
             }
         }
     }
@@ -1137,7 +1135,7 @@ contract MMPositionManager is
         // }
     }
 
-    /// @dev overrides solmate transferFrom to revert if pool manager is locked
+    /// @dev overrides transferFrom to revert if pool manager is locked
     /// @dev mirrors PositionManager and prevents transfers while an unlock session is active (mid-batch), avoiding inconsistent state/reentrancy around router-locked flows.
     function transferFrom(address from, address to, uint256 id) public virtual override onlyIfPoolManagerLocked {
         super.transferFrom(from, to, id);

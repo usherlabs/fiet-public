@@ -2,7 +2,6 @@
 pragma solidity ^0.8.20;
 
 import {LiquidityCommitmentCertificate} from "../LCC.sol";
-import {ERC20} from "solmate/tokens/ERC20.sol";
 import {IERC20Metadata} from "openzeppelin-contracts/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {LibBytes} from "solady/src/utils/LibBytes.sol";
 import {LibString} from "solady/src/utils/LibString.sol";
