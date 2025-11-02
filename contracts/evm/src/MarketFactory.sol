@@ -61,11 +61,19 @@ contract MarketFactory is IMarketFactory, Ownable {
         // Set Protocol bounds addresses
         bounds[address(this)] = true;
         bounds[address(poolManager)] = true;
+        bounds[address(liquidityHub)] = true;
         for (uint256 i = 0; i < _bounds.length; i++) {
             bounds[_bounds[i]] = true;
         }
         // Deploy MarketDeployer which would be used to deploy proxy hooks on behalf of the factory
         marketDeployer = address(new MarketDeployer());
+    }
+
+    modifier onlyLiquidityHub() {
+        if (msg.sender != address(liquidityHub)) {
+            revert InvalidCaller();
+        }
+        _;
     }
 
     function setHooks(address _coreHook) external onlyOwner {
@@ -317,7 +325,25 @@ contract MarketFactory is IMarketFactory, Ownable {
         emit BoundsUpdated(_bounds, false);
     }
 
+    // ============ LIQUIDITY FUNCTIONS ============
+
+    function useMarketLiquidity(address underlyingAsset, bytes32 marketId, uint256 amount)
+        external
+        onlyLiquidityHub
+        returns (uint256 available, uint256 toUse)
+    {
+        available = marketLiquidity(underlyingAsset, marketId);
+        toUse = Math.min(amount, available);
+        IVTSManager(coreHook).incrementCoverage(PoolId.wrap(marketId), toUse);
+    }
+
     // ============ VIEW FUNCTIONS ============
+
+    function marketLiquidity(address underlyingAsset, bytes32 marketId) external view returns (uint256) {
+        return IMarketVault(_proxyToHook[coreToProxy[PoolId.wrap(marketId)]])
+            .inMarketBalanceOf(Currency.wrap(underlyingAsset));
+    }
+
     /**
      * @notice Gets the proxy hook address for a given core pool ID
      * @param corePoolId The core pool ID

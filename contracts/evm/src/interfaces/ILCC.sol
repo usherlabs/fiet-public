@@ -7,6 +7,8 @@ import {ERC20} from "solmate/tokens/ERC20.sol";
 interface ILCC {
     function underlying() external view returns (address);
 
+    function balancesOf(address account) external view returns (uint256 wrapped, uint256 marketDerived);
+
     function issue(uint256 amount) external;
 
     function cancel(uint256 amount) external;

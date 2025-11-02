@@ -146,4 +146,20 @@ interface IMarketFactory {
      * @return The currency pair
      */
     function corePoolToCurrencyPair(PoolId corePoolId) external view returns (address[2] memory);
+
+    /**
+     * @notice Gets the market liquidity for a given underlying asset in a market
+     * @param underlyingAsset The underlying asset address
+     * @param marketId The market ID
+     * @return The market liquidity amount
+     */
+    function marketLiquidity(address underlyingAsset, bytes32 marketId) external view returns (uint256);
+
+    /**
+     * @notice Uses market liquidity for a given underlying asset in a market
+     * @param underlyingAsset The underlying asset address
+     * @param marketId The market ID
+     * @param amount The amount to use
+     */
+    function useMarketLiquidity(address underlyingAsset, bytes32 marketId, uint256 amount) external returns (uint256);
 }

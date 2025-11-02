@@ -15,6 +15,7 @@ interface ILiquidityHub {
      * @param underlyingAsset1 The second underlying asset address
      * @param marketName The market name
      * @param initialIssuers Array of addresses to set as issuers for both LCC tokens
+     * @param marketVaultAddress The Uniswap V4 pool manager address (market vault)
      * @return lccToken0 The first LCC token address
      * @return lccToken1 The second LCC token address
      */
@@ -23,7 +24,8 @@ interface ILiquidityHub {
         address underlyingAsset0,
         address underlyingAsset1,
         string memory marketName,
-        address[] memory initialIssuers
+        address[] memory initialIssuers,
+        address marketVaultAddress
     ) external returns (address lccToken0, address lccToken1);
 
     /**
@@ -69,5 +71,18 @@ interface ILiquidityHub {
      * @return The underlying asset address
      */
     function getUnderlyingAsset(address lccToken) external view returns (address);
+
+    /**
+     * @notice Gets the Market struct for a given LCC token
+     * @param lccToken The LCC token address
+     * @return factory The factory that created this market
+     * @return id The market ID (core pool id as market)
+     * @return ref The market reference (proxy)
+     * @return refIsValidIssuer Whether the market ref address is a valid issuer
+     */
+    function lccToMarket(address lccToken)
+        external
+        view
+        returns (address factory, bytes32 id, bytes memory ref, bool refIsValidIssuer);
 }
 

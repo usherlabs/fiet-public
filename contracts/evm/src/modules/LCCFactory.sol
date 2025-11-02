@@ -7,17 +7,21 @@ import {LibBytes} from "solady/src/utils/LibBytes.sol";
 import {LibString} from "solady/src/utils/LibString.sol";
 import {ILCC} from "../interfaces/ILCC.sol";
 
+interface ILCCAdmin {
+    function mint(address to, uint256 directAmount, uint256 marketAmount) external;
+    function burn(address from, uint256 directAmount, uint256 marketAmount) external;
+}
+
 /**
  * @title LCCFactory
  * @notice Abstract factory contract for creating and managing LCC tokens
  * @dev Provides functionality for creating LCC pairs and managing LCC-underlying asset mappings
  */
 abstract contract LCCFactory {
-    error LCCAlreadyExists();
     error UnableToGenerateUniqueSymbol();
     error SenderNotIssuer(address sender);
     error InvalidAmount();
-    error InvalidLCC();
+    error InvalidLcc(address lcc);
 
     // Event from IMarketFactory interface
     event LCCCreated(address indexed underlyingAsset, address indexed lccToken);
@@ -31,7 +35,7 @@ abstract contract LCCFactory {
     }
 
     // Mapping from underlying asset to LCC token
-    mapping(address => address) public underlyingToLCC;
+    mapping(bytes32 => mapping(address => address)) public marketUnderlyingToLCC;
 
     // Mapping from LCC token to underlying asset
     mapping(address => address) public lccToUnderlying;
@@ -55,6 +59,11 @@ abstract contract LCCFactory {
         nativeAssetName = _nativeAssetName;
         nativeAssetSymbol = _nativeAssetSymbol;
         nativeAssetDecimals = _nativeAssetDecimals;
+    }
+
+    modifier onlyValidLcc(address lcc) {
+        _assertValidLcc(lcc);
+        _;
     }
 
     function _sortTokens(address token0, address token1)
@@ -152,24 +161,28 @@ abstract contract LCCFactory {
 
     /**
      * @notice Creates an LCC token for the given underlying asset
+     * @param marketFactory The market factory address associated to the market-specific LCCs
      * @param marketRef The market reference (bytes from proxyHookAddress)
      * @param underlyingPair The underlying pair [asset0, asset1] for this market
      * @param index The index in the underlying pair (0 or 1)
      * @param marketName The market name (can be empty string)
      * @param initialIssuers Array of addresses to set as issuers for this LCC token
+     * @param marketVaultAddress The Uniswap V4 pool manager address (market vault)
      * @return lccToken The LCC token address
      */
     function _createLCC(
+        address marketFactory,
         bytes memory marketRef,
         address[2] memory underlyingPair,
         uint8 index,
         string memory marketName,
-        address[] memory initialIssuers
+        address[] memory initialIssuers,
+        address marketVaultAddress
     ) internal returns (address lccToken) {
         address underlyingAsset = underlyingPair[index];
         // Check if LCC already exists for this underlying asset
         if (underlyingToLCC[underlyingAsset] != address(0)) {
-            revert LCCAlreadyExists();
+            revert InvalidLcc(underlyingToLCC[underlyingAsset]);
         }
 
         // Get unique symbol with truncated marketRef
@@ -184,10 +197,17 @@ abstract contract LCCFactory {
 
         // Create LCC token (still uses marketId bytes32 for internal tracking)
         lccToken = address(
-            new LiquidityCommitmentCertificate(underlyingAsset, name, symbol, decimals, address(oracleHelper.oracle()))
+            new LiquidityCommitmentCertificate(
+                marketFactory,
+                underlyingAsset,
+                name,
+                symbol,
+                decimals,
+                marketVaultAddress,
+                address(oracleHelper.oracle())
+            )
         );
 
-        underlyingToLCC[underlyingAsset] = lccToken;
         lccToUnderlying[lccToken] = underlyingAsset;
 
         // Set initial issuers for this LCC token
@@ -238,6 +258,8 @@ abstract contract LCCFactory {
         });
         lccToMarket[lccToken0] = market;
         lccToMarket[lccToken1] = market;
+        marketUnderlyingToLCC[marketId][lccToUnderlying[lccToken0]] = lccToken0;
+        marketUnderlyingToLCC[marketId][lccToUnderlying[lccToken1]] = lccToken1;
     }
 
     /**
@@ -246,7 +268,7 @@ abstract contract LCCFactory {
      * @return bool True if the caller is a valid issuer, false otherwise
      */
     function _isCallerIssuer(address lccToken) internal view returns (bool) {
-        address caller = _msgSender();
+        address caller = msg.sender;
 
         // Check if caller is in the issuers mapping
         if (issuers[lccToken][caller]) {
@@ -286,6 +308,39 @@ abstract contract LCCFactory {
     }
 
     /**
+     * @notice Asserts that the given LCC token is valid
+     * @param lcc The LCC token address to assert
+     */
+    function _assertValidLcc(address lcc) internal view {
+        if (
+            lccToMarket[lcc].id == bytes32(0) || lccToMarket[lcc].ref.length == 0
+                || lccToMarket[lcc].factory == address(0)
+        ) {
+            revert InvalidLcc(lcc);
+        }
+    }
+
+    function _mint(address lccToken, address to, uint256 directAmount, uint256 marketAmount) internal {
+        ILCCAdmin(lccToken).mint(to, directAmount, marketAmount);
+    }
+
+    function _burn(address lccToken, address from, uint256 directAmount, uint256 marketAmount) internal {
+        ILCCAdmin(lccToken).burn(from, directAmount, marketAmount);
+    }
+
+    function _balanceOf(address lccToken, address account) internal view returns (uint256) {
+        return ILCC(lccToken).balanceOf(account);
+    }
+
+    function _balancesOf(address lccToken, address account)
+        internal
+        view
+        returns (uint256 wrapped, uint256 marketDerived)
+    {
+        return ILCC(lccToken).balancesOf(account);
+    }
+
+    /**
      * @notice Issues LCC tokens (mints to issuer)
      * @param lccToken The LCC token address to issue for
      * @param amount The amount to issue
@@ -295,7 +350,7 @@ abstract contract LCCFactory {
             revert InvalidAmount();
         }
         if (lccToken == address(0)) {
-            revert InvalidLCC();
+            revert InvalidLcc(lccToken);
         }
 
         if (!_isCallerIssuer(lccToken)) {
@@ -303,7 +358,7 @@ abstract contract LCCFactory {
         }
 
         address issuer = msg.sender;
-        ILCC(lccToken).issueTo(issuer, amount);
+        _mint(issuer, amount);
     }
 
     /**
@@ -316,7 +371,7 @@ abstract contract LCCFactory {
             revert InvalidAmount();
         }
         if (lccToken == address(0) || lccToMarket[lccToken].length == 0) {
-            revert InvalidLCC();
+            revert InvalidLcc(lccToken);
         }
 
         if (!_isCallerIssuer(lccToken)) {
@@ -324,7 +379,7 @@ abstract contract LCCFactory {
         }
 
         address issuer = msg.sender;
-        ILCC(lccToken).cancelFrom(issuer, amount);
+        _burn(issuer, amount);
     }
 }
 
