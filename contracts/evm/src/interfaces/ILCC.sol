@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-interface ILCC {
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+
+interface ILCC is IERC20 {
     // ============ LCC-Specific Methods ============
 
     function underlying() external view returns (address);
