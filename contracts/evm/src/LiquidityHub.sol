@@ -63,11 +63,6 @@ contract LiquidityHub is Ownable, LCCFactory {
         _;
     }
 
-    modifier onlyValidLcc(address lcc) {
-        _assertValidLcc(lcc);
-        _;
-    }
-
     function setFactory(address factory, bool enabled) external onlyOwner {
         isFactory[factory] = enabled;
         emit FactorySet(factory, enabled);
@@ -278,6 +273,34 @@ contract LiquidityHub is Ownable, LCCFactory {
 
     // ============ ISSUER FUNCTIONS ============
 
+    /**
+     * @notice Issues LCC tokens (mints to issuer)
+     * @param lccToken The LCC token address to issue for
+     * @param amount The amount to issue
+     */
+    function issue(address lccToken, uint256 amount) external onlyIssuer(lccToken) onlyValidLcc(lccToken) {
+        if (amount == 0) {
+            revert InvalidAmount();
+        }
+
+        address issuer = msg.sender;
+        _mint(issuer, amount);
+    }
+
+    /**
+     * @notice Cancels LCC tokens (burns from issuer)
+     * @param lccToken The LCC token address to cancel for
+     * @param amount The amount to cancel
+     */
+    function cancel(address lccToken, uint256 amount) external onlyIssuer(lccToken) onlyValidLcc(lccToken) {
+        if (amount == 0) {
+            revert InvalidAmount();
+        }
+
+        address issuer = msg.sender;
+        _burn(issuer, amount);
+    }
+
     // /**
     //  * @dev Unwraps LCC from the Market Vault. Called exclusively by the Market Vault / Proxy Hook.
     //  * @param marketId The market ID
@@ -308,22 +331,6 @@ contract LiquidityHub is Ownable, LCCFactory {
     //     }
     // }
 
-    // // Called by Issuer before settling liquidity from LCCs to the market.
-    // function prepareSettle(uint256 amount) external onlyMarketVault {
-    //     address vault = msg.sender;
-    //     Currency underlyingAssetCurrency = Currency.wrap(underlyingAsset);
-    //     // Allow issuer to facilitate direct liquidity provision transfer of underlying tokens
-    //     // approval does nothing if we are using ETH(address(0)) as the underlying asset
-    //     // so to prepare settle, we simply transfer the ETH to the issuer calling this function
-    //     // so that way the caller can then transfer the ETH on the behalf of the LCC contract since there is no native  `transferFrom`
-    //     if (underlyingAssetCurrency.isAddressZero()) {
-    //         underlyingAssetCurrency.transfer(vault, amount);
-    //     } else {
-    //         underlyingAssetCurrency.approve(vault, amount);
-    //     }
-    //     uaSupply -= amount;
-    // }
-
     /**
      * @notice Called by MarketVault after taking underlying liquidity from the market to LCC
      * @param lcc The LCC token address
@@ -337,6 +344,28 @@ contract LiquidityHub is Ownable, LCCFactory {
         if (shouldEmit) {
             emit LiquidityAvailable(lcc, amount);
         }
+    }
+
+    /**
+     * @notice Prepare settlement of underlying from Hub to MarketVault
+     * @dev For ERC20, approve the caller (expected MarketVault) to pull tokens; for native, transfer ETH to caller.
+     *      Decrements Hub reserve immediately; intended to be called just before settlement in the same tx.
+     */
+    function prepareSettle(address lcc, uint256 amount) external onlyIssuer(lcc) {
+        if (amount == 0) revert InvalidAmount();
+
+        address underlying = lccToUnderlying[lcc];
+        if (reserveOfUnderlying[underlying] < amount) revert InvalidAmount();
+
+        Currency underlyingCurrency = Currency.wrap(underlying);
+        if (underlyingCurrency.isAddressZero()) {
+            // For native, transfer ETH to MarketVault so it can settle to PoolManager
+            underlyingCurrency.transfer(_msgSender(), amount);
+        } else {
+            // Approve MarketVault to pull the ERC20 from the Hub and settle to PoolManager
+            underlyingCurrency.approve(_msgSender(), amount);
+        }
+        reserveOfUnderlying[underlying] -= amount;
     }
 
     /**
@@ -362,28 +391,6 @@ contract LiquidityHub is Ownable, LCCFactory {
         totalQueued[lcc] -= toSettle;
 
         _pay(lcc, recipient, 0, toSettle);
-    }
-
-    /**
-     * @notice Prepare settlement of underlying from Hub to MarketVault
-     * @dev For ERC20, approve the caller (expected MarketVault) to pull tokens; for native, transfer ETH to caller.
-     *      Decrements Hub reserve immediately; intended to be called just before settlement in the same tx.
-     */
-    function prepareSettle(address lcc, uint256 amount) external onlyIssuer(lcc) {
-        if (amount == 0) revert InvalidAmount();
-
-        address underlying = lccToUnderlying[lcc];
-        if (reserveOfUnderlying[underlying] < amount) revert InvalidAmount();
-
-        Currency underlyingCurrency = Currency.wrap(underlying);
-        if (underlyingCurrency.isAddressZero()) {
-            // For native, transfer ETH to MarketVault so it can settle to PoolManager
-            underlyingCurrency.transfer(_msgSender(), amount);
-        } else {
-            // Approve MarketVault to pull the ERC20 from the Hub and settle to PoolManager
-            underlyingCurrency.approve(_msgSender(), amount);
-        }
-        reserveOfUnderlying[underlying] -= amount;
     }
 
     /**

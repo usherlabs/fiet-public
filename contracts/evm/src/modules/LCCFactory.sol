@@ -2,10 +2,12 @@
 pragma solidity ^0.8.20;
 
 import {LiquidityCommitmentCertificate} from "../LCC.sol";
+import {ERC20} from "solmate/tokens/ERC20.sol";
 import {IERC20Metadata} from "openzeppelin-contracts/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {LibBytes} from "solady/src/utils/LibBytes.sol";
 import {LibString} from "solady/src/utils/LibString.sol";
 import {ILCC} from "../interfaces/ILCC.sol";
+import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
 
 interface ILCCAdmin {
     function mint(address to, uint256 directAmount, uint256 marketAmount) external;
@@ -121,7 +123,8 @@ abstract contract LCCFactory {
         uint256 maxLength = marketRef.length;
 
         // Ensure underlyingPair is sorted (smaller address first)
-        address[2] memory sortedPair = _sortTokens(underlyingPair[0], underlyingPair[1]);
+        (address token0Sorted, address token1Sorted) = _sortTokens(underlyingPair[0], underlyingPair[1]);
+        address[2] memory sortedPair = [token0Sorted, token1Sorted];
 
         while (length <= maxLength) {
             // Truncate to first 'length' bytes
@@ -174,7 +177,6 @@ abstract contract LCCFactory {
      * @param index The index in the underlying pair (0 or 1)
      * @param marketName The market name (can be empty string)
      * @param initialIssuers Array of addresses to set as issuers for this LCC token
-     * @param marketVaultAddress The Uniswap V4 pool manager address (market vault)
      * @return lccToken The LCC token address
      */
     function _createLCC(
@@ -183,55 +185,49 @@ abstract contract LCCFactory {
         address[2] memory underlyingPair,
         uint8 index,
         string memory marketName,
-        address[] memory initialIssuers,
-        address marketVaultAddress
+        address[] memory initialIssuers
     ) internal returns (address lccToken) {
-        address underlyingAsset = underlyingPair[index];
-        // Check if LCC already exists for this underlying asset
-        if (marketUnderlyingToLCC[marketId][underlyingAsset] != address(0)) {
-            revert InvalidLcc(marketUnderlyingToLCC[marketId][underlyingAsset]);
-        }
+        address underlying = underlyingPair[index];
 
         // Get unique symbol with truncated marketRef
-        (string memory symbol, string memory truncatedMarketRefStr) =
-            _getSymbol(underlyingAsset, marketRef, underlyingPair);
+        (string memory symbol, string memory truncatedMarketRefStr) = _getSymbol(underlying, marketRef, underlyingPair);
 
         // Get name using truncated marketRef
-        string memory name = _getName(underlyingAsset, marketName, truncatedMarketRefStr);
+        string memory name = _getName(underlying, marketName, truncatedMarketRefStr);
 
         // Get decimals
-        uint8 decimals = _getDecimals(underlyingAsset);
+        uint8 decimals = _getDecimals(underlying);
 
         // Create LCC token (still uses marketId bytes32 for internal tracking)
         lccToken = address(
             new LiquidityCommitmentCertificate(
                 marketFactory,
-                underlyingAsset,
+                underlying,
                 name,
                 symbol,
                 decimals,
-                marketVaultAddress,
                 address(IMarketFactory(marketFactory).oracleHelper().oracle())
             )
         );
 
-        lccToUnderlying[lccToken] = underlyingAsset;
+        lccToUnderlying[lccToken] = underlying;
 
         // Set initial issuers for this LCC token
         for (uint256 i = 0; i < initialIssuers.length; i++) {
             _setIssuer(lccToken, initialIssuers[i], true);
         }
 
-        emit LCCCreated(underlyingAsset, lccToken);
+        emit LCCCreated(underlying, lccToken);
     }
 
     /**
      * @notice Gets the LCC token for a given underlying asset
-     * @param underlyingAsset The underlying asset address
+     * @param marketId The market ID (corePoolKey -> PoolID -> unwrap() to bytes32)
+     * @param underlying The underlying asset address
      * @return The LCC token address
      */
-    function getLCC(address underlyingAsset) external view returns (address) {
-        return underlyingToLCC[underlyingAsset];
+    function getLCC(bytes32 marketId, address underlying) external view returns (address) {
+        return marketUnderlyingToLCC[marketId][underlying];
     }
 
     /**
@@ -239,7 +235,7 @@ abstract contract LCCFactory {
      * @param lccToken The LCC token address
      * @return The underlying asset address
      */
-    function getUnderlyingAsset(address lccToken) external view returns (address) {
+    function getUnderlying(address lccToken) external view returns (address) {
         return lccToUnderlying[lccToken];
     }
 
@@ -345,50 +341,6 @@ abstract contract LCCFactory {
         returns (uint256 wrapped, uint256 marketDerived)
     {
         return ILCC(lccToken).balancesOf(account);
-    }
-
-    // ============== ISSUER FUNCTIONS ==============
-
-    /**
-     * @notice Issues LCC tokens (mints to issuer)
-     * @param lccToken The LCC token address to issue for
-     * @param amount The amount to issue
-     */
-    function issue(address lccToken, uint256 amount) external {
-        if (amount == 0) {
-            revert InvalidAmount();
-        }
-        if (lccToken == address(0)) {
-            revert InvalidLcc(lccToken);
-        }
-
-        if (!_isCallerIssuer(lccToken)) {
-            revert SenderNotIssuer(msg.sender);
-        }
-
-        address issuer = msg.sender;
-        _mint(issuer, amount);
-    }
-
-    /**
-     * @notice Cancels LCC tokens (burns from issuer)
-     * @param lccToken The LCC token address to cancel for
-     * @param amount The amount to cancel
-     */
-    function cancel(address lccToken, uint256 amount) external {
-        if (amount == 0) {
-            revert InvalidAmount();
-        }
-        if (lccToken == address(0) || lccToMarket[lccToken].length == 0) {
-            revert InvalidLcc(lccToken);
-        }
-
-        if (!_isCallerIssuer(lccToken)) {
-            revert SenderNotIssuer(msg.sender);
-        }
-
-        address issuer = msg.sender;
-        _burn(issuer, amount);
     }
 }
 

@@ -15,7 +15,6 @@ interface ILiquidityHub {
      * @param underlyingAsset1 The second underlying asset address
      * @param marketName The market name
      * @param initialIssuers Array of addresses to set as issuers for both LCC tokens
-     * @param marketVaultAddress The Uniswap V4 pool manager address (market vault)
      * @return lccToken0 The first LCC token address
      * @return lccToken1 The second LCC token address
      */
@@ -24,8 +23,7 @@ interface ILiquidityHub {
         address underlyingAsset0,
         address underlyingAsset1,
         string memory marketName,
-        address[] memory initialIssuers,
-        address marketVaultAddress
+        address[] memory initialIssuers
     ) external returns (address lccToken0, address lccToken1);
 
     /**
@@ -57,6 +55,16 @@ interface ILiquidityHub {
      * @param amount The amount to cancel
      */
     function cancel(address lccToken, uint256 amount) external;
+
+    // ============ Trader wrapping/unwrapping ============
+    function wrapTo(address lcc, address to, uint256 amount) external payable;
+    function wrapTo(address underlying, bytes32 marketId, address to, uint256 amount) external payable;
+    function wrap(address lcc, uint256 amount) external payable;
+    function wrap(address underlying, bytes32 marketId, uint256 amount) external payable;
+    function unwrap(address lcc, uint256 amount) external;
+    function unwrap(address underlying, bytes32 marketId, uint256 amount) external;
+    function unwrapTo(address lcc, address to, uint256 amount) external;
+    function unwrapTo(address underlying, bytes32 marketId, address to, uint256 amount) external;
 
     /**
      * @notice Gets the LCC token for a given underlying asset
@@ -118,10 +126,20 @@ interface ILiquidityHub {
 
     /**
      * @notice Annul a user's queued settlement prior to a protocol-bound transfer
+     * @dev If the transfer amount exceeds the user's current liquid balance (wrapped + marketDerived),
+     *      the excess "bleed" will be removed from their queued settlement up to the queued amount.
      * @param lcc The LCC token address
-     * @param fromUser The user initiating the transfer
+     * @param from The user initiating the transfer
+     * @param wrappedBalance The user's wrapped balance
+     * @param marketDerivedBalance The user's market-derived balance
      * @param amountToTransfer The amount intended to be transferred
      */
-    function annulSettlementBeforeTransfer(address lcc, address from, uint256 amountToTransfer) external;
+    function annulSettlementBeforeTransfer(
+        address lcc,
+        address from,
+        uint256 wrappedBalance,
+        uint256 marketDerivedBalance,
+        uint256 amountToTransfer
+    ) external;
 }
 

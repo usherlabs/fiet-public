@@ -284,8 +284,8 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         ILCC coreLccToken1 = ILCC(payable(Currency.unwrap(coreKey.currency1)));
 
         if (
-            Currency.unwrap(key.currency0) == coreLccToken0.underlyingAsset()
-                && Currency.unwrap(key.currency1) == coreLccToken1.underlyingAsset()
+            Currency.unwrap(key.currency0) == coreLccToken0.underlying()
+                && Currency.unwrap(key.currency1) == coreLccToken1.underlying()
         ) {
             // If tokens match order, then Proxy matches Core
             coreZeroForOne = params.zeroForOne;

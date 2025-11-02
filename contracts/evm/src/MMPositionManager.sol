@@ -42,6 +42,7 @@ import {ISettlementVerifier} from "./interfaces/ISettlementVerifier.sol";
 import {IVRLSettlementObserver} from "./interfaces/IVRLSettlementObserver.sol";
 
 import {ICommitmentDescriptor} from "./interfaces/ICommitmentDescriptor.sol";
+import {ILiquidityHub} from "./interfaces/ILiquidityHub.sol";
 
 contract MMPositionManager is
     LiquidityRouter,
@@ -80,8 +81,9 @@ contract MMPositionManager is
     event SignalCommitted(uint256 tokenId);
     event SignalDecommitted(uint256 tokenId, uint256 positionIndex, uint256 amount0, uint256 amount1);
 
-    address public immutable marketFactory;
+    IMarketFactory public immutable marketFactory;
     address public immutable commitmentDescriptor;
+    ILiquidityHub public immutable liquidityHub;
     uint256 private nextTokenId = 1;
     IVRLSignalManager public immutable signalManager;
     IOracleHelper public immutable oracleHelper;
@@ -125,10 +127,11 @@ contract MMPositionManager is
         NativeWrapper(_weth9)
         RFSCheckpointModule(_settlementObserver)
     {
-        marketFactory = _marketFactory;
+        marketFactory = IMarketFactory(_marketFactory);
         signalManager = IVRLSignalManager(_signalManager);
         commitmentDescriptor = _descriptor;
-        oracleHelper = IMarketFactory(_marketFactory).oracleHelper();
+        oracleHelper = marketFactory.oracleHelper();
+        liquidityHub = marketFactory.liquidityHub();
     }
 
     modifier onlyValidCommit(PoolKey memory poolKey, uint256 tokenId) {
@@ -161,11 +164,15 @@ contract MMPositionManager is
     }
 
     function _getVTSManager() internal view returns (IVTSManager) {
-        return IVTSManager(IMarketFactory(marketFactory).coreHook());
+        return IVTSManager(marketFactory.coreHook());
     }
 
     function _getPositionIndex() internal view returns (IPositionIndex) {
-        return IPositionIndex(IMarketFactory(marketFactory).coreHook());
+        return IPositionIndex(marketFactory.coreHook());
+    }
+
+    function _liquidityHub() internal view override returns (ILiquidityHub) {
+        return liquidityHub;
     }
 
     /// @dev Internal helper to unwrap an arbitrary LCC (pair-agnostic) to msgSender().
@@ -423,7 +430,7 @@ contract MMPositionManager is
     function _settleUnderlying(PoolId poolId, BalanceDelta settlementDelta, address ua0, address ua1) internal {
         address sender = msgSender();
 
-        address marketVault = IMarketFactory(marketFactory).corePoolToProxyHook(poolId);
+        address marketVault = marketFactory.corePoolToProxyHook(poolId);
 
         // for deposits, transfer to the Market Vault (proxy hook)
         if (settlementDelta.amount0() > 0) {
@@ -500,7 +507,7 @@ contract MMPositionManager is
     /// @return lcc0 Address of token0's LCC contract for the core pool.
     /// @return lcc1 Address of token1's LCC contract for the core pool.
     function _marketLccPair(PoolId poolId) internal view returns (address lcc0, address lcc1) {
-        address[2] memory pair = IMarketFactory(marketFactory).corePoolToCurrencyPair(poolId);
+        address[2] memory pair = marketFactory.corePoolToCurrencyPair(poolId);
         lcc0 = pair[0];
         lcc1 = pair[1];
     }
@@ -664,8 +671,8 @@ contract MMPositionManager is
         _settleUnderlying(
             commitOf[tokenId].poolId,
             settlementDelta,
-            ILCC(Currency.unwrap(poolKey.currency0)).underlyingAsset(),
-            ILCC(Currency.unwrap(poolKey.currency1)).underlyingAsset()
+            ILCC(Currency.unwrap(poolKey.currency0)).underlying(),
+            ILCC(Currency.unwrap(poolKey.currency1)).underlying()
         );
     }
 
@@ -780,15 +787,15 @@ contract MMPositionManager is
 
         ILCC lcc0 = ILCC(Currency.unwrap(poolKey.currency0));
         ILCC lcc1 = ILCC(Currency.unwrap(poolKey.currency1));
-        address ua0 = lcc0.underlyingAsset();
-        address ua1 = lcc1.underlyingAsset();
+        address ua0 = lcc0.underlying();
+        address ua1 = lcc1.underlying();
 
         // Only issue LCC if amount > 0 to avoid InvalidAmount revert
         if (lcc0AmountToMint > 0) {
-            lcc0.issue(lcc0AmountToMint);
+            liquidityHub.issue(address(lcc0), lcc0AmountToMint);
         }
         if (lcc1AmountToMint > 0) {
-            lcc1.issue(lcc1AmountToMint);
+            liquidityHub.issue(address(lcc1), lcc1AmountToMint);
         }
 
         // mint or modify liquidity. If the position is not minted, this will mint it. If the position is already minted, this will modify it.
@@ -902,27 +909,27 @@ contract MMPositionManager is
             // Burn only principal LCC that was originally issued for the position's liquidity.
             // feesAccrued (from trader flows) stays wrapped and can be unwrapped via UNWRAP_LCC.
             if (principal0 > 0) {
-                lcc0.cancel(principal0);
+                liquidityHub.cancel(address(lcc0), principal0);
             }
             if (principal1 > 0) {
-                lcc1.cancel(principal1);
+                liquidityHub.cancel(address(lcc1), principal1);
             }
             // Transfer residual LCC fees (wrapped via trader flows) to the logical caller.
             // These fees are not principal-issued LCC and must not be cancelled; the MM may later unwrap them explicitly.
             if (fees0 > 0) {
-                lcc0.traceTransfer(msgSender(), marketId, fees0);
+                lcc0.toERC20().transfer(msgSender(), fees0);
             }
             if (fees1 > 0) {
-                lcc1.traceTransfer(msgSender(), marketId, fees1);
+                lcc1.toERC20().transfer(msgSender(), fees1);
             }
         } else {
             // If we get here, then the position is being seized by a non-approved or owner.
             // Therefore, we transfer instead of cancel.
             if (a0 > 0) {
-                lcc0.traceTransfer(msgSender(), marketId, a0);
+                lcc0.toERC20().transfer(msgSender(), a0);
             }
             if (a1 > 0) {
-                lcc1.traceTransfer(msgSender(), marketId, a1);
+                lcc1.toERC20().transfer(msgSender(), a1);
             }
         }
     }

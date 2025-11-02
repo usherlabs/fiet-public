@@ -203,4 +203,8 @@ contract LiquidityCommitmentCertificate is ERC20, Ownable, ILCC {
         _onTransfer(from, to, amount);
         return super.transferFrom(from, to, amount);
     }
+
+    function toERC20() external pure returns (ERC20) {
+        return ERC20(address(this));
+    }
 }

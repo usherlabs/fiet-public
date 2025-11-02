@@ -4,6 +4,7 @@ pragma solidity ^0.8.20;
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {MarketVTSConfiguration} from "../types/VTS.sol";
+import {IOracleHelper} from "./IOracleHelper.sol";
 
 /**
  * @title IMarketFactory
@@ -84,6 +85,18 @@ interface IMarketFactory {
      * @return The market maker position manager address
      */
     function mmPositionManager() external view returns (address);
+
+    /**
+     * @notice Gets the liquidity hub address
+     * @return The liquidity hub address
+     */
+    function liquidityHub() external view returns (address);
+
+    /**
+     * @notice Gets the oracle helper address
+     * @return The oracle helper address
+     */
+    function oracleHelper() external view returns (IOracleHelper);
 
     // ============ STATE CHANGING FUNCTIONS ============
 
