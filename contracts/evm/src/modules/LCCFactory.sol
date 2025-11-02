@@ -5,7 +5,6 @@ import {LiquidityCommitmentCertificate} from "../LCC.sol";
 import {IERC20Metadata} from "openzeppelin-contracts/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {LibBytes} from "solady/src/utils/LibBytes.sol";
 import {LibString} from "solady/src/utils/LibString.sol";
-import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
 import {ILCC} from "../interfaces/ILCC.sol";
 
 /**
@@ -25,8 +24,10 @@ abstract contract LCCFactory {
 
     // Market struct containing ID and Ref
     struct Market {
+        address factory; // the factory that created this market
         bytes32 id; // core pool id as market
         bytes ref; // proxy
+        bool refIsValidIssuer; // whether the market ref address is a valid issuer
     }
 
     // Mapping from underlying asset to LCC token
@@ -34,9 +35,6 @@ abstract contract LCCFactory {
 
     // Mapping from LCC token to underlying asset
     mapping(address => address) public lccToUnderlying;
-
-    // Mapping from LCC token to factory
-    mapping(address => address) public lccToFactory;
 
     // Single mapping: truncated marketRef (bytes) -> underlying pair [asset0, asset1]
     // This tracks truncated marketRef collisions. Symbol hash uniqueness is guaranteed by
@@ -49,26 +47,18 @@ abstract contract LCCFactory {
     // Mapping from LCC token to issuer addresses
     mapping(address => mapping(address => bool)) public issuers;
 
-    bool public immutable marketRefIsValidIssuer;
-
     string private nativeAssetName;
     string private nativeAssetSymbol;
     uint8 private nativeAssetDecimals;
 
-    constructor(
-        string memory _nativeAssetName,
-        string memory _nativeAssetSymbol,
-        uint8 _nativeAssetDecimals,
-        bool _marketRefIsValidIssuer
-    ) {
+    constructor(string memory _nativeAssetName, string memory _nativeAssetSymbol, uint8 _nativeAssetDecimals) {
         nativeAssetName = _nativeAssetName;
         nativeAssetSymbol = _nativeAssetSymbol;
         nativeAssetDecimals = _nativeAssetDecimals;
-        marketRefIsValidIssuer = _marketRefIsValidIssuer;
     }
 
     function _sortTokens(address token0, address token1)
-        private
+        internal
         pure
         returns (address token0Sorted, address token1Sorted)
     {
@@ -162,19 +152,19 @@ abstract contract LCCFactory {
 
     /**
      * @notice Creates an LCC token for the given underlying asset
-     * @param factory The factory address
      * @param marketRef The market reference (bytes from proxyHookAddress)
      * @param underlyingPair The underlying pair [asset0, asset1] for this market
      * @param index The index in the underlying pair (0 or 1)
      * @param marketName The market name (can be empty string)
+     * @param initialIssuers Array of addresses to set as issuers for this LCC token
      * @return lccToken The LCC token address
      */
     function _createLCC(
-        address factory,
         bytes memory marketRef,
         address[2] memory underlyingPair,
         uint8 index,
-        string memory marketName
+        string memory marketName,
+        address[] memory initialIssuers
     ) internal returns (address lccToken) {
         address underlyingAsset = underlyingPair[index];
         // Check if LCC already exists for this underlying asset
@@ -199,7 +189,11 @@ abstract contract LCCFactory {
 
         underlyingToLCC[underlyingAsset] = lccToken;
         lccToUnderlying[lccToken] = underlyingAsset;
-        lccToFactory[lccToken] = factory;
+
+        // Set initial issuers for this LCC token
+        for (uint256 i = 0; i < initialIssuers.length; i++) {
+            _setIssuer(lccToken, initialIssuers[i], true);
+        }
 
         emit LCCCreated(underlyingAsset, lccToken);
     }
@@ -228,9 +222,20 @@ abstract contract LCCFactory {
      * @param lccToken1 The second LCC token address
      * @param marketId The market ID (corePoolKey -> PoolID -> unwrap() to bytes32)
      * @param marketRef The market reference (bytes from proxyHookAddress)
+     * @param refIsValidIssuer Whether the market ref address is a valid issuer
+     * @param factory The factory address (should be msg.sender when called from initialize with onlyFactory modifier)
      */
-    function _initialize(address lccToken0, address lccToken1, bytes32 marketId, bytes memory marketRef) internal {
-        Market memory market = Market({id: marketId, ref: marketRef});
+    function _initialize(
+        address lccToken0,
+        address lccToken1,
+        bytes32 marketId,
+        bytes memory marketRef,
+        bool refIsValidIssuer,
+        address factory
+    ) internal {
+        Market memory market = Market({
+            id: marketId, ref: marketRef, refIsValidIssuer: refIsValidIssuer, factory: factory
+        });
         lccToMarket[lccToken0] = market;
         lccToMarket[lccToken1] = market;
     }
@@ -241,7 +246,7 @@ abstract contract LCCFactory {
      * @return bool True if the caller is a valid issuer, false otherwise
      */
     function _isCallerIssuer(address lccToken) internal view returns (bool) {
-        address caller = msg.sender;
+        address caller = _msgSender();
 
         // Check if caller is in the issuers mapping
         if (issuers[lccToken][caller]) {
@@ -254,33 +259,17 @@ abstract contract LCCFactory {
             return false; // Market not initialized
         }
 
-        // Check if marketRefIsValidIssuer is enabled and caller matches the ref address
-        if (marketRefIsValidIssuer && market.ref.length >= 20) {
+        // Check if refIsValidIssuer is enabled and caller matches the ref address
+        if (market.refIsValidIssuer && market.ref.length >= 20) {
             // Extract address from marketRef bytes (first 20 bytes)
             // marketRef is bytes from abi.encodePacked(proxyHookAddress), so it's 20 bytes
             bytes memory refBytes = LibBytes.slice(market.ref, 0, 20);
             address refAddress;
+            // forgefmt: disable-next-line
             assembly {
                 refAddress := mload(add(refBytes, 0x20))
             }
-            if (caller == refAddress) {
-                if (isMarketVaultExclusive) {
-                    return true; // Market vault (proxy hook) is allowed
-                }
-                return true; // Regular issuer check
-            }
-        }
-
-        // Check if caller is a proxy hook for this LCC's underlying asset
-        address underlyingAsset = lccToUnderlying[lccToken];
-        address factory = lccToFactory[lccToken];
-        if (factory != address(0)) {
-            address[2] memory currencies = IMarketFactory(factory).proxyHookToCurrencyPair(caller);
-            bool isAssetProxyPool = (currencies[0] == underlyingAsset || currencies[1] == underlyingAsset);
-            if (isMarketVaultExclusive) {
-                return isAssetProxyPool;
-            }
-            return isAssetProxyPool;
+            return caller == refAddress;
         }
 
         return false;

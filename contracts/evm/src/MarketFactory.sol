@@ -46,13 +46,17 @@ contract MarketFactory is IMarketFactory, Ownable {
 
     mapping(PoolId => address[2]) private _corePoolToCurrencyPair;
 
-    constructor(address _poolManager, address _liquidityHub, address _oracleHelper, address[] memory _bounds)
-        Ownable(msg.sender)
-    {
+    constructor(
+        address _poolManager,
+        address _liquidityHub,
+        address _oracleHelper,
+        address _mmPositionManager,
+        address[] memory _bounds
+    ) Ownable(msg.sender) {
         poolManager = IPoolManager(_poolManager);
         liquidityHub = ILiquidityHub(_liquidityHub);
         oracleHelper = IOracleHelper(_oracleHelper);
-        mmPositionManager = liquidityHub.mmPositionManager();
+        mmPositionManager = _mmPositionManager;
 
         // Set Protocol bounds addresses
         bounds[address(this)] = true;
@@ -118,10 +122,6 @@ contract MarketFactory is IMarketFactory, Ownable {
             revert InvalidUnderlyingAsset();
         }
 
-        (Currency underlyingCurr0, Currency underlyingCurr1) = _sortCurrencies(underlyingAsset0, underlyingAsset1);
-        underlyingAsset0 = Currency.unwrap(underlyingCurr0);
-        underlyingAsset1 = Currency.unwrap(underlyingCurr1);
-
         // Convert proxyHookAddress to bytes (marketRef)
         // This will be used for LCC token symbol truncation
         bytes memory marketRef = abi.encodePacked(proxyHookAddress);
@@ -129,16 +129,19 @@ contract MarketFactory is IMarketFactory, Ownable {
         string memory marketName =
             string.concat("Uv4 ", IERC20Metadata(underlyingAsset0).symbol(), IERC20Metadata(underlyingAsset1).symbol());
 
+        address[] memory initialIssuers = new address[](1);
+        initialIssuers[0] = mmPositionManager;
+
+        // Maintains order of underlying assets passed.
         (address lccToken0, address lccToken1) =
-            liquidityHub.createLCCPair(address(this), marketRef, underlyingAsset0, underlyingAsset1, marketName);
-        (Currency lccCurr0, Currency lccCurr1) = _sortCurrencies(lccToken0, lccToken1);
-        lccToken0 = Currency.unwrap(lccCurr0);
-        lccToken1 = Currency.unwrap(lccCurr1);
+            liquidityHub.createLCCPair(marketRef, underlyingAsset0, underlyingAsset1, marketName, initialIssuers);
 
         // Validate that oracles exist for both the LCC tokens underlying assets
         oracleHelper.validateMarketOracles(lccToken0, lccToken1);
 
         // Determine if orders match
+        (Currency underlyingCurr0, Currency underlyingCurr1) = _sortCurrencies(underlyingAsset0, underlyingAsset1);
+        (Currency lccCurr0, Currency lccCurr1) = _sortCurrencies(lccToken0, lccToken1);
         bool ordersMatch =
             (underlyingAsset0 == Currency.unwrap(underlyingCurr0)) == (lccToken0 == Currency.unwrap(lccCurr0));
 
@@ -180,7 +183,7 @@ contract MarketFactory is IMarketFactory, Ownable {
 
         // Initialize the mapping from LCC tokens to Market (with ID and Ref)
         bytes32 marketId = PoolId.unwrap(corePoolId);
-        liquidityHub.initialize(lccToken0, lccToken1, marketId, marketRef);
+        liquidityHub.initialize(lccToken0, lccToken1, marketId, marketRef, true);
 
         // Market was created then we call the VTS manager to store the configuration for the market
         IVTSManager(coreHook).setMarketVTSConfiguration(corePoolId, vtsConfiguration);
@@ -188,10 +191,10 @@ contract MarketFactory is IMarketFactory, Ownable {
         emit MarketCreated(
             corePoolId,
             proxyPoolId,
-            underlyingAsset0,
-            underlyingAsset1,
-            lccToken0,
-            lccToken1,
+            Currency.unwrap(underlyingCurr0),
+            Currency.unwrap(underlyingCurr1),
+            Currency.unwrap(lccCurr0),
+            Currency.unwrap(lccCurr1),
             coreHook,
             proxyHookAddress
         );
