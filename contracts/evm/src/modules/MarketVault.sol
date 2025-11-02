@@ -184,16 +184,16 @@ abstract contract MarketVault is IMarketVault {
      * @param amount The maximum amount of underlying asset to attempt to take from the vault
      * @return The actual amount of underlying asset that was taken and confirmed to the LCC
      */
-    function _tryTakeUnderlyingFromVaultToHub(ILCC lccToken, uint256 amount) internal returns (uint256) {
+    function _tryTakeUnderlyingFromVaultToHub(ILCC lccToken, uint256 amount, bool shouldEmit) internal returns (uint256) {
         Currency uaCurrency = Currency.wrap(lccToken.underlying());
 
-        // Attempt to take the underlying asset from vault to the LCC contract address
-        uint256 amountTaken = _tryTakeUnderlyingFromVaultToRecipient(uaCurrency, address(lccToken), amount);
+        // Attempt to take the underlying asset from vault to the Hub contract address
+        uint256 amountTaken = _tryTakeUnderlyingFromVaultToRecipient(uaCurrency, address(liquidityHub), amount);
 
         // If we successfully took any amount, notify the LCC contract about the new balance
         // This allows the LCC to track market-specific liquidity and process settlement queues
         if (amountTaken > 0) {
-            liquidityHub.confirmTake(address(lccToken), amountTaken, false);
+            liquidityHub.confirmTake(address(lccToken), amountTaken, shouldEmit);
         }
 
         return amountTaken;
@@ -203,16 +203,15 @@ abstract contract MarketVault is IMarketVault {
      * @dev Take underlying asset from the vault to an LCC and confirm the take
      * @notice This function will revert if there is insufficient liquidity in the vault.
      *         It takes the full requested amount from the vault, transfers it to the LCC contract,
-     *         and notifies the LCC about the new balance. The LCC may process its settlement queue
-     *         if shouldProcessQueue is true.
-     * @param marketId The market ID for tracking and settlement queue processing
+     *         and notifies the LiquidityHub about the new balance. The LiquidityHub will emit
+     *         a LiquidityAvailable event if shouldEmit is true.
      * @param lccToken The LCC token contract that will receive the underlying asset
      * @param amount The exact amount of underlying asset to take from the vault (must be > 0)
-     * @param shouldProcessQueue Whether the LCC should process its settlement queue after confirming the take
+     * @param shouldEmit Whether to emit LiquidityAvailable event after confirming the take
      * @custom:reverts InvalidAmount If amount is zero
      * @custom:reverts InsufficientLiquidityToTake If the vault doesn't have enough liquidity to fulfill the request
      */
-    function _takeUnderlyingFromVaultToLCC(bytes32 marketId, ILCC lccToken, uint256 amount, bool shouldProcessQueue)
+    function _takeUnderlyingFromVaultToHub(ILCC lccToken, uint256 amount, bool shouldEmit)
         internal
     {
         if (amount == 0) {
@@ -221,13 +220,24 @@ abstract contract MarketVault is IMarketVault {
 
         Currency uaCurrency = Currency.wrap(lccToken.underlying());
 
-        // Take the underlying asset from vault to the LCC contract address
+        // Take the underlying asset from vault to the Hub contract address
         // This will revert if insufficient liquidity is available
-        _takeUnderlyingFromVaultToRecipient(uaCurrency, address(lccToken), amount);
+        _takeUnderlyingFromVaultToRecipient(uaCurrency, address(liquidityHub), amount);
 
-        // Notify the LCC contract about the new balance and optionally process settlement queue
-        // When shouldProcessQueue is true, this triggers settlement of pending user unwrap requests
-        lccToken.confirmTake(marketId, amount, shouldProcessQueue);
+        // Notify the LiquidityHub about the new balance and optionally emit event
+        liquidityHub.confirmTake(address(lccToken), amount, shouldEmit);
+    }
+
+    /**
+     * @dev Settle underlying asset to the vault from the Hub
+     * @notice For ERC20: Hub approves MarketVault and we pull from Hub. For native: Hub transfers ETH to MarketVault and we settle from self.
+     */
+    function _settleUnderlyingToVaultFromHub(ILCC lccToken, uint256 amount) internal {
+        liquidityHub.prepareSettle(address(lccToken), amount);
+
+        Currency uaCurrency = Currency.wrap(lccToken.underlying());
+        // CurrencySettler handles transfer of native ETH from address(this), assuming LiquidityHub conducts native transfer to this first.
+        _settleUnderlyingToVaultFromSender(uaCurrency, address(liquidityHub), amount);
     }
 
     /**
@@ -269,28 +279,6 @@ abstract contract MarketVault is IMarketVault {
     }
 
     /**
-     * @dev Settle underlying asset to the vault from an LCC
-     * @notice This function prepares the LCC for settlement (authorizing the transfer) and then
-     *         settles the underlying asset from the LCC contract to the vault. The LCC must have
-     *         sufficient underlying asset balance to fulfill the settlement.
-     * @param lccToken The LCC token contract that holds the underlying asset
-     * @param amount The amount of underlying asset to settle from the LCC to the vault
-     * @custom:reverts InsufficientLiquidityToSettle If the LCC doesn't have enough underlying asset balance
-     */
-    function _settleUnderlyingToVaultFromLCC(ILCC lccToken, uint256 amount) internal {
-        // Prepare the LCC for settlement - this authorizes the MarketVault to transfer
-        // the underlying asset from the LCC contract. This also reduces the LCC's uaSupply.
-        lccToken.prepareSettle(amount);
-
-        Currency uaCurrency = Currency.wrap(lccToken.underlying());
-        address sender = address(lccToken);
-
-        // Settle the underlying asset from the LCC contract to the vault
-        // This transfers ERC20 tokens and mints claim tokens to the vault
-        _settleUnderlyingToVaultFromSender(uaCurrency, sender, amount);
-    }
-
-    /**
      * @dev Settle pending obligations for both tokens in a market
      * @notice This function attempts to fulfill pending settlement obligations for users who
      *         attempted to unwrap LCC tokens but encountered insufficient liquidity. It processes
@@ -306,23 +294,22 @@ abstract contract MarketVault is IMarketVault {
         ILCC lccToken1 = ILCC(Currency.unwrap(corePoolKey.currency1));
 
         // Attempt to settle obligations for both tokens in the market
-        _settleObligationsForLCC(lccToken0, marketId);
-        _settleObligationsForLCC(lccToken1, marketId);
+        _settleObligationsForLCC(lccToken0);
+        _settleObligationsForLCC(lccToken1);
     }
 
     /**
-     * @dev Try to settle pending settlement obligations for a specific LCC in a market
-     * @notice This function checks if there are pending settlement obligations (deficits) for
+     * @dev Try to settle pending settlement obligations for a specific LCC
+     * @notice This function checks if there are pending settlement obligations (queued amounts) for
      *         users who tried to unwrap LCC tokens but encountered insufficient liquidity. If
      *         there are pending obligations and the vault has available liquidity, it transfers
-     *         the liquidity from the vault to the LCC and triggers settlement queue processing.
+     *         the liquidity from the vault to the Hub and triggers settlement processing.
      *         This is a best-effort operation that settles as much as possible with available liquidity.
      * @param lccToken The LCC token contract to settle obligations for
-     * @param marketId The market ID to check for pending settlements
      */
-    function _settleObligationsForLCC(ILCC lccToken, bytes32 marketId) internal {
-        // Check how much total pending settlement deficit exists for this LCC in this market
-        uint256 totalPendingSettlement = IMarketLiquidity(address(lccToken)).getMarketTotalSettlementDeficit(marketId);
+    function _settleObligationsForLCC(ILCC lccToken) internal {
+        // Check how much total pending settlement is queued for this LCC
+        uint256 totalPendingSettlement = liquidityHub.totalQueued(address(lccToken));
         if (totalPendingSettlement == 0) return; // No pending settlements to fulfill
 
         // Check how much underlying liquidity is available in the vault for this LCC's underlying asset
@@ -333,9 +320,9 @@ abstract contract MarketVault is IMarketVault {
         uint256 amountToSettle = Math.min(totalPendingSettlement, availableLiquidity);
         if (amountToSettle == 0) return; // No liquidity available to fulfill obligations
 
-        // Transfer liquidity from vault to LCC and process settlement queue
-        // This will trigger settlement of pending user unwrap requests
-        _takeUnderlyingFromVaultToLCC(marketId, lccToken, amountToSettle, true);
+        // Transfer liquidity from vault to Hub and emit event
+        // This will trigger LiquidityAvailable event if shouldEmit is true
+        _takeUnderlyingFromVaultToHub(lccToken, amountToSettle, true);
     }
 
     /**
@@ -411,10 +398,10 @@ abstract contract MarketVault is IMarketVault {
         _modifyVaultLiquidity(currency0, currency1, balanceDelta);
         // if there was an addition, then settle the obligations to the lcc tokens
         if (balanceDelta.amount0() > 0) {
-            _settleObligationsForLCC(lccToken0, _marketId());
+            _settleObligationsForLCC(lccToken0);
         }
         if (balanceDelta.amount1() > 0) {
-            _settleObligationsForLCC(lccToken1, _marketId());
+            _settleObligationsForLCC(lccToken1);
         }
     }
 
@@ -460,10 +447,10 @@ abstract contract MarketVault is IMarketVault {
 
         // If there was an addition (deposit), then settle the obligations to the lcc tokens
         if (delta0 > 0) {
-            _settleObligationsForLCC(lccToken0, marketId);
+            _settleObligationsForLCC(lccToken0);
         }
         if (delta1 > 0) {
-            _settleObligationsForLCC(lccToken1, marketId);
+            _settleObligationsForLCC(lccToken1);
         }
 
         return usedDelta;

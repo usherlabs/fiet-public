@@ -84,5 +84,44 @@ interface ILiquidityHub {
         external
         view
         returns (address factory, bytes32 id, bytes memory ref, bool refIsValidIssuer);
+
+    /**
+     * @notice Gets the total amount queued for settlement for a given LCC token
+     * @param lcc The LCC token address
+     * @return The total amount queued for settlement
+     */
+    function totalQueued(address lcc) external view returns (uint256);
+
+    /**
+     * @notice Called by MarketVault after taking underlying liquidity from the market to LCC
+     * @param lcc The LCC token address
+     * @param amount The amount of underlying liquidity taken
+     * @param shouldEmit Whether to emit LiquidityAvailable event
+     */
+    function confirmTake(address lcc, uint256 amount, bool shouldEmit) external;
+
+    /**
+     * @notice Process settlement for a specific recipient using reserveOfUnderlying
+     * @dev Permissionless function that allows anyone to process settlements when liquidity is available
+     * @param lcc The LCC token address
+     * @param recipient The recipient address to settle for
+     * @param maxAmount The maximum amount to settle (caller can limit to avoid large gas costs)
+     */
+    function processSettlementFor(address lcc, address recipient, uint256 maxAmount) external;
+
+    /**
+     * @notice Prepare settlement of underlying from Hub to MarketVault
+     * @param lcc The LCC token address
+     * @param amount The amount of underlying to prepare for settlement
+     */
+    function prepareSettle(address lcc, uint256 amount) external;
+
+    /**
+     * @notice Annul a user's queued settlement prior to a protocol-bound transfer
+     * @param lcc The LCC token address
+     * @param fromUser The user initiating the transfer
+     * @param amountToTransfer The amount intended to be transferred
+     */
+    function annulSettlementBeforeTransfer(address lcc, address from, uint256 amountToTransfer) external;
 }
 

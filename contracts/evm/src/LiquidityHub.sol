@@ -21,8 +21,11 @@ contract LiquidityHub is Ownable, LCCFactory {
     error InvalidCaller();
     error InvalidLcc(address lcc);
     error LiquidityError(address lcc, uint256 amount);
+    error InsufficientWrappedLiquidity(uint256 requested, uint256 available);
 
     event FactorySet(address indexed factory, bool enabled);
+    event LiquidityAvailable(address indexed lcc, uint256 amount);
+    event SettlementQueued(address indexed lcc, address indexed recipient, uint256 amount);
 
     // IMPORTANT NOTE: The LiquidityHub is agnostic/unaware of the end account.
     // Similarly to how PoolManager leverages periphery contracts to manage end-account balances, the LiquidityHub aggregates balances, and uses LCCs to track account balances in a hub-and-spoke model.
@@ -32,6 +35,10 @@ contract LiquidityHub is Ownable, LCCFactory {
     // Mapping from underlying token to OOM (Out-of-Market) balance of the account
     mapping(address => uint256) public directSupply;
     mapping(address => uint256) public reserveOfUnderlying; // reserve of the underlying token
+
+    // Settlement queue mappings (no arrays to avoid clogging)
+    mapping(address => mapping(address => uint256)) public settleQueue; // lcc => recipient => amount owed
+    mapping(address => uint256) public totalQueued; // lcc => total amount queued
 
     constructor(
         address _oracleHelper,
@@ -165,7 +172,7 @@ contract LiquidityHub is Ownable, LCCFactory {
 
         if (wrappedBalance > 0) {
             uint256 amountFromWrapped = Math.min(amount, wrappedBalance);
-            directUnwrapped = _directUnwrap(amountFromWrapped);
+            directUnwrapped = _directUnwrap(lcc, amountFromWrapped);
         }
 
         // Unwrap remaining amount from market-derived balance
@@ -175,7 +182,7 @@ contract LiquidityHub is Ownable, LCCFactory {
             uint256 amountFromMarket = Math.min(remainingToUnwrap, marketDerivedBalance);
 
             // Unwrap from this market's liquidity
-            marketUnwrapped = _marketUnwrap(lcc, from, to, amountFromMarket);
+            marketUnwrapped = _marketUnwrap(lcc, to, amountFromMarket);
 
             remainingToUnwrap -= amountFromMarket;
         }
@@ -184,7 +191,7 @@ contract LiquidityHub is Ownable, LCCFactory {
             // When we unwrap, we first use whatever liquidity is directly wrapped.
             // Then, we turn to liquidity either directly in the market or pending settlement to the market in the future.
             // If there's deficit between the amount to unwrap from market and the amount available, then we're in an insufficient liquidity situation and we queue a settlement
-            _queueSettlement(lccToMarket[lcc].id, to, remainingToUnwrap);
+            _queueSettlement(lcc, to, remainingToUnwrap);
         }
 
         // Burn the amount that was unwrapped
@@ -249,19 +256,21 @@ contract LiquidityHub is Ownable, LCCFactory {
     /**
      * @dev Unwraps LCC from out-of-market liquidity pool (wrapped LCC) i.e LCC that was created by wrapping
      * @dev Unwraps using liquidity that was provided by wrapping
+     * @param lcc The LCC token address
      * @param amount The amount to unwrap from general pool
      * @return The amount actually unwrapped
      */
-    function _directUnwrap(uint256 amount) internal view returns (uint256) {
+    function _directUnwrap(address lcc, uint256 amount) internal returns (uint256) {
         // Directly wrapped LCC should always be fully backed by underlying
         // No settlement queue needed ? - this should always succeed
 
         // if the UA supply that was wrapped is less than the amount to unwrap, then revert
         if (directSupply[lcc] < amount) {
-            revert InsufficientWrappedLiquidity(amount, uaSupply);
+            revert InsufficientWrappedLiquidity(amount, directSupply[lcc]);
         }
 
         directSupply[lcc] -= amount;
+        reserveOfUnderlying[lccToUnderlying[lcc]] -= amount;
 
         // Should Always returns full amount
         return amount;
@@ -315,11 +324,105 @@ contract LiquidityHub is Ownable, LCCFactory {
     //     uaSupply -= amount;
     // }
 
-    // Called by MarketVault after taking underlying liquidity from the market to LCC.
-    // Accounts for Vault -> LCC. if shouldProcessQueue is true, Vault -> Recipients.
-    function confirmTake(address lcc, uint256 amount, bool shouldProcessQueue) external onlyIssuer(lcc) {
+    /**
+     * @notice Called by MarketVault after taking underlying liquidity from the market to LCC
+     * @param lcc The LCC token address
+     * @param amount The amount of underlying liquidity taken
+     * @param shouldEmit Whether to emit LiquidityAvailable event
+     */
+    function confirmTake(address lcc, uint256 amount, bool shouldEmit) external onlyIssuer(lcc) {
         // Track total underlying asset supply
         reserveOfUnderlying[lccToUnderlying[lcc]] += amount;
+
+        if (shouldEmit) {
+            emit LiquidityAvailable(lcc, amount);
+        }
+    }
+
+    /**
+     * @notice Process settlement for a specific recipient using reserveOfUnderlying
+     * @dev Permissionless function that allows anyone to process settlements when liquidity is available
+     * @param lcc The LCC token address
+     * @param recipient The recipient address to settle for
+     * @param maxAmount The maximum amount to settle (caller can limit to avoid large gas costs)
+     */
+    function processSettlementFor(address lcc, address recipient, uint256 maxAmount) external onlyValidLcc(lcc) {
+        uint256 queued = settleQueue[lcc][recipient];
+        if (queued == 0) revert InvalidAmount();
+
+        address underlying = lccToUnderlying[lcc];
+        uint256 available = reserveOfUnderlying[underlying];
+        // market-derived holder balance
+        (, uint256 holderBal) = _balancesOf(lcc, recipient);
+
+        uint256 toSettle = Math.min(Math.min(queued, available), Math.min(maxAmount, holderBal));
+        if (toSettle == 0) revert LiquidityError(lcc, toSettle);
+
+        settleQueue[lcc][recipient] -= toSettle;
+        totalQueued[lcc] -= toSettle;
+
+        _pay(lcc, recipient, 0, toSettle);
+    }
+
+    /**
+     * @notice Prepare settlement of underlying from Hub to MarketVault
+     * @dev For ERC20, approve the caller (expected MarketVault) to pull tokens; for native, transfer ETH to caller.
+     *      Decrements Hub reserve immediately; intended to be called just before settlement in the same tx.
+     */
+    function prepareSettle(address lcc, uint256 amount) external onlyIssuer(lcc) {
+        if (amount == 0) revert InvalidAmount();
+
+        address underlying = lccToUnderlying[lcc];
+        if (reserveOfUnderlying[underlying] < amount) revert InvalidAmount();
+
+        Currency underlyingCurrency = Currency.wrap(underlying);
+        if (underlyingCurrency.isAddressZero()) {
+            // For native, transfer ETH to MarketVault so it can settle to PoolManager
+            underlyingCurrency.transfer(_msgSender(), amount);
+        } else {
+            // Approve MarketVault to pull the ERC20 from the Hub and settle to PoolManager
+            underlyingCurrency.approve(_msgSender(), amount);
+        }
+        reserveOfUnderlying[underlying] -= amount;
+    }
+
+    /**
+     * @notice Annul a user's queued settlement prior to a protocol-bound transfer
+     * @dev If the transfer amount exceeds the user's current liquid balance (wrapped + marketDerived),
+     *      the excess "bleed" will be removed from their queued settlement up to the queued amount.
+     * @param lcc The LCC token address
+     * @param from The user initiating the transfer
+     * @param amountToTransfer The amount intended to be transferred
+     */
+    function annulSettlementBeforeTransfer(
+        address lcc,
+        address from,
+        uint256 wrappedBalance,
+        uint256 marketDerivedBalance,
+        uint256 amountToTransfer
+    ) external onlyValidLcc(lcc) {
+        if (_msgSender() != lcc) {
+            revert InvalidCaller();
+        }
+
+        uint256 queued = settleQueue[lcc][from];
+        if (queued == 0 || amountToTransfer == 0) {
+            return;
+        }
+
+        uint256 liquidBalance = wrappedBalance + marketDerivedBalance;
+
+        // Otherwise, if amountToTransfer > (liquidBalance - queued), it bleeds into queue
+        // Compute max transferable without touching queue
+        uint256 transferableWithoutQueue = liquidBalance > queued ? (liquidBalance - queued) : 0;
+        if (amountToTransfer > transferableWithoutQueue) {
+            uint256 bleedIntoQueue = amountToTransfer - transferableWithoutQueue;
+            uint256 toAnnul = Math.min(bleedIntoQueue, queued);
+            if (toAnnul > 0) {
+                settleQueue[lcc][from] -= toAnnul;
+                totalQueued[lcc] -= toAnnul;
+            }
+        }
     }
 
     // ============ SETTLEMENT FUNCTIONS ============
@@ -348,150 +451,13 @@ contract LiquidityHub is Ownable, LCCFactory {
 
     /**
      * @dev Adds a settlement request to the queue
-     * @param marketId The market ID with pending settlements
+     * @param lcc The LCC token address
      * @param recipient The address with pending settlements
      * @param amount The amount to eventually settle
      */
-    // TODO: Queue logic leaves an edge case where someone can clog the queue through micro-transactions across 1000s of wallets.
-    // If we require that liquidity be available before withdraw, then a separate priphery contract can help LCC holders automatically withdraw their liquidity.
     function _queueSettlement(address lcc, address recipient, uint256 amount) internal {
-        // Add to amount we owe this recipient for this market
-        if (settleQueue[lcc][recipient] == 0) {
-            // First settlement to this recipient in this market
-            pendingRecipients[lcc].push(recipient);
-        }
-
         settleQueue[lcc][recipient] += amount;
         totalQueued[lcc] += amount;
-    }
-
-    /**
-     * @dev Partially or Completely process the market settlement queue
-     * @param marketId The market to process the settlement queue for
-     * @param availableLiquidity The available liquidity in the market
-     * @param burnTokens Whether to burn the equivalent LCC tokens for the settlement settled
-     * @return processedAmount The amount processed from the settlement queue
-     */
-    function _processQueue(address lcc, uint256 amountToProcess, bool burnTokens)
-        internal
-        returns (uint256 processedAmount)
-    {
-        uint256 available = Math.min(amountToProcess, totalQueued[lcc]);
-
-        address[] memory settlementRecipients = marketSettlementRecipients[marketId];
-
-        for (uint256 i = 0; i < settlementRecipients.length && remainingLiquidity > 0; i++) {
-            address recipient = settlementRecipients[i];
-            uint256 amount = marketUserSettlement[marketId][recipient];
-
-            if (amount == 0) continue; // Skip fully paid settlements
-
-            uint256 amountToSettle = Math.min(remainingLiquidity, amount);
-            _processQueueForRecipient(marketId, recipient, amountToSettle, burnTokens);
-            remainingLiquidity -= amountToSettle;
-            processedAmount += amountToSettle;
-        }
-    }
-
-    function _processQueueForAllRecipientMarkets(address recipient, uint256 amountToProcess, bool burnTokens) internal {
-        uint256 remainingLiquidity = amountToProcess;
-        bytes32[] memory userMarkets = _getUserMarkets(recipient);
-        for (uint256 i = 0; i < userMarkets.length; i++) {
-            bytes32 marketId = userMarkets[i];
-            uint256 amountInMarket = marketUserSettlement[marketId][recipient];
-            if (amountInMarket == 0) continue;
-            uint256 amount = Math.min(remainingLiquidity, amountInMarket);
-
-            remainingLiquidity -= amount; // Math.min ensures that the amount is always less than or equal to the remaining liquidity to process
-
-            _processQueueForRecipient(marketId, recipient, amount, burnTokens);
-
-            if (remainingLiquidity == 0) break;
-        }
-    }
-
-    /**
-     * @dev Processes a settlement queue for a recipient
-     * @param marketId The market ID to process the settlement queue for
-     * @param recipient The recipient to process the settlement queue for
-     * @param amount The amount to process
-     * @param burnTokens Whether to burn the equivalent LCC tokens for the settlement settled
-     */
-    function _processQueueForRecipient(bytes32 marketId, address recipient, uint256 amount, bool burnTokens) internal {
-        // Update amount we owe
-        marketUserSettlement[marketId][recipient] -= amount;
-        marketTotalSettlementDeficit[marketId] -= amount;
-
-        // If amount fully paid, remove from pending settlement holders list
-        if (marketUserSettlement[marketId][recipient] == 0) {
-            hasPendingSettlement[marketId][recipient] = false;
-            _removeMarketRecipientRecord(marketId, recipient);
-        }
-
-        // burn the equivalent LCC Tokens for this user's amount that was just paid off
-        // and transfer the underlying assets to the recipient of the settlement
-        // if burn is false, it means we are clearing a settlement we did not pay off
-        if (burnTokens) {
-            _payOutstandingSettlementToUser(recipient, amount);
-        }
-    }
-
-    /**
-     * @dev Process all the market settlement queues for a user partially or completely clearing out their pending settlements
-     * @param fromUser The user who's settlements are being cleared
-     * @param amountToClear The amount of pending settlements to clear
-     */
-    function _annulUserSettlement(address fromUser, uint256 amountToClear) internal {
-        _processQueueForAllRecipientMarkets(fromUser, amountToClear, false);
-    }
-
-    // /**
-    //  * @dev Annul the account's pending settlements partially or completely
-    //  * @dev This is called before a transfer is made to clear any outstanding settlements to this account relative to the amount to settle.
-    //  * @param fromAccount The account to annul the pending settlements for
-    //  * @param amountToTransfer The amount to transfer
-    //  */
-    // function _annulAccountSettlementBeforeTransfer(address from, uint256 amountToTransfer) internal {
-    //     // get the markets the account has LCC from
-    //     // get their balance
-    //     // get their total market pending settlements
-    //     // max amount they can transfer  is balance - sum pending settlements
-    //     // if they try to transfer more than that, then we need to annull the equivalent amount of pending settlements
-    //     uint256 balance = balanceOf[from];
-
-    //     if (balance == 0) {
-    //         return;
-    //     }
-
-    //     if (amountToTransfer > balance) {
-    //         revert InvalidAmount();
-    //     }
-
-    //     // get the account's total pending settlements across all markets
-    //     uint256 accountPendingSettlement = _getAccountPendingSettlement(from);
-    //     if (accountPendingSettlement == 0) {
-    //         return;
-    //     }
-
-    //     uint256 maxAmountCanTransferWithoutClearing = balance - accountPendingSettlement;
-
-    //     if (amountToTransfer > maxAmountCanTransferWithoutClearing) {
-    //         uint256 amountToAnnul = amountToTransfer - maxAmountCanTransferWithoutClearing;
-    //         // annull the equivalent pending settlements
-
-    //         // If a transaction to process settlements occurs before the transfer. In that case, the account's LCC transfer will revert, and they'll have native assets in their wallet instead.
-    //         _annulAccountSettlement(from, amountToAnnul);
-    //     }
-    // }
-
-    // On transfer hook
-    function onTransfer(address from, address to, uint256 amount) external onlyValidLcc(_msgSender()) {
-        address lcc = _msgSender();
-
-        // // clear any outstanding settlement in all markets to be paid to the sender initiating the transfer
-        // _annulAccountSettlementBeforeTransfer(from, amount);
-
-        // // process the market tracing logic to find out which market the token transfer came from
-        // _processMarketTracing(to, amount);
+        emit SettlementQueued(lcc, recipient, amount);
     }
 }

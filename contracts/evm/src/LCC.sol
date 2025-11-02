@@ -178,9 +178,12 @@ contract LiquidityCommitmentCertificate is ERC20, Ownable, ILCC {
                 // This should never happen, as balanceOf from ERC20 will throw first.
                 revert InsufficientBalance(from, totalBalance, amount);
             }
+            // Before adjusting local buckets, annul any portion that bleeds into queued settlements
+            hub.annulSettlementBeforeTransfer(
+                address(this), from, wrappedBalances[from], marketDerivedBalances[from], amount
+            );
             uint256 fromMarketDerived = Math.min(marketDerivedBalances[from], amount);
             marketDerivedBalances[from] -= fromMarketDerived;
-            // TODO: hub.anul for amount fromMarketDerived
             uint256 remaining = amount - fromMarketDerived;
             if (remaining > 0) {
                 uint256 fromWrapped = Math.min(wrappedBalances[from], remaining);

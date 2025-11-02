@@ -179,10 +179,10 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
 
             // Settle underlying liquidity to the vault from the LCCs that were acquired.
             if (amount0 > 0) {
-                _settleUnderlyingToVaultFromLCC(lccToken0, amount0);
+                _settleUnderlyingToVaultFromHub(lccToken0, amount0);
             }
             if (amount1 > 0) {
-                _settleUnderlyingToVaultFromLCC(lccToken1, amount1);
+                _settleUnderlyingToVaultFromHub(lccToken1, amount1);
             }
 
             // Then we take what is available within the total settlement deficit amount from the vault to LCCs.
@@ -196,10 +196,10 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
             // Try take from vault to LCCs. If there's a deficit, it will surface in settlement queue to the DirectLP on LCC unwrap.
             bytes32 marketId = PoolId.unwrap(corePoolKey.toId());
             if (amount0 > 0) {
-                _tryTakeUnderlyingFromVaultToLCC(marketId, lccToken0, amount0);
+                _tryTakeUnderlyingFromVaultToHub(lccToken0, amount0, false);
             }
             if (amount1 > 0) {
-                _tryTakeUnderlyingFromVaultToLCC(marketId, lccToken1, amount1);
+                _tryTakeUnderlyingFromVaultToHub(lccToken1, amount1, false);
             }
         }
     }
@@ -248,7 +248,7 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         // Get the amount of the token that is being swapped in based on if this is a zero one swap or one for zero swap
         uint256 amountIn = isZeroForOne ? amount0 : amount1;
         // Deposit underlying liquidity to pool manager from lcc token
-        _settleUnderlyingToVaultFromLCC(lccTokenIn, amountIn);
+        _settleUnderlyingToVaultFromHub(lccTokenIn, amountIn);
 
         // Handle Token OUT liquidity (move from PoolManager into LCC token)
         ILCC lccTokenOut = isZeroForOne ? lccToken1 : lccToken0;
@@ -256,10 +256,10 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         uint256 amountOut = isZeroForOne ? amount1 : amount0;
 
         bytes32 marketId = PoolId.unwrap(corePoolKey.toId());
-        _tryTakeUnderlyingFromVaultToLCC(marketId, lccTokenOut, amountOut);
+        _tryTakeUnderlyingFromVaultToHub(lccTokenOut, amountOut, false); // funds going out are an attempt to deliver on the trade.
 
         // New liquidity in pool, so we try and settle the outstanding obligations, if any
-        _settleObligationsForLCC(lccTokenIn, marketId);
+        _settleObligationsForLCC(lccTokenIn);
     }
 
     // Before swap we make sure to provide enough delta
@@ -410,7 +410,7 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
 
             // Once LCC tokens settlements conducted for the Core Pool, utilise deposited underlying assets to settle obligations.
             // Involves moving underlying assets from the ProxyHook/MarketVault to the LCC token.
-            _settleObligationsForLCC(lccTokenForCurrency0, PoolId.unwrap(coreKey.toId()));
+            _settleObligationsForLCC(lccTokenForCurrency0);
         } else {
             key.currency1.take(poolManager, address(this), amountIn, true);
 
@@ -433,7 +433,7 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
             key.currency0.settle(poolManager, address(this), amountToSettle, true);
 
             // Once LCC tokens settlements conducted for the Core Pool, settle underlying asset obligations relative to the amountIn LCC token
-            _settleObligationsForLCC(lccTokenForCurrency1, PoolId.unwrap(coreKey.toId()));
+            _settleObligationsForLCC(lccTokenForCurrency1);
         }
 
         // BalanceDelta is a packed value of (currency0Amount, currency1Amount)
