@@ -2,7 +2,6 @@
 pragma solidity ^0.8.0;
 
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
-import {HexStrings} from "v4-periphery/src/libraries/HexStrings.sol";
 
 library MarketMaker {
     /// @dev The reserve of the market maker

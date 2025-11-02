@@ -4,10 +4,10 @@ pragma solidity ^0.8.0;
 import {ICommitmentDescriptor} from "./interfaces/ICommitmentDescriptor.sol";
 import {IMMPositionManager} from "./interfaces/IMMPositionManager.sol";
 import {SignalState} from "./types/Position.sol";
-import {Strings} from "openzeppelin-contracts/contracts/utils/Strings.sol";
+import {LibString} from "solady/utils/LibString.sol";
 
 contract MMPCommitmentDescriptor is ICommitmentDescriptor {
-    using Strings for uint256;
+    using LibString for uint256;
 
     /**
      * @notice Generates a token URI for a commitment NFT

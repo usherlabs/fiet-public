@@ -3,77 +3,61 @@ pragma solidity ^0.8.20;
 
 import {Ownable} from "openzeppelin-contracts/contracts/access/Ownable.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
-import {LiquidityCommitmentCertificate} from "./LCC.sol";
 import {IOracleHelper} from "./interfaces/IOracleHelper.sol";
+import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
+import {LCCFactory} from "./modules/LCCFactory.sol";
+
+// import {ILiquidityHub} from "./interfaces/ILiquidityHub.sol";
 
 /**
- * @title MarketFactory
+ * @title LiquidityHub
  * @notice Factory contract for creating Fiet protocol markets with LCC tokens and pool management
  * @dev Manages LCC token creation, pool deployment, and protocol bounds administration
  */
-contract LiquidityHub is ILiquidityHub, Ownable {
+contract LiquidityHub is Ownable, LCCFactory {
     IOracleHelper public immutable oracleHelper;
     address public mmPositionManager;
 
-    // Mapping from underlying asset to LCC token
-    mapping(address => address) public underlyingToLCC;
+    error NotFactory();
 
-    // Mapping from LCC token to underlying asset
-    mapping(address => address) public lccToUnderlying;
-
-    // Mapping from LCC token to factory
-    mapping(address => address) public lccToFactory;
-
+    // Map of market factories
     mapping(address => bool) public isFactory;
 
-    constructor(address _oracleHelper) Ownable(msg.sender) {
+    constructor(address _oracleHelper, address _mmPositionManager) Ownable(msg.sender) {
         oracleHelper = IOracleHelper(_oracleHelper);
+        mmPositionManager = _mmPositionManager;
     }
 
-    function getOrCreateLCC(address underlyingAsset) external onlyOwner returns (address lccToken) {
-        return _getOrCreateLCC(underlyingAsset);
-    }
-
-    /**
-     * @notice Gets or creates an LCC token for the given underlying asset
-     * @param underlyingAsset The underlying asset address
-     * @return lccToken The LCC token address
-     */
-    function _getOrCreateLCC(address underlyingAsset) internal returns (address lccToken) {
-        lccToken = underlyingToLCC[underlyingAsset];
-
-        if (lccToken == address(0)) {
-            // Create new LCC token
-
-            // Set MMPositionManager as an issuer. By default, ProxyHook/MarketVault is an issuer.
-            address[] memory issuers = new address[](1);
-            issuers[0] = address(mmPositionManager);
-
-            lccToken = address(new LiquidityCommitmentCertificate(underlyingAsset, issuers, address(this)));
-
-            underlyingToLCC[underlyingAsset] = lccToken;
-            lccToUnderlying[lccToken] = underlyingAsset;
-            lccToFactory[lccToken] = address(this);
-
-            emit LCCCreated(underlyingAsset, lccToken);
+    modifier onlyFactory(address factory) {
+        if (!isFactory[factory]) {
+            revert NotFactory();
         }
+        _;
+    }
+
+    function setFactory(address factory) external onlyOwner {
+        isFactory[factory] = true;
+    }
+
+    function unsetFactory(address factory) external onlyOwner {
+        isFactory[factory] = false;
     }
 
     /**
-     * @notice Gets the LCC token for a given underlying asset
-     * @param underlyingAsset The underlying asset address
-     * @return The LCC token address
+     * @notice Creates LCC token pair for a market
+     * @param factory The factory address
+     * @param marketId The market ID
+     * @param underlyingAsset0 The first underlying asset address
+     * @param underlyingAsset1 The second underlying asset address
+     * @return lccToken0 The first LCC token address
+     * @return lccToken1 The second LCC token address
      */
-    function getLCC(address underlyingAsset) external view returns (address) {
-        return underlyingToLCC[underlyingAsset];
-    }
-
-    /**
-     * @notice Gets the underlying asset for a given LCC token
-     * @param lccToken The LCC token address
-     * @return The underlying asset address
-     */
-    function getUnderlyingAsset(address lccToken) external view returns (address) {
-        return lccToUnderlying[lccToken];
+    function createLCCPair(address factory, bytes32 marketId, address underlyingAsset0, address underlyingAsset1)
+        external
+        onlyOwner
+        returns (address lccToken0, address lccToken1)
+    {
+        lccToken0 = _createLCC(marketId, underlyingAsset0, "", "", 18);
+        lccToken1 = _createLCC(marketId, underlyingAsset1, "", "", 18);
     }
 }

@@ -12,13 +12,13 @@ import {PoolId} from "v4-periphery/lib/v4-core/src/types/PoolId.sol";
 import {IProxyHook} from "./interfaces/IProxyHook.sol";
 import {MarketVault} from "./modules/MarketVault.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
-import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {Owned} from "solmate/utils/Owned.sol";
 import {IVTSManager} from "./interfaces/IVTSManager.sol";
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {ILCC} from "./interfaces/ILCC.sol";
 import {CurrencyTransfer} from "./libraries/CurrencyTransfer.sol";
 
-contract LiquidityCommitmentCertificate is ERC20, Ownable, ILCC {
+contract LiquidityCommitmentCertificate is ERC20, Owned, ILCC {
     using SafeTransferLib for ERC20;
     using CurrencyTransfer for Currency;
 
@@ -78,9 +78,9 @@ contract LiquidityCommitmentCertificate is ERC20, Ownable, ILCC {
      * @param _issuers The issuers of the LCC. ProxyHook, and MMPositionManager
      * @param _marketFactory The MarketFactory contract that manages this LCC.
      */
-    constructor(address _underlyingAsset, address[] memory _issuers, address _marketFactory)
+    constructor(bytes32 marketId, address _underlyingAsset)
         ERC20(_getLCCName(_underlyingAsset), _getLCCSymbol(_underlyingAsset), _getLCCDecimals(_underlyingAsset))
-        Ownable(msg.sender)
+        Owned(msg.sender)
     {
         if (_marketFactory == address(0)) {
             revert InvalidMarketFactory();
@@ -438,31 +438,5 @@ contract LiquidityCommitmentCertificate is ERC20, Ownable, ILCC {
             // If a transaction to process settlements occurs before the transfer. In that case, the user's LCC transfer will revert, and they'll have native assets in their wallet instead.
             _annulUserSettlement(fromUser, amountToAnnul);
         }
-    }
-
-    function _getName(address asset, string memory nativeAssetName, string memory marketName)
-        private
-        view
-        returns (string memory)
-    {
-        if (asset == address(0)) {
-            return string.concat("Fiet Liquidity Commitment Certificate of ", nativeAssetName, " in ", marketName);
-        }
-        return
-            string.concat("Fiet Liquidity Commitment Certificate of ", IERC20Metadata(asset).name(), " in ", marketName);
-    }
-
-    function _getSymbol(address asset) private view returns (string memory) {
-        if (asset == address(0)) {
-            return "lcc-ETH";
-        }
-        return string.concat("lcc-", IERC20Metadata(asset).symbol());
-    }
-
-    function _getDecimals(address asset) private view returns (uint8) {
-        if (asset == address(0)) {
-            return 18;
-        }
-        return IERC20Metadata(asset).decimals();
     }
 }

@@ -29,7 +29,6 @@ interface IMarketFactory {
 
     // ============ ERRORS ============
 
-    error LCCAlreadyExists();
     error CorePoolAlreadyExists();
     error ProxyPoolAlreadyExists();
     error InvalidHookAddress();
