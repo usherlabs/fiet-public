@@ -7,8 +7,6 @@ import {IOracleHelper} from "./interfaces/IOracleHelper.sol";
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 import {LCCFactory} from "./modules/LCCFactory.sol";
 
-// import {ILiquidityHub} from "./interfaces/ILiquidityHub.sol";
-
 /**
  * @title LiquidityHub
  * @notice Factory contract for creating Fiet protocol markets with LCC tokens and pool management
@@ -23,7 +21,13 @@ contract LiquidityHub is Ownable, LCCFactory {
     // Map of market factories
     mapping(address => bool) public isFactory;
 
-    constructor(address _oracleHelper, address _mmPositionManager) Ownable(msg.sender) {
+    constructor(
+        address _oracleHelper,
+        address _mmPositionManager,
+        string memory _nativeAssetName,
+        string memory _nativeAssetSymbol,
+        uint8 _nativeAssetDecimals
+    ) Ownable(msg.sender) LCCFactory(_nativeAssetName, _nativeAssetSymbol, _nativeAssetDecimals) {
         oracleHelper = IOracleHelper(_oracleHelper);
         mmPositionManager = _mmPositionManager;
     }
@@ -52,12 +56,15 @@ contract LiquidityHub is Ownable, LCCFactory {
      * @return lccToken0 The first LCC token address
      * @return lccToken1 The second LCC token address
      */
-    function createLCCPair(address factory, bytes32 marketId, address underlyingAsset0, address underlyingAsset1)
-        external
-        onlyOwner
-        returns (address lccToken0, address lccToken1)
-    {
-        lccToken0 = _createLCC(marketId, underlyingAsset0, "", "", 18);
-        lccToken1 = _createLCC(marketId, underlyingAsset1, "", "", 18);
+    function createLCCPair(
+        address factory,
+        bytes32 marketId,
+        address underlyingAsset0,
+        address underlyingAsset1,
+        string memory marketName
+    ) external onlyFactory(factory) returns (address lccToken0, address lccToken1) {
+        address[2] memory underlyingPair = [underlyingAsset0, underlyingAsset1];
+        lccToken0 = _createLCC(factory, marketId, underlyingPair, 0, marketName);
+        lccToken1 = _createLCC(factory, marketId, underlyingPair, 1, marketName);
     }
 }

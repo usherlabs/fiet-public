@@ -77,7 +77,7 @@ abstract contract LCCFactory {
      * @return symbol The unique symbol string
      * @return truncatedMarketIdStr The truncated market ID string used in the symbol
      */
-    function _getSymbol(address asset, string memory marketName, bytes32 marketId, address[2] memory underlyingPair)
+    function _getSymbol(address asset, bytes32 marketId, address[2] memory underlyingPair)
         private
         returns (string memory symbol, string memory truncatedMarketIdStr)
     {
@@ -103,7 +103,7 @@ abstract contract LCCFactory {
             truncatedMarketIdStr = LibString.toHexStringNoPrefix(truncated);
 
             // Build full proposed symbol
-            symbol = string.concat("lcc-", uaSymbol, "-", marketName, "-", truncatedMarketIdStr);
+            symbol = string.concat("lcc-", uaSymbol, "-", truncatedMarketIdStr);
 
             // Check truncated marketId mapping for underlying pair collision
             address[2] memory existingPair = _truncatedMarketIdToUnderlyingPair[truncated];
@@ -150,8 +150,8 @@ abstract contract LCCFactory {
     function _createLCC(
         address factory,
         bytes32 marketId,
-        uint8 index,
         address[2] memory underlyingPair,
+        uint8 index,
         string memory marketName
     ) internal returns (address lccToken) {
         address underlyingAsset = underlyingPair[index];
@@ -162,7 +162,7 @@ abstract contract LCCFactory {
 
         // Get unique symbol with truncated marketId
         (string memory symbol, string memory truncatedMarketIdStr) =
-            _getSymbol(underlyingAsset, marketName, marketId, underlyingPair);
+            _getSymbol(underlyingAsset, marketId, underlyingPair);
 
         // Get name using truncated marketId
         string memory name = _getName(underlyingAsset, marketName, truncatedMarketIdStr);

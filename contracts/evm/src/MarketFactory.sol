@@ -7,7 +7,6 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
-import {LiquidityCommitmentCertificate} from "./LCC.sol";
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 import {IHookPausable} from "./interfaces/IHookPausable.sol";
 import {ProxyHook} from "./ProxyHook.sol";
@@ -15,6 +14,7 @@ import {MarketDeployer} from "./MarketDeployer.sol";
 import {IVTSManager} from "./interfaces/IVTSManager.sol";
 import {MarketVTSConfiguration} from "./types/VTS.sol";
 import {IOracleHelper} from "./interfaces/IOracleHelper.sol";
+import {ILiquidityHub} from "./interfaces/ILiquidityHub.sol";
 
 /**
  * @title MarketFactory
@@ -28,16 +28,8 @@ contract MarketFactory is IMarketFactory, Ownable {
     IOracleHelper public immutable oracleHelper;
     address public coreHook;
     address public marketDeployer;
+    ILiquidityHub public immutable liquidityHub;
     address public mmPositionManager;
-
-    // Mapping from underlying asset to LCC token
-    mapping(address => address) public underlyingToLCC;
-
-    // Mapping from LCC token to underlying asset
-    mapping(address => address) public lccToUnderlying;
-
-    // Mapping from LCC token to factory
-    mapping(address => address) public lccToFactory;
 
     // Mapping from core pool ID to proxy pool ID
     mapping(PoolId => PoolId) public coreToProxy;
@@ -53,14 +45,17 @@ contract MarketFactory is IMarketFactory, Ownable {
 
     mapping(PoolId => address[2]) private _corePoolToCurrencyPair;
 
-    constructor(address _poolManager, address _oracleHelper, address[] memory _bounds) Ownable(msg.sender) {
+    constructor(address _poolManager, address _liquidityHub, address _oracleHelper, address[] memory _bounds)
+        Ownable(msg.sender)
+    {
         poolManager = IPoolManager(_poolManager);
+        liquidityHub = ILiquidityHub(_liquidityHub);
         oracleHelper = IOracleHelper(_oracleHelper);
-        // mmPositionManager = _mmPositionManager; // TODO: Set this to the MMPositionManager address - TBD in LCCHub
+        mmPositionManager = liquidityHub.mmPositionManager();
 
         // Set Protocol bounds addresses
         bounds[address(this)] = true;
-        bounds[poolManagerAddr] = true;
+        bounds[address(poolManager)] = true;
         for (uint256 i = 0; i < _bounds.length; i++) {
             bounds[_bounds[i]] = true;
         }
@@ -116,22 +111,36 @@ contract MarketFactory is IMarketFactory, Ownable {
     ) external onlyOwner returns (PoolId corePoolId, PoolId proxyPoolId) {
         // Deploy proxy hook
         address proxyHookAddress =
-            MarketDeployer(marketDeployer).deployProxyHook(address(_poolManager), address(this), salt);
+            MarketDeployer(marketDeployer).deployProxyHook(address(poolManager), address(this), salt);
 
         if (underlyingAsset0 == address(0) || underlyingAsset1 == address(0)) {
             revert InvalidUnderlyingAsset();
         }
 
-        // Create LCC tokens if they don't exist
-        address lccToken0 = _getOrCreateLCC(underlyingAsset0);
-        address lccToken1 = _getOrCreateLCC(underlyingAsset1);
+        (Currency underlyingCurr0, Currency underlyingCurr1) = _sortCurrencies(underlyingAsset0, underlyingAsset1);
+        underlyingAsset0 = Currency.unwrap(underlyingCurr0);
+        underlyingAsset1 = Currency.unwrap(underlyingCurr1);
+
+        // Compute deterministic marketId from pool parameters
+        // This will be used to create LCC tokens
+        bytes32 marketId =
+            keccak256(abi.encodePacked(underlyingAsset0, underlyingAsset1, corePoolFee, tickSpacing, salt));
+        // TODO: We'll need to redine what marketId means across the repo... current marketId is in fact marketCorePoolId
+
+        string memory marketName = strings.concat(
+            "Uv4 ", IERC20Metadata(underlyingAsset0).symbol(), IERC20Metadata(underlyingAsset1).symbol()
+        );
+
+        (address lccToken0, address lccToken1) =
+            liquidityHub.createLCCPair(address(this), marketId, underlyingAsset0, underlyingAsset1, marketName);
+        (Currency lccCurr0, Currency lccCurr1) = _sortCurrencies(lccToken0, lccToken1);
+        lccToken0 = Currency.unwrap(lccCurr0);
+        lccToken1 = Currency.unwrap(lccCurr1);
 
         // Validate that oracles exist for both the LCC tokens underlying assets
         oracleHelper.validateMarketOracles(lccToken0, lccToken1);
 
         // Determine if orders match
-        (Currency underlyingCurr0,) = _sortCurrencies(underlyingAsset0, underlyingAsset1);
-        (Currency lccCurr0,) = _sortCurrencies(lccToken0, lccToken1);
         bool ordersMatch =
             (underlyingAsset0 == Currency.unwrap(underlyingCurr0)) == (lccToken0 == Currency.unwrap(lccCurr0));
 
@@ -184,35 +193,6 @@ contract MarketFactory is IMarketFactory, Ownable {
             coreHook,
             proxyHookAddress
         );
-    }
-
-    function getOrCreateLCC(address underlyingAsset) external onlyOwner returns (address lccToken) {
-        return _getOrCreateLCC(underlyingAsset);
-    }
-
-    /**
-     * @notice Gets or creates an LCC token for the given underlying asset
-     * @param underlyingAsset The underlying asset address
-     * @return lccToken The LCC token address
-     */
-    function _getOrCreateLCC(address underlyingAsset) internal returns (address lccToken) {
-        lccToken = underlyingToLCC[underlyingAsset];
-
-        if (lccToken == address(0)) {
-            // Create new LCC token
-
-            // Set MMPositionManager as an issuer. By default, ProxyHook/MarketVault is an issuer.
-            address[] memory issuers = new address[](1);
-            issuers[0] = address(mmPositionManager);
-
-            lccToken = address(new LiquidityCommitmentCertificate(underlyingAsset, issuers, address(this)));
-
-            underlyingToLCC[underlyingAsset] = lccToken;
-            lccToUnderlying[lccToken] = underlyingAsset;
-            lccToFactory[lccToken] = address(this);
-
-            emit LCCCreated(underlyingAsset, lccToken);
-        }
     }
 
     /**
@@ -340,24 +320,6 @@ contract MarketFactory is IMarketFactory, Ownable {
      */
     function corePoolToProxyHook(PoolId corePoolId) external view returns (address) {
         return _proxyToHook[coreToProxy[corePoolId]];
-    }
-
-    /**
-     * @notice Gets the LCC token for a given underlying asset
-     * @param underlyingAsset The underlying asset address
-     * @return The LCC token address
-     */
-    function getLCC(address underlyingAsset) external view returns (address) {
-        return underlyingToLCC[underlyingAsset];
-    }
-
-    /**
-     * @notice Gets the underlying asset for a given LCC token
-     * @param lccToken The LCC token address
-     * @return The underlying asset address
-     */
-    function getUnderlyingAsset(address lccToken) external view returns (address) {
-        return lccToUnderlying[lccToken];
     }
 
     /**

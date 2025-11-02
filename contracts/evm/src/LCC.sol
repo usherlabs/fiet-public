@@ -12,13 +12,13 @@ import {PoolId} from "v4-periphery/lib/v4-core/src/types/PoolId.sol";
 import {IProxyHook} from "./interfaces/IProxyHook.sol";
 import {MarketVault} from "./modules/MarketVault.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
-import {Owned} from "solmate/utils/Owned.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {IVTSManager} from "./interfaces/IVTSManager.sol";
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {ILCC} from "./interfaces/ILCC.sol";
 import {CurrencyTransfer} from "./libraries/CurrencyTransfer.sol";
 
-contract LiquidityCommitmentCertificate is ERC20, Owned, ILCC {
+contract LiquidityCommitmentCertificate is ERC20, Ownable, ILCC {
     using SafeTransferLib for ERC20;
     using CurrencyTransfer for Currency;
 
@@ -78,20 +78,15 @@ contract LiquidityCommitmentCertificate is ERC20, Owned, ILCC {
      * @param _issuers The issuers of the LCC. ProxyHook, and MMPositionManager
      * @param _marketFactory The MarketFactory contract that manages this LCC.
      */
-    constructor(bytes32 marketId, address _underlyingAsset)
-        ERC20(_getLCCName(_underlyingAsset), _getLCCSymbol(_underlyingAsset), _getLCCDecimals(_underlyingAsset))
-        Owned(msg.sender)
+    constructor(bytes32 marketId, address _underlyingAsset, string memory name, string memory symbol, uint8 decimals)
+        ERC20(name, symbol, decimals)
+        Ownable(msg.sender)
     {
         if (_marketFactory == address(0)) {
             revert InvalidMarketFactory();
         }
 
         underlyingAsset = _underlyingAsset;
-        marketFactory = IMarketFactory(_marketFactory);
-
-        for (uint256 i = 0; i < _issuers.length; i++) {
-            issuers[_issuers[i]] = true;
-        }
 
         // Note: bounds are managed by the MarketFactory, not set in constructor
     }
