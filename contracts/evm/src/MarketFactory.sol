@@ -74,7 +74,7 @@ contract MarketFactory is IMarketFactory, Ownable {
 
     modifier onlyLiquidityHub() {
         if (msg.sender != address(liquidityHub)) {
-            revert Errors.InvalidCaller();
+            revert Errors.InvalidSender();
         }
         _;
     }
@@ -84,7 +84,7 @@ contract MarketFactory is IMarketFactory, Ownable {
         // Tie this factory to these hooks as LCCs/markets/hooks are tied to the factory.
         if (coreHook == address(0)) {
             if (_coreHook == address(0)) {
-                revert Errors.InvalidHookAddress();
+                revert Errors.InvalidAddress(_coreHook);
             }
             coreHook = _coreHook;
         }
@@ -129,8 +129,11 @@ contract MarketFactory is IMarketFactory, Ownable {
         address proxyHookAddress =
             MarketDeployer(marketDeployer).deployProxyHook(address(poolManager), address(this), salt);
 
-        if (underlyingAsset0 == address(0) || underlyingAsset1 == address(0)) {
-            revert Errors.InvalidUnderlyingAsset();
+        if (underlyingAsset0 == address(0)) {
+            revert Errors.InvalidAddress(underlyingAsset0);
+        }
+        if (underlyingAsset1 == address(0)) {
+            revert Errors.InvalidAddress(underlyingAsset1);
         }
 
         // Convert proxyHookAddress to bytes (marketRef)
@@ -344,7 +347,7 @@ contract MarketFactory is IMarketFactory, Ownable {
         } else if (currencies[1] == underlyingAsset) {
             amount1 = amount;
         } else {
-            revert InvalidUnderlyingAsset();
+            revert Errors.InvalidAddress(underlyingAsset);
         }
         BalanceDelta usedDelta = IMarketVault(_proxyToHook[coreToProxy[pId]])
             .tryModifyLiquidities(LiquidityUtils.safeToBalanceDelta(amount0, amount1, true, true));

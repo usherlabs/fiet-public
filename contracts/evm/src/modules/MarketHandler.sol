@@ -14,13 +14,13 @@ abstract contract MarketHandler {
     }
 
     modifier onlyMarketFactory() {
-        if (msg.sender != marketFactory) revert Errors.InvalidCaller();
+        if (msg.sender != marketFactory) revert Errors.InvalidSender();
         _;
     }
 
     modifier onlyBounds() {
         if (!IMarketFactory(marketFactory).bounds(msg.sender)) {
-            revert Errors.InvalidCaller();
+            revert Errors.InvalidSender();
         }
         _;
     }
@@ -41,7 +41,7 @@ abstract contract MarketHandler {
         } else if (token == currencies[1]) {
             return 1;
         } else {
-            revert Errors.InvalidCaller();
+            revert Errors.InvalidSender();
         }
     }
 }

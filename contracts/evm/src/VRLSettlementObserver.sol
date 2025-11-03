@@ -19,7 +19,7 @@ contract VRLSettlementObserver is Ownable, IVRLSettlementObserver {
     // New function to add a verifier
     function addVerifier(address _verifier) external onlyOwner returns (uint32) {
         if (_verifier == address(0)) {
-            revert Errors.InvalidVerifierAddress();
+            revert Errors.InvalidVerifier();
         }
         uint32 index = nextVerifierIndex++;
         verifiers[index] = _verifier;
@@ -31,7 +31,7 @@ contract VRLSettlementObserver is Ownable, IVRLSettlementObserver {
     function nullifyVerifier(uint32 index) external onlyOwner {
         address verifier = verifiers[index];
         if (verifier == address(0)) {
-            revert Errors.InvalidVerifierAddress();
+            revert Errors.InvalidVerifier();
         }
         delete verifiers[index];
         emit VerifierRemoved(verifier, index);
@@ -40,7 +40,7 @@ contract VRLSettlementObserver is Ownable, IVRLSettlementObserver {
     // New function to allow a verifier for tokens (batch)
     function allowVerifierForTokens(uint32 verifierIndex, address[] memory tokens) external onlyOwner {
         if (verifiers[verifierIndex] == address(0)) {
-            revert Errors.InvalidVerifierAddress();
+            revert Errors.InvalidVerifier();
         }
         for (uint256 i = 0; i < tokens.length; i++) {
             allowedVerifiersForToken[tokens[i]][verifierIndex] = true;
@@ -76,16 +76,16 @@ contract VRLSettlementObserver is Ownable, IVRLSettlementObserver {
         address token = tokenIndex == 0 ? Currency.unwrap(poolKey.currency0) : Currency.unwrap(poolKey.currency1);
 
         if (settlementProof.length == 0) {
-            revert Errors.InvalidSettlementProof();
+            revert Errors.InvalidProof();
         }
 
         address verifierAddress = verifiers[verifierIndex];
         if (verifierAddress == address(0)) {
-            revert Errors.InvalidVerifierAddress();
+            revert Errors.InvalidVerifier();
         }
 
         if (!allowedVerifiersForToken[token][verifierIndex]) {
-            revert Errors.VerifierNotMapped();
+            revert Errors.InvalidVerifier();
         }
 
         // Verify the settlement proof
@@ -93,7 +93,7 @@ contract VRLSettlementObserver is Ownable, IVRLSettlementObserver {
         isProofValid =
             verifier.verifySettlementProof(settlementProof, abi.encode(PoolId.unwrap(poolKey.toId()), tokenIndex));
         if (revertOnInvalid && !isProofValid) {
-            revert Errors.InvalidSettlementProof();
+            revert Errors.InvalidProof();
         }
     }
 }

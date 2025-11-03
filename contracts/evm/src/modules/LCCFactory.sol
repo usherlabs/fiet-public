@@ -65,7 +65,7 @@ abstract contract LCCFactory {
 
     modifier onlyIssuer(address lcc) {
         if (!_isCallerIssuer(lcc)) {
-            revert Errors.SenderNotIssuer(msg.sender);
+            revert Errors.NotApproved(msg.sender);
         }
         _;
     }

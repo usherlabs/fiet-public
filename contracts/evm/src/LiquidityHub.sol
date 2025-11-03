@@ -47,14 +47,14 @@ contract LiquidityHub is Ownable, LCCFactory {
 
     modifier onlyFactory() {
         if (!isFactory[_msgSender()]) {
-            revert Errors.InvalidCaller();
+            revert Errors.InvalidSender();
         }
         _;
     }
 
     modifier onlyFactoryOrOwner() {
         if (!isFactory[_msgSender()] && _msgSender() != owner()) {
-            revert Errors.InvalidCaller();
+            revert Errors.InvalidSender();
         }
         _;
     }
@@ -257,7 +257,7 @@ contract LiquidityHub is Ownable, LCCFactory {
 
         // if the UA supply that was wrapped is less than the amount to unwrap, then revert
         if (directSupply[lcc] < amount) {
-            revert Errors.InsufficientWrappedLiquidity(amount, directSupply[lcc]);
+            revert Errors.InsufficientLiquidity(amount, directSupply[lcc]);
         }
 
         directSupply[lcc] -= amount;
@@ -376,7 +376,7 @@ contract LiquidityHub is Ownable, LCCFactory {
         uint256 amountToTransfer
     ) external onlyValidLcc(lcc) {
         if (_msgSender() != lcc) {
-            revert Errors.InvalidCaller();
+            revert Errors.InvalidSender();
         }
 
         uint256 queued = settleQueue[lcc][from];

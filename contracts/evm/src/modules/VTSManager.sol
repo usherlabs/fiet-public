@@ -125,7 +125,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
 
     modifier onlyMMPosition(PositionId _positionId) {
         if (!_isCallerMMP(msg.sender) || !_isMMPosition(_positionId)) {
-            revert Errors.InvalidCaller();
+            revert Errors.InvalidSender();
         }
         _;
     }

@@ -8,7 +8,6 @@ import {OracleUtils} from "./libraries/OracleUtils.sol";
 import {Errors} from "./libraries/Errors.sol";
 
 contract OracleHelper is Ownable {
-
     IResilientOracle public oracle;
 
     // Mapping of ticker hash to asset address
@@ -17,7 +16,7 @@ contract OracleHelper is Ownable {
     event TickerUpdated(string indexed ticker, bytes32 indexed tickerHash, address indexed newAsset);
 
     constructor(address _oracle) Ownable(msg.sender) {
-        if (_oracle == address(0)) revert Errors.InvalidOracleAddress();
+        if (_oracle == address(0)) revert Errors.InvalidAddress(_oracle);
         oracle = IResilientOracle(_oracle);
     }
 
@@ -28,7 +27,7 @@ contract OracleHelper is Ownable {
      * @custom:access Only owner
      */
     function registerTicker(string calldata ticker, address asset) external onlyOwner {
-        if (asset == address(0)) revert Errors.InvalidAssetAddress();
+        if (asset == address(0)) revert Errors.InvalidAddress(asset);
 
         bytes32 tickerHash = keccak256(bytes(ticker));
 

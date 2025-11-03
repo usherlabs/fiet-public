@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-// Concept for centralised source-of-truth for Errors adopted from https://github.com/pendle-finance/pendle-core-v2-public/blob/main/contracts/core/libraries/Errors.sol
+// Concept for centralised source-of-truth for Errors adopted from
+// https://github.com/pendle-finance/pendle-core-v2-public/blob/main/contracts/core/libraries/Errors.sol
 
 // Import required types for error signatures
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PositionId} from "../types/Position.sol";
-import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {RFSCheckpoint} from "../types/Checkpoint.sol";
 
 /**
@@ -19,29 +19,11 @@ library Errors {
     // ============ AUTHORISATION & ACCESS CONTROL ============
     // Errors related to authorisation, permissions, and access control
 
-    /// @notice Thrown when a caller is not authorised to perform an action
-    error InvalidCaller();
-
     /// @notice Thrown when a sender is not authorised for a specific operation
     error InvalidSender();
 
     /// @notice Thrown when the caller is not approved or is not the owner
     error NotApproved(address caller);
-
-    /// @notice Thrown when the caller is not authorised (generic)
-    error NotAuthorised();
-
-    /// @notice Thrown when an unauthorised caller attempts an action
-    error UnauthorizedCaller();
-
-    /// @notice Thrown when an unauthorised signal owner attempts an action
-    error UnauthorizedSignalOwner();
-
-    /// @notice Thrown when an unauthorised advancer attempts an action
-    error UnauthorizedAdvancer();
-
-    /// @notice Thrown when the sender is not a valid issuer
-    error SenderNotIssuer(address sender);
 
     // ============ VALIDATION & INPUT ERRORS ============
     // Errors related to invalid inputs, parameters, and validation failures
@@ -52,35 +34,11 @@ library Errors {
     /// @notice Thrown when an invalid amount is provided with context
     error InvalidAmount(uint256 amount, uint256 maxAmount);
 
-    /// @notice Thrown when an invalid underlying asset address is provided
-    error InvalidUnderlyingAsset();
-
-    /// @notice Thrown when an invalid LCC address is provided
-    error InvalidLcc(address lcc);
-
-    /// @notice Thrown when an invalid hook address is provided
-    error InvalidHookAddress();
-
-    /// @notice Thrown when an invalid oracle address is provided
-    error InvalidOracleAddress();
-
-    /// @notice Thrown when an invalid asset address is provided
-    error InvalidAssetAddress();
+    /// @notice Thrown when an invalid address is provided (zero address or invalid for context)
+    error InvalidAddress(address self);
 
     /// @notice Thrown when an invalid initialiser is provided
     error InvalidInitialiser();
-
-    /// @notice Thrown when an invalid currency is provided
-    error InvalidCurrency(address currency);
-
-    /// @notice Thrown when an invalid bound is provided
-    error InvalidBound();
-
-    /// @notice Thrown when an invalid issuer is provided
-    error InvalidIssuer();
-
-    /// @notice Thrown when an invalid market factory is provided
-    error InvalidMarketFactory();
 
     /// @notice Thrown when an invalid market is provided
     error InvalidMarket(PoolKey poolKey);
@@ -97,35 +55,17 @@ library Errors {
     /// @notice Thrown when an invalid proxy hook flags configuration is provided
     error InvalidProxyHookFlags();
 
-    /// @notice Thrown when an invalid market VTS configuration is provided
-    error InvalidMarketVTSConfiguration(PoolId corePoolId);
-
     /// @notice Thrown when an invalid liquidity signal is provided
     error InvalidLiquiditySignal(uint256 totalSignalUsdValue, uint256 totalLCCValue);
 
-    /// @notice Thrown when an invalid liquidity signal encoding is provided
-    error InvalidLiquiditySignalEncoding();
-
-    /// @notice Thrown when an invalid settlement proof is provided
-    error InvalidSettlementProof();
-
-    /// @notice Thrown when an invalid verifier address is provided
-    error InvalidVerifierAddress();
-
-    /// @notice Thrown when an invalid verifier index is provided
-    error InvalidVerifierIndex();
+    /// @notice Thrown when an invalid verifier is provided (invalid address, index, or not mapped)
+    error InvalidVerifier();
 
     /// @notice Thrown when an invalid nonce is provided
     error InvalidNonce(uint256 newNonce, uint256 prevNonce);
 
     /// @notice Thrown when an invalid proof is provided
     error InvalidProof();
-
-    /// @notice Thrown when an invalid merkle proof is provided
-    error InvalidMerkleProof();
-
-    /// @notice Thrown when an invalid root state hash signature is provided
-    error InvalidRootStateHashSignature();
 
     /// @notice Thrown when an invalid fee configuration is provided for exact output swaps
     error InvalidFeeForExactOut();
@@ -164,22 +104,13 @@ library Errors {
     // Errors related to liquidity operations, balances, and insufficient funds
 
     /// @notice Thrown when there is insufficient wrapped liquidity available
-    error InsufficientWrappedLiquidity(uint256 requested, uint256 available);
+    error InsufficientLiquidity(uint256 requested, uint256 available);
 
     /// @notice Thrown when there is insufficient liquidity to take from the vault
     error InsufficientLiquidityToTake();
 
     /// @notice Thrown when there is insufficient liquidity to settle
     error InsufficientLiquidityToSettle();
-
-    /// @notice Thrown when there is insufficient liquidity in a signal
-    error InsufficientLiquidityInSignal(uint256 totalSignalUsdValue, uint256 totalLCCValue);
-
-    /// @notice Thrown when there is insufficient ETH sent
-    error InsufficientETH();
-
-    /// @notice Thrown when insufficient ETH is sent for a transaction
-    error InsufficientETHSent();
 
     /// @notice Thrown when there is insufficient balance for an operation
     error InsufficientBalance(address sender, uint256 balance, uint256 needed);
@@ -231,12 +162,6 @@ library Errors {
 
     /// @notice Thrown when the grace period has not elapsed for a position (PositionId variant)
     error GracePeriodNotElapsed(PositionId positionId);
-
-    // ============ VERIFIER & SETTLEMENT ERRORS ============
-    // Errors related to verifiers, settlement proofs, and verification failures
-
-    /// @notice Thrown when a verifier is not mapped for a token
-    error VerifierNotMapped();
 
     // ============ FACTORY & CREATION ERRORS ============
     // Errors related to factory operations and token creation
