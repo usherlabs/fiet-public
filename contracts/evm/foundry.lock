@@ -1,4 +1,19 @@
 {
+  "contracts/evm/lib/forge-std": {
+    "rev": "77041d2ce690e692d6e03cc812b57d1ddaa4d505"
+  },
+  "contracts/evm/lib/openzeppelin-contracts": {
+    "rev": "f9f7db03f3df020aace3958b8fb7de8891d133e5"
+  },
+  "contracts/evm/lib/permit2": {
+    "rev": "cc56ad0f3439c502c246fc5cfcc3db92bb8b7219"
+  },
+  "contracts/evm/lib/solady": {
+    "rev": "acd959aa4bd04720d640bf4e6a5c71037510cc4b"
+  },
+  "contracts/evm/lib/v4-periphery": {
+    "rev": "ad04c9f24a170accf5ea1b2836bbafd514537ca6"
+  },
   "lib/chainlink-brownie-contracts": {
     "rev": "5cb41fbc9b525338b6098da5ea7dd0b7e92f89e4"
   },
@@ -7,6 +22,12 @@
   },
   "lib/openzeppelin-contracts": {
     "rev": "f9f7db03f3df020aace3958b8fb7de8891d133e5"
+  },
+  "lib/oracle": {
+    "tag": {
+      "name": "v2.14.0",
+      "rev": "14be16854577feb440faa566ea877c80dfebabcc"
+    }
   },
   "lib/permit2": {
     "rev": "cc56ad0f3439c502c246fc5cfcc3db92bb8b7219"

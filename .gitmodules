@@ -7,8 +7,8 @@
 [submodule "solidity/lib/openzeppelin-contracts"]
 	path = contracts/evm/lib/openzeppelin-contracts
 	url = https://github.com/OpenZeppelin/openzeppelin-contracts
-[submodule "solidity/oracle-scripts/oracle"]
-	path = contracts/evm/oracle-scripts/oracle
+[submodule "contracts/evm/lib/oracle"]
+	path = contracts/evm/lib/oracle
 	url = https://github.com/VenusProtocol/oracle
 [submodule "solidity/lib/solady"]
 	path = contracts/evm/lib/solady
