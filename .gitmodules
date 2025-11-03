@@ -13,3 +13,6 @@
 [submodule "solidity/lib/solady"]
 	path = contracts/evm/lib/solady
 	url = https://github.com/Vectorized/solady
+[submodule "contracts/evm/lib/permit2"]
+	path = contracts/evm/lib/permit2
+	url = https://github.com/Uniswap/permit2
