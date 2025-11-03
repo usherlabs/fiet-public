@@ -3,10 +3,10 @@
 # @dev:  sh ./deploy.sh development
 
 # Copy the modified hardhat.config.ts to the oracle directory
-cp ./hardhat.custom.config.ts ./oracle/hardhat.config.ts
+cp ./hardhat.custom.config.ts ./lib/oracle/hardhat.config.ts
 
 # navigate into the oracle directory
-cd oracle
+cd ./lib/oracle
 
 # install dependencies
 yarn install

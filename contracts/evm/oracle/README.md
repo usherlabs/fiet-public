@@ -16,7 +16,7 @@ The oracle deployment scripts provide a customised deployment process that:
 - Node.js and Yarn installed
 - Access to the target network RPC endpoints
 - Private key configured in `.env` file (for non-development networks)
-- Git submodule initialised (`oracle` directory)
+- Git submodule initialised (`lib/oracle` directory)
 
 ## Network Configuration
 
@@ -49,8 +49,8 @@ sh ./deploy.sh arbitrumone
 
 The deployment script (`deploy.sh`) performs the following steps:
 
-1. **Configuration Setup**: Copies the custom Hardhat configuration (`hardhat.custom.config.ts`) into the oracle submodule directory, overriding the default configuration
-2. **Dependency Installation**: Installs required dependencies within the oracle directory
+1. **Configuration Setup**: Copies the custom Hardhat configuration (`hardhat.custom.config.ts`) into the `lib/oracle` submodule directory, overriding the default configuration
+2. **Dependency Installation**: Installs required dependencies within the `lib/oracle` directory
 3. **Deployment Execution**: Runs Hardhat deployment with the specified network and deployment tags
 4. **Artifact Storage**: Saves deployment artifacts to `deployments/oracle_deployments/<chain>/`
 
@@ -98,5 +98,5 @@ The deployment script uses environment variables from the project root `.env` fi
 
 - The `--reset` flag is used by default to force fresh deployments and bypass cache
 - The deployment uses the `--tags deploy` flag to execute only tagged deployment scripts
-- Ensure the oracle git submodule is initialised and up to date before deployment
+- Ensure the oracle git submodule is initialised and up to date before deployment (located at `contracts/evm/lib/oracle`)
 - For production deployments, verify all contract addresses and configuration parameters

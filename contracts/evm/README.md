@@ -61,8 +61,6 @@ pnpm install
 
 # Install Forge dependencies
 forge install
-
-git submodule update --init
 ```
 
 ## Environment Setup

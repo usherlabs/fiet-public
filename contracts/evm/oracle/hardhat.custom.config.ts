@@ -88,7 +88,7 @@ const config: HardhatUserConfig = {
   networks: {
     development: {
       url: "http://127.0.0.1:8545/",
-      chainId: 31337,
+      chainId: process.env.CHAIN_ID || 31337,
       live: false,
     },
     sepolia: {
