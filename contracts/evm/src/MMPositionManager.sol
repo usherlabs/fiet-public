@@ -38,6 +38,7 @@ import {TransientSlots} from "./libraries/TransientSlots.sol";
 
 import {ICommitmentDescriptor} from "./interfaces/ICommitmentDescriptor.sol";
 import {ILiquidityHub} from "./interfaces/ILiquidityHub.sol";
+import {IMMPositionManager} from "./interfaces/IMMPositionManager.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Errors} from "./libraries/Errors.sol";
 

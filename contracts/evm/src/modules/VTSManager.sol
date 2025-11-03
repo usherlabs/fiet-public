@@ -167,7 +167,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     function setMarketVTSConfiguration(PoolId corePoolId, MarketVTSConfiguration memory vtsConfiguration)
         public
         override
-        onlyMarketFactory
+        onlyFactory
     {
         corePoolToVTSConfiguration[corePoolId] = vtsConfiguration;
 
@@ -542,7 +542,8 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     /**
      * @dev Called by MarketFactory to increment unwrap coverage. (ie. if liquidity taken by LiquidityHub for unwraps)
      * @param poolId The pool id
-     * @param amount The amount to increment the coverage by
+     * @param amount0 The amount to increment the coverage by for token0
+     * @param amount1 The amount to increment the coverage by for token1
      */
     function incrementCoverage(PoolId poolId, uint256 amount0, uint256 amount1) external onlyFactory {
         if (amount0 > 0) {

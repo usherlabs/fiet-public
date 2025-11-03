@@ -288,9 +288,9 @@ contract CompleteDeployScript is ScriptHelper {
         console.log("WETH9 queried from PositionManager:", wethAddress);
 
         IWETH9 weth9 = IWETH9(wethAddress);
-        address commitmentDescriptor = _deployCommitmentDescriptor();
+        address commitmentDescriptorAddr = _deployCommitmentDescriptor();
         MMPositionManager positionManager = new MMPositionManager(
-            poolManagerAddress, signalManager, marketFactory, settlementObserver, commitmentDescriptor, weth9
+            poolManagerAddress, signalManager, marketFactory, settlementObserver, commitmentDescriptorAddr, weth9
         );
         console.log("MMPositionManager deployed at:", address(positionManager));
         return address(positionManager);

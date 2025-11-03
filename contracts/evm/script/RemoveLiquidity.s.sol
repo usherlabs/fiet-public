@@ -80,7 +80,7 @@ contract RemoveLiquidityScript is ScriptHelper {
         address marketFactoryAddr = readAddress("marketFactory");
         address liquidityHubAddr = readAddress("liquidityHub");
         IMarketFactory factory = IMarketFactory(marketFactoryAddr);
-        ILiquidityHub liquidityHub = ILiquidityHub(liquidityHubAddr);
+        liquidityHub = ILiquidityHub(liquidityHubAddr);
 
         // Require CORE_POOL_ID to be provided
         string memory corePoolId = vm.envString("CORE_POOL_ID");

@@ -13,7 +13,7 @@ abstract contract MarketHandler {
         marketFactory = _marketFactory;
     }
 
-    modifier onlyMarketFactory() {
+    modifier onlyFactory() {
         if (msg.sender != marketFactory) revert Errors.InvalidSender();
         _;
     }

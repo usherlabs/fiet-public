@@ -118,24 +118,24 @@ abstract contract RFSCheckpointModule {
         bool revertOnFalse
     ) internal view returns (bool) {
         PositionId positionId = getPositionId(tokenId, positionIndex);
-        RFSCheckpoint memory checkpoint = positionToCheckpoint[positionId];
-        if (!checkpoint.isOpen) {
+        RFSCheckpoint memory checkpointData = positionToCheckpoint[positionId];
+        if (!checkpointData.isOpen) {
             if (revertOnFalse) {
-                revert Errors.GracePeriodNotElapsed(tokenId, positionIndex, positionId, checkpoint);
+                revert Errors.GracePeriodNotElapsed(tokenId, positionIndex, positionId, checkpointData);
             }
             return false;
         }
-        uint256 timeSinceLastCheckpoint = block.timestamp - checkpoint.timeOfLastTransition;
+        uint256 timeSinceLastCheckpoint = block.timestamp - checkpointData.timeOfLastTransition;
 
-        uint256 totalGracePeriod0 = vtsConfiguration.token0.gracePeriodTime + checkpoint.gracePeriodExtension0;
-        uint256 totalGracePeriod1 = vtsConfiguration.token1.gracePeriodTime + checkpoint.gracePeriodExtension1;
+        uint256 totalGracePeriod0 = vtsConfiguration.token0.gracePeriodTime + checkpointData.gracePeriodExtension0;
+        uint256 totalGracePeriod1 = vtsConfiguration.token1.gracePeriodTime + checkpointData.gracePeriodExtension1;
 
         bool gracePeriod0Elapsed = timeSinceLastCheckpoint > totalGracePeriod0;
         bool gracePeriod1Elapsed = timeSinceLastCheckpoint > totalGracePeriod1;
 
         bool isSeizable = gracePeriod0Elapsed || gracePeriod1Elapsed;
         if (revertOnFalse && !isSeizable) {
-            revert Errors.GracePeriodNotElapsed(tokenId, positionIndex, positionId, checkpoint);
+            revert Errors.GracePeriodNotElapsed(tokenId, positionIndex, positionId, checkpointData);
         }
 
         return isSeizable;

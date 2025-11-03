@@ -94,6 +94,13 @@ abstract contract MarketVault is IMarketVault {
         _;
     }
 
+    modifier onlyFactory() {
+        if (msg.sender != address(marketFactory)) {
+            revert Errors.InvalidSender();
+        }
+        _;
+    }
+
     function _underlying() internal view virtual returns (Currency currency0, Currency currency1);
 
     function _lccs() internal view virtual returns (ILCC lccToken0, ILCC lccToken1);
@@ -337,7 +344,7 @@ abstract contract MarketVault is IMarketVault {
      *         currently available in the vault. The ProxyHook will have already taken the full
      *         LCC amount from the PoolManager, so the deficit represents the shortfall that needs
      *         to be handled separately.
-     * @param key The pool key identifying the market
+     * @param poolId The pool ID identifying the market
      * @param lccToken The LCC token contract to cancel
      * @param amount The amount of LCC tokens requested to be cancelled
      * @param deficitRecipient The address to receive any deficit amount (if insufficient liquidity)
