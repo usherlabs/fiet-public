@@ -21,6 +21,7 @@ import {HookMiner} from "v4-periphery/src/utils/HookMiner.sol";
 import {ProxyHook} from "../src/ProxyHook.sol";
 import {VTSConfigs} from "../src/libraries/VTSConfigs.sol";
 import {HookFlags} from "../src/libraries/HookFlags.sol";
+import {ILiquidityHub} from "../src/interfaces/ILiquidityHub.sol";
 
 /**
  * @title CreateMarketScript
@@ -188,8 +189,9 @@ contract CreateMarketScript is ScriptHelper {
         } catch {
             MarketFactory factory = MarketFactory(marketFactory);
 
-            address lccToken0 = factory.getOrCreateLCC(underlyingAsset0);
-            address lccToken1 = factory.getOrCreateLCC(underlyingAsset1);
+            // Note: LCC tokens are created when markets are created, so we can't get them beforehand
+            // For price calculation, we'll use the underlying assets directly
+            // The market creation will handle LCC token creation automatically
 
             if (bytes(referencePoolIdStr).length > 0) {
                 console.log("Using reference pool %s for initial price", referencePoolIdStr);
@@ -201,15 +203,10 @@ contract CreateMarketScript is ScriptHelper {
 
                 (uint160 sqrtPrice,,,) = manager.getSlot0(referencePoolId);
 
-                bool needsInversion = (underlyingAsset0 < underlyingAsset1) != (lccToken0 < lccToken1);
-
+                // For price calculation, we assume underlying assets are already sorted
+                // LCC tokens will be sorted the same way when created
                 uint8 dec0 = IERC20Metadata(underlyingAsset0).decimals();
                 uint8 dec1 = IERC20Metadata(underlyingAsset1).decimals();
-
-                if (needsInversion) {
-                    sqrtPrice = uint160((uint256(1) << 192) / sqrtPrice);
-                    (dec0, dec1) = (dec1, dec0);
-                }
 
                 int8 decDiff = int8(dec1) - int8(dec0);
                 if (decDiff != 0) {
@@ -244,9 +241,9 @@ contract CreateMarketScript is ScriptHelper {
                     uint8 dec0 = IERC20Metadata(underlyingAsset0).decimals();
                     uint8 dec1 = IERC20Metadata(underlyingAsset1).decimals();
 
-                    (Currency coreCurr0,) = CurrencySortHelper.sortAddresses(lccToken0, lccToken1);
-                    bool isAsset0Core0 =
-                        (underlyingAsset0 < underlyingAsset1) == (Currency.unwrap(coreCurr0) == lccToken0);
+                    // Assets are already sorted by CurrencySortHelper earlier in the function
+                    // LCC tokens will maintain the same order when created
+                    bool isAsset0Core0 = (underlyingAsset0 < underlyingAsset1);
 
                     uint256 price;
                     if (isAsset0Core0) {
@@ -318,10 +315,12 @@ contract CreateMarketScript is ScriptHelper {
         console.log("Core Pool ID:", string.concat("", vm.toString(PoolId.unwrap(corePoolId))));
         console.log("Proxy Pool ID:", string.concat("", vm.toString(PoolId.unwrap(proxyPoolId))));
 
-        // Get LCC tokens
+        // Get LCC tokens from LiquidityHub via MarketFactory
         MarketFactory factory = MarketFactory(marketFactory);
-        address lccTokenOfAsset0 = factory.getLCC(underlyingAsset0);
-        address lccTokenOfAsset1 = factory.getLCC(underlyingAsset1);
+        ILiquidityHub liquidityHub = ILiquidityHub(factory.liquidityHub());
+        bytes32 marketId = PoolId.unwrap(corePoolId);
+        address lccTokenOfAsset0 = liquidityHub.getLCC(marketId, underlyingAsset0);
+        address lccTokenOfAsset1 = liquidityHub.getLCC(marketId, underlyingAsset1);
 
         console.log("Underlying Asset 0:", underlyingAsset0);
         console.log("Underlying Asset 1:", underlyingAsset1);
@@ -351,10 +350,12 @@ contract CreateMarketScript is ScriptHelper {
         // Create a unique market identifier
         string memory marketId = vm.toString(PoolId.unwrap(corePoolId));
 
-        // Get LCC tokens
+        // Get LCC tokens from LiquidityHub via MarketFactory
         MarketFactory factory = MarketFactory(marketFactory);
-        address lccTokenOfAsset0 = factory.getLCC(underlyingAsset0);
-        address lccTokenOfAsset1 = factory.getLCC(underlyingAsset1);
+        ILiquidityHub liquidityHub = ILiquidityHub(factory.liquidityHub());
+        bytes32 marketIdBytes = PoolId.unwrap(corePoolId);
+        address lccTokenOfAsset0 = liquidityHub.getLCC(marketIdBytes, underlyingAsset0);
+        address lccTokenOfAsset1 = liquidityHub.getLCC(marketIdBytes, underlyingAsset1);
 
         writeString(string.concat(marketId, "_corePoolId"), vm.toString(PoolId.unwrap(corePoolId)));
         writeString(string.concat(marketId, "_proxyPoolId"), vm.toString(PoolId.unwrap(proxyPoolId)));
@@ -385,22 +386,26 @@ contract CreateMarketScript is ScriptHelper {
 
         console.log("Pool relationships verified");
 
-        // Verify LCC tokens exist
-        address lccToken0 = factory.getLCC(Currency.unwrap(underlyingCurrency0));
-        address lccToken1 = factory.getLCC(Currency.unwrap(underlyingCurrency1));
+        // Verify LCC tokens exist via LiquidityHub
+        MarketFactory factoryInstance = MarketFactory(marketFactory);
+        ILiquidityHub liquidityHub = ILiquidityHub(factoryInstance.liquidityHub());
+
+        bytes32 marketIdBytes = PoolId.unwrap(corePoolId);
+        address lccToken0 = liquidityHub.getLCC(marketIdBytes, Currency.unwrap(underlyingCurrency0));
+        address lccToken1 = liquidityHub.getLCC(marketIdBytes, Currency.unwrap(underlyingCurrency1));
 
         require(lccToken0 != address(0), "LCC token 0 not found");
         require(lccToken1 != address(0), "LCC token 1 not found");
 
         console.log("LCC tokens verified");
 
-        // Verify underlying assets
+        // Verify underlying assets via LiquidityHub
         require(
-            factory.getUnderlyingAsset(lccToken0) == Currency.unwrap(underlyingCurrency0),
+            liquidityHub.getUnderlyingAsset(lccToken0) == Currency.unwrap(underlyingCurrency0),
             "LCC token 0 underlying mismatch"
         );
         require(
-            factory.getUnderlyingAsset(lccToken1) == Currency.unwrap(underlyingCurrency1),
+            liquidityHub.getUnderlyingAsset(lccToken1) == Currency.unwrap(underlyingCurrency1),
             "LCC token 1 underlying mismatch"
         );
 

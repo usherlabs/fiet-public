@@ -24,6 +24,7 @@ import {ScriptHelper} from "./libraries/ScriptHelper.s.sol";
 import {ProxyHook} from "../src/ProxyHook.sol";
 import {CurrencySortHelper} from "./libraries/CurrencySortHelper.sol";
 import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
+import {ILiquidityHub} from "../src/interfaces/ILiquidityHub.sol";
 import {ArbitrumConstants} from "./constants/Arbitrum.sol";
 import {EthSepoliaConstants} from "./constants/EthSepolia.sol";
 
@@ -32,6 +33,8 @@ contract AddLiquidityScript is ScriptHelper {
     using PoolIdLibrary for PoolKey;
 
     ProxyHook proxyHook;
+
+    ILiquidityHub public liquidityHub;
 
     // Core pool tokens (intent tokens - WHERE LIQUIDITY GOES)
     LiquidityCommitmentCertificate lcc0;
@@ -100,8 +103,11 @@ contract AddLiquidityScript is ScriptHelper {
         // Load deployment addresses
         _setFilename(networkName);
         address marketFactoryAddr = readAddress("marketFactory");
+        address liquidityHubAddr = readAddress("liquidityHub");
         console.log("Market Factory Address: ", marketFactoryAddr);
+        console.log("Liquidity Hub Address: ", liquidityHubAddr);
         IMarketFactory factory = IMarketFactory(marketFactoryAddr);
+        liquidityHub = ILiquidityHub(liquidityHubAddr);
 
         try vm.envAddress("UNDERLYING_ASSET_0") returns (address asset) {
             token0 = asset;
@@ -125,15 +131,27 @@ contract AddLiquidityScript is ScriptHelper {
 
         address coreHookAddr = factory.getCoreHook();
 
-        // Load LCC tokens from factory
-        lcc0 = LiquidityCommitmentCertificate(factory.getLCC(token0));
-        lcc1 = LiquidityCommitmentCertificate(factory.getLCC(token1));
+        // Note: LCC tokens are market-specific, so we need to get them from a market
+        // For now, we'll need to get the market ID from the pool key
+        // This assumes markets have already been created
+        // Load LCC tokens from factory - MarketFactory delegates to LiquidityHub
+        // But we need marketId, so we'll get it after setting up pool keys
+        // For now, we'll set these up after we have the pool keys
 
         // Load pool parameters from env or defaults
         uint24 coreFee = uint24(vm.envOr("CORE_POOL_FEE", uint256(0)));
         int24 tickSpacingVal = int24(uint24(vm.envOr("TICK_SPACING", uint256(60))));
 
         setupPoolKeys(factory, coreHookAddr, coreFee, tickSpacingVal);
+
+        // Get LCC tokens from the market
+        PoolId corePoolId = corePoolKey.toId();
+        bytes32 marketId = PoolId.unwrap(corePoolId);
+        address lcc0Addr = liquidityHub.getLCC(marketId, token0);
+        address lcc1Addr = liquidityHub.getLCC(marketId, token1);
+        lcc0 = LiquidityCommitmentCertificate(lcc0Addr);
+        lcc1 = LiquidityCommitmentCertificate(lcc1Addr);
+
         setupAmounts();
 
         // Get the proxy pool id and hook from the core pool id just created
@@ -301,10 +319,20 @@ contract AddLiquidityScript is ScriptHelper {
         uint256 current = lccToken.balanceOf(user);
         if (current < desired) {
             uint256 needed = desired - current;
-            uint256 available = IERC20(lccToken.underlying()).balanceOf(user);
-            string memory name = IERC20Metadata(lccToken.underlying()).name();
+            address underlying = lccToken.underlying();
+            uint256 available = IERC20(underlying).balanceOf(user);
+            string memory name = IERC20Metadata(underlying).name();
             require(available >= needed, string(abi.encodePacked(name, " insufficient")));
-            lccToken.wrap(needed);
+
+            // Use LiquidityHub to wrap underlying to LCC
+            // Wrap via LiquidityHub
+            if (underlying == address(0)) {
+                // Native ETH wrapping
+                liquidityHub.wrap{value: needed}(address(lccToken), needed);
+            } else {
+                // ERC20 wrapping
+                liquidityHub.wrap(address(lccToken), needed);
+            }
         }
     }
 

@@ -3,14 +3,22 @@ pragma solidity ^0.8.0;
 
 import "forge-std/Script.sol";
 import {LiquidityCommitmentCertificate} from "../src/LCC.sol";
+import {ILiquidityHub} from "../src/interfaces/ILiquidityHub.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {ScriptHelper} from "./libraries/ScriptHelper.s.sol";
 
-contract UnwrapLCCScript is Script {
+contract UnwrapLCCScript is ScriptHelper {
     function run() external {
         uint256 privateKey = uint256(vm.envBytes32("LP_PRIVATE_KEY"));
         address wallet = vm.addr(privateKey);
 
         address lccAddress = vm.envAddress("LCC_ADDRESS");
+
+        // Get LiquidityHub address from deployment
+        string memory networkName = vm.envOr("NETWORK", string("sepolia"));
+        _setFilename(networkName);
+        address liquidityHubAddr = readAddress("liquidityHub");
+        ILiquidityHub liquidityHub = ILiquidityHub(liquidityHubAddr);
 
         LiquidityCommitmentCertificate lcc = LiquidityCommitmentCertificate(lccAddress);
 
@@ -22,7 +30,8 @@ contract UnwrapLCCScript is Script {
         }
 
         vm.startBroadcast(privateKey);
-        lcc.unwrap(balance);
+        // Use LiquidityHub to unwrap LCC to underlying
+        liquidityHub.unwrap(lccAddress, balance);
         vm.stopBroadcast();
 
         console.log("Unwrapped %s LCC tokens to underlying asset.", balance);

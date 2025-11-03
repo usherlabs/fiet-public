@@ -26,6 +26,9 @@ import {VRLSettlementObserver} from "../src/VRLSettlementObserver.sol";
 import {StubSettlementVerifier} from "../src/verifiers/StubSettlementVerifier.sol";
 import {OracleHelper} from "../src/OracleHelper.sol";
 import {MMPCommitmentDescriptor} from "../src/MMPCommitmentDescriptor.sol";
+import {LiquidityHub} from "../src/LiquidityHub.sol";
+import {GlobalConfig} from "../src/GlobalConfig.sol";
+import {ECDSASignatureSignalVerifier} from "../src/verifiers/ECDSASignatureSignalVerifier.sol";
 
 /**
  * @title CompleteDeployScript
@@ -33,13 +36,17 @@ import {MMPCommitmentDescriptor} from "../src/MMPCommitmentDescriptor.sol";
  * @dev Deploys contracts in the correct order with proper HookMiner logic
  *
  * Deployment Order:
- * 1. Deploy OracleRegistry and ChainlinkFactory
- * 2. Deploy MarketFactory (without hooks)
- * 3. Deploy MMPositionManager (must be deployed before CoreHook)
- * 4. Deploy CoreHook (with proper flags and MarketFactory address)
- * 5. Set hooks in MarketFactory using setHooks()
- * 6. Verify hooks (set cross-references)
- * 7. Add protocol addresses to bounds array
+ * 1. Deploy OracleHelper
+ * 2. Deploy LiquidityHub (must be before MarketFactory)
+ * 3. Deploy MarketFactory (with LiquidityHub, without hooks or mmPositionManager initially)
+ * 4. Enable MarketFactory in LiquidityHub
+ * 5. Deploy Verifiers (needs MarketFactory)
+ * 6. Deploy MMPositionManager (must be deployed before CoreHook)
+ * 7. Deploy CoreHook (with proper flags and MarketFactory address)
+ * 8. Set hooks in MarketFactory using setHooks()
+ * 9. Verify hooks (set cross-references)
+ * 10. Add protocol addresses to bounds array (LiquidityHub already in bounds via constructor)
+ * 11. Deploy GlobalConfig and transfer ownership
  */
 contract CompleteDeployScript is ScriptHelper {
     // Deployed contract addresses
@@ -48,6 +55,7 @@ contract CompleteDeployScript is ScriptHelper {
     address public marketFactory;
     address public mmPositionManager;
     address public oracleHelper;
+    address public liquidityHub;
     address public signalManager;
     address public settlementObserver;
     address public globalConfig;
@@ -88,40 +96,50 @@ contract CompleteDeployScript is ScriptHelper {
         oracleHelper = _deployOracleHelper();
         console.log("OracleHelper deployed at:", oracleHelper);
 
-        // Step 2: Deploy MarketFactory
+        // Step 2: Deploy LiquidityHub (must be before MarketFactory)
+        console.log("\n=== Deploying LiquidityHub ===");
+        liquidityHub = _deployLiquidityHub();
+        console.log("LiquidityHub deployed at:", liquidityHub);
+
+        // Step 3: Deploy MarketFactory (with LiquidityHub, without hooks or mmPositionManager initially)
         console.log("\n=== Deploying MarketFactory ===");
         marketFactory = _deployMarketFactory();
         console.log("MarketFactory deployed at:", marketFactory);
 
-        // Step 3: Deploy Verifiers
+        // Step 4: Enable MarketFactory in LiquidityHub
+        console.log("\n=== Enabling MarketFactory in LiquidityHub ===");
+        _enableFactoryInLiquidityHub();
+
+        // Step 5: Deploy Verifiers
         console.log("\n=== Deploying Verifiers ===");
         _deployVerifiers();
         console.log("SignalManager deployed at:", signalManager);
         console.log("SettlementObserver deployed at:", settlementObserver);
 
-        // Step 4: Deploy MMPositionManager (must be before CoreHook)
+        // Step 6: Deploy MMPositionManager (must be before CoreHook)
         console.log("\n=== Deploying MMPositionManager ===");
         mmPositionManager = _deployMMPositionManager();
         console.log("MMPositionManager deployed at:", mmPositionManager);
 
-        // Step 5: Deploy CoreHook
+        // Step 7: Deploy CoreHook
         console.log("\n=== Deploying CoreHook ===");
         coreHook = _deployCoreHook();
         console.log("CoreHook deployed at:", coreHook);
 
-        // Step 6: Set hooks in MarketFactory
+        // Step 8: Set hooks in MarketFactory
         console.log("\n=== Setting Hooks in MarketFactory ===");
         _setHooksInFactory();
 
-        // Step 7: Verify hooks addresses across the contracts
+        // Step 9: Verify hooks addresses across the contracts
         console.log("\n=== Verifying Hooks ===");
         _verifyHooks();
 
-        // Step 8: Add all the protocol addresses expected to hold LCC as a protocol bound address in the market factory
+        // Step 10: Add all the protocol addresses expected to hold LCC as a protocol bound address in the market factory
+        // Note: LiquidityHub is already added to bounds in MarketFactory constructor
         console.log("\n=== Adding addresses to bounds array ===");
         _addAddressesToBounds();
 
-        // Step 9: Deploy GlobalConfig and assign ownership to the market factory
+        // Step 11: Deploy GlobalConfig and assign ownership to the market factory
         console.log("\n=== Deploying GlobalConfig ===");
         globalConfig = _setupGlobalConfig();
         console.log("GlobalConfig deployed at:", globalConfig);
@@ -134,6 +152,7 @@ contract CompleteDeployScript is ScriptHelper {
         console.log("\n=== Deployment Complete ===");
         console.log("CoreHook:", coreHook);
         console.log("MarketFactory:", marketFactory);
+        console.log("LiquidityHub:", liquidityHub);
         console.log("MMPositionManager:", mmPositionManager);
     }
 
@@ -165,6 +184,30 @@ contract CompleteDeployScript is ScriptHelper {
     }
 
     /**
+     * @dev Deploys LiquidityHub with native asset configuration
+     * @return The deployed LiquidityHub address
+     */
+    function _deployLiquidityHub() internal returns (address) {
+        // Native asset configuration - these can be overridden via env vars if needed
+        string memory nativeAssetName = vm.envOr("NATIVE_ASSET_NAME", string("Ethereum"));
+        string memory nativeAssetSymbol = vm.envOr("NATIVE_ASSET_SYMBOL", string("ETH"));
+        uint8 nativeAssetDecimals = uint8(vm.envOr("NATIVE_ASSET_DECIMALS", uint256(18)));
+
+        LiquidityHub hub = new LiquidityHub(oracleHelper, nativeAssetName, nativeAssetSymbol, nativeAssetDecimals);
+
+        return address(hub);
+    }
+
+    /**
+     * @dev Enables MarketFactory in LiquidityHub so it can create LCC pairs
+     */
+    function _enableFactoryInLiquidityHub() internal {
+        LiquidityHub hub = LiquidityHub(liquidityHub);
+        hub.setFactory(marketFactory, true);
+        console.log("MarketFactory enabled in LiquidityHub");
+    }
+
+    /**
      * @dev Deploys CoreHook using HookMiner to find correct address
      * @return The deployed CoreHook address
      */
@@ -184,14 +227,26 @@ contract CompleteDeployScript is ScriptHelper {
     }
 
     /**
-     * @dev Deploys MarketFactory without hooks (hooks will be set later)
+     * @dev Deploys MarketFactory with LiquidityHub (hooks and mmPositionManager will be set later)
      * @return The deployed MarketFactory address
+     * @notice mmPositionManager is set to address(0) initially due to circular dependency.
+     *         It will be used when creating markets, but MarketFactory is already deployed.
      */
     function _deployMarketFactory() internal returns (address) {
         // Initial bounds array (empty for now, can be updated later)
+        // Note: LiquidityHub is automatically added to bounds in MarketFactory constructor
         address[] memory initialBounds = new address[](0);
 
-        MarketFactory factory = new MarketFactory(poolManagerAddress, oracleHelper, initialBounds);
+        // Deploy MarketFactory with LiquidityHub, OracleHelper, and address(0) for mmPositionManager
+        // mmPositionManager will be deployed later but MarketFactory constructor requires it
+        // This is acceptable as mmPositionManager is only used when creating markets
+        MarketFactory factory = new MarketFactory(
+            poolManagerAddress,
+            liquidityHub,
+            oracleHelper,
+            address(0), // mmPositionManager - will be set when creating markets
+            initialBounds
+        );
 
         return address(factory);
     }
@@ -272,15 +327,15 @@ contract CompleteDeployScript is ScriptHelper {
     }
 
     /**
-     * @dev adds all relevant addess to bounds array in the market factory
-     * Whitelist protocol
+     * @dev adds all relevant addresses to bounds array in the market factory
+     * Whitelist protocol addresses
+     * @notice LiquidityHub is already added to bounds in MarketFactory constructor
      */
     function _addAddressesToBounds() internal {
-        // ? we can add more bounds here if needed
         MarketFactory factoryInstance = MarketFactory(marketFactory);
         address[] memory bounds = new address[](1);
         bounds[0] = mmPositionManager;
-        // bounds[1] = liquidityHub;
+        // Note: LiquidityHub is already in bounds via MarketFactory constructor
 
         factoryInstance.addBounds(bounds);
     }
@@ -293,6 +348,7 @@ contract CompleteDeployScript is ScriptHelper {
         _setFilename(networkName);
         writeAddress("coreHook", coreHook);
         writeAddress("marketFactory", marketFactory);
+        writeAddress("liquidityHub", liquidityHub);
         writeAddress("positionManager", mmPositionManager);
         writeAddress("oracleHelper", oracleHelper);
         writeAddress("globalConfig", globalConfig);

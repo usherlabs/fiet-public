@@ -21,6 +21,7 @@ import {ScriptHelper} from "./libraries/ScriptHelper.s.sol";
 import {CurrencySortHelper} from "./libraries/CurrencySortHelper.sol";
 import {EthSepoliaConstants} from "./constants/EthSepolia.sol";
 import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
+import {ILiquidityHub} from "../src/interfaces/ILiquidityHub.sol";
 import {LiquidityCommitmentCertificate} from "../src/LCC.sol";
 
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
@@ -65,8 +66,11 @@ contract SwapV4 is ScriptHelper {
         // Load deployment addresses
         _setFilename(networkName);
         address marketFactoryAddr = readAddress("marketFactory");
+        address liquidityHubAddr = readAddress("liquidityHub");
         IMarketFactory marketFactory = IMarketFactory(marketFactoryAddr);
+        ILiquidityHub liquidityHub = ILiquidityHub(liquidityHubAddr);
         console.log("Market Factory loaded: ", marketFactoryAddr);
+        console.log("Liquidity Hub loaded: ", liquidityHubAddr);
 
         address universalRouterAddr;
         address poolManagerAddr;
@@ -98,30 +102,19 @@ contract SwapV4 is ScriptHelper {
         permit2 = IPermit2(permit2Addr);
         console.log("Permit2 loaded");
 
-        // if MODE="local" then do not load core pool id from env variable
-        // the address is hardcoded in the script contracts/evm/exp/Makefile:111
-        // and it is overriding the core pool id and thus the proxy pool id
-        // for a newly created market
-        bool isLocalFork = keccak256(bytes(mode)) == keccak256(bytes("LOCAL"));
-        if (!isLocalFork) {
-            try vm.envString("CORE_POOL_ID") returns (string memory envCorePoolId) {
-                console.log("CORE_POOL_ID loaded from env: ", envCorePoolId);
-                corePoolId = envCorePoolId;
-                bytes memory idBytes = vm.parseBytes(corePoolId);
-                require(idBytes.length == 32, "CORE_POOL_ID must be 32-byte hex");
-                bytes32 parsedId;
-                assembly {
-                    parsedId := mload(add(idBytes, 32))
-                }
-                _corePoolId = PoolId.wrap(parsedId);
-            } catch {}
-        } else {
-            console.log("is running local fork, skipping core pool id loading from env...");
+        // Require CORE_POOL_ID to be provided
+        corePoolId = vm.envString("CORE_POOL_ID");
+        console.log("CORE_POOL_ID loaded from env: ", corePoolId);
+        bytes memory idBytes = vm.parseBytes(corePoolId);
+        require(idBytes.length == 32, "CORE_POOL_ID must be 32-byte hex");
+        bytes32 parsedId;
+        assembly {
+            parsedId := mload(add(idBytes, 32))
         }
+        _corePoolId = PoolId.wrap(parsedId);
 
         uint24 coreFee = 0;
-        // if core pool key is set locally then load it into fee variable
-        // because core pool fee is not always 0
+        // Load core pool fee from markets deployment file
         try vm.envUint("CORE_POOL_FEE") returns (uint256 envFee) {
             coreFee = uint24(envFee);
             console.log("Core Pool fee loaded from env:", coreFee);
@@ -130,74 +123,60 @@ contract SwapV4 is ScriptHelper {
         }
         int24 tickSpacing;
 
-        if (bytes(corePoolId).length == 0) {
-            if (isSepolia) {
-                token0 = readAddress("usdcToken");
-                console.log("Token0 (USDC) loaded from defaults: ", token0);
-                token1 = readAddress("usdtToken");
-                console.log("Token1 (USDT) loaded from defaults: ", token1);
-            } else {
-                revert("CORE_POOL_ID required for non-sepolia networks");
-            }
-            tickSpacing = 60;
-            console.log("Tick spacing (default):", tickSpacing);
-        } else {
-            // Determine correct deployments file (respect MODE and local_ prefix like ScriptHelper)
-            bool isLocalSepolia = isSepolia && keccak256(bytes(mode)) == keccak256(bytes("LOCAL"));
-            string memory prefix = isLocalSepolia ? "local_" : "";
-            string memory filePath = string.concat("./deployments/", prefix, networkName, "_markets_deployments.json");
-            string memory json = vm.readFile(filePath);
+        // Load market parameters from markets deployment file
+        bool isLocalSepolia = isSepolia && keccak256(bytes(mode)) == keccak256(bytes("LOCAL"));
+        string memory prefix = isLocalSepolia ? "local_" : "";
+        string memory filePath = string.concat("./deployments/", prefix, networkName, "_markets_deployments.json");
+        string memory json = vm.readFile(filePath);
 
-            string memory keyToken0 = string.concat(".", corePoolId, "_underlyingAsset0");
-            string memory keyToken1 = string.concat(".", corePoolId, "_underlyingAsset1");
-            string memory keyFee = string.concat(".", corePoolId, "_corePoolFee");
-            string memory keyTS = string.concat(".", corePoolId, "_tickSpacing");
+        string memory keyToken0 = string.concat(".", corePoolId, "_underlyingAsset0");
+        string memory keyToken1 = string.concat(".", corePoolId, "_underlyingAsset1");
+        string memory keyFee = string.concat(".", corePoolId, "_corePoolFee");
+        string memory keyTS = string.concat(".", corePoolId, "_tickSpacing");
 
-            token0 = vm.parseJsonAddress(json, keyToken0);
-            console.log("Token0 loaded from markets json: ", token0);
-            token1 = vm.parseJsonAddress(json, keyToken1);
-            console.log("Token1 loaded from markets json: ", token1);
+        token0 = vm.parseJsonAddress(json, keyToken0);
+        console.log("Token0 loaded from markets json: ", token0);
+        token1 = vm.parseJsonAddress(json, keyToken1);
+        console.log("Token1 loaded from markets json: ", token1);
 
-            uint256 jsonFee = vm.parseJsonUint(json, keyFee);
-            coreFee = uint24(jsonFee);
-            console.log("Core Pool fee loaded:", coreFee);
+        uint256 jsonFee = vm.parseJsonUint(json, keyFee);
+        coreFee = uint24(jsonFee);
+        console.log("Core Pool fee loaded:", coreFee);
 
-            uint256 jsonTS = vm.parseJsonUint(json, keyTS);
-            tickSpacing = int24(uint24(jsonTS));
-            console.log("Tick spacing loaded:", tickSpacing);
-        }
+        uint256 jsonTS = vm.parseJsonUint(json, keyTS);
+        tickSpacing = int24(uint24(jsonTS));
+        console.log("Tick spacing loaded:", tickSpacing);
 
         address coreHookAddr = marketFactory.getCoreHook();
         console.log("Core Hook loaded");
 
-        // Load LCC tokens for later metrics/logging
-        lccToken0 = marketFactory.getLCC(token0);
-        lccToken1 = marketFactory.getLCC(token1);
+        // Load LCC tokens using marketId from parsedId (already parsed from CORE_POOL_ID)
+        bytes32 marketId = parsedId;
+        lccToken0 = liquidityHub.getLCC(marketId, token0);
+        lccToken1 = liquidityHub.getLCC(marketId, token1);
         console.log("LCC Tokens loaded");
         console.log("lccToken0: ", lccToken0);
         console.log("lccToken1: ", lccToken1);
 
-        // Construct corePoolKey via LCCs only if CORE_POOL_ID was not provided
-        if (bytes(corePoolId).length == 0) {
-            (Currency currencyLccA, Currency currencyLccB) = CurrencySortHelper.sortAddresses(lccToken0, lccToken1);
-            corePoolKey = PoolKey({
-                currency0: currencyLccA,
-                currency1: currencyLccB,
-                fee: coreFee,
-                tickSpacing: tickSpacing,
-                hooks: IHooks(coreHookAddr)
-            });
-            console.log("Currency0: ", Currency.unwrap(corePoolKey.currency0));
-            console.log("Currency1: ", Currency.unwrap(corePoolKey.currency1));
-            console.log("Fee: ", corePoolKey.fee);
-            console.log("Tick Spacing: ", corePoolKey.tickSpacing);
-            console.log("Hooks: ", address(corePoolKey.hooks));
+        // Construct corePoolKey from LCC tokens
+        (Currency currencyLccA, Currency currencyLccB) = CurrencySortHelper.sortAddresses(lccToken0, lccToken1);
+        corePoolKey = PoolKey({
+            currency0: currencyLccA,
+            currency1: currencyLccB,
+            fee: coreFee,
+            tickSpacing: tickSpacing,
+            hooks: IHooks(coreHookAddr)
+        });
+        console.log("Currency0: ", Currency.unwrap(corePoolKey.currency0));
+        console.log("Currency1: ", Currency.unwrap(corePoolKey.currency1));
+        console.log("Fee: ", corePoolKey.fee);
+        console.log("Tick Spacing: ", corePoolKey.tickSpacing);
+        console.log("Hooks: ", address(corePoolKey.hooks));
 
-            console.log("Core PoolKey constructed");
-            console.log("Core PoolKey toId: ");
-            console.logBytes32(PoolId.unwrap(corePoolKey.toId()));
-            _corePoolId = corePoolKey.toId();
-        }
+        console.log("Core PoolKey constructed");
+        console.log("Core PoolKey toId: ");
+        console.logBytes32(PoolId.unwrap(corePoolKey.toId()));
+        _corePoolId = corePoolKey.toId();
 
         // Resolve proxy pool/hook now that _corePoolId is known
         PoolId proxyPoolId = marketFactory.coreToProxy(_corePoolId);

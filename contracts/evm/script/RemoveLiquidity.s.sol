@@ -3,7 +3,6 @@ pragma solidity ^0.8.0;
 
 import "forge-std/Script.sol";
 import {IPositionManager} from "v4-periphery/src/interfaces/IPositionManager.sol";
-import {PositionManager} from "v4-periphery/src/PositionManager.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
@@ -18,6 +17,7 @@ import {ScriptHelper} from "./libraries/ScriptHelper.s.sol";
 import {ProxyHook} from "../src/ProxyHook.sol";
 import {CurrencySortHelper} from "./libraries/CurrencySortHelper.sol";
 import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
+import {ILiquidityHub} from "../src/interfaces/ILiquidityHub.sol";
 import {ArbitrumConstants} from "./constants/Arbitrum.sol";
 import {EthSepoliaConstants} from "./constants/EthSepolia.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -27,6 +27,7 @@ contract RemoveLiquidityScript is ScriptHelper {
     using PoolIdLibrary for PoolKey;
 
     ProxyHook proxyHook;
+    ILiquidityHub public liquidityHub;
 
     LiquidityCommitmentCertificate lcc0;
     LiquidityCommitmentCertificate lcc1;
@@ -77,73 +78,55 @@ contract RemoveLiquidityScript is ScriptHelper {
 
         _setFilename(networkName);
         address marketFactoryAddr = readAddress("marketFactory");
+        address liquidityHubAddr = readAddress("liquidityHub");
         IMarketFactory factory = IMarketFactory(marketFactoryAddr);
+        ILiquidityHub liquidityHub = ILiquidityHub(liquidityHubAddr);
 
-        string memory corePoolId;
-        try vm.envString("CORE_POOL_ID") returns (string memory envCorePoolId) {
-            corePoolId = envCorePoolId;
-        } catch {}
+        // Require CORE_POOL_ID to be provided
+        string memory corePoolId = vm.envString("CORE_POOL_ID");
+        bytes memory idBytes = vm.parseBytes(corePoolId);
+        require(idBytes.length == 32, "CORE_POOL_ID must be 32-byte hex");
+        bytes32 parsedId;
+        assembly {
+            parsedId := mload(add(idBytes, 32))
+        }
 
         uint24 coreFee;
         int24 tickSpacingVal;
 
-        if (bytes(corePoolId).length == 0) {
-            try vm.envAddress("UNDERLYING_ASSET_0") returns (address asset) {
-                token0 = asset;
-            } catch {
-                if (isSepolia) {
-                    token0 = readAddress("usdcToken");
-                } else if (isEthSepolia) {
-                    token0 = EthSepoliaConstants.USDC_ADDRESS;
-                } else {
-                    revert("Please specify UNDERLYING_ASSET_0 via environment variable");
-                }
-            }
+        // Load market parameters from markets deployment file
+        string memory filePath = string.concat("./deployments/", networkName, "_markets_deployments.json");
+        string memory json = vm.readFile(filePath);
 
-            try vm.envAddress("UNDERLYING_ASSET_1") returns (address asset) {
-                token1 = asset;
-            } catch {
-                if (isSepolia) {
-                    token1 = readAddress("usdtToken");
-                } else if (isEthSepolia) {
-                    // Query WETH9 from PositionManager instead of using constant
-                    token1 = PositionManager(positionManagerAddr).WETH9(); // WETH_ADDRESS
-                } else {
-                    revert("Please specify UNDERLYING_ASSET_1 via environment variable");
-                }
-            }
+        string memory keyToken0 = string.concat(".", corePoolId, "_underlyingAsset0");
+        string memory keyToken1 = string.concat(".", corePoolId, "_underlyingAsset1");
+        string memory keyFee = string.concat(".", corePoolId, "_corePoolFee");
+        string memory keyTS = string.concat(".", corePoolId, "_tickSpacing");
 
-            coreFee = uint24(vm.envOr("CORE_POOL_FEE", uint256(0)));
-            tickSpacingVal = int24(uint24(vm.envOr("TICK_SPACING", uint256(60))));
-        } else {
-            string memory filePath = string.concat("./deployments/", networkName, "_markets_deployments.json");
-            string memory json = vm.readFile(filePath);
+        token0 = vm.parseJsonAddress(json, keyToken0);
+        token1 = vm.parseJsonAddress(json, keyToken1);
 
-            string memory keyToken0 = string.concat(".", corePoolId, "_underlyingAsset0");
-            string memory keyToken1 = string.concat(".", corePoolId, "_underlyingAsset1");
-            string memory keyFee = string.concat(".", corePoolId, "_corePoolFee");
-            string memory keyTS = string.concat(".", corePoolId, "_tickSpacing");
+        uint256 jsonFee = vm.parseJsonUint(json, keyFee);
+        coreFee = uint24(jsonFee);
 
-            token0 = vm.parseJsonAddress(json, keyToken0);
-            token1 = vm.parseJsonAddress(json, keyToken1);
-
-            uint256 jsonFee = vm.parseJsonUint(json, keyFee);
-            coreFee = uint24(jsonFee);
-
-            uint256 jsonTS = vm.parseJsonUint(json, keyTS);
-            tickSpacingVal = int24(uint24(jsonTS));
-        }
+        uint256 jsonTS = vm.parseJsonUint(json, keyTS);
+        tickSpacingVal = int24(uint24(jsonTS));
 
         address coreHookAddr = factory.getCoreHook();
+
+        // Load LCC tokens using marketId from parsedId (already parsed from CORE_POOL_ID)
+        bytes32 marketId = parsedId;
+
+        address lcc0Addr = liquidityHub.getLCC(marketId, token0);
+        address lcc1Addr = liquidityHub.getLCC(marketId, token1);
+        lcc0 = LiquidityCommitmentCertificate(lcc0Addr);
+        lcc1 = LiquidityCommitmentCertificate(lcc1Addr);
+
+        setupPoolKeys(coreHookAddr, coreFee, tickSpacingVal);
 
         PoolId proxyPoolId = factory.coreToProxy(corePoolKey.toId());
         address proxyHookAddr = factory.proxyToHook(proxyPoolId);
         proxyHook = ProxyHook(payable(proxyHookAddr));
-
-        lcc0 = LiquidityCommitmentCertificate(factory.getLCC(token0));
-        lcc1 = LiquidityCommitmentCertificate(factory.getLCC(token1));
-
-        setupPoolKeys(coreHookAddr, coreFee, tickSpacingVal);
 
         vm.startBroadcast(lpPrivateKey);
         burnPosition(tokenId, lpAddress);
@@ -208,11 +191,12 @@ contract RemoveLiquidityScript is ScriptHelper {
         uint256 amount0Received = IERC20(address(lcc0)).balanceOf(recipient) - balance0Before;
         uint256 amount1Received = IERC20(address(lcc1)).balanceOf(recipient) - balance1Before;
 
+        // Use LiquidityHub to unwrap LCC tokens
         if (amount0Received > 0) {
-            lcc0.unwrap(amount0Received);
+            liquidityHub.unwrap(address(lcc0), amount0Received);
         }
         if (amount1Received > 0) {
-            lcc1.unwrap(amount1Received);
+            liquidityHub.unwrap(address(lcc1), amount1Received);
         }
 
         console.log("Unwrapped %s LCC0 to underlying", amount0Received);

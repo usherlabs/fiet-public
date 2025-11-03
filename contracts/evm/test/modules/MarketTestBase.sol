@@ -58,7 +58,7 @@ abstract contract MarketTestBase is Test, Deployers {
 
     address resilientOracle = makeAddr("ResilientOracleAddr");
     ECDSASignatureSignalVerifier icVerifier;
-    StubSpokeVerifier stubSpokeVerifier;
+    StubSignalVerifier StubSignalVerifier;
     VRLSignalManager signalManager;
     address mmPositionManager;
     IVRLSettlementObserver settlementObserver;
@@ -153,9 +153,9 @@ abstract contract MarketTestBase is Test, Deployers {
 
         // deploy custom router and verifier
         icVerifier = new ECDSASignatureSignalVerifier(makeAddr("icCanister"));
-        stubSpokeVerifier = new StubSpokeVerifier();
+        StubSignalVerifier = new StubSignalVerifier();
         signalManager = new VRLSignalManager(
-            address(stubSpokeVerifier), address(oracleHelper), address(marketFactory), signalExpiryInSeconds
+            address(StubSignalVerifier), address(oracleHelper), address(marketFactory), signalExpiryInSeconds
         );
 
         // deploy the settlement observer

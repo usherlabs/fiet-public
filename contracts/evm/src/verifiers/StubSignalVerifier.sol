@@ -8,7 +8,7 @@ pragma solidity ^0.8.0;
 import {MarketMaker} from "../libraries/MarketMaker.sol";
 import {ISignalVerifier} from "../interfaces/ISignalVerifier.sol";
 
-contract StubSpokeVerifier is ISignalVerifier {
+contract StubSignalVerifier is ISignalVerifier {
     function verifyProof(
         uint256,
         bytes32,
