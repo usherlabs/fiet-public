@@ -10,7 +10,6 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 /// @title IMMPositionManager
 /// @notice Interface for the MMPositionManager contract
 interface IMMPositionManager {
-
     /// @notice Unlocks Uniswap v4 PoolManager and batches actions for modifying liquidity
     /// @dev This is the standard entrypoint for the MMPositionManager
     /// @param unlockData is an encoding of actions, and parameters for those actions
@@ -54,9 +53,4 @@ interface IMMPositionManager {
     /// @return state the signal state
     /// @return poolId the pool ID associated with the commitment
     function commitOf(uint256 tokenId) external view returns (SignalState memory state, PoolId poolId);
-
-    /// @notice Returns the URI for a given commitment NFT
-    /// @param tokenId the ERC721 tokenId (commitment NFT ID)
-    /// @return string the token URI
-    function tokenURI(uint256 tokenId) external view returns (string memory);
 }
