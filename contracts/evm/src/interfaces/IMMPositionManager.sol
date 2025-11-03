@@ -10,15 +10,6 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 /// @title IMMPositionManager
 /// @notice Interface for the MMPositionManager contract
 interface IMMPositionManager {
-    /// @notice Thrown when the caller is not approved to modify a position
-    error NotApproved(address caller);
-    /// @notice Thrown when the block.timestamp exceeds the user-provided deadline
-    error DeadlinePassed(uint256 deadline);
-    /// @notice Thrown when calling transfer, subscribe, or unsubscribe when the PoolManager is unlocked.
-    /// @dev This is to prevent hooks from being able to trigger notifications at the same time the position is being modified.
-    error PoolManagerMustBeLocked();
-    /// @notice Thrown when the commitment descriptor is not set
-    error CommitmentDescriptorNotSet();
 
     /// @notice Unlocks Uniswap v4 PoolManager and batches actions for modifying liquidity
     /// @dev This is the standard entrypoint for the MMPositionManager
