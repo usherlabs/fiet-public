@@ -7,14 +7,6 @@ interface IVRLSignalManager {
     // Events
     event VerifierChanged(address indexed oldVerifier, address indexed newVerifier);
 
-    // Errors
-    error InvalidProof();
-    error InvalidDelta(int128 amount0, int128 amount1);
-    error InvalidNonce(uint256 newNonce, uint256 prevNonce);
-    error InvalidLiquiditySignalEncoding();
-    error InvalidLiquiditySignal();
-    error InsufficientLiquidityInSignal(uint256 totalSignalUsdValue, uint256 totalLCCValue);
-
     // View functions
     function verifier() external view returns (address);
 

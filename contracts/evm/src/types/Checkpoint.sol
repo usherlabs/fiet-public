@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {MarketVTSConfiguration} from "./VTS.sol";
+import {MarketVTSConfiguration, TokenConfiguration} from "./VTS.sol";
 
 /// The checkpoint of the RFS for a position
 struct RFSCheckpoint {
@@ -35,7 +35,7 @@ library RFSCheckpointLibrary {
     // it adds the extension time to the current grace period extension
     function extendGracePeriod(
         RFSCheckpoint storage self,
-        MarketVTSConfigurationLibrary.TokenConfiguration memory tokenConfiguration,
+        TokenConfiguration memory tokenConfiguration,
         uint8 tokenIndex
     ) internal {
         if (tokenIndex == 0) {

@@ -33,19 +33,13 @@ import {LiquidityUtils} from "../libraries/LiquidityUtils.sol";
 import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
 import {ILiquidityHub} from "../interfaces/ILiquidityHub.sol";
 import {SafeERC20} from "openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol";
+import {Errors} from "../libraries/Errors.sol";
 
 abstract contract MarketVault is IMarketVault {
     using CurrencySettler for Currency;
     using SafeERC20 for ILCC;
 
-    error InsufficientLiquidityToTake();
-    error InsufficientLiquidityToSettle();
-    error InvalidAmount();
-    error InvalidSender();
-
-    event SwapDeficit(
-        PoolId indexed poolId, address lccToken, address deficitRecipient, uint256 deficitAmount
-    );
+    event SwapDeficit(PoolId indexed poolId, address indexed lccToken, address deficitRecipient, uint256 deficitAmount);
 
     IPoolManager public immutable vaultPoolManager;
     IMarketFactory public immutable marketFactory;
@@ -94,8 +88,8 @@ abstract contract MarketVault is IMarketVault {
         //     revert InvalidSender();
         // }
         // Being explicit witn these bounds to prevent leaks.
-        if(msg.sender != (address(marketFactory)) && msg.sender != (address(mmPositionManager))){
-            revert InvalidSender();
+        if (msg.sender != (address(marketFactory)) && msg.sender != (address(mmPositionManager))) {
+            revert Errors.InvalidSender();
         }
         _;
     }
@@ -130,7 +124,7 @@ abstract contract MarketVault is IMarketVault {
         // Verify that the vault has sufficient liquidity to fulfill the request
         uint256 availableLiquidity = inMarketBalanceOf(underlyingCurrency);
         if (availableLiquidity < amount) {
-            revert InsufficientLiquidityToTake();
+            revert Errors.InsufficientLiquidityToTake();
         }
 
         // Burn ERC-6909 claim tokens to release the underlying ERC20 tokens from the PoolManager
@@ -190,7 +184,10 @@ abstract contract MarketVault is IMarketVault {
      * @param amount The maximum amount of underlying asset to attempt to take from the vault
      * @return The actual amount of underlying asset that was taken and confirmed to the LCC
      */
-    function _tryTakeUnderlyingFromVaultToHub(ILCC lccToken, uint256 amount, bool shouldEmit) internal returns (uint256) {
+    function _tryTakeUnderlyingFromVaultToHub(ILCC lccToken, uint256 amount, bool shouldEmit)
+        internal
+        returns (uint256)
+    {
         Currency uaCurrency = Currency.wrap(lccToken.underlying());
 
         // Attempt to take the underlying asset from vault to the Hub contract address
@@ -217,11 +214,9 @@ abstract contract MarketVault is IMarketVault {
      * @custom:reverts InvalidAmount If amount is zero
      * @custom:reverts InsufficientLiquidityToTake If the vault doesn't have enough liquidity to fulfill the request
      */
-    function _takeUnderlyingFromVaultToHub(ILCC lccToken, uint256 amount, bool shouldEmit)
-        internal
-    {
+    function _takeUnderlyingFromVaultToHub(ILCC lccToken, uint256 amount, bool shouldEmit) internal {
         if (amount == 0) {
-            revert InvalidAmount();
+            revert Errors.InvalidAmount();
         }
 
         Currency uaCurrency = Currency.wrap(lccToken.underlying());
@@ -260,7 +255,7 @@ abstract contract MarketVault is IMarketVault {
         // Validate that the sender has sufficient balance to settle
         uint256 senderBalance = underlyingCurrency.balanceOf(sender);
         if (senderBalance < amount) {
-            revert InsufficientLiquidityToSettle();
+            revert Errors.InsufficientLiquidityToSettle();
         }
 
         // Transfer ERC20 tokens from sender to the PoolManager
@@ -388,7 +383,7 @@ abstract contract MarketVault is IMarketVault {
      */
     function unlockCallback(bytes calldata data) external returns (bytes memory) {
         if (msg.sender != address(vaultPoolManager)) {
-            revert InvalidSender();
+            revert Errors.InvalidSender();
         }
 
         // Decode the callback data to extract sender, currencies, and balance delta
@@ -401,22 +396,30 @@ abstract contract MarketVault is IMarketVault {
 
         // Handle negative delta for currency0: take underlying tokens from vault to sender
         if (amount0 < 0) {
-            _takeUnderlyingFromVaultToRecipient(callbackData.currency0, callbackData.sender, LiquidityUtils.safeInt128ToUint256(amount0)));
+            _takeUnderlyingFromVaultToRecipient(
+                callbackData.currency0, callbackData.sender, LiquidityUtils.safeInt128ToUint256(amount0)
+            );
         }
 
         // Handle negative delta for currency1: take underlying tokens from vault to sender
         if (amount1 < 0) {
-            _takeUnderlyingFromVaultToRecipient(callbackData.currency1, callbackData.sender, LiquidityUtils.safeInt128ToUint256(amount1)));
+            _takeUnderlyingFromVaultToRecipient(
+                callbackData.currency1, callbackData.sender, LiquidityUtils.safeInt128ToUint256(amount1)
+            );
         }
 
         // Handle positive delta for currency0: settle underlying tokens from sender to vault
         if (amount0 > 0) {
-            _settleUnderlyingToVaultFromSender(callbackData.currency0, address(this), LiquidityUtils.safeInt128ToUint256(amount0)));
+            _settleUnderlyingToVaultFromSender(
+                callbackData.currency0, address(this), LiquidityUtils.safeInt128ToUint256(amount0)
+            );
         }
 
         // Handle positive delta for currency1: settle underlying tokens from sender to vault
         if (amount1 > 0) {
-            _settleUnderlyingToVaultFromSender(callbackData.currency1, address(this), LiquidityUtils.safeInt128ToUint256(amount1)));
+            _settleUnderlyingToVaultFromSender(
+                callbackData.currency1, address(this), LiquidityUtils.safeInt128ToUint256(amount1)
+            );
         }
 
         return "";

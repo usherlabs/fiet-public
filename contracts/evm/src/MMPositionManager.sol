@@ -39,6 +39,7 @@ import {TransientSlots} from "./libraries/TransientSlots.sol";
 import {ICommitmentDescriptor} from "./interfaces/ICommitmentDescriptor.sol";
 import {ILiquidityHub} from "./interfaces/ILiquidityHub.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {Errors} from "./libraries/Errors.sol";
 
 contract MMPositionManager is
     LiquidityRouter,
@@ -61,20 +62,6 @@ contract MMPositionManager is
     using CurrencyTransfer for Currency;
     using SafeERC20 for IERC20;
     using SafeERC20 for ILCC;
-
-    error InvalidDelta(int128 amount0, int128 amount1);
-    error InvalidAmount(uint256 amount, uint256 maxAmount);
-    error InvalidLiquiditySignal(uint256 totalSignalUsdValue, uint256 totalLCCValue);
-    error InvalidPosition(uint256 tokenId, uint256 positionIndex, PositionId positionId);
-    error InvalidMarket(PoolKey poolKey);
-    error SignalExpired(uint256 tokenId);
-    error UnauthorizedSignalOwner();
-    error DeadlinePassed(uint256 deadline);
-    error NotApproved(address caller);
-    error UnauthorizedAdvancer();
-    error InsufficientETHSent();
-    error CommitmentDescriptorNotSet();
-    error PoolManagerMustBeLocked();
 
     event SignalCommitted(uint256 tokenId);
     event SignalDecommitted(uint256 tokenId, uint256 positionIndex, uint256 amount0, uint256 amount1);
@@ -150,13 +137,13 @@ contract MMPositionManager is
 
     /// @notice Enforces that the PoolManager is locked.
     modifier onlyIfPoolManagerLocked() {
-        if (poolManager.isUnlocked()) revert PoolManagerMustBeLocked();
+        if (poolManager.isUnlocked()) revert Errors.PoolManagerMustBeLocked();
         _;
     }
 
     function tokenURI(uint256 tokenId) public view override returns (string memory) {
         if (commitmentDescriptor == address(0)) {
-            revert CommitmentDescriptorNotSet();
+            revert Errors.CommitmentDescriptorNotSet();
         }
         return ICommitmentDescriptor(commitmentDescriptor).tokenURI(address(this), tokenId);
     }
@@ -203,18 +190,18 @@ contract MMPositionManager is
     }
 
     function _assertApprovedOrOwner(address caller, uint256 tokenId) internal view {
-        if (!_isApprovedOrOwner(caller, tokenId)) revert NotApproved(caller);
+        if (!_isApprovedOrOwner(caller, tokenId)) revert Errors.NotApproved(caller);
     }
 
     function _assertSignalValid(uint256 tokenId) internal view {
         if (commitOf[tokenId].state.expiresAt < block.timestamp) {
-            revert SignalExpired(tokenId);
+            revert Errors.SignalExpired(tokenId);
         }
     }
 
     function _assertCommitForPool(PoolKey memory poolKey, uint256 tokenId) internal view {
         if (PoolId.unwrap(commitOf[tokenId].poolId) != PoolId.unwrap(poolKey.toId())) {
-            revert InvalidMarket(poolKey);
+            revert Errors.InvalidMarket(poolKey);
         }
     }
 
@@ -238,7 +225,7 @@ contract MMPositionManager is
     // ------------------------
 
     modifier checkDeadline(uint256 deadline) {
-        if (block.timestamp > deadline) revert DeadlinePassed(deadline);
+        if (block.timestamp > deadline) revert Errors.DeadlinePassed(deadline);
         _;
     }
 
@@ -485,12 +472,12 @@ contract MMPositionManager is
     function getPosition(uint256 tokenId, uint256 positionIndex) public view returns (PositionMeta memory) {
         PositionId positionId = getPositionId(tokenId, positionIndex);
         if (PositionId.unwrap(positionId) == bytes32(0)) {
-            revert InvalidPosition(tokenId, positionIndex, positionId);
+            revert Errors.InvalidPosition(tokenId, positionIndex, positionId);
         }
         PositionMeta memory m = _getPositionIndex().getPosition(positionId, true);
 
         if (!_isMMPosition(m)) {
-            revert InvalidPosition(tokenId, positionIndex, positionId);
+            revert Errors.InvalidPosition(tokenId, positionIndex, positionId);
         }
 
         return m;
@@ -575,7 +562,7 @@ contract MMPositionManager is
         LiquiditySignal memory sig = abi.decode(liquiditySignal, (LiquiditySignal));
         (bool isSignalValid,) = signalManager.verifyLiquiditySignal(sig);
         if (!isSignalValid) {
-            revert InvalidLiquiditySignal(0, 0);
+            revert Errors.InvalidLiquiditySignal(0, 0);
         }
         (string[] memory tickers, uint256[] memory amounts) = sig.mmState.getReserves();
         return oracleHelper.getTotalUsdValue(tickers, amounts);
@@ -613,7 +600,7 @@ contract MMPositionManager is
 
         // Invariant: issued ≤ signal + settled (prevents over-issuance relative to backing)
         if (issuedUsd > signalUsd + settledUsd) {
-            revert InvalidLiquiditySignal(signalUsd + settledUsd, issuedUsd);
+            revert Errors.InvalidLiquiditySignal(signalUsd + settledUsd, issuedUsd);
         }
     }
 
@@ -652,7 +639,7 @@ contract MMPositionManager is
 
         if (amount0 == 0 && amount1 == 0) {
             // Cannot settle 0 amounts for both assets.
-            revert InvalidDelta(0, 0);
+            revert Errors.InvalidDelta(0, 0);
         }
 
         PositionId positionId = getPositionId(tokenId, positionIndex);
@@ -766,12 +753,12 @@ contract MMPositionManager is
         uint256 liquidity
     ) internal onlyIfApproved(msgSender(), tokenId) onlyValidCommit(poolKey, tokenId) returns (PositionId positionId) {
         if (liquidity == 0) {
-            revert InvalidDelta(0, 0);
+            revert Errors.InvalidDelta(0, 0);
         }
 
         // Prevent overflow when converting to int256/int128 for modifyLiquidity
         if (liquidity > type(uint128).max) {
-            revert InvalidAmount(liquidity, type(uint128).max);
+            revert Errors.InvalidAmount(liquidity, type(uint128).max);
         }
 
         // mint the tokens required to facilitate this liquidity addition
@@ -840,7 +827,7 @@ contract MMPositionManager is
     ) internal returns (BalanceDelta returnDelta) {
         // validate liquidity is not over available
         if (uint256(position.liquidity) < amountToDecrease) {
-            revert InvalidAmount(amountToDecrease, uint256(position.liquidity));
+            revert Errors.InvalidAmount(amountToDecrease, uint256(position.liquidity));
         }
 
         // remove the liquidity from the pool
@@ -939,7 +926,7 @@ contract MMPositionManager is
      */
     function _renew(uint256 tokenId, bytes memory liquiditySignal) internal onlyIfApproved(msgSender(), tokenId) {
         if (liquiditySignal.length == 0) {
-            revert InvalidLiquiditySignal(0, 0);
+            revert Errors.InvalidLiquiditySignal(0, 0);
         }
 
         // Assert solvency against the new signal
@@ -959,7 +946,7 @@ contract MMPositionManager is
      */
     function _commitSignal(PoolKey memory poolKey, bytes memory liquiditySignal) internal returns (uint256 tokenId) {
         if (liquiditySignal.length == 0) {
-            revert InvalidLiquiditySignal(0, 0);
+            revert Errors.InvalidLiquiditySignal(0, 0);
         }
 
         LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
@@ -967,7 +954,7 @@ contract MMPositionManager is
         (bool isSignalValid, uint256 expirySeconds) = signalManager.verifyLiquiditySignal(signal);
         // if the proof is invalid, revert
         if (!isSignalValid) {
-            revert InvalidLiquiditySignal(0, 0);
+            revert Errors.InvalidLiquiditySignal(0, 0);
         }
 
         // ? -- Mint the Commitment NFT
@@ -1032,7 +1019,7 @@ contract MMPositionManager is
 
         // require at least one side is settled
         if (amount0 == 0 && amount1 == 0) {
-            revert InvalidDelta(0, 0);
+            revert Errors.InvalidDelta(0, 0);
         }
 
         PositionMeta memory position = getPosition(tokenId, positionIndex);
@@ -1042,7 +1029,7 @@ contract MMPositionManager is
         // use _isApprovedOrOwner to get the owner/approved wallets of the token id, as position.owner is address(this).
         // Technically, seizing your own position cannot be stopped (via proxy wallets), but there should be no incentive.
         if (_isApprovedOrOwner(msgSender(), tokenId) || position.isActive == false) {
-            revert InvalidPosition(tokenId, positionIndex, positionId);
+            revert Errors.InvalidPosition(tokenId, positionIndex, positionId);
         }
 
         // create a balance delta of the amounts to settle

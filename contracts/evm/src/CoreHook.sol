@@ -29,6 +29,7 @@ import {TickUtils} from "./libraries/TickUtils.sol";
 import {SafeCast} from "openzeppelin-contracts/contracts/utils/math/SafeCast.sol";
 import {PausablePool} from "./modules/PausablePool.sol";
 import {ProxySwapFlag} from "./libraries/ProxySwapFlag.sol";
+import {Errors} from "./libraries/Errors.sol";
 
 /**
  * Core Pool should be aware of Positions.
@@ -40,12 +41,9 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
     using CurrencySettler for Currency;
     using SafeCast for int256;
 
-    error InvalidInitialiser();
-    error InvalidSender();
-
     modifier onlyFactory() {
         if (msg.sender != marketFactory) {
-            revert InvalidSender();
+            revert Errors.InvalidSender();
         }
         _;
     }
@@ -93,7 +91,7 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
         returns (bytes4)
     {
         if (sender != marketFactory) {
-            revert InvalidInitialiser();
+            revert Errors.InvalidInitialiser();
         }
         return this.beforeInitialize.selector;
     }

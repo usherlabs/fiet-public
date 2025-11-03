@@ -2,11 +2,6 @@
 pragma solidity ^0.8.0;
 
 interface IOracleHelper {
-    error MarketOraclesNotConfigured();
-    error InvalidOracleAddress();
-    error TickerNotRegistered(string ticker);
-    error InvalidAssetAddress();
-
     event OracleUpdated(address indexed oldOracle, address indexed newOracle);
     event TickerUpdated(string indexed ticker, bytes32 indexed tickerHash, address indexed newAsset);
 

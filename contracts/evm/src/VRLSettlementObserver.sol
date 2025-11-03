@@ -7,6 +7,7 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
+import {Errors} from "./libraries/Errors.sol";
 
 contract VRLSettlementObserver is Ownable, IVRLSettlementObserver {
     mapping(uint32 => address) public verifiers;
@@ -18,7 +19,7 @@ contract VRLSettlementObserver is Ownable, IVRLSettlementObserver {
     // New function to add a verifier
     function addVerifier(address _verifier) external onlyOwner returns (uint32) {
         if (_verifier == address(0)) {
-            revert InvalidVerifierAddress();
+            revert Errors.InvalidVerifierAddress();
         }
         uint32 index = nextVerifierIndex++;
         verifiers[index] = _verifier;
@@ -30,7 +31,7 @@ contract VRLSettlementObserver is Ownable, IVRLSettlementObserver {
     function nullifyVerifier(uint32 index) external onlyOwner {
         address verifier = verifiers[index];
         if (verifier == address(0)) {
-            revert InvalidVerifierAddress();
+            revert Errors.InvalidVerifierAddress();
         }
         delete verifiers[index];
         emit VerifierRemoved(verifier, index);
@@ -39,7 +40,7 @@ contract VRLSettlementObserver is Ownable, IVRLSettlementObserver {
     // New function to allow a verifier for tokens (batch)
     function allowVerifierForTokens(uint32 verifierIndex, address[] memory tokens) external onlyOwner {
         if (verifiers[verifierIndex] == address(0)) {
-            revert InvalidVerifierAddress();
+            revert Errors.InvalidVerifierAddress();
         }
         for (uint256 i = 0; i < tokens.length; i++) {
             allowedVerifiersForToken[tokens[i]][verifierIndex] = true;
@@ -75,16 +76,16 @@ contract VRLSettlementObserver is Ownable, IVRLSettlementObserver {
         address token = tokenIndex == 0 ? Currency.unwrap(poolKey.currency0) : Currency.unwrap(poolKey.currency1);
 
         if (settlementProof.length == 0) {
-            revert InvalidSettlementProof();
+            revert Errors.InvalidSettlementProof();
         }
 
         address verifierAddress = verifiers[verifierIndex];
         if (verifierAddress == address(0)) {
-            revert InvalidVerifierAddress();
+            revert Errors.InvalidVerifierAddress();
         }
 
         if (!allowedVerifiersForToken[token][verifierIndex]) {
-            revert VerifierNotMapped();
+            revert Errors.VerifierNotMapped();
         }
 
         // Verify the settlement proof
@@ -92,7 +93,7 @@ contract VRLSettlementObserver is Ownable, IVRLSettlementObserver {
         isProofValid =
             verifier.verifySettlementProof(settlementProof, abi.encode(PoolId.unwrap(poolKey.toId()), tokenIndex));
         if (revertOnInvalid && !isProofValid) {
-            revert InvalidSettlementProof();
+            revert Errors.InvalidSettlementProof();
         }
     }
 }

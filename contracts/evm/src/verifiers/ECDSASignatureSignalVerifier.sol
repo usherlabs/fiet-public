@@ -13,10 +13,6 @@ contract ECDSASignatureSignalVerifier is ISignalVerifier {
     using ECDSA for bytes32;
     using MarketMaker for MarketMaker.State;
 
-    error UnauthorizedCaller();
-    error InvalidMerkleProof();
-    error InvalidRootStateHashSignature();
-
     address public immutable publicKeyAddress; // Threshold signature scheme (TSS) (tECDSA via MPC) address used to decentralise this signer.
 
     constructor(address _publicKeyAddress) {
@@ -59,14 +55,12 @@ contract ECDSASignatureSignalVerifier is ISignalVerifier {
 
         // make sure the caller is authorized to perform this action
         if (!isCallerAuthorized) {
-            // revert UnauthorizedCaller();
             return false;
         }
 
         // verify the merkle proof
         bool isProofValid = MerkleProofLib.verify(merkleProof, rootStateHash, mmStateHash);
         if (!isProofValid) {
-            // revert InvalidMerkleProof();
             return false;
         }
 
@@ -76,7 +70,6 @@ contract ECDSASignatureSignalVerifier is ISignalVerifier {
             MessageHashUtils.toEthSignedMessageHash(message).recover(rootStateHashSignature) == publicKeyAddress;
 
         if (!isRootStateHashValid) {
-            // revert InvalidRootStateHashSignature();
             return false;
         }
 

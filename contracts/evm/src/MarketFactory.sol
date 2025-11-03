@@ -18,6 +18,7 @@ import {ILiquidityHub} from "./interfaces/ILiquidityHub.sol";
 import {IERC20Metadata} from "openzeppelin-contracts/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {LiquidityUtils} from "./libraries/LiquidityUtils.sol";
+import {Errors} from "./libraries/Errors.sol";
 
 /**
  * @title MarketFactory
@@ -73,7 +74,7 @@ contract MarketFactory is IMarketFactory, Ownable {
 
     modifier onlyLiquidityHub() {
         if (msg.sender != address(liquidityHub)) {
-            revert InvalidCaller();
+            revert Errors.InvalidCaller();
         }
         _;
     }
@@ -83,7 +84,7 @@ contract MarketFactory is IMarketFactory, Ownable {
         // Tie this factory to these hooks as LCCs/markets/hooks are tied to the factory.
         if (coreHook == address(0)) {
             if (_coreHook == address(0)) {
-                revert InvalidHookAddress();
+                revert Errors.InvalidHookAddress();
             }
             coreHook = _coreHook;
         }
@@ -129,7 +130,7 @@ contract MarketFactory is IMarketFactory, Ownable {
             MarketDeployer(marketDeployer).deployProxyHook(address(poolManager), address(this), salt);
 
         if (underlyingAsset0 == address(0) || underlyingAsset1 == address(0)) {
-            revert InvalidUnderlyingAsset();
+            revert Errors.InvalidUnderlyingAsset();
         }
 
         // Convert proxyHookAddress to bytes (marketRef)
@@ -166,7 +167,7 @@ contract MarketFactory is IMarketFactory, Ownable {
 
         // Check if proxy pool already exists
         if (PoolId.unwrap(coreToProxy[corePoolKey.toId()]) != bytes32(0)) {
-            revert ProxyPoolAlreadyExists();
+            revert Errors.ProxyPoolAlreadyExists();
         }
 
         // Create proxy pool with underlying assets
@@ -243,7 +244,7 @@ contract MarketFactory is IMarketFactory, Ownable {
 
         // Check if pool already exists
         if (PoolId.unwrap(coreToProxy[poolId]) != bytes32(0)) {
-            revert CorePoolAlreadyExists();
+            revert Errors.CorePoolAlreadyExists();
         }
 
         // Initialize the pool

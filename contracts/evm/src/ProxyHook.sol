@@ -23,14 +23,10 @@ import {ProxySwapFlag} from "./libraries/ProxySwapFlag.sol";
 import {LiquidityUtils} from "../src/libraries/LiquidityUtils.sol";
 import {Exttload} from "v4-periphery/lib/v4-core/src/Exttload.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
+import {Errors} from "./libraries/Errors.sol";
 
 contract ProxyHook is BaseHook, MarketVault, Exttload {
     using CurrencySettler for Currency;
-
-    error AddLiquidityThroughHookNotAllowed();
-    error InvalidInitialiser();
-    error InvalidCurrency(address currency);
-    error CorePoolKeyAlreadySet();
 
     struct LiquidityCallbackData {
         uint256 amount0;
@@ -49,7 +45,7 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
 
     modifier onlyCoreHook() {
         if (msg.sender != coreHook) {
-            revert InvalidSender();
+            revert Errors.InvalidSender();
         }
         _;
     }
@@ -98,7 +94,7 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         // An uninitialised PoolKey encodes to a non-zero id via keccak256,
         // so we must not use toId() to detect initialisation. Instead, rely on hooks address.
         if (address(corePoolKey.hooks) != address(0)) {
-            revert CorePoolKeyAlreadySet();
+            revert Errors.CorePoolKeyAlreadySet();
         }
         corePoolKey = _corePoolKey;
     }
@@ -137,7 +133,7 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         returns (bytes4)
     {
         if (sender != marketFactory) {
-            revert InvalidInitialiser();
+            revert Errors.InvalidInitialiser();
         }
         proxyPoolKey = key;
         // initialise the counterparty hook -- proxy pool is created after the core pool.
@@ -154,7 +150,7 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         override
         returns (bytes4)
     {
-        revert AddLiquidityThroughHookNotAllowed();
+        revert Errors.AddLiquidityThroughHookNotAllowed();
     }
 
     // Method called by the Core Hook notifying that Direct Liquidity Provision occurred.

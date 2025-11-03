@@ -28,16 +28,6 @@ interface IMarketFactory {
     event LCCCreated(address indexed underlyingAsset, address indexed lccToken);
     event BoundsUpdated(address[] bounds, bool added);
 
-    // ============ ERRORS ============
-
-    error CorePoolAlreadyExists();
-    error ProxyPoolAlreadyExists();
-    error InvalidHookAddress();
-    error InvalidUnderlyingAsset();
-    error InvalidIssuer();
-    error InvalidBound();
-    error InvalidSender();
-
     // ============ VIEW FUNCTIONS ============
     /**
      * @notice Gets the proxy hook address for a given core pool ID

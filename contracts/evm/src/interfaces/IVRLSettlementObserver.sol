@@ -4,11 +4,6 @@ pragma solidity ^0.8.0;
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 
 interface IVRLSettlementObserver {
-    error InvalidVerifierAddress();
-    error InvalidSettlementProof();
-    error InvalidVerifierIndex();
-    error VerifierNotMapped();
-
     event VerifierAdded(address indexed verifier, uint256 indexed index);
     event VerifierRemoved(address indexed verifier, uint256 indexed removedIndex);
     event VerifierAllowed(address indexed token, uint32 indexed verifierIndex);

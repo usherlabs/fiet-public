@@ -5,12 +5,9 @@ import {IResilientOracle} from "./interfaces/IResilientOracle.sol";
 import {ILCC} from "./interfaces/ILCC.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {OracleUtils} from "./libraries/OracleUtils.sol";
+import {Errors} from "./libraries/Errors.sol";
 
 contract OracleHelper is Ownable {
-    error MarketOraclesNotConfigured();
-    error InvalidOracleAddress();
-    error TickerNotRegistered(string ticker);
-    error InvalidAssetAddress();
 
     IResilientOracle public oracle;
 
@@ -20,7 +17,7 @@ contract OracleHelper is Ownable {
     event TickerUpdated(string indexed ticker, bytes32 indexed tickerHash, address indexed newAsset);
 
     constructor(address _oracle) Ownable(msg.sender) {
-        if (_oracle == address(0)) revert InvalidOracleAddress();
+        if (_oracle == address(0)) revert Errors.InvalidOracleAddress();
         oracle = IResilientOracle(_oracle);
     }
 
@@ -31,7 +28,7 @@ contract OracleHelper is Ownable {
      * @custom:access Only owner
      */
     function registerTicker(string calldata ticker, address asset) external onlyOwner {
-        if (asset == address(0)) revert InvalidAssetAddress();
+        if (asset == address(0)) revert Errors.InvalidAssetAddress();
 
         bytes32 tickerHash = keccak256(bytes(ticker));
 
@@ -48,7 +45,7 @@ contract OracleHelper is Ownable {
     function getAssetByTicker(string memory ticker) public view returns (address) {
         bytes32 tickerHash = keccak256(bytes(ticker));
         address asset = tickerHashToAsset[tickerHash];
-        if (asset == address(0)) revert TickerNotRegistered(ticker);
+        if (asset == address(0)) revert Errors.TickerNotRegistered(ticker);
         return asset;
     }
 
@@ -80,7 +77,7 @@ contract OracleHelper is Ownable {
                 || tokenConfig1.enableFlagsForOracles[uint256(OracleRole.MAIN)] == false
                 || tokenConfig0.asset == address(0) || tokenConfig1.asset == address(0)
         ) {
-            revert MarketOraclesNotConfigured();
+            revert Errors.MarketOraclesNotConfigured();
         }
     }
 

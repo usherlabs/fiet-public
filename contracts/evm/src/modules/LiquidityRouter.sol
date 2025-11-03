@@ -16,6 +16,7 @@ import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {CurrencyLibrary} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {TransientStateLibrary} from "v4-periphery/lib/v4-core/src/libraries/TransientStateLibrary.sol";
 import {IImmutableState} from "v4-periphery/src/interfaces/IImmutableState.sol";
+import {Errors} from "../libraries/Errors.sol";
 
 abstract contract LiquidityRouter is IImmutableState {
     using CurrencySettler for Currency;
@@ -23,8 +24,6 @@ abstract contract LiquidityRouter is IImmutableState {
     using LPFeeLibrary for uint24;
     using StateLibrary for IPoolManager;
     using TransientStateLibrary for IPoolManager;
-
-    error InvariantViolated(string message);
 
     function msgSender() public view virtual returns (address);
 
@@ -64,7 +63,7 @@ abstract contract LiquidityRouter is IImmutableState {
         int256 delta1 = poolManager.currencyDelta(self, key.currency1);
 
         if (int128(liquidityBefore) + params.liquidityDelta != int128(liquidityAfter)) {
-            revert InvariantViolated("liquidity change incorrect");
+            revert Errors.InvariantViolated("liquidity change incorrect");
         }
 
         if (params.liquidityDelta < 0) {

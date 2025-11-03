@@ -10,17 +10,10 @@ import {ILCC} from "./interfaces/ILCC.sol";
 import {ILiquidityHub} from "./interfaces/ILiquidityHub.sol";
 import {OracleUtils} from "./libraries/OracleUtils.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {Errors} from "./libraries/Errors.sol";
 
 contract LiquidityCommitmentCertificate is ERC20, Ownable, ILCC {
     using SafeERC20 for IERC20;
-    error SenderNotIssuer(address sender);
-    error InvalidUnderlyingAsset();
-    error TransferNotAllowed();
-    error InvalidAmount();
-    error InsufficientETH();
-    error InvalidMarketFactory();
-    error InsufficientWrappedLiquidity(uint256 requested, uint256 available);
-    error InsufficientBalance(address sender, uint256 balance, uint256 needed);
 
     uint8 private immutable _decimals;
     address private immutable underlyingAsset;
@@ -48,7 +41,7 @@ contract LiquidityCommitmentCertificate is ERC20, Ownable, ILCC {
         address _resilientOracleAddress
     ) ERC20(name, symbol) Ownable(_msgSender()) {
         if (_underlyingAsset == address(0)) {
-            revert InvalidUnderlyingAsset();
+            revert Errors.InvalidUnderlyingAsset();
         }
 
         _decimals = __decimals;
@@ -137,7 +130,7 @@ contract LiquidityCommitmentCertificate is ERC20, Ownable, ILCC {
     function mint(address to, uint256 directAmount, uint256 marketAmount) external onlyOwner {
         uint256 amount = directAmount + marketAmount;
         if (amount == 0) {
-            revert InvalidAmount();
+            revert Errors.InvalidAmount();
         }
         _mint(to, amount);
         if (marketAmount > 0) {
@@ -157,7 +150,7 @@ contract LiquidityCommitmentCertificate is ERC20, Ownable, ILCC {
     function burn(address from, uint256 directAmount, uint256 marketAmount) external onlyOwner {
         uint256 amount = directAmount + marketAmount;
         if (amount == 0) {
-            revert InvalidAmount();
+            revert Errors.InvalidAmount();
         }
         _burn(from, amount);
         if (marketAmount > 0) {
@@ -174,7 +167,7 @@ contract LiquidityCommitmentCertificate is ERC20, Ownable, ILCC {
         bool isProtocolTransfer = _isProtocolTransfer(from, to, fromProtocol, toProtocol);
 
         if (!isProtocolTransfer) {
-            revert TransferNotAllowed();
+            revert Errors.TransferNotAllowed();
         }
 
         if (fromProtocol && toProtocol) {
@@ -188,7 +181,7 @@ contract LiquidityCommitmentCertificate is ERC20, Ownable, ILCC {
             uint256 totalBalance = marketDerivedBalances[from] + wrappedBalances[from];
             if (totalBalance < amount) {
                 // This should never happen, as balanceOf from ERC20 will throw first.
-                revert InsufficientBalance(from, totalBalance, amount);
+                revert Errors.InsufficientBalance(from, totalBalance, amount);
             }
             // Before adjusting local buckets, annul any portion that bleeds into queued settlements
             hub.annulSettlementBeforeTransfer(

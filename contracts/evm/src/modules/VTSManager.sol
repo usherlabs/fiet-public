@@ -27,6 +27,7 @@ import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {CurrencySettler} from "@uniswap/v4-core/test/utils/CurrencySettler.sol";
 import {IOracleHelper} from "../interfaces/IOracleHelper.sol";
+import {Errors} from "../libraries/Errors.sol";
 
 abstract contract VTSManager is IVTSManager, PositionIndex {
     using StateLibrary for IPoolManager;
@@ -101,10 +102,6 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     // Snapshot of last funded pending fee adjustments per position/token to avoid over-funding across multiple settles
     mapping(PositionId => int256[2]) internal lastFundedPendingAdj;
 
-    error InvalidMarketVTSConfiguration(PoolId corePoolId);
-    error InvalidPosition(PositionId positionId);
-    error RFSOpenForPosition(PositionId positionId);
-
     // Event to notify that the VTS configuration has been set/initialized for a core pool
     event MarketVTSConfigurationSet(PoolId indexed corePoolId, MarketVTSConfiguration indexed vtsConfiguration);
     event FeeShareHandled(
@@ -118,17 +115,17 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
 
     modifier onlyPositionValid(PositionId _positionId) {
         if (!isPositionValid(_positionId, true)) {
-            revert InvalidPosition(_positionId);
+            revert Errors.InvalidPosition(_positionId);
         }
         if (commitmentMaxima[_positionId][0] == 0 || commitmentMaxima[_positionId][1] == 0) {
-            revert InvalidPosition(_positionId);
+            revert Errors.InvalidPosition(_positionId);
         }
         _;
     }
 
     modifier onlyMMPosition(PositionId _positionId) {
         if (!_isCallerMMP(msg.sender) || !_isMMPosition(_positionId)) {
-            revert InvalidCaller();
+            revert Errors.InvalidCaller();
         }
         _;
     }
@@ -387,7 +384,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
                 meta[id].liquidity = newLiquidity;
             }
         } else {
-            revert NotActive(id);
+            revert Errors.NotActive(id);
         }
         if (liq == 0) {
             meta[id].isActive = false;
@@ -1042,7 +1039,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         (bool rfsOpen, BalanceDelta delta) = _getRFS(positionId);
         if (requireClosedRfS) {
             if (rfsOpen) {
-                revert RFSOpenForPosition(positionId);
+                revert Errors.RFSOpenForPosition(positionId);
             }
         }
         return (rfsOpen, delta);
@@ -1065,7 +1062,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         PositionMeta memory m = meta[positionId];
         (bool rfsOpen, BalanceDelta rfsDelta) = _getRFS(positionId);
         if (!rfsOpen) {
-            revert InvalidPosition(positionId);
+            revert Errors.InvalidPosition(positionId);
         }
 
         // Commitments and RfS amounts
@@ -1090,12 +1087,12 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         uint256 openAt = checkpoint.timeOfLastTransition;
         if (r0 > 0 && s0 > 0) {
             if (block.timestamp < openAt + cfg.token0.gracePeriodTime) {
-                revert MarketVTSConfigurationLibrary.GracePeriodNotElapsed(positionId);
+                revert Errors.GracePeriodNotElapsed(positionId);
             }
         }
         if (r1 > 0 && s1 > 0) {
             if (block.timestamp < openAt + cfg.token1.gracePeriodTime) {
-                revert MarketVTSConfigurationLibrary.GracePeriodNotElapsed(positionId);
+                revert Errors.GracePeriodNotElapsed(positionId);
             }
         }
 

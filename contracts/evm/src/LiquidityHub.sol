@@ -7,6 +7,7 @@ import {LCCFactory} from "./modules/LCCFactory.sol";
 import {CurrencyTransfer} from "./libraries/CurrencyTransfer.sol";
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
+import {Errors} from "./libraries/Errors.sol";
 
 /**
  * @title LiquidityHub
@@ -17,11 +18,6 @@ contract LiquidityHub is Ownable, LCCFactory {
     using CurrencyTransfer for Currency;
 
     IOracleHelper public immutable oracleHelper;
-
-    error InvalidCaller();
-    error InvalidLcc(address lcc);
-    error LiquidityError(address lcc, uint256 amount);
-    error InsufficientWrappedLiquidity(uint256 requested, uint256 available);
 
     event FactorySet(address indexed factory, bool enabled);
     event LiquidityAvailable(address indexed lcc, uint256 amount);
@@ -51,14 +47,14 @@ contract LiquidityHub is Ownable, LCCFactory {
 
     modifier onlyFactory() {
         if (!isFactory[_msgSender()]) {
-            revert InvalidCaller();
+            revert Errors.InvalidCaller();
         }
         _;
     }
 
     modifier onlyFactoryOrOwner() {
         if (!isFactory[_msgSender()] && _msgSender() != owner()) {
-            revert InvalidCaller();
+            revert Errors.InvalidCaller();
         }
         _;
     }
@@ -117,7 +113,7 @@ contract LiquidityHub is Ownable, LCCFactory {
         // throw error if the native ETH is insufficient and it is a native ETH backed LCC
         if (isNativeAsset) {
             if (msg.value != amount) {
-                revert InvalidAmount();
+                revert Errors.InvalidAmount();
             }
         } else {
             // safe to make ERC20 call here since we have verified that from address is not a native asset
@@ -158,7 +154,7 @@ contract LiquidityHub is Ownable, LCCFactory {
         (uint256 wrappedBalance, uint256 marketDerivedBalance) = _balancesOf(lcc, from);
         uint256 fromBalance = wrappedBalance + marketDerivedBalance;
         if (amount == 0 || amount > fromBalance) {
-            revert InvalidAmount();
+            revert Errors.InvalidAmount();
         }
 
         // Unwrap from wrapped balance first (out-of-market liquidity)
@@ -261,7 +257,7 @@ contract LiquidityHub is Ownable, LCCFactory {
 
         // if the UA supply that was wrapped is less than the amount to unwrap, then revert
         if (directSupply[lcc] < amount) {
-            revert InsufficientWrappedLiquidity(amount, directSupply[lcc]);
+            revert Errors.InsufficientWrappedLiquidity(amount, directSupply[lcc]);
         }
 
         directSupply[lcc] -= amount;
@@ -280,7 +276,7 @@ contract LiquidityHub is Ownable, LCCFactory {
      */
     function issue(address lccToken, uint256 amount) external onlyIssuer(lccToken) onlyValidLcc(lccToken) {
         if (amount == 0) {
-            revert InvalidAmount();
+            revert Errors.InvalidAmount();
         }
 
         address issuer = msg.sender;
@@ -294,7 +290,7 @@ contract LiquidityHub is Ownable, LCCFactory {
      */
     function cancel(address lccToken, uint256 amount) external onlyIssuer(lccToken) onlyValidLcc(lccToken) {
         if (amount == 0) {
-            revert InvalidAmount();
+            revert Errors.InvalidAmount();
         }
 
         address issuer = msg.sender;
@@ -322,10 +318,10 @@ contract LiquidityHub is Ownable, LCCFactory {
      *      Decrements Hub reserve immediately; intended to be called just before settlement in the same tx.
      */
     function prepareSettle(address lcc, uint256 amount) external onlyIssuer(lcc) {
-        if (amount == 0) revert InvalidAmount();
+        if (amount == 0) revert Errors.InvalidAmount();
 
         address underlying = lccToUnderlying[lcc];
-        if (reserveOfUnderlying[underlying] < amount) revert InvalidAmount();
+        if (reserveOfUnderlying[underlying] < amount) revert Errors.InvalidAmount();
 
         reserveOfUnderlying[underlying] -= amount;
 
@@ -348,7 +344,7 @@ contract LiquidityHub is Ownable, LCCFactory {
      */
     function processSettlementFor(address lcc, address recipient, uint256 maxAmount) external onlyValidLcc(lcc) {
         uint256 queued = settleQueue[lcc][recipient];
-        if (queued == 0) revert InvalidAmount();
+        if (queued == 0) revert Errors.InvalidAmount();
 
         address underlying = lccToUnderlying[lcc];
         uint256 available = reserveOfUnderlying[underlying];
@@ -356,7 +352,7 @@ contract LiquidityHub is Ownable, LCCFactory {
         (, uint256 holderBal) = _balancesOf(lcc, recipient);
 
         uint256 toSettle = Math.min(Math.min(queued, available), Math.min(maxAmount, holderBal));
-        if (toSettle == 0) revert LiquidityError(lcc, toSettle);
+        if (toSettle == 0) revert Errors.LiquidityError(lcc, toSettle);
 
         settleQueue[lcc][recipient] -= toSettle;
         totalQueued[lcc] -= toSettle;
@@ -380,7 +376,7 @@ contract LiquidityHub is Ownable, LCCFactory {
         uint256 amountToTransfer
     ) external onlyValidLcc(lcc) {
         if (_msgSender() != lcc) {
-            revert InvalidCaller();
+            revert Errors.InvalidCaller();
         }
 
         uint256 queued = settleQueue[lcc][from];
@@ -414,7 +410,7 @@ contract LiquidityHub is Ownable, LCCFactory {
     function _transferUnderlying(address underlying, address account, uint256 amount) internal {
         // confirm the amount is valid and not greater than the uaSupply
         if (amount == 0 || amount > reserveOfUnderlying[underlying]) {
-            revert InvalidAmount();
+            revert Errors.InvalidAmount();
         }
         reserveOfUnderlying[underlying] -= amount;
 

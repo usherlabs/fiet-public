@@ -10,6 +10,7 @@ import {ISignalVerifier} from "./interfaces/ISignalVerifier.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {LiquiditySignal} from "./types/Position.sol";
 import {IOracleHelper} from "./interfaces/IOracleHelper.sol";
+import {Errors} from "./libraries/Errors.sol";
 
 contract VRLSignalManager is Ownable {
     ISignalVerifier public verifier;
@@ -22,9 +23,6 @@ contract VRLSignalManager is Ownable {
     event SignalExpiryInSecondsChanged(
         uint256 indexed oldSignalExpiryInSeconds, uint256 indexed newSignalExpiryInSeconds
     );
-
-    error InvalidProof();
-    error InvalidNonce(uint256 newNonce, uint256 prevNonce);
 
     /**
      * @dev Tracks the latest nonce per Market Maker (MM) address.
@@ -85,7 +83,7 @@ contract VRLSignalManager is Ownable {
         // derive the liquidity signal
         // validate the new nonce is greater than than the previous nonce
         if (signal.nonce <= mmNonce[signal.mmState.owner]) {
-            revert InvalidNonce(signal.nonce, mmNonce[signal.mmState.owner]);
+            revert Errors.InvalidNonce(signal.nonce, mmNonce[signal.mmState.owner]);
         }
 
         // verify the proofs associated with the state
@@ -123,6 +121,6 @@ contract VRLSignalManager is Ownable {
     {
         LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
         (ok, _signalExpiryInSeconds) = verifyLiquiditySignal(signal);
-        if (revertOnInvalid && !ok) revert InvalidProof();
+        if (revertOnInvalid && !ok) revert Errors.InvalidProof();
     }
 }

@@ -5,6 +5,7 @@ pragma solidity ^0.8.20;
 
 import {Context} from "@openzeppelin/contracts/utils/Context.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {Errors} from "../libraries/Errors.sol";
 
 /**
  * @dev Contract module which allows children to implement an emergency stop
@@ -25,16 +26,6 @@ abstract contract PausablePool is Context {
      * @dev Emitted when the pause is lifted by `account` for `poolId`.
      */
     event Unpaused(address account, PoolId poolId);
-
-    /**
-     * @dev The operation failed because the contract is paused.
-     */
-    error EnforcedPause();
-
-    /**
-     * @dev The operation failed because the contract is not paused.
-     */
-    error ExpectedPause();
 
     /**
      * @dev Mapping to track pause status for each pool.
@@ -77,7 +68,7 @@ abstract contract PausablePool is Context {
      */
     function _requireNotPaused(PoolId poolId) internal view virtual {
         if (paused(poolId)) {
-            revert EnforcedPause();
+            revert Errors.EnforcedPause();
         }
     }
 
@@ -86,7 +77,7 @@ abstract contract PausablePool is Context {
      */
     function _requirePaused(PoolId poolId) internal view virtual {
         if (!paused(poolId)) {
-            revert ExpectedPause();
+            revert Errors.ExpectedPause();
         }
     }
 

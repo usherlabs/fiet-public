@@ -6,12 +6,13 @@ import {PositionMeta, PositionId} from "../types/Position.sol";
 import {RFSCheckpoint, RFSCheckpointLibrary} from "../types/Checkpoint.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {IVRLSettlementObserver} from "../interfaces/IVRLSettlementObserver.sol";
+import {MarketVTSConfiguration, TokenConfiguration} from "../types/VTS.sol";
+import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {Errors} from "../libraries/Errors.sol";
 
 // NOTE: Contract name intentionally not `RFSCheckpoint` to avoid a name clash with the struct `RFSCheckpoint`.
 abstract contract RFSCheckpointModule {
     using RFSCheckpointLibrary for RFSCheckpoint;
-
-    error GracePeriodNotElapsed(uint256 tokenId, uint256 positionIndex, RFSCheckpoint checkpoint);
 
     event Checkpointed(uint256 tokenId, uint256 positionIndex, RFSCheckpoint checkpoint);
     event GracePeriodExtended(uint256 tokenId, uint256 positionIndex, uint8 tokenIndex, RFSCheckpoint checkpoint);
@@ -93,7 +94,7 @@ abstract contract RFSCheckpointModule {
         // verify the settlement proof and get the grace period extension
         settlementObserver.verifySettlementProof(poolKey, settlementTokenIndex, verifierIndex, settlementProof, true);
         // extend the grace period for the position
-        MarketVTSConfigurationLibrary.TokenConfiguration memory tokenConfiguration =
+        TokenConfiguration memory tokenConfiguration =
             settlementTokenIndex == 0 ? vtsConfiguration.token0 : vtsConfiguration.token1;
         positionToCheckpoint[positionId].extendGracePeriod(tokenConfiguration, settlementTokenIndex);
 
@@ -120,7 +121,7 @@ abstract contract RFSCheckpointModule {
         RFSCheckpoint memory checkpoint = positionToCheckpoint[positionId];
         if (!checkpoint.isOpen) {
             if (revertOnFalse) {
-                revert GracePeriodNotElapsed(tokenId, positionIndex, checkpoint);
+                revert Errors.GracePeriodNotElapsed(tokenId, positionIndex, checkpoint);
             }
             return false;
         }
@@ -134,7 +135,7 @@ abstract contract RFSCheckpointModule {
 
         bool isSeizable = gracePeriod0Elapsed || gracePeriod1Elapsed;
         if (revertOnFalse && !isSeizable) {
-            revert GracePeriodNotElapsed(tokenId, positionIndex, checkpoint);
+            revert Errors.GracePeriodNotElapsed(tokenId, positionIndex, checkpoint);
         }
 
         return isSeizable;

@@ -7,6 +7,7 @@ import {LibBytes} from "solady/src/utils/LibBytes.sol";
 import {LibString} from "solady/src/utils/LibString.sol";
 import {ILCC} from "../interfaces/ILCC.sol";
 import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
+import {Errors} from "../libraries/Errors.sol";
 
 interface ILCCAdmin {
     function mint(address to, uint256 directAmount, uint256 marketAmount) external;
@@ -19,11 +20,6 @@ interface ILCCAdmin {
  * @dev Provides functionality for creating LCC pairs and managing LCC-underlying asset mappings
  */
 abstract contract LCCFactory {
-    error UnableToGenerateUniqueSymbol();
-    error SenderNotIssuer(address sender);
-    error InvalidAmount();
-    error InvalidLcc(address lcc);
-
     // Event from IMarketFactory interface
     event LCCCreated(address indexed underlyingAsset, address indexed lccToken);
 
@@ -69,7 +65,7 @@ abstract contract LCCFactory {
 
     modifier onlyIssuer(address lcc) {
         if (!_isCallerIssuer(lcc)) {
-            revert SenderNotIssuer(msg.sender);
+            revert Errors.SenderNotIssuer(msg.sender);
         }
         _;
     }
@@ -158,7 +154,7 @@ abstract contract LCCFactory {
         }
 
         // This should never happen in practice, but revert if we can't find a unique symbol
-        revert UnableToGenerateUniqueSymbol();
+        revert Errors.UnableToGenerateUniqueSymbol();
     }
 
     function _getDecimals(address asset) private view returns (uint8) {
@@ -318,7 +314,7 @@ abstract contract LCCFactory {
             lccToMarket[lcc].id == bytes32(0) || lccToMarket[lcc].ref.length == 0
                 || lccToMarket[lcc].factory == address(0)
         ) {
-            revert InvalidLcc(lcc);
+            revert Errors.InvalidLcc(lcc);
         }
     }
 

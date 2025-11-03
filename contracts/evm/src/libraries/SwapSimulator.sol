@@ -14,6 +14,7 @@ import {FixedPoint128} from "@uniswap/v4-core/src/libraries/FixedPoint128.sol";
 import {LiquidityMath} from "@uniswap/v4-core/src/libraries/LiquidityMath.sol";
 import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
 import {TickUtils} from "./TickUtils.sol";
+import {Errors} from "./Errors.sol";
 /**
  * @title SwapSimulator
  * @notice Simulates Uniswap V4 swaps without executing them to predict outcomes
@@ -67,15 +68,6 @@ library SwapSimulator {
 
     // ============ ERRORS ============
 
-    /// @notice Thrown when swap fee is too high for exact output swaps
-    error InvalidFeeForExactOut();
-
-    /// @notice Thrown when price limit is already exceeded before swap
-    error PriceLimitAlreadyExceeded(uint160 sqrtPriceX96, uint160 sqrtPriceLimitX96);
-
-    /// @notice Thrown when price limit is outside valid tick bounds
-    error PriceLimitOutOfBounds(uint160 sqrtPriceLimitX96);
-
     // ============ CORE FUNCTIONS ============
 
     /**
@@ -124,7 +116,7 @@ library SwapSimulator {
         // Validate that fees aren't too high for exact output swaps
         if (swapFee >= SwapMath.MAX_SWAP_FEE) {
             if (params.amountSpecified > 0) {
-                revert InvalidFeeForExactOut();
+                revert Errors.InvalidFeeForExactOut();
             }
         }
 
@@ -283,18 +275,18 @@ library SwapSimulator {
         if (zeroForOne) {
             // For Token0 -> Token1, price should decrease
             if (priceLimit >= currentPrice) {
-                revert PriceLimitAlreadyExceeded(currentPrice, priceLimit);
+                revert Errors.PriceLimitAlreadyExceeded(currentPrice, priceLimit);
             }
             if (priceLimit <= TickMath.MIN_SQRT_PRICE) {
-                revert PriceLimitOutOfBounds(priceLimit);
+                revert Errors.PriceLimitOutOfBounds(priceLimit);
             }
         } else {
             // For Token1 -> Token0, price should increase
             if (priceLimit <= currentPrice) {
-                revert PriceLimitAlreadyExceeded(currentPrice, priceLimit);
+                revert Errors.PriceLimitAlreadyExceeded(currentPrice, priceLimit);
             }
             if (priceLimit >= TickMath.MAX_SQRT_PRICE) {
-                revert PriceLimitOutOfBounds(priceLimit);
+                revert Errors.PriceLimitOutOfBounds(priceLimit);
             }
         }
     }
