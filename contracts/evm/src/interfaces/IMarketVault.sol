@@ -19,7 +19,6 @@ interface IMarketVault {
     /**
      * @notice Modify vault liquidity, handling partial withdrawals gracefully
      * @param balanceDelta The desired balance delta to apply
-     * @return The actual balance delta that was applied (may be less than requested for withdrawals)
      */
     function modifyLiquidities(BalanceDelta balanceDelta) external;
 

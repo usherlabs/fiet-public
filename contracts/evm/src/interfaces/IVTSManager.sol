@@ -34,7 +34,7 @@ interface IVTSManager {
         external
         returns (uint256 seizedLiquidityUnits);
 
-    function incrementCoverage(PoolId poolId, uint256 amount) external;
+    function incrementCoverage(PoolId poolId, uint256 amount0, uint256 amount1) external;
 
     function getCommitment(PositionId positionId) external view returns (uint256 commitment0, uint256 commitment1);
 }

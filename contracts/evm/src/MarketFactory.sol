@@ -64,8 +64,8 @@ contract MarketFactory is IMarketFactory, Ownable {
 
         // Set Protocol bounds addresses
         bounds[address(this)] = true;
-        bounds[address(poolManager)] = true;
-        bounds[address(liquidityHub)] = true;
+        bounds[_poolManager] = true;
+        bounds[_liquidityHub] = true;
         for (uint256 i = 0; i < _bounds.length; i++) {
             bounds[_bounds[i]] = true;
         }
@@ -337,7 +337,7 @@ contract MarketFactory is IMarketFactory, Ownable {
     function useMarketLiquidity(address underlyingAsset, bytes32 marketId, uint256 amount)
         external
         onlyLiquidityHub
-        returns (uint256 available, uint256 toUse)
+        returns (uint256 used)
     {
         PoolId pId = PoolId.wrap(marketId);
         address[2] memory currencies = _proxyHookToCurrencyPair[_proxyToHook[coreToProxy[pId]]];
@@ -358,6 +358,7 @@ contract MarketFactory is IMarketFactory, Ownable {
                 LiquidityUtils.safeInt128ToUint256(usedDelta.amount0()),
                 LiquidityUtils.safeInt128ToUint256(usedDelta.amount1())
             );
+        used = LiquidityUtils.safeInt128ToUint256(usedDelta.amount0() + usedDelta.amount1());
     }
 
     // ============ VIEW FUNCTIONS ============

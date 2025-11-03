@@ -57,6 +57,9 @@ library Errors {
     /// @notice Thrown when an invalid liquidity signal is provided
     error InvalidLiquiditySignal(uint256 totalSignalUsdValue, uint256 totalLCCValue);
 
+    /// @notice Thrown when an invalid LCC token is provided
+    error InvalidLcc(address lcc);
+
     /// @notice Thrown when an invalid verifier is provided (invalid address, index, or not mapped)
     error InvalidVerifier();
 

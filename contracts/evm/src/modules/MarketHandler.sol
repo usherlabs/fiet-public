@@ -4,22 +4,23 @@ pragma solidity ^0.8.26;
 import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Errors} from "../libraries/Errors.sol";
+import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
 
 /// @notice Abstract handler for market operations. Receives the MarketFactory in the constructor for read and write access.
 abstract contract MarketHandler {
-    address public immutable marketFactory;
+    IMarketFactory public immutable marketFactory;
 
     constructor(address _marketFactory) {
-        marketFactory = _marketFactory;
+        marketFactory = IMarketFactory(_marketFactory);
     }
 
     modifier onlyFactory() {
-        if (msg.sender != marketFactory) revert Errors.InvalidSender();
+        if (msg.sender != address(marketFactory)) revert Errors.InvalidSender();
         _;
     }
 
     modifier onlyBounds() {
-        if (!IMarketFactory(marketFactory).bounds(msg.sender)) {
+        if (!marketFactory.bounds(msg.sender)) {
             revert Errors.InvalidSender();
         }
         _;
@@ -35,7 +36,7 @@ abstract contract MarketHandler {
     }
 
     function _getTokenIndex(PoolId poolId, address token) internal view returns (uint8) {
-        address[2] memory currencies = IMarketFactory(marketFactory).corePoolToCurrencyPair(poolId);
+        address[2] memory currencies = marketFactory.corePoolToCurrencyPair(poolId);
         if (token == currencies[0]) {
             return 0;
         } else if (token == currencies[1]) {

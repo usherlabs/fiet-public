@@ -15,7 +15,7 @@ interface IOracleHelper {
 
     function getPriceByTicker(string calldata ticker) external view returns (uint256);
 
-    function validateMarketOraclesExist(address lcc0, address lcc1) external view;
+    function validateMarketOracles(address lcc0, address lcc1) external view;
 
     function getTotalUsdValue(string[] memory tickers, uint256[] memory amounts) external view returns (uint256);
 

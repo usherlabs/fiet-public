@@ -22,6 +22,7 @@ import {IOracleHelper} from "../src/interfaces/IOracleHelper.sol";
 import {WETH} from "@uniswap/v4-core/lib/solmate/src/tokens/WETH.sol";
 import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
 import {MMPCommitmentDescriptor} from "../src/MMPCommitmentDescriptor.sol";
+import {ILiquidityHub} from "../src/interfaces/ILiquidityHub.sol";
 
 contract MarketFactoryTest is Test, Deployers {
     using PoolIdLibrary for PoolKey;
@@ -77,10 +78,10 @@ contract MarketFactoryTest is Test, Deployers {
         factory.setHooks(coreHookAddr);
 
         // Mock calls made to external contracts over the cause of the test
-        // Mock the validateMarketOraclesExist call
+        // Mock the validateMarketOracles call
         vm.mockCall(
             oracleHelperAddress,
-            abi.encodeWithSelector(IOracleHelper.validateMarketOraclesExist.selector),
+            abi.encodeWithSelector(IOracleHelper.validateMarketOracles.selector),
             abi.encode() // Empty return (function is view, returns nothing)
         );
     }
@@ -105,10 +106,9 @@ contract MarketFactoryTest is Test, Deployers {
         assertTrue(PoolId.unwrap(coreId) != bytes32(0));
         assertTrue(PoolId.unwrap(proxyId) != bytes32(0));
 
-        address lcc0 = factory.getLCC(address(token0));
-        address lcc1 = factory.getLCC(address(token1));
-        assertEq(factory.getUnderlyingAsset(lcc0), address(token0));
-        assertEq(factory.getUnderlyingAsset(lcc1), address(token1));
+        address[2] memory lccPair = factory.corePoolToCurrencyPair(coreId);
+        assertEq(ILiquidityHub(factory.liquidityHub()).getUnderlying(lccPair[0]), address(token0));
+        assertEq(ILiquidityHub(factory.liquidityHub()).getUnderlying(lccPair[1]), address(token1));
     }
 
     function testGetCoreHook() public view {

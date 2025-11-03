@@ -47,7 +47,7 @@ abstract contract MarketVault is IMarketVault {
     constructor(address _poolManager, address _marketFactory) {
         vaultPoolManager = IPoolManager(_poolManager);
         marketFactory = IMarketFactory(_marketFactory);
-        liquidityHub = marketFactory.liquidityHub();
+        liquidityHub = ILiquidityHub(marketFactory.liquidityHub());
         mmPositionManager = marketFactory.mmPositionManager();
     }
 

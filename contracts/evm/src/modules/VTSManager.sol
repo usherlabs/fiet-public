@@ -23,7 +23,6 @@ import {TransientSlot} from "openzeppelin-contracts/contracts/utils/TransientSlo
 import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint128.sol";
 import {SafeCast} from "openzeppelin-contracts/contracts/utils/math/SafeCast.sol";
 import {LiquidityUtils} from "../libraries/LiquidityUtils.sol";
-import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {CurrencySettler} from "@uniswap/v4-core/test/utils/CurrencySettler.sol";
 import {IOracleHelper} from "../interfaces/IOracleHelper.sol";
@@ -134,7 +133,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         PositionIndex(_marketFactory)
     {
         poolManager = IPoolManager(_poolManager);
-        oracleHelper = IMarketFactory(_marketFactory).oracleHelper(); // TODO: Do the same for MMP
+        oracleHelper = IOracleHelper(marketFactory.oracleHelper());
         mmPositionManager = _mmPositionManager;
     }
 

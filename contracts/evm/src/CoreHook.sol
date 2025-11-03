@@ -41,13 +41,6 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
     using CurrencySettler for Currency;
     using SafeCast for int256;
 
-    modifier onlyFactory() {
-        if (msg.sender != marketFactory) {
-            revert Errors.InvalidSender();
-        }
-        _;
-    }
-
     // Owner will be set to MarketFactory
     constructor(address _poolManager, address _marketFactory, address _mmPositionManager)
         BaseHook(IPoolManager(_poolManager))

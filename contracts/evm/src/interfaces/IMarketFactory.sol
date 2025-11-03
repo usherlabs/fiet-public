@@ -2,9 +2,7 @@
 pragma solidity ^0.8.20;
 
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
-import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {MarketVTSConfiguration} from "../types/VTS.sol";
-import {IOracleHelper} from "./IOracleHelper.sol";
 
 /**
  * @title IMarketFactory
@@ -35,20 +33,6 @@ interface IMarketFactory {
      * @return The proxy hook address
      */
     function corePoolToProxyHook(PoolId corePoolId) external view returns (address);
-
-    /**
-     * @notice Gets the LCC token for a given underlying asset
-     * @param underlyingAsset The underlying asset address
-     * @return The LCC token address
-     */
-    function getLCC(address underlyingAsset) external view returns (address);
-
-    /**
-     * @notice Gets the underlying asset for a given LCC token
-     * @param lccToken The LCC token address
-     * @return The underlying asset address
-     */
-    function getUnderlyingAsset(address lccToken) external view returns (address);
 
     /**
      * @notice Gets the proxy pool ID for a given core pool ID
@@ -86,7 +70,7 @@ interface IMarketFactory {
      * @notice Gets the oracle helper address
      * @return The oracle helper address
      */
-    function oracleHelper() external view returns (IOracleHelper);
+    function oracleHelper() external view returns (address);
 
     // ============ STATE CHANGING FUNCTIONS ============
 
@@ -123,6 +107,24 @@ interface IMarketFactory {
      * @param bounds Array of addresses to remove from bounds
      */
     function removeBounds(address[] calldata bounds) external;
+
+    /**
+     * @notice Sets the core hook address (can only be set once)
+     * @param _coreHook The core hook address to set
+     */
+    function setHooks(address _coreHook) external;
+
+    /**
+     * @notice Pauses a market
+     * @param poolId The Core Pool ID to pause
+     */
+    function pause(PoolId poolId) external;
+
+    /**
+     * @notice Unpauses a market
+     * @param poolId The Core Pool ID to unpause
+     */
+    function unpause(PoolId poolId) external;
 
     /**
      * @notice Gets the pool manager address

@@ -67,18 +67,19 @@ interface ILiquidityHub {
     function unwrapTo(address underlying, bytes32 marketId, address to, uint256 amount) external;
 
     /**
-     * @notice Gets the LCC token for a given underlying asset
-     * @param underlyingAsset The underlying asset address
+     * @notice Gets the LCC token for a given underlying asset in a specific market
+     * @param marketId The market ID (corePoolKey -> PoolID -> unwrap() to bytes32)
+     * @param underlying The underlying asset address
      * @return The LCC token address
      */
-    function getLCC(address underlyingAsset) external view returns (address);
+    function getLCC(bytes32 marketId, address underlying) external view returns (address);
 
     /**
      * @notice Gets the underlying asset for a given LCC token
      * @param lccToken The LCC token address
      * @return The underlying asset address
      */
-    function getUnderlyingAsset(address lccToken) external view returns (address);
+    function getUnderlying(address lccToken) external view returns (address);
 
     /**
      * @notice Gets the Market struct for a given LCC token
@@ -99,6 +100,13 @@ interface ILiquidityHub {
      * @return The total amount queued for settlement
      */
     function totalQueued(address lcc) external view returns (uint256);
+
+    /**
+     * @notice Gets the market liquidity for a given LCC token
+     * @param lcc The LCC token address
+     * @return The market liquidity amount
+     */
+    function marketLiquidity(address lcc) external view returns (uint256);
 
     /**
      * @notice Called by MarketVault after taking underlying liquidity from the market to LCC
@@ -141,5 +149,14 @@ interface ILiquidityHub {
         uint256 marketDerivedBalance,
         uint256 amountToTransfer
     ) external;
+
+    // ============ Factory Management ============
+
+    /**
+     * @notice Sets a factory address as enabled or disabled
+     * @param factory The factory address
+     * @param enabled Whether the factory should be enabled
+     */
+    function setFactory(address factory, bool enabled) external;
 }
 

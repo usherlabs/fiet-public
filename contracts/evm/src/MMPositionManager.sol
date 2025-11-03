@@ -17,7 +17,7 @@ import {PositionMeta, PositionId, PositionLibrary} from "./types/Position.sol";
 import {LiquiditySignal, SignalState} from "./types/Position.sol";
 import {MarketMaker} from "./libraries/MarketMaker.sol";
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 import {IVTSManager} from "./interfaces/IVTSManager.sol";
 import {MarketVTSConfiguration} from "./types/VTS.sol";
 import {LiquidityUtils} from "./libraries/LiquidityUtils.sol";
@@ -41,7 +41,7 @@ import {ILiquidityHub} from "./interfaces/ILiquidityHub.sol";
 import {IMMPositionManager} from "./interfaces/IMMPositionManager.sol";
 import {IMarketVault} from "./interfaces/IMarketVault.sol";
 import {IERC20Minimal} from "@uniswap/v4-core/src/interfaces/external/IERC20Minimal.sol";
-import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {SafeERC20} from "openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Errors} from "./libraries/Errors.sol";
 
 contract MMPositionManager is
@@ -116,8 +116,8 @@ contract MMPositionManager is
         marketFactory = IMarketFactory(_marketFactory);
         signalManager = IVRLSignalManager(_signalManager);
         commitmentDescriptor = _descriptor;
-        oracleHelper = marketFactory.oracleHelper();
-        liquidityHub = marketFactory.liquidityHub();
+        oracleHelper = IOracleHelper(marketFactory.oracleHelper());
+        liquidityHub = ILiquidityHub(marketFactory.liquidityHub());
     }
 
     modifier onlyValidCommit(PoolKey memory poolKey, uint256 tokenId) {
@@ -142,7 +142,12 @@ contract MMPositionManager is
         _;
     }
 
-    function tokenURI(uint256 tokenId) public view override returns (string memory) {
+    function tokenURI(uint256 tokenId)
+        public
+        view
+        override(ERC721Permit_v4, IMMPositionManager)
+        returns (string memory)
+    {
         if (commitmentDescriptor == address(0)) {
             revert Errors.CommitmentDescriptorNotSet();
         }
@@ -167,7 +172,12 @@ contract MMPositionManager is
         unwrapped = _unwrapLCC(ILCC(lccAddr), msgSender(), amount);
     }
 
-    function getPositionId(uint256 tokenId, uint256 positionIndex) public view override returns (PositionId) {
+    function getPositionId(uint256 tokenId, uint256 positionIndex)
+        public
+        view
+        override(IMMPositionManager, RFSCheckpointModule)
+        returns (PositionId)
+    {
         return commitToPosition[tokenId][positionIndex];
     }
 
@@ -852,8 +862,8 @@ contract MMPositionManager is
         ILCC lcc0 = ILCC(Currency.unwrap(poolKey.currency0));
         ILCC lcc1 = ILCC(Currency.unwrap(poolKey.currency1));
 
-        address ua0 = lcc0.underlyingAsset();
-        address ua1 = lcc1.underlyingAsset();
+        address ua0 = lcc0.underlying();
+        address ua1 = lcc1.underlying();
 
         // TODO: On Seizure, this amount should be the seizureSettled + (portion of position settled relative to seizuredLiquidityUnits/liquidity)
         // ----- LCCs acquired by the seizing party are NOT cancelled, rather transferred for unwrap, or subsequent swaps. VTSManager.onMMLiquidityModify coordinates position settlement amounts, whereas Market Vault aggregates them and coordinates LCC queue clearance.

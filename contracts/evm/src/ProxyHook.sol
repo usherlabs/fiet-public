@@ -103,7 +103,7 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
      * @dev Returns the core pool id
      * @return The core pool id
      */
-    function getCorePoolId() public view override returns (PoolId) {
+    function getCorePoolId() public view returns (PoolId) {
         return corePoolKey.toId();
     }
 
@@ -132,7 +132,7 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         override
         returns (bytes4)
     {
-        if (sender != marketFactory) {
+        if (sender != address(marketFactory)) {
             revert Errors.InvalidInitialiser();
         }
         proxyPoolKey = key;
