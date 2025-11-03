@@ -130,7 +130,7 @@ contract LiquidityCommitmentCertificate is ERC20, Ownable, ILCC {
     function mint(address to, uint256 directAmount, uint256 marketAmount) external onlyOwner {
         uint256 amount = directAmount + marketAmount;
         if (amount == 0) {
-            revert Errors.InvalidAmount();
+            revert Errors.InvalidAmount(0, 0);
         }
         _mint(to, amount);
         if (marketAmount > 0) {
@@ -150,7 +150,7 @@ contract LiquidityCommitmentCertificate is ERC20, Ownable, ILCC {
     function burn(address from, uint256 directAmount, uint256 marketAmount) external onlyOwner {
         uint256 amount = directAmount + marketAmount;
         if (amount == 0) {
-            revert Errors.InvalidAmount();
+            revert Errors.InvalidAmount(0, 0);
         }
         _burn(from, amount);
         if (marketAmount > 0) {

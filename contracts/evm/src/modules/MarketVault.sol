@@ -216,7 +216,7 @@ abstract contract MarketVault is IMarketVault {
      */
     function _takeUnderlyingFromVaultToHub(ILCC lccToken, uint256 amount, bool shouldEmit) internal {
         if (amount == 0) {
-            revert Errors.InvalidAmount();
+            revert Errors.InvalidAmount(0, 0);
         }
 
         Currency uaCurrency = Currency.wrap(lccToken.underlying());

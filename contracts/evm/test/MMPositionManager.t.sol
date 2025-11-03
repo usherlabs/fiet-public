@@ -22,7 +22,7 @@ import {PositionMeta} from "../src/types/Position.sol";
 import {PositionId} from "../src/types/Position.sol";
 import {IVTSManager} from "../src/interfaces/IVTSManager.sol";
 import {MarketVTSConfiguration} from "../src/types/VTS.sol";
-import {MockERC20} from "@uniswap/v4-core/lib/solmate/test/utils/mocks/MockERC20.sol";
+import {MockERC20} from "./_mocks/MockERC20.sol";
 import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
 import {IPositionIndex} from "../src/interfaces/IPositionIndex.sol";
 import {SignalState} from "../src/types/Position.sol";

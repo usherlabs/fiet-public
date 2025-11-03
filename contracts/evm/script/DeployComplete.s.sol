@@ -6,7 +6,7 @@ import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {HookMiner} from "v4-periphery/src/utils/HookMiner.sol";
-import {IOwnable} from "@chainlink/contracts/shared/interfaces/IOwnable.sol";
+import {Ownable} from "openzeppelin-contracts/contracts/access/Ownable.sol";
 
 import {CoreHook} from "../src/CoreHook.sol";
 import {ProxyHook} from "../src/ProxyHook.sol";
@@ -20,7 +20,7 @@ import {EthSepoliaConstants} from "./constants/EthSepolia.sol";
 import {MMPositionManager} from "../src/MMPositionManager.sol";
 import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
 import {PositionManager} from "v4-periphery/src/PositionManager.sol";
-import {StubSpokeVerifier} from "../src/verifiers/StubSpokeVerifier.sol";
+import {StubSignalVerifier} from "../src/verifiers/StubSignalVerifier.sol";
 import {VRLSignalManager} from "../src/VRLSignalManager.sol";
 import {VRLSettlementObserver} from "../src/VRLSettlementObserver.sol";
 import {StubSettlementVerifier} from "../src/verifiers/StubSettlementVerifier.sol";
@@ -149,7 +149,7 @@ contract CompleteDeployScript is ScriptHelper {
         // Transfer ownership of the contracts to the global config
         uint256 len = ownedContracts.length;
         for (uint256 i = 0; i < len; i++) {
-            IOwnable(ownedContracts[i]).transferOwnership(address(config));
+            Ownable(ownedContracts[i]).transferOwnership(address(config));
         }
         return address(config);
     }

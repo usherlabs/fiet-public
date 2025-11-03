@@ -2,7 +2,7 @@
 // This contract is inherited by the core hook contract and it is responsible for tracking state wide variables for the VTS
 pragma solidity ^0.8.26;
 
-import {MarketVTSConfiguration, MarketVTSConfigurationLibrary} from "../types/VTS.sol";
+import {MarketVTSConfiguration} from "../types/VTS.sol";
 import {RFSCheckpoint} from "../types/Checkpoint.sol";
 import {PositionIndex} from "../modules/PositionIndex.sol";
 import {PositionMeta} from "../types/Position.sol";
@@ -115,10 +115,10 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
 
     modifier onlyPositionValid(PositionId _positionId) {
         if (!isPositionValid(_positionId, true)) {
-            revert Errors.InvalidPosition(_positionId);
+            revert Errors.InvalidPosition(0, 0, _positionId);
         }
         if (commitmentMaxima[_positionId][0] == 0 || commitmentMaxima[_positionId][1] == 0) {
-            revert Errors.InvalidPosition(_positionId);
+            revert Errors.InvalidPosition(0, 0, _positionId);
         }
         _;
     }
@@ -1062,7 +1062,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         PositionMeta memory m = meta[positionId];
         (bool rfsOpen, BalanceDelta rfsDelta) = _getRFS(positionId);
         if (!rfsOpen) {
-            revert Errors.InvalidPosition(positionId);
+            revert Errors.InvalidPosition(0, 0, positionId);
         }
 
         // Commitments and RfS amounts
@@ -1087,12 +1087,12 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         uint256 openAt = checkpoint.timeOfLastTransition;
         if (r0 > 0 && s0 > 0) {
             if (block.timestamp < openAt + cfg.token0.gracePeriodTime) {
-                revert Errors.GracePeriodNotElapsed(positionId);
+                revert Errors.GracePeriodNotElapsed(0, 0, positionId, RFSCheckpoint(0, false, 0, 0));
             }
         }
         if (r1 > 0 && s1 > 0) {
             if (block.timestamp < openAt + cfg.token1.gracePeriodTime) {
-                revert Errors.GracePeriodNotElapsed(positionId);
+                revert Errors.GracePeriodNotElapsed(0, 0, positionId, RFSCheckpoint(0, false, 0, 0));
             }
         }
 

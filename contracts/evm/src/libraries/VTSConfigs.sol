@@ -18,7 +18,7 @@ library VTSConfigs {
                 maxGracePeriodTime: 36000, // 10 hours
                 seizureUnlockTime: 3600, // 1 hour
                 baseVTSRate: 1000 // 10% (1000 bips)
-            })
+            }),
             coverageFeeShare: 5000 // 50% (5000 bps)
         });
     }

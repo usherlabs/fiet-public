@@ -19,7 +19,7 @@ import {MarketMaker} from "./libraries/MarketMaker.sol";
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IVTSManager} from "./interfaces/IVTSManager.sol";
-import {MarketVTSConfiguration, MarketVTSConfigurationLibrary} from "./types/VTS.sol";
+import {MarketVTSConfiguration} from "./types/VTS.sol";
 import {LiquidityUtils} from "./libraries/LiquidityUtils.sol";
 import {CurrencyTransfer} from "./libraries/CurrencyTransfer.sol";
 import {ILCC} from "./interfaces/ILCC.sol";
@@ -53,7 +53,6 @@ contract MMPositionManager is
     LCCWrapper
 {
     using SafeCast for uint256;
-    using MarketVTSConfigurationLibrary for MarketVTSConfiguration;
     using PositionLibrary for PositionId;
     using MarketMaker for MarketMaker.State;
     using StateLibrary for IPoolManager;

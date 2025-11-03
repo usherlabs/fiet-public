@@ -5,7 +5,7 @@ import "forge-std/Test.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
-import {MockERC20} from "@uniswap/v4-core/lib/solmate/test/utils/mocks/MockERC20.sol";
+import {MockERC20} from "./_mocks/MockERC20.sol";
 
 import {MarketFactory} from "../src/MarketFactory.sol";
 import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";

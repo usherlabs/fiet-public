@@ -2,7 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {IVTSManager} from "../interfaces/IVTSManager.sol";
-import {PositionMeta, PositionId} from "../types/Position.sol";
+import {PositionId} from "../types/Position.sol";
 import {RFSCheckpoint, RFSCheckpointLibrary} from "../types/Checkpoint.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {IVRLSettlementObserver} from "../interfaces/IVRLSettlementObserver.sol";
@@ -121,7 +121,7 @@ abstract contract RFSCheckpointModule {
         RFSCheckpoint memory checkpoint = positionToCheckpoint[positionId];
         if (!checkpoint.isOpen) {
             if (revertOnFalse) {
-                revert Errors.GracePeriodNotElapsed(tokenId, positionIndex, checkpoint);
+                revert Errors.GracePeriodNotElapsed(tokenId, positionIndex, positionId, checkpoint);
             }
             return false;
         }
@@ -135,7 +135,7 @@ abstract contract RFSCheckpointModule {
 
         bool isSeizable = gracePeriod0Elapsed || gracePeriod1Elapsed;
         if (revertOnFalse && !isSeizable) {
-            revert Errors.GracePeriodNotElapsed(tokenId, positionIndex, checkpoint);
+            revert Errors.GracePeriodNotElapsed(tokenId, positionIndex, positionId, checkpoint);
         }
 
         return isSeizable;

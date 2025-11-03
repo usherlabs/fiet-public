@@ -29,9 +29,8 @@ library Errors {
     // Errors related to invalid inputs, parameters, and validation failures
 
     /// @notice Thrown when an invalid amount is provided (zero or out of bounds)
-    error InvalidAmount();
-
-    /// @notice Thrown when an invalid amount is provided with context
+    /// @param amount The invalid amount (0 if not applicable)
+    /// @param maxAmount The maximum allowed amount (0 if not applicable)
     error InvalidAmount(uint256 amount, uint256 maxAmount);
 
     /// @notice Thrown when an invalid address is provided (zero address or invalid for context)
@@ -44,10 +43,10 @@ library Errors {
     error InvalidMarket(PoolKey poolKey);
 
     /// @notice Thrown when an invalid position is provided
+    /// @param tokenId The token ID (0 if not applicable)
+    /// @param positionIndex The position index (0 if not applicable)
+    /// @param positionId The position ID (PositionId.wrap(bytes32(0)) if not applicable)
     error InvalidPosition(uint256 tokenId, uint256 positionIndex, PositionId positionId);
-
-    /// @notice Thrown when an invalid position ID is provided
-    error InvalidPosition(PositionId positionId);
 
     /// @notice Thrown when an invalid delta is provided
     error InvalidDelta(int128 amount0, int128 amount1);
@@ -158,10 +157,13 @@ library Errors {
     // Errors related to grace periods, checkpoints, and settlement timing
 
     /// @notice Thrown when the grace period has not elapsed for a position
-    error GracePeriodNotElapsed(uint256 tokenId, uint256 positionIndex, RFSCheckpoint checkpoint);
-
-    /// @notice Thrown when the grace period has not elapsed for a position (PositionId variant)
-    error GracePeriodNotElapsed(PositionId positionId);
+    /// @param tokenId The token ID (0 if not applicable)
+    /// @param positionIndex The position index (0 if not applicable)
+    /// @param positionId The position ID (PositionId.wrap(bytes32(0)) if not applicable)
+    /// @param checkpoint The RFS checkpoint (empty struct if not applicable)
+    error GracePeriodNotElapsed(
+        uint256 tokenId, uint256 positionIndex, PositionId positionId, RFSCheckpoint checkpoint
+    );
 
     // ============ FACTORY & CREATION ERRORS ============
     // Errors related to factory operations and token creation

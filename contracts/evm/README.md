@@ -63,6 +63,20 @@ pnpm install
 forge install
 ```
 
+### 3. Deploy `ResilientOracle`
+
+The protocol depends on an external deployment of the **ResilientOracle** from Venus Protocol. The oracle must be deployed before deploying the main protocol contracts.
+
+**Important**: The oracle is deployed separately using custom deployment scripts. See the [`oracle/README.md`](oracle/README.md) for detailed deployment instructions.
+
+```bash
+# Deploy oracle to your target network
+cd oracle
+sh ./deploy.sh <chain>  # e.g., sepolia, arbitrumsepolia, arbitrumone
+```
+
+The deployed oracle address must be available as `RESILIENT_ORACLE_ADDRESS` in your environment variables when deploying the main protocol contracts.
+
 ## Environment Setup
 
 Create a `.env` file in the solidity directory with the following variables:
@@ -75,6 +89,9 @@ ARB_MAINNET_RPC_URL="https://arb1.arbitrum.io/rpc"
 # Deployment
 PRIVATE_KEY="your_private_key_here"
 ETHERSCAN_API_KEY="your_etherscan_api_key"
+
+# Oracle (required - must be deployed separately)
+RESILIENT_ORACLE_ADDRESS="0x..."  # Address of deployed ResilientOracle contract
 
 # Optional: Override token addresses
 UNDERLYING_ASSET_0="0x..."  # USDC address
@@ -122,6 +139,8 @@ The deployment scripts support multiple networks:
 - **Arbitrum**: Mainnet deployment
 
 ### Deploy Contracts
+
+**Prerequisite**: Ensure the ResilientOracle has been deployed and `RESILIENT_ORACLE_ADDRESS` is set in your `.env` file. See [Deploy ResilientOracle](#3-deploy-resilientoracle) above.
 
 ```bash
 # Deploy to Sepolia
