@@ -107,8 +107,8 @@ contract MarketFactoryTest is Test, Deployers {
         assertTrue(PoolId.unwrap(proxyId) != bytes32(0));
 
         address[2] memory lccPair = factory.corePoolToCurrencyPair(coreId);
-        assertEq(ILiquidityHub(factory.liquidityHub()).getUnderlying(lccPair[0]), address(token0));
-        assertEq(ILiquidityHub(factory.liquidityHub()).getUnderlying(lccPair[1]), address(token1));
+        assertEq(factory.liquidityHub().getUnderlying(lccPair[0]), address(token0));
+        assertEq(factory.liquidityHub().getUnderlying(lccPair[1]), address(token1));
     }
 
     function testGetCoreHook() public view {

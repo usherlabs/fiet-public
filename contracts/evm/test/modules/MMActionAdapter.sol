@@ -3,6 +3,7 @@ pragma solidity ^0.8.0;
 
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {MMPositionManager} from "../../src/MMPositionManager.sol";
+import {ActionConstants} from "v4-periphery/src/libraries/ActionConstants.sol";
 
 library MMActionAdapter {
     function _concat(bytes1[] memory actions) internal pure returns (bytes memory out) {
@@ -15,7 +16,21 @@ library MMActionAdapter {
         bytes1[] memory acts = new bytes1[](1);
         acts[0] = bytes1(uint8(MMPositionManager.MMAction.COMMIT_SIGNAL));
         bytes[] memory params = new bytes[](1);
-        params[0] = abi.encode(poolKey, liquiditySignal);
+        // Default to minting to msgSender to preserve existing test behaviour
+        params[0] = abi.encode(poolKey, liquiditySignal, ActionConstants.MSG_SENDER);
+        mmpm.modifyLiquiditiesWithoutUnlock(_concat(acts), params);
+    }
+
+    function commitWithOwner(
+        MMPositionManager mmpm,
+        PoolKey memory poolKey,
+        bytes memory liquiditySignal,
+        address owner
+    ) internal {
+        bytes1[] memory acts = new bytes1[](1);
+        acts[0] = bytes1(uint8(MMPositionManager.MMAction.COMMIT_SIGNAL));
+        bytes[] memory params = new bytes[](1);
+        params[0] = abi.encode(poolKey, liquiditySignal, owner);
         mmpm.modifyLiquiditiesWithoutUnlock(_concat(acts), params);
     }
 
@@ -73,9 +88,14 @@ library MMActionAdapter {
         mmpm.modifyLiquiditiesWithoutUnlock(_concat(acts), params);
     }
 
-    function seize(MMPositionManager mmpm, PoolKey memory poolKey, uint256 tokenId, uint256 idx, uint256 a0, uint256 a1)
-        internal
-    {
+    function seize(
+        MMPositionManager mmpm,
+        PoolKey memory poolKey,
+        uint256 tokenId,
+        uint256 idx,
+        uint256 a0,
+        uint256 a1
+    ) internal {
         bytes1[] memory acts = new bytes1[](1);
         acts[0] = bytes1(uint8(MMPositionManager.MMAction.SEIZE_POSITION));
         bytes[] memory params = new bytes[](1);

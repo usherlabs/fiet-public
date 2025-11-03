@@ -3,6 +3,9 @@ pragma solidity ^0.8.20;
 
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {MarketVTSConfiguration} from "../types/VTS.sol";
+import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {IOracleHelper} from "./IOracleHelper.sol";
+import {ILiquidityHub} from "./ILiquidityHub.sol";
 
 /**
  * @title IMarketFactory
@@ -55,6 +58,12 @@ interface IMarketFactory {
     function coreHook() external view returns (address);
 
     /**
+     * @notice Gets the pool manager address
+     * @return The pool manager address
+     */
+    function poolManager() external view returns (IPoolManager);
+
+    /**
      * @notice Gets the market maker position manager address
      * @return The market maker position manager address
      */
@@ -64,13 +73,13 @@ interface IMarketFactory {
      * @notice Gets the liquidity hub address
      * @return The liquidity hub address
      */
-    function liquidityHub() external view returns (address);
+    function liquidityHub() external view returns (ILiquidityHub);
 
     /**
      * @notice Gets the oracle helper address
      * @return The oracle helper address
      */
-    function oracleHelper() external view returns (address);
+    function oracleHelper() external view returns (IOracleHelper);
 
     // ============ STATE CHANGING FUNCTIONS ============
 
@@ -125,12 +134,6 @@ interface IMarketFactory {
      * @param poolId The Core Pool ID to unpause
      */
     function unpause(PoolId poolId) external;
-
-    /**
-     * @notice Gets the pool manager address
-     * @return The pool manager address
-     */
-    function poolManager() external view returns (address);
 
     /**
      * @notice Gets the proxy hook address for a given proxy pool ID

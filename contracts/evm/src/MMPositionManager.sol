@@ -116,8 +116,8 @@ contract MMPositionManager is
         marketFactory = IMarketFactory(_marketFactory);
         signalManager = IVRLSignalManager(_signalManager);
         commitmentDescriptor = _descriptor;
-        oracleHelper = IOracleHelper(marketFactory.oracleHelper());
-        liquidityHub = ILiquidityHub(marketFactory.liquidityHub());
+        oracleHelper = marketFactory.oracleHelper();
+        liquidityHub = marketFactory.liquidityHub();
     }
 
     modifier onlyValidCommit(PoolKey memory poolKey, uint256 tokenId) {
@@ -142,12 +142,7 @@ contract MMPositionManager is
         _;
     }
 
-    function tokenURI(uint256 tokenId)
-        public
-        view
-        override(ERC721Permit_v4, IMMPositionManager)
-        returns (string memory)
-    {
+    function tokenURI(uint256 tokenId) public view override returns (string memory) {
         if (commitmentDescriptor == address(0)) {
             revert Errors.CommitmentDescriptorNotSet();
         }
@@ -261,8 +256,9 @@ contract MMPositionManager is
 
     function _handleAction(uint256 action, bytes calldata params) internal override {
         if (action == uint256(MMAction.COMMIT_SIGNAL)) {
-            (PoolKey memory poolKey, bytes memory liquiditySignal) = abi.decode(params, (PoolKey, bytes));
-            _commitSignal(poolKey, liquiditySignal);
+            (PoolKey memory poolKey, bytes memory liquiditySignal, address owner) =
+                abi.decode(params, (PoolKey, bytes, address));
+            _commitSignal(poolKey, liquiditySignal, _mapRecipient(owner));
             return;
         }
         if (action == uint256(MMAction.MINT_POSITION)) {
@@ -953,9 +949,13 @@ contract MMPositionManager is
      * @dev This function commits a liquidity signal and mints a commitment NFT.
      * @param poolKey The pool key the commitment binds to.
      * @param liquiditySignal The ABI-encoded LiquiditySignal to verify and record.
+     * @param owner The address to receive the commitment NFT (can be mapped constants).
      * @return tokenId The commitment NFT id created.
      */
-    function _commitSignal(PoolKey memory poolKey, bytes memory liquiditySignal) internal returns (uint256 tokenId) {
+    function _commitSignal(PoolKey memory poolKey, bytes memory liquiditySignal, address owner)
+        internal
+        returns (uint256 tokenId)
+    {
         if (liquiditySignal.length == 0) {
             revert Errors.InvalidLiquiditySignal(0, 0);
         }
@@ -969,11 +969,10 @@ contract MMPositionManager is
         }
 
         // ? -- Mint the Commitment NFT
-        address to = msgSender();
         // get the token id
         tokenId = nextTokenId++;
         // mint the nft
-        _mint(to, tokenId);
+        _mint(owner, tokenId);
         // store the signal state (new + legacy for migration) and bind commit to pool
         commitOf[tokenId].state = SignalState({signal: signal, expiresAt: block.timestamp + expirySeconds});
         commitOf[tokenId].poolId = poolKey.toId();

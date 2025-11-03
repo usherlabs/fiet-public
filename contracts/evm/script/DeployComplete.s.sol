@@ -63,7 +63,7 @@ contract CompleteDeployScript is ScriptHelper {
     // Network-specific constants set from environment
     address public poolManagerAddress;
     address public create2Deployer;
-    address public positionManagerAddress;
+    address payable public positionManagerAddress;
     string public networkName;
 
     function run() external {
@@ -73,15 +73,15 @@ contract CompleteDeployScript is ScriptHelper {
         if (keccak256(bytes(networkName)) == keccak256(bytes("sepolia"))) {
             poolManagerAddress = SepoliaConstants.POOL_MANAGER;
             create2Deployer = SepoliaConstants.DEPLOYER_CREATE2;
-            positionManagerAddress = SepoliaConstants.POSITION_MANAGER;
+            positionManagerAddress = payable(SepoliaConstants.POSITION_MANAGER);
         } else if (keccak256(bytes(networkName)) == keccak256(bytes("arbitrum"))) {
             poolManagerAddress = ArbitrumConstants.POOL_MANAGER;
             create2Deployer = ArbitrumConstants.DEPLOYER_CREATE2;
-            positionManagerAddress = ArbitrumConstants.POSITION_MANAGER;
+            positionManagerAddress = payable(ArbitrumConstants.POSITION_MANAGER);
         } else if (keccak256(bytes(networkName)) == keccak256(bytes("ethsepolia"))) {
             poolManagerAddress = EthSepoliaConstants.POOL_MANAGER;
             create2Deployer = EthSepoliaConstants.DEPLOYER_CREATE2;
-            positionManagerAddress = EthSepoliaConstants.POSITION_MANAGER;
+            positionManagerAddress = payable(EthSepoliaConstants.POSITION_MANAGER);
         }
 
         console.log("Starting deployment of CoreHook, ProxyHook, and MarketFactory on %s...", networkName);
@@ -284,10 +284,9 @@ contract CompleteDeployScript is ScriptHelper {
      */
     function _deployMMPositionManager() internal returns (address) {
         // Query WETH9 from the deployed PositionManager contract
-        address wethAddress = PositionManager(positionManagerAddress).WETH9();
-        console.log("WETH9 queried from PositionManager:", wethAddress);
+        IWETH9 weth9 = PositionManager(positionManagerAddress).WETH9();
+        console.log("WETH9 queried from PositionManager:", address(weth9));
 
-        IWETH9 weth9 = IWETH9(wethAddress);
         address commitmentDescriptorAddr = _deployCommitmentDescriptor();
         MMPositionManager positionManager = new MMPositionManager(
             poolManagerAddress, signalManager, marketFactory, settlementObserver, commitmentDescriptorAddr, weth9
@@ -320,7 +319,7 @@ contract CompleteDeployScript is ScriptHelper {
         MarketFactory factoryInstance = MarketFactory(marketFactory);
 
         // Verify the hooks are properly configured
-        require(coreHookInstance.marketFactory() == marketFactory, "CoreHook: marketFactory not set");
+        require(address(coreHookInstance.marketFactory()) == marketFactory, "CoreHook: marketFactory not set");
         require(factoryInstance.coreHook() == coreHook, "MarketFactory: coreHook not set");
 
         console.log("Hooks activated successfully");
@@ -380,7 +379,7 @@ contract CompleteDeployScript is ScriptHelper {
 
         // Verify MarketFactory configuration
         MarketFactory factory = MarketFactory(marketFactory);
-        require(factory.poolManager() == poolManagerAddress, "MarketFactory: wrong poolManager");
+        require(address(factory.poolManager()) == poolManagerAddress, "MarketFactory: wrong poolManager");
         require(factory.coreHook() == coreHook, "MarketFactory: wrong coreHook");
 
         console.log("MarketFactory configuration verified");
@@ -388,7 +387,7 @@ contract CompleteDeployScript is ScriptHelper {
         // Verify hook cross-references
         CoreHook coreHookInstance = CoreHook(coreHook);
 
-        require(coreHookInstance.marketFactory() == marketFactory, "CoreHook: wrong marketFactory");
+        require(address(coreHookInstance.marketFactory()) == marketFactory, "CoreHook: wrong marketFactory");
 
         console.log("Hook cross-references verified");
         console.log("All verifications passed!");

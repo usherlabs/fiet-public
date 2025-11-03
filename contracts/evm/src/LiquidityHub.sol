@@ -128,7 +128,7 @@ contract LiquidityHub is Ownable, LCCFactory {
         reserveOfUnderlying[underlying] += amount;
 
         // mint some tokens
-        _mint(lcc, to, amount);
+        _mint(lcc, to, amount, 0);
     }
 
     function wrapTo(address lcc, address to, uint256 amount) external payable {
@@ -220,7 +220,7 @@ contract LiquidityHub is Ownable, LCCFactory {
             : 0;
     }
 
-    function _useMarketLiquidity(address lcc, uint256 amount) internal returns (uint256 available, uint256 toUse) {
+    function _useMarketLiquidity(address lcc, uint256 amount) internal returns (uint256 d) {
         bytes32 marketId = lccToMarket[lcc].id;
         return IMarketFactory(lccToMarket[lcc].factory).useMarketLiquidity(lccToUnderlying[lcc], marketId, amount);
     }
@@ -243,9 +243,9 @@ contract LiquidityHub is Ownable, LCCFactory {
     function _marketUnwrap(address lcc, address to, uint256 amount) internal returns (uint256) {
         // TODO: On LCC unwrap where LCC underlying, we need to call unwrap on any available after net.
         // Use market liquidity
-        (, uint256 toUse) = _useMarketLiquidity(lcc, amount);
+        uint256 used = _useMarketLiquidity(lcc, amount);
 
-        return toUse;
+        return used;
     }
 
     /**
@@ -275,30 +275,30 @@ contract LiquidityHub is Ownable, LCCFactory {
 
     /**
      * @notice Issues LCC tokens (mints to issuer)
-     * @param lccToken The LCC token address to issue for
+     * @param lcc The LCC token address to issue for
      * @param amount The amount to issue
      */
-    function issue(address lccToken, uint256 amount) external onlyIssuer(lccToken) onlyValidLcc(lccToken) {
+    function issue(address lcc, uint256 amount) external onlyIssuer(lcc) onlyValidLcc(lcc) {
         if (amount == 0) {
             revert Errors.InvalidAmount(0, 0);
         }
 
         address issuer = msg.sender;
-        _mint(issuer, amount);
+        _mint(lcc, issuer, 0, amount);
     }
 
     /**
      * @notice Cancels LCC tokens (burns from issuer)
-     * @param lccToken The LCC token address to cancel for
+     * @param lcc The LCC token address to cancel for
      * @param amount The amount to cancel
      */
-    function cancel(address lccToken, uint256 amount) external onlyIssuer(lccToken) onlyValidLcc(lccToken) {
+    function cancel(address lcc, uint256 amount) external onlyIssuer(lcc) onlyValidLcc(lcc) {
         if (amount == 0) {
             revert Errors.InvalidAmount(0, 0);
         }
 
         address issuer = msg.sender;
-        _burn(issuer, amount);
+        _burn(lcc, issuer, 0, amount);
     }
 
     /**
@@ -439,5 +439,11 @@ contract LiquidityHub is Ownable, LCCFactory {
         settleQueue[lcc][recipient] += amount;
         totalQueued[lcc] += amount;
         emit SettlementQueued(lcc, recipient, amount);
+    }
+
+    // ============ VIEW FUNCTIONS ============
+
+    function sharedReserveOf(address lcc) external view onlyValidLcc(lcc) returns (uint256) {
+        return reserveOfUnderlying[lccToUnderlying[lcc]];
     }
 }

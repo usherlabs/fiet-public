@@ -8,7 +8,6 @@ import {LibString} from "solady/utils/LibString.sol";
 import {ILCC} from "../interfaces/ILCC.sol";
 import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
 import {Errors} from "../libraries/Errors.sol";
-import {IOracleHelper} from "../interfaces/IOracleHelper.sol";
 
 interface ILCCAdmin {
     function mint(address to, uint256 directAmount, uint256 marketAmount) external;
@@ -167,7 +166,7 @@ abstract contract LCCFactory {
 
     /**
      * @notice Creates an LCC token for the given underlying asset
-     * @param marketFactory The market factory address associated to the market-specific LCCs
+     * @param marketFactoryAddress The market factory address associated to the market-specific LCCs
      * @param marketRef The market reference (bytes from proxyHookAddress)
      * @param underlyingPair The underlying pair [asset0, asset1] for this market
      * @param index The index in the underlying pair (0 or 1)
@@ -176,7 +175,7 @@ abstract contract LCCFactory {
      * @return lccToken The LCC token address
      */
     function _createLCC(
-        address marketFactory,
+        address marketFactoryAddress,
         bytes memory marketRef,
         address[2] memory underlyingPair,
         uint8 index,
@@ -197,7 +196,12 @@ abstract contract LCCFactory {
         // Create LCC token (still uses marketId bytes32 for internal tracking)
         lccToken = address(
             new LiquidityCommitmentCertificate(
-                marketFactory, underlying, name, symbol, decimals, IOracleHelper(marketFactory.oracleHelper()).oracle()
+                marketFactoryAddress,
+                underlying,
+                name,
+                symbol,
+                decimals,
+                IMarketFactory(marketFactoryAddress).oracleHelper().oracle()
             )
         );
 

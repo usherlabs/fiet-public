@@ -33,6 +33,7 @@ contract SwapV4 is ScriptHelper {
     IPoolManager poolManager;
     IPermit2 permit2;
     IHooks proxyHook;
+    ILiquidityHub liquidityHub;
 
     // Proxy pool tokens (underlying tokens)
     address token0;
@@ -68,7 +69,7 @@ contract SwapV4 is ScriptHelper {
         address marketFactoryAddr = readAddress("marketFactory");
         address liquidityHubAddr = readAddress("liquidityHub");
         IMarketFactory marketFactory = IMarketFactory(marketFactoryAddr);
-        ILiquidityHub liquidityHub = ILiquidityHub(liquidityHubAddr);
+        liquidityHub = ILiquidityHub(liquidityHubAddr);
         console.log("Market Factory loaded: ", marketFactoryAddr);
         console.log("Liquidity Hub loaded: ", liquidityHubAddr);
 
@@ -348,8 +349,8 @@ contract SwapV4 is ScriptHelper {
     function swapExactInputSingle(IV4Router.ExactInputSingleParams memory params) public {
         (uint160 sqrtPriceX96Before, int24 tickBefore,,) = poolManager.getSlot0(_corePoolId);
         uint128 liquidityBefore = poolManager.getLiquidity(_corePoolId);
-        uint256 uaSupply0Before = LiquidityCommitmentCertificate(lccToken0).uaSupply();
-        uint256 uaSupply1Before = LiquidityCommitmentCertificate(lccToken1).uaSupply();
+        uint256 uaSupply0Before = liquidityHub.sharedReserveOf(lccToken0);
+        uint256 uaSupply1Before = liquidityHub.sharedReserveOf(lccToken1);
         console.log("Before Swap (Exact Input Single):");
         console.log("Core Pool - sqrtPriceX96: %s", sqrtPriceX96Before);
         console.log("Core Pool - tick: %d", tickBefore);
@@ -393,8 +394,8 @@ contract SwapV4 is ScriptHelper {
         // Log after
         (uint160 sqrtPriceX96After, int24 tickAfter,,) = poolManager.getSlot0(_corePoolId);
         uint128 liquidityAfter = poolManager.getLiquidity(_corePoolId);
-        uint256 uaSupply0After = LiquidityCommitmentCertificate(lccToken0).uaSupply();
-        uint256 uaSupply1After = LiquidityCommitmentCertificate(lccToken1).uaSupply();
+        uint256 uaSupply0After = liquidityHub.sharedReserveOf(lccToken0);
+        uint256 uaSupply1After = liquidityHub.sharedReserveOf(lccToken1);
         console.log("After Swap (Exact Input Single):");
         console.log("Core Pool - sqrtPriceX96: %s", sqrtPriceX96After);
         console.log("Core Pool - tick: %d", tickAfter);
@@ -411,8 +412,8 @@ contract SwapV4 is ScriptHelper {
     function swapExactOutputSingle(IV4Router.ExactOutputSingleParams memory params) public {
         (uint160 sqrtPriceX96Before, int24 tickBefore,,) = poolManager.getSlot0(_corePoolId);
         uint128 liquidityBefore = poolManager.getLiquidity(_corePoolId);
-        uint256 uaSupply0Before = LiquidityCommitmentCertificate(lccToken0).uaSupply();
-        uint256 uaSupply1Before = LiquidityCommitmentCertificate(lccToken1).uaSupply();
+        uint256 uaSupply0Before = liquidityHub.sharedReserveOf(lccToken0);
+        uint256 uaSupply1Before = liquidityHub.sharedReserveOf(lccToken1);
         console.log("Before Swap (Exact Output Single):");
         console.log("Core Pool - sqrtPriceX96: %s", sqrtPriceX96Before);
         console.log("Core Pool - tick: %d", tickBefore);
@@ -455,8 +456,8 @@ contract SwapV4 is ScriptHelper {
         // Log after
         (uint160 sqrtPriceX96After, int24 tickAfter,,) = poolManager.getSlot0(_corePoolId);
         uint128 liquidityAfter = poolManager.getLiquidity(_corePoolId);
-        uint256 uaSupply0After = LiquidityCommitmentCertificate(lccToken0).uaSupply();
-        uint256 uaSupply1After = LiquidityCommitmentCertificate(lccToken1).uaSupply();
+        uint256 uaSupply0After = liquidityHub.sharedReserveOf(lccToken0);
+        uint256 uaSupply1After = liquidityHub.sharedReserveOf(lccToken1);
         console.log("After Swap (Exact Output Single):");
         console.log("Core Pool - sqrtPriceX96: %s", sqrtPriceX96After);
         console.log("Core Pool - tick: %d", tickAfter);

@@ -133,7 +133,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
         PositionIndex(_marketFactory)
     {
         poolManager = IPoolManager(_poolManager);
-        oracleHelper = IOracleHelper(marketFactory.oracleHelper());
+        oracleHelper = marketFactory.oracleHelper();
         mmPositionManager = _mmPositionManager;
     }
 

@@ -45,9 +45,7 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
     constructor(address _poolManager, address _marketFactory, address _mmPositionManager)
         BaseHook(IPoolManager(_poolManager))
         VTSManager(_poolManager, _marketFactory, _mmPositionManager)
-    {
-        marketFactory = _marketFactory;
-    }
+    {}
 
     function pause(PoolId poolId) external onlyFactory {
         _pause(poolId);
@@ -83,7 +81,7 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
         override
         returns (bytes4)
     {
-        if (sender != marketFactory) {
+        if (sender != address(marketFactory)) {
             revert Errors.InvalidInitialiser();
         }
         return this.beforeInitialize.selector;
@@ -336,8 +334,8 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
     // Helper function to get the proxy hook address from the core pool key
     function _getProxyHook(PoolKey calldata corePoolKey) internal view returns (address) {
         PoolId corePoolId = corePoolKey.toId();
-        PoolId proxyPoolId = IMarketFactory(marketFactory).coreToProxy(corePoolId);
+        PoolId proxyPoolId = marketFactory.coreToProxy(corePoolId);
 
-        return IMarketFactory(marketFactory).proxyToHook(proxyPoolId);
+        return marketFactory.proxyToHook(proxyPoolId);
     }
 }

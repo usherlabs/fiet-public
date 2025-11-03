@@ -113,15 +113,15 @@ contract CreateMarketScript is ScriptHelper {
         if (keccak256(bytes(networkName)) == keccak256(bytes("arbitrum"))) {
             poolManager = ArbitrumConstants.POOL_MANAGER;
             create2Deployer = ArbitrumConstants.DEPLOYER_CREATE2;
-            positionManagerAddress = ArbitrumConstants.POSITION_MANAGER;
+            positionManagerAddress = payable(ArbitrumConstants.POSITION_MANAGER);
         } else if (keccak256(bytes(networkName)) == keccak256(bytes("sepolia"))) {
             poolManager = SepoliaConstants.POOL_MANAGER;
             create2Deployer = SepoliaConstants.DEPLOYER_CREATE2;
-            positionManagerAddress = SepoliaConstants.POSITION_MANAGER;
+            positionManagerAddress = payable(SepoliaConstants.POSITION_MANAGER);
         } else if (keccak256(bytes(networkName)) == keccak256(bytes("ethsepolia"))) {
             poolManager = EthSepoliaConstants.POOL_MANAGER;
             create2Deployer = EthSepoliaConstants.DEPLOYER_CREATE2;
-            positionManagerAddress = EthSepoliaConstants.POSITION_MANAGER;
+            positionManagerAddress = payable(EthSepoliaConstants.POSITION_MANAGER);
         } else {
             revert("Unsupported network");
         }
@@ -399,7 +399,7 @@ contract CreateMarketScript is ScriptHelper {
         console.log("LCC tokens verified");
 
         // Verify underlying assets via LiquidityHub
-        ILiquidityHub hub = ILiquidityHub(factoryInstance.liquidityHub());
+        ILiquidityHub hub = factoryInstance.liquidityHub();
         require(hub.getUnderlying(lccToken0) == Currency.unwrap(underlyingCurrency0), "LCC token 0 underlying mismatch");
         require(hub.getUnderlying(lccToken1) == Currency.unwrap(underlyingCurrency1), "LCC token 1 underlying mismatch");
 
