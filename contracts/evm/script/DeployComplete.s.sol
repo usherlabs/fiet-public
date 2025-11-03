@@ -321,7 +321,7 @@ contract CompleteDeployScript is ScriptHelper {
 
         // Verify the hooks are properly configured
         require(coreHookInstance.marketFactory() == marketFactory, "CoreHook: marketFactory not set");
-        require(factoryInstance.getCoreHook() == coreHook, "MarketFactory: coreHook not set");
+        require(factoryInstance.coreHook() == coreHook, "MarketFactory: coreHook not set");
 
         console.log("Hooks activated successfully");
     }
@@ -381,7 +381,7 @@ contract CompleteDeployScript is ScriptHelper {
         // Verify MarketFactory configuration
         MarketFactory factory = MarketFactory(marketFactory);
         require(factory.poolManager() == poolManagerAddress, "MarketFactory: wrong poolManager");
-        require(factory.getCoreHook() == coreHook, "MarketFactory: wrong coreHook");
+        require(factory.coreHook() == coreHook, "MarketFactory: wrong coreHook");
 
         console.log("MarketFactory configuration verified");
 

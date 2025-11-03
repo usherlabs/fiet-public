@@ -69,11 +69,11 @@ contract OracleHelper is Ownable {
         // thus if it is the native token then use the resilient oracle native token address
         address underlying0 = OracleUtils.unifyNativeTokenAddress(ILCC(lcc0).underlying());
         address underlying1 = OracleUtils.unifyNativeTokenAddress(ILCC(lcc1).underlying());
-        TokenConfig memory tokenConfig0 = oracle.getTokenConfig(underlying0);
-        TokenConfig memory tokenConfig1 = oracle.getTokenConfig(underlying1);
+        IResilientOracle.TokenConfig memory tokenConfig0 = oracle.getTokenConfig(underlying0);
+        IResilientOracle.TokenConfig memory tokenConfig1 = oracle.getTokenConfig(underlying1);
         if (
-            tokenConfig0.enableFlagsForOracles[uint256(OracleRole.MAIN)] == false
-                || tokenConfig1.enableFlagsForOracles[uint256(OracleRole.MAIN)] == false
+            tokenConfig0.enableFlagsForOracles[uint256(IResilientOracle.OracleRole.MAIN)] == false
+                || tokenConfig1.enableFlagsForOracles[uint256(IResilientOracle.OracleRole.MAIN)] == false
                 || tokenConfig0.asset == address(0) || tokenConfig1.asset == address(0)
         ) {
             revert Errors.MarketOraclesNotConfigured();

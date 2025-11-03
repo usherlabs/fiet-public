@@ -129,7 +129,7 @@ contract AddLiquidityScript is ScriptHelper {
             }
         }
 
-        address coreHookAddr = factory.getCoreHook();
+        address coreHookAddr = factory.coreHook();
 
         // Note: LCC tokens are market-specific, so we need to get them from a market
         // For now, we'll need to get the market ID from the pool key

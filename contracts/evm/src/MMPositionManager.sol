@@ -39,6 +39,8 @@ import {TransientSlots} from "./libraries/TransientSlots.sol";
 import {ICommitmentDescriptor} from "./interfaces/ICommitmentDescriptor.sol";
 import {ILiquidityHub} from "./interfaces/ILiquidityHub.sol";
 import {IMMPositionManager} from "./interfaces/IMMPositionManager.sol";
+import {IMarketVault} from "./interfaces/IMarketVault.sol";
+import {IERC20Minimal} from "@uniswap/v4-core/src/interfaces/external/IERC20Minimal.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Errors} from "./libraries/Errors.sol";
 
@@ -61,7 +63,6 @@ contract MMPositionManager is
     using CurrencyLibrary for Currency;
     using CurrencyTransfer for Currency;
     using SafeERC20 for IERC20;
-    using SafeERC20 for ILCC;
 
     event SignalCommitted(uint256 tokenId);
     event SignalDecommitted(uint256 tokenId, uint256 positionIndex, uint256 amount0, uint256 amount1);
@@ -614,7 +615,7 @@ contract MMPositionManager is
 
         // Invariant: issued ≤ signal + settled (post-verify renew path)
         if (issuedUsd > signalUsd + settledUsd) {
-            revert InvalidLiquiditySignal(signalUsd + settledUsd, issuedUsd);
+            revert Errors.InvalidLiquiditySignal(signalUsd + settledUsd, issuedUsd);
         }
     }
 

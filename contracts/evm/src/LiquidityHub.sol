@@ -3,10 +3,13 @@ pragma solidity ^0.8.20;
 
 import {Ownable} from "openzeppelin-contracts/contracts/access/Ownable.sol";
 import {IOracleHelper} from "./interfaces/IOracleHelper.sol";
+import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 import {LCCFactory} from "./modules/LCCFactory.sol";
 import {CurrencyTransfer} from "./libraries/CurrencyTransfer.sol";
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
+import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Errors} from "./libraries/Errors.sol";
 
 /**
@@ -16,6 +19,7 @@ import {Errors} from "./libraries/Errors.sol";
  */
 contract LiquidityHub is Ownable, LCCFactory {
     using CurrencyTransfer for Currency;
+    using SafeERC20 for ERC20;
 
     IOracleHelper public immutable oracleHelper;
 

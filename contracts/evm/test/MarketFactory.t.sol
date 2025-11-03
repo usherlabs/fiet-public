@@ -112,7 +112,7 @@ contract MarketFactoryTest is Test, Deployers {
     }
 
     function testGetCoreHook() public view {
-        assertEq(factory.getCoreHook(), coreHookAddr);
+        assertEq(factory.coreHook(), coreHookAddr);
     }
 
     function testGetProxyHook() public {

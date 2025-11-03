@@ -21,12 +21,14 @@ import {LiquidityUtils} from "../../src/libraries/LiquidityUtils.sol";
 import {HookFlags} from "../../src/libraries/HookFlags.sol";
 import {MMPositionManager} from "../../src/MMPositionManager.sol";
 import {ECDSASignatureSignalVerifier} from "../../src/verifiers/ECDSASignatureSignalVerifier.sol";
+import {StubSignalVerifier} from "../../src/verifiers/StubSignalVerifier.sol";
 import {WETH} from "@uniswap/v4-core/lib/solmate/src/tokens/WETH.sol";
 import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
 import {VTSConfigs} from "../../src/libraries/VTSConfigs.sol";
 import {IVTSManager} from "../../src/interfaces/IVTSManager.sol";
 import {VRLSignalManager} from "../../src/VRLSignalManager.sol";
 import {VRLSettlementObserver} from "../../src/VRLSettlementObserver.sol";
+import {IVRLSettlementObserver} from "../../src/interfaces/IVRLSettlementObserver.sol";
 import {StubSettlementVerifier} from "../../src/verifiers/StubSettlementVerifier.sol";
 import {IMarketVault} from "../../src/interfaces/IMarketVault.sol";
 import {MMPCommitmentDescriptor} from "../../src/MMPCommitmentDescriptor.sol";
@@ -58,7 +60,7 @@ abstract contract MarketTestBase is Test, Deployers {
 
     address resilientOracle = makeAddr("ResilientOracleAddr");
     ECDSASignatureSignalVerifier icVerifier;
-    StubSignalVerifier StubSignalVerifier;
+    StubSignalVerifier stubSignalVerifier;
     VRLSignalManager signalManager;
     address mmPositionManager;
     IVRLSettlementObserver settlementObserver;
@@ -153,9 +155,9 @@ abstract contract MarketTestBase is Test, Deployers {
 
         // deploy custom router and verifier
         icVerifier = new ECDSASignatureSignalVerifier(makeAddr("icCanister"));
-        StubSignalVerifier = new StubSignalVerifier();
+        stubSignalVerifier = new StubSignalVerifier();
         signalManager = new VRLSignalManager(
-            address(StubSignalVerifier), address(oracleHelper), address(marketFactory), signalExpiryInSeconds
+            address(stubSignalVerifier), address(oracleHelper), address(marketFactory), signalExpiryInSeconds
         );
 
         // deploy the settlement observer
@@ -220,8 +222,8 @@ abstract contract MarketTestBase is Test, Deployers {
         // Ensure LCC.usdPrice() resolves the Oracle Registry via MarketFactory
         vm.mockCall(
             marketFactory,
-            abi.encodeWithSelector(IMarketFactory.oracleRegistry.selector),
-            abi.encode(address(oracleRegistry))
+            abi.encodeWithSelector(IMarketFactory.oracleHelper.selector),
+            abi.encode(address(oracleHelper))
         );
         // mock the call to get the market VTS configuration
         vm.mockCall(

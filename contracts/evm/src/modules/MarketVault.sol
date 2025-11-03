@@ -32,12 +32,10 @@ import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
 import {LiquidityUtils} from "../libraries/LiquidityUtils.sol";
 import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
 import {ILiquidityHub} from "../interfaces/ILiquidityHub.sol";
-import {SafeERC20} from "openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Errors} from "../libraries/Errors.sol";
 
 abstract contract MarketVault is IMarketVault {
     using CurrencySettler for Currency;
-    using SafeERC20 for ILCC;
 
     event SwapDeficit(PoolId indexed poolId, address indexed lccToken, address deficitRecipient, uint256 deficitAmount);
 

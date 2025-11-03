@@ -112,7 +112,7 @@ contract RemoveLiquidityScript is ScriptHelper {
         uint256 jsonTS = vm.parseJsonUint(json, keyTS);
         tickSpacingVal = int24(uint24(jsonTS));
 
-        address coreHookAddr = factory.getCoreHook();
+        address coreHookAddr = factory.coreHook();
 
         // Load LCC tokens using marketId from parsedId (already parsed from CORE_POOL_ID)
         bytes32 marketId = parsedId;

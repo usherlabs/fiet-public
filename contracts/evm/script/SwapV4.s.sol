@@ -147,7 +147,7 @@ contract SwapV4 is ScriptHelper {
         tickSpacing = int24(uint24(jsonTS));
         console.log("Tick spacing loaded:", tickSpacing);
 
-        address coreHookAddr = marketFactory.getCoreHook();
+        address coreHookAddr = marketFactory.coreHook();
         console.log("Core Hook loaded");
 
         // Load LCC tokens using marketId from parsedId (already parsed from CORE_POOL_ID)
