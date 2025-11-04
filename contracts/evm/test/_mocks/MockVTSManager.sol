@@ -1,26 +1,25 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
+pragma solidity ^0.8.26;
 
 import {VTSManager} from "../../src/modules/VTSManager.sol";
 import {PositionId} from "../../src/types/Position.sol";
-import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {PositionLibrary} from "../../src/types/Position.sol";
-import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 
 contract MockVTSManager is VTSManager {
     constructor(address _poolManager, address _marketFactory, address _mmPositionManager)
-        VTSManager(_poolManager, _marketFactory, _mmPositionManager, address(0))
+        VTSManager(_poolManager, _marketFactory, _mmPositionManager)
     {}
 
-    // cache the required VTS per position using this mapping
-    mapping(PositionId => BalanceDelta) public mockVTSRequired;
-    mapping(PositionId => BalanceDelta) public mockVTSCurrent;
-    mapping(PositionId => BalanceDelta) public mockCommitment;
+    // Cache the required VTS per position using this mapping
+    // VTS values are stored in 1e18 scale (1e18 = 100%)
+    mapping(PositionId => uint256[2]) public mockVTSRequired;
+    mapping(PositionId => uint256[2]) public mockVTSCurrent;
+    mapping(PositionId => uint256[2]) public mockCommitment;
 
-    // mock the required VTS for a position
-    function setMockVTSRequired(PositionId positionId, uint128 vtsRequired0, uint128 vtsRequired1) public {
-        mockVTSRequired[positionId] = toBalanceDelta(int128(vtsRequired0), int128(vtsRequired1));
+    // Mock the required VTS for a position (in 1e18 scale)
+    function setMockVTSRequired(PositionId positionId, uint256 vtsRequired0, uint256 vtsRequired1) public {
+        mockVTSRequired[positionId] = [vtsRequired0, vtsRequired1];
     }
 
     // Expose tracked commitmentMaxima for testing
@@ -41,40 +40,42 @@ contract MockVTSManager is VTSManager {
         return (commitmentMaxima[positionId][0], commitmentMaxima[positionId][1]);
     }
 
-    // mock the current VTS for a position
-    function setMockVTSCurrent(PositionId positionId, uint128 vtsCurrent0, uint128 vtsCurrent1) public {
-        mockVTSCurrent[positionId] = toBalanceDelta(int128(vtsCurrent0), int128(vtsCurrent1));
+    // Mock the current VTS for a position (in 1e18 scale)
+    function setMockVTSCurrent(PositionId positionId, uint256 vtsCurrent0, uint256 vtsCurrent1) public {
+        mockVTSCurrent[positionId] = [vtsCurrent0, vtsCurrent1];
     }
 
-    // mock the commitment for a position
-    function setMockCommitment(PositionId positionId, uint128 commitment0, uint128 commitment1) public {
-        mockCommitment[positionId] = toBalanceDelta(int128(commitment0), int128(commitment1));
+    // Mock the commitment for a position
+    function setMockCommitment(PositionId positionId, uint256 commitment0, uint256 commitment1) public {
+        mockCommitment[positionId] = [commitment0, commitment1];
     }
 
-    // increase the VTS for a position by the provided value in bps
-    function increaseVTS(PositionId positionId, uint256 vtsIncreaseBps) public {
+    // Increase the VTS for a position by the provided value in 1e18 scale
+    // Note: VTS values are in 1e18 scale (1e18 = 100%), not basis points
+    function increaseVTS(PositionId positionId, uint256 vtsIncrease) public {
         (uint256 currentVts0, uint256 currentVts1) = _getVTSRequired(positionId);
 
-        // increase VTS by the provided bps value, ensuring it doesn't exceed 10000 bps (100%)
-        uint256 newVts0 = currentVts0 + vtsIncreaseBps;
-        uint256 newVts1 = currentVts1 + vtsIncreaseBps;
+        // Increase VTS by the provided value, ensuring it doesn't exceed 1e18 (100%)
+        uint256 one = 1e18;
+        uint256 newVts0 = currentVts0 + vtsIncrease;
+        uint256 newVts1 = currentVts1 + vtsIncrease;
 
-        // cap at 10000 bps (100%)
-        if (newVts0 > 10000) newVts0 = 10000;
-        if (newVts1 > 10000) newVts1 = 10000;
+        // Cap at 1e18 (100%)
+        if (newVts0 > one) newVts0 = one;
+        if (newVts1 > one) newVts1 = one;
 
-        setMockVTSRequired(positionId, uint128(newVts0), uint128(newVts1));
+        setMockVTSRequired(positionId, newVts0, newVts1);
     }
 
-    // decrease the VTS for a position by the provided value in bps
-    function decreaseVTS(PositionId positionId, uint256 vtsDecreaseBps) public {
+    // Decrease the VTS for a position by the provided value in 1e18 scale
+    function decreaseVTS(PositionId positionId, uint256 vtsDecrease) public {
         (uint256 currentVts0, uint256 currentVts1) = _getVTSRequired(positionId);
 
-        // decrease VTS by the provided bps value, ensuring it doesn't go below 0
-        uint256 newVts0 = currentVts0 > vtsDecreaseBps ? currentVts0 - vtsDecreaseBps : 0;
-        uint256 newVts1 = currentVts1 > vtsDecreaseBps ? currentVts1 - vtsDecreaseBps : 0;
+        // Decrease VTS by the provided value, ensuring it doesn't go below 0
+        uint256 newVts0 = currentVts0 > vtsDecrease ? currentVts0 - vtsDecrease : 0;
+        uint256 newVts1 = currentVts1 > vtsDecrease ? currentVts1 - vtsDecrease : 0;
 
-        setMockVTSRequired(positionId, uint128(newVts0), uint128(newVts1));
+        setMockVTSRequired(positionId, newVts0, newVts1);
     }
 
     function trackCommitment(address router, ModifyLiquidityParams calldata params) external {
@@ -82,44 +83,41 @@ contract MockVTSManager is VTSManager {
         _trackCommitment(positionId, params);
     }
 
-    // since this is a mock contract, we need to overrride the function to get the current vts for a given position
-    // this way we can easily set a mock vts required for a given position
+    /**
+     * @notice Override to return mock VTS required values
+     * @dev VTS values are in 1e18 scale (1e18 = 100%)
+     */
     function _getVTSRequired(PositionId positionId)
         internal
         view
         override
         returns (uint256 vtsRequired0, uint256 vtsRequired1)
     {
-        return (
-            uint256(uint128(mockVTSRequired[positionId].amount0())),
-            uint256(uint128(mockVTSRequired[positionId].amount1()))
-        );
+        return (mockVTSRequired[positionId][0], mockVTSRequired[positionId][1]);
     }
 
-    // since this is a mock contract, we need to overrride the function to get the current vts for a given position
-    // this way we can easily set a mock vts current for a given position
+    /**
+     * @notice Override to return mock VTS current values
+     * @dev VTS values are in 1e18 scale (1e18 = 100%)
+     */
     function _getVTSCurrent(PositionId positionId)
         internal
         view
         override
         returns (uint256 vtsCurrent0, uint256 vtsCurrent1)
     {
-        return (
-            uint256(uint128(mockVTSCurrent[positionId].amount0())),
-            uint256(uint128(mockVTSCurrent[positionId].amount1()))
-        );
+        return (mockVTSCurrent[positionId][0], mockVTSCurrent[positionId][1]);
     }
 
-    // since this is a mock contract, we need to overrride the function to get the commitment for a given position
+    /**
+     * @notice Override to return mock commitment values
+     */
     function _getCommitment(PositionId positionId)
         internal
         view
         override
         returns (uint256 commitment0, uint256 commitment1)
     {
-        return (
-            uint256(uint128(mockCommitment[positionId].amount0())),
-            uint256(uint128(mockCommitment[positionId].amount1()))
-        );
+        return (mockCommitment[positionId][0], mockCommitment[positionId][1]);
     }
 }
