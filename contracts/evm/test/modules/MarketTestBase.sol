@@ -14,11 +14,13 @@ import {IERC20Minimal} from "@uniswap/v4-core/src/interfaces/external/IERC20Mini
 import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 
 import {CurrencySortHelper} from "../../script/libraries/CurrencySortHelper.sol";
+import {CoreHook} from "../../src/CoreHook.sol";
 import {ProxyHook} from "../../src/ProxyHook.sol";
 import {LiquidityCommitmentCertificate} from "../../src/LCC.sol";
 import {IMarketFactory} from "../../src/interfaces/IMarketFactory.sol";
 import {LiquidityUtils} from "../../src/libraries/LiquidityUtils.sol";
 import {HookFlags} from "../../src/libraries/HookFlags.sol";
+import {HookMiner} from "v4-periphery/src/utils/HookMiner.sol";
 import {MMPositionManager} from "../../src/MMPositionManager.sol";
 import {ECDSASignatureSignalVerifier} from "../../src/verifiers/ECDSASignatureSignalVerifier.sol";
 import {StubSignalVerifier} from "../../src/verifiers/StubSignalVerifier.sol";
@@ -156,9 +158,9 @@ abstract contract MarketTestBase is Test, Deployers {
     }
 
     function _deployFreshManagerAndRouters() internal {
-        deployFreshManagerAndRouters();
+        deployFreshManagerAndRouters(); // univ4 core contract deployment
         oracleHelper = new OracleHelper(resilientOracle);
-        marketFactory = makeAddr("marketFactory");
+        marketFactory = makeAddr("marketFactory"); // stub market factory.
 
         // Mock oracleHelper() call needed for LCC creation
         vm.mockCall(
@@ -200,23 +202,34 @@ abstract contract MarketTestBase is Test, Deployers {
                 weth9
             )
         );
+        // Mock mmPositionManager() call needed for LCC creation
+        vm.mockCall(
+            marketFactory,
+            abi.encodeWithSelector(IMarketFactory.mmPositionManager.selector),
+            abi.encode(address(mmPositionManager))
+        );
     }
 
     function _deployHooks() internal {
-        // Compute core hook address
-        uint160 coreFlags = HookFlags.CORE_HOOK_FLAGS;
-        coreHookAddress = address(coreFlags);
-
-        // Deploy CoreHook
-        deployCodeTo("CoreHook.sol", abi.encode(manager, marketFactory, mmPositionManager), coreHookAddress);
+        // Mine CREATE2 salt for CoreHook and deploy to a flags-compliant address
+        bytes memory coreCreationCode = type(CoreHook).creationCode;
+        bytes memory coreArgs = abi.encode(address(manager), address(marketFactory), address(mmPositionManager));
+        (address minedCoreAddr, bytes32 coreSalt) =
+            HookMiner.find(address(this), HookFlags.CORE_HOOK_FLAGS, coreCreationCode, coreArgs);
+        coreHookAddress = minedCoreAddr;
+        CoreHook coreDeployed =
+            new CoreHook{salt: coreSalt}(address(manager), address(marketFactory), address(mmPositionManager));
+        require(address(coreDeployed) == coreHookAddress, "CoreHook deployed at unexpected address");
 
         // Compute proxy hook address
-        uint160 proxyFlags = HookFlags.PROXY_HOOK_FLAGS;
-        address proxyHookAddress = address(proxyFlags);
+        bytes memory proxyCreationCode = type(ProxyHook).creationCode;
+        bytes memory proxyArgs = abi.encode(address(manager), address(marketFactory));
+        (address proxyHookAddress, bytes32 proxySalt) =
+            HookMiner.find(address(this), HookFlags.PROXY_HOOK_FLAGS, proxyCreationCode, proxyArgs);
 
         // Deploy ProxyHook
-        deployCodeTo("ProxyHook.sol", abi.encode(manager, marketFactory), proxyHookAddress);
-        proxyHook = ProxyHook(payable(proxyHookAddress));
+        proxyHook = new ProxyHook{salt: proxySalt}(address(manager), address(marketFactory));
+        require(address(proxyHook) == proxyHookAddress, "ProxyHook deployed at unexpected address");
         mv = IMarketVault(address(proxyHook));
 
         // Mock factory call to provide coreHook() when we activate the proxy hook below

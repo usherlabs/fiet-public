@@ -281,14 +281,10 @@ abstract contract LCCFactory {
 
         // Check if refIsValidIssuer is enabled and caller matches the ref address
         if (market.refIsValidIssuer && market.ref.length >= 20) {
-            // Extract address from marketRef bytes (first 20 bytes)
+            // Extract address from the first 20 bytes of marketRef using LibBytes utilities
             // marketRef is bytes from abi.encodePacked(proxyHookAddress), so it's 20 bytes
-            bytes memory refBytes = LibBytes.slice(market.ref, 0, 20);
-            address refAddress;
-            // forgefmt: disable-next-line
-            assembly {
-                refAddress := mload(add(refBytes, 0x20))
-            }
+            bytes32 word = LibBytes.load(market.ref, 0);
+            address refAddress = LibBytes.msbToAddress(word);
             return caller == refAddress;
         }
 
