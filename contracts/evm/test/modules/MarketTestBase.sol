@@ -160,6 +160,13 @@ abstract contract MarketTestBase is Test, Deployers {
         oracleHelper = new OracleHelper(resilientOracle);
         marketFactory = makeAddr("marketFactory");
 
+        // Mock oracleHelper() call needed for LCC creation
+        vm.mockCall(
+            marketFactory,
+            abi.encodeWithSelector(IMarketFactory.oracleHelper.selector),
+            abi.encode(address(oracleHelper))
+        );
+
         weth9 = IWETH9(address(new WETH()));
 
         // deploy custom router and verifier

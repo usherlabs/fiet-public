@@ -25,7 +25,5 @@ interface IVRLSignalManager {
     function verifyLiquiditySignal(bytes memory liquiditySignal) external returns (bool, uint256);
 
     // bytes overload to match interface (reverting version)
-    function verifyLiquiditySignal(bytes memory liquiditySignal, bool revertOnInvalid)
-        external
-        returns (bool, uint256);
+    function verifyLiquiditySignal(bytes memory liquiditySignal, bool revertOnInvalid) external returns (bool, uint256);
 }

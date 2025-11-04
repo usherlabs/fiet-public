@@ -52,7 +52,9 @@ contract MarketFactoryTest is Test, Deployers {
         coreHookAddr = address(coreFlags);
 
         vm.prank(owner);
-        address oracleHelperAddress = makeAddr("oracleHelper");
+        address resilientOracle = makeAddr("ResilientOracle");
+        OracleHelper oracleHelper = new OracleHelper(resilientOracle);
+        address oracleHelperAddress = address(oracleHelper);
 
         // Deploy LiquidityHub
         address liquidityHubAddress = address(new LiquidityHub(address(oracleHelperAddress), "Ether", "ETH", 18));
