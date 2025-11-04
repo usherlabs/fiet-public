@@ -26,6 +26,8 @@ import {ILiquidityHub} from "../src/interfaces/ILiquidityHub.sol";
 import {LiquidityHub} from "../src/LiquidityHub.sol";
 import {OracleHelper} from "../src/OracleHelper.sol";
 import {Errors} from "../src/libraries/Errors.sol";
+import {CurrencySortHelper} from "../script/libraries/CurrencySortHelper.sol";
+import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 
 contract MarketFactoryTest is Test, Deployers {
     using PoolIdLibrary for PoolKey;
@@ -56,7 +58,8 @@ contract MarketFactoryTest is Test, Deployers {
         OracleHelper oracleHelper = new OracleHelper(resilientOracle);
         address oracleHelperAddress = address(oracleHelper);
 
-        // Deploy LiquidityHub
+        // Deploy LiquidityHub as `owner` so subsequent owner-only calls succeed
+        vm.prank(owner);
         address liquidityHubAddress = address(new LiquidityHub(address(oracleHelperAddress), "Ether", "ETH", 18));
 
         // Deploy MMPositionManager first (needed for MarketFactory constructor)
@@ -76,6 +79,7 @@ contract MarketFactoryTest is Test, Deployers {
             abi.encode(liquidityHubAddress)
         );
 
+        vm.prank(owner);
         positionManager = new MMPositionManager(
             address(poolManager),
             makeAddr("spokeReceiver"),
@@ -98,7 +102,7 @@ contract MarketFactoryTest is Test, Deployers {
             coreHookAddr
         );
 
-        // Authorise factory in LiquidityHub
+        // Authorise factory in LiquidityHub (owner-only)
         vm.prank(owner);
         LiquidityHub(liquidityHubAddress).setFactory(address(factory), true);
 
@@ -140,8 +144,9 @@ contract MarketFactoryTest is Test, Deployers {
         assertTrue(PoolId.unwrap(proxyId) != bytes32(0));
 
         address[2] memory lccPair = factory.corePoolToCurrencyPair(coreId);
-        assertEq(factory.liquidityHub().getUnderlying(lccPair[0]), address(token0));
-        assertEq(factory.liquidityHub().getUnderlying(lccPair[1]), address(token1));
+        (Currency curr0, Currency curr1) = CurrencySortHelper.sortAddresses(address(token0), address(token1));
+        assertEq(factory.liquidityHub().getUnderlying(lccPair[0]), Currency.unwrap(curr0));
+        assertEq(factory.liquidityHub().getUnderlying(lccPair[1]), Currency.unwrap(curr1));
     }
 
     function testGetCoreHook() public view {
