@@ -110,9 +110,17 @@ abstract contract MarketTestBase is Test, Deployers {
         return Currency.wrap(address(token));
     }
 
+    function _deployCurrencyA() internal virtual returns (Currency currency) {
+        return deployMintAndApproveCurrency();
+    }
+
+    function _deployCurrencyB() internal virtual returns (Currency currency) {
+        return deployMintAndApproveCurrency();
+    }
+
     function _deployCurrencies(address hookAddr) internal virtual {
-        Currency _currencyA = deployMintAndApproveCurrency();
-        Currency _currencyB = deployMintAndApproveCurrency();
+        Currency _currencyA = _deployCurrencyA();
+        Currency _currencyB = _deployCurrencyB();
 
         (_currency0, _currency1) =
             CurrencySortHelper.sortAddresses(Currency.unwrap(_currencyA), Currency.unwrap(_currencyB));
@@ -178,7 +186,7 @@ abstract contract MarketTestBase is Test, Deployers {
         weth9 = IWETH9(address(new WETH()));
 
         // deploy custom router and verifier
-        icVerifier = new ECDSASignatureSignalVerifier(makeAddr("icCanister"));
+        icVerifier = new ECDSASignatureSignalVerifier(makeAddr("signatureVerifier"));
         stubSignalVerifier = new StubSignalVerifier();
         signalManager = new VRLSignalManager(marketFactory, address(stubSignalVerifier), signalExpiryInSeconds);
 
@@ -310,11 +318,17 @@ abstract contract MarketTestBase is Test, Deployers {
         LiquidityCommitmentCertificate lcc0 = LiquidityCommitmentCertificate(lccToken0);
         LiquidityCommitmentCertificate lcc1 = LiquidityCommitmentCertificate(lccToken1);
 
-        IERC20Minimal(lcc0.underlying()).approve(liquidityHub, initialLiquidity);
-        LiquidityHub(liquidityHub).wrap(address(lcc0), initialLiquidity);
+        address ua0 = lcc0.underlying();
+        if (ua0 != address(0)) {
+            IERC20Minimal(ua0).approve(liquidityHub, initialLiquidity);
+            LiquidityHub(liquidityHub).wrap(address(lcc0), initialLiquidity);
+        }
 
-        IERC20Minimal(lcc1.underlying()).approve(liquidityHub, initialLiquidity);
-        LiquidityHub(liquidityHub).wrap(address(lcc1), initialLiquidity);
+        address ua1 = lcc1.underlying();
+        if (ua1 != address(0)) {
+            IERC20Minimal(ua1).approve(liquidityHub, initialLiquidity);
+            LiquidityHub(liquidityHub).wrap(address(lcc1), initialLiquidity);
+        }
 
         // approve LCCs and underlyings for routers
         approveLCCForMarketUse(lcc0);

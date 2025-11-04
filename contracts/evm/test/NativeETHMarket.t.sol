@@ -51,59 +51,12 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
     address guarantor = makeAddr("guarantor");
     uint256 guarantorInitialBalance = 10000e18;
 
-    function _deployCurrencies(address hookAddr) internal override {
-        Currency _currencyA = Currency.wrap(address(0));
-        Currency _currencyB = deployMintAndApproveCurrency();
-
-        Currency _currencyC = deployAndApproveLCC(Currency.unwrap(_currencyA), hookAddr);
-        Currency _currencyD = deployAndApproveLCC(Currency.unwrap(_currencyB), hookAddr);
-
-        (_currency0, _currency1) =
-            CurrencySortHelper.sortAddresses(Currency.unwrap(_currencyA), Currency.unwrap(_currencyB));
-
-        (_currency2, _currency3) =
-            CurrencySortHelper.sortAddresses(Currency.unwrap(_currencyC), Currency.unwrap(_currencyD));
-    }
-
-    function setUpNativeMarket() public {
-        _deployFreshManagerAndRouters();
-        _deployHooks();
-        _deployCurrencies(address(proxyHook));
-        _deployCorePool(SQRT_PRICE_1_1);
-        _deployProxyPool(SQRT_PRICE_1_1);
-
-        // Set core pool key against the proxy pool key id.
-        vm.prank(marketFactory);
-        proxyHook.setCorePoolKey(corePoolKey);
-
-        // wrap enough lcc tokens by providing the underlying asset to the lcc contract as 'collateral'
-        lcc0 = LiquidityCommitmentCertificate(Currency.unwrap(_currency2));
-        lcc1 = LiquidityCommitmentCertificate(Currency.unwrap(_currency3));
-
-        // get which lcc token represents lcc-eth
-        (lccNativeETH, lccERC20) = lcc0.underlying() == address(0) ? (lcc0, lcc1) : (lcc1, lcc0);
-
-        // Wrap ERC20 via LiquidityHub
-        IERC20Minimal(lccERC20.underlying()).approve(liquidityHub, initialLiquidity);
-        LiquidityHub(liquidityHub).wrap(address(lccERC20), initialLiquidity);
-
-        // Wrap native ETH via LiquidityHub
-        LiquidityHub(liquidityHub).wrap{value: initialLiquidity}(address(lccNativeETH), initialLiquidity);
-
-        _mockFactoryCalls();
-
-        // add liquidity to the core pool
-        modifyLiquidityRouter.modifyLiquidity(
-            corePoolKey,
-            ModifyLiquidityParams({
-                tickLower: -60, tickUpper: 60, liquidityDelta: int256(initialLiquidity), salt: bytes32(0)
-            }),
-            ZERO_BYTES
-        );
+    function _deployCurrencyA() internal override returns (Currency currency) {
+        return Currency.wrap(address(0));
     }
 
     function setUp() public {
-        setUpNativeMarket();
+        _setupMarket();
         _setUpMM();
 
         // set up mocks for the mmposition manager

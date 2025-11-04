@@ -14,7 +14,7 @@ contract MarketMakerTest is MarketMakerTestBase {
     function setUp() public {
         // Create and fill in the test state
         _setUpMM();
-        verifier = new ECDSASignatureSignalVerifier(icCanister);
+        verifier = new ECDSASignatureSignalVerifier(signatureVerifier);
     }
 
     function test_marketMaker_toLeafHash() public view {

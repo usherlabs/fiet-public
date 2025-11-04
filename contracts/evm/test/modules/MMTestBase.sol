@@ -29,8 +29,8 @@ abstract contract MarketMakerTestBase is Test {
     uint256 nonce = 1;
 
     // mock details about the ic canister
-    uint256 icCanisterPrivateKey = uint256(keccak256(abi.encodePacked(makeAddr("icCanisterPrivateKey"))));
-    address icCanister;
+    uint256 signatureVerifierPrivateKey = uint256(keccak256(abi.encodePacked(makeAddr("publicKeyAddress"))));
+    address signatureVerifier;
 
     struct StatePayload {
         uint256 privateKey;
@@ -41,7 +41,7 @@ abstract contract MarketMakerTestBase is Test {
      * @dev entrypoint function to set up the market makers and generate the liquidity signals
      */
     function _setUpMM() public {
-        icCanister = vm.addr(icCanisterPrivateKey);
+        signatureVerifier = vm.addr(signatureVerifierPrivateKey);
         // Create a liquidity signal
         LiquiditySignal[] memory signals = generateLiquiditySignals(2);
         liquiditySignal = signals[0];
@@ -83,14 +83,14 @@ abstract contract MarketMakerTestBase is Test {
 
             // generate a canister signature of the payload(merkle root hash and signature)
             bytes32 canisterSignaturePayload = keccak256(abi.encodePacked(nonce, merkleRootHash));
-            bytes memory icCanisterMerkleRootHashSignature =
-                _signEthMessage(icCanisterPrivateKey, canisterSignaturePayload);
+            bytes memory signatureVerifierMerkleRootHashSignature =
+                _signEthMessage(signatureVerifierPrivateKey, canisterSignaturePayload);
             // generate the liquidity signal
             liquiditySignals[i] = LiquiditySignal({
                 // the merkle root hash of the merkle tree generated from the states
                 rootHash: merkleRootHash,
                 // the ic canister's signature of the payload(merkle root hash and the nonce)
-                rootHashSignature: icCanisterMerkleRootHashSignature,
+                rootHashSignature: signatureVerifierMerkleRootHashSignature,
                 // the merkle proof of the market maker state
                 merkleProof: merkleLeaves.generateProof(i),
                 // the market maker state
