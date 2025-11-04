@@ -6,6 +6,7 @@ import {LiquidityHub} from "../src/LiquidityHub.sol";
 import {OracleHelper} from "../src/OracleHelper.sol";
 import {IResilientOracle} from "../src/interfaces/IResilientOracle.sol";
 import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
+import {ILCC} from "../src/interfaces/ILCC.sol";
 import {MockERC20} from "./_mocks/MockERC20.sol";
 import {Errors} from "../src/libraries/Errors.sol";
 
@@ -82,13 +83,12 @@ contract LiquidityHubSettlementTest is Test {
         );
 
         // Set user1 as issuer for lccToken1 so we can issue LCC tokens
-        vm.prank(factory);
         // Note: We can't directly set issuers without a setter function
         // Instead, we'll use wrap to create LCC balance
     }
 
-    /// @notice Tests queuing a settlement when unwrapping fails due to insufficient liquidity
-    function testQueueSettlementOnFailedUnwrap() public {
+    /// @notice Tests queuing a settlement when unwrapping with remaining deficit amounts due to insufficient liquidity
+    function testQueueSettlementOnUnwrapWithDeficit() public {
         // Setup: User has LCC tokens (via issue) but insufficient market liquidity
 
         // Make user1 an issuer by setting them via factory's issuer management
@@ -102,21 +102,31 @@ contract LiquidityHubSettlementTest is Test {
         liquidityHub.wrap(lccToken1, wrapAmount);
         vm.stopPrank();
 
-        // Now user1 has wrappedBalance = 100
+        // Verify user1 has LCC tokens
+        ILCC lcc = ILCC(lccToken1);
+        assertGt(lcc.balanceOf(user1), 0, "User should have LCC tokens after wrapping");
+        (uint256 wrappedBal, uint256 marketBal) = lcc.balancesOf(user1);
+        assertEq(wrappedBal, wrapAmount, "User should have direct balance");
+        assertEq(marketBal, 0, "User should NOT have market balance");
 
-        // Mock market factory to return insufficient liquidity for market unwrap
+        // Verify directSupply is set correctly
+        assertEq(liquidityHub.directSupply(lccToken1), wrapAmount, "directSupply should equal wrapAmount");
+        assertEq(
+            liquidityHub.reserveOfUnderlying(address(underlyingAsset1)),
+            wrapAmount,
+            "reserveOfUnderlying should equal wrapAmount"
+        );
+
+        // Mock factory to return insufficient liquidity for market unwrap
+        // useMarketLiquidity returns uint256 (amount used)
         vm.mockCall(
-            address(mockMarketFactory),
+            factory,
             abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector),
-            abi.encode(uint256(0), uint256(0)) // available = 0, toUse = 0
+            abi.encode(uint256(0)) // used = 0 (no liquidity available)
         );
 
         // Mock marketLiquidity to return 0
-        vm.mockCall(
-            address(mockMarketFactory),
-            abi.encodeWithSelector(IMarketFactory.marketLiquidity.selector),
-            abi.encode(uint256(0))
-        );
+        vm.mockCall(factory, abi.encodeWithSelector(IMarketFactory.marketLiquidity.selector), abi.encode(uint256(0)));
 
         // User tries to unwrap their full balance
         // Since there's no market liquidity, it should use direct unwrap and succeed
@@ -125,9 +135,13 @@ contract LiquidityHubSettlementTest is Test {
 
         // Verify underlying was transferred
         assertEq(underlyingAsset1.balanceOf(user1), wrapAmount);
+        assertEq(lcc.balanceOf(user1), 0);
+        (wrappedBal, marketBal) = lcc.balancesOf(user1);
+        assertEq(wrappedBal, 0);
+        assertEq(marketBal, 0);
 
         // To test settlement queue, we need market-derived balance
-        // This requires a more complex setup with actual market operations
+        // TODO: This requires a more complex setup with actual market operations
         // For now, verify the queue structure exists
         assertEq(liquidityHub.totalQueued(lccToken1), 0);
         assertEq(liquidityHub.settleQueue(lccToken1, user1), 0);
@@ -159,10 +173,10 @@ contract LiquidityHubSettlementTest is Test {
         vm.stopPrank();
 
         // Try to process settlement when none is queued (should revert)
-        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAmount.selector));
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAmount.selector, uint256(0), uint256(0)));
         liquidityHub.processSettlementFor(lccToken1, user1, type(uint256).max);
 
-        // To test successful processing, we'd need to:
+        // TODO: To test successful processing, we'd need to:
         // 1. Set up a queued settlement (requires market-derived balance scenario)
         // 2. Add underlying liquidity to reserveOfUnderlying
         // 3. Call processSettlementFor
@@ -172,7 +186,7 @@ contract LiquidityHubSettlementTest is Test {
     /// @notice Tests that different LCC tokens have isolated settlement queues
     function testLccIsolation() public {
         // Create a second LCC pair
-        vm.prank(factory);
+        vm.startPrank(factory);
         (address lccToken3, address lccToken4) = liquidityHub.createLCCPair(
             abi.encodePacked(address(0x5678)),
             address(underlyingAsset1),
@@ -182,8 +196,8 @@ contract LiquidityHubSettlementTest is Test {
         );
 
         // Initialize second market
-        vm.prank(factory);
         liquidityHub.initialize(lccToken3, lccToken4, marketId2, abi.encodePacked(address(0x5678)), false);
+        vm.stopPrank();
 
         // Verify queues are separate
         assertEq(liquidityHub.totalQueued(lccToken1), 0);
@@ -218,11 +232,11 @@ contract LiquidityHubSettlementTest is Test {
     /// @notice Tests that processSettlementFor requires queued settlement > 0
     function testProcessSettlementForRequiresQueue() public {
         // Try to process when no settlement is queued
-        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAmount.selector));
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAmount.selector, uint256(0), uint256(0)));
         liquidityHub.processSettlementFor(lccToken1, user1, type(uint256).max);
 
         // Try with different recipient
-        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAmount.selector));
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAmount.selector, uint256(0), uint256(0)));
         liquidityHub.processSettlementFor(lccToken1, user2, type(uint256).max);
     }
 

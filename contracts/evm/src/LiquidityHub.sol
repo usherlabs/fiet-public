@@ -265,7 +265,7 @@ contract LiquidityHub is Ownable, LCCFactory {
         }
 
         directSupply[lcc] -= amount;
-        reserveOfUnderlying[lccToUnderlying[lcc]] -= amount;
+        // reserveOfUnderlying[underlying] is decremented on _pay
 
         // Should Always returns full amount
         return amount;
