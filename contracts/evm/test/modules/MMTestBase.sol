@@ -7,6 +7,14 @@ import {MarketMaker} from "../../src/libraries/MarketMaker.sol";
 import {console} from "forge-std/console.sol";
 import {MerkleProofGenerator} from "../libraries/MerkleProofGenerator.sol";
 import {LiquiditySignal} from "../../src/types/Position.sol";
+import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
+import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {PositionId} from "../../src/types/Position.sol";
+import {MarketVTSConfiguration} from "../../src/types/VTS.sol";
+import {MMPositionManager} from "../../src/MMPositionManager.sol";
+import {MMActionAdapter as MMA} from "../modules/MMActionAdapter.sol";
+import {LiquidityUtils} from "../../src/libraries/LiquidityUtils.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Test} from "forge-std/Test.sol";
 
 abstract contract MarketMakerTestBase is Test {
@@ -135,5 +143,119 @@ abstract contract MarketMakerTestBase is Test {
 
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, ethSignedMessageHash);
         return abi.encodePacked(r, s, v);
+    }
+
+    // ============ COMMITMENT SETUP HELPERS ============
+
+    /**
+     * @notice Calculates the base settlement amounts required for a given liquidity position
+     * @param liquidityParams The liquidity parameters for the position
+     * @param marketVTSConfiguration The VTS configuration for the market
+     * @return requiredSettlementAmount0 The amount of token0 to settle
+     * @return requiredSettlementAmount1 The amount of token1 to settle
+     */
+    function _calculateSettlementAmounts(
+        ModifyLiquidityParams memory liquidityParams,
+        MarketVTSConfiguration memory marketVTSConfiguration
+    ) internal pure returns (uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) {
+        (uint256 c0, uint256 c1) = LiquidityUtils.calculateCommitmentMaxima(
+            liquidityParams.tickLower, liquidityParams.tickUpper, uint128(uint256(liquidityParams.liquidityDelta))
+        );
+        return LiquidityUtils.getBaseSettlementAmounts(
+            c0, c1, marketVTSConfiguration.token0.baseVTSRate, marketVTSConfiguration.token1.baseVTSRate
+        );
+    }
+
+    /**
+     * @notice Approves tokens for the position manager
+     * @param lcc0 The first LCC token
+     * @param lcc1 The second LCC token
+     * @param amount0 The amount of token0 to approve
+     * @param amount1 The amount of token1 to approve
+     */
+    function _approveForPositionManager(
+        address lcc0,
+        address lcc1,
+        address positionManager,
+        uint256 amount0,
+        uint256 amount1
+    ) internal {
+        IERC20(lcc0).approve(positionManager, amount0);
+        IERC20(lcc1).approve(positionManager, amount1);
+    }
+
+    /**
+     * @notice Commits a signal and mints a position in a single batched transaction
+     * @param positionManager The MMPositionManager instance
+     * @param corePoolKey The pool key for the core pool
+     * @param signalBytes The liquidity signal bytes
+     * @param liquidityParams The liquidity parameters for the position
+     * @return tokenId The token ID of the committed position (always 1 for first commit)
+     * @return positionId The position ID of the minted position
+     */
+    function _commitAndMintPosition(
+        MMPositionManager positionManager,
+        PoolKey memory corePoolKey,
+        bytes memory signalBytes,
+        ModifyLiquidityParams memory liquidityParams
+    ) internal returns (uint256 tokenId, PositionId positionId) {
+        // Batch commit and mint
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
+        actions[0] = MMA.prepareCommit(corePoolKey, signalBytes);
+        actions[1] = MMA.prepareMint(
+            corePoolKey,
+            1,
+            liquidityParams.tickLower,
+            liquidityParams.tickUpper,
+            uint256(liquidityParams.liquidityDelta)
+        );
+        MMA.execute(positionManager, actions);
+
+        tokenId = 1;
+        positionId = positionManager.getPositionId(tokenId, 0);
+    }
+
+    /**
+     * @notice Full workflow: calculates settlement amounts, approves tokens, and commits+mints a position
+     * @param positionManager The MMPositionManager instance
+     * @param corePoolKey The pool key for the core pool
+     * @param signalBytes The liquidity signal bytes
+     * @param liquidityParams The liquidity parameters for the position
+     * @param marketVTSConfiguration The VTS configuration for the market
+     * @param lcc0 The address of the first LCC token
+     * @param lcc1 The address of the second LCC token
+     * @return tokenId The token ID of the committed position
+     * @return positionId The position ID of the minted position
+     * @return requiredSettlementAmount0 The amount of token0 settled
+     * @return requiredSettlementAmount1 The amount of token1 settled
+     */
+    function _setupCommittedPosition(
+        MMPositionManager positionManager,
+        PoolKey memory corePoolKey,
+        bytes memory signalBytes,
+        ModifyLiquidityParams memory liquidityParams,
+        MarketVTSConfiguration memory marketVTSConfiguration,
+        address lcc0,
+        address lcc1
+    )
+        internal
+        returns (
+            uint256 tokenId,
+            PositionId positionId,
+            uint256 requiredSettlementAmount0,
+            uint256 requiredSettlementAmount1
+        )
+    {
+        // Calculate settlement amounts
+        (requiredSettlementAmount0, requiredSettlementAmount1) =
+            _calculateSettlementAmounts(liquidityParams, marketVTSConfiguration);
+
+        // Approve tokens
+        _approveForPositionManager(
+            lcc0, lcc1, address(positionManager), requiredSettlementAmount0, requiredSettlementAmount1
+        );
+
+        // Commit and mint
+        (tokenId, positionId) = _commitAndMintPosition(positionManager, corePoolKey, signalBytes, liquidityParams);
     }
 }

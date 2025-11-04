@@ -30,6 +30,7 @@ import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {IOracleHelper} from "../src/interfaces/IOracleHelper.sol";
+import {Errors} from "../src/libraries/Errors.sol";
 
 contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
     using SafeCast for *;
@@ -111,34 +112,27 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             liquidityParams.liquidityDelta
         );
 
-        // Get amount of underlying liquidity to transfer from the issuer to the lcc
-        (uint256 c0, uint256 c1) = LiquidityUtils.calculateCommitmentMaxima(
-            liquidityParams.tickLower, liquidityParams.tickUpper, uint128(uint256(liquidityParams.liquidityDelta))
-        );
-        (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) = LiquidityUtils.getBaseSettlementAmounts(
-            c0, c1, marketVTSConfiguration.token0.baseVTSRate, marketVTSConfiguration.token1.baseVTSRate
-        );
-
-        // Approve
-        IERC20(lcc0.underlying()).approve(address(mmPositionManager), underlyingLiquidityFraction0);
-        IERC20(lcc1.underlying()).approve(address(mmPositionManager), underlyingLiquidityFraction1);
-
         uint256 pmLcc0BalanceBefore = lcc0.balanceOf(address(manager));
         uint256 pmLcc1BalanceBefore = lcc1.balanceOf(address(manager));
-
         uint256 proxyCurrency0BalanceBefore = manager.balanceOf(address(proxyHook), proxyPoolKey.currency0.toId());
         uint256 proxyCurrency1BalanceBefore = manager.balanceOf(address(proxyHook), proxyPoolKey.currency1.toId());
-        MMA.commit(positionManager, corePoolKey, liquiditySignal);
-        MMA.mint(
+
+        // Setup committed position using helper
+        (
+            uint256 tokenId,
+            PositionId positionId,
+            uint256 requiredSettlementAmount0,
+            uint256 requiredSettlementAmount1
+        ) = _setupCommittedPosition(
             positionManager,
             corePoolKey,
-            1,
-            liquidityParams.tickLower,
-            liquidityParams.tickUpper,
-            uint256(liquidityParams.liquidityDelta)
+            liquiditySignal,
+            liquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
         );
-        // First commit mints the first NFT
-        uint256 tokenId = 1;
+
         PositionMeta memory m = positionManager.getPosition(tokenId, 0);
 
         uint256 pmLcc0BalanceAfter = lcc0.balanceOf(address(manager));
@@ -153,8 +147,8 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         uint256 proxyCurrency0BalanceAfter = manager.balanceOf(address(proxyHook), proxyPoolKey.currency0.toId());
         uint256 proxyCurrency1BalanceAfter = manager.balanceOf(address(proxyHook), proxyPoolKey.currency1.toId());
 
-        assertEq(proxyCurrency0BalanceAfter, proxyCurrency0BalanceBefore + underlyingLiquidityFraction0);
-        assertEq(proxyCurrency1BalanceAfter, proxyCurrency1BalanceBefore + underlyingLiquidityFraction1);
+        assertEq(proxyCurrency0BalanceAfter, proxyCurrency0BalanceBefore + requiredSettlementAmount0);
+        assertEq(proxyCurrency1BalanceAfter, proxyCurrency1BalanceBefore + requiredSettlementAmount1);
 
         assertEq(PoolId.unwrap(m.poolId), PoolId.unwrap(corePoolKey.toId()));
         assertEq(m.tickLower, liquidityParams.tickLower);
@@ -170,30 +164,21 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         ModifyLiquidityParams memory liquidityParams =
             ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
 
-        // Get amount of underlying liquidity to transfer from the issuer to the lcc
-        (uint256 c0, uint256 c1) = LiquidityUtils.calculateCommitmentMaxima(
-            liquidityParams.tickLower, liquidityParams.tickUpper, uint128(uint256(liquidityParams.liquidityDelta))
-        );
-        (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) = LiquidityUtils.getBaseSettlementAmounts(
-            c0, c1, marketVTSConfiguration.token0.baseVTSRate, marketVTSConfiguration.token1.baseVTSRate
-        );
-
-        // Approve the position manager to take the base/minimum underlying liquidity to create the position
-        IERC20(lcc0.underlying()).approve(address(mmPositionManager), underlyingLiquidityFraction0);
-        IERC20(lcc1.underlying()).approve(address(mmPositionManager), underlyingLiquidityFraction1);
-
-        // commit the position
-        MMA.commit(positionManager, corePoolKey, liquiditySignal);
-        MMA.mint(
+        // Setup committed position using helper
+        (
+            uint256 tokenId,
+            PositionId positionId,
+            uint256 requiredSettlementAmount0,
+            uint256 requiredSettlementAmount1
+        ) = _setupCommittedPosition(
             positionManager,
             corePoolKey,
-            1,
-            liquidityParams.tickLower,
-            liquidityParams.tickUpper,
-            uint256(liquidityParams.liquidityDelta)
+            liquiditySignal,
+            liquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
         );
-        PositionId positionId = positionManager.getPositionId(1, 0);
-        uint256 tokenId = 1;
 
         // get the current vts for this position
         // TODO: Change these tests to either depend on VTSCalculator, or ...
@@ -214,16 +199,16 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         );
         // make a settlement to the position with the base vts, which should double the current VTS for this position
         // -- before making a settlement, we have to approve the position manager to take the tokens from us
-        IERC20(lcc0.underlying()).approve(address(mmPositionManager), underlyingLiquidityFraction0);
-        IERC20(lcc1.underlying()).approve(address(mmPositionManager), underlyingLiquidityFraction1);
+        IERC20(lcc0.underlying()).approve(address(mmPositionManager), requiredSettlementAmount0);
+        IERC20(lcc1.underlying()).approve(address(mmPositionManager), requiredSettlementAmount1);
         // -- make a settlement to the created position
         MMA.settle(
             positionManager,
             corePoolKey,
             tokenId,
             0,
-            int128(int256(underlyingLiquidityFraction0)),
-            int128(int256(underlyingLiquidityFraction1))
+            int128(int256(requiredSettlementAmount0)),
+            int128(int256(requiredSettlementAmount1))
         );
 
         // get the current vts for this position
@@ -248,33 +233,16 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         ModifyLiquidityParams memory liquidityParams =
             ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
 
-        // Get amount of underlying liquidity to transfer from the issuer to the lcc
-        (uint256 c0_withdraw, uint256 c1_withdraw) = LiquidityUtils.calculateCommitmentMaxima(
-            liquidityParams.tickLower, liquidityParams.tickUpper, uint128(uint256(liquidityParams.liquidityDelta))
-        );
-        (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) = LiquidityUtils.getBaseSettlementAmounts(
-            c0_withdraw,
-            c1_withdraw,
-            marketVTSConfiguration.token0.baseVTSRate,
-            marketVTSConfiguration.token1.baseVTSRate
-        );
-
-        // Approve the position manager to take the base/minimum underlying liquidity to create the position
-        IERC20(lcc0.underlying()).approve(address(mmPositionManager), underlyingLiquidityFraction0);
-        IERC20(lcc1.underlying()).approve(address(mmPositionManager), underlyingLiquidityFraction1);
-
-        // commit the position
-        MMA.commit(positionManager, corePoolKey, liquiditySignal);
-        MMA.mint(
+        // Setup committed position using helper
+        (uint256 tokenId, PositionId positionId,,) = _setupCommittedPosition(
             positionManager,
             corePoolKey,
-            1,
-            liquidityParams.tickLower,
-            liquidityParams.tickUpper,
-            uint256(liquidityParams.liquidityDelta)
+            liquiditySignal,
+            liquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
         );
-        PositionId positionId = positionManager.getPositionId(1, 0);
-        uint256 tokenId = 1;
 
         // get current VTS
         (uint256 vtsCurrent0BeforeWithdrawal, uint256 vtsCurrent1BeforeWithdrawal) =
@@ -319,27 +287,16 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         ModifyLiquidityParams memory liquidityParams =
             ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
 
-        // Get amount of underlying liquidity to transfer from the issuer to the lcc
-        (uint256 c0_burn1, uint256 c1_burn1) = LiquidityUtils.calculateCommitmentMaxima(
-            liquidityParams.tickLower, liquidityParams.tickUpper, uint128(uint256(liquidityParams.liquidityDelta))
-        );
-        (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) = LiquidityUtils.getBaseSettlementAmounts(
-            c0_burn1, c1_burn1, marketVTSConfiguration.token0.baseVTSRate, marketVTSConfiguration.token1.baseVTSRate
-        );
-
-        // Approve the position manager to take the base/minimum underlying liquidity to create the position
-        IERC20(lcc0.underlyingAsset()).approve(address(mmPositionManager), underlyingLiquidityFraction0);
-        IERC20(lcc1.underlyingAsset()).approve(address(mmPositionManager), underlyingLiquidityFraction1);
-        MMA.commit(positionManager, corePoolKey, liquiditySignal);
-        MMA.mint(
+        // Setup committed position using helper
+        (uint256 tokenId,,,) = _setupCommittedPosition(
             positionManager,
             corePoolKey,
-            1,
-            liquidityParams.tickLower,
-            liquidityParams.tickUpper,
-            uint256(liquidityParams.liquidityDelta)
+            liquiditySignal,
+            liquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
         );
-        uint256 tokenId = 1;
 
         // get underlying asset balance before decommitment
         uint256 token0BalanceBefore = Currency.wrap(lcc0.underlying()).balanceOf(address(this));
@@ -363,29 +320,16 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         ModifyLiquidityParams memory liquidityParams =
             ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
 
-        // Get amount of underlying liquidity to transfer from the issuer to the lcc
-        (uint256 c0_burn2, uint256 c1_burn2) = LiquidityUtils.calculateCommitmentMaxima(
-            liquidityParams.tickLower, liquidityParams.tickUpper, uint128(uint256(liquidityParams.liquidityDelta))
-        );
-        (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) = LiquidityUtils.getBaseSettlementAmounts(
-            c0_burn2, c1_burn2, marketVTSConfiguration.token0.baseVTSRate, marketVTSConfiguration.token1.baseVTSRate
-        );
-
-        // Approve the position manager to take the base/minimum underlying liquidity to create the position
-        IERC20(lcc0.underlyingAsset()).approve(address(mmPositionManager), underlyingLiquidityFraction0);
-        IERC20(lcc1.underlyingAsset()).approve(address(mmPositionManager), underlyingLiquidityFraction1);
-        MMA.commit(positionManager, corePoolKey, liquiditySignal);
-        MMA.mint(
+        // Setup committed position using helper
+        (uint256 tokenId,,,) = _setupCommittedPosition(
             positionManager,
             corePoolKey,
-            1,
-            liquidityParams.tickLower,
-            liquidityParams.tickUpper,
-            uint256(liquidityParams.liquidityDelta)
+            liquiditySignal,
+            liquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
         );
-
-        // get the token id for the position (first token)
-        uint256 tokenId = 1;
 
         // get underlying asset balance before decommitment
         uint256 token0BalanceBefore = Currency.wrap(lcc0.underlying()).balanceOf(address(this));
@@ -415,7 +359,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         // Get amount of underlying liquidity to transfer from the issuer to the lcc
         (uint160 sqrtPriceX96_2, int24 currentTick_2,,) = manager.getSlot0(corePoolKey.toId());
-        (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) = LiquidityUtils.calculateEffectiveTokenAmounts(
+        (uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) = LiquidityUtils.calculateEffectiveTokenAmounts(
             sqrtPriceX96_2,
             currentTick_2,
             liquidityParams.tickLower,
@@ -424,19 +368,20 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         );
 
         // Approve the position manager to take the base/minimum underlying liquidity to create to the position
-        IERC20(lcc0.underlying()).approve(address(mmPositionManager), underlyingLiquidityFraction0);
-        IERC20(lcc1.underlying()).approve(address(mmPositionManager), underlyingLiquidityFraction1);
+        IERC20(lcc0.underlying()).approve(address(mmPositionManager), requiredSettlementAmount0);
+        IERC20(lcc1.underlying()).approve(address(mmPositionManager), requiredSettlementAmount1);
 
-        // commit the position
-        MMA.commit(positionManager, corePoolKey, liquiditySignal);
-        MMA.mint(
-            positionManager,
+        // commit the position - batch commit and mint
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
+        actions[0] = MMA.prepareCommit(corePoolKey, liquiditySignal);
+        actions[1] = MMA.prepareMint(
             corePoolKey,
             1,
             liquidityParams.tickLower,
             liquidityParams.tickUpper,
             uint256(liquidityParams.liquidityDelta)
         );
+        MMA.execute(positionManager, actions);
         PositionId positionId = positionManager.getPositionId(1, 0);
         uint256 tokenId = 1;
 
@@ -467,7 +412,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         // --- seize the position ---
         PositionMeta memory positionBeforeSeizure = positionManager.getPosition(tokenId, 0);
-        // uint256 token1UABeforeSeizure = Currency.wrap(lcc1.underlyingAsset()).balanceOf(address(guarantor));
+        // uint256 token1UABeforeSeizure = Currency.wrap(lcc1.underlying()).balanceOf(address(guarantor));
         uint256 lcc0BeforeSeizure = lcc0.balanceOf(address(guarantor));
         // get the initial settled balance delta
         (uint256 initialSettledAmount0, uint256 initialSettledAmount1) =
@@ -533,23 +478,25 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         (uint256 c0_partial, uint256 c1_partial) = LiquidityUtils.calculateCommitmentMaxima(
             liquidityParams.tickLower, liquidityParams.tickUpper, uint128(uint256(liquidityParams.liquidityDelta))
         );
-        (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) = LiquidityUtils.getBaseSettlementAmounts(
+        (uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) = LiquidityUtils.getBaseSettlementAmounts(
             c0_partial, c1_partial, marketVTSConfiguration.token0.baseVTSRate, marketVTSConfiguration.token1.baseVTSRate
         );
 
         // Approve the position manager to take the base/minimum underlying liquidity to create to the position
-        IERC20(lcc0.underlying()).approve(address(mmPositionManager), underlyingLiquidityFraction0);
-        IERC20(lcc1.underlying()).approve(address(mmPositionManager), underlyingLiquidityFraction1);
+        IERC20(lcc0.underlying()).approve(address(mmPositionManager), requiredSettlementAmount0);
+        IERC20(lcc1.underlying()).approve(address(mmPositionManager), requiredSettlementAmount1);
 
-        MMA.commit(positionManager, corePoolKey, liquiditySignal);
-        MMA.mint(
-            positionManager,
+        // Batch commit and mint
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
+        actions[0] = MMA.prepareCommit(corePoolKey, liquiditySignal);
+        actions[1] = MMA.prepareMint(
             corePoolKey,
             1,
             liquidityParams.tickLower,
             liquidityParams.tickUpper,
             uint256(liquidityParams.liquidityDelta)
         );
+        MMA.execute(positionManager, actions);
         PositionId positionId = positionManager.getPositionId(1, 0);
         uint256 tokenId = 1;
 
@@ -579,7 +526,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         IERC20(lcc1.underlying()).approve(address(mmPositionManager), 100);
 
         PositionMeta memory positionBeforeSeizure = positionManager.getPosition(tokenId, 0);
-        // uint256 token1UABeforeSeizure = Currency.wrap(lcc1.underlyingAsset()).balanceOf(address(guarantor));
+        // uint256 token1UABeforeSeizure = Currency.wrap(lcc1.underlying()).balanceOf(address(guarantor));
         uint256 lcc0BeforeSeizure2 = lcc0.balanceOf(address(guarantor));
         (uint256 initialSettledAmount0, uint256 initialSettledAmount1) =
             IVTSManager(coreHookAddress).getPositionSettledAmounts(positionId);
@@ -642,23 +589,25 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         (uint256 c0_full, uint256 c1_full) = LiquidityUtils.calculateCommitmentMaxima(
             liquidityParams.tickLower, liquidityParams.tickUpper, uint128(uint256(liquidityParams.liquidityDelta))
         );
-        (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) = LiquidityUtils.getBaseSettlementAmounts(
+        (uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) = LiquidityUtils.getBaseSettlementAmounts(
             c0_full, c1_full, marketVTSConfiguration.token0.baseVTSRate, marketVTSConfiguration.token1.baseVTSRate
         );
 
         // Approve the position manager to take the base/minimum underlying liquidity to create to the position
-        IERC20(lcc0.underlying()).approve(address(mmPositionManager), underlyingLiquidityFraction0);
-        IERC20(lcc1.underlying()).approve(address(mmPositionManager), underlyingLiquidityFraction1);
+        IERC20(lcc0.underlying()).approve(address(mmPositionManager), requiredSettlementAmount0);
+        IERC20(lcc1.underlying()).approve(address(mmPositionManager), requiredSettlementAmount1);
 
-        MMA.commit(positionManager, corePoolKey, liquiditySignal);
-        MMA.mint(
-            positionManager,
+        // Batch commit and mint
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
+        actions[0] = MMA.prepareCommit(corePoolKey, liquiditySignal);
+        actions[1] = MMA.prepareMint(
             corePoolKey,
             1,
             liquidityParams.tickLower,
             liquidityParams.tickUpper,
             uint256(liquidityParams.liquidityDelta)
         );
+        MMA.execute(positionManager, actions);
         PositionId positionId = positionManager.getPositionId(1, 0);
         uint256 tokenId = 1;
         // Mock the RFS for this position
@@ -725,7 +674,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         (uint256 c0_fullover, uint256 c1_fullover) = LiquidityUtils.calculateCommitmentMaxima(
             liquidityParams.tickLower, liquidityParams.tickUpper, uint128(uint256(liquidityParams.liquidityDelta))
         );
-        (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) = LiquidityUtils.getBaseSettlementAmounts(
+        (uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) = LiquidityUtils.getBaseSettlementAmounts(
             c0_fullover,
             c1_fullover,
             marketVTSConfiguration.token0.baseVTSRate,
@@ -733,18 +682,20 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         );
 
         // Approve the position manager to take the base/minimum underlying liquidity to create to the position
-        IERC20(lcc0.underlying()).approve(address(mmPositionManager), underlyingLiquidityFraction0);
-        IERC20(lcc1.underlying()).approve(address(mmPositionManager), underlyingLiquidityFraction1);
+        IERC20(lcc0.underlying()).approve(address(mmPositionManager), requiredSettlementAmount0);
+        IERC20(lcc1.underlying()).approve(address(mmPositionManager), requiredSettlementAmount1);
 
-        MMA.commit(positionManager, corePoolKey, liquiditySignal);
-        MMA.mint(
-            positionManager,
+        // Batch commit and mint
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
+        actions[0] = MMA.prepareCommit(corePoolKey, liquiditySignal);
+        actions[1] = MMA.prepareMint(
             corePoolKey,
             1,
             liquidityParams.tickLower,
             liquidityParams.tickUpper,
             uint256(liquidityParams.liquidityDelta)
         );
+        MMA.execute(positionManager, actions);
         PositionId positionId = positionManager.getPositionId(1, 0);
         uint256 tokenId = 1;
         // Mock the RFS for this position
@@ -771,8 +722,8 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         vm.startPrank(guarantor);
         // seize the position by settling more than the outstanding RFS amount
         uint256 amount0ToSettle = LiquidityUtils.safeInt128ToUint256(rfsDelta.amount0()) + 100;
-        IERC20(lcc0.underlyingAsset()).approve(address(mmPositionManager), amount0ToSettle);
-        // ERC20(lcc1.underlyingAsset()).approve(address(mmPositionManager), 100);
+        IERC20(lcc0.underlying()).approve(address(mmPositionManager), amount0ToSettle);
+        // ERC20(lcc1.underlying()).approve(address(mmPositionManager), 100);
         MMA.seize(positionManager, corePoolKey, tokenId, 0, amount0ToSettle, 0);
         // basic cap for fraction bps if needed (no-op here since we mocked full seize units)
         // get the total settlement amount for the position after seizure
@@ -802,29 +753,31 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         (uint256 c0_mint1, uint256 c1_mint1) = LiquidityUtils.calculateCommitmentMaxima(
             liquidityParams.tickLower, liquidityParams.tickUpper, uint128(uint256(liquidityParams.liquidityDelta))
         );
-        (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) = LiquidityUtils.getBaseSettlementAmounts(
+        (uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) = LiquidityUtils.getBaseSettlementAmounts(
             c0_mint1, c1_mint1, marketVTSConfiguration.token0.baseVTSRate, marketVTSConfiguration.token1.baseVTSRate
         );
 
         // Approve the position manager to take the base/minimum underlying liquidity to create to the position
-        IERC20(lcc0.underlying()).approve(address(mmPositionManager), underlyingLiquidityFraction0);
-        IERC20(lcc1.underlying()).approve(address(mmPositionManager), underlyingLiquidityFraction1);
+        IERC20(lcc0.underlying()).approve(address(mmPositionManager), requiredSettlementAmount0);
+        IERC20(lcc1.underlying()).approve(address(mmPositionManager), requiredSettlementAmount1);
 
-        MMA.commit(positionManager, corePoolKey, liquiditySignal);
-        MMA.mint(
-            positionManager,
+        // Batch commit and mint
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
+        actions[0] = MMA.prepareCommit(corePoolKey, liquiditySignal);
+        actions[1] = MMA.prepareMint(
             corePoolKey,
             1,
             liquidityParams.tickLower,
             liquidityParams.tickUpper,
             uint256(liquidityParams.liquidityDelta)
         );
+        MMA.execute(positionManager, actions);
         uint256 tokenId = 1;
 
         // mint a position using this token id
         // approve the position for base settlement
-        IERC20(lcc0.underlying()).approve(address(mmPositionManager), underlyingLiquidityFraction0);
-        IERC20(lcc1.underlying()).approve(address(mmPositionManager), underlyingLiquidityFraction1);
+        IERC20(lcc0.underlying()).approve(address(mmPositionManager), requiredSettlementAmount0);
+        IERC20(lcc1.underlying()).approve(address(mmPositionManager), requiredSettlementAmount1);
 
         MMA.mint(
             positionManager,
@@ -844,8 +797,8 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             .getPositionSettledAmounts(positionManager.getPositionId(tokenId, positionIndex));
         BalanceDelta finalSettledBalanceDelta =
             toBalanceDelta(finalSettledAmount0.toInt128(), finalSettledAmount1.toInt128());
-        assertEq(LiquidityUtils.safeInt128ToUint256(finalSettledBalanceDelta.amount0()), underlyingLiquidityFraction0);
-        assertEq(LiquidityUtils.safeInt128ToUint256(finalSettledBalanceDelta.amount1()), underlyingLiquidityFraction1);
+        assertEq(LiquidityUtils.safeInt128ToUint256(finalSettledBalanceDelta.amount0()), requiredSettlementAmount0);
+        assertEq(LiquidityUtils.safeInt128ToUint256(finalSettledBalanceDelta.amount1()), requiredSettlementAmount1);
     }
 
     // make sure the positions must be covered by the total usd value in the signal
@@ -859,7 +812,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         (uint256 c0_insolvent, uint256 c1_insolvent) = LiquidityUtils.calculateCommitmentMaxima(
             liquidityParams.tickLower, liquidityParams.tickUpper, uint128(uint256(liquidityParams.liquidityDelta))
         );
-        (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) = LiquidityUtils.getBaseSettlementAmounts(
+        (uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) = LiquidityUtils.getBaseSettlementAmounts(
             c0_insolvent,
             c1_insolvent,
             marketVTSConfiguration.token0.baseVTSRate,
@@ -867,19 +820,19 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         );
 
         // Approve the position manager to take the base/minimum underlying liquidity to create to the position
-        IERC20(lcc0.underlying()).approve(address(mmPositionManager), underlyingLiquidityFraction0);
-        IERC20(lcc1.underlying()).approve(address(mmPositionManager), underlyingLiquidityFraction1);
+        IERC20(lcc0.underlying()).approve(address(mmPositionManager), requiredSettlementAmount0);
+        IERC20(lcc1.underlying()).approve(address(mmPositionManager), requiredSettlementAmount1);
 
         MMA.commit(positionManager, corePoolKey, liquiditySignal);
         uint256 tokenId = 1;
 
         // mint a position using this token id
         // approve the position for base settlement
-        IERC20(lcc0.underlying()).approve(address(mmPositionManager), underlyingLiquidityFraction0);
-        IERC20(lcc1.underlying()).approve(address(mmPositionManager), underlyingLiquidityFraction1);
+        IERC20(lcc0.underlying()).approve(address(mmPositionManager), requiredSettlementAmount0);
+        IERC20(lcc1.underlying()).approve(address(mmPositionManager), requiredSettlementAmount1);
 
         // attempt to mint an amount that exceeds solvency; should revert via InvalidLiquiditySignal (solvency gate)
-        vm.expectRevert(abi.encodeWithSelector(MMPositionManager.InvalidLiquiditySignal.selector));
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidLiquiditySignal.selector));
         MMA.mint(
             positionManager,
             corePoolKey,
@@ -901,23 +854,25 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         (uint256 c0_renew, uint256 c1_renew) = LiquidityUtils.calculateCommitmentMaxima(
             liquidityParams.tickLower, liquidityParams.tickUpper, uint128(uint256(liquidityParams.liquidityDelta))
         );
-        (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) = LiquidityUtils.getBaseSettlementAmounts(
+        (uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) = LiquidityUtils.getBaseSettlementAmounts(
             c0_renew, c1_renew, marketVTSConfiguration.token0.baseVTSRate, marketVTSConfiguration.token1.baseVTSRate
         );
 
         // Approve the position manager to take the base/minimum underlying liquidity to create to the position
-        IERC20(lcc0.underlying()).approve(address(mmPositionManager), underlyingLiquidityFraction0);
-        IERC20(lcc1.underlying()).approve(address(mmPositionManager), underlyingLiquidityFraction1);
+        IERC20(lcc0.underlying()).approve(address(mmPositionManager), requiredSettlementAmount0);
+        IERC20(lcc1.underlying()).approve(address(mmPositionManager), requiredSettlementAmount1);
 
-        MMA.commit(positionManager, corePoolKey, liquiditySignal);
-        MMA.mint(
-            positionManager,
+        // Batch commit and mint
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
+        actions[0] = MMA.prepareCommit(corePoolKey, liquiditySignal);
+        actions[1] = MMA.prepareMint(
             corePoolKey,
             1,
             liquidityParams.tickLower,
             liquidityParams.tickUpper,
             uint256(liquidityParams.liquidityDelta)
         );
+        MMA.execute(positionManager, actions);
         uint256 tokenId = 1;
 
         // renew the signal
@@ -947,23 +902,25 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         (uint256 c0_remove, uint256 c1_remove) = LiquidityUtils.calculateCommitmentMaxima(
             liquidityParams.tickLower, liquidityParams.tickUpper, uint128(uint256(liquidityParams.liquidityDelta))
         );
-        (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) = LiquidityUtils.getBaseSettlementAmounts(
+        (uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) = LiquidityUtils.getBaseSettlementAmounts(
             c0_remove, c1_remove, marketVTSConfiguration.token0.baseVTSRate, marketVTSConfiguration.token1.baseVTSRate
         );
 
         // Approve the position manager to take the base/minimum underlying liquidity to create to the position
-        IERC20(lcc0.underlying()).approve(address(mmPositionManager), underlyingLiquidityFraction0);
-        IERC20(lcc1.underlying()).approve(address(mmPositionManager), underlyingLiquidityFraction1);
+        IERC20(lcc0.underlying()).approve(address(mmPositionManager), requiredSettlementAmount0);
+        IERC20(lcc1.underlying()).approve(address(mmPositionManager), requiredSettlementAmount1);
 
-        MMA.commit(positionManager, corePoolKey, liquiditySignal);
-        MMA.mint(
-            positionManager,
+        // Batch commit and mint
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
+        actions[0] = MMA.prepareCommit(corePoolKey, liquiditySignal);
+        actions[1] = MMA.prepareMint(
             corePoolKey,
             1,
             liquidityParams.tickLower,
             liquidityParams.tickUpper,
             uint256(liquidityParams.liquidityDelta)
         );
+        MMA.execute(positionManager, actions);
         PositionId positionId = positionManager.getPositionId(1, 0);
         uint256 tokenId = 1;
         uint256 positionIndex = 0;
@@ -1018,23 +975,25 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         (uint256 c0_add, uint256 c1_add) = LiquidityUtils.calculateCommitmentMaxima(
             liquidityParams.tickLower, liquidityParams.tickUpper, uint128(uint256(liquidityParams.liquidityDelta))
         );
-        (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) = LiquidityUtils.getBaseSettlementAmounts(
+        (uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) = LiquidityUtils.getBaseSettlementAmounts(
             c0_add, c1_add, marketVTSConfiguration.token0.baseVTSRate, marketVTSConfiguration.token1.baseVTSRate
         );
 
         // Approve the position manager to take the base/minimum underlying liquidity to create to the position
-        IERC20(lcc0.underlying()).approve(address(mmPositionManager), underlyingLiquidityFraction0);
-        IERC20(lcc1.underlying()).approve(address(mmPositionManager), underlyingLiquidityFraction1);
+        IERC20(lcc0.underlying()).approve(address(mmPositionManager), requiredSettlementAmount0);
+        IERC20(lcc1.underlying()).approve(address(mmPositionManager), requiredSettlementAmount1);
 
-        MMA.commit(positionManager, corePoolKey, liquiditySignal);
-        MMA.mint(
-            positionManager,
+        // Batch commit and mint
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
+        actions[0] = MMA.prepareCommit(corePoolKey, liquiditySignal);
+        actions[1] = MMA.prepareMint(
             corePoolKey,
             1,
             liquidityParams.tickLower,
             liquidityParams.tickUpper,
             uint256(liquidityParams.liquidityDelta)
         );
+        MMA.execute(positionManager, actions);
         uint256 tokenId = 1;
         uint256 positionIndex = 0;
         int256 liquidityDelta = 1e5;
@@ -1052,13 +1011,13 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             modifyLiquidityParams.tickUpper,
             uint128(uint256(modifyLiquidityParams.liquidityDelta))
         );
-        (underlyingLiquidityFraction0, underlyingLiquidityFraction1) = LiquidityUtils.getBaseSettlementAmounts(
+        (requiredSettlementAmount0, requiredSettlementAmount1) = LiquidityUtils.getBaseSettlementAmounts(
             c0_mint2, c1_mint2, marketVTSConfiguration.token0.baseVTSRate, marketVTSConfiguration.token1.baseVTSRate
         );
 
         // Approve the position manager to take the base/minimum underlying liquidity to create to the position
-        IERC20(lcc0.underlying()).approve(address(mmPositionManager), underlyingLiquidityFraction0);
-        IERC20(lcc1.underlying()).approve(address(mmPositionManager), underlyingLiquidityFraction1);
+        IERC20(lcc0.underlying()).approve(address(mmPositionManager), requiredSettlementAmount0);
+        IERC20(lcc1.underlying()).approve(address(mmPositionManager), requiredSettlementAmount1);
 
         // get the details of the position after add liquidity
         PositionMeta memory positionAfterCommit = positionManager.getPosition(tokenId, positionIndex);
@@ -1085,12 +1044,12 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
     //         ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
 
     //     // Get amount of underlying liquidity to transfer from the issuer to the lcc
-    //     (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) =
+    //     (uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) =
     //         LiquidityUtils.getBaseSettlementAmounts(liquidityParams, marketVTSConfiguration);
 
     //     // Approve the position manager to take the base/minimum underlying liquidity to create to the position
-    //     ERC20(lcc0.underlyingAsset()).approve(address(mmPositionManager), underlyingLiquidityFraction0);
-    //     ERC20(lcc1.underlyingAsset()).approve(address(mmPositionManager), underlyingLiquidityFraction1);
+    //     ERC20(lcc0.underlying()).approve(address(mmPositionManager), requiredSettlementAmount0);
+    //     ERC20(lcc1.underlying()).approve(address(mmPositionManager), requiredSettlementAmount1);
 
     //     MMA.commit(positionManager, corePoolKey, encodedLiquiditySignal);
     //     MMA.mint(

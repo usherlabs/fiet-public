@@ -23,6 +23,9 @@ import {WETH} from "@uniswap/v4-core/lib/solmate/src/tokens/WETH.sol";
 import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
 import {MMPCommitmentDescriptor} from "../src/MMPCommitmentDescriptor.sol";
 import {ILiquidityHub} from "../src/interfaces/ILiquidityHub.sol";
+import {LiquidityHub} from "../src/LiquidityHub.sol";
+import {OracleHelper} from "../src/OracleHelper.sol";
+import {Errors} from "../src/libraries/Errors.sol";
 
 contract MarketFactoryTest is Test, Deployers {
     using PoolIdLibrary for PoolKey;
@@ -50,16 +53,26 @@ contract MarketFactoryTest is Test, Deployers {
 
         vm.prank(owner);
         address oracleHelperAddress = makeAddr("oracleHelper");
-        factory = new MarketFactory(address(poolManager), oracleHelperAddress, bounds);
+
+        // Deploy LiquidityHub
+        address liquidityHubAddress = address(new LiquidityHub(address(oracleHelperAddress), "Ether", "ETH", 18));
+
+        // Deploy MMPositionManager first (needed for MarketFactory constructor)
         IWETH9 weth9 = IWETH9(address(new WETH()));
         address commitmentDescriptor = address(new MMPCommitmentDescriptor());
         positionManager = new MMPositionManager(
             address(poolManager),
             makeAddr("spokeReceiver"),
-            address(factory),
+            makeAddr("marketFactory"), // temporary address, will be updated after factory deployment
             makeAddr("settlementObserver"),
             commitmentDescriptor,
             weth9
+        );
+
+        // Deploy MarketFactory with all required arguments
+        vm.prank(owner);
+        factory = new MarketFactory(
+            address(poolManager), liquidityHubAddress, oracleHelperAddress, address(positionManager), bounds
         );
 
         // Deploy CoreHook at computed address
@@ -68,6 +81,10 @@ contract MarketFactoryTest is Test, Deployers {
             abi.encode(poolManager, address(factory), address(positionManager), oracleHelperAddress),
             coreHookAddr
         );
+
+        // Authorise factory in LiquidityHub
+        vm.prank(owner);
+        LiquidityHub(liquidityHubAddress).setFactory(address(factory), true);
 
         address proxyDeployer = MarketFactory(address(factory)).marketDeployer();
 
@@ -192,14 +209,6 @@ contract MarketFactoryTest is Test, Deployers {
         assertTrue(factory.bounds(boundAddr));
     }
 
-    function testRevertInvalidUnderlying() public {
-        vm.prank(owner);
-        vm.expectRevert(IMarketFactory.InvalidUnderlyingAsset.selector);
-        factory.createMarket(
-            address(0), address(token1), 3000, 60, 79228162514264337593543950336, salt, VTSConfigs.getDefaultConfig()
-        );
-    }
-
     function testPauseMarket() public {
         vm.mockCall(
             address(poolManager), abi.encodeWithSelector(IPoolManager.initialize.selector), abi.encode(bytes32(0))
@@ -228,7 +237,7 @@ contract MarketFactoryTest is Test, Deployers {
 
         // Cannot re-pause
         vm.prank(owner);
-        vm.expectRevert(abi.encodeWithSelector(Pausable.EnforcedPause.selector));
+        vm.expectRevert(abi.encodeWithSelector(Errors.EnforcedPause.selector));
         factory.pause(coreId);
     }
 
@@ -263,7 +272,7 @@ contract MarketFactoryTest is Test, Deployers {
 
         // Cannot re-unpause
         vm.prank(owner);
-        vm.expectRevert(abi.encodeWithSelector(Pausable.ExpectedPause.selector));
+        vm.expectRevert(abi.encodeWithSelector(Errors.ExpectedPause.selector));
         factory.unpause(coreId);
     }
 

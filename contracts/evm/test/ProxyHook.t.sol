@@ -385,7 +385,7 @@ contract ProxyHookTest is MarketTestBase {
 
         // With no hookData, params are adjusted so output <= available; there should be no deficit minted
         bytes32 marketId = PoolId.unwrap(corePoolKey.toId());
-        LiquidityCommitmentCertificate lccOut = lcc1.underlyingAsset() == Currency.unwrap(_currency1) ? lcc1 : lcc0;
+        LiquidityCommitmentCertificate lccOut = lcc1.underlying() == Currency.unwrap(_currency1) ? lcc1 : lcc0;
         assertEq(lccOut.getMarketTotalSettlementDeficit(marketId), 0, "No deficit should be created without recipient");
         // Locker (address(1)) should not hold LCC because no deficit
         assertEq(lccOut.balanceOf(address(1)), 0, "Locker should not receive LCC");
@@ -564,7 +564,7 @@ contract ProxyHookTest is MarketTestBase {
 
         PoolSwapTest.TestSettings memory settings =
             PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false});
-        LiquidityCommitmentCertificate lccOut = lcc1.underlyingAsset() == Currency.unwrap(_currency1) ? lcc1 : lcc0;
+        LiquidityCommitmentCertificate lccOut = lcc1.underlying() == Currency.unwrap(_currency1) ? lcc1 : lcc0;
 
         // ===== TEST 1: WITHOUT RECIPIENT (restricted swap) =====
         uint256 balanceBeforeNoRecipient = proxyPoolKey.currency0.balanceOfSelf();

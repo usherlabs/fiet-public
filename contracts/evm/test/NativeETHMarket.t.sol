@@ -11,6 +11,8 @@ import {MarketMakerTestBase} from "./modules/MMTestBase.sol";
 import {CurrencySortHelper} from "../script/libraries/CurrencySortHelper.sol";
 import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
 import {LiquidityCommitmentCertificate} from "../src/LCC.sol";
+import {LiquidityHub} from "../src/LiquidityHub.sol";
+import {MMActionAdapter as MMA} from "./modules/MMActionAdapter.sol";
 import {IERC20Minimal} from "@uniswap/v4-core/src/interfaces/external/IERC20Minimal.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {PoolSwapTest} from "@uniswap/v4-core/src/test/PoolSwapTest.sol";
@@ -78,10 +80,12 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
         // get which lcc token represents lcc-eth
         (lccNativeETH, lccERC20) = lcc0.underlying() == address(0) ? (lcc0, lcc1) : (lcc1, lcc0);
 
-        IERC20Minimal(lccERC20.underlying()).approve(address(lccERC20), initialLiquidity);
-        lccERC20.wrap(initialLiquidity);
+        // Wrap ERC20 via LiquidityHub
+        IERC20Minimal(lccERC20.underlying()).approve(liquidityHub, initialLiquidity);
+        LiquidityHub(liquidityHub).wrap(address(lccERC20), initialLiquidity);
 
-        lccNativeETH.wrap{value: initialLiquidity}(initialLiquidity);
+        // Wrap native ETH via LiquidityHub
+        LiquidityHub(liquidityHub).wrap{value: initialLiquidity}(address(lccNativeETH), initialLiquidity);
 
         _mockFactoryCalls();
 
@@ -101,7 +105,7 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
 
         // set up mocks for the mmposition manager
         console.log("setUP() mmPositionManager", address(mmPositionManager));
-        positionManager = MMPositionManager(mmPositionManager);
+        positionManager = MMPositionManager(payable(mmPositionManager));
         lcc0 = LiquidityCommitmentCertificate(payable(Currency.unwrap(_currency2)));
         lcc1 = LiquidityCommitmentCertificate(payable(Currency.unwrap(_currency3)));
 
@@ -142,7 +146,7 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
         console.log("lcc1 underlying asset", lcc1.underlying());
     }
 
-    function test_canAddLiquidityToPoolWithNativeAsUnderlyingAsset() public {
+    function test_canAddLiquidityToPoolWithNativeAsunderlying() public {
         // add liquidity to the core pool
         modifyLiquidityRouter.modifyLiquidity(
             corePoolKey,
@@ -220,16 +224,26 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
         bytes memory liquiditySignal = abi.encode(liquiditySignal);
 
         // Get the amount of LCC tokens that will be minted
-        (uint256 token0AmountMinted, uint256 token1AmountMinted) =
-            LiquidityUtils.calculateTokenAmountsFromPositionParams(manager, corePoolKey, liquidityParams);
+        (uint160 sqrtPriceX96, int24 currentTick,,) = manager.getSlot0(corePoolKey.toId());
+        (uint256 token0AmountMinted, uint256 token1AmountMinted) = LiquidityUtils.calculateEffectiveTokenAmounts(
+            sqrtPriceX96,
+            currentTick,
+            liquidityParams.tickLower,
+            liquidityParams.tickUpper,
+            liquidityParams.liquidityDelta
+        );
 
         // Get amount of underlying liquidity to transfer from the issuer to the lcc
-        (uint256 underlyingLiquidityFraction0, uint256 underlyingLiquidityFraction1) =
-            LiquidityUtils.getBaseSettlementAmounts(liquidityParams, marketVTSConfiguration);
+        (uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) = LiquidityUtils.getBaseSettlementAmounts(
+            token0AmountMinted,
+            token1AmountMinted,
+            marketVTSConfiguration.token0.baseVTSRate,
+            marketVTSConfiguration.token1.baseVTSRate
+        );
 
         // Approve
-        IERC20(lccERC20.underlying()).approve(address(mmPositionManager), underlyingLiquidityFraction0);
-        // IERC20(lcc1.underlying()).approve(address(mmPositionManager), underlyingLiquidityFraction1);
+        IERC20(lccERC20.underlying()).approve(address(mmPositionManager), requiredSettlementAmount0);
+        // IERC20(lcc1.underlying()).approve(address(mmPositionManager), requiredSettlementAmount1);
 
         uint256 pmLcc0BalanceBefore = IERC20(address(lcc0)).balanceOf(address(manager));
         uint256 pmLcc1BalanceBefore = IERC20(address(lcc1)).balanceOf(address(manager));
@@ -242,22 +256,27 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
 
         // get the amount of ETH to send over
         // eth is zero address, so it will always be token0
-        uint256 ethAmount = underlyingLiquidityFraction0;
+        uint256 ethAmount = requiredSettlementAmount0;
         console.log("ethAmount", ethAmount);
-        console.log("underlyingLiquidityFraction0", underlyingLiquidityFraction0);
-        console.log("underlyingLiquidityFraction1", underlyingLiquidityFraction1);
+        console.log("requiredSettlementAmount0", requiredSettlementAmount0);
+        console.log("requiredSettlementAmount1", requiredSettlementAmount1);
         console.log("self eth balance", address(this).balance);
-        // send the entire balance of ETH to the position manager
-        // we should get a refund of the left over ETH
-        positionManager.commit{
-            value: address(this).balance
-        }(
+
+        // Prepare actions using the adapter pattern
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
+        actions[0] = MMA.prepareCommit(corePoolKey, liquiditySignal);
+        actions[1] = MMA.prepareMint(
             corePoolKey,
+            1,
             liquidityParams.tickLower,
             liquidityParams.tickUpper,
-            liquidityParams.liquidityDelta,
-            liquiditySignal
+            uint256(liquidityParams.liquidityDelta)
         );
+
+        // Execute both actions in a single modifyLiquiditiesWithoutUnlock call
+        // send the entire balance of ETH to the position manager
+        // we should get a refund of the left over ETH
+        MMA.execute(positionManager, actions, address(this).balance);
         // First commit mints the first NFT
         uint256 tokenId = 1;
         PositionMeta memory m = positionManager.getPosition(tokenId, 0);
@@ -276,8 +295,8 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
         console.log("lcc1UnderlyingAssetBalanceAfter", lcc1UnderlyingAssetBalanceAfter);
 
         // validate lcc liquidity has been taken from user's balance
-        assertEq(lcc0UnderlyingAssetBalanceAfter, lcc0UnderlyingAssetBalanceBefore - underlyingLiquidityFraction0);
-        assertEq(lcc1UnderlyingAssetBalanceAfter, lcc1UnderlyingAssetBalanceBefore - underlyingLiquidityFraction1);
+        assertEq(lcc0UnderlyingAssetBalanceAfter, lcc0UnderlyingAssetBalanceBefore - requiredSettlementAmount0);
+        assertEq(lcc1UnderlyingAssetBalanceAfter, lcc1UnderlyingAssetBalanceBefore - requiredSettlementAmount1);
 
         // validate lcc liquidity has been added to the core pool
         assertEq(pmLcc0BalanceAfter, pmLcc0BalanceBefore + token0AmountMinted);
@@ -288,8 +307,8 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
         uint256 proxyCurrency0BalanceAfter = manager.balanceOf(address(proxyHook), proxyPoolKey.currency0.toId());
         uint256 proxyCurrency1BalanceAfter = manager.balanceOf(address(proxyHook), proxyPoolKey.currency1.toId());
 
-        assertEq(proxyCurrency0BalanceAfter, proxyCurrency0BalanceBefore + underlyingLiquidityFraction0);
-        assertEq(proxyCurrency1BalanceAfter, proxyCurrency1BalanceBefore + underlyingLiquidityFraction1);
+        assertEq(proxyCurrency0BalanceAfter, proxyCurrency0BalanceBefore + requiredSettlementAmount0);
+        assertEq(proxyCurrency1BalanceAfter, proxyCurrency1BalanceBefore + requiredSettlementAmount1);
 
         assertEq(PoolId.unwrap(m.poolId), PoolId.unwrap(corePoolKey.toId()));
         assertEq(m.tickLower, liquidityParams.tickLower);

@@ -6,88 +6,288 @@ import {MMPositionManager} from "../../src/MMPositionManager.sol";
 import {ActionConstants} from "v4-periphery/src/libraries/ActionConstants.sol";
 
 library MMActionAdapter {
+    struct PreparedAction {
+        bytes1 action;
+        bytes params;
+    }
+
+    /**
+     * @notice Concatenates action bytes into a single bytes array
+     */
     function _concat(bytes1[] memory actions) internal pure returns (bytes memory out) {
         for (uint256 i = 0; i < actions.length; i++) {
             out = bytes.concat(out, actions[i]);
         }
     }
 
-    function commit(MMPositionManager mmpm, PoolKey memory poolKey, bytes memory liquiditySignal) internal {
-        bytes1[] memory acts = new bytes1[](1);
-        acts[0] = bytes1(uint8(MMPositionManager.MMAction.COMMIT_SIGNAL));
-        bytes[] memory params = new bytes[](1);
-        // Default to minting to msgSender to preserve existing test behaviour
-        params[0] = abi.encode(poolKey, liquiditySignal, ActionConstants.MSG_SENDER);
-        mmpm.modifyLiquiditiesWithoutUnlock(_concat(acts), params);
+    /**
+     * @notice Concatenates prepared actions into arrays for execution
+     */
+    function _concatPrepared(PreparedAction[] memory prepared)
+        internal
+        pure
+        returns (bytes memory actions, bytes[] memory params)
+    {
+        params = new bytes[](prepared.length);
+
+        for (uint256 i = 0; i < prepared.length; i++) {
+            actions = bytes.concat(actions, prepared[i].action);
+            params[i] = prepared[i].params;
+        }
     }
 
+    /**
+     * @notice Executes prepared actions in a single modifyLiquiditiesWithoutUnlock call
+     */
+    function execute(MMPositionManager mmpm, PreparedAction[] memory prepared) internal {
+        (bytes memory actions, bytes[] memory params) = _concatPrepared(prepared);
+        mmpm.modifyLiquiditiesWithoutUnlock(actions, params);
+    }
+
+    /**
+     * @notice Executes prepared actions with ETH value in a single modifyLiquiditiesWithoutUnlock call
+     */
+    function execute(MMPositionManager mmpm, PreparedAction[] memory prepared, uint256 value) internal {
+        (bytes memory actions, bytes[] memory params) = _concatPrepared(prepared);
+        mmpm.modifyLiquiditiesWithoutUnlock{value: value}(actions, params);
+    }
+
+    // ============ PREPARE METHODS ============
+
+    /**
+     * @notice Prepares a COMMIT_SIGNAL action
+     */
+    function prepareCommit(PoolKey memory poolKey, bytes memory liquiditySignal)
+        internal
+        pure
+        returns (PreparedAction memory)
+    {
+        return PreparedAction({
+            action: bytes1(uint8(MMPositionManager.MMAction.COMMIT_SIGNAL)),
+            params: abi.encode(poolKey, liquiditySignal, ActionConstants.MSG_SENDER)
+        });
+    }
+
+    /**
+     * @notice Prepares a COMMIT_SIGNAL action with a specific owner
+     */
+    function prepareCommitWithOwner(PoolKey memory poolKey, bytes memory liquiditySignal, address owner)
+        internal
+        pure
+        returns (PreparedAction memory)
+    {
+        return PreparedAction({
+            action: bytes1(uint8(MMPositionManager.MMAction.COMMIT_SIGNAL)),
+            params: abi.encode(poolKey, liquiditySignal, owner)
+        });
+    }
+
+    /**
+     * @notice Prepares a MINT_POSITION action
+     */
+    function prepareMint(PoolKey memory poolKey, uint256 tokenId, int24 tickLower, int24 tickUpper, uint256 liquidity)
+        internal
+        pure
+        returns (PreparedAction memory)
+    {
+        return PreparedAction({
+            action: bytes1(uint8(MMPositionManager.MMAction.MINT_POSITION)),
+            params: abi.encode(poolKey, tokenId, tickLower, tickUpper, liquidity)
+        });
+    }
+
+    /**
+     * @notice Prepares a SETTLE_POSITION action
+     */
+    function prepareSettle(
+        PoolKey memory poolKey,
+        uint256 tokenId,
+        uint256 positionIndex,
+        int128 amount0,
+        int128 amount1
+    ) internal pure returns (PreparedAction memory) {
+        return PreparedAction({
+            action: bytes1(uint8(MMPositionManager.MMAction.SETTLE_POSITION)),
+            params: abi.encode(poolKey, tokenId, positionIndex, amount0, amount1)
+        });
+    }
+
+    /**
+     * @notice Prepares a DECREASE_LIQUIDITY action
+     */
+    function prepareDecrease(PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex, uint256 amount)
+        internal
+        pure
+        returns (PreparedAction memory)
+    {
+        return PreparedAction({
+            action: bytes1(uint8(MMPositionManager.MMAction.DECREASE_LIQUIDITY)),
+            params: abi.encode(poolKey, tokenId, positionIndex, amount)
+        });
+    }
+
+    /**
+     * @notice Prepares a BURN_POSITION action
+     */
+    function prepareBurn(PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex)
+        internal
+        pure
+        returns (PreparedAction memory)
+    {
+        return PreparedAction({
+            action: bytes1(uint8(MMPositionManager.MMAction.BURN_POSITION)),
+            params: abi.encode(poolKey, tokenId, positionIndex)
+        });
+    }
+
+    /**
+     * @notice Prepares a DECOMMIT action
+     */
+    function prepareDecommit(PoolKey memory poolKey, uint256 tokenId) internal pure returns (PreparedAction memory) {
+        return PreparedAction({
+            action: bytes1(uint8(MMPositionManager.MMAction.DECOMMIT)), params: abi.encode(poolKey, tokenId)
+        });
+    }
+
+    /**
+     * @notice Prepares a RENEW_SIGNAL action
+     */
+    function prepareRenew(uint256 tokenId, bytes memory liquiditySignal) internal pure returns (PreparedAction memory) {
+        return PreparedAction({
+            action: bytes1(uint8(MMPositionManager.MMAction.RENEW_SIGNAL)), params: abi.encode(tokenId, liquiditySignal)
+        });
+    }
+
+    /**
+     * @notice Prepares a SEIZE_POSITION action
+     */
+    function prepareSeize(
+        PoolKey memory poolKey,
+        uint256 tokenId,
+        uint256 positionIndex,
+        uint256 amount0,
+        uint256 amount1
+    ) internal pure returns (PreparedAction memory) {
+        return PreparedAction({
+            action: bytes1(uint8(MMPositionManager.MMAction.SEIZE_POSITION)),
+            params: abi.encode(poolKey, tokenId, positionIndex, amount0, amount1)
+        });
+    }
+
+    /**
+     * @notice Prepares an INCREASE_LIQUIDITY action
+     */
+    function prepareIncrease(
+        PoolKey memory poolKey,
+        uint256 tokenId,
+        uint256 positionIndex,
+        int24 tickLower,
+        int24 tickUpper,
+        uint256 liquidity
+    ) internal pure returns (PreparedAction memory) {
+        return PreparedAction({
+            action: bytes1(uint8(MMPositionManager.MMAction.INCREASE_LIQUIDITY)),
+            params: abi.encode(poolKey, tokenId, positionIndex, tickLower, tickUpper, liquidity)
+        });
+    }
+
+    // ============ CONVENIENCE METHODS (for backward compatibility) ============
+
+    /**
+     * @notice Commits a signal (single action execution)
+     * @dev For backward compatibility - use prepareCommit + execute for batching
+     */
+    function commit(MMPositionManager mmpm, PoolKey memory poolKey, bytes memory liquiditySignal) internal {
+        PreparedAction[] memory prepared = new PreparedAction[](1);
+        prepared[0] = prepareCommit(poolKey, liquiditySignal);
+        execute(mmpm, prepared);
+    }
+
+    /**
+     * @notice Commits a signal with owner (single action execution)
+     * @dev For backward compatibility - use prepareCommitWithOwner + execute for batching
+     */
     function commitWithOwner(
         MMPositionManager mmpm,
         PoolKey memory poolKey,
         bytes memory liquiditySignal,
         address owner
     ) internal {
-        bytes1[] memory acts = new bytes1[](1);
-        acts[0] = bytes1(uint8(MMPositionManager.MMAction.COMMIT_SIGNAL));
-        bytes[] memory params = new bytes[](1);
-        params[0] = abi.encode(poolKey, liquiditySignal, owner);
-        mmpm.modifyLiquiditiesWithoutUnlock(_concat(acts), params);
+        PreparedAction[] memory prepared = new PreparedAction[](1);
+        prepared[0] = prepareCommitWithOwner(poolKey, liquiditySignal, owner);
+        execute(mmpm, prepared);
     }
 
+    /**
+     * @notice Mints a position (single action execution)
+     * @dev For backward compatibility - use prepareMint + execute for batching
+     */
     function mint(MMPositionManager mmpm, PoolKey memory poolKey, uint256 tokenId, int24 tl, int24 tu, uint256 liq)
         internal
     {
-        bytes1[] memory acts = new bytes1[](1);
-        acts[0] = bytes1(uint8(MMPositionManager.MMAction.MINT_POSITION));
-        bytes[] memory params = new bytes[](1);
-        params[0] = abi.encode(poolKey, tokenId, tl, tu, liq);
-        mmpm.modifyLiquiditiesWithoutUnlock(_concat(acts), params);
+        PreparedAction[] memory prepared = new PreparedAction[](1);
+        prepared[0] = prepareMint(poolKey, tokenId, tl, tu, liq);
+        execute(mmpm, prepared);
     }
 
+    /**
+     * @notice Settles a position (single action execution)
+     * @dev For backward compatibility - use prepareSettle + execute for batching
+     */
     function settle(MMPositionManager mmpm, PoolKey memory poolKey, uint256 tokenId, uint256 idx, int128 a0, int128 a1)
         internal
     {
-        bytes1[] memory acts = new bytes1[](1);
-        acts[0] = bytes1(uint8(MMPositionManager.MMAction.SETTLE_POSITION));
-        bytes[] memory params = new bytes[](1);
-        params[0] = abi.encode(poolKey, tokenId, idx, a0, a1);
-        mmpm.modifyLiquiditiesWithoutUnlock(_concat(acts), params);
+        PreparedAction[] memory prepared = new PreparedAction[](1);
+        prepared[0] = prepareSettle(poolKey, tokenId, idx, a0, a1);
+        execute(mmpm, prepared);
     }
 
+    /**
+     * @notice Decreases liquidity (single action execution)
+     * @dev For backward compatibility - use prepareDecrease + execute for batching
+     */
     function decrease(MMPositionManager mmpm, PoolKey memory poolKey, uint256 tokenId, uint256 idx, uint256 amt)
         internal
     {
-        bytes1[] memory acts = new bytes1[](1);
-        acts[0] = bytes1(uint8(MMPositionManager.MMAction.DECREASE_LIQUIDITY));
-        bytes[] memory params = new bytes[](1);
-        params[0] = abi.encode(poolKey, tokenId, idx, amt);
-        mmpm.modifyLiquiditiesWithoutUnlock(_concat(acts), params);
+        PreparedAction[] memory prepared = new PreparedAction[](1);
+        prepared[0] = prepareDecrease(poolKey, tokenId, idx, amt);
+        execute(mmpm, prepared);
     }
 
+    /**
+     * @notice Burns a position (single action execution)
+     * @dev For backward compatibility - use prepareBurn + execute for batching
+     */
     function burn(MMPositionManager mmpm, PoolKey memory poolKey, uint256 tokenId, uint256 idx) internal {
-        bytes1[] memory acts = new bytes1[](1);
-        acts[0] = bytes1(uint8(MMPositionManager.MMAction.BURN_POSITION));
-        bytes[] memory params = new bytes[](1);
-        params[0] = abi.encode(poolKey, tokenId, idx);
-        mmpm.modifyLiquiditiesWithoutUnlock(_concat(acts), params);
+        PreparedAction[] memory prepared = new PreparedAction[](1);
+        prepared[0] = prepareBurn(poolKey, tokenId, idx);
+        execute(mmpm, prepared);
     }
 
+    /**
+     * @notice Decommits a position (single action execution)
+     * @dev For backward compatibility - use prepareDecommit + execute for batching
+     */
     function decommit(MMPositionManager mmpm, PoolKey memory poolKey, uint256 tokenId) internal {
-        bytes1[] memory acts = new bytes1[](1);
-        acts[0] = bytes1(uint8(MMPositionManager.MMAction.DECOMMIT));
-        bytes[] memory params = new bytes[](1);
-        params[0] = abi.encode(poolKey, tokenId);
-        mmpm.modifyLiquiditiesWithoutUnlock(_concat(acts), params);
+        PreparedAction[] memory prepared = new PreparedAction[](1);
+        prepared[0] = prepareDecommit(poolKey, tokenId);
+        execute(mmpm, prepared);
     }
 
+    /**
+     * @notice Renews a signal (single action execution)
+     * @dev For backward compatibility - use prepareRenew + execute for batching
+     */
     function renew(MMPositionManager mmpm, uint256 tokenId, bytes memory liquiditySignal) internal {
-        bytes1[] memory acts = new bytes1[](1);
-        acts[0] = bytes1(uint8(MMPositionManager.MMAction.RENEW_SIGNAL));
-        bytes[] memory params = new bytes[](1);
-        params[0] = abi.encode(tokenId, liquiditySignal);
-        mmpm.modifyLiquiditiesWithoutUnlock(_concat(acts), params);
+        PreparedAction[] memory prepared = new PreparedAction[](1);
+        prepared[0] = prepareRenew(tokenId, liquiditySignal);
+        execute(mmpm, prepared);
     }
 
+    /**
+     * @notice Seizes a position (single action execution)
+     * @dev For backward compatibility - use prepareSeize + execute for batching
+     */
     function seize(
         MMPositionManager mmpm,
         PoolKey memory poolKey,
@@ -96,10 +296,8 @@ library MMActionAdapter {
         uint256 a0,
         uint256 a1
     ) internal {
-        bytes1[] memory acts = new bytes1[](1);
-        acts[0] = bytes1(uint8(MMPositionManager.MMAction.SEIZE_POSITION));
-        bytes[] memory params = new bytes[](1);
-        params[0] = abi.encode(poolKey, tokenId, idx, a0, a1);
-        mmpm.modifyLiquiditiesWithoutUnlock(_concat(acts), params);
+        PreparedAction[] memory prepared = new PreparedAction[](1);
+        prepared[0] = prepareSeize(poolKey, tokenId, idx, a0, a1);
+        execute(mmpm, prepared);
     }
 }

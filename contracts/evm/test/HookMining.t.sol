@@ -15,6 +15,7 @@ import {HookFlags} from "../src/libraries/HookFlags.sol";
 import {MMPositionManager} from "../src/MMPositionManager.sol";
 import {WETH} from "@uniswap/v4-core/lib/solmate/src/tokens/WETH.sol";
 import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
+import {Errors} from "../src/libraries/Errors.sol";
 
 contract HookTest is Test, Deployers {
     IPoolManager poolManager;
@@ -29,7 +30,13 @@ contract HookTest is Test, Deployers {
         address[] memory bounds = new address[](0);
         vm.prank(owner);
 
-        factory = new MarketFactory(address(poolManager), address(makeAddr("OracleHelper")), bounds);
+        factory = new MarketFactory(
+            address(poolManager),
+            address(makeAddr("liquidityHub")),
+            address(makeAddr("OracleHelper")),
+            address(mmPositionManager),
+            bounds
+        );
         IWETH9 weth9 = IWETH9(address(new WETH()));
         mmPositionManager = new MMPositionManager(
             address(poolManager),
@@ -99,7 +106,7 @@ contract HookTest is Test, Deployers {
         PoolId poolId = PoolId.wrap(keccak256("test_pool"));
 
         // Non-factory cannot pause
-        vm.expectRevert(CoreHook.InvalidSender.selector);
+        vm.expectRevert(Errors.InvalidSender.selector);
         coreHook.pause(poolId);
 
         // Factory can pause
@@ -110,7 +117,7 @@ contract HookTest is Test, Deployers {
 
         // Cannot re-pause
         vm.prank(address(factory));
-        vm.expectRevert(abi.encodeWithSelector(Pausable.EnforcedPause.selector));
+        vm.expectRevert(abi.encodeWithSelector(Errors.EnforcedPause.selector));
         coreHook.pause(poolId);
     }
 
@@ -121,7 +128,7 @@ contract HookTest is Test, Deployers {
         coreHook.pause(poolId);
 
         // Non-factory cannot unpause
-        vm.expectRevert(CoreHook.InvalidSender.selector);
+        vm.expectRevert(Errors.InvalidSender.selector);
         coreHook.unpause(poolId);
 
         // Factory can unpause
@@ -132,7 +139,7 @@ contract HookTest is Test, Deployers {
 
         // Cannot re-unpause
         vm.prank(address(factory));
-        vm.expectRevert(abi.encodeWithSelector(Pausable.ExpectedPause.selector));
+        vm.expectRevert(abi.encodeWithSelector(Errors.ExpectedPause.selector));
         coreHook.unpause(poolId);
     }
 
