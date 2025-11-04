@@ -59,7 +59,7 @@ abstract contract MarketTestBase is Test, Deployers {
     PoolKey proxyPoolKey;
 
     address marketFactory;
-    address liquidityHub;
+    address payable liquidityHub;
     address coreHookAddress;
 
     address resilientOracle = makeAddr("ResilientOracleAddr");
@@ -131,7 +131,7 @@ abstract contract MarketTestBase is Test, Deployers {
         initialIssuers[0] = mmPositionManager;
 
         vm.prank(marketFactory);
-        (address _lcc0, address _lcc1) = LiquidityHub(liquidityHub)
+        (address _lcc0, address _lcc1) = LiquidityHub(payable(liquidityHub))
             .createLCCPair(
                 marketRef, Currency.unwrap(_currency0), Currency.unwrap(_currency1), marketName, initialIssuers
             );
@@ -178,7 +178,7 @@ abstract contract MarketTestBase is Test, Deployers {
         );
 
         // Mock liquidityHub() before constructing MMPositionManager, since its constructor reads this from factory
-        liquidityHub = address(new LiquidityHub(address(oracleHelper), "Ether", "ETH", 18));
+        liquidityHub = payable(address(new LiquidityHub(address(oracleHelper), "Ether", "ETH", 18)));
         vm.mockCall(
             marketFactory, abi.encodeWithSelector(IMarketFactory.liquidityHub.selector), abi.encode(liquidityHub)
         );
@@ -191,7 +191,7 @@ abstract contract MarketTestBase is Test, Deployers {
         signalManager = new VRLSignalManager(marketFactory, address(stubSignalVerifier), signalExpiryInSeconds);
 
         // deploy LiquidityHub and authorise factory
-        LiquidityHub(liquidityHub).setFactory(marketFactory, true);
+        LiquidityHub(payable(liquidityHub)).setFactory(marketFactory, true);
 
         // deploy the settlement observer
         settlementObserver = new VRLSettlementObserver();
@@ -311,7 +311,7 @@ abstract contract MarketTestBase is Test, Deployers {
             bytes32 marketId = PoolId.unwrap(corePoolKey.toId());
             bytes memory marketRef = abi.encodePacked(address(proxyHook));
             vm.prank(marketFactory);
-            LiquidityHub(liquidityHub).initialize(lccToken0, lccToken1, marketId, marketRef, true);
+            LiquidityHub(payable(liquidityHub)).initialize(lccToken0, lccToken1, marketId, marketRef, true);
         }
 
         // wrap enough lcc tokens by providing the underlying asset to the hub
@@ -321,13 +321,13 @@ abstract contract MarketTestBase is Test, Deployers {
         address ua0 = lcc0.underlying();
         if (ua0 != address(0)) {
             IERC20Minimal(ua0).approve(liquidityHub, initialLiquidity);
-            LiquidityHub(liquidityHub).wrap(address(lcc0), initialLiquidity);
+            LiquidityHub(payable(liquidityHub)).wrap(address(lcc0), initialLiquidity);
         }
 
         address ua1 = lcc1.underlying();
         if (ua1 != address(0)) {
             IERC20Minimal(ua1).approve(liquidityHub, initialLiquidity);
-            LiquidityHub(liquidityHub).wrap(address(lcc1), initialLiquidity);
+            LiquidityHub(payable(liquidityHub)).wrap(address(lcc1), initialLiquidity);
         }
 
         // approve LCCs and underlyings for routers

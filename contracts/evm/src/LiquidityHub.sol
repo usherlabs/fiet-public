@@ -461,10 +461,8 @@ contract LiquidityHub is Ownable, LCCFactory {
     }
 
     // Best practice: be explicit about intent
-    // Only executes on plain transaction (no selector) (ie. poolManager or WETH9 transfer of assets) to the MarketVault.
-    // Plain transactions are performed by the pool manager or external contracts in native asset routes.
+    // Plain transactions are performed by the market vault in native asset routes.
     // ie. Only be executed if the msg.sender is the market vault in route: PM -> MV -> LH
-    // This functin replaces NativeWrapper.sol receive() function to include MarketVault..
     receive() external payable {
         // plain ETH transfer must come from a market vault.
         _assertValidEthSender();

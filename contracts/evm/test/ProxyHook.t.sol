@@ -335,7 +335,9 @@ contract ProxyHookTest is MarketVaultBase {
         // With no hookData, params are adjusted so output <= available; there should be no deficit minted
         LiquidityCommitmentCertificate lccOut = _getLCCOut(_currency1);
         assertEq(
-            LiquidityHub(liquidityHub).totalQueued(address(lccOut)), 0, "No deficit should be created without recipient"
+            LiquidityHub(payable(liquidityHub)).totalQueued(address(lccOut)),
+            0,
+            "No deficit should be created without recipient"
         );
         assertEq(lccOut.balanceOf(address(1)), 0, "Locker should not receive LCC");
 
@@ -421,11 +423,11 @@ contract ProxyHookTest is MarketVaultBase {
         // mock as the lcc recipient
         // unwrap the lcc tokens to get the underlying asset
         vm.prank(lcc_recipient);
-        LiquidityHub(liquidityHub).unwrap(address(lccOut), deficit);
+        LiquidityHub(payable(liquidityHub)).unwrap(address(lccOut), deficit);
         vm.stopPrank();
 
         // get amount owed to this particular recipient from settlement queue
-        uint256 amountOwedToRecipient = LiquidityHub(liquidityHub).settleQueue(address(lccOut), lcc_recipient);
+        uint256 amountOwedToRecipient = LiquidityHub(payable(liquidityHub)).settleQueue(address(lccOut), lcc_recipient);
 
         // validate the amount owed to the recipient is the attempted unwrap amount
         // and that the user still has their LCC tokens (or they were burned if unwrapped)
@@ -439,8 +441,8 @@ contract ProxyHookTest is MarketVaultBase {
             ZERO_BYTES
         );
 
-        assertEq(LiquidityHub(liquidityHub).settleQueue(address(lccOut), lcc_recipient), 0);
-        assertEq(LiquidityHub(liquidityHub).totalQueued(address(lccOut)), 0);
+        assertEq(LiquidityHub(payable(liquidityHub)).settleQueue(address(lccOut), lcc_recipient), 0);
+        assertEq(LiquidityHub(payable(liquidityHub)).totalQueued(address(lccOut)), 0);
         assertEq(lccOut.balanceOf(lcc_recipient), 0);
         //confirm recippient got ua
         assertEq(_currency1.balanceOf(lcc_recipient), deficit);
@@ -482,7 +484,7 @@ contract ProxyHookTest is MarketVaultBase {
         assertLe(inputNoRecipient, swapAmount, "Without recipient: input should be reduced");
         assertLt(outputNoRecipient, expectedFullOutput, "Without recipient: output should be less than full swap");
         assertEq(
-            LiquidityHub(liquidityHub).totalQueued(address(lccOut)),
+            LiquidityHub(payable(liquidityHub)).totalQueued(address(lccOut)),
             0,
             "Without recipient: no deficit should be created"
         );
@@ -520,7 +522,9 @@ contract ProxyHookTest is MarketVaultBase {
         // Note: Settlement queue is only created when user tries to unwrap, not immediately on receipt
         // So we check the total queued, which should be 0 until unwrap is attempted
         assertEq(
-            LiquidityHub(liquidityHub).totalQueued(address(lccOut)), 0, "Settlement queue should be empty until unwrap"
+            LiquidityHub(payable(liquidityHub)).totalQueued(address(lccOut)),
+            0,
+            "Settlement queue should be empty until unwrap"
         );
 
         vm.clearMockedCalls();

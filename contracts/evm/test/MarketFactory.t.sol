@@ -60,7 +60,8 @@ contract MarketFactoryTest is Test, Deployers {
 
         // Deploy LiquidityHub as `owner` so subsequent owner-only calls succeed
         vm.prank(owner);
-        address liquidityHubAddress = address(new LiquidityHub(address(oracleHelperAddress), "Ether", "ETH", 18));
+        address payable liquidityHubAddress =
+            payable(address(new LiquidityHub(address(oracleHelperAddress), "Ether", "ETH", 18)));
 
         // Deploy MMPositionManager first (needed for MarketFactory constructor)
         IWETH9 weth9 = IWETH9(address(new WETH()));
@@ -104,7 +105,7 @@ contract MarketFactoryTest is Test, Deployers {
 
         // Authorise factory in LiquidityHub (owner-only)
         vm.prank(owner);
-        LiquidityHub(liquidityHubAddress).setFactory(address(factory), true);
+        LiquidityHub(payable(liquidityHubAddress)).setFactory(address(factory), true);
 
         address proxyDeployer = MarketFactory(address(factory)).marketDeployer();
 

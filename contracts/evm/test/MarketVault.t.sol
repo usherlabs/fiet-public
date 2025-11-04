@@ -38,14 +38,14 @@ contract MarketVaultTest is MarketVaultBase {
         vm.prank(user);
         Currency.wrap(underlying0).approve(liquidityHub, 1000);
         vm.prank(user);
-        LiquidityHub(liquidityHub).wrap(address(lccToken0), 1000);
+        LiquidityHub(payable(liquidityHub)).wrap(address(lccToken0), 1000);
 
         // Try to unwrap more than available to create settlement queue
         vm.prank(user);
-        LiquidityHub(liquidityHub).unwrap(address(lccToken0), 2000); // This should queue settlement
+        LiquidityHub(payable(liquidityHub)).unwrap(address(lccToken0), 2000); // This should queue settlement
 
         // Check that settlement is queued
-        uint256 queuedBefore = LiquidityHub(liquidityHub).totalQueued(address(lccToken0));
+        uint256 queuedBefore = LiquidityHub(payable(liquidityHub)).totalQueued(address(lccToken0));
         assertGt(queuedBefore, 0, "Should have queued settlement");
 
         // Now perform a swap that should trigger settlement
@@ -64,7 +64,7 @@ contract MarketVaultTest is MarketVaultBase {
         // Settlement should be processed if liquidity became available
         // Note: This is a best-effort check - if swap didn't add liquidity for token0,
         // settlement may not be fully processed
-        uint256 queuedAfter = LiquidityHub(liquidityHub).totalQueued(address(lccToken0));
+        uint256 queuedAfter = LiquidityHub(payable(liquidityHub)).totalQueued(address(lccToken0));
         // Settlement queue should be reduced or cleared if swap provided liquidity
         assertLe(queuedAfter, queuedBefore, "Settlement queue should be reduced after swap");
     }
@@ -84,12 +84,12 @@ contract MarketVaultTest is MarketVaultBase {
         vm.prank(user);
         Currency.wrap(underlying0).approve(liquidityHub, 1000);
         vm.prank(user);
-        LiquidityHub(liquidityHub).wrap(address(lccToken0), 1000);
+        LiquidityHub(payable(liquidityHub)).wrap(address(lccToken0), 1000);
 
         vm.prank(user);
-        LiquidityHub(liquidityHub).unwrap(address(lccToken0), 2000);
+        LiquidityHub(payable(liquidityHub)).unwrap(address(lccToken0), 2000);
 
-        uint256 queuedBefore = LiquidityHub(liquidityHub).totalQueued(address(lccToken0));
+        uint256 queuedBefore = LiquidityHub(payable(liquidityHub)).totalQueued(address(lccToken0));
         assertGt(queuedBefore, 0, "Should have queued settlement");
 
         // Add liquidity via modifyLiquidities
@@ -97,7 +97,7 @@ contract MarketVaultTest is MarketVaultBase {
         mv.modifyLiquidities(toBalanceDelta(int128(uint128(1000)), 0));
 
         // Settlement should be processed
-        uint256 queuedAfter = LiquidityHub(liquidityHub).totalQueued(address(lccToken0));
+        uint256 queuedAfter = LiquidityHub(payable(liquidityHub)).totalQueued(address(lccToken0));
         assertLe(queuedAfter, queuedBefore, "Settlement queue should be reduced after adding liquidity");
     }
 

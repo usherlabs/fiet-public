@@ -39,7 +39,7 @@ abstract contract MarketHandler {
         return marketFactory.corePoolToCurrencyPair(poolId);
     }
 
-    function _vaultToCurrencyPair(address vault) internal view returns (address[2] memory) {
+    function _vaultToCurrencyPair(address vault) internal view virtual returns (address[2] memory) {
         return marketFactory.proxyHookToCurrencyPair(vault);
     }
 
@@ -47,7 +47,7 @@ abstract contract MarketHandler {
         return marketFactory.corePoolToProxyHook(poolId);
     }
 
-    function _validateToken(address token, address[2] memory currencies) internal view returns (uint8) {
+    function _validateToken(address token, address[2] memory currencies) internal view virtual returns (uint8) {
         if (token == currencies[0]) {
             return 0;
         } else if (token == currencies[1]) {

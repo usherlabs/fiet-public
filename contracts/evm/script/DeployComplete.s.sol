@@ -55,7 +55,7 @@ contract CompleteDeployScript is ScriptHelper {
     address public marketFactory;
     address public mmPositionManager;
     address public oracleHelper;
-    address public liquidityHub;
+    address payable public liquidityHub;
     address public signalManager;
     address public settlementObserver;
     address public globalConfig;
@@ -187,7 +187,7 @@ contract CompleteDeployScript is ScriptHelper {
      * @dev Deploys LiquidityHub with native asset configuration
      * @return The deployed LiquidityHub address
      */
-    function _deployLiquidityHub() internal returns (address) {
+    function _deployLiquidityHub() internal returns (address payable) {
         // Native asset configuration - these can be overridden via env vars if needed
         string memory nativeAssetName = vm.envOr("NATIVE_ASSET_NAME", string("Ethereum"));
         string memory nativeAssetSymbol = vm.envOr("NATIVE_ASSET_SYMBOL", string("ETH"));
@@ -195,14 +195,14 @@ contract CompleteDeployScript is ScriptHelper {
 
         LiquidityHub hub = new LiquidityHub(oracleHelper, nativeAssetName, nativeAssetSymbol, nativeAssetDecimals);
 
-        return address(hub);
+        return payable(address(hub));
     }
 
     /**
      * @dev Enables MarketFactory in LiquidityHub so it can create LCC pairs
      */
     function _enableFactoryInLiquidityHub() internal {
-        LiquidityHub hub = LiquidityHub(liquidityHub);
+        LiquidityHub hub = LiquidityHub(payable(liquidityHub));
         hub.setFactory(marketFactory, true);
         console.log("MarketFactory enabled in LiquidityHub");
     }

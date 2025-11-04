@@ -100,6 +100,7 @@ contract MMPositionManager is
         EXTEND_GRACE_PERIOD // params: (PoolKey, uint256 tokenId, uint256 positionIndex, uint8 settlementTokenIndex, uint32 verifierIndex, bytes settlementProof)
     }
 
+    // MarketHandler must be first.
     constructor(
         address _manager,
         address _signalManager,
@@ -108,11 +109,11 @@ contract MMPositionManager is
         address _descriptor,
         IWETH9 _weth9
     )
+        MarketHandler(_marketFactory)
         ERC721Permit_v4("Fiet VRL Commitment Positions Manager", "FIET-VRL-MMP")
         BaseActionsRouter(IPoolManager(_manager))
-        NativeWrapper(_weth9)
         RFSCheckpointModule(_settlementObserver)
-        MarketHandler(_marketFactory)
+        NativeWrapper(_weth9)
     {
         signalManager = IVRLSignalManager(_signalManager);
         commitmentDescriptor = _descriptor;
@@ -159,6 +160,28 @@ contract MMPositionManager is
 
     function _liquidityHub() internal view override returns (ILiquidityHub) {
         return liquidityHub;
+    }
+
+    /// @notice Resolves conflict between NativeWrapper and MarketHandler
+    /// @dev Delegates to MarketHandler's implementation via super
+    function _vaultToCurrencyPair(address vault)
+        internal
+        view
+        override(NativeWrapper, MarketHandler)
+        returns (address[2] memory)
+    {
+        return super._vaultToCurrencyPair(vault);
+    }
+
+    /// @notice Resolves conflict between NativeWrapper and MarketHandler
+    /// @dev Delegates to MarketHandler's implementation via super
+    function _validateToken(address token, address[2] memory currencies)
+        internal
+        view
+        override(NativeWrapper, MarketHandler)
+        returns (uint8)
+    {
+        return super._validateToken(token, currencies);
     }
 
     /// @dev Internal helper to unwrap an arbitrary LCC (pair-agnostic) to msgSender().
