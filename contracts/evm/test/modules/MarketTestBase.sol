@@ -167,6 +167,12 @@ abstract contract MarketTestBase is Test, Deployers {
             abi.encode(address(oracleHelper))
         );
 
+        // Mock liquidityHub() before constructing MMPositionManager, since its constructor reads this from factory
+        liquidityHub = address(new LiquidityHub(address(oracleHelper), "Ether", "ETH", 18));
+        vm.mockCall(
+            marketFactory, abi.encodeWithSelector(IMarketFactory.liquidityHub.selector), abi.encode(liquidityHub)
+        );
+
         weth9 = IWETH9(address(new WETH()));
 
         // deploy custom router and verifier
@@ -175,7 +181,6 @@ abstract contract MarketTestBase is Test, Deployers {
         signalManager = new VRLSignalManager(marketFactory, address(stubSignalVerifier), signalExpiryInSeconds);
 
         // deploy LiquidityHub and authorise factory
-        liquidityHub = address(new LiquidityHub(address(oracleHelper), "Ether", "ETH", 18));
         LiquidityHub(liquidityHub).setFactory(marketFactory, true);
 
         // deploy the settlement observer

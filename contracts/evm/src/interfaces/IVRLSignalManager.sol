@@ -6,17 +6,18 @@ import {LiquiditySignal} from "../types/Position.sol";
 interface IVRLSignalManager {
     // Events
     event VerifierChanged(address indexed oldVerifier, address indexed newVerifier);
+    event SignalExpiryInSecondsChanged(
+        uint256 indexed oldSignalExpiryInSeconds, uint256 indexed newSignalExpiryInSeconds
+    );
 
     // View functions
-    function verifier() external view returns (address);
-
-    function oracleRegistry() external view returns (address);
+    function getVerifier() external view returns (address);
     function signalExpiryInSeconds() external view returns (uint256);
-
-    function getTotalUsdValue(string[] memory tickers, uint256[] memory amounts) external view returns (uint256);
+    function mmNonce(address) external view returns (uint256);
 
     // External functions
     function setVerifier(address _newVerifier) external;
+    function setSignalExpiryInSeconds(uint256 _signalExpiryInSeconds) external;
 
     // signal overload to match interface (non-reverting version)
     function verifyLiquiditySignal(LiquiditySignal memory signal) external returns (bool, uint256);

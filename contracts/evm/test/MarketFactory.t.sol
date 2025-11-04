@@ -62,10 +62,24 @@ contract MarketFactoryTest is Test, Deployers {
         // Deploy MMPositionManager first (needed for MarketFactory constructor)
         IWETH9 weth9 = IWETH9(address(new WETH()));
         address commitmentDescriptor = address(new MMPCommitmentDescriptor());
+
+        // Mock factory calls used by MMPositionManager constructor
+        address tempFactoryAddr = makeAddr("marketFactory");
+        vm.mockCall(
+            tempFactoryAddr,
+            abi.encodeWithSelector(IMarketFactory.oracleHelper.selector),
+            abi.encode(oracleHelperAddress)
+        );
+        vm.mockCall(
+            tempFactoryAddr,
+            abi.encodeWithSelector(IMarketFactory.liquidityHub.selector),
+            abi.encode(liquidityHubAddress)
+        );
+
         positionManager = new MMPositionManager(
             address(poolManager),
             makeAddr("spokeReceiver"),
-            makeAddr("marketFactory"), // temporary address, will be updated after factory deployment
+            tempFactoryAddr, // temporary address, will be updated after factory deployment
             makeAddr("settlementObserver"),
             commitmentDescriptor,
             weth9

@@ -2,11 +2,8 @@
 ##### This script will deploy the contracts to the provided($1) network #####
 # @dev:  sh ./deploy.sh development
 
-# Copy the modified hardhat.config.ts to the oracle directory
-cp ./hardhat.custom.config.ts ./lib/oracle/hardhat.config.ts
-
 # navigate into the oracle directory
-cd ./lib/oracle
+cd ../lib/oracle
 
 # install dependencies
 yarn install
@@ -18,4 +15,4 @@ yarn install
 # @dev: $1 is the network name provided via the command line e.g development, sepolia, arbitrumsepolia, arbitrumone
 # @dev: --tags deploy is the tag of the deployment script
 # @dev: --reset is the reset flag to force a new deployment regardless of the cache
-npx hardhat deploy --network $1 --tags deploy --reset
+npx hardhat --config ../../oracle/hardhat.custom.config.ts deploy --network $1 --tags deploy --reset

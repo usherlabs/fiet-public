@@ -3,7 +3,7 @@
 import "module-alias/register";
 
 import "@nomicfoundation/hardhat-chai-matchers";
-import "@nomiclabs/hardhat-etherscan";
+import "@nomicfoundation/hardhat-verify";
 import "@openzeppelin/hardhat-upgrades";
 import "@typechain/hardhat";
 import * as dotenv from "dotenv";
@@ -88,7 +88,7 @@ const config: HardhatUserConfig = {
   networks: {
     development: {
       url: "http://127.0.0.1:8545/",
-      chainId: process.env.CHAIN_ID || 31337,
+      chainId: process.env.CHAIN_ID ? Number(process.env.CHAIN_ID) : 31337,
       live: false,
     },
     sepolia: {

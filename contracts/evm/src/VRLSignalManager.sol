@@ -9,20 +9,14 @@ import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 import {ISignalVerifier} from "./interfaces/ISignalVerifier.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {LiquiditySignal} from "./types/Position.sol";
-import {IOracleHelper} from "./interfaces/IOracleHelper.sol";
 import {Errors} from "./libraries/Errors.sol";
+import {IVRLSignalManager} from "./interfaces/IVRLSignalManager.sol";
 
-contract VRLSignalManager is Ownable {
-    ISignalVerifier public verifier;
-    IOracleHelper public oracleHelper;
-    IMarketFactory public marketFactory;
-
+contract VRLSignalManager is Ownable, IVRLSignalManager {
     using MarketMaker for MarketMaker.State;
 
-    event VerifierChanged(address indexed oldVerifier, address indexed newVerifier);
-    event SignalExpiryInSecondsChanged(
-        uint256 indexed oldSignalExpiryInSeconds, uint256 indexed newSignalExpiryInSeconds
-    );
+    ISignalVerifier internal verifier;
+    IMarketFactory internal marketFactory;
 
     /**
      * @dev Tracks the latest nonce per Market Maker (MM) address.
@@ -59,6 +53,14 @@ contract VRLSignalManager is Ownable {
         address oldVerifier = address(verifier);
         verifier = ISignalVerifier(_newVerifier);
         emit VerifierChanged(oldVerifier, _newVerifier);
+    }
+
+    /**
+     * @dev This function is used to get the verifier for the VRLSpokeReceiver
+     * @return The verifier address
+     */
+    function getVerifier() external view returns (address) {
+        return address(verifier);
     }
 
     /**

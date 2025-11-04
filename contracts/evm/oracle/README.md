@@ -16,7 +16,7 @@ The oracle deployment scripts provide a customised deployment process that:
 - Node.js and Yarn installed
 - Access to the target network RPC endpoints
 - Private key configured in `.env` file (for non-development networks)
-- Git submodule initialised (`lib/oracle` directory)
+- Git submodule initialised (`contracts/evm/lib/oracle` directory) via Forge (`forge install`)
 
 ## Network Configuration
 
@@ -33,6 +33,14 @@ The deployment supports the following networks:
 
 ```bash
 sh ./deploy.sh <chain>
+```
+
+Example for local development on Arbitrum mainnet Anvil fork:
+
+```bash
+make fork
+
+CHAIN_ID=421614 ./deploy.sh development
 ```
 
 Replace `<chain>` with one of the supported network names:
@@ -98,5 +106,5 @@ The deployment script uses environment variables from the project root `.env` fi
 
 - The `--reset` flag is used by default to force fresh deployments and bypass cache
 - The deployment uses the `--tags deploy` flag to execute only tagged deployment scripts
-- Ensure the oracle git submodule is initialised and up to date before deployment (located at `contracts/evm/lib/oracle`)
+- Ensure the oracle git submodule is initialised via Forge (`forge install`) and up to date before deployment (located at `contracts/evm/lib/oracle`)
 - For production deployments, verify all contract addresses and configuration parameters
