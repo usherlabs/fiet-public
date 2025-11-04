@@ -105,6 +105,11 @@ abstract contract MarketVault is IMarketVault {
 
     function _marketId() internal view virtual returns (bytes32);
 
+    function lccs() external view returns (address lccToken0, address lccToken1) {
+        (ILCC l0, ILCC l1) = _lccs();
+        return (address(l0), address(l1));
+    }
+
     /**
      * @dev Get the balance of a token in the MarketVault
      * @param currency The currency in market vault
@@ -517,6 +522,8 @@ abstract contract MarketVault is IMarketVault {
     // Only executes on plain transaction (no selector) (ie. poolManager or WETH9 transfer of assets) to the MarketVault.
     // Mostly used to prevent accidental transfers to the vault.
     receive() external payable {
-        // Handle plain ETH transfers
+        if (msg.sender != address(liquidityHub) && msg.sender != address(vaultPoolManager)) {
+            revert Errors.InvalidEthSender();
+        }
     }
 }

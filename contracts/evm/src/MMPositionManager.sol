@@ -16,7 +16,6 @@ import {BaseActionsRouter} from "v4-periphery/src/base/BaseActionsRouter.sol";
 import {PositionMeta, PositionId, PositionLibrary} from "./types/Position.sol";
 import {LiquiditySignal, SignalState} from "./types/Position.sol";
 import {MarketMaker} from "./libraries/MarketMaker.sol";
-import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 import {IVTSManager} from "./interfaces/IVTSManager.sol";
 import {MarketVTSConfiguration} from "./types/VTS.sol";
@@ -31,7 +30,7 @@ import {FullMath} from "v4-periphery/lib/v4-core/src/libraries/FullMath.sol";
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
 import {TransientStateLibrary} from "v4-periphery/lib/v4-core/src/libraries/TransientStateLibrary.sol";
 import {RFSCheckpointModule} from "./modules/RFSCheckpoint.sol";
-import {NativeWrapper} from "v4-periphery/src/base/NativeWrapper.sol";
+import {NativeWrapper} from "./modules/NativeWrapper.sol";
 import {LCCWrapper} from "./modules/LCCWrapper.sol";
 import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
 import {TransientSlots} from "./libraries/TransientSlots.sol";
@@ -43,6 +42,7 @@ import {IMarketVault} from "./interfaces/IMarketVault.sol";
 import {IERC20Minimal} from "@uniswap/v4-core/src/interfaces/external/IERC20Minimal.sol";
 import {SafeERC20} from "openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Errors} from "./libraries/Errors.sol";
+import {MarketHandler} from "./modules/MarketHandler.sol";
 
 contract MMPositionManager is
     LiquidityRouter,
@@ -53,7 +53,8 @@ contract MMPositionManager is
     Multicall_v4,
     BaseActionsRouter,
     NativeWrapper,
-    LCCWrapper
+    LCCWrapper,
+    MarketHandler
 {
     using SafeCast for uint256;
     using PositionLibrary for PositionId;
@@ -67,7 +68,6 @@ contract MMPositionManager is
     event SignalCommitted(uint256 tokenId);
     event SignalDecommitted(uint256 tokenId, uint256 positionIndex, uint256 amount0, uint256 amount1);
 
-    IMarketFactory public immutable marketFactory;
     address public immutable commitmentDescriptor;
     ILiquidityHub public immutable liquidityHub;
     uint256 private nextTokenId = 1;
@@ -112,8 +112,8 @@ contract MMPositionManager is
         BaseActionsRouter(IPoolManager(_manager))
         NativeWrapper(_weth9)
         RFSCheckpointModule(_settlementObserver)
+        MarketHandler(_marketFactory)
     {
-        marketFactory = IMarketFactory(_marketFactory);
         signalManager = IVRLSignalManager(_signalManager);
         commitmentDescriptor = _descriptor;
         oracleHelper = marketFactory.oracleHelper();
@@ -422,7 +422,7 @@ contract MMPositionManager is
     function _settleUnderlying(PoolId poolId, BalanceDelta settlementDelta, address ua0, address ua1) internal {
         address sender = msgSender();
 
-        address marketVault = marketFactory.corePoolToProxyHook(poolId);
+        address marketVault = _getVault(poolId);
 
         // for deposits, transfer to the Market Vault (proxy hook)
         if (settlementDelta.amount0() > 0) {
@@ -499,7 +499,7 @@ contract MMPositionManager is
     /// @return lcc0 Address of token0's LCC contract for the core pool.
     /// @return lcc1 Address of token1's LCC contract for the core pool.
     function _marketLccPair(PoolId poolId) internal view returns (address lcc0, address lcc1) {
-        address[2] memory pair = marketFactory.corePoolToCurrencyPair(poolId);
+        address[2] memory pair = _corePoolToCurrencyPair(poolId);
         lcc0 = pair[0];
         lcc1 = pair[1];
     }

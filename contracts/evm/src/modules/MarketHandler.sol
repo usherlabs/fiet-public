@@ -35,8 +35,19 @@ abstract contract MarketHandler {
         return _getTokenIndex(poolId, msg.sender);
     }
 
-    function _getTokenIndex(PoolId poolId, address token) internal view returns (uint8) {
-        address[2] memory currencies = marketFactory.corePoolToCurrencyPair(poolId);
+    function _corePoolToCurrencyPair(PoolId poolId) internal view returns (address[2] memory) {
+        return marketFactory.corePoolToCurrencyPair(poolId);
+    }
+
+    function _vaultToCurrencyPair(address vault) internal view returns (address[2] memory) {
+        return marketFactory.proxyHookToCurrencyPair(vault);
+    }
+
+    function _getVault(PoolId poolId) internal view returns (address) {
+        return marketFactory.corePoolToProxyHook(poolId);
+    }
+
+    function _validateToken(address token, address[2] memory currencies) internal view returns (uint8) {
         if (token == currencies[0]) {
             return 0;
         } else if (token == currencies[1]) {
@@ -44,5 +55,10 @@ abstract contract MarketHandler {
         } else {
             revert Errors.InvalidSender();
         }
+    }
+
+    function _getTokenIndex(PoolId poolId, address token) internal view returns (uint8) {
+        address[2] memory currencies = _corePoolToCurrencyPair(poolId);
+        return _validateToken(token, currencies);
     }
 }

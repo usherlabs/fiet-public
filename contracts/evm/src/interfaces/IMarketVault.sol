@@ -9,6 +9,8 @@ import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
  * @notice Interface for th ProxyHook contract
  */
 interface IMarketVault {
+    function lccs() external view returns (address lccToken0, address lccToken1);
+
     /**
      * @notice Get the balance of a currency in the market vault
      * @param currency The currency to get the balance of

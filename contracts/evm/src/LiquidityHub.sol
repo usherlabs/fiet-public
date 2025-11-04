@@ -11,6 +11,7 @@ import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Errors} from "./libraries/Errors.sol";
+import {IMarketVault} from "./interfaces/IMarketVault.sol";
 
 /**
  * @title LiquidityHub
@@ -283,7 +284,7 @@ contract LiquidityHub is Ownable, LCCFactory {
             revert Errors.InvalidAmount(0, 0);
         }
 
-        address issuer = msg.sender;
+        address issuer = _msgSender();
         _mint(lcc, issuer, 0, amount, true);
     }
 
@@ -297,7 +298,7 @@ contract LiquidityHub is Ownable, LCCFactory {
             revert Errors.InvalidAmount(0, 0);
         }
 
-        address issuer = msg.sender;
+        address issuer = _msgSender();
         _burn(lcc, issuer, 0, amount, true);
     }
 
@@ -445,5 +446,27 @@ contract LiquidityHub is Ownable, LCCFactory {
 
     function sharedReserveOf(address lcc) external view onlyValidLcc(lcc) returns (uint256) {
         return reserveOfUnderlying[lccToUnderlying[lcc]];
+    }
+
+    // ============ INTERNAL FUNCTIONS ============
+
+    function _assertValidEthSender() internal view {
+        address sender = _msgSender();
+        (address l0, address l1) = IMarketVault(sender).lccs();
+        bool valid0 = _isValidLcc(l0);
+        bool valid1 = _isValidLcc(l1);
+        if (!(valid0 && valid1 && (lccToUnderlying[l0] == address(0) || lccToUnderlying[l1] == address(0)))) {
+            revert Errors.InvalidEthSender();
+        }
+    }
+
+    // Best practice: be explicit about intent
+    // Only executes on plain transaction (no selector) (ie. poolManager or WETH9 transfer of assets) to the MarketVault.
+    // Plain transactions are performed by the pool manager or external contracts in native asset routes.
+    // ie. Only be executed if the msg.sender is the market vault in route: PM -> MV -> LH
+    // This functin replaces NativeWrapper.sol receive() function to include MarketVault..
+    receive() external payable {
+        // plain ETH transfer must come from a market vault.
+        _assertValidEthSender();
     }
 }

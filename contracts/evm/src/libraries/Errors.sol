@@ -25,6 +25,9 @@ library Errors {
     /// @notice Thrown when the caller is not approved or is not the owner
     error NotApproved(address caller);
 
+    /// @notice Thrown when ETH is sent from an unauthorised sender (e.g., not from authorised protocol contracts)
+    error InvalidEthSender();
+
     // ============ VALIDATION & INPUT ERRORS ============
     // Errors related to invalid inputs, parameters, and validation failures
 

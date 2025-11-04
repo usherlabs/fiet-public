@@ -301,15 +301,18 @@ abstract contract LCCFactory {
         issuers[lccToken][issuer] = isIssuer;
     }
 
+    function _isValidLcc(address lcc) internal view returns (bool) {
+        return
+            lccToMarket[lcc].id != bytes32(0) && lccToMarket[lcc].ref.length != 0
+                && lccToMarket[lcc].factory != address(0);
+    }
+
     /**
      * @notice Asserts that the given LCC token is valid
      * @param lcc The LCC token address to assert
      */
     function _assertValidLcc(address lcc) internal view {
-        if (
-            lccToMarket[lcc].id == bytes32(0) || lccToMarket[lcc].ref.length == 0
-                || lccToMarket[lcc].factory == address(0)
-        ) {
+        if (!_isValidLcc(lcc)) {
             revert Errors.InvalidLcc(lcc);
         }
     }
