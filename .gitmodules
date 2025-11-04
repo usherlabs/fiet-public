@@ -10,6 +10,7 @@
 [submodule "contracts/evm/lib/oracle"]
 	path = contracts/evm/lib/oracle
 	url = https://github.com/VenusProtocol/oracle
+	ignore = dirty
 [submodule "solidity/lib/solady"]
 	path = contracts/evm/lib/solady
 	url = https://github.com/Vectorized/solady
