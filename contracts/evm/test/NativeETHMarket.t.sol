@@ -29,12 +29,15 @@ import {LiquidityUtils} from "../src/libraries/LiquidityUtils.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IOracleHelper} from "../src/interfaces/IOracleHelper.sol";
 import {PositionMeta} from "../src/types/Position.sol";
+import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
+import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 
 contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
     using SafeCast for *;
     using PoolIdLibrary for PoolId;
     using CurrencyLibrary for Currency;
     using MarketMaker for MarketMaker.State;
+    using StateLibrary for IPoolManager;
 
     MMPositionManager internal positionManager;
     MarketVTSConfiguration internal marketVTSConfiguration;
