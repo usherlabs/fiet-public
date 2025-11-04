@@ -33,7 +33,9 @@ contract MarketVaultTest is MarketVaultBase {
         // Create a pending settlement by having a user unwrap more than available
         address user = makeAddr("user");
 
-        // Approve and wrap some LCC first via LiquidityHub
+        // Fund user and have user approve & wrap some LCC first via LiquidityHub
+        Currency.wrap(underlying0).transfer(user, 1000);
+        vm.prank(user);
         Currency.wrap(underlying0).approve(liquidityHub, 1000);
         vm.prank(user);
         LiquidityHub(liquidityHub).wrap(address(lccToken0), 1000);
@@ -77,6 +79,9 @@ contract MarketVaultTest is MarketVaultBase {
 
         // Create a pending settlement
         address user = makeAddr("user");
+        // Fund user and have user approve & wrap via LiquidityHub
+        Currency.wrap(underlying0).transfer(user, 1000);
+        vm.prank(user);
         Currency.wrap(underlying0).approve(liquidityHub, 1000);
         vm.prank(user);
         LiquidityHub(liquidityHub).wrap(address(lccToken0), 1000);
@@ -126,7 +131,7 @@ contract MarketVaultTest is MarketVaultBase {
         uint256 expectedDeficit = expectedOutput > mockAvailableLiquidity ? expectedOutput - mockAvailableLiquidity : 0;
 
         if (expectedDeficit > 0) {
-            vm.expectEmit(true, true, true, true);
+            vm.expectEmit(true, true, true, true, address(mv));
             // The emit below doesn't actually emit - it tells Foundry what to expect
             emit MarketVault.SwapDeficit(PoolId.wrap(marketId), address(lccOut), recipient, expectedDeficit);
         }

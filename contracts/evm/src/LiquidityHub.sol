@@ -128,7 +128,7 @@ contract LiquidityHub is Ownable, LCCFactory {
         reserveOfUnderlying[underlying] += amount;
 
         // mint some tokens
-        _mint(lcc, to, amount, 0);
+        _mint(lcc, to, amount, 0, _isCallerIssuer(lcc));
     }
 
     function wrapTo(address lcc, address to, uint256 amount) external payable {
@@ -284,7 +284,7 @@ contract LiquidityHub is Ownable, LCCFactory {
         }
 
         address issuer = msg.sender;
-        _mint(lcc, issuer, 0, amount);
+        _mint(lcc, issuer, 0, amount, true);
     }
 
     /**
@@ -298,7 +298,7 @@ contract LiquidityHub is Ownable, LCCFactory {
         }
 
         address issuer = msg.sender;
-        _burn(lcc, issuer, 0, amount);
+        _burn(lcc, issuer, 0, amount, true);
     }
 
     /**
@@ -425,7 +425,7 @@ contract LiquidityHub is Ownable, LCCFactory {
 
     // Pay an outstanding settlement to an account and burn their underlying tokens
     function _pay(address lcc, address to, uint256 fromDirect, uint256 fromMarket) internal {
-        _burn(lcc, to, fromDirect, fromMarket);
+        _burn(lcc, to, fromDirect, fromMarket, _isCallerIssuer(lcc));
         _transferUnderlying(lccToUnderlying[lcc], to, fromDirect + fromMarket);
     }
 

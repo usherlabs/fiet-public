@@ -124,13 +124,17 @@ contract LiquidityCommitmentCertificate is ERC20, Ownable, ILCC {
      * @param to The address to mint tokens to
      * @param directAmount The amount to issue to direct balance
      * @param marketAmount The amount to issue to market-derived balance
+     * @param issued Whether the tokens are issued
      */
-    function mint(address to, uint256 directAmount, uint256 marketAmount) external onlyOwner {
+    function mint(address to, uint256 directAmount, uint256 marketAmount, bool issued) external onlyOwner {
         uint256 amount = directAmount + marketAmount;
         if (amount == 0) {
             revert Errors.InvalidAmount(0, 0);
         }
         _mint(to, amount);
+        if (issued) {
+            return;
+        }
         if (marketAmount > 0) {
             marketDerivedBalances[to] += marketAmount;
         }
@@ -144,18 +148,24 @@ contract LiquidityCommitmentCertificate is ERC20, Ownable, ILCC {
      * @param from The address to burn tokens from
      * @param directAmount The amount to cancel from direct balance
      * @param marketAmount The amount to cancel from market-derived balance
+     * @param issued Whether the tokens are issued
      */
-    function burn(address from, uint256 directAmount, uint256 marketAmount) external onlyOwner {
+    function burn(address from, uint256 directAmount, uint256 marketAmount, bool issued) external onlyOwner {
         uint256 amount = directAmount + marketAmount;
         if (amount == 0) {
             revert Errors.InvalidAmount(0, 0);
         }
         _burn(from, amount);
+        // If burning from a protocol-bound address, bucket accounting is skipped.
+        // Protocol addresses are intentionally not tracked in bucket maps.
+        if (issued) {
+            return;
+        }
         if (marketAmount > 0) {
-            marketDerivedBalances[from] -= amount;
+            marketDerivedBalances[from] -= marketAmount;
         }
         if (directAmount > 0) {
-            wrappedBalances[from] -= amount;
+            wrappedBalances[from] -= directAmount;
         }
     }
 

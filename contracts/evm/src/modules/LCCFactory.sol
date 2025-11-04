@@ -10,8 +10,8 @@ import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
 import {Errors} from "../libraries/Errors.sol";
 
 interface ILCCAdmin {
-    function mint(address to, uint256 directAmount, uint256 marketAmount) external;
-    function burn(address from, uint256 directAmount, uint256 marketAmount) external;
+    function mint(address to, uint256 directAmount, uint256 marketAmount, bool issued) external;
+    function burn(address from, uint256 directAmount, uint256 marketAmount, bool issued) external;
 }
 
 /**
@@ -314,12 +314,12 @@ abstract contract LCCFactory {
         }
     }
 
-    function _mint(address lccToken, address to, uint256 directAmount, uint256 marketAmount) internal {
-        ILCCAdmin(lccToken).mint(to, directAmount, marketAmount);
+    function _mint(address lccToken, address to, uint256 directAmount, uint256 marketAmount, bool issued) internal {
+        ILCCAdmin(lccToken).mint(to, directAmount, marketAmount, issued);
     }
 
-    function _burn(address lccToken, address from, uint256 directAmount, uint256 marketAmount) internal {
-        ILCCAdmin(lccToken).burn(from, directAmount, marketAmount);
+    function _burn(address lccToken, address from, uint256 directAmount, uint256 marketAmount, bool issued) internal {
+        ILCCAdmin(lccToken).burn(from, directAmount, marketAmount, issued);
     }
 
     function _balanceOf(address lccToken, address account) internal view returns (uint256) {
