@@ -751,6 +751,10 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
     }
 
     /// @dev Settle coverage-usage growth and burn fees only on exercised deficits
+    ///
+    /// All positions intersecting the tick-indexed coverage range will be attributed coverage usage,
+    /// with their deficit amounts (remaining owed after netting with settlements) determining their fee share.
+    /// Fee sharing only applies to fees earned on the net deficit amounts (outflows) exercised for coverage.
     function _settleCoverageUsage(PositionId positionId) internal {
         PositionMeta memory m = meta[positionId];
         PoolId poolId = m.poolId;
@@ -781,7 +785,21 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
         uint256 s = totalSettlementAmount[id][tokenIndex];
         if (cov == 0 || (d == 0 && s == 0)) return;
 
-        // Enforce c <= d + s, then burn only deficit portion
+        // Enforce invariant: cov <= d + s, then burn only deficit portion
+        //
+        // Invariants:
+        // - If there's no liquidity in the market, then there's no deficit to accrue to positions.
+        //   All unwraps enter into settlement queue (via LiquidityHub).
+        // - If there is liquidity in the market, deficits cap at commitmentMaxima.
+        // - totalSettlementAmount also caps at commitmentMaxima, and deficit = 0 if totalSettlementAmount > 0
+        //   (since settlements net against deficits in _updateSettlement).
+        // - Therefore, unwraps covered by market liquidity either come from the MM (settledAmount)
+        //   or others' liquidity (deficit of MM to protocol).
+        //
+        // This invariant ensures that coverage usage attributed to a position cannot exceed the
+        // sum of its deficit and settled amounts, reflecting that coverage is either:
+        // 1. Covered by the position's own settled liquidity (s), or
+        // 2. Covered by others' liquidity, exercising a borrow mechanic on the deficit (d) amount of the position.
         uint256 cEff = cov <= (d + s) ? cov : (d + s);
         if (cEff == 0 || d == 0) return;
         uint256 burnBase = cEff <= d ? cEff : d; // min(coverage, deficit)
