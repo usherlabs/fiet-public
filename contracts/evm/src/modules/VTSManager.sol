@@ -1172,8 +1172,8 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
         uint256 req0 = d0 < c0 ? d0 : c0; // cap deficit by commitment
         uint256 req1 = d1 < c1 ? d1 : c1;
 
-        int128 amount0 = _rfsDeltaRaw(s0, req0, 0);
-        int128 amount1 = _rfsDeltaRaw(s1, req1, 0);
+        int128 amount0 = _rfsDeltaRaw(s0, req0);
+        int128 amount1 = _rfsDeltaRaw(s1, req1);
 
         // Spec: amount > 0 => settlement required (RfS open); amount < 0 => withdraw allowed
         bool open = (amount0 > 0) || (amount1 > 0);
@@ -1181,8 +1181,7 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
     }
 
     /// @dev Return signed delta in raw units: positive => needs settlement, negative => withdrawable
-    function _rfsDeltaRaw(uint256 settled, uint256 required, uint256 obligation) internal pure returns (int128) {
-        uint256 need = required + obligation; // safe add (Solidity 0.8 checks overflow)
+    function _rfsDeltaRaw(uint256 settled, uint256 need) internal pure returns (int128) {
         if (need >= settled) {
             uint256 pos = need - settled; // rfs is the needed minus the already settled.
             if (pos > INT128_MAX_U) return type(int128).max;
