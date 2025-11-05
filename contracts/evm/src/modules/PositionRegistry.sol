@@ -4,14 +4,14 @@ pragma solidity ^0.8.26;
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {PositionId} from "../types/Position.sol";
 import {PositionLibrary} from "../types/Position.sol";
-import {IPositionIndex} from "../interfaces/IPositionIndex.sol";
+import {IPositionRegistry} from "../interfaces/IPositionRegistry.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {PositionMeta} from "../types/Position.sol";
-import {MarketHandler} from "../modules/MarketHandler.sol";
+import {MarketHandler} from "./MarketHandler.sol";
 import {Errors} from "../libraries/Errors.sol";
 
-/// @notice Central index for position metadata
-abstract contract PositionIndex is IPositionIndex, MarketHandler {
+/// @notice Central registry for position metadata
+abstract contract PositionRegistry is IPositionRegistry, MarketHandler {
     mapping(PositionId => PositionMeta) internal meta;
 
     constructor(address _marketFactory) MarketHandler(_marketFactory) {}
@@ -59,3 +59,4 @@ abstract contract PositionIndex is IPositionIndex, MarketHandler {
         return true;
     }
 }
+

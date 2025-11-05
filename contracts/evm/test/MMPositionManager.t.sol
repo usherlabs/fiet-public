@@ -24,7 +24,7 @@ import {IVTSManager} from "../src/interfaces/IVTSManager.sol";
 import {MarketVTSConfiguration} from "../src/types/VTS.sol";
 import {MockERC20} from "./_mocks/MockERC20.sol";
 import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
-import {IPositionIndex} from "../src/interfaces/IPositionIndex.sol";
+import {IPositionRegistry} from "../src/interfaces/IPositionRegistry.sol";
 import {SignalState} from "../src/types/Position.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
@@ -652,7 +652,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             toBalanceDelta(finalSettledAmount0.toInt128(), finalSettledAmount1.toInt128());
 
         // get the position info after seizure
-        PositionMeta memory positionAfterSeizure = IPositionIndex(coreHookAddress).getPosition(positionId, false);
+        PositionMeta memory positionAfterSeizure = IPositionRegistry(coreHookAddress).getPosition(positionId, false);
 
         // validate the position is marked as inactive
         assertEq(positionAfterSeizure.isActive, false);
@@ -733,7 +733,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             toBalanceDelta(finalSettledAmount0.toInt128(), finalSettledAmount1.toInt128());
 
         // get the position info after seizure
-        PositionMeta memory positionAfterSeizure = IPositionIndex(coreHookAddress).getPosition(positionId, false);
+        PositionMeta memory positionAfterSeizure = IPositionRegistry(coreHookAddress).getPosition(positionId, false);
 
         // validate the position is marked as inactive
         assertEq(positionAfterSeizure.isActive, false);

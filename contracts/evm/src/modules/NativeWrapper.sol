@@ -3,13 +3,14 @@ pragma solidity ^0.8.26;
 
 import {NativeWrapper as UniNativeWrapper} from "../forks/NativeWrapper.sol";
 import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
+import {MarketHandler} from "./MarketHandler.sol";
 
 /// @title NativeWrapper
 /// @notice Used for wrapping and unwrapping native assets in PositionManagers.
 /// @dev This contract extends UniNativeWrapper. When used with MarketHandler via multiple inheritance
 ///      (e.g., in MMPositionManager), the _vaultToCurrencyPair and _validateToken functions from
 ///      MarketHandler will be available through the inheritance chain.
-abstract contract NativeWrapper is UniNativeWrapper {
+abstract contract NativeWrapper is UniNativeWrapper, MarketHandler {
     constructor(IWETH9 _weth9) UniNativeWrapper(_weth9) {}
 
     /// @notice Validates that the ETH sender is either WETH9, poolManager, or a valid MarketVault
@@ -23,14 +24,6 @@ abstract contract NativeWrapper is UniNativeWrapper {
         address[2] memory currencies = _vaultToCurrencyPair(msg.sender);
         _validateToken(msg.sender, currencies);
     }
-
-    /// @notice Must be implemented by MarketHandler or a contract that inherits from MarketHandler
-    /// @dev This function signature matches MarketHandler._vaultToCurrencyPair
-    function _vaultToCurrencyPair(address vault) internal view virtual returns (address[2] memory);
-
-    /// @notice Must be implemented by MarketHandler or a contract that inherits from MarketHandler
-    /// @dev This function signature matches MarketHandler._validateToken
-    function _validateToken(address token, address[2] memory currencies) internal view virtual returns (uint8);
 
     // Best practice: be explicit about intent
     // Only executes on plain transaction (no selector) (ie. poolManager or WETH9 transfer of assets) to MarketVault.

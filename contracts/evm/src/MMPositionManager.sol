@@ -23,10 +23,8 @@ import {LiquidityUtils} from "./libraries/LiquidityUtils.sol";
 import {CurrencyTransfer} from "./libraries/CurrencyTransfer.sol";
 import {ILCC} from "./interfaces/ILCC.sol";
 import {IVRLSignalManager} from "./interfaces/IVRLSignalManager.sol";
-import {IPositionIndex} from "./interfaces/IPositionIndex.sol";
 import {IOracleHelper} from "./interfaces/IOracleHelper.sol";
 import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
-import {FullMath} from "v4-periphery/lib/v4-core/src/libraries/FullMath.sol";
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
 import {TransientStateLibrary} from "v4-periphery/lib/v4-core/src/libraries/TransientStateLibrary.sol";
 import {RFSCheckpointModule} from "./modules/RFSCheckpoint.sol";
@@ -38,11 +36,9 @@ import {TransientSlots} from "./libraries/TransientSlots.sol";
 import {ICommitmentDescriptor} from "./interfaces/ICommitmentDescriptor.sol";
 import {ILiquidityHub} from "./interfaces/ILiquidityHub.sol";
 import {IMMPositionManager} from "./interfaces/IMMPositionManager.sol";
-import {IMarketVault} from "./interfaces/IMarketVault.sol";
 import {IERC20Minimal} from "@uniswap/v4-core/src/interfaces/external/IERC20Minimal.sol";
 import {SafeERC20} from "openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Errors} from "./libraries/Errors.sol";
-import {MarketHandler} from "./modules/MarketHandler.sol";
 
 contract MMPositionManager is
     LiquidityRouter,
@@ -53,8 +49,7 @@ contract MMPositionManager is
     Multicall_v4,
     BaseActionsRouter,
     NativeWrapper,
-    LCCWrapper,
-    MarketHandler
+    LCCWrapper
 {
     using SafeCast for uint256;
     using PositionLibrary for PositionId;
@@ -62,17 +57,19 @@ contract MMPositionManager is
     using StateLibrary for IPoolManager;
     using TransientStateLibrary for IPoolManager;
     using CurrencyLibrary for Currency;
-    using CurrencyTransfer for Currency;
     using SafeERC20 for IERC20;
 
     event SignalCommitted(uint256 tokenId);
     event SignalDecommitted(uint256 tokenId, uint256 positionIndex, uint256 amount0, uint256 amount1);
 
-    address public immutable commitmentDescriptor;
-    ILiquidityHub public immutable liquidityHub;
+    IVTSManager internal immutable vtsManager;
+    ILiquidityHub internal immutable liquidityHub;
+    IVRLSignalManager internal immutable signalManager;
+    IOracleHelper internal immutable oracleHelper;
+
     uint256 private nextTokenId = 1;
-    IVRLSignalManager public immutable signalManager;
-    IOracleHelper public immutable oracleHelper;
+
+    address public immutable commitmentDescriptor;
     mapping(uint256 => mapping(uint256 => PositionId)) public commitToPosition;
     mapping(uint256 => uint256) public commitToPositionCount;
 
@@ -109,14 +106,15 @@ contract MMPositionManager is
         address _descriptor,
         IWETH9 _weth9
     )
-        MarketHandler(_marketFactory)
         ERC721Permit_v4("Fiet VRL Commitment Positions Manager", "FIET-VRL-MMP")
+        LiquidityRouter(_marketFactory)
         BaseActionsRouter(IPoolManager(_manager))
         RFSCheckpointModule(_settlementObserver)
         NativeWrapper(_weth9)
     {
         signalManager = IVRLSignalManager(_signalManager);
         commitmentDescriptor = _descriptor;
+        vtsManager = IVTSManager(marketFactory.coreHook());
         oracleHelper = marketFactory.oracleHelper();
         liquidityHub = marketFactory.liquidityHub();
     }
@@ -150,38 +148,8 @@ contract MMPositionManager is
         return ICommitmentDescriptor(commitmentDescriptor).tokenURI(address(this), tokenId);
     }
 
-    function _getVTSManager() internal view returns (IVTSManager) {
-        return IVTSManager(marketFactory.coreHook());
-    }
-
-    function _getPositionIndex() internal view returns (IPositionIndex) {
-        return IPositionIndex(marketFactory.coreHook());
-    }
-
     function _liquidityHub() internal view override returns (ILiquidityHub) {
         return liquidityHub;
-    }
-
-    /// @notice Resolves conflict between NativeWrapper and MarketHandler
-    /// @dev Delegates to MarketHandler's implementation via super
-    function _vaultToCurrencyPair(address vault)
-        internal
-        view
-        override(NativeWrapper, MarketHandler)
-        returns (address[2] memory)
-    {
-        return super._vaultToCurrencyPair(vault);
-    }
-
-    /// @notice Resolves conflict between NativeWrapper and MarketHandler
-    /// @dev Delegates to MarketHandler's implementation via super
-    function _validateToken(address token, address[2] memory currencies)
-        internal
-        view
-        override(NativeWrapper, MarketHandler)
-        returns (uint8)
-    {
-        return super._validateToken(token, currencies);
     }
 
     /// @dev Internal helper to unwrap an arbitrary LCC (pair-agnostic) to msgSender().
@@ -426,48 +394,9 @@ contract MMPositionManager is
         // generate unique position id using the params which contains the salt making this unique across all positions
         positionId = PositionLibrary.generateId(address(this), params);
         // Consume the aggregated required settlement delta from CoreHook (VTSManager) and clear it
-        requiredSettlementDelta = TransientSlots.consumePositionRequiredSettlementDelta(address(_getVTSManager()));
+        requiredSettlementDelta = TransientSlots.consumePositionRequiredSettlementDelta(address(vtsManager));
         // Consume fee adjustment materialised by CoreHook for this call
-        feeAdj = TransientSlots.consumeFeeAdjDelta(address(_getVTSManager()));
-    }
-
-    /**
-     * @dev Settles the underlying assets for a given position based on protocol-defined settlement rules.
-     * Utilizes the provided modifyDelta as an input; the actual settled amounts (settlementDelta) are determined in accordance with protocol rules applied by the VTSManager,
-     * which may differ from modifyDelta (e.g., due to clamping or adjustments).
-     * The appropriate underlying assets are then transferred or withdrawn, and the proxy hook is notified.
-     * In essence, the MM is providing a modifyDelta what default settlements apply.
-     * @param poolId The pool id associated with the position
-     * @param settlementDelta The balance delta for underlying asset settlement. Either direct via _settle, or position-required via _callModifyLiquidity
-     * @param ua0 The address of underlying asset 0
-     * @param ua1 The address of underlying asset 1
-     */
-    function _settleUnderlying(PoolId poolId, BalanceDelta settlementDelta, address ua0, address ua1) internal {
-        address sender = msgSender();
-
-        address marketVault = _getVault(poolId);
-
-        // for deposits, transfer to the Market Vault (proxy hook)
-        if (settlementDelta.amount0() > 0) {
-            Currency.wrap(ua0)
-                .transferFrom(sender, marketVault, LiquidityUtils.safeInt128ToUint256(settlementDelta.amount0()));
-        }
-        if (settlementDelta.amount1() > 0) {
-            Currency.wrap(ua1)
-                .transferFrom(sender, marketVault, LiquidityUtils.safeInt128ToUint256(settlementDelta.amount1()));
-        }
-        // notify the proxy hook of the settled underlying tokens
-        // a positive balance delta means we are settling underlying tokens to the proxy hook, negative means withdrawing to the MMP.
-        // Call after deposits, but before withdrawals.
-        IMarketVault(marketVault).modifyLiquidities(settlementDelta);
-
-        // for withdrawals, transfer to the caller/sender/MM.
-        if (settlementDelta.amount0() < 0) {
-            Currency.wrap(ua0).transfer(sender, LiquidityUtils.safeInt128ToUint256(settlementDelta.amount0()));
-        }
-        if (settlementDelta.amount1() < 0) {
-            Currency.wrap(ua1).transfer(sender, LiquidityUtils.safeInt128ToUint256(settlementDelta.amount1()));
-        }
+        feeAdj = TransientSlots.consumeFeeAdjDelta(address(vtsManager));
     }
 
     // ------------------------------------------------------------------------------------------------
@@ -490,7 +419,7 @@ contract MMPositionManager is
         returns (PositionId positionId, bool rfsOpen, BalanceDelta rfsDelta)
     {
         positionId = getPositionId(tokenId, positionIndex);
-        (rfsOpen, rfsDelta) = _getVTSManager().calcRFS(positionId, requireClosedRfS);
+        (rfsOpen, rfsDelta) = vtsManager.calcRFS(positionId, requireClosedRfS);
     }
 
     /**
@@ -504,7 +433,7 @@ contract MMPositionManager is
         if (PositionId.unwrap(positionId) == bytes32(0)) {
             revert Errors.InvalidPosition(tokenId, positionIndex, positionId);
         }
-        PositionMeta memory m = _getPositionIndex().getPosition(positionId, true);
+        PositionMeta memory m = vtsManager.getPosition(positionId, true);
 
         if (!_isMMPosition(m)) {
             revert Errors.InvalidPosition(tokenId, positionIndex, positionId);
@@ -533,13 +462,12 @@ contract MMPositionManager is
     /// @return s1 Total settled token1 across positions.
     function _sumSettledAmountsForCommit(uint256 tokenId) internal view returns (uint256 s0, uint256 s1) {
         uint256 n = commitToPositionCount[tokenId];
-        IVTSManager vts = _getVTSManager();
         PositionId[] memory pids = new PositionId[](n);
         for (uint256 i = 0; i < n; i++) {
             PositionId pid = getPositionId(tokenId, i);
             pids[i] = pid;
         }
-        (s0, s1) = vts.getPositionSettledAmounts(pids);
+        (s0, s1) = vtsManager.getPositionSettledAmounts(pids);
     }
 
     /// @dev Re-composes effective LCC amounts across all positions at the current pool price.
@@ -676,8 +604,8 @@ contract MMPositionManager is
 
         // notify the vts manager of the settlement made for this position
         // returns the delta of required settlements IN or OUT
-        (BalanceDelta settlementDelta, bool rfsOpen) = _getVTSManager()
-            .onMMSettle(positionId, poolKey.currency0, poolKey.currency1, toBalanceDelta(amount0, amount1));
+        (BalanceDelta settlementDelta, bool rfsOpen) =
+            vtsManager.onMMSettle(positionId, poolKey.currency0, poolKey.currency1, toBalanceDelta(amount0, amount1));
 
         // mark RFS checkpoint
         _markCheckpoint(positionId, rfsOpen); // checkpoint directly on the _settleUnderlying call.
@@ -711,7 +639,7 @@ contract MMPositionManager is
         getPosition(tokenId, positionIndex); // Validate the position by fetching it.
 
         // Get the VTS configuration for the pool
-        MarketVTSConfiguration memory vtsConfiguration = _getVTSManager().getMarketVTSConfiguration(poolKey.toId());
+        MarketVTSConfiguration memory vtsConfiguration = vtsManager.getMarketVTSConfiguration(poolKey.toId());
 
         // Call the inherited function from RFSCheckpointModule
         // Note: Different signature allows function overloading, but we use super to explicitly call parent
@@ -1027,7 +955,7 @@ contract MMPositionManager is
         // make sure to add the position only after modifying the liquidity
         // because the number of positions is used to generate the salt for the position
         commitToPosition[tokenId][positionIndex] = positionId;
-        // Position metadata is managed centrally via PositionIndex/VTSManager
+        // Position metadata is managed centrally via PositionRegistry/VTSManager
         // increment the number of positions for the nft
         commitToPositionCount[tokenId]++;
     }
@@ -1067,8 +995,6 @@ contract MMPositionManager is
 
         // create a balance delta of the amounts to settle
         BalanceDelta settlementDelta = toBalanceDelta(amount0.toInt128(), amount1.toInt128());
-
-        IVTSManager vtsManager = _getVTSManager();
 
         // Validate grace (using last checkpoint) and derive liquidity to seize
         uint256 seizedLiquidityUnits =

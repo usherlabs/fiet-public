@@ -3,10 +3,10 @@ pragma solidity ^0.8.26;
 
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {PositionId} from "../../src/types/Position.sol";
-import {IPositionIndex} from "../../src/interfaces/IPositionIndex.sol";
+import {IPositionRegistry} from "../../src/interfaces/IPositionRegistry.sol";
 import {PositionMeta} from "../../src/types/Position.sol";
 
-contract MockPositionIndex is IPositionIndex {
+contract MockPositionRegistry is IPositionRegistry {
     mapping(PositionId => PositionMeta) public meta;
     mapping(PositionId => uint128) public liq;
 
@@ -41,3 +41,4 @@ contract MockPositionIndex is IPositionIndex {
         return meta[id];
     }
 }
+

@@ -4,7 +4,7 @@ pragma solidity ^0.8.26;
 
 import {MarketVTSConfiguration} from "../types/VTS.sol";
 import {RFSCheckpoint} from "../types/Checkpoint.sol";
-import {PositionIndex} from "../modules/PositionIndex.sol";
+import {PositionRegistry} from "../modules/PositionRegistry.sol";
 import {PositionMeta} from "../types/Position.sol";
 import {GrowthAccounting} from "../libraries/GrowthAccounting.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
@@ -28,7 +28,7 @@ import {CurrencySettler} from "@uniswap/v4-core/test/utils/CurrencySettler.sol";
 import {IOracleHelper} from "../interfaces/IOracleHelper.sol";
 import {Errors} from "../libraries/Errors.sol";
 
-abstract contract VTSManager is IVTSManager, PositionIndex {
+abstract contract VTSManager is IVTSManager, PositionRegistry {
     using StateLibrary for IPoolManager;
     using TransientStateLibrary for IPoolManager;
     using TransientSlot for *;
@@ -130,7 +130,7 @@ abstract contract VTSManager is IVTSManager, PositionIndex {
     }
 
     constructor(address _poolManager, address _marketFactory, address _mmPositionManager)
-        PositionIndex(_marketFactory)
+        PositionRegistry(_marketFactory)
     {
         poolManager = IPoolManager(_poolManager);
         oracleHelper = marketFactory.oracleHelper();

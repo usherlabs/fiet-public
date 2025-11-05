@@ -15,28 +15,32 @@ import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {CurrencyLibrary} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {TransientStateLibrary} from "v4-periphery/lib/v4-core/src/libraries/TransientStateLibrary.sol";
-import {IImmutableState} from "v4-periphery/src/interfaces/IImmutableState.sol";
 import {Errors} from "../libraries/Errors.sol";
+import {ImmutableState} from "v4-periphery/src/base/ImmutableState.sol";
+import {MarketHandler} from "./MarketHandler.sol";
+import {CurrencyTransfer} from "../libraries/CurrencyTransfer.sol";
+import {IMarketVault} from "../interfaces/IMarketVault.sol";
+import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {LiquidityUtils} from "../libraries/LiquidityUtils.sol";
 
-abstract contract LiquidityRouter is IImmutableState {
+abstract contract LiquidityRouter is ImmutableState, MarketHandler {
     using CurrencySettler for Currency;
+    using CurrencyTransfer for Currency;
+    using CurrencyLibrary for Currency;
     using Hooks for IHooks;
     using LPFeeLibrary for uint24;
     using StateLibrary for IPoolManager;
     using TransientStateLibrary for IPoolManager;
 
-    function msgSender() public view virtual returns (address);
+    constructor(address _marketFactory) MarketHandler(_marketFactory) {}
 
-    function _pm() internal view returns (IPoolManager) {
-        return IImmutableState(address(this)).poolManager();
-    }
+    function msgSender() public view virtual returns (address);
 
     /// unlock the pool manager and use the callback to modify the liquidity
     function _modifyLiquidity(PoolKey memory key, ModifyLiquidityParams memory params, bytes memory hookData)
         internal
         returns (BalanceDelta delta, BalanceDelta feesAccrued)
     {
-        IPoolManager poolManager = _pm();
         bool settleUsingBurn = false;
         bool takeClaims = false;
 
@@ -89,12 +93,51 @@ abstract contract LiquidityRouter is IImmutableState {
             key.currency1.take(poolManager, self, uint256(delta1), takeClaims);
         }
 
-        // Dust guard
-        // forward any stray native ETH held by the router (e.g. native-currency pools, or flows that momentarily leave ETH on the router) back to the logical caller at the end of the action.
-        // If you keep it, send to your router’s logical caller (your msgSender() override), not raw msg.sender.
-        uint256 nativeBalance = address(this).balance;
-        if (nativeBalance > 0) {
-            CurrencyLibrary.ADDRESS_ZERO.transfer(msgSender(), nativeBalance);
+        // // Dust guard
+        // // forward any stray native ETH held by the router (e.g. native-currency pools, or flows that momentarily leave ETH on the router) back to the logical caller at the end of the action.
+        // // If you keep it, send to your router’s logical caller (your msgSender() override), not raw msg.sender.
+        // uint256 nativeBalance = address(this).balance;
+        // if (nativeBalance > 0) {
+        //     CurrencyLibrary.ADDRESS_ZERO.transfer(msgSender(), nativeBalance);
+        // }
+    }
+
+    /**
+     * @dev Settles the underlying assets for a given position based on protocol-defined settlement rules.
+     * Utilizes the provided modifyDelta as an input; the actual settled amounts (settlementDelta) are determined in accordance with protocol rules applied by the VTSManager,
+     * which may differ from modifyDelta (e.g., due to clamping or adjustments).
+     * The appropriate underlying assets are then transferred or withdrawn, and the proxy hook is notified.
+     * In essence, the MM is providing a modifyDelta what default settlements apply.
+     * @param poolId The pool id associated with the position
+     * @param settlementDelta The balance delta for underlying asset settlement. Either direct via _settle, or position-required via _callModifyLiquidity
+     * @param ua0 The address of underlying asset 0
+     * @param ua1 The address of underlying asset 1
+     */
+    function _settleUnderlying(PoolId poolId, BalanceDelta settlementDelta, address ua0, address ua1) internal {
+        address sender = msgSender();
+
+        address marketVault = _getVault(poolId);
+
+        // for deposits, transfer to the Market Vault (proxy hook)
+        if (settlementDelta.amount0() > 0) {
+            Currency.wrap(ua0)
+                .transferFrom(sender, marketVault, LiquidityUtils.safeInt128ToUint256(settlementDelta.amount0()));
+        }
+        if (settlementDelta.amount1() > 0) {
+            Currency.wrap(ua1)
+                .transferFrom(sender, marketVault, LiquidityUtils.safeInt128ToUint256(settlementDelta.amount1()));
+        }
+        // notify the proxy hook of the settled underlying tokens
+        // a positive balance delta means we are settling underlying tokens to the proxy hook, negative means withdrawing to the MMP.
+        // Call after deposits, but before withdrawals.
+        IMarketVault(marketVault).modifyLiquidities(settlementDelta);
+
+        // for withdrawals, transfer to the caller/sender/MM.
+        if (settlementDelta.amount0() < 0) {
+            Currency.wrap(ua0).transfer(sender, LiquidityUtils.safeInt128ToUint256(settlementDelta.amount0()));
+        }
+        if (settlementDelta.amount1() < 0) {
+            Currency.wrap(ua1).transfer(sender, LiquidityUtils.safeInt128ToUint256(settlementDelta.amount1()));
         }
     }
 }
