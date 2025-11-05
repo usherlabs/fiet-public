@@ -13,6 +13,7 @@ library TransientSlots {
     bytes32 internal constant LIQ_BEFORE_SLOT = keccak256("LIQ_BEFORE");
     bytes32 internal constant POSITION_REQUIRED_SETTLEMENT_DELTA_SLOT = keccak256("POSITION_REQUIRED_SETTLEMENT_DELTA");
     bytes32 internal constant FEE_ADJ_DELTA_SLOT = keccak256("FEE_ADJ_DELTA");
+    bytes32 internal constant NATIVE_ETH_SPENT_SLOT = keccak256("NATIVE_ETH_SPENT");
 
     // ------------------------------
     // Position Required Settlement Delta helpers
@@ -81,5 +82,22 @@ library TransientSlots {
         int256 raw = loadFeeAdjDelta(sourceAddress);
         TransientSlot.asInt256(TransientSlots.FEE_ADJ_DELTA_SLOT).tstore(int256(0));
         return BalanceDelta.wrap(raw);
+    }
+
+    // ------------------------------
+    // Native ETH Spending helpers
+    // ------------------------------
+
+    function addNativeEthSpent(uint256 amount) internal {
+        uint256 current = TransientSlot.asUint256(TransientSlots.NATIVE_ETH_SPENT_SLOT).tload();
+        uint256 total = current + amount;
+        TransientSlot.asUint256(TransientSlots.NATIVE_ETH_SPENT_SLOT).tstore(total);
+    }
+
+    function consumeNativeEthSpent() internal returns (uint256) {
+        uint256 current = TransientSlot.asUint256(TransientSlots.NATIVE_ETH_SPENT_SLOT).tload();
+        // Clear for subsequent reads in the same transaction
+        TransientSlot.asUint256(TransientSlots.NATIVE_ETH_SPENT_SLOT).tstore(uint256(0));
+        return current;
     }
 }

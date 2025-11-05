@@ -40,6 +40,8 @@ import {CurrencyTransfer} from "../libraries/CurrencyTransfer.sol";
 import {IMarketVault} from "../interfaces/IMarketVault.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {LiquidityUtils} from "../libraries/LiquidityUtils.sol";
+import {ILCC} from "../interfaces/ILCC.sol";
+import {TransientSlots} from "../libraries/TransientSlots.sol";
 
 // * Used by MM Position Manager to modify liquidity and settle underlying assets
 abstract contract LiquidityRouter is ImmutableState, MarketHandler {
@@ -113,8 +115,12 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler {
         // Get net currency deltas from PoolManager
         // currencyDelta is a net including fee accrual plus any hook-side fee-sharing that's already
         // been applied at modification time.
-        // TODO: this doesn't consider prior actions relative caller, that could cause the
-        // currencyDelta > modifyLiquidity[tokenIndex]
+
+        // Note: Prior actions in a batch don't accumulate here because each _modifyLiquidity call
+        // immediately settles its deltas, resetting currencyDelta to 0 before the next
+        // action. The delta read here reflects only the current modification's effect (including hook
+        // adjustments like feeAdj from CoreHook). Other actions (e.g., SETTLE_POSITION) account deltas
+        // to the hook contract, not to MMPositionManager, so they don't affect this currencyDelta.
         int256 delta0 = poolManager.currencyDelta(self, key.currency0);
         int256 delta1 = poolManager.currencyDelta(self, key.currency1);
 
@@ -149,15 +155,6 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler {
         if (delta1 > 0) {
             key.currency1.take(poolManager, self, uint256(delta1), takeClaims);
         }
-
-        // Note: Dust guard for native ETH is commented out
-        // If needed, forward any stray native ETH held by the router (e.g. native-currency pools,
-        // or flows that momentarily leave ETH on the router) back to the logical caller at the end of the action.
-        // If you keep it, send to your router's logical caller (your msgSender() override), not raw msg.sender.
-        // uint256 nativeBalance = address(this).balance;
-        // if (nativeBalance > 0) {
-        //     CurrencyLibrary.ADDRESS_ZERO.transfer(msgSender(), nativeBalance);
-        // }
     }
 
     /**
@@ -185,6 +182,15 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler {
         address sender = msgSender();
         address marketVault = _getVault(poolId);
 
+        // Track native ETH spending before transfers to avoid reentrancy warnings
+        // For underlying settlement, we spend native ETH when depositing (positive deltas)
+        if (settlementDelta.amount0() > 0 && ua0 == address(0)) {
+            TransientSlots.addNativeEthSpent(LiquidityUtils.safeInt128ToUint256(settlementDelta.amount0()));
+        }
+        if (settlementDelta.amount1() > 0 && ua1 == address(0)) {
+            TransientSlots.addNativeEthSpent(LiquidityUtils.safeInt128ToUint256(settlementDelta.amount1()));
+        }
+
         // For deposits: transfer underlying tokens from MMP to MarketVault (proxy hook)
         if (settlementDelta.amount0() > 0) {
             Currency.wrap(ua0)
@@ -207,6 +213,52 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler {
         }
         if (settlementDelta.amount1() < 0) {
             Currency.wrap(ua1).transfer(sender, LiquidityUtils.safeInt128ToUint256(settlementDelta.amount1()));
+        }
+    }
+
+    /**
+     * @notice Tracks native ETH spending for refund at end of batch
+     * @dev Tracks native ETH spending from settlement deltas. In settlementDelta, positive values mean deposits.
+     * @param currency0 The currency for token0
+     * @param currency1 The currency for token1
+     * @param delta The balance delta to track
+     */
+    function _trackNativeSettlementDelta(Currency currency0, Currency currency1, BalanceDelta delta) internal {
+        // In settlementDelta, positive values mean deposits, and negative values mean withdrawals.
+        // We track native ETH spending when depositing (positive deltas) if the underlying is native ETH.
+        if (delta.amount0() > 0 && currency0.isAddressZero()) {
+            if (ILCC(Currency.unwrap(currency0)).underlying() == address(0)) {
+                TransientSlots.addNativeEthSpent(LiquidityUtils.safeInt128ToUint256(delta.amount0()));
+            }
+        }
+        if (delta.amount1() > 0 && currency1.isAddressZero()) {
+            if (ILCC(Currency.unwrap(currency1)).underlying() == address(0)) {
+                TransientSlots.addNativeEthSpent(LiquidityUtils.safeInt128ToUint256(delta.amount1()));
+            }
+        }
+    }
+
+    /**
+     * @notice Refunds excess native ETH sent to the contract
+     * @dev Calculates the difference between msg.value and the tracked cumulative amount spent,
+     *      then refunds any excess to msgSender(). This handles precision issues between
+     *      on-chain and off-chain calculations for native ETH operations.
+     *      Should be called at the end of a batch of operations after all _modifyLiquidity
+     *      and _settleUnderlying calls have completed.
+     */
+    function _tryRefundExcessNative() internal {
+        uint256 totalAmountSentToContract = msg.value;
+        uint256 amountSpent = TransientSlots.consumeNativeEthSpent();
+
+        if (amountSpent == 0 || totalAmountSentToContract == 0) {
+            return;
+        }
+
+        // Calculate excess and refund if there's any leftover
+        if (totalAmountSentToContract > amountSpent) {
+            uint256 excess = totalAmountSentToContract - amountSpent;
+            // Transfer excess back to the logical caller (not raw msg.sender)
+            CurrencyLibrary.ADDRESS_ZERO.transfer(msgSender(), excess);
         }
     }
 }

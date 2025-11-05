@@ -243,6 +243,12 @@ contract MMPositionManager is
         isNotLocked
     {
         _executeActionsWithoutUnlock(actions, params);
+
+        // Refund excess native ETH at end of batch after all operations complete
+        // Anytime a batch of actions is provided, we tally the native asset spend and prepare a refund to prevent overspend.
+        // Even if multi-batch tx, each refund is calculated on a per-batch.
+        // This warrants multi-batch implementations to re-transfer refunded ETH to the MMP after each batch.
+        _tryRefundExcessNative();
     }
 
     function _handleAction(uint256 action, bytes calldata params) internal override {
@@ -397,6 +403,8 @@ contract MMPositionManager is
         requiredSettlementDelta = TransientSlots.consumePositionRequiredSettlementDelta(address(vtsManager));
         // Consume fee adjustment materialised by CoreHook for this call
         feeAdj = TransientSlots.consumeFeeAdjDelta(address(vtsManager));
+
+        _trackNativeSettlementDelta(poolKey.currency0, poolKey.currency1, requiredSettlementDelta);
     }
 
     // ------------------------------------------------------------------------------------------------
