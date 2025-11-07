@@ -369,7 +369,7 @@ contract MMPositionManager is
             return;
         }
         if (action == uint256(MMAction.TAKE_LCCS)) {
-            // params: (PoolKey memory poolKey, address recipient, uint256 maxAmount, bool payerIsUser)
+            // params: (Currency currency, address recipient, uint256 maxAmount, bool payerIsUser)
             (Currency currency, address recipient, uint256 maxAmount, bool payerIsUser) = abi.decode(params, (Currency, address, uint256, bool));
             _take(currency, _mapPayer(payerIsUser), _mapRecipient(recipient), maxAmount);
             return;
@@ -389,7 +389,15 @@ contract MMPositionManager is
         if (action == uint256(MMAction.SETTLE_POSITION_FROM_DELTAS)) {
             (PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex, bool settleIn0, bool settleIn1) =
                 abi.decode(params, (PoolKey, uint256, uint256, bool, bool));
-            BalanceDelta sDelta = LiquidityUtils.safeToBalanceDelta(_getFullCredit(poolKey.currency0, msgSender()), _getFullCredit(poolKey.currency1, msgSender()), settleIn0, settleIn1);
+            // Settlement happens in underlying terms, so we need to check underlying credits, not LCC credits
+            // Note: settleIn0/settleIn1 flags determine direction. After onMMSettle negates the delta:
+            //       true = negative amount = deposit (settle IN), false = positive amount = withdraw (settle OUT)
+            BalanceDelta sDelta = LiquidityUtils.safeToBalanceDelta(
+                _getFullCredit(_lccToUnderlyingCurrency(poolKey.currency0), msgSender()),
+                _getFullCredit(_lccToUnderlyingCurrency(poolKey.currency1), msgSender()),
+                settleIn0,
+                settleIn1
+            );
             _settle(poolKey, tokenId, positionIndex, sDelta.amount0(), sDelta.amount1());
             return;
         }
