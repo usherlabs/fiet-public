@@ -37,7 +37,7 @@ import {IMMPositionManager} from "./interfaces/IMMPositionManager.sol";
 import {IERC20Minimal} from "@uniswap/v4-core/src/interfaces/external/IERC20Minimal.sol";
 import {SafeERC20} from "openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Errors} from "./libraries/Errors.sol";
-import {NonzeroDeltaCount} from "./modules/libraries/NonzeroDeltaCount.sol";
+import {NonzeroDeltaCount} from "@uniswap/v4-core/src/libraries/NonzeroDeltaCount.sol";
 import {LiquidityAmounts} from "v4-periphery/src/libraries/LiquidityAmounts.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
@@ -50,7 +50,7 @@ contract MMPositionManager is
     ReentrancyLock,
     Multicall_v4,
     BaseActionsRouter,
-    NativeWrapper,
+    NativeWrapper
 {
     using SafeCast for uint256;
     using PositionLibrary for PositionId;
@@ -99,7 +99,7 @@ contract MMPositionManager is
         TAKE_LCCS, // params: (Currency currency, address recipient, uint256 maxAmount, bool payerIsUser)
         INCREASE_LIQUIDITY_FROM_DELTAS, // params: (Currency currency, int128 delta, address target)
         MINT_POSITION_FROM_DELTAS, // params: (Currency currency, int128 delta, address target)
-        SETTLE_POSITION_FROM_DELTAS, // params: (PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex, bool settleIn0, bool settleIn1)
+        SETTLE_POSITION_FROM_DELTAS // params: (PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex, bool settleIn0, bool settleIn1)
     }
 
     // MarketHandler must be first.
@@ -198,7 +198,7 @@ contract MMPositionManager is
     }
 
     /// @inheritdoc BaseActionsRouter
-    function msgSender() public view override(BaseActionsRouter, LiquidityRouter) returns (address) {
+    function msgSender() public view override returns (address) {
         return _getLocker();
     }
 
@@ -326,7 +326,8 @@ contract MMPositionManager is
         }
         if (action == uint256(MMAction.UNWRAP_LCC)) {
             // params: (address lcc, uint256 amount, address recipient)
-            (address lccAddr, uint256 amount, address recipient, bool payerIsUser) = abi.decode(params, (address, uint256, address, bool));
+            (address lccAddr, uint256 amount, address recipient, bool payerIsUser) =
+                abi.decode(params, (address, uint256, address, bool));
             // Pair-agnostic: accept any LCC address. Governance/guards can be added if needed.
             // Unwrap best-effort to recipient; non-reverting, clamps to available manager-held LCC.
             _unwrapLCC(lccAddr, _mapPayer(payerIsUser), _mapRecipient(recipient), amount);
@@ -370,7 +371,8 @@ contract MMPositionManager is
         }
         if (action == uint256(MMAction.TAKE_LCCS)) {
             // params: (Currency currency, address recipient, uint256 maxAmount, bool payerIsUser)
-            (Currency currency, address recipient, uint256 maxAmount, bool payerIsUser) = abi.decode(params, (Currency, address, uint256, bool));
+            (Currency currency, address recipient, uint256 maxAmount, bool payerIsUser) =
+                abi.decode(params, (Currency, address, uint256, bool));
             _take(currency, _mapPayer(payerIsUser), _mapRecipient(recipient), maxAmount);
             return;
         }
@@ -412,10 +414,8 @@ contract MMPositionManager is
      * @dev This function is used to modify liquidity for a given pool key and parameters
      * @param poolKey The pool key to modify liquidity for
      * @param params The liquidity parameters to modify liquidity for
-     * @return positionId The position id
-     * @return requiredSettlementDelta The balance delta of the required settlements
-     * @return positionDelta The balance delta of the position caller delta
-     * @return feesAccrued The balance delta of the fees accrued
+     * @return principalDelta The balance delta of the principal liquidity
+     * @return accruedFeesAfterAdj The balance delta of the fees accrued after adjustment
      */
     function _modifyPositionLiquidity(PoolKey memory poolKey, ModifyLiquidityParams memory params)
         internal
@@ -636,7 +636,10 @@ contract MMPositionManager is
     /// @param to The recipient address to receive the underlying asset
     /// @param requested The requested LCC amount to unwrap (0 = unwrap from deltas, >0 = unwrap from caller's wallet)
     /// @return unwrapped The actual amount of underlying delivered to the recipient
-    function _unwrapLCC(address lccAddr, address from, address to, uint256 requested) internal returns (uint256 unwrapped) {
+    function _unwrapLCC(address lccAddr, address from, address to, uint256 requested)
+        internal
+        returns (uint256 unwrapped)
+    {
         ILCC lcc = ILCC(lccAddr);
         Currency lccCurrency = Currency.wrap(lccAddr);
         address underlying = lcc.underlying();
@@ -657,7 +660,7 @@ contract MMPositionManager is
 
         if (toUnwrap > 0) {
             // Route unwrap via LiquidityHub to leverage reserve tracking and settlement queuing
-            if(from != address(this)){
+            if (from != address(this)) {
                 lcc.safeTransferFrom(from, address(this), toUnwrap);
             }
             liquidityHub.unwrapTo(lccAddr, to, toUnwrap);
@@ -666,7 +669,7 @@ contract MMPositionManager is
         // Compute actually unwrapped by observing recipient balance delta
         unwrapped = IERC20Minimal(underlying).balanceOf(to) - beforeBal;
 
-        if(unwrapped > 0){
+        if (unwrapped > 0) {
             _accountDelta(lccCurrency, -unwrapped.toInt128(), msgSender()); // Debit LCC delta from source
             _accountDelta(Currency.wrap(underlying), unwrapped.toInt128(), to); // Credit underlying delta to recipient
         }
@@ -771,7 +774,6 @@ contract MMPositionManager is
      * @param poolKey The pool key for the position
      * @param tokenId The token id to decommit the position for
      * @param positionIndex The position index to decommit the position for
-     * @return balanceDelta The balance delta
      */
     function _burnPosition(PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex) internal {
         PositionMeta memory pos = getPosition(tokenId, positionIndex);
@@ -836,16 +838,22 @@ contract MMPositionManager is
      * @param tickUpper The upper tick of the position
      * @return liquidity The liquidity from deltas
      */
-    function _getLiquidityFromDeltas(
-        PoolKey memory poolKey,
-        int24 tickLower,
-        int24 tickUpper
-    ) internal view returns (uint256 liquidity) {
+    function _getLiquidityFromDeltas(PoolKey memory poolKey, int24 tickLower, int24 tickUpper)
+        internal
+        view
+        returns (uint256 liquidity)
+    {
         address sender = msgSender();
         uint256 credit0 = _getFullCredit(_lccToUnderlyingCurrency(poolKey.currency0), sender);
         uint256 credit1 = _getFullCredit(_lccToUnderlyingCurrency(poolKey.currency1), sender);
         (uint160 sqrtPriceX96,,,) = poolManager.getSlot0(poolKey.toId());
-        return LiquidityAmounts.getLiquidityForAmounts(sqrtPriceX96, TickMath.getSqrtPriceAtTick(tickLower), TickMath.getSqrtPriceAtTick(tickUpper), credit0, credit1);
+        return LiquidityAmounts.getLiquidityForAmounts(
+            sqrtPriceX96,
+            TickMath.getSqrtPriceAtTick(tickLower),
+            TickMath.getSqrtPriceAtTick(tickUpper),
+            credit0,
+            credit1
+        );
     }
 
     /**
@@ -862,7 +870,7 @@ contract MMPositionManager is
         uint256 positionIndex,
         int24 tickLower,
         int24 tickUpper
-    ) internal  onlyIfApproved(msgSender(), tokenId) onlyValidCommit(poolKey, tokenId) {
+    ) internal onlyIfApproved(msgSender(), tokenId) onlyValidCommit(poolKey, tokenId) {
         // Compute liquidity from LCC credits (via router helper)
         uint256 liquidityFromDeltas = _getLiquidityFromDeltas(poolKey, tickLower, tickUpper);
 
@@ -877,18 +885,14 @@ contract MMPositionManager is
      * @param tickUpper The upper tick of the position
      */
     function _mintFromDeltas(PoolKey memory poolKey, uint256 tokenId, int24 tickLower, int24 tickUpper)
-        internal onlyIfApproved(msgSender(), tokenId) onlyValidCommit(poolKey, tokenId)
+        internal
+        onlyIfApproved(msgSender(), tokenId)
+        onlyValidCommit(poolKey, tokenId)
     {
         // Compute underying liquidity from credits (via router helper)
         uint256 liquidityFromDeltas = _getLiquidityFromDeltas(poolKey, tickLower, tickUpper);
 
-        _mintPosition(
-            poolKey,
-            tokenId,
-            tickLower,
-            tickUpper,
-            liquidityFromDeltas
-        );
+        _mintPosition(poolKey, tokenId, tickLower, tickUpper, liquidityFromDeltas);
     }
 
     /**
@@ -937,9 +941,6 @@ contract MMPositionManager is
             return;
         }
 
-        address lcc0 = Currency.unwrap(poolKey.currency0);
-        address lcc1 = Currency.unwrap(poolKey.currency1);
-
         // TODO: On Seizure, this amount should be the seizureSettled + (portion of position settled relative to seizuredLiquidityUnits/liquidity)
         // ----- LCCs acquired by the seizing party are NOT cancelled, rather transferred for unwrap, or subsequent swaps. VTSManager.onMMLiquidityModify coordinates position settlement amounts, whereas Market Vault aggregates them and coordinates LCC queue clearance.
 
@@ -961,19 +962,19 @@ contract MMPositionManager is
             // Burn only principal LCC that was originally issued for the position's liquidity.
             // feesAccrued (from trader flows) stays wrapped and can be unwrapped via UNWRAP_LCC.
             if (a0 > 0) {
-                liquidityHub.cancel(lcc0, a0);
+                liquidityHub.cancel(Currency.unwrap(poolKey.currency0), a0);
             }
             if (a1 > 0) {
-                liquidityHub.cancel(lcc1, a1);
+                liquidityHub.cancel(Currency.unwrap(poolKey.currency1), a1);
             }
         } else {
             // If we get here, then the position is being seized by a non-approved or owner.
             // Therefore, we transfer instead of cancel.
             if (a0 > 0) {
-                _accountDelta(lcc0, a0.toInt128(), msgSender());
+                _accountDelta(poolKey.currency0, a0.toInt128(), msgSender());
             }
             if (a1 > 0) {
-                _accountDelta(lcc1, a1.toInt128(), msgSender());
+                _accountDelta(poolKey.currency1, a1.toInt128(), msgSender());
             }
         }
     }
@@ -1112,7 +1113,10 @@ contract MMPositionManager is
         // -- Liquidate the position partially or fully
         // do this last because it could potentially mark the position as inactive and cause some of the above calls to fail as they require an active position
         // Mirror liquidate by decreasing liquidity by seized units and letting settle logic handle deltas
-        return _decrease(poolKey, position, _positionSalt(tokenId, positionIndex), seizedLiquidityUnits, false);
+        _decrease(poolKey, position, _positionSalt(tokenId, positionIndex), seizedLiquidityUnits, false);
+
+        // TODO: Return actual seized position delta once _decrease is refactored to return BalanceDelta
+        return toBalanceDelta(0, 0);
     }
 
     /**

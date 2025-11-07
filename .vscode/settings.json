@@ -1,26 +1,31 @@
 {
     "solidity.formatter": "forge",
-    "solidity.linter": "solhint",
+    "solidity.linter": "none",
     "solidity.defaultCompiler": "remote",
     "solidity.compileUsingRemoteVersion": "0.8.26",
-    "solidity.packageDefaultDependenciesDirectory": "lib",
-    "solidity.packageDefaultDependenciesContractsDirectory": "src",
+    "solidity.packageDefaultDependenciesDirectory": "contracts/evm/lib",
+    "solidity.packageDefaultDependenciesContractsDirectory": "contracts/evm/src",
     "solidity.remappings": [
-        "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
-        "@uniswap/v4-core/=lib/v4-periphery/lib/v4-core/",
-        "@uniswap/v4-periphery/=lib/v4-periphery/",
-        "@uniswap/permit2/=lib/permit2/",
-        "solmate/=lib/solmate/src/",
-        "forge-gas-snapshot/=lib/forge-gas-snapshot/src/",
-        "forge-std/=lib/forge-std/src/"
+        "@openzeppelin/contracts/=contracts/evm/lib/openzeppelin-contracts/contracts/",
+        "@uniswap/v4-core/=contracts/evm/lib/v4-periphery/lib/v4-core/",
+        "@uniswap/v4-periphery/=contracts/evm/lib/v4-periphery/",
+        "@uniswap/permit2/=contracts/evm/lib/permit2/",
+        "forge-std/=contracts/evm/lib/forge-std/src/"
     ],
-    "solidity.enabledAsYouTypeCompilationErrorCheck": true,
-    "solidity.validationDelay": 1500,
-    "solidity.linterExecutablePath": "./node_modules/.bin/solhint",
+    "solidity.enabledAsYouTypeCompilationErrorCheck": false,
+    "solidity.validationDelay": 3000,
     "editor.formatOnSave": true,
     "editor.codeActionsOnSave": {
         "source.fixAll": "explicit",
         "source.organizeImports": "explicit"
+    },
+    "search.exclude": {
+        "contracts/evm/out": true,
+        "contracts/evm/broadcast": true
+    },
+    "files.watcherExclude": {
+        "**/contracts/evm/out/**": true,
+        "**/contracts/evm/broadcast/**": true
     },
     "files.associations": {
         "*.sol": "solidity"

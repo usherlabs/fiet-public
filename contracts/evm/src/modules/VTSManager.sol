@@ -21,7 +21,6 @@ import {LiquidityUtils} from "../libraries/LiquidityUtils.sol";
 import {TransientSlots} from "../libraries/TransientSlots.sol";
 import {TransientSlot} from "openzeppelin-contracts/contracts/utils/TransientSlot.sol";
 import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint128.sol";
-import {LiquidityUtils} from "../libraries/LiquidityUtils.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {CurrencySettler} from "@uniswap/v4-core/test/utils/CurrencySettler.sol";
 import {IOracleHelper} from "../interfaces/IOracleHelper.sol";
@@ -441,7 +440,8 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
 
         if (params.liquidityDelta > 0) {
             // Liquidity added: increase tracked maxima by the delta's maxima over the tick range
-            uint128 liquidityAdded = params.liquidityDelta.toUint128();
+            // Cast int256 -> uint256 -> uint128 to preserve full uint128 range (not limited by int128 max)
+            uint128 liquidityAdded = uint256(params.liquidityDelta).toUint128();
             (uint256 addC0, uint256 addC1) =
                 LiquidityUtils.calculateCommitmentMaxima(params.tickLower, params.tickUpper, liquidityAdded);
 
@@ -450,7 +450,7 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
             // (coverage units removed)
         } else if (params.liquidityDelta < 0) {
             // Liquidity removed: decrease tracked maxima by the delta's maxima over the tick range
-            uint128 liquidityRemoved = (-params.liquidityDelta).toUint128();
+            uint128 liquidityRemoved = uint256(-params.liquidityDelta).toUint128();
             (uint256 subC0, uint256 subC1) =
                 LiquidityUtils.calculateCommitmentMaxima(params.tickLower, params.tickUpper, liquidityRemoved);
 
@@ -493,14 +493,14 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
         (rfsOpen,) = calcRFS(positionId, isWithdrawal);
 
         if (amount0 > 0) {
-            amount0 = _updateSettlement(positionId, 0, -amount0.toInt256());
+            amount0 = _updateSettlement(positionId, 0, -amount0);
         } else if (amount0 < 0) {
-            amount0 = _updateSettlement(positionId, 0, -amount0.toInt256());
+            amount0 = _updateSettlement(positionId, 0, -amount0);
         }
         if (amount1 > 0) {
-            amount1 = _updateSettlement(positionId, 1, -amount1.toInt256());
+            amount1 = _updateSettlement(positionId, 1, -amount1);
         } else if (amount1 < 0) {
-            amount1 = _updateSettlement(positionId, 1, -amount1.toInt256());
+            amount1 = _updateSettlement(positionId, 1, -amount1);
         }
 
         // Clamps within _updateSettlement may modify the return delta.
