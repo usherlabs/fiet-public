@@ -51,6 +51,9 @@ library Errors {
     /// @param positionId The position ID (PositionId.wrap(bytes32(0)) if not applicable)
     error InvalidPosition(uint256 tokenId, uint256 positionIndex, PositionId positionId);
 
+    /// @notice Thrown when there are nonzero deltas after a batch of actions
+    error CurrencyNotSettled();
+
     /// @notice Thrown when an invalid delta is provided
     error InvalidDelta(int128 amount0, int128 amount1);
 

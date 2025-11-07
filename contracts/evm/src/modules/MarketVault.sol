@@ -404,29 +404,29 @@ abstract contract MarketVault is IMarketVault {
         // Positive values indicate tokens need to be settled to the vault
         (int128 amount0, int128 amount1) = (callbackData.balanceDelta.amount0(), callbackData.balanceDelta.amount1());
 
-        // Handle negative delta for currency0: take underlying tokens from vault to sender
-        if (amount0 < 0) {
+        // Handle positive delta for currency0: take underlying tokens from vault to sender
+        if (amount0 > 0) {
             _takeUnderlyingFromVaultToRecipient(
                 callbackData.currency0, callbackData.sender, LiquidityUtils.safeInt128ToUint256(amount0)
             );
         }
 
-        // Handle negative delta for currency1: take underlying tokens from vault to sender
-        if (amount1 < 0) {
+        // Handle positive delta for currency1: take underlying tokens from vault to sender
+        if (amount1 > 0) {
             _takeUnderlyingFromVaultToRecipient(
                 callbackData.currency1, callbackData.sender, LiquidityUtils.safeInt128ToUint256(amount1)
             );
         }
 
-        // Handle positive delta for currency0: settle underlying tokens from sender to vault
-        if (amount0 > 0) {
+        // Handle negative delta for currency0: settle underlying tokens from sender to vault
+        if (amount0 < 0) {
             _settleUnderlyingToVaultFromSender(
                 callbackData.currency0, address(this), LiquidityUtils.safeInt128ToUint256(amount0)
             );
         }
 
-        // Handle positive delta for currency1: settle underlying tokens from sender to vault
-        if (amount1 > 0) {
+        // Handle negative delta for currency1: settle underlying tokens from sender to vault
+        if (amount1 < 0) {
             _settleUnderlyingToVaultFromSender(
                 callbackData.currency1, address(this), LiquidityUtils.safeInt128ToUint256(amount1)
             );
@@ -459,10 +459,11 @@ abstract contract MarketVault is IMarketVault {
         (ILCC lccToken0, ILCC lccToken1) = _lccs();
         _modifyVaultLiquidity(currency0, currency1, balanceDelta);
         // if there was an addition, then settle the obligations to the lcc tokens
-        if (balanceDelta.amount0() > 0) {
+        // ? caller context means negative delta liquidity leaving the caller, and entering the vault.
+        if (balanceDelta.amount0() < 0) {
             _settleObligationsForLCC(lccToken0);
         }
-        if (balanceDelta.amount1() > 0) {
+        if (balanceDelta.amount1() < 0) {
             _settleObligationsForLCC(lccToken1);
         }
     }
@@ -480,23 +481,23 @@ abstract contract MarketVault is IMarketVault {
         int128 actualDelta1 = delta1;
 
         // Handle withdrawals (negative deltas) - only withdraw what's available
-        if (delta0 < 0) {
+        if (delta0 > 0) {
             uint256 requested0 = LiquidityUtils.safeInt128ToUint256(delta0);
             uint256 available0 = inMarketBalanceOf(currency0);
             uint256 amount0 = Math.min(requested0, available0);
             // If we can't fulfill the full withdrawal, adjust the delta to what we can actually withdraw
             if (amount0 < requested0) {
-                actualDelta0 = -SafeCast.toInt128(amount0);
+                actualDelta0 = SafeCast.toInt128(amount0);
             }
         }
 
-        if (delta1 < 0) {
+        if (delta1 > 0) {
             uint256 requested1 = LiquidityUtils.safeInt128ToUint256(delta1);
             uint256 available1 = inMarketBalanceOf(currency1);
             uint256 amount1 = Math.min(requested1, available1);
             // If we can't fulfill the full withdrawal, adjust the delta to what we can actually withdraw
             if (amount1 < requested1) {
-                actualDelta1 = -SafeCast.toInt128(amount1);
+                actualDelta1 = SafeCast.toInt128(amount1);
             }
         }
 
@@ -508,10 +509,10 @@ abstract contract MarketVault is IMarketVault {
         _modifyVaultLiquidity(currency0, currency1, usedDelta);
 
         // If there was an addition (deposit), then settle the obligations to the lcc tokens
-        if (delta0 > 0) {
+        if (delta0 < 0) {
             _settleObligationsForLCC(lccToken0);
         }
-        if (delta1 > 0) {
+        if (delta1 < 0) {
             _settleObligationsForLCC(lccToken1);
         }
 

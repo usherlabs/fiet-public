@@ -11,18 +11,20 @@ pragma solidity ^0.8.0;
  *      - Coordinates the transfer of underlying tokens for deposits and withdrawals
  *
  * Flow:
- *   MMPositionManager (MMP) <-> LiquidityRouter <-> PoolManager (PM) / MarketVault (MV)
+ *   MMPositionManager (MMP) / LiquidityRouter <-> PoolManager (PM) || MarketVault (MV)
  *
- *   - For liquidity modifications: MMP -> Router -> PM (via _modifyLiquidity)
- *   - For underlying settlement: MMP <-> Router <-> MV (via _settleUnderlying)
+ *   - For position modifications: Router -> PM (via _modifyPositionLiquidity)
+ *   - For underlying settlement: Router <-> MV (via _settleUnderlying)
  *
  * Note: This contract is inherited by MMPositionManager, which provides the concrete implementation
  *       including the msgSender() override to identify the caller.
+ * Note: LCCs are never settled in. MMP is responsible for issuing/cancelling (ie. mint/burn) LCCs per positions based on (out-of-protocol) liquidity signals.
+ *       However, LCC acrrued as fees can be taken from the MMP.
  */
 
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
-import {BalanceDelta} from "v4-periphery/lib/v4-core/src/types/BalanceDelta.sol";
+import {BalanceDelta, toBalanceDelta} from "v4-periphery/lib/v4-core/src/types/BalanceDelta.sol";
 import {PoolKey} from "v4-periphery/lib/v4-core/src/types/PoolKey.sol";
 import {ModifyLiquidityParams} from "v4-periphery/lib/v4-core/src/types/PoolOperation.sol";
 import {IHooks} from "v4-periphery/lib/v4-core/src/interfaces/IHooks.sol";
@@ -41,13 +43,16 @@ import {IMarketVault} from "../interfaces/IMarketVault.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {LiquidityUtils} from "../libraries/LiquidityUtils.sol";
 import {ILCC} from "../interfaces/ILCC.sol";
-import {TransientSlots} from "../libraries/TransientSlots.sol";
+import {CurrencyDelta} from "v4-periphery/lib/v4-core/src/libraries/CurrencyDelta.sol";
+import {NonzeroDeltaCount} from "./libraries/NonzeroDeltaCount.sol";
+import {Constants} from "@uniswap/v4-core/test/utils/Constants.sol";
+import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
 
-// * Used by MM Position Manager to modify liquidity and settle underlying assets
 abstract contract LiquidityRouter is ImmutableState, MarketHandler {
     using CurrencySettler for Currency;
     using CurrencyTransfer for Currency;
     using CurrencyLibrary for Currency;
+    using CurrencyDelta for Currency;
     using Hooks for IHooks;
     using LPFeeLibrary for uint24;
     using StateLibrary for IPoolManager;
@@ -60,15 +65,7 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler {
     constructor(address _marketFactory) MarketHandler(_marketFactory) {}
 
     /**
-     * @notice Returns the address that should be treated as the caller for liquidity operations
-     * @dev Must be overridden by the inheriting contract to return the appropriate sender
-     *      (e.g., MMPositionManager returns the actual caller, not the contract itself)
-     * @return The address to use as the sender for transfers and operations
-     */
-    function msgSender() public view virtual returns (address);
-
-    /**
-     * @notice Modifies liquidity in a Uniswap V4 pool via the PoolManager
+     * @notice Modifies liquidity parameters of LCC-based position in a Uniswap V4 pool via the PoolManager
      * @dev This function bridges liquidity modifications from MMPositionManager to the PoolManager:
      *      - Calls PoolManager.modifyLiquidity() to add or remove liquidity
      *      - Validates the liquidity change matches expected delta
@@ -84,8 +81,9 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler {
      *
      * Note: The pool manager must already be unlocked by the caller before calling this function.
      */
-    function _modifyLiquidity(PoolKey memory key, ModifyLiquidityParams memory params, bytes memory hookData)
+    function _modifyPositionLiquidity(PoolKey memory key, ModifyLiquidityParams memory params)
         internal
+        virtual
         returns (BalanceDelta delta, BalanceDelta feesAccrued)
     {
         bool settleUsingBurn = false;
@@ -106,7 +104,7 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler {
         // Downstream, MMPositionManager treats principal vs feesAccrued differently: principal maps
         // to LCC issue/cancel, while feesAccrued (originating from trader flows, wrapped into LCCs)
         // must remain wrapped until explicitly unwrapped.
-        (delta, feesAccrued) = poolManager.modifyLiquidity(key, params, hookData);
+        (delta, feesAccrued) = poolManager.modifyLiquidity(key, params, Constants.ZERO_BYTES);
 
         // Get liquidity state after modification for validation
         (uint128 liquidityAfter,,) =
@@ -178,87 +176,124 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler {
      * @param ua0 The address of underlying asset 0
      * @param ua1 The address of underlying asset 1
      */
-    function _settleUnderlying(PoolId poolId, BalanceDelta settlementDelta, address ua0, address ua1) internal {
-        address sender = msgSender();
+    function _settleUnderlying(address sender, PoolId poolId, BalanceDelta settlementDelta, address ua0, address ua1)
+        internal
+    {
         address marketVault = _getVault(poolId);
 
-        // Track native ETH spending before transfers to avoid reentrancy warnings
-        // For underlying settlement, we spend native ETH when depositing (positive deltas)
-        if (settlementDelta.amount0() > 0 && ua0 == address(0)) {
-            TransientSlots.addNativeEthSpent(LiquidityUtils.safeInt128ToUint256(settlementDelta.amount0()));
-        }
-        if (settlementDelta.amount1() > 0 && ua1 == address(0)) {
-            TransientSlots.addNativeEthSpent(LiquidityUtils.safeInt128ToUint256(settlementDelta.amount1()));
-        }
+        Currency currency0 = Currency.wrap(ua0);
+        Currency currency1 = Currency.wrap(ua1);
+        int128 amount0 = settlementDelta.amount0();
+        int128 amount1 = settlementDelta.amount1();
 
-        // For deposits: transfer underlying tokens from MMP to MarketVault (proxy hook)
-        if (settlementDelta.amount0() > 0) {
-            Currency.wrap(ua0)
-                .transferFrom(sender, marketVault, LiquidityUtils.safeInt128ToUint256(settlementDelta.amount0()));
+        // Process deposits first (amount < 0), then notify vault, then process withdrawals (amount > 0)
+        // This ensures the vault is funded before withdrawals
+        if (amount0 < 0) {
+            _settleUnderlyingCurrency(currency0, amount0, sender, marketVault);
         }
-        if (settlementDelta.amount1() > 0) {
-            Currency.wrap(ua1)
-                .transferFrom(sender, marketVault, LiquidityUtils.safeInt128ToUint256(settlementDelta.amount1()));
+        if (amount1 < 0) {
+            _settleUnderlyingCurrency(currency1, amount1, sender, marketVault);
         }
 
         // Notify the proxy hook (MarketVault) of the settled underlying tokens
         // A positive balance delta means settling underlying tokens to the proxy hook,
         // negative means withdrawing to the MMP.
-        // Call after deposits, but before withdrawals.
-        IMarketVault(marketVault).modifyLiquidities(settlementDelta);
+        // Call after deposits (so MV is funded), but before withdrawals.
+        IMarketVault(marketVault).modifyLiquidities(LiquidityUtils.safeToBalanceDelta(amount0, amount1));
 
-        // For withdrawals: transfer underlying tokens from MarketVault to MMP (caller/sender)
-        if (settlementDelta.amount0() < 0) {
-            Currency.wrap(ua0).transfer(sender, LiquidityUtils.safeInt128ToUint256(settlementDelta.amount0()));
+        // Process withdrawals (amount > 0)
+        if (amount0 > 0) {
+            _settleUnderlyingCurrency(currency0, amount0, sender, marketVault);
         }
-        if (settlementDelta.amount1() < 0) {
-            Currency.wrap(ua1).transfer(sender, LiquidityUtils.safeInt128ToUint256(settlementDelta.amount1()));
+        if (amount1 > 0) {
+            _settleUnderlyingCurrency(currency1, amount1, sender, marketVault);
         }
+
+        // _tryRefundNativeExcess(sender, currency0, currency1);
     }
 
     /**
-     * @notice Tracks native ETH spending for refund at end of batch
-     * @dev Tracks native ETH spending from settlement deltas. In settlementDelta, positive values mean deposits.
-     * @param currency0 The currency for token0
-     * @param currency1 The currency for token1
-     * @param delta The balance delta to track
+     * @notice Settles a single underlying currency based on the settlement amount
+     * @dev Handles both deposits (amount < 0) and withdrawals (amount > 0) with proper delta accounting.
+     *      For deposits: If delta is negative (caller owes) and amount < delta (deposit exceeds debt),
+     *                    nets the delta to zero. Otherwise accounts the full amount.
+     *      For withdrawals: If delta is positive (protocol owes) and amount > delta (withdrawal exceeds credit),
+     *                      nets the delta to zero. Otherwise accounts the full amount.
+     * @param currency The currency to settle
+     * @param amount The settlement amount (negative for deposits, positive for withdrawals)
+     * @param sender The address initiating the settlement
+     * @param marketVault The market vault address for transfers
      */
-    function _trackNativeSettlementDelta(Currency currency0, Currency currency1, BalanceDelta delta) internal {
-        // In settlementDelta, positive values mean deposits, and negative values mean withdrawals.
-        // We track native ETH spending when depositing (positive deltas) if the underlying is native ETH.
-        if (delta.amount0() > 0 && currency0.isAddressZero()) {
-            if (ILCC(Currency.unwrap(currency0)).underlying() == address(0)) {
-                TransientSlots.addNativeEthSpent(LiquidityUtils.safeInt128ToUint256(delta.amount0()));
+    function _settleUnderlyingCurrency(Currency currency, int128 amount, address sender, address marketVault) private {
+        if (amount == 0) return;
+
+        int256 delta = currency.getDelta(sender);
+        int128 deltaToAccount = 0;
+
+        if (amount < 0) {
+            // Handle excess native ETH refund for deposits only
+            // For deposits (amount < 0), user sends msg.value native ETH. If msg.value exceeds |amount|,
+            // the excess should be accounted as a positive delta (protocol owes it back).
+            if (currency.isAddressZero()) {
+                uint256 totalNativeSentToContract = msg.value;
+                uint256 requiredAmount = LiquidityUtils.safeInt128ToUint256(amount); // |amount| since amount < 0
+
+                // Calculate excess if user sent more than required
+                if (totalNativeSentToContract > requiredAmount) {
+                    uint256 excess = totalNativeSentToContract - requiredAmount;
+                    // Account excess as positive delta (protocol owes caller back)
+                    // SafeCast will revert if excess exceeds int128 max (shouldn't happen in practice)
+                    deltaToAccount = SafeCast.toInt128(excess);
+                }
             }
-        }
-        if (delta.amount1() > 0 && currency1.isAddressZero()) {
-            if (ILCC(Currency.unwrap(currency1)).underlying() == address(0)) {
-                TransientSlots.addNativeEthSpent(LiquidityUtils.safeInt128ToUint256(delta.amount1()));
-            }
+
+            // Deposit: transfer FROM caller TO vault
+            // If delta is negative (caller owes protocol) and amount < delta (deposit exceeds debt),
+            // net the delta to zero. Otherwise, account the full amount.
+            deltaToAccount += (delta < 0 && SafeCast.toInt256(amount) < delta) ? SafeCast.toInt128(-delta) : -amount;
+            _accountDelta(currency, deltaToAccount, sender);
+            currency.transferFrom(sender, marketVault, LiquidityUtils.safeInt128ToUint256(amount));
+        } else {
+            // Withdrawal: transfer FROM vault TO caller
+            // If delta is positive (protocol owes caller) and amount > delta (withdrawal exceeds credit),
+            // net the delta to zero. Otherwise, account the full amount.
+            deltaToAccount = (delta > 0 && SafeCast.toInt256(amount) > delta) ? SafeCast.toInt128(-delta) : -amount;
+            _accountDelta(currency, deltaToAccount, sender);
+            currency.transfer(sender, LiquidityUtils.safeInt128ToUint256(amount));
         }
     }
 
-    /**
-     * @notice Refunds excess native ETH sent to the contract
-     * @dev Calculates the difference between msg.value and the tracked cumulative amount spent,
-     *      then refunds any excess to msgSender(). This handles precision issues between
-     *      on-chain and off-chain calculations for native ETH operations.
-     *      Should be called at the end of a batch of operations after all _modifyLiquidity
-     *      and _settleUnderlying calls have completed.
-     */
-    function _tryRefundExcessNative() internal {
-        uint256 totalAmountSentToContract = msg.value;
-        uint256 amountSpent = TransientSlots.consumeNativeEthSpent();
-
-        if (amountSpent == 0 || totalAmountSentToContract == 0) {
-            return;
-        }
-
-        // Calculate excess and refund if there's any leftover
-        if (totalAmountSentToContract > amountSpent) {
-            uint256 excess = totalAmountSentToContract - amountSpent;
-            // Transfer excess back to the logical caller (not raw msg.sender)
-            CurrencyLibrary.ADDRESS_ZERO.transfer(msgSender(), excess);
+    function _accountDelta(Currency currency, int128 delta, address target) internal {
+        (int256 previous, int256 next) = currency.applyDelta(target, delta);
+        if (next == 0) {
+            NonzeroDeltaCount.decrement();
+        } else if (previous == 0) {
+            NonzeroDeltaCount.increment();
         }
     }
+
+    function _accountSettlementDelta(
+        address sender,
+        BalanceDelta settlementDelta,
+        Currency currency0,
+        Currency currency1
+    ) internal {
+        _accountDelta(Currency.wrap(ILCC(Currency.unwrap(currency0)).underlying()), settlementDelta.amount0(), sender);
+        _accountDelta(Currency.wrap(ILCC(Currency.unwrap(currency1)).underlying()), settlementDelta.amount1(), sender);
+    }
+
+    // function _tryRefundNativeExcess(address sender, Currency currency, Currency currency1) internal {
+    //     uint256 totalAmountSentToContract = msg.value;
+
+    //     if (amountSpent == 0 || totalAmountSentToContract == 0) {
+    //         return;
+    //     }
+
+    //     // Calculate excess and refund if there's any leftover
+    //     if (totalAmountSentToContract > amountSpent) {
+    //         uint256 excess = totalAmountSentToContract - amountSpent;
+    //         // Transfer excess back to the logical caller (not raw msg.sender)
+    //         CurrencyLibrary.ADDRESS_ZERO.transfer(msgSender(), excess);
+    //     }
+    // }
 }

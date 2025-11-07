@@ -12,6 +12,7 @@ import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.
 import {TransientStateLibrary} from "v4-periphery/lib/v4-core/src/libraries/TransientStateLibrary.sol";
 import {MarketVTSConfiguration} from "../types/VTS.sol";
 import {BalanceDelta, toBalanceDelta, BalanceDeltaLibrary} from "v4-periphery/lib/v4-core/src/types/BalanceDelta.sol";
+import {SafeCast as SafeCastLib} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 
 /// @notice Library for liquidity utility functions
 library LiquidityUtils {
@@ -39,9 +40,9 @@ library LiquidityUtils {
      */
     function safeInt128ToUint256(int128 value) internal pure returns (uint256) {
         if (value < 0) {
-            return uint256(uint128(-value));
+            return SafeCastLib.toUint256(-value);
         }
-        return uint256(uint128(value));
+        return SafeCastLib.toUint256(value);
     }
 
     /**
@@ -51,9 +52,9 @@ library LiquidityUtils {
      */
     function safeInt128ToUint128(int128 value) internal pure returns (uint128) {
         if (value < 0) {
-            return uint128(-value);
+            return (-value).toUint128();
         }
-        return uint128(value);
+        return value.toUint128();
     }
 
     /**

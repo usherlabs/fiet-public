@@ -21,18 +21,21 @@ import {LiquidityUtils} from "../libraries/LiquidityUtils.sol";
 import {TransientSlots} from "../libraries/TransientSlots.sol";
 import {TransientSlot} from "openzeppelin-contracts/contracts/utils/TransientSlot.sol";
 import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint128.sol";
-import {SafeCast} from "openzeppelin-contracts/contracts/utils/math/SafeCast.sol";
 import {LiquidityUtils} from "../libraries/LiquidityUtils.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {CurrencySettler} from "@uniswap/v4-core/test/utils/CurrencySettler.sol";
 import {IOracleHelper} from "../interfaces/IOracleHelper.sol";
 import {Errors} from "../libraries/Errors.sol";
+import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
 
 abstract contract VTSManager is IVTSManager, PositionRegistry {
     using StateLibrary for IPoolManager;
     using TransientStateLibrary for IPoolManager;
     using TransientSlot for *;
     using CurrencySettler for Currency;
+    using SafeCast for int128;
+    using SafeCast for int256;
+    using SafeCast for uint256;
 
     // Mapping from core pool ID to VTS configuration
     mapping(PoolId => MarketVTSConfiguration) public corePoolToVTSConfiguration;
@@ -283,16 +286,17 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
                     vtsConfiguration.token1.baseVTSRate
                 );
                 // Set the settlement amounts to the total commitment amounts for DirectLPs.
-                _updateSettlement(id, 0, SafeCast.toInt256(amountToSettle0));
-                _updateSettlement(id, 1, SafeCast.toInt256(amountToSettle1));
+                _updateSettlement(id, 0, amountToSettle0.toInt256());
+                _updateSettlement(id, 1, amountToSettle1.toInt256());
 
+                // Invert signs: negative delta = caller owes liquidity (deposit), positive = protocol owes (withdrawal)
                 TransientSlots.addPositionRequiredSettlementDelta(
-                    LiquidityUtils.safeToBalanceDelta(amountToSettle0, amountToSettle1, false, false)
+                    LiquidityUtils.safeToBalanceDelta(amountToSettle0, amountToSettle1, true, true)
                 );
             } else {
                 // Set the settlement amounts to the total commitment amounts for DirectLPs.
-                _updateSettlement(id, 0, SafeCast.toInt256(commitmentMaxima[id][0]));
-                _updateSettlement(id, 1, SafeCast.toInt256(commitmentMaxima[id][1]));
+                _updateSettlement(id, 0, commitmentMaxima[id][0].toInt256());
+                _updateSettlement(id, 1, commitmentMaxima[id][1].toInt256());
             }
         } else if (m.isActive == true) {
             // EXISTING POSITION: update the liquidity by the liquidity delta
@@ -322,16 +326,17 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
                 }
                 // ? Update settlement for all positions.
                 if (excess0 > 0) {
-                    _updateSettlement(id, 0, -SafeCast.toInt256(excess0));
+                    _updateSettlement(id, 0, -excess0.toInt256());
                 }
                 if (excess1 > 0) {
-                    _updateSettlement(id, 1, -SafeCast.toInt256(excess1));
+                    _updateSettlement(id, 1, -excess1.toInt256());
                 }
                 // ? Only save the settlement delta for MMPs.
                 if (isMMPosition) {
                     // this sets the required settlement because we changes the position.
+                    // Invert signs: negative delta = caller owes liquidity (deposit), positive = protocol owes (withdrawal)
                     TransientSlots.addPositionRequiredSettlementDelta(
-                        LiquidityUtils.safeToBalanceDelta(excess0, excess1, true, true)
+                        LiquidityUtils.safeToBalanceDelta(excess0, excess1, false, false)
                     );
                 }
             } else if (params.liquidityDelta > 0) {
@@ -356,21 +361,22 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
                     uint256 excess1 = baseAmountToSettle1 > s1 ? baseAmountToSettle1 - s1 : 0;
 
                     // Instruct MMP to source underlying for the excess
+                    // Invert signs: negative delta = caller owes liquidity (deposit), positive = protocol owes (withdrawal)
                     TransientSlots.addPositionRequiredSettlementDelta(
-                        LiquidityUtils.safeToBalanceDelta(excess0, excess1, false, false)
+                        LiquidityUtils.safeToBalanceDelta(excess0, excess1, true, true)
                     );
 
                     // Apply the increase to the position’s settled amounts immediately so bonus weights reflect net state.
                     if (excess0 > 0) {
-                        _updateSettlement(id, 0, SafeCast.toInt256(excess0));
+                        _updateSettlement(id, 0, excess0.toInt256());
                     }
                     if (excess1 > 0) {
-                        _updateSettlement(id, 1, SafeCast.toInt256(excess1));
+                        _updateSettlement(id, 1, excess1.toInt256());
                     }
                 } else {
                     // Increase DirectLPs settlement amounts by the difference between the commitment maxima and the last settled amounts.
-                    _updateSettlement(id, 0, SafeCast.toInt256(commitmentMaxima[id][0] - s0));
-                    _updateSettlement(id, 1, SafeCast.toInt256(commitmentMaxima[id][1] - s1));
+                    _updateSettlement(id, 0, (commitmentMaxima[id][0] - s0).toInt256());
+                    _updateSettlement(id, 1, (commitmentMaxima[id][1] - s1).toInt256());
                 }
             }
 
@@ -435,7 +441,7 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
 
         if (params.liquidityDelta > 0) {
             // Liquidity added: increase tracked maxima by the delta's maxima over the tick range
-            uint128 liquidityAdded = SafeCast.toUint128(uint256(params.liquidityDelta));
+            uint128 liquidityAdded = params.liquidityDelta.toUint128();
             (uint256 addC0, uint256 addC1) =
                 LiquidityUtils.calculateCommitmentMaxima(params.tickLower, params.tickUpper, liquidityAdded);
 
@@ -444,7 +450,7 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
             // (coverage units removed)
         } else if (params.liquidityDelta < 0) {
             // Liquidity removed: decrease tracked maxima by the delta's maxima over the tick range
-            uint128 liquidityRemoved = SafeCast.toUint128(uint256(-params.liquidityDelta));
+            uint128 liquidityRemoved = (-params.liquidityDelta).toUint128();
             (uint256 subC0, uint256 subC1) =
                 LiquidityUtils.calculateCommitmentMaxima(params.tickLower, params.tickUpper, liquidityRemoved);
 
@@ -477,26 +483,28 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
         PositionMeta memory m = meta[positionId];
         PoolId poolId = m.poolId;
 
+        // during withdrawals, delta is positive as per caller context. during deposits, delta is negative.
+        // However, _updateSettlement accepts the inverse as a delta of the totalSettlementAmount. ie. positive increases, and negative decreases the metric.
+        int256 amount0 = delta.amount0();
+        int256 amount1 = delta.amount1();
+
         // Only assert closed RfS if pure underlying liquidity WITHDRAWAL. calcRFS includes settle growth accounting since last touch
-        bool isWithdrawal = delta.amount0() < 0 || delta.amount1() < 0;
+        bool isWithdrawal = amount0 > 0 || amount1 > 0;
         (rfsOpen,) = calcRFS(positionId, isWithdrawal);
 
-        // during withdrawals, delta 0 - negative modifyDelta < 0. during deposits, delta 0 + positive modifyDelta > 0. //
-        int256 amount0 = int256(delta.amount0());
-        int256 amount1 = int256(delta.amount1());
         if (amount0 > 0) {
-            amount0 = _updateSettlement(positionId, 0, int256(amount0));
+            amount0 = _updateSettlement(positionId, 0, -amount0.toInt256());
         } else if (amount0 < 0) {
-            amount0 = _updateSettlement(positionId, 0, int256(amount0));
+            amount0 = _updateSettlement(positionId, 0, -amount0.toInt256());
         }
         if (amount1 > 0) {
-            amount1 = _updateSettlement(positionId, 1, int256(amount1));
+            amount1 = _updateSettlement(positionId, 1, -amount1.toInt256());
         } else if (amount1 < 0) {
-            amount1 = _updateSettlement(positionId, 1, int256(amount1));
+            amount1 = _updateSettlement(positionId, 1, -amount1.toInt256());
         }
 
         // Clamps within _updateSettlement may modify the return delta.
-        settlementDelta = LiquidityUtils.safeToBalanceDelta(amount0, amount1);
+        settlementDelta = LiquidityUtils.negateBalanceDelta(toBalanceDelta(amount0.toInt128(), amount1.toInt128()));
 
         // Proactive extraction (incremental): fund only increases in pending slashes since last observation to avoid over-funding.
         /**
@@ -658,7 +666,7 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
             // Deduct from pot, keep self-contrib excluded
             protocolFeeAccrued[p][t] = potAvail - bonus + selfContrib;
             // Queue negative pending (bonus increases payout at materialisation)
-            pendingFeeAdj[id][t] -= SafeCast.toInt256(bonus);
+            pendingFeeAdj[id][t] -= bonus.toInt256();
         }
 
         // After allocation, zero/decrement nets so future allocations don't double-count
@@ -693,7 +701,7 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
             uint256 pay0 = pot0 < need0 ? pot0 : need0;
             if (pay0 > 0) {
                 _drainFeePot(p, currency0, 0, pay0);
-                mat0 = -SafeCast.toInt256(pay0);
+                mat0 = -pay0.toInt256();
             }
         }
 
@@ -706,7 +714,7 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
             uint256 pay1 = pot1 < need1 ? pot1 : need1;
             if (pay1 > 0) {
                 _drainFeePot(p, currency1, 1, pay1);
-                mat1 = -SafeCast.toInt256(pay1);
+                mat1 = -pay1.toInt256();
             }
         }
 
@@ -829,7 +837,7 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
         // Record contributor’s share for self-exclusion and queue pending slash (reduces payout at hook materialisation)
         feesSharedByPosition[id][tokenIndex] += feesBurn;
         // Fee sharing/slashing is applied to the pending fee adjustment mapping to be consumed at the point of position modification.
-        pendingFeeAdj[id][tokenIndex] += SafeCast.toInt256(feesBurn);
+        pendingFeeAdj[id][tokenIndex] += feesBurn.toInt256();
         emit FeeShareHandled(p, id, tokenIndex, feesBurn, growthInc);
     }
 
@@ -910,12 +918,12 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
             // MM deficits account for liquidity no longer theirs. Settled liquidity must not include amounts that cover deficits. The counterparty token inflow amounts are accrued to the position's settled amounts to compensate.
             uint256 s0 = totalSettlementAmount[positionId][0];
             if (s0 >= add0) {
-                _updateSettlement(positionId, 0, -(SafeCast.toInt256(add0))); // reduce total settlement amount by add0
+                _updateSettlement(positionId, 0, -(add0.toInt256())); // reduce total settlement amount by add0
             } else {
                 uint256 netAdd0 = add0 - s0;
                 cumulativeDeficit[positionId][0] += netAdd0;
                 globalDeficit[corePoolId][0] += netAdd0;
-                _updateSettlement(positionId, 0, -(SafeCast.toInt256(s0))); // set total settlement amount to 0
+                _updateSettlement(positionId, 0, -(s0.toInt256())); // set total settlement amount to 0
             }
         }
         if (add1 > 0) {
@@ -923,12 +931,12 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
 
             uint256 s1 = totalSettlementAmount[positionId][1];
             if (s1 >= add1) {
-                _updateSettlement(positionId, 1, -(SafeCast.toInt256(add1))); // reduce total settlement amount by add1
+                _updateSettlement(positionId, 1, -(add1.toInt256())); // reduce total settlement amount by add1
             } else {
                 uint256 netAdd1 = add1 - s1;
                 cumulativeDeficit[positionId][1] += netAdd1;
                 globalDeficit[corePoolId][1] += netAdd1;
-                _updateSettlement(positionId, 1, -(SafeCast.toInt256(s1))); // set total settlement amount to 0
+                _updateSettlement(positionId, 1, -(s1.toInt256())); // set total settlement amount to 0
             }
         }
     }
@@ -960,13 +968,13 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
         // Token0: net against deficit first
         if (add0 > 0) {
             // Auto-net and apply via centralised updater
-            _updateSettlement(positionId, 0, SafeCast.toInt256(add0));
+            _updateSettlement(positionId, 0, add0.toInt256());
         }
 
         // Token1: net against deficit first
         if (add1 > 0) {
             // Auto-net and apply via centralised updater
-            _updateSettlement(positionId, 1, SafeCast.toInt256(add1));
+            _updateSettlement(positionId, 1, add1.toInt256());
         }
     }
 
@@ -1185,11 +1193,11 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
         if (need >= settled) {
             uint256 pos = need - settled; // rfs is the needed minus the already settled.
             if (pos > INT128_MAX_U) return type(int128).max;
-            return SafeCast.toInt128(SafeCast.toInt256(pos));
+            return pos.toInt128();
         }
         uint256 neg = settled - need; // withdrawable
         if (neg > INT128_MAX_U) return type(int128).min;
-        int128 magnitude = SafeCast.toInt128(SafeCast.toInt256(neg));
+        int128 magnitude = neg.toInt128();
         return -magnitude;
     }
 
@@ -1243,7 +1251,7 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
         }
 
         totalSettlementAmount[id][tokenIndex] = next;
-        int256 applied = SafeCast.toInt256(next) - SafeCast.toInt256(cur); // output delta
+        int256 applied = next.toInt256() - cur.toInt256(); // output delta
 
         // Accrue persistent nets since last fee finalisation
         {
