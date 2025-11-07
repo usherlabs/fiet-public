@@ -1,26 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
-
-/**
- * @title LiquidityRouter
- * @notice Abstract contract that bridges liquidity operations between MMPositionManager and the Uniswap V4
- *         PoolManager/MarketVault.
- * @dev This contract acts as a bridge/router that:
- *      - Handles liquidity modifications with the PoolManager (adding/removing liquidity from Uniswap V4 pools)
- *      - Manages settlement flows of underlying assets between MMPositionManager (MMP) and MarketVault (MV)
- *      - Coordinates the transfer of underlying tokens for deposits and withdrawals
- *
- * Flow:
- *   MMPositionManager (MMP) / LiquidityRouter <-> PoolManager (PM) || MarketVault (MV)
- *
- *   - For position modifications: Router -> PM (via _modifyPositionLiquidity)
- *   - For underlying settlement: Router <-> MV (via _settleUnderlying)
- *
- * Note: This contract is inherited by MMPositionManager, which provides the concrete implementation
- *       including the msgSender() override to identify the caller.
- * Note: LCCs are never settled in. MMP is responsible for issuing/cancelling (ie. mint/burn) LCCs per positions based on (out-of-protocol) liquidity signals.
- *       However, LCC acrrued as fees can be taken from the MMP.
- */
+pragma solidity ^0.8.26;
 
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
@@ -44,10 +23,31 @@ import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {LiquidityUtils} from "../libraries/LiquidityUtils.sol";
 import {ILCC} from "../interfaces/ILCC.sol";
 import {CurrencyDelta} from "v4-periphery/lib/v4-core/src/libraries/CurrencyDelta.sol";
-import {NonzeroDeltaCount} from "./libraries/NonzeroDeltaCount.sol";
+import {NonzeroDeltaCount} from "@uniswap/v4-core/src/libraries/NonzeroDeltaCount.sol";
 import {Constants} from "@uniswap/v4-core/test/utils/Constants.sol";
 import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
+import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 
+/**
+ * @title LiquidityRouter
+ * @notice Abstract contract that bridges liquidity operations between MMPositionManager and the Uniswap V4
+ *         PoolManager/MarketVault.
+ * @dev This contract acts as a bridge/router that:
+ *      - Handles liquidity modifications with the PoolManager (adding/removing liquidity from Uniswap V4 pools)
+ *      - Manages settlement flows of underlying assets between MMPositionManager (MMP) and MarketVault (MV)
+ *      - Coordinates the transfer of underlying tokens for deposits and withdrawals
+ *
+ * Flow:
+ *   MMPositionManager (MMP) / LiquidityRouter <-> PoolManager (PM) || MarketVault (MV)
+ *
+ *   - For position modifications: Router -> PM (via _modifyPositionLiquidity)
+ *   - For underlying settlement: Router <-> MV (via _settleUnderlying)
+ *
+ * Note: This contract is inherited by MMPositionManager, which provides the concrete implementation
+ *       including the msgSender() override to identify the caller.
+ * Note: LCCs are never settled in. MMP is responsible for issuing/cancelling (ie. mint/burn) LCCs per positions based on (out-of-protocol) liquidity signals.
+ *       However, LCC acrrued as fees can be taken from the MMP.
+ */
 abstract contract LiquidityRouter is ImmutableState, MarketHandler {
     using CurrencySettler for Currency;
     using CurrencyTransfer for Currency;
@@ -74,7 +74,6 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler {
      *
      * @param key The pool key identifying the pool to modify
      * @param params Parameters for the liquidity modification (tick range, delta, salt)
-     * @param hookData Additional data to pass to pool hooks
      * @return delta The principal balance delta (callerDelta) - includes liquidity change plus immediate
      *               fee/hook deltas
      * @return feesAccrued Informational delta of fee growth in the modified range for this call
@@ -250,19 +249,26 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler {
             // Deposit: transfer FROM caller TO vault
             // If delta is negative (caller owes protocol) and amount < delta (deposit exceeds debt),
             // net the delta to zero. Otherwise, account the full amount.
-            deltaToAccount += (delta < 0 && SafeCast.toInt256(amount) < delta) ? SafeCast.toInt128(-delta) : -amount;
+            deltaToAccount += (delta < 0 && int256(amount) < delta) ? SafeCast.toInt128(-delta) : -amount;
             _accountDelta(currency, deltaToAccount, sender);
             currency.transferFrom(sender, marketVault, LiquidityUtils.safeInt128ToUint256(amount));
         } else {
             // Withdrawal: transfer FROM vault TO caller
             // If delta is positive (protocol owes caller) and amount > delta (withdrawal exceeds credit),
             // net the delta to zero. Otherwise, account the full amount.
-            deltaToAccount = (delta > 0 && SafeCast.toInt256(amount) > delta) ? SafeCast.toInt128(-delta) : -amount;
+            deltaToAccount = (delta > 0 && int256(amount) > delta) ? SafeCast.toInt128(-delta) : -amount;
             _accountDelta(currency, deltaToAccount, sender);
             currency.transfer(sender, LiquidityUtils.safeInt128ToUint256(amount));
         }
     }
 
+    /**
+     * @notice Accounts a delta for a currency and target address
+     * @dev Increments or decrements the nonzero delta count based on the previous and next deltas
+     * @param currency The currency to account the delta for
+     * @param delta The delta to account
+     * @param target The target address to account the delta for
+     */
     function _accountDelta(Currency currency, int128 delta, address target) internal {
         (int256 previous, int256 next) = currency.applyDelta(target, delta);
         if (next == 0) {
@@ -272,28 +278,69 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler {
         }
     }
 
-    function _accountSettlementDelta(
+    /**
+     * @notice Accounts a settlement delta for a currency and target address
+     * @dev Increments or decrements the nonzero delta count based on the previous and next deltas
+     * @param sender The address initiating the settlement
+     * @param settlementDelta The settlement delta to account
+     * @param currency0 The first currency to account the delta for
+     * @param currency1 The second currency to account the delta for
+     */
+    function _accountUnderlyingSettlementDelta(
         address sender,
         BalanceDelta settlementDelta,
         Currency currency0,
         Currency currency1
     ) internal {
-        _accountDelta(Currency.wrap(ILCC(Currency.unwrap(currency0)).underlying()), settlementDelta.amount0(), sender);
-        _accountDelta(Currency.wrap(ILCC(Currency.unwrap(currency1)).underlying()), settlementDelta.amount1(), sender);
+        _accountDelta(_lccToUnderlyingCurrency(currency0), settlementDelta.amount0(), sender);
+        _accountDelta(_lccToUnderlyingCurrency(currency1), settlementDelta.amount1(), sender);
     }
 
-    // function _tryRefundNativeExcess(address sender, Currency currency, Currency currency1) internal {
-    //     uint256 totalAmountSentToContract = msg.value;
+    /**
+     * @notice Takes up to maxAmount from MMP's balance of currency to 'to', capping to caller's positive delta
+     * @dev Takes min(caller's positive delta, maxAmount) from MMP's balance and nets the delta
+     * @param currency The currency to take
+     * @param sender The address initiating the take
+     * @param to The recipient address
+     * @param maxAmount The maximum amount to take (use type(uint256).max for full available)
+     */
+    function _take(Currency currency, address sender, address to, uint256 maxAmount) internal {
+        int256 delta = currency.getDelta(sender);
 
-    //     if (amountSpent == 0 || totalAmountSentToContract == 0) {
-    //         return;
-    //     }
+        if (delta < 0) return; // No positive delta (credit) available
 
-    //     // Calculate excess and refund if there's any leftover
-    //     if (totalAmountSentToContract > amountSpent) {
-    //         uint256 excess = totalAmountSentToContract - amountSpent;
-    //         // Transfer excess back to the logical caller (not raw msg.sender)
-    //         CurrencyLibrary.ADDRESS_ZERO.transfer(msgSender(), excess);
-    //     }
-    // }
+        // Cap to min of positive delta and maxAmount
+        uint256 availableCredit = uint256(delta);
+        uint256 amountToTake = maxAmount == 0 ? availableCredit : Math.min(availableCredit, maxAmount);
+
+        // Net the delta by accounting the negative amount taken
+        // Mirror logic from lines 257-262: if amount > delta, net to zero, otherwise account full amount
+        int128 deltaToAccount = (delta > 0 && SafeCast.toInt256(amountToTake) > delta)
+            ? SafeCast.toInt128(-delta)
+            : -SafeCast.toInt128(amountToTake);
+        _accountDelta(currency, deltaToAccount, sender);
+
+        // Transfer the amount from MMP's balance to 'to' (assumes MMP holds the tokens)
+        currency.transfer(to, amountToTake);
+    }
+
+    /**
+     * @notice Gets the full positive delta (credit) for a currency and target address
+     * @param currency The currency to check
+     * @param target The target address to check delta for
+     * @return The positive delta amount, or 0 if delta is not positive
+     */
+    function _getFullCredit(Currency currency, address target) internal view returns (uint256) {
+        int256 delta = currency.getDelta(target);
+        return (delta > 0) ? uint256(delta) : 0;
+    }
+
+    /**
+     * @notice Converts an LCC currency to its underlying currency
+     * @param lccCurrency The LCC currency to convert
+     * @return The underlying currency
+     */
+    function _lccToUnderlyingCurrency(Currency lccCurrency) internal view returns (Currency) {
+        return Currency.wrap(ILCC(Currency.unwrap(lccCurrency)).underlying());
+    }
 }
