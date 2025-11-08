@@ -13,7 +13,7 @@ library TransientSlots {
     bytes32 internal constant LIQ_BEFORE_SLOT = keccak256("LIQ_BEFORE");
     bytes32 internal constant POSITION_REQUIRED_SETTLEMENT_DELTA_SLOT = keccak256("POSITION_REQUIRED_SETTLEMENT_DELTA");
     bytes32 internal constant FEE_ADJ_DELTA_SLOT = keccak256("FEE_ADJ_DELTA");
-    bytes32 internal constant NATIVE_ETH_SPENT_SLOT = keccak256("NATIVE_ETH_SPENT");
+    bytes32 internal constant NATIVE_VALUE_READ_SLOT = keccak256("NATIVE_VALUE_READ");
 
     // ------------------------------
     // Position Required Settlement Delta helpers

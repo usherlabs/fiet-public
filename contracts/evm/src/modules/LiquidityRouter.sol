@@ -207,8 +207,6 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler {
         if (amount1 > 0) {
             _settleUnderlyingCurrency(currency1, amount1, sender, marketVault);
         }
-
-        // _tryRefundNativeExcess(sender, currency0, currency1);
     }
 
     /**
@@ -230,22 +228,6 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler {
         int128 deltaToAccount = 0;
 
         if (amount < 0) {
-            // Handle excess native ETH refund for deposits only
-            // For deposits (amount < 0), user sends msg.value native ETH. If msg.value exceeds |amount|,
-            // the excess should be accounted as a positive delta (protocol owes it back).
-            if (currency.isAddressZero()) {
-                uint256 totalNativeSentToContract = msg.value;
-                uint256 requiredAmount = LiquidityUtils.safeInt128ToUint256(amount); // |amount| since amount < 0
-
-                // Calculate excess if user sent more than required
-                if (totalNativeSentToContract > requiredAmount) {
-                    uint256 excess = totalNativeSentToContract - requiredAmount;
-                    // Account excess as positive delta (protocol owes caller back)
-                    // SafeCast will revert if excess exceeds int128 max (shouldn't happen in practice)
-                    deltaToAccount = SafeCast.toInt128(excess);
-                }
-            }
-
             // Deposit: transfer FROM caller TO vault
             // If delta is negative (caller owes protocol) and amount < delta (deposit exceeds debt),
             // net the delta to zero. Otherwise, account the full amount.
@@ -342,5 +324,24 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler {
      */
     function _lccToUnderlyingCurrency(Currency lccCurrency) internal view returns (Currency) {
         return Currency.wrap(ILCC(Currency.unwrap(lccCurrency)).underlying());
+    }
+
+    /**
+     * @notice Handles the native value for a sender
+     * @dev Reads from cache to determine if native msg.value has been factored into currencyDelta.
+     * @dev This is essentially a "credit full amount once, debit as needed" pattern.
+     * @param sender The address initiating the settlement
+     */
+    function _handleNativeValue(address sender) internal {
+        bool isNativeValueRead = TransientSlot.asBoolean(TransientSlots.NATIVE_VALUE_READ_SLOT).tload();
+        if (isNativeValueRead == true) {
+            return;
+        } else {
+            TransientSlot.asBoolean(TransientSlots.NATIVE_VALUE_READ_SLOT).tstore(true);
+            uint256 nativeValue = msg.value;
+            if (nativeValue > 0) {
+                _accountDelta(CurrencyLibrary.ADDRESS_ZERO, SafeCast.toInt128(nativeValue), sender);
+            }
+        }
     }
 }

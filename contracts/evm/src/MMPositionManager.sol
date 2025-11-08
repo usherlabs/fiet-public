@@ -237,6 +237,8 @@ contract MMPositionManager is
         payable
         isNotLocked
     {
+        _handleNativeValue(msgSender());
+
         _executeActionsWithoutUnlock(actions, params);
 
         if (NonzeroDeltaCount.read() > 0) {
@@ -334,14 +336,18 @@ contract MMPositionManager is
             return;
         }
         if (action == uint256(MMAction.WRAP_NATIVE)) {
-            // Reference: https://github.com/Uniswap/v4-periphery/blob/444c526b77d804590f0d7bc5a481af5a3277c952/src/PositionManager.sol#L275
             // params: (uint256 amount)
             uint256 amount = abi.decode(params, (uint256));
-            uint256 wrapAmt = amount > address(this).balance ? address(this).balance : amount;
+            int256 nativeDelta = CurrencyLibrary.ADDRESS_ZERO.getDelta(msgSender());
+            if (nativeDelta < 0) {
+                // if the native delta is negative, then the caller is in debt to protocol. Tx will fail.
+                revert Errors.InvalidAmount(amount, 0);
+            }
+            uint256 wrapAmt = amount > uint256(nativeDelta) ? uint256(nativeDelta) : amount;
             if (wrapAmt > 0) {
                 _wrap(wrapAmt); // deposit ETH to WETH into this contract
-                // forward WETH to logical caller
-                IERC20(address(WETH9)).safeTransfer(msgSender(), wrapAmt);
+                _accountDelta(CurrencyLibrary.ADDRESS_ZERO, -SafeCast.toInt128(wrapAmt), msgSender());
+                _accountDelta(address(WETH9), SafeCast.toInt128(wrapAmt), msgSender());
             }
             return;
         }
