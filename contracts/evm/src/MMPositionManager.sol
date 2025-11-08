@@ -354,12 +354,16 @@ contract MMPositionManager is
         if (action == uint256(MMAction.UNWRAP_NATIVE)) {
             // params: (uint256 amount)
             uint256 amount = abi.decode(params, (uint256));
-            uint256 wethBal = IERC20Minimal(address(WETH9)).balanceOf(address(this));
-            uint256 unwrapAmt = amount > wethBal ? wethBal : amount;
+            int256 wethDelta = Currency.wrap(address(WETH9)).getDelta(msgSender());
+            if (wethDelta < 0) {
+                // if the WETH delta is negative, then the caller is in debt to protocol. Tx will fail.
+                revert Errors.InvalidAmount(amount, 0);
+            }
+            uint256 unwrapAmt = amount > uint256(wethDelta) ? uint256(wethDelta) : amount;
             if (unwrapAmt > 0) {
                 _unwrap(unwrapAmt); // withdraw WETH to ETH into this contract
-                // forward ETH to logical caller
-                CurrencyLibrary.ADDRESS_ZERO.transfer(msgSender(), unwrapAmt);
+                _accountDelta(address(WETH9), -SafeCast.toInt128(unwrapAmt), msgSender());
+                _accountDelta(CurrencyLibrary.ADDRESS_ZERO, SafeCast.toInt128(unwrapAmt), msgSender());
             }
             return;
         }
