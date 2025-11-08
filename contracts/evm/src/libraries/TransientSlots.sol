@@ -83,4 +83,14 @@ library TransientSlots {
         TransientSlot.asInt256(TransientSlots.FEE_ADJ_DELTA_SLOT).tstore(int256(0));
         return BalanceDelta.wrap(raw);
     }
+
+    function readMsgValueOnce() internal returns (uint256) {
+        bool isNativeValueRead = TransientSlot.asBoolean(TransientSlots.NATIVE_VALUE_READ_SLOT).tload();
+        if (isNativeValueRead == true) {
+            return 0;
+        } else {
+            TransientSlot.asBoolean(TransientSlots.NATIVE_VALUE_READ_SLOT).tstore(true);
+            return msg.value;
+        }
+    }
 }

@@ -27,6 +27,9 @@ import {NonzeroDeltaCount} from "@uniswap/v4-core/src/libraries/NonzeroDeltaCoun
 import {Constants} from "@uniswap/v4-core/test/utils/Constants.sol";
 import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
+import {TransientSlots} from "../libraries/TransientSlots.sol";
+import {NativeWrapper} from "./NativeWrapper.sol";
+import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
 
 /**
  * @title LiquidityRouter
@@ -48,7 +51,7 @@ import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
  * Note: LCCs are never settled in. MMP is responsible for issuing/cancelling (ie. mint/burn) LCCs per positions based on (out-of-protocol) liquidity signals.
  *       However, LCC acrrued as fees can be taken from the MMP.
  */
-abstract contract LiquidityRouter is ImmutableState, MarketHandler {
+abstract contract LiquidityRouter is ImmutableState, MarketHandler, NativeWrapper {
     using CurrencySettler for Currency;
     using CurrencyTransfer for Currency;
     using CurrencyLibrary for Currency;
@@ -62,7 +65,7 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler {
      * @notice Constructs the LiquidityRouter
      * @param _marketFactory Address of the MarketFactory contract
      */
-    constructor(address _marketFactory) MarketHandler(_marketFactory) {}
+    constructor(address _marketFactory, IWETH9 _weth9) MarketHandler(_marketFactory) NativeWrapper(_weth9) {}
 
     /**
      * @notice Modifies liquidity parameters of LCC-based position in a Uniswap V4 pool via the PoolManager
@@ -333,15 +336,50 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler {
      * @param sender The address initiating the settlement
      */
     function _handleNativeValue(address sender) internal {
-        bool isNativeValueRead = TransientSlot.asBoolean(TransientSlots.NATIVE_VALUE_READ_SLOT).tload();
-        if (isNativeValueRead == true) {
-            return;
-        } else {
-            TransientSlot.asBoolean(TransientSlots.NATIVE_VALUE_READ_SLOT).tstore(true);
-            uint256 nativeValue = msg.value;
-            if (nativeValue > 0) {
-                _accountDelta(CurrencyLibrary.ADDRESS_ZERO, SafeCast.toInt128(nativeValue), sender);
-            }
+        uint256 nativeValue = TransientSlots.readMsgValueOnce();
+        if (nativeValue > 0) {
+            _accountDelta(CurrencyLibrary.ADDRESS_ZERO, SafeCast.toInt128(nativeValue), sender);
+        }
+    }
+
+    /**
+     * @notice Wraps native assets into WETH
+     * @dev Wraps native assets into WETH into this contract
+     * @param sender The address initiating the wrap
+     * @param amount The amount of native assets to wrap
+     */
+    function _wrapNative(address sender, uint256 amount) internal {
+        int256 nativeDelta = CurrencyLibrary.ADDRESS_ZERO.getDelta(sender);
+        if (nativeDelta < 0) {
+            // if the native delta is negative, then the caller is in debt to protocol. Tx will fail.
+            revert Errors.InvalidAmount(amount, 0);
+        }
+        uint256 wrapAmt = amount > uint256(nativeDelta) ? uint256(nativeDelta) : amount;
+        if (wrapAmt > 0) {
+            _wrap(wrapAmt); // deposit ETH to WETH into this contract
+            _accountDelta(CurrencyLibrary.ADDRESS_ZERO, -SafeCast.toInt128(wrapAmt), sender);
+            _accountDelta(Currency.wrap(address(WETH9)), SafeCast.toInt128(wrapAmt), sender);
+        }
+    }
+
+    /**
+     * @notice Unwraps WETH into native assets
+     * @dev Unwraps WETH into native assets from this contract
+     * @param sender The address initiating the unwrap
+     * @param amount The amount of WETH to unwrap
+     */
+    function _unwrapNative(address sender, uint256 amount) internal {
+        Currency weth = Currency.wrap(address(WETH9));
+        int256 wethDelta = weth.getDelta(sender);
+        if (wethDelta < 0) {
+            // if the WETH delta is negative, then the caller is in debt to protocol. Tx will fail.
+            revert Errors.InvalidAmount(amount, 0);
+        }
+        uint256 unwrapAmt = amount > uint256(wethDelta) ? uint256(wethDelta) : amount;
+        if (unwrapAmt > 0) {
+            _unwrap(unwrapAmt); // withdraw WETH to ETH into this contract
+            _accountDelta(weth, -SafeCast.toInt128(unwrapAmt), sender);
+            _accountDelta(CurrencyLibrary.ADDRESS_ZERO, SafeCast.toInt128(unwrapAmt), sender);
         }
     }
 }

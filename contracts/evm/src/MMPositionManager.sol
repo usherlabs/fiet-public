@@ -27,7 +27,6 @@ import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
 import {TransientStateLibrary} from "v4-periphery/lib/v4-core/src/libraries/TransientStateLibrary.sol";
 import {RFSCheckpointModule} from "./modules/RFSCheckpoint.sol";
-import {NativeWrapper} from "./modules/NativeWrapper.sol";
 import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
 import {TransientSlots} from "./libraries/TransientSlots.sol";
 
@@ -49,8 +48,7 @@ contract MMPositionManager is
     IMMPositionManager,
     ReentrancyLock,
     Multicall_v4,
-    BaseActionsRouter,
-    NativeWrapper
+    BaseActionsRouter
 {
     using SafeCast for uint256;
     using PositionLibrary for PositionId;
@@ -112,10 +110,9 @@ contract MMPositionManager is
         IWETH9 _weth9
     )
         ERC721Permit_v4("Fiet VRL Commitment Positions Manager", "FIET-VRL-MMP")
-        LiquidityRouter(_marketFactory)
+        LiquidityRouter(_marketFactory, _weth9)
         BaseActionsRouter(IPoolManager(_manager))
         RFSCheckpointModule(_settlementObserver)
-        NativeWrapper(_weth9)
     {
         signalManager = IVRLSignalManager(_signalManager);
         commitmentDescriptor = _descriptor;
@@ -338,33 +335,13 @@ contract MMPositionManager is
         if (action == uint256(MMAction.WRAP_NATIVE)) {
             // params: (uint256 amount)
             uint256 amount = abi.decode(params, (uint256));
-            int256 nativeDelta = CurrencyLibrary.ADDRESS_ZERO.getDelta(msgSender());
-            if (nativeDelta < 0) {
-                // if the native delta is negative, then the caller is in debt to protocol. Tx will fail.
-                revert Errors.InvalidAmount(amount, 0);
-            }
-            uint256 wrapAmt = amount > uint256(nativeDelta) ? uint256(nativeDelta) : amount;
-            if (wrapAmt > 0) {
-                _wrap(wrapAmt); // deposit ETH to WETH into this contract
-                _accountDelta(CurrencyLibrary.ADDRESS_ZERO, -SafeCast.toInt128(wrapAmt), msgSender());
-                _accountDelta(address(WETH9), SafeCast.toInt128(wrapAmt), msgSender());
-            }
+            _wrapNative(msgSender(), amount);
             return;
         }
         if (action == uint256(MMAction.UNWRAP_NATIVE)) {
             // params: (uint256 amount)
             uint256 amount = abi.decode(params, (uint256));
-            int256 wethDelta = Currency.wrap(address(WETH9)).getDelta(msgSender());
-            if (wethDelta < 0) {
-                // if the WETH delta is negative, then the caller is in debt to protocol. Tx will fail.
-                revert Errors.InvalidAmount(amount, 0);
-            }
-            uint256 unwrapAmt = amount > uint256(wethDelta) ? uint256(wethDelta) : amount;
-            if (unwrapAmt > 0) {
-                _unwrap(unwrapAmt); // withdraw WETH to ETH into this contract
-                _accountDelta(address(WETH9), -SafeCast.toInt128(unwrapAmt), msgSender());
-                _accountDelta(CurrencyLibrary.ADDRESS_ZERO, SafeCast.toInt128(unwrapAmt), msgSender());
-            }
+            _unwrapNative(msgSender(), amount);
             return;
         }
         if (action == uint256(MMAction.EXTEND_GRACE_PERIOD)) {
