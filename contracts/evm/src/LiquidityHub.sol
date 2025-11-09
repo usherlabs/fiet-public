@@ -44,7 +44,8 @@ contract LiquidityHub is Ownable, LCCFactory {
     mapping(address => mapping(address => uint256)) public settleQueue; // lcc => recipient => amount owed
     mapping(address => uint256) public totalQueued; // lcc => total amount queued
 
-    // Note: Cross-LCC netting removed. O(1) flattening only; no pairwise reserves tracked.
+    // Pending shortfall for netting: backerLcc => mintedLcc => queued amount at Hub
+    mapping(address => mapping(address => uint256)) public lccBackingLccShortfall;
 
     constructor(
         address _oracleHelper,
@@ -199,21 +200,64 @@ contract LiquidityHub is Ownable, LCCFactory {
         // Will annul any settlement queue for the withLCC
         ERC20(withLCC).safeTransferFrom(from, address(this), amount);
 
-        // O(1) flattening: immediately unwrap withLCC into shared underlying reserves
-        // This consumes directSupply[withLCC] and/or market liquidity, burns Hub-held withLCC,
-        // and queues any shortfall to Hub's own settlement queue
-        (uint256 directUnwrapped, uint256 marketUnwrapped) = _unwrapInternalLogic(
-            withLCC, address(this), address(this), amount, fromWrappedAmount, fromMarketDerivedAmount
-        );
+        uint256 toMintForMarket = 0;
 
-        uint256 toBurn = directUnwrapped + marketUnwrapped;
-        if (toBurn > 0) {
-            // Burn Hub-held withLCC for the portion successfully unwrapped (protocol-bound burn)
-            _burn(withLCC, address(this), directUnwrapped, marketUnwrapped, true);
+        // First: net queued shortfall in reverse direction to minimise market liquidity usage and Hub queue growth
+
+        // `pairPending` gives shortfall where target lcc is backing the withLCC (now being used as a underlying)
+        // ie. is the LCC-as-underlying already currently backed by the target LCC?
+        uint256 pairPending = lccBackingLccShortfall[lcc][withLCC];
+        uint256 hubQueueForWith = settleQueue[withLCC][address(this)];
+
+        // nettable: give me the minimum of [settlement queue amount for LCC-as-underlying, OR the shortfall where target LCC is backing the now LCC-as-underlying]
+        uint256 nettable = Math.min(amount, Math.min(pairPending, hubQueueForWith));
+        if (nettable > 0) {
+            // Decrement pair map and Hub queue for withLCC
+            lccBackingLccShortfall[lcc][withLCC] = pairPending - nettable;
+            settleQueue[withLCC][address(this)] = hubQueueForWith - nettable;
+            totalQueued[withLCC] -= nettable;
+            // Burn received withLCC against the netted amount (protocol-bound burn)
+            _burn(withLCC, address(this), 0, nettable, true);
+            // Mint lcc as market-derived for the netted portion
+            // If nettable due to queued shortfalls, then amounts were originally market-derived.
+            toMintForMarket = nettable;
         }
 
-        // Mint wrapped (direct) lcc to recipient for the full amount
-        _mint(lcc, to, amount, 0, false);
+        uint256 remainderAmount = amount - nettable;
+        if (remainderAmount > 0) {
+            // Adjust original bucket-based view for the remainder after netting:
+            // Prefer to net from market-derived first (since queued shortfalls represent market pending)
+            uint256 usedFromMarketForNet = Math.min(fromMarketDerivedAmount, nettable);
+            fromMarketDerivedAmount -= usedFromMarketForNet;
+            uint256 remainingNet = nettable - usedFromMarketForNet;
+            if (remainingNet > 0) {
+                // Any leftover net comes from wrapped-origin tokens
+                fromWrappedAmount = fromWrappedAmount > remainingNet ? (fromWrappedAmount - remainingNet) : 0;
+            }
+
+            // O(1) flattening: immediately unwrap withLCC into shared underlying reserves
+            // This consumes directSupply[withLCC] and/or market liquidity, burns Hub-held withLCC,
+            // and queues any shortfall to Hub's own settlement queue
+            (uint256 directUnwrapped, uint256 marketUnwrapped) = _unwrapInternalLogic(
+                withLCC, address(this), address(this), remainderAmount, fromWrappedAmount, fromMarketDerivedAmount
+            );
+
+            uint256 toBurn = directUnwrapped + marketUnwrapped;
+
+            // If this unwrap is the Hub-flattening from wrapWith, track pairwise pending for future netting
+            lccBackingLccShortfall[withLCC][lcc] += remainderAmount - toBurn;
+
+            if (toBurn > 0) {
+                // Burn Hub-held withLCC for the portion successfully unwrapped (protocol-bound burn)
+                _burn(withLCC, address(this), directUnwrapped, marketUnwrapped, true);
+            }
+
+            // Mint lcc to recipient reflecting immediate direct flattening vs market-derived remainder
+            // Note: We already minted 'nettable' as market-derived above, so here we mint for the remainder only
+            toMintForMarket += remainderAmount - directUnwrapped;
+        }
+
+        _mint(lcc, to, directUnwrapped, toMintForMarket, false);
 
         emit LccWrappedWith(lcc, withLCC, from, to, amount);
     }
@@ -289,7 +333,7 @@ contract LiquidityHub is Ownable, LCCFactory {
             revert Errors.InvalidAmount(amount, fromBalance);
         }
 
-        (uint256 directUnwrapped, uint256 marketUnwrapped) =
+        (uint256 directUnwrapped, uint256 marketUnwrapped,) =
             _unwrapInternalLogic(lcc, from, to, amount, wrappedBalance, marketDerivedBalance);
 
         // Burn the amount that was unwrapped
