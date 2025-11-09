@@ -38,10 +38,6 @@ contract LiquidityCommitmentCertificate is ERC20, Ownable, ILCC {
         uint8 __decimals,
         address _resilientOracleAddress
     ) ERC20(name, symbol) Ownable(_msgSender()) {
-        if (_underlyingAsset == address(0)) {
-            revert Errors.InvalidAddress(_underlyingAsset);
-        }
-
         _decimals = __decimals;
         underlyingAsset = _underlyingAsset;
         resilientOracleAddress = _resilientOracleAddress;

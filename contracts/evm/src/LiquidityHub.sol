@@ -8,6 +8,7 @@ import {LCCFactory} from "./modules/LCCFactory.sol";
 import {CurrencyTransfer} from "./libraries/CurrencyTransfer.sol";
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
+import {ReentrancyGuardTransient} from "openzeppelin-contracts/contracts/utils/ReentrancyGuardTransient.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Errors} from "./libraries/Errors.sol";
@@ -18,7 +19,7 @@ import {IMarketVault} from "./interfaces/IMarketVault.sol";
  * @notice Factory contract for creating Fiet protocol markets with LCC tokens and pool management
  * @dev Manages LCC token creation, pool deployment, and protocol bounds administration
  */
-contract LiquidityHub is Ownable, LCCFactory {
+contract LiquidityHub is Ownable, LCCFactory, ReentrancyGuardTransient {
     using CurrencyTransfer for Currency;
     using SafeERC20 for ERC20;
 
@@ -152,19 +153,19 @@ contract LiquidityHub is Ownable, LCCFactory {
         emit LccWrapped(lcc, from, to, amount);
     }
 
-    function wrapTo(address lcc, address to, uint256 amount) external payable {
+    function wrapTo(address lcc, address to, uint256 amount) external payable nonReentrant {
         _wrap(lcc, _msgSender(), to, amount);
     }
 
-    function wrapTo(address underlying, bytes32 marketId, address to, uint256 amount) external payable {
+    function wrapTo(address underlying, bytes32 marketId, address to, uint256 amount) external payable nonReentrant {
         _wrap(marketUnderlyingToLCC[marketId][underlying], _msgSender(), to, amount);
     }
 
-    function wrap(address lcc, uint256 amount) external payable {
+    function wrap(address lcc, uint256 amount) external payable nonReentrant {
         _wrap(lcc, _msgSender(), _msgSender(), amount);
     }
 
-    function wrap(address underlying, bytes32 marketId, uint256 amount) external payable {
+    function wrap(address underlying, bytes32 marketId, uint256 amount) external payable nonReentrant {
         _wrap(marketUnderlyingToLCC[marketId][underlying], _msgSender(), _msgSender(), amount);
     }
 
@@ -180,6 +181,7 @@ contract LiquidityHub is Ownable, LCCFactory {
         internal
         onlyValidLcc(lcc)
     {
+        uint256 originalRequestedAmount = amount;
         if (amount == 0) {
             revert Errors.InvalidAmount(0, 0);
         }
@@ -304,6 +306,16 @@ contract LiquidityHub is Ownable, LCCFactory {
             }
         }
 
+        // Clamp final burns to current Hub-held balances to avoid over-burns due to external effects
+        uint256 targetHeld = _balanceOf(lcc, address(this));
+        if (targetToBurn > targetHeld) {
+            targetToBurn = targetHeld;
+        }
+        uint256 backingHeld = _balanceOf(withLCC, address(this));
+        if (backingToBurn > backingHeld) {
+            backingToBurn = backingHeld;
+        }
+
         // Consolidate burns: single burn call per LCC
         // Passing issuer = true to skip bucket accounting.
         if (targetToBurn > 0) {
@@ -313,16 +325,32 @@ contract LiquidityHub is Ownable, LCCFactory {
             _burn(withLCC, address(this), 0, backingToBurn, true);
         }
 
+        // Defensive invariant clamps
+        // Ensure we never mint more than originally requested
+        if (directToMint + marketToMint > originalRequestedAmount) {
+            // Clamp marketToMint to ensure total does not exceed request
+            uint256 excess = (directToMint + marketToMint) - originalRequestedAmount;
+            marketToMint = marketToMint > excess ? (marketToMint - excess) : 0;
+        }
+        // Ensure lazy-claimed never exceeds current queue
+        {
+            uint256 currentQueueWith = settleQueue[withLCC][address(this)];
+            uint256 claimedWith = nettedLCCsAsUnderlying[withLCC];
+            if (claimedWith > currentQueueWith) {
+                nettedLCCsAsUnderlying[withLCC] = currentQueueWith;
+            }
+        }
+
         _mint(lcc, to, directToMint, marketToMint, false);
 
         emit LccWrappedWith(lcc, withLCC, from, to, amount);
     }
 
-    function wrapWith(address lcc, address withLCC, uint256 amount) external {
+    function wrapWith(address lcc, address withLCC, uint256 amount) external nonReentrant {
         _wrapWith(lcc, withLCC, _msgSender(), _msgSender(), amount);
     }
 
-    function wrapWithTo(address lcc, address withLCC, address to, uint256 amount) external {
+    function wrapWithTo(address lcc, address withLCC, address to, uint256 amount) external nonReentrant {
         _wrapWith(lcc, withLCC, _msgSender(), to, amount);
     }
 
@@ -408,19 +436,19 @@ contract LiquidityHub is Ownable, LCCFactory {
      * @param lcc The LCC token address to unwrap
      * @param amount The amount of LCC tokens to unwrap
      */
-    function unwrap(address lcc, uint256 amount) external {
+    function unwrap(address lcc, uint256 amount) external nonReentrant {
         _unwrap(lcc, _msgSender(), _msgSender(), amount);
     }
 
-    function unwrap(address underlying, bytes32 marketId, uint256 amount) external {
+    function unwrap(address underlying, bytes32 marketId, uint256 amount) external nonReentrant {
         _unwrap(marketUnderlyingToLCC[marketId][underlying], _msgSender(), _msgSender(), amount);
     }
 
-    function unwrapTo(address lcc, address to, uint256 amount) external {
+    function unwrapTo(address lcc, address to, uint256 amount) external nonReentrant {
         _unwrap(lcc, _msgSender(), to, amount);
     }
 
-    function unwrapTo(address underlying, bytes32 marketId, address to, uint256 amount) external {
+    function unwrapTo(address underlying, bytes32 marketId, address to, uint256 amount) external nonReentrant {
         _unwrap(marketUnderlyingToLCC[marketId][underlying], _msgSender(), to, amount);
     }
 
@@ -485,7 +513,7 @@ contract LiquidityHub is Ownable, LCCFactory {
      * @param amount The amount of underlying liquidity taken
      * @param shouldEmit Whether to emit LiquidityAvailable event
      */
-    function confirmTake(address lcc, uint256 amount, bool shouldEmit) external onlyIssuer(lcc) {
+    function confirmTake(address lcc, uint256 amount, bool shouldEmit) external onlyIssuer(lcc) nonReentrant {
         // Track total underlying asset supply
         reserveOfUnderlying[lccToUnderlying[lcc]] += amount;
 
@@ -506,7 +534,7 @@ contract LiquidityHub is Ownable, LCCFactory {
      * @dev For ERC20, approve the caller (expected MarketVault) to pull tokens; for native, transfer ETH to caller.
      *      Decrements Hub reserve immediately; intended to be called just before settlement in the same tx.
      */
-    function prepareSettle(address lcc, uint256 amount) external onlyIssuer(lcc) {
+    function prepareSettle(address lcc, uint256 amount) external onlyIssuer(lcc) nonReentrant {
         if (amount == 0) revert Errors.InvalidAmount(0, 0);
 
         address underlying = lccToUnderlying[lcc];
@@ -536,7 +564,11 @@ contract LiquidityHub is Ownable, LCCFactory {
      * @param recipient The recipient address to settle for (address(this) for Hub's own queue)
      * @param maxAmount The maximum amount to settle (caller can limit to avoid large gas costs)
      */
-    function processSettlementFor(address lcc, address recipient, uint256 maxAmount) external onlyValidLcc(lcc) {
+    function processSettlementFor(address lcc, address recipient, uint256 maxAmount)
+        external
+        onlyValidLcc(lcc)
+        nonReentrant
+    {
         bool isForHub = recipient == address(this);
         uint256 queued = settleQueue[lcc][recipient];
         if (queued == 0) revert Errors.InvalidAmount(0, 0);
