@@ -27,9 +27,7 @@ contract LiquidityHub is Ownable, LCCFactory {
     event FactorySet(address indexed factory, bool enabled);
     event LiquidityAvailable(address indexed lcc, uint256 amount);
     event SettlementQueued(address indexed lcc, address indexed recipient, uint256 amount);
-    event LccWrappedWith(
-        address indexed lcc, address indexed withLCC, address from, address to, uint256 amount, uint256 netted
-    );
+    event LccWrappedWith(address indexed lcc, address indexed withLCC, address from, address to, uint256 amount);
     event LccWrapped(address indexed lcc, address from, address to, uint256 amount);
     event LccUnwrapped(address indexed lcc, address from, address to, uint256 amount);
 
@@ -46,8 +44,7 @@ contract LiquidityHub is Ownable, LCCFactory {
     mapping(address => mapping(address => uint256)) public settleQueue; // lcc => recipient => amount owed
     mapping(address => uint256) public totalQueued; // lcc => total amount queued
 
-    // LCC-as-underlying reserves: backingLcc => mintedLcc => amount
-    mapping(address => mapping(address => uint256)) public lccBackingReserve;
+    // Note: Cross-LCC netting removed. O(1) flattening only; no pairwise reserves tracked.
 
     constructor(
         address _oracleHelper,
@@ -202,63 +199,23 @@ contract LiquidityHub is Ownable, LCCFactory {
         // Will annul any settlement queue for the withLCC
         ERC20(withLCC).safeTransferFrom(from, address(this), amount);
 
-        // Net against reverse reserve if available: lccBackingReserve[lcc][withLCC]
-        uint256 reverseReserve = lccBackingReserve[lcc][withLCC];
-        uint256 nettable = Math.min(amount, reverseReserve);
-        uint256 remainder = amount - nettable;
-        uint256 toMint = 0;
+        // O(1) flattening: immediately unwrap withLCC into shared underlying reserves
+        // This consumes directSupply[withLCC] and/or market liquidity, burns Hub-held withLCC,
+        // and queues any shortfall to Hub's own settlement queue
+        (uint256 directUnwrapped, uint256 marketUnwrapped) = _unwrapInternalLogic(
+            withLCC, address(this), address(this), amount, fromWrappedAmount, fromMarketDerivedAmount
+        );
 
-        if (nettable > 0) {
-            // Reduce reverse reserve: A backing B reduced
-            lccBackingReserve[lcc][withLCC] = reverseReserve - nettable;
-
-            // Burn the withLCC received for the netted portion (held by Hub) - protocol-bound burn
-            _burn(withLCC, address(this), nettable, 0, true);
-
-            // Replace Hub-held lcc with newly minted lcc to recipient to keep A supply unchanged and classify as wrapped
-            _burn(lcc, address(this), nettable, 0, true);
-
-            toMint += nettable;
+        uint256 toBurn = directUnwrapped + marketUnwrapped;
+        if (toBurn > 0) {
+            // Burn Hub-held withLCC for the portion successfully unwrapped (protocol-bound burn)
+            _burn(withLCC, address(this), directUnwrapped, marketUnwrapped, true);
         }
 
-        if (remainder > 0) {
-            // Adjust bucket amounts to account for nettable portion already handled
-            // Deduct nettable from wrapped first, then market-derived
-            uint256 nettableFromWrapped = Math.min(nettable, fromWrappedAmount);
-            fromWrappedAmount -= nettableFromWrapped;
-            uint256 nettableFromMarketDerived = nettable - nettableFromWrapped;
-            fromMarketDerivedAmount -= nettableFromMarketDerived;
+        // Mint wrapped (direct) lcc to recipient for the full amount
+        _mint(lcc, to, amount, 0, false);
 
-            // O(1) flattening: immediately unwrap withLCC into shared underlying reserves
-            // This consumes directSupply[withLCC] and/or market liquidity, burns Hub-held withLCC,
-            // and queues any shortfall to Hub's own settlement queue
-            (uint256 directUnwrapped, uint256 marketUnwrapped) = _unwrapInternalLogic(
-                withLCC, address(this), address(this), remainder, fromWrappedAmount, fromMarketDerivedAmount
-            );
-
-            uint256 toBurn = directUnwrapped + marketUnwrapped;
-
-            // Then) Burn Hub-held LCC for the portion successfully unwrapped (protocol-bound burn)
-            // skip _pay which conducts transfer of underlying (already held by Hub)
-            // If no liquidity in market or direct, then full remainder is queued for settlement
-            if (toBurn > 0) {
-                // pass issued = true to skip bucket maps
-                _burn(withLCC, address(this), directUnwrapped, marketUnwrapped, true);
-            }
-
-            // TODO: Where to accrue? How to resolve in processSettlementFor?
-            lccBackingReserve[withLCC][lcc] += remainder - toBurn;
-
-            // remainder is the sum of the used amounts from direct, market and the queued amounts
-            toMint += remainder;
-        }
-
-        if (toMint > 0) {
-            // Mint wrapped (direct) lcc to recipient for the full remainder
-            _mint(lcc, to, toMint, 0, false);
-        }
-
-        emit LccWrappedWith(lcc, withLCC, from, to, amount, nettable);
+        emit LccWrappedWith(lcc, withLCC, from, to, amount);
     }
 
     function wrapWith(address lcc, address withLCC, uint256 amount) external {
@@ -288,22 +245,24 @@ contract LiquidityHub is Ownable, LCCFactory {
     ) internal returns (uint256 directUnwrapped, uint256 marketUnwrapped) {
         // 1) Consume directSupply[lcc] if available
         if (wrappedBalance > 0) {
-            directUnwrapped = Math.min(amount, wrappedBalance);
-            /// @dev Unwraps LCC from out-of-market liquidity pool (wrapped LCC) i.e LCC that was created by wrapping
-            /// @dev Unwraps using liquidity that was provided by wrapping
-            directSupply[lcc] -= directUnwrapped;
+            uint256 directAvail = directSupply[lcc];
+            directUnwrapped = Math.min(Math.min(amount, wrappedBalance), directAvail);
+            if (directUnwrapped > 0) {
+                // Underlying already accounted in reserveOfUnderlying (shared pool), no transfer needed
+                directSupply[lcc] = directAvail - directUnwrapped;
+            }
         }
 
         // 2) Pull from market liquidity; increases reserves later via confirmTake callbacks
         uint256 remainingToUnwrap = amount - directUnwrapped;
         if (remainingToUnwrap > 0 && marketDerivedBalance > 0) {
             // Get the max amount that can be unwrapped from this market
-            uint256 amountFromMarket = Math.min(remainingToUnwrap, marketDerivedBalance);
+            uint256 requestFromMarket = Math.min(remainingToUnwrap, marketDerivedBalance);
 
             // Unwrap from this market's liquidity
-            marketUnwrapped = _useMarketLiquidity(lcc, amountFromMarket);
+            marketUnwrapped = _useMarketLiquidity(lcc, requestFromMarket);
 
-            remainingToUnwrap -= amountFromMarket;
+            remainingToUnwrap -= marketUnwrapped;
         }
 
         // 3) Queue any shortfall to Hub itself for later processing
@@ -419,7 +378,14 @@ contract LiquidityHub is Ownable, LCCFactory {
         // Track total underlying asset supply
         reserveOfUnderlying[lccToUnderlying[lcc]] += amount;
 
-        if (shouldEmit) {
+        // Best-effort: settle Hub queue up to the newly available amount
+        uint256 hubQueue = settleQueue[lcc][address(this)];
+        if (hubQueue > 0) {
+            processSettlementFor(lcc, address(this), hubQueue);
+        }
+
+        if (shouldEmit && hubQueue < amount) {
+            // Only emit if there is new liquidity available and not consumed greedily by the Hub
             emit LiquidityAvailable(lcc, amount);
         }
     }
@@ -460,37 +426,41 @@ contract LiquidityHub is Ownable, LCCFactory {
      * @param maxAmount The maximum amount to settle (caller can limit to avoid large gas costs)
      */
     function processSettlementFor(address lcc, address recipient, uint256 maxAmount) external onlyValidLcc(lcc) {
+        bool isForHub = recipient == address(this);
         uint256 queued = settleQueue[lcc][recipient];
         if (queued == 0) revert Errors.InvalidAmount(0, 0);
 
         address underlying = lccToUnderlying[lcc];
         uint256 available = reserveOfUnderlying[underlying];
 
-        if (recipient == address(this)) {
+        uint256 holderBal = 0;
+        if (isForHub) {
             // Hub-specific path: burn Hub-held LCC against available reserves
             // Does NOT transfer underlying or decrement reserveOfUnderlying (underlying stays in shared pool)
-            uint256 toSettle = Math.min(Math.min(queued, available), maxAmount);
-            if (toSettle == 0) revert Errors.LiquidityError(lcc, toSettle);
-
-            settleQueue[lcc][recipient] -= toSettle;
-            totalQueued[lcc] -= toSettle;
-
-            // Burn Hub-held LCC; protocol-bound burn, skip bucket maps
-            _burn(lcc, address(this), 0, toSettle, true);
-            return;
+            holderBal = _balanceOf(lcc, recipient);
+        } else {
+            // Standard path for external recipients
+            // market-derived holder balance
+            (, holderBal) = _balancesOf(lcc, recipient);
         }
 
-        // Standard path for external recipients
-        // market-derived holder balance
-        (, uint256 holderBal) = _balancesOf(lcc, recipient);
-
         uint256 toSettle = Math.min(Math.min(queued, available), Math.min(maxAmount, holderBal));
-        if (toSettle == 0) revert Errors.LiquidityError(lcc, toSettle);
+        if (toSettle == 0) {
+            if (!isForHub) {
+                revert Errors.LiquidityError(lcc, toSettle);
+            }
+            return;
+        }
 
         settleQueue[lcc][recipient] -= toSettle;
         totalQueued[lcc] -= toSettle;
 
-        _pay(lcc, recipient, 0, toSettle);
+        if (isForHub) {
+            // Burn Hub-held LCC; protocol-bound burn, skip bucket maps
+            _burn(lcc, recipient, 0, toSettle, true);
+        } else {
+            _pay(lcc, recipient, 0, toSettle);
+        }
     }
 
     /**
