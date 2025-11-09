@@ -169,35 +169,6 @@ contract LiquidityCommitmentCertificate is ERC20, Ownable, ILCC {
         }
     }
 
-    /**
-     * @notice Burns and mints LCC tokens from an address to another address. Ensures netting of balances, where mint to is wrapped balance.
-     * @param from The address to burn tokens from
-     * @param to The address to mint tokens to
-     * @param directAmount The amount to burn from direct balance
-     * @param marketAmount The amount to burn from market-derived balance
-     * @param issued Whether the tokens are issued
-     */
-    function burnAndMint(address from, address to, uint256 directAmount, uint256 marketAmount, bool issued)
-        external
-        onlyOwner
-    {
-        uint256 amount = directAmount + marketAmount;
-        if (amount == 0) {
-            revert Errors.InvalidAmount(0, 0);
-        }
-        _burn(from, amount);
-        _mint(to, amount);
-        if (issued) {
-            return;
-        }
-        if (marketAmount > 0) {
-            marketDerivedBalances[from] -= marketAmount;
-        }
-        if (directAmount > 0) {
-            wrappedBalances[from] -= directAmount;
-        }
-    }
-
     function _onTransfer(address from, address to, uint256 amount) internal {
         bool fromProtocol = marketFactory.bounds(from);
         bool toProtocol = marketFactory.bounds(to);

@@ -326,17 +326,6 @@ abstract contract LCCFactory {
         ILCCAdmin(lccToken).burn(from, directAmount, marketAmount, issued);
     }
 
-    function _burnAndMint(
-        address lccToken,
-        address from,
-        address to,
-        uint256 directAmount,
-        uint256 marketAmount,
-        bool issued
-    ) internal {
-        ILCCAdmin(lccToken).burnAndMint(from, to, directAmount, marketAmount, issued);
-    }
-
     function _balanceOf(address lccToken, address account) internal view returns (uint256) {
         return ILCC(lccToken).balanceOf(account);
     }
