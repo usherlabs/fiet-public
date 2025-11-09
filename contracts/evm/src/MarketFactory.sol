@@ -351,7 +351,7 @@ contract MarketFactory is IMarketFactory, Ownable {
             revert Errors.InvalidAddress(underlyingAsset);
         }
         BalanceDelta usedDelta = IMarketVault(_proxyToHook[coreToProxy[pId]])
-            .tryModifyLiquidities(LiquidityUtils.safeToBalanceDelta(amount0, amount1, true, true));
+            .tryModifyLiquidities(LiquidityUtils.safeToBalanceDelta(amount0, amount1, false, false)); // positive delta indicating withdrawal from market
         IVTSManager(coreHook)
             .incrementCoverage(
                 pId,
