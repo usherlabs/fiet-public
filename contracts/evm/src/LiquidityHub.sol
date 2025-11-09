@@ -307,6 +307,7 @@ contract LiquidityHub is Ownable, LCCFactory, ReentrancyGuardTransient {
         }
 
         // Clamp final burns to current Hub-held balances to avoid over-burns due to external effects
+        // TODO: we need to test these invariants/clamps heavily.
         uint256 targetHeld = _balanceOf(lcc, address(this));
         if (targetToBurn > targetHeld) {
             targetToBurn = targetHeld;
@@ -520,7 +521,7 @@ contract LiquidityHub is Ownable, LCCFactory, ReentrancyGuardTransient {
         // Best-effort: settle Hub queue up to the newly available amount
         uint256 hubQueue = settleQueue[lcc][address(this)];
         if (hubQueue > 0) {
-            processSettlementFor(lcc, address(this), amount);
+            _processSettlementFor(lcc, address(this), amount);
         }
 
         if (shouldEmit && hubQueue < amount) {
@@ -569,6 +570,10 @@ contract LiquidityHub is Ownable, LCCFactory, ReentrancyGuardTransient {
         onlyValidLcc(lcc)
         nonReentrant
     {
+        _processSettlementFor(lcc, recipient, maxAmount);
+    }
+
+    function _processSettlementFor(address lcc, address recipient, uint256 maxAmount) internal {
         bool isForHub = recipient == address(this);
         uint256 queued = settleQueue[lcc][recipient];
         if (queued == 0) revert Errors.InvalidAmount(0, 0);
