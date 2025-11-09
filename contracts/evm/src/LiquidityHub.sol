@@ -70,6 +70,11 @@ contract LiquidityHub is Ownable, LCCFactory {
         _;
     }
 
+    /**
+     * @notice Sets or removes a factory address from the allowed factories list
+     * @param factory The factory address to enable or disable
+     * @param enabled Whether the factory should be enabled (true) or disabled (false)
+     */
     function setFactory(address factory, bool enabled) external onlyOwner {
         isFactory[factory] = enabled;
         emit FactorySet(factory, enabled);
@@ -118,6 +123,13 @@ contract LiquidityHub is Ownable, LCCFactory {
     // ============ TRADER FUNCTIONS ============
 
     // DirectLPs and Traders engaging the CorePool directly will need LCC. LCC is 1:1 with the underlying asset.
+    /**
+     * @dev Internal function to wrap underlying assets into LCC tokens
+     * @param lcc The LCC token address to wrap into
+     * @param from The address providing the underlying assets
+     * @param to The address receiving the LCC tokens
+     * @param amount The amount of underlying assets to wrap
+     */
     function _wrap(address lcc, address from, address to, uint256 amount) internal onlyValidLcc(lcc) {
         address underlying = lccToUnderlying[lcc];
         bool isNativeAsset = underlying == address(0);
@@ -322,6 +334,8 @@ contract LiquidityHub is Ownable, LCCFactory {
      * @param amount The amount to unwrap
      * @param wrappedBalance The wrapped balance of the account
      * @param marketDerivedBalance The market-derived balance of the account
+     * @return directUnwrapped The amount unwrapped from direct supply
+     * @return marketUnwrapped The amount unwrapped from market liquidity
      */
     function _unwrapInternalLogic(
         address lcc,
@@ -363,9 +377,9 @@ contract LiquidityHub is Ownable, LCCFactory {
     }
 
     /**
-     * @dev Unwraps LCC from the account's wallet.
-     * @dev Accounts should only be able to unwrap if LCC in their wallet.
-     * @dev Routes to Hub-specific path when recipient is address(this), otherwise uses standard unwrap flow.
+     * @dev Unwraps LCC from the account's wallet and transfers underlying assets to recipient
+     * @dev Accounts should only be able to unwrap if they have LCC in their wallet
+     * @param lcc The LCC token address to unwrap
      * @param from The account to unwrap from
      * @param to The recipient of the underlying asset
      * @param amount The amount to unwrap
@@ -389,6 +403,11 @@ contract LiquidityHub is Ownable, LCCFactory {
         emit LccUnwrapped(lcc, from, to, amount);
     }
 
+    /**
+     * @notice Unwraps LCC tokens back to underlying assets for the caller
+     * @param lcc The LCC token address to unwrap
+     * @param amount The amount of LCC tokens to unwrap
+     */
     function unwrap(address lcc, uint256 amount) external {
         _unwrap(lcc, _msgSender(), _msgSender(), amount);
     }
@@ -407,6 +426,11 @@ contract LiquidityHub is Ownable, LCCFactory {
 
     // ============ LIQUIDITY FUNCTIONS ============
 
+    /**
+     * @notice Returns the available liquidity in the market for a given LCC token
+     * @param lcc The LCC token address
+     * @return The amount of liquidity available in the market (0 if market doesn't exist)
+     */
     function marketLiquidity(address lcc) public view returns (uint256) {
         return lccToMarket[lcc].id != bytes32(0)
             ? IMarketFactory(lccToMarket[lcc].factory).marketLiquidity(lccToUnderlying[lcc], lccToMarket[lcc].id)
@@ -414,12 +438,11 @@ contract LiquidityHub is Ownable, LCCFactory {
     }
 
     /**
-     * @dev Unwraps LCC from a specific market's liquidity reserves
+     * @dev Requests liquidity from a specific market's reserves via the MarketFactory
      * @notice OOM vs IM Distinction: When acquiring LCCs from a market, it's underlying liquidity either in the market, or to be settled to the market.
      * @param lcc The LCC token address
-     * @param to The recipient of underlying assets
-     * @param amount The amount to unwrap from this market
-     * @return The amount actually unwrapped from this market
+     * @param amount The amount of liquidity to request from the market
+     * @return The amount actually provided by the market
      */
     function _useMarketLiquidity(address lcc, uint256 amount) internal returns (uint256 d) {
         bytes32 marketId = lccToMarket[lcc].id;
@@ -620,7 +643,13 @@ contract LiquidityHub is Ownable, LCCFactory {
         Currency.wrap(underlying).transfer(account, amount);
     }
 
-    // Pay an outstanding settlement to an account and burn their underlying tokens
+    /**
+     * @dev Pays an outstanding settlement to an account by burning LCC tokens and transferring underlying assets
+     * @param lcc The LCC token address
+     * @param to The recipient of the underlying assets
+     * @param fromDirect The amount of LCC to burn from direct supply
+     * @param fromMarket The amount of LCC to burn from market-derived supply
+     */
     function _pay(address lcc, address to, uint256 fromDirect, uint256 fromMarket) internal {
         _burn(lcc, to, fromDirect, fromMarket, _isCallerIssuer(lcc));
         _transferUnderlying(lccToUnderlying[lcc], to, fromDirect + fromMarket);
@@ -640,12 +669,21 @@ contract LiquidityHub is Ownable, LCCFactory {
 
     // ============ VIEW FUNCTIONS ============
 
+    /**
+     * @notice Returns the shared reserve of underlying assets for a given LCC token
+     * @param lcc The LCC token address
+     * @return The amount of underlying assets held in reserve for this LCC
+     */
     function sharedReserveOf(address lcc) external view onlyValidLcc(lcc) returns (uint256) {
         return reserveOfUnderlying[lccToUnderlying[lcc]];
     }
 
     // ============ INTERNAL FUNCTIONS ============
 
+    /**
+     * @dev Validates that the sender is a valid MarketVault with at least one native asset LCC
+     * @dev Reverts if the sender is not a MarketVault or if neither LCC uses native ETH as underlying
+     */
     function _assertValidEthSender() internal view {
         address sender = _msgSender();
         (address l0, address l1) = IMarketVault(sender).lccs();

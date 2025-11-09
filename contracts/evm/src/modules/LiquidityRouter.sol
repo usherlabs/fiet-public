@@ -201,6 +201,9 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler, NativeWrappe
         // A positive balance delta means settling underlying tokens to the proxy hook,
         // negative means withdrawing to the MMP.
         // Call after deposits (so MV is funded), but before withdrawals.
+        // TODO: This could fail if liquidity in market is insufficient to cover the withdrawal of a burned position.
+        // ---- ie. mass unwrap of LCCs, settled liquidity is used as coverage, then burn position.
+        // ---- Basically, on decrease, return assets to the caller as LCCs always????
         IMarketVault(marketVault).modifyLiquidities(LiquidityUtils.safeToBalanceDelta(amount0, amount1));
 
         // Process withdrawals (amount > 0)

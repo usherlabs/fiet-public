@@ -1180,6 +1180,8 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
         uint256 req0 = d0 < c0 ? d0 : c0; // cap deficit by commitment
         uint256 req1 = d1 < c1 ? d1 : c1;
 
+        // TODO: Currently, RFS does not gate by base rate. This should be added. However, the base can be either side based on oracle price of the market.
+
         int128 amount0 = _rfsDeltaRaw(s0, req0);
         int128 amount1 = _rfsDeltaRaw(s1, req1);
 

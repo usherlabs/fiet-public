@@ -4,6 +4,7 @@ pragma solidity ^0.8.0;
 import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {TransientSlot} from "openzeppelin-contracts/contracts/utils/TransientSlot.sol";
 import {IExttload} from "v4-periphery/lib/v4-core/src/interfaces/IExttload.sol";
+import {PositionId} from "../types/Position.sol";
 
 library TransientSlots {
     using TransientSlot for *;
@@ -14,6 +15,8 @@ library TransientSlots {
     bytes32 internal constant POSITION_REQUIRED_SETTLEMENT_DELTA_SLOT = keccak256("POSITION_REQUIRED_SETTLEMENT_DELTA");
     bytes32 internal constant FEE_ADJ_DELTA_SLOT = keccak256("FEE_ADJ_DELTA");
     bytes32 internal constant NATIVE_VALUE_READ_SLOT = keccak256("NATIVE_VALUE_READ");
+    bytes32 internal constant SEIZED_LIQUIDITY_UNITS_SLOT = keccak256("SEIZED_LIQUIDITY_UNITS");
+    bytes32 internal constant SEIZED_POSITION_ID_SLOT = keccak256("SEIZED_POSITION_ID");
 
     // ------------------------------
     // Position Required Settlement Delta helpers
@@ -92,5 +95,28 @@ library TransientSlots {
             TransientSlot.asBoolean(TransientSlots.NATIVE_VALUE_READ_SLOT).tstore(true);
             return msg.value;
         }
+    }
+
+    // ------------------------------
+    // Seizure helpers
+    // ------------------------------
+
+    function setSeizedPosition(PositionId positionId, uint256 liquidityUnits) internal {
+        TransientSlot.asBytes32(TransientSlots.SEIZED_POSITION_ID_SLOT).tstore(PositionId.unwrap(positionId));
+        TransientSlot.asUint256(TransientSlots.SEIZED_LIQUIDITY_UNITS_SLOT).tstore(liquidityUnits);
+    }
+
+    function getSeizedPositionId() internal view returns (PositionId) {
+        bytes32 raw = TransientSlot.asBytes32(TransientSlots.SEIZED_POSITION_ID_SLOT).tload();
+        return PositionId.wrap(raw);
+    }
+
+    function getSeizedLiquidityUnits() internal view returns (uint256) {
+        return TransientSlot.asUint256(TransientSlots.SEIZED_LIQUIDITY_UNITS_SLOT).tload();
+    }
+
+    function clearSeizedPosition() internal {
+        TransientSlot.asBytes32(TransientSlots.SEIZED_POSITION_ID_SLOT).tstore(bytes32(0));
+        TransientSlot.asUint256(TransientSlots.SEIZED_LIQUIDITY_UNITS_SLOT).tstore(uint256(0));
     }
 }

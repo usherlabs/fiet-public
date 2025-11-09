@@ -182,6 +182,21 @@ contract MMPositionManager is
         if (!_isApprovedOrOwner(caller, tokenId)) revert Errors.NotApproved(caller);
     }
 
+    function _assertApprovedOrSeizingParty(address sender, uint256 tokenId, PositionId positionId) internal view {
+        // Check if caller has established seizure rights via transient storage
+        PositionId seizedPositionId = TransientSlots.getSeizedPositionId();
+        uint256 seizedLiquidityUnits = TransientSlots.getSeizedLiquidityUnits();
+
+        // If transient storage has matching positionId and non-zero liquidity, allow access
+        if (PositionId.unwrap(seizedPositionId) == PositionId.unwrap(positionId) && seizedLiquidityUnits > 0) {
+            return;
+        }
+
+        // Otherwise, fall back to standard approval check
+        _assertSignalValid(tokenId);
+        _assertApprovedOrOwner(sender, tokenId);
+    }
+
     function _assertSignalValid(uint256 tokenId) internal view {
         if (commitOf[tokenId].state.expiresAt < block.timestamp) {
             revert Errors.SignalExpired(tokenId);
@@ -284,10 +299,9 @@ contract MMPositionManager is
             (PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex, uint256 amountToDecrease) =
                 abi.decode(params, (PoolKey, uint256, uint256, uint256));
             PositionMeta memory position = getPosition(tokenId, positionIndex);
-            _assertSignalValid(tokenId);
             _assertCommitForPool(poolKey, tokenId);
-            _assertApprovedOrOwner(msgSender(), tokenId);
-            _decrease(poolKey, position, _positionSalt(tokenId, positionIndex), amountToDecrease, true);
+            _assertApprovedOrSeizingParty(msgSender(), tokenId, getPositionId(tokenId, positionIndex));
+            _decrease(poolKey, position, _positionSalt(tokenId, positionIndex), amountToDecrease);
             return;
         }
         if (action == uint256(MMAction.BURN_POSITION)) {
@@ -672,10 +686,8 @@ contract MMPositionManager is
      */
     function _settle(PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex, int128 amount0, int128 amount1)
         internal
-        onlyIfApproved(msgSender(), tokenId)
-        onlyValidCommit(poolKey, tokenId)
     {
-        getPosition(tokenId, positionIndex); // Validate the position by fetching it.
+        _assertCommitForPool(poolKey, tokenId);
 
         if (amount0 == 0 && amount1 == 0) {
             // Cannot settle 0 amounts for both assets.
@@ -683,6 +695,12 @@ contract MMPositionManager is
         }
 
         PositionId positionId = getPositionId(tokenId, positionIndex);
+
+        // Check access: either approved/owner or seizing party via transient storage
+        // If seizure, then rfs is open, and amount0 and amount1 must be negative (deposits)
+        _assertApprovedOrSeizingParty(msgSender(), tokenId, positionId);
+
+        getPosition(tokenId, positionIndex); // Validate the position by fetching it.
 
         // notify the vts manager of the settlement made for this position
         // returns the delta of required settlements IN or OUT
@@ -900,16 +918,34 @@ contract MMPositionManager is
     ///      Mirrors native PositionManager _decrease semantics (first modify, then settle flows).
     ///      Returns the balance delta of excess (above new lower commitmentMaxima) settlement returned.
     /// @dev Passing liqudity delta 0 will still surface feesAccrued, and therefore transfer (fee sweep) functionality.
-    function _decrease(
-        PoolKey memory poolKey,
-        PositionMeta memory position,
-        bytes32 salt,
-        uint256 amountToDecrease,
-        bool byApprovedOrOwner
-    ) internal {
+    function _decrease(PoolKey memory poolKey, PositionMeta memory position, bytes32 salt, uint256 amountToDecrease)
+        internal
+    {
+        // Access checked in _handleAction
+        // Check if seizure is active for this position
+        PositionId seizedPositionId = TransientSlots.getSeizedPositionId();
+        uint256 seizedLiquidityUnits = TransientSlots.getSeizedLiquidityUnits();
+        bool isSeizing = seizedLiquidityUnits > 0;
+
+        // Handle liquidity clamping/defaulting for seizure
+        if (isSeizing) {
+            if (amountToDecrease == 0) {
+                // Default to seized liquidity units if amount is 0
+                amountToDecrease = seizedLiquidityUnits;
+            } else {
+                // Clamp to seized liquidity units
+                if (amountToDecrease > seizedLiquidityUnits) {
+                    amountToDecrease = seizedLiquidityUnits;
+                }
+            }
+        }
+
         // validate liquidity is not over available
         if (uint256(position.liquidity) < amountToDecrease) {
             revert Errors.InvalidAmount(amountToDecrease, uint256(position.liquidity));
+        }
+        if (amountToDecrease > uint256(type(int256).max)) {
+            amountToDecrease = uint256(type(int256).max); // clamp by max.
         }
 
         // remove the liquidity from the pool
@@ -919,7 +955,7 @@ contract MMPositionManager is
             ModifyLiquidityParams({
                 tickLower: position.tickLower,
                 tickUpper: position.tickUpper,
-                liquidityDelta: -int256(amountToDecrease),
+                liquidityDelta: -amountToDecrease.toInt256(),
                 salt: salt
             })
         );
@@ -928,33 +964,10 @@ contract MMPositionManager is
             return;
         }
 
-        // TODO: On Seizure, this amount should be the seizureSettled + (portion of position settled relative to seizuredLiquidityUnits/liquidity)
-        // ----- LCCs acquired by the seizing party are NOT cancelled, rather transferred for unwrap, or subsequent swaps. VTSManager.onMMLiquidityModify coordinates position settlement amounts, whereas Market Vault aggregates them and coordinates LCC queue clearance.
-
-        // pass zero delta because caller is not explicitly settling anything IN or OUT. However, settlements may occur as a reaction to position modification.
-        // reference: contracts/evm/src/modules/VTSManager.sol _touchPosition
-        // ? ----- During seizeCommitment, issued LCCs must remained solvent. RfS positions must be closed across the commitment. Identifying insolvency essentially enables seizure with a skip on gracePeriod validation.
-        // // ? ----- ----- Despite the signal value no longer matching LCC value, the open RfS + settled liquidity expresses utilised liquidity.
-        // // ? ----- ----- Rather than apportioning the commitment, the entire commitment should be seized.
-        // ? ----- ----- As per the second point under decommit, LCCs issued during position management rather than for entire commitment reduces the solvency requirement before seizeCommitment and decommit.
-        // ? ----- ----- Assuming that the full commitment is utilised in positions, then 80% of the commitment is insolvent, what occurs?
-        // ? ----- ----- What if proving insolvency results in unlocking seizure across positions in an intra-transaction process - raising the a position specific-deficit by the diff in signal -> commit values, and skipping the gracePeriod validation for X amount.
-        // ? ----- ----- This could allow re-use of position seizure, and for all MMs/Guarantors to paritipate on the seizure. The advancer can be given a share of the seized outcome.
-        // ? ----- ----- If we adopt an action-dispatcher model as per the Native PositionManager, then MM's can chain actions together, ie. insolvent (prove insolvency), seize position, mint position, etc.
-
         // Distinguish raw position deltas (a0/a1) from feesAccrued, then derive principal (after deducting fees).
         uint256 a0 = LiquidityUtils.safeInt128ToUint256(principalDelta.amount0());
         uint256 a1 = LiquidityUtils.safeInt128ToUint256(principalDelta.amount1());
-        if (byApprovedOrOwner) {
-            // Burn only principal LCC that was originally issued for the position's liquidity.
-            // feesAccrued (from trader flows) stays wrapped and can be unwrapped via UNWRAP_LCC.
-            if (a0 > 0) {
-                liquidityHub.cancel(Currency.unwrap(poolKey.currency0), a0);
-            }
-            if (a1 > 0) {
-                liquidityHub.cancel(Currency.unwrap(poolKey.currency1), a1);
-            }
-        } else {
+        if (isSeizing) {
             // If we get here, then the position is being seized by a non-approved or owner.
             // Therefore, we transfer instead of cancel.
             if (a0 > 0) {
@@ -962,6 +975,15 @@ contract MMPositionManager is
             }
             if (a1 > 0) {
                 _accountDelta(poolKey.currency1, a1.toInt128(), msgSender());
+            }
+        } else {
+            // Burn only principal LCC that was originally issued for the position's liquidity.
+            // feesAccrued (from trader flows) stays wrapped and can be unwrapped via UNWRAP_LCC.
+            if (a0 > 0) {
+                liquidityHub.cancel(Currency.unwrap(poolKey.currency0), a0);
+            }
+            if (a1 > 0) {
+                liquidityHub.cancel(Currency.unwrap(poolKey.currency1), a1);
             }
         }
     }
@@ -1057,13 +1079,7 @@ contract MMPositionManager is
      * @param amount0 The amount of token0 to settle
      * @param amount1 The amount of token1 to settle
      */
-    function _seizePosition(
-        PoolKey memory poolKey,
-        uint256 tokenId,
-        uint256 positionIndex,
-        uint256 amount0,
-        uint256 amount1
-    ) internal returns (BalanceDelta seizedPositionDelta) {
+    function _seizePosition(PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex) internal {
         // -- Validate the poolKey
         _assertCommitForPool(poolKey, tokenId);
 
@@ -1082,28 +1098,30 @@ contract MMPositionManager is
             revert Errors.InvalidPosition(tokenId, positionIndex, positionId);
         }
 
-        // create a balance delta of the amounts to settle
-        BalanceDelta settlementDelta = toBalanceDelta(amount0.toInt128(), amount1.toInt128());
-
         // Validate grace (using last checkpoint) and derive liquidity to seize
         uint256 seizedLiquidityUnits =
             vtsManager.calcSeizure(positionId, settlementDelta, positionToCheckpoint[positionId]);
 
-        // ? settlement is necessary because the seizing party is covering the deficit (settlement queue) in exchange for LCCs.
-        // calcSeizure will internally manage the required settlement delta.
-        // _settle();
-        // TODO: What if we do a _seize, _settle - where if failure to settle, then revert. This could ensure _settle occurs to a new position owned by the seizing party, intra-transaction.
-        require(false == true, "TODO: Seize Position needs an independent refactor.");
+        if (seizedLiquidityUnits > 0) {
+            // Set the seized liquidity units to transient storage. This will authenticate the locker for other actions on the position.
+            // eg. settlement is necessary because the seizing party is covering the deficit (settlement queue) in exchange for LCCs.
+            TransientSlots.setSeizedPosition(positionId, seizedLiquidityUnits);
+        }
 
-        // -- Move the underlying liquidity to the to the seizer/caller or to the new position
+        // By executing _decrease as part of operations, _touchPosition will automatically set a positive required settlement delta - indicating credit to the locker.
+        // By default this credit to the locker is the excess > commitmentMaxima delta.
+        // TODO: A simpler approach is full liquidation of the position, which allows the full settled amount to credit.
+        // LCCs principal delta - position-required-settlement-delta can cancel in full.
+        // ----- if delta > 0, then accrue to LCC currencies. otherwise, accrue to underlying currencies.
+        // settled delta indicates amounts actively in-market. Therefore, they're protected. This includes the VTS base.
+        // This mechanic automatically ensures that seizure results in LCCs for settled amounts.
+        // Alternatively, we could use the "failed" delta in MarketVault.tryModifyLiquidities
 
-        // -- Liquidate the position partially or fully
-        // do this last because it could potentially mark the position as inactive and cause some of the above calls to fail as they require an active position
-        // Mirror liquidate by decreasing liquidity by seized units and letting settle logic handle deltas
-        _decrease(poolKey, position, _positionSalt(tokenId, positionIndex), seizedLiquidityUnits, false);
+        // By executing _settle before _decrease, the locker clears the RfS to enable the seizure.
+        // The result is settlement into a position to cover seizure in return for LCCs that can be unwrapped / awaited.
 
-        // TODO: Return actual seized position delta once _decrease is refactored to return BalanceDelta
-        return toBalanceDelta(0, 0);
+        // ? _seize, _settle, _decrease, _take - where if failure to settle, then revert.
+        // currency delta should solve for this.
     }
 
     /**
@@ -1113,12 +1131,17 @@ contract MMPositionManager is
      * @param liquiditySignal The liquidity signal to sieze the commitment for
      */
     // TODO: Ensure seizeCommitment maths is correct.
-    function _seizeCommitment(PoolKey memory poolKey, uint256 tokenId, bytes memory liquiditySignal)
-        internal
-        view
-        returns (uint256 deficitFractionInBips)
-    {
+    function _seizeCommitment(PoolKey memory poolKey, uint256 tokenId, bytes memory liquiditySignal) internal {
         _assertCommitForPool(poolKey, tokenId);
+
+        // ? ----- During seizeCommitment, issued LCCs must remained solvent. RfS positions must be closed across the commitment. Identifying insolvency essentially enables seizure with a skip on gracePeriod validation.
+        // // ? ----- ----- Despite the signal value no longer matching LCC value, the open RfS + settled liquidity expresses utilised liquidity.
+        // // ? ----- ----- Rather than apportioning the commitment, the entire commitment should be seized.
+        // ? ----- ----- As per the second point under decommit, LCCs issued during position management rather than for entire commitment reduces the solvency requirement before seizeCommitment and decommit.
+        // ? ----- ----- Assuming that the full commitment is utilised in positions, then 80% of the commitment is insolvent, what occurs?
+        // ? ----- ----- What if proving insolvency results in unlocking seizure across positions in an intra-transaction process - raising the a position specific-deficit by the diff in signal -> commit values, and skipping the gracePeriod validation for X amount.
+        // ? ----- ----- This could allow re-use of position seizure, and for all MMs/Guarantors to paritipate on the seizure. The advancer can be given a share of the seized outcome.
+        // ? ----- ----- If we adopt an action-dispatcher model as per the Native PositionManager, then MM's can chain actions together, ie. insolvent (prove insolvency), seize position, mint position, etc.
 
         // // verify the new liquidity signal(this increases the nonce of the mm's signals)
         // // get the total usd value of the signal and its expiry time
