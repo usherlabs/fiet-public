@@ -12,6 +12,7 @@ import {Errors} from "../libraries/Errors.sol";
 interface ILCCAdmin {
     function mint(address to, uint256 directAmount, uint256 marketAmount, bool issued) external;
     function burn(address from, uint256 directAmount, uint256 marketAmount, bool issued) external;
+    function burnAndMint(address from, address to, uint256 directAmount, uint256 marketAmount, bool issued) external;
 }
 
 /**
@@ -323,6 +324,17 @@ abstract contract LCCFactory {
 
     function _burn(address lccToken, address from, uint256 directAmount, uint256 marketAmount, bool issued) internal {
         ILCCAdmin(lccToken).burn(from, directAmount, marketAmount, issued);
+    }
+
+    function _burnAndMint(
+        address lccToken,
+        address from,
+        address to,
+        uint256 directAmount,
+        uint256 marketAmount,
+        bool issued
+    ) internal {
+        ILCCAdmin(lccToken).burnAndMint(from, to, directAmount, marketAmount, issued);
     }
 
     function _balanceOf(address lccToken, address account) internal view returns (uint256) {

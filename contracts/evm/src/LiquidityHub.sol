@@ -41,6 +41,13 @@ contract LiquidityHub is Ownable, LCCFactory {
     mapping(address => mapping(address => uint256)) public settleQueue; // lcc => recipient => amount owed
     mapping(address => uint256) public totalQueued; // lcc => total amount queued
 
+    // LCC-as-underlying reserves: backingLcc => mintedLcc => amount
+    mapping(address => mapping(address => uint256)) public lccBackingReserve;
+
+    event WrappedWith(
+        address indexed lcc, address indexed withLCC, address indexed from, address to, uint256 amount, uint256 netted
+    );
+
     constructor(
         address _oracleHelper,
         string memory _nativeAssetName,
@@ -146,6 +153,68 @@ contract LiquidityHub is Ownable, LCCFactory {
 
     function wrap(address underlying, bytes32 marketId, uint256 amount) external payable {
         _wrap(marketUnderlyingToLCC[marketId][underlying], _msgSender(), _msgSender(), amount);
+    }
+
+    /**
+     * @notice Wrap LCC using another LCC as backing, with netting if reverse reserve exists
+     * @param lcc The LCC to mint
+     * @param withLCC The LCC used as backing reserve
+     * @param from The address providing withLCC
+     * @param to The recipient of newly minted lcc
+     * @param amount The amount of withLCC to use
+     */
+    function _wrapWith(address lcc, address withLCC, address from, address to, uint256 amount)
+        internal
+        onlyValidLcc(lcc)
+    {
+        if (amount == 0) {
+            revert Errors.InvalidAmount(0, 0);
+        }
+        // Ensure withLCC is a valid LCC and not the same token
+        _assertValidLcc(withLCC);
+        if (lcc == withLCC) {
+            revert Errors.InvalidAddress(withLCC);
+        }
+        // Enforce same underlying asset for both LCCs
+        if (lccToUnderlying[lcc] != lccToUnderlying[withLCC]) {
+            revert Errors.LiquidityError(withLCC, amount);
+        }
+
+        // Pull backing LCC from user to Hub
+        ERC20(withLCC).safeTransferFrom(from, address(this), amount);
+
+        // Net against reverse reserve if available: lccBackingReserve[lcc][withLCC]
+        uint256 reverseReserve = lccBackingReserve[lcc][withLCC];
+        uint256 nettable = Math.min(amount, reverseReserve);
+        uint256 remainder = amount - nettable;
+
+        if (nettable > 0) {
+            // Reduce reverse reserve: A backing B reduced
+            lccBackingReserve[lcc][withLCC] = reverseReserve - nettable;
+
+            // Burn the withLCC received for the netted portion (held by Hub)
+            _burn(withLCC, address(this), nettable, 0, false);
+
+            // Replace Hub-held lcc with newly minted lcc to recipient to keep A supply unchanged and classify as wrapped
+            _burnAndMint(lcc, address(this), to, nettable, 0, false);
+        }
+
+        if (remainder > 0) {
+            // For non-nettable portion, back lcc using withLCC
+            lccBackingReserve[withLCC][lcc] += remainder;
+            // Mint wrapped (direct) lcc to recipient
+            _mint(lcc, to, remainder, 0, false);
+        }
+
+        emit WrappedWith(lcc, withLCC, from, to, amount, nettable);
+    }
+
+    function wrapWith(address lcc, address withLCC, uint256 amount) external {
+        _wrapWith(lcc, withLCC, _msgSender(), _msgSender(), amount);
+    }
+
+    function wrapWithTo(address lcc, address withLCC, address to, uint256 amount) external {
+        _wrapWith(lcc, withLCC, _msgSender(), to, amount);
     }
 
     /**
