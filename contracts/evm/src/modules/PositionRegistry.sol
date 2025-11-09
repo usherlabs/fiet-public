@@ -36,9 +36,13 @@ abstract contract PositionRegistry is IPositionRegistry, MarketHandler {
     /// @param id The position id
     /// @param revertIfInvalid Whether to revert if the position is invalid
     /// @return m The position meta data
-    function getPosition(PositionId id, bool revertIfInvalid) external view returns (PositionMeta memory) {
+    function getPosition(PositionId id, bool requireActive, bool revertIfInvalid)
+        external
+        view
+        returns (PositionMeta memory)
+    {
         if (revertIfInvalid) {
-            if (!isPositionValid(id, true)) {
+            if (!isPositionValid(id, requireActive)) {
                 revert Errors.NotActive(id);
             }
         }

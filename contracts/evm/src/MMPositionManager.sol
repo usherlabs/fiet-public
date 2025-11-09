@@ -478,18 +478,27 @@ contract MMPositionManager is
      * @param positionIndex The position index to get the position info for
      * @return positionInfo The position info
      */
-    function getPosition(uint256 tokenId, uint256 positionIndex) public view returns (PositionMeta memory) {
+    function _getPosition(uint256 tokenId, uint256 positionIndex, bool requireActive)
+        internal
+        view
+        returns (PositionMeta memory)
+    {
         PositionId positionId = getPositionId(tokenId, positionIndex);
         if (PositionId.unwrap(positionId) == bytes32(0)) {
             revert Errors.InvalidPosition(tokenId, positionIndex, positionId);
         }
-        PositionMeta memory m = vtsManager.getPosition(positionId, true);
+        PositionMeta memory m = vtsManager.getPosition(positionId, requireActive, true);
 
         if (!_isMMPosition(m)) {
             revert Errors.InvalidPosition(tokenId, positionIndex, positionId);
         }
 
         return m;
+    }
+
+    // Overloaded function to automate require active position.
+    function getPosition(uint256 tokenId, uint256 positionIndex) public view returns (PositionMeta memory) {
+        return _getPosition(tokenId, positionIndex, true);
     }
 
     // ------------------------
