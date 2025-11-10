@@ -1006,73 +1006,74 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
     // Lens Functions
     // --------------------------------------------------
 
-    // /**
-    //  * @notice Calculates the required vts for a position
-    //  * @param positionId The position id
-    //  * @return vtsRequired0 The required vts for token0 (1e18 scale)
-    //  * @return vtsRequired1 The required vts for token1 (1e18 scale)
-    //  */
-    // function calcVTSRequired(PositionId positionId)
-    //     public
-    //     onlyPositionValid(positionId)
-    //     returns (uint256 vtsRequired0, uint256 vtsRequired1)
-    // {
-    //     _settlePositionGrowths(positionId);
-    //     return _getVTSRequired(positionId);
-    // }
+    // TODO: Move these lens functions to a standalone VTSLens.sol
+    /**
+     * @notice Calculates the required vts for a position
+     * @param positionId The position id
+     * @return vtsRequired0 The required vts for token0 (1e18 scale)
+     * @return vtsRequired1 The required vts for token1 (1e18 scale)
+     */
+    function calcVTSRequired(PositionId positionId)
+        public
+        onlyPositionValid(positionId)
+        returns (uint256 vtsRequired0, uint256 vtsRequired1)
+    {
+        _settlePositionGrowths(positionId);
+        return _getVTSRequired(positionId);
+    }
 
-    // /**
-    //  * @notice Gets the required vts for a position using cumulative deficits
-    //  * @param positionId The position id
-    //  * @return vtsRequired0 The required vts for token0 (1e18 scale)
-    //  * @return vtsRequired1 The required vts for token1 (1e18 scale)
-    //  */
-    // function _getVTSRequired(PositionId positionId)
-    //     internal
-    //     view
-    //     virtual
-    //     returns (uint256 vtsRequired0, uint256 vtsRequired1)
-    // {
-    //     (uint256 c0, uint256 c1) = _getCommitment(positionId);
-    //     uint256 d0 = cumulativeDeficit[positionId][0];
-    //     uint256 d1 = cumulativeDeficit[positionId][1];
-    //     uint256 one = 1e18;
-    //     vtsRequired0 = c0 == 0 ? 0 : (d0 >= c0 ? one : FullMath.mulDiv(d0, one, c0));
-    //     vtsRequired1 = c1 == 0 ? 0 : (d1 >= c1 ? one : FullMath.mulDiv(d1, one, c1));
-    // }
+    /**
+     * @notice Gets the required vts for a position using cumulative deficits
+     * @param positionId The position id
+     * @return vtsRequired0 The required vts for token0 (1e18 scale)
+     * @return vtsRequired1 The required vts for token1 (1e18 scale)
+     */
+    function _getVTSRequired(PositionId positionId)
+        internal
+        view
+        virtual
+        returns (uint256 vtsRequired0, uint256 vtsRequired1)
+    {
+        (uint256 c0, uint256 c1) = _getCommitment(positionId);
+        uint256 d0 = cumulativeDeficit[positionId][0];
+        uint256 d1 = cumulativeDeficit[positionId][1];
+        uint256 one = 1e18;
+        vtsRequired0 = c0 == 0 ? 0 : (d0 >= c0 ? one : FullMath.mulDiv(d0, one, c0));
+        vtsRequired1 = c1 == 0 ? 0 : (d1 >= c1 ? one : FullMath.mulDiv(d1, one, c1));
+    }
 
-    // function calcVTSCurrent(PositionId positionId)
-    //     public
-    //     onlyPositionValid(positionId)
-    //     returns (uint256 vtsCurrent0, uint256 vtsCurrent1)
-    // {
-    //     _settlePositionGrowths(positionId);
-    //     return _getVTSCurrent(positionId);
-    // }
+    function calcVTSCurrent(PositionId positionId)
+        public
+        onlyPositionValid(positionId)
+        returns (uint256 vtsCurrent0, uint256 vtsCurrent1)
+    {
+        _settlePositionGrowths(positionId);
+        return _getVTSCurrent(positionId);
+    }
 
-    // /**
-    //  * @notice Gets the current vts for a position
-    //  * @param positionId The position id
-    //  * @return vtsCurrent0 The current vts for token0
-    //  * @return vtsCurrent1 The current vts for token1
-    //  */
-    // function _getVTSCurrent(PositionId positionId)
-    //     internal
-    //     view
-    //     virtual
-    //     returns (uint256 vtsCurrent0, uint256 vtsCurrent1)
-    // {
-    //     uint256 c0 = commitmentMaxima[positionId][0];
-    //     uint256 c1 = commitmentMaxima[positionId][1];
+    /**
+     * @notice Gets the current vts for a position
+     * @param positionId The position id
+     * @return vtsCurrent0 The current vts for token0
+     * @return vtsCurrent1 The current vts for token1
+     */
+    function _getVTSCurrent(PositionId positionId)
+        internal
+        view
+        virtual
+        returns (uint256 vtsCurrent0, uint256 vtsCurrent1)
+    {
+        uint256 c0 = commitmentMaxima[positionId][0];
+        uint256 c1 = commitmentMaxima[positionId][1];
 
-    //     uint256 s0 = totalSettlementAmount[positionId][0];
-    //     uint256 s1 = totalSettlementAmount[positionId][1];
+        uint256 s0 = totalSettlementAmount[positionId][0];
+        uint256 s1 = totalSettlementAmount[positionId][1];
 
-    //     uint256 one = 1e18;
-    //     uint256 v0 = c0 > 0 ? FullMath.mulDiv(s0, one, c0) : 0;
-    //     uint256 v1 = c1 > 0 ? FullMath.mulDiv(s1, one, c1) : 0;
-    //     return (v0, v1);
-    // }
+        uint256 one = 1e18;
+        uint256 v0 = c0 > 0 ? FullMath.mulDiv(s0, one, c0) : 0;
+        uint256 v1 = c1 > 0 ? FullMath.mulDiv(s1, one, c1) : 0;
+        return (v0, v1);
+    }
 
     /**
      * @notice Calculates the RFS for a position (settles growths and calls getRFS)
@@ -1162,6 +1163,7 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
         e1bps = aggUncapBps + cfg.token1.baseVTSRate > e1bps ? aggUncapBps + cfg.token1.baseVTSRate : e1bps;
 
         // \phi_settle ensures seizure calculation is proportional to the settled amount relative to the RfS amount in this transaction.
+        // TODO: Concern here is that the undercapitalized portion is fractionalised, however, then the excess attributed to seizing party is not.
         uint256 p0bps = LiquidityUtils.settleOfRfsBps(s0, r0);
         uint256 p1bps = LiquidityUtils.settleOfRfsBps(s1, r1);
 

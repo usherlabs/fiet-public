@@ -652,7 +652,8 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             toBalanceDelta(finalSettledAmount0.toInt128(), finalSettledAmount1.toInt128());
 
         // get the position info after seizure
-        PositionMeta memory positionAfterSeizure = IPositionRegistry(coreHookAddress).getPosition(positionId, false);
+        PositionMeta memory positionAfterSeizure =
+            IPositionRegistry(coreHookAddress).getPosition(positionId, false, false);
 
         // validate the position is marked as inactive
         assertEq(positionAfterSeizure.isActive, false);
@@ -733,7 +734,8 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             toBalanceDelta(finalSettledAmount0.toInt128(), finalSettledAmount1.toInt128());
 
         // get the position info after seizure
-        PositionMeta memory positionAfterSeizure = IPositionRegistry(coreHookAddress).getPosition(positionId, false);
+        PositionMeta memory positionAfterSeizure =
+            IPositionRegistry(coreHookAddress).getPosition(positionId, false, false);
 
         // validate the position is marked as inactive
         assertEq(positionAfterSeizure.isActive, false);

@@ -793,7 +793,7 @@ contract MMPositionManager is
     function _burnPosition(PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex) internal {
         PositionMeta memory pos = getPosition(tokenId, positionIndex);
         uint256 completeLiquidity = uint256(pos.liquidity);
-        _decrease(poolKey, pos, _positionSalt(tokenId, positionIndex), completeLiquidity, true);
+        _decrease(poolKey, pos, _positionSalt(tokenId, positionIndex), completeLiquidity);
     }
 
     /**
@@ -991,14 +991,20 @@ contract MMPositionManager is
         BalanceDelta availableDelta = _clampDeltaByAvailableVaultLiquidities(poolKey.toId(), principalDelta);
         BalanceDelta diff = principalDelta - availableDelta;
         if (availableDelta.amount0() > 0) {
-            liquidityHub.cancel(Currency.unwrap(poolKey.currency0), availableDelta.amount0());
+            liquidityHub.cancel(
+                Currency.unwrap(poolKey.currency0), LiquidityUtils.safeInt128ToUint256(availableDelta.amount0())
+            );
         }
         if (availableDelta.amount1() > 0) {
-            liquidityHub.cancel(Currency.unwrap(poolKey.currency1), availableDelta.amount1());
+            liquidityHub.cancel(
+                Currency.unwrap(poolKey.currency1), LiquidityUtils.safeInt128ToUint256(availableDelta.amount1())
+            );
         }
         // For unavailable liquidity, mark the difference as LCCs (withdrawable = positive delta) to the caller.
         if (diff.amount0() > 0 || diff.amount1() > 0) {
-            _convertSettleUnderlyingToLcc(msgSender(), diff, poolKey.currency0, poolKey.currency1);
+            _convertSettleUnderlyingToLcc(
+                msgSender(), diff, Currency.unwrap(poolKey.currency0), Currency.unwrap(poolKey.currency1)
+            );
         }
         // }
     }
@@ -1115,7 +1121,7 @@ contract MMPositionManager is
         // Validate grace period has elapsed
         _isSeizable(vtsManager.getMarketVTSConfiguration(position.poolId), tokenId, positionIndex, true); // revert if grace period has not elapsed
 
-        BalanceDelta settlementDelta = LiquidityUtils.safeToBalanceDelta(amount0, amount1);
+        BalanceDelta settlementDelta = LiquidityUtils.safeToBalanceDelta(amount0, amount1, false, false);
 
         // Derive liquidity to seize
         uint256 seizedLiquidityUnits = vtsManager.calcSeizure(positionId, settlementDelta);

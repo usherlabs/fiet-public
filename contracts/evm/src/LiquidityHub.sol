@@ -420,7 +420,7 @@ contract LiquidityHub is Ownable, LCCFactory, ReentrancyGuardTransient {
             revert Errors.InvalidAmount(amount, fromBalance);
         }
 
-        (uint256 directUnwrapped, uint256 marketUnwrapped,) =
+        (uint256 directUnwrapped, uint256 marketUnwrapped) =
             _unwrapInternalLogic(lcc, from, to, amount, wrappedBalance, marketDerivedBalance);
 
         // Burn the amount that was unwrapped
@@ -473,7 +473,7 @@ contract LiquidityHub is Ownable, LCCFactory, ReentrancyGuardTransient {
      * @param amount The amount of liquidity to request from the market
      * @return The amount actually provided by the market
      */
-    function _useMarketLiquidity(address lcc, uint256 amount) internal returns (uint256 d) {
+    function _useMarketLiquidity(address lcc, uint256 amount) internal returns (uint256) {
         bytes32 marketId = lccToMarket[lcc].id;
         return IMarketFactory(lccToMarket[lcc].factory).useMarketLiquidity(lccToUnderlying[lcc], marketId, amount);
     }

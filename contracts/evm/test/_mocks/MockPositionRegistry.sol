@@ -30,15 +30,24 @@ contract MockPositionRegistry is IPositionRegistry {
         return true;
     }
 
-    function getPosition(
-        PositionId id,
-        bool /*revertIfInvalid*/
-    )
+    function getPosition(PositionId id, bool requireActive, bool revertIfInvalid)
         external
         view
         returns (PositionMeta memory)
     {
-        return meta[id];
+        PositionMeta memory m = meta[id];
+        if (m.owner == address(0)) {
+            if (revertIfInvalid) {
+                revert("Position not found");
+            }
+            return m;
+        }
+        if (requireActive && !m.isActive) {
+            if (revertIfInvalid) {
+                revert("Position not active");
+            }
+        }
+        return m;
     }
 }
 
