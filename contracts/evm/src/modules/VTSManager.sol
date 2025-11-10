@@ -326,6 +326,8 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
                     excess1 = s1;
                 } else if (isSeizing) {
                     // TODO: Special case for seizing?
+                    // The correct approach is to leverage the existing default on excess over reduced commitment maxima, by decreasing liquidity to the totalSettledAmount - the rfsdelta closed by the seizing party.
+                    // ---  this way the rfsDelta closed becomes the excess obtained by the seizing party. Any remaining position is fully capitalised. After rfsDelta considered the VTS_base this becomes the incentive/threshold.
                     excess0 = s0;
                     excess1 = s1;
                 } else {
