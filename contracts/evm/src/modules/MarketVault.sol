@@ -33,7 +33,7 @@ import {LiquidityUtils} from "../libraries/LiquidityUtils.sol";
 import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
 import {ILiquidityHub} from "../interfaces/ILiquidityHub.sol";
 import {Errors} from "../libraries/Errors.sol";
-import {ReentrancyGuardTransient} from "openzeppelin-contracts/contracts/utils/ReentrancyGuard.sol";
+import {ReentrancyGuardTransient} from "openzeppelin-contracts/contracts/utils/ReentrancyGuardTransient.sol";
 
 abstract contract MarketVault is IMarketVault, ReentrancyGuardTransient {
     using CurrencySettler for Currency;
@@ -536,6 +536,7 @@ abstract contract MarketVault is IMarketVault, ReentrancyGuardTransient {
         returns (BalanceDelta)
     {
         (ILCC lccToken0, ILCC lccToken1) = _lccs();
+        (Currency currency0, Currency currency1) = _underlying();
 
         BalanceDelta usedDelta = _dryModifyLiquidities(balanceDelta);
         _modifyVaultLiquidity(currency0, currency1, usedDelta);

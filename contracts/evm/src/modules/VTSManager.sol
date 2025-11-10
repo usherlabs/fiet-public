@@ -638,7 +638,10 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
     ///      Materialised values are signed and MUST be bounded by the current pending values.
     ///      Any non-materialised remainder stays in pending to be retried on future hook calls.
     ///      Returns the materialised delta as BalanceDelta for the hook to apply this call only.
-    function _finaliseFeeAdjustment(PositionId id) internal returns (BalanceDelta) {
+    function _finaliseFeeAdjustment(PositionId id, PoolId p, Currency currency0, Currency currency1)
+        internal
+        returns (BalanceDelta)
+    {
         // Materialise pending: fund slashed pot for +ve; drain to LP for -ve
         (int256 pend0, int256 pend1) = _peekFeeAdjustment(id);
         int256 mat0 = 0;
@@ -764,7 +767,7 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
             }
         }
 
-        return _finaliseFeeAdjustment(id);
+        return _finaliseFeeAdjustment(id, p, currency0, currency1);
     }
 
     /// @dev Increase the slashed pot for a pool/token when a take() succeeds.

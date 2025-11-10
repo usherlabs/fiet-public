@@ -203,8 +203,7 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler, NativeWrappe
         // To prevent failure when liquidity in market is insufficient to cover the withdrawal, we tryModifyLiquidities and account LCCs for excess.
         // ---- eg. Failure on mass unwrap of LCCs, settled liquidity is used as coverage, then burn position.
         // ---- Basically, on decrease, return assets to the caller as LCCs in excess of usedDelta.
-        BalanceDelta usedDelta =
-            IMarketVault(marketVault).tryModifyLiquidities(LiquidityUtils.safeToBalanceDelta(amount0, amount1));
+        usedDelta = IMarketVault(marketVault).tryModifyLiquidities(LiquidityUtils.safeToBalanceDelta(amount0, amount1));
 
         if (usedDelta.amount0() > 0) {
             _settleUnderlyingCurrency(currency0, usedDelta.amount0(), sender, marketVault);
@@ -212,8 +211,6 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler, NativeWrappe
         if (usedDelta.amount1() > 0) {
             _settleUnderlyingCurrency(currency1, usedDelta.amount1(), sender, marketVault);
         }
-
-        return usedDelta;
     }
 
     /**

@@ -1095,17 +1095,10 @@ contract MMPositionManager is
      * @param poolKey The pool key for the position
      * @param tokenId The token id to settle the position for
      * @param positionIndex The position index to settle the position for
-     * @param amount0 The amount of token0 to settle
-     * @param amount1 The amount of token1 to settle
      */
     function _seizePosition(PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex) internal {
         // -- Validate the poolKey
         _assertCommitForPool(poolKey, tokenId);
-
-        // require at least one side is settled
-        if (amount0 == 0 && amount1 == 0) {
-            revert Errors.InvalidDelta(0, 0);
-        }
 
         PositionMeta memory position = getPosition(tokenId, positionIndex);
         PositionId positionId = getPositionId(tokenId, positionIndex);
