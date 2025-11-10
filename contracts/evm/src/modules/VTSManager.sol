@@ -260,13 +260,23 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
      * @param poolId The pool id
      * @param params The parameters of the transaction
      */
-    function _touchPosition(address owner, PoolId poolId, ModifyLiquidityParams calldata params) internal virtual {
+    function _touchPosition(address owner, PoolId poolId, ModifyLiquidityParams calldata params, bytes memory hookData)
+        internal
+        virtual
+    {
         PositionId id = PositionLibrary.generateId(owner, params);
         PositionMeta memory m = meta[id];
 
         uint128 liq = poolManager.getPositionLiquidity(poolId, PositionId.unwrap(id));
 
         bool isMMPosition = _isCallerMMP(owner) && _isMMPosition(id);
+        bool isSeizing = false;
+        bytes32 rawSeizedPositionId = abi.decode(hookData, (bytes32));
+        if (rawSeizedPositionId.length > 0 && isMMPosition) {
+            if (rawSeizedPositionId == PositionId.unwrap(id)) {
+                isSeizing = true;
+            }
+        }
 
         if (m.owner == address(0)) {
             // NEW POSITION: initialize the liquidity to the liquidity delta, assuming it will always be positive
@@ -312,6 +322,10 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
                 uint256 excess1 = 0;
                 if (liq == 0) {
                     // full liquidation
+                    excess0 = s0;
+                    excess1 = s1;
+                } else if (isSeizing) {
+                    // TODO: Special case for seizing?
                     excess0 = s0;
                     excess1 = s1;
                 } else {
@@ -490,20 +504,47 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
 
         // Only assert closed RfS if pure underlying liquidity WITHDRAWAL. calcRFS includes settle growth accounting since last touch
         bool isWithdrawal = amount0 > 0 || amount1 > 0;
-        (rfsOpen,) = calcRFS(positionId, isWithdrawal);
+        BalanceDelta rfsDelta;
+        (rfsOpen, rfsDelta) = calcRFS(positionId, isWithdrawal);
 
         if (amount0 > 0) {
-            amount0 = _updateSettlement(positionId, 0, -amount0);
+            // withdraw
+            // Clamp by rfsDelta: if rfsDelta < 0, then -rfsDelta is withdrawable
+            int128 rfs0 = rfsDelta.amount0();
+            if (rfs0 < 0) {
+                uint256 withdrawable0 = LiquidityUtils.safeInt128ToUint256(rfs0);
+                if (LiquidityUtils.safeInt128ToUint256(amount0) > withdrawable0) {
+                    amount0 = withdrawable0.toInt256();
+                }
+                amount0 = _updateSettlement(positionId, 0, -amount0);
+            } else {
+                // rfsDelta >= 0 means cannot withdraw (handled in calcRFS)
+                amount0 = 0;
+            }
         } else if (amount0 < 0) {
+            // deposit
             amount0 = _updateSettlement(positionId, 0, -amount0);
         }
         if (amount1 > 0) {
-            amount1 = _updateSettlement(positionId, 1, -amount1);
+            // withdraw
+            // Clamp by rfsDelta: if rfsDelta < 0, then -rfsDelta is withdrawable
+            int128 rfs1 = rfsDelta.amount1();
+            if (rfs1 < 0) {
+                uint256 withdrawable1 = LiquidityUtils.safeInt128ToUint256(rfs1);
+                if (LiquidityUtils.safeInt128ToUint256(amount1) > withdrawable1) {
+                    amount1 = withdrawable1.toInt256();
+                }
+                amount1 = _updateSettlement(positionId, 1, -amount1);
+            } else {
+                // rfsDelta >= 0 means cannot withdraw (handled in calcRFS)
+                amount1 = 0;
+            }
         } else if (amount1 < 0) {
+            // deposit
             amount1 = _updateSettlement(positionId, 1, -amount1);
         }
 
-        // Clamps within _updateSettlement may modify the return delta.
+        // Clamps within _updateSettlement may modify the return delta. Flip the signs on amount0 and amount1 to match caller-context delta.
         settlementDelta = LiquidityUtils.negateBalanceDelta(toBalanceDelta(amount0.toInt128(), amount1.toInt128()));
 
         // Proactive extraction (incremental): fund only increases in pending slashes since last observation to avoid over-funding.
@@ -591,53 +632,87 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
     }
 
     /// @dev Finalise a portion of the pending fee adjustment as materialised in the current hook call.
+    ///      Funds/drains pot based on pending adjustments, and finalises materialised delta for this call.
     ///      Materialised values are signed and MUST be bounded by the current pending values.
     ///      Any non-materialised remainder stays in pending to be retried on future hook calls.
     ///      Returns the materialised delta as BalanceDelta for the hook to apply this call only.
-    function _finaliseFeeAdjustment(PositionId id, int256 materialised0, int256 materialised1)
-        internal
-        returns (BalanceDelta)
-    {
-        // Clamp materialised values to current pending to avoid over-finalisation.
-        int256 p0 = pendingFeeAdj[id][0];
-        int256 p1 = pendingFeeAdj[id][1];
+    function _finaliseFeeAdjustment(PositionId id) internal returns (BalanceDelta) {
+        // Materialise pending: fund slashed pot for +ve; drain to LP for -ve
+        (int256 pend0, int256 pend1) = _peekFeeAdjustment(id);
+        int256 mat0 = 0;
+        int256 mat1 = 0;
 
-        // For positive pending, materialised must be in [0, p]; for negative pending, in [p, 0].
-        if (p0 >= 0) {
-            if (materialised0 < 0) materialised0 = 0;
-            if (materialised0 > p0) materialised0 = p0;
-        } else {
-            if (materialised0 > 0) materialised0 = 0;
-            if (materialised0 < p0) materialised0 = p0;
+        if (pend0 > 0) {
+            _fundFeePot(p, currency0, 0, uint256(pend0));
+            mat0 = pend0;
+        } else if (pend0 < 0) {
+            uint256 need0 = uint256(-pend0);
+            uint256 pot0 = slashedPot[p][0];
+            uint256 pay0 = pot0 < need0 ? pot0 : need0;
+            if (pay0 > 0) {
+                _drainFeePot(p, currency0, 0, pay0);
+                mat0 = -pay0.toInt256();
+            }
         }
-        if (p1 >= 0) {
-            if (materialised1 < 0) materialised1 = 0;
-            if (materialised1 > p1) materialised1 = p1;
+
+        if (pend1 > 0) {
+            _fundFeePot(p, currency1, 1, uint256(pend1));
+            mat1 = pend1;
+        } else if (pend1 < 0) {
+            uint256 need1 = uint256(-pend1);
+            uint256 pot1 = slashedPot[p][1];
+            uint256 pay1 = pot1 < need1 ? pot1 : need1;
+            if (pay1 > 0) {
+                _drainFeePot(p, currency1, 1, pay1);
+                mat1 = -pay1.toInt256();
+            }
+        }
+
+        // Clamp materialised values to current pending to avoid over-finalisation.
+        // For positive pending, materialised must be in [0, p]; for negative pending, in [p, 0].
+        if (pend0 >= 0) {
+            if (mat0 < 0) mat0 = 0;
+            if (mat0 > pend0) mat0 = pend0;
         } else {
-            if (materialised1 > 0) materialised1 = 0;
-            if (materialised1 < p1) materialised1 = p1;
+            if (mat0 > 0) mat0 = 0;
+            if (mat0 < pend0) mat0 = pend0;
+        }
+        if (pend1 >= 0) {
+            if (mat1 < 0) mat1 = 0;
+            if (mat1 > pend1) mat1 = pend1;
+        } else {
+            if (mat1 > 0) mat1 = 0;
+            if (mat1 < pend1) mat1 = pend1;
         }
 
         // Subtract the materialised portion from pending (note: signed arithmetic).
-        pendingFeeAdj[id][0] = p0 - materialised0;
-        pendingFeeAdj[id][1] = p1 - materialised1;
+        pendingFeeAdj[id][0] = pend0 - mat0;
+        pendingFeeAdj[id][1] = pend1 - mat1;
 
-        BalanceDelta adj = LiquidityUtils.safeToBalanceDelta(materialised0, materialised1);
+        BalanceDelta adj = LiquidityUtils.safeToBalanceDelta(mat0, mat1);
         // Publish this-call adjustment to transient storage for MM-managed positions only;
         // MMPositionManager will consume it to classify principal vs effective fees.
         if (_isMMPosition(id)) {
             TransientSlots.addFeeAdjDelta(adj);
         }
+
+        // Snapshot current pending after finalisation to keep future settle-time funding incremental
+        lastFundedPendingAdj[id][0] = pendingFeeAdj[id][0];
+        lastFundedPendingAdj[id][1] = pendingFeeAdj[id][1];
+
         return adj;
     }
 
-    /// @dev Consolidated fee processing for a position during modification: applies and zeros nets, queues bonus using net weighting,
-    ///      funds/drains pot based on pending adjustments, and finalises materialised delta for this call.
+    /// @dev Consolidated fee processing for a position during modification: applies and zeros nets, queues bonus using net weighting.
     function _processPositionFees(PositionId id, Currency currency0, Currency currency1)
         internal
         returns (BalanceDelta)
     {
         PoolId p = meta[id].poolId;
+
+        if (_isFeeSharingEnabled(meta[id].poolId)) {
+            return toBalanceDelta(0, 0);
+        }
 
         // Read per-position nets (already applied to totalSettlementAmount via _updateSettlement). Do not mutate yet.
         int256 selfNet0 = netSettlementSinceLastMod[id][0];
@@ -687,47 +762,7 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
             }
         }
 
-        // Materialise pending: fund slashed pot for +ve; drain to LP for -ve
-        (int256 pend0, int256 pend1) = _peekFeeAdjustment(id);
-        int256 mat0 = 0;
-        int256 mat1 = 0;
-
-        if (pend0 > 0) {
-            _fundFeePot(p, currency0, 0, uint256(pend0));
-            mat0 = pend0;
-        } else if (pend0 < 0) {
-            uint256 need0 = uint256(-pend0);
-            uint256 pot0 = slashedPot[p][0];
-            uint256 pay0 = pot0 < need0 ? pot0 : need0;
-            if (pay0 > 0) {
-                _drainFeePot(p, currency0, 0, pay0);
-                mat0 = -pay0.toInt256();
-            }
-        }
-
-        if (pend1 > 0) {
-            _fundFeePot(p, currency1, 1, uint256(pend1));
-            mat1 = pend1;
-        } else if (pend1 < 0) {
-            uint256 need1 = uint256(-pend1);
-            uint256 pot1 = slashedPot[p][1];
-            uint256 pay1 = pot1 < need1 ? pot1 : need1;
-            if (pay1 > 0) {
-                _drainFeePot(p, currency1, 1, pay1);
-                mat1 = -pay1.toInt256();
-            }
-        }
-
-        BalanceDelta ret = _finaliseFeeAdjustment(id, mat0, mat1);
-
-        // Snapshot current pending after finalisation to keep future settle-time funding incremental
-        {
-            (int256 cur0, int256 cur1) = _peekFeeAdjustment(id);
-            lastFundedPendingAdj[id][0] = cur0;
-            lastFundedPendingAdj[id][1] = cur1;
-        }
-
-        return ret;
+        return _finaliseFeeAdjustment(id);
     }
 
     /// @dev Increase the slashed pot for a pool/token when a take() succeeds.

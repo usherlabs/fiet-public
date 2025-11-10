@@ -33,8 +33,9 @@ import {LiquidityUtils} from "../libraries/LiquidityUtils.sol";
 import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
 import {ILiquidityHub} from "../interfaces/ILiquidityHub.sol";
 import {Errors} from "../libraries/Errors.sol";
+import {ReentrancyGuardTransient} from "openzeppelin-contracts/contracts/utils/ReentrancyGuard.sol";
 
-abstract contract MarketVault is IMarketVault {
+abstract contract MarketVault is IMarketVault, ReentrancyGuardTransient {
     using CurrencySettler for Currency;
 
     event SwapDeficit(PoolId indexed poolId, address indexed lccToken, address deficitRecipient, uint256 deficitAmount);
@@ -454,7 +455,7 @@ abstract contract MarketVault is IMarketVault {
      * @param balanceDelta The balance delta of the currency0 and currency1
      * @notice Derive the ProxyHook address from the Pool Id, assumes the (LCC underlying) currencies for the Proxy Pool.
      */
-    function modifyLiquidities(BalanceDelta balanceDelta) external onlyProtocolBounds {
+    function modifyLiquidities(BalanceDelta balanceDelta) external onlyProtocolBounds nonReentrant {
         (Currency currency0, Currency currency1) = _underlying();
         (ILCC lccToken0, ILCC lccToken1) = _lccs();
         _modifyVaultLiquidity(currency0, currency1, balanceDelta);
@@ -468,7 +469,12 @@ abstract contract MarketVault is IMarketVault {
         }
     }
 
-    function tryModifyLiquidities(BalanceDelta balanceDelta) external onlyProtocolBounds returns (BalanceDelta) {
+    /**
+     * @dev Dry run to modify vault liquidity, handling partial withdrawals gracefully
+     * @param balanceDelta The desired balance delta to apply
+     * @return The actual balance delta that was applied (may be less than requested for withdrawals)
+     */
+    function _dryModifyLiquidities(BalanceDelta balanceDelta) internal returns (BalanceDelta) {
         (Currency currency0, Currency currency1) = _underlying();
         (ILCC lccToken0, ILCC lccToken1) = _lccs();
         bytes32 marketId = _marketId();
@@ -506,13 +512,39 @@ abstract contract MarketVault is IMarketVault {
         // 2. We have withdrawals but sufficient balance available - proceed with adjusted deltas
         // 3. For withdrawals, if we don't have enough, we still proceed with what we can withdraw
         BalanceDelta usedDelta = toBalanceDelta(actualDelta0, actualDelta1);
+        return usedDelta;
+    }
+
+    /**
+     * @dev Dry run to modify vault liquidity, handling partial withdrawals gracefully
+     * @param balanceDelta The desired balance delta to apply
+     * @return The actual balance delta that was applied (may be less than requested for withdrawals)
+     */
+    function dryModifyLiquidities(BalanceDelta balanceDelta) external onlyProtocolBounds returns (BalanceDelta) {
+        return _dryModifyLiquidities(balanceDelta);
+    }
+
+    /**
+     * @dev Try to modify vault liquidity, handling partial withdrawals gracefully
+     * @param balanceDelta The desired balance delta to apply
+     * @return The actual balance delta that was applied (may be less than requested for withdrawals)
+     */
+    function tryModifyLiquidities(BalanceDelta balanceDelta)
+        external
+        onlyProtocolBounds
+        nonReentrant
+        returns (BalanceDelta)
+    {
+        (ILCC lccToken0, ILCC lccToken1) = _lccs();
+
+        BalanceDelta usedDelta = _dryModifyLiquidities(balanceDelta);
         _modifyVaultLiquidity(currency0, currency1, usedDelta);
 
         // If there was an addition (deposit), then settle the obligations to the lcc tokens
-        if (delta0 < 0) {
+        if (balanceDelta.amount0() < 0) {
             _settleObligationsForLCC(lccToken0);
         }
-        if (delta1 < 0) {
+        if (balanceDelta.amount1() < 0) {
             _settleObligationsForLCC(lccToken1);
         }
 

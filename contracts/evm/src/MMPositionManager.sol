@@ -40,6 +40,7 @@ import {NonzeroDeltaCount} from "@uniswap/v4-core/src/libraries/NonzeroDeltaCoun
 import {LiquidityAmounts} from "v4-periphery/src/libraries/LiquidityAmounts.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
+import {Constants} from "@uniswap/v4-core/test/utils/Constants.sol";
 
 contract MMPositionManager is
     LiquidityRouter,
@@ -94,7 +95,7 @@ contract MMPositionManager is
         WRAP_NATIVE, // params: (uint256 amount)
         UNWRAP_NATIVE, // params: (uint256 amount)
         EXTEND_GRACE_PERIOD, // params: (PoolKey, uint256 tokenId, uint256 positionIndex, uint8 settlementTokenIndex, uint32 verifierIndex, bytes settlementProof)
-        TAKE_LCCS, // params: (Currency currency, address recipient, uint256 maxAmount, bool payerIsUser)
+        TAKE_LCC, // params: (Currency currency, address recipient, uint256 maxAmount, bool payerIsUser)
         INCREASE_LIQUIDITY_FROM_DELTAS, // params: (Currency currency, int128 delta, address target)
         MINT_POSITION_FROM_DELTAS, // params: (Currency currency, int128 delta, address target)
         SETTLE_POSITION_FROM_DELTAS // params: (PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex, bool settleIn0, bool settleIn1)
@@ -370,7 +371,7 @@ contract MMPositionManager is
             _extendGracePeriod(poolKey, tokenId, positionIndex, settlementTokenIndex, verifierIndex, settlementProof);
             return;
         }
-        if (action == uint256(MMAction.TAKE_LCCS)) {
+        if (action == uint256(MMAction.TAKE_LCC)) {
             // params: (Currency currency, address recipient, uint256 maxAmount, bool payerIsUser)
             (Currency currency, address recipient, uint256 maxAmount, bool payerIsUser) =
                 abi.decode(params, (Currency, address, uint256, bool));
@@ -418,13 +419,14 @@ contract MMPositionManager is
      * @return principalDelta The balance delta of the principal liquidity
      * @return accruedFeesAfterAdj The balance delta of the fees accrued after adjustment
      */
-    function _modifyPositionLiquidity(PoolKey memory poolKey, ModifyLiquidityParams memory params)
-        internal
-        override
-        returns (BalanceDelta principalDelta, BalanceDelta accruedFeesAfterAdj)
-    {
+    function _modifyPositionLiquidity(
+        PoolKey memory poolKey,
+        ModifyLiquidityParams memory params,
+        bytes memory hookData
+    ) internal override returns (BalanceDelta principalDelta, BalanceDelta accruedFeesAfterAdj) {
         // use param to modify liquidity
-        (BalanceDelta positionDelta, BalanceDelta feesAccrued) = super._modifyPositionLiquidity(poolKey, params);
+        (BalanceDelta positionDelta, BalanceDelta feesAccrued) =
+            super._modifyPositionLiquidity(poolKey, params, hookData);
 
         // Consume fee adjustment materialised by CoreHook for this call
         BalanceDelta feeAdj = TransientSlots.consumeFeeAdjDelta(address(vtsManager));
@@ -720,7 +722,7 @@ contract MMPositionManager is
         _markCheckpoint(positionId, rfsOpen); // checkpoint directly on the _settleUnderlying call.
 
         // settle the underlying assets to the proxy
-        _settleUnderlying(
+        BalanceDelta usedDelta = _settleUnderlying(
             msgSender(),
             poolKey.toId(),
             settlementDelta,
@@ -823,8 +825,10 @@ contract MMPositionManager is
         });
 
         // mint or modify liquidity. If the position is not minted, this will mint it. If the position is already minted, this will modify it.
-        (BalanceDelta principalDelta,) = _modifyPositionLiquidity(poolKey, params);
+        (BalanceDelta principalDelta,) = _modifyPositionLiquidity(poolKey, params, Constants.ZERO_BYTES);
         // generate unique position id using the params which contains the salt making this unique across all positions
+        // ? If an existing position is being modified, then the position id will be the SAME, so long as (tickUpper, tickLower, salt, AND owner) do not change.
+        // ie. changing liquidity does not impact the position id.
         positionId = PositionLibrary.generateId(address(this), params);
         if (liquidity == 0 && LiquidityUtils.isZeroDelta(principalDelta)) {
             return positionId;
@@ -934,24 +938,23 @@ contract MMPositionManager is
         // Check if seizure is active for this position
         PositionId seizedPositionId = TransientSlots.getSeizedPositionId();
         uint256 seizedLiquidityUnits = TransientSlots.getSeizedLiquidityUnits();
-        bool isSeizing = seizedLiquidityUnits > 0;
+        bool isSeizing = PositionId.unwrap(seizedPositionId).length != 0 && seizedLiquidityUnits > 0;
 
         // Handle liquidity clamping/defaulting for seizure
+        bytes memory hookData = Constants.ZERO_BYTES;
         if (isSeizing) {
-            if (amountToDecrease == 0) {
-                // Default to seized liquidity units if amount is 0
+            TransientSlots.clearSeizedPosition(); // clear on decrease to avoid re-use of the same position id and liquidity units.
+            if (amountToDecrease == 0 || amountToDecrease > seizedLiquidityUnits) {
+                // Default to seized liquidity units if amount is 0 OR Clamp to seized liquidity units
                 amountToDecrease = seizedLiquidityUnits;
-            } else {
-                // Clamp to seized liquidity units
-                if (amountToDecrease > seizedLiquidityUnits) {
-                    amountToDecrease = seizedLiquidityUnits;
-                }
             }
+            hookData = abi.encode(PositionId.unwrap(seizedPositionId));
         }
 
         // validate liquidity is not over available
-        if (uint256(position.liquidity) < amountToDecrease) {
-            revert Errors.InvalidAmount(amountToDecrease, uint256(position.liquidity));
+        uint256 posLiq = uint256(position.liquidity);
+        if (amountToDecrease > posLiq) {
+            revert Errors.InvalidAmount(amountToDecrease, posLiq);
         }
         if (amountToDecrease > uint256(type(int256).max)) {
             amountToDecrease = uint256(type(int256).max); // clamp by max.
@@ -959,42 +962,49 @@ contract MMPositionManager is
 
         // remove the liquidity from the pool
         // By calling this, CoreHook afterRemoveLiquidity will be called to deactivate the position.
-        (BalanceDelta principalDelta, BalanceDelta accruedFeesAfterAdj) = _modifyPositionLiquidity(
+        (BalanceDelta principalDelta,) = _modifyPositionLiquidity(
             poolKey,
             ModifyLiquidityParams({
                 tickLower: position.tickLower,
                 tickUpper: position.tickUpper,
                 liquidityDelta: -amountToDecrease.toInt256(),
                 salt: salt
-            })
+            }),
+            hookData
         );
 
         if (amountToDecrease == 0 && LiquidityUtils.isZeroDelta(principalDelta)) {
             return;
         }
 
-        // Distinguish raw position deltas (a0/a1) from feesAccrued, then derive principal (after deducting fees).
-        uint256 a0 = LiquidityUtils.safeInt128ToUint256(principalDelta.amount0());
-        uint256 a1 = LiquidityUtils.safeInt128ToUint256(principalDelta.amount1());
-        if (isSeizing) {
-            // If we get here, then the position is being seized by a non-approved or owner.
-            // Therefore, we transfer instead of cancel.
-            if (a0 > 0) {
-                _accountDelta(poolKey.currency0, a0.toInt128(), msgSender());
-            }
-            if (a1 > 0) {
-                _accountDelta(poolKey.currency1, a1.toInt128(), msgSender());
-            }
-        } else {
-            // Burn only principal LCC that was originally issued for the position's liquidity.
-            // feesAccrued (from trader flows) stays wrapped and can be unwrapped via UNWRAP_LCC.
-            if (a0 > 0) {
-                liquidityHub.cancel(Currency.unwrap(poolKey.currency0), a0);
-            }
-            if (a1 > 0) {
-                liquidityHub.cancel(Currency.unwrap(poolKey.currency1), a1);
-            }
+        // // Distinguish raw position deltas (a0/a1) from feesAccrued, then derive principal (after deducting fees).
+        // if (isSeizing) {
+        //     // If we get here, then the position is being seized by a non-approved or owner.
+        //     // Therefore, we transfer instead of cancel.
+        //     int128 a0 = principalDelta.amount0();
+        //     int128 a1 = principalDelta.amount1();
+        //     if (a0 > 0) {
+        //         _accountDelta(poolKey.currency0, a0, msgSender());
+        //     }
+        //     if (a1 > 0) {
+        //         _accountDelta(poolKey.currency1, a1, msgSender());
+        //     }
+        // } else {
+        //     // Burn only principal LCC that was originally issued for the position's liquidity.
+        //     // feesAccrued (from trader flows) stays wrapped and can be unwrapped via UNWRAP_LCC.
+        BalanceDelta availableDelta = _clampDeltaByAvailableVaultLiquidities(poolKey.toId(), principalDelta);
+        BalanceDelta diff = principalDelta - availableDelta;
+        if (availableDelta.amount0() > 0) {
+            liquidityHub.cancel(Currency.unwrap(poolKey.currency0), availableDelta.amount0());
         }
+        if (availableDelta.amount1() > 0) {
+            liquidityHub.cancel(Currency.unwrap(poolKey.currency1), availableDelta.amount1());
+        }
+        // For unavailable liquidity, mark the difference as LCCs (withdrawable = positive delta) to the caller.
+        if (diff.amount0() > 0 || diff.amount1() > 0) {
+            _convertSettleUnderlyingToLcc(msgSender(), diff, poolKey.currency0, poolKey.currency1);
+        }
+        // }
     }
 
     /**
@@ -1107,7 +1117,10 @@ contract MMPositionManager is
             revert Errors.InvalidPosition(tokenId, positionIndex, positionId);
         }
 
-        // Validate grace (using last checkpoint) and derive liquidity to seize
+        // Validate grace period has elapsed
+        _isSeizable(vtsManager.getMarketVTSConfiguration(position.poolId), tokenId, positionIndex, true); // revert if grace period has not elapsed
+
+        // Derive liquidity to seize
         uint256 seizedLiquidityUnits =
             vtsManager.calcSeizure(positionId, settlementDelta, positionToCheckpoint[positionId]);
 

@@ -24,7 +24,6 @@ import {LiquidityUtils} from "../libraries/LiquidityUtils.sol";
 import {ILCC} from "../interfaces/ILCC.sol";
 import {CurrencyDelta} from "v4-periphery/lib/v4-core/src/libraries/CurrencyDelta.sol";
 import {NonzeroDeltaCount} from "@uniswap/v4-core/src/libraries/NonzeroDeltaCount.sol";
-import {Constants} from "@uniswap/v4-core/test/utils/Constants.sol";
 import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {TransientSlots} from "../libraries/TransientSlots.sol";
@@ -83,7 +82,7 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler, NativeWrappe
      *
      * Note: The pool manager must already be unlocked by the caller before calling this function.
      */
-    function _modifyPositionLiquidity(PoolKey memory key, ModifyLiquidityParams memory params)
+    function _modifyPositionLiquidity(PoolKey memory key, ModifyLiquidityParams memory params, bytes memory hookData)
         internal
         virtual
         returns (BalanceDelta delta, BalanceDelta feesAccrued)
@@ -106,7 +105,7 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler, NativeWrappe
         // Downstream, MMPositionManager treats principal vs feesAccrued differently: principal maps
         // to LCC issue/cancel, while feesAccrued (originating from trader flows, wrapped into LCCs)
         // must remain wrapped until explicitly unwrapped.
-        (delta, feesAccrued) = poolManager.modifyLiquidity(key, params, Constants.ZERO_BYTES);
+        (delta, feesAccrued) = poolManager.modifyLiquidity(key, params, hookData);
 
         // Get liquidity state after modification for validation
         (uint128 liquidityAfter,,) =
@@ -180,6 +179,7 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler, NativeWrappe
      */
     function _settleUnderlying(address sender, PoolId poolId, BalanceDelta settlementDelta, address ua0, address ua1)
         internal
+        returns (BalanceDelta usedDelta)
     {
         address marketVault = _getVault(poolId);
 
@@ -197,22 +197,58 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler, NativeWrappe
             _settleUnderlyingCurrency(currency1, amount1, sender, marketVault);
         }
 
-        // Notify the proxy hook (MarketVault) of the settled underlying tokens
-        // A positive balance delta means settling underlying tokens to the proxy hook,
-        // negative means withdrawing to the MMP.
+        // Notify the MarketVault (proxy hook) of the settled underlying tokens
+        // A positive balance delta means withdrawing underlying tokens, negative balance means depositing underlying tokens,
         // Call after deposits (so MV is funded), but before withdrawals.
-        // TODO: This could fail if liquidity in market is insufficient to cover the withdrawal of a burned position.
-        // ---- ie. mass unwrap of LCCs, settled liquidity is used as coverage, then burn position.
-        // ---- Basically, on decrease, return assets to the caller as LCCs always????
-        IMarketVault(marketVault).modifyLiquidities(LiquidityUtils.safeToBalanceDelta(amount0, amount1));
+        // To prevent failure when liquidity in market is insufficient to cover the withdrawal, we tryModifyLiquidities and account LCCs for excess.
+        // ---- eg. Failure on mass unwrap of LCCs, settled liquidity is used as coverage, then burn position.
+        // ---- Basically, on decrease, return assets to the caller as LCCs in excess of usedDelta.
+        BalanceDelta usedDelta =
+            IMarketVault(marketVault).tryModifyLiquidities(LiquidityUtils.safeToBalanceDelta(amount0, amount1));
 
-        // Process withdrawals (amount > 0)
-        if (amount0 > 0) {
-            _settleUnderlyingCurrency(currency0, amount0, sender, marketVault);
+        if (usedDelta.amount0() > 0) {
+            _settleUnderlyingCurrency(currency0, usedDelta.amount0(), sender, marketVault);
         }
-        if (amount1 > 0) {
-            _settleUnderlyingCurrency(currency1, amount1, sender, marketVault);
+        if (usedDelta.amount1() > 0) {
+            _settleUnderlyingCurrency(currency1, usedDelta.amount1(), sender, marketVault);
         }
+
+        return usedDelta;
+    }
+
+    /**
+     * @notice Clamps the settlement delta by the available vault liquidities
+     * @param poolId The pool ID associated with the position
+     * @param settlementDelta The balance delta for underlying asset settlement. Positive means depositing to MV,
+     *                        negative means withdrawing from MV to MMP
+     * @return availableDelta The available balance delta that can be used for the settlement
+     */
+    function _clampDeltaByAvailableVaultLiquidities(PoolId poolId, BalanceDelta settlementDelta)
+        internal
+        returns (BalanceDelta)
+    {
+        address marketVault = _getVault(poolId);
+        return IMarketVault(marketVault).dryModifyLiquidities(settlementDelta);
+    }
+
+    function _convertSettleUnderlyingToLcc(address sender, BalanceDelta settlementDelta, address lcc0, address lcc1)
+        internal
+        returns (BalanceDelta)
+    {
+        address ua0 = ILCC(lcc0).underlying();
+        address ua1 = ILCC(lcc1).underlying();
+        if (LiquidityUtils.isZeroDelta(settlementDelta)) {
+            int256 uaDelta0 = Currency.wrap(ua0).getDelta(sender);
+            int256 uaDelta1 = Currency.wrap(ua1).getDelta(sender);
+            settlementDelta = toBalanceDelta(uaDelta0.toInt128(), uaDelta1.toInt128());
+        }
+        // Inverse the current delta of the underlying assets to the sender
+        _accountDelta(Currency.wrap(ua0), -settlementDelta.amount0(), sender);
+        _accountDelta(Currency.wrap(ua1), -settlementDelta.amount1(), sender);
+        // Apply the deltas to LCCs
+        _accountDelta(Currency.wrap(lcc0), settlementDelta.amount0(), sender);
+        _accountDelta(Currency.wrap(lcc1), settlementDelta.amount1(), sender);
+        return settlementDelta;
     }
 
     /**

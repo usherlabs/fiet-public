@@ -30,4 +30,11 @@ interface IMarketVault {
      * @return The actual balance delta that was applied (may be less than requested for withdrawals)
      */
     function tryModifyLiquidities(BalanceDelta balanceDelta) external returns (BalanceDelta);
+
+    /**
+     * @notice Dry run to modify vault liquidity, handling partial withdrawals gracefully
+     * @param balanceDelta The desired balance delta to apply
+     * @return The actual balance delta that was applied (may be less than requested for withdrawals)
+     */
+    function dryModifyLiquidities(BalanceDelta balanceDelta) external returns (BalanceDelta);
 }
