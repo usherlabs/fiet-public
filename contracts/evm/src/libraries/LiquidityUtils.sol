@@ -4,7 +4,7 @@ pragma solidity ^0.8.0;
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {SqrtPriceMath} from "@uniswap/v4-core/src/libraries/SqrtPriceMath.sol";
-import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {ModifyLiquidityParams} from "v4-periphery/lib/v4-core/src/types/PoolOperation.sol";
 import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
@@ -84,22 +84,22 @@ library LiquidityUtils {
      * @dev Computes the RfS exposure ratio e_A in basis points.
      *      Formula: e_A = min(1, a_A / C_A) where a_A is RfS amount for token A and C_A is commitment for token A.
      *      - Returns e_A scaled to ONE_BIP (1e4).
-     *      - Uses ceilDiv to avoid underestimation (round up), ensuring obligations are not under-accounted.
+     *      - Uses mulDivRoundingUp to avoid underestimation (round up), ensuring obligations are not under-accounted.
      */
     function exposureBps(uint256 rfsAmount, uint256 commitment) internal pure returns (uint256) {
         if (commitment == 0) return 0;
-        uint256 bps = Math.ceilDiv(rfsAmount * ONE_BIP, commitment);
+        uint256 bps = FullMath.mulDivRoundingUp(rfsAmount, ONE_BIP, commitment);
         return bps > ONE_BIP ? ONE_BIP : bps;
     }
 
     /**
      * @dev Computes the portion of RfS settled this tx (\phi_settle) in basis points.
      *      Formula: \phi_settle = min(1, settled / a_A), scaled to ONE_BIP (1e4).
-     *      - Uses ceilDiv to round up, so a settlement does not leave dust deficit due to flooring.
+     *      - Uses mulDivRoundingUp to round up, so a settlement does not leave dust deficit due to flooring.
      */
     function settleOfRfsBps(uint256 settleAmount, uint256 rfsAmount) internal pure returns (uint256) {
         if (rfsAmount == 0) return 0;
-        uint256 bps = Math.ceilDiv(settleAmount * ONE_BIP, rfsAmount);
+        uint256 bps = FullMath.mulDivRoundingUp(settleAmount, ONE_BIP, rfsAmount);
         return bps > ONE_BIP ? ONE_BIP : bps;
     }
 
@@ -115,8 +115,8 @@ library LiquidityUtils {
     {
         if (exposureBps_ == 0 || settleOfRfsBps_ == 0 || liquidityUnits == 0) return 0;
         // product of two bps values -> scale back to bps once, then to units
-        uint256 fracBps = Math.ceilDiv(exposureBps_ * settleOfRfsBps_, ONE_BIP);
-        return Math.ceilDiv(liquidityUnits * fracBps, ONE_BIP);
+        uint256 fracBps = FullMath.mulDivRoundingUp(exposureBps_, settleOfRfsBps_, ONE_BIP);
+        return FullMath.mulDivRoundingUp(liquidityUnits, fracBps, ONE_BIP);
     }
 
     /**
@@ -199,8 +199,8 @@ library LiquidityUtils {
         uint256 baseVTSRate1
     ) internal pure returns (uint256 settlementAmount0, uint256 settlementAmount1) {
         // divide by 10000 to convert to a percentage from bips
-        settlementAmount0 = Math.ceilDiv(commitment0 * baseVTSRate0, ONE_BIP);
-        settlementAmount1 = Math.ceilDiv(commitment1 * baseVTSRate1, ONE_BIP);
+        settlementAmount0 = FullMath.mulDivRoundingUp(commitment0, baseVTSRate0, ONE_BIP);
+        settlementAmount1 = FullMath.mulDivRoundingUp(commitment1, baseVTSRate1, ONE_BIP);
     }
 
     /**
