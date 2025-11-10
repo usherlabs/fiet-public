@@ -1111,11 +1111,15 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
     /**
      * @notice Gets the liquidity amount to be seized from a position
      * @dev This method is called BEFORE the position is modified by the seizure.
+     *      Seizure size ensures the original position remains 100% capitalized post-seizure.
+     *      The seized portion is mostly uncapitalized (LCCs that cancel), so seizers get
+     *      proportional underlying from settled shortfall. For dual-sided positions, max
+     *      aggregation tolerates overseizure to ensure incentives for intervention.
      * @param positionId The position id
-     * @param settleDelta The balance delta of the amounts settled during seizure.
+     * @param settlementDelta The balance delta of the amounts settled during seizure.
      * @return seizedLiquidityUnits The amount of position liquidity units that can be seized
      */
-    function calcSeizure(PositionId positionId, BalanceDelta settleDelta, RFSCheckpoint calldata checkpoint)
+    function calcSeizure(PositionId positionId, BalanceDelta settlementDelta)
         external
         onlyMMPosition(positionId)
         onlyPositionValid(positionId)
@@ -1133,8 +1137,8 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
         uint256 c1 = commitmentMaxima[positionId][1];
         uint256 r0 = LiquidityUtils.safeInt128ToUint256(rfsDelta.amount0());
         uint256 r1 = LiquidityUtils.safeInt128ToUint256(rfsDelta.amount1());
-        uint256 s0 = LiquidityUtils.safeInt128ToUint256(settleDelta.amount0());
-        uint256 s1 = LiquidityUtils.safeInt128ToUint256(settleDelta.amount1());
+        uint256 s0 = LiquidityUtils.safeInt128ToUint256(settlementDelta.amount0());
+        uint256 s1 = LiquidityUtils.safeInt128ToUint256(settlementDelta.amount1());
 
         // Clamp settles by RfS per token to avoid over-seizure via over-settlement
         if (s0 > r0) {
@@ -1144,44 +1148,18 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
             s1 = r1;
         }
 
-        // Grace gating per token being intervened
-        // TODO: update validation logic per ProofOfSettlement mechanic
         MarketVTSConfiguration memory cfg = getMarketVTSConfiguration(m.poolId);
-        uint256 openAt = checkpoint.timeOfLastTransition;
-        if (r0 > 0 && s0 > 0) {
-            if (block.timestamp < openAt + cfg.token0.gracePeriodTime) {
-                revert Errors.GracePeriodNotElapsed(0, 0, positionId, RFSCheckpoint(0, false, 0, 0));
-            }
-        }
-        if (r1 > 0 && s1 > 0) {
-            if (block.timestamp < openAt + cfg.token1.gracePeriodTime) {
-                revert Errors.GracePeriodNotElapsed(0, 0, positionId, RFSCheckpoint(0, false, 0, 0));
-            }
-        }
 
-        // Force the clamped settlement via transient slot; MMPositionManager._settleUnderlying will consume this
-        // TransientSlots.setSettlementDelta(LiquidityUtils.safeToBalanceDelta(s0, s1, false, false));
+        // Compute uncapitalized ratios per token (1 - settled/commitment)
+        // Use current totalSettlementAmount (position's existing settled amounts), not settlementDelta
+        uint256 currentSettled0 = totalSettlementAmount[positionId][0];
+        uint256 currentSettled1 = totalSettlementAmount[positionId][1];
+        uint256 uncap0 = LiquidityUtils.uncapitalizedBps(currentSettled0, c0);
+        uint256 uncap1 = LiquidityUtils.uncapitalizedBps(currentSettled1, c1);
+        // Aggregate for dual-sided tolerance (max ensures overseizure is acceptable when both sides open)
+        uint256 aggUncapBps = LiquidityUtils.aggregateUncapitalizedBps(uncap0, uncap1);
 
-        // Pre-deduct the seizer's settlement from the position's settled amounts so the LCCs
-        // transferred on _decrease include claim to the newly funded underlying post-obligation.
-        // Clamp deductions to current settled balances to avoid underflow.
-        // TODO: settle in to the position, which closes the deficit and does NOT increase settled amount for deficit closed.
-        // TODO: Therefore, the seizure is paying back the protocol for the amount owed by the position.
-        // (legacy references to proactive obligation removed)
-        // {
-        //     uint256 curS0 = totalSettlementAmount[positionId][0];
-        //     uint256 curS1 = totalSettlementAmount[positionId][1];
-        //     uint256 dec0 = s0 > curS0 ? curS0 : s0;
-        //     uint256 dec1 = s1 > curS1 ? curS1 : s1;
-        //     if (dec0 > 0) {
-        //         _updateSettlement(m.poolId, positionId, 0, -SafeCast.toInt256(dec0));
-        //     }
-        //     if (dec1 > 0) {
-        //         _updateSettlement(m.poolId, positionId, 1, -SafeCast.toInt256(dec1));
-        //     }
-        // }
-
-        // Exposures and settle proportions (apply base VTS as minimum buffer)
+        // Base exposures (RfS/commitment, floored by VTS_base)
         uint256 e0bps = LiquidityUtils.exposureBps(r0, c0);
         uint256 e1bps = LiquidityUtils.exposureBps(r1, c1);
         if (cfg.token0.baseVTSRate > e0bps) {
@@ -1190,7 +1168,13 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
         if (cfg.token1.baseVTSRate > e1bps) {
             e1bps = cfg.token1.baseVTSRate;
         }
-        // \phi_settle ensures seizure calculation is proportional to the settled amount in this transaction.
+
+        // Adjust exposures to include uncapitalized portion: ensures seizure covers uncapitalized + base
+        // This guarantees the original position is 100% capitalized after seizure
+        e0bps = aggUncapBps + cfg.token0.baseVTSRate > e0bps ? aggUncapBps + cfg.token0.baseVTSRate : e0bps;
+        e1bps = aggUncapBps + cfg.token1.baseVTSRate > e1bps ? aggUncapBps + cfg.token1.baseVTSRate : e1bps;
+
+        // \phi_settle ensures seizure calculation is proportional to the settled amount relative to the RfS amount in this transaction.
         uint256 p0bps = LiquidityUtils.settleOfRfsBps(s0, r0);
         uint256 p1bps = LiquidityUtils.settleOfRfsBps(s1, r1);
 

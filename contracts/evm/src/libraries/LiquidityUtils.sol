@@ -120,6 +120,32 @@ library LiquidityUtils {
     }
 
     /**
+     * @dev Computes the uncapitalized ratio in basis points.
+     *      Formula: uncap = 1 - (settled / commitment), scaled to ONE_BIP (1e4).
+     *      - Returns the portion of commitment that is not settled (uncapitalized).
+     *      - Returns 0 if commitment == 0.
+     *      - Uses mulDivRoundingUp for precision to avoid underestimation.
+     */
+    function uncapitalizedBps(uint256 settled, uint256 commitment) internal pure returns (uint256) {
+        if (commitment == 0) return 0;
+        // Compute (VTS_current) settled ratio in wad (1e18), then convert uncapitalized portion to bps
+        uint256 settledRatioWad = FullMath.mulDivRoundingUp(settled, ONE_WAD, commitment);
+        if (settledRatioWad >= ONE_WAD) return 0; // Fully capitalized
+        uint256 uncapRatioWad = ONE_WAD - settledRatioWad;
+        // Convert from wad to bps: uncapRatioWad * ONE_BIP / ONE_WAD
+        return FullMath.mulDivRoundingUp(uncapRatioWad, ONE_BIP, ONE_WAD);
+    }
+
+    /**
+     * @dev Aggregates uncapitalized ratios for dual-sided positions.
+     *      Returns max(uncap0, uncap1) to tolerate overseizure when both sides are open in RfS.
+     *      This ensures incentives for intervention even in stable markets where both tokens may have RfS.
+     */
+    function aggregateUncapitalizedBps(uint256 uncap0, uint256 uncap1) internal pure returns (uint256) {
+        return uncap0 > uncap1 ? uncap0 : uncap1;
+    }
+
+    /**
      * @dev This function is used to negate a balance delta
      * @param balanceDelta The balance delta to negate
      * @return The negated balance delta
