@@ -1019,73 +1019,73 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
     // Lens Functions
     // --------------------------------------------------
 
-    /**
-     * @notice Calculates the required vts for a position
-     * @param positionId The position id
-     * @return vtsRequired0 The required vts for token0 (1e18 scale)
-     * @return vtsRequired1 The required vts for token1 (1e18 scale)
-     */
-    function calcVTSRequired(PositionId positionId)
-        public
-        onlyPositionValid(positionId)
-        returns (uint256 vtsRequired0, uint256 vtsRequired1)
-    {
-        _settlePositionGrowths(positionId);
-        return _getVTSRequired(positionId);
-    }
+    // /**
+    //  * @notice Calculates the required vts for a position
+    //  * @param positionId The position id
+    //  * @return vtsRequired0 The required vts for token0 (1e18 scale)
+    //  * @return vtsRequired1 The required vts for token1 (1e18 scale)
+    //  */
+    // function calcVTSRequired(PositionId positionId)
+    //     public
+    //     onlyPositionValid(positionId)
+    //     returns (uint256 vtsRequired0, uint256 vtsRequired1)
+    // {
+    //     _settlePositionGrowths(positionId);
+    //     return _getVTSRequired(positionId);
+    // }
 
-    /**
-     * @notice Gets the required vts for a position using cumulative deficits
-     * @param positionId The position id
-     * @return vtsRequired0 The required vts for token0 (1e18 scale)
-     * @return vtsRequired1 The required vts for token1 (1e18 scale)
-     */
-    function _getVTSRequired(PositionId positionId)
-        internal
-        view
-        virtual
-        returns (uint256 vtsRequired0, uint256 vtsRequired1)
-    {
-        (uint256 c0, uint256 c1) = _getCommitment(positionId);
-        uint256 d0 = cumulativeDeficit[positionId][0];
-        uint256 d1 = cumulativeDeficit[positionId][1];
-        uint256 one = 1e18;
-        vtsRequired0 = c0 == 0 ? 0 : (d0 >= c0 ? one : FullMath.mulDiv(d0, one, c0));
-        vtsRequired1 = c1 == 0 ? 0 : (d1 >= c1 ? one : FullMath.mulDiv(d1, one, c1));
-    }
+    // /**
+    //  * @notice Gets the required vts for a position using cumulative deficits
+    //  * @param positionId The position id
+    //  * @return vtsRequired0 The required vts for token0 (1e18 scale)
+    //  * @return vtsRequired1 The required vts for token1 (1e18 scale)
+    //  */
+    // function _getVTSRequired(PositionId positionId)
+    //     internal
+    //     view
+    //     virtual
+    //     returns (uint256 vtsRequired0, uint256 vtsRequired1)
+    // {
+    //     (uint256 c0, uint256 c1) = _getCommitment(positionId);
+    //     uint256 d0 = cumulativeDeficit[positionId][0];
+    //     uint256 d1 = cumulativeDeficit[positionId][1];
+    //     uint256 one = 1e18;
+    //     vtsRequired0 = c0 == 0 ? 0 : (d0 >= c0 ? one : FullMath.mulDiv(d0, one, c0));
+    //     vtsRequired1 = c1 == 0 ? 0 : (d1 >= c1 ? one : FullMath.mulDiv(d1, one, c1));
+    // }
 
-    function calcVTSCurrent(PositionId positionId)
-        public
-        onlyPositionValid(positionId)
-        returns (uint256 vtsCurrent0, uint256 vtsCurrent1)
-    {
-        _settlePositionGrowths(positionId);
-        return _getVTSCurrent(positionId);
-    }
+    // function calcVTSCurrent(PositionId positionId)
+    //     public
+    //     onlyPositionValid(positionId)
+    //     returns (uint256 vtsCurrent0, uint256 vtsCurrent1)
+    // {
+    //     _settlePositionGrowths(positionId);
+    //     return _getVTSCurrent(positionId);
+    // }
 
-    /**
-     * @notice Gets the current vts for a position
-     * @param positionId The position id
-     * @return vtsCurrent0 The current vts for token0
-     * @return vtsCurrent1 The current vts for token1
-     */
-    function _getVTSCurrent(PositionId positionId)
-        internal
-        view
-        virtual
-        returns (uint256 vtsCurrent0, uint256 vtsCurrent1)
-    {
-        uint256 c0 = commitmentMaxima[positionId][0];
-        uint256 c1 = commitmentMaxima[positionId][1];
+    // /**
+    //  * @notice Gets the current vts for a position
+    //  * @param positionId The position id
+    //  * @return vtsCurrent0 The current vts for token0
+    //  * @return vtsCurrent1 The current vts for token1
+    //  */
+    // function _getVTSCurrent(PositionId positionId)
+    //     internal
+    //     view
+    //     virtual
+    //     returns (uint256 vtsCurrent0, uint256 vtsCurrent1)
+    // {
+    //     uint256 c0 = commitmentMaxima[positionId][0];
+    //     uint256 c1 = commitmentMaxima[positionId][1];
 
-        uint256 s0 = totalSettlementAmount[positionId][0];
-        uint256 s1 = totalSettlementAmount[positionId][1];
+    //     uint256 s0 = totalSettlementAmount[positionId][0];
+    //     uint256 s1 = totalSettlementAmount[positionId][1];
 
-        uint256 one = 1e18;
-        uint256 v0 = c0 > 0 ? FullMath.mulDiv(s0, one, c0) : 0;
-        uint256 v1 = c1 > 0 ? FullMath.mulDiv(s1, one, c1) : 0;
-        return (v0, v1);
-    }
+    //     uint256 one = 1e18;
+    //     uint256 v0 = c0 > 0 ? FullMath.mulDiv(s0, one, c0) : 0;
+    //     uint256 v1 = c1 > 0 ? FullMath.mulDiv(s1, one, c1) : 0;
+    //     return (v0, v1);
+    // }
 
     /**
      * @notice Calculates the RFS for a position (settles growths and calls getRFS)
@@ -1203,6 +1203,14 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
 
     /**
      * @notice Gets (view) the RFS for a position
+     * @dev RfS gating applies a base buffer: per token, the required amount is
+     *      max(baseRequired, cappedDeficit), where:
+     *        - baseRequired = commitment * baseVTSRate / 1e18
+     *        - cappedDeficit = min(cumulativeDeficit, commitment)
+     *      This opens RfS when settled < baseRequired even without a deficit,
+     *      preventing withdrawals below the configured baseline buffer.
+     *      Seizure logic remains complementary and enforces its own base floor.
+     *      Future enhancement: make base side-selection price-aware via oracle.
      * @param _positionId The position id
      * @return rfsOpen Whether the RFS is open
      * @return balanceDelta The balance delta of the amount of required to be settled or allowed to be withdrawn depending on if it is negative or positive
@@ -1214,10 +1222,16 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
         uint256 s1 = totalSettlementAmount[_positionId][1];
         uint256 d0 = cumulativeDeficit[_positionId][0];
         uint256 d1 = cumulativeDeficit[_positionId][1];
-        uint256 req0 = d0 < c0 ? d0 : c0; // cap deficit by commitment
-        uint256 req1 = d1 < c1 ? d1 : c1;
-
-        // TODO: Currently, RFS does not gate by base rate. This should be added. However, the base can be either side based on oracle price of the market.
+        // Base-required per token (commitment * baseVTSRate). RfS gates by max(deficitReq, baseReq)
+        MarketVTSConfiguration memory cfg = getMarketVTSConfiguration(meta[_positionId].poolId);
+        (uint256 base0, uint256 base1) =
+            LiquidityUtils.getBaseSettlementAmounts(c0, c1, cfg.token0.baseVTSRate, cfg.token1.baseVTSRate);
+        // Cap deficits by commitment
+        uint256 defReq0 = d0 < c0 ? d0 : c0;
+        uint256 defReq1 = d1 < c1 ? d1 : c1;
+        // Gate by base: require at least base amounts even without deficit
+        uint256 req0 = base0 > defReq0 ? base0 : defReq0;
+        uint256 req1 = base1 > defReq1 ? base1 : defReq1;
 
         int128 amount0 = _rfsDeltaRaw(s0, req0);
         int128 amount1 = _rfsDeltaRaw(s1, req1);
