@@ -29,6 +29,7 @@ import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {TransientSlots} from "../libraries/TransientSlots.sol";
 import {NativeWrapper} from "./NativeWrapper.sol";
 import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
+import {Constants} from "@uniswap/v4-core/test/utils/Constants.sol";
 
 /**
  * @title LiquidityRouter
@@ -82,7 +83,7 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler, NativeWrappe
      *
      * Note: The pool manager must already be unlocked by the caller before calling this function.
      */
-    function _modifyPositionLiquidity(PoolKey memory key, ModifyLiquidityParams memory params, bytes memory hookData)
+    function _modifyPositionLiquidity(PoolKey memory key, ModifyLiquidityParams memory params)
         internal
         virtual
         returns (BalanceDelta delta, BalanceDelta feesAccrued)
@@ -105,7 +106,7 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler, NativeWrappe
         // Downstream, MMPositionManager treats principal vs feesAccrued differently: principal maps
         // to LCC issue/cancel, while feesAccrued (originating from trader flows, wrapped into LCCs)
         // must remain wrapped until explicitly unwrapped.
-        (delta, feesAccrued) = poolManager.modifyLiquidity(key, params, hookData);
+        (delta, feesAccrued) = poolManager.modifyLiquidity(key, params, Constants.ZERO_BYTES);
 
         // Get liquidity state after modification for validation
         (uint128 liquidityAfter,,) =
@@ -237,7 +238,7 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler, NativeWrappe
         if (LiquidityUtils.isZeroDelta(settlementDelta)) {
             int256 uaDelta0 = Currency.wrap(ua0).getDelta(sender);
             int256 uaDelta1 = Currency.wrap(ua1).getDelta(sender);
-            settlementDelta = toBalanceDelta(uaDelta0.toInt128(), uaDelta1.toInt128());
+            settlementDelta = toBalanceDelta(SafeCast.toInt128(uaDelta0), SafeCast.toInt128(uaDelta1));
         }
         // Inverse the current delta of the underlying assets to the sender
         _accountDelta(Currency.wrap(ua0), -settlementDelta.amount0(), sender);

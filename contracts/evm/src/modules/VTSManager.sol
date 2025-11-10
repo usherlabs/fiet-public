@@ -260,23 +260,13 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
      * @param poolId The pool id
      * @param params The parameters of the transaction
      */
-    function _touchPosition(address owner, PoolId poolId, ModifyLiquidityParams calldata params, bytes memory hookData)
-        internal
-        virtual
-    {
+    function _touchPosition(address owner, PoolId poolId, ModifyLiquidityParams calldata params) internal virtual {
         PositionId id = PositionLibrary.generateId(owner, params);
         PositionMeta memory m = meta[id];
 
         uint128 liq = poolManager.getPositionLiquidity(poolId, PositionId.unwrap(id));
 
         bool isMMPosition = _isCallerMMP(owner) && _isMMPosition(id);
-        bool isSeizing = false;
-        bytes32 rawSeizedPositionId = abi.decode(hookData, (bytes32));
-        if (rawSeizedPositionId.length > 0 && isMMPosition) {
-            if (rawSeizedPositionId == PositionId.unwrap(id)) {
-                isSeizing = true;
-            }
-        }
 
         if (m.owner == address(0)) {
             // NEW POSITION: initialize the liquidity to the liquidity delta, assuming it will always be positive
@@ -322,12 +312,6 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
                 uint256 excess1 = 0;
                 if (liq == 0) {
                     // full liquidation
-                    excess0 = s0;
-                    excess1 = s1;
-                } else if (isSeizing) {
-                    // TODO: Special case for seizing?
-                    // The correct approach is to leverage the existing default on excess over reduced commitment maxima, by decreasing liquidity to the totalSettledAmount - the rfsdelta closed by the seizing party.
-                    // ---  this way the rfsDelta closed becomes the excess obtained by the seizing party. Any remaining position is fully capitalised. After rfsDelta considered the VTS_base this becomes the incentive/threshold.
                     excess0 = s0;
                     excess1 = s1;
                 } else {
@@ -515,7 +499,7 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
             int128 rfs0 = rfsDelta.amount0();
             if (rfs0 < 0) {
                 uint256 withdrawable0 = LiquidityUtils.safeInt128ToUint256(rfs0);
-                if (LiquidityUtils.safeInt128ToUint256(amount0) > withdrawable0) {
+                if (uint256(amount0) > withdrawable0) {
                     amount0 = withdrawable0.toInt256();
                 }
                 amount0 = _updateSettlement(positionId, 0, -amount0);
@@ -533,7 +517,7 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
             int128 rfs1 = rfsDelta.amount1();
             if (rfs1 < 0) {
                 uint256 withdrawable1 = LiquidityUtils.safeInt128ToUint256(rfs1);
-                if (LiquidityUtils.safeInt128ToUint256(amount1) > withdrawable1) {
+                if (uint256(amount1) > withdrawable1) {
                     amount1 = withdrawable1.toInt256();
                 }
                 amount1 = _updateSettlement(positionId, 1, -amount1);

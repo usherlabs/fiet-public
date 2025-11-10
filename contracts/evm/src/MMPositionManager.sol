@@ -419,14 +419,13 @@ contract MMPositionManager is
      * @return principalDelta The balance delta of the principal liquidity
      * @return accruedFeesAfterAdj The balance delta of the fees accrued after adjustment
      */
-    function _modifyPositionLiquidity(
-        PoolKey memory poolKey,
-        ModifyLiquidityParams memory params,
-        bytes memory hookData
-    ) internal override returns (BalanceDelta principalDelta, BalanceDelta accruedFeesAfterAdj) {
+    function _modifyPositionLiquidity(PoolKey memory poolKey, ModifyLiquidityParams memory params)
+        internal
+        override
+        returns (BalanceDelta principalDelta, BalanceDelta accruedFeesAfterAdj)
+    {
         // use param to modify liquidity
-        (BalanceDelta positionDelta, BalanceDelta feesAccrued) =
-            super._modifyPositionLiquidity(poolKey, params, hookData);
+        (BalanceDelta positionDelta, BalanceDelta feesAccrued) = super._modifyPositionLiquidity(poolKey, params);
 
         // Consume fee adjustment materialised by CoreHook for this call
         BalanceDelta feeAdj = TransientSlots.consumeFeeAdjDelta(address(vtsManager));
@@ -825,7 +824,7 @@ contract MMPositionManager is
         });
 
         // mint or modify liquidity. If the position is not minted, this will mint it. If the position is already minted, this will modify it.
-        (BalanceDelta principalDelta,) = _modifyPositionLiquidity(poolKey, params, Constants.ZERO_BYTES);
+        (BalanceDelta principalDelta,) = _modifyPositionLiquidity(poolKey, params);
         // generate unique position id using the params which contains the salt making this unique across all positions
         // ? If an existing position is being modified, then the position id will be the SAME, so long as (tickUpper, tickLower, salt, AND owner) do not change.
         // ie. changing liquidity does not impact the position id.
@@ -941,14 +940,12 @@ contract MMPositionManager is
         bool isSeizing = PositionId.unwrap(seizedPositionId).length != 0 && seizedLiquidityUnits > 0;
 
         // Handle liquidity clamping/defaulting for seizure
-        bytes memory hookData = Constants.ZERO_BYTES;
         if (isSeizing) {
             TransientSlots.clearSeizedPosition(); // clear on decrease to avoid re-use of the same position id and liquidity units.
             if (amountToDecrease == 0 || amountToDecrease > seizedLiquidityUnits) {
                 // Default to seized liquidity units if amount is 0 OR Clamp to seized liquidity units
                 amountToDecrease = seizedLiquidityUnits;
             }
-            hookData = abi.encode(PositionId.unwrap(seizedPositionId));
         }
 
         // validate liquidity is not over available
@@ -969,8 +966,7 @@ contract MMPositionManager is
                 tickUpper: position.tickUpper,
                 liquidityDelta: -amountToDecrease.toInt256(),
                 salt: salt
-            }),
-            hookData
+            })
         );
 
         if (amountToDecrease == 0 && LiquidityUtils.isZeroDelta(principalDelta)) {
@@ -1096,7 +1092,13 @@ contract MMPositionManager is
      * @param tokenId The token id to settle the position for
      * @param positionIndex The position index to settle the position for
      */
-    function _seizePosition(PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex) internal {
+    function _seizePosition(
+        PoolKey memory poolKey,
+        uint256 tokenId,
+        uint256 positionIndex,
+        uint256 amount0,
+        uint256 amount1
+    ) internal {
         // -- Validate the poolKey
         _assertCommitForPool(poolKey, tokenId);
 
@@ -1113,9 +1115,10 @@ contract MMPositionManager is
         // Validate grace period has elapsed
         _isSeizable(vtsManager.getMarketVTSConfiguration(position.poolId), tokenId, positionIndex, true); // revert if grace period has not elapsed
 
+        BalanceDelta settlementDelta = LiquidityUtils.safeToBalanceDelta(amount0, amount1);
+
         // Derive liquidity to seize
-        uint256 seizedLiquidityUnits =
-            vtsManager.calcSeizure(positionId, settlementDelta, positionToCheckpoint[positionId]);
+        uint256 seizedLiquidityUnits = vtsManager.calcSeizure(positionId, settlementDelta);
 
         if (seizedLiquidityUnits > 0) {
             // Set the seized liquidity units to transient storage. This will authenticate the locker for other actions on the position.

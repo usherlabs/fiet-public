@@ -31,7 +31,7 @@ interface IVTSManager is IPositionRegistry {
         view
         returns (uint256 amount0, uint256 amount1);
 
-    function calcSeizure(PositionId positionId, BalanceDelta settleDelta, RFSCheckpoint calldata checkpoint)
+    function calcSeizure(PositionId positionId, BalanceDelta settlementDelta)
         external
         returns (uint256 seizedLiquidityUnits);
 
