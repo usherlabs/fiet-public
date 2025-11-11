@@ -115,7 +115,7 @@ contract VRLSignalManager is Ownable, IVRLSignalManager {
         (ok, _signalExpiryInSeconds) = verifyLiquiditySignal(signal);
     }
 
-    // removed: checkSignalSolvency (documentation cleaned up)
+    // removed: checkSignalBacking (documentation cleaned up)
 
     function verifyLiquiditySignal(bytes memory liquiditySignal, bool revertOnInvalid)
         external

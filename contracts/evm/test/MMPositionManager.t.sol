@@ -806,19 +806,19 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
     }
 
     // make sure the positions must be covered by the total usd value in the signal
-    function test_cannotMintInsolventPositions_usingExistingTokenId() public {
+    function test_cannotMintUnbackedPositions_usingExistingTokenId() public {
         // commit to a position
         bytes memory liquiditySignal = abi.encode(liquiditySignal);
         ModifyLiquidityParams memory liquidityParams =
             ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
 
         // Get amount of underlying liquidity to transfer from the issuer to the lcc
-        (uint256 c0_insolvent, uint256 c1_insolvent) = LiquidityUtils.calculateCommitmentMaxima(
+        (uint256 c0_unbacked, uint256 c1_unbacked) = LiquidityUtils.calculateCommitmentMaxima(
             liquidityParams.tickLower, liquidityParams.tickUpper, uint128(uint256(liquidityParams.liquidityDelta))
         );
         (uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) = LiquidityUtils.getBaseSettlementAmounts(
-            c0_insolvent,
-            c1_insolvent,
+            c0_unbacked,
+            c1_unbacked,
             marketVTSConfiguration.token0.baseVTSRate,
             marketVTSConfiguration.token1.baseVTSRate
         );
@@ -835,7 +835,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         IERC20(lcc0.underlying()).approve(address(mmPositionManager), requiredSettlementAmount0);
         IERC20(lcc1.underlying()).approve(address(mmPositionManager), requiredSettlementAmount1);
 
-        // attempt to mint an amount that exceeds solvency; should revert via InvalidLiquiditySignal (solvency gate)
+        // attempt to mint an amount that exceeds backing; should revert via InvalidLiquiditySignal (backing gate)
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidLiquiditySignal.selector));
         MMA.mint(
             positionManager,
@@ -1039,8 +1039,8 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         );
     }
 
-    // TODO: Recreate this once the new insolvent() is implemented
-    // function test_canSeizeInsolventPosition() public {
+    // TODO: Recreate this once the new slashUnbackedCommitment() is implemented
+    // function test_canSeizeUnbackedPosition() public {
     //     // make a commitment to a position
     //     bytes memory encodedLiquiditySignal = abi.encode(liquiditySignal);
 
@@ -1068,10 +1068,10 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
     //     // get the position before reallocation
     //     PositionMeta memory positionBeforeReallocation = positionManager.getPosition(tokenId, 0);
-    //     // prepare an insolvent renewal (force deficit by returning 0 USD value)
+    //     // prepare an unbacked renewal (force deficit by returning 0 USD value)
     //     uint256 newSignalUSDValue = 0;
 
-    //     // mock the signal manager to return an insolvent response
+    //     // mock the signal manager to return an unbacked response
     //     vm.mockCall(
     //         address(signalManager),
     //         abi.encodeWithSelector(signalManager.renewLiquiditySignal.selector),
@@ -1080,7 +1080,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
     //     address advancer = liquiditySignal.mmState.advancer;
     //     vm.prank(address(advancer));
-    //     // reallocate the position by mocking an insolvent(by 20%) response from the signal manager
+    //     // reallocate the position by mocking an unbacked(by 20%) response from the signal manager
     //     // seizeCommitment remains a dedicated call: dispatch via action adapter is not defined; keep direct if present
     //     uint256 deficitFraction = positionManager.seizeCommitment(corePoolKey, tokenId, encodedLiquiditySignal);
     //     vm.stopPrank();

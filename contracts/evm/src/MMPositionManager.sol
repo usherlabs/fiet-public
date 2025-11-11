@@ -98,7 +98,8 @@ contract MMPositionManager is
         TAKE_LCC, // params: (Currency currency, address recipient, uint256 maxAmount, bool payerIsUser)
         INCREASE_LIQUIDITY_FROM_DELTAS, // params: (Currency currency, int128 delta, address target)
         MINT_POSITION_FROM_DELTAS, // params: (Currency currency, int128 delta, address target)
-        SETTLE_POSITION_FROM_DELTAS // params: (PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex, bool settleIn0, bool settleIn1)
+        SETTLE_POSITION_FROM_DELTAS, // params: (PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex, bool settleIn0, bool settleIn1)
+        SLASH_UNBACKED_COMMITMENT // params: (PoolKey memory poolKey, uint256 tokenId, bytes memory liquiditySignal)
     }
 
     // MarketHandler must be first.
@@ -296,15 +297,15 @@ contract MMPositionManager is
         if (action == uint256(MMAction.SEIZE_POSITION)) {
             (PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex, uint256 amount0, uint256 amount1) =
                 abi.decode(params, (PoolKey, uint256, uint256, uint256, uint256));
-            // seize is third-party action; no approval required by design
+            // seize is third-party guarantor action; no approval required by design
             _seizePosition(poolKey, tokenId, positionIndex, amount0, amount1);
             return;
         }
-        if (action == uint256(MMAction.SEIZE_COMMITMENT)) {
+        if (action == uint256(MMAction.SLASH_UNBACKED_COMMITMENT)) {
             (PoolKey memory poolKey, uint256 tokenId, bytes memory liquiditySignal) =
                 abi.decode(params, (PoolKey, uint256, bytes));
-            // seize commitment is third-party advancer flow; no approval required
-            _seizeCommitment(poolKey, tokenId, liquiditySignal);
+            // slash an unbacked commitment. A third-party guarantor action; no approval required
+            _slashUnbackedCommitment(poolKey, tokenId, liquiditySignal);
             return;
         }
         if (action == uint256(MMAction.DECOMMIT)) {
@@ -548,7 +549,7 @@ contract MMPositionManager is
     }
 
     /// @dev Verifies a new signal (nonce bump) and returns its USD value.
-    ///      Reverts if invalid; used for renew paths to gate solvency with the new state.
+    ///      Reverts if invalid; used for renew paths to gate backing with the new state.
     /// @param liquiditySignal ABI-encoded LiquiditySignal.
     /// @return USD value of the new signal reserves.
     function _verifiedSignalUsdValue(bytes memory liquiditySignal) internal returns (uint256) {
@@ -583,12 +584,12 @@ contract MMPositionManager is
         settledUsd = _usdValueLccPair(l0, s0, l1, s1);
     }
 
-    /// @dev Asserts commit solvency against the currently stored signal.
+    /// @dev Asserts commit backing against the currently stored signal.
     ///      Effective LCC (including any prospective issuance passed in) must be ≤ signal USD + settled USD.
     /// @param tokenId The commit NFT id.
     /// @param extraIssue0 Prospective token0 LCC to add to effective amounts (e.g., for a new mint).
     /// @param extraIssue1 Prospective token1 LCC to add to effective amounts (e.g., for a new mint).
-    function _assertCommitmentSolventStored(uint256 tokenId, uint256 extraIssue0, uint256 extraIssue1) internal view {
+    function _assertCommitmentBackedStored(uint256 tokenId, uint256 extraIssue0, uint256 extraIssue1) internal view {
         (uint256 issuedUsd, uint256 settledUsd) = _computeCommitmentUsdValues(tokenId, extraIssue0, extraIssue1);
         uint256 signalUsd = _currentSignalUsdValue(tokenId);
 
@@ -598,11 +599,11 @@ contract MMPositionManager is
         }
     }
 
-    /// @dev Asserts commit solvency against a newly supplied signal.
+    /// @dev Asserts commit backing against a newly supplied signal.
     ///      Verifies the signal (nonce bump), then checks effective LCC ≤ signal USD + settled USD.
     /// @param tokenId The commit NFT id.
     /// @param liquiditySignal ABI-encoded LiquiditySignal (new state).
-    function _assertCommitmentSolventWithNewSignal(uint256 tokenId, bytes memory liquiditySignal) internal {
+    function _assertCommitmentBackedWithNewSignal(uint256 tokenId, bytes memory liquiditySignal) internal {
         (uint256 issuedUsd, uint256 settledUsd) = _computeCommitmentUsdValues(tokenId, 0, 0);
         uint256 signalUsd = _verifiedSignalUsdValue(liquiditySignal);
 
@@ -839,8 +840,8 @@ contract MMPositionManager is
 
         uint256 a0 = LiquidityUtils.safeInt128ToUint256(principalDelta.amount0());
         uint256 a1 = LiquidityUtils.safeInt128ToUint256(principalDelta.amount1());
-        // Solvency gate: effective LCC (including prospective) <= signal + settled
-        _assertCommitmentSolventStored(tokenId, a0, a1);
+        // Backing gate: effective LCC (including prospective) <= signal + settled
+        _assertCommitmentBackedStored(tokenId, a0, a1);
 
         address lcc0 = Currency.unwrap(poolKey.currency0);
         address lcc1 = Currency.unwrap(poolKey.currency1);
@@ -1020,8 +1021,8 @@ contract MMPositionManager is
             revert Errors.InvalidLiquiditySignal(0, 0);
         }
 
-        // Assert solvency against the new signal
-        _assertCommitmentSolventWithNewSignal(tokenId, liquiditySignal);
+        // Assert backing against the new signal
+        _assertCommitmentBackedWithNewSignal(tokenId, liquiditySignal);
 
         // Verify new signal (nonce bump) and persist without extra pricing
         (, uint256 expirySeconds) = signalManager.verifyLiquiditySignal(liquiditySignal, true);
@@ -1151,30 +1152,48 @@ contract MMPositionManager is
     }
 
     /**
-     * @dev Sieze a portion of an insolvent commitment
-     * @param poolKey The pool key to sieze the commitment for
-     * @param tokenId The token id to sieze the commitment for
-     * @param liquiditySignal The liquidity signal to sieze the commitment for
+     * @dev Slash an unbacked commitment, and unlock its positions for seizure.
+     * @param poolKey The pool key to slash the commitment for
+     * @param tokenId The token id to slash the commitment for
+     * @param liquiditySignal The liquidity signal used as proof that the commitment is unbacked
      */
     // TODO: Ensure seizeCommitment maths is correct.
-    function _seizeCommitment(PoolKey memory poolKey, uint256 tokenId, bytes memory liquiditySignal) internal {
+    function _slashUnbackedCommitment(PoolKey memory poolKey, uint256 tokenId, bytes memory liquiditySignal) internal {
         _assertCommitForPool(poolKey, tokenId);
 
-        // ? ----- During seizeCommitment, issued LCCs must remained solvent. RfS positions must be closed across the commitment. Identifying insolvency essentially enables seizure with a skip on gracePeriod validation.
+        // 1) Verify the new liquidity signal
+        if (liquiditySignal.length == 0) {
+            revert Errors.InvalidLiquiditySignal(0, 0);
+        }
+
+        LiquiditySignal memory newSignal = abi.decode(liquiditySignal, (LiquiditySignal));
+        // verify the proofs associated with the state
+        (bool isSignalValid,) = signalManager.verifyLiquiditySignal(newSignal, true);
+
+        LiquiditySignal memory oldSignal = commitOf[tokenId].state.signal;
+
+        if (
+            newSignal.mmState.owner != oldSignal.mmState.owner || msgSender() != newSignal.mmState.advancer
+                || newSignal.mmState.advancer == newSignal.mmState.owner
+        ) {
+            revert Errors.InvalidLiquiditySignal(0, 0);
+        }
+
+        // ? ----- During seizeCommitment, issued LCCs must remain backed. RfS positions must be closed across the commitment. Identifying unbacked status essentially enables seizure with a skip on gracePeriod validation.
         // // ? ----- ----- Despite the signal value no longer matching LCC value, the open RfS + settled liquidity expresses utilised liquidity.
         // // ? ----- ----- Rather than apportioning the commitment, the entire commitment should be seized.
-        // ? ----- ----- As per the second point under decommit, LCCs issued during position management rather than for entire commitment reduces the solvency requirement before seizeCommitment and decommit.
-        // ? ----- ----- Assuming that the full commitment is utilised in positions, then 80% of the commitment is insolvent, what occurs?
-        // ? ----- ----- What if proving insolvency results in unlocking seizure across positions in an intra-transaction process - raising the a position specific-deficit by the diff in signal -> commit values, and skipping the gracePeriod validation for X amount.
+        // ? ----- ----- As per the second point under decommit, LCCs issued during position management rather than for entire commitment reduces the backing requirement before seizeCommitment and decommit.
+        // ? ----- ----- Assuming that the full commitment is utilised in positions, then 80% of the commitment is unbacked, what occurs?
+        // ? ----- ----- What if proving unbacked status results in unlocking seizure across positions in an intra-transaction process - raising the a position specific-deficit by the diff in signal -> commit values, and skipping the gracePeriod validation for X amount.
         // ? ----- ----- This could allow re-use of position seizure, and for all MMs/Guarantors to paritipate on the seizure. The advancer can be given a share of the seized outcome.
-        // ? ----- ----- If we adopt an action-dispatcher model as per the Native PositionManager, then MM's can chain actions together, ie. insolvent (prove insolvency), seize position, mint position, etc.
+        // ? ----- ----- If we adopt an action-dispatcher model as per the Native PositionManager, then MM's can chain actions together, ie. slashUnbackedCommitment (prove unbacked status), seize position, mint position, etc.
 
         // // verify the new liquidity signal(this increases the nonce of the mm's signals)
         // // get the total usd value of the signal and its expiry time
         // (uint256 totalSignalUsdValue, uint256 signalExpiryInSeconds) =
         //     signalManager.verifyLiquiditySignal(liquiditySignal, true);
         // // get the total unsettled value of the position
-        // // replaced by effective recomposition solvency; keep legacy math for seizeCommitment path
+        // // replaced by effective recomposition backing; keep legacy math for seizeCommitment path
         // uint256 positionTotalCommitmentsUSDValue = 0;
         // {
         //     PoolId poolId = commitOf[tokenId].poolId;
@@ -1186,7 +1205,7 @@ contract MMPositionManager is
         //     // Effective commitments = issuedUsd; legacy path used this as “position value”
         //     positionTotalCommitmentsUSDValue = issuedUsd > settledUsd ? (issuedUsd - settledUsd) : 0;
         // }
-        // // make sure the new signal is insolvent before it can be reallocated
+        // // make sure the new signal is unbacked before it can be reallocated
         // if (totalSignalUsdValue >= positionTotalCommitmentsUSDValue) {
         //     revert InvalidLiquiditySignal(totalSignalUsdValue, positionTotalCommitmentsUSDValue);
         // }
