@@ -1172,9 +1172,15 @@ contract MMPositionManager is
 
         LiquiditySignal memory oldSignal = commitOf[tokenId].state.signal;
 
+        // Validate slashing conditions:
+        // - The signal proof must have a consistent owner (newSignal.owner == oldSignal.owner)
+        // - The caller must be the advancer (msgSender() == newSignal.advancer)
+        // - The advancer cannot be the owner (advancer != owner) - prevents self-slashing
+        // - The caller cannot be approved or owner of the commitment NFT - prevents self-slashing
+        // The advancer is the slashing party, authorised to prove unbacked status and enable seizure.
         if (
             newSignal.mmState.owner != oldSignal.mmState.owner || msgSender() != newSignal.mmState.advancer
-                || newSignal.mmState.advancer == newSignal.mmState.owner
+                || newSignal.mmState.advancer == newSignal.mmState.owner || _isApprovedOrOwner(msgSender(), tokenId)
         ) {
             revert Errors.InvalidLiquiditySignal(0, 0);
         }
