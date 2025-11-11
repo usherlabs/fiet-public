@@ -253,7 +253,7 @@ library LiquidityUtils {
      * @param totalSettlement0 The total settlement amount for token0
      * @param totalSettlement1 The total settlement amount for token1
      * @param currentLiquidity The current liquidity of the position
-     * @param liquidityDelta The liquidity delta (negative for decreases)
+     * @param negativeLiquidityDelta The liquidity delta (negative for decreases)
      * @param seizureSettlementDelta The settlement delta from the seizure
      * @return excess0 The excess settlement amount for token0
      * @return excess1 The excess settlement amount for token1

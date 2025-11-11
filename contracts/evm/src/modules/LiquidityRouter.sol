@@ -83,7 +83,7 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler, NativeWrappe
      *
      * Note: The pool manager must already be unlocked by the caller before calling this function.
      */
-    function _modifyPositionLiquidity(PoolKey memory key, ModifyLiquidityParams memory params, bytes calldata hookData)
+    function _modifyPositionLiquidity(PoolKey memory key, ModifyLiquidityParams memory params, bytes memory hookData)
         internal
         virtual
         returns (BalanceDelta delta, BalanceDelta feesAccrued)
@@ -234,7 +234,7 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler, NativeWrappe
 
     /**
      * @notice Clamps the settlement delta by the available liquidities
-     * @param sender The address initiating the settlement
+     * @param poolId The pool ID
      * @param settlementDelta The settlement delta to clamp
      * @return clampedDelta The clamped settlement delta
      */
@@ -250,8 +250,8 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler, NativeWrappe
      * @notice Converts the settlement delta to LCC delta
      * @param sender The address initiating the settlement
      * @param settlementDelta The settlement delta to convert
-     * @param lcc0 The address of the first LCC
-     * @param lcc1 The address of the second LCC
+     * @param lccCurrency0 The currency of the first LCC
+     * @param lccCurrency1 The currency of the second LCC
      * @return convertedDelta The converted balance delta
      */
     function _convertUnderlyingDeltaToLccDelta(

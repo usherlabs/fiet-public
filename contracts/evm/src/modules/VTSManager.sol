@@ -5,6 +5,7 @@ pragma solidity ^0.8.26;
 import {MarketVTSConfiguration} from "../types/VTS.sol";
 import {RFSCheckpoint} from "../types/Checkpoint.sol";
 import {PositionRegistry} from "../modules/PositionRegistry.sol";
+import {IPositionRegistry} from "../interfaces/IPositionRegistry.sol";
 import {PositionMeta} from "../types/Position.sol";
 import {GrowthAccounting} from "../libraries/GrowthAccounting.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
@@ -161,7 +162,12 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
     }
 
     /// @notice Override to check if position commitmentMaxima is valid (exists and optionally active)
-    function isPositionValid(PositionId positionId, bool requireActive) public view override returns (bool) {
+    function isPositionValid(PositionId positionId, bool requireActive)
+        public
+        view
+        override(IPositionRegistry, PositionRegistry)
+        returns (bool)
+    {
         // Commitment maxima must be > 0 for active positions. Otherwise, it's 0 for inactive positions.
         if (requireActive && (commitmentMaxima[positionId][0] == 0 || commitmentMaxima[positionId][1] == 0)) {
             return false;

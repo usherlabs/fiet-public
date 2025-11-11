@@ -393,16 +393,18 @@ contract MMPositionManager is
      * @dev This function is used to modify liquidity for a given pool key and parameters
      * @param poolKey The pool key to modify liquidity for
      * @param params The liquidity parameters to modify liquidity for
+     * @param hookData The hook data to pass to the pool manager
      * @return principalDelta The balance delta of the principal liquidity
      * @return accruedFeesAfterAdj The balance delta of the fees accrued after adjustment
      */
-    function _modifyPositionLiquidity(PoolKey memory poolKey, ModifyLiquidityParams memory params)
-        internal
-        override
-        returns (BalanceDelta principalDelta, BalanceDelta accruedFeesAfterAdj)
-    {
+    function _modifyPositionLiquidity(
+        PoolKey memory poolKey,
+        ModifyLiquidityParams memory params,
+        bytes memory hookData
+    ) internal override returns (BalanceDelta principalDelta, BalanceDelta accruedFeesAfterAdj) {
         // use param to modify liquidity
-        (BalanceDelta positionDelta, BalanceDelta feesAccrued) = super._modifyPositionLiquidity(poolKey, params);
+        (BalanceDelta positionDelta, BalanceDelta feesAccrued) =
+            super._modifyPositionLiquidity(poolKey, params, hookData);
 
         // Consume fee adjustment materialised by CoreHook for this call
         BalanceDelta feeAdj = TransientSlots.consumeFeeAdjDelta(address(vtsManager));
@@ -670,7 +672,6 @@ contract MMPositionManager is
      * @param positionIndex The position index to settle the position for
      * @param amount0 The amount of token0 to settle. Positive amounts result in deposits, negative amounts result in withdrawals.
      * @param amount1 The amount of token1 to settle. Positive amounts result in deposits, negative amounts result in withdrawals.
-     * @return seizedLiquidityUnits The amount of liquidity units seized (non-zero only when seizing)
      */
     function _settle(PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex, int128 amount0, int128 amount1)
         internal
@@ -1138,7 +1139,7 @@ contract MMPositionManager is
         bytes memory hookData =
             abi.encode(PositionId.unwrap(positionId), settlementDelta.amount0(), settlementDelta.amount1());
 
-        // Call _decreaseInternal with hookData
+        // Call _decreaseInternal with hookData (convert to calldata via helper)
         _decreaseInternal(poolKey, position, _positionSalt(tokenId, positionIndex), seizedLiquidityUnits, hookData);
     }
 
