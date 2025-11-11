@@ -50,7 +50,7 @@ abstract contract PositionRegistry is IPositionRegistry, MarketHandler {
     }
 
     /// @notice Checks if a position is valid (exists and optionally active)
-    function isPositionValid(PositionId id, bool requireActive) public view returns (bool) {
+    function isPositionValid(PositionId id, bool requireActive) public view virtual returns (bool) {
         PositionMeta memory m = meta[id];
         PoolId _poolId = m.poolId;
         // Ensure the position has a valid poolId assigned

@@ -83,7 +83,7 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler, NativeWrappe
      *
      * Note: The pool manager must already be unlocked by the caller before calling this function.
      */
-    function _modifyPositionLiquidity(PoolKey memory key, ModifyLiquidityParams memory params)
+    function _modifyPositionLiquidity(PoolKey memory key, ModifyLiquidityParams memory params, bytes calldata hookData)
         internal
         virtual
         returns (BalanceDelta delta, BalanceDelta feesAccrued)
@@ -106,7 +106,7 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler, NativeWrappe
         // Downstream, MMPositionManager treats principal vs feesAccrued differently: principal maps
         // to LCC issue/cancel, while feesAccrued (originating from trader flows, wrapped into LCCs)
         // must remain wrapped until explicitly unwrapped.
-        (delta, feesAccrued) = poolManager.modifyLiquidity(key, params, Constants.ZERO_BYTES);
+        (delta, feesAccrued) = poolManager.modifyLiquidity(key, params, hookData);
 
         // Get liquidity state after modification for validation
         (uint128 liquidityAfter,,) =
@@ -215,13 +215,30 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler, NativeWrappe
     }
 
     /**
-     * @notice Clamps the settlement delta by the available vault liquidities
-     * @param poolId The pool ID associated with the position
-     * @param settlementDelta The balance delta for underlying asset settlement. Positive means depositing to MV,
-     *                        negative means withdrawing from MV to MMP
-     * @return availableDelta The available balance delta that can be used for the settlement
+     * @notice Gets the underlying settlement delta for a sender
+     * @param sender The address initiating the settlement
+     * @param lccCurrency0 The first LCC currency
+     * @param lccCurrency1 The second LCC currency
+     * @return settlementDelta The settlement delta for the sender
      */
-    function _clampDeltaByAvailableVaultLiquidities(PoolId poolId, BalanceDelta settlementDelta)
+    function _getUnderlyingSettlementDelta(address sender, Currency lccCurrency0, Currency lccCurrency1)
+        internal
+        returns (BalanceDelta)
+    {
+        Currency uCurrency0 = _lccToUnderlyingCurrency(lccCurrency0);
+        Currency uCurrency1 = _lccToUnderlyingCurrency(lccCurrency1);
+        int256 uDelta0 = uCurrency0.getDelta(sender);
+        int256 uDelta1 = uCurrency1.getDelta(sender);
+        return toBalanceDelta(SafeCast.toInt128(uDelta0), SafeCast.toInt128(uDelta1));
+    }
+
+    /**
+     * @notice Clamps the settlement delta by the available liquidities
+     * @param sender The address initiating the settlement
+     * @param settlementDelta The settlement delta to clamp
+     * @return clampedDelta The clamped settlement delta
+     */
+    function _clampSettlementDeltaByAvailableLiquidities(PoolId poolId, BalanceDelta settlementDelta)
         internal
         returns (BalanceDelta)
     {
@@ -229,23 +246,33 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler, NativeWrappe
         return IMarketVault(marketVault).dryModifyLiquidities(settlementDelta);
     }
 
-    function _convertSettleUnderlyingToLcc(address sender, BalanceDelta settlementDelta, address lcc0, address lcc1)
-        internal
-        returns (BalanceDelta)
-    {
-        address ua0 = ILCC(lcc0).underlying();
-        address ua1 = ILCC(lcc1).underlying();
+    /**
+     * @notice Converts the settlement delta to LCC delta
+     * @param sender The address initiating the settlement
+     * @param settlementDelta The settlement delta to convert
+     * @param lcc0 The address of the first LCC
+     * @param lcc1 The address of the second LCC
+     * @return convertedDelta The converted balance delta
+     */
+    function _convertUnderlyingDeltaToLccDelta(
+        address sender,
+        BalanceDelta settlementDelta,
+        Currency lccCurrency0,
+        Currency lccCurrency1
+    ) internal returns (BalanceDelta) {
+        Currency uCurrency0 = _lccToUnderlyingCurrency(lccCurrency0);
+        Currency uCurrency1 = _lccToUnderlyingCurrency(lccCurrency1);
         if (LiquidityUtils.isZeroDelta(settlementDelta)) {
-            int256 uaDelta0 = Currency.wrap(ua0).getDelta(sender);
-            int256 uaDelta1 = Currency.wrap(ua1).getDelta(sender);
+            int256 uaDelta0 = uCurrency0.getDelta(sender);
+            int256 uaDelta1 = uCurrency1.getDelta(sender);
             settlementDelta = toBalanceDelta(SafeCast.toInt128(uaDelta0), SafeCast.toInt128(uaDelta1));
         }
         // Inverse the current delta of the underlying assets to the sender
-        _accountDelta(Currency.wrap(ua0), -settlementDelta.amount0(), sender);
-        _accountDelta(Currency.wrap(ua1), -settlementDelta.amount1(), sender);
+        _accountDelta(uCurrency0, -settlementDelta.amount0(), sender);
+        _accountDelta(uCurrency1, -settlementDelta.amount1(), sender);
         // Apply the deltas to LCCs
-        _accountDelta(Currency.wrap(lcc0), settlementDelta.amount0(), sender);
-        _accountDelta(Currency.wrap(lcc1), settlementDelta.amount1(), sender);
+        _accountDelta(lccCurrency0, settlementDelta.amount0(), sender);
+        _accountDelta(lccCurrency1, settlementDelta.amount1(), sender);
         return settlementDelta;
     }
 

@@ -183,21 +183,6 @@ contract MMPositionManager is
         if (!_isApprovedOrOwner(caller, tokenId)) revert Errors.NotApproved(caller);
     }
 
-    function _assertApprovedOrSeizingParty(address sender, uint256 tokenId, PositionId positionId) internal view {
-        // Check if caller has established seizure rights via transient storage
-        PositionId seizedPositionId = TransientSlots.getSeizedPositionId();
-        uint256 seizedLiquidityUnits = TransientSlots.getSeizedLiquidityUnits();
-
-        // If transient storage has matching positionId and non-zero liquidity, allow access
-        if (PositionId.unwrap(seizedPositionId) == PositionId.unwrap(positionId) && seizedLiquidityUnits > 0) {
-            return;
-        }
-
-        // Otherwise, fall back to standard approval check
-        _assertSignalValid(tokenId);
-        _assertApprovedOrOwner(sender, tokenId);
-    }
-
     function _assertSignalValid(uint256 tokenId) internal view {
         if (commitOf[tokenId].state.expiresAt < block.timestamp) {
             revert Errors.SignalExpired(tokenId);
@@ -257,6 +242,7 @@ contract MMPositionManager is
         if (NonzeroDeltaCount.read() > 0) {
             revert Errors.CurrencyNotSettled();
         }
+        TransientSlots.clearSeizedPosition();
     }
 
     function _handleAction(uint256 action, bytes calldata params) internal override {
@@ -290,27 +276,18 @@ contract MMPositionManager is
                 int24 tickUpper,
                 uint256 liquidity
             ) = abi.decode(params, (PoolKey, uint256, uint256, int24, int24, uint256));
-            _assertSignalValid(tokenId);
-            _assertCommitForPool(poolKey, tokenId);
-            _assertApprovedOrOwner(msgSender(), tokenId);
             _increase(poolKey, tokenId, positionIndex, tickLower, tickUpper, liquidity);
             return;
         }
         if (action == uint256(MMAction.DECREASE_LIQUIDITY)) {
             (PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex, uint256 amountToDecrease) =
                 abi.decode(params, (PoolKey, uint256, uint256, uint256));
-            PositionMeta memory position = getPosition(tokenId, positionIndex);
-            _assertCommitForPool(poolKey, tokenId);
-            _assertApprovedOrSeizingParty(msgSender(), tokenId, getPositionId(tokenId, positionIndex));
-            _decrease(poolKey, position, _positionSalt(tokenId, positionIndex), amountToDecrease);
+            _decrease(poolKey, tokenId, positionIndex, amountToDecrease);
             return;
         }
         if (action == uint256(MMAction.BURN_POSITION)) {
             (PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex) =
                 abi.decode(params, (PoolKey, uint256, uint256));
-            _assertSignalValid(tokenId);
-            _assertCommitForPool(poolKey, tokenId);
-            _assertApprovedOrOwner(msgSender(), tokenId);
             _burnPosition(poolKey, tokenId, positionIndex);
             return;
         }
@@ -693,6 +670,7 @@ contract MMPositionManager is
      * @param positionIndex The position index to settle the position for
      * @param amount0 The amount of token0 to settle. Positive amounts result in deposits, negative amounts result in withdrawals.
      * @param amount1 The amount of token1 to settle. Positive amounts result in deposits, negative amounts result in withdrawals.
+     * @return seizedLiquidityUnits The amount of liquidity units seized (non-zero only when seizing)
      */
     function _settle(PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex, int128 amount0, int128 amount1)
         internal
@@ -705,29 +683,38 @@ contract MMPositionManager is
         }
 
         PositionId positionId = getPositionId(tokenId, positionIndex);
+        // Check transient storage for seized position to determine if seizing
+        PositionId seizedPositionId = TransientSlots.getSeizedPositionId();
+        bool isSeizing = PositionId.unwrap(seizedPositionId) == PositionId.unwrap(positionId);
 
-        // Check access: either approved/owner or seizing party via transient storage
-        // If seizure, then rfs is open, and amount0 and amount1 must be negative (deposits)
-        _assertApprovedOrSeizingParty(msgSender(), tokenId, positionId);
-
-        getPosition(tokenId, positionIndex); // Validate the position by fetching it.
+        // Access control: if not seizing, require approval
+        if (!isSeizing) {
+            _assertSignalValid(tokenId);
+            _assertApprovedOrOwner(msgSender(), tokenId);
+        }
 
         // notify the vts manager of the settlement made for this position
-        // returns the delta of required settlements IN or OUT
-        (BalanceDelta settlementDelta, bool rfsOpen) =
-            vtsManager.onMMSettle(positionId, poolKey.currency0, poolKey.currency1, toBalanceDelta(amount0, amount1));
+        // validats the position internally, or throws.
+        // returns the delta of required underlying settlements IN or OUT, rfs open/closed, and the amount of liquidity units seized during seizure path
+        (BalanceDelta settlementDelta, bool rfsOpen, uint256 seizedLiqUnits) = vtsManager.onMMSettle(
+            positionId, poolKey.currency0, poolKey.currency1, toBalanceDelta(amount0, amount1), isSeizing
+        );
 
         // mark RFS checkpoint
         _markCheckpoint(positionId, rfsOpen); // checkpoint directly on the _settleUnderlying call.
 
         // settle the underlying assets to the proxy
-        BalanceDelta usedDelta = _settleUnderlying(
+        _settleUnderlying(
             msgSender(),
             poolKey.toId(),
             settlementDelta,
             ILCC(Currency.unwrap(poolKey.currency0)).underlying(),
             ILCC(Currency.unwrap(poolKey.currency1)).underlying()
         );
+
+        if (seizedLiqUnits > 0 && isSeizing) {
+            TransientSlots.setSeizedPosition(positionId, seizedLiqUnits);
+        }
     }
 
     /**
@@ -774,7 +761,7 @@ contract MMPositionManager is
         for (uint256 i = 0; i < positionCount; i++) {
             PositionMeta memory position = getPosition(tokenId, i);
             if (position.isActive) {
-                _burnPosition(poolKey, tokenId, i);
+                _burnPositionInternal(poolKey, tokenId, i);
             }
         }
 
@@ -790,10 +777,18 @@ contract MMPositionManager is
      * @param tokenId The token id to decommit the position for
      * @param positionIndex The position index to decommit the position for
      */
-    function _burnPosition(PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex) internal {
+    function _burnPosition(PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex)
+        internal
+        onlyIfApproved(msgSender(), tokenId)
+        onlyValidCommit(poolKey, tokenId)
+    {
+        _burnPositionInternal(poolKey, tokenId, positionIndex);
+    }
+
+    function _burnPositionInternal(PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex) internal {
         PositionMeta memory pos = getPosition(tokenId, positionIndex);
         uint256 completeLiquidity = uint256(pos.liquidity);
-        _decrease(poolKey, pos, _positionSalt(tokenId, positionIndex), completeLiquidity);
+        _decrease(poolKey, tokenId, positionIndex, completeLiquidity);
     }
 
     /**
@@ -804,6 +799,17 @@ contract MMPositionManager is
      * @param liquidity The amount of liquidity to increase
      */
     function _increase(
+        PoolKey memory poolKey,
+        uint256 tokenId,
+        uint256 positionIndex,
+        int24 tickLower,
+        int24 tickUpper,
+        uint256 liquidity
+    ) internal onlyIfApproved(msgSender(), tokenId) onlyValidCommit(poolKey, tokenId) {
+        _increaseInternal(poolKey, tokenId, positionIndex, tickLower, tickUpper, liquidity);
+    }
+
+    function _increaseInternal(
         PoolKey memory poolKey,
         uint256 tokenId,
         uint256 positionIndex,
@@ -824,7 +830,7 @@ contract MMPositionManager is
         });
 
         // mint or modify liquidity. If the position is not minted, this will mint it. If the position is already minted, this will modify it.
-        (BalanceDelta principalDelta,) = _modifyPositionLiquidity(poolKey, params);
+        (BalanceDelta principalDelta,) = _modifyPositionLiquidity(poolKey, params, Constants.ZERO_BYTES);
         // generate unique position id using the params which contains the salt making this unique across all positions
         // ? If an existing position is being modified, then the position id will be the SAME, so long as (tickUpper, tickLower, salt, AND owner) do not change.
         // ie. changing liquidity does not impact the position id.
@@ -913,41 +919,54 @@ contract MMPositionManager is
     }
 
     /**
-     * @dev This function is used to liquidate a position for a given token id and position index
-     *      it removes the underlying liquidity from the position to the caller firstly
-     *      then it removes the liquidity from the position and burns the tokens
+     * @dev Entry point for decreasing position liquidity.
+     *      Validates position and access control, then calls internal logic.
      * @param poolKey The pool key for the position
-     * @param position The position to liquidate
-     * @param salt The salt of the position
-     * @param amountToLiquidate The amount of liquidity to liquidate
-     * @param byApprovedOrOwner Whether the caller is the approved or owner of the Commit (therefore, the position)
-     * @return returnDelta The balance delta of excess (above new lower commitmentMaxima) settlement returned.
-     * @dev make sure to settle the underlying assets before calling this function
-     *      because this function could potentially mark the position as inactive
-     *      and if the position is inactive, then the call to modify the underlying assets will fail
+     * @param tokenId The token id to decrease the liquidity for
+     * @param positionIndex The position index to decrease the liquidity for
+     * @param amountToDecrease The amount of liquidity to decrease
      */
-    /// @dev Decrease position liquidity by amountToDecrease and settle underlying changes.
-    ///      Mirrors native PositionManager _decrease semantics (first modify, then settle flows).
-    ///      Returns the balance delta of excess (above new lower commitmentMaxima) settlement returned.
-    /// @dev Passing liqudity delta 0 will still surface feesAccrued, and therefore transfer (fee sweep) functionality.
-    function _decrease(PoolKey memory poolKey, PositionMeta memory position, bytes32 salt, uint256 amountToDecrease)
+    function _decrease(PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex, uint256 amountToDecrease)
         internal
     {
-        // Access checked in _handleAction
-        // Check if seizure is active for this position
-        PositionId seizedPositionId = TransientSlots.getSeizedPositionId();
-        uint256 seizedLiquidityUnits = TransientSlots.getSeizedLiquidityUnits();
-        bool isSeizing = PositionId.unwrap(seizedPositionId).length != 0 && seizedLiquidityUnits > 0;
+        _assertCommitForPool(poolKey, tokenId);
 
-        // Handle liquidity clamping/defaulting for seizure
-        if (isSeizing) {
-            TransientSlots.clearSeizedPosition(); // clear on decrease to avoid re-use of the same position id and liquidity units.
-            if (amountToDecrease == 0 || amountToDecrease > seizedLiquidityUnits) {
-                // Default to seized liquidity units if amount is 0 OR Clamp to seized liquidity units
-                amountToDecrease = seizedLiquidityUnits;
-            }
+        PositionMeta memory position = getPosition(tokenId, positionIndex);
+        PositionId positionId = getPositionId(tokenId, positionIndex);
+
+        // Check transient storage for seized position
+        PositionId seizedPositionId = TransientSlots.getSeizedPositionId();
+        bool isSeizing = PositionId.unwrap(seizedPositionId) == PositionId.unwrap(positionId);
+
+        // Access control: if not seizing, require approval
+        if (!isSeizing) {
+            _assertSignalValid(tokenId);
+            _assertApprovedOrOwner(msgSender(), tokenId);
         }
 
+        // For seizure, hookData is prepared in _seizePosition and passed directly to _decreaseInternal
+        // Call internal logic
+        _decreaseInternal(
+            poolKey, position, _positionSalt(tokenId, positionIndex), amountToDecrease, Constants.ZERO_BYTES
+        );
+    }
+
+    /**
+     * @dev Internal logic for decreasing position liquidity.
+     *      Removes liquidity from the pool and handles settlement.
+     * @param poolKey The pool key for the position
+     * @param position The position to decrease
+     * @param salt The salt of the position
+     * @param amountToDecrease The amount of liquidity to decrease
+     * @param hookData The hook data to pass to modifyLiquidity
+     */
+    function _decreaseInternal(
+        PoolKey memory poolKey,
+        PositionMeta memory position,
+        bytes32 salt,
+        uint256 amountToDecrease,
+        bytes memory hookData
+    ) internal {
         // validate liquidity is not over available
         uint256 posLiq = uint256(position.liquidity);
         if (amountToDecrease > posLiq) {
@@ -966,30 +985,17 @@ contract MMPositionManager is
                 tickUpper: position.tickUpper,
                 liquidityDelta: -amountToDecrease.toInt256(),
                 salt: salt
-            })
+            }),
+            hookData
         );
 
         if (amountToDecrease == 0 && LiquidityUtils.isZeroDelta(principalDelta)) {
             return;
         }
 
-        // // Distinguish raw position deltas (a0/a1) from feesAccrued, then derive principal (after deducting fees).
-        // if (isSeizing) {
-        //     // If we get here, then the position is being seized by a non-approved or owner.
-        //     // Therefore, we transfer instead of cancel.
-        //     int128 a0 = principalDelta.amount0();
-        //     int128 a1 = principalDelta.amount1();
-        //     if (a0 > 0) {
-        //         _accountDelta(poolKey.currency0, a0, msgSender());
-        //     }
-        //     if (a1 > 0) {
-        //         _accountDelta(poolKey.currency1, a1, msgSender());
-        //     }
-        // } else {
-        //     // Burn only principal LCC that was originally issued for the position's liquidity.
-        //     // feesAccrued (from trader flows) stays wrapped and can be unwrapped via UNWRAP_LCC.
-        BalanceDelta availableDelta = _clampDeltaByAvailableVaultLiquidities(poolKey.toId(), principalDelta);
-        BalanceDelta diff = principalDelta - availableDelta;
+        BalanceDelta settlementDelta = _getUnderlyingSettlementDelta(msgSender(), poolKey.currency0, poolKey.currency1);
+        BalanceDelta availableDelta = _clampSettlementDeltaByAvailableLiquidities(position.poolId, settlementDelta);
+        BalanceDelta diff = settlementDelta - availableDelta;
         if (availableDelta.amount0() > 0) {
             liquidityHub.cancel(
                 Currency.unwrap(poolKey.currency0), LiquidityUtils.safeInt128ToUint256(availableDelta.amount0())
@@ -1002,11 +1008,8 @@ contract MMPositionManager is
         }
         // For unavailable liquidity, mark the difference as LCCs (withdrawable = positive delta) to the caller.
         if (diff.amount0() > 0 || diff.amount1() > 0) {
-            _convertSettleUnderlyingToLcc(
-                msgSender(), diff, Currency.unwrap(poolKey.currency0), Currency.unwrap(poolKey.currency1)
-            );
+            _convertUnderlyingDeltaToLccDelta(msgSender(), diff, poolKey.currency0, poolKey.currency1);
         }
-        // }
     }
 
     /**
@@ -1081,7 +1084,7 @@ contract MMPositionManager is
         // add liquidity to the pool using the token id and position index to generate a unique salt
         positionIndex = commitToPositionCount[tokenId];
 
-        positionId = _increase(poolKey, tokenId, positionIndex, tickLower, tickUpper, liquidity);
+        positionId = _increaseInternal(poolKey, tokenId, positionIndex, tickLower, tickUpper, liquidity);
 
         // Attach position to this nft
         // make sure to add the position only after modifying the liquidity
@@ -1121,31 +1124,22 @@ contract MMPositionManager is
         // Validate grace period has elapsed
         _isSeizable(vtsManager.getMarketVTSConfiguration(position.poolId), tokenId, positionIndex, true); // revert if grace period has not elapsed
 
-        BalanceDelta settlementDelta = LiquidityUtils.safeToBalanceDelta(amount0, amount1, false, false);
+        BalanceDelta settlementDelta = LiquidityUtils.safeToBalanceDelta(amount0, amount1, true, true);
 
-        // Derive liquidity to seize
-        uint256 seizedLiquidityUnits = vtsManager.calcSeizure(positionId, settlementDelta);
+        // Set transient storage placeholder (will be updated after settlement with actual seizedLiquidityUnits)
+        TransientSlots.setSeizedPosition(positionId, 0);
 
-        if (seizedLiquidityUnits > 0) {
-            // Set the seized liquidity units to transient storage. This will authenticate the locker for other actions on the position.
-            // eg. settlement is necessary because the seizing party is covering the deficit (settlement queue) in exchange for LCCs.
-            TransientSlots.setSeizedPosition(positionId, seizedLiquidityUnits);
-        }
+        // Call _settle - this will read isSeizing from transient storage and call onMMSettle
+        _settle(poolKey, tokenId, positionIndex, amount0.toInt128(), amount1.toInt128());
 
-        // By executing _decrease as part of operations, _touchPosition will automatically set a positive required settlement delta - indicating credit to the locker.
-        // By default this credit to the locker is the excess > commitmentMaxima delta.
-        // TODO: A simpler approach is full liquidation of the position, which allows the full settled amount to credit.
-        // LCCs principal delta - position-required-settlement-delta can cancel in full.
-        // ----- if delta > 0, then accrue to LCC currencies. otherwise, accrue to underlying currencies.
-        // settled delta indicates amounts actively in-market. Therefore, they're protected. This includes the VTS base.
-        // This mechanic automatically ensures that seizure results in LCCs for settled amounts.
-        // Alternatively, we could use the "failed" delta in MarketVault.tryModifyLiquidities
+        uint256 seizedLiquidityUnits = TransientSlots.getSeizedLiquidityUnits(); // set inside of _settle
 
-        // By executing _settle before _decrease, the locker clears the RfS to enable the seizure.
-        // The result is settlement into a position to cover seizure in return for LCCs that can be unwrapped / awaited.
+        // Prepare hookData: encode seizedPositionId and settlementDelta
+        bytes memory hookData =
+            abi.encode(PositionId.unwrap(positionId), settlementDelta.amount0(), settlementDelta.amount1());
 
-        // ? _seize, _settle, _decrease, _take - where if failure to settle, then revert.
-        // currency delta should solve for this.
+        // Call _decreaseInternal with hookData
+        _decreaseInternal(poolKey, position, _positionSalt(tokenId, positionIndex), seizedLiquidityUnits, hookData);
     }
 
     /**
@@ -1205,7 +1199,7 @@ contract MMPositionManager is
         // // get the fraction of the deficit of the position, unit is in wad(1e18) for better precision
         // deficitFractionInBips = FullMath.mulDiv(
         //     positionTotalCommitmentsUSDValue - totalSignalUsdValue,
-        //     LiquidityUtils.ONE_BIP,
+        //     LiquidityUtils.BPS_DENOMINATOR,
         //     positionTotalCommitmentsUSDValue
         // );
 
@@ -1215,7 +1209,7 @@ contract MMPositionManager is
         //     PositionMeta memory position = getPosition(tokenId, i);
         //     // liquidate a percentage given by the deficit fraction
         //     uint256 liquidityToSeize =
-        //         FullMath.mulDiv(uint256(position.liquidity), deficitFractionInBips, LiquidityUtils.ONE_BIP);
+        //         FullMath.mulDiv(uint256(position.liquidity), deficitFractionInBips, LiquidityUtils.BPS_DENOMINATOR);
         //     _decrease(poolKey, position, _positionSalt(tokenId, i), liquidityToSeize, false);
         // }
     }

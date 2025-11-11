@@ -12,9 +12,13 @@ import {IPositionRegistry} from "./IPositionRegistry.sol";
 interface IVTSManager is IPositionRegistry {
     function setMarketVTSConfiguration(PoolId corePoolId, MarketVTSConfiguration memory vtsConfiguration) external;
 
-    function onMMSettle(PositionId positionId, Currency lccCurrency0, Currency lccCurrency1, BalanceDelta delta)
-        external
-        returns (BalanceDelta settlementDelta, bool rfsOpen);
+    function onMMSettle(
+        PositionId positionId,
+        Currency lccCurrency0,
+        Currency lccCurrency1,
+        BalanceDelta delta,
+        bool isSeizing
+    ) external returns (BalanceDelta settlementDelta, bool rfsOpen, uint256 seizedLiquidityUnits);
 
     function getMarketVTSConfiguration(PoolId corePoolId) external view returns (MarketVTSConfiguration memory);
 
@@ -30,10 +34,6 @@ interface IVTSManager is IPositionRegistry {
         external
         view
         returns (uint256 amount0, uint256 amount1);
-
-    function calcSeizure(PositionId positionId, BalanceDelta settlementDelta)
-        external
-        returns (uint256 seizedLiquidityUnits);
 
     function incrementCoverage(PoolId poolId, uint256 amount0, uint256 amount1) external;
 

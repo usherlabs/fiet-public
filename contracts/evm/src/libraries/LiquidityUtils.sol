@@ -30,7 +30,7 @@ library LiquidityUtils {
 
     uint160 internal constant ZERO_FOR_ONE_LIMIT = TickMath.MIN_SQRT_PRICE + 1;
     uint160 internal constant ONE_FOR_ZERO_LIMIT = TickMath.MAX_SQRT_PRICE - 1;
-    uint256 internal constant ONE_BIP = 10000;
+    uint256 internal constant BPS_DENOMINATOR = 10000; // 100% (10000 basis points)
     uint256 internal constant ONE_WAD = 1e18;
 
     /**
@@ -83,24 +83,24 @@ library LiquidityUtils {
     /**
      * @dev Computes the RfS exposure ratio e_A in basis points.
      *      Formula: e_A = min(1, a_A / C_A) where a_A is RfS amount for token A and C_A is commitment for token A.
-     *      - Returns e_A scaled to ONE_BIP (1e4).
+     *      - Returns e_A scaled to BPS_DENOMINATOR (1e4).
      *      - Uses mulDivRoundingUp to avoid underestimation (round up), ensuring obligations are not under-accounted.
      */
     function exposureBps(uint256 rfsAmount, uint256 commitment) internal pure returns (uint256) {
         if (commitment == 0) return 0;
-        uint256 bps = FullMath.mulDivRoundingUp(rfsAmount, ONE_BIP, commitment);
-        return bps > ONE_BIP ? ONE_BIP : bps;
+        uint256 bps = FullMath.mulDivRoundingUp(rfsAmount, BPS_DENOMINATOR, commitment);
+        return bps > BPS_DENOMINATOR ? BPS_DENOMINATOR : bps;
     }
 
     /**
      * @dev Computes the portion of RfS settled this tx (\phi_settle) in basis points.
-     *      Formula: \phi_settle = min(1, settled / a_A), scaled to ONE_BIP (1e4).
+     *      Formula: \phi_settle = min(1, settled / a_A), scaled to BPS_DENOMINATOR (1e4).
      *      - Uses mulDivRoundingUp to round up, so a settlement does not leave dust deficit due to flooring.
      */
     function settleOfRfsBps(uint256 settleAmount, uint256 rfsAmount) internal pure returns (uint256) {
         if (rfsAmount == 0) return 0;
-        uint256 bps = FullMath.mulDivRoundingUp(settleAmount, ONE_BIP, rfsAmount);
-        return bps > ONE_BIP ? ONE_BIP : bps;
+        uint256 bps = FullMath.mulDivRoundingUp(settleAmount, BPS_DENOMINATOR, rfsAmount);
+        return bps > BPS_DENOMINATOR ? BPS_DENOMINATOR : bps;
     }
 
     /**
@@ -115,34 +115,8 @@ library LiquidityUtils {
     {
         if (exposureBps_ == 0 || settleOfRfsBps_ == 0 || liquidityUnits == 0) return 0;
         // product of two bps values -> scale back to bps once, then to units
-        uint256 fracBps = FullMath.mulDivRoundingUp(exposureBps_, settleOfRfsBps_, ONE_BIP);
-        return FullMath.mulDivRoundingUp(liquidityUnits, fracBps, ONE_BIP);
-    }
-
-    /**
-     * @dev Computes the uncapitalized ratio in basis points.
-     *      Formula: uncap = 1 - (settled / commitment), scaled to ONE_BIP (1e4).
-     *      - Returns the portion of commitment that is not settled (uncapitalized).
-     *      - Returns 0 if commitment == 0.
-     *      - Uses mulDivRoundingUp for precision to avoid underestimation.
-     */
-    function uncapitalizedBps(uint256 settled, uint256 commitment) internal pure returns (uint256) {
-        if (commitment == 0) return 0;
-        // Compute (VTS_current) settled ratio in wad (1e18), then convert uncapitalized portion to bps
-        uint256 settledRatioWad = FullMath.mulDivRoundingUp(settled, ONE_WAD, commitment);
-        if (settledRatioWad >= ONE_WAD) return 0; // Fully capitalized
-        uint256 uncapRatioWad = ONE_WAD - settledRatioWad;
-        // Convert from wad to bps: uncapRatioWad * ONE_BIP / ONE_WAD
-        return FullMath.mulDivRoundingUp(uncapRatioWad, ONE_BIP, ONE_WAD);
-    }
-
-    /**
-     * @dev Aggregates uncapitalized ratios for dual-sided positions.
-     *      Returns max(uncap0, uncap1) to tolerate overseizure when both sides are open in RfS.
-     *      This ensures incentives for intervention even in stable markets where both tokens may have RfS.
-     */
-    function aggregateUncapitalizedBps(uint256 uncap0, uint256 uncap1) internal pure returns (uint256) {
-        return uncap0 > uncap1 ? uncap0 : uncap1;
+        uint256 fracBps = FullMath.mulDivRoundingUp(exposureBps_, settleOfRfsBps_, BPS_DENOMINATOR);
+        return FullMath.mulDivRoundingUp(liquidityUnits, fracBps, BPS_DENOMINATOR);
     }
 
     /**
@@ -225,8 +199,8 @@ library LiquidityUtils {
         uint256 baseVTSRate1
     ) internal pure returns (uint256 settlementAmount0, uint256 settlementAmount1) {
         // divide by 10000 to convert to a percentage from bips
-        settlementAmount0 = FullMath.mulDivRoundingUp(commitment0, baseVTSRate0, ONE_BIP);
-        settlementAmount1 = FullMath.mulDivRoundingUp(commitment1, baseVTSRate1, ONE_BIP);
+        settlementAmount0 = FullMath.mulDivRoundingUp(commitment0, baseVTSRate0, BPS_DENOMINATOR);
+        settlementAmount1 = FullMath.mulDivRoundingUp(commitment1, baseVTSRate1, BPS_DENOMINATOR);
     }
 
     /**
@@ -270,5 +244,38 @@ library LiquidityUtils {
      */
     function isZeroDelta(BalanceDelta delta) internal pure returns (bool) {
         return BalanceDelta.unwrap(delta) == BalanceDelta.unwrap(BalanceDeltaLibrary.ZERO_DELTA);
+    }
+
+    /**
+     * @dev Calculates the excess settlement amounts for seizure scenarios.
+     *      Apportions totalSettlementAmount by liquidity delta ratio, then takes the minimum
+     *      of the apportioned amount and the seizureSettlementDelta.
+     * @param totalSettlement0 The total settlement amount for token0
+     * @param totalSettlement1 The total settlement amount for token1
+     * @param currentLiquidity The current liquidity of the position
+     * @param liquidityDelta The liquidity delta (negative for decreases)
+     * @param seizureSettlementDelta The settlement delta from the seizure
+     * @return excess0 The excess settlement amount for token0
+     * @return excess1 The excess settlement amount for token1
+     */
+    function calculateSeizureExcess(
+        uint256 totalSettlement0,
+        uint256 totalSettlement1,
+        uint256 currentLiquidity,
+        uint256 negativeLiquidityDelta, // negative delta means decrease in liquidity
+        BalanceDelta seizureSettlementDelta
+    ) internal pure returns (uint256 excess0, uint256 excess1) {
+        // Apportion totalSettlementAmount by liquidity delta ratio
+        // ie. change in liquidity / current liquidity
+        uint256 liquidityRatio = FullMath.mulDiv(negativeLiquidityDelta, ONE_WAD, currentLiquidity);
+        uint256 apportionedS0 = FullMath.mulDiv(totalSettlement0, liquidityRatio, ONE_WAD);
+        uint256 apportionedS1 = FullMath.mulDiv(totalSettlement1, liquidityRatio, ONE_WAD);
+
+        // Excess = min(apportioned, seizureSettlementDelta)
+        uint256 seizureS0 = safeInt128ToUint256(seizureSettlementDelta.amount0());
+        uint256 seizureS1 = safeInt128ToUint256(seizureSettlementDelta.amount1());
+
+        excess0 = apportionedS0 < seizureS0 ? apportionedS0 : seizureS0;
+        excess1 = apportionedS1 < seizureS1 ? apportionedS1 : seizureS1;
     }
 }

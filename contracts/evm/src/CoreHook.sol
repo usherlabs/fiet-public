@@ -273,10 +273,10 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
         ModifyLiquidityParams calldata params,
         BalanceDelta delta,
         BalanceDelta,
-        bytes calldata
+        bytes calldata hookData
     ) internal virtual override whenNotPaused(key.toId()) returns (bytes4, BalanceDelta) {
         // Update PositionRegistry with registration/update based on actual pool id
-        _touchPosition(sender, key.toId(), params);
+        _touchPosition(sender, key.toId(), params, hookData);
 
         PositionId id = PositionLibrary.generateId(sender, params);
 
@@ -309,10 +309,10 @@ contract CoreHook is BaseHook, PausablePool, Exttload, VTSManager {
         ModifyLiquidityParams calldata params,
         BalanceDelta delta,
         BalanceDelta,
-        bytes calldata
+        bytes calldata hookData
     ) internal virtual override returns (bytes4, BalanceDelta) {
         // Update PositionRegistry with registration/update based on actual pool id
-        _touchPosition(sender, key.toId(), params);
+        _touchPosition(sender, key.toId(), params, hookData);
 
         // Handle fee-share mechanics
         // Example FeeTakingHook: https://github.com/Uniswap/v4-core/blob/a7cf038cd568801a79a9b4cf92cd5b52c95c8585/src/test/FeeTakingHook.sol#L14

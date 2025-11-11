@@ -1087,7 +1087,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
     //     PositionMeta memory positionAfterReallocation = positionManager.getPosition(tokenId, 0);
     //     // validate the liquidity in the position is reduced by 20%
     //     uint256 expectedLiquidityAfterReallocation = uint256(positionBeforeReallocation.liquidity)
-    //         - Math.mulDiv(uint256(positionBeforeReallocation.liquidity), deficitFraction, LiquidityUtils.ONE_BIP);
+    //         - Math.mulDiv(uint256(positionBeforeReallocation.liquidity), deficitFraction, LiquidityUtils.BPS_DENOMINATOR);
     //     assertEq(uint256(positionAfterReallocation.liquidity), expectedLiquidityAfterReallocation);
     // }
 }

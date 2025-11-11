@@ -118,15 +118,15 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
         if (!isPositionValid(_positionId, true)) {
             revert Errors.InvalidPosition(0, 0, _positionId);
         }
-        if (commitmentMaxima[_positionId][0] == 0 || commitmentMaxima[_positionId][1] == 0) {
-            revert Errors.InvalidPosition(0, 0, _positionId);
-        }
         _;
     }
 
     modifier onlyMMPosition(PositionId _positionId) {
-        if (!_isCallerMMP(msg.sender) || !_isMMPosition(_positionId)) {
+        if (!_isCallerMMP(msg.sender)) {
             revert Errors.InvalidSender();
+        }
+        if (!_isMMPosition(_positionId)) {
+            revert Errors.InvalidPosition(0, 0, _positionId);
         }
         _;
     }
@@ -158,6 +158,15 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
      */
     function _isMMPosition(PositionId positionId) internal view returns (bool) {
         return meta[positionId].owner == mmPositionManager;
+    }
+
+    /// @notice Override to check if position commitmentMaxima is valid (exists and optionally active)
+    function isPositionValid(PositionId positionId, bool requireActive) public view override returns (bool) {
+        // Commitment maxima must be > 0 for active positions. Otherwise, it's 0 for inactive positions.
+        if (requireActive && (commitmentMaxima[positionId][0] == 0 || commitmentMaxima[positionId][1] == 0)) {
+            return false;
+        }
+        return super.isPositionValid(positionId, requireActive);
     }
 
     /**
@@ -259,14 +268,35 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
      * @param owner The owner of the position - ie. the Smart Contract managing positions.
      * @param poolId The pool id
      * @param params The parameters of the transaction
+     * @param hookData The hook data containing seizure information if applicable
      */
-    function _touchPosition(address owner, PoolId poolId, ModifyLiquidityParams calldata params) internal virtual {
+    function _touchPosition(
+        address owner,
+        PoolId poolId,
+        ModifyLiquidityParams calldata params,
+        bytes calldata hookData
+    ) internal virtual {
         PositionId id = PositionLibrary.generateId(owner, params);
         PositionMeta memory m = meta[id];
 
         uint128 liq = poolManager.getPositionLiquidity(poolId, PositionId.unwrap(id));
 
         bool isMMPosition = _isCallerMMP(owner) && _isMMPosition(id);
+
+        // Decode hookData to determine if seizing
+        bool isSeizing = false;
+        BalanceDelta seizureSettlementDelta = BalanceDelta.wrap(0);
+
+        if (hookData.length > 0) {
+            (bytes32 seizedPositionIdBytes, int128 settle0, int128 settle1) =
+                abi.decode(hookData, (bytes32, int128, int128));
+            PositionId seizedPositionId = PositionId.wrap(seizedPositionIdBytes);
+
+            if (PositionId.unwrap(seizedPositionId) == PositionId.unwrap(id)) {
+                isSeizing = true;
+                seizureSettlementDelta = toBalanceDelta(settle0, settle1);
+            }
+        }
 
         if (m.owner == address(0)) {
             // NEW POSITION: initialize the liquidity to the liquidity delta, assuming it will always be positive
@@ -285,8 +315,8 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
                     vtsConfiguration.token1.baseVTSRate
                 );
                 // Set the settlement amounts to the total commitment amounts for DirectLPs.
-                _updateSettlement(id, 0, amountToSettle0.toInt256());
-                _updateSettlement(id, 1, amountToSettle1.toInt256());
+                // ? No _updateSettlement calls inside of this function - as we're now using flash-ier accounting.
+                // All MM settlements handled inside of onMMSettle.
 
                 // Invert signs: negative delta = caller owes liquidity (deposit), positive = protocol owes (withdrawal)
                 TransientSlots.addPositionRequiredSettlementDelta(
@@ -294,6 +324,7 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
                 );
             } else {
                 // Set the settlement amounts to the total commitment amounts for DirectLPs.
+                // DirectLPs do not settle in underlying terms - as they are handled natively.
                 _updateSettlement(id, 0, commitmentMaxima[id][0].toInt256());
                 _updateSettlement(id, 1, commitmentMaxima[id][1].toInt256());
             }
@@ -303,7 +334,10 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
                 // FULL or PARTIAL LIQUIDATION:
 
                 // validate that RfS is closed before we track position param (commitment maxima) updates.
-                calcRFS(id, true); // rfs is always closed for DirectLPs.
+                // Skip calcRFS when seizing
+                if (!isSeizing) {
+                    calcRFS(id, true); // rfs is always closed for DirectLPs.
+                }
                 _trackCommitment(id, params);
                 // active position is being liquidated.
                 uint256 s0 = totalSettlementAmount[id][0];
@@ -316,19 +350,24 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
                     excess1 = s1;
                 } else {
                     // a partial liquidation results in removal of the settlements above the NEW commitment maxima.
-                    if (s0 > commitmentMaxima[id][0]) {
-                        excess0 = s0 - commitmentMaxima[id][0];
+                    if (isSeizing) {
+                        // Use seizure-specific excess calculation
+                        (excess0, excess1) = LiquidityUtils.calculateSeizureExcess(
+                            s0,
+                            s1,
+                            uint256(liq),
+                            uint256(-params.liquidityDelta), // the amount to seize.
+                            seizureSettlementDelta
+                        );
+                    } else {
+                        // Standard excess calculation
+                        if (s0 > commitmentMaxima[id][0]) {
+                            excess0 = s0 - commitmentMaxima[id][0];
+                        }
+                        if (s1 > commitmentMaxima[id][1]) {
+                            excess1 = s1 - commitmentMaxima[id][1];
+                        }
                     }
-                    if (s1 > commitmentMaxima[id][1]) {
-                        excess1 = s1 - commitmentMaxima[id][1];
-                    }
-                }
-                // ? Update settlement for all positions.
-                if (excess0 > 0) {
-                    _updateSettlement(id, 0, -excess0.toInt256());
-                }
-                if (excess1 > 0) {
-                    _updateSettlement(id, 1, -excess1.toInt256());
                 }
                 // ? Only save the settlement delta for MMPs.
                 if (isMMPosition) {
@@ -337,6 +376,14 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
                     TransientSlots.addPositionRequiredSettlementDelta(
                         LiquidityUtils.safeToBalanceDelta(excess0, excess1, false, false)
                     );
+                } else {
+                    // ? Update settlement for DirectLPs.
+                    if (excess0 > 0) {
+                        _updateSettlement(id, 0, -excess0.toInt256());
+                    }
+                    if (excess1 > 0) {
+                        _updateSettlement(id, 1, -excess1.toInt256());
+                    }
                 }
             } else if (params.liquidityDelta > 0) {
                 // POSITION DELTA INCREASE:
@@ -364,14 +411,6 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
                     TransientSlots.addPositionRequiredSettlementDelta(
                         LiquidityUtils.safeToBalanceDelta(excess0, excess1, true, true)
                     );
-
-                    // Apply the increase to the position’s settled amounts immediately so bonus weights reflect net state.
-                    if (excess0 > 0) {
-                        _updateSettlement(id, 0, excess0.toInt256());
-                    }
-                    if (excess1 > 0) {
-                        _updateSettlement(id, 1, excess1.toInt256());
-                    }
                 } else {
                     // Increase DirectLPs settlement amounts by the difference between the commitment maxima and the last settled amounts.
                     _updateSettlement(id, 0, (commitmentMaxima[id][0] - s0).toInt256());
@@ -471,67 +510,108 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
      * @param lccCurrency0 The pool currency of the LCC token for token0
      * @param lccCurrency1 The pool currency of the LCC token for token1
      * @param delta The balance delta of the settlement
+     * @param isSeizing Whether the position is being seized
      * @return settlementDelta The balance delta of the settlement amounts relative to the position that was actually modified. The amount of underlying native assets actually reallocated/adjusted.
      * @return rfsOpen Whether the RfS is open for the position
+     * @return seizedLiquidityUnits The amount of liquidity units seized (non-zero only when seizing)
      */
-    function onMMSettle(PositionId positionId, Currency lccCurrency0, Currency lccCurrency1, BalanceDelta delta)
+    function onMMSettle(
+        PositionId positionId,
+        Currency lccCurrency0,
+        Currency lccCurrency1,
+        BalanceDelta delta,
+        bool isSeizing
+    )
         external
         onlyMMPosition(positionId)
-        onlyPositionValid(positionId)
-        returns (BalanceDelta settlementDelta, bool rfsOpen)
+        returns (BalanceDelta settlementDelta, bool rfsOpen, uint256 seizedLiquidityUnits)
     {
         PositionMeta memory m = meta[positionId];
         PoolId poolId = m.poolId;
+
+        // Do not require position active, but validate.
+        if (!isPositionValid(positionId, false)) {
+            revert Errors.InvalidPosition(0, 0, positionId);
+        }
 
         // during withdrawals, delta is positive as per caller context. during deposits, delta is negative.
         // However, _updateSettlement accepts the inverse as a delta of the totalSettlementAmount. ie. positive increases, and negative decreases the metric.
         int256 amount0 = delta.amount0();
         int256 amount1 = delta.amount1();
 
-        // Only assert closed RfS if pure underlying liquidity WITHDRAWAL. calcRFS includes settle growth accounting since last touch
+        // Settle growths and get RFS state
         bool isWithdrawal = amount0 > 0 || amount1 > 0;
         BalanceDelta rfsDelta;
-        (rfsOpen, rfsDelta) = calcRFS(positionId, isWithdrawal);
+        _settlePositionGrowths(positionId);
+        (rfsOpen, rfsDelta) = _getRFS(positionId);
 
-        if (amount0 > 0) {
-            // withdraw
-            // Clamp by rfsDelta: if rfsDelta < 0, then -rfsDelta is withdrawable
-            int128 rfs0 = rfsDelta.amount0();
-            if (rfs0 < 0) {
-                uint256 withdrawable0 = LiquidityUtils.safeInt128ToUint256(rfs0);
-                if (uint256(amount0) > withdrawable0) {
-                    amount0 = withdrawable0.toInt256();
-                }
+        // Handle settlement based on position state
+        if (isSeizing || !m.isActive) {
+            // Seizing or inactive: skip RFS validation and clamps, directly update settlement
+            if (amount0 != 0) {
                 amount0 = _updateSettlement(positionId, 0, -amount0);
-            } else {
-                // rfsDelta >= 0 means cannot withdraw (handled in calcRFS)
-                amount0 = 0;
             }
-        } else if (amount0 < 0) {
-            // deposit
-            amount0 = _updateSettlement(positionId, 0, -amount0);
-        }
-        if (amount1 > 0) {
-            // withdraw
-            // Clamp by rfsDelta: if rfsDelta < 0, then -rfsDelta is withdrawable
-            int128 rfs1 = rfsDelta.amount1();
-            if (rfs1 < 0) {
-                uint256 withdrawable1 = LiquidityUtils.safeInt128ToUint256(rfs1);
-                if (uint256(amount1) > withdrawable1) {
-                    amount1 = withdrawable1.toInt256();
-                }
+            if (amount1 != 0) {
                 amount1 = _updateSettlement(positionId, 1, -amount1);
-            } else {
-                // rfsDelta >= 0 means cannot withdraw (handled in calcRFS)
-                amount1 = 0;
             }
-        } else if (amount1 < 0) {
-            // deposit
-            amount1 = _updateSettlement(positionId, 1, -amount1);
+        } else {
+            // Active and not seizing: validate and apply RFS clamps
+            if (commitmentMaxima[positionId][0] == 0 || commitmentMaxima[positionId][1] == 0) {
+                revert Errors.InvalidPosition(0, 0, positionId);
+            }
+            // For withdrawals, validate RFS closure
+            if (isWithdrawal && rfsOpen) {
+                revert Errors.RFSOpenForPosition(positionId);
+            }
+
+            // Apply RFS clamps for withdrawals
+            if (amount0 > 0) {
+                // withdraw
+                // Clamp by rfsDelta: if rfsDelta < 0, then -rfsDelta is withdrawable
+                int128 rfs0 = rfsDelta.amount0();
+                if (rfs0 < 0) {
+                    uint256 withdrawable0 = LiquidityUtils.safeInt128ToUint256(rfs0);
+                    if (uint256(amount0) > withdrawable0) {
+                        amount0 = withdrawable0.toInt256();
+                    }
+                    amount0 = _updateSettlement(positionId, 0, -amount0);
+                } else {
+                    // rfsDelta >= 0 means cannot withdraw
+                    amount0 = 0;
+                }
+            } else if (amount0 < 0) {
+                // deposit
+                amount0 = _updateSettlement(positionId, 0, -amount0);
+            }
+            if (amount1 > 0) {
+                // withdraw
+                // Clamp by rfsDelta: if rfsDelta < 0, then -rfsDelta is withdrawable
+                int128 rfs1 = rfsDelta.amount1();
+                if (rfs1 < 0) {
+                    uint256 withdrawable1 = LiquidityUtils.safeInt128ToUint256(rfs1);
+                    if (uint256(amount1) > withdrawable1) {
+                        amount1 = withdrawable1.toInt256();
+                    }
+                    amount1 = _updateSettlement(positionId, 1, -amount1);
+                } else {
+                    // rfsDelta >= 0 means cannot withdraw
+                    amount1 = 0;
+                }
+            } else if (amount1 < 0) {
+                // deposit
+                amount1 = _updateSettlement(positionId, 1, -amount1);
+            }
         }
 
         // Clamps within _updateSettlement may modify the return delta. Flip the signs on amount0 and amount1 to match caller-context delta.
         settlementDelta = LiquidityUtils.negateBalanceDelta(toBalanceDelta(amount0.toInt128(), amount1.toInt128()));
+
+        // Calculate seized liquidity units when seizing
+        if (isSeizing) {
+            seizedLiquidityUnits = _calcSeizure(positionId, delta);
+        } else {
+            seizedLiquidityUnits = 0;
+        }
 
         // Proactive extraction (incremental): fund only increases in pending slashes since last observation to avoid over-funding.
         /**
@@ -844,7 +924,7 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
 
         // feesBurn = fees * (burnBase / ofDelta) * bps/10000
         uint256 feesBurn = FullMath.mulDiv(fees, burnBase, ofDelta);
-        feesBurn = FullMath.mulDiv(feesBurn, bps, LiquidityUtils.ONE_BIP);
+        feesBurn = FullMath.mulDiv(feesBurn, bps, LiquidityUtils.BPS_DENOMINATOR);
         if (feesBurn == 0) return;
         if (feesBurn > fees) feesBurn = fees; // clamp to fees accrued
 
@@ -1097,7 +1177,7 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
     }
 
     /**
-     * @notice Gets the liquidity amount to be seized from a position
+     * @notice Gets the liquidity amount to be seized from a position (internal)
      * @dev This method is called BEFORE the position is modified by the seizure.
      *      Seizure size ensures the original position remains 100% capitalized post-seizure.
      *      The seized portion is mostly uncapitalized (LCCs that cancel), so seizers get
@@ -1107,9 +1187,8 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
      * @param settlementDelta The balance delta of the amounts settled during seizure.
      * @return seizedLiquidityUnits The amount of position liquidity units that can be seized
      */
-    function calcSeizure(PositionId positionId, BalanceDelta settlementDelta)
-        external
-        onlyMMPosition(positionId)
+    function _calcSeizure(PositionId positionId, BalanceDelta settlementDelta)
+        internal
         onlyPositionValid(positionId)
         returns (uint256 seizedLiquidityUnits)
     {
@@ -1138,16 +1217,7 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
 
         MarketVTSConfiguration memory cfg = getMarketVTSConfiguration(m.poolId);
 
-        // Compute uncapitalized ratios per token (1 - settled/commitment)
-        // Use current totalSettlementAmount (position's existing settled amounts), not settlementDelta
-        uint256 currentSettled0 = totalSettlementAmount[positionId][0];
-        uint256 currentSettled1 = totalSettlementAmount[positionId][1];
-        uint256 uncap0 = LiquidityUtils.uncapitalizedBps(currentSettled0, c0);
-        uint256 uncap1 = LiquidityUtils.uncapitalizedBps(currentSettled1, c1);
-        // Aggregate for dual-sided tolerance (max ensures overseizure is acceptable when both sides open)
-        uint256 aggUncapBps = LiquidityUtils.aggregateUncapitalizedBps(uncap0, uncap1);
-
-        // Base exposures (RfS/commitment, floored by VTS_base)
+        // 1) Base exposures (RfS/commitment, floored by VTS_base)
         uint256 e0bps = LiquidityUtils.exposureBps(r0, c0);
         uint256 e1bps = LiquidityUtils.exposureBps(r1, c1);
         if (cfg.token0.baseVTSRate > e0bps) {
@@ -1157,19 +1227,21 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
             e1bps = cfg.token1.baseVTSRate;
         }
 
-        // Adjust exposures to include uncapitalized portion: ensures seizure covers uncapitalized + base
-        // This guarantees the original position is 100% capitalized after seizure
-        e0bps = aggUncapBps + cfg.token0.baseVTSRate > e0bps ? aggUncapBps + cfg.token0.baseVTSRate : e0bps;
-        e1bps = aggUncapBps + cfg.token1.baseVTSRate > e1bps ? aggUncapBps + cfg.token1.baseVTSRate : e1bps;
+        // Apportioning seizure amounts without consideration for uncapitalised portion allows micro partial settlements chip away at positions as RfS is exposed.
+        // Additionally, if an RfS remains open even after seizures, due to RfS being open, then the seizing party is still incentivised to settle.
 
+        // 2) Determine a portion of the seizure exposure proportional to settled / RfS amount.
         // \phi_settle ensures seizure calculation is proportional to the settled amount relative to the RfS amount in this transaction.
-        // TODO: Concern here is that the undercapitalized portion is fractionalised, however, then the excess attributed to seizing party is not.
         uint256 p0bps = LiquidityUtils.settleOfRfsBps(s0, r0);
         uint256 p1bps = LiquidityUtils.settleOfRfsBps(s1, r1);
 
+        // 3) Calculate seized liquidity units based on exposure / commitment sized by settlement.
+        // Use the sum based on heuristic of inversely proportional demand for either token in market.
         uint256 liq = uint256(m.liquidity);
         uint256 u0 = LiquidityUtils.seizedUnitsFromBps(liq, e0bps, p0bps);
         uint256 u1 = LiquidityUtils.seizedUnitsFromBps(liq, e1bps, p1bps);
+
+        // 4) Cap at full position liquidity.
         uint256 total = u0 + u1;
         return total > liq ? liq : total;
     }
@@ -1189,6 +1261,7 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
      * @return balanceDelta The balance delta of the amount of required to be settled or allowed to be withdrawn depending on if it is negative or positive
      */
     function _getRFS(PositionId _positionId) internal view returns (bool, BalanceDelta) {
+        // TODO: Currently RfS gate enforces base on both sides — instead, we could normalise by current price and allow base on either side.
         (uint256 c0, uint256 c1) = _getCommitment(_positionId);
 
         uint256 s0 = totalSettlementAmount[_positionId][0];
