@@ -255,9 +255,6 @@ contract MMPositionManager is
         if (action == uint256(MMAction.MINT_POSITION)) {
             (PoolKey memory poolKey, uint256 tokenId, int24 tickLower, int24 tickUpper, uint256 liquidity) =
                 abi.decode(params, (PoolKey, uint256, int24, int24, uint256));
-            _assertSignalValid(tokenId);
-            _assertCommitForPool(poolKey, tokenId);
-            _assertApprovedOrOwner(msgSender(), tokenId);
             _mintPosition(poolKey, tokenId, tickLower, tickUpper, liquidity);
             return;
         }
@@ -916,7 +913,7 @@ contract MMPositionManager is
         // Compute underying liquidity from credits (via router helper)
         uint256 liquidityFromDeltas = _getLiquidityFromDeltas(poolKey, tickLower, tickUpper);
 
-        _mintPosition(poolKey, tokenId, tickLower, tickUpper, liquidityFromDeltas);
+        _mintPositionInternal(poolKey, tokenId, tickLower, tickUpper, liquidityFromDeltas);
     }
 
     /**
@@ -1076,6 +1073,16 @@ contract MMPositionManager is
      * @param liquidity The liquidity amount to mint
      */
     function _mintPosition(
+        PoolKey memory poolKey,
+        uint256 tokenId,
+        int24 tickLower,
+        int24 tickUpper,
+        uint256 liquidity
+    ) internal onlyIfApproved(msgSender(), tokenId) onlyValidCommit(poolKey, tokenId) {
+        _mintPositionInternal(poolKey, tokenId, tickLower, tickUpper, liquidity);
+    }
+
+    function _mintPositionInternal(
         PoolKey memory poolKey,
         uint256 tokenId,
         int24 tickLower,
