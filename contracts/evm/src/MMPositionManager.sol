@@ -964,7 +964,8 @@ contract MMPositionManager is
         PositionMeta memory position,
         bytes32 salt,
         uint256 amountToDecrease,
-        bytes memory hookData
+        PositionId seizedPositionId,
+        BalanceDelta seizureSettlementDelta
     ) internal {
         // validate liquidity is not over available
         uint256 posLiq = uint256(position.liquidity);
@@ -985,29 +986,49 @@ contract MMPositionManager is
                 liquidityDelta: -amountToDecrease.toInt256(),
                 salt: salt
             }),
-            hookData
+            hookData // TODO Construct the hook data here...
         );
 
         if (amountToDecrease == 0 && LiquidityUtils.isZeroDelta(principalDelta)) {
             return;
         }
 
+        // TODO: I think we can cancel the full amount, if not seizing and approved for token id.
+        // I actually think we principle cancel entirely all the time.
+        // The LCCs issued after principalDelta cancel will derive
+        // However, they should also receive LCCs for the amount unavailable in the market (diff between settlementDelta and availableDelta)
+
+        // settlementDelta is what's owed to the MM.
+        // However, if protocol covers unwraps, then available liquidity may be less than what is owed. ie. Other MM's are in deficit.
+        // The LCCs taken during decrease liquidity, are backed by the MM's on aggregate. Therefore, removal of position should also cancel the LCCs in full.
+        // Converting the underlying delta to LCC delta means that LCCs are derived from pending liquidity to the protocol.
+
+        // // ? MMs must maintain a commitment and signal until they're fully burned.
+        // // What this means is that MMs must hold LCCs that they're backing themselves, until they're fully burned.
         BalanceDelta settlementDelta = _getUnderlyingSettlementDelta(msgSender(), poolKey.currency0, poolKey.currency1);
         BalanceDelta availableDelta = _clampSettlementDeltaByAvailableLiquidities(position.poolId, settlementDelta);
         BalanceDelta diff = settlementDelta - availableDelta;
-        if (availableDelta.amount0() > 0) {
+        BalanceDelta cancelDelta = principalDelta - diff; // the total amount to cancel must be the principle, however, for any diff/deficit, the LCCs are backed by pending liquidity to the protocol.
+        if (cancelDelta.amount0() > 0) {
             liquidityHub.cancel(
-                Currency.unwrap(poolKey.currency0), LiquidityUtils.safeInt128ToUint256(availableDelta.amount0())
+                Currency.unwrap(poolKey.currency0), LiquidityUtils.safeInt128ToUint256(cancelDelta.amount0())
             );
         }
-        if (availableDelta.amount1() > 0) {
+        if (cancelDelta.amount1() > 0) {
             liquidityHub.cancel(
-                Currency.unwrap(poolKey.currency1), LiquidityUtils.safeInt128ToUint256(availableDelta.amount1())
+                Currency.unwrap(poolKey.currency1), LiquidityUtils.safeInt128ToUint256(cancelDelta.amount1())
             );
         }
         // For unavailable liquidity, mark the difference as LCCs (withdrawable = positive delta) to the caller.
         if (diff.amount0() > 0 || diff.amount1() > 0) {
             _convertUnderlyingDeltaToLccDelta(msgSender(), diff, poolKey.currency0, poolKey.currency1);
+            // // Accrue the diff against the MM's floating issued balance.
+            // // MM is restricted from decommitment
+            // LCCs accrue in the MMP contract, and unwrap to queue settlement from market vault.
+            // MMs are responsible for calling processSettlementFor to ensure their full underlyings are settled.
+            // Underlyings are settled to address(this).
+            // Since original underlying settlement delta did not cover the full VTSManager.totalSettlementAmount, the withdrawal on inactive position will valid.
+            // As such, we're building on VTSManager for tracking remaining settledAmounts on inactive positions.
         }
     }
 
@@ -1133,7 +1154,7 @@ contract MMPositionManager is
         // Validate grace period has elapsed
         _isSeizable(vtsManager.getMarketVTSConfiguration(position.poolId), tokenId, positionIndex, true); // revert if grace period has not elapsed
 
-        BalanceDelta settlementDelta = LiquidityUtils.safeToBalanceDelta(amount0, amount1, true, true);
+        BalanceDelta seizureSettlementDelta = LiquidityUtils.safeToBalanceDelta(amount0, amount1, true, true);
 
         // Set transient storage placeholder (will be updated after settlement with actual seizedLiquidityUnits)
         TransientSlots.setSeizedPosition(positionId, 0);
@@ -1184,6 +1205,9 @@ contract MMPositionManager is
         ) {
             revert Errors.InvalidLiquiditySignal(0, 0);
         }
+
+        // LCCs can be cancelled under the condition that there's liquidity in the MarketVault available for the caller/MM to take.
+        // Otherwise (in _decrease), LCCs are allocated to the caller - indicating that further settlement is required.
 
         // ? ----- During seizeCommitment, issued LCCs must remain backed. RfS positions must be closed across the commitment. Identifying unbacked status essentially enables seizure with a skip on gracePeriod validation.
         // // ? ----- ----- Despite the signal value no longer matching LCC value, the open RfS + settled liquidity expresses utilised liquidity.
