@@ -1027,8 +1027,12 @@ contract MMPositionManager is
             // LCCs accrue in the MMP contract, and unwrap to queue settlement from market vault.
             // MMs are responsible for calling processSettlementFor to ensure their full underlyings are settled.
             // Underlyings are settled to address(this).
-            // Since original underlying settlement delta did not cover the full VTSManager.totalSettlementAmount, the withdrawal on inactive position will valid.
+            // Since original underlying settlement delta cannot cover the full VTSManager.totalSettlementAmount, subsequent withdrawals on the positions will be valid.
+            // In essence, _settleUnderlying will check address(this) first, via a persistent settlement delta.
             // As such, we're building on VTSManager for tracking remaining settledAmounts on inactive positions.
+
+            // For Seizures, this works too.
+            // ANSWER: Repurpose the settle mechanic, and hold pending settlements inside of MMP.
         }
     }
 
