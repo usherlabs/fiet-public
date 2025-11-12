@@ -1317,7 +1317,6 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
      * @return balanceDelta The balance delta of the amount of required to be settled or allowed to be withdrawn depending on if it is negative or positive
      */
     function _getRFS(PositionId _positionId) internal view returns (bool, BalanceDelta) {
-        // TODO: Currently RfS gate enforces base on both sides — instead, we could normalise by current price and allow base on either side.
         (uint256 c0, uint256 c1) = _getCommitment(_positionId);
 
         uint256 s0 = totalSettlementAmount[_positionId][0];
