@@ -1191,7 +1191,7 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
     // Lens Functions
     // --------------------------------------------------
 
-    // TODO: Move these lens functions to a standalone VTSLens.sol
+    // TODO: Move these lens functions to a standalone VTSLens.sol -- TBD: FIET-399
     /**
      * @notice Calculates the required vts for a position
      * @param positionId The position id
