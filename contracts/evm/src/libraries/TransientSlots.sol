@@ -108,16 +108,12 @@ library TransientSlots {
     // Seizure helpers
     // ------------------------------
 
-    function setSeizedPosition(PositionId positionId) internal {
+    function setSeizedPositionId(PositionId positionId) internal {
         TransientSlot.asBytes32(TransientSlots.SEIZED_POSITION_ID_SLOT).tstore(PositionId.unwrap(positionId));
     }
 
-    function getSeizedPosition() internal view returns (PositionId) {
+    function getSeizedPositionId() internal view returns (PositionId) {
         bytes32 raw = TransientSlot.asBytes32(TransientSlots.SEIZED_POSITION_ID_SLOT).tload();
         return PositionId.wrap(raw);
-    }
-
-    function clearSeizedPosition() internal {
-        TransientSlot.asBytes32(TransientSlots.SEIZED_POSITION_ID_SLOT).tstore(bytes32(0));
     }
 }

@@ -212,6 +212,16 @@ contract MMPositionManager is
         return keccak256(abi.encodePacked(tokenId, positionIndex));
     }
 
+    /**
+     * @dev This function is used to check if the position is being seized
+     * @param positionId The position id to check if it is being seized
+     * @return bool True if the position is being seized, false otherwise
+     */
+    function _isSeizing(PositionId positionId) internal view returns (bool) {
+        PositionId seizedPositionId = TransientSlots.getSeizedPositionId();
+        return PositionId.unwrap(seizedPositionId) == PositionId.unwrap(positionId);
+    }
+
     // ------------------------
     // Uniswap-like batch entrypoints and dispatcher
     // ------------------------
@@ -244,7 +254,6 @@ contract MMPositionManager is
         if (NonzeroDeltaCount.read() > 0) {
             revert Errors.CurrencyNotSettled();
         }
-        TransientSlots.clearSeizedPosition();
     }
 
     function _handleAction(uint256 action, bytes calldata params) internal override {
@@ -429,10 +438,12 @@ contract MMPositionManager is
 
         // Consume the required settlement delta for the modified position from CoreHook (VTSManager)
         // Signs: negative delta = caller owes liquidity (deposit), positive = protocol owes (withdrawal)
-        PositionId id = PositionLibrary.generateId(params.owner, params);
+        PositionId id = PositionLibrary.generateId(address(this), params);
         BalanceDelta requiredSettlementDelta =
             TransientSlots.readPositionRequiredSettlementDelta(address(vtsManager), id);
-        _accountUnderlyingSettlementDeltaChange(msgSender(), requiredSettlementDelta, poolKey.currency0, poolKey.currency1);
+        _accountUnderlyingSettlementDeltaChange(
+            msgSender(), requiredSettlementDelta, poolKey.currency0, poolKey.currency1
+        );
     }
 
     // ------------------------------------------------------------------------------------------------
@@ -680,11 +691,11 @@ contract MMPositionManager is
     function _collectAvailableLiquidity(address lcc, address recipient, uint256 maxAmount) internal {
         address sender = msgSender();
         uint256 queued = liquidityHub.settleQueue(lcc, sender);
-        
+
         if (queued > 0) {
             liquidityHub.processSettlementFor(lcc, recipient, maxAmount);
         }
-        
+
         _primeUnderlyingDelta(sender, Currency.wrap(lcc));
     }
 
@@ -709,9 +720,7 @@ contract MMPositionManager is
         }
 
         PositionId positionId = getPositionId(tokenId, positionIndex);
-        // Check transient storage for seized position to determine if seizing
-        PositionId seizedPositionId = TransientSlots.getSeizedPositionId();
-        bool isSeizing = PositionId.unwrap(seizedPositionId) == PositionId.unwrap(positionId);
+        bool isSeizing = _isSeizing(positionId);
 
         // Access control: if not seizing, require approval
         if (!isSeizing) {
@@ -730,13 +739,7 @@ contract MMPositionManager is
         _markCheckpoint(positionId, rfsOpen); // checkpoint directly on the _settleUnderlying call.
 
         // settle the underlying assets to the proxy
-        _settleUnderlying(
-            msgSender(),
-            poolKey.toId(),
-            settlementDelta,
-            poolKey.currency0,
-            poolKey.currency1,
-        );
+        _settleUnderlying(msgSender(), poolKey.toId(), settlementDelta, poolKey.currency0, poolKey.currency1);
 
         return seizedLiqUnits;
     }
@@ -958,9 +961,7 @@ contract MMPositionManager is
         PositionMeta memory position = getPosition(tokenId, positionIndex);
         PositionId positionId = getPositionId(tokenId, positionIndex);
 
-        // Check transient storage for seized position
-        PositionId seizedPositionId = TransientSlots.getSeizedPositionId();
-        bool isSeizing = PositionId.unwrap(seizedPositionId) == PositionId.unwrap(positionId);
+        bool isSeizing = _isSeizing(positionId);
 
         // Access control: if not seizing, require approval
         if (!isSeizing) {
@@ -1038,8 +1039,18 @@ contract MMPositionManager is
         address lcc0 = Currency.unwrap(poolKey.currency0);
         address lcc1 = Currency.unwrap(poolKey.currency1);
 
-        liquidityHub.cancelWithQueue(lcc0, LiquidityUtils.safeInt128ToUint256(cancelDelta.amount0()), LiquidityUtils.safeInt128ToUint256(diff.amount0()), address(this));
-        liquidityHub.cancelWithQueue(lcc1, LiquidityUtils.safeInt128ToUint256(cancelDelta.amount1()), LiquidityUtils.safeInt128ToUint256(diff.amount1()), address(this));
+        liquidityHub.cancelWithQueue(
+            lcc0,
+            LiquidityUtils.safeInt128ToUint256(cancelDelta.amount0()),
+            LiquidityUtils.safeInt128ToUint256(diff.amount0()),
+            address(this)
+        );
+        liquidityHub.cancelWithQueue(
+            lcc1,
+            LiquidityUtils.safeInt128ToUint256(cancelDelta.amount1()),
+            LiquidityUtils.safeInt128ToUint256(diff.amount1()),
+            address(this)
+        );
     }
 
     /**
@@ -1167,12 +1178,10 @@ contract MMPositionManager is
         BalanceDelta seizureSettlementDelta = LiquidityUtils.safeToBalanceDelta(amount0, amount1, true, true);
 
         // Set transient storage placeholder (will be updated after settlement with actual seizedLiquidityUnits)
-        TransientSlots.setSeizedPosition(positionId, 0);
-
+        TransientSlots.setSeizedPositionId(positionId);
 
         // Call _settle - this will return the seizedLiquidityUnits
-        uint256 seizedLiquidityUnits =
-            _settle(poolKey, tokenId, positionIndex, amount0.toInt128(), amount1.toInt128());
+        uint256 seizedLiquidityUnits = _settle(poolKey, tokenId, positionIndex, amount0.toInt128(), amount1.toInt128());
 
         // Prepare hookData: encode seizedPositionId and settlementDelta
         bytes memory hookData = abi.encode(
@@ -1200,7 +1209,7 @@ contract MMPositionManager is
 
         LiquiditySignal memory newSignal = abi.decode(liquiditySignal, (LiquiditySignal));
         // verify the proofs associated with the state
-        (bool isSignalValid,) = signalManager.verifyLiquiditySignal(newSignal, true);
+        (bool isSignalValid,) = signalManager.verifyLiquiditySignal(liquiditySignal, true);
 
         LiquiditySignal memory oldSignal = commitOf[tokenId].state.signal;
 

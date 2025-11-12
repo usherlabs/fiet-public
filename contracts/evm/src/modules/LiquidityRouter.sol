@@ -200,12 +200,12 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler, NativeWrappe
      *   3. Notify MarketVault of liquidity changes (via modifyLiquidities)
      *   4. Withdrawals: MarketVault -> Router -> MMP (via transfer)
      *
+     * @param sender The address initiating the settlement
      * @param poolId The pool ID associated with the position
      * @param settlementDelta The balance delta for underlying asset settlement. Positive means depositing to MV,
      *                        negative means withdrawing from MV to MMP
      * @param lccCurrency0 The currency of the first LCC
      * @param lccCurrency1 The currency of the second LCC
-     * @param ua1 The address of underlying asset 1
      */
     function _settleUnderlying(
         address sender,
@@ -215,18 +215,18 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler, NativeWrappe
         Currency lccCurrency1
     ) internal returns (BalanceDelta usedDelta) {
         address marketVault = _getVault(poolId);
-        Currency underlyngCurrency0 = _lccToUnderlyingCurrency(lccCurrency0);
-        Currency underlyngCurrency1 = _lccToUnderlyingCurrency(lccCurrency1);
+        Currency underlyingCurrency0 = _lccToUnderlyingCurrency(lccCurrency0);
+        Currency underlyingCurrency1 = _lccToUnderlyingCurrency(lccCurrency1);
         int128 amount0 = settlementDelta.amount0();
         int128 amount1 = settlementDelta.amount1();
 
         // Step A: Consume any self negative deltas first (withdrawals from MMP → sender)
         // This prioritises MMP-held balances that were primed at batch start
-        int256 selfDelta0 = underlyngCurrency0.getDelta(address(this));
-        int256 selfDelta1 = underlyngCurrency1.getDelta(address(this));
+        int256 selfDelta0 = underlyingCurrency0.getDelta(address(this));
+        int256 selfDelta1 = underlyingCurrency1.getDelta(address(this));
 
         if (selfDelta0 > 0 && amount0 > 0) {
-            uint256 take0 = Math.min(uint256(selfDelta0), uint256(amount0));
+            uint256 take0 = Math.min(uint256(selfDelta0), LiquidityUtils.safeInt128ToUint256(amount0));
             if (take0 > 0) {
                 // Transfer directly from MMP to sender (satisfying primed credit)
                 underlyingCurrency0.transfer(sender, take0);
@@ -237,7 +237,7 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler, NativeWrappe
         }
 
         if (selfDelta1 > 0 && amount1 > 0) {
-            uint256 take1 = Math.min(uint256(selfDelta1), uint256(amount1));
+            uint256 take1 = Math.min(uint256(selfDelta1), LiquidityUtils.safeInt128ToUint256(amount1));
             if (take1 > 0) {
                 // Transfer directly from MMP to sender (satisfying primed credit)
                 underlyingCurrency1.transfer(sender, take1);

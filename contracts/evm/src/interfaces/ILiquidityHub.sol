@@ -56,6 +56,15 @@ interface ILiquidityHub {
      */
     function cancel(address lccToken, uint256 amount) external;
 
+    /**
+     * @notice Cancels LCC tokens and queues a settlement for the shortfall
+     * @param lccToken The LCC token address to cancel for
+     * @param amount The amount to cancel
+     * @param queueAmount The amount to queue for settlement
+     * @param recipient The recipient address for the queued settlement
+     */
+    function cancelWithQueue(address lccToken, uint256 amount, uint256 queueAmount, address recipient) external;
+
     // ============ Trader wrapping/unwrapping ============
     function wrapTo(address lcc, address to, uint256 amount) external payable;
     function wrapTo(address underlying, bytes32 marketId, address to, uint256 amount) external payable;
