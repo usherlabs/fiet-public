@@ -1207,10 +1207,9 @@ contract MMPositionManager is
             revert Errors.InvalidLiquiditySignal(0, 0);
         }
 
-        LiquiditySignal memory newSignal = abi.decode(liquiditySignal, (LiquiditySignal));
         // verify the proofs associated with the state
         (bool isSignalValid,) = signalManager.verifyLiquiditySignal(liquiditySignal, true);
-
+        LiquiditySignal memory newSignal = abi.decode(liquiditySignal, (LiquiditySignal));
         LiquiditySignal memory oldSignal = commitOf[tokenId].state.signal;
 
         // Validate slashing conditions:
@@ -1226,17 +1225,38 @@ contract MMPositionManager is
             revert Errors.InvalidLiquiditySignal(0, 0);
         }
 
+        /**
+         * TODO:
+         * In @VRLSignalManager.sol - let's include a new event that emits the LiquiditySignal once it is verified.
+         *
+         * @MMPositionManager.sol (1061) - Let's revise the Commit struct.
+         *
+         * Currently, we're storing much fo the proof data from the signal into SignalState, however, beyond verification after being passed in via calldata this data is not utilised.
+         * Further, liquiditySignal should be marked as calldata in signatures rather the memory since signal is usually passed as a parameter to external extrypoints function.
+         *
+         * With this in mind, I propose we flatten the Commit Structure, and only store the expiresAt at the base, and the MarketMaker.State
+         */
+
         // LCCs can be cancelled under the condition that there's liquidity in the MarketVault available for the caller/MM to take.
         // Otherwise (in _decrease), LCCs are allocated to the caller - indicating that further settlement is required.
 
-        // ? ----- During seizeCommitment, issued LCCs must remain backed. RfS positions must be closed across the commitment. Identifying unbacked status essentially enables seizure with a skip on gracePeriod validation.
-        // // ? ----- ----- Despite the signal value no longer matching LCC value, the open RfS + settled liquidity expresses utilised liquidity.
-        // // ? ----- ----- Rather than apportioning the commitment, the entire commitment should be seized.
-        // ? ----- ----- As per the second point under decommit, LCCs issued during position management rather than for entire commitment reduces the backing requirement before seizeCommitment and decommit.
         // ? ----- ----- Assuming that the full commitment is utilised in positions, then 80% of the commitment is unbacked, what occurs?
-        // ? ----- ----- What if proving unbacked status results in unlocking seizure across positions in an intra-transaction process - raising the a position specific-deficit by the diff in signal -> commit values, and skipping the gracePeriod validation for X amount.
-        // ? ----- ----- This could allow re-use of position seizure, and for all MMs/Guarantors to paritipate on the seizure. The advancer can be given a share of the seized outcome.
-        // ? ----- ----- If we adopt an action-dispatcher model as per the Native PositionManager, then MM's can chain actions together, ie. slashUnbackedCommitment (prove unbacked status), seize position, mint position, etc.
+
+        // ? Issued LCCs must remain backed. RfS positions must be closed across the commitment. Identifying unbacked status essentially enables seizure with a skip on gracePeriod validation.
+        // Executed by increasing position deficits by insolvent amounts
+        // Must skip the gracePeriod for any open RfS positions.
+        // Ideally, a single slash opens RfS to all MMs/Guarantors. Advancer only has a head start and initial siphon.
+        // ie. using existing totalSettlementAmounts to cover for insolvent amounts.
+        // However, this could siphon all totalSettlementAmounts out - leaving no on-chain collateral to incentivise intervention.
+        // On the contrary, it would push positions into an open RfS.
+
+        // What happens when sum of position valuation is still > signal?
+        // --- Committing a signal does not affect valuations. Valuations are only considered when minting/increasing positions. LCCs are not minted for the full commitment amount, but rather the effective position liquidity.
+
+        // Why not seize positions relative to size of insolvency? - involves capturing collateral value of positions.
+        // During burnPosition - where RfS is closed, MMs can cancel their LCCs arbitrarily.
+        // If RfS is open, force gracePeriod as elapsed to allow for direct position seizure.
+        // Note: Positions can only be insolvent for a fraction of the position.
 
         // // verify the new liquidity signal(this increases the nonce of the mm's signals)
         // // get the total usd value of the signal and its expiry time

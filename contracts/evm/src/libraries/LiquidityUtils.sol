@@ -248,7 +248,7 @@ library LiquidityUtils {
 
     /**
      * @dev Calculates the excess settlement amounts for seizure scenarios.
-     *      Apportions totalSettlementAmount by liquidity delta ratio, then takes the minimum
+     *      Apportions totalSettlementAmount by liquidity delta ratio, then takes the maximum
      *      of the apportioned amount and the seizureSettlementDelta.
      * @param totalSettlement0 The total settlement amount for token0
      * @param totalSettlement1 The total settlement amount for token1
@@ -271,11 +271,13 @@ library LiquidityUtils {
         uint256 apportionedS0 = FullMath.mulDiv(totalSettlement0, liquidityRatio, ONE_WAD);
         uint256 apportionedS1 = FullMath.mulDiv(totalSettlement1, liquidityRatio, ONE_WAD);
 
-        // Excess = min(apportioned, seizureSettlementDelta)
+        // Excess = max(apportioned, seizureSettlementDelta)
+        // Seizure calculation ensures settlement of the greater side, always results in apportionedS_A = seizureS_A.
+        // Therefore, the reward dervies from the counterparty asset, which is also apportioned.
         uint256 seizureS0 = safeInt128ToUint256(seizureSettlementDelta.amount0());
         uint256 seizureS1 = safeInt128ToUint256(seizureSettlementDelta.amount1());
 
-        excess0 = apportionedS0 < seizureS0 ? apportionedS0 : seizureS0;
-        excess1 = apportionedS1 < seizureS1 ? apportionedS1 : seizureS1;
+        excess0 = apportionedS0 > seizureS0 ? apportionedS0 : seizureS0;
+        excess1 = apportionedS1 > seizureS1 ? apportionedS1 : seizureS1;
     }
 }

@@ -672,6 +672,7 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
         settlementDelta = LiquidityUtils.negateBalanceDelta(toBalanceDelta(amount0.toInt128(), amount1.toInt128()));
 
         // Calculate seized liquidity units when seizing
+        // TODO: Consider an incentive floor (small, pot-funded) when S is near zero to keep intervention attractive.
         if (isSeizing) {
             seizedLiquidityUnits = _calcSeizure(positionId, settlementDelta);
         } else {
