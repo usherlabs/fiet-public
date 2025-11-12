@@ -362,7 +362,7 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
                             s0,
                             s1,
                             uint256(liq),
-                            uint256(-params.liquidityDelta), // the amount to seize.
+                            uint256(-params.liquidityDelta), // the amount to seize - determined in _calcSeizure
                             seizureSettlementDelta
                         );
                     } else {
@@ -614,7 +614,7 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
 
         // Calculate seized liquidity units when seizing
         if (isSeizing) {
-            seizedLiquidityUnits = _calcSeizure(positionId, delta);
+            seizedLiquidityUnits = _calcSeizure(positionId, settlementDelta);
         } else {
             seizedLiquidityUnits = 0;
         }

@@ -1016,45 +1016,23 @@ contract MMPositionManager is
             return;
         }
 
-        // TODO: I think we can cancel the full amount, if not seizing and approved for token id.
-        // I actually think we principle cancel entirely all the time.
-        // The LCCs issued after principalDelta cancel will derive
-        // However, they should also receive LCCs for the amount unavailable in the market (diff between settlementDelta and availableDelta)
-
-        // settlementDelta is what's owed to the MM.
-        // However, if protocol covers unwraps, then available liquidity may be less than what is owed. ie. Other MM's are in deficit.
-        // The LCCs taken during decrease liquidity, are backed by the MM's on aggregate. Therefore, removal of position should also cancel the LCCs in full.
-        // Converting the underlying delta to LCC delta means that LCCs are derived from pending liquidity to the protocol.
-
-        // // ? MMs must maintain a commitment and signal until they're fully burned.
-        // // What this means is that MMs must hold LCCs that they're backing themselves, until they're fully burned.
+        // Calculate settlement delta (what's owed to the MM) and clamp by available market liquidity
         BalanceDelta settlementDelta = _getUnderlyingSettlementDelta(msgSender(), poolKey.currency0, poolKey.currency1);
         BalanceDelta availableDelta = _clampSettlementDeltaByAvailableLiquidities(position.poolId, settlementDelta);
         BalanceDelta diff = settlementDelta - availableDelta;
-        BalanceDelta cancelDelta = principalDelta - diff; // the total amount to cancel must be the principle, however, for any diff/deficit, the LCCs are backed by pending liquidity to the protocol.
-        // For unavailable liquidity, persist the remainder and queue via cancelWithQueue
+
+        // Cancel principal delta minus any shortfall. The shortfall represents unavailable liquidity
+        // where LCCs remain backed by pending liquidity to the protocol.
+        BalanceDelta cancelDelta = principalDelta - diff;
+
+        // If there's a shortfall (unavailable liquidity), persist it as credits owed by MMP to the MM.
+        // These credits will be primed at collection of available liquidity via _primeUnderlyingDelta and consumed during
+        // settlement. MMs can also collect available liquidity via COLLECT_AVAILABLE_LIQUIDITY action
+        // to process settlements from LiquidityHub's settleQueue.
         if (diff.amount0() > 0 || diff.amount1() > 0) {
-            // Persist the shortfall to persistent storage
             _persistUnderlyingDelta(msgSender(), diff, poolKey.currency0, poolKey.currency1);
-
-            // // Accrue the diff against the MM's floating issued balance.
-            // // MM is restricted from decommitment
-            // LCCs accrue in the MMP contract, and unwrap to queue settlement from market vault.
-            // MMs are responsible for calling processSettlementFor to ensure their full underlyings are settled.
-            // Underlyings are settled to address(this).
-            // Since original underlying settlement delta cannot cover the full VTSManager.totalSettlementAmount, subsequent withdrawals on the positions will be valid.
-            // In essence, _settleUnderlying will check address(this) first, via a persistent settlement delta.
-            // As such, we're building on VTSManager for tracking remaining settledAmounts on inactive positions.
-
-            // For Seizures, this works too.
-            // ANSWER: Repurpose the settle mechanic, and hold pending settlements inside of MMP.
-            // We should:
-            // 1. Load min(_persistentUnderlyingSettlementDelta mapping (if > 0), available currency amount in MMP address(this)) in to transient first on batch start,
-            // 2. validating whether MMP holds the relevant underlying assets, and clearing it from mapping if available.
-            // 3. Load a negative currency delta with target address(this) to determine what to take directly from MMP before proceeding to take/modify MarketVault liquidities.
-            // On _settleUnderlying, clear the delta on address(this).
-            // Finally, include an action for PROCESS_SETTLEMENT for MMs to call to process their pending settlements in a batch.
         }
+
         // Queue settlements via cancelWithQueue
         address lcc0 = Currency.unwrap(poolKey.currency0);
         address lcc1 = Currency.unwrap(poolKey.currency1);
