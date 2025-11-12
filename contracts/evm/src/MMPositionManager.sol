@@ -427,10 +427,11 @@ contract MMPositionManager is
         _accountDelta(poolKey.currency0, accruedFeesAfterAdj.amount0(), msgSender());
         _accountDelta(poolKey.currency1, accruedFeesAfterAdj.amount1(), msgSender());
 
-        // Consume the aggregated required settlement delta from CoreHook (VTSManager) and clear it
+        // Consume the required settlement delta for the modified position from CoreHook (VTSManager)
         // Signs: negative delta = caller owes liquidity (deposit), positive = protocol owes (withdrawal)
+        PositionId id = PositionLibrary.generateId(params.owner, params);
         BalanceDelta requiredSettlementDelta =
-            TransientSlots.readPositionRequiredSettlementDelta(address(vtsManager));
+            TransientSlots.readPositionRequiredSettlementDelta(address(vtsManager), id);
         _accountUnderlyingSettlementDeltaChange(msgSender(), requiredSettlementDelta, poolKey.currency0, poolKey.currency1);
     }
 

@@ -326,7 +326,7 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
 
                 // Invert signs: negative delta = caller owes liquidity (deposit), positive = protocol owes (withdrawal)
                 TransientSlots.addPositionRequiredSettlementDelta(
-                    LiquidityUtils.safeToBalanceDelta(amountToSettle0, amountToSettle1, true, true)
+                    id, LiquidityUtils.safeToBalanceDelta(amountToSettle0, amountToSettle1, true, true)
                 );
             } else {
                 // Set the settlement amounts to the total commitment amounts for DirectLPs.
@@ -380,7 +380,7 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
                     // this sets the required settlement because we changes the position.
                     // Invert signs: negative delta = caller owes liquidity (deposit), positive = protocol owes (withdrawal)
                     TransientSlots.addPositionRequiredSettlementDelta(
-                        LiquidityUtils.safeToBalanceDelta(excess0, excess1, false, false)
+                        id, LiquidityUtils.safeToBalanceDelta(excess0, excess1, false, false)
                     );
                 } else {
                     // ? Update settlement for DirectLPs.
@@ -415,7 +415,7 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
                     // Instruct MMP to source underlying for the excess
                     // Invert signs: negative delta = caller owes liquidity (deposit), positive = protocol owes (withdrawal)
                     TransientSlots.addPositionRequiredSettlementDelta(
-                        LiquidityUtils.safeToBalanceDelta(excess0, excess1, true, true)
+                        id, LiquidityUtils.safeToBalanceDelta(excess0, excess1, true, true)
                     );
                 } else {
                     // Increase DirectLPs settlement amounts by the difference between the commitment maxima and the last settled amounts.
@@ -566,7 +566,8 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
 
             // Read the required settlement delta from position modifications
             // Signs: negative delta = caller owes liquidity (deposit), positive = protocol owes (withdrawal)
-            BalanceDelta positionRequiredSettlementDelta = TransientSlots.readPositionRequiredSettlementDelta();
+            BalanceDelta positionRequiredSettlementDelta =
+                TransientSlots.readPositionRequiredSettlementDelta(positionId);
             int128 posRequiredSettlement0 = positionRequiredSettlementDelta.amount0();
             int128 posRequiredSettlement1 = positionRequiredSettlementDelta.amount1();
 

@@ -21,34 +21,46 @@ library TransientSlots {
     // Position Required Settlement Delta helpers
     // ------------------------------
 
-    function addPositionRequiredSettlementDelta(BalanceDelta settlementDelta) internal {
-        BalanceDelta current =
-            BalanceDelta.wrap(TransientSlot.asInt256(TransientSlots.POSITION_REQUIRED_SETTLEMENT_DELTA_SLOT).tload());
-        // pack with bounds to int128 via toBalanceDelta (will revert on overflow; expected not to overflow in practice)
+    function _computePositionRequiredSettlementDeltaSlot(PositionId positionId)
+        internal
+        pure
+        returns (bytes32 hashSlot)
+    {
+        // Compute a unique slot per positionId under the POSITION_REQUIRED_SETTLEMENT_DELTA namespace
+        // Per-slot delta derived from https://github.com/Uniswap/v4-core/blob/11953555e87a976e505b9af49ec2c4c64ac821c2/src/libraries/CurrencyDelta.sol#L8
+        assembly ("memory-safe") {
+            mstore(0, sload(POSITION_REQUIRED_SETTLEMENT_DELTA_SLOT.slot))
+            mstore(32, and(positionId, 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff))
+            hashSlot := keccak256(0, 64)
+        }
+    }
+
+    function addPositionRequiredSettlementDelta(PositionId positionId, BalanceDelta settlementDelta) internal {
+        bytes32 slot = _computePositionRequiredSettlementDeltaSlot(positionId);
+        BalanceDelta current = BalanceDelta.wrap(TransientSlot.asInt256(slot).tload());
+        // pack with bounds to int128 via toBalanceDelta at callsite (expected to not overflow in practice)
         BalanceDelta total = current + settlementDelta;
-        TransientSlot.asInt256(TransientSlots.POSITION_REQUIRED_SETTLEMENT_DELTA_SLOT)
-            .tstore(BalanceDelta.unwrap(total));
+        TransientSlot.asInt256(slot).tstore(BalanceDelta.unwrap(total));
     }
 
-    function readPositionRequiredSettlementDelta() internal view returns (BalanceDelta) {
-        int256 raw = TransientSlot.asInt256(TransientSlots.POSITION_REQUIRED_SETTLEMENT_DELTA_SLOT).tload();
+    function readPositionRequiredSettlementDelta(PositionId positionId) internal view returns (BalanceDelta) {
+        bytes32 slot = _computePositionRequiredSettlementDeltaSlot(positionId);
+        int256 raw = TransientSlot.asInt256(slot).tload();
         return BalanceDelta.wrap(raw);
     }
 
-    function readPositionRequiredSettlementDelta(address sourceAddress) internal view returns (BalanceDelta) {
-        int256 raw = loadPositionRequiredSettlementDelta(sourceAddress);
-        return BalanceDelta.wrap(raw);
-    }
-
-    function loadPositionRequiredSettlementDelta(address sourceAddress) internal view returns (int256) {
-        // Read the raw bytes32 from the source contract's transient storage via exttload,
-        // and interpret it as a signed int256 preserving two's-complement representation.
-        bytes32 raw = IExttload(sourceAddress).exttload(TransientSlots.POSITION_REQUIRED_SETTLEMENT_DELTA_SLOT);
+    function readPositionRequiredSettlementDelta(address sourceAddress, PositionId positionId)
+        internal
+        view
+        returns (BalanceDelta)
+    {
+        bytes32 slot = _computePositionRequiredSettlementDeltaSlot(positionId);
+        bytes32 raw = IExttload(sourceAddress).exttload(slot);
         int256 signedValue;
         assembly ("memory-safe") {
             signedValue := raw
         }
-        return signedValue;
+        return BalanceDelta.wrap(signedValue);
     }
 
     // ------------------------------
