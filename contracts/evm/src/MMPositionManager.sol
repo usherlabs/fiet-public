@@ -1258,6 +1258,13 @@ contract MMPositionManager is
         // If RfS is open, force gracePeriod as elapsed to allow for direct position seizure.
         // Note: Positions can only be insolvent for a fraction of the position.
 
+        // * Finalised flow is to use signalDeficit amount determined here, and cleared in _renew.
+        // signalDeficit inflates the deficit in VTSManager to open RfS early, requiring settlement or seizure.
+        // Settlements clear the RfS, however, if tokens derive from signal liquidity sources, the _slashUnbackedCommitment will remain available.
+        // Without _renewal, positins must either be settled to close/decrease/burn. Otherwise, they're seized.
+        // Positions cannot be modified if RfS is open. Therefore, this deficit applied is like a penalty on the commitment.
+        // Furthermore, on slash - grace period is skipped to open RfS immediately.
+
         // // verify the new liquidity signal(this increases the nonce of the mm's signals)
         // // get the total usd value of the signal and its expiry time
         // (uint256 totalSignalUsdValue, uint256 signalExpiryInSeconds) =
