@@ -9,11 +9,6 @@ import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 
 type PositionId is bytes32;
 
-struct SignalState {
-    LiquiditySignal signal;
-    uint256 expiresAt;
-}
-
 struct PositionMeta {
     // the lower tick of the position
     int24 tickLower;

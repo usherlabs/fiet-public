@@ -660,7 +660,6 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
         settlementDelta = LiquidityUtils.negateBalanceDelta(toBalanceDelta(amount0.toInt128(), amount1.toInt128()));
 
         // Calculate seized liquidity units when seizing
-        // TODO: Consider an incentive floor (small, pot-funded) when S is near zero to keep intervention attractive.
         if (isSeizing) {
             seizedLiquidityUnits = _calcSeizure(positionId, settlementDelta);
         } else {
@@ -1338,6 +1337,8 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
         uint256 u1 = LiquidityUtils.seizedUnitsFromBps(liq, e1bps, p1bps);
 
         // 4) Cap at full position liquidity.
+        // TODO: A guard (small, pot-funded) when L is near zero to prevent interventions from approaching 0 indefinitely.
+
         uint256 total = u0 + u1;
         return total > liq ? liq : total;
     }

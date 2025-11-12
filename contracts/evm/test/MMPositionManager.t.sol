@@ -25,7 +25,6 @@ import {MarketVTSConfiguration} from "../src/types/VTS.sol";
 import {MockERC20} from "./_mocks/MockERC20.sol";
 import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
 import {IPositionRegistry} from "../src/interfaces/IPositionRegistry.sol";
-import {SignalState} from "../src/types/Position.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
@@ -885,13 +884,15 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         MMA.renew(positionManager, tokenId, abi.encode(renewSignal));
 
         // get the new signal
-        SignalState memory newSignalState = positionManager.getSignalState(tokenId);
+        (MarketMaker.State memory newMmState, uint256 expiresAt,) = positionManager.commitOf(tokenId);
+
+        // TODO: We assert verified LiquiditySignal is emitted event of VRLSignalManager
 
         // validate the new signal is the same as the renewed signal
-        assertEq(abi.encode(newSignalState.signal), abi.encode(renewSignal));
+        assertEq(abi.encode(newMmState), abi.encode(renewSignal.mmState));
 
         // validate the expiry is updated
-        assertEq(newSignalState.expiresAt, newTimestamp + signalExpiryInSeconds);
+        assertEq(expiresAt, newTimestamp + signalExpiryInSeconds);
     }
 
     // can modify an existing position by removing liquidity from it

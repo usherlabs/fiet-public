@@ -30,30 +30,6 @@ library MarketMaker {
         address advancer;
     }
 
-    /// @dev The parameters of the proof to verify the state of the market maker
-    struct ProofParams {
-        /// The root state hash of the merkle tree
-        bytes32 rootStateHash;
-        /// The signature of the root state hash
-        bytes rootStateHashSignature;
-        /// The merkle proof of mm state data we want to verify in the merkle tree
-        bytes32[] merkleProof;
-        /// The state of the market maker
-        MarketMaker.State mmStateData;
-        /// The signature of the state of the market maker
-        bytes mmStateHashSignature;
-    }
-
-    /// @dev The parameters of the position to create
-    struct PositionParams {
-        /// The core pool key of the position
-        PoolKey corePoolKey;
-        /// The lower tick of the position
-        int24 tickLower;
-        /// The upper tick of the position
-        int24 tickUpper;
-    }
-
     /**
      * @dev This function is used to get the tickers and amounts of the reserves of the market maker
      * @param state The state to get the reserves from

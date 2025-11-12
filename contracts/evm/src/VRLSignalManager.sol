@@ -101,6 +101,8 @@ contract VRLSignalManager is Ownable, IVRLSignalManager {
         if (isProofValid) {
             // update the nonce for the mm if the proof is valid
             mmNonce[signal.mmState.owner] = signal.nonce;
+            // emit the verified liquidity signal
+            emit LiquiditySignalVerified(signal);
         }
 
         _signalExpiryInSeconds = signalExpiryInSeconds;

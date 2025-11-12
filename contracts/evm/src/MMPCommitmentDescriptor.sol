@@ -3,7 +3,6 @@ pragma solidity ^0.8.0;
 
 import {ICommitmentDescriptor} from "./interfaces/ICommitmentDescriptor.sol";
 import {IMMPositionManager} from "./interfaces/IMMPositionManager.sol";
-import {SignalState} from "./types/Position.sol";
 import {LibString} from "solady/utils/LibString.sol";
 
 contract MMPCommitmentDescriptor is ICommitmentDescriptor {
@@ -19,7 +18,7 @@ contract MMPCommitmentDescriptor is ICommitmentDescriptor {
         IMMPositionManager positionManager = IMMPositionManager(manager);
 
         uint256 posCount = positionManager.commitToPositionCount(tokenId);
-        (SignalState memory s,) = positionManager.commitOf(tokenId);
+        (, uint256 expiresAt,) = positionManager.commitOf(tokenId);
 
         string memory name = string(abi.encodePacked("Fiet Commitment #", tokenId.toString()));
         string memory description = "Fiet VRL Commitment NFT granting position management rights.";
@@ -29,7 +28,7 @@ contract MMPCommitmentDescriptor is ICommitmentDescriptor {
                 posCount.toString(),
                 "},",
                 "{\"trait_type\":\"expiresAt\",\"value\":",
-                s.expiresAt.toString(),
+                expiresAt.toString(),
                 "}]"
             )
         );

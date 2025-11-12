@@ -9,6 +9,7 @@ interface IVRLSignalManager {
     event SignalExpiryInSecondsChanged(
         uint256 indexed oldSignalExpiryInSeconds, uint256 indexed newSignalExpiryInSeconds
     );
+    event LiquiditySignalVerified(LiquiditySignal signal);
 
     // View functions
     function getVerifier() external view returns (address);

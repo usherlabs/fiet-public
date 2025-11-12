@@ -13,7 +13,7 @@ import {ReentrancyLock} from "v4-periphery/src/base/ReentrancyLock.sol";
 import {Multicall_v4} from "v4-periphery/src/base/Multicall_v4.sol";
 import {BaseActionsRouter} from "v4-periphery/src/base/BaseActionsRouter.sol";
 import {PositionMeta, PositionId, PositionLibrary} from "./types/Position.sol";
-import {LiquiditySignal, SignalState} from "./types/Position.sol";
+import {LiquiditySignal} from "./types/Position.sol";
 import {MarketMaker} from "./libraries/MarketMaker.sol";
 import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 import {IVTSManager} from "./interfaces/IVTSManager.sol";
@@ -64,6 +64,7 @@ contract MMPositionManager is
     event SignalDecommitted(uint256 tokenId, uint256 positionCount);
 
     /// @notice Maximum number of positions allowed per commitment to prevent gas exhaustion
+    // TODO: We'll need to attempt to remove this in a refactor of contract sizes -- FIET-399
     uint256 public constant MAX_POSITIONS_PER_COMMITMENT = 250;
 
     ILiquidityHub internal immutable liquidityHub;
@@ -78,7 +79,8 @@ contract MMPositionManager is
     mapping(uint256 => uint256) public commitToPositionCount;
 
     struct Commit {
-        SignalState state;
+        MarketMaker.State state;
+        uint256 expiresAt;
         PoolId poolId;
     }
 
@@ -171,10 +173,6 @@ contract MMPositionManager is
         return nextTokenId;
     }
 
-    function getSignalState(uint256 tokenId) public view returns (SignalState memory) {
-        return commitOf[tokenId].state;
-    }
-
     function _positionCountOf(uint256 tokenId) internal view override returns (uint256) {
         return commitToPositionCount[tokenId];
     }
@@ -190,7 +188,7 @@ contract MMPositionManager is
     }
 
     function _assertSignalValid(uint256 tokenId) internal view {
-        if (commitOf[tokenId].state.expiresAt < block.timestamp) {
+        if (commitOf[tokenId].expiresAt < block.timestamp) {
             revert Errors.SignalExpired(tokenId);
         }
     }
@@ -562,12 +560,12 @@ contract MMPositionManager is
         return (p0 * a0) + (p1 * a1);
     }
 
-    /// @dev Extracts USD value from an already-decoded LiquiditySignal (no verification).
+    /// @dev Extracts USD value from MarketMaker.State.
     ///      Used when signal has already been verified elsewhere.
-    /// @param signal The decoded LiquiditySignal.
+    /// @param mmState The MarketMaker.State.
     /// @return USD value of the signal reserves.
-    function _signalUsdValue(LiquiditySignal memory signal) internal view returns (uint256) {
-        (string[] memory tickers, uint256[] memory amounts) = signal.mmState.getReserves();
+    function _signalUsdValue(MarketMaker.State memory mmState) internal view returns (uint256) {
+        (string[] memory tickers, uint256[] memory amounts) = mmState.getReserves();
         return oracleHelper.getTotalUsdValue(tickers, amounts);
     }
 
@@ -599,7 +597,7 @@ contract MMPositionManager is
     /// @param extraIssue1 Prospective token1 LCC to add to effective amounts (e.g., for a new mint).
     function _assertCurrentCommitmentBacked(uint256 tokenId, uint256 extraIssue0, uint256 extraIssue1) internal view {
         (uint256 issuedUsd, uint256 settledUsd) = _computeCommitmentUsdValues(tokenId, extraIssue0, extraIssue1);
-        uint256 signalUsd = _signalUsdValue(commitOf[tokenId].state.signal);
+        uint256 signalUsd = _signalUsdValue(commitOf[tokenId].state);
 
         // Invariant: issued ≤ signal + settled (prevents over-issuance relative to backing)
         if (issuedUsd > signalUsd + settledUsd) {
@@ -1044,15 +1042,16 @@ contract MMPositionManager is
 
         // Compute USD values for invariant check and deficit clearing using helpers
         (uint256 issuedUsd, uint256 settledUsd) = _computeCommitmentUsdValues(tokenId, 0, 0);
-        uint256 signalUsd = _signalUsdValue(signal);
+        uint256 signalUsd = _signalUsdValue(signal.mmState);
 
         // Assert invariant: issued ≤ signal + settled
         if (issuedUsd > signalUsd + settledUsd) {
             revert Errors.InvalidLiquiditySignal(signalUsd + settledUsd, issuedUsd);
         }
 
-        // Persist signal state
-        commitOf[tokenId].state = SignalState({signal: signal, expiresAt: block.timestamp + expirySeconds});
+        // Persist signal state (only state and expiresAt)
+        commitOf[tokenId].state = signal.mmState;
+        commitOf[tokenId].expiresAt = block.timestamp + expirySeconds;
 
         // If invariant holds (we've already checked above), clear any commitment deficits
         // Use applyCommitmentDeficit with bps=0 to clear deficits
@@ -1088,8 +1087,9 @@ contract MMPositionManager is
         tokenId = nextTokenId++;
         // mint the nft
         _mint(owner, tokenId);
-        // store the signal state (new + legacy for migration) and bind commit to pool
-        commitOf[tokenId].state = SignalState({signal: signal, expiresAt: block.timestamp + expirySeconds});
+        // store the signal state (only state and expiresAt) and bind commit to pool
+        commitOf[tokenId].state = signal.mmState;
+        commitOf[tokenId].expiresAt = block.timestamp + expirySeconds;
         commitOf[tokenId].poolId = poolKey.toId();
 
         emit SignalCommitted(tokenId);
@@ -1205,7 +1205,7 @@ contract MMPositionManager is
         // verify the proofs associated with the state
         signalManager.verifyLiquiditySignal(liquiditySignal, true);
         LiquiditySignal memory newSignal = abi.decode(liquiditySignal, (LiquiditySignal));
-        LiquiditySignal memory oldSignal = commitOf[tokenId].state.signal;
+        MarketMaker.State memory oldMmState = commitOf[tokenId].state;
 
         // Validate declaration conditions:
         // - The signal proof must have a consistent owner (newSignal.owner == oldSignal.owner)
@@ -1214,7 +1214,7 @@ contract MMPositionManager is
         // - The caller cannot be approved or owner of the commitment NFT - prevents self-declaration
         // The advancer is the declaring party, authorised to prove unbacked status and enable seizure.
         if (
-            newSignal.mmState.owner != oldSignal.mmState.owner || msgSender() != newSignal.mmState.advancer
+            newSignal.mmState.owner != oldMmState.owner || msgSender() != newSignal.mmState.advancer
                 || newSignal.mmState.advancer == newSignal.mmState.owner || _isApprovedOrOwner(msgSender(), tokenId)
         ) {
             revert Errors.InvalidLiquiditySignal(0, 0);
@@ -1222,7 +1222,7 @@ contract MMPositionManager is
 
         // --- Compute commitment-level discrepancy D in USD using helpers
         (uint256 issuedUsd, uint256 settledUsd) = _computeCommitmentUsdValues(tokenId, 0, 0);
-        uint256 signalUsd = _signalUsdValue(newSignal);
+        uint256 signalUsd = _signalUsdValue(newSignal.mmState);
 
         // If no discrepancy, revert
         if (issuedUsd <= signalUsd + settledUsd) {

@@ -3,9 +3,9 @@ pragma solidity ^0.8.0;
 
 import {PositionMeta} from "../types/Position.sol";
 import {PositionId} from "../types/Position.sol";
-import {SignalState} from "../types/Position.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {MarketMaker} from "../libraries/MarketMaker.sol";
 
 /// @title IMMPositionManager
 /// @notice Interface for the MMPositionManager contract
@@ -38,11 +38,6 @@ interface IMMPositionManager {
     /// @return PositionId the position ID
     function getPositionId(uint256 tokenId, uint256 positionIndex) external view returns (PositionId);
 
-    /// @notice Returns the signal state for a given commitment NFT
-    /// @param tokenId the ERC721 tokenId (commitment NFT ID)
-    /// @return SignalState the signal state
-    function getSignalState(uint256 tokenId) external view returns (SignalState memory);
-
     /// @notice Returns the number of positions associated with a commitment NFT
     /// @param tokenId the ERC721 tokenId (commitment NFT ID)
     /// @return uint256 the number of positions
@@ -50,7 +45,11 @@ interface IMMPositionManager {
 
     /// @notice Returns the commit information for a given commitment NFT
     /// @param tokenId the ERC721 tokenId (commitment NFT ID)
-    /// @return state the signal state
+    /// @return state the MarketMaker.State associated with the commitment
+    /// @return expiresAt the expiry timestamp of the commitment
     /// @return poolId the pool ID associated with the commitment
-    function commitOf(uint256 tokenId) external view returns (SignalState memory state, PoolId poolId);
+    function commitOf(uint256 tokenId)
+        external
+        view
+        returns (MarketMaker.State memory state, uint256 expiresAt, PoolId poolId);
 }
