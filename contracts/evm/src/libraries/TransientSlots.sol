@@ -28,11 +28,10 @@ library TransientSlots {
     {
         // Compute a unique slot per positionId under the POSITION_REQUIRED_SETTLEMENT_DELTA namespace
         // Per-slot delta derived from https://github.com/Uniswap/v4-core/blob/11953555e87a976e505b9af49ec2c4c64ac821c2/src/libraries/CurrencyDelta.sol#L8
-        assembly ("memory-safe") {
-            mstore(0, sload(POSITION_REQUIRED_SETTLEMENT_DELTA_SLOT.slot))
-            mstore(32, and(positionId, 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff))
-            hashSlot := keccak256(0, 64)
-        }
+        bytes32 namespaceSlot = POSITION_REQUIRED_SETTLEMENT_DELTA_SLOT;
+        bytes32 key = PositionId.unwrap(positionId);
+        // keccak256 over 64 bytes: namespace (32) || key (32)
+        hashSlot = keccak256(abi.encodePacked(namespaceSlot, key));
     }
 
     function addPositionRequiredSettlementDelta(PositionId positionId, BalanceDelta settlementDelta) internal {
@@ -93,6 +92,10 @@ library TransientSlots {
         TransientSlot.asInt256(TransientSlots.FEE_ADJ_DELTA_SLOT).tstore(int256(0));
         return BalanceDelta.wrap(raw);
     }
+
+    // ------------------------------
+    // Native Eth/Asset Msg Value helpers
+    // ------------------------------
 
     function readMsgValueOnce() internal returns (uint256) {
         bool isNativeValueRead = TransientSlot.asBoolean(TransientSlots.NATIVE_VALUE_READ_SLOT).tload();
