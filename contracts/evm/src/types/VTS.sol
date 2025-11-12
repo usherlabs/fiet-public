@@ -19,4 +19,6 @@ struct MarketVTSConfiguration {
     TokenConfiguration token1;
     // Fee share applied to LP fees when protocol covers deficits (in basis points)
     uint16 coverageFeeShare;
+    // Minimum residual liquidity units threshold for full position closure during seizure
+    uint256 minResidualUnits;
 }

@@ -19,7 +19,8 @@ library VTSConfigs {
                 seizureUnlockTime: 3600, // 1 hour
                 baseVTSRate: 1000 // 10% (1000 bips)
             }),
-            coverageFeeShare: 5000 // 50% (5000 bps)
+            coverageFeeShare: 5000, // 50% (5000 bps)
+            minResidualUnits: 1 // minimum units of liquidity that will result in full seizure
         });
     }
 }

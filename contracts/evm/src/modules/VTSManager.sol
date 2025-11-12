@@ -1336,11 +1336,21 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
         uint256 u0 = LiquidityUtils.seizedUnitsFromBps(liq, e0bps, p0bps);
         uint256 u1 = LiquidityUtils.seizedUnitsFromBps(liq, e1bps, p1bps);
 
-        // 4) Cap at full position liquidity.
-        // TODO: A guard (small, pot-funded) when L is near zero to prevent interventions from approaching 0 indefinitely.
-
+        // 4) Cap at full position liquidity and apply residual threshold
         uint256 total = u0 + u1;
-        return total > liq ? liq : total;
+
+        // Apply residual threshold: if remaining liquidity would be below minResidualUnits, fully close the position
+        uint256 minResidual = cfg.minResidualUnits == 0 ? 1 : cfg.minResidualUnits;
+        if (total < liq) {
+            if ((liq - total) < minResidual) {
+                total = liq;
+            }
+        } else if (total > liq) {
+            // Final clamp to ensure we don't exceed position liquidity
+            total = liq;
+        }
+
+        return total;
     }
 
     /**
