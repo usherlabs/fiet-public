@@ -10,6 +10,7 @@ import {BitMath} from "@uniswap/v4-core/src/libraries/BitMath.sol";
 /// @title TickUtils
 /// @notice Utility functions for tick calculations and validation
 library TickUtils {
+    // Reference: https://github.com/Uniswap/v4-core/blob/cd989b470f1e3cb89d07da428e3785dd00b32a32/src/libraries/TickBitmap.sol#L85
     /**
      * @notice Finds the next initialized tick within one word of the tick bitmap
      * @param poolManager The PoolManager contract
