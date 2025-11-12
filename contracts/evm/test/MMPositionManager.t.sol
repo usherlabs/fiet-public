@@ -1039,7 +1039,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         );
     }
 
-    // TODO: Recreate this once the new slashUnbackedCommitment() is implemented
+    // TODO: Recreate this once the new declareUnbackedCommitment() is implemented
     // function test_canSeizeUnbackedPosition() public {
     //     // make a commitment to a position
     //     bytes memory encodedLiquiditySignal = abi.encode(liquiditySignal);

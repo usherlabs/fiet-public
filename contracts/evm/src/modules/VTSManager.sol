@@ -205,24 +205,6 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
         return (totalSettlementAmount[positionId][0], totalSettlementAmount[positionId][1]);
     }
 
-    function getPositionSettledAmounts(PositionId[] calldata positionIds)
-        public
-        view
-        override
-        returns (uint256 amount0, uint256 amount1)
-    {
-        uint256 len = positionIds.length;
-        for (uint256 i = 0; i < len;) {
-            PositionId id = positionIds[i];
-            uint256[2] storage s = totalSettlementAmount[id];
-            amount0 += s[0];
-            amount1 += s[1];
-            unchecked {
-                i++;
-            }
-        }
-    }
-
     /**
      * @notice Gets the VTS configuration for a core pool
      * @param corePoolId The core pool ID
@@ -725,24 +707,23 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
      * @notice Apply commitment-scoped deficits as BPS of commitment per position.
      * @dev Callable only by the MM Position Manager controller.
      * @dev Applies the same BPS to both tokens for each position.
-     * @dev If bps = 0 and deficit > 0, clears the deficit for that position.
+     * @dev If totalDeficitBps = 0 and deficit > 0, clears the deficit for that position.
      * @param ids Position ids to apply deficits for
-     * @param bps BPS amounts per position (length == ids.length), applied to both tokens
+     * @param totalDeficitBps Total BPS amount divided equally across all positions, applied to both tokens
      */
-    function applyCommitmentDeficit(PositionId[] calldata ids, uint16[] calldata bps) external {
+    function applyCommitmentDeficit(PositionId[] calldata ids, uint256 totalDeficitBps) external {
         if (!_isCallerMMP(msg.sender)) {
             revert Errors.InvalidSender();
         }
         uint256 n = ids.length;
-        if (bps.length != n) {
-            revert Errors.InvalidSender();
-        }
+
+        uint256 bpsValue = totalDeficitBps / n;
+
         for (uint256 i = 0; i < n;) {
             PositionId id = ids[i];
             if (!_isMMPosition(id)) {
                 revert Errors.InvalidPosition(0, 0, id);
             }
-            uint16 bpsValue = bps[i];
             uint256 cd0 = commitmentDeficitUnits[id][0];
             uint256 cd1 = commitmentDeficitUnits[id][1];
 
@@ -756,8 +737,8 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
                 // Apply same BPS to both tokens
                 uint256 c0 = commitmentMaxima[id][0];
                 uint256 c1 = commitmentMaxima[id][1];
-                uint256 add0 = c0 == 0 ? 0 : FullMath.mulDiv(c0, uint256(bpsValue), LiquidityUtils.BPS_DENOMINATOR);
-                uint256 add1 = c1 == 0 ? 0 : FullMath.mulDiv(c1, uint256(bpsValue), LiquidityUtils.BPS_DENOMINATOR);
+                uint256 add0 = c0 == 0 ? 0 : FullMath.mulDiv(c0, bpsValue, LiquidityUtils.BPS_DENOMINATOR);
+                uint256 add1 = c1 == 0 ? 0 : FullMath.mulDiv(c1, bpsValue, LiquidityUtils.BPS_DENOMINATOR);
                 if (add0 > c0) add0 = c0;
                 if (add1 > c1) add1 = c1;
                 if (add0 > 0) {

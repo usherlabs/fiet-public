@@ -63,6 +63,9 @@ contract MMPositionManager is
     event SignalCommitted(uint256 tokenId);
     event SignalDecommitted(uint256 tokenId, uint256 positionCount);
 
+    /// @notice Maximum number of positions allowed per commitment to prevent gas exhaustion
+    uint256 public constant MAX_POSITIONS_PER_COMMITMENT = 250;
+
     ILiquidityHub internal immutable liquidityHub;
     IVTSManager internal immutable vtsManager;
     IVRLSignalManager internal immutable signalManager;
@@ -100,7 +103,7 @@ contract MMPositionManager is
         INCREASE_LIQUIDITY_FROM_DELTAS, // params: (Currency currency, int128 delta, address target)
         MINT_POSITION_FROM_DELTAS, // params: (Currency currency, int128 delta, address target)
         SETTLE_POSITION_FROM_DELTAS, // params: (PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex, bool settleIn0, bool settleIn1)
-        SLASH_UNBACKED_COMMITMENT, // params: (PoolKey memory poolKey, uint256 tokenId, bytes memory liquiditySignal)
+        DECLARE_UNBACKED_COMMITMENT, // params: (PoolKey memory poolKey, uint256 tokenId, bytes memory liquiditySignal)
         COLLECT_AVAILABLE_LIQUIDITY // params: (address lcc, address recipient, uint256 maxAmount)
     }
 
@@ -312,11 +315,11 @@ contract MMPositionManager is
             _seizePosition(poolKey, tokenId, positionIndex, amount0, amount1);
             return;
         }
-        if (action == uint256(MMAction.SLASH_UNBACKED_COMMITMENT)) {
+        if (action == uint256(MMAction.DECLARE_UNBACKED_COMMITMENT)) {
             (PoolKey memory poolKey, uint256 tokenId, bytes memory liquiditySignal) =
                 abi.decode(params, (PoolKey, uint256, bytes));
-            // slash an unbacked commitment. A third-party guarantor action; no approval required
-            _slashUnbackedCommitment(poolKey, tokenId, liquiditySignal);
+            // declare an unbacked commitment. A third-party guarantor action; no approval required
+            _declareUnbackedCommitment(poolKey, tokenId, liquiditySignal);
             return;
         }
         if (action == uint256(MMAction.COLLECT_AVAILABLE_LIQUIDITY)) {
@@ -519,12 +522,12 @@ contract MMPositionManager is
     /// @return s1 Total settled token1 across positions.
     function _sumSettledAmountsForCommit(uint256 tokenId) internal view returns (uint256 s0, uint256 s1) {
         uint256 n = commitToPositionCount[tokenId];
-        PositionId[] memory pids = new PositionId[](n);
         for (uint256 i = 0; i < n; i++) {
             PositionId pid = getPositionId(tokenId, i);
-            pids[i] = pid;
+            (uint256 pos0, uint256 pos1) = vtsManager.getPositionSettledAmounts(pid);
+            s0 += pos0;
+            s1 += pos1;
         }
-        (s0, s1) = vtsManager.getPositionSettledAmounts(pids);
     }
 
     /// @dev Re-composes effective LCC amounts across all positions at the current pool price.
@@ -1055,12 +1058,10 @@ contract MMPositionManager is
         // Use applyCommitmentDeficit with bps=0 to clear deficits
         uint256 n = commitToPositionCount[tokenId];
         PositionId[] memory ids = new PositionId[](n);
-        uint16[] memory bps = new uint16[](n);
         for (uint256 i = 0; i < n; i++) {
             ids[i] = getPositionId(tokenId, i);
-            bps[i] = 0; // Clear deficits
         }
-        vtsManager.applyCommitmentDeficit(ids, bps);
+        vtsManager.applyCommitmentDeficit(ids, 0);
     }
 
     /**
@@ -1119,8 +1120,14 @@ contract MMPositionManager is
         int24 tickUpper,
         uint256 liquidity
     ) internal returns (PositionId positionId, uint256 positionIndex) {
+        // Enforce maximum positions per commitment to prevent gas exhaustion
+        uint256 currentCount = commitToPositionCount[tokenId];
+        if (currentCount >= MAX_POSITIONS_PER_COMMITMENT) {
+            revert Errors.MaxPositionsExceeded(tokenId, MAX_POSITIONS_PER_COMMITMENT);
+        }
+
         // add liquidity to the pool using the token id and position index to generate a unique salt
-        positionIndex = commitToPositionCount[tokenId];
+        positionIndex = currentCount;
 
         positionId = _increaseInternal(poolKey, tokenId, positionIndex, tickLower, tickUpper, liquidity);
 
@@ -1180,12 +1187,14 @@ contract MMPositionManager is
     }
 
     /**
-     * @dev Slash an unbacked commitment, and unlock its positions for seizure.
-     * @param poolKey The pool key to slash the commitment for
-     * @param tokenId The token id to slash the commitment for
+     * @dev Declare an unbacked commitment, and unlock its positions for seizure.
+     * @param poolKey The pool key to declare the commitment for
+     * @param tokenId The token id to declare the commitment for
      * @param liquiditySignal The liquidity signal used as proof that the commitment is unbacked
      */
-    function _slashUnbackedCommitment(PoolKey memory poolKey, uint256 tokenId, bytes memory liquiditySignal) internal {
+    function _declareUnbackedCommitment(PoolKey memory poolKey, uint256 tokenId, bytes memory liquiditySignal)
+        internal
+    {
         _assertCommitForPool(poolKey, tokenId);
 
         // 1) Verify the new liquidity signal
@@ -1198,12 +1207,12 @@ contract MMPositionManager is
         LiquiditySignal memory newSignal = abi.decode(liquiditySignal, (LiquiditySignal));
         LiquiditySignal memory oldSignal = commitOf[tokenId].state.signal;
 
-        // Validate slashing conditions:
+        // Validate declaration conditions:
         // - The signal proof must have a consistent owner (newSignal.owner == oldSignal.owner)
         // - The caller must be the advancer (msgSender() == newSignal.advancer)
-        // - The advancer cannot be the owner (advancer != owner) - prevents self-slashing
-        // - The caller cannot be approved or owner of the commitment NFT - prevents self-slashing
-        // The advancer is the slashing party, authorised to prove unbacked status and enable seizure.
+        // - The advancer cannot be the owner (advancer != owner) - prevents self-declaration
+        // - The caller cannot be approved or owner of the commitment NFT - prevents self-declaration
+        // The advancer is the declaring party, authorised to prove unbacked status and enable seizure.
         if (
             newSignal.mmState.owner != oldSignal.mmState.owner || msgSender() != newSignal.mmState.advancer
                 || newSignal.mmState.advancer == newSignal.mmState.owner || _isApprovedOrOwner(msgSender(), tokenId)
@@ -1235,16 +1244,13 @@ contract MMPositionManager is
         MarketVTSConfiguration memory cfg = vtsManager.getMarketVTSConfiguration(poolKey.toId());
         uint256 totalDeficitBps = FullMath.mulDiv(commitmentDeficitUsd, LiquidityUtils.BPS_DENOMINATOR, issuedUsd);
         // Average deficit BPS across positions (implicit floor via integer division)
-        uint16 perPosBps = uint16(totalDeficitBps / n);
         PositionId[] memory ids = new PositionId[](n);
-        uint16[] memory bps = new uint16[](n);
         for (uint256 i = 0; i < n; i++) {
             ids[i] = getPositionId(tokenId, i);
-            bps[i] = perPosBps;
             // Force open and elapse grace for immediate seizure across all positions in this commitment
             _forceOpenAndElapse(cfg, tokenId, i);
         }
-        vtsManager.applyCommitmentDeficit(ids, bps);
+        vtsManager.applyCommitmentDeficit(ids, totalDeficitBps);
     }
 
     /// @dev overrides transferFrom to revert if pool manager is locked

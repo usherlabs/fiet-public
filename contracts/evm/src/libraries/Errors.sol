@@ -153,6 +153,11 @@ library Errors {
     /// @notice Thrown when a commitment descriptor is not set
     error CommitmentDescriptorNotSet();
 
+    /// @notice Thrown when the maximum number of positions per commitment is exceeded
+    /// @param tokenId The token ID of the commitment
+    /// @param maxPositions The maximum allowed positions per commitment
+    error MaxPositionsExceeded(uint256 tokenId, uint256 maxPositions);
+
     // ============ PAUSE & STATE ERRORS ============
     // Errors related to contract pause state and state transitions
 

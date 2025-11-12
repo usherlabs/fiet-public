@@ -30,14 +30,9 @@ interface IVTSManager is IPositionRegistry {
 
     function getPositionSettledAmounts(PositionId positionId) external view returns (uint256 amount0, uint256 amount1);
 
-    function getPositionSettledAmounts(PositionId[] calldata positionIds)
-        external
-        view
-        returns (uint256 amount0, uint256 amount1);
-
     function incrementCoverage(PoolId poolId, uint256 amount0, uint256 amount1) external;
 
     function getCommitment(PositionId positionId) external view returns (uint256 commitment0, uint256 commitment1);
 
-    function applyCommitmentDeficit(PositionId[] calldata ids, uint16[] calldata bps) external;
+    function applyCommitmentDeficit(PositionId[] calldata ids, uint256 totalDeficitBps) external;
 }
