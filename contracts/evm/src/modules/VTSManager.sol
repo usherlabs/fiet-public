@@ -542,8 +542,8 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
 
         // during withdrawals, delta is positive as per caller context. during deposits, delta is negative.
         // However, _updateSettlement accepts the inverse as a delta of the totalSettlementAmount. ie. positive increases, and negative decreases the metric.
-        int256 amount0 = delta.amount0();
-        int256 amount1 = delta.amount1();
+        int256 amount0 = int256(delta.amount0());
+        int256 amount1 = int256(delta.amount1());
 
         // Settle growths and get RFS state
         BalanceDelta rfsDelta;
