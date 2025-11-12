@@ -509,6 +509,36 @@ contract LiquidityHub is Ownable, LCCFactory, ReentrancyGuardTransient {
     }
 
     /**
+     * @notice Cancels LCC tokens and queues a settlement for the shortfall
+     * @dev Simulates unwrap-with-queue without touching direct supply or market liquidity
+     * @param lcc The LCC token address to cancel for
+     * @param cancelAmount The amount to cancel (burn)
+     * @param queueAmount The amount to queue for settlement (must be <= cancelAmount)
+     * @param recipient The recipient address for the queued settlement
+     */
+    function cancelWithQueue(address lcc, uint256 cancelAmount, uint256 queueAmount, address recipient)
+        external
+        onlyIssuer(lcc)
+        onlyValidLcc(lcc)
+    {
+        if (cancelAmount == 0) {
+            revert Errors.InvalidAmount(0, 0);
+        }
+        if (queueAmount > cancelAmount) {
+            revert Errors.InvalidAmount(queueAmount, cancelAmount);
+        }
+
+        address issuer = _msgSender();
+        // Burn the cancelled amount (issuer burn path, skip bucket accounting)
+        _burn(lcc, issuer, 0, cancelAmount, true);
+
+        // Queue the settlement for future processing
+        if (queueAmount > 0) {
+            _queueSettlement(lcc, recipient, queueAmount);
+        }
+    }
+
+    /**
      * @notice Called by MarketVault after taking underlying liquidity from the market to LCC
      * @param lcc The LCC token address
      * @param amount The amount of underlying liquidity taken

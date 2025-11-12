@@ -99,7 +99,8 @@ contract MMPositionManager is
         INCREASE_LIQUIDITY_FROM_DELTAS, // params: (Currency currency, int128 delta, address target)
         MINT_POSITION_FROM_DELTAS, // params: (Currency currency, int128 delta, address target)
         SETTLE_POSITION_FROM_DELTAS, // params: (PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex, bool settleIn0, bool settleIn1)
-        SLASH_UNBACKED_COMMITMENT // params: (PoolKey memory poolKey, uint256 tokenId, bytes memory liquiditySignal)
+        SLASH_UNBACKED_COMMITMENT, // params: (PoolKey memory poolKey, uint256 tokenId, bytes memory liquiditySignal)
+        COLLECT_AVAILABLE_LIQUIDITY // params: (address lcc, address recipient, uint256 maxAmount)
     }
 
     // MarketHandler must be first.
@@ -306,6 +307,12 @@ contract MMPositionManager is
                 abi.decode(params, (PoolKey, uint256, bytes));
             // slash an unbacked commitment. A third-party guarantor action; no approval required
             _slashUnbackedCommitment(poolKey, tokenId, liquiditySignal);
+            return;
+        }
+        if (action == uint256(MMAction.COLLECT_AVAILABLE_LIQUIDITY)) {
+            // params: (address lcc, address recipient, uint256 maxAmount)
+            (address lcc, address recipient, uint256 maxAmount) = abi.decode(params, (address, address, uint256));
+            _collectAvailableLiquidity(lcc, recipient, maxAmount);
             return;
         }
         if (action == uint256(MMAction.DECOMMIT)) {
@@ -664,15 +671,34 @@ contract MMPositionManager is
     }
 
     /**
+     * @dev Collects available liquidity from the settlement queue for the caller
+     * @param lcc The LCC token address to process settlement for
+     * @param recipient The recipient address to receive the underlying assets
+     * @param maxAmount The maximum amount to settle
+     */
+    function _collectAvailableLiquidity(address lcc, address recipient, uint256 maxAmount) internal {
+        address sender = msgSender();
+        uint256 queued = liquidityHub.settleQueue(lcc, sender);
+        
+        if (queued > 0) {
+            liquidityHub.processSettlementFor(lcc, recipient, maxAmount);
+        }
+        
+        _primeUnderlyingDelta(sender, Currency.wrap(lcc));
+    }
+
+    /**
      * @dev This function is used to settle underlying assets to/from the position
      * @param poolKey The pool key for the position - adheres to Uniswap standards where poolKey provided as a param.
      * @param tokenId The token id to settle the position for
      * @param positionIndex The position index to settle the position for
      * @param amount0 The amount of token0 to settle. Positive amounts result in deposits, negative amounts result in withdrawals.
      * @param amount1 The amount of token1 to settle. Positive amounts result in deposits, negative amounts result in withdrawals.
+     * @return seizedLiquidityUnits The amount of liquidity units seized during seizure path (0 if not seizing)
      */
     function _settle(PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex, int128 amount0, int128 amount1)
         internal
+        returns (uint256 seizedLiquidityUnits)
     {
         _assertCommitForPool(poolKey, tokenId);
 
@@ -707,13 +733,11 @@ contract MMPositionManager is
             msgSender(),
             poolKey.toId(),
             settlementDelta,
-            ILCC(Currency.unwrap(poolKey.currency0)).underlying(),
-            ILCC(Currency.unwrap(poolKey.currency1)).underlying()
+            poolKey.currency0,
+            poolKey.currency1,
         );
 
-        if (seizedLiqUnits > 0 && isSeizing) {
-            TransientSlots.setSeizedPosition(positionId, seizedLiqUnits);
-        }
+        return seizedLiqUnits;
     }
 
     /**
@@ -964,8 +988,7 @@ contract MMPositionManager is
         PositionMeta memory position,
         bytes32 salt,
         uint256 amountToDecrease,
-        PositionId seizedPositionId,
-        BalanceDelta seizureSettlementDelta
+        bytes memory hookData
     ) internal {
         // validate liquidity is not over available
         uint256 posLiq = uint256(position.liquidity);
@@ -986,7 +1009,7 @@ contract MMPositionManager is
                 liquidityDelta: -amountToDecrease.toInt256(),
                 salt: salt
             }),
-            hookData // TODO Construct the hook data here...
+            hookData
         );
 
         if (amountToDecrease == 0 && LiquidityUtils.isZeroDelta(principalDelta)) {
@@ -1009,19 +1032,11 @@ contract MMPositionManager is
         BalanceDelta availableDelta = _clampSettlementDeltaByAvailableLiquidities(position.poolId, settlementDelta);
         BalanceDelta diff = settlementDelta - availableDelta;
         BalanceDelta cancelDelta = principalDelta - diff; // the total amount to cancel must be the principle, however, for any diff/deficit, the LCCs are backed by pending liquidity to the protocol.
-        if (cancelDelta.amount0() > 0) {
-            liquidityHub.cancel(
-                Currency.unwrap(poolKey.currency0), LiquidityUtils.safeInt128ToUint256(cancelDelta.amount0())
-            );
-        }
-        if (cancelDelta.amount1() > 0) {
-            liquidityHub.cancel(
-                Currency.unwrap(poolKey.currency1), LiquidityUtils.safeInt128ToUint256(cancelDelta.amount1())
-            );
-        }
-        // For unavailable liquidity, mark the difference as LCCs (withdrawable = positive delta) to the caller.
+        // For unavailable liquidity, persist the remainder and queue via cancelWithQueue
         if (diff.amount0() > 0 || diff.amount1() > 0) {
-            _convertUnderlyingDeltaToLccDelta(msgSender(), diff, poolKey.currency0, poolKey.currency1);
+            // Persist the shortfall to persistent storage
+            _persistUnderlyingDelta(msgSender(), diff, poolKey.currency0, poolKey.currency1);
+
             // // Accrue the diff against the MM's floating issued balance.
             // // MM is restricted from decommitment
             // LCCs accrue in the MMP contract, and unwrap to queue settlement from market vault.
@@ -1033,7 +1048,19 @@ contract MMPositionManager is
 
             // For Seizures, this works too.
             // ANSWER: Repurpose the settle mechanic, and hold pending settlements inside of MMP.
+            // We should:
+            // 1. Load min(_persistentUnderlyingSettlementDelta mapping (if > 0), available currency amount in MMP address(this)) in to transient first on batch start,
+            // 2. validating whether MMP holds the relevant underlying assets, and clearing it from mapping if available.
+            // 3. Load a negative currency delta with target address(this) to determine what to take directly from MMP before proceeding to take/modify MarketVault liquidities.
+            // On _settleUnderlying, clear the delta on address(this).
+            // Finally, include an action for PROCESS_SETTLEMENT for MMs to call to process their pending settlements in a batch.
         }
+        // Queue settlements via cancelWithQueue
+        address lcc0 = Currency.unwrap(poolKey.currency0);
+        address lcc1 = Currency.unwrap(poolKey.currency1);
+
+        liquidityHub.cancelWithQueue(lcc0, LiquidityUtils.safeInt128ToUint256(cancelDelta.amount0()), LiquidityUtils.safeInt128ToUint256(diff.amount0()), address(this));
+        liquidityHub.cancelWithQueue(lcc1, LiquidityUtils.safeInt128ToUint256(cancelDelta.amount1()), LiquidityUtils.safeInt128ToUint256(diff.amount1()), address(this));
     }
 
     /**
@@ -1163,14 +1190,15 @@ contract MMPositionManager is
         // Set transient storage placeholder (will be updated after settlement with actual seizedLiquidityUnits)
         TransientSlots.setSeizedPosition(positionId, 0);
 
-        // Call _settle - this will read isSeizing from transient storage and call onMMSettle
-        _settle(poolKey, tokenId, positionIndex, amount0.toInt128(), amount1.toInt128());
 
-        uint256 seizedLiquidityUnits = TransientSlots.getSeizedLiquidityUnits(); // set inside of _settle
+        // Call _settle - this will return the seizedLiquidityUnits
+        uint256 seizedLiquidityUnits =
+            _settle(poolKey, tokenId, positionIndex, amount0.toInt128(), amount1.toInt128());
 
         // Prepare hookData: encode seizedPositionId and settlementDelta
-        bytes memory hookData =
-            abi.encode(PositionId.unwrap(positionId), settlementDelta.amount0(), settlementDelta.amount1());
+        bytes memory hookData = abi.encode(
+            PositionId.unwrap(positionId), seizureSettlementDelta.amount0(), seizureSettlementDelta.amount1()
+        );
 
         // Call _decreaseInternal with hookData (convert to calldata via helper)
         _decreaseInternal(poolKey, position, _positionSalt(tokenId, positionIndex), seizedLiquidityUnits, hookData);

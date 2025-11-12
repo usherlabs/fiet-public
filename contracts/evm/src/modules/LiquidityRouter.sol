@@ -61,6 +61,10 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler, NativeWrappe
     using StateLibrary for IPoolManager;
     using TransientStateLibrary for IPoolManager;
 
+    // Persistent storage to track unsettled underlying owed per target (similar to CurrencyDelta pattern)
+    mapping(address target => mapping(address underlying => int256 amount)) internal
+        _persistentUnderlyingSettlementDelta;
+
     /**
      * @notice Constructs the LiquidityRouter
      * @param _marketFactory Address of the MarketFactory contract
@@ -158,6 +162,53 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler, NativeWrappe
     }
 
     /**
+     * @notice Primes persistent settlement deltas from MMP-held balances
+     * @dev Loads min(persistent mapping for sender, MMP contract balance) as positive delta to sender (credit)
+     *      representing deduction from address(this) to sender (flash accounting)
+     * @param sender The address to prime deltas for
+     * @param ua0 The address of underlying asset 0
+     * @param ua1 The address of underlying asset 1
+     */
+    function _primeUnderlyingDelta(address sender, Currency lccCurrency) internal {
+        address self = address(this);
+        Currency underlyingCurrency = _lccToUnderlyingCurrency(lccCurrency);
+        address ua = Currency.unwrap(underlyingCurrency);
+
+        // For currency0
+        int256 persistentDelta = _persistentUnderlyingSettlementDelta[sender][ua];
+        if (persistentDelta > 0) {
+            uint256 balance = currency.balanceOfSelf();
+            uint256 load = Math.min(SafeCast.toUint256(persistentDelta), balance);
+            if (load > 0) {
+                // Load positive delta to sender (credit) representing deduction from MMP
+                _accountDelta(currency, SafeCast.toInt128(load), sender);
+                _accountDelta(currency, -SafeCast.toInt128(load), address(this)); // indicate (negative) from this to (positive) to sender
+                _persistentUnderlyingSettlementDelta[sender][Currency.unwrap(currency)] = persistentDelta - load;
+            }
+        } else if (persistentDelta < 0) {
+            // This path should never really execute.
+            // ie. There's no reason to persist deltas owing from caller -> protocol.
+            _accountDelta(underlyingCurrency, SafeCast.toInt128(persistentDelta), sender);
+            _accountDelta(underlyingCurrency, -SafeCast.toInt128(persistentDelta), address(this)); // indicate (positive) to this from (negative) to sender
+            _persistentUnderlyingSettlementDelta[sender][ua] = 0;
+        }
+    }
+
+    /**
+     * @notice Clears any remaining transient deltas on address(this) for the underlyings
+     * @param ua0 The address of underlying asset 0
+     * @param ua1 The address of underlying asset 1
+     */
+    function _clearSelfDelta(Currency currency) internal {
+        address self = address(this);
+        int256 delta = currency.getDelta(self);
+
+        if (delta != 0) {
+            _accountDelta(currency, -SafeCast.toInt128(delta), self);
+        }
+    }
+
+    /**
      * @notice Settles underlying assets between MMPositionManager and MarketVault based on
      *         protocol-defined settlement rules
      * @dev This function bridges the flow of underlying assets between MMP and MarketVault (proxy hook):
@@ -168,34 +219,65 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler, NativeWrappe
      * which may differ from the modifyDelta due to clamping or adjustments.
      *
      * Flow:
-     *   1. Deposits: MMP -> Router -> MarketVault (via transferFrom)
-     *   2. Notify MarketVault of liquidity changes (via modifyLiquidities)
-     *   3. Withdrawals: MarketVault -> Router -> MMP (via transfer)
+     *   1. Consume any sender positive deltas first (withdrawals from MMP → sender)
+     *   2. Deposits: MMP -> Router -> MarketVault (via transferFrom)
+     *   3. Notify MarketVault of liquidity changes (via modifyLiquidities)
+     *   4. Withdrawals: MarketVault -> Router -> MMP (via transfer)
      *
      * @param poolId The pool ID associated with the position
      * @param settlementDelta The balance delta for underlying asset settlement. Positive means depositing to MV,
      *                        negative means withdrawing from MV to MMP
-     * @param ua0 The address of underlying asset 0
+     * @param lccCurrency0 The currency of the first LCC
+     * @param lccCurrency1 The currency of the second LCC
      * @param ua1 The address of underlying asset 1
      */
-    function _settleUnderlying(address sender, PoolId poolId, BalanceDelta settlementDelta, address ua0, address ua1)
-        internal
-        returns (BalanceDelta usedDelta)
-    {
+    function _settleUnderlying(
+        address sender,
+        PoolId poolId,
+        BalanceDelta settlementDelta,
+        Currency lccCurrency0,
+        Currency lccCurrency1
+    ) internal returns (BalanceDelta usedDelta) {
         address marketVault = _getVault(poolId);
-
-        Currency currency0 = Currency.wrap(ua0);
-        Currency currency1 = Currency.wrap(ua1);
+        Currency underlyngCurrency0 = _lccToUnderlyingCurrency(lccCurrency0);
+        Currency underlyngCurrency1 = _lccToUnderlyingCurrency(lccCurrency1);
         int128 amount0 = settlementDelta.amount0();
         int128 amount1 = settlementDelta.amount1();
+
+        // Step A: Consume any self negative deltas first (withdrawals from MMP → sender)
+        // This prioritises MMP-held balances that were primed at batch start
+        int256 selfDelta0 = selfUnderlyingCurrency0.getDelta(address(this));
+        int256 selfDelta1 = selfUnderlyingCurrency1.getDelta(address(this));
+
+        if (selfDelta0 > 0 && amount0 > 0) {
+            uint256 take0 = Math.min(uint256(selfDelta0), uint256(amount0));
+            if (take0 > 0) {
+                // Transfer directly from MMP to sender (satisfying primed credit)
+                underlyingCurrency0.transfer(sender, take0);
+                _accountDelta(underlyingCurrency0, -SafeCast.toInt128(take0), sender);
+                _accountDelta(underlyingCurrency0, SafeCast.toInt128(take0), address(this));
+                amount0 -= SafeCast.toInt128(take0);
+            }
+        }
+
+        if (selfDelta1 > 0 && amount1 > 0) {
+            uint256 take1 = Math.min(uint256(selfDelta1), uint256(amount1));
+            if (take1 > 0) {
+                // Transfer directly from MMP to sender (satisfying primed credit)
+                underlyingCurrency1.transfer(sender, take1);
+                _accountDelta(underlyingCurrency1, -SafeCast.toInt128(take1), sender);
+                _accountDelta(underlyingCurrency1, SafeCast.toInt128(take1), address(this));
+                amount1 -= SafeCast.toInt128(take1);
+            }
+        }
 
         // Process deposits first (amount < 0), then notify vault, then process withdrawals (amount > 0)
         // This ensures the vault is funded before withdrawals
         if (amount0 < 0) {
-            _settleUnderlyingCurrency(currency0, amount0, sender, marketVault);
+            _settleUnderlyingCurrency(underlyingCurrency0, amount0, sender, marketVault);
         }
         if (amount1 < 0) {
-            _settleUnderlyingCurrency(currency1, amount1, sender, marketVault);
+            _settleUnderlyingCurrency(underlyingCurrency1, amount1, sender, marketVault);
         }
 
         // Notify the MarketVault (proxy hook) of the settled underlying tokens
@@ -207,10 +289,10 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler, NativeWrappe
         usedDelta = IMarketVault(marketVault).tryModifyLiquidities(LiquidityUtils.safeToBalanceDelta(amount0, amount1));
 
         if (usedDelta.amount0() > 0) {
-            _settleUnderlyingCurrency(currency0, usedDelta.amount0(), sender, marketVault);
+            _settleUnderlyingCurrency(underlyingCurrency0, usedDelta.amount0(), sender, marketVault);
         }
         if (usedDelta.amount1() > 0) {
-            _settleUnderlyingCurrency(currency1, usedDelta.amount1(), sender, marketVault);
+            _settleUnderlyingCurrency(underlyingCurrency1, usedDelta.amount1(), sender, marketVault);
         }
     }
 
@@ -247,33 +329,43 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler, NativeWrappe
     }
 
     /**
-     * @notice Converts the settlement delta to LCC delta
+     * @notice Persists unsettled underlying deltas to persistent storage
+     * @dev Persists any positive underlying deltas (protocol owes) to persistent mapping and clears transient deltas
      * @param sender The address initiating the settlement
-     * @param settlementDelta The settlement delta to convert
+     * @param settlementDelta The settlement delta to persist
      * @param lccCurrency0 The currency of the first LCC
      * @param lccCurrency1 The currency of the second LCC
-     * @return convertedDelta The converted balance delta
      */
-    function _convertUnderlyingDeltaToLccDelta(
+    function _persistUnderlyingDelta(
         address sender,
         BalanceDelta settlementDelta,
         Currency lccCurrency0,
         Currency lccCurrency1
-    ) internal returns (BalanceDelta) {
+    ) internal {
         Currency uCurrency0 = _lccToUnderlyingCurrency(lccCurrency0);
         Currency uCurrency1 = _lccToUnderlyingCurrency(lccCurrency1);
+
+        // Get current transient deltas if settlementDelta is zero
         if (LiquidityUtils.isZeroDelta(settlementDelta)) {
             int256 uaDelta0 = uCurrency0.getDelta(sender);
             int256 uaDelta1 = uCurrency1.getDelta(sender);
             settlementDelta = toBalanceDelta(SafeCast.toInt128(uaDelta0), SafeCast.toInt128(uaDelta1));
         }
-        // Inverse the current delta of the underlying assets to the sender
-        _accountDelta(uCurrency0, -settlementDelta.amount0(), sender);
-        _accountDelta(uCurrency1, -settlementDelta.amount1(), sender);
-        // Apply the deltas to LCCs
-        _accountDelta(lccCurrency0, settlementDelta.amount0(), sender);
-        _accountDelta(lccCurrency1, settlementDelta.amount1(), sender);
-        return settlementDelta;
+
+        // Persist positive deltas (protocol owes) to persistent storage
+        int128 amount0 = settlementDelta.amount0();
+        int128 amount1 = settlementDelta.amount1();
+
+        if (amount0 != 0) {
+            address ua0 = Currency.unwrap(uCurrency0);
+            _persistentUnderlyingSettlementDelta[sender][ua0] += int256(amount0);
+            _accountDelta(uCurrency0, -amount0, sender); // Clear transient delta
+        }
+        if (amount1 != 0) {
+            address ua1 = Currency.unwrap(uCurrency1);
+            _persistentUnderlyingSettlementDelta[sender][ua1] += int256(amount1);
+            _accountDelta(uCurrency1, -amount1, sender); // Clear transient delta
+        }
     }
 
     /**

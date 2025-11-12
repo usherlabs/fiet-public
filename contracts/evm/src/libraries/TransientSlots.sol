@@ -15,7 +15,6 @@ library TransientSlots {
     bytes32 internal constant POSITION_REQUIRED_SETTLEMENT_DELTA_SLOT = keccak256("POSITION_REQUIRED_SETTLEMENT_DELTA");
     bytes32 internal constant FEE_ADJ_DELTA_SLOT = keccak256("FEE_ADJ_DELTA");
     bytes32 internal constant NATIVE_VALUE_READ_SLOT = keccak256("NATIVE_VALUE_READ");
-    bytes32 internal constant SEIZED_LIQUIDITY_UNITS_SLOT = keccak256("SEIZED_LIQUIDITY_UNITS");
     bytes32 internal constant SEIZED_POSITION_ID_SLOT = keccak256("SEIZED_POSITION_ID");
 
     // ------------------------------
@@ -101,22 +100,16 @@ library TransientSlots {
     // Seizure helpers
     // ------------------------------
 
-    function setSeizedPosition(PositionId positionId, uint256 liquidityUnits) internal {
+    function setSeizedPosition(PositionId positionId) internal {
         TransientSlot.asBytes32(TransientSlots.SEIZED_POSITION_ID_SLOT).tstore(PositionId.unwrap(positionId));
-        TransientSlot.asUint256(TransientSlots.SEIZED_LIQUIDITY_UNITS_SLOT).tstore(liquidityUnits);
     }
 
-    function getSeizedPositionId() internal view returns (PositionId) {
+    function getSeizedPosition() internal view returns (PositionId) {
         bytes32 raw = TransientSlot.asBytes32(TransientSlots.SEIZED_POSITION_ID_SLOT).tload();
         return PositionId.wrap(raw);
     }
 
-    function getSeizedLiquidityUnits() internal view returns (uint256) {
-        return TransientSlot.asUint256(TransientSlots.SEIZED_LIQUIDITY_UNITS_SLOT).tload();
-    }
-
     function clearSeizedPosition() internal {
         TransientSlot.asBytes32(TransientSlots.SEIZED_POSITION_ID_SLOT).tstore(bytes32(0));
-        TransientSlot.asUint256(TransientSlots.SEIZED_LIQUIDITY_UNITS_SLOT).tstore(uint256(0));
     }
 }
