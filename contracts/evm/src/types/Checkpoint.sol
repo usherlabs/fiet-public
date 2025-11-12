@@ -52,4 +52,20 @@ library RFSCheckpointLibrary {
             }
         }
     }
+
+    // Force open checkpoint and backdate transition so grace is considered elapsed
+    function forceOpenAndElapse(RFSCheckpoint storage self, uint256 backdateSeconds) internal {
+        self.isOpen = true;
+        if (backdateSeconds == 0) {
+            self.timeOfLastTransition = 0; // maximal backdate
+        } else {
+            // Backdate so timeSinceLastTransition > grace windows
+            uint256 t = block.timestamp;
+            unchecked {
+                self.timeOfLastTransition = t - backdateSeconds;
+            }
+        }
+        self.gracePeriodExtension0 = 0;
+        self.gracePeriodExtension1 = 0;
+    }
 }

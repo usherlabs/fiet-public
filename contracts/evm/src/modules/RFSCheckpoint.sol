@@ -103,6 +103,27 @@ abstract contract RFSCheckpointModule {
     }
 
     /**
+     * @notice Force a position's checkpoint to open and mark grace as elapsed immediately.
+     * @dev Computes a backdate window based on configured max grace periods and applies it.
+     */
+    function _forceOpenAndElapse(
+        MarketVTSConfiguration memory vtsConfiguration,
+        uint256 tokenId,
+        uint256 positionIndex
+    ) internal {
+        PositionId positionId = getPositionId(tokenId, positionIndex);
+        // Backdate by the larger of the two token max grace windows plus 1 second
+        uint256 max0 = vtsConfiguration.token0.maxGracePeriodTime;
+        uint256 max1 = vtsConfiguration.token1.maxGracePeriodTime;
+        uint256 backdate = max0 > max1 ? max0 : max1;
+        unchecked {
+            backdate = backdate + 1;
+        }
+        positionToCheckpoint[positionId].forceOpenAndElapse(backdate);
+        emit Checkpointed(tokenId, positionIndex, positionToCheckpoint[positionId]);
+    }
+
+    /**
      * @notice Determines if a position is open for seizure by checking if the grace period has elapsed
      * @dev Returns true if timeSinceLastCheckpoint > (gracePeriodTime + extension) for either token
      * @param vtsConfiguration The VTS configuration

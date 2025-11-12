@@ -84,6 +84,9 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
     // Per-position outflow snapshot taken when feeGrowthInsideLast is checkpointed, per token
     mapping(PositionId => uint256[2]) internal outflowsAtFeeSnap;
 
+    // Commitment-scoped deficit (insolvency gate) per position/token (raw units)
+    mapping(PositionId => uint256[2]) internal commitmentDeficitUnits;
+
     // (legacy proactive and fee-pot accounting removed)
 
     // Per-position fees contributed to the pot via slashes (for self-exclusion in bonus)
@@ -110,6 +113,9 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
         PoolId indexed poolId, PositionId indexed positionId, uint8 indexed tokenIndex, uint256 share, uint256 growthInc
     );
     event MMPositionSettle(PoolId indexed poolId, PositionId indexed positionId, int128 amount0, int128 amount1);
+    event CommitmentDeficitApplied(PositionId indexed positionId, uint8 indexed tokenIndex, uint256 units);
+    event CommitmentDeficitConsumed(PositionId indexed positionId, uint8 indexed tokenIndex, uint256 units);
+    event CommitmentDeficitCleared(PositionId indexed positionId);
 
     address private immutable mmPositionManager;
     IPoolManager private immutable poolManager;
@@ -713,6 +719,58 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
         }
 
         emit MMPositionSettle(poolId, positionId, settlementDelta.amount0(), settlementDelta.amount1());
+    }
+
+    /**
+     * @notice Apply commitment-scoped deficits as BPS of commitment per position.
+     * @dev Callable only by the MM Position Manager controller.
+     * @dev Applies the same BPS to both tokens for each position.
+     * @dev If bps = 0 and deficit > 0, clears the deficit for that position.
+     * @param ids Position ids to apply deficits for
+     * @param bps BPS amounts per position (length == ids.length), applied to both tokens
+     */
+    function applyCommitmentDeficit(PositionId[] calldata ids, uint16[] calldata bps) external {
+        if (!_isCallerMMP(msg.sender)) {
+            revert Errors.InvalidSender();
+        }
+        uint256 n = ids.length;
+        if (bps.length != n) {
+            revert Errors.InvalidSender();
+        }
+        for (uint256 i = 0; i < n;) {
+            PositionId id = ids[i];
+            if (!_isMMPosition(id)) {
+                revert Errors.InvalidPosition(0, 0, id);
+            }
+            uint16 bpsValue = bps[i];
+            uint256 cd0 = commitmentDeficitUnits[id][0];
+            uint256 cd1 = commitmentDeficitUnits[id][1];
+
+            // If bps = 0 and deficit exists, clear it
+            if (bpsValue == 0) {
+                if (cd0 > 0 || cd1 > 0) {
+                    commitmentDeficitUnits[id][0] = 0;
+                    commitmentDeficitUnits[id][1] = 0;
+                }
+            } else {
+                // Apply same BPS to both tokens
+                uint256 c0 = commitmentMaxima[id][0];
+                uint256 c1 = commitmentMaxima[id][1];
+                uint256 add0 = c0 == 0 ? 0 : FullMath.mulDiv(c0, uint256(bpsValue), LiquidityUtils.BPS_DENOMINATOR);
+                uint256 add1 = c1 == 0 ? 0 : FullMath.mulDiv(c1, uint256(bpsValue), LiquidityUtils.BPS_DENOMINATOR);
+                if (add0 > c0) add0 = c0;
+                if (add1 > c1) add1 = c1;
+                if (add0 > 0) {
+                    commitmentDeficitUnits[id][0] += add0;
+                }
+                if (add1 > 0) {
+                    commitmentDeficitUnits[id][1] += add1;
+                }
+            }
+            unchecked {
+                i++;
+            }
+        }
     }
 
     // --------------------------------------------------
@@ -1334,6 +1392,17 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
         // Gate by base: require at least base amounts even without deficit
         uint256 req0 = base0 > defReq0 ? base0 : defReq0;
         uint256 req1 = base1 > defReq1 ? base1 : defReq1;
+        // Inflate by commitment-scoped deficit (insolvency gate), clamp by commitment
+        uint256 cd0 = commitmentDeficitUnits[_positionId][0];
+        uint256 cd1 = commitmentDeficitUnits[_positionId][1];
+        if (cd0 > 0) {
+            uint256 add0 = req0 + cd0;
+            req0 = add0 > c0 ? c0 : add0;
+        }
+        if (cd1 > 0) {
+            uint256 add1 = req1 + cd1;
+            req1 = add1 > c1 ? c1 : add1;
+        }
 
         int128 amount0 = _rfsDeltaRaw(s0, req0);
         int128 amount1 = _rfsDeltaRaw(s1, req1);
@@ -1386,6 +1455,17 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
                     uint256 gD = globalDeficit[p][tokenIndex];
                     globalDeficit[p][tokenIndex] = cover <= gD ? (gD - cover) : 0;
                     delta -= int256(cover);
+                }
+            }
+            // Then net against commitment-scoped deficit (insolvency gate)
+            if (delta > 0) {
+                uint256 cd = commitmentDeficitUnits[id][tokenIndex];
+                if (cd > 0) {
+                    uint256 coverCd = uint256(delta) > cd ? cd : uint256(delta);
+                    if (coverCd > 0) {
+                        commitmentDeficitUnits[id][tokenIndex] = cd - coverCd;
+                        delta -= int256(coverCd);
+                    }
                 }
             }
 

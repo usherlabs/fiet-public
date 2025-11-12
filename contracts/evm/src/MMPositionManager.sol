@@ -40,6 +40,7 @@ import {NonzeroDeltaCount} from "@uniswap/v4-core/src/libraries/NonzeroDeltaCoun
 import {LiquidityAmounts} from "v4-periphery/src/libraries/LiquidityAmounts.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
+import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {Constants} from "@uniswap/v4-core/test/utils/Constants.sol";
 
 contract MMPositionManager is
@@ -558,27 +559,12 @@ contract MMPositionManager is
         return (p0 * a0) + (p1 * a1);
     }
 
-    /// @dev Values the currently stored signal reserves in USD via OracleHelper.
-    ///      This does not mutate the signal nonce; it is a pure view against the stored state.
-    /// @param tokenId The commit NFT id.
-    /// @return USD value of the stored signal reserves.
-    function _currentSignalUsdValue(uint256 tokenId) internal view returns (uint256) {
-        (string[] memory tickers, uint256[] memory amounts) = commitOf[tokenId].state.signal.mmState.getReserves();
-        return oracleHelper.getTotalUsdValue(tickers, amounts);
-    }
-
-    /// @dev Verifies a new signal (nonce bump) and returns its USD value.
-    ///      Reverts if invalid; used for renew paths to gate backing with the new state.
-    /// @param liquiditySignal ABI-encoded LiquiditySignal.
-    /// @return USD value of the new signal reserves.
-    function _verifiedSignalUsdValue(bytes memory liquiditySignal) internal returns (uint256) {
-        // Will revert if invalid; also bumps the nonce when valid
-        LiquiditySignal memory sig = abi.decode(liquiditySignal, (LiquiditySignal));
-        (bool isSignalValid,) = signalManager.verifyLiquiditySignal(sig);
-        if (!isSignalValid) {
-            revert Errors.InvalidLiquiditySignal(0, 0);
-        }
-        (string[] memory tickers, uint256[] memory amounts) = sig.mmState.getReserves();
+    /// @dev Extracts USD value from an already-decoded LiquiditySignal (no verification).
+    ///      Used when signal has already been verified elsewhere.
+    /// @param signal The decoded LiquiditySignal.
+    /// @return USD value of the signal reserves.
+    function _signalUsdValue(LiquiditySignal memory signal) internal view returns (uint256) {
+        (string[] memory tickers, uint256[] memory amounts) = signal.mmState.getReserves();
         return oracleHelper.getTotalUsdValue(tickers, amounts);
     }
 
@@ -608,25 +594,11 @@ contract MMPositionManager is
     /// @param tokenId The commit NFT id.
     /// @param extraIssue0 Prospective token0 LCC to add to effective amounts (e.g., for a new mint).
     /// @param extraIssue1 Prospective token1 LCC to add to effective amounts (e.g., for a new mint).
-    function _assertCommitmentBackedStored(uint256 tokenId, uint256 extraIssue0, uint256 extraIssue1) internal view {
+    function _assertCurrentCommitmentBacked(uint256 tokenId, uint256 extraIssue0, uint256 extraIssue1) internal view {
         (uint256 issuedUsd, uint256 settledUsd) = _computeCommitmentUsdValues(tokenId, extraIssue0, extraIssue1);
-        uint256 signalUsd = _currentSignalUsdValue(tokenId);
+        uint256 signalUsd = _signalUsdValue(commitOf[tokenId].state.signal);
 
         // Invariant: issued ≤ signal + settled (prevents over-issuance relative to backing)
-        if (issuedUsd > signalUsd + settledUsd) {
-            revert Errors.InvalidLiquiditySignal(signalUsd + settledUsd, issuedUsd);
-        }
-    }
-
-    /// @dev Asserts commit backing against a newly supplied signal.
-    ///      Verifies the signal (nonce bump), then checks effective LCC ≤ signal USD + settled USD.
-    /// @param tokenId The commit NFT id.
-    /// @param liquiditySignal ABI-encoded LiquiditySignal (new state).
-    function _assertCommitmentBackedWithNewSignal(uint256 tokenId, bytes memory liquiditySignal) internal {
-        (uint256 issuedUsd, uint256 settledUsd) = _computeCommitmentUsdValues(tokenId, 0, 0);
-        uint256 signalUsd = _verifiedSignalUsdValue(liquiditySignal);
-
-        // Invariant: issued ≤ signal + settled (post-verify renew path)
         if (issuedUsd > signalUsd + settledUsd) {
             revert Errors.InvalidLiquiditySignal(signalUsd + settledUsd, issuedUsd);
         }
@@ -869,7 +841,7 @@ contract MMPositionManager is
         uint256 a0 = LiquidityUtils.safeInt128ToUint256(principalDelta.amount0());
         uint256 a1 = LiquidityUtils.safeInt128ToUint256(principalDelta.amount1());
         // Backing gate: effective LCC (including prospective) <= signal + settled
-        _assertCommitmentBackedStored(tokenId, a0, a1);
+        _assertCurrentCommitmentBacked(tokenId, a0, a1);
 
         address lcc0 = Currency.unwrap(poolKey.currency0);
         address lcc1 = Currency.unwrap(poolKey.currency1);
@@ -1063,13 +1035,32 @@ contract MMPositionManager is
             revert Errors.InvalidLiquiditySignal(0, 0);
         }
 
-        // Assert backing against the new signal
-        _assertCommitmentBackedWithNewSignal(tokenId, liquiditySignal);
-
-        // Verify new signal (nonce bump) and persist without extra pricing
+        // Verify new signal once (nonce bump) and decode
         (, uint256 expirySeconds) = signalManager.verifyLiquiditySignal(liquiditySignal, true);
         LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
+
+        // Compute USD values for invariant check and deficit clearing using helpers
+        (uint256 issuedUsd, uint256 settledUsd) = _computeCommitmentUsdValues(tokenId, 0, 0);
+        uint256 signalUsd = _signalUsdValue(signal);
+
+        // Assert invariant: issued ≤ signal + settled
+        if (issuedUsd > signalUsd + settledUsd) {
+            revert Errors.InvalidLiquiditySignal(signalUsd + settledUsd, issuedUsd);
+        }
+
+        // Persist signal state
         commitOf[tokenId].state = SignalState({signal: signal, expiresAt: block.timestamp + expirySeconds});
+
+        // If invariant holds (we've already checked above), clear any commitment deficits
+        // Use applyCommitmentDeficit with bps=0 to clear deficits
+        uint256 n = commitToPositionCount[tokenId];
+        PositionId[] memory ids = new PositionId[](n);
+        uint16[] memory bps = new uint16[](n);
+        for (uint256 i = 0; i < n; i++) {
+            ids[i] = getPositionId(tokenId, i);
+            bps[i] = 0; // Clear deficits
+        }
+        vtsManager.applyCommitmentDeficit(ids, bps);
     }
 
     /**
@@ -1087,13 +1078,9 @@ contract MMPositionManager is
             revert Errors.InvalidLiquiditySignal(0, 0);
         }
 
-        LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
         // verify the proofs associated with the state
-        (bool isSignalValid, uint256 expirySeconds) = signalManager.verifyLiquiditySignal(signal);
-        // if the proof is invalid, revert
-        if (!isSignalValid) {
-            revert Errors.InvalidLiquiditySignal(0, 0);
-        }
+        (, uint256 expirySeconds) = signalManager.verifyLiquiditySignal(liquiditySignal, true);
+        LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
 
         // ? -- Mint the Commitment NFT
         // get the token id
@@ -1198,7 +1185,6 @@ contract MMPositionManager is
      * @param tokenId The token id to slash the commitment for
      * @param liquiditySignal The liquidity signal used as proof that the commitment is unbacked
      */
-    // TODO: Ensure seizeCommitment maths is correct.
     function _slashUnbackedCommitment(PoolKey memory poolKey, uint256 tokenId, bytes memory liquiditySignal) internal {
         _assertCommitForPool(poolKey, tokenId);
 
@@ -1208,7 +1194,7 @@ contract MMPositionManager is
         }
 
         // verify the proofs associated with the state
-        (bool isSignalValid,) = signalManager.verifyLiquiditySignal(liquiditySignal, true);
+        signalManager.verifyLiquiditySignal(liquiditySignal, true);
         LiquiditySignal memory newSignal = abi.decode(liquiditySignal, (LiquiditySignal));
         LiquiditySignal memory oldSignal = commitOf[tokenId].state.signal;
 
@@ -1225,97 +1211,40 @@ contract MMPositionManager is
             revert Errors.InvalidLiquiditySignal(0, 0);
         }
 
-        /**
-         * TODO:
-         * In @VRLSignalManager.sol - let's include a new event that emits the LiquiditySignal once it is verified.
-         *
-         * @MMPositionManager.sol (1061) - Let's revise the Commit struct.
-         *
-         * Currently, we're storing much fo the proof data from the signal into SignalState, however, beyond verification after being passed in via calldata this data is not utilised.
-         * Further, liquiditySignal should be marked as calldata in signatures rather the memory since signal is usually passed as a parameter to external extrypoints function.
-         *
-         * With this in mind, I propose we flatten the Commit Structure, and only store the expiresAt at the base, and the MarketMaker.State
-         */
+        // --- Compute commitment-level discrepancy D in USD using helpers
+        (uint256 issuedUsd, uint256 settledUsd) = _computeCommitmentUsdValues(tokenId, 0, 0);
+        uint256 signalUsd = _signalUsdValue(newSignal);
 
-        // LCCs can be cancelled under the condition that there's liquidity in the MarketVault available for the caller/MM to take.
-        // Otherwise (in _decrease), LCCs are allocated to the caller - indicating that further settlement is required.
+        // If no discrepancy, revert
+        if (issuedUsd <= signalUsd + settledUsd) {
+            revert Errors.InvalidLiquiditySignal(signalUsd + settledUsd, issuedUsd);
+        }
 
-        // ? ----- ----- Assuming that the full commitment is utilised in positions, then 80% of the commitment is unbacked, what occurs?
+        uint256 commitmentDeficitUsd = issuedUsd - (signalUsd + settledUsd);
 
-        // ? Issued LCCs must remain backed. RfS positions must be closed across the commitment. Identifying unbacked status essentially enables seizure with a skip on gracePeriod validation.
-        // Executed by increasing position deficits by insolvent amounts
-        // Must skip the gracePeriod for any open RfS positions.
-        // Ideally, a single slash opens RfS to all MMs/Guarantors. Advancer only has a head start and initial siphon.
-        // ie. using existing totalSettlementAmounts to cover for insolvent amounts.
-        // However, this could siphon all totalSettlementAmounts out - leaving no on-chain collateral to incentivise intervention.
-        // On the contrary, it would push positions into an open RfS.
-
-        // What happens when sum of position valuation is still > signal?
-        // --- Committing a signal does not affect valuations. Valuations are only considered when minting/increasing positions. LCCs are not minted for the full commitment amount, but rather the effective position liquidity.
-
-        // Why not seize positions relative to size of insolvency? - involves capturing collateral value of positions.
-        // During burnPosition - where RfS is closed, MMs can cancel their LCCs arbitrarily.
-        // If RfS is open, force gracePeriod as elapsed to allow for direct position seizure.
-        // Note: Positions can only be insolvent for a fraction of the position.
-
-        // * Finalised flow is to use signalDeficit amount determined here, and cleared in _renew.
-        // signalDeficit inflates the deficit in VTSManager to open RfS early, requiring settlement or seizure.
-        // Settlements clear the RfS, however, if tokens derive from signal liquidity sources, the _slashUnbackedCommitment will remain available.
-        // Without _renewal, positins must either be settled to close/decrease/burn. Otherwise, they're seized.
-        // Positions cannot be modified if RfS is open. Therefore, this deficit applied is like a penalty on the commitment.
-        // Furthermore, on slash - grace period is skipped to open RfS immediately.
-
-        // // verify the new liquidity signal(this increases the nonce of the mm's signals)
-        // // get the total usd value of the signal and its expiry time
-        // (uint256 totalSignalUsdValue, uint256 signalExpiryInSeconds) =
-        //     signalManager.verifyLiquiditySignal(liquiditySignal, true);
-        // // get the total unsettled value of the position
-        // // replaced by effective recomposition backing; keep legacy math for seizeCommitment path
-        // uint256 positionTotalCommitmentsUSDValue = 0;
-        // {
-        //     PoolId poolId = commitOf[tokenId].poolId;
-        //     (address oracleFactory, address l0, address l1) = _marketOracleFactoryAndPair(poolId);
-        //     (uint256 e0, uint256 e1) = _effectiveIssuedAmountsForCommit(tokenId);
-        //     (uint256 s0, uint256 s1) = _sumSettledAmountsForCommit(tokenId);
-        //     uint256 issuedUsd = _usdValueLccPair(l0, e0, l1, e1, oracleFactory);
-        //     uint256 settledUsd = _usdValueLccPair(l0, s0, l1, s1, oracleFactory);
-        //     // Effective commitments = issuedUsd; legacy path used this as “position value”
-        //     positionTotalCommitmentsUSDValue = issuedUsd > settledUsd ? (issuedUsd - settledUsd) : 0;
-        // }
-        // // make sure the new signal is unbacked before it can be reallocated
-        // if (totalSignalUsdValue >= positionTotalCommitmentsUSDValue) {
-        //     revert InvalidLiquiditySignal(totalSignalUsdValue, positionTotalCommitmentsUSDValue);
-        // }
-        // LiquiditySignal memory newSignal = abi.decode(liquiditySignal, (LiquiditySignal));
-        // LiquiditySignal memory oldSignal = commitOf[tokenId].state.signal;
-        // // validate that new signal belongs to the same mm as the old signal
-        // // require caller is advancer, and ensures that the advancer is not the owner of the signal.
-        // if (
-        //     newSignal.mmState.owner != oldSignal.mmState.owner && msgSender() != newSignal.mmState.advancer
-        //         && newSignal.mmState.advancer == newSignal.mmState.owner
-        // ) {
-        //     revert UnauthorizedSignalOwner();
-        // }
-        // SignalState memory s = SignalState({signal: newSignal, expiresAt: block.timestamp + signalExpiryInSeconds});
-        // commitOf[tokenId].state = s;
-
-        // // get the difference in the usd value of the signal and the position
-        // // get the fraction of the deficit of the position, unit is in wad(1e18) for better precision
-        // deficitFractionInBips = FullMath.mulDiv(
-        //     positionTotalCommitmentsUSDValue - totalSignalUsdValue,
-        //     LiquidityUtils.BPS_DENOMINATOR,
-        //     positionTotalCommitmentsUSDValue
-        // );
-
-        // // iterate through all the positions using the position index, then liquidate a percentage given by the deficit fraction
-        // uint256 positionCount = commitToPositionCount[tokenId];
-        // for (uint256 i = 0; i < positionCount; i++) {
-        //     PositionMeta memory position = getPosition(tokenId, i);
-        //     // liquidate a percentage given by the deficit fraction
-        //     uint256 liquidityToSeize =
-        //         FullMath.mulDiv(uint256(position.liquidity), deficitFractionInBips, LiquidityUtils.BPS_DENOMINATOR);
-        //     _decrease(poolKey, position, _positionSalt(tokenId, i), liquidityToSeize, false);
-        // }
+        // Simplified allocation: single commitment-level deficit BPS applied uniformly per position on both tokens.
+        // Compute deficit as percentage of issued: totalDeficitBps = 10000 * (D / issuedUsd)
+        // This ensures BPS <= 10000 (deficit cannot exceed issued)
+        uint256 n = commitToPositionCount[tokenId];
+        if (n == 0) {
+            revert Errors.InvalidPosition(tokenId, 0, PositionId.wrap(bytes32(0)));
+        }
+        if (issuedUsd == 0) {
+            revert Errors.InvalidLiquiditySignal(0, 0);
+        }
+        MarketVTSConfiguration memory cfg = vtsManager.getMarketVTSConfiguration(poolKey.toId());
+        uint256 totalDeficitBps = FullMath.mulDiv(commitmentDeficitUsd, LiquidityUtils.BPS_DENOMINATOR, issuedUsd);
+        // Average deficit BPS across positions (implicit floor via integer division)
+        uint16 perPosBps = uint16(totalDeficitBps / n);
+        PositionId[] memory ids = new PositionId[](n);
+        uint16[] memory bps = new uint16[](n);
+        for (uint256 i = 0; i < n; i++) {
+            ids[i] = getPositionId(tokenId, i);
+            bps[i] = perPosBps;
+            // Force open and elapse grace for immediate seizure across all positions in this commitment
+            _forceOpenAndElapse(cfg, tokenId, i);
+        }
+        vtsManager.applyCommitmentDeficit(ids, bps);
     }
 
     /// @dev overrides transferFrom to revert if pool manager is locked
