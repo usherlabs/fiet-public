@@ -30,17 +30,13 @@ library TransientSlots {
             .tstore(BalanceDelta.unwrap(total));
     }
 
-    function consumePositionRequiredSettlementDelta() internal returns (BalanceDelta) {
+    function readPositionRequiredSettlementDelta() internal view returns (BalanceDelta) {
         int256 raw = TransientSlot.asInt256(TransientSlots.POSITION_REQUIRED_SETTLEMENT_DELTA_SLOT).tload();
-        // clear for subsequent reads in the same transaction
-        TransientSlot.asInt256(TransientSlots.POSITION_REQUIRED_SETTLEMENT_DELTA_SLOT).tstore(int256(0));
         return BalanceDelta.wrap(raw);
     }
 
-    function consumePositionRequiredSettlementDelta(address sourceAddress) internal returns (BalanceDelta) {
+    function readPositionRequiredSettlementDelta(address sourceAddress) internal view returns (BalanceDelta) {
         int256 raw = loadPositionRequiredSettlementDelta(sourceAddress);
-        // clear for subsequent reads in the same transaction
-        TransientSlot.asInt256(TransientSlots.POSITION_REQUIRED_SETTLEMENT_DELTA_SLOT).tstore(int256(0));
         return BalanceDelta.wrap(raw);
     }
 

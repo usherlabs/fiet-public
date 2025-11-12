@@ -546,18 +546,75 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
         int256 amount1 = delta.amount1();
 
         // Settle growths and get RFS state
-        bool isWithdrawal = amount0 > 0 || amount1 > 0;
         BalanceDelta rfsDelta;
         _settlePositionGrowths(positionId);
         (rfsOpen, rfsDelta) = _getRFS(positionId);
 
         // Handle settlement based on position state
-        if (isSeizing || !m.isActive) {
-            // Seizing or inactive: skip RFS validation and clamps, directly update settlement
+        if (!m.isActive) {
+            // Inactive: unrestricted deposits/settlements
             if (amount0 != 0) {
                 amount0 = _updateSettlement(positionId, 0, -amount0);
             }
             if (amount1 != 0) {
+                amount1 = _updateSettlement(positionId, 1, -amount1);
+            }
+        } else if (isSeizing) {
+            // Seizing: clamp deposits (negative settlementDelta) by positive rfsDelta
+            int128 rfs0 = rfsDelta.amount0();
+            int128 rfs1 = rfsDelta.amount1();
+
+            // Read the required settlement delta from position modifications
+            // Signs: negative delta = caller owes liquidity (deposit), positive = protocol owes (withdrawal)
+            BalanceDelta positionRequiredSettlementDelta = TransientSlots.readPositionRequiredSettlementDelta();
+            int128 posRequiredSettlement0 = positionRequiredSettlementDelta.amount0();
+            int128 posRequiredSettlement1 = positionRequiredSettlementDelta.amount1();
+
+            if (amount0 < 0) {
+                // deposit: clamp by positive rfsDelta
+                // If rfs0 > 0, we can deposit up to rfs0 (clamp amount0 to -rfs0 minimum)
+                if (rfs0 > 0) {
+                    int128 maxDeposit0 = -rfs0; // negative because deposits are negative
+                    if (amount0 < maxDeposit0) {
+                        amount0 = maxDeposit0;
+                    }
+                }
+                amount0 = _updateSettlement(positionId, 0, -amount0);
+            } else if (amount0 > 0) {
+                // withdrawal: clamp by positionRequiredSettlementDelta
+                // If positionRequiredSettlementDelta > 0, clamp to min(amount0, positionRequiredSettlementDelta)
+                // If positionRequiredSettlementDelta <= 0, clamp to 0
+                if (posRequiredSettlement0 > 0) {
+                    if (amount0 > posRequiredSettlement0) {
+                        amount0 = posRequiredSettlement0;
+                    }
+                } else {
+                    amount0 = 0;
+                }
+                amount0 = _updateSettlement(positionId, 0, -amount0);
+            }
+
+            if (amount1 < 0) {
+                // deposit: clamp by positive rfsDelta
+                // If rfs1 > 0, we can deposit up to rfs1 (clamp amount1 to -rfs1 minimum)
+                if (rfs1 > 0) {
+                    int128 maxDeposit1 = -rfs1; // negative because deposits are negative
+                    if (amount1 < maxDeposit1) {
+                        amount1 = maxDeposit1;
+                    }
+                }
+                amount1 = _updateSettlement(positionId, 1, -amount1);
+            } else if (amount1 > 0) {
+                // withdrawal: clamp by positionRequiredSettlementDelta
+                // If positionRequiredSettlementDelta > 0, clamp to min(amount1, positionRequiredSettlementDelta)
+                // If positionRequiredSettlementDelta <= 0, clamp to 0
+                if (posRequiredSettlement1 > 0) {
+                    if (amount1 > posRequiredSettlement1) {
+                        amount1 = posRequiredSettlement1;
+                    }
+                } else {
+                    amount1 = 0;
+                }
                 amount1 = _updateSettlement(positionId, 1, -amount1);
             }
         } else {
@@ -566,6 +623,7 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
                 revert Errors.InvalidPosition(0, 0, positionId);
             }
             // For withdrawals, validate RFS closure
+            bool isWithdrawal = amount0 > 0 || amount1 > 0;
             if (isWithdrawal && rfsOpen) {
                 revert Errors.RFSOpenForPosition(positionId);
             }
@@ -1195,7 +1253,6 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
      */
     function _calcSeizure(PositionId positionId, BalanceDelta settlementDelta)
         internal
-        onlyPositionValid(positionId)
         returns (uint256 seizedLiquidityUnits)
     {
         _settlePositionGrowths(positionId);
@@ -1212,14 +1269,6 @@ abstract contract VTSManager is IVTSManager, PositionRegistry {
         uint256 r1 = LiquidityUtils.safeInt128ToUint256(rfsDelta.amount1());
         uint256 s0 = LiquidityUtils.safeInt128ToUint256(settlementDelta.amount0());
         uint256 s1 = LiquidityUtils.safeInt128ToUint256(settlementDelta.amount1());
-
-        // Clamp settles by RfS per token to avoid over-seizure via over-settlement
-        if (s0 > r0) {
-            s0 = r0;
-        }
-        if (s1 > r1) {
-            s1 = r1;
-        }
 
         MarketVTSConfiguration memory cfg = getMarketVTSConfiguration(m.poolId);
 

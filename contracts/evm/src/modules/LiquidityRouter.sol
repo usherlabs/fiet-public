@@ -362,22 +362,22 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler, NativeWrappe
         if (amount == 0) return;
 
         int256 delta = currency.getDelta(sender);
-        int128 deltaToAccount = 0;
 
         if (amount < 0) {
             // Deposit: transfer FROM caller TO vault
             // If delta is negative (caller owes protocol) and amount < delta (deposit exceeds debt),
+
             // net the delta to zero. Otherwise, account the full amount.
-            deltaToAccount += (delta < 0 && int256(amount) < delta) ? SafeCast.toInt128(-delta) : -amount;
+            // * This allows settlement above what is required.
+            int128 deltaToAccount = (delta < 0 && int256(amount) < delta) ? SafeCast.toInt128(-delta) : -amount;
             _accountDelta(currency, deltaToAccount, sender);
             currency.transferFrom(sender, marketVault, LiquidityUtils.safeInt128ToUint256(amount));
         } else {
             // Withdrawal: transfer FROM vault TO caller
             // If delta is positive (protocol owes caller) and amount > delta (withdrawal exceeds credit),
-            // net the delta to zero. Otherwise, account the full amount.
-            // TODO: This may be off...
-            deltaToAccount = (delta > 0 && int256(amount) > delta) ? SafeCast.toInt128(-delta) : -amount;
-            _accountDelta(currency, deltaToAccount, sender);
+
+            // Avoid delta net, to prevent withdrawal of more than is credited to the caller.
+            _accountDelta(currency, amount, sender);
             currency.transfer(sender, LiquidityUtils.safeInt128ToUint256(amount));
         }
     }
@@ -399,21 +399,34 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler, NativeWrappe
     }
 
     /**
-     * @notice Accounts a settlement delta for a currency and target address
-     * @dev Increments or decrements the nonzero delta count based on the previous and next deltas
+     * @notice Accounts the change in settlement delta for underlying currencies
+     * @dev Reads the current currency delta, calculates the change needed to reach the target settlement delta,
+     *      and accounts that change (delta of delta)
      * @param sender The address initiating the settlement
-     * @param settlementDelta The settlement delta to account
-     * @param currency0 The first currency to account the delta for
-     * @param currency1 The second currency to account the delta for
+     * @param targetSettlementDelta The target settlement delta to reach
+     * @param currency0 The first currency to account the delta change for
+     * @param currency1 The second currency to account the delta change for
      */
-    function _accountUnderlyingSettlementDelta(
+    function _accountUnderlyingSettlementDeltaChange(
         address sender,
-        BalanceDelta settlementDelta,
+        BalanceDelta targetSettlementDelta,
         Currency currency0,
         Currency currency1
     ) internal {
-        _accountDelta(_lccToUnderlyingCurrency(currency0), settlementDelta.amount0(), sender);
-        _accountDelta(_lccToUnderlyingCurrency(currency1), settlementDelta.amount1(), sender);
+        Currency underlyingCurrency0 = _lccToUnderlyingCurrency(currency0);
+        Currency underlyingCurrency1 = _lccToUnderlyingCurrency(currency1);
+
+        // Read current currency deltas
+        int256 currentDelta0 = underlyingCurrency0.getDelta(sender);
+        int256 currentDelta1 = underlyingCurrency1.getDelta(sender);
+
+        // Calculate the delta of delta (the change): targetSettlementDelta - currentDelta
+        int128 changeDelta0 = targetSettlementDelta.amount0() - SafeCast.toInt128(currentDelta0);
+        int128 changeDelta1 = targetSettlementDelta.amount1() - SafeCast.toInt128(currentDelta1);
+
+        // Account the delta of delta (the change)
+        _accountDelta(underlyingCurrency0, changeDelta0, sender);
+        _accountDelta(underlyingCurrency1, changeDelta1, sender);
     }
 
     /**
