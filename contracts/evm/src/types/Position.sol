@@ -1,14 +1,18 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {MarketMaker} from "../libraries/MarketMaker.sol";
-import {ModifyLiquidityParams} from "v4-periphery/lib/v4-core/src/types/PoolOperation.sol";
-import {Position} from "v4-periphery/lib/v4-core/src/libraries/Position.sol";
-import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {
+    ModifyLiquidityParams
+} from "v4-periphery/lib/v4-core/src/types/PoolOperation.sol";
+import {
+    Position as UniPosition
+} from "v4-periphery/lib/v4-core/src/libraries/Position.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 
 type PositionId is bytes32;
 
+/// @notice Legacy struct for backward compatibility
+// TODO: Deprecated
 struct PositionMeta {
     // the lower tick of the position
     int24 tickLower;
@@ -24,20 +28,22 @@ struct PositionMeta {
     PoolId poolId;
 }
 
-/// The parameters of the proof to verify the state of the market maker
-struct LiquiditySignal {
-    /// The nonce of the liquidity signal which should always be incrementing
-    uint256 nonce;
-    /// The hash of the root merkle tree
-    bytes32 rootHash;
-    /// The canister's signature of the root state hash
-    bytes rootHashSignature;
-    /// The merkle proof of mm state data we want to verify in the merkle tree
-    bytes32[] merkleProof;
-    /// The state of the market maker
-    MarketMaker.State mmState;
-    /// The signature of the state of the market maker
-    bytes mmSignature;
+/// @notice Core Position struct for state management (Bunni-style)
+struct Position {
+    // the owner of the position -- ie. the router, mm position manager, native Uv4, etc.
+    address owner;
+    // the core pool id for this position (immutable after registration)
+    PoolId poolId;
+    // the lower tick of the position
+    int24 tickLower;
+    // the upper tick of the position
+    int24 tickUpper;
+    // the liquidity of the position
+    uint128 liquidity;
+    // whether the position is active
+    bool isActive;
+    // Unique salt for position ID generation
+    bytes32 salt;
 }
 
 library PositionLibrary {
@@ -47,13 +53,16 @@ library PositionLibrary {
      * @param params The params of the modify liquidity operation
      * @return id The id of the position
      */
-    function generateId(address modifyLiquidityRouter, ModifyLiquidityParams memory params)
-        internal
-        pure
-        returns (PositionId id)
-    {
-        bytes32 positionKey =
-            Position.calculatePositionKey(modifyLiquidityRouter, params.tickLower, params.tickUpper, params.salt);
+    function generateId(
+        address modifyLiquidityRouter,
+        ModifyLiquidityParams memory params
+    ) internal pure returns (PositionId id) {
+        bytes32 positionKey = UniPosition.calculatePositionKey(
+            modifyLiquidityRouter,
+            params.tickLower,
+            params.tickUpper,
+            params.salt
+        );
 
         id = PositionId.wrap(positionKey);
     }
