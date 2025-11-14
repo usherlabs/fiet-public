@@ -23,6 +23,7 @@ import {
     VTSPoolAndPositionAccountingLib
 } from "./libraries/VTSPoolAndPositionAccountingLib.sol";
 import {VTSSettleLib} from "./libraries/VTSSettleLib.sol";
+import {VTSCommitLib} from "./libraries/VTSCommitLib.sol";
 import {LiquidityUtils} from "./libraries/LiquidityUtils.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {TransientSlots} from "./libraries/TransientSlots.sol";
@@ -344,6 +345,7 @@ contract VTSOrchestrator is Ownable, IVTSManager, IPositionRegistry {
         return (rfsOpen, delta);
     }
 
+    // TODO: Not necessary? Esp. if contract sizes are big.
     /// @inheritdoc IVTSManager
     function calcVTSRequired(
         PositionId positionId
@@ -360,6 +362,7 @@ contract VTSOrchestrator is Ownable, IVTSManager, IPositionRegistry {
         return _getVTSRequired(positionId);
     }
 
+    // TODO: Not necessary? Esp. if contract sizes are big.
     /// @inheritdoc IVTSManager
     function calcVTSCurrent(
         PositionId positionId
@@ -429,55 +432,12 @@ contract VTSOrchestrator is Ownable, IVTSManager, IPositionRegistry {
         uint256 totalDeficitBps
     ) external {
         if (msg.sender != mmPositionManager) revert Errors.InvalidSender();
-        uint256 n = ids.length;
-        uint256 bpsValue = totalDeficitBps / n;
-
-        for (uint256 i = 0; i < n; ) {
-            PositionId id = ids[i];
-            if (!_isMMPosition(id)) {
-                revert Errors.InvalidPosition(0, 0, id);
-            }
-            PositionAccounting storage pa = s.positionAccounting[id];
-            uint256 cd0 = pa.commitmentDeficit0;
-            uint256 cd1 = pa.commitmentDeficit1;
-
-            // If bps = 0 and deficit exists, clear it
-            if (bpsValue == 0) {
-                if (cd0 > 0 || cd1 > 0) {
-                    pa.commitmentDeficit0 = 0;
-                    pa.commitmentDeficit1 = 0;
-                }
-            } else {
-                // Apply same BPS to both tokens
-                uint256 c0 = pa.commitmentMax0;
-                uint256 c1 = pa.commitmentMax1;
-                uint256 add0 = c0 == 0
-                    ? 0
-                    : FullMath.mulDiv(
-                        c0,
-                        bpsValue,
-                        LiquidityUtils.BPS_DENOMINATOR
-                    );
-                uint256 add1 = c1 == 0
-                    ? 0
-                    : FullMath.mulDiv(
-                        c1,
-                        bpsValue,
-                        LiquidityUtils.BPS_DENOMINATOR
-                    );
-                if (add0 > c0) add0 = c0;
-                if (add1 > c1) add1 = c1;
-                if (add0 > 0) {
-                    pa.commitmentDeficit0 += add0;
-                }
-                if (add1 > 0) {
-                    pa.commitmentDeficit1 += add1;
-                }
-            }
-            unchecked {
-                i++;
-            }
-        }
+        VTSCommitLib._applyCommitmentDeficit(
+            s,
+            mmPositionManager,
+            ids,
+            totalDeficitBps
+        );
     }
 
     // --------------------------------------------------

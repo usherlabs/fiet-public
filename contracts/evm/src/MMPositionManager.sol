@@ -435,12 +435,15 @@ contract MMPositionManager is
         // that maps to LCC cancellation. fees are trader-derived, wrapped LCC value and must remain wrapped.
         principalDelta = positionDelta - accruedFeesAfterAdj;
 
+        // TODO: Should be done inside of VTSOrchestrator.
         _accountDelta(poolKey.currency0, accruedFeesAfterAdj.amount0(), msgSender());
         _accountDelta(poolKey.currency1, accruedFeesAfterAdj.amount1(), msgSender());
 
         // Consume the required settlement delta for the modified position from CoreHook (VTSManager)
         // Signs: negative delta = caller owes liquidity (deposit), positive = protocol owes (withdrawal)
         PositionId id = PositionLibrary.generateId(address(this), params);
+        // TODO: Basically, remove PositionRequiredSettlementDelta from here.
+        // TODO: requiredSettlementDelta is already within VTSOrchestrator, therefore, we can set the delta there.
         BalanceDelta requiredSettlementDelta =
             TransientSlots.readPositionRequiredSettlementDelta(address(vtsManager), id);
         _accountUnderlyingSettlementDeltaChange(
