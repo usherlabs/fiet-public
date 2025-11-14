@@ -15,10 +15,6 @@ struct Pool {
     Currency currency1;
     /// VTS configuration for this pool
     MarketVTSConfiguration vtsConfig;
-    /// Total settled token0
-    uint256 totalSettled0;
-    /// Total settled token1
-    uint256 totalSettled1;
     /// Pool pause flag (if needed)
     bool isPaused;
 }

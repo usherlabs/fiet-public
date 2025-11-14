@@ -134,8 +134,8 @@ struct VTSStorage {
     /// Per-pool per-tick coverage usage growth outside
     mapping(PoolId => mapping(int24 => GrowthPair)) coverageUseGrowthOutside;
     /// Root-level RFS checkpoints, keyed by a generic bytes32 identifier
+    /// For positions: use PositionId.unwrap(positionId)
     /// For commits: use keccak256(abi.encodePacked(commitTokenId))
-    /// For commit-position pairs: use keccak256(abi.encodePacked(commitTokenId, positionIndex))
     mapping(bytes32 => RFSCheckpoint) checkpoints;
     /// Global pause flag
     bool isPaused;

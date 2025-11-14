@@ -71,7 +71,6 @@ contract VTSOrchestrator is Ownable {
         returns (
             MarketMaker.State memory mmState,
             uint256 expiresAt,
-            PoolId poolId,
             uint256 positionCount,
             uint256 deficitBps
         )
@@ -80,7 +79,6 @@ contract VTSOrchestrator is Ownable {
         return (
             commit.mmState,
             commit.expiresAt,
-            commit.poolId,
             commit.positionCount,
             commit.deficitBps
         );
@@ -104,8 +102,6 @@ contract VTSOrchestrator is Ownable {
     /// @return currency0 Token0 currency
     /// @return currency1 Token1 currency
     /// @return vtsConfig The VTS configuration
-    /// @return totalSettled0 Total settled token0
-    /// @return totalSettled1 Total settled token1
     /// @return isPaused Whether pool is paused
     function getPool(
         PoolId poolId
@@ -117,8 +113,6 @@ contract VTSOrchestrator is Ownable {
             Currency currency0,
             Currency currency1,
             MarketVTSConfiguration memory vtsConfig,
-            uint256 totalSettled0,
-            uint256 totalSettled1,
             bool isPaused
         )
     {
@@ -128,8 +122,6 @@ contract VTSOrchestrator is Ownable {
             pool.currency0,
             pool.currency1,
             pool.vtsConfig,
-            pool.totalSettled0,
-            pool.totalSettled1,
             pool.isPaused
         );
     }
