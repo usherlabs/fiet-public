@@ -264,7 +264,8 @@ contract VTSOrchestrator is Ownable, IVTSManager, IPositionRegistry {
         PositionAccounting storage pa = s.positionAccounting[id];
         // Commitment maxima must be > 0 for active positions
         if (
-            requireActive && (pa.commitmentMax0 == 0 || pa.commitmentMax1 == 0)
+            requireActive &&
+            (pa.commitmentMax.token0 == 0 || pa.commitmentMax.token1 == 0)
         ) {
             return false;
         }
@@ -384,7 +385,7 @@ contract VTSOrchestrator is Ownable, IVTSManager, IPositionRegistry {
         PositionId positionId
     ) external view returns (uint256 amount0, uint256 amount1) {
         PositionAccounting storage pa = s.positionAccounting[positionId];
-        return (pa.settled0, pa.settled1);
+        return (pa.settled.token0, pa.settled.token1);
     }
 
     /// @inheritdoc IVTSManager
@@ -423,7 +424,7 @@ contract VTSOrchestrator is Ownable, IVTSManager, IPositionRegistry {
         returns (uint256 commitment0, uint256 commitment1)
     {
         PositionAccounting storage pa = s.positionAccounting[positionId];
-        return (pa.commitmentMax0, pa.commitmentMax1);
+        return (pa.commitmentMax.token0, pa.commitmentMax.token1);
     }
 
     /// @inheritdoc IVTSManager
@@ -452,10 +453,10 @@ contract VTSOrchestrator is Ownable, IVTSManager, IPositionRegistry {
         PositionId positionId
     ) internal view returns (uint256 vtsRequired0, uint256 vtsRequired1) {
         PositionAccounting storage pa = s.positionAccounting[positionId];
-        uint256 c0 = pa.commitmentMax0;
-        uint256 c1 = pa.commitmentMax1;
-        uint256 d0 = pa.cumulativeDeficit0;
-        uint256 d1 = pa.cumulativeDeficit1;
+        uint256 c0 = pa.commitmentMax.token0;
+        uint256 c1 = pa.commitmentMax.token1;
+        uint256 d0 = pa.cumulativeDeficit.token0;
+        uint256 d1 = pa.cumulativeDeficit.token1;
         uint256 one = 1e18;
         vtsRequired0 = c0 == 0
             ? 0
@@ -473,10 +474,10 @@ contract VTSOrchestrator is Ownable, IVTSManager, IPositionRegistry {
         PositionId positionId
     ) internal view returns (uint256 vtsCurrent0, uint256 vtsCurrent1) {
         PositionAccounting storage pa = s.positionAccounting[positionId];
-        uint256 c0 = pa.commitmentMax0;
-        uint256 c1 = pa.commitmentMax1;
-        uint256 s0 = pa.settled0;
-        uint256 s1 = pa.settled1;
+        uint256 c0 = pa.commitmentMax.token0;
+        uint256 c1 = pa.commitmentMax.token1;
+        uint256 s0 = pa.settled.token0;
+        uint256 s1 = pa.settled.token1;
         uint256 one = 1e18;
         uint256 v0 = c0 > 0 ? FullMath.mulDiv(s0, one, c0) : 0;
         uint256 v1 = c1 > 0 ? FullMath.mulDiv(s1, one, c1) : 0;

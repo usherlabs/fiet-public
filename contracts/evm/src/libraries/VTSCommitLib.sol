@@ -36,19 +36,19 @@ library VTSCommitLib {
             }
 
             PositionAccounting storage pa = s.positionAccounting[id];
-            uint256 cd0 = pa.commitmentDeficit0;
-            uint256 cd1 = pa.commitmentDeficit1;
+            uint256 cd0 = pa.commitmentDeficit.token0;
+            uint256 cd1 = pa.commitmentDeficit.token1;
 
             // If bps = 0 and deficit exists, clear it
             if (bpsValue == 0) {
                 if (cd0 > 0 || cd1 > 0) {
-                    pa.commitmentDeficit0 = 0;
-                    pa.commitmentDeficit1 = 0;
+                    pa.commitmentDeficit.token0 = 0;
+                    pa.commitmentDeficit.token1 = 0;
                 }
             } else {
                 // Apply same BPS to both tokens
-                uint256 c0 = pa.commitmentMax0;
-                uint256 c1 = pa.commitmentMax1;
+                uint256 c0 = pa.commitmentMax.token0;
+                uint256 c1 = pa.commitmentMax.token1;
                 uint256 add0 = c0 == 0
                     ? 0
                     : FullMath.mulDiv(
@@ -66,10 +66,10 @@ library VTSCommitLib {
                 if (add0 > c0) add0 = c0;
                 if (add1 > c1) add1 = c1;
                 if (add0 > 0) {
-                    pa.commitmentDeficit0 += add0;
+                    pa.commitmentDeficit.token0 += add0;
                 }
                 if (add1 > 0) {
-                    pa.commitmentDeficit1 += add1;
+                    pa.commitmentDeficit.token1 += add1;
                 }
             }
             unchecked {

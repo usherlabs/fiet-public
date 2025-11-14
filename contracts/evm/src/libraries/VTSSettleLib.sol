@@ -188,7 +188,7 @@ library VTSSettleLib {
             }
         } else {
             // Active and not seizing: validate and apply RFS clamps
-            if (pa.commitmentMax0 == 0 || pa.commitmentMax1 == 0) {
+            if (pa.commitmentMax.token0 == 0 || pa.commitmentMax.token1 == 0) {
                 revert("VTSSettleLib: Invalid position");
             }
             // For withdrawals, validate RFS closure
@@ -281,8 +281,8 @@ library VTSSettleLib {
         {
             (int256 adj0, int256 adj1) = VTSPoolAndPositionAccountingLib
                 ._peekFeeAdjustment(s, positionId);
-            int256 prev0 = pa.lastFundedPendingAdj0;
-            int256 prev1 = pa.lastFundedPendingAdj1;
+            int256 prev0 = pa.lastFundedPendingAdj.token0;
+            int256 prev1 = pa.lastFundedPendingAdj.token1;
 
             if (adj0 > prev0) {
                 VTSPoolAndPositionAccountingLib._fundFeePot(
@@ -306,8 +306,8 @@ library VTSSettleLib {
             }
 
             // Snapshot current pending as baseline for the next settle
-            pa.lastFundedPendingAdj0 = adj0;
-            pa.lastFundedPendingAdj1 = adj1;
+            pa.lastFundedPendingAdj.token0 = adj0;
+            pa.lastFundedPendingAdj.token1 = adj1;
         }
     }
 
@@ -325,14 +325,14 @@ library VTSSettleLib {
         Pool memory pool = s.pools[pos.poolId];
 
         // Get commitments
-        uint256 c0 = pa.commitmentMax0;
-        uint256 c1 = pa.commitmentMax1;
+        uint256 c0 = pa.commitmentMax.token0;
+        uint256 c1 = pa.commitmentMax.token1;
 
         // Get settled amounts and deficits
-        uint256 s0 = pa.settled0;
-        uint256 s1 = pa.settled1;
-        uint256 d0 = pa.cumulativeDeficit0;
-        uint256 d1 = pa.cumulativeDeficit1;
+        uint256 s0 = pa.settled.token0;
+        uint256 s1 = pa.settled.token1;
+        uint256 d0 = pa.cumulativeDeficit.token0;
+        uint256 d1 = pa.cumulativeDeficit.token1;
 
         // Base-required per token (commitment * baseVTSRate). RfS gates by max(deficitReq, baseReq)
         MarketVTSConfiguration memory cfg = pool.vtsConfig;
@@ -353,8 +353,8 @@ library VTSSettleLib {
         uint256 req1 = base1 > defReq1 ? base1 : defReq1;
 
         // Inflate by commitment-scoped deficit (insolvency gate), clamp by commitment
-        uint256 cd0 = pa.commitmentDeficit0;
-        uint256 cd1 = pa.commitmentDeficit1;
+        uint256 cd0 = pa.commitmentDeficit.token0;
+        uint256 cd1 = pa.commitmentDeficit.token1;
         if (cd0 > 0) {
             uint256 add0 = req0 + cd0;
             req0 = add0 > c0 ? c0 : add0;
@@ -420,8 +420,8 @@ library VTSSettleLib {
         Pool memory pool = s.pools[pos.poolId];
 
         // Commitments and RfS amounts
-        uint256 c0 = pa.commitmentMax0;
-        uint256 c1 = pa.commitmentMax1;
+        uint256 c0 = pa.commitmentMax.token0;
+        uint256 c1 = pa.commitmentMax.token1;
         uint256 r0 = LiquidityUtils.safeInt128ToUint256(rfsDelta.amount0());
         uint256 r1 = LiquidityUtils.safeInt128ToUint256(rfsDelta.amount1());
         uint256 s0 = LiquidityUtils.safeInt128ToUint256(

@@ -33,85 +33,135 @@ struct MarketVTSConfiguration {
 /// @dev Split out of VTSManager to follow the Bunni-style storage pattern
 struct PositionAccounting {
     // Commitment maxima per token
-    uint256 commitmentMax0;
-    uint256 commitmentMax1;
+    TokenPairUint commitmentMax;
     // Settled amounts per token
-    uint256 settled0;
-    uint256 settled1;
+    TokenPairUint settled;
     // Cumulative deficit per token (raw units)
-    uint256 cumulativeDeficit0;
-    uint256 cumulativeDeficit1;
+    TokenPairUint cumulativeDeficit;
     // Coverage usage growth snapshots per token
-    uint256 coverageUseGrowthInsideLast0;
-    uint256 coverageUseGrowthInsideLast1;
+    TokenPairUint coverageUseGrowthInsideLast;
     // Deficit growth snapshots per token
-    uint256 deficitGrowthInsideLast0;
-    uint256 deficitGrowthInsideLast1;
+    TokenPairUint deficitGrowthInsideLast;
     // Inflow growth snapshots per token
-    uint256 inflowGrowthInsideLast0;
-    uint256 inflowGrowthInsideLast1;
+    TokenPairUint inflowGrowthInsideLast;
     // Fee growth snapshots per token
-    uint256 feeGrowthInsideLast0;
-    uint256 feeGrowthInsideLast1;
+    TokenPairUint feeGrowthInsideLast;
     // Cumulative outflows per token
-    uint256 cumulativeOutflows0;
-    uint256 cumulativeOutflows1;
+    TokenPairUint cumulativeOutflows;
     // Outflow snapshots at last fee snap per token
-    uint256 outflowsAtFeeSnap0;
-    uint256 outflowsAtFeeSnap1;
+    TokenPairUint outflowsAtFeeSnap;
     // Commitment-scoped deficit (insolvency gate) per token
-    uint256 commitmentDeficit0;
-    uint256 commitmentDeficit1;
+    TokenPairUint commitmentDeficit;
     // Fees shared by position per token
-    uint256 feesShared0;
-    uint256 feesShared1;
+    TokenPairUint feesShared;
     // Pending fee adjustments per token: +slash (reduces payout), -bonus (increases payout)
-    int256 pendingFeeAdj0;
-    int256 pendingFeeAdj1;
+    TokenPairInt pendingFeeAdj;
     // Net settlement since last modification per token
-    int256 netSettlementSinceLastMod0;
-    int256 netSettlementSinceLastMod1;
+    TokenPairInt netSettlementSinceLastMod;
     // Last funded pending adjustment per token
-    int256 lastFundedPendingAdj0;
-    int256 lastFundedPendingAdj1;
+    TokenPairInt lastFundedPendingAdj;
 }
 
 /// @notice Per-pool accounting data (mirrors VTSManager per-pool mappings)
 /// @dev Split out of VTSManager to follow the Bunni-style storage pattern
 struct PoolAccounting {
     // Deficit growth global per token
-    uint256 deficitGrowthGlobal0;
-    uint256 deficitGrowthGlobal1;
+    TokenPairUint deficitGrowthGlobal;
     // Inflow growth global per token
-    uint256 inflowGrowthGlobal0;
-    uint256 inflowGrowthGlobal1;
+    TokenPairUint inflowGrowthGlobal;
     // Protocol coverage per token
-    uint256 protocolCoverage0;
-    uint256 protocolCoverage1;
+    TokenPairUint protocolCoverage;
     // Coverage usage growth global per token
-    uint256 coverageUseGrowthGlobal0;
-    uint256 coverageUseGrowthGlobal1;
+    TokenPairUint coverageUseGrowthGlobal;
     // Residual coverage per token (when no in-range liquidity)
-    uint256 coverageResidual0;
-    uint256 coverageResidual1;
+    TokenPairUint coverageResidual;
     // Sum of all position cumulative deficits per token
-    uint256 globalDeficit0;
-    uint256 globalDeficit1;
+    TokenPairUint globalDeficit;
     // Protocol/LPs fee pot accrued from fee sharing per token
-    uint256 protocolFeeAccrued0;
-    uint256 protocolFeeAccrued1;
+    TokenPairUint protocolFeeAccrued;
     // Slashed pot balances per token
-    uint256 slashedPot0;
-    uint256 slashedPot1;
+    TokenPairUint slashedPot;
     // Pool-wide sum of positive nets since last modification per token
-    uint256 poolNetSinceLastMod0;
-    uint256 poolNetSinceLastMod1;
+    TokenPairUint poolNetSinceLastMod;
 }
 
 /// @notice Simple pair struct for per-tick growth (replaces uint256[2] arrays)
 struct GrowthPair {
     uint256 token0;
     uint256 token1;
+}
+
+/// @notice Pair struct for uint256 values per token (token0 and token1)
+/// @dev Similar to GrowthPair but used for general accounting fields
+struct TokenPairUint {
+    uint256 token0;
+    uint256 token1;
+}
+
+/// @notice Pair struct for int256 values per token (token0 and token1)
+/// @dev Used for signed accounting fields like net settlement and fee adjustments
+struct TokenPairInt {
+    int256 token0;
+    int256 token1;
+}
+
+/// @title TokenPairLib
+/// @notice Library for accessing TokenPair fields by tokenIndex
+/// @dev Provides get/set helpers to replace manual if (tokenIndex == 0) branching
+library TokenPairLib {
+    /// @notice Get the value for a specific token index from a TokenPairUint
+    /// @param self The TokenPairUint storage reference
+    /// @param tokenIndex The token index (0 or 1)
+    /// @return The value for the specified token
+    function get(
+        TokenPairUint storage self,
+        uint8 tokenIndex
+    ) internal view returns (uint256) {
+        return tokenIndex == 0 ? self.token0 : self.token1;
+    }
+
+    /// @notice Set the value for a specific token index in a TokenPairUint
+    /// @param self The TokenPairUint storage reference
+    /// @param tokenIndex The token index (0 or 1)
+    /// @param value The value to set
+    function set(
+        TokenPairUint storage self,
+        uint8 tokenIndex,
+        uint256 value
+    ) internal {
+        if (tokenIndex == 0) {
+            self.token0 = value;
+        } else {
+            self.token1 = value;
+        }
+    }
+
+    /// @notice Get the value for a specific token index from a TokenPairInt
+    /// @param self The TokenPairInt storage reference
+    /// @param tokenIndex The token index (0 or 1)
+    /// @return The value for the specified token
+    function get(
+        TokenPairInt storage self,
+        uint8 tokenIndex
+    ) internal view returns (int256) {
+        return tokenIndex == 0 ? self.token0 : self.token1;
+    }
+
+    /// @notice Set the value for a specific token index in a TokenPairInt
+    /// @param self The TokenPairInt storage reference
+    /// @param tokenIndex The token index (0 or 1)
+    /// @param value The value to set
+    function set(
+        TokenPairInt storage self,
+        uint8 tokenIndex,
+        int256 value
+    ) internal {
+        if (tokenIndex == 0) {
+            self.token0 = value;
+        } else {
+            self.token1 = value;
+        }
+    }
 }
 
 /// @notice Central storage struct (like Bunni's HubStorage)

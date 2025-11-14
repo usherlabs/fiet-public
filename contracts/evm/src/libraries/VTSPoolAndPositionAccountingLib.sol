@@ -11,10 +11,14 @@ import {
     PositionAccounting,
     PoolAccounting,
     GrowthPair,
-    MarketVTSConfiguration
+    MarketVTSConfiguration,
+    TokenPairUint,
+    TokenPairInt,
+    TokenPairLib
 } from "../types/VTS.sol";
 import {PositionId, Position} from "../types/Position.sol";
 import {Pool} from "../types/Pool.sol";
+import {Commit} from "../types/Commit.sol";
 import {LiquidityUtils} from "./LiquidityUtils.sol";
 import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
 import {
@@ -42,6 +46,8 @@ library VTSPoolAndPositionAccountingLib {
     using SafeCast for uint256;
     using SafeCast for int256;
     using CurrencySettler for Currency;
+    using TokenPairLib for TokenPairUint;
+    using TokenPairLib for TokenPairInt;
 
     /// @notice Tracks the maximum potential commitment for both tokens in a position
     /// @param s The central VTS storage
@@ -55,8 +61,8 @@ library VTSPoolAndPositionAccountingLib {
         PositionAccounting storage pa = s.positionAccounting[positionId];
 
         // Current tracked maxima for this position
-        uint256 currentC0 = pa.commitmentMax0;
-        uint256 currentC1 = pa.commitmentMax1;
+        uint256 currentC0 = pa.commitmentMax.token0;
+        uint256 currentC1 = pa.commitmentMax.token1;
 
         if (params.liquidityDelta > 0) {
             // Liquidity added: increase tracked maxima by the delta's maxima over the tick range
@@ -69,8 +75,8 @@ library VTSPoolAndPositionAccountingLib {
                     liquidityAdded
                 );
 
-            pa.commitmentMax0 = currentC0 + addC0;
-            pa.commitmentMax1 = currentC1 + addC1;
+            pa.commitmentMax.token0 = currentC0 + addC0;
+            pa.commitmentMax.token1 = currentC1 + addC1;
         } else if (params.liquidityDelta < 0) {
             // Liquidity removed: decrease tracked maxima by the delta's maxima over the tick range
             uint128 liquidityRemoved = uint256(-params.liquidityDelta)
@@ -83,8 +89,12 @@ library VTSPoolAndPositionAccountingLib {
                 );
 
             // Clamp at zero to avoid underflow; if fully removed, both become zero
-            pa.commitmentMax0 = currentC0 > subC0 ? (currentC0 - subC0) : 0;
-            pa.commitmentMax1 = currentC1 > subC1 ? (currentC1 - subC1) : 0;
+            pa.commitmentMax.token0 = currentC0 > subC0
+                ? (currentC0 - subC0)
+                : 0;
+            pa.commitmentMax.token1 = currentC1 > subC1
+                ? (currentC1 - subC1)
+                : 0;
         } else {
             // No-op if liquidityDelta == 0 (poke)
             return;
@@ -104,33 +114,20 @@ library VTSPoolAndPositionAccountingLib {
         int256 delta
     ) public returns (int256 applied) {
         // Derive poolId from position to minimise parameters
-        PoolId poolId = s.positions[id].poolId;
+        Position memory pos = s.positions[id];
+        PoolId poolId = pos.poolId;
         PositionAccounting storage pa = s.positionAccounting[id];
         PoolAccounting storage paPool = s.poolAccounting[poolId];
 
         // Read current settled amount and commitment maxima for the selected token
-        uint256 cur;
-        uint256 c;
-        uint256 cumulativeDef;
-        uint256 commitmentDef;
-        int256 netSinceLastMod;
-        uint256 poolNetSinceLastMod;
-
-        if (tokenIndex == 0) {
-            cur = pa.settled0;
-            c = pa.commitmentMax0;
-            cumulativeDef = pa.cumulativeDeficit0;
-            commitmentDef = pa.commitmentDeficit0;
-            netSinceLastMod = pa.netSettlementSinceLastMod0;
-            poolNetSinceLastMod = paPool.poolNetSinceLastMod0;
-        } else {
-            cur = pa.settled1;
-            c = pa.commitmentMax1;
-            cumulativeDef = pa.cumulativeDeficit1;
-            commitmentDef = pa.commitmentDeficit1;
-            netSinceLastMod = pa.netSettlementSinceLastMod1;
-            poolNetSinceLastMod = paPool.poolNetSinceLastMod1;
-        }
+        uint256 cur = pa.settled.get(tokenIndex);
+        uint256 c = pa.commitmentMax.get(tokenIndex);
+        uint256 cumulativeDef = pa.cumulativeDeficit.get(tokenIndex);
+        uint256 commitmentDef = pa.commitmentDeficit.get(tokenIndex);
+        int256 netSinceLastMod = pa.netSettlementSinceLastMod.get(tokenIndex);
+        uint256 poolNetSinceLastMod = paPool.poolNetSinceLastMod.get(
+            tokenIndex
+        );
 
         if (delta == 0) {
             return 0;
@@ -146,17 +143,11 @@ library VTSPoolAndPositionAccountingLib {
                 if (cover > 0) {
                     cumulativeDef -= cover;
                     // keep global coherent
-                    if (tokenIndex == 0) {
-                        uint256 gD0 = paPool.globalDeficit0;
-                        paPool.globalDeficit0 = cover <= gD0
-                            ? (gD0 - cover)
-                            : 0;
-                    } else {
-                        uint256 gD1 = paPool.globalDeficit1;
-                        paPool.globalDeficit1 = cover <= gD1
-                            ? (gD1 - cover)
-                            : 0;
-                    }
+                    uint256 gD = paPool.globalDeficit.get(tokenIndex);
+                    paPool.globalDeficit.set(
+                        tokenIndex,
+                        cover <= gD ? (gD - cover) : 0
+                    );
                     delta -= int256(cover);
                 }
             }
@@ -188,45 +179,45 @@ library VTSPoolAndPositionAccountingLib {
         }
 
         // Write back updated settlement and accounting fields based on token index
-        if (tokenIndex == 0) {
-            pa.settled0 = next;
-            pa.cumulativeDeficit0 = cumulativeDef;
-            pa.commitmentDeficit0 = commitmentDef;
-        } else {
-            pa.settled1 = next;
-            pa.cumulativeDeficit1 = cumulativeDef;
-            pa.commitmentDeficit1 = commitmentDef;
-        }
+        pa.settled.set(tokenIndex, next);
+        pa.cumulativeDeficit.set(tokenIndex, cumulativeDef);
+        pa.commitmentDeficit.set(tokenIndex, commitmentDef);
 
         applied = next.toInt256() - cur.toInt256(); // output delta
 
+        // Update commit-level settled amounts if position belongs to a commit
+        if (pos.commitId > 0) {
+            Commit storage commit = s.commits[pos.commitId];
+            Pool storage pool = s.pools[poolId];
+            Currency currency = tokenIndex == 0
+                ? pool.currency0
+                : pool.currency1;
+
+            uint256 commitSettled = commit.settled[currency];
+            if (applied > 0) {
+                commit.settled[currency] = commitSettled + uint256(applied);
+            } else if (applied < 0) {
+                uint256 subtract = uint256(-applied);
+                commit.settled[currency] = subtract > commitSettled
+                    ? 0
+                    : (commitSettled - subtract);
+            }
+        }
+
         // Accrue persistent nets since last fee finalisation
-        if (tokenIndex == 0) {
-            pa.netSettlementSinceLastMod0 = netSinceLastMod + applied;
-            if (applied >= 0) {
-                paPool.poolNetSinceLastMod0 =
-                    poolNetSinceLastMod +
-                    uint256(applied);
-            } else {
-                uint256 dec = uint256(-applied);
-                uint256 curPoolNet = poolNetSinceLastMod;
-                paPool.poolNetSinceLastMod0 = dec > curPoolNet
-                    ? 0
-                    : (curPoolNet - dec);
-            }
+        pa.netSettlementSinceLastMod.set(tokenIndex, netSinceLastMod + applied);
+        if (applied >= 0) {
+            paPool.poolNetSinceLastMod.set(
+                tokenIndex,
+                poolNetSinceLastMod + uint256(applied)
+            );
         } else {
-            pa.netSettlementSinceLastMod1 = netSinceLastMod + applied;
-            if (applied >= 0) {
-                paPool.poolNetSinceLastMod1 =
-                    poolNetSinceLastMod +
-                    uint256(applied);
-            } else {
-                uint256 dec = uint256(-applied);
-                uint256 curPoolNet = poolNetSinceLastMod;
-                paPool.poolNetSinceLastMod1 = dec > curPoolNet
-                    ? 0
-                    : (curPoolNet - dec);
-            }
+            uint256 dec = uint256(-applied);
+            uint256 curPoolNet = poolNetSinceLastMod;
+            paPool.poolNetSinceLastMod.set(
+                tokenIndex,
+                dec > curPoolNet ? 0 : (curPoolNet - dec)
+            );
         }
     }
 
@@ -295,25 +286,25 @@ library VTSPoolAndPositionAccountingLib {
         uint256 lastSnap0;
         uint256 lastSnap1;
         if (snapField0 == 0) {
-            lastSnap0 = pa.deficitGrowthInsideLast0;
-            pa.deficitGrowthInsideLast0 = inside0;
+            lastSnap0 = pa.deficitGrowthInsideLast.token0;
+            pa.deficitGrowthInsideLast.token0 = inside0;
         } else if (snapField0 == 1) {
-            lastSnap0 = pa.inflowGrowthInsideLast0;
-            pa.inflowGrowthInsideLast0 = inside0;
+            lastSnap0 = pa.inflowGrowthInsideLast.token0;
+            pa.inflowGrowthInsideLast.token0 = inside0;
         } else {
-            lastSnap0 = pa.coverageUseGrowthInsideLast0;
-            pa.coverageUseGrowthInsideLast0 = inside0;
+            lastSnap0 = pa.coverageUseGrowthInsideLast.token0;
+            pa.coverageUseGrowthInsideLast.token0 = inside0;
         }
 
         if (snapField1 == 0) {
-            lastSnap1 = pa.deficitGrowthInsideLast1;
-            pa.deficitGrowthInsideLast1 = inside1;
+            lastSnap1 = pa.deficitGrowthInsideLast.token1;
+            pa.deficitGrowthInsideLast.token1 = inside1;
         } else if (snapField1 == 1) {
-            lastSnap1 = pa.inflowGrowthInsideLast1;
-            pa.inflowGrowthInsideLast1 = inside1;
+            lastSnap1 = pa.inflowGrowthInsideLast.token1;
+            pa.inflowGrowthInsideLast.token1 = inside1;
         } else {
-            lastSnap1 = pa.coverageUseGrowthInsideLast1;
-            pa.coverageUseGrowthInsideLast1 = inside1;
+            lastSnap1 = pa.coverageUseGrowthInsideLast.token1;
+            pa.coverageUseGrowthInsideLast.token1 = inside1;
         }
 
         uint256 d0 = inside0 - lastSnap0;
@@ -359,8 +350,8 @@ library VTSPoolAndPositionAccountingLib {
             pos.tickLower,
             pos.tickUpper,
             liq,
-            paPool.deficitGrowthGlobal0,
-            paPool.deficitGrowthGlobal1,
+            paPool.deficitGrowthGlobal.token0,
+            paPool.deficitGrowthGlobal.token1,
             s.deficitGrowthOutside,
             pa,
             0, // deficit growth field
@@ -369,29 +360,29 @@ library VTSPoolAndPositionAccountingLib {
 
         if (add0 > 0) {
             // Track full attributed outflows for fee sharing normalisation window
-            pa.cumulativeOutflows0 += add0;
+            pa.cumulativeOutflows.token0 += add0;
 
             // Consume settled coverage first, then accrue shortfall to deficit
-            uint256 s0 = pa.settled0;
+            uint256 s0 = pa.settled.token0;
             if (s0 >= add0) {
                 _updateSettlement(s, positionId, 0, -int256(add0)); // reduce total settlement amount by add0
             } else {
                 uint256 netAdd0 = add0 - s0;
-                pa.cumulativeDeficit0 += netAdd0;
-                paPool.globalDeficit0 += netAdd0;
+                pa.cumulativeDeficit.token0 += netAdd0;
+                paPool.globalDeficit.token0 += netAdd0;
                 _updateSettlement(s, positionId, 0, -int256(s0)); // set total settlement amount to 0
             }
         }
         if (add1 > 0) {
-            pa.cumulativeOutflows1 += add1;
+            pa.cumulativeOutflows.token1 += add1;
 
-            uint256 s1 = pa.settled1;
+            uint256 s1 = pa.settled.token1;
             if (s1 >= add1) {
                 _updateSettlement(s, positionId, 1, -int256(add1)); // reduce total settlement amount by add1
             } else {
                 uint256 netAdd1 = add1 - s1;
-                pa.cumulativeDeficit1 += netAdd1;
-                paPool.globalDeficit1 += netAdd1;
+                pa.cumulativeDeficit.token1 += netAdd1;
+                paPool.globalDeficit.token1 += netAdd1;
                 _updateSettlement(s, positionId, 1, -int256(s1)); // set total settlement amount to 0
             }
         }
@@ -422,8 +413,8 @@ library VTSPoolAndPositionAccountingLib {
             pos.tickLower,
             pos.tickUpper,
             liq,
-            paPool.inflowGrowthGlobal0,
-            paPool.inflowGrowthGlobal1,
+            paPool.inflowGrowthGlobal.token0,
+            paPool.inflowGrowthGlobal.token1,
             s.inflowGrowthOutside,
             pa,
             1, // inflow growth field
@@ -470,9 +461,7 @@ library VTSPoolAndPositionAccountingLib {
         uint256 fg = tokenIndex == 0 ? fg0 : fg1;
 
         PositionAccounting storage pa = s.positionAccounting[positionId];
-        uint256 last = tokenIndex == 0
-            ? pa.feeGrowthInsideLast0
-            : pa.feeGrowthInsideLast1;
+        uint256 last = pa.feeGrowthInsideLast.get(tokenIndex);
 
         if (positionLiquidity > 0 && fg > last) {
             fees = FullMath.mulDiv(
@@ -485,22 +474,13 @@ library VTSPoolAndPositionAccountingLib {
         }
 
         // Compute outflow window and checkpoint both snapshots
-        uint256 cf = tokenIndex == 0
-            ? pa.cumulativeOutflows0
-            : pa.cumulativeOutflows1;
-        uint256 snap = tokenIndex == 0
-            ? pa.outflowsAtFeeSnap0
-            : pa.outflowsAtFeeSnap1;
+        uint256 cf = pa.cumulativeOutflows.get(tokenIndex);
+        uint256 snap = pa.outflowsAtFeeSnap.get(tokenIndex);
         ofDelta = cf >= snap ? (cf - snap) : 0;
 
         // Snapshot fees here
-        if (tokenIndex == 0) {
-            pa.feeGrowthInsideLast0 = fg;
-            pa.outflowsAtFeeSnap0 = cf;
-        } else {
-            pa.feeGrowthInsideLast1 = fg;
-            pa.outflowsAtFeeSnap1 = cf;
-        }
+        pa.feeGrowthInsideLast.set(tokenIndex, fg);
+        pa.outflowsAtFeeSnap.set(tokenIndex, cf);
     }
 
     /// @notice Settle coverage-usage growth and burn fees only on exercised deficits
@@ -528,8 +508,8 @@ library VTSPoolAndPositionAccountingLib {
             pos.tickLower,
             pos.tickUpper,
             liq,
-            paPool.coverageUseGrowthGlobal0,
-            paPool.coverageUseGrowthGlobal1,
+            paPool.coverageUseGrowthGlobal.token0,
+            paPool.coverageUseGrowthGlobal.token1,
             s.coverageUseGrowthOutside,
             pa,
             2, // coverage growth field
@@ -578,10 +558,8 @@ library VTSPoolAndPositionAccountingLib {
         uint128 positionLiquidity
     ) private {
         PositionAccounting storage pa = s.positionAccounting[id];
-        uint256 d = tokenIndex == 0
-            ? pa.cumulativeDeficit0
-            : pa.cumulativeDeficit1;
-        uint256 settled = tokenIndex == 0 ? pa.settled0 : pa.settled1;
+        uint256 d = pa.cumulativeDeficit.get(tokenIndex);
+        uint256 settled = pa.settled.get(tokenIndex);
         if (cov == 0 || (d == 0 && settled == 0)) return;
 
         // Enforce invariant: cov <= d + settled, then burn only deficit portion
@@ -622,23 +600,23 @@ library VTSPoolAndPositionAccountingLib {
                 uint256(positionLiquidity)
             );
             // Burn by advancing fee growth baseline
-            if (tokenIndex == 0) {
-                pa.feeGrowthInsideLast0 += growthInc;
-            } else {
-                pa.feeGrowthInsideLast1 += growthInc;
-            }
+            uint256 currentFeeGrowth = pa.feeGrowthInsideLast.get(tokenIndex);
+            pa.feeGrowthInsideLast.set(
+                tokenIndex,
+                currentFeeGrowth + growthInc
+            );
         }
 
         PoolAccounting storage paPool = s.poolAccounting[p];
-        if (tokenIndex == 0) {
-            paPool.protocolFeeAccrued0 += feesBurn;
-            pa.feesShared0 += feesBurn;
-            pa.pendingFeeAdj0 += int256(feesBurn);
-        } else {
-            paPool.protocolFeeAccrued1 += feesBurn;
-            pa.feesShared1 += feesBurn;
-            pa.pendingFeeAdj1 += int256(feesBurn);
-        }
+        uint256 currentProtocolFee = paPool.protocolFeeAccrued.get(tokenIndex);
+        paPool.protocolFeeAccrued.set(
+            tokenIndex,
+            currentProtocolFee + feesBurn
+        );
+        uint256 currentFeesShared = pa.feesShared.get(tokenIndex);
+        pa.feesShared.set(tokenIndex, currentFeesShared + feesBurn);
+        int256 currentPendingAdj = pa.pendingFeeAdj.get(tokenIndex);
+        pa.pendingFeeAdj.set(tokenIndex, currentPendingAdj + int256(feesBurn));
     }
 
     /// @notice Internal helper to settle both deficit and inflow growth for a position
@@ -669,8 +647,8 @@ library VTSPoolAndPositionAccountingLib {
         PositionId positionId
     ) public view returns (int256 adj0, int256 adj1) {
         PositionAccounting storage pa = s.positionAccounting[positionId];
-        adj0 = pa.pendingFeeAdj0;
-        adj1 = pa.pendingFeeAdj1;
+        adj0 = pa.pendingFeeAdj.token0;
+        adj1 = pa.pendingFeeAdj.token1;
     }
 
     /// @notice Increase the slashed pot for a pool/token when a take() succeeds
@@ -692,11 +670,8 @@ library VTSPoolAndPositionAccountingLib {
         // In linked libraries, address(this) refers to the calling contract via DELEGATECALL
         lccCurrency.take(poolManager, address(this), amount, true);
         PoolAccounting storage paPool = s.poolAccounting[poolId];
-        if (tokenIndex == 0) {
-            paPool.slashedPot0 += amount;
-        } else {
-            paPool.slashedPot1 += amount;
-        }
+        uint256 currentPot = paPool.slashedPot.get(tokenIndex);
+        paPool.slashedPot.set(tokenIndex, currentPot + amount);
     }
 
     /// @notice Decrease the slashed pot when settling bonuses (giving out from CoreHook to PoolManager)
@@ -717,14 +692,10 @@ library VTSPoolAndPositionAccountingLib {
         if (amount == 0) return;
         lccCurrency.settle(poolManager, address(this), amount, true);
         PoolAccounting storage paPool = s.poolAccounting[poolId];
-        uint256 pot = tokenIndex == 0 ? paPool.slashedPot0 : paPool.slashedPot1;
+        uint256 pot = paPool.slashedPot.get(tokenIndex);
         // Clamp to available pot to avoid underflow; caller must have already bounded the amount
         if (amount > pot) amount = pot;
-        if (tokenIndex == 0) {
-            paPool.slashedPot0 = pot - amount;
-        } else {
-            paPool.slashedPot1 = pot - amount;
-        }
+        paPool.slashedPot.set(tokenIndex, pot - amount);
     }
 
     /// @notice Finalise a portion of the pending fee adjustment as materialised in the current hook call
@@ -756,7 +727,7 @@ library VTSPoolAndPositionAccountingLib {
         } else if (pend0 < 0) {
             uint256 need0 = uint256(-pend0);
             PoolAccounting storage paPool = s.poolAccounting[poolId];
-            uint256 pot0 = paPool.slashedPot0;
+            uint256 pot0 = paPool.slashedPot.token0;
             uint256 pay0 = pot0 < need0 ? pot0 : need0;
             if (pay0 > 0) {
                 _drainFeePot(s, poolManager, poolId, currency0, 0, pay0);
@@ -770,7 +741,7 @@ library VTSPoolAndPositionAccountingLib {
         } else if (pend1 < 0) {
             uint256 need1 = uint256(-pend1);
             PoolAccounting storage paPool = s.poolAccounting[poolId];
-            uint256 pot1 = paPool.slashedPot1;
+            uint256 pot1 = paPool.slashedPot.token1;
             uint256 pay1 = pot1 < need1 ? pot1 : need1;
             if (pay1 > 0) {
                 _drainFeePot(s, poolManager, poolId, currency1, 1, pay1);
@@ -797,8 +768,8 @@ library VTSPoolAndPositionAccountingLib {
 
         // Subtract the materialised portion from pending (note: signed arithmetic)
         PositionAccounting storage pa = s.positionAccounting[positionId];
-        pa.pendingFeeAdj0 = pend0 - mat0;
-        pa.pendingFeeAdj1 = pend1 - mat1;
+        pa.pendingFeeAdj.token0 = pend0 - mat0;
+        pa.pendingFeeAdj.token1 = pend1 - mat1;
 
         adj = LiquidityUtils.safeToBalanceDelta(mat0, mat1);
         // Note: Transient storage handling for MM positions should be done by the calling contract
@@ -807,8 +778,8 @@ library VTSPoolAndPositionAccountingLib {
         // }
 
         // Snapshot current pending after finalisation to keep future settle-time funding incremental
-        pa.lastFundedPendingAdj0 = pa.pendingFeeAdj0;
-        pa.lastFundedPendingAdj1 = pa.pendingFeeAdj1;
+        pa.lastFundedPendingAdj.token0 = pa.pendingFeeAdj.token0;
+        pa.lastFundedPendingAdj.token1 = pa.pendingFeeAdj.token1;
     }
 
     /// @notice Consolidated fee processing for a position during modification: applies and zeros nets, queues bonus using net weighting
@@ -840,24 +811,20 @@ library VTSPoolAndPositionAccountingLib {
         PoolAccounting storage paPool = s.poolAccounting[poolId];
 
         // Read per-position nets (already applied to settled via _updateSettlement). Do not mutate yet
-        int256 selfNet0 = pa.netSettlementSinceLastMod0;
-        int256 selfNet1 = pa.netSettlementSinceLastMod1;
+        int256 selfNet0 = pa.netSettlementSinceLastMod.token0;
+        int256 selfNet1 = pa.netSettlementSinceLastMod.token1;
 
         // Queue bonuses using positive nets since last modification
         for (uint8 t = 0; t < 2; t++) {
             int256 selfNet = (t == 0) ? selfNet0 : selfNet1;
             if (selfNet <= 0) continue;
 
-            uint256 pot = t == 0
-                ? paPool.protocolFeeAccrued0
-                : paPool.protocolFeeAccrued1;
-            uint256 selfContrib = t == 0 ? pa.feesShared0 : pa.feesShared1;
+            uint256 pot = paPool.protocolFeeAccrued.get(t);
+            uint256 selfContrib = pa.feesShared.get(t);
             uint256 potAvail = pot > selfContrib ? (pot - selfContrib) : 0;
             if (potAvail == 0) continue;
 
-            uint256 totalNetBefore = t == 0
-                ? paPool.poolNetSinceLastMod0
-                : paPool.poolNetSinceLastMod1;
+            uint256 totalNetBefore = paPool.poolNetSinceLastMod.get(t);
             // totalNetBefore is UNSIGNED. Only positive when settled > 0 - preventing positive nets that cover deficits from being used
             if (totalNetBefore == 0) continue;
 
@@ -872,31 +839,31 @@ library VTSPoolAndPositionAccountingLib {
             if (bonus > potAvail) bonus = potAvail;
 
             // Deduct from pot, keep self-contrib excluded
-            if (t == 0) {
-                paPool.protocolFeeAccrued0 = potAvail - bonus + selfContrib;
-                // Queue negative pending (bonus increases payout at materialisation)
-                pa.pendingFeeAdj0 -= bonus.toInt256();
-            } else {
-                paPool.protocolFeeAccrued1 = potAvail - bonus + selfContrib;
-                pa.pendingFeeAdj1 -= bonus.toInt256();
-            }
+            paPool.protocolFeeAccrued.set(t, potAvail - bonus + selfContrib);
+            // Queue negative pending (bonus increases payout at materialisation)
+            int256 currentPending = pa.pendingFeeAdj.get(t);
+            pa.pendingFeeAdj.set(t, currentPending - bonus.toInt256());
         }
 
         // After allocation, zero/decrement nets so future allocations don't double-count
         if (selfNet0 != 0) {
-            pa.netSettlementSinceLastMod0 = 0;
+            pa.netSettlementSinceLastMod.token0 = 0;
             if (selfNet0 > 0) {
-                uint256 cur0 = paPool.poolNetSinceLastMod0;
+                uint256 cur0 = paPool.poolNetSinceLastMod.token0;
                 uint256 dec0 = uint256(selfNet0);
-                paPool.poolNetSinceLastMod0 = dec0 > cur0 ? 0 : (cur0 - dec0);
+                paPool.poolNetSinceLastMod.token0 = dec0 > cur0
+                    ? 0
+                    : (cur0 - dec0);
             }
         }
         if (selfNet1 != 0) {
-            pa.netSettlementSinceLastMod1 = 0;
+            pa.netSettlementSinceLastMod.token1 = 0;
             if (selfNet1 > 0) {
-                uint256 cur1 = paPool.poolNetSinceLastMod1;
+                uint256 cur1 = paPool.poolNetSinceLastMod.token1;
                 uint256 dec1 = uint256(selfNet1);
-                paPool.poolNetSinceLastMod1 = dec1 > cur1 ? 0 : (cur1 - dec1);
+                paPool.poolNetSinceLastMod.token1 = dec1 > cur1
+                    ? 0
+                    : (cur1 - dec1);
             }
         }
 
@@ -936,18 +903,20 @@ library VTSPoolAndPositionAccountingLib {
                 FixedPoint128.Q128,
                 uint256(liq)
             );
-            if (tokenIndex == 0) {
-                paPool.coverageUseGrowthGlobal0 += deltaG;
-            } else {
-                paPool.coverageUseGrowthGlobal1 += deltaG;
-            }
+            uint256 currentGrowth = paPool.coverageUseGrowthGlobal.get(
+                tokenIndex
+            );
+            paPool.coverageUseGrowthGlobal.set(
+                tokenIndex,
+                currentGrowth + deltaG
+            );
         } else {
             // No in-range liquidity; defer to residual
-            if (tokenIndex == 0) {
-                paPool.coverageResidual0 += coveredAmount;
-            } else {
-                paPool.coverageResidual1 += coveredAmount;
-            }
+            uint256 currentResidual = paPool.coverageResidual.get(tokenIndex);
+            paPool.coverageResidual.set(
+                tokenIndex,
+                currentResidual + coveredAmount
+            );
         }
     }
 }

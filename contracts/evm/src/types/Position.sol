@@ -34,6 +34,8 @@ struct Position {
     address owner;
     // the core pool id for this position (immutable after registration)
     PoolId poolId;
+    // the commit ID (tokenId) this position belongs to (0 if not part of a commit)
+    uint256 commitId;
     // the lower tick of the position
     int24 tickLower;
     // the upper tick of the position
