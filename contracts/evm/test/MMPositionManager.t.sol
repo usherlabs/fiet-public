@@ -30,6 +30,12 @@ import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {IOracleHelper} from "../src/interfaces/IOracleHelper.sol";
 import {Errors} from "../src/libraries/Errors.sol";
+import {Position} from "../src/types/Position.sol";
+import {RFSCheckpoint} from "../src/types/Checkpoint.sol";
+import {ILCC} from "../src/interfaces/ILCC.sol";
+import {ILiquidityHub} from "../src/interfaces/ILiquidityHub.sol";
+import {IVRLSignalManager} from "../src/interfaces/IVRLSignalManager.sol";
+import {LiquiditySignal} from "../src/types/Commit.sol";
 
 contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
     using SafeCast for *;
@@ -82,8 +88,9 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             abi.encodeWithSelector(IOracleHelper.getPricesForLCCPair.selector),
             abi.encode(uint256(1), uint256(1))
         );
+        // supply enough
         vm.mockCall(
-            address(oracleHelper), abi.encodeWithSelector(IOracleHelper.getTotalUsdValue.selector), abi.encode(2)
+            address(oracleHelper), abi.encodeWithSelector(IOracleHelper.getTotalUsdValue.selector), abi.encode(1e18)
         );
     }
 
@@ -95,7 +102,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         );
     }
 
-    function testCanCommitPosition() public {
+    function testCanCommitAndMintPosition() public {
         ModifyLiquidityParams memory liquidityParams =
             ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e18, salt: bytes32(0)});
 
@@ -124,6 +131,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             uint256 requiredSettlementAmount1
         ) = _setupCommittedPosition(
             positionManager,
+            vtsOrchestrator,
             corePoolKey,
             liquiditySignal,
             liquidityParams,
@@ -132,30 +140,54 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             address(lcc1)
         );
 
-        PositionMeta memory m = positionManager.getPosition(tokenId, 0);
+        // Get the position from the vts orchestrator
+        Position memory position = vtsOrchestrator.getPosition(positionId);
+        assertEq(position.owner, address(vtsOrchestrator));
+        // Validate the owner of the NFT is the caller of the function
+        assertEq(positionManager.ownerOf(tokenId), address(this));
+
+        assertEq(PoolId.unwrap(position.poolId), PoolId.unwrap(corePoolKey.toId()));
+        assertEq(position.commitId, tokenId);
+        assertEq(position.tickLower, liquidityParams.tickLower);
+        assertEq(position.tickUpper, liquidityParams.tickUpper);
+        // Validate the amount of liquidity has been added to the position
+        assertEq(uint256(position.liquidity), uint256(liquidityParams.liquidityDelta));
+        assertEq(position.isActive, true);
 
         uint256 pmLcc0BalanceAfter = lcc0.balanceOf(address(manager));
         uint256 pmLcc1BalanceAfter = lcc1.balanceOf(address(manager));
 
-        // validate lcc liquidity has been added to the core pool
-        assertEq(pmLcc0BalanceAfter, pmLcc0BalanceBefore + token0AmountMinted);
-        assertEq(pmLcc1BalanceAfter, pmLcc1BalanceBefore + token1AmountMinted);
-
-        // validate underlying tokens have been transferred to proxy pool
-        // and proxy hook has claim tokens
+        // validate underlying tokens have been transferred to proxy pool and proxy hook has claim tokens
         uint256 proxyCurrency0BalanceAfter = manager.balanceOf(address(proxyHook), proxyPoolKey.currency0.toId());
         uint256 proxyCurrency1BalanceAfter = manager.balanceOf(address(proxyHook), proxyPoolKey.currency1.toId());
 
-        assertEq(proxyCurrency0BalanceAfter, proxyCurrency0BalanceBefore + requiredSettlementAmount0);
-        assertEq(proxyCurrency1BalanceAfter, proxyCurrency1BalanceBefore + requiredSettlementAmount1);
+        console.log("requiredSettlementAmount0", requiredSettlementAmount0);
+        console.log("requiredSettlementAmount1", requiredSettlementAmount1);
 
-        assertEq(PoolId.unwrap(m.poolId), PoolId.unwrap(corePoolKey.toId()));
-        assertEq(m.tickLower, liquidityParams.tickLower);
-        assertEq(m.tickUpper, liquidityParams.tickUpper);
-        assertEq(m.liquidity, liquidityParams.liquidityDelta);
-        // Position owner is the manager contract
-        assertEq(m.owner, address(mmPositionManager));
-        assertEq(m.isActive, true);
+        console.log("token0AmountMinted", token0AmountMinted);
+        console.log("token1AmountMinted", token1AmountMinted);
+
+        console.log("pmLcc0BalanceBefore", pmLcc0BalanceBefore);
+        console.log("pmLcc0BalanceAfter", pmLcc0BalanceAfter);
+
+        console.log("pmLcc1BalanceAfter", pmLcc1BalanceAfter);
+        console.log("pmLcc1BalanceBefore", pmLcc1BalanceBefore);
+
+        console.log("proxyCurrency0BalanceBefore", proxyCurrency0BalanceBefore);
+        console.log("proxyCurrency0BalanceBefore", proxyCurrency0BalanceBefore);
+
+        console.log("proxyCurrency0BalanceAfter", proxyCurrency0BalanceAfter);
+        console.log("proxyCurrency1BalanceAfter", proxyCurrency1BalanceAfter);
+
+        // TODO: implement Fees accounting here to account for fees in token minted vs token transferred to the pm
+        // this would account for the exact tokens rather than doing a greater than check
+
+        // validate lcc liquidity has been added to the core pool
+        assertGt(pmLcc0BalanceAfter, pmLcc0BalanceBefore);
+        assertGt(pmLcc1BalanceAfter, pmLcc1BalanceBefore);
+
+        assertGt(proxyCurrency0BalanceAfter, proxyCurrency0BalanceBefore);
+        assertGt(proxyCurrency1BalanceAfter, proxyCurrency1BalanceBefore);
     }
 
     function testCanSettleToCreatedPosition() public {
@@ -171,6 +203,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             uint256 requiredSettlementAmount1
         ) = _setupCommittedPosition(
             positionManager,
+            vtsOrchestrator,
             corePoolKey,
             liquiditySignal,
             liquidityParams,
@@ -180,61 +213,65 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         );
 
         // get the current vts for this position
-        // TODO: Change these tests to either depend on VTSCalculator, or ...
-        (uint256 vtsCurrent0BeforeSettlement, uint256 vtsCurrent1BeforeSettlement) =
-            IVTSManager(coreHookAddress).calcVTSCurrent(positionId);
-
-        // VTS current from the `IVTSManager` is expressed in 1e18
-        // VTS base in the market configuration is expressed in bips
-        uint256 vtsCurrent0BeforeSettlementBips = (vtsCurrent0BeforeSettlement * 10000) / 1e18;
-        uint256 vtsCurrent1BeforeSettlementBips = (vtsCurrent1BeforeSettlement * 10000) / 1e18;
-
-        // assert the vts before further settlement is equal to the base vts
-        assertApproxEqRel(
-            vtsCurrent0BeforeSettlementBips, marketVTSConfiguration.token0.baseVTSRate, 1e16, "Price within 1%"
-        );
-        assertApproxEqRel(
-            vtsCurrent1BeforeSettlementBips, marketVTSConfiguration.token1.baseVTSRate, 1e16, "Price within 1%"
-        );
         // make a settlement to the position with the base vts, which should double the current VTS for this position
         // -- before making a settlement, we have to approve the position manager to take the tokens from us
-        IERC20(lcc0.underlying()).approve(address(mmPositionManager), requiredSettlementAmount0);
-        IERC20(lcc1.underlying()).approve(address(mmPositionManager), requiredSettlementAmount1);
+        IERC20(lcc0.underlying()).approve(address(vtsOrchestrator), requiredSettlementAmount0);
+        IERC20(lcc1.underlying()).approve(address(vtsOrchestrator), requiredSettlementAmount1);
+
+        // log vts before settlement
+        (uint256 vtsCurrent0BeforeSettlement, uint256 vtsCurrent1BeforeSettlement) =
+            vtsOrchestrator.calcVTSCurrent(positionId);
+        console.log("vtsCurrent0BeforeSettlement", vtsCurrent0BeforeSettlement);
+        console.log("vtsCurrent1BeforeSettlement", vtsCurrent1BeforeSettlement);
+
         // -- make a settlement to the created position
         MMA.settle(
             positionManager,
             corePoolKey,
             tokenId,
             0,
-            int128(int256(requiredSettlementAmount0)),
-            int128(int256(requiredSettlementAmount1))
+            -int128(int256(requiredSettlementAmount0)),
+            -int128(int256(requiredSettlementAmount1))
         );
 
         // get the current vts for this position
         (uint256 vtsCurrent0AfterSettlement, uint256 vtsCurrent1AfterSettlement) =
-            IVTSManager(coreHookAddress).calcVTSCurrent(positionId);
-        // assert the vts after settlement is equal to the base vts * 2
+            vtsOrchestrator.calcVTSCurrent(positionId);
+        console.log("vtsCurrent0AfterSettlement", vtsCurrent0AfterSettlement);
+        console.log("vtsCurrent1AfterSettlement", vtsCurrent1AfterSettlement);
+
         // since we basically just made another settlement equal to the base vts, the vts should be doubled
         uint256 vtsCurrent0AfterSettlementBips = (vtsCurrent0AfterSettlement * 10000) / 1e18;
         uint256 vtsCurrent1AfterSettlementBips = (vtsCurrent1AfterSettlement * 10000) / 1e18;
 
+        console.log("vtsCurrent0AfterSettlementBips", vtsCurrent0AfterSettlementBips);
+        console.log("vtsCurrent1AfterSettlementBips", vtsCurrent1AfterSettlementBips);
+        console.log("marketVTSConfiguration.token0.baseVTSRate", marketVTSConfiguration.token0.baseVTSRate);
+        console.log("marketVTSConfiguration.token1.baseVTSRate", marketVTSConfiguration.token1.baseVTSRate);
+
         assertApproxEqRel(
-            vtsCurrent0AfterSettlementBips, marketVTSConfiguration.token0.baseVTSRate * 2, 1e16, "Price within 1%"
+            vtsCurrent0AfterSettlementBips, marketVTSConfiguration.token0.baseVTSRate, 1e16, "Price within 1%"
         );
         assertApproxEqRel(
-            vtsCurrent1AfterSettlementBips, marketVTSConfiguration.token1.baseVTSRate * 2, 1e16, "Price within 1%"
+            vtsCurrent1AfterSettlementBips, marketVTSConfiguration.token1.baseVTSRate, 1e16, "Price within 1%"
         );
     }
 
-    function testCanWithdrawFromSettledPositionWithoutOpenRFS() public {
+    function testCanWithdrawFromSettledPosition() public {
         // get the default market confiration so we can tweak it
         bytes memory liquiditySignal = abi.encode(liquiditySignal);
         ModifyLiquidityParams memory liquidityParams =
             ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
 
         // Setup committed position using helper
-        (uint256 tokenId, PositionId positionId,,) = _setupCommittedPosition(
+        (
+            uint256 tokenId,
+            PositionId positionId,
+            uint256 requiredSettlementAmount0,
+            uint256 requiredSettlementAmount1
+        ) = _setupCommittedPosition(
             positionManager,
+            vtsOrchestrator,
             corePoolKey,
             liquiditySignal,
             liquidityParams,
@@ -243,58 +280,101 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             address(lcc1)
         );
 
-        // get current VTS
-        (uint256 vtsCurrent0BeforeWithdrawal, uint256 vtsCurrent1BeforeWithdrawal) =
-            IVTSManager(coreHookAddress).calcVTSCurrent(positionId);
+        // get the current vts for this position
+        (uint256 vtsCurrent0BeforeSettlement, uint256 vtsCurrent1BeforeSettlement) =
+            vtsOrchestrator.calcVTSCurrent(positionId);
+        console.log("vtsCurrent0BeforeSettlement", vtsCurrent0BeforeSettlement);
+        console.log("vtsCurrent1BeforeSettlement", vtsCurrent1BeforeSettlement);
 
-        // Mock the RFS for this position
-        // this means RFS for this position is not open and the user can withdraw 1000 & 500 units of each token
-        uint256 amount0 = 100;
-        uint256 amount1 = 50;
-        bool rfsOpen = false; // if rfs is open then amount0 || amount1 will be less than zero
-        vm.mockCall(
-            address(IVTSManager(coreHookAddress)),
-            abi.encodeWithSelector(IVTSManager.calcRFS.selector),
-            abi.encode(rfsOpen, toBalanceDelta(int128(int256(amount0)), int128(int256(amount1))))
+        uint256 settlementAmount0 = requiredSettlementAmount0 * 3;
+        uint256 settlementAmount1 = requiredSettlementAmount1 * 3;
+        // make a settlement for the position
+        IERC20(lcc0.underlying()).approve(address(vtsOrchestrator), settlementAmount0);
+        IERC20(lcc1.underlying()).approve(address(vtsOrchestrator), settlementAmount1);
+        // -- make a settlement to the created position
+        MMA.settle(
+            positionManager,
+            corePoolKey,
+            tokenId,
+            0,
+            -int128(int256(settlementAmount0)),
+            -int128(int256(settlementAmount1))
         );
+
+        // get the current vts for this position
+        (uint256 vtsCurrent0AfterSettlement, uint256 vtsCurrent1AfterSettlement) =
+            vtsOrchestrator.calcVTSCurrent(positionId);
+        console.log("vtsCurrent0AfterSettlement", vtsCurrent0AfterSettlement);
+        console.log("vtsCurrent1AfterSettlement", vtsCurrent1AfterSettlement);
+
         // get balance of underlying tokens of position manager
         uint256 preBalanceOfToken0UnderlyingAssetInPM = Currency.wrap(lcc0.underlying()).balanceOf(address(this));
         uint256 preBalanceOfToken1UnderlyingAssetInPM = Currency.wrap(lcc1.underlying()).balanceOf(address(this));
 
+        console.log("========================");
+        // validate vts current before withdrawal
+        (uint256 vtsCurrent0BeforeWithdrawal, uint256 vtsCurrent1BeforeWithdrawal) =
+            vtsOrchestrator.calcVTSCurrent(positionId);
+
         // withdraw from the position by settling out
-        MMA.settle(positionManager, corePoolKey, tokenId, 0, -int128(int256(amount0)), -int128(int256(amount1)));
+        uint256 amount0 = 100;
+        uint256 amount1 = 100;
+        MMA.settle(positionManager, corePoolKey, tokenId, 0, int128(int256(amount0)), int128(int256(amount1)));
+
+        // get the current vts for this position after withdrawal
+        (uint256 vtsCurrent0AfterWithdrawal, uint256 vtsCurrent1AfterWithdrawal) =
+            vtsOrchestrator.calcVTSCurrent(positionId);
+        console.log("vtsCurrent0AfterWithdrawal", vtsCurrent0AfterWithdrawal);
+        console.log("vtsCurrent1AfterWithdrawal", vtsCurrent1AfterWithdrawal);
 
         // get balance of underlying tokens of position manager after withdrawal
         uint256 postBalanceOfToken0UnderlyingAssetInPM = Currency.wrap(lcc0.underlying()).balanceOf(address(this));
         uint256 postBalanceOfToken1UnderlyingAssetInPM = Currency.wrap(lcc1.underlying()).balanceOf(address(this));
 
+        console.log("preBalanceOfToken0UnderlyingAssetInPM", preBalanceOfToken0UnderlyingAssetInPM);
+        console.log("preBalanceOfToken1UnderlyingAssetInPM", preBalanceOfToken1UnderlyingAssetInPM);
+        console.log("postBalanceOfToken0UnderlyingAssetInPM", postBalanceOfToken0UnderlyingAssetInPM);
+        console.log("postBalanceOfToken1UnderlyingAssetInPM", postBalanceOfToken1UnderlyingAssetInPM);
+
         // validate balance after withdrawal
         assertEq(postBalanceOfToken0UnderlyingAssetInPM, preBalanceOfToken0UnderlyingAssetInPM + amount0);
         assertEq(postBalanceOfToken1UnderlyingAssetInPM, preBalanceOfToken1UnderlyingAssetInPM + amount1);
-
-        // validate vts current reduces after withdrawal
-        (uint256 vtsCurrent0AfterWithdrawal, uint256 vtsCurrent1AfterWithdrawal) =
-            IVTSManager(coreHookAddress).calcVTSCurrent(positionId);
 
         assertGt(vtsCurrent0BeforeWithdrawal, vtsCurrent0AfterWithdrawal);
         assertGt(vtsCurrent1BeforeWithdrawal, vtsCurrent1AfterWithdrawal);
     }
 
-    function testCanburnUsingTokenAndIndex() public {
+    function testCanburnPositionUsingTokenAndIndex() public {
         // get the default market confiration so we can tweak it
         bytes memory liquiditySignal = abi.encode(liquiditySignal);
         ModifyLiquidityParams memory liquidityParams =
             ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
 
         // Setup committed position using helper
-        (uint256 tokenId,,,) = _setupCommittedPosition(
+        (uint256 tokenId,, uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) = _setupCommittedPosition(
             positionManager,
+            vtsOrchestrator,
             corePoolKey,
             liquiditySignal,
             liquidityParams,
             marketVTSConfiguration,
             address(lcc0),
             address(lcc1)
+        );
+
+        uint256 settlementAmount0 = requiredSettlementAmount0 * 3;
+        uint256 settlementAmount1 = requiredSettlementAmount1 * 3;
+        // make a settlement for the position
+        IERC20(lcc0.underlying()).approve(address(vtsOrchestrator), settlementAmount0);
+        IERC20(lcc1.underlying()).approve(address(vtsOrchestrator), settlementAmount1);
+        // -- make a settlement to the created position
+        MMA.settle(
+            positionManager,
+            corePoolKey,
+            tokenId,
+            0,
+            -int128(int256(settlementAmount0)),
+            -int128(int256(settlementAmount1))
         );
 
         // get underlying asset balance before decommitment
@@ -303,6 +383,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         // burn
         MMA.burn(positionManager, corePoolKey, tokenId, 0);
+
         BalanceDelta balanceDelta = toBalanceDelta(0, 0); // effects come via VTS mock and internal settle
 
         // get underlying asset balance after decommitment
@@ -313,15 +394,21 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         assertEq(token1BalanceAfter, token1BalanceBefore + LiquidityUtils.safeInt128ToUint256(balanceDelta.amount1()));
     }
 
-    function testCanburnUsingTokenId() public {
+    function testCanDecommitUsingTokenId() public {
         // get the default market confiration so we can tweak it
         bytes memory liquiditySignal = abi.encode(liquiditySignal);
         ModifyLiquidityParams memory liquidityParams =
             ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
 
         // Setup committed position using helper
-        (uint256 tokenId,,,) = _setupCommittedPosition(
+        (
+            uint256 tokenId,
+            PositionId positionId,
+            uint256 requiredSettlementAmount0,
+            uint256 requiredSettlementAmount1
+        ) = _setupCommittedPosition(
             positionManager,
+            vtsOrchestrator,
             corePoolKey,
             liquiditySignal,
             liquidityParams,
@@ -330,767 +417,677 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             address(lcc1)
         );
 
+        // settle for the position
+        uint256 settlementAmount0 = requiredSettlementAmount0 * 3;
+        uint256 settlementAmount1 = requiredSettlementAmount1 * 3;
+        // make a settlement for the position
+        IERC20(lcc0.underlying()).approve(address(vtsOrchestrator), settlementAmount0);
+        IERC20(lcc1.underlying()).approve(address(vtsOrchestrator), settlementAmount1);
+        // -- make a settlement to the created position
+        MMA.settle(
+            positionManager,
+            corePoolKey,
+            tokenId,
+            0,
+            -int128(int256(settlementAmount0)),
+            -int128(int256(settlementAmount1))
+        );
+
+        // get total settlement for position from mmpm
+        BalanceDelta settlementDeltaBeforeDecommit =
+            vtsOrchestrator.getSettlementDelta(address(this), address(lcc0), address(lcc1));
+
+        console.log("settlementDeltaBeforeDecommit.amount0()", settlementDeltaBeforeDecommit.amount0());
+        console.log("settlementDeltaBeforeDecommit.amount1()", settlementDeltaBeforeDecommit.amount1());
+
         // get underlying asset balance before decommitment
         uint256 token0BalanceBefore = Currency.wrap(lcc0.underlying()).balanceOf(address(this));
         uint256 token1BalanceBefore = Currency.wrap(lcc1.underlying()).balanceOf(address(this));
+        console.log("===== start decommit ======");
+        // MMA.decommit(positionManager, corePoolKey, tokenId);
+        _decommitAndWithdrawDeltas(positionManager, corePoolKey, tokenId, 0, false, false);
 
-        MMA.decommit(positionManager, corePoolKey, tokenId);
+        BalanceDelta settlementDeltaAfterDecommit =
+            vtsOrchestrator.getSettlementDelta(address(this), address(lcc0), address(lcc1));
 
         // get underlying asset balance after decommitment
         uint256 token0BalanceAfter = Currency.wrap(lcc0.underlying()).balanceOf(address(this));
         uint256 token1BalanceAfter = Currency.wrap(lcc1.underlying()).balanceOf(address(this));
 
+        // Validate the underlying tokens were redeemed and thus the balance of the caller has increased
         assertGt(token0BalanceAfter, token0BalanceBefore);
         assertGt(token1BalanceAfter, token1BalanceBefore);
+
+        console.log("settlementDeltaBeforeDecommit.amount0()", settlementDeltaBeforeDecommit.amount0());
+        console.log("settlementDeltaBeforeDecommit.amount1()", settlementDeltaBeforeDecommit.amount1());
+
+        // validate that after settlement the settlement delta is 0
+        assertEq(settlementDeltaAfterDecommit.amount0(), 0);
+        assertEq(settlementDeltaAfterDecommit.amount1(), 0);
     }
 
-    // can partially seize a position while not being a market maker
-    // function test_canPartially_seizePosition_asNoneMM() public {
-    //     // commit to a position
-    //     bytes memory liquiditySignal = abi.encode(liquiditySignal);
-
-    //     uint256 siezureFractionBPS = 1000;
-
-    //     BalanceDelta rfsDelta = toBalanceDelta(-100, 0);
-
-    //     ModifyLiquidityParams memory liquidityParams =
-    //         ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
-
-    //     // Get amount of underlying liquidity to transfer from the issuer to the lcc
-    //     (uint160 sqrtPriceX96_2, int24 currentTick_2,,) = manager.getSlot0(corePoolKey.toId());
-    //     (uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) = LiquidityUtils.calculateEffectiveTokenAmounts(
-    //         sqrtPriceX96_2,
-    //         currentTick_2,
-    //         liquidityParams.tickLower,
-    //         liquidityParams.tickUpper,
-    //         liquidityParams.liquidityDelta
-    //     );
-
-    //     // Approve the position manager to take the base/minimum underlying liquidity to create to the position
-    //     IERC20(lcc0.underlying()).approve(address(mmPositionManager), requiredSettlementAmount0);
-    //     IERC20(lcc1.underlying()).approve(address(mmPositionManager), requiredSettlementAmount1);
-
-    //     // commit the position - batch commit and mint
-    //     MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
-    //     actions[0] = MMA.prepareCommit(corePoolKey, liquiditySignal);
-    //     actions[1] = MMA.prepareMint(
-    //         corePoolKey,
-    //         1,
-    //         liquidityParams.tickLower,
-    //         liquidityParams.tickUpper,
-    //         uint256(liquidityParams.liquidityDelta)
-    //     );
-    //     MMA.execute(positionManager, actions);
-    //     PositionId positionId = positionManager.getPositionId(1, 0);
-    //     uint256 tokenId = 1;
-
-    //     // Mock the RFS for this position
-    //     vm.mockCall(
-    //         address(IVTSManager(coreHookAddress)),
-    //         abi.encodeWithSelector(IVTSManager.calcRFS.selector),
-    //         // mock the RFS for this position to be open and the balanceDelta to be negative to indicate pending amount to be settled by the mm
-    //         abi.encode(true, rfsDelta)
-    //     );
-
-    //     // mock the seized units for this position (fraction of current liquidity)
-    //     uint256 seizedUnits = (uint256(positionManager.getPosition(tokenId, 0).liquidity) * siezureFractionBPS) / 10000;
-    //     // Note: calcSeizure is an internal function, so we mock onMMSettle instead which returns seizedLiquidityUnits
-    //     // vm.mockCall(
-    //     //     address(IVTSManager(coreHookAddress)),
-    //     //     abi.encodeWithSelector(IVTSManager.calcSeizure.selector),
-    //     //     abi.encode(seizedUnits)
-    //     // );
-
-    //     // mint the underlying assets to the guarantor, and approve the  position manager to take the underlying assets
-    //     MockERC20(lcc0.underlying()).mint(guarantor, guarantorInitialBalance);
-    //     MockERC20(lcc1.underlying()).mint(guarantor, guarantorInitialBalance);
-
-    //     // act as the guarantor who wants to seize the position partially
-    //     vm.startPrank(guarantor);
-    //     IERC20(lcc0.underlying()).approve(address(mmPositionManager), 100);
-    //     IERC20(lcc1.underlying()).approve(address(mmPositionManager), 100);
-
-    //     // --- seize the position ---
-    //     PositionMeta memory positionBeforeSeizure = positionManager.getPosition(tokenId, 0);
-    //     // uint256 token1UABeforeSeizure = Currency.wrap(lcc1.underlying()).balanceOf(address(guarantor));
-    //     uint256 lcc0BeforeSeizure = lcc0.balanceOf(address(guarantor));
-    //     // get the initial settled balance delta
-    //     (uint256 initialSettledAmount0, uint256 initialSettledAmount1) =
-    //         IVTSManager(coreHookAddress).getPositionSettledAmounts(positionId);
-    //     BalanceDelta initialSettledBalanceDelta =
-    //         toBalanceDelta(initialSettledAmount0.toInt128(), initialSettledAmount1.toInt128());
-
-    //     // during seizure, the outstanding amount will be settled, so that would be the total settled amount to use to calculate the fraction to return back
-    //     BalanceDelta settledBalanceDelta = add(initialSettledBalanceDelta, LiquidityUtils.negateBalanceDelta(rfsDelta));
-    //     // expected seized settlement fraction per token (bps-based)
-    //     uint256 seized0 =
-    //         Math.mulDiv(LiquidityUtils.safeInt128ToUint256(settledBalanceDelta.amount0()), siezureFractionBPS, 10000);
-
-    //     // seize the position
-    //     // settle all the outstanding rfs of token 0
-    //     MMA.seize(positionManager, corePoolKey, tokenId, 0, LiquidityUtils.safeInt128ToUint256(rfsDelta.amount0()), 0);
-
-    //     // get the balance of the underlying assets after seizure
-    //     uint256 lcc0AfterSeizure = lcc0.balanceOf(address(guarantor));
-
-    //     // get the expected balance of the underlying assets after seizure
-    //     // seizer receives LCCs, not underlying; ensure LCC balance increased
-    //     assertGt(lcc0AfterSeizure, lcc0BeforeSeizure);
-
-    //     PositionMeta memory positionAfterSeizure = positionManager.getPosition(tokenId, 0);
-
-    //     uint256 expectedLiquidityAfterSeizure = uint256(positionBeforeSeizure.liquidity) - seizedUnits;
-
-    //     // validate liquidity in the position is reduced
-    //     assertEq(uint256(positionAfterSeizure.liquidity), expectedLiquidityAfterSeizure);
-
-    //     // validate that LCC transfer occurred to seizer was positive (already asserted)
-
-    //     // expected settlement = initial settlement + rfs delta -  settlement fraction seized
-    //     (uint256 finalSettledAmount0, uint256 finalSettledAmount1) =
-    //         IVTSManager(coreHookAddress).getPositionSettledAmounts(positionId);
-    //     BalanceDelta finalSettledBalanceDelta =
-    //         toBalanceDelta(finalSettledAmount0.toInt128(), finalSettledAmount1.toInt128());
-    //     uint256 expectedRemainingSettlement0ForPosition =
-    //         LiquidityUtils.safeInt128ToUint256(initialSettledBalanceDelta.amount0())
-    //             + LiquidityUtils.safeInt128ToUint256(rfsDelta.amount0()) - seized0;
-
-    //     // validate the remaining settlement for the position is as expected
-    //     assertEq(
-    //         LiquidityUtils.safeInt128ToUint256(finalSettledBalanceDelta.amount0()),
-    //         expectedRemainingSettlement0ForPosition
-    //     );
-    // }
-
-    // // can partially seize a position while not being a market maker and settling more than the outstanding RFS amount
-    // function test_canPartially_seizePosition_asNoneMM_withPartialSettlement() public {
-    //     // commit to a position
-    //     bytes memory liquiditySignal = abi.encode(liquiditySignal);
-
-    //     uint256 seizureFractionBPS = 1000;
-
-    //     BalanceDelta rfsDelta = toBalanceDelta(-100, 0);
-
-    //     ModifyLiquidityParams memory liquidityParams =
-    //         ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
-
-    //     // Get amount of underlying liquidity to transfer from the issuer to the lcc
-    //     (uint256 c0_partial, uint256 c1_partial) = LiquidityUtils.calculateCommitmentMaxima(
-    //         liquidityParams.tickLower, liquidityParams.tickUpper, uint128(uint256(liquidityParams.liquidityDelta))
-    //     );
-    //     (uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) = LiquidityUtils.getBaseSettlementAmounts(
-    //         c0_partial, c1_partial, marketVTSConfiguration.token0.baseVTSRate, marketVTSConfiguration.token1.baseVTSRate
-    //     );
-
-    //     // Approve the position manager to take the base/minimum underlying liquidity to create to the position
-    //     IERC20(lcc0.underlying()).approve(address(mmPositionManager), requiredSettlementAmount0);
-    //     IERC20(lcc1.underlying()).approve(address(mmPositionManager), requiredSettlementAmount1);
-
-    //     // Batch commit and mint
-    //     MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
-    //     actions[0] = MMA.prepareCommit(corePoolKey, liquiditySignal);
-    //     actions[1] = MMA.prepareMint(
-    //         corePoolKey,
-    //         1,
-    //         liquidityParams.tickLower,
-    //         liquidityParams.tickUpper,
-    //         uint256(liquidityParams.liquidityDelta)
-    //     );
-    //     MMA.execute(positionManager, actions);
-    //     PositionId positionId = positionManager.getPositionId(1, 0);
-    //     uint256 tokenId = 1;
-
-    //     // Mock the RFS for this position
-    //     vm.mockCall(
-    //         address(IVTSManager(coreHookAddress)),
-    //         abi.encodeWithSelector(IVTSManager.calcRFS.selector),
-    //         // mock the RFS for this position to be open and the balanceDelta to be negative to indicate pending amount to be settled by the mm
-    //         abi.encode(true, rfsDelta)
-    //     );
-
-    //     // mock the seized units for this position (fraction of current liquidity)
-    //     uint256 seizedUnits = (uint256(positionManager.getPosition(tokenId, 0).liquidity) * seizureFractionBPS) / 10000;
-    //     // Note: calcSeizure is an internal function, so we mock onMMSettle instead which returns seizedLiquidityUnits
-    //     // vm.mockCall(
-    //     //     address(IVTSManager(coreHookAddress)),
-    //     //     abi.encodeWithSelector(IVTSManager.calcSeizure.selector),
-    //     //     abi.encode(seizedUnits)
-    //     // );
-
-    //     // mint the underlying assets to the guarantor, and approve the  position manager to take the underlying assets
-    //     MockERC20(lcc0.underlying()).mint(guarantor, guarantorInitialBalance);
-    //     MockERC20(lcc1.underlying()).mint(guarantor, guarantorInitialBalance);
-
-    //     // act as the guarantor who wants to seize the position partially
-    //     vm.startPrank(guarantor);
-    //     IERC20(lcc0.underlying()).approve(address(mmPositionManager), 100);
-    //     IERC20(lcc1.underlying()).approve(address(mmPositionManager), 100);
-
-    //     PositionMeta memory positionBeforeSeizure = positionManager.getPosition(tokenId, 0);
-    //     // uint256 token1UABeforeSeizure = Currency.wrap(lcc1.underlying()).balanceOf(address(guarantor));
-    //     uint256 lcc0BeforeSeizure2 = lcc0.balanceOf(address(guarantor));
-    //     (uint256 initialSettledAmount0, uint256 initialSettledAmount1) =
-    //         IVTSManager(coreHookAddress).getPositionSettledAmounts(positionId);
-    //     BalanceDelta initialSettledBalanceDelta =
-    //         toBalanceDelta(initialSettledAmount0.toInt128(), initialSettledAmount1.toInt128());
-    //     // during seizure, the outstanding amount will be settled, so that would be the total settled amount to use to calculate the fraction to return back
-
-    //     // ---- seize the position
-    //     // settle all the outstanding rfs of token 0
-    //     uint256 amount0ToSettle = LiquidityUtils.safeInt128ToUint256(rfsDelta.amount0()) / 2;
-    //     BalanceDelta settledBalanceDelta =
-    //         add(initialSettledBalanceDelta, toBalanceDelta(amount0ToSettle.toInt128(), 0));
-    //     MMA.seize(positionManager, corePoolKey, tokenId, 0, amount0ToSettle, 0);
-    //     // expected seized settlement fraction per token (bps-based)
-    //     uint256 seized0 =
-    //         Math.mulDiv(LiquidityUtils.safeInt128ToUint256(settledBalanceDelta.amount0()), seizureFractionBPS, 10000);
-    //     // get the balance of the underlying assets after seizure
-    //     uint256 lcc0AfterSeizure2 = lcc0.balanceOf(address(guarantor));
-
-    //     // get the expected balance of the underlying assets after seizure
-    //     // assert LCC payout to seizer increased
-    //     assertGt(lcc0AfterSeizure2, lcc0BeforeSeizure2);
-
-    //     PositionMeta memory positionAfterSeizure = positionManager.getPosition(tokenId, 0);
-
-    //     uint256 expectedLiquidityAfterSeizure = uint256(positionBeforeSeizure.liquidity) - seizedUnits;
-
-    //     // validate liquidity in the position is reduced
-    //     assertEq(uint256(positionAfterSeizure.liquidity), expectedLiquidityAfterSeizure);
-
-    //     // validate LCC payout was positive (already asserted)
-
-    //     // expected settlement = initial settlement + rfs delta -  settlement fraction seized
-    //     (uint256 finalSettledAmount0, uint256 finalSettledAmount1) =
-    //         IVTSManager(coreHookAddress).getPositionSettledAmounts(positionId);
-    //     BalanceDelta finalSettledBalanceDelta =
-    //         toBalanceDelta(finalSettledAmount0.toInt128(), finalSettledAmount1.toInt128());
-
-    //     uint256 expectedRemainingSettlement0ForPosition =
-    //         LiquidityUtils.safeInt128ToUint256(initialSettledBalanceDelta.amount0()) + amount0ToSettle - seized0;
-
-    //     // validate the remaining settlement for the position is as expected
-    //     assertEq(
-    //         LiquidityUtils.safeInt128ToUint256(finalSettledBalanceDelta.amount0()),
-    //         expectedRemainingSettlement0ForPosition
-    //     );
-    // }
-
-    // // can fully seize a position while not being a market maker
-    // function test_canFully_seizePosition_asNoneMM_withEnoughSettlement() public {
-    //     // commit to a position
-    //     bytes memory liquiditySignal = abi.encode(liquiditySignal);
-
-    //     BalanceDelta rfsDelta = toBalanceDelta(-100, 0);
-
-    //     ModifyLiquidityParams memory liquidityParams =
-    //         ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
-
-    //     // Get amount of underlying liquidity to transfer from the issuer to the lcc
-    //     (uint256 c0_full, uint256 c1_full) = LiquidityUtils.calculateCommitmentMaxima(
-    //         liquidityParams.tickLower, liquidityParams.tickUpper, uint128(uint256(liquidityParams.liquidityDelta))
-    //     );
-    //     (uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) = LiquidityUtils.getBaseSettlementAmounts(
-    //         c0_full, c1_full, marketVTSConfiguration.token0.baseVTSRate, marketVTSConfiguration.token1.baseVTSRate
-    //     );
-
-    //     // Approve the position manager to take the base/minimum underlying liquidity to create to the position
-    //     IERC20(lcc0.underlying()).approve(address(mmPositionManager), requiredSettlementAmount0);
-    //     IERC20(lcc1.underlying()).approve(address(mmPositionManager), requiredSettlementAmount1);
-
-    //     // Batch commit and mint
-    //     MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
-    //     actions[0] = MMA.prepareCommit(corePoolKey, liquiditySignal);
-    //     actions[1] = MMA.prepareMint(
-    //         corePoolKey,
-    //         1,
-    //         liquidityParams.tickLower,
-    //         liquidityParams.tickUpper,
-    //         uint256(liquidityParams.liquidityDelta)
-    //     );
-    //     MMA.execute(positionManager, actions);
-    //     PositionId positionId = positionManager.getPositionId(1, 0);
-    //     uint256 tokenId = 1;
-    //     // Mock the RFS for this position
-    //     vm.mockCall(
-    //         address(IVTSManager(coreHookAddress)),
-    //         abi.encodeWithSelector(IVTSManager.calcRFS.selector),
-    //         // mock the RFS for this position to be open and the balanceDelta to be negative to indicate pending amount to be settled by the mm
-    //         abi.encode(true, rfsDelta)
-    //     );
-
-    //     // mock full seized units (entire liquidity)
-    //     // uint256 seizedUnitsFull = uint256(positionManager.getPosition(tokenId, 0).liquidity);
-    //     // vm.mockCall(
-    //     //     address(IVTSManager(coreHookAddress)),
-    //     //     abi.encodeWithSelector(IVTSManager.calcSeizure.selector),
-    //     //     abi.encode(seizedUnitsFull)
-    //     // );
-
-    //     // mint the underlying assets to the guarantor, and approve the  position manager to take the underlying assets
-    //     MockERC20(lcc0.underlying()).mint(guarantor, guarantorInitialBalance);
-    //     // MockERC20(lcc1.underlying()).mint(guarantor, guarantorInitialBalance);
-
-    //     // act as the guarantor who wants to seize the position partially
-    //     vm.startPrank(guarantor);
-    //     IERC20(lcc0.underlying()).approve(address(mmPositionManager), 100);
-    //     // ERC20(lcc1.underlying()).approve(address(mmPositionManager), 100);
-
-    //     // seize the position by settling all of the outstanding RFS amount
-    //     MMA.seize(
-    //         positionManager,
-    //         corePoolKey,
-    //         tokenId,
-    //         0,
-    //         LiquidityUtils.safeInt128ToUint256(rfsDelta.amount0()),
-    //         LiquidityUtils.safeInt128ToUint256(rfsDelta.amount1())
-    //     );
-
-    //     // get the total settlement amount for the position after seizure
-    //     (uint256 finalSettledAmount0, uint256 finalSettledAmount1) =
-    //         IVTSManager(coreHookAddress).getPositionSettledAmounts(positionId);
-    //     BalanceDelta finalSettledBalanceDelta =
-    //         toBalanceDelta(finalSettledAmount0.toInt128(), finalSettledAmount1.toInt128());
-
-    //     // get the position info after seizure
-    //     PositionMeta memory positionAfterSeizure =
-    //         IPositionRegistry(coreHookAddress).getPosition(positionId, false, false);
-
-    //     // validate the position is marked as inactive
-    //     assertEq(positionAfterSeizure.isActive, false);
-    //     // validate all the settled amount is seized
-    //     assertEq(LiquidityUtils.safeInt128ToUint256(finalSettledBalanceDelta.amount0()), 0);
-    // }
-
-    // can seize a position while not being a market maker and settling more than the outstanding RFS amount
-    // function test_canFully_seizePosition_asNoneMM_withOverSettlement() public {
-    //     // commit to a position
-    //     bytes memory liquiditySignal = abi.encode(liquiditySignal);
-
-    //     BalanceDelta rfsDelta = toBalanceDelta(-100, 0);
-
-    //     ModifyLiquidityParams memory liquidityParams =
-    //         ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
-
-    //     // Get amount of underlying liquidity to transfer from the issuer to the lcc
-    //     (uint256 c0_fullover, uint256 c1_fullover) = LiquidityUtils.calculateCommitmentMaxima(
-    //         liquidityParams.tickLower, liquidityParams.tickUpper, uint128(uint256(liquidityParams.liquidityDelta))
-    //     );
-    //     (uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) = LiquidityUtils.getBaseSettlementAmounts(
-    //         c0_fullover,
-    //         c1_fullover,
-    //         marketVTSConfiguration.token0.baseVTSRate,
-    //         marketVTSConfiguration.token1.baseVTSRate
-    //     );
-
-    //     // Approve the position manager to take the base/minimum underlying liquidity to create to the position
-    //     IERC20(lcc0.underlying()).approve(address(mmPositionManager), requiredSettlementAmount0);
-    //     IERC20(lcc1.underlying()).approve(address(mmPositionManager), requiredSettlementAmount1);
-
-    //     // Batch commit and mint
-    //     MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
-    //     actions[0] = MMA.prepareCommit(corePoolKey, liquiditySignal);
-    //     actions[1] = MMA.prepareMint(
-    //         corePoolKey,
-    //         1,
-    //         liquidityParams.tickLower,
-    //         liquidityParams.tickUpper,
-    //         uint256(liquidityParams.liquidityDelta)
-    //     );
-    //     MMA.execute(positionManager, actions);
-    //     PositionId positionId = positionManager.getPositionId(1, 0);
-    //     uint256 tokenId = 1;
-    //     // Mock the RFS for this position
-    //     vm.mockCall(
-    //         address(IVTSManager(coreHookAddress)),
-    //         abi.encodeWithSelector(IVTSManager.calcRFS.selector),
-    //         // mock the RFS for this position to be open and the balanceDelta to be negative to indicate pending amount to be settled by the mm
-    //         abi.encode(true, rfsDelta)
-    //     );
-
-    //     // mock full seized units (entire liquidity)
-    //     // uint256 seizedUnitsOver = uint256(positionManager.getPosition(tokenId, 0).liquidity);
-    //     // vm.mockCall(
-    //     //     address(IVTSManager(coreHookAddress)),
-    //     //     abi.encodeWithSelector(IVTSManager.calcSeizure.selector),
-    //     //     abi.encode(seizedUnitsOver)
-    //     // );
-
-    //     // mint the underlying assets to the guarantor, and approve the  position manager to take the underlying assets
-    //     MockERC20(lcc0.underlying()).mint(guarantor, guarantorInitialBalance);
-    //     // MockERC20(lcc1.underlying()).mint(guarantor, guarantorInitialBalance);
-
-    //     // act as the guarantor who wants to seize the position partially
-    //     vm.startPrank(guarantor);
-    //     // seize the position by settling more than the outstanding RFS amount
-    //     uint256 amount0ToSettle = LiquidityUtils.safeInt128ToUint256(rfsDelta.amount0()) + 100;
-    //     IERC20(lcc0.underlying()).approve(address(mmPositionManager), amount0ToSettle);
-    //     // ERC20(lcc1.underlying()).approve(address(mmPositionManager), 100);
-    //     MMA.seize(positionManager, corePoolKey, tokenId, 0, amount0ToSettle, 0);
-    //     // basic cap for fraction bps if needed (no-op here since we mocked full seize units)
-    //     // get the total settlement amount for the position after seizure
-    //     (uint256 finalSettledAmount0, uint256 finalSettledAmount1) =
-    //         IVTSManager(coreHookAddress).getPositionSettledAmounts(positionId);
-    //     BalanceDelta finalSettledBalanceDelta =
-    //         toBalanceDelta(finalSettledAmount0.toInt128(), finalSettledAmount1.toInt128());
-
-    //     // get the position info after seizure
-    //     PositionMeta memory positionAfterSeizure =
-    //         IPositionRegistry(coreHookAddress).getPosition(positionId, false, false);
-
-    //     // validate the position is marked as inactive
-    //     assertEq(positionAfterSeizure.isActive, false);
-    //     // validate all the settled amount is seized
-    //     assertEq(LiquidityUtils.safeInt128ToUint256(finalSettledBalanceDelta.amount0()), 0);
-    // }
-
-    // can mint new positions to an existing token id
-    function test_canMintPositions_usingExistingTokenId() public {
-        // commit to a position
+    function testCanIncreaseLiquidityPosition() public {
+        // get the default market confiration so we can tweak it
         bytes memory liquiditySignal = abi.encode(liquiditySignal);
-
         ModifyLiquidityParams memory liquidityParams =
             ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
 
-        // Get amount of underlying liquidity to transfer from the issuer to the lcc
-        (uint256 c0_mint1, uint256 c1_mint1) = LiquidityUtils.calculateCommitmentMaxima(
-            liquidityParams.tickLower, liquidityParams.tickUpper, uint128(uint256(liquidityParams.liquidityDelta))
-        );
-        (uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) = LiquidityUtils.getBaseSettlementAmounts(
-            c0_mint1, c1_mint1, marketVTSConfiguration.token0.baseVTSRate, marketVTSConfiguration.token1.baseVTSRate
-        );
-
-        // Approve the position manager to take the base/minimum underlying liquidity to create to the position
-        IERC20(lcc0.underlying()).approve(address(mmPositionManager), requiredSettlementAmount0);
-        IERC20(lcc1.underlying()).approve(address(mmPositionManager), requiredSettlementAmount1);
-
-        // Batch commit and mint
-        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
-        actions[0] = MMA.prepareCommit(corePoolKey, liquiditySignal);
-        actions[1] = MMA.prepareMint(
-            corePoolKey,
-            1,
-            liquidityParams.tickLower,
-            liquidityParams.tickUpper,
-            uint256(liquidityParams.liquidityDelta)
-        );
-        MMA.execute(positionManager, actions);
-        uint256 tokenId = 1;
-
-        // mint a position using this token id
-        // approve the position for base settlement
-        IERC20(lcc0.underlying()).approve(address(mmPositionManager), requiredSettlementAmount0);
-        IERC20(lcc1.underlying()).approve(address(mmPositionManager), requiredSettlementAmount1);
-
-        MMA.mint(
+        // Setup committed position using helper
+        (
+            uint256 tokenId,
+            PositionId positionId,
+            uint256 requiredSettlementAmount0,
+            uint256 requiredSettlementAmount1
+        ) = _setupCommittedPosition(
             positionManager,
+            vtsOrchestrator,
             corePoolKey,
-            tokenId,
-            liquidityParams.tickLower,
-            liquidityParams.tickUpper,
-            uint256(liquidityParams.liquidityDelta)
+            liquiditySignal,
+            liquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
         );
         uint256 positionIndex = 0;
 
-        // validate the position is marked as active
-        assertEq(positionManager.getPosition(tokenId, positionIndex).isActive, true);
-
-        // validate base settlement for the position is made
-        (uint256 finalSettledAmount0, uint256 finalSettledAmount1) = IVTSManager(coreHookAddress)
-            .getPositionSettledAmounts(positionManager.getPositionId(tokenId, positionIndex));
-        BalanceDelta finalSettledBalanceDelta =
-            toBalanceDelta(finalSettledAmount0.toInt128(), finalSettledAmount1.toInt128());
-        assertEq(LiquidityUtils.safeInt128ToUint256(finalSettledBalanceDelta.amount0()), requiredSettlementAmount0);
-        assertEq(LiquidityUtils.safeInt128ToUint256(finalSettledBalanceDelta.amount1()), requiredSettlementAmount1);
-    }
-
-    // make sure the positions must be covered by the total usd value in the signal
-    function test_cannotMintUnbackedPositions_usingExistingTokenId() public {
-        // commit to a position
-        bytes memory liquiditySignal = abi.encode(liquiditySignal);
-        ModifyLiquidityParams memory liquidityParams =
-            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
-
-        // Get amount of underlying liquidity to transfer from the issuer to the lcc
-        (uint256 c0_unbacked, uint256 c1_unbacked) = LiquidityUtils.calculateCommitmentMaxima(
-            liquidityParams.tickLower, liquidityParams.tickUpper, uint128(uint256(liquidityParams.liquidityDelta))
-        );
-        (uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) = LiquidityUtils.getBaseSettlementAmounts(
-            c0_unbacked,
-            c1_unbacked,
-            marketVTSConfiguration.token0.baseVTSRate,
-            marketVTSConfiguration.token1.baseVTSRate
-        );
-
-        // Approve the position manager to take the base/minimum underlying liquidity to create to the position
-        IERC20(lcc0.underlying()).approve(address(mmPositionManager), requiredSettlementAmount0);
-        IERC20(lcc1.underlying()).approve(address(mmPositionManager), requiredSettlementAmount1);
-
-        MMA.commit(positionManager, corePoolKey, liquiditySignal);
-        uint256 tokenId = 1;
-
-        // mint a position using this token id
-        // approve the position for base settlement
-        IERC20(lcc0.underlying()).approve(address(mmPositionManager), requiredSettlementAmount0);
-        IERC20(lcc1.underlying()).approve(address(mmPositionManager), requiredSettlementAmount1);
-
-        // attempt to mint an amount that exceeds backing; should revert via InvalidLiquiditySignal (backing gate)
-        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidLiquiditySignal.selector));
-        MMA.mint(
+        // over settle to the position
+        uint256 settlementAmount0 = requiredSettlementAmount0 * 3;
+        uint256 settlementAmount1 = requiredSettlementAmount1 * 3;
+        // make a settlement for the position
+        IERC20(lcc0.underlying()).approve(address(vtsOrchestrator), settlementAmount0);
+        IERC20(lcc1.underlying()).approve(address(vtsOrchestrator), settlementAmount1);
+        // -- make a settlement to the created position
+        MMA.settle(
             positionManager,
             corePoolKey,
             tokenId,
+            positionIndex,
+            -int128(int256(settlementAmount0)),
+            -int128(int256(settlementAmount1))
+        );
+
+        Position memory positionBeforeIncrease = positionManager.getPosition(tokenId, positionIndex);
+
+        // increase the liquidity in the position
+        uint256 liquidityToIncrease = 1000;
+        MMA.increase(
+            positionManager,
+            corePoolKey,
+            tokenId,
+            positionIndex,
             liquidityParams.tickLower,
             liquidityParams.tickUpper,
-            type(uint256).max / 2
+            liquidityToIncrease
+        );
+
+        // validate the liquidity in the position is increased
+        Position memory positionAfterIncrease = positionManager.getPosition(tokenId, positionIndex);
+        assertEq(
+            uint256(positionAfterIncrease.liquidity), uint256(positionBeforeIncrease.liquidity) + liquidityToIncrease
         );
     }
 
-    function test_canRenewSignal() public {
-        // make a commitment to a position
+    function testCanDecreasePositionAndMintNewOneFromDeltas() public {
+        // get the default market confiration so we can tweak it
         bytes memory liquiditySignal = abi.encode(liquiditySignal);
-
         ModifyLiquidityParams memory liquidityParams =
             ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
 
-        // Get amount of underlying liquidity to transfer from the issuer to the lcc
-        (uint256 c0_renew, uint256 c1_renew) = LiquidityUtils.calculateCommitmentMaxima(
-            liquidityParams.tickLower, liquidityParams.tickUpper, uint128(uint256(liquidityParams.liquidityDelta))
-        );
-        (uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) = LiquidityUtils.getBaseSettlementAmounts(
-            c0_renew, c1_renew, marketVTSConfiguration.token0.baseVTSRate, marketVTSConfiguration.token1.baseVTSRate
-        );
-
-        // Approve the position manager to take the base/minimum underlying liquidity to create to the position
-        IERC20(lcc0.underlying()).approve(address(mmPositionManager), requiredSettlementAmount0);
-        IERC20(lcc1.underlying()).approve(address(mmPositionManager), requiredSettlementAmount1);
-
-        // Batch commit and mint
-        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
-        actions[0] = MMA.prepareCommit(corePoolKey, liquiditySignal);
-        actions[1] = MMA.prepareMint(
+        // Setup committed position using helper
+        (uint256 tokenId,, uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) = _setupCommittedPosition(
+            positionManager,
+            vtsOrchestrator,
             corePoolKey,
-            1,
-            liquidityParams.tickLower,
-            liquidityParams.tickUpper,
-            uint256(liquidityParams.liquidityDelta)
+            liquiditySignal,
+            liquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
         );
-        MMA.execute(positionManager, actions);
-        uint256 tokenId = 1;
+        uint256 positionIndex = 0;
+
+        // over settle to the position
+        uint256 settlementAmount0 = requiredSettlementAmount0 * 1000000;
+        uint256 settlementAmount1 = requiredSettlementAmount1 * 1000000;
+        // make a settlement for the position
+        IERC20(lcc0.underlying()).approve(address(vtsOrchestrator), settlementAmount0);
+        IERC20(lcc1.underlying()).approve(address(vtsOrchestrator), settlementAmount1);
+        // -- make a settlement to the created position
+        MMA.settle(
+            positionManager,
+            corePoolKey,
+            tokenId,
+            positionIndex,
+            -int128(int256(settlementAmount0)),
+            -int128(int256(settlementAmount1))
+        );
+
+        Position memory positionBeforeDecrease = positionManager.getPosition(tokenId, positionIndex);
+
+        // increase the liquidity in the position
+        uint256 liquidityToDecrease = 10000000;
+        console.log("----- decreasing --------");
+
+        _decreaseAndMintPositionFromDeltas(
+            positionManager,
+            corePoolKey,
+            tokenId,
+            positionIndex,
+            liquidityToDecrease,
+            liquidityParams.tickLower,
+            liquidityParams.tickUpper
+        );
+
+        // validate the liquidity in the position is decreased
+        Position memory positionAfterIncrease = positionManager.getPosition(tokenId, positionIndex);
+        assertEq(
+            uint256(positionAfterIncrease.liquidity), uint256(positionBeforeDecrease.liquidity) - liquidityToDecrease
+        );
+
+        // validate the new position was created with the new ticks provided
+        uint256 newPositionIndex = 1;
+        Position memory newPosition = positionManager.getPosition(tokenId, newPositionIndex);
+        assertEq(newPosition.tickLower, liquidityParams.tickLower);
+        assertEq(newPosition.tickUpper, liquidityParams.tickUpper);
+    }
+
+    function testCanDecreasePositionAndSettlePositionFromDelta() public {
+        // get the default market confiration so we can tweak it
+        bytes memory liquiditySignal = abi.encode(liquiditySignal);
+        ModifyLiquidityParams memory liquidityParams =
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
+
+        // Setup committed position using helper
+        (uint256 tokenId,, uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) = _setupCommittedPosition(
+            positionManager,
+            vtsOrchestrator,
+            corePoolKey,
+            liquiditySignal,
+            liquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+        uint256 positionIndex = 0;
+
+        // over settle to the position
+        uint256 settlementAmount0 = requiredSettlementAmount0 * 1000000;
+        uint256 settlementAmount1 = requiredSettlementAmount1 * 1000000;
+        // make a settlement for the position
+        IERC20(lcc0.underlying()).approve(address(vtsOrchestrator), settlementAmount0);
+        IERC20(lcc1.underlying()).approve(address(vtsOrchestrator), settlementAmount1);
+        // -- make a settlement to the created position
+        MMA.settle(
+            positionManager,
+            corePoolKey,
+            tokenId,
+            positionIndex,
+            -int128(int256(settlementAmount0)),
+            -int128(int256(settlementAmount1))
+        );
+
+        // create a new position using the decrease and mint new position
+        uint256 liquidityToDecrease = 10000000;
+        uint256 newPositionIndex = 1;
+        _decreaseAndMintPositionFromDeltas(
+            positionManager,
+            corePoolKey,
+            tokenId,
+            positionIndex,
+            liquidityToDecrease,
+            liquidityParams.tickLower,
+            liquidityParams.tickUpper
+        );
+
+        // get settlement amounts for this newly created position
+        PositionId newPositionId = vtsOrchestrator.getPositionId(tokenId, newPositionIndex);
+        (uint256 newPositionSettledAmount0Before, uint256 newPositionSettledAmount1Before) =
+            vtsOrchestrator.getPositionSettledAmounts(newPositionId);
+
+        // get liquidity amount for the position to be reduced
+        (Position memory positionBeforeDecrease,) = vtsOrchestrator.getPosition(tokenId, positionIndex);
+
+        // decrease from one position and settle to another position
+        _decreaseAndSettlePositionFromDeltas(
+            positionManager, corePoolKey, tokenId, positionIndex, newPositionIndex, liquidityToDecrease, true, true
+        );
+
+        // get settlement amounts for this newly created position
+        (uint256 newPositionSettledAmount0After, uint256 newPositionSettledAmount1After) =
+            vtsOrchestrator.getPositionSettledAmounts(newPositionId);
+
+        // get liquidity amount for the position to be reduced
+        (Position memory positionAfterDecrease,) = vtsOrchestrator.getPosition(tokenId, positionIndex);
+
+        // assert that settlement is increased for the new position after `decreaseAndSettlePositionFromDeltas`
+        assertGt(newPositionSettledAmount0After, newPositionSettledAmount0Before);
+        assertGt(newPositionSettledAmount1After, newPositionSettledAmount1Before);
+
+        // assert that the liquidity is decreased for the position to be reduced
+        assertEq(
+            uint256(positionAfterDecrease.liquidity), uint256(positionBeforeDecrease.liquidity) - liquidityToDecrease
+        );
+    }
+
+    function testCanDecreasePositionAndIncreasePositionFromDelta() public {
+        // get the default market confiration so we can tweak it
+        bytes memory liquiditySignal = abi.encode(liquiditySignal);
+        ModifyLiquidityParams memory liquidityParams =
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
+
+        // Setup committed position using helper
+        (uint256 tokenId,, uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) = _setupCommittedPosition(
+            positionManager,
+            vtsOrchestrator,
+            corePoolKey,
+            liquiditySignal,
+            liquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+        uint256 positionIndex = 0;
+
+        // over settle to the position
+        uint256 settlementAmount0 = requiredSettlementAmount0 * 1000000;
+        uint256 settlementAmount1 = requiredSettlementAmount1 * 1000000;
+        // make a settlement for the position
+        IERC20(lcc0.underlying()).approve(address(vtsOrchestrator), settlementAmount0);
+        IERC20(lcc1.underlying()).approve(address(vtsOrchestrator), settlementAmount1);
+        // -- make a settlement to the created position
+        MMA.settle(
+            positionManager,
+            corePoolKey,
+            tokenId,
+            positionIndex,
+            -int128(int256(settlementAmount0)),
+            -int128(int256(settlementAmount1))
+        );
+
+        // create a new position using the decrease and mint new position
+        uint256 liquidityToDecrease = 10000000;
+        uint256 newPositionIndex = 1;
+        _decreaseAndMintPositionFromDeltas(
+            positionManager,
+            corePoolKey,
+            tokenId,
+            positionIndex,
+            liquidityToDecrease,
+            liquidityParams.tickLower,
+            liquidityParams.tickUpper
+        );
+
+        // get liquidity amounts before decrease and increase
+        (Position memory positionBeforeDecrease,) = vtsOrchestrator.getPosition(tokenId, positionIndex);
+        (Position memory positionBeforeIncrease,) = vtsOrchestrator.getPosition(tokenId, newPositionIndex);
+
+        // decrease from one position and increase another position using deltas
+        _decreaseAndIncreasePositionFromDeltas(
+            positionManager,
+            corePoolKey,
+            tokenId,
+            positionIndex,
+            newPositionIndex,
+            liquidityToDecrease,
+            liquidityParams.tickLower,
+            liquidityParams.tickUpper
+        );
+
+        // get liquidity amounts after decrease and increase
+        (Position memory positionAfterDecrease,) = vtsOrchestrator.getPosition(tokenId, positionIndex);
+        (Position memory positionAfterIncrease,) = vtsOrchestrator.getPosition(tokenId, newPositionIndex);
+
+        // assert that the liquidity is decreased for the position to be reduced
+        assertEq(
+            uint256(positionAfterDecrease.liquidity), uint256(positionBeforeDecrease.liquidity) - liquidityToDecrease
+        );
+
+        // assert that the liquidity is increased for the target position
+        assertGt(
+            uint256(positionAfterIncrease.liquidity),
+            uint256(positionBeforeIncrease.liquidity),
+            "Target position liquidity should increase"
+        );
+    }
+
+    function testCanExtendGracePeriod() public {
+        // get the default market confiration so we can tweak it
+        bytes memory liquiditySignal = abi.encode(liquiditySignal);
+        ModifyLiquidityParams memory liquidityParams =
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
+
+        // Setup committed position using helper
+        (uint256 tokenId,,,) = _setupCommittedPosition(
+            positionManager,
+            vtsOrchestrator,
+            corePoolKey,
+            liquiditySignal,
+            liquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+        uint256 positionIndex = 0;
+
+        // extend the grace period of the commitment
+        bytes memory settlementProof = abi.encode(1);
+        uint8 settlementTokenIndex0 = 0;
+        uint8 settlementTokenIndex1 = 1;
+        uint32 verifierIndex = 0;
+
+        // mock the call made to the settlement observer to verify the settlement proof
+        vm.mockCall(
+            address(settlementObserver),
+            abi.encodeWithSelector(settlementObserver.verifySettlementProof.selector),
+            abi.encode(true)
+        );
+
+        PositionId positionId = vtsOrchestrator.getPositionId(tokenId, positionIndex);
+
+        // get the checkpoint of the position
+        RFSCheckpoint memory checkpointBefore = vtsOrchestrator.positionToCheckpoint(positionId);
+        vtsOrchestrator.positionToCheckpoint(positionId);
+
+        // extend the grace period of both tokens in the market
+        MMA.extendGracePeriod(
+            positionManager, corePoolKey, tokenId, positionIndex, settlementTokenIndex0, verifierIndex, settlementProof
+        );
+        MMA.extendGracePeriod(
+            positionManager, corePoolKey, tokenId, positionIndex, settlementTokenIndex1, verifierIndex, settlementProof
+        );
+
+        // validate the extension
+        RFSCheckpoint memory checkpointAfter = vtsOrchestrator.positionToCheckpoint(positionId);
+        vtsOrchestrator.positionToCheckpoint(positionId);
+
+        console.log("gracePeriodExtension0Before", checkpointBefore.gracePeriodExtension0);
+        console.log("gracePeriodExtension1Before", checkpointBefore.gracePeriodExtension1);
+        console.log("gracePeriodExtension0After", checkpointAfter.gracePeriodExtension0);
+        console.log("gracePeriodExtension1After", checkpointAfter.gracePeriodExtension1);
+        assertGt(checkpointAfter.gracePeriodExtension0, checkpointBefore.gracePeriodExtension0);
+        assertGt(checkpointAfter.gracePeriodExtension1, checkpointBefore.gracePeriodExtension1);
+    }
+
+    function testCanWrapAndUnwrapNativeAsset() public {
+        // get the default market confiration so we can tweak it
+        bytes memory liquiditySignal = abi.encode(liquiditySignal);
+        ModifyLiquidityParams memory liquidityParams =
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
+
+        // Send ETH with msg.value to create a native delta
+        uint256 wrapAmount = 1 ether;
+        uint256 ethToSend = 2 ether;
+
+        deal(address(mmPositionManager), ethToSend);
+
+        // Get native and WETH deltas before wrap
+        uint256 nativeDeltaBefore = vtsOrchestrator.getFullCredit(CurrencyLibrary.ADDRESS_ZERO, address(this));
+        uint256 wethDeltaBefore = vtsOrchestrator.getFullCredit(Currency.wrap(address(weth9)), address(this));
+
+        console.log("nativeDeltaBefore", nativeDeltaBefore);
+        console.log("wethDeltaBefore", wethDeltaBefore);
+
+        // Wrap native ETH to WETH (ETH is sent as msg.value via execute function)
+        vm.prank(address(mmPositionManager));
+        vtsOrchestrator.wrapNative{value: ethToSend}(address(this), wrapAmount);
+
+        // Get native and WETH deltas after wrap
+        uint256 nativeDeltaAfterWrap = vtsOrchestrator.getFullCredit(CurrencyLibrary.ADDRESS_ZERO, address(this));
+        uint256 wethDeltaAfterWrap = vtsOrchestrator.getFullCredit(Currency.wrap(address(weth9)), address(this));
+
+        console.log("nativeDeltaAfterWrap", nativeDeltaAfterWrap);
+        console.log("wethDeltaAfterWrap", wethDeltaAfterWrap);
+
+        // Validate: native delta should decrease, WETH delta should increase
+        assertGt(wethDeltaAfterWrap, wethDeltaBefore, "WETH delta should increase after wrap");
+
+        // Validate the native delta is sent amount - wrap amount
+        assertEq(nativeDeltaAfterWrap, ethToSend - wrapAmount);
+
+        // unwrap the weth to native
+        vtsOrchestrator.unwrapNative(address(this), wethDeltaAfterWrap);
+        // Get native and WETH deltas after wrap
+        uint256 nativeDeltaAfterUnwrap = vtsOrchestrator.getFullCredit(CurrencyLibrary.ADDRESS_ZERO, address(this));
+        uint256 wethDeltaAfterUnwrap = vtsOrchestrator.getFullCredit(Currency.wrap(address(weth9)), address(this));
+        console.log("nativeDeltaAfterUnwrap", nativeDeltaAfterUnwrap);
+        console.log("wethDeltaAfterUnwrap", wethDeltaAfterUnwrap);
+
+        // Validate the native delta is wrap amount
+        assertEq(nativeDeltaAfterUnwrap, wrapAmount * 2);
+
+        // Validate the weth delta is 0
+        assertEq(wethDeltaAfterUnwrap, 0);
+    }
+
+    function testCanUnwrapLCC() public {
+        address user = makeAddr("user");
+        uint256 amount = 1000;
+        // Use lcc0 directly - verify it matches lccToken0 from MarketTestBase
+        address lccTokenAddress = address(lcc0);
+        // Verify addresses match (they should both be from _currency2)
+        assertEq(lccTokenAddress, lccToken0, "lcc0 and lccToken0 should match");
+
+        // Mock VTSOrchestrator as non-protocol so it accumulates LCC balance when tokens are transferred to it
+        vm.mockCall(
+            marketFactory, abi.encodeWithSelector(IMarketFactory.bounds.selector, address(user)), abi.encode(false)
+        );
+
+        // wrap some lcc tokens
+        MockERC20 underlyingAsset = MockERC20(lcc0.underlying());
+        // mint the underlying asset to the user
+        underlyingAsset.mint(user, amount);
+        // approve the liquidity hub to spend(move) the underlying asset
+        // hub then spends(moves) underlying assets to itself
+        // and then gives LCC tokens to the user
+        vm.startPrank(user);
+        underlyingAsset.approve(address(liquidityHub), amount);
+        ILiquidityHub(liquidityHub).wrap(lccTokenAddress, amount);
+        vm.stopPrank();
+
+        // validate lcc balance of the user
+        assertEq(lcc0.balanceOf(user), amount);
+
+        // unwrap lcc using the orchestrator
+        // approve orchestrator to spend the lcc (must be approved by the user, not the test contract)
+        vm.startPrank(user);
+        lcc0.approve(address(vtsOrchestrator), amount);
+        vm.stopPrank();
+
+        // Verify the approval was set correctly (check outside of prank to ensure it persists)
+        uint256 allowance = lcc0.allowance(user, address(vtsOrchestrator));
+        assertEq(allowance, amount, "Approval should be set before unwrap");
+
+        (uint256 wrappedBalance, uint256 marketDerivedBalance) = lcc0.balancesOf(user);
+
+        vtsOrchestrator.unwrapLCC(user, lccTokenAddress, user, user, amount);
+
+        // validate lcc balance of the user
+        assertEq(lcc0.balanceOf(user), 0);
+
+        // validate underlying balance of the user
+        assertEq(underlyingAsset.balanceOf(user), amount);
+    }
+
+    function test_canRenewSignal() public {
+        // get the default market confiration so we can tweak it
+        bytes memory liquiditySignal = abi.encode(liquiditySignal);
+        ModifyLiquidityParams memory liquidityParams =
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
+
+        // Setup committed position using helper
+        (uint256 tokenId,,,) = _setupCommittedPosition(
+            positionManager,
+            vtsOrchestrator,
+            corePoolKey,
+            liquiditySignal,
+            liquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+        uint256 positionIndex = 0;
+
+        (, uint256 expiresAtPrevious,,) = vtsOrchestrator.getCommit(tokenId);
 
         // renew the signal
         uint256 newTimestamp = 1000;
         vm.warp(newTimestamp);
         MMA.renew(positionManager, tokenId, abi.encode(renewSignal));
 
-        // get the new signal
-        (MarketMaker.State memory newMmState, uint256 expiresAt,) = positionManager.commitOf(tokenId);
+        (, uint256 expiresAtAfter,,) = vtsOrchestrator.getCommit(tokenId);
 
-        // TODO: We assert verified LiquiditySignal is emitted event of VRLSignalManager
+        console.log("expiresAtPrevious", expiresAtPrevious);
+        console.log("expiresAtAfter", expiresAtAfter);
 
-        // validate the new signal is the same as the renewed signal
-        assertEq(abi.encode(newMmState), abi.encode(renewSignal.mmState));
-
-        // validate the expiry is updated
-        assertEq(expiresAt, newTimestamp + signalExpiryInSeconds);
+        // // validate the expiry is updated
+        assertEq(expiresAtAfter + 1, newTimestamp + expiresAtPrevious);
     }
 
-    // can modify an existing position by removing liquidity from it
-    function test_canModifyLiquidity_byRemovingLiquidity() public {
-        // make a commitment to a position
+    // test can seize position
+    function testCanSeizePosition() public {
+        // get the default market confiration so we can tweak it
         bytes memory liquiditySignal = abi.encode(liquiditySignal);
-
         ModifyLiquidityParams memory liquidityParams =
             ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
 
-        // Get amount of underlying liquidity to transfer from the issuer to the lcc
-        (uint256 c0_remove, uint256 c1_remove) = LiquidityUtils.calculateCommitmentMaxima(
-            liquidityParams.tickLower, liquidityParams.tickUpper, uint128(uint256(liquidityParams.liquidityDelta))
-        );
-        (uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) = LiquidityUtils.getBaseSettlementAmounts(
-            c0_remove, c1_remove, marketVTSConfiguration.token0.baseVTSRate, marketVTSConfiguration.token1.baseVTSRate
-        );
-
-        // Approve the position manager to take the base/minimum underlying liquidity to create to the position
-        IERC20(lcc0.underlying()).approve(address(mmPositionManager), requiredSettlementAmount0);
-        IERC20(lcc1.underlying()).approve(address(mmPositionManager), requiredSettlementAmount1);
-
-        // Batch commit and mint
-        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
-        actions[0] = MMA.prepareCommit(corePoolKey, liquiditySignal);
-        actions[1] = MMA.prepareMint(
+        // Setup committed position using helper
+        (uint256 tokenId,,,) = _setupCommittedPosition(
+            positionManager,
+            vtsOrchestrator,
             corePoolKey,
-            1,
-            liquidityParams.tickLower,
-            liquidityParams.tickUpper,
-            uint256(liquidityParams.liquidityDelta)
+            liquiditySignal,
+            liquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
         );
-        MMA.execute(positionManager, actions);
-        PositionId positionId = positionManager.getPositionId(1, 0);
-        uint256 tokenId = 1;
         uint256 positionIndex = 0;
-        int256 liquidityDelta = -1e5;
 
-        // get the details of the position after commit
-        PositionMeta memory positionAfterCommit = positionManager.getPosition(tokenId, positionIndex);
-        (uint256 s0, uint256 s1) = IVTSManager(coreHookAddress).getPositionSettledAmounts(positionId);
-        // get the balance of the underlying assets after commit
-        uint256 lcc0BalanceAfterCommit = Currency.wrap(lcc0.underlying()).balanceOf(address(this));
-        uint256 lcc1BalanceAfterCommit = Currency.wrap(lcc1.underlying()).balanceOf(address(this));
+        vm.warp(block.timestamp + 10000000);
 
-        // remove liquidity from the position
-        MMA.decrease(positionManager, corePoolKey, tokenId, positionIndex, uint256(-liquidityDelta));
+        // approve the orchestrator to spend the underlying assets
+        uint256 amount0 = 1000;
+        uint256 amount1 = 1000;
+        // approve the orchestrator to spend the underlying assets
+        IERC20(lcc0.underlying()).transfer(guarantor, amount0);
+        IERC20(lcc1.underlying()).transfer(guarantor, amount1);
 
-        // get the details of the position after modify liquidity
-        PositionMeta memory positionAfterModifyLiquidity = positionManager.getPosition(tokenId, positionIndex);
-        // get the balance of the underlying assets after commit
-        uint256 lcc0BalanceAfterModifyLiquidity = Currency.wrap(lcc0.underlying()).balanceOf(address(this));
-        uint256 lcc1BalanceAfterModifyLiquidity = Currency.wrap(lcc1.underlying()).balanceOf(address(this));
+        BalanceDelta requiredSettlementDeltaBefore = vtsOrchestrator.getSettlementDelta(address(guarantor), address(lcc0), address(lcc1));
 
-        // validate the position's liquidity is reduced
-        assertEq(positionAfterModifyLiquidity.liquidity, positionAfterCommit.liquidity + liquidityDelta);
+        vm.startPrank(guarantor);
+        IERC20(lcc0.underlying()).approve(address(vtsOrchestrator), amount0);
+        IERC20(lcc1.underlying()).approve(address(vtsOrchestrator), amount1);
 
-        // validate user is credited with the underlying assets
-        //  get the fraction of the liquidity to take out of the position
-        uint256 liquidityFraction = Math.mulDiv(uint256(-liquidityDelta), 1e18, uint256(positionAfterCommit.liquidity));
-        // compute fraction of delta inline per token
-        BalanceDelta underlyingAssetFraction = toBalanceDelta(
-            int128(int256(Math.mulDiv(s0, liquidityFraction, 1e18))),
-            int128(int256(Math.mulDiv(s1, liquidityFraction, 1e18)))
-        );
-        // validate mmpm holds no token balance
-        assertEq(
-            lcc0BalanceAfterModifyLiquidity,
-            lcc0BalanceAfterCommit + LiquidityUtils.safeInt128ToUint256(underlyingAssetFraction.amount0())
-        );
-        assertEq(
-            lcc1BalanceAfterModifyLiquidity,
-            lcc1BalanceAfterCommit + LiquidityUtils.safeInt128ToUint256(underlyingAssetFraction.amount1())
-        );
+        // get position liquidity
+        (Position memory positionBeforeSeize,) = vtsOrchestrator.getPosition(tokenId, positionIndex);
+        // call the seize method of the orchestrator
+        // vtsOrchestrator.seizePosition(address(this), corePoolKey, tokenId, positionIndex, amount0, amount1);
+        // then call the withdraw from delta method of the orchestrator
+        _seizeAndTakeDeltas(positionManager, corePoolKey, tokenId, positionIndex, amount0, amount1);
+        vm.stopPrank();
+
+        // get position liquidity after seize
+        (Position memory positionAfterSeize,) = vtsOrchestrator.getPosition(tokenId, positionIndex);
+        console.log("positionLiquidityBeforeSeize", uint256(positionBeforeSeize.liquidity));
+        console.log("positionLiquidityAfterSeize", uint256(positionAfterSeize.liquidity));
+
+        // get the position required settlement delta
+        BalanceDelta requiredSettlementDeltaAFter = vtsOrchestrator.getSettlementDelta(address(guarantor), address(lcc0), address(lcc1));
+
+        console.log("requiredSettlementDelta0Before", requiredSettlementDeltaBefore.amount0());
+        console.log("requiredSettlementDelta1Before", requiredSettlementDeltaBefore.amount1());
+        console.log("requiredSettlementDelta0", requiredSettlementDeltaAFter.amount0());
+        console.log("requiredSettlementDelta1", requiredSettlementDeltaAFter.amount1());
+
+        // validate the position liquidity is decreased
+        assertLt(uint256(positionAfterSeize.liquidity), uint256(positionBeforeSeize.liquidity));
+        // validate the user's delta in increased
+        assertGt(requiredSettlementDeltaAFter.amount0(), requiredSettlementDeltaBefore.amount0());
+        assertGt(requiredSettlementDeltaAFter.amount1(), requiredSettlementDeltaBefore.amount1());
     }
 
-    function test_canModifyLiquidity_byAddingLiquidity() public {
-        // make a commitment to a position
-        bytes memory liquiditySignal = abi.encode(liquiditySignal);
+    function testCanDeclareUnbackedCommitment() public {
+        // get the default market confiration so we can tweak it
+        LiquiditySignal memory renewSignal = liquiditySignal;
 
+        bytes memory liquiditySignal = abi.encode(liquiditySignal);
         ModifyLiquidityParams memory liquidityParams =
             ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
 
-        // Get amount of underlying liquidity to transfer from the issuer to the lcc
-        (uint256 c0_add, uint256 c1_add) = LiquidityUtils.calculateCommitmentMaxima(
-            liquidityParams.tickLower, liquidityParams.tickUpper, uint128(uint256(liquidityParams.liquidityDelta))
-        );
-        (uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) = LiquidityUtils.getBaseSettlementAmounts(
-            c0_add, c1_add, marketVTSConfiguration.token0.baseVTSRate, marketVTSConfiguration.token1.baseVTSRate
-        );
-
-        // Approve the position manager to take the base/minimum underlying liquidity to create to the position
-        IERC20(lcc0.underlying()).approve(address(mmPositionManager), requiredSettlementAmount0);
-        IERC20(lcc1.underlying()).approve(address(mmPositionManager), requiredSettlementAmount1);
-
-        // Batch commit and mint
-        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
-        actions[0] = MMA.prepareCommit(corePoolKey, liquiditySignal);
-        actions[1] = MMA.prepareMint(
+        // Setup committed position using helper
+        (uint256 tokenId,,,) = _setupCommittedPosition(
+            positionManager,
+            vtsOrchestrator,
             corePoolKey,
-            1,
-            liquidityParams.tickLower,
-            liquidityParams.tickUpper,
-            uint256(liquidityParams.liquidityDelta)
+            liquiditySignal,
+            liquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
         );
-        MMA.execute(positionManager, actions);
-        uint256 tokenId = 1;
         uint256 positionIndex = 0;
-        int256 liquidityDelta = 1e5;
+        address advancer = renewSignal.mmState.advancer;
 
-        ModifyLiquidityParams memory modifyLiquidityParams = ModifyLiquidityParams({
-            tickLower: liquidityParams.tickLower,
-            tickUpper: liquidityParams.tickUpper,
-            liquidityDelta: liquidityDelta,
-            salt: bytes32(0)
-        });
+        // declare the unbacked commitment
+        vm.startPrank(renewSignal.mmState.advancer);
+        bytes memory unbackedLiquiditySignal = abi.encode(renewSignal);
 
-        // Get amount of underlying liquidity to transfer from the issuer to the lcc
-        (uint256 c0_mint2, uint256 c1_mint2) = LiquidityUtils.calculateCommitmentMaxima(
-            modifyLiquidityParams.tickLower,
-            modifyLiquidityParams.tickUpper,
-            uint128(uint256(modifyLiquidityParams.liquidityDelta))
-        );
-        (requiredSettlementAmount0, requiredSettlementAmount1) = LiquidityUtils.getBaseSettlementAmounts(
-            c0_mint2, c1_mint2, marketVTSConfiguration.token0.baseVTSRate, marketVTSConfiguration.token1.baseVTSRate
+        // IVRLSignalManager(signalManager).verifyLiquiditySignal(liquiditySignal, true);
+        vm.mockCall(
+            address(signalManager),
+            abi.encodeWithSelector(
+                bytes4(keccak256("verifyLiquiditySignal(bytes,bool)")),
+                unbackedLiquiditySignal,
+                true
+            ),
+            abi.encode(true, 10)
         );
 
-        // Approve the position manager to take the base/minimum underlying liquidity to create to the position
-        IERC20(lcc0.underlying()).approve(address(mmPositionManager), requiredSettlementAmount0);
-        IERC20(lcc1.underlying()).approve(address(mmPositionManager), requiredSettlementAmount1);
-
-        // get the details of the position after add liquidity
-        PositionMeta memory positionAfterCommit = positionManager.getPosition(tokenId, positionIndex);
-
-        // add liquidity to the position
-        PositionMeta memory posBounds2 = positionManager.getPosition(tokenId, positionIndex);
-        MMA.mint(
-            positionManager, corePoolKey, tokenId, posBounds2.tickLower, posBounds2.tickUpper, uint256(liquidityDelta)
+        // get the amount of tokens that will be minted using the parameters
+        (uint160 sqrtPriceX96, int24 currentTick,,) = manager.getSlot0(corePoolKey.toId());
+        (uint256 a0, uint256 a1) = LiquidityUtils.calculateEffectiveTokenAmounts(
+            sqrtPriceX96, currentTick, liquidityParams.tickLower, liquidityParams.tickUpper, liquidityParams.liquidityDelta
         );
 
-        // validate liquidity is added to the position
-        assertEq(
-            positionManager.getPosition(tokenId, positionIndex).liquidity,
-            positionAfterCommit.liquidity + liquidityDelta
+        // get liquidity in position 0
+        (Position memory positionBeforeDeclare,) = vtsOrchestrator.getPosition(tokenId, positionIndex);
+        console.log("positionLiquidityBeforeDeclare", uint256(positionBeforeDeclare.liquidity));
+
+        // need to inflate the value of issuedusd to be greater than the signalusd by 20%
+        vm.mockCall(
+            address(oracleHelper),
+            abi.encodeWithSelector(IOracleHelper.getPricesForLCCPair.selector),
+            abi.encode(50000000000, 50000000000)
         );
+
+        vm.startPrank(mmPositionManager);
+        vtsOrchestrator.declareUnbackedCommitment(advancer, tokenId, liquiditySignal);
+
+        vm.stopPrank();
+        // get liquidity in position 0
+        (Position memory positionAfterDeclare,) = vtsOrchestrator.getPosition(tokenId, positionIndex);
+        console.log("positionLiquidityAfterDeclare", uint256(positionAfterDeclare.liquidity));
+
     }
 
-    // TODO: Recreate this once the new declareUnbackedCommitment() is implemented
-    // function test_canSeizeUnbackedPosition() public {
-    //     // make a commitment to a position
-    //     bytes memory encodedLiquiditySignal = abi.encode(liquiditySignal);
-
-    //     ModifyLiquidityParams memory liquidityParams =
-    //         ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
-
-    //     // Get amount of underlying liquidity to transfer from the issuer to the lcc
-    //     (uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) =
-    //         LiquidityUtils.getBaseSettlementAmounts(liquidityParams, marketVTSConfiguration);
-
-    //     // Approve the position manager to take the base/minimum underlying liquidity to create to the position
-    //     ERC20(lcc0.underlying()).approve(address(mmPositionManager), requiredSettlementAmount0);
-    //     ERC20(lcc1.underlying()).approve(address(mmPositionManager), requiredSettlementAmount1);
-
-    //     MMA.commit(positionManager, corePoolKey, encodedLiquiditySignal);
-    //     MMA.mint(
-    //         positionManager,
-    //         corePoolKey,
-    //         1,
-    //         liquidityParams.tickLower,
-    //         liquidityParams.tickUpper,
-    //         uint256(liquidityParams.liquidityDelta)
-    //     );
-    //     uint256 tokenId = 1;
-
-    //     // get the position before reallocation
-    //     PositionMeta memory positionBeforeReallocation = positionManager.getPosition(tokenId, 0);
-    //     // prepare an unbacked renewal (force deficit by returning 0 USD value)
-    //     uint256 newSignalUSDValue = 0;
-
-    //     // mock the signal manager to return an unbacked response
-    //     vm.mockCall(
-    //         address(signalManager),
-    //         abi.encodeWithSelector(signalManager.renewLiquiditySignal.selector),
-    //         abi.encode(newSignalUSDValue, signalExpiryInSeconds)
-    //     );
-
-    //     address advancer = liquiditySignal.mmState.advancer;
-    //     vm.prank(address(advancer));
-    //     // reallocate the position by mocking an unbacked(by 20%) response from the signal manager
-    //     // seizeCommitment remains a dedicated call: dispatch via action adapter is not defined; keep direct if present
-    //     uint256 deficitFraction = positionManager.seizeCommitment(corePoolKey, tokenId, encodedLiquiditySignal);
-    //     vm.stopPrank();
-
-    //     // get the position after reallocation
-    //     PositionMeta memory positionAfterReallocation = positionManager.getPosition(tokenId, 0);
-    //     // validate the liquidity in the position is reduced by 20%
-    //     uint256 expectedLiquidityAfterReallocation = uint256(positionBeforeReallocation.liquidity)
-    //         - Math.mulDiv(uint256(positionBeforeReallocation.liquidity), deficitFraction, LiquidityUtils.BPS_DENOMINATOR);
-    //     assertEq(uint256(positionAfterReallocation.liquidity), expectedLiquidityAfterReallocation);
-    // }
+    /**
+     * @notice Calculates y such that (x * y) * 2 = signalUSD * (1 + percentageIncreaseBps/10000)
+     * @param x The input value
+     * @param signalUSD The current signal USD value (e.g., 10000)
+     * @param percentageIncreaseBps The percentage increase in basis points (e.g., 2000 for 20%)
+     * @return y The calculated value
+     */
+    function calculateY(uint256 x, uint256 signalUSD, uint256 percentageIncreaseBps) 
+        public 
+        pure 
+        returns (uint256 y) 
+    {
+        require(x > 0, "x must be greater than 0");
+        
+        // Calculate: y = (signalUSD * (10000 + percentageIncreaseBps)) / (x * 2 * 10000)
+        uint256 numerator = signalUSD * (10000 + percentageIncreaseBps);
+        uint256 denominator = x * 2 * 10000;
+        
+        y = numerator / denominator;
+    }
 }

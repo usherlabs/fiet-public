@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import {LiquiditySignal} from "../types/Position.sol";
+import {LiquiditySignal} from "../types/Commit.sol";
 
 interface IVRLSignalManager {
     // Events

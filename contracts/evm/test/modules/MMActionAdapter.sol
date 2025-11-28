@@ -37,11 +37,33 @@ library MMActionAdapter {
     }
 
     /**
+     * @notice Public wrapper for _concatPrepared to use with modifyLiquidities
+     */
+    function concatPrepared(PreparedAction[] memory prepared)
+        public
+        pure
+        returns (bytes memory actions, bytes[] memory params)
+    {
+        return _concatPrepared(prepared);
+    }
+
+    /**
      * @notice Executes prepared actions in a single modifyLiquiditiesWithoutUnlock call
      */
     function execute(MMPositionManager mmpm, PreparedAction[] memory prepared) internal {
-        (bytes memory actions, bytes[] memory params) = _concatPrepared(prepared);
-        mmpm.modifyLiquiditiesWithoutUnlock(actions, params);
+        // Use modifyLiquidities which handles unlocking automatically
+        (bytes memory actionsBytes, bytes[] memory params) = _concatPrepared(prepared);
+        // bytes memory unlockData = abi.encode(actionsBytes, params);
+        mmpm.modifyLiquiditiesWithoutUnlock(actionsBytes, params);
+    }
+
+    /**
+     * @notice Executes prepared actions in a single modifyLiquidities call
+     */
+    function executeWithUnlock(MMPositionManager mmpm, PreparedAction[] memory prepared, uint256 deadline) internal {
+        (bytes memory actionsBytes, bytes[] memory params) = _concatPrepared(prepared);
+        bytes memory unlockData = abi.encode(actionsBytes, params);
+        mmpm.modifyLiquidities(unlockData, deadline);
     }
 
     /**
@@ -96,6 +118,17 @@ library MMActionAdapter {
         });
     }
 
+    function prepareMintFromDeltas(PoolKey memory poolKey, uint256 tokenId, int24 tickLower, int24 tickUpper)
+        internal
+        pure
+        returns (PreparedAction memory)
+    {
+        return PreparedAction({
+            action: bytes1(uint8(MMPositionManager.MMAction.MINT_POSITION_FROM_DELTAS)),
+            params: abi.encode(poolKey, tokenId, tickLower, tickUpper)
+        });
+    }
+
     /**
      * @notice Prepares a SETTLE_POSITION action
      */
@@ -123,6 +156,22 @@ library MMActionAdapter {
         return PreparedAction({
             action: bytes1(uint8(MMPositionManager.MMAction.DECREASE_LIQUIDITY)),
             params: abi.encode(poolKey, tokenId, positionIndex, amount)
+        });
+    }
+
+    /**
+     * @notice Prepares a SETTLE_POSITION_FROM_DELTAS action
+     */
+    function prepareSettleFromDeltas(
+        PoolKey memory poolKey,
+        uint256 tokenId,
+        uint256 positionIndex,
+        bool settleIn0,
+        bool settleIn1
+    ) internal pure returns (PreparedAction memory) {
+        return PreparedAction({
+            action: bytes1(uint8(MMPositionManager.MMAction.SETTLE_POSITION_FROM_DELTAS)),
+            params: abi.encode(poolKey, tokenId, positionIndex, settleIn0, settleIn1)
         });
     }
 
@@ -191,6 +240,54 @@ library MMActionAdapter {
         });
     }
 
+    /**
+     * @notice Prepares an INCREASE_LIQUIDITY_FROM_DELTAS action
+     */
+    function prepareIncreaseFromDeltas(
+        PoolKey memory poolKey,
+        uint256 tokenId,
+        uint256 positionIndex,
+        int24 tickLower,
+        int24 tickUpper
+    ) internal pure returns (PreparedAction memory) {
+        return PreparedAction({
+            action: bytes1(uint8(MMPositionManager.MMAction.INCREASE_LIQUIDITY_FROM_DELTAS)),
+            params: abi.encode(poolKey, tokenId, positionIndex, tickLower, tickUpper)
+        });
+    }
+
+    function prepareExtendGracePeriod(
+        PoolKey memory poolKey,
+        uint256 tokenId,
+        uint256 positionIndex,
+        uint8 settlementTokenIndex,
+        uint32 verifierIndex,
+        bytes memory settlementProof
+    ) internal pure returns (PreparedAction memory) {
+        return PreparedAction({
+            action: bytes1(uint8(MMPositionManager.MMAction.EXTEND_GRACE_PERIOD)),
+            params: abi.encode(poolKey, tokenId, positionIndex, settlementTokenIndex, verifierIndex, settlementProof)
+        });
+    }
+
+    /**
+     * @notice Prepares a WRAP_NATIVE action
+     */
+    function prepareWrapNative(uint256 amount) internal pure returns (PreparedAction memory) {
+        return
+            PreparedAction({action: bytes1(uint8(MMPositionManager.MMAction.WRAP_NATIVE)), params: abi.encode(amount)});
+    }
+
+    /**
+     * @notice Prepares an UNWRAP_NATIVE action
+     */
+    function prepareUnwrapNative(uint256 amount) internal pure returns (PreparedAction memory) {
+        return
+            PreparedAction({
+                action: bytes1(uint8(MMPositionManager.MMAction.UNWRAP_NATIVE)), params: abi.encode(amount)
+            });
+    }
+
     // ============ CONVENIENCE METHODS (for backward compatibility) ============
 
     /**
@@ -239,7 +336,7 @@ library MMActionAdapter {
     {
         PreparedAction[] memory prepared = new PreparedAction[](1);
         prepared[0] = prepareSettle(poolKey, tokenId, idx, a0, a1);
-        execute(mmpm, prepared);
+        executeWithUnlock(mmpm, prepared, block.timestamp + 3600);
     }
 
     /**
@@ -251,7 +348,25 @@ library MMActionAdapter {
     {
         PreparedAction[] memory prepared = new PreparedAction[](1);
         prepared[0] = prepareDecrease(poolKey, tokenId, idx, amt);
-        execute(mmpm, prepared);
+        executeWithUnlock(mmpm, prepared, block.timestamp + 3600);
+    }
+
+    /**
+     * @notice Increases liquidity (single action execution)
+     * @dev For backward compatibility - use prepareIncrease + execute for batching
+     */
+    function increase(
+        MMPositionManager mmpm,
+        PoolKey memory poolKey,
+        uint256 tokenId,
+        uint256 positionIndex,
+        int24 tickLower,
+        int24 tickUpper,
+        uint256 liquidity
+    ) internal {
+        PreparedAction[] memory prepared = new PreparedAction[](1);
+        prepared[0] = prepareIncrease(poolKey, tokenId, positionIndex, tickLower, tickUpper, liquidity);
+        executeWithUnlock(mmpm, prepared, block.timestamp + 3600);
     }
 
     /**
@@ -261,6 +376,49 @@ library MMActionAdapter {
     function burn(MMPositionManager mmpm, PoolKey memory poolKey, uint256 tokenId, uint256 idx) internal {
         PreparedAction[] memory prepared = new PreparedAction[](1);
         prepared[0] = prepareBurn(poolKey, tokenId, idx);
+
+        // unlock pm and execute the actions
+        executeWithUnlock(mmpm, prepared, block.timestamp + 3600);
+    }
+
+    function extendGracePeriod(
+        MMPositionManager mmpm,
+        PoolKey memory poolKey,
+        uint256 tokenId,
+        uint256 idx,
+        uint8 settlementTokenIndex,
+        uint32 verifierIndex,
+        bytes memory settlementProof
+    ) internal {
+        PreparedAction[] memory prepared = new PreparedAction[](1);
+        prepared[0] =
+            prepareExtendGracePeriod(poolKey, tokenId, idx, settlementTokenIndex, verifierIndex, settlementProof);
+        execute(mmpm, prepared);
+    }
+
+    /**
+     * @notice Wraps native ETH to WETH (single action execution)
+     */
+    /**
+     * @notice Wraps native ETH to WETH (single action execution)
+     * @dev Sends ETH as msg.value to create native delta, then wraps it to WETH delta
+     * @param mmpm The MMPositionManager instance
+     * @param amount The amount of ETH to wrap (also sent as msg.value to create native delta)
+     */
+    function wrapNative(MMPositionManager mmpm, uint256 amount) internal {
+        PreparedAction[] memory prepared = new PreparedAction[](1);
+        prepared[0] = prepareWrapNative(amount);
+        // Use execute overload with value to send ETH as msg.value
+        // This creates a native delta via _handleNativeValue, which can then be wrapped
+        execute(mmpm, prepared, amount);
+    }
+
+    /**
+     * @notice Unwraps WETH to native ETH (single action execution)
+     */
+    function unwrapNative(MMPositionManager mmpm, uint256 amount) internal {
+        PreparedAction[] memory prepared = new PreparedAction[](1);
+        prepared[0] = prepareUnwrapNative(amount);
         execute(mmpm, prepared);
     }
 
@@ -271,7 +429,9 @@ library MMActionAdapter {
     function decommit(MMPositionManager mmpm, PoolKey memory poolKey, uint256 tokenId) internal {
         PreparedAction[] memory prepared = new PreparedAction[](1);
         prepared[0] = prepareDecommit(poolKey, tokenId);
-        execute(mmpm, prepared);
+
+        // unlock the poolmanager and execute the action
+        executeWithUnlock(mmpm, prepared, block.timestamp + 3600);
     }
 
     /**

@@ -11,6 +11,7 @@ import {LiquidityCommitmentCertificate} from "../../src/LCC.sol";
 import {LiquidityUtils} from "../../src/libraries/LiquidityUtils.sol";
 import {SwapSimulator} from "../../src/libraries/SwapSimulator.sol";
 import {IMarketFactory} from "../../src/interfaces/IMarketFactory.sol";
+import {ILCC} from "../../src/interfaces/ILCC.sol";
 
 /**
  * @title MarketVaultBase
@@ -37,13 +38,42 @@ abstract contract MarketVaultBase is MarketTestBase {
     }
 
     /**
-     * @notice Mock limited available liquidity for a given currency
+     * @notice Mock limited available liquidity for a given currency in the market vault(manager)
+     * @dev mock how much underlying liquidity the proxy hook/market has with the pool manager i.e it is market specific
+     * ? rename to _mockLimitedVaultLiquidity
      */
     function _mockLimitedLiquidity(Currency currency, uint256 availableAmount) internal {
         vm.mockCall(
             address(manager),
             abi.encodeWithSelector(manager.balanceOf.selector, address(proxyHook), currency.toId()),
             abi.encode(availableAmount)
+        );
+    }
+
+    /**
+     * @notice Mock liquidity present for a particular user in a market
+     * @dev  Mock the user's balance in a given market.
+     * @dev it can be used to simulate the amount of liquidity the caller has in the given market i.e it is caller specific
+     */
+    function _mockLimitedMarketLiquidity(address underlyingAsset, bytes32 marketId, uint256 usedAmount) internal {
+        vm.mockCall(
+            marketFactory,
+            abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector, underlyingAsset, marketId),
+            abi.encode(usedAmount)
+        );
+    }
+
+    /**
+     * @param lcc The LCC token to mock the balances for
+     * @param user The user to mock the balances for
+     * @param wrappedBalance The wrapped balance of the user in the LCC token
+     * @param marketDerivedBalance The market-derived balance of the user in the LCC token
+     */
+    function _mockLCCBalances(ILCC lcc, address user, uint256 wrappedBalance, uint256 marketDerivedBalance) internal {
+        vm.mockCall(
+            address(lcc),
+            abi.encodeWithSelector(ILCC.balancesOf.selector, user),
+            abi.encode(wrappedBalance, marketDerivedBalance)
         );
     }
 

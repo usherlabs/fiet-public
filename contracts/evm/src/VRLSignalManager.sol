@@ -8,7 +8,7 @@ import {MarketMaker} from "./libraries/MarketMaker.sol";
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 import {ISignalVerifier} from "./interfaces/ISignalVerifier.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
-import {LiquiditySignal} from "./types/Position.sol";
+import {LiquiditySignal} from "./types/Commit.sol";
 import {Errors} from "./libraries/Errors.sol";
 import {IVRLSignalManager} from "./interfaces/IVRLSignalManager.sol";
 

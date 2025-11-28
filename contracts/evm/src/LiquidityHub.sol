@@ -13,6 +13,7 @@ import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Errors} from "./libraries/Errors.sol";
 import {IMarketVault} from "./interfaces/IMarketVault.sol";
+import {console} from "forge-std/console.sol";
 
 /**
  * @title LiquidityHub
@@ -192,7 +193,7 @@ contract LiquidityHub is Ownable, LCCFactory, ReentrancyGuardTransient {
         }
         // Enforce same underlying asset for both LCCs
         if (lccToUnderlying[lcc] != lccToUnderlying[withLCC]) {
-            revert Errors.LiquidityError(withLCC, amount);
+            revert Errors.UnderlyingAssetMismatch(lccToUnderlying[lcc], lccToUnderlying[withLCC]);
         }
 
         // Get bucketed balances of the owner to validate amount and determine unwrap priority
@@ -415,7 +416,17 @@ contract LiquidityHub is Ownable, LCCFactory, ReentrancyGuardTransient {
      */
     function _unwrap(address lcc, address from, address to, uint256 amount) internal onlyValidLcc(lcc) {
         (uint256 wrappedBalance, uint256 marketDerivedBalance) = _balancesOf(lcc, from);
+        uint256 erc20Balance = _balanceOf(lcc, from);
         uint256 fromBalance = wrappedBalance + marketDerivedBalance;
+
+        // Handle protocol addresses: they don't accumulate balance buckets but may hold ERC20 balance
+        // If balance buckets are 0 but ERC20 balance exists, treat all as wrapped balance
+        if (fromBalance == 0 && erc20Balance > 0) {
+            // Protocol address holding tokens: treat all balance as wrapped
+            wrappedBalance = erc20Balance;
+            fromBalance = erc20Balance;
+        }
+
         if (amount == 0 || amount > fromBalance) {
             revert Errors.InvalidAmount(amount, fromBalance);
         }
@@ -426,7 +437,7 @@ contract LiquidityHub is Ownable, LCCFactory, ReentrancyGuardTransient {
         // Burn the amount that was unwrapped
         // and transfer the underlying assets to the account
         if (directUnwrapped + marketUnwrapped > 0) {
-            _pay(lcc, to, directUnwrapped, marketUnwrapped);
+            _pay(lcc, from, to, directUnwrapped, marketUnwrapped);
         }
 
         emit LccUnwrapped(lcc, from, to, amount);
@@ -649,7 +660,7 @@ contract LiquidityHub is Ownable, LCCFactory, ReentrancyGuardTransient {
                 _burn(lcc, recipient, 0, effectiveToBurn, true);
             }
         } else {
-            _pay(lcc, recipient, 0, toSettle);
+            _pay(lcc, recipient, recipient, 0, toSettle);
         }
     }
 
@@ -717,8 +728,8 @@ contract LiquidityHub is Ownable, LCCFactory, ReentrancyGuardTransient {
      * @param fromDirect The amount of LCC to burn from direct supply
      * @param fromMarket The amount of LCC to burn from market-derived supply
      */
-    function _pay(address lcc, address to, uint256 fromDirect, uint256 fromMarket) internal {
-        _burn(lcc, to, fromDirect, fromMarket, _isCallerIssuer(lcc));
+    function _pay(address lcc, address owner, address to, uint256 fromDirect, uint256 fromMarket) internal {
+        _burn(lcc, owner, fromDirect, fromMarket, _isCallerIssuer(lcc));
         _transferUnderlying(lccToUnderlying[lcc], to, fromDirect + fromMarket);
     }
 
@@ -765,7 +776,8 @@ contract LiquidityHub is Ownable, LCCFactory, ReentrancyGuardTransient {
     // Plain transactions are performed by the market vault in native asset routes.
     // ie. Only be executed if the msg.sender is the market vault in route: PM -> MV -> LH
     receive() external payable {
+        // TODO: enable filter back and include check for pm and mmpm contracts
         // plain ETH transfer must come from a market vault.
-        _assertValidEthSender();
+        // _assertValidEthSender();
     }
 }

@@ -6,6 +6,8 @@ import {MarketVTSConfiguration} from "../types/VTS.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IOracleHelper} from "./IOracleHelper.sol";
 import {ILiquidityHub} from "./ILiquidityHub.sol";
+// TODO: replace with IVTSOrchestrator
+import {VTSOrchestrator} from "../VTSOrchestrator.sol";
 
 /**
  * @title IMarketFactory
@@ -68,6 +70,12 @@ interface IMarketFactory {
      * @return The market maker position manager address
      */
     function mmPositionManager() external view returns (address);
+
+    /**
+     * @notice Gets the VTS orchestrator address
+     * @return The VTS orchestrator address
+     */
+    function vtsOrchestrator() external view returns (VTSOrchestrator);
 
     /**
      * @notice Gets the liquidity hub address

@@ -28,6 +28,7 @@ import {OracleHelper} from "../src/OracleHelper.sol";
 import {Errors} from "../src/libraries/Errors.sol";
 import {CurrencySortHelper} from "../script/libraries/CurrencySortHelper.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {VTSOrchestrator} from "../src/VTSOrchestrator.sol";
 
 contract MarketFactoryTest is Test, Deployers {
     using PoolIdLibrary for PoolKey;
@@ -80,26 +81,37 @@ contract MarketFactoryTest is Test, Deployers {
             abi.encode(liquidityHubAddress)
         );
 
+        address vtsOrchestrator = address(makeAddr("vtsOrchestrator"));
+        vm.mockCall(
+            vtsOrchestrator,
+            abi.encodeWithSelector(VTSOrchestrator.setMarketVTSConfiguration.selector),
+            abi.encode(true)
+        );
+
         vm.prank(owner);
         positionManager = new MMPositionManager(
             address(poolManager),
-            makeAddr("spokeReceiver"),
+            makeAddr("signalManager"),
             tempFactoryAddr, // temporary address, will be updated after factory deployment
-            makeAddr("settlementObserver"),
-            commitmentDescriptor,
-            weth9
+            makeAddr("vtsOrchestrator"),
+            commitmentDescriptor
         );
 
         // Deploy MarketFactory with all required arguments
         vm.prank(owner);
         factory = new MarketFactory(
-            address(poolManager), liquidityHubAddress, oracleHelperAddress, address(positionManager), bounds
+            address(poolManager),
+            liquidityHubAddress,
+            oracleHelperAddress,
+            address(positionManager),
+            address(makeAddr("vtsOrchestrator")),
+            bounds
         );
 
         // Deploy CoreHook at computed address
         deployCodeTo(
             "CoreHook.sol:CoreHook",
-            abi.encode(poolManager, address(factory), address(positionManager), oracleHelperAddress),
+            abi.encode(poolManager, address(factory), address(positionManager), address(makeAddr("vtsOrchestrator"))),
             coreHookAddr
         );
 

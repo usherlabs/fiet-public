@@ -87,6 +87,9 @@ library Errors {
     // ============ POOL & MARKET ERRORS ============
     // Errors related to pool creation, market operations, and pool state
 
+    /// @notice Thrown when the underlying assets of two LCCs do not match
+    error UnderlyingAssetMismatch(address ua1, address ua2);
+
     /// @notice Thrown when a core pool already exists
     error CorePoolAlreadyExists();
 
@@ -150,6 +153,9 @@ library Errors {
     /// @notice Thrown when RFS (Required for Settlement) is open for a position
     error RFSOpenForPosition(PositionId positionId);
 
+    /// @notice Thrown when RFS (Required for Settlement) is not open for a position
+    error RFSNotOpenForPosition(PositionId positionId);
+
     /// @notice Thrown when a commitment descriptor is not set
     error CommitmentDescriptorNotSet();
 
@@ -179,6 +185,9 @@ library Errors {
         uint256 tokenId, uint256 positionIndex, PositionId positionId, RFSCheckpoint checkpoint
     );
 
+    /// @notice Thrown when an invalid token index is provided
+    error InvalidTokenIndex(uint8 tokenIndex);
+
     // ============ FACTORY & CREATION ERRORS ============
     // Errors related to factory operations and token creation
 
@@ -190,5 +199,20 @@ library Errors {
 
     /// @notice Thrown when an invariant is violated
     error InvariantViolated(string message);
+
+    // ============ VTS ORCHESTRATOR ERRORS ============
+    // Errors related to the VTS Orchestrator
+
+    /// @notice Thrown when the MM Position Manager address is not set
+    error MMPositionManagerNotSet();
+
+    /// @notice Thrown when the MM Position Manager address is invalid
+    error VTSOrchestrator__Paused();
+
+    error VTSOrchestrator__InvalidPoolManager();
+
+    error VTSOrchestrator__InvalidOwner();
+
+    error VTSOrchestrator__InvalidPosition();
 }
 

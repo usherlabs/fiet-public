@@ -34,22 +34,24 @@ import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
 import {ILiquidityHub} from "../interfaces/ILiquidityHub.sol";
 import {Errors} from "../libraries/Errors.sol";
 import {ReentrancyGuardTransient} from "openzeppelin-contracts/contracts/utils/ReentrancyGuardTransient.sol";
+import {VTSOrchestrator} from "../VTSOrchestrator.sol";
+import {console} from "forge-std/console.sol";
 
 abstract contract MarketVault is IMarketVault, ReentrancyGuardTransient {
     using CurrencySettler for Currency;
 
     event SwapDeficit(PoolId indexed poolId, address indexed lccToken, address deficitRecipient, uint256 deficitAmount);
 
+    VTSOrchestrator public immutable vtsOrchestrator;
     IPoolManager public immutable vaultPoolManager;
     IMarketFactory public immutable marketFactory;
     ILiquidityHub public immutable liquidityHub;
-    address public immutable mmPositionManager;
 
     constructor(address _poolManager, address _marketFactory) {
         vaultPoolManager = IPoolManager(_poolManager);
         marketFactory = IMarketFactory(_marketFactory);
         liquidityHub = marketFactory.liquidityHub();
-        mmPositionManager = marketFactory.mmPositionManager();
+        vtsOrchestrator = marketFactory.vtsOrchestrator();
     }
 
     // Market tracking state variables
@@ -82,12 +84,15 @@ abstract contract MarketVault is IMarketVault, ReentrancyGuardTransient {
     }
 
     modifier onlyProtocolBounds() {
-        // authorises calls from protocol bounds (ie. MarketFactory, LiquidityHub, MMPositionManager, etc.)
+        // authorises calls from protocol bounds (ie. MarketFactory, LiquidityHub, VTSOrchestrator, etc.)
         // if (!marketFactory.bounds(msg.sender)) {
         //     revert InvalidSender();
         // }
         // Being explicit witn these bounds to prevent leaks.
-        if (msg.sender != (address(marketFactory)) && msg.sender != (address(mmPositionManager))) {
+        if (msg.sender != (address(marketFactory)) && msg.sender != (address(vtsOrchestrator))) {
+            console.log("msg.sender", msg.sender);
+            console.log("address(marketFactory)", address(marketFactory));
+            console.log("address(vtsOrchestrator)", address(vtsOrchestrator));
             revert Errors.InvalidSender();
         }
         _;
@@ -265,6 +270,7 @@ abstract contract MarketVault is IMarketVault, ReentrancyGuardTransient {
     function _settleUnderlyingToVaultFromSender(Currency underlyingCurrency, address sender, uint256 amount) internal {
         // Validate that the sender has sufficient balance to settle
         uint256 senderBalance = underlyingCurrency.balanceOf(sender);
+
         if (senderBalance < amount) {
             revert Errors.InsufficientLiquidityToSettle();
         }
@@ -373,7 +379,7 @@ abstract contract MarketVault is IMarketVault, ReentrancyGuardTransient {
 
         if (deficitAmount > 0 && deficitRecipient != address(0)) {
             // ? The MarketVault will have already taken the full LCC amount from the PoolManager.
-            lccToken.safeTransfer(deficitRecipient, deficitAmount);
+            lccToken.transfer(deficitRecipient, deficitAmount);
             emit SwapDeficit(poolId, address(lccToken), deficitRecipient, deficitAmount);
         }
         // Note: If deficit recipient is not specified, but a deficit > 0, then excess will accumulate.
@@ -392,8 +398,12 @@ abstract contract MarketVault is IMarketVault, ReentrancyGuardTransient {
      * @custom:reverts InsufficientLiquidityToTake If negative deltas exceed available vault liquidity
      * @custom:reverts InsufficientLiquidityToSettle If positive deltas require more than available balance
      */
-    function unlockCallback(bytes calldata data) external returns (bytes memory) {
-        if (msg.sender != address(vaultPoolManager)) {
+    function unlockCallback(bytes calldata data) public returns (bytes memory) {
+        return _unlockCallback(data);
+    }
+
+    function _unlockCallback(bytes memory data) internal returns (bytes memory) {
+        if (msg.sender != address(vaultPoolManager) && msg.sender != address(vtsOrchestrator)) {
             revert Errors.InvalidSender();
         }
 
@@ -447,7 +457,15 @@ abstract contract MarketVault is IMarketVault, ReentrancyGuardTransient {
      * @param balanceDelta The balance delta representing the desired liquidity changes
      */
     function _modifyVaultLiquidity(Currency currency0, Currency currency1, BalanceDelta balanceDelta) internal {
-        vaultPoolManager.unlock(abi.encode(CallbackData(msg.sender, (currency0), (currency1), balanceDelta)));
+        // if this is vts orchestrator then do not unlock the pool manager as it would have bene unlocked already by the MMPM
+        // we need all the deltas to settle in one transaction and that is checked at the end of the `modifyLiquidities` function
+        // if we run the `decommit` action with the manager unlocked and the `settle` with the manager locked
+        // then we cannot make sure teh deltas at the end balance out
+        if (msg.sender != address(vtsOrchestrator)) {
+            vaultPoolManager.unlock(abi.encode(CallbackData(msg.sender, (currency0), (currency1), balanceDelta)));
+        } else {
+            _unlockCallback(abi.encode(CallbackData(msg.sender, (currency0), (currency1), balanceDelta)));
+        }
     }
 
     /**
@@ -539,6 +557,7 @@ abstract contract MarketVault is IMarketVault, ReentrancyGuardTransient {
         (Currency currency0, Currency currency1) = _underlying();
 
         BalanceDelta usedDelta = _dryModifyLiquidities(balanceDelta);
+        // if caller is vtsorchstrator then do not unl
         _modifyVaultLiquidity(currency0, currency1, usedDelta);
 
         // If there was an addition (deposit), then settle the obligations to the lcc tokens

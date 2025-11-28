@@ -17,8 +17,7 @@ contract MMPCommitmentDescriptor is ICommitmentDescriptor {
     function tokenURI(address manager, uint256 tokenId) external view override returns (string memory) {
         IMMPositionManager positionManager = IMMPositionManager(manager);
 
-        uint256 posCount = positionManager.commitToPositionCount(tokenId);
-        (, uint256 expiresAt,) = positionManager.commitOf(tokenId);
+        (, uint256 expiresAt, uint256 posCount,) = positionManager.commitOf(tokenId);
 
         string memory name = string(abi.encodePacked("Fiet Commitment #", tokenId.toString()));
         string memory description = "Fiet VRL Commitment NFT granting position management rights.";

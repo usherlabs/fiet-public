@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// !DEPRECATED: This contract is no longer used and will be removed in the future
 pragma solidity ^0.8.26;
 
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";

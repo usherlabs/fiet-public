@@ -35,16 +35,16 @@ contract HookTest is Test, Deployers {
             address(makeAddr("liquidityHub")),
             address(makeAddr("OracleHelper")),
             address(mmPositionManager),
+            address(makeAddr("vtsOrchestrator")),
             bounds
         );
         IWETH9 weth9 = IWETH9(address(new WETH()));
         mmPositionManager = new MMPositionManager(
             address(poolManager),
-            makeAddr("spokeReceiver"),
+            makeAddr("signalManager"),
             address(factory),
-            makeAddr("settlementObserver"),
-            makeAddr("descriptor"),
-            weth9
+            makeAddr("vtsOrchestrator"),
+            makeAddr("descriptor")
         );
 
         // Compute flags for CoreHook
@@ -53,7 +53,7 @@ contract HookTest is Test, Deployers {
 
         deployCodeTo(
             "CoreHook.sol:CoreHook",
-            abi.encode(poolManager, address(factory), address(mmPositionManager)),
+            abi.encode(poolManager, address(factory), address(mmPositionManager), address(makeAddr("vtsOrchestrator"))),
             coreHookAddrComputed
         );
         coreHook = CoreHook(coreHookAddrComputed);

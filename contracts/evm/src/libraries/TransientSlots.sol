@@ -16,6 +16,8 @@ library TransientSlots {
     bytes32 internal constant FEE_ADJ_DELTA_SLOT = keccak256("FEE_ADJ_DELTA");
     bytes32 internal constant NATIVE_VALUE_READ_SLOT = keccak256("NATIVE_VALUE_READ");
     bytes32 internal constant SEIZED_POSITION_ID_SLOT = keccak256("SEIZED_POSITION_ID");
+    bytes32 internal constant DECOMMITTED_POSITION_ID_SLOT = keccak256("DECOMMITTED_POSITION_ID");
+    bytes32 internal constant SEIZED_SETTLEMENT_DELTA_SLOT = keccak256("SEIZED_SETTLEMENT_DELTA");
 
     // ------------------------------
     // Position Required Settlement Delta helpers
@@ -31,6 +33,16 @@ library TransientSlots {
         bytes32 namespaceSlot = POSITION_REQUIRED_SETTLEMENT_DELTA_SLOT;
         bytes32 key = PositionId.unwrap(positionId);
         // keccak256 over 64 bytes: namespace (32) || key (32)
+        hashSlot = keccak256(abi.encodePacked(namespaceSlot, key));
+    }
+
+    function _computeSiezedSettlementDeltaSlot(PositionId positionId)
+        internal
+        pure
+        returns (bytes32 hashSlot)
+    {
+        bytes32 namespaceSlot = SEIZED_SETTLEMENT_DELTA_SLOT;
+        bytes32 key = PositionId.unwrap(positionId);
         hashSlot = keccak256(abi.encodePacked(namespaceSlot, key));
     }
 
@@ -118,5 +130,17 @@ library TransientSlots {
     function getSeizedPositionId() internal view returns (PositionId) {
         bytes32 raw = TransientSlot.asBytes32(TransientSlots.SEIZED_POSITION_ID_SLOT).tload();
         return PositionId.wrap(raw);
+    }
+
+    function setSiezedSettlementDelta(PositionId positionId, BalanceDelta settlementDelta) internal {
+        bytes32 slot = _computeSiezedSettlementDeltaSlot(positionId);
+        TransientSlot.asInt256(slot).tstore(BalanceDelta.unwrap(settlementDelta));
+    }
+
+    function consumeSeizedSettlementDelta(PositionId positionId) internal returns (BalanceDelta) {
+        bytes32 slot = _computeSiezedSettlementDeltaSlot(positionId);
+        int256 raw = TransientSlot.asInt256(slot).tload();
+        TransientSlot.asInt256(slot).tstore(int256(0));
+        return BalanceDelta.wrap(raw);
     }
 }

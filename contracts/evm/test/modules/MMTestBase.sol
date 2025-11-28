@@ -6,7 +6,7 @@ import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/Messa
 import {MarketMaker} from "../../src/libraries/MarketMaker.sol";
 import {console} from "forge-std/console.sol";
 import {MerkleProofGenerator} from "../libraries/MerkleProofGenerator.sol";
-import {LiquiditySignal} from "../../src/types/Position.sol";
+import {LiquiditySignal} from "../../src/types/Commit.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PositionId} from "../../src/types/Position.sol";
@@ -15,6 +15,7 @@ import {MMPositionManager} from "../../src/MMPositionManager.sol";
 import {MMActionAdapter as MMA} from "../modules/MMActionAdapter.sol";
 import {LiquidityUtils} from "../../src/libraries/LiquidityUtils.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {VTSOrchestrator} from "../../src/VTSOrchestrator.sol";
 import {Test} from "forge-std/Test.sol";
 
 abstract contract MarketMakerTestBase is Test {
@@ -111,7 +112,7 @@ abstract contract MarketMakerTestBase is Test {
      * @param privateKey The private key to generate the state for
      * @return The state payload
      */
-    function _createMarketMakerState(uint256 privateKey) internal pure returns (StatePayload memory) {
+    function _createMarketMakerState(uint256 privateKey) internal returns (StatePayload memory) {
         // use private key to get the address of the owner
         address owner = vm.addr(privateKey);
         // create a state for the owner
@@ -122,7 +123,7 @@ abstract contract MarketMakerTestBase is Test {
         state.nonce = "nonce123";
         // this field could potentially be a zero address
         // it signifies who requests for the proof advance
-        state.advancer = owner;
+        state.advancer = makeAddr("advancer");
 
         // Add reserves
         state.reserves = new MarketMaker.Reserve[](2);
@@ -209,15 +210,114 @@ abstract contract MarketMakerTestBase is Test {
             liquidityParams.tickUpper,
             uint256(liquidityParams.liquidityDelta)
         );
-        MMA.execute(positionManager, actions);
+
+        // Use modifyLiquidities which handles unlocking automatically
+        (bytes memory actionsBytes, bytes[] memory params) = MMA.concatPrepared(actions);
+        bytes memory unlockData = abi.encode(actionsBytes, params);
+        positionManager.modifyLiquidities(unlockData, block.timestamp + 3600);
 
         tokenId = 1;
         positionId = positionManager.getPositionId(tokenId, 0);
     }
 
+    function _decommitAndWithdrawDeltas(
+        MMPositionManager positionManager,
+        PoolKey memory poolKey,
+        uint256 tokenId,
+        uint256 idx,
+        bool settleIn0,
+        bool settleIn1
+    ) internal {
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
+        actions[0] = MMA.prepareDecommit(poolKey, tokenId);
+        actions[1] = MMA.prepareSettleFromDeltas(poolKey, tokenId, idx, settleIn0, settleIn1);
+
+        // Use modifyLiquidities which handles unlocking automatically
+        (bytes memory actionsBytes, bytes[] memory params) = MMA.concatPrepared(actions);
+        bytes memory unlockData = abi.encode(actionsBytes, params);
+        positionManager.modifyLiquidities(unlockData, block.timestamp + 3600);
+    }
+
+    function _decreaseAndMintPositionFromDeltas(
+        MMPositionManager positionManager,
+        PoolKey memory poolKey,
+        uint256 tokenId,
+        uint256 positionIndex,
+        uint256 amountToDecrease,
+        int24 tickLower,
+        int24 tickUpper
+    ) internal {
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
+        actions[0] = MMA.prepareDecrease(poolKey, tokenId, positionIndex, amountToDecrease);
+        actions[1] = MMA.prepareMintFromDeltas(poolKey, tokenId, tickLower, tickUpper);
+
+        // Use modifyLiquidities which handles unlocking automatically
+        (bytes memory actionsBytes, bytes[] memory params) = MMA.concatPrepared(actions);
+        bytes memory unlockData = abi.encode(actionsBytes, params);
+        positionManager.modifyLiquidities(unlockData, block.timestamp + 3600);
+    }
+
+    function _decreaseAndSettlePositionFromDeltas(
+        MMPositionManager positionManager,
+        PoolKey memory poolKey,
+        uint256 tokenId,
+        uint256 positionIndexToDecrease,
+        uint256 positionIndexToSettle,
+        uint256 amountToDecrease,
+        bool settleIn0,
+        bool settleIn1
+    ) internal {
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
+        actions[0] = MMA.prepareDecrease(poolKey, tokenId, positionIndexToDecrease, amountToDecrease);
+        actions[1] = MMA.prepareSettleFromDeltas(poolKey, tokenId, positionIndexToSettle, settleIn0, settleIn1);
+
+        // Use modifyLiquidities which handles unlocking automatically
+        (bytes memory actionsBytes, bytes[] memory params) = MMA.concatPrepared(actions);
+        bytes memory unlockData = abi.encode(actionsBytes, params);
+        positionManager.modifyLiquidities(unlockData, block.timestamp + 3600);
+    }
+
+    function _decreaseAndIncreasePositionFromDeltas(
+        MMPositionManager positionManager,
+        PoolKey memory poolKey,
+        uint256 tokenId,
+        uint256 positionIndexToDecrease,
+        uint256 positionIndexToIncrease,
+        uint256 amountToDecrease,
+        int24 tickLower,
+        int24 tickUpper
+    ) internal {
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
+        actions[0] = MMA.prepareDecrease(poolKey, tokenId, positionIndexToDecrease, amountToDecrease);
+        actions[1] = MMA.prepareIncreaseFromDeltas(poolKey, tokenId, positionIndexToIncrease, tickLower, tickUpper);
+
+        // Use modifyLiquidities which handles unlocking automatically
+        (bytes memory actionsBytes, bytes[] memory params) = MMA.concatPrepared(actions);
+        bytes memory unlockData = abi.encode(actionsBytes, params);
+        positionManager.modifyLiquidities(unlockData, block.timestamp + 3600);
+    }
+
+    function _seizeAndTakeDeltas(
+        MMPositionManager positionManager,
+        PoolKey memory poolKey,
+        uint256 tokenId,
+        uint256 positionIndexToSeize,
+        uint256 amount0ToSettle,
+        uint256 amount1ToSettle
+    ) internal {
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
+        actions[0] = MMA.prepareSeize(poolKey, tokenId, positionIndexToSeize, amount0ToSettle, amount1ToSettle);
+        actions[1] = MMA.prepareSettleFromDeltas(poolKey, tokenId, positionIndexToSeize, false, false); //take
+        // Use modifyLiquidities which handles unlocking automatically
+        (bytes memory actionsBytes, bytes[] memory params) = MMA.concatPrepared(actions);
+        bytes memory unlockData = abi.encode(actionsBytes, params);
+        positionManager.modifyLiquidities(unlockData, block.timestamp + 3600);
+    }
+
     /**
      * @notice Full workflow: calculates settlement amounts, approves tokens, and commits+mints a position
      * @param positionManager The MMPositionManager instance
+     * @param vtsOrchestrator The VTSOrchestrator instance
      * @param corePoolKey The pool key for the core pool
      * @param signalBytes The liquidity signal bytes
      * @param liquidityParams The liquidity parameters for the position
@@ -231,6 +331,7 @@ abstract contract MarketMakerTestBase is Test {
      */
     function _setupCommittedPosition(
         MMPositionManager positionManager,
+        VTSOrchestrator vtsOrchestrator,
         PoolKey memory corePoolKey,
         bytes memory signalBytes,
         ModifyLiquidityParams memory liquidityParams,
@@ -252,7 +353,7 @@ abstract contract MarketMakerTestBase is Test {
 
         // Approve tokens
         _approveForPositionManager(
-            lcc0, lcc1, address(positionManager), requiredSettlementAmount0, requiredSettlementAmount1
+            lcc0, lcc1, address(vtsOrchestrator), requiredSettlementAmount0, requiredSettlementAmount1
         );
 
         // Commit and mint

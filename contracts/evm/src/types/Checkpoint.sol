@@ -15,6 +15,8 @@ struct RFSCheckpoint {
     uint256 gracePeriodExtension1;
 }
 
+using RFSCheckpointLibrary for RFSCheckpoint global;
+
 // initially the checkpoint wouls be set to (0,false)
 // and it can remain that way until the first transition(change from false to true or true to false for `rfsopen`) occurs
 library RFSCheckpointLibrary {

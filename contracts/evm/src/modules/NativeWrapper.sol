@@ -17,9 +17,11 @@ abstract contract NativeWrapper is UniNativeWrapper, MarketHandler {
     /// @dev Uses _vaultToCurrencyPair and _validateToken which must be provided by MarketHandler
     ///      via multiple inheritance in the final contract (e.g., MMPositionManager)
     function _assertValidEthSender() internal view {
-        if (msg.sender != address(WETH9) && msg.sender != address(poolManager)) {
-            revert InvalidEthSender();
+        // If sender is WETH9 or poolManager, allow it (these are trusted sources)
+        if (msg.sender == address(WETH9) || msg.sender == address(poolManager)) {
+            return;
         }
+        // otherwise check if the caller is a valid MarketVault
         // These functions will be resolved from MarketHandler via multiple inheritance
         address[2] memory currencies = _vaultToCurrencyPair(msg.sender);
         _validateToken(msg.sender, currencies);

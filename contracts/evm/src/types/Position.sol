@@ -1,12 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {
-    ModifyLiquidityParams
-} from "v4-periphery/lib/v4-core/src/types/PoolOperation.sol";
-import {
-    Position as UniPosition
-} from "v4-periphery/lib/v4-core/src/libraries/Position.sol";
+import {ModifyLiquidityParams} from "v4-periphery/lib/v4-core/src/types/PoolOperation.sol";
+import {Position as UniPosition} from "v4-periphery/lib/v4-core/src/libraries/Position.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 
 type PositionId is bytes32;
@@ -55,17 +51,25 @@ library PositionLibrary {
      * @param params The params of the modify liquidity operation
      * @return id The id of the position
      */
-    function generateId(
-        address modifyLiquidityRouter,
-        ModifyLiquidityParams memory params
-    ) internal pure returns (PositionId id) {
+    function generateId(address modifyLiquidityRouter, ModifyLiquidityParams memory params)
+        internal
+        pure
+        returns (PositionId id)
+    {
         bytes32 positionKey = UniPosition.calculatePositionKey(
-            modifyLiquidityRouter,
-            params.tickLower,
-            params.tickUpper,
-            params.salt
+            modifyLiquidityRouter, params.tickLower, params.tickUpper, params.salt
         );
 
         id = PositionId.wrap(positionKey);
+    }
+
+    /**
+     * @dev This function is used to generate a unique salt for a given token id and position index
+     * @param tokenId The token id to generate the salt for
+     * @param positionIndex The position index to generate the salt for
+     * @return salt The unique salt
+     */
+    function generateSalt(uint256 tokenId, uint256 positionIndex) internal pure returns (bytes32) {
+        return keccak256(abi.encodePacked(tokenId, positionIndex));
     }
 }

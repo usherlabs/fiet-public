@@ -113,10 +113,7 @@ library TokenPairLib {
     /// @param self The TokenPairUint storage reference
     /// @param tokenIndex The token index (0 or 1)
     /// @return The value for the specified token
-    function get(
-        TokenPairUint storage self,
-        uint8 tokenIndex
-    ) internal view returns (uint256) {
+    function get(TokenPairUint storage self, uint8 tokenIndex) internal view returns (uint256) {
         return tokenIndex == 0 ? self.token0 : self.token1;
     }
 
@@ -124,11 +121,7 @@ library TokenPairLib {
     /// @param self The TokenPairUint storage reference
     /// @param tokenIndex The token index (0 or 1)
     /// @param value The value to set
-    function set(
-        TokenPairUint storage self,
-        uint8 tokenIndex,
-        uint256 value
-    ) internal {
+    function set(TokenPairUint storage self, uint8 tokenIndex, uint256 value) internal {
         if (tokenIndex == 0) {
             self.token0 = value;
         } else {
@@ -140,10 +133,7 @@ library TokenPairLib {
     /// @param self The TokenPairInt storage reference
     /// @param tokenIndex The token index (0 or 1)
     /// @return The value for the specified token
-    function get(
-        TokenPairInt storage self,
-        uint8 tokenIndex
-    ) internal view returns (int256) {
+    function get(TokenPairInt storage self, uint8 tokenIndex) internal view returns (int256) {
         return tokenIndex == 0 ? self.token0 : self.token1;
     }
 
@@ -151,11 +141,7 @@ library TokenPairLib {
     /// @param self The TokenPairInt storage reference
     /// @param tokenIndex The token index (0 or 1)
     /// @param value The value to set
-    function set(
-        TokenPairInt storage self,
-        uint8 tokenIndex,
-        int256 value
-    ) internal {
+    function set(TokenPairInt storage self, uint8 tokenIndex, int256 value) internal {
         if (tokenIndex == 0) {
             self.token0 = value;
         } else {
@@ -166,6 +152,7 @@ library TokenPairLib {
 
 /// @notice Central storage struct (like Bunni's HubStorage)
 /// @dev Contains all state mappings for pools, commits, positions and accounting
+/// ? need a mapping from tokenId => PositionIndex => PositionId
 struct VTSStorage {
     /// Per-pool state
     mapping(PoolId => Pool) pools;
@@ -187,6 +174,8 @@ struct VTSStorage {
     /// For positions: use PositionId.unwrap(positionId)
     /// For commits: use keccak256(abi.encodePacked(commitTokenId))
     mapping(bytes32 => RFSCheckpoint) checkpoints;
+    /// Next token ID for commit NFTs (starts at 1)
+    uint256 nextTokenId;
     /// Global pause flag
     bool isPaused;
 }

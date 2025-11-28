@@ -30,6 +30,9 @@ import {TransientSlots} from "../libraries/TransientSlots.sol";
 import {NativeWrapper} from "./NativeWrapper.sol";
 import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
 import {Constants} from "@uniswap/v4-core/test/utils/Constants.sol";
+import {console} from "forge-std/console.sol";
+import {MMLiquidityLib} from "../libraries/MMLiquidityLib.sol";
+import {PositionId} from "../types/Position.sol";
 
 /**
  * @title LiquidityRouter
@@ -91,73 +94,7 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler, NativeWrappe
         virtual
         returns (BalanceDelta delta, BalanceDelta feesAccrued)
     {
-        bool settleUsingBurn = false;
-        bool takeClaims = false;
-
-        // Note: Pool manager must already be unlocked by the caller (MMPositionManager handles this)
-
-        address self = address(this);
-
-        // Get liquidity state before modification for validation
-        (uint128 liquidityBefore,,) =
-            poolManager.getPositionInfo(key.toId(), self, params.tickLower, params.tickUpper, params.salt);
-
-        // PoolManager returns two deltas:
-        // - delta (callerDelta): principal liquidity change plus any immediate fee/hook deltas applied
-        //   to the caller
-        // - feesAccrued: informational delta of fee growth in the modified range for this call
-        // Downstream, MMPositionManager treats principal vs feesAccrued differently: principal maps
-        // to LCC issue/cancel, while feesAccrued (originating from trader flows, wrapped into LCCs)
-        // must remain wrapped until explicitly unwrapped.
-        (delta, feesAccrued) = poolManager.modifyLiquidity(key, params, hookData);
-
-        // Get liquidity state after modification for validation
-        (uint128 liquidityAfter,,) =
-            poolManager.getPositionInfo(key.toId(), self, params.tickLower, params.tickUpper, params.salt);
-
-        // Get net currency deltas from PoolManager
-        // currencyDelta is a net including fee accrual plus any hook-side fee-sharing that's already
-        // been applied at modification time.
-
-        // Note: Prior actions in a batch don't accumulate here because each _modifyLiquidity call
-        // immediately settles its deltas, resetting currencyDelta to 0 before the next
-        // action. The delta read here reflects only the current modification's effect (including hook
-        // adjustments like feeAdj from CoreHook). Other actions (e.g., SETTLE_POSITION) account deltas
-        // to the hook contract, not to MMPositionManager, so they don't affect this currencyDelta.
-        int256 delta0 = poolManager.currencyDelta(self, key.currency0);
-        int256 delta1 = poolManager.currencyDelta(self, key.currency1);
-
-        // Validate that liquidity change matches expected delta
-        if (int128(liquidityBefore) + params.liquidityDelta != int128(liquidityAfter)) {
-            revert Errors.InvariantViolated("liquidity change incorrect");
-        }
-
-        // Validate currency delta direction matches liquidity operation type
-        if (params.liquidityDelta < 0) {
-            // Removing liquidity: PoolManager owes tokens to the LP (positive delta)
-            assert(delta0 > 0 || delta1 > 0);
-            assert(!(delta0 < 0 || delta1 < 0));
-        } else if (params.liquidityDelta > 0) {
-            // Adding liquidity: LP owes tokens to PoolManager (negative delta)
-            assert(delta0 < 0 || delta1 < 0);
-            assert(!(delta0 > 0 || delta1 > 0));
-        }
-
-        // Settle negative deltas: pay tokens owed to PoolManager (LP is depositing)
-        if (delta0 < 0) {
-            key.currency0.settle(poolManager, self, uint256(-delta0), settleUsingBurn);
-        }
-        if (delta1 < 0) {
-            key.currency1.settle(poolManager, self, uint256(-delta1), settleUsingBurn);
-        }
-
-        // Take positive deltas: receive tokens owed from PoolManager (LP is withdrawing)
-        if (delta0 > 0) {
-            key.currency0.take(poolManager, self, uint256(delta0), takeClaims);
-        }
-        if (delta1 > 0) {
-            key.currency1.take(poolManager, self, uint256(delta1), takeClaims);
-        }
+        (delta, feesAccrued) = MMLiquidityLib._modifyPositionLiquidity(poolManager, key, params, hookData);
     }
 
     /**
@@ -168,20 +105,7 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler, NativeWrappe
      * @param lccCurrency The LCC currency to prime credits for
      */
     function _primeUnderlyingDelta(address sender, Currency lccCurrency) internal {
-        Currency underlyingCurrency = _lccToUnderlyingCurrency(lccCurrency);
-        address ua = Currency.unwrap(underlyingCurrency);
-
-        uint256 persistentCredit = _persistentUnderlyingCredits[sender][ua];
-        if (persistentCredit > 0) {
-            uint256 balance = underlyingCurrency.balanceOfSelf();
-            uint256 load = Math.min(persistentCredit, balance);
-            if (load > 0) {
-                // Load positive delta to sender (credit) representing deduction from MMP
-                _accountDelta(underlyingCurrency, SafeCast.toInt128(load), sender);
-                _accountDelta(underlyingCurrency, -SafeCast.toInt128(load), address(this)); // indicate (negative) from this to (positive) to sender
-                _persistentUnderlyingCredits[sender][ua] = persistentCredit - load;
-            }
-        }
+        MMLiquidityLib._primeUnderlyingDelta(_persistentUnderlyingCredits, lccCurrency, sender);
     }
 
     /**
@@ -214,62 +138,7 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler, NativeWrappe
         Currency lccCurrency0,
         Currency lccCurrency1
     ) internal returns (BalanceDelta usedDelta) {
-        address marketVault = _getVault(poolId);
-        Currency underlyingCurrency0 = _lccToUnderlyingCurrency(lccCurrency0);
-        Currency underlyingCurrency1 = _lccToUnderlyingCurrency(lccCurrency1);
-        int128 amount0 = settlementDelta.amount0();
-        int128 amount1 = settlementDelta.amount1();
-
-        // Step A: Consume any self negative deltas first (withdrawals from MMP → sender)
-        // This prioritises MMP-held balances that were primed at batch start
-        int256 selfDelta0 = underlyingCurrency0.getDelta(address(this));
-        int256 selfDelta1 = underlyingCurrency1.getDelta(address(this));
-
-        if (selfDelta0 > 0 && amount0 > 0) {
-            uint256 take0 = Math.min(uint256(selfDelta0), LiquidityUtils.safeInt128ToUint256(amount0));
-            if (take0 > 0) {
-                // Transfer directly from MMP to sender (satisfying primed credit)
-                underlyingCurrency0.transfer(sender, take0);
-                _accountDelta(underlyingCurrency0, -SafeCast.toInt128(take0), sender);
-                _accountDelta(underlyingCurrency0, SafeCast.toInt128(take0), address(this));
-                amount0 -= SafeCast.toInt128(take0);
-            }
-        }
-
-        if (selfDelta1 > 0 && amount1 > 0) {
-            uint256 take1 = Math.min(uint256(selfDelta1), LiquidityUtils.safeInt128ToUint256(amount1));
-            if (take1 > 0) {
-                // Transfer directly from MMP to sender (satisfying primed credit)
-                underlyingCurrency1.transfer(sender, take1);
-                _accountDelta(underlyingCurrency1, -SafeCast.toInt128(take1), sender);
-                _accountDelta(underlyingCurrency1, SafeCast.toInt128(take1), address(this));
-                amount1 -= SafeCast.toInt128(take1);
-            }
-        }
-
-        // Process deposits first (amount < 0), then notify vault, then process withdrawals (amount > 0)
-        // This ensures the vault is funded before withdrawals
-        if (amount0 < 0) {
-            _settleUnderlyingCurrencyWithVault(underlyingCurrency0, amount0, sender, marketVault);
-        }
-        if (amount1 < 0) {
-            _settleUnderlyingCurrencyWithVault(underlyingCurrency1, amount1, sender, marketVault);
-        }
-
-        // Notify the MarketVault (proxy hook) of the settled underlying tokens
-        // A positive balance delta means withdrawing underlying tokens, negative balance means depositing underlying tokens,
-        // Call after deposits (so MV is funded), but before withdrawals.
-        // To prevent failure when liquidity in market is insufficient to cover the withdrawal, we tryModifyLiquidities and account LCCs for excess.
-        // ---- eg. Failure on mass unwrap of LCCs, settled liquidity is used as coverage, then burn position.
-        // ---- Basically, on decrease, return assets to the caller as LCCs in excess of usedDelta.
-        usedDelta = IMarketVault(marketVault).tryModifyLiquidities(LiquidityUtils.safeToBalanceDelta(amount0, amount1));
-
-        if (usedDelta.amount0() > 0) {
-            _settleUnderlyingCurrencyWithVault(underlyingCurrency0, usedDelta.amount0(), sender, marketVault);
-        }
-        if (usedDelta.amount1() > 0) {
-            _settleUnderlyingCurrencyWithVault(underlyingCurrency1, usedDelta.amount1(), sender, marketVault);
-        }
+        usedDelta = MMLiquidityLib._settleUnderlyingDelta(marketFactory, sender, poolId, settlementDelta, lccCurrency0, lccCurrency1);
     }
 
     /**
@@ -281,14 +150,12 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler, NativeWrappe
      */
     function _getUnderlyingSettlementDelta(address sender, Currency lccCurrency0, Currency lccCurrency1)
         internal
+        view
         returns (BalanceDelta)
     {
-        Currency uCurrency0 = _lccToUnderlyingCurrency(lccCurrency0);
-        Currency uCurrency1 = _lccToUnderlyingCurrency(lccCurrency1);
-        int256 uDelta0 = uCurrency0.getDelta(sender);
-        int256 uDelta1 = uCurrency1.getDelta(sender);
-        return toBalanceDelta(SafeCast.toInt128(uDelta0), SafeCast.toInt128(uDelta1));
+        return MMLiquidityLib._getUnderlyingSettlementDelta(sender, lccCurrency0, lccCurrency1);
     }
+
 
     /**
      * @notice Clamps the settlement delta by the available liquidities
@@ -318,30 +185,7 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler, NativeWrappe
         Currency lccCurrency0,
         Currency lccCurrency1
     ) internal {
-        Currency uCurrency0 = _lccToUnderlyingCurrency(lccCurrency0);
-        Currency uCurrency1 = _lccToUnderlyingCurrency(lccCurrency1);
-
-        // Get current transient deltas if settlementDelta is zero
-        if (LiquidityUtils.isZeroDelta(settlementDelta)) {
-            int256 uaDelta0 = uCurrency0.getDelta(sender);
-            int256 uaDelta1 = uCurrency1.getDelta(sender);
-            settlementDelta = toBalanceDelta(SafeCast.toInt128(uaDelta0), SafeCast.toInt128(uaDelta1));
-        }
-
-        // Persist positive deltas (MMP owes credits) to persistent storage
-        int128 amount0 = settlementDelta.amount0();
-        int128 amount1 = settlementDelta.amount1();
-
-        if (amount0 > 0) {
-            address ua0 = Currency.unwrap(uCurrency0);
-            _persistentUnderlyingCredits[sender][ua0] += LiquidityUtils.safeInt128ToUint256(amount0);
-            _accountDelta(uCurrency0, -amount0, sender); // Clear transient delta
-        }
-        if (amount1 > 0) {
-            address ua1 = Currency.unwrap(uCurrency1);
-            _persistentUnderlyingCredits[sender][ua1] += LiquidityUtils.safeInt128ToUint256(amount1);
-            _accountDelta(uCurrency1, -amount1, sender); // Clear transient delta
-        }
+        MMLiquidityLib._persistUnderlyingDelta(_persistentUnderlyingCredits, sender, settlementDelta, lccCurrency0, lccCurrency1);
     }
 
     /**
@@ -359,27 +203,7 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler, NativeWrappe
     function _settleUnderlyingCurrencyWithVault(Currency currency, int128 amount, address sender, address marketVault)
         private
     {
-        if (amount == 0) return;
-
-        int256 delta = currency.getDelta(sender);
-
-        if (amount < 0) {
-            // Deposit: transfer FROM caller TO vault
-            // If delta is negative (caller owes protocol) and amount < delta (deposit exceeds debt),
-
-            // net the delta to zero. Otherwise, account the full amount.
-            // * This allows settlement above what is required.
-            int128 deltaToAccount = (delta < 0 && int256(amount) < delta) ? SafeCast.toInt128(-delta) : -amount;
-            _accountDelta(currency, deltaToAccount, sender);
-            currency.transferFrom(sender, marketVault, LiquidityUtils.safeInt128ToUint256(amount));
-        } else {
-            // Withdrawal: transfer FROM vault TO caller
-            // If delta is positive (protocol owes caller) and amount > delta (withdrawal exceeds credit),
-
-            // Avoid delta net, to prevent withdrawal of more than is credited to the caller.
-            _accountDelta(currency, amount, sender);
-            currency.transfer(sender, LiquidityUtils.safeInt128ToUint256(amount));
-        }
+        MMLiquidityLib._settleUnderlyingCurrencyWithVault(currency, amount, sender, marketVault);
     }
 
     /**
@@ -390,12 +214,7 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler, NativeWrappe
      * @param target The target address to account the delta for
      */
     function _accountDelta(Currency currency, int128 delta, address target) internal {
-        (int256 previous, int256 next) = currency.applyDelta(target, delta);
-        if (next == 0) {
-            NonzeroDeltaCount.decrement();
-        } else if (previous == 0) {
-            NonzeroDeltaCount.increment();
-        }
+        MMLiquidityLib._accountDelta(currency, delta, target);
     }
 
     /**
@@ -413,20 +232,7 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler, NativeWrappe
         Currency currency0,
         Currency currency1
     ) internal {
-        Currency underlyingCurrency0 = _lccToUnderlyingCurrency(currency0);
-        Currency underlyingCurrency1 = _lccToUnderlyingCurrency(currency1);
-
-        // Read current currency deltas
-        int256 currentDelta0 = underlyingCurrency0.getDelta(sender);
-        int256 currentDelta1 = underlyingCurrency1.getDelta(sender);
-
-        // Calculate the delta of delta (the change): targetSettlementDelta - currentDelta
-        int128 changeDelta0 = targetSettlementDelta.amount0() - SafeCast.toInt128(currentDelta0);
-        int128 changeDelta1 = targetSettlementDelta.amount1() - SafeCast.toInt128(currentDelta1);
-
-        // Account the delta of delta (the change)
-        _accountDelta(underlyingCurrency0, changeDelta0, sender);
-        _accountDelta(underlyingCurrency1, changeDelta1, sender);
+        MMLiquidityLib._accountUnderlyingSettlementDeltaChange(sender, targetSettlementDelta, currency0, currency1);
     }
 
     /**
@@ -438,23 +244,7 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler, NativeWrappe
      * @param maxAmount The maximum amount to take (use type(uint256).max for full available)
      */
     function _take(Currency currency, address sender, address to, uint256 maxAmount) internal {
-        int256 delta = currency.getDelta(sender);
-
-        if (delta < 0) return; // No positive delta (credit) available
-
-        // Cap to min of positive delta and maxAmount
-        uint256 availableCredit = uint256(delta);
-        uint256 amountToTake = maxAmount == 0 ? availableCredit : Math.min(availableCredit, maxAmount);
-
-        // Net the delta by accounting the negative amount taken
-        // Mirror logic from lines 257-262: if amount > delta, net to zero, otherwise account full amount
-        int128 deltaToAccount = (delta > 0 && SafeCast.toInt256(amountToTake) > delta)
-            ? SafeCast.toInt128(-delta)
-            : -SafeCast.toInt128(amountToTake);
-        _accountDelta(currency, deltaToAccount, sender);
-
-        // Transfer the amount from MMP's balance to 'to' (assumes MMP holds the tokens)
-        currency.transfer(to, amountToTake);
+        MMLiquidityLib._take(currency, sender, to, maxAmount);
     }
 
     /**
@@ -464,8 +254,7 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler, NativeWrappe
      * @return The positive delta amount, or 0 if delta is not positive
      */
     function _getFullCredit(Currency currency, address target) internal view returns (uint256) {
-        int256 delta = currency.getDelta(target);
-        return (delta > 0) ? uint256(delta) : 0;
+        return MMLiquidityLib._getFullCredit(currency, target);
     }
 
     /**
@@ -474,7 +263,7 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler, NativeWrappe
      * @return The underlying currency
      */
     function _lccToUnderlyingCurrency(Currency lccCurrency) internal view returns (Currency) {
-        return Currency.wrap(ILCC(Currency.unwrap(lccCurrency)).underlying());
+        return MMLiquidityLib._lccToUnderlyingCurrency(lccCurrency);
     }
 
     /**
@@ -484,10 +273,7 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler, NativeWrappe
      * @param sender The address initiating the settlement
      */
     function _handleNativeValue(address sender) internal {
-        uint256 nativeValue = TransientSlots.readMsgValueOnce();
-        if (nativeValue > 0) {
-            _accountDelta(CurrencyLibrary.ADDRESS_ZERO, SafeCast.toInt128(nativeValue), sender);
-        }
+        return MMLiquidityLib._handleNativeValue(sender);
     }
 
     /**
@@ -497,16 +283,9 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler, NativeWrappe
      * @param amount The amount of native assets to wrap
      */
     function _wrapNative(address sender, uint256 amount) internal {
-        int256 nativeDelta = CurrencyLibrary.ADDRESS_ZERO.getDelta(sender);
-        if (nativeDelta < 0) {
-            // if the native delta is negative, then the caller is in debt to protocol. Tx will fail.
-            revert Errors.InvalidAmount(amount, 0);
-        }
-        uint256 wrapAmt = amount > uint256(nativeDelta) ? uint256(nativeDelta) : amount;
+        uint256 wrapAmt = MMLiquidityLib._wrapNative(address(WETH9), sender, amount);
         if (wrapAmt > 0) {
             _wrap(wrapAmt); // deposit ETH to WETH into this contract
-            _accountDelta(CurrencyLibrary.ADDRESS_ZERO, -SafeCast.toInt128(wrapAmt), sender);
-            _accountDelta(Currency.wrap(address(WETH9)), SafeCast.toInt128(wrapAmt), sender);
         }
     }
 
@@ -517,17 +296,9 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler, NativeWrappe
      * @param amount The amount of WETH to unwrap
      */
     function _unwrapNative(address sender, uint256 amount) internal {
-        Currency weth = Currency.wrap(address(WETH9));
-        int256 wethDelta = weth.getDelta(sender);
-        if (wethDelta < 0) {
-            // if the WETH delta is negative, then the caller is in debt to protocol. Tx will fail.
-            revert Errors.InvalidAmount(amount, 0);
-        }
-        uint256 unwrapAmt = amount > uint256(wethDelta) ? uint256(wethDelta) : amount;
+        uint256 unwrapAmt = MMLiquidityLib._unwrapNative(address(WETH9), sender, amount);
         if (unwrapAmt > 0) {
             _unwrap(unwrapAmt); // withdraw WETH to ETH into this contract
-            _accountDelta(weth, -SafeCast.toInt128(unwrapAmt), sender);
-            _accountDelta(CurrencyLibrary.ADDRESS_ZERO, SafeCast.toInt128(unwrapAmt), sender);
         }
     }
 }

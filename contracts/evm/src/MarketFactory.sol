@@ -20,6 +20,7 @@ import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {IMarketVault} from "./interfaces/IMarketVault.sol";
 import {LiquidityUtils} from "./libraries/LiquidityUtils.sol";
 import {Errors} from "./libraries/Errors.sol";
+import {VTSOrchestrator} from "./VTSOrchestrator.sol";
 
 /**
  * @title MarketFactory
@@ -34,6 +35,7 @@ contract MarketFactory is IMarketFactory, Ownable {
     address public coreHook;
     address public marketDeployer;
     ILiquidityHub public immutable liquidityHub;
+    VTSOrchestrator public immutable vtsOrchestrator;
     address public mmPositionManager;
 
     // Mapping from core pool ID to proxy pool ID
@@ -55,11 +57,13 @@ contract MarketFactory is IMarketFactory, Ownable {
         address _liquidityHub,
         address _oracleHelper,
         address _mmPositionManager,
+        address _vtsOrchestrator,
         address[] memory _bounds
     ) Ownable(msg.sender) {
         poolManager = IPoolManager(_poolManager);
         liquidityHub = ILiquidityHub(_liquidityHub);
         oracleHelper = IOracleHelper(_oracleHelper);
+        vtsOrchestrator = VTSOrchestrator(payable(_vtsOrchestrator));
         mmPositionManager = _mmPositionManager;
 
         // Set Protocol bounds addresses
@@ -201,7 +205,7 @@ contract MarketFactory is IMarketFactory, Ownable {
         liquidityHub.initialize(lccToken0, lccToken1, marketId, marketRef, true);
 
         // Market was created then we call the VTS manager to store the configuration for the market
-        IVTSManager(coreHook).setMarketVTSConfiguration(corePoolId, vtsConfiguration);
+        vtsOrchestrator.initPool(corePoolKey, vtsConfiguration);
 
         emit MarketCreated(
             corePoolId,

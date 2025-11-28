@@ -2,27 +2,22 @@
 pragma solidity ^0.8.26;
 
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
-import {
-    BalanceDelta,
-    toBalanceDelta
-} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
-import {
-    IPoolManager
-} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
+import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
-
-import {
-    VTSStorage,
-    PositionAccounting,
-    MarketVTSConfiguration
-} from "../types/VTS.sol";
+import {TransientSlots} from "./TransientSlots.sol";
+import {VTSStorage, PositionAccounting, MarketVTSConfiguration} from "../types/VTS.sol";
 import {PositionId, Position} from "../types/Position.sol";
 import {Pool} from "../types/Pool.sol";
 import {LiquidityUtils} from "./LiquidityUtils.sol";
-import {
-    VTSPoolAndPositionAccountingLib
-} from "./VTSPoolAndPositionAccountingLib.sol";
+import {VTSPoolAndPositionAccountingLib} from "./VTSPoolAndPositionAccountingLib.sol";
+import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
+import {console} from "forge-std/console.sol";
+import {ILCC} from "../interfaces/ILCC.sol";
+import {IERC20Minimal} from "@uniswap/v4-core/src/interfaces/external/IERC20Minimal.sol";
+import {ILiquidityHub} from "../interfaces/ILiquidityHub.sol";
+
 
 /// @title VTSSettleLib
 /// @notice Settlement and RFS logic for VTS, operating on VTSStorage
@@ -35,6 +30,7 @@ library VTSSettleLib {
 
     // Maximum positive magnitude representable in int128
     uint256 internal constant INT128_MAX_U = uint256(type(uint128).max) >> 1;
+
     /// @notice Core settlement entrypoint for MM-managed positions
     /// @param s The central VTS storage
     /// @param poolManager The pool manager contract
@@ -78,6 +74,7 @@ library VTSSettleLib {
         // Ie. positive increases, and negative decreases the metric.
         int256 amount0 = int256(delta.amount0());
         int256 amount1 = int256(delta.amount1());
+
 
         // Settle growths and get RFS state
         BalanceDelta rfsDelta;
@@ -135,6 +132,8 @@ library VTSSettleLib {
                     -amount0
                 );
             } else if (amount0 > 0) {
+                console.log("aaaaa amount0 before clamp", amount0);
+                console.log("posRequiredSettlement0", posRequiredSettlement0);
                 // withdrawal: clamp by positionRequiredSettlementDelta
                 // If positionRequiredSettlementDelta > 0, clamp to min(amount0, positionRequiredSettlementDelta)
                 // If positionRequiredSettlementDelta <= 0, clamp to 0
@@ -145,6 +144,7 @@ library VTSSettleLib {
                 } else {
                     amount0 = 0;
                 }
+                console.log("bbbbb amount0 after clamp", amount0);
                 amount0 = VTSPoolAndPositionAccountingLib._updateSettlement(
                     s,
                     positionId,
@@ -179,6 +179,7 @@ library VTSSettleLib {
                 } else {
                     amount1 = 0;
                 }
+
                 amount1 = VTSPoolAndPositionAccountingLib._updateSettlement(
                     s,
                     positionId,
@@ -210,11 +211,11 @@ library VTSSettleLib {
                         amount0 = withdrawable0.toInt256();
                     }
                     amount0 = VTSPoolAndPositionAccountingLib._updateSettlement(
-                        s,
-                        positionId,
-                        0,
-                        -amount0
-                    );
+                            s,
+                            positionId,
+                            0,
+                            -amount0
+                        );
                 } else {
                     // rfsDelta >= 0 means cannot withdraw
                     amount0 = 0;
@@ -240,11 +241,11 @@ library VTSSettleLib {
                         amount1 = withdrawable1.toInt256();
                     }
                     amount1 = VTSPoolAndPositionAccountingLib._updateSettlement(
-                        s,
-                        positionId,
-                        1,
-                        -amount1
-                    );
+                            s,
+                            positionId,
+                            1,
+                            -amount1
+                        );
                 } else {
                     // rfsDelta >= 0 means cannot withdraw
                     amount1 = 0;
@@ -391,6 +392,42 @@ library VTSSettleLib {
         return -magnitude;
     }
 
+    /// @notice Gets the current VTS for a position
+    /// @param s The central VTS storage
+    /// @param positionId The position id
+    /// @return vtsCurrent0 The current VTS for token0
+    /// @return vtsCurrent1 The current VTS for token1
+    function getVTSCurrent(VTSStorage storage s, PositionId positionId) public view returns (uint256 vtsCurrent0, uint256 vtsCurrent1) {
+        PositionAccounting storage pa = s.positionAccounting[positionId];
+        uint256 c0 = pa.commitmentMax.token0;
+        uint256 c1 = pa.commitmentMax.token1;
+        uint256 s0 = pa.settled.token0;
+        uint256 s1 = pa.settled.token1;
+
+        uint256 v0 = c0 > 0 ? FullMath.mulDiv(s0, LiquidityUtils.ONE_WAD, c0) : 0;
+        uint256 v1 = c1 > 0 ? FullMath.mulDiv(s1, LiquidityUtils.ONE_WAD, c1) : 0;
+        return (v0, v1);
+    }
+
+    /// @notice Gets the required VTS for a position
+    /// @param s The central VTS storage
+    /// @param positionId The position id
+    /// @return vtsRequired0 The required VTS for token0 (1e18 scale)
+    /// @return vtsRequired1 The required VTS for token1 (1e18 scale)
+    function getVTSRequired(VTSStorage storage s, PositionId positionId) public view returns (uint256 vtsRequired0, uint256 vtsRequired1) {
+        PositionAccounting storage pa = s.positionAccounting[positionId];
+        uint256 c0 = pa.commitmentMax.token0;
+        uint256 c1 = pa.commitmentMax.token1;
+        uint256 d0 = pa.cumulativeDeficit.token0;
+        uint256 d1 = pa.cumulativeDeficit.token1;
+        vtsRequired0 = c0 == 0
+            ? 0
+            : (d0 >= c0 ? LiquidityUtils.ONE_WAD : FullMath.mulDiv(d0, LiquidityUtils.ONE_WAD, c0));
+        vtsRequired1 = c1 == 0
+            ? 0
+            : (d1 >= c1 ? LiquidityUtils.ONE_WAD : FullMath.mulDiv(d1, LiquidityUtils.ONE_WAD, c1));
+    }
+
     /// @notice Calculates liquidity units to seize for a given position and settlement delta
     /// @param s The central VTS storage
     /// @param poolManager The pool manager contract
@@ -469,5 +506,77 @@ library VTSSettleLib {
         }
 
         return total;
+    }
+
+    /// @notice Reduces the position required settlement delta
+    //  This is called when a position
+    /// @param positionId The position ID
+    /// @param settlementDelta The settlement delta
+    /// @param positionRequiredSettlementDelta The position required settlement delta
+    function _reducePositionRequiredSettlementDelta(
+        PositionId positionId,
+        BalanceDelta settlementDelta,
+        BalanceDelta positionRequiredSettlementDelta
+    ) public {
+        // whenver there is a settlement, we need to update the transient storage's required settlement delta
+        // make sure this only updates on settlements/deposits and not withdrawals ie. delta is negative because user made a settlement
+        if (settlementDelta.amount0() < 0 || settlementDelta.amount1() < 0) {
+            // if they settle more than the required amount then net to 0 because they would not have any required settlement
+            // i.e set the amount to be the negative of the required amount such that when they are added in the transient storage, it will net to 0
+            int128 cappedSettlementDelta0 = settlementDelta.amount0() <
+                positionRequiredSettlementDelta.amount0()
+                ? positionRequiredSettlementDelta.amount0()
+                : settlementDelta.amount0();
+            int128 cappedSettlementDelta1 = settlementDelta.amount1() <
+                positionRequiredSettlementDelta.amount1()
+                ? positionRequiredSettlementDelta.amount1() : settlementDelta.amount1();
+            
+            // update the transient storage's required settlement delta
+            TransientSlots.addPositionRequiredSettlementDelta(
+                positionId,
+                LiquidityUtils.negateBalanceDelta(
+                    toBalanceDelta(
+                        cappedSettlementDelta0,
+                        cappedSettlementDelta1
+                    )
+                )
+            );
+        }
+    }
+
+    function _unwrapLCC(
+        ILCC lcc,
+        ILiquidityHub liquidityHub,
+        address from,
+        address to,
+        uint256 requested,
+        uint256 availableCredit
+    ) public returns (uint256 unwrapped, address underlying) {
+        // unwrap the lcc from the position
+        underlying = lcc.underlying();
+
+        // Measure recipient underlying balance before unwrap
+        uint256 beforeBal = IERC20Minimal(underlying).balanceOf(to);
+
+        uint256 toUnwrap;
+
+        if (requested == 0) {
+            // Unwrap from deltas: use available credit from this contract's deltas
+            toUnwrap = availableCredit; // Unwrap all available deltas
+        } else {
+            // Unwrap from caller's wallet: transfer LCC from caller to this contract first
+            toUnwrap = requested;
+        }
+
+        if (toUnwrap > 0) {
+            // Route unwrap via LiquidityHub to leverage reserve tracking and settlement queuing
+            if (from != address(this)) {
+                lcc.transferFrom(from, address(this), toUnwrap);
+            }
+            liquidityHub.unwrapTo(address(lcc), to, toUnwrap);
+        }
+
+        // Compute actually unwrapped by observing recipient balance delta
+        unwrapped = IERC20Minimal(underlying).balanceOf(to) - beforeBal;
     }
 }

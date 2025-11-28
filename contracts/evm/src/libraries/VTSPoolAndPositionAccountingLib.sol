@@ -2,9 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
-import {
-    ModifyLiquidityParams
-} from "@uniswap/v4-core/src/types/PoolOperation.sol";
+import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 
 import {
     VTSStorage,
@@ -21,21 +19,12 @@ import {Pool} from "../types/Pool.sol";
 import {Commit} from "../types/Commit.sol";
 import {LiquidityUtils} from "./LiquidityUtils.sol";
 import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
-import {
-    IPoolManager
-} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
-import {
-    StateLibrary
-} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
+import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
+import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
-import {
-    FixedPoint128
-} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint128.sol";
+import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint128.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
-import {
-    BalanceDelta,
-    toBalanceDelta
-} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {CurrencySettler} from "@uniswap/v4-core/test/utils/CurrencySettler.sol";
 
 /// @title VTSPoolAndPositionAccountingLib
@@ -53,11 +42,9 @@ library VTSPoolAndPositionAccountingLib {
     /// @param s The central VTS storage
     /// @param positionId The ascribed id of the position
     /// @param params The parameters of the transaction
-    function _trackCommitment(
-        VTSStorage storage s,
-        PositionId positionId,
-        ModifyLiquidityParams calldata params
-    ) external {
+    function _trackCommitment(VTSStorage storage s, PositionId positionId, ModifyLiquidityParams calldata params)
+        external
+    {
         PositionAccounting storage pa = s.positionAccounting[positionId];
 
         // Current tracked maxima for this position
@@ -68,33 +55,20 @@ library VTSPoolAndPositionAccountingLib {
             // Liquidity added: increase tracked maxima by the delta's maxima over the tick range
             // Cast int256 -> uint256 -> uint128 to preserve full uint128 range (not limited by int128 max)
             uint128 liquidityAdded = uint256(params.liquidityDelta).toUint128();
-            (uint256 addC0, uint256 addC1) = LiquidityUtils
-                .calculateCommitmentMaxima(
-                    params.tickLower,
-                    params.tickUpper,
-                    liquidityAdded
-                );
+            (uint256 addC0, uint256 addC1) =
+                LiquidityUtils.calculateCommitmentMaxima(params.tickLower, params.tickUpper, liquidityAdded);
 
             pa.commitmentMax.token0 = currentC0 + addC0;
             pa.commitmentMax.token1 = currentC1 + addC1;
         } else if (params.liquidityDelta < 0) {
             // Liquidity removed: decrease tracked maxima by the delta's maxima over the tick range
-            uint128 liquidityRemoved = uint256(-params.liquidityDelta)
-                .toUint128();
-            (uint256 subC0, uint256 subC1) = LiquidityUtils
-                .calculateCommitmentMaxima(
-                    params.tickLower,
-                    params.tickUpper,
-                    liquidityRemoved
-                );
+            uint128 liquidityRemoved = uint256(-params.liquidityDelta).toUint128();
+            (uint256 subC0, uint256 subC1) =
+                LiquidityUtils.calculateCommitmentMaxima(params.tickLower, params.tickUpper, liquidityRemoved);
 
             // Clamp at zero to avoid underflow; if fully removed, both become zero
-            pa.commitmentMax.token0 = currentC0 > subC0
-                ? (currentC0 - subC0)
-                : 0;
-            pa.commitmentMax.token1 = currentC1 > subC1
-                ? (currentC1 - subC1)
-                : 0;
+            pa.commitmentMax.token0 = currentC0 > subC0 ? (currentC0 - subC0) : 0;
+            pa.commitmentMax.token1 = currentC1 > subC1 ? (currentC1 - subC1) : 0;
         } else {
             // No-op if liquidityDelta == 0 (poke)
             return;
@@ -107,12 +81,10 @@ library VTSPoolAndPositionAccountingLib {
     /// @param tokenIndex The token index (0 or 1)
     /// @param delta The delta of the settlement
     /// @return applied The applied delta to the total settlement amount
-    function _updateSettlement(
-        VTSStorage storage s,
-        PositionId id,
-        uint8 tokenIndex,
-        int256 delta
-    ) public returns (int256 applied) {
+    function _updateSettlement(VTSStorage storage s, PositionId id, uint8 tokenIndex, int256 delta)
+        public
+        returns (int256 applied)
+    {
         // Derive poolId from position to minimise parameters
         Position memory pos = s.positions[id];
         PoolId poolId = pos.poolId;
@@ -125,9 +97,7 @@ library VTSPoolAndPositionAccountingLib {
         uint256 cumulativeDef = pa.cumulativeDeficit.get(tokenIndex);
         uint256 commitmentDef = pa.commitmentDeficit.get(tokenIndex);
         int256 netSinceLastMod = pa.netSettlementSinceLastMod.get(tokenIndex);
-        uint256 poolNetSinceLastMod = paPool.poolNetSinceLastMod.get(
-            tokenIndex
-        );
+        uint256 poolNetSinceLastMod = paPool.poolNetSinceLastMod.get(tokenIndex);
 
         if (delta == 0) {
             return 0;
@@ -137,25 +107,18 @@ library VTSPoolAndPositionAccountingLib {
         if (delta > 0) {
             // Auto-net any lingering deficit first
             if (cumulativeDef > 0) {
-                uint256 cover = uint256(delta) > cumulativeDef
-                    ? cumulativeDef
-                    : uint256(delta);
+                uint256 cover = uint256(delta) > cumulativeDef ? cumulativeDef : uint256(delta);
                 if (cover > 0) {
                     cumulativeDef -= cover;
                     // keep global coherent
                     uint256 gD = paPool.globalDeficit.get(tokenIndex);
-                    paPool.globalDeficit.set(
-                        tokenIndex,
-                        cover <= gD ? (gD - cover) : 0
-                    );
+                    paPool.globalDeficit.set(tokenIndex, cover <= gD ? (gD - cover) : 0);
                     delta -= int256(cover);
                 }
             }
             // Then net against commitment-scoped deficit (insolvency gate)
             if (delta > 0 && commitmentDef > 0) {
-                uint256 coverCd = uint256(delta) > commitmentDef
-                    ? commitmentDef
-                    : uint256(delta);
+                uint256 coverCd = uint256(delta) > commitmentDef ? commitmentDef : uint256(delta);
                 if (coverCd > 0) {
                     commitmentDef -= coverCd;
                     delta -= int256(coverCd);
@@ -189,41 +152,133 @@ library VTSPoolAndPositionAccountingLib {
         if (pos.commitId > 0) {
             Commit storage commit = s.commits[pos.commitId];
             Pool storage pool = s.pools[poolId];
-            Currency currency = tokenIndex == 0
-                ? pool.currency0
-                : pool.currency1;
+            Currency currency = tokenIndex == 0 ? pool.currency0 : pool.currency1;
 
             uint256 commitSettled = commit.settled[currency];
             if (applied > 0) {
                 commit.settled[currency] = commitSettled + uint256(applied);
             } else if (applied < 0) {
                 uint256 subtract = uint256(-applied);
-                commit.settled[currency] = subtract > commitSettled
-                    ? 0
-                    : (commitSettled - subtract);
+                commit.settled[currency] = subtract > commitSettled ? 0 : (commitSettled - subtract);
             }
         }
 
         // Accrue persistent nets since last fee finalisation
         pa.netSettlementSinceLastMod.set(tokenIndex, netSinceLastMod + applied);
         if (applied >= 0) {
-            paPool.poolNetSinceLastMod.set(
-                tokenIndex,
-                poolNetSinceLastMod + uint256(applied)
-            );
+            paPool.poolNetSinceLastMod.set(tokenIndex, poolNetSinceLastMod + uint256(applied));
         } else {
             uint256 dec = uint256(-applied);
             uint256 curPoolNet = poolNetSinceLastMod;
-            paPool.poolNetSinceLastMod.set(
-                tokenIndex,
-                dec > curPoolNet ? 0 : (curPoolNet - dec)
-            );
+            paPool.poolNetSinceLastMod.set(tokenIndex, dec > curPoolNet ? 0 : (curPoolNet - dec));
         }
     }
 
     // --------------------------------------------------
     // Growth Accounting Helper Functions
     // --------------------------------------------------
+
+    /// @notice Called by the hook on tick cross to flip outside growth for a tick
+    function _onTickCross(VTSStorage storage s, IPoolManager poolManager, PoolId poolId, int24 tick, uint8 token)
+        public
+    {
+        // Flip deficit growth outside
+        _flipOutside(s, poolId, tick, token, 0);
+        // Flip inflow growth outside
+        _flipOutside(s, poolId, tick, token, 1);
+        // Flip coverage usage growth outside
+        _flipOutside(s, poolId, tick, token, 2);
+
+        // Apply residual if any when liquidity becomes active
+        PoolAccounting storage paPool = s.poolAccounting[poolId];
+        uint256 residual = paPool.coverageResidual.get(token);
+        if (residual > 0) {
+            uint128 liq = StateLibrary.getLiquidity(poolManager, poolId);
+            if (liq > 0) {
+                uint256 deltaG = FullMath.mulDiv(residual, FixedPoint128.Q128, uint256(liq));
+                uint256 currentGrowth = paPool.coverageUseGrowthGlobal.get(token);
+                paPool.coverageUseGrowthGlobal.set(token, currentGrowth + deltaG);
+                paPool.coverageResidual.set(token, 0);
+            }
+        }
+    }
+
+    /// @notice Flip outside growth for a tick
+    /// @param s The central VTS storage
+    /// @param poolId The pool ID
+    /// @param tick The tick
+    /// @param token The token index (0 or 1)
+    /// @param growthType The growth type (0 = deficit, 1 = inflow, 2 = coverage usage)
+    function _flipOutside(VTSStorage storage s, PoolId poolId, int24 tick, uint8 token, uint8 growthType) public {
+        if (token > 1) return;
+        PoolAccounting storage paPool = s.poolAccounting[poolId];
+        uint256 g;
+        GrowthPair storage outsidePair;
+
+        if (growthType == 0) {
+            // Deficit growth
+            g = paPool.deficitGrowthGlobal.get(token);
+            outsidePair = s.deficitGrowthOutside[poolId][tick];
+        } else if (growthType == 1) {
+            // Inflow growth
+            g = paPool.inflowGrowthGlobal.get(token);
+            outsidePair = s.inflowGrowthOutside[poolId][tick];
+        } else if (growthType == 2) {
+            // Coverage usage growth
+            g = paPool.coverageUseGrowthGlobal.get(token);
+            outsidePair = s.coverageUseGrowthOutside[poolId][tick];
+        } else {
+            return;
+        }
+
+        uint256 o = token == 0 ? outsidePair.token0 : outsidePair.token1;
+        uint256 newOutside = g - o;
+        if (token == 0) {
+            outsidePair.token0 = newOutside;
+        } else {
+            outsidePair.token1 = newOutside;
+        }
+    }
+
+    /// @notice Accrue growth to a pool's global accumulator (per token) using current in-range liquidity
+    /// @param s The central VTS storage
+    /// @param poolId The pool ID
+    /// @param token The token index (0 or 1)
+    /// @param amount The amount to accrue
+    /// @param liquidity The current in-range liquidity
+    function _accrueDeficitGlobalGrowth(
+        VTSStorage storage s,
+        PoolId poolId,
+        uint8 token,
+        uint256 amount,
+        uint128 liquidity
+    ) public {
+        if (token > 1 || amount == 0 || liquidity == 0) return;
+        uint256 deltaG = FullMath.mulDiv(amount, FixedPoint128.Q128, uint256(liquidity));
+        PoolAccounting storage paPool = s.poolAccounting[poolId];
+        uint256 currentGrowth = paPool.deficitGrowthGlobal.get(token);
+        paPool.deficitGrowthGlobal.set(token, currentGrowth + deltaG);
+    }
+
+    /// @notice Accrue inflow growth to a pool's global accumulator (per token) using current in-range liquidity
+    /// @param s The central VTS storage
+    /// @param poolId The pool ID
+    /// @param token The token index (0 or 1)
+    /// @param amount The amount to accrue
+    /// @param liquidity The current in-range liquidity
+    function _accrueInflowGlobalGrowth(
+        VTSStorage storage s,
+        PoolId poolId,
+        uint8 token,
+        uint256 amount,
+        uint128 liquidity
+    ) public {
+        if (token > 1 || amount == 0 || liquidity == 0) return;
+        uint256 deltaG = FullMath.mulDiv(amount, FixedPoint128.Q128, uint256(liquidity));
+        PoolAccounting storage paPool = s.poolAccounting[poolId];
+        uint256 currentGrowth = paPool.inflowGrowthGlobal.get(token);
+        paPool.inflowGrowthGlobal.set(token, currentGrowth + deltaG);
+    }
 
     /// @notice Compute inside growth for a position range using GrowthPair-based outside mappings
     /// @param poolId The pool ID
@@ -273,14 +328,7 @@ library VTSPoolAndPositionAccountingLib {
         uint8 snapField0,
         uint8 snapField1
     ) private returns (uint256 add0, uint256 add1) {
-        (uint256 inside0, uint256 inside1) = _growthInside(
-            poolId,
-            tickLower,
-            tickUpper,
-            global0,
-            global1,
-            outsideMap
-        );
+        (uint256 inside0, uint256 inside1) = _growthInside(poolId, tickLower, tickUpper, global0, global1, outsideMap);
 
         // Read last snapshots based on field identifier
         uint256 lastSnap0;
@@ -310,18 +358,12 @@ library VTSPoolAndPositionAccountingLib {
         uint256 d0 = inside0 - lastSnap0;
         uint256 d1 = inside1 - lastSnap1;
         if (liquidity > 0) {
-            if (d0 > 0)
-                add0 = FullMath.mulDiv(
-                    d0,
-                    uint256(liquidity),
-                    FixedPoint128.Q128
-                );
-            if (d1 > 0)
-                add1 = FullMath.mulDiv(
-                    d1,
-                    uint256(liquidity),
-                    FixedPoint128.Q128
-                );
+            if (d0 > 0) {
+                add0 = FullMath.mulDiv(d0, uint256(liquidity), FixedPoint128.Q128);
+            }
+            if (d1 > 0) {
+                add1 = FullMath.mulDiv(d1, uint256(liquidity), FixedPoint128.Q128);
+            }
         }
     }
 
@@ -329,18 +371,12 @@ library VTSPoolAndPositionAccountingLib {
     /// @param s The central VTS storage
     /// @param poolManager The pool manager contract
     /// @param positionId The position ID
-    function _settlePositionDeficitGrowth(
-        VTSStorage storage s,
-        IPoolManager poolManager,
-        PositionId positionId
-    ) public {
+    function _settlePositionDeficitGrowth(VTSStorage storage s, IPoolManager poolManager, PositionId positionId)
+        public
+    {
         Position memory pos = s.positions[positionId];
         PoolId poolId = pos.poolId;
-        uint128 liq = StateLibrary.getPositionLiquidity(
-            poolManager,
-            poolId,
-            PositionId.unwrap(positionId)
-        );
+        uint128 liq = StateLibrary.getPositionLiquidity(poolManager, poolId, PositionId.unwrap(positionId));
 
         PoolAccounting storage paPool = s.poolAccounting[poolId];
         PositionAccounting storage pa = s.positionAccounting[positionId];
@@ -392,18 +428,10 @@ library VTSPoolAndPositionAccountingLib {
     /// @param s The central VTS storage
     /// @param poolManager The pool manager contract
     /// @param positionId The position ID
-    function _settlePositionInflowGrowth(
-        VTSStorage storage s,
-        IPoolManager poolManager,
-        PositionId positionId
-    ) public {
+    function _settlePositionInflowGrowth(VTSStorage storage s, IPoolManager poolManager, PositionId positionId) public {
         Position memory pos = s.positions[positionId];
         PoolId poolId = pos.poolId;
-        uint128 liq = StateLibrary.getPositionLiquidity(
-            poolManager,
-            poolId,
-            PositionId.unwrap(positionId)
-        );
+        uint128 liq = StateLibrary.getPositionLiquidity(poolManager, poolId, PositionId.unwrap(positionId));
 
         PoolAccounting storage paPool = s.poolAccounting[poolId];
         PositionAccounting storage pa = s.positionAccounting[positionId];
@@ -452,23 +480,14 @@ library VTSPoolAndPositionAccountingLib {
         uint128 positionLiquidity
     ) public returns (uint256 fees, uint256 ofDelta) {
         Position memory pos = s.positions[positionId];
-        (uint256 fg0, uint256 fg1) = StateLibrary.getFeeGrowthInside(
-            poolManager,
-            poolId,
-            pos.tickLower,
-            pos.tickUpper
-        );
+        (uint256 fg0, uint256 fg1) = StateLibrary.getFeeGrowthInside(poolManager, poolId, pos.tickLower, pos.tickUpper);
         uint256 fg = tokenIndex == 0 ? fg0 : fg1;
 
         PositionAccounting storage pa = s.positionAccounting[positionId];
         uint256 last = pa.feeGrowthInsideLast.get(tokenIndex);
 
         if (positionLiquidity > 0 && fg > last) {
-            fees = FullMath.mulDiv(
-                fg - last,
-                uint256(positionLiquidity),
-                FixedPoint128.Q128
-            );
+            fees = FullMath.mulDiv(fg - last, uint256(positionLiquidity), FixedPoint128.Q128);
         } else {
             fees = 0;
         }
@@ -487,18 +506,10 @@ library VTSPoolAndPositionAccountingLib {
     /// @param s The central VTS storage
     /// @param poolManager The pool manager contract
     /// @param positionId The position ID
-    function _settleCoverageUsage(
-        VTSStorage storage s,
-        IPoolManager poolManager,
-        PositionId positionId
-    ) public {
+    function _settleCoverageUsage(VTSStorage storage s, IPoolManager poolManager, PositionId positionId) public {
         Position memory pos = s.positions[positionId];
         PoolId poolId = pos.poolId;
-        uint128 liq = StateLibrary.getPositionLiquidity(
-            poolManager,
-            poolId,
-            PositionId.unwrap(positionId)
-        );
+        uint128 liq = StateLibrary.getPositionLiquidity(poolManager, poolId, PositionId.unwrap(positionId));
 
         PoolAccounting storage paPool = s.poolAccounting[poolId];
         PositionAccounting storage pa = s.positionAccounting[positionId];
@@ -517,26 +528,10 @@ library VTSPoolAndPositionAccountingLib {
         );
 
         if (cov0 > 0) {
-            _applyCoverageBurn(
-                s,
-                poolManager,
-                positionId,
-                poolId,
-                0,
-                cov0,
-                liq
-            );
+            _applyCoverageBurn(s, poolManager, positionId, poolId, 0, cov0, liq);
         }
         if (cov1 > 0) {
-            _applyCoverageBurn(
-                s,
-                poolManager,
-                positionId,
-                poolId,
-                1,
-                cov1,
-                liq
-            );
+            _applyCoverageBurn(s, poolManager, positionId, poolId, 1, cov1, liq);
         }
     }
 
@@ -567,14 +562,7 @@ library VTSPoolAndPositionAccountingLib {
         if (cEff == 0 || d == 0) return;
         uint256 burnBase = cEff < d ? cEff : d; // min(coverage, deficit)
 
-        (uint256 fees, uint256 ofDelta) = _readFeesAndCheckpoint(
-            s,
-            poolManager,
-            id,
-            p,
-            tokenIndex,
-            positionLiquidity
-        );
+        (uint256 fees, uint256 ofDelta) = _readFeesAndCheckpoint(s, poolManager, id, p, tokenIndex, positionLiquidity);
         if (fees == 0 || ofDelta == 0) return;
 
         Pool memory pool = s.pools[p];
@@ -584,35 +572,21 @@ library VTSPoolAndPositionAccountingLib {
 
         // feesBurn = fees * (burnBase / ofDelta) * bps/10000
         uint256 feesBurn = FullMath.mulDiv(fees, burnBase, ofDelta);
-        feesBurn = FullMath.mulDiv(
-            feesBurn,
-            bps,
-            LiquidityUtils.BPS_DENOMINATOR
-        );
+        feesBurn = FullMath.mulDiv(feesBurn, bps, LiquidityUtils.BPS_DENOMINATOR);
         if (feesBurn == 0) return;
         if (feesBurn > fees) feesBurn = fees; // clamp to fees accrued
 
         uint256 growthInc = 0;
         if (positionLiquidity > 0) {
-            growthInc = FullMath.mulDiv(
-                feesBurn,
-                FixedPoint128.Q128,
-                uint256(positionLiquidity)
-            );
+            growthInc = FullMath.mulDiv(feesBurn, FixedPoint128.Q128, uint256(positionLiquidity));
             // Burn by advancing fee growth baseline
             uint256 currentFeeGrowth = pa.feeGrowthInsideLast.get(tokenIndex);
-            pa.feeGrowthInsideLast.set(
-                tokenIndex,
-                currentFeeGrowth + growthInc
-            );
+            pa.feeGrowthInsideLast.set(tokenIndex, currentFeeGrowth + growthInc);
         }
 
         PoolAccounting storage paPool = s.poolAccounting[p];
         uint256 currentProtocolFee = paPool.protocolFeeAccrued.get(tokenIndex);
-        paPool.protocolFeeAccrued.set(
-            tokenIndex,
-            currentProtocolFee + feesBurn
-        );
+        paPool.protocolFeeAccrued.set(tokenIndex, currentProtocolFee + feesBurn);
         uint256 currentFeesShared = pa.feesShared.get(tokenIndex);
         pa.feesShared.set(tokenIndex, currentFeesShared + feesBurn);
         int256 currentPendingAdj = pa.pendingFeeAdj.get(tokenIndex);
@@ -623,11 +597,7 @@ library VTSPoolAndPositionAccountingLib {
     /// @param s The central VTS storage
     /// @param poolManager The pool manager contract
     /// @param positionId The position ID
-    function _settlePositionGrowths(
-        VTSStorage storage s,
-        IPoolManager poolManager,
-        PositionId positionId
-    ) external {
+    function _settlePositionGrowths(VTSStorage storage s, IPoolManager poolManager, PositionId positionId) external {
         _settlePositionDeficitGrowth(s, poolManager, positionId);
         _settlePositionInflowGrowth(s, poolManager, positionId);
         _settleCoverageUsage(s, poolManager, positionId);
@@ -642,10 +612,11 @@ library VTSPoolAndPositionAccountingLib {
     /// @param positionId The position ID
     /// @return adj0 The pending fee adjustment for token0 (+slash, -bonus)
     /// @return adj1 The pending fee adjustment for token1 (+slash, -bonus)
-    function _peekFeeAdjustment(
-        VTSStorage storage s,
-        PositionId positionId
-    ) public view returns (int256 adj0, int256 adj1) {
+    function _peekFeeAdjustment(VTSStorage storage s, PositionId positionId)
+        public
+        view
+        returns (int256 adj0, int256 adj1)
+    {
         PositionAccounting storage pa = s.positionAccounting[positionId];
         adj0 = pa.pendingFeeAdj.token0;
         adj1 = pa.pendingFeeAdj.token1;
@@ -772,6 +743,7 @@ library VTSPoolAndPositionAccountingLib {
         pa.pendingFeeAdj.token1 = pend1 - mat1;
 
         adj = LiquidityUtils.safeToBalanceDelta(mat0, mat1);
+        // TODO: move all storage manipulation to the calling contract i.e the vtsOrchestrator
         // Note: Transient storage handling for MM positions should be done by the calling contract
         // if (isMMPosition) {
         //     TransientSlots.addFeeAdjDelta(adj);
@@ -831,11 +803,7 @@ library VTSPoolAndPositionAccountingLib {
             // Dust guard
             if (uint256(selfNet) < 1e12) continue;
 
-            uint256 bonus = FullMath.mulDiv(
-                potAvail,
-                uint256(selfNet),
-                totalNetBefore
-            );
+            uint256 bonus = FullMath.mulDiv(potAvail, uint256(selfNet), totalNetBefore);
             if (bonus > potAvail) bonus = potAvail;
 
             // Deduct from pot, keep self-contrib excluded
@@ -851,9 +819,7 @@ library VTSPoolAndPositionAccountingLib {
             if (selfNet0 > 0) {
                 uint256 cur0 = paPool.poolNetSinceLastMod.token0;
                 uint256 dec0 = uint256(selfNet0);
-                paPool.poolNetSinceLastMod.token0 = dec0 > cur0
-                    ? 0
-                    : (cur0 - dec0);
+                paPool.poolNetSinceLastMod.token0 = dec0 > cur0 ? 0 : (cur0 - dec0);
             }
         }
         if (selfNet1 != 0) {
@@ -861,22 +827,11 @@ library VTSPoolAndPositionAccountingLib {
             if (selfNet1 > 0) {
                 uint256 cur1 = paPool.poolNetSinceLastMod.token1;
                 uint256 dec1 = uint256(selfNet1);
-                paPool.poolNetSinceLastMod.token1 = dec1 > cur1
-                    ? 0
-                    : (cur1 - dec1);
+                paPool.poolNetSinceLastMod.token1 = dec1 > cur1 ? 0 : (cur1 - dec1);
             }
         }
 
-        return
-            _finaliseFeeAdjustment(
-                s,
-                poolManager,
-                positionId,
-                poolId,
-                currency0,
-                currency1,
-                isMMPosition
-            );
+        return _finaliseFeeAdjustment(s, poolManager, positionId, poolId, currency0, currency1, isMMPosition);
     }
 
     /// @notice Increment protocol or proactive excess liquidity coverage on LCC unwrap, consuming proactive pool first
@@ -898,25 +853,18 @@ library VTSPoolAndPositionAccountingLib {
 
         if (liq > 0) {
             // Accrue coverage usage growth per-liquidity (outflow weight basis at current tick)
-            uint256 deltaG = FullMath.mulDiv(
-                coveredAmount,
-                FixedPoint128.Q128,
-                uint256(liq)
-            );
-            uint256 currentGrowth = paPool.coverageUseGrowthGlobal.get(
-                tokenIndex
-            );
-            paPool.coverageUseGrowthGlobal.set(
-                tokenIndex,
-                currentGrowth + deltaG
-            );
+            uint256 deltaG = FullMath.mulDiv(coveredAmount, FixedPoint128.Q128, uint256(liq));
+            uint256 currentGrowth = paPool.coverageUseGrowthGlobal.get(tokenIndex);
+            paPool.coverageUseGrowthGlobal.set(tokenIndex, currentGrowth + deltaG);
         } else {
             // No in-range liquidity; defer to residual
             uint256 currentResidual = paPool.coverageResidual.get(tokenIndex);
-            paPool.coverageResidual.set(
-                tokenIndex,
-                currentResidual + coveredAmount
-            );
+            paPool.coverageResidual.set(tokenIndex, currentResidual + coveredAmount);
         }
+    }
+
+    /// @dev Check if fee sharing is enabled for a pool
+    function _isFeeSharingEnabled(VTSStorage storage s, PoolId p) internal view returns (bool) {
+        return s.pools[p].vtsConfig.coverageFeeShare > 0;
     }
 }

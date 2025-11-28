@@ -64,6 +64,8 @@ contract CompleteDeployScript is ScriptHelper {
     address public poolManagerAddress;
     address public create2Deployer;
     address payable public positionManagerAddress;
+    // TODO: Deploy VTSOrchestrator before deploying CoreHook
+    address public vtsOrchestrator = makeAddr("vtsOrchestrator");
     string public networkName;
 
     function run() external {
@@ -220,7 +222,9 @@ contract CompleteDeployScript is ScriptHelper {
         console.log("CoreHook will be deployed to:", hookAddress);
         console.log("CoreHook salt:", vm.toString(salt));
 
-        CoreHook deployedHook = new CoreHook{salt: salt}(poolManagerAddress, marketFactory, address(mmPositionManager));
+        CoreHook deployedHook = new CoreHook{
+            salt: salt
+        }(poolManagerAddress, marketFactory, address(mmPositionManager), address(vtsOrchestrator));
         require(address(deployedHook) == hookAddress, "CoreHook: address mismatch");
 
         return address(deployedHook);
@@ -245,6 +249,7 @@ contract CompleteDeployScript is ScriptHelper {
             liquidityHub,
             oracleHelper,
             address(0), // mmPositionManager - will be set when creating markets
+            vtsOrchestrator,
             initialBounds
         );
 
@@ -283,13 +288,13 @@ contract CompleteDeployScript is ScriptHelper {
      * @return The deployed MMPositionManager address
      */
     function _deployMMPositionManager() internal returns (address) {
-        // Query WETH9 from the deployed PositionManager contract
-        IWETH9 weth9 = PositionManager(positionManagerAddress).WETH9();
-        console.log("WETH9 queried from PositionManager:", address(weth9));
-
         address commitmentDescriptorAddr = _deployCommitmentDescriptor();
         MMPositionManager positionManager = new MMPositionManager(
-            poolManagerAddress, signalManager, marketFactory, settlementObserver, commitmentDescriptorAddr, weth9
+            poolManagerAddress,
+            signalManager,
+            marketFactory,
+            vtsOrchestrator,
+            commitmentDescriptorAddr
         );
         console.log("MMPositionManager deployed at:", address(positionManager));
         return address(positionManager);
