@@ -2,9 +2,7 @@
 pragma solidity ^0.8.0;
 
 import {PositionMeta} from "../types/Position.sol";
-import {PositionId} from "../types/Position.sol";
-import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
-import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {PositionId, Position} from "../types/Position.sol";
 import {MarketMaker} from "../libraries/MarketMaker.sol";
 
 /// @title IMMPositionManager
@@ -22,15 +20,11 @@ interface IMMPositionManager {
     /// @param params the parameters to provide for the actions
     function modifyLiquiditiesWithoutUnlock(bytes calldata actions, bytes[] calldata params) external payable;
 
-    /// @notice Used to get the ID that will be used for the next minted commitment NFT
-    /// @return uint256 The next token ID
-    function getNextTokenId() external view returns (uint256);
-
     /// @notice Returns the position information for a given token ID and position index
     /// @param tokenId the ERC721 tokenId (commitment NFT ID)
     /// @param positionIndex the index of the position within the commitment
     /// @return PositionMeta the position metadata
-    function getPosition(uint256 tokenId, uint256 positionIndex) external view returns (PositionMeta memory);
+    function getPosition(uint256 tokenId, uint256 positionIndex) external view returns (Position memory);
 
     /// @notice Returns the position ID for a given token ID and position index
     /// @param tokenId the ERC721 tokenId (commitment NFT ID)
@@ -38,18 +32,15 @@ interface IMMPositionManager {
     /// @return PositionId the position ID
     function getPositionId(uint256 tokenId, uint256 positionIndex) external view returns (PositionId);
 
-    /// @notice Returns the number of positions associated with a commitment NFT
-    /// @param tokenId the ERC721 tokenId (commitment NFT ID)
-    /// @return uint256 the number of positions
-    function commitToPositionCount(uint256 tokenId) external view returns (uint256);
-
     /// @notice Returns the commit information for a given commitment NFT
     /// @param tokenId the ERC721 tokenId (commitment NFT ID)
     /// @return state the MarketMaker.State associated with the commitment
     /// @return expiresAt the expiry timestamp of the commitment
-    /// @return poolId the pool ID associated with the commitment
+    /// @return positionCount the number of positions associated with the commitment
+    /// @return deficitBps the deficit basis points associated with the commitment
     function commitOf(uint256 tokenId)
         external
         view
-        returns (MarketMaker.State memory state, uint256 expiresAt, PoolId poolId);
+        returns (MarketMaker.State memory state, uint256 expiresAt, uint256 positionCount, uint256 deficitBps);
+
 }
