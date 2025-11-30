@@ -42,5 +42,4 @@ interface IMMPositionManager {
         external
         view
         returns (MarketMaker.State memory state, uint256 expiresAt, uint256 positionCount, uint256 deficitBps);
-
 }
