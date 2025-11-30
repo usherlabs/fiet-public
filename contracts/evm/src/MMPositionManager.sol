@@ -46,13 +46,7 @@ import {Position} from "./types/Position.sol";
 import {IMarketVault} from "./interfaces/IMarketVault.sol";
 import {BalanceDelta, toBalanceDelta, add} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 
-contract MMPositionManager is
-    ERC721Permit_v4,
-    IMMPositionManager,
-    ReentrancyLock,
-    Multicall_v4,
-    BaseActionsRouter
-{
+contract MMPositionManager is ERC721Permit_v4, IMMPositionManager, ReentrancyLock, Multicall_v4, BaseActionsRouter {
     using SafeCast for uint256;
     using PositionLibrary for PositionId;
     using MarketMaker for MarketMaker.State;
@@ -116,7 +110,6 @@ contract MMPositionManager is
         liquidityHub = marketFactory.liquidityHub();
     }
 
-
     /// @notice Reverts if the caller is not the owner or approved for the ERC721 token
     /// @param caller The address of the caller
     /// @param tokenId the unique identifier of the ERC721 token
@@ -152,8 +145,6 @@ contract MMPositionManager is
     function msgSender() public view override returns (address) {
         return _getLocker();
     }
-
-
 
     // --------------------------------------------------------------------------------
     // Uniswap-like batch entrypoints and dispatcher
@@ -244,8 +235,7 @@ contract MMPositionManager is
             return;
         }
         if (action == uint256(MMAction.DECLARE_UNBACKED_COMMITMENT)) {
-            (uint256 tokenId, bytes memory liquiditySignal) =
-                abi.decode(params, (uint256, bytes));
+            (uint256 tokenId, bytes memory liquiditySignal) = abi.decode(params, (uint256, bytes));
             // declare an unbacked commitment. A third-party guarantor action; no approval required
             vtsOrchestrator.declareUnbackedCommitment(msgSender(), tokenId, liquiditySignal);
             return;
@@ -326,22 +316,18 @@ contract MMPositionManager is
         revert("UnsupportedAction");
     }
 
-
-
     // ------------------------------------------------------------------------------------------------
     // MM Position Manager functions
     // ------------------------------------------------------------------------------------------------
-
 
     /// @notice Returns the position information for a given token ID and position index
     /// @param tokenId the ERC721 tokenId (commitment NFT ID)
     /// @param positionIndex the index of the position within the commitment
     /// @return Position the position information
     function getPosition(uint256 tokenId, uint256 positionIndex) public view returns (Position memory) {
-        (Position memory position, ) = vtsOrchestrator.getPosition(tokenId, positionIndex);
+        (Position memory position,) = vtsOrchestrator.getPosition(tokenId, positionIndex);
         return position;
     }
-
 
     /**
      * @dev This function returns the position ID for a given token ID and position index
@@ -368,7 +354,6 @@ contract MMPositionManager is
     // ------------------------------------------------------------------------------------------------
     // MM Position Manager functions
     // ------------------------------------------------------------------------------------------------
-
 
     // ------------------------------------------------------------------------------------------------
     // Handler functions for the defined actions
@@ -411,7 +396,7 @@ contract MMPositionManager is
         return seizedLiquidityUnits;
     }
 
-    /** 
+    /**
      * @dev This function is used to decommit a position for a given token id
      * @param poolKey The pool key for the position
      * @param tokenId The token id to decommit the position for
@@ -421,7 +406,7 @@ contract MMPositionManager is
         onlyIfApproved(msgSender(), tokenId)
         // onlyValidCommit(poolKey, tokenId)
 
-    {   
+    {
         // this logic would be taken out and the user would have to burn each position individually
         // get all positions attached to this token id
         // uint256 positionCount = commitToPositionCount[tokenId];
@@ -450,7 +435,6 @@ contract MMPositionManager is
     function _burnPosition(PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex)
         internal
         onlyIfApproved(msgSender(), tokenId)
-
     {
         _burnPositionInternal(poolKey, tokenId, positionIndex);
     }
@@ -511,7 +495,6 @@ contract MMPositionManager is
     function _mintFromDeltas(PoolKey memory poolKey, uint256 tokenId, int24 tickLower, int24 tickUpper)
         internal
         onlyIfApproved(msgSender(), tokenId)
-
     {
         // Compute underying liquidity from credits (via router helper)
         uint256 liquidityFromDeltas = vtsOrchestrator.getLiquidityFromDeltas(msgSender(), poolKey, tickLower, tickUpper);
@@ -573,10 +556,10 @@ contract MMPositionManager is
         int24 tickUpper,
         uint256 liquidity
     ) internal returns (PositionId positionId, uint256 positionIndex) {
-        (positionId, positionIndex) =
-            vtsOrchestrator.mintPosition(msgSender(), poolKey, tokenId, tickLower, tickUpper, liquidity);
+        (positionId, positionIndex) = vtsOrchestrator.mintPosition(
+            msgSender(), poolKey, tokenId, tickLower, tickUpper, liquidity
+        );
     }
-
 
     /**
      * @dev This function is used to mint a new position for a given token id
@@ -603,11 +586,13 @@ contract MMPositionManager is
      * @param currency1 The address of the currency1 to get the settlement delta for
      * @return settlementDelta The settlement delta for the given user and currency pair
      */
-    function getSettlementDelta(address user, address currency0, address currency1) external view returns (BalanceDelta) {
+    function getSettlementDelta(address user, address currency0, address currency1)
+        external
+        view
+        returns (BalanceDelta)
+    {
         return vtsOrchestrator.getSettlementDelta(user, currency0, currency1);
     }
-
-
 
     /// @dev overrides transferFrom to revert if pool manager is locked
     /// @dev mirrors PositionManager and prevents transfers while an unlock session is active (mid-batch), avoiding inconsistent state/reentrancy around router-locked flows.

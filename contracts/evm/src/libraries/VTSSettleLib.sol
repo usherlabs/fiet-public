@@ -18,7 +18,6 @@ import {ILCC} from "../interfaces/ILCC.sol";
 import {IERC20Minimal} from "@uniswap/v4-core/src/interfaces/external/IERC20Minimal.sol";
 import {ILiquidityHub} from "../interfaces/ILiquidityHub.sol";
 
-
 /// @title VTSSettleLib
 /// @notice Settlement and RFS logic for VTS, operating on VTSStorage
 /// @dev All helper functions are external/public for linked-library usage. Functions that are conceptually internal are prefixed with `_`.
@@ -52,14 +51,7 @@ library VTSSettleLib {
         BalanceDelta delta,
         bool isSeizing,
         BalanceDelta positionRequiredSettlementDelta // TODO: To replace with currencyDelta0/1
-    )
-        public
-        returns (
-            BalanceDelta settlementDelta,
-            bool rfsOpen,
-            uint256 seizedLiquidityUnits
-        )
-    {
+    ) public returns (BalanceDelta settlementDelta, bool rfsOpen, uint256 seizedLiquidityUnits) {
         Position memory pos = s.positions[positionId];
         PoolId poolId = pos.poolId;
 
@@ -75,34 +67,19 @@ library VTSSettleLib {
         int256 amount0 = int256(delta.amount0());
         int256 amount1 = int256(delta.amount1());
 
-
         // Settle growths and get RFS state
         BalanceDelta rfsDelta;
-        VTSPoolAndPositionAccountingLib._settlePositionGrowths(
-            s,
-            poolManager,
-            positionId
-        );
+        VTSPoolAndPositionAccountingLib._settlePositionGrowths(s, poolManager, positionId);
         (rfsOpen, rfsDelta) = _getRFS(s, positionId);
 
         // Handle settlement based on position state
         if (!pos.isActive) {
             // Inactive: unrestricted deposits/settlements
             if (amount0 != 0) {
-                amount0 = VTSPoolAndPositionAccountingLib._updateSettlement(
-                    s,
-                    positionId,
-                    0,
-                    -amount0
-                );
+                amount0 = VTSPoolAndPositionAccountingLib._updateSettlement(s, positionId, 0, -amount0);
             }
             if (amount1 != 0) {
-                amount1 = VTSPoolAndPositionAccountingLib._updateSettlement(
-                    s,
-                    positionId,
-                    1,
-                    -amount1
-                );
+                amount1 = VTSPoolAndPositionAccountingLib._updateSettlement(s, positionId, 1, -amount1);
             }
         } else if (isSeizing) {
             // Seizing: clamp deposits (negative settlementDelta) by positive rfsDelta
@@ -111,10 +88,8 @@ library VTSSettleLib {
 
             // Read the required settlement delta from position modifications
             // Signs: negative delta = caller owes liquidity (deposit), positive = protocol owes (withdrawal)
-            int128 posRequiredSettlement0 = positionRequiredSettlementDelta
-                .amount0();
-            int128 posRequiredSettlement1 = positionRequiredSettlementDelta
-                .amount1();
+            int128 posRequiredSettlement0 = positionRequiredSettlementDelta.amount0();
+            int128 posRequiredSettlement1 = positionRequiredSettlementDelta.amount1();
 
             if (amount0 < 0) {
                 // deposit: clamp by positive rfsDelta
@@ -125,12 +100,7 @@ library VTSSettleLib {
                         amount0 = maxDeposit0;
                     }
                 }
-                amount0 = VTSPoolAndPositionAccountingLib._updateSettlement(
-                    s,
-                    positionId,
-                    0,
-                    -amount0
-                );
+                amount0 = VTSPoolAndPositionAccountingLib._updateSettlement(s, positionId, 0, -amount0);
             } else if (amount0 > 0) {
                 console.log("aaaaa amount0 before clamp", amount0);
                 console.log("posRequiredSettlement0", posRequiredSettlement0);
@@ -145,12 +115,7 @@ library VTSSettleLib {
                     amount0 = 0;
                 }
                 console.log("bbbbb amount0 after clamp", amount0);
-                amount0 = VTSPoolAndPositionAccountingLib._updateSettlement(
-                    s,
-                    positionId,
-                    0,
-                    -amount0
-                );
+                amount0 = VTSPoolAndPositionAccountingLib._updateSettlement(s, positionId, 0, -amount0);
             }
 
             if (amount1 < 0) {
@@ -162,12 +127,7 @@ library VTSSettleLib {
                         amount1 = maxDeposit1;
                     }
                 }
-                amount1 = VTSPoolAndPositionAccountingLib._updateSettlement(
-                    s,
-                    positionId,
-                    1,
-                    -amount1
-                );
+                amount1 = VTSPoolAndPositionAccountingLib._updateSettlement(s, positionId, 1, -amount1);
             } else if (amount1 > 0) {
                 // withdrawal: clamp by positionRequiredSettlementDelta
                 // If positionRequiredSettlementDelta > 0, clamp to min(amount1, positionRequiredSettlementDelta)
@@ -180,12 +140,7 @@ library VTSSettleLib {
                     amount1 = 0;
                 }
 
-                amount1 = VTSPoolAndPositionAccountingLib._updateSettlement(
-                    s,
-                    positionId,
-                    1,
-                    -amount1
-                );
+                amount1 = VTSPoolAndPositionAccountingLib._updateSettlement(s, positionId, 1, -amount1);
             }
         } else {
             // Active and not seizing: validate and apply RFS clamps
@@ -204,105 +159,63 @@ library VTSSettleLib {
                 // Clamp by rfsDelta: if rfsDelta < 0, then -rfsDelta is withdrawable
                 int128 rfs0 = rfsDelta.amount0();
                 if (rfs0 < 0) {
-                    uint256 withdrawable0 = LiquidityUtils.safeInt128ToUint256(
-                        rfs0
-                    );
+                    uint256 withdrawable0 = LiquidityUtils.safeInt128ToUint256(rfs0);
                     if (uint256(amount0) > withdrawable0) {
                         amount0 = withdrawable0.toInt256();
                     }
-                    amount0 = VTSPoolAndPositionAccountingLib._updateSettlement(
-                            s,
-                            positionId,
-                            0,
-                            -amount0
-                        );
+                    amount0 = VTSPoolAndPositionAccountingLib._updateSettlement(s, positionId, 0, -amount0);
                 } else {
                     // rfsDelta >= 0 means cannot withdraw
                     amount0 = 0;
                 }
             } else if (amount0 < 0) {
                 // deposit
-                amount0 = VTSPoolAndPositionAccountingLib._updateSettlement(
-                    s,
-                    positionId,
-                    0,
-                    -amount0
-                );
+                amount0 = VTSPoolAndPositionAccountingLib._updateSettlement(s, positionId, 0, -amount0);
             }
             if (amount1 > 0) {
                 // withdraw
                 // Clamp by rfsDelta: if rfsDelta < 0, then -rfsDelta is withdrawable
                 int128 rfs1 = rfsDelta.amount1();
                 if (rfs1 < 0) {
-                    uint256 withdrawable1 = LiquidityUtils.safeInt128ToUint256(
-                        rfs1
-                    );
+                    uint256 withdrawable1 = LiquidityUtils.safeInt128ToUint256(rfs1);
                     if (uint256(amount1) > withdrawable1) {
                         amount1 = withdrawable1.toInt256();
                     }
-                    amount1 = VTSPoolAndPositionAccountingLib._updateSettlement(
-                            s,
-                            positionId,
-                            1,
-                            -amount1
-                        );
+                    amount1 = VTSPoolAndPositionAccountingLib._updateSettlement(s, positionId, 1, -amount1);
                 } else {
                     // rfsDelta >= 0 means cannot withdraw
                     amount1 = 0;
                 }
             } else if (amount1 < 0) {
                 // deposit
-                amount1 = VTSPoolAndPositionAccountingLib._updateSettlement(
-                    s,
-                    positionId,
-                    1,
-                    -amount1
-                );
+                amount1 = VTSPoolAndPositionAccountingLib._updateSettlement(s, positionId, 1, -amount1);
             }
         }
 
         // Clamps within _updateSettlement may modify the return delta. Flip the signs on amount0 and amount1 to match caller-context delta.
-        settlementDelta = LiquidityUtils.negateBalanceDelta(
-            toBalanceDelta(amount0.toInt128(), amount1.toInt128())
-        );
+        settlementDelta = LiquidityUtils.negateBalanceDelta(toBalanceDelta(amount0.toInt128(), amount1.toInt128()));
 
         // Calculate seized liquidity units when seizing
         if (isSeizing) {
-            seizedLiquidityUnits = _calcSeizure(
-                s,
-                poolManager,
-                positionId,
-                settlementDelta
-            );
+            seizedLiquidityUnits = _calcSeizure(s, poolManager, positionId, settlementDelta);
         } else {
             seizedLiquidityUnits = 0;
         }
 
         // Proactive extraction (incremental): fund only increases in pending slashes since last observation to avoid over-funding
         {
-            (int256 adj0, int256 adj1) = VTSPoolAndPositionAccountingLib
-                ._peekFeeAdjustment(s, positionId);
+            (int256 adj0, int256 adj1) = VTSPoolAndPositionAccountingLib._peekFeeAdjustment(s, positionId);
             int256 prev0 = pa.lastFundedPendingAdj.token0;
             int256 prev1 = pa.lastFundedPendingAdj.token1;
 
             if (adj0 > prev0) {
                 VTSPoolAndPositionAccountingLib._fundFeePot(
-                    s,
-                    poolManager,
-                    poolId,
-                    lccCurrency0,
-                    0,
-                    uint256(adj0 - prev0)
+                    s, poolManager, poolId, lccCurrency0, 0, uint256(adj0 - prev0)
                 );
             }
             if (adj1 > prev1) {
                 VTSPoolAndPositionAccountingLib._fundFeePot(
-                    s,
-                    poolManager,
-                    poolId,
-                    lccCurrency1,
-                    1,
-                    uint256(adj1 - prev1)
+                    s, poolManager, poolId, lccCurrency1, 1, uint256(adj1 - prev1)
                 );
             }
 
@@ -317,10 +230,11 @@ library VTSSettleLib {
     /// @param positionId The position id
     /// @return rfsOpen Whether the RFS is open
     /// @return delta The settlement delta required/available
-    function _getRFS(
-        VTSStorage storage s,
-        PositionId positionId
-    ) public view returns (bool rfsOpen, BalanceDelta delta) {
+    function _getRFS(VTSStorage storage s, PositionId positionId)
+        public
+        view
+        returns (bool rfsOpen, BalanceDelta delta)
+    {
         PositionAccounting storage pa = s.positionAccounting[positionId];
         Position memory pos = s.positions[positionId];
         Pool memory pool = s.pools[pos.poolId];
@@ -337,13 +251,8 @@ library VTSSettleLib {
 
         // Base-required per token (commitment * baseVTSRate). RfS gates by max(deficitReq, baseReq)
         MarketVTSConfiguration memory cfg = pool.vtsConfig;
-        (uint256 base0, uint256 base1) = LiquidityUtils
-            .getBaseSettlementAmounts(
-                c0,
-                c1,
-                cfg.token0.baseVTSRate,
-                cfg.token1.baseVTSRate
-            );
+        (uint256 base0, uint256 base1) =
+            LiquidityUtils.getBaseSettlementAmounts(c0, c1, cfg.token0.baseVTSRate, cfg.token1.baseVTSRate);
 
         // Cap deficits by commitment
         uint256 defReq0 = d0 < c0 ? d0 : c0;
@@ -377,10 +286,7 @@ library VTSSettleLib {
     /// @param settled Current settled amount
     /// @param need Required amount
     /// @return deltaRaw Signed delta in raw units
-    function _rfsDeltaRaw(
-        uint256 settled,
-        uint256 need
-    ) public pure returns (int128 deltaRaw) {
+    function _rfsDeltaRaw(uint256 settled, uint256 need) public pure returns (int128 deltaRaw) {
         if (need >= settled) {
             uint256 pos = need - settled; // rfs is the needed minus the already settled
             if (pos > INT128_MAX_U) return type(int128).max;
@@ -397,7 +303,11 @@ library VTSSettleLib {
     /// @param positionId The position id
     /// @return vtsCurrent0 The current VTS for token0
     /// @return vtsCurrent1 The current VTS for token1
-    function getVTSCurrent(VTSStorage storage s, PositionId positionId) public view returns (uint256 vtsCurrent0, uint256 vtsCurrent1) {
+    function getVTSCurrent(VTSStorage storage s, PositionId positionId)
+        public
+        view
+        returns (uint256 vtsCurrent0, uint256 vtsCurrent1)
+    {
         PositionAccounting storage pa = s.positionAccounting[positionId];
         uint256 c0 = pa.commitmentMax.token0;
         uint256 c1 = pa.commitmentMax.token1;
@@ -414,18 +324,20 @@ library VTSSettleLib {
     /// @param positionId The position id
     /// @return vtsRequired0 The required VTS for token0 (1e18 scale)
     /// @return vtsRequired1 The required VTS for token1 (1e18 scale)
-    function getVTSRequired(VTSStorage storage s, PositionId positionId) public view returns (uint256 vtsRequired0, uint256 vtsRequired1) {
+    function getVTSRequired(VTSStorage storage s, PositionId positionId)
+        public
+        view
+        returns (uint256 vtsRequired0, uint256 vtsRequired1)
+    {
         PositionAccounting storage pa = s.positionAccounting[positionId];
         uint256 c0 = pa.commitmentMax.token0;
         uint256 c1 = pa.commitmentMax.token1;
         uint256 d0 = pa.cumulativeDeficit.token0;
         uint256 d1 = pa.cumulativeDeficit.token1;
-        vtsRequired0 = c0 == 0
-            ? 0
-            : (d0 >= c0 ? LiquidityUtils.ONE_WAD : FullMath.mulDiv(d0, LiquidityUtils.ONE_WAD, c0));
-        vtsRequired1 = c1 == 0
-            ? 0
-            : (d1 >= c1 ? LiquidityUtils.ONE_WAD : FullMath.mulDiv(d1, LiquidityUtils.ONE_WAD, c1));
+        vtsRequired0 =
+            c0 == 0 ? 0 : (d0 >= c0 ? LiquidityUtils.ONE_WAD : FullMath.mulDiv(d0, LiquidityUtils.ONE_WAD, c0));
+        vtsRequired1 =
+            c1 == 0 ? 0 : (d1 >= c1 ? LiquidityUtils.ONE_WAD : FullMath.mulDiv(d1, LiquidityUtils.ONE_WAD, c1));
     }
 
     /// @notice Calculates liquidity units to seize for a given position and settlement delta
@@ -441,11 +353,7 @@ library VTSSettleLib {
         BalanceDelta settlementDelta
     ) public returns (uint256 seizedLiquidityUnits) {
         // Settle growths first
-        VTSPoolAndPositionAccountingLib._settlePositionGrowths(
-            s,
-            poolManager,
-            positionId
-        );
+        VTSPoolAndPositionAccountingLib._settlePositionGrowths(s, poolManager, positionId);
 
         Position memory pos = s.positions[positionId];
         (bool rfsOpen, BalanceDelta rfsDelta) = _getRFS(s, positionId);
@@ -461,12 +369,8 @@ library VTSSettleLib {
         uint256 c1 = pa.commitmentMax.token1;
         uint256 r0 = LiquidityUtils.safeInt128ToUint256(rfsDelta.amount0());
         uint256 r1 = LiquidityUtils.safeInt128ToUint256(rfsDelta.amount1());
-        uint256 s0 = LiquidityUtils.safeInt128ToUint256(
-            settlementDelta.amount0()
-        );
-        uint256 s1 = LiquidityUtils.safeInt128ToUint256(
-            settlementDelta.amount1()
-        );
+        uint256 s0 = LiquidityUtils.safeInt128ToUint256(settlementDelta.amount0());
+        uint256 s1 = LiquidityUtils.safeInt128ToUint256(settlementDelta.amount1());
 
         MarketVTSConfiguration memory cfg = pool.vtsConfig;
 
@@ -493,9 +397,7 @@ library VTSSettleLib {
         uint256 total = u0 + u1;
 
         // Apply residual threshold: if remaining liquidity would be below minResidualUnits, fully close the position
-        uint256 minResidual = cfg.minResidualUnits == 0
-            ? 1
-            : cfg.minResidualUnits;
+        uint256 minResidual = cfg.minResidualUnits == 0 ? 1 : cfg.minResidualUnits;
         if (total < liq) {
             if ((liq - total) < minResidual) {
                 total = liq;
@@ -523,23 +425,17 @@ library VTSSettleLib {
         if (settlementDelta.amount0() < 0 || settlementDelta.amount1() < 0) {
             // if they settle more than the required amount then net to 0 because they would not have any required settlement
             // i.e set the amount to be the negative of the required amount such that when they are added in the transient storage, it will net to 0
-            int128 cappedSettlementDelta0 = settlementDelta.amount0() <
-                positionRequiredSettlementDelta.amount0()
+            int128 cappedSettlementDelta0 = settlementDelta.amount0() < positionRequiredSettlementDelta.amount0()
                 ? positionRequiredSettlementDelta.amount0()
                 : settlementDelta.amount0();
-            int128 cappedSettlementDelta1 = settlementDelta.amount1() <
-                positionRequiredSettlementDelta.amount1()
-                ? positionRequiredSettlementDelta.amount1() : settlementDelta.amount1();
-            
+            int128 cappedSettlementDelta1 = settlementDelta.amount1() < positionRequiredSettlementDelta.amount1()
+                ? positionRequiredSettlementDelta.amount1()
+                : settlementDelta.amount1();
+
             // update the transient storage's required settlement delta
             TransientSlots.addPositionRequiredSettlementDelta(
                 positionId,
-                LiquidityUtils.negateBalanceDelta(
-                    toBalanceDelta(
-                        cappedSettlementDelta0,
-                        cappedSettlementDelta1
-                    )
-                )
+                LiquidityUtils.negateBalanceDelta(toBalanceDelta(cappedSettlementDelta0, cappedSettlementDelta1))
             );
         }
     }

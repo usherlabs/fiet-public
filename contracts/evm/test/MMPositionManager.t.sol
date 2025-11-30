@@ -972,7 +972,8 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         IERC20(lcc0.underlying()).transfer(guarantor, amount0);
         IERC20(lcc1.underlying()).transfer(guarantor, amount1);
 
-        BalanceDelta requiredSettlementDeltaBefore = vtsOrchestrator.getSettlementDelta(address(guarantor), address(lcc0), address(lcc1));
+        BalanceDelta requiredSettlementDeltaBefore =
+            vtsOrchestrator.getSettlementDelta(address(guarantor), address(lcc0), address(lcc1));
 
         vm.startPrank(guarantor);
         IERC20(lcc0.underlying()).approve(address(vtsOrchestrator), amount0);
@@ -992,7 +993,8 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         console.log("positionLiquidityAfterSeize", uint256(positionAfterSeize.liquidity));
 
         // get the position required settlement delta
-        BalanceDelta requiredSettlementDeltaAFter = vtsOrchestrator.getSettlementDelta(address(guarantor), address(lcc0), address(lcc1));
+        BalanceDelta requiredSettlementDeltaAFter =
+            vtsOrchestrator.getSettlementDelta(address(guarantor), address(lcc0), address(lcc1));
 
         console.log("requiredSettlementDelta0Before", requiredSettlementDeltaBefore.amount0());
         console.log("requiredSettlementDelta1Before", requiredSettlementDeltaBefore.amount1());
@@ -1036,9 +1038,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         vm.mockCall(
             address(signalManager),
             abi.encodeWithSelector(
-                bytes4(keccak256("verifyLiquiditySignal(bytes,bool)")),
-                unbackedLiquiditySignal,
-                true
+                bytes4(keccak256("verifyLiquiditySignal(bytes,bool)")), unbackedLiquiditySignal, true
             ),
             abi.encode(true, 10)
         );
@@ -1046,7 +1046,11 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         // get the amount of tokens that will be minted using the parameters
         (uint160 sqrtPriceX96, int24 currentTick,,) = manager.getSlot0(corePoolKey.toId());
         (uint256 a0, uint256 a1) = LiquidityUtils.calculateEffectiveTokenAmounts(
-            sqrtPriceX96, currentTick, liquidityParams.tickLower, liquidityParams.tickUpper, liquidityParams.liquidityDelta
+            sqrtPriceX96,
+            currentTick,
+            liquidityParams.tickLower,
+            liquidityParams.tickUpper,
+            liquidityParams.liquidityDelta
         );
 
         // get liquidity in position 0
@@ -1067,7 +1071,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         // get liquidity in position 0
         (Position memory positionAfterDeclare,) = vtsOrchestrator.getPosition(tokenId, positionIndex);
         console.log("positionLiquidityAfterDeclare", uint256(positionAfterDeclare.liquidity));
-
     }
 
     /**
@@ -1077,17 +1080,13 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
      * @param percentageIncreaseBps The percentage increase in basis points (e.g., 2000 for 20%)
      * @return y The calculated value
      */
-    function calculateY(uint256 x, uint256 signalUSD, uint256 percentageIncreaseBps) 
-        public 
-        pure 
-        returns (uint256 y) 
-    {
+    function calculateY(uint256 x, uint256 signalUSD, uint256 percentageIncreaseBps) public pure returns (uint256 y) {
         require(x > 0, "x must be greater than 0");
-        
+
         // Calculate: y = (signalUSD * (10000 + percentageIncreaseBps)) / (x * 2 * 10000)
         uint256 numerator = signalUSD * (10000 + percentageIncreaseBps);
         uint256 denominator = x * 2 * 10000;
-        
+
         y = numerator / denominator;
     }
 }

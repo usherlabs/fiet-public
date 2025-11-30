@@ -37,8 +37,12 @@ import {console} from "forge-std/console.sol";
 /// @author Fiet Protocol
 library VTSCommitLib {
     event SignalCommitted(uint256 tokenId);
-    event PoolInitialized(PoolId indexed corePoolId, address indexed currency0, address indexed currency1, MarketVTSConfiguration vtsConfiguration);
-
+    event PoolInitialized(
+        PoolId indexed corePoolId,
+        address indexed currency0,
+        address indexed currency1,
+        MarketVTSConfiguration vtsConfiguration
+    );
 
     using StateLibrary for IPoolManager;
     using TransientStateLibrary for IPoolManager;
@@ -203,7 +207,7 @@ library VTSCommitLib {
     ) public view returns (uint256 issuedUsd, uint256 settledUsd, uint256 signalUsd) {
         issuedUsd = _issuedUSDValue(s, oracleHelper, tokenId);
         settledUsd = _settledUSDValue(s, oracleHelper, tokenId);
-        signalUsd = _signalUSDValue(s, oracleHelper, tokenId);   
+        signalUsd = _signalUSDValue(s, oracleHelper, tokenId);
 
         if (errorIfInsufficientBacking) {
             if (issuedUsd > signalUsd + settledUsd) {
@@ -245,11 +249,11 @@ library VTSCommitLib {
     /// @param oracleHelper The oracle helper for USD price calculations
     /// @param tokenId The commit NFT id
     /// @return totalUsdValue Total USD value of commitment maxima (averaged)
-    function _issuedUSDValue(
-        VTSStorage storage s,
-        IOracleHelper oracleHelper,
-        uint256 tokenId
-    ) public view returns (uint256 totalUsdValue) {
+    function _issuedUSDValue(VTSStorage storage s, IOracleHelper oracleHelper, uint256 tokenId)
+        public
+        view
+        returns (uint256 totalUsdValue)
+    {
         Commit storage commit = s.commits[tokenId];
         uint256 positionCount = commit.positionCount;
 
@@ -355,8 +359,11 @@ library VTSCommitLib {
         return _mmStateUsdValue(mmState, oracleHelper);
     }
 
-
-    function _mmStateUsdValue(MarketMaker.State memory mmState, IOracleHelper oracleHelper) public view returns (uint256 totalUsdValue) {
+    function _mmStateUsdValue(MarketMaker.State memory mmState, IOracleHelper oracleHelper)
+        public
+        view
+        returns (uint256 totalUsdValue)
+    {
         (string[] memory tickers, uint256[] memory amounts) = MarketMaker.getReserves(mmState);
         totalUsdValue = oracleHelper.getTotalUsdValue(tickers, amounts);
     }
@@ -365,11 +372,9 @@ library VTSCommitLib {
     /// @param s The central VTS storage
     /// @param poolKey The pool key
     /// @param vtsConfiguration The VTS configuration
-    function _initPool(
-        VTSStorage storage s,
-        PoolKey memory poolKey,
-        MarketVTSConfiguration memory vtsConfiguration
-    ) public {
+    function _initPool(VTSStorage storage s, PoolKey memory poolKey, MarketVTSConfiguration memory vtsConfiguration)
+        public
+    {
         // initialize the market details in the VTS state
         s.pools[poolKey.toId()] = Pool({
             id: poolKey.toId(),
@@ -380,10 +385,7 @@ library VTSCommitLib {
         });
 
         emit PoolInitialized(
-            poolKey.toId(),
-            Currency.unwrap(poolKey.currency0),
-            Currency.unwrap(poolKey.currency1),
-            vtsConfiguration
+            poolKey.toId(), Currency.unwrap(poolKey.currency0), Currency.unwrap(poolKey.currency1), vtsConfiguration
         );
     }
 
@@ -464,7 +466,7 @@ library VTSCommitLib {
             amountToDecrease = uint256(type(int256).max); // clamp by max.
         }
 
-        return (position, amountToDecrease);      
+        return (position, amountToDecrease);
     }
 
     function _clampSettlementDeltaByAvailableLiquidities(
@@ -485,9 +487,7 @@ library VTSCommitLib {
         PoolKey memory poolKey
     ) public returns (BalanceDelta cancelDelta, BalanceDelta diff) {
         BalanceDelta availableDelta = _clampSettlementDeltaByAvailableLiquidities(
-            marketFactory,
-            settlementDelta,
-            poolKey.toId()
+            marketFactory, settlementDelta, poolKey.toId()
         );
 
         diff = settlementDelta - availableDelta;
@@ -516,9 +516,7 @@ library VTSCommitLib {
 
     function _isSeizing(PositionId positionId) public view returns (bool) {
         PositionId seizedPositionId = TransientSlots.getSeizedPositionId();
-        return
-            PositionId.unwrap(seizedPositionId) ==
-            PositionId.unwrap(positionId);
+        return PositionId.unwrap(seizedPositionId) == PositionId.unwrap(positionId);
     }
 
     function _onModifyPositionLiquidity(
@@ -526,7 +524,15 @@ library VTSCommitLib {
         BalanceDelta positionDelta,
         BalanceDelta feesAccrued,
         ModifyLiquidityParams memory params
-    ) public returns (PositionId id, BalanceDelta requiredSettlementDelta, BalanceDelta accruedFeesAfterAdj, BalanceDelta principalDelta) {
+    )
+        public
+        returns (
+            PositionId id,
+            BalanceDelta requiredSettlementDelta,
+            BalanceDelta accruedFeesAfterAdj,
+            BalanceDelta principalDelta
+        )
+    {
         // ---- Fee adjustment handling for the modified position ----
         // Consume fee adjustment materialised by _processPositionFees
         BalanceDelta feeAdj = TransientSlots.consumeFeeAdjDelta();
@@ -545,17 +551,13 @@ library VTSCommitLib {
         // Signs: negative delta = caller owes liquidity (deposit), positive = protocol owes (withdrawal)
         id = PositionLibrary.generateId(positionManager, params);
 
-
         bool isSeizing = _isSeizing(id);
 
         if (isSeizing) {
-            requiredSettlementDelta = TransientSlots
-                .consumeSeizedSettlementDelta(id);
+            requiredSettlementDelta = TransientSlots.consumeSeizedSettlementDelta(id);
         } else {
-            requiredSettlementDelta = TransientSlots
-                .readPositionRequiredSettlementDelta(id);
+            requiredSettlementDelta = TransientSlots.readPositionRequiredSettlementDelta(id);
         }
-
     }
 
     /// @notice Declares a commitment deficit for a position
@@ -576,10 +578,7 @@ library VTSCommitLib {
 
         // verify the proofs associated with the state
         signalManager.verifyLiquiditySignal(liquiditySignal, true);
-        LiquiditySignal memory newSignal = abi.decode(
-            liquiditySignal,
-            (LiquiditySignal)
-        );
+        LiquiditySignal memory newSignal = abi.decode(liquiditySignal, (LiquiditySignal));
 
         MarketMaker.State memory oldMmState = s.commits[tokenId].mmState;
         // Validate declaration conditions:
@@ -589,36 +588,20 @@ library VTSCommitLib {
         // - The caller cannot be approved or owner of the commitment NFT - prevents self-declaration
         // The advancer is the declaring party, authorised to prove unbacked status and enable seizure.
         if (
-            newSignal.mmState.owner != oldMmState.owner ||
-            sender != newSignal.mmState.advancer ||
-            newSignal.mmState.advancer == newSignal.mmState.owner
+            newSignal.mmState.owner != oldMmState.owner || sender != newSignal.mmState.advancer
+                || newSignal.mmState.advancer == newSignal.mmState.owner
         ) {
             revert Errors.InvalidSender();
         }
 
-
         // --- Compute commitment-level discrepancy D in USD using helpers
-        uint256 issuedUsd = _issuedUSDValue(
-            s,
-            oracleHelper,
-            tokenId
-        );
-        uint256 settledUsd = _settledUSDValue(
-            s,
-            oracleHelper,
-            tokenId
-        );
-        uint256 signalUsd = _mmStateUsdValue(
-            newSignal.mmState,
-            oracleHelper
-        );
+        uint256 issuedUsd = _issuedUSDValue(s, oracleHelper, tokenId);
+        uint256 settledUsd = _settledUSDValue(s, oracleHelper, tokenId);
+        uint256 signalUsd = _mmStateUsdValue(newSignal.mmState, oracleHelper);
 
         // If no discrepancy, revert
         if (issuedUsd <= signalUsd + settledUsd) {
-            revert Errors.InvalidLiquiditySignal(
-                signalUsd + settledUsd,
-                issuedUsd
-            );
+            revert Errors.InvalidLiquiditySignal(signalUsd + settledUsd, issuedUsd);
         }
         uint256 commitmentDeficitUsd = issuedUsd - (signalUsd + settledUsd);
 
@@ -627,20 +610,12 @@ library VTSCommitLib {
         // This ensures BPS <= 10000 (deficit cannot exceed issued)
         uint256 n = s.commits[tokenId].positionCount;
         if (n == 0) {
-            revert Errors.InvalidPosition(
-                tokenId,
-                0,
-                PositionId.wrap(bytes32(0))
-            );
+            revert Errors.InvalidPosition(tokenId, 0, PositionId.wrap(bytes32(0)));
         }
         if (issuedUsd == 0) {
             revert Errors.InvalidLiquiditySignal(0, 0);
         }
-        uint256 totalDeficitBps = FullMath.mulDiv(
-            commitmentDeficitUsd,
-            LiquidityUtils.BPS_DENOMINATOR,
-            issuedUsd
-        );
+        uint256 totalDeficitBps = FullMath.mulDiv(commitmentDeficitUsd, LiquidityUtils.BPS_DENOMINATOR, issuedUsd);
 
         PositionId[] memory ids = new PositionId[](n);
         for (uint256 i = 0; i < n; i++) {
@@ -648,12 +623,7 @@ library VTSCommitLib {
             // Force open and elapse grace for immediate seizure across all positions in this commitment
             CheckpointLibrary._forceOpenAndElapse(s, tokenId, i);
         }
-        _applyCommitmentDeficit(
-            s,
-            positionManager,
-            ids,
-            totalDeficitBps
-        );
+        _applyCommitmentDeficit(s, positionManager, ids, totalDeficitBps);
     }
 
     function _renewSignal(
@@ -669,18 +639,10 @@ library VTSCommitLib {
 
         // Verify new signal once (nonce bump) and decode
         (, uint256 expirySeconds) = signalManager.verifyLiquiditySignal(liquiditySignal, true);
-        LiquiditySignal memory signal = abi.decode(
-            liquiditySignal,
-            (LiquiditySignal)
-        );
+        LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
 
         // Compute USD values for invariant check and deficit clearing using helpers
-        _totalCommitmentUsdValue(
-            s,
-            oracleHelper,
-            tokenId,
-            true
-        );
+        _totalCommitmentUsdValue(s, oracleHelper, tokenId, true);
 
         // Persist signal state (only state and expiresAt)
         Commit storage commit = s.commits[tokenId];
@@ -697,5 +659,4 @@ library VTSCommitLib {
         // Use applyCommitmentDeficit with bps=0 to clear deficits
         _applyCommitmentDeficit(s, address(this), ids, 0);
     }
-
 }

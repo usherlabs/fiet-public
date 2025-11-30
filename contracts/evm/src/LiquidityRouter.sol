@@ -14,25 +14,25 @@ import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {CurrencyLibrary} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {TransientStateLibrary} from "v4-periphery/lib/v4-core/src/libraries/TransientStateLibrary.sol";
-import {Errors} from "../libraries/Errors.sol";
+import {Errors} from "./libraries/Errors.sol";
 import {ImmutableState} from "v4-periphery/src/base/ImmutableState.sol";
-import {MarketHandler} from "./MarketHandler.sol";
-import {CurrencyTransfer} from "../libraries/CurrencyTransfer.sol";
-import {IMarketVault} from "../interfaces/IMarketVault.sol";
+import {MarketHandler} from "./modules/MarketHandler.sol";
+import {CurrencyTransfer} from "./libraries/CurrencyTransfer.sol";
+import {IMarketVault} from "./interfaces/IMarketVault.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
-import {LiquidityUtils} from "../libraries/LiquidityUtils.sol";
-import {ILCC} from "../interfaces/ILCC.sol";
+import {LiquidityUtils} from "./libraries/LiquidityUtils.sol";
+import {ILCC} from "./interfaces/ILCC.sol";
 import {CurrencyDelta} from "v4-periphery/lib/v4-core/src/libraries/CurrencyDelta.sol";
 import {NonzeroDeltaCount} from "@uniswap/v4-core/src/libraries/NonzeroDeltaCount.sol";
 import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
-import {TransientSlots} from "../libraries/TransientSlots.sol";
-import {NativeWrapper} from "./NativeWrapper.sol";
+import {TransientSlots} from "./libraries/TransientSlots.sol";
+import {NativeWrapper} from "./modules/NativeWrapper.sol";
 import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
 import {Constants} from "@uniswap/v4-core/test/utils/Constants.sol";
 import {console} from "forge-std/console.sol";
-import {MMLiquidityLib} from "../libraries/MMLiquidityLib.sol";
-import {PositionId} from "../types/Position.sol";
+import {MMLiquidityLib} from "./libraries/MMLiquidityLib.sol";
+import {PositionId} from "./types/Position.sol";
 
 /**
  * @title LiquidityRouter
@@ -54,7 +54,7 @@ import {PositionId} from "../types/Position.sol";
  * Note: LCCs are never settled in. MMP is responsible for issuing/cancelling (ie. mint/burn) LCCs per positions based on (out-of-protocol) liquidity signals.
  *       However, LCC acrrued as fees can be taken from the MMP.
  */
-abstract contract LiquidityRouter is ImmutableState, MarketHandler, NativeWrapper {
+contract NewLiquidityRouter is ImmutableState, MarketHandler, NativeWrapper {
     using CurrencySettler for Currency;
     using CurrencyTransfer for Currency;
     using CurrencyLibrary for Currency;
@@ -69,9 +69,11 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler, NativeWrappe
 
     /**
      * @notice Constructs the LiquidityRouter
+     * @param _poolManager Address of the PoolManager contract
      * @param _marketFactory Address of the MarketFactory contract
+     * @param _weth9 Address of the WETH9 contract
      */
-    constructor(address _marketFactory, IWETH9 _weth9) MarketHandler(_marketFactory) NativeWrapper(_weth9) {}
+    constructor(address _poolManager, address _marketFactory, IWETH9 _weth9) ImmutableState(IPoolManager(_poolManager)) MarketHandler(_marketFactory) NativeWrapper(_weth9) {}
 
     /**
      * @notice Modifies liquidity parameters of LCC-based position in a Uniswap V4 pool via the PoolManager
@@ -90,7 +92,7 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler, NativeWrappe
      * Note: The pool manager must already be unlocked by the caller before calling this function.
      */
     function _modifyPositionLiquidity(PoolKey memory key, ModifyLiquidityParams memory params, bytes memory hookData)
-        internal
+        public
         virtual
         returns (BalanceDelta delta, BalanceDelta feesAccrued)
     {
@@ -104,7 +106,7 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler, NativeWrappe
      * @param sender The address to prime credits for
      * @param lccCurrency The LCC currency to prime credits for
      */
-    function _primeUnderlyingDelta(address sender, Currency lccCurrency) internal {
+    function _primeUnderlyingDelta(address sender, Currency lccCurrency) public {
         MMLiquidityLib._primeUnderlyingDelta(_persistentUnderlyingCredits, lccCurrency, sender);
     }
 
@@ -137,7 +139,7 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler, NativeWrappe
         BalanceDelta settlementDelta,
         Currency lccCurrency0,
         Currency lccCurrency1
-    ) internal returns (BalanceDelta usedDelta) {
+    ) public returns (BalanceDelta usedDelta) {
         usedDelta = MMLiquidityLib._settleUnderlyingDelta(
             marketFactory, sender, poolId, settlementDelta, lccCurrency0, lccCurrency1
         );
@@ -151,7 +153,7 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler, NativeWrappe
      * @return settlementDelta The settlement delta for the sender
      */
     function _getUnderlyingSettlementDelta(address sender, Currency lccCurrency0, Currency lccCurrency1)
-        internal
+        public
         view
         returns (BalanceDelta)
     {
@@ -185,7 +187,7 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler, NativeWrappe
         BalanceDelta settlementDelta,
         Currency lccCurrency0,
         Currency lccCurrency1
-    ) internal {
+    ) public {
         MMLiquidityLib._persistUnderlyingDelta(
             _persistentUnderlyingCredits, sender, settlementDelta, lccCurrency0, lccCurrency1
         );
@@ -216,7 +218,7 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler, NativeWrappe
      * @param delta The delta to account
      * @param target The target address to account the delta for
      */
-    function _accountDelta(Currency currency, int128 delta, address target) internal {
+    function _accountDelta(Currency currency, int128 delta, address target) public {
         MMLiquidityLib._accountDelta(currency, delta, target);
     }
 
@@ -234,7 +236,7 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler, NativeWrappe
         BalanceDelta targetSettlementDelta,
         Currency currency0,
         Currency currency1
-    ) internal {
+    ) public {
         MMLiquidityLib._accountUnderlyingSettlementDeltaChange(sender, targetSettlementDelta, currency0, currency1);
     }
 
@@ -246,7 +248,7 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler, NativeWrappe
      * @param to The recipient address
      * @param maxAmount The maximum amount to take (use type(uint256).max for full available)
      */
-    function _take(Currency currency, address sender, address to, uint256 maxAmount) internal {
+    function _take(Currency currency, address sender, address to, uint256 maxAmount) public {
         MMLiquidityLib._take(currency, sender, to, maxAmount);
     }
 
@@ -256,7 +258,7 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler, NativeWrappe
      * @param target The target address to check delta for
      * @return The positive delta amount, or 0 if delta is not positive
      */
-    function _getFullCredit(Currency currency, address target) internal view returns (uint256) {
+    function _getFullCredit(Currency currency, address target) public view returns (uint256) {
         return MMLiquidityLib._getFullCredit(currency, target);
     }
 
@@ -275,7 +277,7 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler, NativeWrappe
      * @dev This is essentially a "credit full amount once, debit as needed" pattern.
      * @param sender The address initiating the settlement
      */
-    function _handleNativeValue(address sender) internal {
+    function _handleNativeValue(address sender) public {
         return MMLiquidityLib._handleNativeValue(sender);
     }
 
@@ -285,7 +287,7 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler, NativeWrappe
      * @param sender The address initiating the wrap
      * @param amount The amount of native assets to wrap
      */
-    function _wrapNative(address sender, uint256 amount) internal {
+    function _wrapNative(address sender, uint256 amount) public {
         uint256 wrapAmt = MMLiquidityLib._wrapNative(address(WETH9), sender, amount);
         if (wrapAmt > 0) {
             _wrap(wrapAmt); // deposit ETH to WETH into this contract
@@ -298,7 +300,7 @@ abstract contract LiquidityRouter is ImmutableState, MarketHandler, NativeWrappe
      * @param sender The address initiating the unwrap
      * @param amount The amount of WETH to unwrap
      */
-    function _unwrapNative(address sender, uint256 amount) internal {
+    function _unwrapNative(address sender, uint256 amount) public {
         uint256 unwrapAmt = MMLiquidityLib._unwrapNative(address(WETH9), sender, amount);
         if (unwrapAmt > 0) {
             _unwrap(unwrapAmt); // withdraw WETH to ETH into this contract

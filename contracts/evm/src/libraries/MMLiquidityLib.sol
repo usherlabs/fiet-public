@@ -30,7 +30,6 @@ import {TransientSlots} from "../libraries/TransientSlots.sol";
 /// @notice Library for managing MM-managed liquidity
 
 library MMLiquidityLib {
-
     using StateLibrary for IPoolManager;
     using TransientStateLibrary for IPoolManager;
     using CurrencySettler for Currency;
@@ -46,8 +45,7 @@ library MMLiquidityLib {
         PoolKey memory key,
         ModifyLiquidityParams memory params,
         bytes memory hookData
-    ) public returns (BalanceDelta delta, BalanceDelta feesAccrued)
-    {
+    ) public returns (BalanceDelta delta, BalanceDelta feesAccrued) {
         bool settleUsingBurn = false;
         bool takeClaims = false;
 
@@ -67,7 +65,7 @@ library MMLiquidityLib {
         // must remain wrapped until explicitly unwrapped.
         (delta, feesAccrued) = poolManager.modifyLiquidity(key, params, hookData);
 
-                // Get liquidity state after modification for validation
+        // Get liquidity state after modification for validation
         (uint128 liquidityAfter,,) =
             poolManager.getPositionInfo(key.toId(), self, params.tickLower, params.tickUpper, params.salt);
 
@@ -83,7 +81,7 @@ library MMLiquidityLib {
         int256 delta0 = poolManager.currencyDelta(self, key.currency0);
         int256 delta1 = poolManager.currencyDelta(self, key.currency1);
 
-            // Validate that liquidity change matches expected delta
+        // Validate that liquidity change matches expected delta
         if (int128(liquidityBefore) + params.liquidityDelta != int128(liquidityAfter)) {
             revert Errors.InvariantViolated("liquidity change incorrect");
         }
@@ -204,7 +202,6 @@ library MMLiquidityLib {
         if (usedDelta.amount1() > 0) {
             _settleUnderlyingCurrencyWithVault(underlyingCurrency1, usedDelta.amount1(), sender, marketVault);
         }
-
     }
 
     function _getUnderlyingSettlementDelta(address sender, Currency lccCurrency0, Currency lccCurrency1)
@@ -219,7 +216,9 @@ library MMLiquidityLib {
         return toBalanceDelta(SafeCast.toInt128(uDelta0), SafeCast.toInt128(uDelta1));
     }
 
-    function _settleUnderlyingCurrencyWithVault(Currency currency, int128 amount, address sender, address marketVault) internal {
+    function _settleUnderlyingCurrencyWithVault(Currency currency, int128 amount, address sender, address marketVault)
+        internal
+    {
         if (amount == 0) return;
 
         int256 delta = currency.getDelta(sender);

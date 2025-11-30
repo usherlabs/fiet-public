@@ -290,11 +290,7 @@ contract CompleteDeployScript is ScriptHelper {
     function _deployMMPositionManager() internal returns (address) {
         address commitmentDescriptorAddr = _deployCommitmentDescriptor();
         MMPositionManager positionManager = new MMPositionManager(
-            poolManagerAddress,
-            signalManager,
-            marketFactory,
-            vtsOrchestrator,
-            commitmentDescriptorAddr
+            poolManagerAddress, signalManager, marketFactory, vtsOrchestrator, commitmentDescriptorAddr
         );
         console.log("MMPositionManager deployed at:", address(positionManager));
         return address(positionManager);

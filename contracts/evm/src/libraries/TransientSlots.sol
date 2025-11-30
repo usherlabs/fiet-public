@@ -36,11 +36,7 @@ library TransientSlots {
         hashSlot = keccak256(abi.encodePacked(namespaceSlot, key));
     }
 
-    function _computeSiezedSettlementDeltaSlot(PositionId positionId)
-        internal
-        pure
-        returns (bytes32 hashSlot)
-    {
+    function _computeSiezedSettlementDeltaSlot(PositionId positionId) internal pure returns (bytes32 hashSlot) {
         bytes32 namespaceSlot = SEIZED_SETTLEMENT_DELTA_SLOT;
         bytes32 key = PositionId.unwrap(positionId);
         hashSlot = keccak256(abi.encodePacked(namespaceSlot, key));

@@ -54,7 +54,6 @@ import {CheckpointLibrary} from "./libraries/Checkpoint.sol";
 import {IVRLSettlementObserver} from "./interfaces/IVRLSettlementObserver.sol";
 import {RFSCheckpoint} from "./types/Checkpoint.sol";
 
-
 /// @title VTSOrchestrator
 /// @notice Central state management layer and orchestrator for VTS logic
 /// @dev Adopts Bunni-style pattern: state managed in VTSStorage struct, complex logic delegated to linked libraries
@@ -104,11 +103,7 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSManager {
         address _liquidityHub,
         address _settlementObserver,
         IWETH9 _weth9
-    )
-        Ownable(_msgSender())
-        LiquidityRouter(_marketFactory, _weth9)
-        ImmutableState(IPoolManager(_poolManager))
-    {
+    ) Ownable(_msgSender()) LiquidityRouter(_marketFactory, _weth9) ImmutableState(IPoolManager(_poolManager)) {
         if (_poolManager == address(0)) {
             revert Errors.VTSOrchestrator__InvalidPoolManager();
         }
@@ -174,9 +169,7 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSManager {
     }
 
     /// @notice Set the MM Position Manager address
-    function setMMPositionManager(
-        address _mmPositionManager
-    ) external onlyOwner {
+    function setMMPositionManager(address _mmPositionManager) external onlyOwner {
         if (_mmPositionManager == address(0)) {
             revert Errors.InvalidAddress(_mmPositionManager);
         }
@@ -186,9 +179,7 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSManager {
     /// @notice Get position by PositionId
     /// @param positionId The position identifier
     /// @return The Position struct
-    function getPosition(
-        PositionId positionId
-    ) public view returns (Position memory) {
+    function getPosition(PositionId positionId) public view returns (Position memory) {
         return s.positions[positionId];
     }
 
@@ -196,10 +187,7 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSManager {
     /// @param tokenId The commit token identifier
     /// @param positionIndex The position index within the commit
     /// @return The Position struct
-    function getPosition(
-        uint256 tokenId,
-        uint256 positionIndex
-    ) public view returns (Position memory, PositionId) {
+    function getPosition(uint256 tokenId, uint256 positionIndex) public view returns (Position memory, PositionId) {
         PositionId positionId = s.commits[tokenId].positions[positionIndex];
         return (s.positions[positionId], positionId);
     }
@@ -211,25 +199,13 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSManager {
     /// @return expiresAt The expiration timestamp
     /// @return positionCount The count of positions
     /// @return deficitBps The deficit basis points
-    function getCommit(
-        uint256 tokenId
-    )
+    function getCommit(uint256 tokenId)
         external
         view
-        returns (
-            MarketMaker.State memory mmState,
-            uint256 expiresAt,
-            uint256 positionCount,
-            uint256 deficitBps
-        )
+        returns (MarketMaker.State memory mmState, uint256 expiresAt, uint256 positionCount, uint256 deficitBps)
     {
         Commit storage commit = s.commits[tokenId];
-        return (
-            commit.mmState,
-            commit.expiresAt,
-            commit.positionCount,
-            commit.deficitBps
-        );
+        return (commit.mmState, commit.expiresAt, commit.positionCount, commit.deficitBps);
     }
 
     /// @notice Get pool by PoolId
@@ -240,9 +216,7 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSManager {
     /// @return currency1 Token1 currency
     /// @return vtsConfig The VTS configuration
     /// @return _isPaused Whether pool is paused
-    function getPool(
-        PoolId poolId
-    )
+    function getPool(PoolId poolId)
         external
         view
         returns (
@@ -254,13 +228,7 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSManager {
         )
     {
         Pool storage pool = s.pools[poolId];
-        return (
-            pool.id,
-            pool.currency0,
-            pool.currency1,
-            pool.vtsConfig,
-            pool.isPaused
-        );
+        return (pool.id, pool.currency0, pool.currency1, pool.vtsConfig, pool.isPaused);
     }
 
     /// @notice Set global pause flag
@@ -279,29 +247,22 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSManager {
     // IPositionRegistry Implementation
     // --------------------------------------------------
     /// @inheritdoc IPositionRegistry
-    function getPosition(
-        PositionId id,
-        bool requireActive,
-        bool revertIfInvalid
-    ) public view returns (PositionMeta memory) {
-        return
-            MMPositionsLib._getPosition(s, id, requireActive, revertIfInvalid);
+    function getPosition(PositionId id, bool requireActive, bool revertIfInvalid)
+        public
+        view
+        returns (PositionMeta memory)
+    {
+        return MMPositionsLib._getPosition(s, id, requireActive, revertIfInvalid);
     }
 
     /// @inheritdoc IPositionRegistry
-    function isPositionValid(
-        PositionId id,
-        bool requireActive
-    ) public view returns (bool) {
+    function isPositionValid(PositionId id, bool requireActive) public view returns (bool) {
         Position memory pos = s.positions[id];
         if (pos.owner == address(0)) return false;
         if (requireActive && !pos.isActive) return false;
         PositionAccounting storage pa = s.positionAccounting[id];
         // Commitment maxima must be > 0 for active positions
-        if (
-            requireActive &&
-            (pa.commitmentMax.token0 == 0 || pa.commitmentMax.token1 == 0)
-        ) {
+        if (requireActive && (pa.commitmentMax.token0 == 0 || pa.commitmentMax.token1 == 0)) {
             return false;
         }
         return true;
@@ -318,36 +279,27 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSManager {
     function settlePositionGrowths(PositionId positionId) external {
         // if the provided position id is valid, then settle the position growths
         if (isPositionValid(positionId, true)) {
-            VTSPoolAndPositionAccountingLib._settlePositionGrowths(
-                s,
-                poolManager,
-                positionId
-            );
+            VTSPoolAndPositionAccountingLib._settlePositionGrowths(s, poolManager, positionId);
         }
     }
 
     /// @notice Initialize a market's config in the VTS state, it is called by the MarketFactory contract
     /// @param corePoolKey The core pool key
     /// @param vtsConfiguration The VTS configuration
-    function initPool(
-        PoolKey memory corePoolKey,
-        MarketVTSConfiguration memory vtsConfiguration
-    ) external onlyFactory {
+    function initPool(PoolKey memory corePoolKey, MarketVTSConfiguration memory vtsConfiguration) external onlyFactory {
         VTSCommitLib._initPool(s, corePoolKey, vtsConfiguration);
     }
 
     /// @inheritdoc IVTSManager
-    function setMarketVTSConfiguration(
-        PoolId corePoolId,
-        MarketVTSConfiguration memory vtsConfiguration
-    ) external onlyFactory {
+    function setMarketVTSConfiguration(PoolId corePoolId, MarketVTSConfiguration memory vtsConfiguration)
+        external
+        onlyFactory
+    {
         s.pools[corePoolId].vtsConfig = vtsConfiguration;
     }
 
     /// @inheritdoc IVTSManager
-    function getMarketVTSConfiguration(
-        PoolId corePoolId
-    ) public view returns (MarketVTSConfiguration memory) {
+    function getMarketVTSConfiguration(PoolId corePoolId) public view returns (MarketVTSConfiguration memory) {
         return s.pools[corePoolId].vtsConfig;
     }
 
@@ -364,127 +316,71 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSManager {
         public
         onlyMMPosition(positionId)
         notPaused
-        returns (
-            BalanceDelta settlementDelta,
-            bool rfsOpen,
-            uint256 seizedLiquidityUnits
-        )
+        returns (BalanceDelta settlementDelta, bool rfsOpen, uint256 seizedLiquidityUnits)
     {
         // Read positionRequiredSettlementDelta from transient storage
-        BalanceDelta positionRequiredSettlementDelta = TransientSlots
-            .readPositionRequiredSettlementDelta(positionId);
+        BalanceDelta positionRequiredSettlementDelta = TransientSlots.readPositionRequiredSettlementDelta(positionId);
 
-        (settlementDelta, rfsOpen, seizedLiquidityUnits) = VTSSettleLib
-            .onMMSettle(
-                s,
-                poolManager,
-                positionId,
-                lccCurrency0,
-                lccCurrency1,
-                delta,
-                isSeizing,
-                positionRequiredSettlementDelta
-            );
-
-        VTSSettleLib._reducePositionRequiredSettlementDelta(
-            positionId,
-            settlementDelta,
-            positionRequiredSettlementDelta
+        (settlementDelta, rfsOpen, seizedLiquidityUnits) = VTSSettleLib.onMMSettle(
+            s, poolManager, positionId, lccCurrency0, lccCurrency1, delta, isSeizing, positionRequiredSettlementDelta
         );
 
+        VTSSettleLib._reducePositionRequiredSettlementDelta(
+            positionId, settlementDelta, positionRequiredSettlementDelta
+        );
     }
 
     /// @inheritdoc IVTSManager
-    function calcRFS(
-        PositionId positionId,
-        bool requireClosedRfS
-    ) public onlyPositionValid(positionId) returns (bool, BalanceDelta) {
-        return
-            MMPositionsLib._calcRFS(
-                s,
-                poolManager,
-                positionId,
-                requireClosedRfS
-            );
+    function calcRFS(PositionId positionId, bool requireClosedRfS)
+        public
+        onlyPositionValid(positionId)
+        returns (bool, BalanceDelta)
+    {
+        return MMPositionsLib._calcRFS(s, poolManager, positionId, requireClosedRfS);
     }
 
-    function calcRFS(
-        uint256 tokenId,
-        uint256 positionIndex,
-        bool requireClosedRfS
-    ) public returns (PositionId, bool, BalanceDelta) {
+    function calcRFS(uint256 tokenId, uint256 positionIndex, bool requireClosedRfS)
+        public
+        returns (PositionId, bool, BalanceDelta)
+    {
         PositionId positionId = getPositionId(tokenId, positionIndex);
-        (bool rfsOpen, BalanceDelta delta) = MMPositionsLib._calcRFS(
-            s,
-            poolManager,
-            positionId,
-            requireClosedRfS
-        );
+        (bool rfsOpen, BalanceDelta delta) = MMPositionsLib._calcRFS(s, poolManager, positionId, requireClosedRfS);
         return (positionId, rfsOpen, delta);
     }
 
-    function getPositionId(
-        uint256 tokenId,
-        uint256 positionIndex
-    ) public view returns (PositionId) {
+    function getPositionId(uint256 tokenId, uint256 positionIndex) public view returns (PositionId) {
         return s.commits[tokenId].positions[positionIndex];
     }
 
     // TODO: Not necessary? Esp. if contract sizes are big.
     /// @inheritdoc IVTSManager
-    function calcVTSCurrent(
-        PositionId positionId
-    )
+    function calcVTSCurrent(PositionId positionId)
         external
         onlyPositionValid(positionId)
         returns (uint256 vtsCurrent0, uint256 vtsCurrent1)
     {
-        VTSPoolAndPositionAccountingLib._settlePositionGrowths(
-            s,
-            poolManager,
-            positionId
-        );
+        VTSPoolAndPositionAccountingLib._settlePositionGrowths(s, poolManager, positionId);
         return _getVTSCurrent(positionId);
     }
 
     /// @inheritdoc IVTSManager
-    function getPositionSettledAmounts(
-        PositionId positionId
-    ) external view returns (uint256 amount0, uint256 amount1) {
+    function getPositionSettledAmounts(PositionId positionId) external view returns (uint256 amount0, uint256 amount1) {
         PositionAccounting storage pa = s.positionAccounting[positionId];
         return (pa.settled.token0, pa.settled.token1);
     }
 
     /// @inheritdoc IVTSManager
-    function incrementCoverage(
-        PoolId poolId,
-        uint256 amount0,
-        uint256 amount1
-    ) external onlyFactory {
+    function incrementCoverage(PoolId poolId, uint256 amount0, uint256 amount1) external onlyFactory {
         if (amount0 > 0) {
-            VTSPoolAndPositionAccountingLib._incrementCoverage(
-                s,
-                poolManager,
-                poolId,
-                0,
-                amount0
-            );
+            VTSPoolAndPositionAccountingLib._incrementCoverage(s, poolManager, poolId, 0, amount0);
         }
         if (amount1 > 0) {
-            VTSPoolAndPositionAccountingLib._incrementCoverage(
-                s,
-                poolManager,
-                poolId,
-                1,
-                amount1
-            );
+            VTSPoolAndPositionAccountingLib._incrementCoverage(s, poolManager, poolId, 1, amount1);
         }
     }
 
     /// @inheritdoc IVTSManager
-    function getCommitment(
-        PositionId positionId
-    )
+    function getCommitment(PositionId positionId)
         external
         view
         onlyPositionValid(positionId)
@@ -495,62 +391,28 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSManager {
     }
 
     /// @inheritdoc IVTSManager
-    function applyCommitmentDeficit(
-        PositionId[] calldata ids,
-        uint256 totalDeficitBps
-    ) external {
+    function applyCommitmentDeficit(PositionId[] calldata ids, uint256 totalDeficitBps) external {
         if (msg.sender != mmPositionManager) revert Errors.InvalidSender();
-        VTSCommitLib._applyCommitmentDeficit(
-            s,
-            mmPositionManager,
-            ids,
-            totalDeficitBps
-        );
+        VTSCommitLib._applyCommitmentDeficit(s, mmPositionManager, ids, totalDeficitBps);
     }
 
     // --------------------------------------------------
     // CoreHook VTS Functionality
     // @dev: TODO: add a modifier to ensure caller is Core Hook
     // --------------------------------------------------
-    function accrueInflowGrowth(
-        PoolId corePoolId,
-        uint8 token,
-        uint256 inflowAmount
-    ) external {
+    function accrueInflowGrowth(PoolId corePoolId, uint8 token, uint256 inflowAmount) external {
         uint128 liq = poolManager.getLiquidity(corePoolId);
-        VTSPoolAndPositionAccountingLib._accrueInflowGlobalGrowth(
-            s,
-            corePoolId,
-            token,
-            inflowAmount,
-            liq
-        );
+        VTSPoolAndPositionAccountingLib._accrueInflowGlobalGrowth(s, corePoolId, token, inflowAmount, liq);
     }
 
     /// @notice Called by the hook on tick cross to flip outside growth for a tick
     function onTickCross(PoolId corePoolId, int24 tick, uint8 token) external {
-        VTSPoolAndPositionAccountingLib._onTickCross(
-            s,
-            poolManager,
-            corePoolId,
-            tick,
-            token
-        );
+        VTSPoolAndPositionAccountingLib._onTickCross(s, poolManager, corePoolId, tick, token);
     }
 
-    function accrueDeficitGrowth(
-        PoolId corePoolId,
-        uint8 token,
-        uint256 deficitAmount
-    ) external {
+    function accrueDeficitGrowth(PoolId corePoolId, uint8 token, uint256 deficitAmount) external {
         uint128 liq = poolManager.getLiquidity(corePoolId);
-        VTSPoolAndPositionAccountingLib._accrueDeficitGlobalGrowth(
-            s,
-            corePoolId,
-            token,
-            deficitAmount,
-            liq
-        );
+        VTSPoolAndPositionAccountingLib._accrueDeficitGlobalGrowth(s, corePoolId, token, deficitAmount, liq);
     }
 
     function touchPosition(
@@ -559,33 +421,18 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSManager {
         ModifyLiquidityParams calldata params,
         bytes calldata hookData
     ) external returns (Position memory pos, PositionId id) {
-        id = MMPositionsLib._touchPosition(
-            s,
-            poolManager,
-            owner,
-            poolId,
-            params,
-            hookData,
-            address(this)
-        );
+        id = MMPositionsLib._touchPosition(s, poolManager, owner, poolId, params, hookData, address(this));
         // get the position from the position id
         pos = s.positions[id];
     }
 
-    function processPositionFees(
-        PositionId id,
-        Currency currency0,
-        Currency currency1
-    ) external returns (BalanceDelta) {
-        BalanceDelta feeAdj = VTSPoolAndPositionAccountingLib
-            ._processPositionFees(
-                s,
-                poolManager,
-                id,
-                currency0,
-                currency1,
-                false
-            );
+    function processPositionFees(PositionId id, Currency currency0, Currency currency1)
+        external
+        returns (BalanceDelta)
+    {
+        BalanceDelta feeAdj = VTSPoolAndPositionAccountingLib._processPositionFees(
+            s, poolManager, id, currency0, currency1, false
+        );
         // check if this is an mm handled position and if it is handle transient storage for the fee adj
         if (_isMMPosition(id)) {
             TransientSlots.addFeeAdjDelta(feeAdj);
@@ -603,15 +450,9 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSManager {
      * @param liquiditySignal The liquidity signal to commit
      * @return tokenId The token id of the committed signal
      */
-    function commitSignal(
-        bytes memory liquiditySignal
-    ) external onlyMMPositionManager returns (uint256 tokenId) {
+    function commitSignal(bytes memory liquiditySignal) external onlyMMPositionManager returns (uint256 tokenId) {
         // verify and commit the signal to state
-        tokenId = VTSCommitLib._commitSignal(
-            s,
-            IVRLSignalManager(signalManager),
-            liquiditySignal
-        );
+        tokenId = VTSCommitLib._commitSignal(s, IVRLSignalManager(signalManager), liquiditySignal);
     }
 
     function mintPosition(
@@ -621,34 +462,16 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSManager {
         int24 tickLower,
         int24 tickUpper,
         uint256 liquidity
-    )
-        external
-        onlyMMPositionManager
-        onlyValidCommit(tokenId)
-        returns (PositionId positionId, uint256 positionIndex)
-    {
+    ) external onlyMMPositionManager onlyValidCommit(tokenId) returns (PositionId positionId, uint256 positionIndex) {
         // Get the current position count to use as the positionIndex for salt generation
         // This ensures each new position gets a unique PositionId
         positionIndex = s.commits[tokenId].positionCount;
 
         // Initialize the position and inject the lcc tokens representing the commitment into the pool
-        positionId = increaseInternal(
-            owner,
-            poolKey,
-            tokenId,
-            positionIndex,
-            tickLower,
-            tickUpper,
-            liquidity
-        );
+        positionId = increaseInternal(owner, poolKey, tokenId, positionIndex, tickLower, tickUpper, liquidity);
 
         // Link the position to the commit (this increments positionCount)
-        MMPositionsLib._linkPositionToCommit(
-            s,
-            address(this),
-            positionId,
-            tokenId
-        );
+        MMPositionsLib._linkPositionToCommit(s, address(this), positionId, tokenId);
     }
 
     function increaseInternal(
@@ -659,7 +482,7 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSManager {
         int24 tickLower,
         int24 tickUpper,
         uint256 liquidity
-    ) onlyMMPositionManager onlyValidCommit(tokenId) public returns (PositionId) {
+    ) public onlyMMPositionManager onlyValidCommit(tokenId) returns (PositionId) {
         // Parse the modify liquidity params into a struct
         ModifyLiquidityParams memory params = ModifyLiquidityParams({
             tickLower: tickLower,
@@ -668,7 +491,7 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSManager {
             salt: PositionLibrary.generateSalt(tokenId, positionIndex)
         });
 
-        (PositionId positionId, , ) = VTSCommitLib._issueTokens(
+        (PositionId positionId,,) = VTSCommitLib._issueTokens(
             s,
             poolManager,
             oracleHelper,
@@ -701,19 +524,13 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSManager {
         bytes32 salt,
         uint256 amountToDecrease,
         bytes memory hookData
-    )
-        public
-        onlyMMPositionManager
-        returns (BalanceDelta , BalanceDelta)
-    {
-        (
-            Position memory position,
-            uint256 clampedAmountToReduce
-        ) = VTSCommitLib._clampLiquidityAmount(s, tokenId, positionIndex, amountToDecrease);
+    ) public onlyMMPositionManager returns (BalanceDelta, BalanceDelta) {
+        (Position memory position, uint256 clampedAmountToReduce) =
+            VTSCommitLib._clampLiquidityAmount(s, tokenId, positionIndex, amountToDecrease);
 
         // remove the liquidity from the pool
         // By calling this, CoreHook afterRemoveLiquidity will be called to deactivate the position.
-        (BalanceDelta principalDelta, ) = modifyPositionLiquidity(
+        (BalanceDelta principalDelta,) = modifyPositionLiquidity(
             sender,
             poolKey,
             ModifyLiquidityParams({
@@ -726,26 +543,15 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSManager {
         );
 
         // take settled amount
-        if (
-            amountToDecrease == 0 && LiquidityUtils.isZeroDelta(principalDelta)
-        ) {
+        if (amountToDecrease == 0 && LiquidityUtils.isZeroDelta(principalDelta)) {
             return (principalDelta, principalDelta);
         }
 
         // Calculate settlement delta (what's owed to the MM) and clamp by available market liquidity
-        BalanceDelta settlementDelta = _getUnderlyingSettlementDelta(
-            sender,
-            poolKey.currency0,
-            poolKey.currency1
-        );
+        BalanceDelta settlementDelta = _getUnderlyingSettlementDelta(sender, poolKey.currency0, poolKey.currency1);
 
         (BalanceDelta canceledDelta, BalanceDelta diff) = VTSCommitLib._decreasePosition(
-            address(this),
-            liquidityHub,
-            marketFactory,
-            settlementDelta,
-            principalDelta,
-            poolKey
+            address(this), liquidityHub, marketFactory, settlementDelta, principalDelta, poolKey
         );
 
         // If there's a shortfall (unavailable liquidity), persist it as credits owed by MMP to the MM.
@@ -753,21 +559,13 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSManager {
         // settlement. MMs can also collect available liquidity via COLLECT_AVAILABLE_LIQUIDITY action
         // to process settlements from LiquidityHub's settleQueue.
         if (diff.amount0() > 0 || diff.amount1() > 0) {
-            _persistUnderlyingDelta(
-                sender,
-                diff,
-                poolKey.currency0,
-                poolKey.currency1
-            );
+            _persistUnderlyingDelta(sender, diff, poolKey.currency0, poolKey.currency1);
         }
 
         return (canceledDelta, diff);
     }
 
-    function getFullCredit(
-        Currency currency,
-        address owner
-    ) public view returns (uint256) {
+    function getFullCredit(Currency currency, address owner) public view returns (uint256) {
         return _getFullCredit(currency, owner);
     }
 
@@ -777,12 +575,7 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSManager {
      * @param recipient The recipient address to receive the underlying assets
      * @param maxAmount The maximum amount to settle
      */
-    function collectAvailableLiquidity(
-        address sender,
-        address lcc,
-        address recipient,
-        uint256 maxAmount
-    ) public {
+    function collectAvailableLiquidity(address sender, address lcc, address recipient, uint256 maxAmount) public {
         uint256 queued = liquidityHub.settleQueue(lcc, sender);
 
         if (queued > 0) {
@@ -811,12 +604,7 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSManager {
         _settle(sender, poolKey, getPositionId(tokenId, positionIndex), sDelta);
     }
 
-    function take(
-        Currency currency,
-        address sender,
-        address to,
-        uint256 maxAmount
-    ) public {
+    function take(Currency currency, address sender, address to, uint256 maxAmount) public {
         _take(currency, sender, to, maxAmount);
     }
 
@@ -831,23 +619,12 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSManager {
         // validate position exists
         PositionId positionId = getPositionId(tokenId, positionIndex);
         if (PositionId.unwrap(positionId) == bytes32(0)) {
-            revert Errors.InvalidPosition(
-                tokenId,
-                positionIndex,
-                PositionId.wrap(bytes32(0))
-            );
+            revert Errors.InvalidPosition(tokenId, positionIndex, PositionId.wrap(bytes32(0)));
         }
 
         // using the RFSCheckpoint module to extend the grace period
         CheckpointLibrary.extendGracePeriod(
-            s,
-            settlementObserver,
-            poolKey,
-            tokenId,
-            positionIndex,
-            settlementTokenIndex,
-            verifierIndex,
-            settlementProof
+            s, settlementObserver, poolKey, tokenId, positionIndex, settlementTokenIndex, verifierIndex, settlementProof
         );
     }
 
@@ -871,29 +648,17 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSManager {
             true // revert if grace period has not elapsed
         );
 
-        BalanceDelta seizureSettlementDelta = LiquidityUtils.safeToBalanceDelta(
-            amount0,
-            amount1,
-            true,
-            true
-        );
+        BalanceDelta seizureSettlementDelta = LiquidityUtils.safeToBalanceDelta(amount0, amount1, true, true);
 
         // Set transient storage placeholder (will be updated after settlement with actual seizedLiquidityUnits)
         TransientSlots.setSeizedPositionId(positionId);
 
         // Call _settle - this will return the seizedLiquidityUnits
-        uint256 seizedLiquidityUnits = _settle(
-            sender,
-            poolKey,
-            positionId,
-            seizureSettlementDelta
-        );
+        uint256 seizedLiquidityUnits = _settle(sender, poolKey, positionId, seizureSettlementDelta);
 
         // Prepare hookData: encode seizedPositionId and settlementDelta
         bytes memory hookData = abi.encode(
-            PositionId.unwrap(positionId),
-            seizureSettlementDelta.amount0(),
-            seizureSettlementDelta.amount1()
+            PositionId.unwrap(positionId), seizureSettlementDelta.amount0(), seizureSettlementDelta.amount1()
         );
 
         // Call _decreaseInternal with hookData (convert to calldata via helper)
@@ -926,21 +691,13 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSManager {
     /// @return unwrapped The actual amount of underlying delivered to the recipient
     // can only be called by mmpm and it can provide the address of the mm who called the method
     // add another public method that uses the msg.sender as the sender
-    function unwrapLCC(
-        address sender,
-        address lccAddr,
-        address from,
-        address to,
-        uint256 requested
-    ) public returns (uint256 unwrapped, address underlying) {
+    function unwrapLCC(address sender, address lccAddr, address from, address to, uint256 requested)
+        public
+        returns (uint256 unwrapped, address underlying)
+    {
         ILCC lcc = ILCC(lccAddr);
         (unwrapped, underlying) = VTSSettleLib._unwrapLCC(
-            lcc,
-            liquidityHub,
-            from,
-            to,
-            requested,
-            _getFullCredit(Currency.wrap(address(lcc)), from)
+            lcc, liquidityHub, from, to, requested, _getFullCredit(Currency.wrap(address(lcc)), from)
         );
 
         if (unwrapped > 0) {
@@ -957,30 +714,21 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSManager {
      * @param tickUpper The upper tick of the position
      * @return liquidity The full credit from deltas
      */
-    function getLiquidityFromDeltas(
-        address owner,
-        PoolKey memory poolKey,
-        int24 tickLower,
-        int24 tickUpper
-    ) public view returns (uint256 liquidity) {
-        (uint160 sqrtPriceX96, , , ) = poolManager.getSlot0(poolKey.toId());
+    function getLiquidityFromDeltas(address owner, PoolKey memory poolKey, int24 tickLower, int24 tickUpper)
+        public
+        view
+        returns (uint256 liquidity)
+    {
+        (uint160 sqrtPriceX96,,,) = poolManager.getSlot0(poolKey.toId());
 
-        return
-            LiquidityAmounts.getLiquidityForAmounts(
-                sqrtPriceX96,
-                TickMath.getSqrtPriceAtTick(tickLower),
-                TickMath.getSqrtPriceAtTick(tickUpper),
-                _getFullCredit(
-                    _lccToUnderlyingCurrency(poolKey.currency0),
-                    owner
-                ),
-                _getFullCredit(
-                    _lccToUnderlyingCurrency(poolKey.currency1),
-                    owner
-                )
-            );
+        return LiquidityAmounts.getLiquidityForAmounts(
+            sqrtPriceX96,
+            TickMath.getSqrtPriceAtTick(tickLower),
+            TickMath.getSqrtPriceAtTick(tickUpper),
+            _getFullCredit(_lccToUnderlyingCurrency(poolKey.currency0), owner),
+            _getFullCredit(_lccToUnderlyingCurrency(poolKey.currency1), owner)
+        );
     }
-
 
     /**
      * @dev This function is used to settle a position, it is called from the MMPositionManager contract
@@ -998,14 +746,8 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSManager {
         uint256 tokenId,
         uint256 positionIndex,
         BalanceDelta sDelta
-    ) public
-        onlyMMPositionManager
-        returns (uint256 seizedLiquidityUnits, bool isSeizing)
-    {
-        (Position memory position, PositionId positionId) = getPosition(
-            tokenId,
-            positionIndex
-        );
+    ) public onlyMMPositionManager returns (uint256 seizedLiquidityUnits, bool isSeizing) {
+        (Position memory position, PositionId positionId) = getPosition(tokenId, positionIndex);
         // assert poolkey is valid for selected position
         if (PoolId.unwrap(position.poolId) != PoolId.unwrap(poolKey.toId())) {
             revert Errors.InvalidMarket(poolKey);
@@ -1019,12 +761,10 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSManager {
         seizedLiquidityUnits = _settle(sender, poolKey, positionId, sDelta);
     }
 
-    function _settle(
-        address sender,
-        PoolKey memory poolKey,
-        PositionId positionId,
-        BalanceDelta sDelta
-    ) internal returns (uint256) {
+    function _settle(address sender, PoolKey memory poolKey, PositionId positionId, BalanceDelta sDelta)
+        internal
+        returns (uint256)
+    {
         // Validate that both at least one amount is none-zero
         if (sDelta.amount0() == 0 && sDelta.amount1() == 0) {
             // Cannot settle 0 amounts for both assets.
@@ -1034,25 +774,10 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSManager {
         bool isSeizing = _isSeizing(positionId);
 
         // update fees and required settlement delta for the position
-        (
-            BalanceDelta settlementDelta,
-            bool rfsOpen,
-            uint256 seizedLiquidityUnits
-        ) = onMMSettle(
-                positionId,
-                poolKey.currency0,
-                poolKey.currency1,
-                sDelta,
-                isSeizing
-            );
+        (BalanceDelta settlementDelta, bool rfsOpen, uint256 seizedLiquidityUnits) =
+            onMMSettle(positionId, poolKey.currency0, poolKey.currency1, sDelta, isSeizing);
 
-        _settleUnderlying(
-            sender,
-            poolKey.toId(),
-            settlementDelta,
-            poolKey.currency0,
-            poolKey.currency1
-        );
+        _settleUnderlying(sender, poolKey.toId(), settlementDelta, poolKey.currency0, poolKey.currency1);
 
         // mark checkpoint
         _markCheckpoint(positionId, rfsOpen);
@@ -1060,28 +785,15 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSManager {
     }
 
     function renewSignal(uint256 tokenId, bytes memory liquiditySignal) public {
-        VTSCommitLib._renewSignal(
-            s,
-            IVRLSignalManager(signalManager),
-            oracleHelper,
-            tokenId,
-            liquiditySignal
-        );
+        VTSCommitLib._renewSignal(s, IVRLSignalManager(signalManager), oracleHelper, tokenId, liquiditySignal);
     }
 
-    function declareUnbackedCommitment(
-        address sender,
-        uint256 tokenId,
-        bytes memory liquiditySignal
-    ) public onlyMMPositionManager {
+    function declareUnbackedCommitment(address sender, uint256 tokenId, bytes memory liquiditySignal)
+        public
+        onlyMMPositionManager
+    {
         VTSCommitLib._declareCommitmentDeficit(
-            s,
-            sender,
-            address(this),
-            tokenId,
-            IVRLSignalManager(signalManager),
-            oracleHelper,
-            liquiditySignal
+            s, sender, address(this), tokenId, IVRLSignalManager(signalManager), oracleHelper, liquiditySignal
         );
     }
 
@@ -1092,22 +804,13 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSManager {
      */
     function _isSeizing(PositionId positionId) internal view returns (bool) {
         PositionId seizedPositionId = TransientSlots.getSeizedPositionId();
-        return
-            PositionId.unwrap(seizedPositionId) ==
-            PositionId.unwrap(positionId);
+        return PositionId.unwrap(seizedPositionId) == PositionId.unwrap(positionId);
     }
 
-    function getSettlementDelta(
-        address user,
-        address currency0,
-        address currency1
-    ) public view returns (BalanceDelta) {
+    function getSettlementDelta(address user, address currency0, address currency1) public view returns (BalanceDelta) {
         // Calculate settlement delta (what's owed to the MM) and clamp by available market liquidity
-        BalanceDelta settlementDelta = _getUnderlyingSettlementDelta(
-            user,
-            Currency.wrap(currency0),
-            Currency.wrap(currency1)
-        );
+        BalanceDelta settlementDelta =
+            _getUnderlyingSettlementDelta(user, Currency.wrap(currency0), Currency.wrap(currency1));
 
         return settlementDelta;
     }
@@ -1130,50 +833,33 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSManager {
         PoolKey memory poolKey,
         ModifyLiquidityParams memory params,
         bytes memory hookData
-    )
-        internal
-        returns (BalanceDelta, BalanceDelta)
-    {
+    ) internal returns (BalanceDelta, BalanceDelta) {
         // use param to modify liquidity in the pool i.e add or remove liquidity
-        (
-            BalanceDelta positionDelta,
-            BalanceDelta feesAccrued
-        ) = _modifyPositionLiquidity(poolKey, params, hookData);
+        (BalanceDelta positionDelta, BalanceDelta feesAccrued) = _modifyPositionLiquidity(poolKey, params, hookData);
 
         // ---- Fee adjustment handling for the modified position ----
         (
-            PositionId id, BalanceDelta requiredSettlementDelta,
+            PositionId id,
+            BalanceDelta requiredSettlementDelta,
             BalanceDelta accruedFeesAfterAdj,
             BalanceDelta principalDelta
-        ) = VTSCommitLib._onModifyPositionLiquidity(
-            address(this),
-            positionDelta,
-            feesAccrued,
-            params
-        );
+        ) = VTSCommitLib._onModifyPositionLiquidity(address(this), positionDelta, feesAccrued, params);
 
         // this is causing unsettled deltas to be accounted for. further investigation needed.
         _accountDelta(poolKey.currency0, accruedFeesAfterAdj.amount0(), owner);
         _accountDelta(poolKey.currency1, accruedFeesAfterAdj.amount1(), owner);
 
-        _accountUnderlyingSettlementDeltaChange(
-            owner,
-            requiredSettlementDelta,
-            poolKey.currency0,
-            poolKey.currency1
-        );
+        _accountUnderlyingSettlementDeltaChange(owner, requiredSettlementDelta, poolKey.currency0, poolKey.currency1);
 
         // Mark checkpoint to reflect current RFS state after liquidity modification
         // Calculate RFS to determine if it's open (settlement required)
-        (bool rfsOpen, ) = VTSSettleLib._getRFS(s, id);
+        (bool rfsOpen,) = VTSSettleLib._getRFS(s, id);
         _markCheckpoint(id, rfsOpen);
 
         return (principalDelta, accruedFeesAfterAdj);
     }
 
-    function positionToCheckpoint(
-        PositionId positionId
-    ) public view returns (RFSCheckpoint memory) {
+    function positionToCheckpoint(PositionId positionId) public view returns (RFSCheckpoint memory) {
         return s.checkpoints[PositionId.unwrap(positionId)];
     }
 
@@ -1185,9 +871,7 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSManager {
     /// @param positionId The position ID
     /// @return vtsRequired0 The required VTS for token0 (1e18 scale)
     /// @return vtsRequired1 The required VTS for token1 (1e18 scale)
-    function _getVTSRequired(
-        PositionId positionId
-    ) internal view returns (uint256 vtsRequired0, uint256 vtsRequired1) {
+    function _getVTSRequired(PositionId positionId) internal view returns (uint256 vtsRequired0, uint256 vtsRequired1) {
         (vtsRequired0, vtsRequired1) = VTSSettleLib.getVTSRequired(s, positionId);
     }
 
@@ -1195,9 +879,7 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSManager {
     /// @param positionId The position ID
     /// @return vtsCurrent0 The current VTS for token0
     /// @return vtsCurrent1 The current VTS for token1
-    function _getVTSCurrent(
-        PositionId positionId
-    ) internal view returns (uint256 vtsCurrent0, uint256 vtsCurrent1) {
+    function _getVTSCurrent(PositionId positionId) internal view returns (uint256 vtsCurrent0, uint256 vtsCurrent1) {
         (vtsCurrent0, vtsCurrent1) = VTSSettleLib.getVTSCurrent(s, positionId);
     }
 
@@ -1207,11 +889,7 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSManager {
     }
 
     function _checkpoint(uint256 tokenId, uint256 positionIndex) internal {
-        (PositionId positionId, bool rfsOpen, ) = calcRFS(
-            tokenId,
-            positionIndex,
-            false
-        );
+        (PositionId positionId, bool rfsOpen,) = calcRFS(tokenId, positionIndex, false);
         _markCheckpoint(positionId, rfsOpen);
     }
 
@@ -1219,14 +897,8 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSManager {
         _checkpoint(tokenId, positionIndex);
     }
 
-    function checkpoint(
-        uint256[] memory tokenIds,
-        uint256[] memory positionIndexes
-    ) public {
-        require(
-            tokenIds.length == positionIndexes.length,
-            "Invalid input lengths"
-        );
+    function checkpoint(uint256[] memory tokenIds, uint256[] memory positionIndexes) public {
+        require(tokenIds.length == positionIndexes.length, "Invalid input lengths");
         for (uint256 i = 0; i < tokenIds.length; i++) {
             _checkpoint(tokenIds[i], positionIndexes[i]);
         }
