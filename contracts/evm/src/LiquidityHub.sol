@@ -416,16 +416,7 @@ contract LiquidityHub is Ownable, LCCFactory, ReentrancyGuardTransient {
      */
     function _unwrap(address lcc, address from, address to, uint256 amount) internal onlyValidLcc(lcc) {
         (uint256 wrappedBalance, uint256 marketDerivedBalance) = _balancesOf(lcc, from);
-        uint256 erc20Balance = _balanceOf(lcc, from);
         uint256 fromBalance = wrappedBalance + marketDerivedBalance;
-
-        // Handle protocol addresses: they don't accumulate balance buckets but may hold ERC20 balance
-        // If balance buckets are 0 but ERC20 balance exists, treat all as wrapped balance
-        if (fromBalance == 0 && erc20Balance > 0) {
-            // Protocol address holding tokens: treat all balance as wrapped
-            wrappedBalance = erc20Balance;
-            fromBalance = erc20Balance;
-        }
 
         if (amount == 0 || amount > fromBalance) {
             revert Errors.InvalidAmount(amount, fromBalance);

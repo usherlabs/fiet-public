@@ -112,6 +112,14 @@ contract LiquidityCommitmentCertificate is ERC20, Ownable, ILCC {
      * @return marketDerived The market-derived balance
      */
     function balancesOf(address account) public view virtual returns (uint256 wrapped, uint256 marketDerived) {
+        // Handle protocol addresses: they don't accumulate balance buckets but may hold ERC20 balance
+        // If balance buckets are 0 but ERC20 balance exists, treat all as wrapped balance
+        uint256 balanceSum = wrappedBalances[account] + marketDerivedBalances[account];
+        uint256 fullBalance = balanceOf(account);
+        if (balanceSum == 0 && fullBalance > 0) {
+            // Protocol address holding tokens: treat all balance as wrapped
+            return (fullBalance, 0);
+        }
         return (wrappedBalances[account], marketDerivedBalances[account]);
     }
 
