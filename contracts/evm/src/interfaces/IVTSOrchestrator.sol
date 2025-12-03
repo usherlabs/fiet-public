@@ -5,7 +5,7 @@ import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
-import {PositionId, Position, PositionMeta} from "../types/Position.sol";
+import {PositionId, Position} from "../types/Position.sol";
 import {MarketVTSConfiguration} from "../types/VTS.sol";
 import {MarketMaker} from "../libraries/MarketMaker.sol";
 import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
@@ -43,11 +43,7 @@ interface IVTSOrchestrator {
             bool _isPaused
         );
 
-    // IPositionRegistry
-    function getPosition(PositionId id, bool requireActive, bool revertIfInvalid)
-        external
-        view
-        returns (PositionMeta memory);
+    // Position metadata / validity helper (canonical Position-based surface)
     function isPositionValid(PositionId id, bool requireActive) external view returns (bool);
 
     // VTS Logic & Settlement

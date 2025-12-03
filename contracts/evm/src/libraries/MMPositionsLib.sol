@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {PositionMeta} from "../types/Position.sol";
 import {PositionId} from "../types/Position.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {MMPositionManager} from "../MMPositionManager.sol";
@@ -99,50 +98,6 @@ library MMPositionsLib {
         // update the commitId of the position i.e associate the position with the commit
         // as specified in `MMPositionsLib._createPosition L67`
         s.positions[positionId].commitId = tokenId;
-    }
-
-    /// @notice Get a position by PositionId
-    /// @param s The VTS storage
-    /// @param id The position id
-    /// @param requireActive Whether to require the position to be active
-    /// @param revertIfInvalid Whether to revert if the position is invalid
-    /// @return The position meta data
-    function _getPosition(VTSStorage storage s, PositionId id, bool requireActive, bool revertIfInvalid)
-        external
-        view
-        returns (PositionMeta memory)
-    {
-        Position memory pos = s.positions[id];
-        if (pos.owner == address(0)) {
-            if (revertIfInvalid) revert Errors.InvalidPosition(0, 0, id);
-            return PositionMeta({
-                tickLower: 0,
-                tickUpper: 0,
-                liquidity: 0,
-                owner: address(0),
-                isActive: false,
-                poolId: PoolId.wrap(bytes32(0))
-            });
-        }
-        if (requireActive && !pos.isActive) {
-            if (revertIfInvalid) revert Errors.InvalidPosition(0, 0, id);
-            return PositionMeta({
-                tickLower: pos.tickLower,
-                tickUpper: pos.tickUpper,
-                liquidity: int256(uint256(pos.liquidity)),
-                owner: pos.owner,
-                isActive: false,
-                poolId: pos.poolId
-            });
-        }
-        return PositionMeta({
-            tickLower: pos.tickLower,
-            tickUpper: pos.tickUpper,
-            liquidity: int256(uint256(pos.liquidity)),
-            owner: pos.owner,
-            isActive: pos.isActive,
-            poolId: pos.poolId
-        });
     }
 
     function _touchPosition(

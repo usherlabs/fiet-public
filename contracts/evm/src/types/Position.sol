@@ -7,23 +7,6 @@ import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 
 type PositionId is bytes32;
 
-/// @notice Legacy struct for backward compatibility
-// TODO: Deprecated
-struct PositionMeta {
-    // the lower tick of the position
-    int24 tickLower;
-    // the upper tick of the position
-    int24 tickUpper;
-    // the liquidity of the position
-    int256 liquidity;
-    // the owner of the position -- ie. the router, mm position manager, native Uv4, etc.
-    address owner;
-    // whether the position is active
-    bool isActive;
-    // the core pool id for this position (immutable after registration)
-    PoolId poolId;
-}
-
 /// @notice Core Position struct for state management (Bunni-style)
 struct Position {
     // the owner of the position -- ie. the router, mm position manager, native Uv4, etc.

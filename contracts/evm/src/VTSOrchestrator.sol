@@ -9,7 +9,7 @@ import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {PositionId} from "./types/Position.sol";
-import {PositionMeta, Position} from "./types/Position.sol";
+import {Position} from "./types/Position.sol";
 import {Commit} from "./types/Commit.sol";
 import {Pool} from "./types/Pool.sol";
 import {MarketVTSConfiguration, PositionAccounting} from "./types/VTS.sol";
@@ -17,7 +17,6 @@ import {MarketMaker} from "./libraries/MarketMaker.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {VTSStorage} from "./types/VTS.sol";
 import {IVTSOrchestrator} from "./interfaces/IVTSOrchestrator.sol";
-import {IPositionRegistry} from "./interfaces/IPositionRegistry.sol";
 import {VTSPoolAndPositionAccountingLib} from "./libraries/VTSPoolAndPositionAccountingLib.sol";
 import {VTSSettleLib} from "./libraries/VTSSettleLib.sol";
 import {VTSCommitLib} from "./libraries/VTSCommitLib.sol";
@@ -172,6 +171,7 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSOrchestrator {
     /// @return The Position struct
     function getPosition(uint256 commitId, uint256 positionIndex) public view returns (Position memory, PositionId) {
         PositionId positionId = s.commits[commitId].positions[positionIndex];
+        _assertPositionValid(positionId, true, true); // When calling from MM related helpers, let's assert that the position is valid
         return (s.positions[positionId], positionId);
     }
 
@@ -227,18 +227,8 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSOrchestrator {
     }
 
     // --------------------------------------------------
-    // IPositionRegistry Implementation
+    // Position validity helpers
     // --------------------------------------------------
-    /// @dev Implements IPositionRegistry.getPosition for registry compatibility.
-    function getPosition(PositionId id, bool requireActive, bool revertIfInvalid)
-        public
-        view
-        returns (PositionMeta memory)
-    {
-        return MMPositionsLib._getPosition(s, id, requireActive, revertIfInvalid);
-    }
-
-    /// @dev Implements IPositionRegistry.isPositionValid for registry compatibility.
     function isPositionValid(PositionId id, bool requireActive) public view returns (bool) {
         Position memory pos = s.positions[id];
         if (pos.owner == address(0)) return false;
@@ -249,6 +239,22 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSOrchestrator {
             return false;
         }
         return true;
+    }
+
+    /// @dev Internal assertion helper mirroring legacy registry semantics.
+    /// @param id The position id
+    /// @param requireActive Whether the position must be active
+    /// @param revertIfInvalid Whether to revert on invalid positions
+    /// @return isValid True if the position is valid under the requested constraints
+    function _assertPositionValid(PositionId id, bool requireActive, bool revertIfInvalid)
+        internal
+        view
+        returns (bool isValid)
+    {
+        isValid = isPositionValid(id, requireActive);
+        if (!isValid && revertIfInvalid) {
+            revert Errors.InvalidPosition(0, 0, id);
+        }
     }
 
     // --------------------------------------------------
@@ -634,7 +640,7 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSOrchestrator {
     ) public {
         // -- Validate the position
         PositionId positionId = getPositionId(commitId, positionIndex);
-        getPosition(positionId, true, true);
+        _assertPositionValid(positionId, true, true);
 
         // validate grace period has elapsed
         CheckpointLibrary.isSeizable(

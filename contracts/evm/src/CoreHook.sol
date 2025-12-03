@@ -177,7 +177,7 @@ contract CoreHook is BaseHook, PausablePool, Exttload, MarketHandler {
         BalanceDelta,
         bytes calldata hookData
     ) internal virtual override whenNotPaused(key.toId()) returns (bytes4, BalanceDelta) {
-        // Update PositionRegistry with registration/update based on actual pool id
+        // Update VTS position state with registration/update based on actual pool id
         (Position memory pos, PositionId id, BalanceDelta feeAdj) =
             vtsOrchestrator.touchAndProcessPosition(sender, key, params, hookData);
 
@@ -209,7 +209,7 @@ contract CoreHook is BaseHook, PausablePool, Exttload, MarketHandler {
         BalanceDelta,
         bytes calldata hookData
     ) internal virtual override returns (bytes4, BalanceDelta) {
-        // Update PositionRegistry with registration/update based on actual pool id
+        // Update VTS position state with registration/update based on actual pool id
         (Position memory pos,, BalanceDelta feeAdj) =
             vtsOrchestrator.touchAndProcessPosition(sender, key, params, hookData);
         // Handle fee-share mechanics
