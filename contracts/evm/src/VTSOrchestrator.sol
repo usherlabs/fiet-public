@@ -43,6 +43,7 @@ import {ILCC} from "./interfaces/ILCC.sol";
 import {CheckpointLibrary} from "./libraries/Checkpoint.sol";
 import {IVRLSettlementObserver} from "./interfaces/IVRLSettlementObserver.sol";
 import {RFSCheckpoint} from "./types/Checkpoint.sol";
+import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 
 /// @title VTSOrchestrator
 /// @notice Central state management layer and orchestrator for VTS logic
@@ -155,7 +156,7 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSManager {
     /// @param positionId The position ID
     /// @return True if position is owned by MM Position Manager
     function _isMMPosition(PositionId positionId) internal view returns (bool) {
-        return s.positions[positionId].owner == address(this);
+        return s.positions[positionId].owner == mmPositionManager;
     }
 
     /// @notice Set the MM Position Manager address
@@ -342,7 +343,7 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSManager {
         return s.commits[tokenId].positions[positionIndex];
     }
 
-    // TODO: Not necessary? Esp. if contract sizes are big.
+    // TODO: Not necessary? Esp. if contract sizes are big.9
     /// @inheritdoc IVTSManager
     function calcVTSCurrent(PositionId positionId)
         external
@@ -388,36 +389,22 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSManager {
 
     // --------------------------------------------------
     // CoreHook VTS Functionality
-    // @dev: TODO: add a modifier to ensure caller is Core Hook
+    // TODO: add a modifier to ensure caller is CoreHook
     // --------------------------------------------------
-    function accrueInflowGrowth(PoolId corePoolId, uint8 token, uint256 inflowAmount) external {
-        uint128 liq = poolManager.getLiquidity(corePoolId);
-        VTSPoolAndPositionAccountingLib._accrueInflowGlobalGrowth(s, corePoolId, token, inflowAmount, liq);
-    }
 
-    /// @notice Called by the hook on tick cross to flip outside growth for a tick
-    function onTickCross(PoolId corePoolId, int24 tick, uint8 token) external {
-        VTSPoolAndPositionAccountingLib._onTickCross(s, poolManager, corePoolId, tick, token);
-    }
-
-    function accrueDeficitGrowth(PoolId corePoolId, uint8 token, uint256 deficitAmount) external {
-        uint128 liq = poolManager.getLiquidity(corePoolId);
-        VTSPoolAndPositionAccountingLib._accrueDeficitGlobalGrowth(s, corePoolId, token, deficitAmount, liq);
-    }
-
-    function touchPosition(
+    function _touchPosition(
         address owner,
         PoolId poolId,
         ModifyLiquidityParams calldata params,
         bytes calldata hookData
-    ) external returns (Position memory pos, PositionId id) {
-        id = MMPositionsLib._touchPosition(s, poolManager, owner, poolId, params, hookData, address(this));
+    ) internal returns (Position memory pos, PositionId id) {
+        id = MMPositionsLib._touchPosition(s, poolManager, owner, poolId, params, hookData, mmPositionManager);
         // get the position from the position id
         pos = s.positions[id];
     }
 
-    function processPositionFees(PositionId id, Currency currency0, Currency currency1)
-        external
+    function _processPositionFees(PositionId id, Currency currency0, Currency currency1)
+        internal
         returns (BalanceDelta)
     {
         BalanceDelta feeAdj = VTSPoolAndPositionAccountingLib._processPositionFees(
@@ -429,6 +416,28 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSManager {
         }
 
         return feeAdj;
+    }
+
+    function touchAndProcessPosition(
+        address owner,
+        PoolKey calldata poolKey,
+        ModifyLiquidityParams calldata params,
+        bytes calldata hookData
+    ) external returns (Position memory pos, PositionId id, BalanceDelta feeAdj) {
+        (pos, id) = _touchPosition(owner, poolKey.toId(), params, hookData);
+        feeAdj = _processPositionFees(id, poolKey.currency0, poolKey.currency1);
+    }
+
+    function afterCoreSwap(
+        PoolKey calldata key,
+        SwapParams calldata params,
+        BalanceDelta delta,
+        uint160 sqrtPBefore,
+        uint128 liqBefore
+    ) external {
+        VTSPoolAndPositionAccountingLib._processSwap(
+            s, poolManager, marketFactory, key, params, delta, sqrtPBefore, liqBefore
+        );
     }
 
     // -----------------------------------------------------------------------------

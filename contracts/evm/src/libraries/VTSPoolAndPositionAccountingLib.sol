@@ -26,6 +26,16 @@ import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint12
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {CurrencySettler} from "@uniswap/v4-core/test/utils/CurrencySettler.sol";
+import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
+import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {TransientSlot} from "openzeppelin-contracts/contracts/utils/TransientSlot.sol";
+import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
+import {SqrtPriceMath} from "@uniswap/v4-core/src/libraries/SqrtPriceMath.sol";
+import {TransientSlots} from "./TransientSlots.sol";
+import {TickUtils} from "./TickUtils.sol";
+import {ProxySwapFlag} from "./ProxySwapFlag.sol";
+import {ProxyHook} from "../ProxyHook.sol";
+import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
 
 /// @title VTSPoolAndPositionAccountingLib
 /// @notice Pool and position-level accounting helpers for VTS, operating on VTSStorage
@@ -37,6 +47,122 @@ library VTSPoolAndPositionAccountingLib {
     using CurrencySettler for Currency;
     using TokenPairLib for TokenPairUint;
     using TokenPairLib for TokenPairInt;
+
+    /// @notice Processes the logic for CoreHook._afterSwap
+    function _processSwap(
+        VTSStorage storage s,
+        IPoolManager poolManager,
+        address marketFactory,
+        PoolKey calldata key,
+        SwapParams calldata,
+        BalanceDelta delta,
+        uint160 sqrtPBefore,
+        uint128 liqBefore
+    ) external {
+        // Inflow growth is net of (excludes) LP/protocol fees.
+
+        // Tick cross flips + per-segment accrual: iterate initialised ticks crossed during the swap
+        {
+            // read start tick from transient sqrtP_before and end tick from state
+            (uint160 sqrtPAfter, int24 tickAfter,,) = StateLibrary.getSlot0(poolManager, key.toId());
+            int24 tickBefore = TickMath.getTickAtSqrtPrice(sqrtPBefore);
+
+            if (tickAfter != tickBefore) {
+                bool zeroForOne = tickAfter < tickBefore;
+                // running sqrt for segment starts
+                uint160 sqrtCurrent = sqrtPBefore;
+                // running segment liquidity snapshot (from beforeSwap)
+                uint128 segmentLiquidity = liqBefore;
+                int24 stepTick = tickBefore;
+                while (true) {
+                    // next initialised tick in the direction of the swap
+                    (int24 next, bool initialized) = TickUtils.nextInitializedTickWithinOneWord(
+                        poolManager, key.toId(), stepTick, key.tickSpacing, zeroForOne
+                    );
+                    // compute target sqrt for this segment (either next tick or final price)
+                    // Ensure we don't go beyond valid tick bounds
+                    int24 boundedNext = next;
+                    if (boundedNext <= TickMath.MIN_TICK) {
+                        boundedNext = TickMath.MIN_TICK;
+                    }
+                    if (boundedNext >= TickMath.MAX_TICK) {
+                        boundedNext = TickMath.MAX_TICK;
+                    }
+                    uint160 sqrtNext = TickMath.getSqrtPriceAtTick(boundedNext);
+                    uint160 sqrtTarget = zeroForOne
+                        ? (sqrtPAfter < sqrtNext ? sqrtPAfter : sqrtNext)
+                        : (sqrtPAfter > sqrtNext ? sqrtPAfter : sqrtNext);
+                    if (segmentLiquidity > 0 && sqrtTarget != sqrtCurrent) {
+                        // amountOut per segment from price delta and liquidity
+                        // see reference: https://github.com/Uniswap/v4-core/blob/0f17b65aa61edee384d5129b7ea080f22905faa0/src/libraries/SwapMath.sol#L88
+                        uint256 outSeg = zeroForOne
+                            ? SqrtPriceMath.getAmount1Delta(sqrtTarget, sqrtCurrent, segmentLiquidity, false)
+                            : SqrtPriceMath.getAmount0Delta(sqrtCurrent, sqrtTarget, segmentLiquidity, false);
+                        if (outSeg > 0) {
+                            _accrueDeficitGlobalGrowth(s, key.toId(), zeroForOne ? 1 : 0, outSeg, segmentLiquidity);
+                        }
+                        // Inflow accrual per segment using no-fee input (net of LP/protocol fees)
+                        {
+                            uint8 tokenIn = zeroForOne ? 0 : 1;
+                            uint256 inNoFee = zeroForOne
+                                ? SqrtPriceMath.getAmount0Delta(sqrtCurrent, sqrtTarget, segmentLiquidity, true)
+                                : SqrtPriceMath.getAmount1Delta(sqrtTarget, sqrtCurrent, segmentLiquidity, true);
+                            if (inNoFee > 0) {
+                                _accrueInflowGlobalGrowth(s, key.toId(), tokenIn, inNoFee, segmentLiquidity);
+                            }
+                        }
+                        sqrtCurrent = sqrtTarget;
+                    }
+                    // stop if we've reached final price
+                    if (sqrtTarget == sqrtPAfter) {
+                        break;
+                    }
+                    // otherwise, we crossed an initialised tick; flip outside and update liquidity
+                    if (initialized) {
+                        _onTickCross(s, poolManager, key.toId(), next, 0);
+                        _onTickCross(s, poolManager, key.toId(), next, 1);
+                        // apply liquidity net change for subsequent segments (direction-aware)
+                        (, int128 liquidityNet) = StateLibrary.getTickLiquidity(poolManager, key.toId(), next);
+                        if (zeroForOne) liquidityNet = -liquidityNet;
+                        unchecked {
+                            if (liquidityNet < 0) {
+                                segmentLiquidity = uint128(uint256(segmentLiquidity) - uint256(uint128(-liquidityNet)));
+                            } else if (liquidityNet > 0) {
+                                segmentLiquidity = uint128(uint256(segmentLiquidity) + uint256(uint128(liquidityNet)));
+                            }
+                        }
+                    }
+                    stepTick = next;
+                }
+            } else {
+                // Intra-tick swap: accrue a single segment from sqrtPBefore to sqrtPAfter
+                // Determine direction by price movement
+                bool zeroForOne = sqrtPAfter < sqrtPBefore;
+                // Load liquidity snapshot from beforeSwap
+                uint128 segmentLiquidity = liqBefore;
+                if (segmentLiquidity > 0 && sqrtPAfter != sqrtPBefore) {
+                    uint256 outSeg = zeroForOne
+                        ? SqrtPriceMath.getAmount1Delta(sqrtPAfter, sqrtPBefore, segmentLiquidity, false)
+                        : SqrtPriceMath.getAmount0Delta(sqrtPBefore, sqrtPAfter, segmentLiquidity, false);
+                    if (outSeg > 0) {
+                        _accrueDeficitGlobalGrowth(s, key.toId(), zeroForOne ? 1 : 0, outSeg, segmentLiquidity);
+                    }
+                    // Inflow accrual for intra-tick segment (no-fee input)
+                    {
+                        uint8 tokenIn = zeroForOne ? 0 : 1;
+                        uint256 inNoFee = zeroForOne
+                            ? SqrtPriceMath.getAmount0Delta(sqrtPBefore, sqrtPAfter, segmentLiquidity, true)
+                            : SqrtPriceMath.getAmount1Delta(sqrtPAfter, sqrtPBefore, segmentLiquidity, true);
+                        if (inNoFee > 0) {
+                            _accrueInflowGlobalGrowth(s, key.toId(), tokenIn, inNoFee, segmentLiquidity);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Check if this is a direct core pool swap, and if it is, call the proxy hook
+    }
 
     /// @notice Tracks the maximum potential commitment for both tokens in a position
     /// @param s The central VTS storage
@@ -676,7 +802,6 @@ library VTSPoolAndPositionAccountingLib {
     /// @param poolId The pool ID
     /// @param currency0 The currency for token0
     /// @param currency1 The currency for token1
-    /// @param isMMPosition Whether this is an MM-managed position (for transient storage handling)
     /// @return adj The materialised delta as BalanceDelta for the hook to apply this call only
     function _finaliseFeeAdjustment(
         VTSStorage storage s,
@@ -685,8 +810,7 @@ library VTSPoolAndPositionAccountingLib {
         PoolId poolId,
         Currency currency0,
         Currency currency1,
-        bool isMMPosition
-    ) public returns (BalanceDelta adj) {
+    ) internal returns (BalanceDelta adj) {
         // Materialise pending: fund slashed pot for +ve; drain to LP for -ve
         (int256 pend0, int256 pend1) = _peekFeeAdjustment(s, positionId);
         int256 mat0 = 0;
@@ -743,11 +867,6 @@ library VTSPoolAndPositionAccountingLib {
         pa.pendingFeeAdj.token1 = pend1 - mat1;
 
         adj = LiquidityUtils.safeToBalanceDelta(mat0, mat1);
-        // TODO: move all storage manipulation to the calling contract i.e the vtsOrchestrator
-        // Note: Transient storage handling for MM positions should be done by the calling contract
-        // if (isMMPosition) {
-        //     TransientSlots.addFeeAdjDelta(adj);
-        // }
 
         // Snapshot current pending after finalisation to keep future settle-time funding incremental
         pa.lastFundedPendingAdj.token0 = pa.pendingFeeAdj.token0;
@@ -760,7 +879,6 @@ library VTSPoolAndPositionAccountingLib {
     /// @param positionId The position ID
     /// @param currency0 The currency for token0
     /// @param currency1 The currency for token1
-    /// @param isMMPosition Whether this is an MM-managed position
     /// @return adj The materialised fee adjustment delta
     function _processPositionFees(
         VTSStorage storage s,
@@ -768,7 +886,6 @@ library VTSPoolAndPositionAccountingLib {
         PositionId positionId,
         Currency currency0,
         Currency currency1,
-        bool isMMPosition
     ) public returns (BalanceDelta adj) {
         Position memory pos = s.positions[positionId];
         PoolId poolId = pos.poolId;
@@ -831,7 +948,7 @@ library VTSPoolAndPositionAccountingLib {
             }
         }
 
-        return _finaliseFeeAdjustment(s, poolManager, positionId, poolId, currency0, currency1, isMMPosition);
+        return _finaliseFeeAdjustment(s, poolManager, positionId, poolId, currency0, currency1);
     }
 
     /// @notice Increment protocol or proactive excess liquidity coverage on LCC unwrap, consuming proactive pool first

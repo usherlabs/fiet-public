@@ -47,8 +47,6 @@ contract MMPositionManager is ERC721Permit_v4, IMMPositionManager, ReentrancyLoc
     IOracleHelper internal immutable oracleHelper;
     VTSOrchestrator internal immutable vtsOrchestrator;
 
-    uint256 private nextTokenId = 1;
-
     address public immutable commitmentDescriptor;
 
     enum MMAction {

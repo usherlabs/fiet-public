@@ -140,122 +140,16 @@ contract CoreHook is BaseHook, PausablePool, Exttload, MarketHandler {
         return (this.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
     }
 
-    function _afterSwap(address, PoolKey calldata key, SwapParams calldata, BalanceDelta delta, bytes calldata)
+    function _afterSwap(address, PoolKey calldata key, SwapParams calldata params, BalanceDelta delta, bytes calldata)
         internal
         virtual
         override
         whenNotPaused(key.toId())
         returns (bytes4, int128)
     {
-        // Inflow growth is net of (excludes) LP/protocol fees.
-
-        // Tick cross flips + per-segment accrual: iterate initialised ticks crossed during the swap
-        {
-            // read start tick from transient sqrtP_before and end tick from state
-            uint160 sqrtPBefore = uint160(TransientSlot.asUint256(TransientSlots.SQRTP_BEFORE_SLOT).tload());
-            (uint160 sqrtPAfter, int24 tickAfter,,) = StateLibrary.getSlot0(poolManager, key.toId());
-            int24 tickBefore = TickMath.getTickAtSqrtPrice(sqrtPBefore);
-
-            if (tickAfter != tickBefore) {
-                bool zeroForOne = tickAfter < tickBefore;
-                // running sqrt for segment starts
-                uint160 sqrtCurrent = sqrtPBefore;
-                // running segment liquidity snapshot (from beforeSwap)
-                uint128 segmentLiquidity = uint128(TransientSlot.asUint256(TransientSlots.LIQ_BEFORE_SLOT).tload());
-                int24 stepTick = tickBefore;
-                while (true) {
-                    // next initialised tick in the direction of the swap
-                    (int24 next, bool initialized) = TickUtils.nextInitializedTickWithinOneWord(
-                        poolManager, key.toId(), stepTick, key.tickSpacing, zeroForOne
-                    );
-                    // compute target sqrt for this segment (either next tick or final price)
-                    // Ensure we don't go beyond valid tick bounds
-                    int24 boundedNext = next;
-                    if (boundedNext <= TickMath.MIN_TICK) {
-                        boundedNext = TickMath.MIN_TICK;
-                    }
-                    if (boundedNext >= TickMath.MAX_TICK) {
-                        boundedNext = TickMath.MAX_TICK;
-                    }
-                    uint160 sqrtNext = TickMath.getSqrtPriceAtTick(boundedNext);
-                    uint160 sqrtTarget = zeroForOne
-                        ? (sqrtPAfter < sqrtNext ? sqrtPAfter : sqrtNext)
-                        : (sqrtPAfter > sqrtNext ? sqrtPAfter : sqrtNext);
-                    if (segmentLiquidity > 0 && sqrtTarget != sqrtCurrent) {
-                        // amountOut per segment from price delta and liquidity
-                        // see reference: https://github.com/Uniswap/v4-core/blob/0f17b65aa61edee384d5129b7ea080f22905faa0/src/libraries/SwapMath.sol#L88
-                        uint256 outSeg = zeroForOne
-                            ? SqrtPriceMath.getAmount1Delta(sqrtTarget, sqrtCurrent, segmentLiquidity, false)
-                            : SqrtPriceMath.getAmount0Delta(sqrtCurrent, sqrtTarget, segmentLiquidity, false);
-                        if (outSeg > 0) {
-                            // token index: zeroForOne -> token1, else token0
-                            // _accrueDeficitGrowth(key.toId(), zeroForOne ? 1 : 0, outSeg);
-                            vtsOrchestrator.accrueDeficitGrowth(key.toId(), zeroForOne ? 1 : 0, outSeg);
-                        }
-                        // Inflow accrual per segment using no-fee input (net of LP/protocol fees)
-                        {
-                            uint8 tokenIn = zeroForOne ? 0 : 1;
-                            uint256 inNoFee = zeroForOne
-                                ? SqrtPriceMath.getAmount0Delta(sqrtCurrent, sqrtTarget, segmentLiquidity, true)
-                                : SqrtPriceMath.getAmount1Delta(sqrtTarget, sqrtCurrent, segmentLiquidity, true);
-                            if (inNoFee > 0) {
-                                // _accrueInflowGrowth(key.toId(), tokenIn, inNoFee);
-                                vtsOrchestrator.accrueInflowGrowth(key.toId(), tokenIn, inNoFee);
-                            }
-                        }
-                        sqrtCurrent = sqrtTarget;
-                    }
-                    // stop if we've reached final price
-                    if (sqrtTarget == sqrtPAfter) {
-                        break;
-                    }
-                    // otherwise, we crossed an initialised tick; flip outside and update liquidity
-                    if (initialized) {
-                        // _onTickCross(key.toId(), next, 0);
-                        // _onTickCross(key.toId(), next, 1);
-                        vtsOrchestrator.onTickCross(key.toId(), next, 0);
-                        vtsOrchestrator.onTickCross(key.toId(), next, 1);
-                        // apply liquidity net change for subsequent segments (direction-aware)
-                        (, int128 liquidityNet) = StateLibrary.getTickLiquidity(poolManager, key.toId(), next);
-                        if (zeroForOne) liquidityNet = -liquidityNet;
-                        unchecked {
-                            if (liquidityNet < 0) {
-                                segmentLiquidity = uint128(uint256(segmentLiquidity) - uint256(uint128(-liquidityNet)));
-                            } else if (liquidityNet > 0) {
-                                segmentLiquidity = uint128(uint256(segmentLiquidity) + uint256(uint128(liquidityNet)));
-                            }
-                        }
-                    }
-                    stepTick = next;
-                }
-            } else {
-                // Intra-tick swap: accrue a single segment from sqrtPBefore to sqrtPAfter
-                // Determine direction by price movement
-                bool zeroForOne = sqrtPAfter < sqrtPBefore;
-                // Load liquidity snapshot from beforeSwap
-                uint128 segmentLiquidity = uint128(TransientSlot.asUint256(TransientSlots.LIQ_BEFORE_SLOT).tload());
-                if (segmentLiquidity > 0 && sqrtPAfter != sqrtPBefore) {
-                    uint256 outSeg = zeroForOne
-                        ? SqrtPriceMath.getAmount1Delta(sqrtPAfter, sqrtPBefore, segmentLiquidity, false)
-                        : SqrtPriceMath.getAmount0Delta(sqrtPBefore, sqrtPAfter, segmentLiquidity, false);
-                    if (outSeg > 0) {
-                        // _accrueDeficitGrowth(key.toId(), zeroForOne ? 1 : 0, outSeg);
-                        vtsOrchestrator.accrueDeficitGrowth(key.toId(), zeroForOne ? 1 : 0, outSeg);
-                    }
-                    // Inflow accrual for intra-tick segment (no-fee input)
-                    {
-                        uint8 tokenIn = zeroForOne ? 0 : 1;
-                        uint256 inNoFee = zeroForOne
-                            ? SqrtPriceMath.getAmount0Delta(sqrtPBefore, sqrtPAfter, segmentLiquidity, true)
-                            : SqrtPriceMath.getAmount1Delta(sqrtPAfter, sqrtPBefore, segmentLiquidity, true);
-                        if (inNoFee > 0) {
-                            // _accrueInflowGrowth(key.toId(), tokenIn, inNoFee);
-                            vtsOrchestrator.accrueInflowGrowth(key.toId(), tokenIn, inNoFee);
-                        }
-                    }
-                }
-            }
-        }
+        uint160 sqrtPBefore = uint160(TransientSlot.asUint256(TransientSlots.SQRTP_BEFORE_SLOT).tload());
+        uint128 liqBefore = uint128(TransientSlot.asUint256(TransientSlots.LIQ_BEFORE_SLOT).tload());
+        vtsOrchestrator.afterCoreSwap(key, params, delta, sqrtPBefore, liqBefore);
 
         // Check if this is a direct core pool swap, and if it is, call the proxy hook
         address proxyHook = _getProxyHook(key);
@@ -284,12 +178,8 @@ contract CoreHook is BaseHook, PausablePool, Exttload, MarketHandler {
         bytes calldata hookData
     ) internal virtual override whenNotPaused(key.toId()) returns (bytes4, BalanceDelta) {
         // Update PositionRegistry with registration/update based on actual pool id
-        // _touchPosition(sender, key.toId(), params, hookData);
-        (Position memory pos, PositionId id) = vtsOrchestrator.touchPosition(sender, key.toId(), params, hookData);
-
-        // Consolidated fee processing: apply nets, queue bonus, fund/drain pot, and finalise
-        // BalanceDelta feeAdj = _processPositionFees(id, key.currency0, key.currency1);
-        BalanceDelta feeAdj = vtsOrchestrator.processPositionFees(id, key.currency0, key.currency1);
+        (Position memory pos, PositionId id, BalanceDelta feeAdj) =
+            vtsOrchestrator.touchAndProcessPosition(sender, key, params, hookData);
 
         // only add direct liquidity if the sender is not the market maker position manager/router
         if (!_isCallerMMP(sender) && !_isMMPosition(pos)) {
@@ -320,15 +210,10 @@ contract CoreHook is BaseHook, PausablePool, Exttload, MarketHandler {
         bytes calldata hookData
     ) internal virtual override returns (bytes4, BalanceDelta) {
         // Update PositionRegistry with registration/update based on actual pool id
-        // _touchPosition(sender, key.toId(), params, hookData);
-        // TODO: combine touch and process fees into one function in VTSOrchestrator.
-        (Position memory pos, PositionId id) = vtsOrchestrator.touchPosition(sender, key.toId(), params, hookData);
+        (Position memory pos,, BalanceDelta feeAdj) =
+            vtsOrchestrator.touchAndProcessPosition(sender, key, params, hookData);
         // Handle fee-share mechanics
         // Example FeeTakingHook: https://github.com/Uniswap/v4-core/blob/a7cf038cd568801a79a9b4cf92cd5b52c95c8585/src/test/FeeTakingHook.sol#L14
-
-        // Consolidated fee processing: apply nets, queue bonus, fund/drain pot, and finalise
-        // BalanceDelta feeAdj = _processPositionFees(id, key.currency0, key.currency1);
-        BalanceDelta feeAdj = vtsOrchestrator.processPositionFees(id, key.currency0, key.currency1);
 
         if (!_isCallerMMP(sender) || !_isMMPosition(pos)) {
             // Forward effective caller delta including fee adjustment (Uniswap will apply callerDelta - hookDelta)
