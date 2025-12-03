@@ -59,7 +59,7 @@ contract MMPositionManager is ERC721Permit_v4, IMMPositionManager, ReentrancyLoc
         RENEW_SIGNAL,
         SEIZE_POSITION,
         SEIZE_COMMITMENT,
-        DECOMMIT,
+        DECOMMIT_SIGNAL,
         UNWRAP_LCC, // params: (address lcc, uint256 amount, address recipient, bool payerIsUser)
         WRAP_NATIVE, // params: (uint256 amount)
         UNWRAP_NATIVE, // params: (uint256 amount)
@@ -227,7 +227,7 @@ contract MMPositionManager is ERC721Permit_v4, IMMPositionManager, ReentrancyLoc
             vtsOrchestrator.collectAvailableLiquidity(msgSender(), lcc, recipient, maxAmount);
             return;
         }
-        if (action == uint256(MMAction.DECOMMIT)) {
+        if (action == uint256(MMAction.DECOMMIT_SIGNAL)) {
             (PoolKey memory poolKey, uint256 tokenId) = abi.decode(params, (PoolKey, uint256));
             _decommitSignal(poolKey, tokenId);
             return;
@@ -297,6 +297,12 @@ contract MMPositionManager is ERC721Permit_v4, IMMPositionManager, ReentrancyLoc
         revert("UnsupportedAction");
     }
 
+    /// @dev This function is used to modify the liquidity of a position
+    /// @param poolKey The pool key for the position
+    /// @param params The parameters for the liquidity modification
+    /// @param hookData The hook data to pass to the pool manager
+    /// @return positionDelta The balance delta of the principal liquidity
+    /// @return feesAccrued The balance delta of the fees accrued
     function _modifyPositionLiquidity(
         PoolKey memory poolKey,
         ModifyLiquidityParams memory params,
@@ -499,29 +505,7 @@ contract MMPositionManager is ERC721Permit_v4, IMMPositionManager, ReentrancyLoc
         (BalanceDelta positionDelta, BalanceDelta feesAccrued) =
             _modifyPositionLiquidity(poolKey, params, Constants.ZERO_BYTES);
 
-        // mint or modify liquidity. If the position is not minted, this will mint it. If the position is already minted, this will modify it.
-        (BalanceDelta principalDelta,) = _modifyPositionLiquidity(poolKey, params, Constants.ZERO_BYTES);
-        // generate unique position id using the params which contains the salt making this unique across all positions
-        // ? If an existing position is being modified, then the position id will be the SAME, so long as (tickUpper, tickLower, salt, AND owner) do not change.
-        // ie. changing liquidity does not impact the position id.
-        positionId = PositionLibrary.generateId(address(this), params);
-        if (liquidity == 0 && LiquidityUtils.isZeroDelta(principalDelta)) {
-            return positionId;
-        }
-
-        uint256 a0 = LiquidityUtils.safeInt128ToUint256(principalDelta.amount0());
-        uint256 a1 = LiquidityUtils.safeInt128ToUint256(principalDelta.amount1());
-        // Backing gate: effective LCC (including prospective) <= signal + settled
-        _assertCurrentCommitmentBacked(tokenId, a0, a1);
-
-        address lcc0 = Currency.unwrap(poolKey.currency0);
-        address lcc1 = Currency.unwrap(poolKey.currency1);
-        if (a0 > 0) {
-            liquidityHub.issue(lcc0, a0);
-        }
-        if (a1 > 0) {
-            liquidityHub.issue(lcc1, a1);
-        }
+        vtsOrchestrator.settleModifiedLiquidities(positionDelta, feesAccrued);
     }
 
     /**
