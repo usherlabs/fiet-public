@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import {PositionMeta} from "../types/Position.sol";
 import {PositionId, Position} from "../types/Position.sol";
 import {MarketMaker} from "../libraries/MarketMaker.sol";
 
@@ -23,7 +22,7 @@ interface IMMPositionManager {
     /// @notice Returns the position information for a given token ID and position index
     /// @param tokenId the ERC721 tokenId (commitment NFT ID)
     /// @param positionIndex the index of the position within the commitment
-    /// @return PositionMeta the position metadata
+    /// @return Position the position data
     function getPosition(uint256 tokenId, uint256 positionIndex) external view returns (Position memory);
 
     /// @notice Returns the position ID for a given token ID and position index
