@@ -440,6 +440,69 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSOrchestrator {
     // MMPM Functionality: methods used by the MMPositionManager contract
     // -----------------------------------------------------------------------------
 
+    /// @dev This function is used to settle the modified liquidities - called immediately after _modifyPositionLiquidity is called in MMPositionManager
+    /// @param params The parameters for the liquidity modification
+    /// @param key The pool key for the position
+    /// @param positionDelta The balance delta of the principal liquidity
+    /// @param feesAccrued The balance delta of the fees accrued
+    function settleModifiedLiquidities(PoolKey memory key, ModifyLiquidityParams memory params, BalanceDelta positionDelta, BalanceDelta feesAccrued) external onlyMMPositionManager {
+        address owner = msg.sender;
+        // Get net currency deltas from PoolManager
+        // currencyDelta is a net including fee accrual plus any hook-side fee-sharing that's already
+        // been applied at modification time.
+
+        // Note: Prior actions in a batch don't accumulate here because each _modifyLiquidity call in based on LCCs, which immediately issue/cancel and settle, resetting currencyDelta to 0 before the next action.
+        // The delta read here reflects only the current modification's effect (including hook adjustments like feeAdj from CoreHook).
+        // Other actions on the MMP (e.g., SETTLE_POSITION) account deltas to native underlying assets independent to PoolManager's awareness of LCC deltas.
+        int256 delta0 = poolManager.currencyDelta(owner, key.currency0);
+        int256 delta1 = poolManager.currencyDelta(owner, key.currency1);
+
+        // Validate currency delta direction matches liquidity operation type
+        if (params.liquidityDelta < 0) {
+            // Removing liquidity: PoolManager owes tokens to the LP (positive delta)
+            assert(delta0 > 0 || delta1 > 0);
+            assert(!(delta0 < 0 || delta1 < 0));
+        } else if (params.liquidityDelta > 0) {
+            // Adding liquidity: LP owes tokens to PoolManager (negative delta)
+            assert(delta0 < 0 || delta1 < 0);
+            assert(!(delta0 > 0 || delta1 > 0));
+        }
+
+        if(delta0 < 0 && delta1 < 0){
+            // If position is increasing, and therefore caller owes tokens to PoolManager, then we issue LCCs accordingly.
+            VTSCommitLib._issueTokens(
+                s,
+                oracleHelper,
+                liquidityHub,
+                poolKey,
+                params,
+                owner,
+                commitId,
+                uint256(-delta0),
+                uint256(-delta1)
+            );
+        }else if(delta0 > 0 && delta1 > 0){
+            // If position is decreasing, and therefore PoolManager owes tokens to caller, then we settle the deltas accordingly.
+            // TODO: Implement the decrease here, and adjust the position management logic accordingly.
+        }
+        
+        // Settle negative deltas: pay tokens owed to PoolManager (LP is depositing)
+        if (delta0 < 0) {
+            key.currency0.settle(poolManager, self, uint256(-delta0), settleUsingBurn);
+        }
+        if (delta1 < 0) {
+            key.currency1.settle(poolManager, self, uint256(-delta1), settleUsingBurn);
+        }
+
+        // Take positive deltas: receive tokens owed from PoolManager (LP is withdrawing)
+        if (delta0 > 0) {
+            key.currency0.take(poolManager, self, uint256(delta0), takeClaims);
+        }
+        if (delta1 > 0) {
+            key.currency1.take(poolManager, self, uint256(delta1), takeClaims);
+        }
+    }
+
     /**
      * @dev This function commits a liquidity signal to the VTS state
      * @param liquiditySignal The liquidity signal to commit
@@ -466,40 +529,7 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSOrchestrator {
         positionId = increaseInternal(owner, poolKey, commitId, positionIndex, tickLower, tickUpper, liquidity);
 
         // Link the position to the commit (this increments positionCount)
-        MMPositionsLib._linkPositionToCommit(s, address(this), positionId, commitId);
-    }
-
-    function increaseInternal(
-        address owner,
-        PoolKey memory poolKey,
-        uint256 commitId,
-        uint256 positionIndex,
-        int24 tickLower,
-        int24 tickUpper,
-        uint256 liquidity
-    ) public onlyMMPositionManager onlyValidCommit(commitId) returns (PositionId) {
-        // Parse the modify liquidity params into a struct
-        ModifyLiquidityParams memory params = ModifyLiquidityParams({
-            tickLower: tickLower,
-            tickUpper: tickUpper,
-            liquidityDelta: liquidity.toInt256(),
-            salt: PositionLibrary.generateSalt(commitId, positionIndex)
-        });
-
-        (PositionId positionId,,) = VTSCommitLib._issueTokens(
-            s,
-            poolManager,
-            oracleHelper,
-            liquidityHub,
-            address(this), // the vts orchestrator is the owner/manager of the positions
-            commitId,
-            poolKey,
-            params
-        );
-
-        modifyPositionLiquidity(owner, poolKey, params, Constants.ZERO_BYTES);
-
-        return positionId;
+        MMPositionsLib._linkPositionToCommit(s, msg.sender, positionId, commitId);
     }
 
     /**
@@ -520,8 +550,17 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSOrchestrator {
         uint256 amountToDecrease,
         bytes memory hookData
     ) public onlyMMPositionManager returns (BalanceDelta, BalanceDelta) {
-        (Position memory position, uint256 clampedAmountToReduce) =
-            VTSCommitLib._clampLiquidityAmount(s, commitId, positionIndex, amountToDecrease);
+        Position memory position = getPosition(commitId, positionIndex);
+
+        // validate liquidity is not over available
+        uint256 posLiq = uint256(position.liquidity);I
+        if (amountToDecrease > posLiq) {
+            revert Errors.InvalidAmount(amountToDecrease, posLiq);
+        }
+
+        if (amountToDecrease > uint256(type(int256).max)) {
+            amountToDecrease = uint256(type(int256).max); // clamp by max.
+        }
 
         // remove the liquidity from the pool
         // By calling this, CoreHook afterRemoveLiquidity will be called to deactivate the position.
@@ -531,7 +570,7 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSOrchestrator {
             ModifyLiquidityParams({
                 tickLower: position.tickLower,
                 tickUpper: position.tickUpper,
-                liquidityDelta: -clampedAmountToReduce.toInt256(),
+                liquidityDelta: -amountToDecrease.toInt256(),
                 salt: salt
             }),
             hookData

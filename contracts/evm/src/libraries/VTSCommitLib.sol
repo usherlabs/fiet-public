@@ -403,14 +403,15 @@ library VTSCommitLib {
     /// @return a1 The amount of token1 to issue
     function _issueTokens(
         VTSStorage storage s,
-        IPoolManager poolManager,
         IOracleHelper oracleHelper,
         ILiquidityHub liquidityHub,
-        address positionManager,
-        uint256 commitId,
         PoolKey memory poolKey,
         ModifyLiquidityParams memory params
-    ) public returns (PositionId positionId, uint256 a0, uint256 a1) {
+        address positionManager,
+        uint256 commitId,
+        uint256 a0,
+        uint256 a1
+    ) public returns (PositionId positionId) {
         positionId = PositionLibrary.generateId(positionManager, params);
 
         // Prevent overflow when converting to int256/int128 for modifyLiquidity
@@ -418,17 +419,8 @@ library VTSCommitLib {
             revert Errors.InvalidAmount(uint256(params.liquidityDelta), type(uint128).max);
         }
 
-        // get the current slot0 and tick of the pool, we need this to calculate the effective token amounts
-        // so we can mint the correct amount of tokens to the pool
-        (uint160 sqrtPriceX96, int24 currentTick,,) = poolManager.getSlot0(poolKey.toId());
-
-        (a0, a1) = LiquidityUtils.calculateEffectiveTokenAmounts(
-            sqrtPriceX96, currentTick, params.tickLower, params.tickUpper, params.liquidityDelta
-        );
-
         // derive the principal delta from the effective token amounts
-        BalanceDelta derivedDelta = toBalanceDelta(a0.toInt128(), a1.toInt128());
-        if (uint256(params.liquidityDelta) == 0 && LiquidityUtils.isZeroDelta(derivedDelta)) {
+        if (uint256(params.liquidityDelta) == 0 || (a0 == 0 && a1 == 0)) {
             return (positionId, 0, 0);
         }
 
@@ -440,33 +432,11 @@ library VTSCommitLib {
         address lcc0 = Currency.unwrap(poolKey.currency0);
         address lcc1 = Currency.unwrap(poolKey.currency1);
         if (a0 > 0) {
-            liquidityHub.issue(lcc0, a0);
+            liquidityHub.issue(lcc0, positionManager, a0);
         }
         if (a1 > 0) {
-            liquidityHub.issue(lcc1, a1);
+            liquidityHub.issue(lcc1, positionManager, a1);
         }
-    }
-
-    function _clampLiquidityAmount(
-        VTSStorage storage s,
-        uint256 tokenId,
-        uint256 positionIndex,
-        uint256 amountToDecrease
-    ) public view returns (Position memory position, uint256 clampedAmountToReduce) {
-        PositionId positionId = s.commits[tokenId].positions[positionIndex];
-        position = s.positions[positionId];
-
-        // validate liquidity is not over available
-        uint256 posLiq = uint256(position.liquidity);
-        if (amountToDecrease > posLiq) {
-            revert Errors.InvalidAmount(amountToDecrease, posLiq);
-        }
-
-        if (amountToDecrease > uint256(type(int256).max)) {
-            amountToDecrease = uint256(type(int256).max); // clamp by max.
-        }
-
-        return (position, amountToDecrease);
     }
 
     function _clampSettlementDeltaByAvailableLiquidities(

@@ -487,13 +487,12 @@ contract LiquidityHub is Ownable, LCCFactory, ReentrancyGuardTransient {
      * @param lcc The LCC token address to issue for
      * @param amount The amount to issue
      */
-    function issue(address lcc, uint256 amount) external onlyIssuer(lcc) onlyValidLcc(lcc) {
+    function issue(address lcc, address to, uint256 amount) external onlyIssuer(lcc) onlyValidLcc(lcc) {
         if (amount == 0) {
             revert Errors.InvalidAmount(0, 0);
         }
 
-        address issuer = _msgSender();
-        _mint(lcc, issuer, 0, amount, true);
+        _mint(lcc, to, 0, amount, true);
     }
 
     /**

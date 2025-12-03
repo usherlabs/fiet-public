@@ -297,6 +297,38 @@ contract MMPositionManager is ERC721Permit_v4, IMMPositionManager, ReentrancyLoc
         revert("UnsupportedAction");
     }
 
+    function _modifyPositionLiquidity(
+        PoolKey memory poolKey,
+        ModifyLiquidityParams memory params,
+        bytes memory hookData
+    ) internal returns (BalanceDelta positionDelta, BalanceDelta feesAccrued) {
+        // Note: Pool manager must already be unlocked by the caller (MMPositionManager handles this)
+
+        address self = address(this);
+
+        // Get liquidity state before modification for validation
+        (uint128 liquidityBefore,,) =
+            poolManager.getPositionInfo(key.toId(), self, params.tickLower, params.tickUpper, params.salt);
+
+        // PoolManager returns two deltas:
+        // - delta (callerDelta): principal liquidity change plus any immediate fee/hook deltas applied
+        //   to the caller
+        // - feesAccrued: informational delta of fee growth in the modified range for this call
+        // Downstream, MMPositionManager treats principal vs feesAccrued differently: principal maps
+        // to LCC issue/cancel, while feesAccrued (originating from trader flows, wrapped into LCCs)
+        // must remain wrapped until explicitly unwrapped.
+        (delta, feesAccrued) = poolManager.modifyLiquidity(key, params, hookData);
+
+        // Get liquidity state after modification for validation
+        (uint128 liquidityAfter,,) =
+            poolManager.getPositionInfo(key.toId(), self, params.tickLower, params.tickUpper, params.salt);
+
+        // Validate that liquidity change matches expected delta
+        if (int128(liquidityBefore) + params.liquidityDelta != int128(liquidityAfter)) {
+            revert Errors.InvariantViolated("liquidity change incorrect");
+        }
+    }
+
     // ------------------------------------------------------------------------------------------------
     // MM Position Manager functions
     // ------------------------------------------------------------------------------------------------
@@ -441,7 +473,55 @@ contract MMPositionManager is ERC721Permit_v4, IMMPositionManager, ReentrancyLoc
         int24 tickUpper,
         uint256 liquidity
     ) internal onlyIfApproved(msgSender(), tokenId) {
-        vtsOrchestrator.increaseInternal(msgSender(), poolKey, tokenId, positionIndex, tickLower, tickUpper, liquidity);
+        _increaseInternal(poolKey, tokenId, positionIndex, tickLower, tickUpper, liquidity);
+    }
+
+    function _increaseInternal(
+        PoolKey memory poolKey,
+        uint256 tokenId,
+        uint256 positionIndex,
+        int24 tickLower,
+        int24 tickUpper,
+        uint256 liquidity
+    ) internal returns (PositionId positionId) {
+        // Prevent overflow when converting to int256/int128 for modifyLiquidity
+        if (liquidity > type(uint128).max) {
+            revert Errors.InvalidAmount(liquidity, type(uint128).max);
+        }
+
+        ModifyLiquidityParams memory params = ModifyLiquidityParams({
+            tickLower: tickLower,
+            tickUpper: tickUpper,
+            liquidityDelta: liquidity.toInt256(),
+            salt: _positionSalt(tokenId, positionIndex)
+        });
+
+        (BalanceDelta positionDelta, BalanceDelta feesAccrued) =
+            _modifyPositionLiquidity(poolKey, params, Constants.ZERO_BYTES);
+
+        // mint or modify liquidity. If the position is not minted, this will mint it. If the position is already minted, this will modify it.
+        (BalanceDelta principalDelta,) = _modifyPositionLiquidity(poolKey, params, Constants.ZERO_BYTES);
+        // generate unique position id using the params which contains the salt making this unique across all positions
+        // ? If an existing position is being modified, then the position id will be the SAME, so long as (tickUpper, tickLower, salt, AND owner) do not change.
+        // ie. changing liquidity does not impact the position id.
+        positionId = PositionLibrary.generateId(address(this), params);
+        if (liquidity == 0 && LiquidityUtils.isZeroDelta(principalDelta)) {
+            return positionId;
+        }
+
+        uint256 a0 = LiquidityUtils.safeInt128ToUint256(principalDelta.amount0());
+        uint256 a1 = LiquidityUtils.safeInt128ToUint256(principalDelta.amount1());
+        // Backing gate: effective LCC (including prospective) <= signal + settled
+        _assertCurrentCommitmentBacked(tokenId, a0, a1);
+
+        address lcc0 = Currency.unwrap(poolKey.currency0);
+        address lcc1 = Currency.unwrap(poolKey.currency1);
+        if (a0 > 0) {
+            liquidityHub.issue(lcc0, a0);
+        }
+        if (a1 > 0) {
+            liquidityHub.issue(lcc1, a1);
+        }
     }
 
     /**
@@ -537,9 +617,21 @@ contract MMPositionManager is ERC721Permit_v4, IMMPositionManager, ReentrancyLoc
         int24 tickUpper,
         uint256 liquidity
     ) internal returns (PositionId positionId, uint256 positionIndex) {
-        (positionId, positionIndex) = vtsOrchestrator.mintPosition(
-            msgSender(), poolKey, tokenId, tickLower, tickUpper, liquidity
-        );
+        // add liquidity to the pool using the token id and position index to generate a unique salt
+        (,, positionIndex,) = vtsOrchestrator.getCommit(tokenId);
+
+        positionId = _increaseInternal(poolKey, tokenId, positionIndex, tickLower, tickUpper, liquidity);
+
+        // Attach position to this nft
+        // make sure to add the position only after modifying the liquidity
+        // because the number of positions is used to generate the salt for the position
+        commitToPosition[tokenId][positionIndex] = positionId;
+        // Position metadata is managed centrally via PositionRegistry/VTSManager
+        // increment the number of positions for the nft
+        commitToPositionCount[tokenId]++;
+
+        (positionId, positionIndex) =
+            vtsOrchestrator.mintPosition(msgSender(), poolKey, tokenId, tickLower, tickUpper, liquidity);
     }
 
     /**

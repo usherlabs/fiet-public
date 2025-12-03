@@ -82,14 +82,11 @@ library MMPositionsLib {
         address positionManager,
         PositionId positionId,
         uint256 tokenId
-    ) external returns (uint256 positionCount) {
+    ) external {
         // validate there is an existing commit for the token id
         if (s.commits[tokenId].expiresAt < block.timestamp) {
             revert Errors.SignalExpired(tokenId);
         }
-
-        // get the number of positions for the token id from the commitment
-        positionCount = s.commits[tokenId].positionCount;
 
         // modify the commit to inlcude the position and update the position count
         s.commits[tokenId].positions[positionCount] = positionId;
