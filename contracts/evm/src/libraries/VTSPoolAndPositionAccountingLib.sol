@@ -35,7 +35,6 @@ import {TransientSlots} from "./TransientSlots.sol";
 import {TickUtils} from "./TickUtils.sol";
 import {ProxySwapFlag} from "./ProxySwapFlag.sol";
 import {ProxyHook} from "../ProxyHook.sol";
-import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
 
 /// @title VTSPoolAndPositionAccountingLib
 /// @notice Pool and position-level accounting helpers for VTS, operating on VTSStorage
@@ -52,7 +51,6 @@ library VTSPoolAndPositionAccountingLib {
     function _processSwap(
         VTSStorage storage s,
         IPoolManager poolManager,
-        address marketFactory,
         PoolKey calldata key,
         SwapParams calldata,
         BalanceDelta delta,
@@ -809,7 +807,7 @@ library VTSPoolAndPositionAccountingLib {
         PositionId positionId,
         PoolId poolId,
         Currency currency0,
-        Currency currency1,
+        Currency currency1
     ) internal returns (BalanceDelta adj) {
         // Materialise pending: fund slashed pot for +ve; drain to LP for -ve
         (int256 pend0, int256 pend1) = _peekFeeAdjustment(s, positionId);
@@ -885,7 +883,7 @@ library VTSPoolAndPositionAccountingLib {
         IPoolManager poolManager,
         PositionId positionId,
         Currency currency0,
-        Currency currency1,
+        Currency currency1
     ) public returns (BalanceDelta adj) {
         Position memory pos = s.positions[positionId];
         PoolId poolId = pos.poolId;

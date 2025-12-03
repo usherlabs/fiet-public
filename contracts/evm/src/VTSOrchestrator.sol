@@ -229,7 +229,7 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSOrchestrator {
     // --------------------------------------------------
     // IPositionRegistry Implementation
     // --------------------------------------------------
-    /// @inheritdoc IPositionRegistry
+    /// @dev Implements IPositionRegistry.getPosition for registry compatibility.
     function getPosition(PositionId id, bool requireActive, bool revertIfInvalid)
         public
         view
@@ -238,7 +238,7 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSOrchestrator {
         return MMPositionsLib._getPosition(s, id, requireActive, revertIfInvalid);
     }
 
-    /// @inheritdoc IPositionRegistry
+    /// @dev Implements IPositionRegistry.isPositionValid for registry compatibility.
     function isPositionValid(PositionId id, bool requireActive) public view returns (bool) {
         Position memory pos = s.positions[id];
         if (pos.owner == address(0)) return false;
@@ -400,7 +400,7 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSOrchestrator {
         returns (BalanceDelta)
     {
         BalanceDelta feeAdj = VTSPoolAndPositionAccountingLib._processPositionFees(
-            s, poolManager, id, currency0, currency1, false
+            s, poolManager, id, currency0, currency1
         );
         // check if this is an mm handled position and if it is handle transient storage for the fee adj
         if (_isMMPosition(id)) {
@@ -427,9 +427,7 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSOrchestrator {
         uint160 sqrtPBefore,
         uint128 liqBefore
     ) external {
-        VTSPoolAndPositionAccountingLib._processSwap(
-            s, poolManager, marketFactory, key, params, delta, sqrtPBefore, liqBefore
-        );
+        VTSPoolAndPositionAccountingLib._processSwap(s, poolManager, key, params, delta, sqrtPBefore, liqBefore);
     }
 
     // -----------------------------------------------------------------------------
@@ -856,6 +854,10 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSOrchestrator {
     // Checkpoint Helper Functions
     // --------------------------------------------------
 
+    function _markCheckpoint(PositionId positionId, bool isOpen) internal {
+        CheckpointLibrary._markCheckpoint(s, positionId, isOpen);
+    }
+
     /// @notice Gets the checkpoint for a given position
     /// @param positionId The position ID
     /// @return checkpoint The checkpoint for the position
@@ -868,7 +870,7 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSOrchestrator {
     /// @param positionIndex The index of the position within the commitment
     function markCheckpoint(uint256 commitId, uint256 positionIndex) external onlyMMPositionManager {
         (PositionId positionId, bool rfsOpen,) = calcRFS(commitId, positionIndex, false);
-        CheckpointLibrary._markCheckpoint(s, positionId, rfsOpen);
+        _markCheckpoint(positionId, rfsOpen);
     }
 
     // --------------------------------------------------

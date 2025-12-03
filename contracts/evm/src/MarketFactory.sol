@@ -34,7 +34,7 @@ contract MarketFactory is IMarketFactory, Ownable {
     address public coreHook;
     address public marketDeployer;
     ILiquidityHub public immutable liquidityHub;
-    VTSOrchestrator public immutable vtsOrchestrator;
+    IVTSOrchestrator public immutable vtsOrchestrator;
     address public mmPositionManager;
 
     // Mapping from core pool ID to proxy pool ID

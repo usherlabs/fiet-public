@@ -34,7 +34,7 @@ import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
 import {ILiquidityHub} from "../interfaces/ILiquidityHub.sol";
 import {Errors} from "../libraries/Errors.sol";
 import {ReentrancyGuardTransient} from "openzeppelin-contracts/contracts/utils/ReentrancyGuardTransient.sol";
-import {VTSOrchestrator} from "../VTSOrchestrator.sol";
+import {IVTSOrchestrator} from "../interfaces/IVTSOrchestrator.sol";
 import {console} from "forge-std/console.sol";
 
 abstract contract MarketVault is IMarketVault, ReentrancyGuardTransient {
@@ -42,7 +42,7 @@ abstract contract MarketVault is IMarketVault, ReentrancyGuardTransient {
 
     event SwapDeficit(PoolId indexed poolId, address indexed lccToken, address deficitRecipient, uint256 deficitAmount);
 
-    VTSOrchestrator public immutable vtsOrchestrator;
+    IVTSOrchestrator public immutable vtsOrchestrator;
     IPoolManager public immutable vaultPoolManager;
     IMarketFactory public immutable marketFactory;
     ILiquidityHub public immutable liquidityHub;
