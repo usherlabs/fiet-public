@@ -11,7 +11,7 @@ import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 import {IHookPausable} from "./interfaces/IHookPausable.sol";
 import {ProxyHook} from "./ProxyHook.sol";
 import {MarketDeployer} from "./MarketDeployer.sol";
-import {IVTSManager} from "./interfaces/IVTSManager.sol";
+import {IVTSOrchestrator} from "./interfaces/IVTSOrchestrator.sol";
 import {MarketVTSConfiguration} from "./types/VTS.sol";
 import {IOracleHelper} from "./interfaces/IOracleHelper.sol";
 import {ILiquidityHub} from "./interfaces/ILiquidityHub.sol";
@@ -20,7 +20,6 @@ import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {IMarketVault} from "./interfaces/IMarketVault.sol";
 import {LiquidityUtils} from "./libraries/LiquidityUtils.sol";
 import {Errors} from "./libraries/Errors.sol";
-import {VTSOrchestrator} from "./VTSOrchestrator.sol";
 
 /**
  * @title MarketFactory
@@ -63,7 +62,7 @@ contract MarketFactory is IMarketFactory, Ownable {
         poolManager = IPoolManager(_poolManager);
         liquidityHub = ILiquidityHub(_liquidityHub);
         oracleHelper = IOracleHelper(_oracleHelper);
-        vtsOrchestrator = VTSOrchestrator(payable(_vtsOrchestrator));
+        vtsOrchestrator = IVTSOrchestrator(payable(_vtsOrchestrator));
         mmPositionManager = _mmPositionManager;
 
         // Set Protocol bounds addresses
@@ -356,12 +355,11 @@ contract MarketFactory is IMarketFactory, Ownable {
         }
         BalanceDelta usedDelta = IMarketVault(_proxyToHook[coreToProxy[pId]])
             .tryModifyLiquidities(LiquidityUtils.safeToBalanceDelta(amount0, amount1, false, false)); // positive delta indicating withdrawal from market
-        IVTSManager(coreHook)
-            .incrementCoverage(
-                pId,
-                LiquidityUtils.safeInt128ToUint256(usedDelta.amount0()),
-                LiquidityUtils.safeInt128ToUint256(usedDelta.amount1())
-            );
+        vtsOrchestrator.incrementCoverage(
+            pId,
+            LiquidityUtils.safeInt128ToUint256(usedDelta.amount0()),
+            LiquidityUtils.safeInt128ToUint256(usedDelta.amount1())
+        );
         used = LiquidityUtils.safeInt128ToUint256(usedDelta.amount0() + usedDelta.amount1());
     }
 

@@ -24,7 +24,6 @@ import {CurrencyLibrary, Currency} from "@uniswap/v4-core/src/types/Currency.sol
 import {MarketMaker} from "../src/libraries/MarketMaker.sol";
 import {MMPositionManager} from "../src/MMPositionManager.sol";
 import {MarketVTSConfiguration} from "../src/types/VTS.sol";
-import {IVTSManager} from "../src/interfaces/IVTSManager.sol";
 import {LiquidityUtils} from "../src/libraries/LiquidityUtils.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IOracleHelper} from "../src/interfaces/IOracleHelper.sol";
@@ -64,7 +63,7 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
         lcc0 = LiquidityCommitmentCertificate(payable(Currency.unwrap(_currency2)));
         lcc1 = LiquidityCommitmentCertificate(payable(Currency.unwrap(_currency3)));
 
-        marketVTSConfiguration = IVTSManager(coreHookAddress).getMarketVTSConfiguration(corePoolKey.toId());
+        marketVTSConfiguration = vtsOrchestrator.getMarketVTSConfiguration(corePoolKey.toId());
 
         // approve the lccs to the mmPositionManager to be able to route tokens to the pool manager
         // lcc0.approve(address(mmPositionManager), Constants.MAX_UINT256);

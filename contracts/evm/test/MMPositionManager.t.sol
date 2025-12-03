@@ -20,7 +20,6 @@ import {MarketMaker} from "../src/libraries/MarketMaker.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {PositionMeta} from "../src/types/Position.sol";
 import {PositionId} from "../src/types/Position.sol";
-import {IVTSManager} from "../src/interfaces/IVTSManager.sol";
 import {MarketVTSConfiguration} from "../src/types/VTS.sol";
 import {MockERC20} from "./_mocks/MockERC20.sol";
 import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
@@ -61,7 +60,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         lcc0 = LiquidityCommitmentCertificate(payable(Currency.unwrap(_currency2)));
         lcc1 = LiquidityCommitmentCertificate(payable(Currency.unwrap(_currency3)));
 
-        marketVTSConfiguration = IVTSManager(coreHookAddress).getMarketVTSConfiguration(corePoolKey.toId());
+        marketVTSConfiguration = vtsOrchestrator.getMarketVTSConfiguration(corePoolKey.toId());
 
         // approve the lccs to the mmPositionManager to be able to route tokens to the pool manager
         // lcc0.approve(address(mmPositionManager), Constants.MAX_UINT256);

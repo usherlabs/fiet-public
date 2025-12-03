@@ -26,7 +26,7 @@ import {Errors} from "./libraries/Errors.sol";
 import {NonzeroDeltaCount} from "@uniswap/v4-core/src/libraries/NonzeroDeltaCount.sol";
 import {Constants} from "@uniswap/v4-core/test/utils/Constants.sol";
 import {console} from "forge-std/console.sol";
-import {VTSOrchestrator} from "./VTSOrchestrator.sol";
+import {IVTSOrchestrator} from "./interfaces/IVTSOrchestrator.sol";
 import {Position} from "./types/Position.sol";
 
 contract MMPositionManager is ERC721Permit_v4, IMMPositionManager, ReentrancyLock, Multicall_v4, BaseActionsRouter {
@@ -45,7 +45,7 @@ contract MMPositionManager is ERC721Permit_v4, IMMPositionManager, ReentrancyLoc
     IMarketFactory internal immutable marketFactory;
     IVRLSignalManager internal immutable signalManager;
     IOracleHelper internal immutable oracleHelper;
-    VTSOrchestrator internal immutable vtsOrchestrator;
+    IVTSOrchestrator internal immutable vtsOrchestrator;
 
     address public immutable commitmentDescriptor;
 
@@ -85,7 +85,7 @@ contract MMPositionManager is ERC721Permit_v4, IMMPositionManager, ReentrancyLoc
     {
         commitmentDescriptor = _descriptor;
         signalManager = IVRLSignalManager(_signalManager);
-        vtsOrchestrator = VTSOrchestrator(payable(_vtsOrchestrator));
+        vtsOrchestrator = IVTSOrchestrator(payable(_vtsOrchestrator));
         marketFactory = IMarketFactory(_marketFactory);
         oracleHelper = marketFactory.oracleHelper();
         liquidityHub = marketFactory.liquidityHub();

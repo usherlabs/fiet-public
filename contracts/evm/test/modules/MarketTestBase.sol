@@ -27,7 +27,7 @@ import {StubSignalVerifier} from "../../src/verifiers/StubSignalVerifier.sol";
 import {WETH} from "@uniswap/v4-core/lib/solmate/src/tokens/WETH.sol";
 import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
 import {VTSConfigs} from "../../src/libraries/VTSConfigs.sol";
-import {IVTSManager} from "../../src/interfaces/IVTSManager.sol";
+import {IVTSOrchestrator} from "../../src/interfaces/IVTSOrchestrator.sol";
 import {VRLSignalManager} from "../../src/VRLSignalManager.sol";
 import {VRLSettlementObserver} from "../../src/VRLSettlementObserver.sol";
 import {IVRLSettlementObserver} from "../../src/interfaces/IVRLSettlementObserver.sol";
@@ -292,10 +292,10 @@ abstract contract MarketTestBase is Test, Deployers {
             abi.encodeWithSelector(IMarketFactory.oracleHelper.selector),
             abi.encode(address(oracleHelper))
         );
-        // mock the call to get the market VTS configuration
+        // mock the call to get the market VTS configuration on the VTS orchestrator
         vm.mockCall(
-            coreHookAddress,
-            abi.encodeWithSelector(IVTSManager.getMarketVTSConfiguration.selector),
+            address(vtsOrchestrator),
+            abi.encodeWithSelector(IVTSOrchestrator.getMarketVTSConfiguration.selector),
             abi.encode(VTSConfigs.getDefaultConfig())
         );
         // Mock factory calls made by LCC contract when it is transferred to a non-protocol bound address and tracking is activated

@@ -29,7 +29,7 @@ import {SafeCast} from "openzeppelin-contracts/contracts/utils/math/SafeCast.sol
 import {PausablePool} from "./modules/PausablePool.sol";
 import {ProxySwapFlag} from "./libraries/ProxySwapFlag.sol";
 import {Errors} from "./libraries/Errors.sol";
-import {VTSOrchestrator} from "./VTSOrchestrator.sol";
+import {IVTSOrchestrator} from "./interfaces/IVTSOrchestrator.sol";
 import {MarketHandler} from "./modules/MarketHandler.sol";
 import {Position} from "./types/Position.sol";
 
@@ -43,7 +43,7 @@ contract CoreHook is BaseHook, PausablePool, Exttload, MarketHandler {
     using CurrencySettler for Currency;
     using SafeCast for int256;
 
-    VTSOrchestrator internal immutable vtsOrchestrator;
+    IVTSOrchestrator internal immutable vtsOrchestrator;
     address internal immutable mmPositionManager;
 
     // Owner will be set to MarketFactory
@@ -51,7 +51,7 @@ contract CoreHook is BaseHook, PausablePool, Exttload, MarketHandler {
         BaseHook(IPoolManager(_poolManager))
         MarketHandler(_marketFactory)
     {
-        vtsOrchestrator = VTSOrchestrator(payable(_vtsOrchestrator));
+        vtsOrchestrator = IVTSOrchestrator(payable(_vtsOrchestrator));
         mmPositionManager = _mmPositionManager;
     }
 
