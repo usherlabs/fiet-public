@@ -575,6 +575,49 @@ contract MMPositionManager is ERC721Permit_v4, IMMPositionManager, ReentrancyLoc
         return vtsOrchestrator.getSettlementDelta(user, currency0, currency1);
     }
 
+    // ------------------------------------------------------------------------------------------------
+    // Checkpoint helpers (RFS / deficit lifecycle)
+    // ------------------------------------------------------------------------------------------------
+
+    /// @notice Marks a checkpoint for a single position within a commitment.
+    /// @param tokenId The ERC721 token id (commitment NFT id)
+    /// @param positionIndex The index of the position within the commitment
+    function checkpoint(uint256 tokenId, uint256 positionIndex) external onlyIfApproved(msg.sender, tokenId) {
+        vtsOrchestrator.markCheckpoint(tokenId, positionIndex);
+    }
+
+    /// @notice Marks checkpoints for multiple (tokenId, positionIndex) pairs.
+    /// @param tokenIds Array of commitment NFT ids
+    /// @param positionIndexes Array of position indexes within each commitment
+    function checkpoint(uint256[] calldata tokenIds, uint256[] calldata positionIndexes) external {
+        require(tokenIds.length == positionIndexes.length, "Invalid input lengths");
+        for (uint256 i = 0; i < tokenIds.length; i++) {
+            _assertApprovedOrOwner(msg.sender, tokenIds[i]);
+            vtsOrchestrator.markCheckpoint(tokenIds[i], positionIndexes[i]);
+        }
+    }
+
+    /// @notice Marks checkpoints for all positions within a single commitment.
+    /// @param tokenId The ERC721 token id (commitment NFT id)
+    function checkpoint(uint256 tokenId) external onlyIfApproved(msg.sender, tokenId) {
+        (,, uint256 positionCount,) = vtsOrchestrator.getCommit(tokenId);
+        for (uint256 i = 0; i < positionCount; i++) {
+            vtsOrchestrator.markCheckpoint(tokenId, i);
+        }
+    }
+
+    /// @notice Marks checkpoints for all positions across multiple commitments.
+    /// @param tokenIds Array of commitment NFT ids
+    function checkpoint(uint256[] calldata tokenIds) external {
+        for (uint256 i = 0; i < tokenIds.length; i++) {
+            _assertApprovedOrOwner(msg.sender, tokenIds[i]);
+            (,, uint256 positionCount,) = vtsOrchestrator.getCommit(tokenIds[i]);
+            for (uint256 j = 0; j < positionCount; j++) {
+                vtsOrchestrator.markCheckpoint(tokenIds[i], j);
+            }
+        }
+    }
+
     /// @dev overrides transferFrom to revert if pool manager is locked
     /// @dev mirrors PositionManager and prevents transfers while an unlock session is active (mid-batch), avoiding inconsistent state/reentrancy around router-locked flows.
     function transferFrom(address from, address to, uint256 id) public virtual override onlyIfPoolManagerLocked {

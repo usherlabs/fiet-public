@@ -177,8 +177,5 @@ interface IVTSOrchestrator {
 
     // Checkpoints
     function positionToCheckpoint(PositionId positionId) external view returns (RFSCheckpoint memory);
-    function checkpoint(uint256 commitId, uint256 positionIndex) external;
-    function checkpoint(uint256[] memory commitIds, uint256[] memory positionIndexes) external;
-    function checkpoint(uint256 commitId) external;
-    function checkpoint(uint256[] memory commitIds) external;
+    function markCheckpoint(uint256 commitId, uint256 positionIndex) external;
 }

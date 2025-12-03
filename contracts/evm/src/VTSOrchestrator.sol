@@ -852,8 +852,23 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSOrchestrator {
         return (principalDelta, accruedFeesAfterAdj);
     }
 
+    // --------------------------------------------------
+    // Checkpoint Helper Functions
+    // --------------------------------------------------
+
+    /// @notice Gets the checkpoint for a given position
+    /// @param positionId The position ID
+    /// @return checkpoint The checkpoint for the position
     function positionToCheckpoint(PositionId positionId) public view returns (RFSCheckpoint memory) {
         return s.checkpoints[PositionId.unwrap(positionId)];
+    }
+
+    /// @notice Marks a checkpoint for a given commit position. Only callable by the MMPositionManager.
+    /// @param commitId The commitment identifier (ERC721 token id at MMPM)
+    /// @param positionIndex The index of the position within the commitment
+    function markCheckpoint(uint256 commitId, uint256 positionIndex) external onlyMMPositionManager {
+        (PositionId positionId, bool rfsOpen,) = calcRFS(commitId, positionIndex, false);
+        CheckpointLibrary._markCheckpoint(s, positionId, rfsOpen);
     }
 
     // --------------------------------------------------
@@ -874,39 +889,5 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSOrchestrator {
     /// @return vtsCurrent1 The current VTS for token1
     function _getVTSCurrent(PositionId positionId) internal view returns (uint256 vtsCurrent0, uint256 vtsCurrent1) {
         (vtsCurrent0, vtsCurrent1) = VTSSettleLib.getVTSCurrent(s, positionId);
-    }
-
-    // ----- Checkpoint API -----
-    function _markCheckpoint(PositionId positionId, bool isOpen) internal {
-        CheckpointLibrary._markCheckpoint(s, positionId, isOpen);
-    }
-
-    function _checkpoint(uint256 commitId, uint256 positionIndex) internal {
-        (PositionId positionId, bool rfsOpen,) = calcRFS(commitId, positionIndex, false);
-        _markCheckpoint(positionId, rfsOpen);
-    }
-
-    function checkpoint(uint256 commitId, uint256 positionIndex) public {
-        _checkpoint(commitId, positionIndex);
-    }
-
-    function checkpoint(uint256[] memory commitIds, uint256[] memory positionIndexes) public {
-        require(commitIds.length == positionIndexes.length, "Invalid input lengths");
-        for (uint256 i = 0; i < commitIds.length; i++) {
-            _checkpoint(commitIds[i], positionIndexes[i]);
-        }
-    }
-
-    function checkpoint(uint256 commitId) public {
-        uint256 positionCount = s.commits[commitId].positionCount;
-        for (uint256 i = 0; i < positionCount; i++) {
-            _checkpoint(commitId, i);
-        }
-    }
-
-    function checkpoint(uint256[] memory commitIds) public {
-        for (uint256 i = 0; i < commitIds.length; i++) {
-            checkpoint(commitIds[i]);
-        }
     }
 }
