@@ -43,12 +43,14 @@ import {CheckpointLibrary} from "./libraries/Checkpoint.sol";
 import {IVRLSettlementObserver} from "./interfaces/IVRLSettlementObserver.sol";
 import {RFSCheckpoint} from "./types/Checkpoint.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
+import {LiquidityDeltaManager} from "./modules/LiquidityDeltaManager.sol";
+import {MarketHandler} from "./modules/MarketHandler.sol";
 
 /// @title VTSOrchestrator
 /// @notice Central state management layer and orchestrator for VTS logic
 /// @dev Adopts Bunni-style pattern: state managed in VTSStorage struct, complex logic delegated to linked libraries
 /// @author Fiet Protocol
-contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSOrchestrator {
+contract VTSOrchestrator is LiquidityDeltaManager, Ownable, IVTSOrchestrator {
     using StateLibrary for IPoolManager;
     using TransientStateLibrary for IPoolManager;
     using SafeCast for uint256;
@@ -56,18 +58,12 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSOrchestrator {
     /// @notice Central storage pointer (passed to libraries)
     VTSStorage internal s;
 
-    /// @notice Immutable pool manager reference
-    // IPoolManager public override poolManager;
-
     /// @notice OracleHelper address
     IOracleHelper public immutable oracleHelper;
 
     ILiquidityHub internal immutable liquidityHub;
 
     IVRLSettlementObserver public immutable settlementObserver;
-
-    /// @notice MarketFactory address (for access control)
-    // address public immutable marketFactory;
 
     /// @notice MM Position Manager address (for access control)
     address public mmPositionManager;
@@ -85,14 +81,12 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSOrchestrator {
         address _liquidityHub,
         address _settlementObserver,
         IWETH9 _weth9
-    ) Ownable(_msgSender()) LiquidityRouter(_marketFactory, _weth9) ImmutableState(IPoolManager(_poolManager)) {
+    ) Ownable(_msgSender()) LiquidityDeltaManager(_marketFactory, _weth9) ImmutableState(IPoolManager(_poolManager)) {
         if (_poolManager == address(0)) {
             revert Errors.VTSOrchestrator__InvalidPoolManager();
         }
         if (_marketFactory == address(0)) revert Errors.InvalidSender();
-        // poolManager = IPoolManager(_poolManager);
         oracleHelper = IOracleHelper(_oracleHelper);
-        // marketFactory = _marketFactory;
         signalManager = _signalManager;
         liquidityHub = ILiquidityHub(_liquidityHub);
         settlementObserver = IVRLSettlementObserver(_settlementObserver);
@@ -173,6 +167,14 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSOrchestrator {
         PositionId positionId = s.commits[commitId].positions[positionIndex];
         _assertPositionValid(positionId, true, true); // When calling from MM related helpers, let's assert that the position is valid
         return (s.positions[positionId], positionId);
+    }
+
+    /// @notice Get position id by commitId and positionIndex
+    /// @param commitId The commit identifier
+    /// @param positionIndex The position index within the commit
+    /// @return The position id
+    function getPositionId(uint256 commitId, uint256 positionIndex) public view returns (PositionId) {
+        return s.commits[commitId].positions[positionIndex];
     }
 
     /// @notice Get commit by commitId
@@ -293,33 +295,6 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSOrchestrator {
     }
 
     /// @inheritdoc IVTSOrchestrator
-    /// @notice Processes MM position settlement: reads required settlement delta from transient storage, settles position growths,
-    /// calculates RFS state, and updates settlement accounting with validation against position requirements
-    function onMMSettle(
-        PositionId positionId,
-        Currency lccCurrency0,
-        Currency lccCurrency1,
-        BalanceDelta delta,
-        bool isSeizing
-    )
-        public
-        onlyMMPosition(positionId)
-        notPaused
-        returns (BalanceDelta settlementDelta, bool rfsOpen, uint256 seizedLiquidityUnits)
-    {
-        // Read positionRequiredSettlementDelta from transient storage
-        BalanceDelta positionRequiredSettlementDelta = TransientSlots.readPositionRequiredSettlementDelta(positionId);
-
-        (settlementDelta, rfsOpen, seizedLiquidityUnits) = VTSSettleLib.onMMSettle(
-            s, poolManager, positionId, lccCurrency0, lccCurrency1, delta, isSeizing, positionRequiredSettlementDelta
-        );
-
-        VTSSettleLib._reducePositionRequiredSettlementDelta(
-            positionId, settlementDelta, positionRequiredSettlementDelta
-        );
-    }
-
-    /// @inheritdoc IVTSOrchestrator
     function calcRFS(PositionId positionId, bool requireClosedRfS)
         public
         onlyPositionValid(positionId)
@@ -328,6 +303,7 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSOrchestrator {
         return MMPositionsLib._calcRFS(s, poolManager, positionId, requireClosedRfS);
     }
 
+    /// @inheritdoc IVTSOrchestrator
     function calcRFS(uint256 commitId, uint256 positionIndex, bool requireClosedRfS)
         public
         returns (PositionId, bool, BalanceDelta)
@@ -335,10 +311,6 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSOrchestrator {
         PositionId positionId = getPositionId(commitId, positionIndex);
         (bool rfsOpen, BalanceDelta delta) = MMPositionsLib._calcRFS(s, poolManager, positionId, requireClosedRfS);
         return (positionId, rfsOpen, delta);
-    }
-
-    function getPositionId(uint256 commitId, uint256 positionIndex) public view returns (PositionId) {
-        return s.commits[commitId].positions[positionIndex];
     }
 
     // TODO: Not necessary? Esp. if contract sizes are big.9
@@ -440,69 +412,6 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSOrchestrator {
     // MMPM Functionality: methods used by the MMPositionManager contract
     // -----------------------------------------------------------------------------
 
-    /// @dev This function is used to settle the modified liquidities - called immediately after _modifyPositionLiquidity is called in MMPositionManager
-    /// @param params The parameters for the liquidity modification
-    /// @param key The pool key for the position
-    /// @param positionDelta The balance delta of the principal liquidity
-    /// @param feesAccrued The balance delta of the fees accrued
-    function settleModifiedLiquidities(PoolKey memory key, ModifyLiquidityParams memory params, BalanceDelta positionDelta, BalanceDelta feesAccrued) external onlyMMPositionManager {
-        address owner = msg.sender;
-        // Get net currency deltas from PoolManager
-        // currencyDelta is a net including fee accrual plus any hook-side fee-sharing that's already
-        // been applied at modification time.
-
-        // Note: Prior actions in a batch don't accumulate here because each _modifyLiquidity call in based on LCCs, which immediately issue/cancel and settle, resetting currencyDelta to 0 before the next action.
-        // The delta read here reflects only the current modification's effect (including hook adjustments like feeAdj from CoreHook).
-        // Other actions on the MMP (e.g., SETTLE_POSITION) account deltas to native underlying assets independent to PoolManager's awareness of LCC deltas.
-        int256 delta0 = poolManager.currencyDelta(owner, key.currency0);
-        int256 delta1 = poolManager.currencyDelta(owner, key.currency1);
-
-        // Validate currency delta direction matches liquidity operation type
-        if (params.liquidityDelta < 0) {
-            // Removing liquidity: PoolManager owes tokens to the LP (positive delta)
-            assert(delta0 > 0 || delta1 > 0);
-            assert(!(delta0 < 0 || delta1 < 0));
-        } else if (params.liquidityDelta > 0) {
-            // Adding liquidity: LP owes tokens to PoolManager (negative delta)
-            assert(delta0 < 0 || delta1 < 0);
-            assert(!(delta0 > 0 || delta1 > 0));
-        }
-
-        if(delta0 < 0 && delta1 < 0){
-            // If position is increasing, and therefore caller owes tokens to PoolManager, then we issue LCCs accordingly.
-            VTSCommitLib._issueTokens(
-                s,
-                oracleHelper,
-                liquidityHub,
-                poolKey,
-                params,
-                owner,
-                commitId,
-                uint256(-delta0),
-                uint256(-delta1)
-            );
-        }else if(delta0 > 0 && delta1 > 0){
-            // If position is decreasing, and therefore PoolManager owes tokens to caller, then we settle the deltas accordingly.
-            // TODO: Implement the decrease here, and adjust the position management logic accordingly.
-        }
-        
-        // Settle negative deltas: pay tokens owed to PoolManager (LP is depositing)
-        if (delta0 < 0) {
-            key.currency0.settle(poolManager, self, uint256(-delta0), settleUsingBurn);
-        }
-        if (delta1 < 0) {
-            key.currency1.settle(poolManager, self, uint256(-delta1), settleUsingBurn);
-        }
-
-        // Take positive deltas: receive tokens owed from PoolManager (LP is withdrawing)
-        if (delta0 > 0) {
-            key.currency0.take(poolManager, self, uint256(delta0), takeClaims);
-        }
-        if (delta1 > 0) {
-            key.currency1.take(poolManager, self, uint256(delta1), takeClaims);
-        }
-    }
-
     /**
      * @dev This function commits a liquidity signal to the VTS state
      * @param liquiditySignal The liquidity signal to commit
@@ -583,9 +492,10 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSOrchestrator {
 
         // Calculate settlement delta (what's owed to the MM) and clamp by available market liquidity
         BalanceDelta settlementDelta = _getUnderlyingSettlementDelta(sender, poolKey.currency0, poolKey.currency1);
+        BalanceDelta availableDelta = _clampSettlementDeltaByAvailableLiquidities(poolKey.toId(), settlementDelta);
 
         (BalanceDelta canceledDelta, BalanceDelta diff) = VTSCommitLib._decreasePosition(
-            address(this), liquidityHub, marketFactory, settlementDelta, principalDelta, poolKey
+            address(this), liquidityHub, availableDelta, settlementDelta, principalDelta, poolKey
         );
 
         // If there's a shortfall (unavailable liquidity), persist it as credits owed by MMP to the MM.
@@ -802,6 +712,14 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSOrchestrator {
         seizedLiquidityUnits = _settle(sender, poolKey, positionId, sDelta);
     }
 
+    /**
+     * @dev This function is used to settle a position, it is called from the MMPositionManager contract
+     * @param sender The sender of the settlement
+     * @param poolKey The pool key for the position
+     * @param positionId The position id of the position
+     * @param sDelta The settlement delta
+     * @return seizedLiquidityUnits The amount of liquidity units seized during seizure path (0 if not seizing)
+     */
     function _settle(address sender, PoolKey memory poolKey, PositionId positionId, BalanceDelta sDelta)
         internal
         returns (uint256)
@@ -814,9 +732,16 @@ contract VTSOrchestrator is LiquidityRouter, Ownable, IVTSOrchestrator {
 
         bool isSeizing = _isSeizing(positionId);
 
-        // update fees and required settlement delta for the position
-        (BalanceDelta settlementDelta, bool rfsOpen, uint256 seizedLiquidityUnits) =
-            onMMSettle(positionId, poolKey.currency0, poolKey.currency1, sDelta, isSeizing);
+        // Read positionRequiredSettlementDelta from transient storage
+        BalanceDelta positionRequiredSettlementDelta = TransientSlots.readPositionRequiredSettlementDelta(positionId);
+
+        (settlementDelta, rfsOpen, seizedLiquidityUnits) = VTSSettleLib.onMMSettle(
+            s, poolManager, positionId, lccCurrency0, lccCurrency1, delta, isSeizing, positionRequiredSettlementDelta
+        );
+
+        VTSSettleLib._reducePositionRequiredSettlementDelta(
+            positionId, settlementDelta, positionRequiredSettlementDelta
+        );
 
         _settleUnderlying(sender, poolKey.toId(), settlementDelta, poolKey.currency0, poolKey.currency1);
 

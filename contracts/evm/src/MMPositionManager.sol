@@ -297,17 +297,30 @@ contract MMPositionManager is ERC721Permit_v4, IMMPositionManager, ReentrancyLoc
         revert("UnsupportedAction");
     }
 
-    /// @dev This function is used to modify the liquidity of a position
-    /// @param poolKey The pool key for the position
-    /// @param params The parameters for the liquidity modification
-    /// @param hookData The hook data to pass to the pool manager
-    /// @return positionDelta The balance delta of the principal liquidity
-    /// @return feesAccrued The balance delta of the fees accrued
-    function _modifyPositionLiquidity(
-        PoolKey memory poolKey,
-        ModifyLiquidityParams memory params,
-        bytes memory hookData
-    ) internal returns (BalanceDelta positionDelta, BalanceDelta feesAccrued) {
+    /**
+     * @notice Modifies liquidity parameters of LCC-based position in a Uniswap V4 pool via the PoolManager
+     * @dev This function bridges liquidity modifications from MMPositionManager to the PoolManager:
+     *      - Calls PoolManager.modifyLiquidity() to add or remove liquidity
+     *      - Validates the liquidity change matches expected delta
+     *      - Handles currency settlement (paying owed amounts) and claims (receiving owed amounts)
+     *      - Returns both principal delta and fees accrued (which are treated differently downstream)
+     *
+     * @param key The pool key identifying the pool to modify
+     * @param params Parameters for the liquidity modification (tick range, delta, salt)
+     * @return delta The principal balance delta (callerDelta) - includes liquidity change plus immediate
+     *               fee/hook deltas
+     * @return feesAccrued Informational delta of fee growth in the modified range for this call
+     *
+     * Note: The pool manager must already be unlocked by the caller before calling this function.
+     */
+    function _modifyPositionLiquidity(PoolKey memory key, ModifyLiquidityParams memory params, bytes memory hookData)
+        internal
+        virtual
+        returns (BalanceDelta delta, BalanceDelta feesAccrued)
+    {
+        bool settleUsingBurn = false;
+        bool takeClaims = false;
+
         // Note: Pool manager must already be unlocked by the caller (MMPositionManager handles this)
 
         address self = address(this);
@@ -329,9 +342,56 @@ contract MMPositionManager is ERC721Permit_v4, IMMPositionManager, ReentrancyLoc
         (uint128 liquidityAfter,,) =
             poolManager.getPositionInfo(key.toId(), self, params.tickLower, params.tickUpper, params.salt);
 
+        // Get net currency deltas from PoolManager
+        // currencyDelta is a net including fee accrual plus any hook-side fee-sharing that's already
+        // been applied at modification time.
+
+        // Note: Prior actions in a batch don't accumulate here because each _modifyLiquidity call
+        // immediately settles its deltas, resetting currencyDelta to 0 before the next
+        // action. The delta read here reflects only the current modification's effect (including hook
+        // adjustments like feeAdj from CoreHook). Other actions (e.g., SETTLE_POSITION) account deltas
+        // to the hook contract, not to MMPositionManager, so they don't affect this currencyDelta.
+        int256 delta0 = poolManager.currencyDelta(self, key.currency0);
+        int256 delta1 = poolManager.currencyDelta(self, key.currency1);
+
         // Validate that liquidity change matches expected delta
         if (int128(liquidityBefore) + params.liquidityDelta != int128(liquidityAfter)) {
             revert Errors.InvariantViolated("liquidity change incorrect");
+        }
+
+        // Validate currency delta direction matches liquidity operation type
+        if (params.liquidityDelta < 0) {
+            // Removing liquidity: PoolManager owes tokens to the LP (positive delta)
+            assert(delta0 > 0 || delta1 > 0);
+            assert(!(delta0 < 0 || delta1 < 0));
+        } else if (params.liquidityDelta > 0) {
+            // Adding liquidity: LP owes tokens to PoolManager (negative delta)
+            assert(delta0 < 0 || delta1 < 0);
+            assert(!(delta0 > 0 || delta1 > 0));
+        }
+
+        if (delta0 < 0 && delta1 < 0) {
+            // If position is increasing, and therefore caller owes tokens to PoolManager, then we issue LCCs accordingly.
+            vtsOrchestrator.issueLCCs(poolKey, params, commitId, uint256(-delta0), uint256(-delta1)); // TODO: Implement this function
+        } else if (delta0 > 0 && delta1 > 0) {
+            // If position is decreasing, and therefore PoolManager owes tokens to caller, then we settle the deltas accordingly.
+            // TODO: Implement the decrease here, and adjust the position management logic accordingly.
+        }
+
+        // Settle negative deltas: pay tokens owed to PoolManager (LP is depositing)
+        if (delta0 < 0) {
+            key.currency0.settle(poolManager, self, uint256(-delta0), settleUsingBurn);
+        }
+        if (delta1 < 0) {
+            key.currency1.settle(poolManager, self, uint256(-delta1), settleUsingBurn);
+        }
+
+        // Take positive deltas: receive tokens owed from PoolManager (LP is withdrawing)
+        if (delta0 > 0) {
+            key.currency0.take(poolManager, self, uint256(delta0), takeClaims);
+        }
+        if (delta1 > 0) {
+            key.currency1.take(poolManager, self, uint256(delta1), takeClaims);
         }
     }
 

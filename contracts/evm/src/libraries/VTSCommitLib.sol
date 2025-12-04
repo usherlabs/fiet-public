@@ -439,27 +439,14 @@ library VTSCommitLib {
         }
     }
 
-    function _clampSettlementDeltaByAvailableLiquidities(
-        IMarketFactory marketFactory,
-        BalanceDelta settlementDelta,
-        PoolId poolId
-    ) public returns (BalanceDelta) {
-        address marketVault = marketFactory.corePoolToProxyHook(poolId);
-        return IMarketVault(marketVault).dryModifyLiquidities(settlementDelta);
-    }
-
     function _decreasePosition(
         address positionManager,
         ILiquidityHub liquidityHub,
-        IMarketFactory marketFactory,
+        BalanceDelta availableDelta,
         BalanceDelta settlementDelta,
         BalanceDelta principalDelta,
         PoolKey memory poolKey
     ) public returns (BalanceDelta cancelDelta, BalanceDelta diff) {
-        BalanceDelta availableDelta = _clampSettlementDeltaByAvailableLiquidities(
-            marketFactory, settlementDelta, poolKey.toId()
-        );
-
         diff = settlementDelta - availableDelta;
 
         // Cancel principal delta minus any shortfall. The shortfall represents unavailable liquidity
