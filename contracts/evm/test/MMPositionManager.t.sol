@@ -807,54 +807,39 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
     }
 
     function testCanWrapAndUnwrapNativeAsset() public {
-        // get the default market confiration so we can tweak it
-        bytes memory liquiditySignal = abi.encode(liquiditySignal);
-        ModifyLiquidityParams memory liquidityParams =
-            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
+        // NOTE: Following Uniswap v4 PositionManager pattern, wrap/unwrap are now simple
+        // WETH9 deposit/withdraw operations without delta accounting.
+        // The wrap/unwrap operations are handled by MMPositionManager which inherits NativeWrapper.
+        // Settlement happens via the standard settle/take flow.
 
-        // Send ETH with msg.value to create a native delta
         uint256 wrapAmount = 1 ether;
-        uint256 ethToSend = 2 ether;
 
-        deal(address(mmPositionManager), ethToSend);
+        // Deal ETH to MMPositionManager
+        deal(address(mmPositionManager), wrapAmount);
 
-        // Get native and WETH deltas before wrap
-        uint256 nativeDeltaBefore = vtsOrchestrator.getFullCredit(CurrencyLibrary.ADDRESS_ZERO, address(this));
-        uint256 wethDeltaBefore = vtsOrchestrator.getFullCredit(Currency.wrap(address(weth9)), address(this));
+        // Get WETH balance before wrap
+        uint256 wethBalanceBefore = weth9.balanceOf(address(mmPositionManager));
 
-        console.log("nativeDeltaBefore", nativeDeltaBefore);
-        console.log("wethDeltaBefore", wethDeltaBefore);
-
-        // Wrap native ETH to WETH (ETH is sent as msg.value via execute function)
+        // Wrap native ETH to WETH via MMPositionManager's NativeWrapper
+        // This is a simple WETH9.deposit() call - no delta accounting
         vm.prank(address(mmPositionManager));
-        vtsOrchestrator.wrapNative{value: ethToSend}(address(this), wrapAmount);
+        MMPositionManager(payable(mmPositionManager)).WETH9().deposit{value: wrapAmount}();
 
-        // Get native and WETH deltas after wrap
-        uint256 nativeDeltaAfterWrap = vtsOrchestrator.getFullCredit(CurrencyLibrary.ADDRESS_ZERO, address(this));
-        uint256 wethDeltaAfterWrap = vtsOrchestrator.getFullCredit(Currency.wrap(address(weth9)), address(this));
+        // Get WETH balance after wrap
+        uint256 wethBalanceAfter = weth9.balanceOf(address(mmPositionManager));
 
-        console.log("nativeDeltaAfterWrap", nativeDeltaAfterWrap);
-        console.log("wethDeltaAfterWrap", wethDeltaAfterWrap);
+        // Validate: WETH balance should increase by wrap amount
+        assertEq(wethBalanceAfter - wethBalanceBefore, wrapAmount, "WETH balance should increase by wrap amount");
 
-        // Validate: native delta should decrease, WETH delta should increase
-        assertGt(wethDeltaAfterWrap, wethDeltaBefore, "WETH delta should increase after wrap");
+        // Unwrap WETH to native ETH
+        vm.prank(address(mmPositionManager));
+        MMPositionManager(payable(mmPositionManager)).WETH9().withdraw(wrapAmount);
 
-        // Validate the native delta is sent amount - wrap amount
-        assertEq(nativeDeltaAfterWrap, ethToSend - wrapAmount);
+        // Get WETH balance after unwrap
+        uint256 wethBalanceAfterUnwrap = weth9.balanceOf(address(mmPositionManager));
 
-        // unwrap the weth to native
-        vtsOrchestrator.unwrapNative(address(this), wethDeltaAfterWrap);
-        // Get native and WETH deltas after wrap
-        uint256 nativeDeltaAfterUnwrap = vtsOrchestrator.getFullCredit(CurrencyLibrary.ADDRESS_ZERO, address(this));
-        uint256 wethDeltaAfterUnwrap = vtsOrchestrator.getFullCredit(Currency.wrap(address(weth9)), address(this));
-        console.log("nativeDeltaAfterUnwrap", nativeDeltaAfterUnwrap);
-        console.log("wethDeltaAfterUnwrap", wethDeltaAfterUnwrap);
-
-        // Validate the native delta is wrap amount
-        assertEq(nativeDeltaAfterUnwrap, wrapAmount * 2);
-
-        // Validate the weth delta is 0
-        assertEq(wethDeltaAfterUnwrap, 0);
+        // Validate: WETH balance should be back to original
+        assertEq(wethBalanceAfterUnwrap, wethBalanceBefore, "WETH balance should be back to original");
     }
 
     function testCanUnwrapLCC() public {

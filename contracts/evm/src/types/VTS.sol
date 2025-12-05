@@ -174,6 +174,9 @@ struct VTSStorage {
     /// For positions: use PositionId.unwrap(positionId)
     /// For commits: use keccak256(abi.encodePacked(commitTokenId))
     mapping(bytes32 => RFSCheckpoint) checkpoints;
+    /// Persistent underlying credits owed by protocol to users (target => underlying => credit)
+    /// Used to track unsettled withdrawals that couldn't be fulfilled immediately
+    mapping(address => mapping(address => uint256)) persistentUnderlyingCredits;
     /// Next token ID for commit NFTs (starts at 1)
     uint256 nextTokenId;
     /// Global pause flag

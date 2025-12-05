@@ -44,7 +44,8 @@ contract HookTest is Test, Deployers {
             makeAddr("signalManager"),
             address(factory),
             makeAddr("vtsOrchestrator"),
-            makeAddr("descriptor")
+            makeAddr("descriptor"),
+            weth9
         );
 
         // Compute flags for CoreHook

@@ -11,6 +11,8 @@ import {ERC721Permit_v4} from "v4-periphery/src/base/ERC721Permit_v4.sol";
 import {ReentrancyLock} from "v4-periphery/src/base/ReentrancyLock.sol";
 import {Multicall_v4} from "v4-periphery/src/base/Multicall_v4.sol";
 import {BaseActionsRouter} from "v4-periphery/src/base/BaseActionsRouter.sol";
+import {NativeWrapper} from "./forks/NativeWrapper.sol";
+import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
 import {PositionId, PositionLibrary, PositionModificationHookDataLib} from "./types/Position.sol";
 import {MarketMaker} from "./libraries/MarketMaker.sol";
 import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
@@ -39,6 +41,7 @@ contract MMPositionManager is
     ReentrancyLock,
     Multicall_v4,
     BaseActionsRouter,
+    NativeWrapper,
     PositionManagerLiquidity
 {
     using SafeCast for uint256;
@@ -84,16 +87,17 @@ contract MMPositionManager is
         COLLECT_AVAILABLE_LIQUIDITY // params: (address lcc, address recipient, uint256 maxAmount)
     }
 
-    // MarketHandler must be first.
     constructor(
         address _manager,
         address _signalManager,
         address _marketFactory,
         address _vtsOrchestrator,
-        address _descriptor
+        address _descriptor,
+        IWETH9 _weth9
     )
         ERC721Permit_v4("Fiet VRL Commitment Positions Manager", "FIET-VRL-MMP")
         BaseActionsRouter(IPoolManager(_manager))
+        NativeWrapper(_weth9)
     {
         commitmentDescriptor = _descriptor;
         signalManager = IVRLSignalManager(_signalManager);
@@ -256,14 +260,17 @@ contract MMPositionManager is
             return;
         }
         if (action == uint256(MMAction.WRAP_NATIVE)) {
+            // Following Uniswap v4 PositionManager pattern: wrap is a simple WETH9 deposit
+            // No delta accounting - settlement happens via standard settle/take flow
             uint256 amount = abi.decode(params, (uint256));
-            vtsOrchestrator.wrapNative{value: msg.value}(msgSender(), amount);
+            _wrap(amount);
             return;
         }
         if (action == uint256(MMAction.UNWRAP_NATIVE)) {
-            // params: (uint256 amount)
+            // Following Uniswap v4 PositionManager pattern: unwrap is a simple WETH9 withdraw
+            // No delta accounting - settlement happens via standard settle/take flow
             uint256 amount = abi.decode(params, (uint256));
-            vtsOrchestrator.unwrapNative(msgSender(), amount);
+            _unwrap(amount);
             return;
         }
         if (action == uint256(MMAction.EXTEND_GRACE_PERIOD)) {

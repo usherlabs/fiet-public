@@ -94,7 +94,8 @@ contract MarketFactoryTest is Test, Deployers {
             makeAddr("signalManager"),
             tempFactoryAddr, // temporary address, will be updated after factory deployment
             makeAddr("vtsOrchestrator"),
-            commitmentDescriptor
+            commitmentDescriptor,
+            weth9
         );
 
         // Deploy MarketFactory with all required arguments

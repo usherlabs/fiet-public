@@ -214,8 +214,7 @@ abstract contract MarketTestBase is Test, Deployers {
             address(signalManager),
             address(oracleHelper),
             address(liquidityHub),
-            address(settlementObserver),
-            weth9
+            address(settlementObserver)
         );
 
         mmPositionManager = address(
@@ -224,7 +223,8 @@ abstract contract MarketTestBase is Test, Deployers {
                 address(signalManager),
                 address(marketFactory),
                 address(vtsOrchestrator),
-                commitmentDescriptor
+                commitmentDescriptor,
+                weth9
             )
         );
 

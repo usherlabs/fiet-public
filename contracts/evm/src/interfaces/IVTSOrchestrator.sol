@@ -132,8 +132,6 @@ interface IVTSOrchestrator {
         uint256 amount1
     ) external;
 
-    function wrapNative(address sender, uint256 amount) external payable;
-    function unwrapNative(address sender, uint256 amount) external;
     function unwrapLCC(address sender, address lccAddr, address from, address to, uint256 requested)
         external
         returns (uint256 unwrapped, address underlying);
