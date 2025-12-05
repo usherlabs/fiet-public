@@ -41,7 +41,8 @@ import {ILiquidityHub} from "../interfaces/ILiquidityHub.sol";
 
 /// @title VTSPositionLib
 /// @notice Position lifecycle, registration, RFS, settlement, seizure, and growth accounting for VTS
-/// @dev All functions are external/public for linked-library usage but prefixed with `_` as they are conceptually internal.
+/// @dev External functions (called via VTSPositionLib.func()) have no underscore prefix.
+///      Internal functions (called only within this library) have underscore prefix.
 /// @author Fiet Protocol
 library VTSPositionLib {
     using SafeCast for uint256;
@@ -106,7 +107,7 @@ library VTSPositionLib {
     /// @param delta The delta of the settlement
     /// @return applied The applied delta to the total settlement amount
     function _updateSettlement(VTSStorage storage s, PositionId id, uint8 tokenIndex, int256 delta)
-        public
+        internal
         returns (int256 applied)
     {
         // Derive poolId from position to minimise parameters
@@ -294,7 +295,7 @@ library VTSPositionLib {
     /// @param poolManager The pool manager contract
     /// @param positionId The position ID
     function _settlePositionDeficitGrowth(VTSStorage storage s, IPoolManager poolManager, PositionId positionId)
-        public
+        internal
     {
         Position memory pos = s.positions[positionId];
         PoolId poolId = pos.poolId;
@@ -350,7 +351,7 @@ library VTSPositionLib {
     /// @param s The central VTS storage
     /// @param poolManager The pool manager contract
     /// @param positionId The position ID
-    function _settlePositionInflowGrowth(VTSStorage storage s, IPoolManager poolManager, PositionId positionId) public {
+    function _settlePositionInflowGrowth(VTSStorage storage s, IPoolManager poolManager, PositionId positionId) internal {
         Position memory pos = s.positions[positionId];
         PoolId poolId = pos.poolId;
         uint128 liq = StateLibrary.getPositionLiquidity(poolManager, poolId, PositionId.unwrap(positionId));
@@ -384,11 +385,109 @@ library VTSPositionLib {
         }
     }
 
+    /// @notice Read fees since last snapshot and checkpoint fee growth and outflow snapshots atomically
+    /// @param s The central VTS storage
+    /// @param poolManager The pool manager contract
+    /// @param positionId The position ID
+    /// @param poolId The pool ID
+    /// @param tokenIndex The token index (0 or 1)
+    /// @param positionLiquidity The position liquidity
+    /// @return fees The fees accrued since last snapshot
+    /// @return ofDelta The outflow delta since last fee snapshot
+    function _readFeesAndCheckpoint(
+        VTSStorage storage s,
+        IPoolManager poolManager,
+        PositionId positionId,
+        PoolId poolId,
+        uint8 tokenIndex,
+        uint128 positionLiquidity
+    ) internal returns (uint256 fees, uint256 ofDelta) {
+        Position memory pos = s.positions[positionId];
+        (uint256 fg0, uint256 fg1) = StateLibrary.getFeeGrowthInside(poolManager, poolId, pos.tickLower, pos.tickUpper);
+        uint256 fg = tokenIndex == 0 ? fg0 : fg1;
+
+        PositionAccounting storage pa = s.positionAccounting[positionId];
+        uint256 last = pa.feeGrowthInsideLast.get(tokenIndex);
+
+        if (positionLiquidity > 0 && fg > last) {
+            fees = FullMath.mulDiv(fg - last, uint256(positionLiquidity), FixedPoint128.Q128);
+        } else {
+            fees = 0;
+        }
+
+        // Compute outflow window and checkpoint both snapshots
+        uint256 cf = pa.cumulativeOutflows.get(tokenIndex);
+        uint256 snap = pa.outflowsAtFeeSnap.get(tokenIndex);
+        ofDelta = cf >= snap ? (cf - snap) : 0;
+
+        // Snapshot fees here
+        pa.feeGrowthInsideLast.set(tokenIndex, fg);
+        pa.outflowsAtFeeSnap.set(tokenIndex, cf);
+    }
+
+    /// @notice Apply coverage burn for a position
+    /// @param s The central VTS storage
+    /// @param poolManager The pool manager contract
+    /// @param id The position ID
+    /// @param p The pool ID
+    /// @param tokenIndex The token index (0 or 1)
+    /// @param cov The coverage usage amount
+    /// @param positionLiquidity The position liquidity
+    function _applyCoverageBurn(
+        VTSStorage storage s,
+        IPoolManager poolManager,
+        PositionId id,
+        PoolId p,
+        uint8 tokenIndex,
+        uint256 cov,
+        uint128 positionLiquidity
+    ) internal {
+        PositionAccounting storage pa = s.positionAccounting[id];
+        uint256 d = pa.cumulativeDeficit.get(tokenIndex);
+        uint256 settled = pa.settled.get(tokenIndex);
+        if (cov == 0 || (d == 0 && settled == 0)) return;
+
+        // Enforce invariant: cov <= d + settled, then burn only deficit portion
+        uint256 cEff = cov <= (d + settled) ? cov : (d + settled);
+        if (cEff == 0 || d == 0) return;
+        uint256 burnBase = cEff < d ? cEff : d; // min(coverage, deficit)
+
+        (uint256 fees, uint256 ofDelta) = _readFeesAndCheckpoint(s, poolManager, id, p, tokenIndex, positionLiquidity);
+        if (fees == 0 || ofDelta == 0) return;
+
+        Pool memory pool = s.pools[p];
+        MarketVTSConfiguration memory cfg = pool.vtsConfig;
+        uint256 bps = cfg.coverageFeeShare;
+        if (bps == 0) return;
+
+        // feesBurn = fees * (burnBase / ofDelta) * bps/10000
+        uint256 feesBurn = FullMath.mulDiv(fees, burnBase, ofDelta);
+        feesBurn = FullMath.mulDiv(feesBurn, bps, LiquidityUtils.BPS_DENOMINATOR);
+        if (feesBurn == 0) return;
+        if (feesBurn > fees) feesBurn = fees; // clamp to fees accrued
+
+        uint256 growthInc = 0;
+        if (positionLiquidity > 0) {
+            growthInc = FullMath.mulDiv(feesBurn, FixedPoint128.Q128, uint256(positionLiquidity));
+            // Burn by advancing fee growth baseline
+            uint256 currentFeeGrowth = pa.feeGrowthInsideLast.get(tokenIndex);
+            pa.feeGrowthInsideLast.set(tokenIndex, currentFeeGrowth + growthInc);
+        }
+
+        PoolAccounting storage paPool = s.poolAccounting[p];
+        uint256 currentProtocolFee = paPool.protocolFeeAccrued.get(tokenIndex);
+        paPool.protocolFeeAccrued.set(tokenIndex, currentProtocolFee + feesBurn);
+        uint256 currentFeesShared = pa.feesShared.get(tokenIndex);
+        pa.feesShared.set(tokenIndex, currentFeesShared + feesBurn);
+        int256 currentPendingAdj = pa.pendingFeeAdj.get(tokenIndex);
+        pa.pendingFeeAdj.set(tokenIndex, currentPendingAdj + int256(feesBurn));
+    }
+
     /// @notice Settle coverage-usage growth and burn fees only on exercised deficits
     /// @param s The central VTS storage
     /// @param poolManager The pool manager contract
     /// @param positionId The position ID
-    function _settleCoverageUsage(VTSStorage storage s, IPoolManager poolManager, PositionId positionId) public {
+    function _settleCoverageUsage(VTSStorage storage s, IPoolManager poolManager, PositionId positionId) internal {
         Position memory pos = s.positions[positionId];
         PoolId poolId = pos.poolId;
         uint128 liq = StateLibrary.getPositionLiquidity(poolManager, poolId, PositionId.unwrap(positionId));
@@ -410,18 +509,18 @@ library VTSPositionLib {
         );
 
         if (cov0 > 0) {
-            VTSFeeLib._applyCoverageBurn(s, poolManager, positionId, poolId, 0, cov0, liq);
+            _applyCoverageBurn(s, poolManager, positionId, poolId, 0, cov0, liq);
         }
         if (cov1 > 0) {
-            VTSFeeLib._applyCoverageBurn(s, poolManager, positionId, poolId, 1, cov1, liq);
+            _applyCoverageBurn(s, poolManager, positionId, poolId, 1, cov1, liq);
         }
     }
 
-    /// @notice Internal helper to settle both deficit and inflow growth for a position
+    /// @notice Settle both deficit, inflow, and coverage growth for a position
     /// @param s The central VTS storage
     /// @param poolManager The pool manager contract
     /// @param positionId The position ID
-    function _settlePositionGrowths(VTSStorage storage s, IPoolManager poolManager, PositionId positionId) public {
+    function settlePositionGrowths(VTSStorage storage s, IPoolManager poolManager, PositionId positionId) public {
         _settlePositionDeficitGrowth(s, poolManager, positionId);
         _settlePositionInflowGrowth(s, poolManager, positionId);
         _settleCoverageUsage(s, poolManager, positionId);
@@ -441,7 +540,7 @@ library VTSPositionLib {
         address owner,
         PoolId poolId,
         ModifyLiquidityParams calldata params
-    ) public {
+    ) internal {
         // Derive position id consistent with Uniswap position keying
         PositionId id = PositionLibrary.generateId(owner, params);
 
@@ -473,7 +572,7 @@ library VTSPositionLib {
         address positionManager,
         PositionId positionId,
         uint256 tokenId
-    ) public {
+    ) internal {
         // validate there is an existing commit for the token id
         if (s.commits[tokenId].expiresAt < block.timestamp) {
             revert Errors.SignalExpired(tokenId);
@@ -497,14 +596,14 @@ library VTSPositionLib {
     /// @param requireClosedRfS Whether to require the RFS to be closed
     /// @return rfsOpen Whether the RFS is open
     /// @return delta The RFS delta
-    function _calcRFS(VTSStorage storage s, IPoolManager poolManager, PositionId id, bool requireClosedRfS)
+    function calcRFS(VTSStorage storage s, IPoolManager poolManager, PositionId id, bool requireClosedRfS)
         public
         returns (bool rfsOpen, BalanceDelta delta)
     {
         // Settle position growths before calculating RFS
-        _settlePositionGrowths(s, poolManager, id);
+        settlePositionGrowths(s, poolManager, id);
 
-        (rfsOpen, delta) = _getRFS(s, id);
+        (rfsOpen, delta) = getRFS(s, id);
         if (requireClosedRfS && rfsOpen) {
             revert Errors.RFSOpenForPosition(id);
         }
@@ -580,7 +679,7 @@ library VTSPositionLib {
     /// @return feeAdj The fee adjustment delta
     /// @return isSeizing Whether this is a seizure operation
     /// @return isNewPosition Whether this is a new position
-    function _touchPosition(
+    function touchPosition(
         VTSStorage storage s,
         IPoolManager poolManager,
         address owner,
@@ -660,7 +759,7 @@ library VTSPositionLib {
                 // validate that RfS is closed before we track position param updates.
                 // Skip calcRFS when seizing
                 if (!isSeizing) {
-                    _calcRFS(s, poolManager, id, true);
+                    calcRFS(s, poolManager, id, true);
                 }
                 _trackCommitment(s, id, params);
 
@@ -754,7 +853,7 @@ library VTSPositionLib {
         }
 
         // Process position fees - single entry point for fee processing
-        feeAdj = VTSFeeLib._processPositionFees(s, poolManager, id, currency0, currency1);
+        feeAdj = VTSFeeLib.processPositionFees(s, poolManager, id, currency0, currency1);
     }
 
     // --------------------------------------------------
@@ -766,7 +865,7 @@ library VTSPositionLib {
     /// @param positionId The position id
     /// @return rfsOpen Whether the RFS is open
     /// @return delta The settlement delta required/available
-    function _getRFS(VTSStorage storage s, PositionId positionId)
+    function getRFS(VTSStorage storage s, PositionId positionId)
         public
         view
         returns (bool rfsOpen, BalanceDelta delta)
@@ -822,7 +921,7 @@ library VTSPositionLib {
     /// @param settled Current settled amount
     /// @param need Required amount
     /// @return deltaRaw Signed delta in raw units
-    function _rfsDeltaRaw(uint256 settled, uint256 need) public pure returns (int128 deltaRaw) {
+    function _rfsDeltaRaw(uint256 settled, uint256 need) internal pure returns (int128 deltaRaw) {
         if (need >= settled) {
             uint256 pos = need - settled; // rfs is the needed minus the already settled
             if (pos > INT128_MAX_U) return type(int128).max;
@@ -923,8 +1022,8 @@ library VTSPositionLib {
 
         // Settle growths and get RFS state
         BalanceDelta rfsDelta;
-        _settlePositionGrowths(s, poolManager, positionId);
-        (rfsOpen, rfsDelta) = _getRFS(s, positionId);
+        settlePositionGrowths(s, poolManager, positionId);
+        (rfsOpen, rfsDelta) = getRFS(s, positionId);
 
         // Handle settlement based on position state
         if (!pos.isActive) {
@@ -1054,22 +1153,7 @@ library VTSPositionLib {
         }
 
         // Proactive extraction (incremental): fund only increases in pending slashes since last observation to avoid over-funding
-        {
-            (int256 adj0, int256 adj1) = VTSFeeLib._peekFeeAdjustment(s, positionId);
-            int256 prev0 = pa.lastFundedPendingAdj.token0;
-            int256 prev1 = pa.lastFundedPendingAdj.token1;
-
-            if (adj0 > prev0) {
-                VTSFeeLib._fundFeePot(s, poolManager, poolId, lccCurrency0, 0, uint256(adj0 - prev0));
-            }
-            if (adj1 > prev1) {
-                VTSFeeLib._fundFeePot(s, poolManager, poolId, lccCurrency1, 1, uint256(adj1 - prev1));
-            }
-
-            // Snapshot current pending as baseline for the next settle
-            pa.lastFundedPendingAdj.token0 = adj0;
-            pa.lastFundedPendingAdj.token1 = adj1;
-        }
+        VTSFeeLib.proactiveFunding(s, poolManager, poolId, positionId, lccCurrency0, lccCurrency1);
     }
 
     /// @notice Calculates liquidity units to seize for a given position and settlement delta
@@ -1083,12 +1167,12 @@ library VTSPositionLib {
         IPoolManager poolManager,
         PositionId positionId,
         BalanceDelta settlementDelta
-    ) public returns (uint256 seizedLiquidityUnits) {
+    ) internal returns (uint256 seizedLiquidityUnits) {
         // Settle growths first
-        _settlePositionGrowths(s, poolManager, positionId);
+        settlePositionGrowths(s, poolManager, positionId);
 
         Position memory pos = s.positions[positionId];
-        (bool rfsOpen, BalanceDelta rfsDelta) = _getRFS(s, positionId);
+        (bool rfsOpen, BalanceDelta rfsDelta) = getRFS(s, positionId);
         if (!rfsOpen) {
             revert("VTSPositionLib: RFS not open");
         }
@@ -1151,7 +1235,7 @@ library VTSPositionLib {
     /// @param availableCredit The available credit from deltas
     /// @return unwrapped The amount actually unwrapped
     /// @return underlying The underlying token address
-    function _unwrapLCC(
+    function unwrapLCC(
         ILCC lcc,
         ILiquidityHub liquidityHub,
         address from,

@@ -27,7 +27,8 @@ import {LiquidityUtils} from "./LiquidityUtils.sol";
 
 /// @title VTSFeeLib
 /// @notice Fee processing, slashed pot management, and coverage burn logic for VTS
-/// @dev All functions are external/public for linked-library usage but prefixed with `_` as they are conceptually internal.
+/// @dev External functions (called via VTSFeeLib.func()) have no underscore prefix.
+///      Internal functions (called only within this library) have underscore prefix.
 /// @author Fiet Protocol
 library VTSFeeLib {
     using SafeCast for uint256;
@@ -46,7 +47,7 @@ library VTSFeeLib {
     /// @param positionId The position ID
     /// @return adj0 The pending fee adjustment for token0 (+slash, -bonus)
     /// @return adj1 The pending fee adjustment for token1 (+slash, -bonus)
-    function _peekFeeAdjustment(VTSStorage storage s, PositionId positionId)
+    function peekFeeAdjustment(VTSStorage storage s, PositionId positionId)
         public
         view
         returns (int256 adj0, int256 adj1)
@@ -70,7 +71,7 @@ library VTSFeeLib {
         Currency lccCurrency,
         uint8 tokenIndex,
         uint256 amount
-    ) public {
+    ) internal {
         if (amount == 0) return;
         // In linked libraries, address(this) refers to the calling contract via DELEGATECALL
         lccCurrency.take(poolManager, address(this), amount, true);
@@ -93,7 +94,7 @@ library VTSFeeLib {
         Currency lccCurrency,
         uint8 tokenIndex,
         uint256 amount
-    ) public {
+    ) internal {
         if (amount == 0) return;
         lccCurrency.settle(poolManager, address(this), amount, true);
         PoolAccounting storage paPool = s.poolAccounting[poolId];
@@ -101,104 +102,6 @@ library VTSFeeLib {
         // Clamp to available pot to avoid underflow; caller must have already bounded the amount
         if (amount > pot) amount = pot;
         paPool.slashedPot.set(tokenIndex, pot - amount);
-    }
-
-    /// @notice Read fees since last snapshot and checkpoint fee growth and outflow snapshots atomically
-    /// @param s The central VTS storage
-    /// @param poolManager The pool manager contract
-    /// @param positionId The position ID
-    /// @param poolId The pool ID
-    /// @param tokenIndex The token index (0 or 1)
-    /// @param positionLiquidity The position liquidity
-    /// @return fees The fees accrued since last snapshot
-    /// @return ofDelta The outflow delta since last fee snapshot
-    function _readFeesAndCheckpoint(
-        VTSStorage storage s,
-        IPoolManager poolManager,
-        PositionId positionId,
-        PoolId poolId,
-        uint8 tokenIndex,
-        uint128 positionLiquidity
-    ) public returns (uint256 fees, uint256 ofDelta) {
-        Position memory pos = s.positions[positionId];
-        (uint256 fg0, uint256 fg1) = StateLibrary.getFeeGrowthInside(poolManager, poolId, pos.tickLower, pos.tickUpper);
-        uint256 fg = tokenIndex == 0 ? fg0 : fg1;
-
-        PositionAccounting storage pa = s.positionAccounting[positionId];
-        uint256 last = pa.feeGrowthInsideLast.get(tokenIndex);
-
-        if (positionLiquidity > 0 && fg > last) {
-            fees = FullMath.mulDiv(fg - last, uint256(positionLiquidity), FixedPoint128.Q128);
-        } else {
-            fees = 0;
-        }
-
-        // Compute outflow window and checkpoint both snapshots
-        uint256 cf = pa.cumulativeOutflows.get(tokenIndex);
-        uint256 snap = pa.outflowsAtFeeSnap.get(tokenIndex);
-        ofDelta = cf >= snap ? (cf - snap) : 0;
-
-        // Snapshot fees here
-        pa.feeGrowthInsideLast.set(tokenIndex, fg);
-        pa.outflowsAtFeeSnap.set(tokenIndex, cf);
-    }
-
-    /// @notice Apply coverage burn for a position
-    /// @param s The central VTS storage
-    /// @param poolManager The pool manager contract
-    /// @param id The position ID
-    /// @param p The pool ID
-    /// @param tokenIndex The token index (0 or 1)
-    /// @param cov The coverage usage amount
-    /// @param positionLiquidity The position liquidity
-    function _applyCoverageBurn(
-        VTSStorage storage s,
-        IPoolManager poolManager,
-        PositionId id,
-        PoolId p,
-        uint8 tokenIndex,
-        uint256 cov,
-        uint128 positionLiquidity
-    ) public {
-        PositionAccounting storage pa = s.positionAccounting[id];
-        uint256 d = pa.cumulativeDeficit.get(tokenIndex);
-        uint256 settled = pa.settled.get(tokenIndex);
-        if (cov == 0 || (d == 0 && settled == 0)) return;
-
-        // Enforce invariant: cov <= d + settled, then burn only deficit portion
-        uint256 cEff = cov <= (d + settled) ? cov : (d + settled);
-        if (cEff == 0 || d == 0) return;
-        uint256 burnBase = cEff < d ? cEff : d; // min(coverage, deficit)
-
-        (uint256 fees, uint256 ofDelta) = _readFeesAndCheckpoint(s, poolManager, id, p, tokenIndex, positionLiquidity);
-        if (fees == 0 || ofDelta == 0) return;
-
-        Pool memory pool = s.pools[p];
-        MarketVTSConfiguration memory cfg = pool.vtsConfig;
-        uint256 bps = cfg.coverageFeeShare;
-        if (bps == 0) return;
-
-        // feesBurn = fees * (burnBase / ofDelta) * bps/10000
-        uint256 feesBurn = FullMath.mulDiv(fees, burnBase, ofDelta);
-        feesBurn = FullMath.mulDiv(feesBurn, bps, LiquidityUtils.BPS_DENOMINATOR);
-        if (feesBurn == 0) return;
-        if (feesBurn > fees) feesBurn = fees; // clamp to fees accrued
-
-        uint256 growthInc = 0;
-        if (positionLiquidity > 0) {
-            growthInc = FullMath.mulDiv(feesBurn, FixedPoint128.Q128, uint256(positionLiquidity));
-            // Burn by advancing fee growth baseline
-            uint256 currentFeeGrowth = pa.feeGrowthInsideLast.get(tokenIndex);
-            pa.feeGrowthInsideLast.set(tokenIndex, currentFeeGrowth + growthInc);
-        }
-
-        PoolAccounting storage paPool = s.poolAccounting[p];
-        uint256 currentProtocolFee = paPool.protocolFeeAccrued.get(tokenIndex);
-        paPool.protocolFeeAccrued.set(tokenIndex, currentProtocolFee + feesBurn);
-        uint256 currentFeesShared = pa.feesShared.get(tokenIndex);
-        pa.feesShared.set(tokenIndex, currentFeesShared + feesBurn);
-        int256 currentPendingAdj = pa.pendingFeeAdj.get(tokenIndex);
-        pa.pendingFeeAdj.set(tokenIndex, currentPendingAdj + int256(feesBurn));
     }
 
     /// @notice Finalise a portion of the pending fee adjustment as materialised in the current hook call
@@ -218,7 +121,7 @@ library VTSFeeLib {
         Currency currency1
     ) internal returns (BalanceDelta adj) {
         // Materialise pending: fund slashed pot for +ve; drain to LP for -ve
-        (int256 pend0, int256 pend1) = _peekFeeAdjustment(s, positionId);
+        (int256 pend0, int256 pend1) = peekFeeAdjustment(s, positionId);
         int256 mat0 = 0;
         int256 mat1 = 0;
 
@@ -286,7 +189,7 @@ library VTSFeeLib {
     /// @param currency0 The currency for token0
     /// @param currency1 The currency for token1
     /// @return adj The materialised fee adjustment delta
-    function _processPositionFees(
+    function processPositionFees(
         VTSStorage storage s,
         IPoolManager poolManager,
         PositionId positionId,
@@ -357,8 +260,40 @@ library VTSFeeLib {
         return _finaliseFeeAdjustment(s, poolManager, positionId, poolId, currency0, currency1);
     }
 
+    /// @notice Proactive extraction (incremental): fund only increases in pending slashes since last observation
+    /// @param s The central VTS storage
+    /// @param poolManager The pool manager contract
+    /// @param poolId The pool ID
+    /// @param positionId The position ID
+    /// @param lccCurrency0 The LCC currency for token0
+    /// @param lccCurrency1 The LCC currency for token1
+    function proactiveFunding(
+        VTSStorage storage s,
+        IPoolManager poolManager,
+        PoolId poolId,
+        PositionId positionId,
+        Currency lccCurrency0,
+        Currency lccCurrency1
+    ) external {
+        (int256 adj0, int256 adj1) = peekFeeAdjustment(s, positionId);
+        PositionAccounting storage pa = s.positionAccounting[positionId];
+        int256 prev0 = pa.lastFundedPendingAdj.token0;
+        int256 prev1 = pa.lastFundedPendingAdj.token1;
+
+        if (adj0 > prev0) {
+            _fundFeePot(s, poolManager, poolId, lccCurrency0, 0, uint256(adj0 - prev0));
+        }
+        if (adj1 > prev1) {
+            _fundFeePot(s, poolManager, poolId, lccCurrency1, 1, uint256(adj1 - prev1));
+        }
+
+        // Snapshot current pending as baseline for the next settle
+        pa.lastFundedPendingAdj.token0 = adj0;
+        pa.lastFundedPendingAdj.token1 = adj1;
+    }
+
     /// @dev Check if fee sharing is enabled for a pool
-    function _isFeeSharingEnabled(VTSStorage storage s, PoolId p) public view returns (bool) {
+    function _isFeeSharingEnabled(VTSStorage storage s, PoolId p) internal view returns (bool) {
         return s.pools[p].vtsConfig.coverageFeeShare > 0;
     }
 }

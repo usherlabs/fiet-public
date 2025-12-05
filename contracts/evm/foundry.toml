@@ -24,6 +24,7 @@ remappings = ["@openzeppelin/=lib/openzeppelin-contracts/"]
 #   "src/libraries/VTSPositionLib.sol:VTSPositionLib:0x0000000000000000000000000000000000000000",
 #   "src/libraries/VTSFeeLib.sol:VTSFeeLib:0x0000000000000000000000000000000000000000",
 #   "src/libraries/VTSSwapLib.sol:VTSSwapLib:0x0000000000000000000000000000000000000000",
+#   "src/libraries/VTSCommitLib.sol:VTSCommitLib:0x0000000000000000000000000000000000000000",
 # ]
 
 [rpc_endpoints]

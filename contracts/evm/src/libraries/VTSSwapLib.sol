@@ -17,20 +17,21 @@ import {TickUtils} from "./TickUtils.sol";
 
 /// @title VTSSwapLib
 /// @notice Swap processing and global growth accrual logic for VTS
-/// @dev All functions are external/public for linked-library usage but prefixed with `_` as they are conceptually internal.
+/// @dev External functions (called via VTSSwapLib.func()) have no underscore prefix.
+///      Internal functions (called only within this library) have underscore prefix.
 /// @author Fiet Protocol
 library VTSSwapLib {
     using StateLibrary for IPoolManager;
     using TokenPairLib for TokenPairUint;
 
-    /// @notice Processes the logic for CoreHook._afterSwap
+    /// @notice Processes the logic for CoreHook.afterSwap
     /// @param s The central VTS storage
     /// @param poolManager The pool manager contract
     /// @param key The pool key
     /// @param delta The balance delta from the swap
     /// @param sqrtPBefore The sqrt price before the swap
     /// @param liqBefore The liquidity before the swap
-    function _processSwap(
+    function processSwap(
         VTSStorage storage s,
         IPoolManager poolManager,
         PoolKey calldata key,
@@ -142,14 +143,14 @@ library VTSSwapLib {
         }
     }
 
-    /// @notice Called by the hook on tick cross to flip outside growth for a tick
+    /// @notice Called on tick cross to flip outside growth for a tick
     /// @param s The central VTS storage
     /// @param poolManager The pool manager contract
     /// @param poolId The pool ID
     /// @param tick The tick that was crossed
     /// @param token The token index (0 or 1)
     function _onTickCross(VTSStorage storage s, IPoolManager poolManager, PoolId poolId, int24 tick, uint8 token)
-        public
+        internal
     {
         // Flip deficit growth outside
         _flipOutside(s, poolId, tick, token, 0);
@@ -178,7 +179,7 @@ library VTSSwapLib {
     /// @param tick The tick
     /// @param token The token index (0 or 1)
     /// @param growthType The growth type (0 = deficit, 1 = inflow, 2 = coverage usage)
-    function _flipOutside(VTSStorage storage s, PoolId poolId, int24 tick, uint8 token, uint8 growthType) public {
+    function _flipOutside(VTSStorage storage s, PoolId poolId, int24 tick, uint8 token, uint8 growthType) internal {
         if (token > 1) return;
         PoolAccounting storage paPool = s.poolAccounting[poolId];
         uint256 g;
@@ -221,7 +222,7 @@ library VTSSwapLib {
         uint8 token,
         uint256 amount,
         uint128 liquidity
-    ) public {
+    ) internal {
         if (token > 1 || amount == 0 || liquidity == 0) return;
         uint256 deltaG = FullMath.mulDiv(amount, FixedPoint128.Q128, uint256(liquidity));
         PoolAccounting storage paPool = s.poolAccounting[poolId];
@@ -241,7 +242,7 @@ library VTSSwapLib {
         uint8 token,
         uint256 amount,
         uint128 liquidity
-    ) public {
+    ) internal {
         if (token > 1 || amount == 0 || liquidity == 0) return;
         uint256 deltaG = FullMath.mulDiv(amount, FixedPoint128.Q128, uint256(liquidity));
         PoolAccounting storage paPool = s.poolAccounting[poolId];

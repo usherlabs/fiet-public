@@ -280,7 +280,7 @@ contract VTSOrchestrator is MarketHandler, Ownable, ImmutableState, IVTSOrchestr
     function settlePositionGrowths(PositionId positionId) external onlyCoreHook {
         // if the provided position id is valid, then settle the position growths
         if (isPositionValid(positionId, true)) {
-            VTSPositionLib._settlePositionGrowths(s, poolManager, positionId);
+            VTSPositionLib.settlePositionGrowths(s, poolManager, positionId);
         }
     }
 
@@ -288,7 +288,7 @@ contract VTSOrchestrator is MarketHandler, Ownable, ImmutableState, IVTSOrchestr
     /// @param corePoolKey The core pool key
     /// @param vtsConfiguration The VTS configuration
     function initPool(PoolKey memory corePoolKey, MarketVTSConfiguration memory vtsConfiguration) external onlyFactory {
-        VTSCommitLib._initPool(s, corePoolKey, vtsConfiguration);
+        VTSCommitLib.initPool(s, corePoolKey, vtsConfiguration);
     }
 
     /// @inheritdoc IVTSOrchestrator
@@ -310,7 +310,7 @@ contract VTSOrchestrator is MarketHandler, Ownable, ImmutableState, IVTSOrchestr
         onlyPositionValid(positionId)
         returns (bool, BalanceDelta)
     {
-        return VTSPositionLib._calcRFS(s, poolManager, positionId, requireClosedRfS);
+        return VTSPositionLib.calcRFS(s, poolManager, positionId, requireClosedRfS);
     }
 
     /// @inheritdoc IVTSOrchestrator
@@ -319,7 +319,7 @@ contract VTSOrchestrator is MarketHandler, Ownable, ImmutableState, IVTSOrchestr
         returns (PositionId, bool, BalanceDelta)
     {
         PositionId positionId = getPositionId(commitId, positionIndex);
-        (bool rfsOpen, BalanceDelta delta) = VTSPositionLib._calcRFS(s, poolManager, positionId, requireClosedRfS);
+        (bool rfsOpen, BalanceDelta delta) = VTSPositionLib.calcRFS(s, poolManager, positionId, requireClosedRfS);
         return (positionId, rfsOpen, delta);
     }
 
@@ -329,7 +329,7 @@ contract VTSOrchestrator is MarketHandler, Ownable, ImmutableState, IVTSOrchestr
         onlyPositionValid(positionId)
         returns (uint256 vtsCurrent0, uint256 vtsCurrent1)
     {
-        VTSPositionLib._settlePositionGrowths(s, poolManager, positionId);
+        VTSPositionLib.settlePositionGrowths(s, poolManager, positionId);
         return _getVTSCurrent(positionId);
     }
 
@@ -342,10 +342,10 @@ contract VTSOrchestrator is MarketHandler, Ownable, ImmutableState, IVTSOrchestr
     /// @inheritdoc IVTSOrchestrator
     function incrementCoverage(PoolId poolId, uint256 amount0, uint256 amount1) external onlyFactory {
         if (amount0 > 0) {
-            VTSCommitLib._incrementCoverage(s, poolManager, poolId, 0, amount0);
+            VTSCommitLib.incrementCoverage(s, poolManager, poolId, 0, amount0);
         }
         if (amount1 > 0) {
-            VTSCommitLib._incrementCoverage(s, poolManager, poolId, 1, amount1);
+            VTSCommitLib.incrementCoverage(s, poolManager, poolId, 1, amount1);
         }
     }
 
@@ -363,7 +363,7 @@ contract VTSOrchestrator is MarketHandler, Ownable, ImmutableState, IVTSOrchestr
     /// @inheritdoc IVTSOrchestrator
     function applyCommitmentDeficit(PositionId[] calldata ids, uint256 totalDeficitBps) external {
         if (msg.sender != mmPositionManager) revert Errors.InvalidSender();
-        VTSCommitLib._applyCommitmentDeficit(s, mmPositionManager, ids, totalDeficitBps);
+        VTSCommitLib.applyCommitmentDeficit(s, mmPositionManager, ids, totalDeficitBps);
     }
 
     // --------------------------------------------------
@@ -402,7 +402,7 @@ contract VTSOrchestrator is MarketHandler, Ownable, ImmutableState, IVTSOrchestr
         )
     {
         (id, requiredSettlementDelta, feeAdj, isSeizing, isNewPosition) =
-            VTSPositionLib._touchPosition(
+            VTSPositionLib.touchPosition(
                 s, poolManager, owner, poolId, params, hookData, mmPositionManager, currency0, currency1
             );
         // get the position from the position id
@@ -469,7 +469,7 @@ contract VTSOrchestrator is MarketHandler, Ownable, ImmutableState, IVTSOrchestr
             }
 
             // Mark RFS checkpoint
-            (bool rfsOpen,) = VTSPositionLib._getRFS(s, id);
+            (bool rfsOpen,) = VTSPositionLib.getRFS(s, id);
             _markCheckpoint(id, rfsOpen);
         }
     }
@@ -539,7 +539,7 @@ contract VTSOrchestrator is MarketHandler, Ownable, ImmutableState, IVTSOrchestr
         uint160 sqrtPBefore,
         uint128 liqBefore
     ) external onlyCoreHook {
-        VTSSwapLib._processSwap(s, poolManager, key, params, delta, sqrtPBefore, liqBefore);
+        VTSSwapLib.processSwap(s, poolManager, key, params, delta, sqrtPBefore, liqBefore);
     }
 
     // -----------------------------------------------------------------------------
@@ -553,7 +553,7 @@ contract VTSOrchestrator is MarketHandler, Ownable, ImmutableState, IVTSOrchestr
      */
     function commitSignal(bytes memory liquiditySignal) external onlyMMPositionManager returns (uint256 commitId) {
         // verify and commit the signal to state
-        commitId = VTSCommitLib._commitSignal(s, IVRLSignalManager(signalManager), liquiditySignal);
+        commitId = VTSCommitLib.commitSignal(s, IVRLSignalManager(signalManager), liquiditySignal);
     }
 
     /**
@@ -701,7 +701,7 @@ contract VTSOrchestrator is MarketHandler, Ownable, ImmutableState, IVTSOrchestr
     {
         ILCC lcc = ILCC(lccAddr);
         // Move this back into MMPM - and remove the delta accounting within the MMPM.
-        (unwrapped, underlying) = VTSPositionLib._unwrapLCC(
+        (unwrapped, underlying) = VTSPositionLib.unwrapLCC(
             lcc,
             liquidityHub,
             from,
@@ -813,14 +813,14 @@ contract VTSOrchestrator is MarketHandler, Ownable, ImmutableState, IVTSOrchestr
     }
 
     function renewSignal(uint256 commitId, bytes memory liquiditySignal) public {
-        VTSCommitLib._renewSignal(s, IVRLSignalManager(signalManager), oracleHelper, commitId, liquiditySignal);
+        VTSCommitLib.renewSignal(s, IVRLSignalManager(signalManager), oracleHelper, commitId, liquiditySignal);
     }
 
     function declareUnbackedCommitment(address sender, uint256 commitId, bytes memory liquiditySignal)
         public
         onlyMMPositionManager
     {
-        VTSCommitLib._declareCommitmentDeficit(
+        VTSCommitLib.declareCommitmentDeficit(
             s, sender, address(this), commitId, IVRLSignalManager(signalManager), oracleHelper, liquiditySignal
         );
     }
@@ -881,7 +881,7 @@ contract VTSOrchestrator is MarketHandler, Ownable, ImmutableState, IVTSOrchestr
             liquidityDelta: liquidityDelta,
             salt: bytes32(0) // Not used for validation
         });
-        VTSCommitLib._effectiveCommitmentUsdValue(s, oracleHelper, commitId, poolKey.toId(), params, true);
+        VTSCommitLib.effectiveCommitmentUsdValue(s, oracleHelper, commitId, poolKey.toId(), params, true);
 
         // Issue LCC tokens to MMP (mmPositionManager is the recipient)
         address lcc0 = Currency.unwrap(poolKey.currency0);

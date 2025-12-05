@@ -35,7 +35,8 @@ import {console} from "forge-std/console.sol";
 
 /// @title VTSCommitLib
 /// @notice Commit and commitment deficit management helpers for VTS, operating on VTSStorage
-/// @dev All functions are external/public for linked-library usage but prefixed with `_` as they are conceptually internal.
+/// @dev External functions (called via VTSCommitLib.func()) have no underscore prefix.
+///      Internal functions (called only within this library) have underscore prefix.
 /// @author Fiet Protocol
 library VTSCommitLib {
     event SignalCommitted(uint256 tokenId);
@@ -58,7 +59,7 @@ library VTSCommitLib {
     /// @param poolId The pool ID
     /// @param tokenIndex The token index (0 or 1)
     /// @param coveredAmount The amount covered
-    function _incrementCoverage(
+    function incrementCoverage(
         VTSStorage storage s,
         IPoolManager poolManager,
         PoolId poolId,
@@ -86,12 +87,12 @@ library VTSCommitLib {
     /// @param signalManager The signal manager address
     /// @param liquiditySignal The liquidity signal to commit
     /// @return tokenId The token id of the committed signal
-    function _commitSignal(
+    function commitSignal(
         VTSStorage storage s,
         IVRLSignalManager signalManager, // Pass as parameter
         bytes memory liquiditySignal
     )
-        internal
+        public
         returns (uint256 tokenId)
     {
         // validate the liquidity signal was actually provided
@@ -114,7 +115,21 @@ library VTSCommitLib {
         emit SignalCommitted(tokenId);
     }
 
-    /// @notice Applies commitment deficit to a batch of positions
+    /// @notice Applies commitment deficit to a batch of positions (external wrapper)
+    /// @param s The central VTS storage
+    /// @param mmPositionManager The MM Position Manager address (for validation)
+    /// @param ids Array of position IDs to apply deficit to
+    /// @param totalDeficitBps Total deficit basis points to distribute across positions
+    function applyCommitmentDeficit(
+        VTSStorage storage s,
+        address mmPositionManager,
+        PositionId[] memory ids,
+        uint256 totalDeficitBps
+    ) public {
+        _applyCommitmentDeficit(s, mmPositionManager, ids, totalDeficitBps);
+    }
+
+    /// @notice Applies commitment deficit to a batch of positions (internal)
     /// @param s The central VTS storage
     /// @param mmPositionManager The MM Position Manager address (for validation)
     /// @param ids Array of position IDs to apply deficit to
@@ -124,7 +139,7 @@ library VTSCommitLib {
         address mmPositionManager,
         PositionId[] memory ids,
         uint256 totalDeficitBps
-    ) public {
+    ) internal {
         uint256 n = ids.length;
         uint256 bpsValue = totalDeficitBps / n;
 
@@ -176,7 +191,7 @@ library VTSCommitLib {
     /// @return potentialIssuedUsd Total USD value of potential issued commitment maxima across all positions
     /// @return settledUsd Total USD value of settled amounts across all positions
     /// @return signalUsd Total USD value of signal reserves
-    function _effectiveCommitmentUsdValue(
+    function effectiveCommitmentUsdValue(
         VTSStorage storage s,
         IOracleHelper oracleHelper,
         uint256 tokenId,
@@ -200,7 +215,7 @@ library VTSCommitLib {
         IOracleHelper oracleHelper,
         uint256 tokenId,
         bool errorIfInsufficientBacking
-    ) public view returns (uint256 issuedUsd, uint256 settledUsd, uint256 signalUsd) {
+    ) internal view returns (uint256 issuedUsd, uint256 settledUsd, uint256 signalUsd) {
         issuedUsd = _issuedUSDValue(s, oracleHelper, tokenId);
         settledUsd = _settledUSDValue(s, oracleHelper, tokenId);
         signalUsd = _signalUSDValue(s, oracleHelper, tokenId);
@@ -223,7 +238,7 @@ library VTSCommitLib {
         uint256 tokenId,
         PoolId commitPoolId,
         ModifyLiquidityParams memory params
-    ) public view returns (uint256 totalUsdValue) {
+    ) internal view returns (uint256 totalUsdValue) {
         // get the current issued USD value
         totalUsdValue = _issuedUSDValue(s, oracleHelper, tokenId);
 
@@ -246,7 +261,7 @@ library VTSCommitLib {
     /// @param tokenId The commit NFT id
     /// @return totalUsdValue Total USD value of commitment maxima (averaged)
     function _issuedUSDValue(VTSStorage storage s, IOracleHelper oracleHelper, uint256 tokenId)
-        public
+        internal
         view
         returns (uint256 totalUsdValue)
     {
@@ -296,7 +311,7 @@ library VTSCommitLib {
     /// @param tokenId The commit NFT id
     /// @return totalUsdValue Total USD value of settled amounts
     function _settledUSDValue(VTSStorage storage s, IOracleHelper oracleHelper, uint256 tokenId)
-        public
+        internal
         view
         returns (uint256 totalUsdValue)
     {
@@ -344,7 +359,7 @@ library VTSCommitLib {
     /// @param tokenId The commit NFT id
     /// @return totalUsdValue Total USD value of signal reserves
     function _signalUSDValue(VTSStorage storage s, IOracleHelper oracleHelper, uint256 tokenId)
-        public
+        internal
         view
         returns (uint256 totalUsdValue)
     {
@@ -356,7 +371,7 @@ library VTSCommitLib {
     }
 
     function _mmStateUsdValue(MarketMaker.State memory mmState, IOracleHelper oracleHelper)
-        public
+        internal
         view
         returns (uint256 totalUsdValue)
     {
@@ -368,7 +383,7 @@ library VTSCommitLib {
     /// @param s The central VTS storage
     /// @param poolKey The pool key
     /// @param vtsConfiguration The VTS configuration
-    function _initPool(VTSStorage storage s, PoolKey memory poolKey, MarketVTSConfiguration memory vtsConfiguration)
+    function initPool(VTSStorage storage s, PoolKey memory poolKey, MarketVTSConfiguration memory vtsConfiguration)
         public
     {
         // initialize the market details in the VTS state
@@ -406,7 +421,7 @@ library VTSCommitLib {
         uint256 commitId,
         uint256 a0,
         uint256 a1
-    ) public returns (PositionId positionId) {
+    ) internal returns (PositionId positionId) {
         positionId = PositionLibrary.generateId(positionManager, params);
 
         // Prevent overflow when converting to int256/int128 for modifyLiquidity
@@ -421,7 +436,7 @@ library VTSCommitLib {
 
         // validate the commitment backing
         // Backing gate: effective LCC (including prospective) <= signal + settled
-        _effectiveCommitmentUsdValue(s, oracleHelper, commitId, poolKey.toId(), params, true);
+        effectiveCommitmentUsdValue(s, oracleHelper, commitId, poolKey.toId(), params, true);
 
         // issue the lcc tokens to be injected into the pool
         address lcc0 = Currency.unwrap(poolKey.currency0);
@@ -441,7 +456,7 @@ library VTSCommitLib {
         BalanceDelta settlementDelta,
         BalanceDelta principalDelta,
         PoolKey memory poolKey
-    ) public returns (BalanceDelta cancelDelta, BalanceDelta diff) {
+    ) internal returns (BalanceDelta cancelDelta, BalanceDelta diff) {
         diff = settlementDelta - availableDelta;
 
         // Cancel principal delta minus any shortfall. The shortfall represents unavailable liquidity
@@ -468,7 +483,7 @@ library VTSCommitLib {
 
     /// @notice Declares a commitment deficit for a position
     /// @param s The central VTS storage
-    function _declareCommitmentDeficit(
+    function declareCommitmentDeficit(
         VTSStorage storage s,
         address sender,
         address positionManager,
@@ -532,7 +547,7 @@ library VTSCommitLib {
         _applyCommitmentDeficit(s, positionManager, ids, totalDeficitBps);
     }
 
-    function _renewSignal(
+    function renewSignal(
         VTSStorage storage s,
         IVRLSignalManager signalManager,
         IOracleHelper oracleHelper,
