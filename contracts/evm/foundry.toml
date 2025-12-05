@@ -20,6 +20,12 @@ fs_permissions = [{ access = "read-write", path = "./deployments" }]
 
 remappings = ["@openzeppelin/=lib/openzeppelin-contracts/"]
 
+# libraries = [
+#   "src/libraries/VTSPositionLib.sol:VTSPositionLib:0x0000000000000000000000000000000000000000",
+#   "src/libraries/VTSFeeLib.sol:VTSFeeLib:0x0000000000000000000000000000000000000000",
+#   "src/libraries/VTSSwapLib.sol:VTSSwapLib:0x0000000000000000000000000000000000000000",
+# ]
+
 [rpc_endpoints]
 local = "${ANVIL_FORK_URL}"
 sepolia = "${ARB_SEPOLIA_RPC_URL}"
