@@ -52,13 +52,8 @@ interface IVTSOrchestrator {
     function setMarketVTSConfiguration(PoolId corePoolId, MarketVTSConfiguration memory vtsConfiguration) external;
     function getMarketVTSConfiguration(PoolId corePoolId) external view returns (MarketVTSConfiguration memory);
 
-    function onMMSettle(
-        PositionId positionId,
-        Currency lccCurrency0,
-        Currency lccCurrency1,
-        BalanceDelta delta,
-        bool isSeizing
-    ) external returns (BalanceDelta settlementDelta, bool rfsOpen, uint256 seizedLiquidityUnits);
+    // NOTE: onMMSettle has been removed from the interface.
+    // Settlement is now handled internally via VTSSettleLib.onMMSettle called from _settle.
 
     function calcRFS(PositionId positionId, bool requireClosedRfS) external returns (bool, BalanceDelta);
     function calcRFS(uint256 commitId, uint256 positionIndex, bool requireClosedRfS)
@@ -72,10 +67,24 @@ interface IVTSOrchestrator {
     function applyCommitmentDeficit(PositionId[] calldata ids, uint256 totalDeficitBps) external;
 
     // CoreHook
-    function touchAndProcessPosition(
+    /// @notice Called by CoreHook after add/remove liquidity to update position state and process fees
+    /// @dev Consolidates all delta management for both MM and DirectLP positions.
+    ///      For MM positions: handles fee accounting, LCC issuance/cancellation, position linking, and delta accounting.
+    /// @param owner The owner of the position (e.g., MMPositionManager or other router)
+    /// @param poolKey The pool key for the position
+    /// @param params The modify liquidity params
+    /// @param callerDelta The caller delta from poolManager.modifyLiquidity
+    /// @param feesAccrued The fees accrued from poolManager.modifyLiquidity
+    /// @param hookData The hook data containing PositionModificationHookData for MM operations
+    /// @return pos The position struct
+    /// @return id The position id
+    /// @return feeAdj The fee adjustment delta
+    function processPosition(
         address owner,
         PoolKey calldata poolKey,
         ModifyLiquidityParams calldata params,
+        BalanceDelta callerDelta,
+        BalanceDelta feesAccrued,
         bytes calldata hookData
     ) external returns (Position memory pos, PositionId id, BalanceDelta feeAdj);
 
@@ -90,41 +99,8 @@ interface IVTSOrchestrator {
     // MMPositionManager
     function commitSignal(bytes memory liquiditySignal) external returns (uint256 commitId);
 
-    /// @notice Called by MMP after it has called poolManager.modifyLiquidity to add liquidity
-    function onMintPosition(
-        address owner,
-        PoolKey memory poolKey,
-        uint256 commitId,
-        uint256 positionIndex,
-        int24 tickLower,
-        int24 tickUpper,
-        BalanceDelta currencyDelta,
-        BalanceDelta callerDelta,
-        BalanceDelta feesAccrued
-    ) external returns (PositionId positionId);
-
-    /// @notice Called by MMP after it has called poolManager.modifyLiquidity to increase liquidity
-    function onIncreaseLiquidity(
-        address sender,
-        PoolKey memory poolKey,
-        uint256 commitId,
-        uint256 positionIndex,
-        int24 tickLower,
-        int24 tickUpper,
-        BalanceDelta currencyDelta,
-        BalanceDelta callerDelta,
-        BalanceDelta feesAccrued
-    ) external;
-
-    /// @notice Called by MMP after it has called poolManager.modifyLiquidity to decrease liquidity
-    function onDecreaseLiquidity(
-        address sender,
-        PoolKey memory poolKey,
-        uint256 commitId,
-        uint256 positionIndex,
-        BalanceDelta callerDelta,
-        BalanceDelta feesAccrued
-    ) external returns (BalanceDelta canceledDelta, BalanceDelta queuedDelta);
+    // NOTE: onMintPosition, onIncreaseLiquidity, onDecreaseLiquidity have been removed.
+    // All delta management is now handled in processPosition via CoreHook callbacks.
 
     function getFullCredit(Currency currency, address owner) external view returns (uint256);
     function collectAvailableLiquidity(address sender, address lcc, address recipient, uint256 maxAmount) external;

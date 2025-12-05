@@ -7,8 +7,8 @@ import {LiquidityDeltaManager} from "./modules/LiquidityDeltaManager.sol";
 import {Ownable} from "openzeppelin-contracts/contracts/access/Ownable.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
-import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
-import {PositionId} from "./types/Position.sol";
+import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {PositionId, PositionModificationHookData, PositionModificationHookDataLib} from "./types/Position.sol";
 import {Position} from "./types/Position.sol";
 import {Commit} from "./types/Commit.sol";
 import {Pool} from "./types/Pool.sol";
@@ -370,13 +370,24 @@ contract VTSOrchestrator is LiquidityDeltaManager, Ownable, IVTSOrchestrator {
     // CoreHook VTS Functionality
     // --------------------------------------------------
 
+    /// @notice Touch a position to update its state and calculate required settlement delta
+    /// @dev Returns the settlement delta directly instead of using transient storage for same-call-scope efficiency
+    /// @param owner The owner of the position
+    /// @param poolId The pool id
+    /// @param params The modify liquidity params
+    /// @param hookData The hook data containing PositionModificationHookData
+    /// @return pos The position struct
+    /// @return id The position id
+    /// @return requiredSettlementDelta The required settlement delta (returned directly, not via transient storage)
+    /// @return isSeizing Whether this is a seizure operation
     function _touchPosition(
         address owner,
         PoolId poolId,
         ModifyLiquidityParams calldata params,
         bytes calldata hookData
-    ) internal returns (Position memory pos, PositionId id) {
-        id = MMPositionsLib._touchPosition(s, poolManager, owner, poolId, params, hookData, mmPositionManager);
+    ) internal returns (Position memory pos, PositionId id, BalanceDelta requiredSettlementDelta, bool isSeizing) {
+        (id, requiredSettlementDelta, isSeizing) =
+            MMPositionsLib._touchPosition(s, poolManager, owner, poolId, params, hookData, mmPositionManager);
         // get the position from the position id
         pos = s.positions[id];
     }
@@ -397,14 +408,124 @@ contract VTSOrchestrator is LiquidityDeltaManager, Ownable, IVTSOrchestrator {
     }
 
     /// @notice Called by CoreHook after add/remove liquidity to update position state and process fees
-    function touchAndProcessPosition(
+    /// @dev Consolidates all delta management for both MM and DirectLP positions.
+    ///      For MM positions: handles fee accounting, LCC issuance/cancellation, position linking, and delta accounting.
+    /// @param owner The owner of the position (e.g., MMPositionManager or other router)
+    /// @param poolKey The pool key for the position
+    /// @param params The modify liquidity params
+    /// @param callerDelta The caller delta from poolManager.modifyLiquidity
+    /// @param feesAccrued The fees accrued from poolManager.modifyLiquidity
+    /// @param hookData The hook data containing PositionModificationHookData for MM operations
+    /// @return pos The position struct
+    /// @return id The position id
+    /// @return feeAdj The fee adjustment delta
+    function processPosition(
         address owner,
         PoolKey calldata poolKey,
         ModifyLiquidityParams calldata params,
+        BalanceDelta callerDelta,
+        BalanceDelta feesAccrued,
         bytes calldata hookData
     ) external onlyCoreHook returns (Position memory pos, PositionId id, BalanceDelta feeAdj) {
-        (pos, id) = _touchPosition(owner, poolKey.toId(), params, hookData);
+        PoolId poolId = poolKey.toId();
+
+        // Step 1: Touch position - returns settlement delta directly (no transient storage round-trip)
+        BalanceDelta requiredSettlementDelta;
+        bool isSeizing;
+        (pos, id, requiredSettlementDelta, isSeizing) = _touchPosition(owner, poolId, params, hookData);
+
+        // Step 2: Process position fees
         feeAdj = _processPositionFees(id, poolKey.currency0, poolKey.currency1);
+
+        // Step 3: Handle MM-specific operations
+        PositionModificationHookData memory mmData = PositionModificationHookDataLib.decodeCalldata(hookData);
+
+        if (PositionModificationHookDataLib.isMMOperation(mmData) && owner == mmPositionManager) {
+            // Compute principal delta after fee adjustments
+            BalanceDelta accruedFeesAfterAdj = feesAccrued - feeAdj;
+            BalanceDelta principalDelta = callerDelta - accruedFeesAfterAdj;
+
+            // Account fee credits to MMPositionManager contract (not the locker)
+            // This creates a clear separation: MMPM deltas vs VTSO deltas
+            _accountDelta(poolKey.currency0, accruedFeesAfterAdj.amount0(), mmPositionManager);
+            _accountDelta(poolKey.currency1, accruedFeesAfterAdj.amount1(), mmPositionManager);
+
+            // Account underlying settlement delta change to MMPositionManager
+            _accountUnderlyingSettlementDeltaChange(
+                mmPositionManager, requiredSettlementDelta, poolKey.currency0, poolKey.currency1
+            );
+
+            // Handle LCC issuance/cancellation based on liquidity direction
+            if (params.liquidityDelta > 0) {
+                // Adding liquidity: Issue LCCs
+                _handleLiquidityIncrease(poolKey, mmData.commitId, id, params, principalDelta);
+            } else if (params.liquidityDelta < 0) {
+                // Removing liquidity: Cancel LCCs
+                _handleLiquidityDecrease(poolKey, id, principalDelta, requiredSettlementDelta);
+            }
+
+            // Link position to commit for new positions
+            if (pos.commitId == 0 && mmData.commitId > 0) {
+                MMPositionsLib._linkPositionToCommit(s, mmPositionManager, id, mmData.commitId);
+            }
+
+            // Mark RFS checkpoint
+            (bool rfsOpen,) = VTSSettleLib._getRFS(s, id);
+            _markCheckpoint(id, rfsOpen);
+        }
+    }
+
+    /// @notice Handle liquidity increase (mint or add liquidity) - issues LCCs
+    /// @param poolKey The pool key
+    /// @param commitId The commit id
+    /// @param positionId The position id
+    /// @param params The modify liquidity params
+    /// @param principalDelta The principal delta after fee adjustments
+    function _handleLiquidityIncrease(
+        PoolKey calldata poolKey,
+        uint256 commitId,
+        PositionId positionId,
+        ModifyLiquidityParams calldata params,
+        BalanceDelta principalDelta
+    ) internal {
+        // Negative delta means LP deposited tokens
+        uint256 amount0 =
+            principalDelta.amount0() < 0 ? LiquidityUtils.safeInt128ToUint256(principalDelta.amount0()) : 0;
+        uint256 amount1 =
+            principalDelta.amount1() < 0 ? LiquidityUtils.safeInt128ToUint256(principalDelta.amount1()) : 0;
+
+        _issueLCCs(
+            poolKey, commitId, positionId, params.tickLower, params.tickUpper, params.liquidityDelta, amount0, amount1
+        );
+    }
+
+    /// @notice Handle liquidity decrease (remove liquidity or burn) - cancels LCCs
+    /// @param poolKey The pool key
+    /// @param positionId The position id
+    /// @param principalDelta The principal delta after fee adjustments
+    /// @param requiredSettlementDelta The required settlement delta from _touchPosition
+    function _handleLiquidityDecrease(
+        PoolKey calldata poolKey,
+        PositionId positionId,
+        BalanceDelta principalDelta,
+        BalanceDelta requiredSettlementDelta
+    ) internal {
+        // Zero delta check
+        if (LiquidityUtils.isZeroDelta(principalDelta)) {
+            return;
+        }
+
+        // Clamp settlement delta by available market liquidity
+        BalanceDelta availableDelta =
+            _clampSettlementDeltaByAvailableLiquidities(poolKey.toId(), requiredSettlementDelta);
+
+        // Cancel LCCs and queue any shortfall
+        (, BalanceDelta queuedDelta) = _cancelLCCs(poolKey, availableDelta, requiredSettlementDelta, principalDelta);
+
+        // Persist shortfall as credits owed by MMP to the MM
+        if (queuedDelta.amount0() > 0 || queuedDelta.amount1() > 0) {
+            _persistUnderlyingDelta(mmPositionManager, queuedDelta, poolKey.currency0, poolKey.currency1);
+        }
     }
 
     /// @notice Called by CoreHook after a swap to process swap-related accounting
@@ -432,219 +553,51 @@ contract VTSOrchestrator is LiquidityDeltaManager, Ownable, IVTSOrchestrator {
         commitId = VTSCommitLib._commitSignal(s, IVRLSignalManager(signalManager), liquiditySignal);
     }
 
-    /**
-     * @dev Called by MMP after it has called poolManager.modifyLiquidity to add liquidity.
-     *      Handles fee adjustments, LCC issuance, VTS state updates, and returns position metadata.
-     * @param owner The owner address for the position
-     * @param poolKey The pool key for the position
-     * @param commitId The commit id for the position
-     * @param positionIndex The position index within the commit
-     * @param tickLower The lower tick of the position
-     * @param tickUpper The upper tick of the position
-     * @param amount0 The amount of token0 used (from MMP's modifyLiquidity call)
-     * @param amount1 The amount of token1 used (from MMP's modifyLiquidity call)
-     * @param callerDelta The caller delta from poolManager.modifyLiquidity
-     * @param feesAccrued The fees accrued from poolManager.modifyLiquidity
-     * @return positionId The position ID created
-     */
-    function onMintPosition(
-        address owner,
-        PoolKey memory poolKey,
-        uint256 commitId,
-        uint256 positionIndex,
-        int24 tickLower,
-        int24 tickUpper,
-        BalanceDelta currencyDelta,
-        BalanceDelta callerDelta,
-        BalanceDelta feesAccrued
-    ) external onlyMMPositionManager onlyValidCommit(commitId) returns (PositionId positionId) {
-        bytes32 salt = PositionLibrary.generateSalt(commitId, positionIndex);
-
-        // Generate position ID from MMP (msg.sender) and params
-        ModifyLiquidityParams memory params = ModifyLiquidityParams({
-            tickLower: tickLower,
-            tickUpper: tickUpper,
-            liquidityDelta: 0, // Not used for ID generation
-            salt: salt
-        });
-        positionId = PositionLibrary.generateId(mmPositionManager, params);
-
-        // Process fee adjustments and settlement accounting (internal)
-        _onModifyPositionLiquidity(owner, poolKey, callerDelta, feesAccrued, tickLower, tickUpper, salt);
-
-        // Issue LCCs to MMP (mmPositionManager) - VTSOrchestrator maintains issuance authority
-        // Negative delta means LP deposited tokens
-        uint256 amount0 = currencyDelta.amount0() < 0 ? LiquidityUtils.safeInt128ToUint256(currencyDelta.amount0()) : 0;
-        uint256 amount1 = currencyDelta.amount1() < 0 ? LiquidityUtils.safeInt128ToUint256(currencyDelta.amount1()) : 0;
-        _issueLCCs(poolKey, commitId, positionId, tickLower, tickUpper, 0, amount0, amount1);
-
-        // Link the position to the commit (this increments positionCount)
-        // TODO: Cleaner approach?
-        MMPositionsLib._linkPositionToCommit(s, mmPositionManager, positionId, commitId);
-    }
+    // NOTE: onMintPosition, onIncreaseLiquidity, onDecreaseLiquidity, and _onModifyPositionLiquidity
+    // have been removed as part of the CurrencyDelta Management Consolidation.
+    // All delta management is now handled in processPosition via CoreHook callbacks.
+    // See: _handleLiquidityIncrease and _handleLiquidityDecrease for the consolidated logic.
 
     /**
-     * @dev Called by MMP after it has called poolManager.modifyLiquidity to increase liquidity.
-     *      Handles fee adjustments, LCC issuance and VTS state updates.
-     * @param sender The address initiating the increase (MM)
+     * @dev Seize a position from an unbacked commitment.
+     *      Called by MMPositionManager when a third-party guarantor seizes a position.
+     *      This function validates the seizure conditions and sets up transient storage for the seizure flow.
+     *      The actual liquidity decrease is handled by MMPositionManager calling _decreaseInternal with seizure hookData.
+     * @param sender The address initiating the seizure (the seizer/guarantor)
      * @param poolKey The pool key for the position
-     * @param commitId The commit id for the position
+     * @param commitId The commit id (tokenId) of the position
      * @param positionIndex The position index within the commit
-     * @param tickLower The lower tick of the position
-     * @param tickUpper The upper tick of the position
-     * @param currencyDelta The currency delta from poolManager.modifyLiquidity
-     * @param callerDelta The caller delta from poolManager.modifyLiquidity
-     * @param feesAccrued The fees accrued from poolManager.modifyLiquidity
+     * @param amount0 The amount of token0 to settle
+     * @param amount1 The amount of token1 to settle
      */
-    function onIncreaseLiquidity(
+    function seizePosition(
         address sender,
         PoolKey memory poolKey,
         uint256 commitId,
         uint256 positionIndex,
-        int24 tickLower,
-        int24 tickUpper,
-        BalanceDelta currencyDelta,
-        BalanceDelta callerDelta,
-        BalanceDelta feesAccrued
-    ) external onlyMMPositionManager onlyValidCommit(commitId) {
-        bytes32 salt = PositionLibrary.generateSalt(commitId, positionIndex);
+        uint256 amount0,
+        uint256 amount1
+    ) external onlyMMPositionManager {
+        (Position memory position, PositionId positionId) = getPosition(commitId, positionIndex);
 
-        // Generate position ID from MMP (msg.sender) and params
-        ModifyLiquidityParams memory params = ModifyLiquidityParams({
-            tickLower: tickLower,
-            tickUpper: tickUpper,
-            liquidityDelta: 0, // Not used for ID generation
-            salt: salt
-        });
-        PositionId positionId = PositionLibrary.generateId(mmPositionManager, params);
-
-        // Process fee adjustments and settlement accounting (internal)
-        _onModifyPositionLiquidity(sender, poolKey, callerDelta, feesAccrued, tickLower, tickUpper, salt);
-
-        // Issue LCCs to MMP
-        // Negative delta means LP deposited tokens
-        uint256 amount0 = currencyDelta.amount0() < 0 ? LiquidityUtils.safeInt128ToUint256(currencyDelta.amount0()) : 0;
-        uint256 amount1 = currencyDelta.amount1() < 0 ? LiquidityUtils.safeInt128ToUint256(currencyDelta.amount1()) : 0;
-        _issueLCCs(poolKey, commitId, positionId, tickLower, tickUpper, 0, amount0, amount1);
-    }
-
-    /**
-     * @dev Called by MMP after it has called poolManager.modifyLiquidity to decrease liquidity.
-     *      Handles fee adjustments, LCC cancellation, settlement queueing, and VTS state updates.
-     * @param sender The address initiating the decrease (MM)
-     * @param poolKey The pool key for the position
-     * @param commitId The commit id of the position
-     * @param positionIndex The position index of the position
-     * @param callerDelta The caller delta from poolManager.modifyLiquidity
-     * @param feesAccrued The fees accrued from poolManager.modifyLiquidity
-     * @return canceledDelta The LCC amount that was cancelled
-     * @return queuedDelta The LCC amount that was queued for later settlement (shortfall)
-     */
-    function onDecreaseLiquidity(
-        PoolKey memory poolKey,
-        uint256 commitId,
-        uint256 positionIndex,
-        BalanceDelta callerDelta,
-        BalanceDelta feesAccrued
-    ) external onlyMMPositionManager returns (BalanceDelta canceledDelta, BalanceDelta queuedDelta) {
-        address sender = _msgSender();
-
-        // Get positionId from commitId+positionIndex mapping
-        PositionId positionId = getPositionId(commitId, positionIndex);
-
-        // Read position to get tickLower/tickUpper
-        Position memory position = s.positions[positionId];
-        if (position.owner == address(0)) {
+        // Validate position is active
+        if (!position.isActive) {
             revert Errors.InvalidPosition(commitId, positionIndex, positionId);
         }
 
-        bytes32 salt = PositionLibrary.generateSalt(commitId, positionIndex);
+        // Validate grace period has elapsed (position is seizable)
+        // This will revert if the grace period has not elapsed
+        CheckpointLibrary.isSeizable(s, commitId, positionIndex, true);
 
-        // Process fee adjustments and settlement accounting (internal)
-        // This computes principalDelta after fee adjustments
-        BalanceDelta principalDelta = _onModifyPositionLiquidity(
-            sender, poolKey, callerDelta, feesAccrued, position.tickLower, position.tickUpper, salt
-        );
+        // Set transient storage for seizure tracking
+        TransientSlots.setSeizedPositionId(positionId);
 
-        // Zero delta check
-        if (LiquidityUtils.isZeroDelta(principalDelta)) {
-            return (principalDelta, principalDelta);
-        }
+        // Call settle to process the seizure settlement
+        BalanceDelta sDelta = toBalanceDelta(SafeCast.toInt128(amount0), SafeCast.toInt128(amount1));
+        this.settle(sender, poolKey, commitId, positionIndex, sDelta);
 
-        // Calculate settlement delta (what's owed to the MM) and clamp by available market liquidity
-        BalanceDelta settlementDelta = _getUnderlyingSettlementDelta(sender, poolKey.currency0, poolKey.currency1);
-        BalanceDelta availableDelta = _clampSettlementDeltaByAvailableLiquidities(poolKey.toId(), settlementDelta);
-
-        // Cancel LCCs and queue any shortfall
-        (canceledDelta, queuedDelta) = _cancelLCCs(poolKey, availableDelta, settlementDelta, principalDelta);
-
-        // If there's a shortfall (unavailable liquidity), persist it as credits owed by MMP to the MM.
-        // These credits will be primed at collection of available liquidity via _primeUnderlyingDelta and consumed during
-        // settlement. MMs can also collect available liquidity via COLLECT_AVAILABLE_LIQUIDITY action
-        // to process settlements from LiquidityHub's settleQueue.
-        if (queuedDelta.amount0() > 0 || queuedDelta.amount1() > 0) {
-            _persistUnderlyingDelta(sender, queuedDelta, poolKey.currency0, poolKey.currency1);
-        }
-    }
-
-    /**
-     * @dev Internal function to handle fee adjustment and settlement accounting after modifyLiquidity.
-     *      This processes the delta returned by CoreHook's feeAdj and updates CurrencyDelta for the sender.
-     *      Called internally from onMintPosition, onIncreaseLiquidity, and onDecreaseLiquidity.
-     * @param sender The address initiating the modification (MM)
-     * @param poolKey The pool key for the position
-     * @param callerDelta The caller delta from poolManager.modifyLiquidity
-     * @param feesAccrued The fees accrued from poolManager.modifyLiquidity
-     * @param params The modify liquidity params used
-     * @return principalDelta The principal delta after fee adjustments
-     */
-    function _onModifyPositionLiquidity(
-        address sender,
-        PoolKey memory poolKey,
-        BalanceDelta callerDelta,
-        BalanceDelta feesAccrued,
-        int24 tickLower,
-        int24 tickUpper,
-        bytes32 salt
-    ) internal returns (BalanceDelta principalDelta) {
-        // Consume fee adjustment from CoreHook (via transient storage)
-        BalanceDelta feeAdj = TransientSlots.consumeFeeAdjDelta();
-
-        // CoreHook applies a feeAdj to the callerDelta: callerDelta = principalDelta - feesAccrued - feeAdj
-        // Treat feeAdj as part of fees for cancel/transfer purposes
-        BalanceDelta accruedFeesAfterAdj = feesAccrued - feeAdj;
-
-        // principal = caller delta - fees
-        principalDelta = callerDelta - accruedFeesAfterAdj;
-
-        // Account fee credits to the sender
-        _accountDelta(poolKey.currency0, accruedFeesAfterAdj.amount0(), sender);
-        _accountDelta(poolKey.currency1, accruedFeesAfterAdj.amount1(), sender);
-
-        // Generate position ID and compute required settlement delta
-        ModifyLiquidityParams memory params = ModifyLiquidityParams({
-            tickLower: tickLower,
-            tickUpper: tickUpper,
-            liquidityDelta: 0, // Not used for ID generation
-            salt: salt
-        });
-        PositionId id = PositionLibrary.generateId(mmPositionManager, params);
-
-        // Check if seizing
-        bool isSeizing = _isSeizing(id);
-        BalanceDelta requiredSettlementDelta;
-        if (isSeizing) {
-            requiredSettlementDelta = TransientSlots.consumeSeizedSettlementDelta(id);
-        } else {
-            requiredSettlementDelta = TransientSlots.readPositionRequiredSettlementDelta(id);
-        }
-
-        // Update underlying settlement delta
-        _accountUnderlyingSettlementDeltaChange(sender, requiredSettlementDelta, poolKey.currency0, poolKey.currency1);
-
-        // Mark checkpoint
-        (bool rfsOpen,) = VTSSettleLib._getRFS(s, id);
-        _markCheckpoint(id, rfsOpen);
+        // Note: The actual liquidity decrease is handled by MMPositionManager calling _decreaseInternal
+        // with seizure hookData encoded via PositionModificationHookDataLib.encodeSeizure()
     }
 
     function getFullCredit(Currency currency, address owner) public view returns (uint256) {
@@ -896,7 +849,9 @@ contract VTSOrchestrator is LiquidityDeltaManager, Ownable, IVTSOrchestrator {
      * @param poolKey The pool key
      * @param commitId The commit id
      * @param positionId The position id
-     * @param params The modify liquidity params (for backing validation)
+     * @param tickLower The lower tick of the position
+     * @param tickUpper The upper tick of the position
+     * @param liquidityDelta The liquidity delta (for backing validation)
      * @param amount0 The amount of token0 to issue
      * @param amount1 The amount of token1 to issue
      */

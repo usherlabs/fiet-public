@@ -165,7 +165,7 @@ contract CoreHook is BaseHook, PausablePool, Exttload, MarketHandler {
     /// @param key The key for the pool
     /// @param params The parameters for adding liquidity
     /// @param delta The caller's balance delta after adding liquidity; the sum of principal delta, fees accrued, and hook delta
-    // / @param feesAccrued The fees accrued since the last time fees were collected from this position
+    /// @param feesAccrued The fees accrued since the last time fees were collected from this position
     /// @param hookData Arbitrary data handed into the PoolManager by the liquidity provider to be passed on to the hook
     /// @return bytes4 The function selector for the hook
     /// @return BalanceDelta The hook's delta in token0 and token1. Positive: the hook is owed/took currency, negative: the hook owes/sent currency
@@ -174,12 +174,13 @@ contract CoreHook is BaseHook, PausablePool, Exttload, MarketHandler {
         PoolKey calldata key,
         ModifyLiquidityParams calldata params,
         BalanceDelta delta,
-        BalanceDelta,
+        BalanceDelta feesAccrued,
         bytes calldata hookData
     ) internal virtual override whenNotPaused(key.toId()) returns (bytes4, BalanceDelta) {
         // Update VTS position state with registration/update based on actual pool id
+        // Pass callerDelta and feesAccrued for consolidated delta management
         (Position memory pos, PositionId id, BalanceDelta feeAdj) =
-            vtsOrchestrator.touchAndProcessPosition(sender, key, params, hookData);
+            vtsOrchestrator.processPosition(sender, key, params, delta, feesAccrued, hookData);
 
         // only add direct liquidity if the sender is not the market maker position manager/router
         if (!_isCallerMMP(sender) && !_isMMPosition(pos)) {
@@ -197,8 +198,8 @@ contract CoreHook is BaseHook, PausablePool, Exttload, MarketHandler {
     /// @param key The key for the pool
     /// @param params The parameters for removing liquidity
     /// @param delta The caller's balance delta after removing liquidity; the sum of principal delta, fees accrued, and hook delta
-    // /// @param feesAccrued The fees accrued since the last time fees were collected from this position
-    // /// @param hookData Arbitrary data handed into the PoolManager by the liquidity provider to be be passed on to the hook
+    /// @param feesAccrued The fees accrued since the last time fees were collected from this position
+    /// @param hookData Arbitrary data handed into the PoolManager by the liquidity provider to be be passed on to the hook
     /// @return bytes4 The function selector for the hook
     /// @return BalanceDelta The hook's delta in token0 and token1. Positive: the hook is owed/took currency, negative: the hook owes/sent currency
     function _afterRemoveLiquidity(
@@ -206,16 +207,15 @@ contract CoreHook is BaseHook, PausablePool, Exttload, MarketHandler {
         PoolKey calldata key,
         ModifyLiquidityParams calldata params,
         BalanceDelta delta,
-        BalanceDelta,
+        BalanceDelta feesAccrued,
         bytes calldata hookData
     ) internal virtual override returns (bytes4, BalanceDelta) {
         // Update VTS position state with registration/update based on actual pool id
+        // Pass callerDelta and feesAccrued for consolidated delta management
         (Position memory pos,, BalanceDelta feeAdj) =
-            vtsOrchestrator.touchAndProcessPosition(sender, key, params, hookData);
-        // Handle fee-share mechanics
-        // Example FeeTakingHook: https://github.com/Uniswap/v4-core/blob/a7cf038cd568801a79a9b4cf92cd5b52c95c8585/src/test/FeeTakingHook.sol#L14
+            vtsOrchestrator.processPosition(sender, key, params, delta, feesAccrued, hookData);
 
-        if (!_isCallerMMP(sender) || !_isMMPosition(pos)) {
+        if (!_isCallerMMP(sender) && !_isMMPosition(pos)) {
             // Forward effective caller delta including fee adjustment (Uniswap will apply callerDelta - hookDelta)
             BalanceDelta effective = delta - feeAdj;
             ProxyHook(payable(_getProxyHook(key)))

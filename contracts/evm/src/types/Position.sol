@@ -27,6 +27,105 @@ struct Position {
     bytes32 salt;
 }
 
+/// @notice Seizure-specific data for position seizure operations
+struct SeizureData {
+    /// @notice Whether this is a seizure operation
+    bool isSeizing;
+    /// @notice The settlement delta for seizure (amounts being settled by seizer)
+    int128 settle0;
+    int128 settle1;
+}
+
+/// @notice Hook data structure for position modifications via MMPositionManager
+/// @dev Passed through poolManager.modifyLiquidity -> CoreHook -> VTSOrchestrator
+struct PositionModificationHookData {
+    /// @notice The commit ID (ERC721 tokenId) this position belongs to
+    /// @dev Required for all MM position operations (mint, increase, decrease)
+    uint256 commitId;
+    /// @notice The position index within the commit
+    uint256 positionIndex;
+    /// @notice Seizure-related data (only populated during seizure operations)
+    SeizureData seizure;
+    /// @notice Arbitrary additional data for future extensions
+    bytes extraData;
+}
+
+/// @notice Library for encoding/decoding PositionModificationHookData
+library PositionModificationHookDataLib {
+    /// @notice Encodes hook data for standard position modifications
+    /// @param commitId The commit ID (ERC721 tokenId)
+    /// @param positionIndex The position index within the commit
+    /// @return Encoded hook data bytes
+    function encode(uint256 commitId, uint256 positionIndex) internal pure returns (bytes memory) {
+        return abi.encode(
+            PositionModificationHookData({
+                commitId: commitId,
+                positionIndex: positionIndex,
+                seizure: SeizureData({isSeizing: false, settle0: 0, settle1: 0}),
+                extraData: ""
+            })
+        );
+    }
+
+    /// @notice Encodes hook data for seizure operations
+    /// @param commitId The commit ID (ERC721 tokenId)
+    /// @param positionIndex The position index within the commit
+    /// @param settle0 The settlement amount for token0
+    /// @param settle1 The settlement amount for token1
+    /// @return Encoded hook data bytes
+    function encodeSeizure(uint256 commitId, uint256 positionIndex, int128 settle0, int128 settle1)
+        internal
+        pure
+        returns (bytes memory)
+    {
+        return abi.encode(
+            PositionModificationHookData({
+                commitId: commitId,
+                positionIndex: positionIndex,
+                seizure: SeizureData({isSeizing: true, settle0: settle0, settle1: settle1}),
+                extraData: ""
+            })
+        );
+    }
+
+    /// @notice Decodes hook data, returns empty struct if data is empty or invalid
+    /// @param hookData The encoded hook data bytes
+    /// @return Decoded PositionModificationHookData struct
+    function decode(bytes memory hookData) internal pure returns (PositionModificationHookData memory) {
+        if (hookData.length == 0) {
+            return PositionModificationHookData({
+                commitId: 0,
+                positionIndex: 0,
+                seizure: SeizureData({isSeizing: false, settle0: 0, settle1: 0}),
+                extraData: ""
+            });
+        }
+        return abi.decode(hookData, (PositionModificationHookData));
+    }
+
+    /// @notice Decodes hook data from calldata, returns empty struct if data is empty
+    /// @param hookData The encoded hook data calldata
+    /// @return Decoded PositionModificationHookData struct
+    function decodeCalldata(bytes calldata hookData) internal pure returns (PositionModificationHookData memory) {
+        if (hookData.length == 0) {
+            return PositionModificationHookData({
+                commitId: 0,
+                positionIndex: 0,
+                seizure: SeizureData({isSeizing: false, settle0: 0, settle1: 0}),
+                extraData: ""
+            });
+        }
+        return abi.decode(hookData, (PositionModificationHookData));
+    }
+
+    /// @notice Check if this is an MM position modification (has valid commitId)
+    /// @param data The decoded hook data
+    /// @return True if this is an MM operation
+    function isMMOperation(PositionModificationHookData memory data) internal pure returns (bool) {
+        return data.commitId > 0;
+    }
+}
+
 library PositionLibrary {
     /**
      * @dev This function is used to generate the id of a position using the router and the params of the modify liquidity operation

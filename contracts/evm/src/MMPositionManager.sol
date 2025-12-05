@@ -11,7 +11,7 @@ import {ERC721Permit_v4} from "v4-periphery/src/base/ERC721Permit_v4.sol";
 import {ReentrancyLock} from "v4-periphery/src/base/ReentrancyLock.sol";
 import {Multicall_v4} from "v4-periphery/src/base/Multicall_v4.sol";
 import {BaseActionsRouter} from "v4-periphery/src/base/BaseActionsRouter.sol";
-import {PositionId, PositionLibrary} from "./types/Position.sol";
+import {PositionId, PositionLibrary, PositionModificationHookDataLib} from "./types/Position.sol";
 import {MarketMaker} from "./libraries/MarketMaker.sol";
 import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 import {IVRLSignalManager} from "./interfaces/IVRLSignalManager.sol";
@@ -460,9 +460,11 @@ contract MMPositionManager is
     /**
      * @dev Internal function to increase liquidity for an existing position.
      *      Flow:
-     *      1. Call _modifyPositionLiquidity to modify liquidity in poolManager (gets deltas)
-     *      2. Call vtsOrchestrator.onIncreaseLiquidity to process fees and issue LCCs
-     *      3. Call _settleModifiedLiquidities to settle with poolManager
+     *      1. Encode hookData with commitId and positionIndex
+     *      2. Call _modifySyntheticLiquidity which:
+     *         - Calls poolManager.modifyLiquidity (triggers CoreHook -> VTSOrchestrator.processPosition)
+     *         - VTSOrchestrator handles: fee accounting, LCC issuance, delta accounting
+     *         - Settles with poolManager
      *
      * @param poolKey The pool key for the position
      * @param tokenId The token id (commit id)
@@ -495,17 +497,12 @@ contract MMPositionManager is
         // Generate position ID for return
         positionId = PositionLibrary.generateId(address(this), params);
 
-        // Step 1: Call poolManager.modifyLiquidity (gets deltas but does NOT settle)
-        (BalanceDelta callerDelta, BalanceDelta feesAccrued, BalanceDelta currencyDelta) =
-            _modifyPositionLiquidity(poolKey, params, Constants.ZERO_BYTES);
+        // Encode hook data with commitId and positionIndex
+        bytes memory hookData = PositionModificationHookDataLib.encode(tokenId, positionIndex);
 
-        // Step 2: Issue LCCs via VTSOrchestrator (includes fee adjustment processing internally)
-        vtsOrchestrator.onIncreaseLiquidity(
-            msgSender(), poolKey, tokenId, positionIndex, tickLower, tickUpper, currencyDelta, callerDelta, feesAccrued
-        );
-
-        // Step 3: Settle with poolManager using the just-issued LCCs
-        _settleModifiedLiquidities(poolKey, currencyDelta);
+        // Single call: modify liquidity + settle
+        // VTSOrchestrator.processPosition handles: fee accounting, LCC issuance, delta accounting
+        _modifySyntheticLiquidity(poolKey, params, hookData);
     }
 
     /**
@@ -550,18 +547,18 @@ contract MMPositionManager is
     /**
      * @dev Internal logic for decreasing position liquidity.
      *      Flow:
-     *      1. Call _modifyPositionLiquidity to modify liquidity in poolManager (gets deltas)
-     *      2. Call _settleModifiedLiquidities to take LCCs from poolManager
-     *      3. Call vtsOrchestrator.onDecreaseLiquidity to process fees and cancel LCCs
+     *      1. Encode hookData with commitId and positionIndex (or use provided hookData for seizure)
+     *      2. Call _modifySyntheticLiquidity which:
+     *         - Calls poolManager.modifyLiquidity (triggers CoreHook -> VTSOrchestrator.processPosition)
+     *         - VTSOrchestrator handles: fee accounting, LCC cancellation, delta accounting
+     *         - Settles with poolManager
      *
      * @param poolKey The pool key for the position
      * @param tokenId The token id (commit id) to decrease the liquidity for
      * @param positionIndex The position index to decrease the liquidity for
      * @param salt The salt of the position
      * @param amountToDecrease The amount of liquidity to decrease
-     * @param hookData The hook data to pass to modifyLiquidity
-     * @return canceledDelta The LCC amount that was cancelled immediately
-     * @return queueDelta The LCC amount queued for later settlement (shortfall)
+     * @param hookData The hook data to pass to modifyLiquidity (for seizure operations)
      */
     function _decreaseInternal(
         PoolKey memory poolKey,
@@ -570,7 +567,7 @@ contract MMPositionManager is
         bytes32 salt,
         uint256 amountToDecrease,
         bytes memory hookData
-    ) internal returns (BalanceDelta canceledDelta, BalanceDelta queueDelta) {
+    ) internal {
         // Get position to validate and retrieve tick range
         (Position memory position,) = vtsOrchestrator.getPosition(tokenId, positionIndex);
 
@@ -592,17 +589,14 @@ contract MMPositionManager is
             salt: salt
         });
 
-        // Step 1: Call poolManager.modifyLiquidity (gets deltas but does NOT settle)
-        (BalanceDelta callerDelta, BalanceDelta feesAccrued, BalanceDelta currencyDelta) =
-            _modifyPositionLiquidity(poolKey, params, hookData);
+        // If hookData is empty, encode standard hook data
+        if (hookData.length == 0) {
+            hookData = PositionModificationHookDataLib.encode(tokenId, positionIndex);
+        }
 
-        // Step 2: Take LCCs from poolManager (for decreasing, deltas are positive = PM owes us)
-        _settleModifiedLiquidities(poolKey, currencyDelta);
-
-        // Step 3: Cancel LCCs via VTSOrchestrator and handle settlement queueing
-        // (includes fee adjustment processing internally)
-        (canceledDelta, queueDelta) =
-            vtsOrchestrator.onDecreaseLiquidity(msgSender(), poolKey, tokenId, positionIndex, callerDelta, feesAccrued);
+        // Single call: modify liquidity + settle
+        // VTSOrchestrator.processPosition handles: fee accounting, LCC cancellation, delta accounting
+        _modifySyntheticLiquidity(poolKey, params, hookData);
     }
 
     /**
@@ -632,9 +626,11 @@ contract MMPositionManager is
     /**
      * @dev Internal function to mint a new position.
      *      Flow:
-     *      1. Call _modifyPositionLiquidity to modify liquidity in poolManager (gets deltas)
-     *      2. Call vtsOrchestrator.onMintPosition to process fees, issue LCCs, and register position
-     *      3. Call _settleModifiedLiquidities to settle with poolManager
+     *      1. Encode hookData with commitId and positionIndex
+     *      2. Call _modifySyntheticLiquidity which:
+     *         - Calls poolManager.modifyLiquidity (triggers CoreHook -> VTSOrchestrator.processPosition)
+     *         - VTSOrchestrator handles: fee accounting, LCC issuance, position linking, delta accounting
+     *         - Settles with poolManager
      *
      * @param poolKey The pool key for the position
      * @param tokenId The token id (commit id)
@@ -669,17 +665,12 @@ contract MMPositionManager is
         // Generate position ID
         positionId = PositionLibrary.generateId(address(this), params);
 
-        // Step 1: Call poolManager.modifyLiquidity (gets deltas but does NOT settle)
-        (BalanceDelta callerDelta, BalanceDelta feesAccrued, BalanceDelta currencyDelta) =
-            _modifyPositionLiquidity(poolKey, params, Constants.ZERO_BYTES);
+        // Encode hook data with commitId and positionIndex
+        bytes memory hookData = PositionModificationHookDataLib.encode(tokenId, positionIndex);
 
-        // Step 2: Issue LCCs and register position via VTSOrchestrator (includes fee adjustment processing internally)
-        vtsOrchestrator.onMintPosition(
-            msgSender(), poolKey, tokenId, positionIndex, tickLower, tickUpper, currencyDelta, callerDelta, feesAccrued
-        );
-
-        // Step 3: Settle with poolManager using the just-issued LCCs
-        _settleModifiedLiquidities(poolKey, currencyDelta);
+        // Single call: modify liquidity + settle
+        // VTSOrchestrator.processPosition handles: fee accounting, LCC issuance, position linking, delta accounting
+        _modifySyntheticLiquidity(poolKey, params, hookData);
     }
 
     /**

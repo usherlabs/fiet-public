@@ -1,7 +1,12 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {PositionId} from "../types/Position.sol";
+import {
+    PositionId,
+    PositionModificationHookData,
+    PositionModificationHookDataLib,
+    SeizureData
+} from "../types/Position.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {MMPositionManager} from "../MMPositionManager.sol";
 import {Errors} from "./Errors.sol";
@@ -100,6 +105,18 @@ library MMPositionsLib {
         s.positions[positionId].commitId = tokenId;
     }
 
+    /// @notice Touch a position to update its state and calculate required settlement delta
+    /// @dev Returns the settlement delta directly instead of using transient storage for same-call-scope efficiency
+    /// @param s The VTS storage
+    /// @param poolManager The pool manager
+    /// @param owner The owner of the position
+    /// @param poolId The pool id
+    /// @param params The modify liquidity params
+    /// @param hookData The hook data containing PositionModificationHookData
+    /// @param positionManager The MM position manager address
+    /// @return id The position id
+    /// @return requiredSettlementDelta The required settlement delta (returned directly, not via transient storage)
+    /// @return isSeizing Whether this is a seizure operation
     function _touchPosition(
         VTSStorage storage s,
         IPoolManager poolManager,
@@ -108,7 +125,7 @@ library MMPositionsLib {
         ModifyLiquidityParams calldata params,
         bytes calldata hookData,
         address positionManager
-    ) external returns (PositionId id) {
+    ) external returns (PositionId id, BalanceDelta requiredSettlementDelta, bool isSeizing) {
         id = PositionLibrary.generateId(owner, params);
         Position storage pos = s.positions[id];
 
@@ -117,20 +134,17 @@ library MMPositionsLib {
 
         uint128 liq = poolManager.getPositionLiquidity(poolId, PositionId.unwrap(id));
 
-        // Decode hookData to determine if seizing
-        bool isSeizing = false;
+        // Decode hookData using the new PositionModificationHookData struct
         BalanceDelta seizureSettlementDelta = BalanceDelta.wrap(0);
+        PositionModificationHookData memory mmData = PositionModificationHookDataLib.decodeCalldata(hookData);
 
-        if (hookData.length > 0) {
-            (bytes32 seizedPositionIdBytes, int128 settle0, int128 settle1) =
-                abi.decode(hookData, (bytes32, int128, int128));
-            PositionId seizedPositionId = PositionId.wrap(seizedPositionIdBytes);
-
-            if (PositionId.unwrap(seizedPositionId) == PositionId.unwrap(id)) {
-                isSeizing = true;
-                seizureSettlementDelta = toBalanceDelta(settle0, settle1);
-            }
+        if (mmData.seizure.isSeizing) {
+            isSeizing = true;
+            seizureSettlementDelta = toBalanceDelta(mmData.seizure.settle0, mmData.seizure.settle1);
         }
+
+        // Initialize requiredSettlementDelta to zero
+        requiredSettlementDelta = BalanceDelta.wrap(0);
 
         if (pos.owner == address(0)) {
             // NEW POSITION: initialize the liquidity to the liquidity delta, assuming it will always be positive
@@ -152,14 +166,10 @@ library MMPositionsLib {
                     vtsConfiguration.token0.baseVTSRate,
                     vtsConfiguration.token1.baseVTSRate
                 );
-                // Set the settlement amounts to the total commitment amounts for DirectLPs.
-                // ? No _updateSettlement calls inside of this function - as we're now using flash-ier accounting.
-                // All MM settlements handled inside of onMMSettle.
-
+                // Return settlement delta directly instead of writing to transient storage
                 // Invert signs: negative delta = caller owes liquidity (deposit), positive = protocol owes (withdrawal)
-                TransientSlots.addPositionRequiredSettlementDelta(
-                    id, LiquidityUtils.safeToBalanceDelta(amountToSettle0, amountToSettle1, true, true)
-                );
+                requiredSettlementDelta =
+                    LiquidityUtils.safeToBalanceDelta(amountToSettle0, amountToSettle1, true, true);
             } else {
                 // Set the settlement amounts to the total commitment amounts for DirectLPs.
                 // DirectLPs do not settle in underlying terms - as they are handled natively.
@@ -213,21 +223,11 @@ library MMPositionsLib {
                 console.log("excess1", excess1);
                 console.log("isMMPosition", isMMPosition);
                 console.logBytes32(PositionId.unwrap(id));
-                // ? Only save the settlement delta for MMPs.
+                // ? Only save the settlement delta for MMPs - return directly instead of transient storage
                 if (isMMPosition) {
-                    // this sets the required settlement because we changed the position.
-                    // Invert signs: negative delta = caller owes liquidity (deposit), positive = protocol owes (withdrawal)
-                    // if we do not do this, then the excess credits to go to the position instead of the address that seized the position
-                    // since the address that siezed the position cannot be accessed here, then we cache to get it after modification of liquidity
-                    if (isSeizing) {
-                        TransientSlots.setSiezedSettlementDelta(
-                            id, LiquidityUtils.safeToBalanceDelta(excess0, excess1, false, false)
-                        );
-                    } else {
-                        TransientSlots.addPositionRequiredSettlementDelta(
-                            id, LiquidityUtils.safeToBalanceDelta(excess0, excess1, false, false)
-                        );
-                    }
+                    // Return settlement delta directly
+                    // Positive delta = protocol owes (withdrawal)
+                    requiredSettlementDelta = LiquidityUtils.safeToBalanceDelta(excess0, excess1, false, false);
                 } else {
                     // ? Update settlement for DirectLPs.
                     if (excess0 > 0) {
@@ -260,11 +260,9 @@ library MMPositionsLib {
                     uint256 excess0 = baseAmountToSettle0 > s0 ? baseAmountToSettle0 - s0 : 0;
                     uint256 excess1 = baseAmountToSettle1 > s1 ? baseAmountToSettle1 - s1 : 0;
 
-                    // Instruct MMP to source underlying for the excess
-                    // Invert signs: negative delta = caller owes liquidity (deposit), positive = protocol owes (withdrawal)
-                    TransientSlots.addPositionRequiredSettlementDelta(
-                        id, LiquidityUtils.safeToBalanceDelta(excess0, excess1, true, true)
-                    );
+                    // Return settlement delta directly instead of transient storage
+                    // Negative delta = caller owes liquidity (deposit)
+                    requiredSettlementDelta = LiquidityUtils.safeToBalanceDelta(excess0, excess1, true, true);
                 } else {
                     // Increase DirectLPs settlement amounts by the difference between the commitment maxima and the last settled amounts.
                     VTSPoolAndPositionAccountingLib._updateSettlement(
