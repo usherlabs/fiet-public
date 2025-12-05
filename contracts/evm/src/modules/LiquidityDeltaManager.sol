@@ -192,6 +192,7 @@ abstract contract LiquidityDeltaManager is ImmutableState, MarketHandler, Native
      */
     function _getUnderlyingSettlementDelta(address sender, Currency lccCurrency0, Currency lccCurrency1)
         internal
+        view
         returns (BalanceDelta)
     {
         Currency uCurrency0 = _lccToUnderlyingCurrency(lccCurrency0);
@@ -277,7 +278,6 @@ abstract contract LiquidityDeltaManager is ImmutableState, MarketHandler, Native
         if (amount < 0) {
             // Deposit: transfer FROM caller TO vault
             // If delta is negative (caller owes protocol) and amount < delta (deposit exceeds debt),
-
             // net the delta to zero. Otherwise, account the full amount.
             // * This allows settlement above what is required.
             int128 deltaToAccount = (delta < 0 && int256(amount) < delta) ? SafeCast.toInt128(-delta) : -amount;
@@ -285,22 +285,25 @@ abstract contract LiquidityDeltaManager is ImmutableState, MarketHandler, Native
             currency.transferFrom(sender, marketVault, LiquidityUtils.safeInt128ToUint256(amount));
         } else {
             // Withdrawal: transfer FROM vault TO caller
+            // Reduce sender's credit (positive delta) by the withdrawal amount
             // If delta is positive (protocol owes caller) and amount > delta (withdrawal exceeds credit),
-
-            // Avoid delta net, to prevent withdrawal of more than is credited to the caller.
-            _accountDelta(currency, amount, sender);
+            // net the delta to zero. Otherwise account the full (negative) amount to reduce credit.
+            int128 deltaToAccount = (delta > 0 && int256(amount) > delta) ? SafeCast.toInt128(-delta) : -amount;
+            _accountDelta(currency, deltaToAccount, sender);
             currency.transfer(sender, LiquidityUtils.safeInt128ToUint256(amount));
         }
     }
 
     /**
      * @notice Accounts a delta for a currency and target address
-     * @dev Increments or decrements the nonzero delta count based on the previous and next deltas
+     * @dev Increments or decrements the nonzero delta count based on the previous and next deltas.
+     *      Early returns if delta is zero for gas optimisation.
      * @param currency The currency to account the delta for
      * @param delta The delta to account
      * @param target The target address to account the delta for
      */
     function _accountDelta(Currency currency, int128 delta, address target) internal {
+        if (delta == 0) return; // Gas optimisation: no-op for zero delta
         (int256 previous, int256 next) = currency.applyDelta(target, delta);
         if (next == 0) {
             NonzeroDeltaCount.decrement();

@@ -376,9 +376,9 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
             // Take the underlying tokens from PoolManager as Claim Tokens... the underlying liquidity remains in the Pool Manager...
             key.currency0.take(poolManager, address(this), amountIn, true);
 
-            // Mint LCC tokens for the input amount
+            // Mint LCC tokens for the input amount to this contract
             // These LCC tokens are collateralised by liquidity that remains in the Pool Manager.
-            liquidityHub.issue(address(lccTokenForCurrency0), amountIn);
+            liquidityHub.issue(address(lccTokenForCurrency0), address(this), amountIn);
 
             // Settle minted LCC tokens to the PoolManager
             // Accounts for LCC of 0 IN for the Core Pool Swap
@@ -411,8 +411,8 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
             key.currency1.take(poolManager, address(this), amountIn, true);
 
             // If user is selling Token 1 (IN) and buying Token 0 (OUT)
-            // First mint LCC tokens for the input amount
-            liquidityHub.issue(address(lccTokenForCurrency1), amountIn);
+            // First mint LCC tokens for the input amount to this contract
+            liquidityHub.issue(address(lccTokenForCurrency1), address(this), amountIn);
 
             // Settle LCC tokens to the PoolManager
             lccCurrencyForCurrency1.settle(poolManager, address(this), amountIn, false);

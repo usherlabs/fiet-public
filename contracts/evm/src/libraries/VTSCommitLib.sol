@@ -391,22 +391,21 @@ library VTSCommitLib {
 
     /// @notice Issues tokens to the pool
     /// @param s The central VTS storage
-    /// @param poolManager The pool manager
     /// @param oracleHelper The oracle helper
     /// @param liquidityHub The liquidity hub
-    /// @param positionManager The position manager
-    /// @param commitId The commit id
     /// @param poolKey The pool key
     /// @param params The modify liquidity parameters
+    /// @param positionManager The position manager (LP owner)
+    /// @param commitId The commit id
+    /// @param a0 The amount of token0 to issue
+    /// @param a1 The amount of token1 to issue
     /// @return positionId The position id
-    /// @return a0 The amount of token0 to issue
-    /// @return a1 The amount of token1 to issue
     function _issueTokens(
         VTSStorage storage s,
         IOracleHelper oracleHelper,
         ILiquidityHub liquidityHub,
         PoolKey memory poolKey,
-        ModifyLiquidityParams memory params
+        ModifyLiquidityParams memory params,
         address positionManager,
         uint256 commitId,
         uint256 a0,
@@ -421,7 +420,7 @@ library VTSCommitLib {
 
         // derive the principal delta from the effective token amounts
         if (uint256(params.liquidityDelta) == 0 || (a0 == 0 && a1 == 0)) {
-            return (positionId, 0, 0);
+            return positionId;
         }
 
         // validate the commitment backing

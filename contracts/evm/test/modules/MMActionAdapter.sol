@@ -190,11 +190,11 @@ library MMActionAdapter {
     }
 
     /**
-     * @notice Prepares a DECOMMIT action
+     * @notice Prepares a DECOMMIT_SIGNAL action
      */
     function prepareDecommit(PoolKey memory poolKey, uint256 tokenId) internal pure returns (PreparedAction memory) {
         return PreparedAction({
-            action: bytes1(uint8(MMPositionManager.MMAction.DECOMMIT)), params: abi.encode(poolKey, tokenId)
+            action: bytes1(uint8(MMPositionManager.MMAction.DECOMMIT_SIGNAL)), params: abi.encode(poolKey, tokenId)
         });
     }
 

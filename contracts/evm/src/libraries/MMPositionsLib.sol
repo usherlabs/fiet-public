@@ -88,8 +88,11 @@ library MMPositionsLib {
             revert Errors.SignalExpired(tokenId);
         }
 
-        // modify the commit to inlcude the position and update the position count
-        s.commits[tokenId].positions[positionCount] = positionId;
+        // Get current position count to use as index for the new position
+        uint256 currentPositionCount = s.commits[tokenId].positionCount;
+
+        // modify the commit to include the position and update the position count
+        s.commits[tokenId].positions[currentPositionCount] = positionId;
         s.commits[tokenId].positionCount++;
 
         // update the commitId of the position i.e associate the position with the commit

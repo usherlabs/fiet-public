@@ -43,11 +43,12 @@ interface ILiquidityHub {
     ) external;
 
     /**
-     * @notice Issues LCC tokens (mints to issuer)
+     * @notice Issues LCC tokens (mints to specified recipient)
      * @param lccToken The LCC token address to issue for
+     * @param to The recipient address
      * @param amount The amount to issue
      */
-    function issue(address lccToken, uint256 amount) external;
+    function issue(address lccToken, address to, uint256 amount) external;
 
     /**
      * @notice Cancels LCC tokens (burns from issuer)

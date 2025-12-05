@@ -89,34 +89,42 @@ interface IVTSOrchestrator {
 
     // MMPositionManager
     function commitSignal(bytes memory liquiditySignal) external returns (uint256 commitId);
-    function mintPosition(
-        address owner,
-        PoolKey memory poolKey,
-        uint256 commitId,
-        int24 tickLower,
-        int24 tickUpper,
-        uint256 liquidity
-    ) external returns (PositionId positionId, uint256 positionIndex);
 
-    function increaseInternal(
+    /// @notice Called by MMP after it has called poolManager.modifyLiquidity to add liquidity
+    function onMintPosition(
         address owner,
         PoolKey memory poolKey,
         uint256 commitId,
         uint256 positionIndex,
         int24 tickLower,
         int24 tickUpper,
-        uint256 liquidity
-    ) external returns (PositionId);
+        BalanceDelta currencyDelta,
+        BalanceDelta callerDelta,
+        BalanceDelta feesAccrued
+    ) external returns (PositionId positionId);
 
-    function decreaseInternal(
+    /// @notice Called by MMP after it has called poolManager.modifyLiquidity to increase liquidity
+    function onIncreaseLiquidity(
         address sender,
         PoolKey memory poolKey,
         uint256 commitId,
         uint256 positionIndex,
-        bytes32 salt,
-        uint256 amountToDecrease,
-        bytes memory hookData
-    ) external returns (BalanceDelta, BalanceDelta);
+        int24 tickLower,
+        int24 tickUpper,
+        BalanceDelta currencyDelta,
+        BalanceDelta callerDelta,
+        BalanceDelta feesAccrued
+    ) external;
+
+    /// @notice Called by MMP after it has called poolManager.modifyLiquidity to decrease liquidity
+    function onDecreaseLiquidity(
+        address sender,
+        PoolKey memory poolKey,
+        uint256 commitId,
+        uint256 positionIndex,
+        BalanceDelta callerDelta,
+        BalanceDelta feesAccrued
+    ) external returns (BalanceDelta canceledDelta, BalanceDelta queuedDelta);
 
     function getFullCredit(Currency currency, address owner) external view returns (uint256);
     function collectAvailableLiquidity(address sender, address lcc, address recipient, uint256 maxAmount) external;

@@ -139,7 +139,8 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         // Get the position from the vts orchestrator
         Position memory position = vtsOrchestrator.getPosition(positionId);
-        assertEq(position.owner, address(vtsOrchestrator));
+        // In the new architecture, position owner is MMPositionManager (not VTSOrchestrator)
+        assertEq(position.owner, address(positionManager));
         // Validate the owner of the NFT is the caller of the function
         assertEq(positionManager.ownerOf(tokenId), address(this));
 

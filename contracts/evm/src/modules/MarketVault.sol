@@ -398,10 +398,6 @@ abstract contract MarketVault is IMarketVault, ReentrancyGuardTransient {
      * @custom:reverts InsufficientLiquidityToTake If negative deltas exceed available vault liquidity
      * @custom:reverts InsufficientLiquidityToSettle If positive deltas require more than available balance
      */
-    function unlockCallback(bytes calldata data) public returns (bytes memory) {
-        return _unlockCallback(data);
-    }
-
     function _unlockCallback(bytes memory data) internal returns (bytes memory) {
         if (msg.sender != address(vaultPoolManager) && msg.sender != address(vtsOrchestrator)) {
             revert Errors.InvalidSender();
