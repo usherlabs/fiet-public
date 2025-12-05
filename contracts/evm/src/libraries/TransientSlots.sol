@@ -12,37 +12,8 @@ library TransientSlots {
     bytes32 internal constant PROXY_SWAP_FLAG_SLOT = keccak256("PROXY_SWAP_FLAG");
     bytes32 internal constant SQRTP_BEFORE_SLOT = keccak256("SQRTP_BEFORE");
     bytes32 internal constant LIQ_BEFORE_SLOT = keccak256("LIQ_BEFORE");
-    // TODO: Remove
-    bytes32 internal constant POSITION_REQUIRED_SETTLEMENT_DELTA_SLOT = keccak256("POSITION_REQUIRED_SETTLEMENT_DELTA");
     bytes32 internal constant NATIVE_VALUE_READ_SLOT = keccak256("NATIVE_VALUE_READ");
     bytes32 internal constant SEIZED_POSITION_ID_SLOT = keccak256("SEIZED_POSITION_ID");
-
-    // ------------------------------
-    // Position Required Settlement Delta helpers
-    // ------------------------------
-
-    function _computePositionRequiredSettlementDeltaSlot(PositionId positionId)
-        internal
-        pure
-        returns (bytes32 hashSlot)
-    {
-        bytes32 namespaceSlot = POSITION_REQUIRED_SETTLEMENT_DELTA_SLOT;
-        bytes32 key = PositionId.unwrap(positionId);
-        hashSlot = keccak256(abi.encodePacked(namespaceSlot, key));
-    }
-
-    function addPositionRequiredSettlementDelta(PositionId positionId, BalanceDelta settlementDelta) internal {
-        bytes32 slot = _computePositionRequiredSettlementDeltaSlot(positionId);
-        BalanceDelta current = BalanceDelta.wrap(TransientSlot.asInt256(slot).tload());
-        BalanceDelta total = current + settlementDelta;
-        TransientSlot.asInt256(slot).tstore(BalanceDelta.unwrap(total));
-    }
-
-    function readPositionRequiredSettlementDelta(PositionId positionId) internal view returns (BalanceDelta) {
-        bytes32 slot = _computePositionRequiredSettlementDeltaSlot(positionId);
-        int256 raw = TransientSlot.asInt256(slot).tload();
-        return BalanceDelta.wrap(raw);
-    }
 
     // ------------------------------
     // Native Eth/Asset Msg Value helpers

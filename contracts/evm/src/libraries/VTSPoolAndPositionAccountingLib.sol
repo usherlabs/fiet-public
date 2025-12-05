@@ -43,7 +43,6 @@ import {VTSCommitLib} from "./VTSCommitLib.sol";
 import {VTSSettleLib} from "./VTSSettleLib.sol";
 import {Errors} from "./Errors.sol";
 import {TransientStateLibrary} from "v4-periphery/lib/v4-core/src/libraries/TransientStateLibrary.sol";
-import {console} from "forge-std/console.sol";
 import {ProxySwapFlag} from "./ProxySwapFlag.sol";
 import {ProxyHook} from "../ProxyHook.sol";
 
@@ -61,6 +60,7 @@ library VTSPoolAndPositionAccountingLib {
     using TransientStateLibrary for IPoolManager;
 
     /// @notice Processes the logic for CoreHook._afterSwap
+    // TODO: Move to VTSSwapLib.sol
     function _processSwap(
         VTSStorage storage s,
         IPoolManager poolManager,
@@ -383,6 +383,7 @@ library VTSPoolAndPositionAccountingLib {
     /// @param token The token index (0 or 1)
     /// @param amount The amount to accrue
     /// @param liquidity The current in-range liquidity
+    // TODO: Move to VTSSwapLib.sol
     function _accrueDeficitGlobalGrowth(
         VTSStorage storage s,
         PoolId poolId,
@@ -403,6 +404,7 @@ library VTSPoolAndPositionAccountingLib {
     /// @param token The token index (0 or 1)
     /// @param amount The amount to accrue
     /// @param liquidity The current in-range liquidity
+    // TODO: Move to VTSSwapLib.sol
     function _accrueInflowGlobalGrowth(
         VTSStorage storage s,
         PoolId poolId,
@@ -891,6 +893,7 @@ library VTSPoolAndPositionAccountingLib {
     /// @param currency0 The currency for token0
     /// @param currency1 The currency for token1
     /// @return adj The materialised fee adjustment delta
+    // TODO: Merge _finaliseFeeAdjustment into _processPositionFees, and move to
     function _processPositionFees(
         VTSStorage storage s,
         IPoolManager poolManager,
@@ -968,6 +971,7 @@ library VTSPoolAndPositionAccountingLib {
     /// @param poolId The pool ID
     /// @param tokenIndex The token index (0 or 1)
     /// @param coveredAmount The amount covered
+    // TODO: Move to VTSCommitLib.sol
     function _incrementCoverage(
         VTSStorage storage s,
         IPoolManager poolManager,
@@ -1079,6 +1083,60 @@ library VTSPoolAndPositionAccountingLib {
         }
     }
 
+    /**
+     * @notice Initializes the snapshots for a position. Prevents new positions from inheriting historical tick-indexed growths.
+     * @param s The central VTS storage
+     * @param poolManager The pool manager contract
+     * @param id The id of the position
+     */
+    function _initPositionSnapshots(VTSStorage storage s, IPoolManager poolManager, PositionId id) internal {
+        Position memory pos = s.positions[id];
+        PoolId p = pos.poolId;
+        PoolAccounting storage paPool = s.poolAccounting[p];
+        PositionAccounting storage pa = s.positionAccounting[id];
+
+        // Deficit growth snapshot
+        (uint256 d0, uint256 d1) = _growthInside(
+            p,
+            pos.tickLower,
+            pos.tickUpper,
+            paPool.deficitGrowthGlobal.token0,
+            paPool.deficitGrowthGlobal.token1,
+            s.deficitGrowthOutside
+        );
+        pa.deficitGrowthInsideLast.token0 = d0;
+        pa.deficitGrowthInsideLast.token1 = d1;
+
+        // Inflow growth snapshot
+        (uint256 i0, uint256 i1) = _growthInside(
+            p,
+            pos.tickLower,
+            pos.tickUpper,
+            paPool.inflowGrowthGlobal.token0,
+            paPool.inflowGrowthGlobal.token1,
+            s.inflowGrowthOutside
+        );
+        pa.inflowGrowthInsideLast.token0 = i0;
+        pa.inflowGrowthInsideLast.token1 = i1;
+
+        // Fee growth snapshot
+        (uint256 fg0, uint256 fg1) = StateLibrary.getFeeGrowthInside(poolManager, p, pos.tickLower, pos.tickUpper);
+        pa.feeGrowthInsideLast.token0 = fg0;
+        pa.feeGrowthInsideLast.token1 = fg1;
+
+        // Coverage usage snapshot
+        (uint256 cu0, uint256 cu1) = _growthInside(
+            p,
+            pos.tickLower,
+            pos.tickUpper,
+            paPool.coverageUseGrowthGlobal.token0,
+            paPool.coverageUseGrowthGlobal.token1,
+            s.coverageUseGrowthOutside
+        );
+        pa.coverageUseGrowthInsideLast.token0 = cu0;
+        pa.coverageUseGrowthInsideLast.token1 = cu1;
+    }
+
     /// @notice Touch a position to update its state, process fees, and calculate required settlement delta
     /// @dev Single entry point for position processing - handles registration, linking, fee processing
     /// @param s The VTS storage
@@ -1139,7 +1197,7 @@ library VTSPoolAndPositionAccountingLib {
         if (isNewPosition) {
             // NEW POSITION: initialize the liquidity to the liquidity delta
             _registerPosition(s, owner, poolId, params);
-            // TODO: Re-add initSnapshots.
+            _initPositionSnapshots(s, poolManager, id);
             _trackCommitment(s, id, params);
 
             // Link position to commit for MM positions
@@ -1207,11 +1265,6 @@ library VTSPoolAndPositionAccountingLib {
                         }
                     }
                 }
-
-                console.log("excess0", excess0);
-                console.log("excess1", excess1);
-                console.log("isMMPosition", isMMPosition);
-                console.logBytes32(PositionId.unwrap(id));
 
                 if (isMMPosition) {
                     // Positive delta = protocol owes (withdrawal)

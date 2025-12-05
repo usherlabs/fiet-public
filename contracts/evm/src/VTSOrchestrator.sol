@@ -772,16 +772,7 @@ contract VTSOrchestrator is LiquidityDeltaManager, Ownable, IVTSOrchestrator {
         internal
         returns (uint256 seizedLiquidityUnits)
     {
-        // Validate that at least one amount is non-zero
-        if (sDelta.amount0() == 0 && sDelta.amount1() == 0) {
-            // Cannot settle 0 amounts for both assets.
-            revert Errors.InvalidDelta(0, 0);
-        }
-
-        bool isSeizing = _isSeizing(positionId);
-
-        // Read positionRequiredSettlementDelta from transient storage
-        // TODO: Remove position required delta.
+        // Repalce with read from currencyDelta.
         BalanceDelta positionRequiredSettlementDelta = TransientSlots.readPositionRequiredSettlementDelta(positionId);
 
         // Process settlement via VTSSettleLib
@@ -933,15 +924,11 @@ contract VTSOrchestrator is LiquidityDeltaManager, Ownable, IVTSOrchestrator {
     // Checkpoint Helper Functions
     // --------------------------------------------------
 
+    /// @notice Marks a checkpoint for a given position
+    /// @param positionId The position ID
+    /// @param isOpen The state of the checkpoint
     function _markCheckpoint(PositionId positionId, bool isOpen) internal {
         CheckpointLibrary._markCheckpoint(s, positionId, isOpen);
-    }
-
-    /// @notice Gets the checkpoint for a given position
-    /// @param positionId The position ID
-    /// @return checkpoint The checkpoint for the position
-    function positionToCheckpoint(PositionId positionId) public view returns (RFSCheckpoint memory) {
-        return s.checkpoints[PositionId.unwrap(positionId)];
     }
 
     /// @notice Marks a checkpoint for a given commit position. Only callable by the MMPositionManager.
@@ -950,6 +937,13 @@ contract VTSOrchestrator is LiquidityDeltaManager, Ownable, IVTSOrchestrator {
     function markCheckpoint(uint256 commitId, uint256 positionIndex) external onlyMMPositionManager {
         (PositionId positionId, bool rfsOpen,) = calcRFS(commitId, positionIndex, false);
         _markCheckpoint(positionId, rfsOpen);
+    }
+
+    /// @notice Gets the checkpoint for a given position
+    /// @param positionId The position ID
+    /// @return checkpoint The checkpoint for the position
+    function positionToCheckpoint(PositionId positionId) public view returns (RFSCheckpoint memory) {
+        return s.checkpoints[PositionId.unwrap(positionId)];
     }
 
     // --------------------------------------------------

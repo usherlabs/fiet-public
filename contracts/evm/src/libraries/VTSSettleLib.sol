@@ -410,36 +410,6 @@ library VTSSettleLib {
         return total;
     }
 
-    /// @notice Reduces the position required settlement delta
-    //  This is called when a position
-    /// @param positionId The position ID
-    /// @param settlementDelta The settlement delta
-    /// @param positionRequiredSettlementDelta The position required settlement delta
-    function _reducePositionRequiredSettlementDelta(
-        PositionId positionId,
-        BalanceDelta settlementDelta,
-        BalanceDelta positionRequiredSettlementDelta
-    ) public {
-        // whenver there is a settlement, we need to update the transient storage's required settlement delta
-        // make sure this only updates on settlements/deposits and not withdrawals ie. delta is negative because user made a settlement
-        if (settlementDelta.amount0() < 0 || settlementDelta.amount1() < 0) {
-            // if they settle more than the required amount then net to 0 because they would not have any required settlement
-            // i.e set the amount to be the negative of the required amount such that when they are added in the transient storage, it will net to 0
-            int128 cappedSettlementDelta0 = settlementDelta.amount0() < positionRequiredSettlementDelta.amount0()
-                ? positionRequiredSettlementDelta.amount0()
-                : settlementDelta.amount0();
-            int128 cappedSettlementDelta1 = settlementDelta.amount1() < positionRequiredSettlementDelta.amount1()
-                ? positionRequiredSettlementDelta.amount1()
-                : settlementDelta.amount1();
-
-            // update the transient storage's required settlement delta
-            TransientSlots.addPositionRequiredSettlementDelta(
-                positionId,
-                LiquidityUtils.negateBalanceDelta(toBalanceDelta(cappedSettlementDelta0, cappedSettlementDelta1))
-            );
-        }
-    }
-
     function _unwrapLCC(
         ILCC lcc,
         ILiquidityHub liquidityHub,
