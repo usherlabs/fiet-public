@@ -25,7 +25,6 @@ import {TransientSlots} from "./libraries/TransientSlots.sol";
 import {Errors} from "./libraries/Errors.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {IVRLSignalManager} from "./interfaces/IVRLSignalManager.sol";
-import {MMPositionsLib} from "./libraries/MMPositionsLib.sol";
 import {ModifyLiquidityParams} from "v4-periphery/lib/v4-core/src/types/PoolOperation.sol";
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
 import {TransientStateLibrary} from "v4-periphery/lib/v4-core/src/libraries/TransientStateLibrary.sol";
@@ -309,7 +308,7 @@ contract VTSOrchestrator is LiquidityDeltaManager, Ownable, IVTSOrchestrator {
         onlyPositionValid(positionId)
         returns (bool, BalanceDelta)
     {
-        return MMPositionsLib._calcRFS(s, poolManager, positionId, requireClosedRfS);
+        return VTSPoolAndPositionAccountingLib._calcRFS(s, poolManager, positionId, requireClosedRfS);
     }
 
     /// @inheritdoc IVTSOrchestrator
@@ -318,11 +317,11 @@ contract VTSOrchestrator is LiquidityDeltaManager, Ownable, IVTSOrchestrator {
         returns (PositionId, bool, BalanceDelta)
     {
         PositionId positionId = getPositionId(commitId, positionIndex);
-        (bool rfsOpen, BalanceDelta delta) = MMPositionsLib._calcRFS(s, poolManager, positionId, requireClosedRfS);
+        (bool rfsOpen, BalanceDelta delta) =
+            VTSPoolAndPositionAccountingLib._calcRFS(s, poolManager, positionId, requireClosedRfS);
         return (positionId, rfsOpen, delta);
     }
 
-    // TODO: Not necessary? Esp. if contract sizes are big.9
     /// @inheritdoc IVTSOrchestrator
     function calcVTSCurrent(PositionId positionId)
         external
@@ -370,8 +369,9 @@ contract VTSOrchestrator is LiquidityDeltaManager, Ownable, IVTSOrchestrator {
     // CoreHook VTS Functionality
     // --------------------------------------------------
 
-    /// @notice Touch a position to update its state and calculate required settlement delta
-    /// @dev Returns the settlement delta directly instead of using transient storage for same-call-scope efficiency
+    /// @notice Touch a position to update its state, process fees, and calculate required settlement delta
+    /// @dev Returns the settlement delta and feeAdj directly instead of using transient storage.
+    ///      Fee processing is now integrated into VTSPoolAndPositionAccountingLib._touchPosition (single entry point).
     /// @param owner The owner of the position
     /// @param poolId The pool id
     /// @param params The modify liquidity params
@@ -379,37 +379,39 @@ contract VTSOrchestrator is LiquidityDeltaManager, Ownable, IVTSOrchestrator {
     /// @return pos The position struct
     /// @return id The position id
     /// @return requiredSettlementDelta The required settlement delta (returned directly, not via transient storage)
+    /// @return feeAdj The fee adjustment delta (from consolidated _touchPosition)
     /// @return isSeizing Whether this is a seizure operation
+    /// @return isNewPosition Whether this is a new position
     function _touchPosition(
         address owner,
         PoolId poolId,
         ModifyLiquidityParams calldata params,
-        bytes calldata hookData
-    ) internal returns (Position memory pos, PositionId id, BalanceDelta requiredSettlementDelta, bool isSeizing) {
-        (id, requiredSettlementDelta, isSeizing) =
-            MMPositionsLib._touchPosition(s, poolManager, owner, poolId, params, hookData, mmPositionManager);
+        bytes calldata hookData,
+        Currency currency0,
+        Currency currency1
+    )
+        internal
+        returns (
+            Position memory pos,
+            PositionId id,
+            BalanceDelta requiredSettlementDelta,
+            BalanceDelta feeAdj,
+            bool isSeizing,
+            bool isNewPosition
+        )
+    {
+        (id, requiredSettlementDelta, feeAdj, isSeizing, isNewPosition) =
+            VTSPoolAndPositionAccountingLib._touchPosition(
+                s, poolManager, owner, poolId, params, hookData, mmPositionManager, currency0, currency1
+            );
         // get the position from the position id
         pos = s.positions[id];
-    }
-
-    function _processPositionFees(PositionId id, Currency currency0, Currency currency1)
-        internal
-        returns (BalanceDelta)
-    {
-        BalanceDelta feeAdj = VTSPoolAndPositionAccountingLib._processPositionFees(
-            s, poolManager, id, currency0, currency1
-        );
-        // check if this is an mm handled position and if it is handle transient storage for the fee adj
-        if (_isMMPosition(id)) {
-            TransientSlots.addFeeAdjDelta(feeAdj);
-        }
-
-        return feeAdj;
     }
 
     /// @notice Called by CoreHook after add/remove liquidity to update position state and process fees
     /// @dev Consolidates all delta management for both MM and DirectLP positions.
     ///      For MM positions: handles fee accounting, LCC issuance/cancellation, position linking, and delta accounting.
+    ///      Fee processing is now integrated into _touchPosition (single entry point).
     /// @param owner The owner of the position (e.g., MMPositionManager or other router)
     /// @param poolKey The pool key for the position
     /// @param params The modify liquidity params
@@ -429,15 +431,15 @@ contract VTSOrchestrator is LiquidityDeltaManager, Ownable, IVTSOrchestrator {
     ) external onlyCoreHook returns (Position memory pos, PositionId id, BalanceDelta feeAdj) {
         PoolId poolId = poolKey.toId();
 
-        // Step 1: Touch position - returns settlement delta directly (no transient storage round-trip)
+        // Step 1: Touch position - returns settlement delta and feeAdj directly (no transient storage round-trip)
+        // Fee processing is now integrated into _touchPosition (consolidated single entry point)
         BalanceDelta requiredSettlementDelta;
         bool isSeizing;
-        (pos, id, requiredSettlementDelta, isSeizing) = _touchPosition(owner, poolId, params, hookData);
+        bool isNewPosition;
+        (pos, id, requiredSettlementDelta, feeAdj, isSeizing, isNewPosition) =
+            _touchPosition(owner, poolId, params, hookData, poolKey.currency0, poolKey.currency1);
 
-        // Step 2: Process position fees
-        feeAdj = _processPositionFees(id, poolKey.currency0, poolKey.currency1);
-
-        // Step 3: Handle MM-specific operations
+        // Step 2: Handle MM-specific operations
         PositionModificationHookData memory mmData = PositionModificationHookDataLib.decodeCalldata(hookData);
 
         if (PositionModificationHookDataLib.isMMOperation(mmData) && owner == mmPositionManager) {
@@ -462,11 +464,6 @@ contract VTSOrchestrator is LiquidityDeltaManager, Ownable, IVTSOrchestrator {
             } else if (params.liquidityDelta < 0) {
                 // Removing liquidity: Cancel LCCs
                 _handleLiquidityDecrease(poolKey, id, principalDelta, requiredSettlementDelta);
-            }
-
-            // Link position to commit for new positions
-            if (pos.commitId == 0 && mmData.commitId > 0) {
-                MMPositionsLib._linkPositionToCommit(s, mmPositionManager, id, mmData.commitId);
             }
 
             // Mark RFS checkpoint
@@ -552,11 +549,6 @@ contract VTSOrchestrator is LiquidityDeltaManager, Ownable, IVTSOrchestrator {
         // verify and commit the signal to state
         commitId = VTSCommitLib._commitSignal(s, IVRLSignalManager(signalManager), liquiditySignal);
     }
-
-    // NOTE: onMintPosition, onIncreaseLiquidity, onDecreaseLiquidity, and _onModifyPositionLiquidity
-    // have been removed as part of the CurrencyDelta Management Consolidation.
-    // All delta management is now handled in processPosition via CoreHook callbacks.
-    // See: _handleLiquidityIncrease and _handleLiquidityDecrease for the consolidated logic.
 
     /**
      * @dev Seize a position from an unbacked commitment.
@@ -646,6 +638,13 @@ contract VTSOrchestrator is LiquidityDeltaManager, Ownable, IVTSOrchestrator {
         _take(currency, sender, to, maxAmount);
     }
 
+    /// @notice Extends the grace period for a position
+    /// @param poolKey The pool key for the position
+    /// @param commitId The commit id of the position
+    /// @param positionIndex The position index of the position
+    /// @param settlementTokenIndex The index of the settlement token
+    /// @param verifierIndex The verifier index
+    /// @param settlementProof The settlement proof
     function extendGracePeriod(
         PoolKey memory poolKey,
         uint256 commitId,

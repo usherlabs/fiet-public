@@ -164,6 +164,8 @@ contract MMPositionManager is
         payable
         isNotLocked
     {
+        // _handleNativeValue
+
         _executeActionsWithoutUnlock(actions, params);
         if (NonzeroDeltaCount.read() > 0) {
             // TODO: include revert after clamping deltas is implemented

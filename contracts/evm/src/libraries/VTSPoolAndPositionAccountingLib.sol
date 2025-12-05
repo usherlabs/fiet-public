@@ -14,7 +14,13 @@ import {
     TokenPairInt,
     TokenPairLib
 } from "../types/VTS.sol";
-import {PositionId, Position} from "../types/Position.sol";
+import {
+    PositionId,
+    Position,
+    PositionLibrary,
+    PositionModificationHookData,
+    PositionModificationHookDataLib
+} from "../types/Position.sol";
 import {Pool} from "../types/Pool.sol";
 import {Commit} from "../types/Commit.sol";
 import {LiquidityUtils} from "./LiquidityUtils.sol";
@@ -33,6 +39,11 @@ import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {SqrtPriceMath} from "@uniswap/v4-core/src/libraries/SqrtPriceMath.sol";
 import {TransientSlots} from "./TransientSlots.sol";
 import {TickUtils} from "./TickUtils.sol";
+import {VTSCommitLib} from "./VTSCommitLib.sol";
+import {VTSSettleLib} from "./VTSSettleLib.sol";
+import {Errors} from "./Errors.sol";
+import {TransientStateLibrary} from "v4-periphery/lib/v4-core/src/libraries/TransientStateLibrary.sol";
+import {console} from "forge-std/console.sol";
 import {ProxySwapFlag} from "./ProxySwapFlag.sol";
 import {ProxyHook} from "../ProxyHook.sol";
 
@@ -46,6 +57,8 @@ library VTSPoolAndPositionAccountingLib {
     using CurrencySettler for Currency;
     using TokenPairLib for TokenPairUint;
     using TokenPairLib for TokenPairInt;
+    using StateLibrary for IPoolManager;
+    using TransientStateLibrary for IPoolManager;
 
     /// @notice Processes the logic for CoreHook._afterSwap
     function _processSwap(
@@ -167,7 +180,7 @@ library VTSPoolAndPositionAccountingLib {
     /// @param positionId The ascribed id of the position
     /// @param params The parameters of the transaction
     function _trackCommitment(VTSStorage storage s, PositionId positionId, ModifyLiquidityParams calldata params)
-        external
+        internal
     {
         PositionAccounting storage pa = s.positionAccounting[positionId];
 
@@ -721,7 +734,7 @@ library VTSPoolAndPositionAccountingLib {
     /// @param s The central VTS storage
     /// @param poolManager The pool manager contract
     /// @param positionId The position ID
-    function _settlePositionGrowths(VTSStorage storage s, IPoolManager poolManager, PositionId positionId) external {
+    function _settlePositionGrowths(VTSStorage storage s, IPoolManager poolManager, PositionId positionId) public {
         _settlePositionDeficitGrowth(s, poolManager, positionId);
         _settlePositionInflowGrowth(s, poolManager, positionId);
         _settleCoverageUsage(s, poolManager, positionId);
@@ -981,5 +994,286 @@ library VTSPoolAndPositionAccountingLib {
     /// @dev Check if fee sharing is enabled for a pool
     function _isFeeSharingEnabled(VTSStorage storage s, PoolId p) internal view returns (bool) {
         return s.pools[p].vtsConfig.coverageFeeShare > 0;
+    }
+
+    // --------------------------------------------------
+    // Position Registration and Management (consolidated from MMPositionsLib)
+    // --------------------------------------------------
+
+    /// @notice Register a new position in VTSStorage
+    /// @param s The VTS storage
+    /// @param owner The owner of the position
+    /// @param poolId The pool id
+    /// @param params The modify liquidity params
+    function _registerPosition(
+        VTSStorage storage s,
+        address owner,
+        PoolId poolId,
+        ModifyLiquidityParams calldata params
+    ) public {
+        // Derive position id consistent with Uniswap position keying
+        PositionId id = PositionLibrary.generateId(owner, params);
+
+        // Check if already registered
+        if (s.positions[id].owner != address(0)) {
+            revert Errors.AlreadyRegistered(id);
+        }
+
+        // Register the position in VTSStorage
+        s.positions[id] = Position({
+            owner: owner,
+            poolId: poolId,
+            commitId: 0, // Will be set when position is associated with a commit
+            tickLower: params.tickLower,
+            tickUpper: params.tickUpper,
+            liquidity: SafeCast.toUint128(uint256(params.liquidityDelta)),
+            isActive: true,
+            salt: params.salt
+        });
+    }
+
+    /// @notice Link a position to a commit
+    /// @param s The VTS storage
+    /// @param positionManager The position manager address
+    /// @param positionId The position id
+    /// @param tokenId The token id (commit id)
+    function _linkPositionToCommit(
+        VTSStorage storage s,
+        address positionManager,
+        PositionId positionId,
+        uint256 tokenId
+    ) public {
+        // validate there is an existing commit for the token id
+        if (s.commits[tokenId].expiresAt < block.timestamp) {
+            revert Errors.SignalExpired(tokenId);
+        }
+
+        // Get current position count to use as index for the new position
+        uint256 currentPositionCount = s.commits[tokenId].positionCount;
+
+        // modify the commit to include the position and update the position count
+        s.commits[tokenId].positions[currentPositionCount] = positionId;
+        s.commits[tokenId].positionCount++;
+
+        // update the commitId of the position i.e associate the position with the commit
+        s.positions[positionId].commitId = tokenId;
+    }
+
+    /// @notice Calculate RFS (Required for Settlement) for a position
+    /// @param s The VTS storage
+    /// @param poolManager The pool manager
+    /// @param id The position id
+    /// @param requireClosedRfS Whether to require the RFS to be closed
+    /// @return rfsOpen Whether the RFS is open
+    /// @return delta The RFS delta
+    function _calcRFS(VTSStorage storage s, IPoolManager poolManager, PositionId id, bool requireClosedRfS)
+        public
+        returns (bool rfsOpen, BalanceDelta delta)
+    {
+        // Settle position growths before calculating RFS
+        _settlePositionGrowths(s, poolManager, id);
+
+        (rfsOpen, delta) = VTSSettleLib._getRFS(s, id);
+        if (requireClosedRfS && rfsOpen) {
+            revert Errors.RFSOpenForPosition(id);
+        }
+    }
+
+    /// @notice Touch a position to update its state, process fees, and calculate required settlement delta
+    /// @dev Single entry point for position processing - handles registration, linking, fee processing
+    /// @param s The VTS storage
+    /// @param poolManager The pool manager
+    /// @param owner The owner of the position
+    /// @param poolId The pool id
+    /// @param params The modify liquidity params
+    /// @param hookData The hook data containing PositionModificationHookData
+    /// @param positionManager The MM position manager address
+    /// @param currency0 The currency for token0
+    /// @param currency1 The currency for token1
+    /// @return id The position id
+    /// @return requiredSettlementDelta The required settlement delta
+    /// @return feeAdj The fee adjustment delta
+    /// @return isSeizing Whether this is a seizure operation
+    /// @return isNewPosition Whether this is a new position
+    function _touchPosition(
+        VTSStorage storage s,
+        IPoolManager poolManager,
+        address owner,
+        PoolId poolId,
+        ModifyLiquidityParams calldata params,
+        bytes calldata hookData,
+        address positionManager,
+        Currency currency0,
+        Currency currency1
+    )
+        external
+        returns (
+            PositionId id,
+            BalanceDelta requiredSettlementDelta,
+            BalanceDelta feeAdj,
+            bool isSeizing,
+            bool isNewPosition
+        )
+    {
+        id = PositionLibrary.generateId(owner, params);
+        Position storage pos = s.positions[id];
+
+        // pos.owner == address(0) means new position
+        isNewPosition = pos.owner == address(0);
+        bool isMMPosition = isNewPosition ? owner == positionManager : pos.owner == positionManager;
+
+        uint128 liq = poolManager.getPositionLiquidity(poolId, PositionId.unwrap(id));
+
+        // Decode hookData using the PositionModificationHookData struct
+        BalanceDelta seizureSettlementDelta = BalanceDelta.wrap(0);
+        PositionModificationHookData memory mmData = PositionModificationHookDataLib.decodeCalldata(hookData);
+
+        if (mmData.seizure.isSeizing) {
+            isSeizing = true;
+            seizureSettlementDelta = toBalanceDelta(mmData.seizure.settle0, mmData.seizure.settle1);
+        }
+
+        // Initialize requiredSettlementDelta to zero
+        requiredSettlementDelta = BalanceDelta.wrap(0);
+
+        if (isNewPosition) {
+            // NEW POSITION: initialize the liquidity to the liquidity delta
+            _registerPosition(s, owner, poolId, params);
+            // TODO: Re-add initSnapshots.
+            _trackCommitment(s, id, params);
+
+            // Link position to commit for MM positions
+            if (isMMPosition && mmData.commitId > 0) {
+                _linkPositionToCommit(s, positionManager, id, mmData.commitId);
+            }
+
+            // get the commitment maxima for the position
+            TokenPairUint memory commitmentMaxima = s.positionAccounting[id].commitmentMax;
+
+            if (isMMPosition) {
+                // New positions mean base settlement.
+                MarketVTSConfiguration memory vtsConfiguration = s.pools[poolId].vtsConfig;
+                (uint256 amountToSettle0, uint256 amountToSettle1) = LiquidityUtils.getBaseSettlementAmounts(
+                    commitmentMaxima.token0,
+                    commitmentMaxima.token1,
+                    vtsConfiguration.token0.baseVTSRate,
+                    vtsConfiguration.token1.baseVTSRate
+                );
+                // Invert signs: negative delta = caller owes liquidity (deposit)
+                requiredSettlementDelta =
+                    LiquidityUtils.safeToBalanceDelta(amountToSettle0, amountToSettle1, true, true);
+            } else {
+                // Set the settlement amounts to the total commitment amounts for DirectLPs.
+                _updateSettlement(s, id, 0, SafeCast.toInt256(commitmentMaxima.token0));
+                _updateSettlement(s, id, 1, SafeCast.toInt256(commitmentMaxima.token1));
+            }
+        } else if (pos.isActive == true) {
+            // EXISTING POSITION: update the liquidity by the liquidity delta
+            if (params.liquidityDelta < 0) {
+                // FULL or PARTIAL LIQUIDATION:
+
+                // validate that RfS is closed before we track position param updates.
+                // Skip calcRFS when seizing
+                if (!isSeizing) {
+                    _calcRFS(s, poolManager, id, true);
+                }
+                _trackCommitment(s, id, params);
+
+                PositionAccounting storage pa = s.positionAccounting[id];
+                uint256 s0 = pa.settled.token0;
+                uint256 s1 = pa.settled.token1;
+                uint256 excess0 = 0;
+                uint256 excess1 = 0;
+
+                if (liq == 0) {
+                    // full liquidation
+                    excess0 = s0;
+                    excess1 = s1;
+                } else {
+                    // partial liquidation
+                    TokenPairUint memory commitmentMaxima = pa.commitmentMax;
+                    if (isSeizing) {
+                        // Use seizure-specific excess calculation
+                        (excess0, excess1) = LiquidityUtils.calculateSeizureExcess(
+                            s0, s1, uint256(liq), uint256(-params.liquidityDelta), seizureSettlementDelta
+                        );
+                    } else {
+                        // Standard excess calculation
+                        if (s0 > commitmentMaxima.token0) {
+                            excess0 = s0 - commitmentMaxima.token0;
+                        }
+                        if (s1 > commitmentMaxima.token1) {
+                            excess1 = s1 - commitmentMaxima.token1;
+                        }
+                    }
+                }
+
+                console.log("excess0", excess0);
+                console.log("excess1", excess1);
+                console.log("isMMPosition", isMMPosition);
+                console.logBytes32(PositionId.unwrap(id));
+
+                if (isMMPosition) {
+                    // Positive delta = protocol owes (withdrawal)
+                    requiredSettlementDelta = LiquidityUtils.safeToBalanceDelta(excess0, excess1, false, false);
+                } else {
+                    // Update settlement for DirectLPs
+                    if (excess0 > 0) {
+                        _updateSettlement(s, id, 0, -SafeCast.toInt256(excess0));
+                    }
+                    if (excess1 > 0) {
+                        _updateSettlement(s, id, 1, -SafeCast.toInt256(excess1));
+                    }
+                }
+            } else if (params.liquidityDelta > 0) {
+                // POSITION DELTA INCREASE:
+                _trackCommitment(s, id, params);
+
+                PositionAccounting storage pa = s.positionAccounting[id];
+                uint256 s0 = pa.settled.token0;
+                uint256 s1 = pa.settled.token1;
+                TokenPairUint memory commitmentMaxima = pa.commitmentMax;
+
+                if (isMMPosition) {
+                    // commitment maxima increases, recalculate base settlement requirements
+                    MarketVTSConfiguration memory vtsConfiguration = s.pools[poolId].vtsConfig;
+                    (uint256 baseAmountToSettle0, uint256 baseAmountToSettle1) = LiquidityUtils.getBaseSettlementAmounts(
+                        commitmentMaxima.token0,
+                        commitmentMaxima.token1,
+                        vtsConfiguration.token0.baseVTSRate,
+                        vtsConfiguration.token1.baseVTSRate
+                    );
+                    uint256 excess0 = baseAmountToSettle0 > s0 ? baseAmountToSettle0 - s0 : 0;
+                    uint256 excess1 = baseAmountToSettle1 > s1 ? baseAmountToSettle1 - s1 : 0;
+
+                    // Negative delta = caller owes liquidity (deposit)
+                    requiredSettlementDelta = LiquidityUtils.safeToBalanceDelta(excess0, excess1, true, true);
+                } else {
+                    // Increase DirectLPs settlement amounts
+                    _updateSettlement(s, id, 0, SafeCast.toInt256(commitmentMaxima.token0) - SafeCast.toInt256(s0));
+                    _updateSettlement(s, id, 1, SafeCast.toInt256(commitmentMaxima.token1) - SafeCast.toInt256(s1));
+                }
+            }
+
+            // Update position liquidity
+            int256 newLiquidity = SafeCast.toInt256(uint256(pos.liquidity)) + params.liquidityDelta;
+            if (newLiquidity < 0) {
+                pos.liquidity = 0;
+            } else {
+                pos.liquidity = SafeCast.toUint128(uint256(newLiquidity));
+            }
+        } else {
+            revert Errors.NotActive(id);
+        }
+
+        // Update active status based on liquidity
+        if (liq == 0) {
+            pos.isActive = false;
+        } else {
+            pos.isActive = true;
+        }
+
+        // Process position fees - single entry point for fee processing
+        feeAdj = _processPositionFees(s, poolManager, id, currency0, currency1);
     }
 }

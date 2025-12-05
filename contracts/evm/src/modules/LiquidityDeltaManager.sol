@@ -397,6 +397,8 @@ abstract contract LiquidityDeltaManager is ImmutableState, MarketHandler, Native
      * @dev This is essentially a "credit full amount once, debit as needed" pattern.
      * @param sender The address initiating the settlement
      */
+    // TODO: Maybe remove this entirely? Previously used to ensure there is a take ETH mechanic for over-capitalisation.
+    // However, to solve for this, we can simply require that native ETH deposits include a take dust guard?
     function _handleNativeValue(address sender) internal {
         uint256 nativeValue = TransientSlots.readMsgValueOnce();
         if (nativeValue > 0) {
@@ -410,6 +412,10 @@ abstract contract LiquidityDeltaManager is ImmutableState, MarketHandler, Native
      * @param sender The address initiating the wrap
      * @param amount The amount of native assets to wrap
      */
+    // TODO: Update how we manage _wrapNative, in that Uniswap does not handle deltas on _wrap/_unwrap.
+    // In Uniswap, the PositionManager is agnostic to the currencydelta requirements inside of the PoolManager, but allows for functions that authenticate against settle/take calls.
+    // Therefore, MMPositionManager should be the same - agnostic to _wrap/_unwrap, so that when _settle is called, it authenticates for whatever the destination asset is - resolving any currencydelta triggered by the MV.
+    //
     function _wrapNative(address sender, uint256 amount) internal {
         int256 nativeDelta = CurrencyLibrary.ADDRESS_ZERO.getDelta(sender);
         if (nativeDelta < 0) {

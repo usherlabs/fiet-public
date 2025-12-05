@@ -135,43 +135,6 @@ library VTSCommitLib {
         }
     }
 
-    /// @notice Tracks a commitment to the VTS state
-    /// @param s The central VTS storage
-    /// @param positionId The position ID
-    /// @param params The modify liquidity parameters
-    function _trackCommitment(VTSStorage storage s, PositionId positionId, ModifyLiquidityParams calldata params)
-        external
-    {
-        PositionAccounting storage pa = s.positionAccounting[positionId];
-
-        // Current tracked maxima for this position
-        uint256 currentC0 = pa.commitmentMax.token0;
-        uint256 currentC1 = pa.commitmentMax.token1;
-
-        if (params.liquidityDelta > 0) {
-            // Liquidity added: increase tracked maxima by the delta's maxima over the tick range
-            // Cast int256 -> uint256 -> uint128 to preserve full uint128 range (not limited by int128 max)
-            uint128 liquidityAdded = SafeCast.toUint128(uint256(params.liquidityDelta));
-            (uint256 addC0, uint256 addC1) =
-                LiquidityUtils.calculateCommitmentMaxima(params.tickLower, params.tickUpper, liquidityAdded);
-
-            pa.commitmentMax.token0 = currentC0 + addC0;
-            pa.commitmentMax.token1 = currentC1 + addC1;
-        } else if (params.liquidityDelta < 0) {
-            // Liquidity removed: decrease tracked maxima by the delta's maxima over the tick range
-            uint128 liquidityRemoved = SafeCast.toUint128(uint256(-params.liquidityDelta));
-            (uint256 subC0, uint256 subC1) =
-                LiquidityUtils.calculateCommitmentMaxima(params.tickLower, params.tickUpper, liquidityRemoved);
-
-            // Clamp at zero to avoid underflow; if fully removed, both become zero
-            pa.commitmentMax.token0 = currentC0 > subC0 ? (currentC0 - subC0) : 0;
-            pa.commitmentMax.token1 = currentC1 > subC1 ? (currentC1 - subC1) : 0;
-        } else {
-            // No-op if liquidityDelta == 0 (poke)
-            return;
-        }
-    }
-
     /// @dev Re-composes effective LCC amounts across all positions at the current pool price.
     ///      This reflects the live composition of the commitment rather than any historical issuance tallies.
     /// @param s The central VTS storage
@@ -468,52 +431,6 @@ library VTSCommitLib {
             LiquidityUtils.safeInt128ToUint256(diff.amount1()),
             positionManager
         );
-    }
-
-    function _isSeizing(PositionId positionId) public view returns (bool) {
-        PositionId seizedPositionId = TransientSlots.getSeizedPositionId();
-        return PositionId.unwrap(seizedPositionId) == PositionId.unwrap(positionId);
-    }
-
-    function _onModifyPositionLiquidity(
-        address positionManager,
-        BalanceDelta positionDelta,
-        BalanceDelta feesAccrued,
-        ModifyLiquidityParams memory params
-    )
-        public
-        returns (
-            PositionId id,
-            BalanceDelta requiredSettlementDelta,
-            BalanceDelta accruedFeesAfterAdj,
-            BalanceDelta principalDelta
-        )
-    {
-        // ---- Fee adjustment handling for the modified position ----
-        // Consume fee adjustment materialised by _processPositionFees
-        BalanceDelta feeAdj = TransientSlots.consumeFeeAdjDelta();
-
-        // CoreHook applies a feeAdj to the callerDelta. ie.  callerDelta = principalDelta - feesAccrued - feeAdj.
-        // Treat feeAdj as part of fees for cancel/transfer purposes.
-        // ? feeAdj bonus is negative, slash is positive. The result is higher fees for bonus, lower for slash.
-        accruedFeesAfterAdj = feesAccrued - feeAdj;
-
-        // positionDelta(a0/a1) are the gross amounts returned by the PoolManager for position modification.
-        // principal0/principal1 = a{0,1} - fees{0,1} reflect the true principal liquidity change
-        // that maps to LCC cancellation. fees are trader-derived, wrapped LCC value and must remain wrapped.
-        principalDelta = positionDelta - accruedFeesAfterAdj;
-
-        // Consume the required settlement delta for the modified position from CoreHook (VTSManager)
-        // Signs: negative delta = caller owes liquidity (deposit), positive = protocol owes (withdrawal)
-        id = PositionLibrary.generateId(positionManager, params);
-
-        bool isSeizing = _isSeizing(id);
-
-        if (isSeizing) {
-            requiredSettlementDelta = TransientSlots.consumeSeizedSettlementDelta(id);
-        } else {
-            requiredSettlementDelta = TransientSlots.readPositionRequiredSettlementDelta(id);
-        }
     }
 
     /// @notice Declares a commitment deficit for a position
