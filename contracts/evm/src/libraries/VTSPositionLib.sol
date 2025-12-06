@@ -20,7 +20,8 @@ import {
     MarketVTSConfiguration,
     TokenPairUint,
     TokenPairInt,
-    TokenPairLib
+    TokenPairLib,
+    PositionContext
 } from "../types/VTS.sol";
 import {
     PositionId,
@@ -38,6 +39,8 @@ import {DynamicCurrencyDelta} from "./DynamicCurrencyDelta.sol";
 import {ILCC} from "../interfaces/ILCC.sol";
 import {IERC20Minimal} from "@uniswap/v4-core/src/interfaces/external/IERC20Minimal.sol";
 import {ILiquidityHub} from "../interfaces/ILiquidityHub.sol";
+import {VTSCommitLib} from "./VTSCommitLib.sol";
+import {CheckpointLibrary} from "./Checkpoint.sol";
 
 /// @title VTSPositionLib
 /// @notice Position lifecycle, registration, RFS, settlement, seizure, and growth accounting for VTS
@@ -351,7 +354,9 @@ library VTSPositionLib {
     /// @param s The central VTS storage
     /// @param poolManager The pool manager contract
     /// @param positionId The position ID
-    function _settlePositionInflowGrowth(VTSStorage storage s, IPoolManager poolManager, PositionId positionId) internal {
+    function _settlePositionInflowGrowth(VTSStorage storage s, IPoolManager poolManager, PositionId positionId)
+        internal
+    {
         Position memory pos = s.positions[positionId];
         PoolId poolId = pos.poolId;
         uint128 liq = StateLibrary.getPositionLiquidity(poolManager, poolId, PositionId.unwrap(positionId));
@@ -663,50 +668,41 @@ library VTSPositionLib {
         pa.coverageUseGrowthInsideLast.token1 = cu1;
     }
 
-    /// @notice Touch a position to update its state, process fees, and calculate required settlement delta
-    /// @dev Single entry point for position processing - handles registration, linking, fee processing
+    /// @notice Touch a position to update its state, process fees, and handle MM-specific operations
+    /// @dev Single entry point for position processing - handles registration, linking, fee processing,
+    ///      delta accounting, LCC issuance/cancellation, and checkpoint marking
     /// @param s The VTS storage
-    /// @param poolManager The pool manager
+    /// @param ctx The position context containing dependency references (poolManager, liquidityHub, etc.)
     /// @param owner The owner of the position
-    /// @param poolId The pool id
+    /// @param poolKey The pool key (needed for LCC operations and currency access)
     /// @param params The modify liquidity params
+    /// @param callerDelta The caller delta from poolManager.modifyLiquidity
+    /// @param feesAccrued The fees accrued from poolManager.modifyLiquidity
     /// @param hookData The hook data containing PositionModificationHookData
-    /// @param positionManager The MM position manager address
-    /// @param currency0 The currency for token0
-    /// @param currency1 The currency for token1
+    /// @return pos The position struct
     /// @return id The position id
-    /// @return requiredSettlementDelta The required settlement delta
     /// @return feeAdj The fee adjustment delta
-    /// @return isSeizing Whether this is a seizure operation
-    /// @return isNewPosition Whether this is a new position
     function touchPosition(
         VTSStorage storage s,
-        IPoolManager poolManager,
+        PositionContext memory ctx,
         address owner,
-        PoolId poolId,
+        PoolKey calldata poolKey,
         ModifyLiquidityParams calldata params,
-        bytes calldata hookData,
-        address positionManager,
-        Currency currency0,
-        Currency currency1
-    )
-        external
-        returns (
-            PositionId id,
-            BalanceDelta requiredSettlementDelta,
-            BalanceDelta feeAdj,
-            bool isSeizing,
-            bool isNewPosition
-        )
-    {
+        BalanceDelta callerDelta,
+        BalanceDelta feesAccrued,
+        bytes calldata hookData
+    ) external returns (Position memory pos, PositionId id, BalanceDelta feeAdj) {
+        PoolId poolId = poolKey.toId();
         id = PositionLibrary.generateId(owner, params);
-        Position storage pos = s.positions[id];
+        Position storage posStorage = s.positions[id];
 
         // pos.owner == address(0) means new position
-        isNewPosition = pos.owner == address(0);
-        bool isMMPosition = isNewPosition ? owner == positionManager : pos.owner == positionManager;
+        bool isNewPosition = posStorage.owner == address(0);
+        bool isMMPosition = isNewPosition ? owner == ctx.mmPositionManager : posStorage.owner == ctx.mmPositionManager;
+        bool isSeizing;
+        BalanceDelta requiredSettlementDelta;
 
-        uint128 liq = poolManager.getPositionLiquidity(poolId, PositionId.unwrap(id));
+        uint128 liq = ctx.poolManager.getPositionLiquidity(poolId, PositionId.unwrap(id));
 
         // Decode hookData using the PositionModificationHookData struct
         BalanceDelta seizureSettlementDelta = BalanceDelta.wrap(0);
@@ -723,12 +719,12 @@ library VTSPositionLib {
         if (isNewPosition) {
             // NEW POSITION: initialize the liquidity to the liquidity delta
             _registerPosition(s, owner, poolId, params);
-            _initPositionSnapshots(s, poolManager, id);
+            _initPositionSnapshots(s, ctx.poolManager, id);
             _trackCommitment(s, id, params);
 
             // Link position to commit for MM positions
             if (isMMPosition && mmData.commitId > 0) {
-                _linkPositionToCommit(s, positionManager, id, mmData.commitId);
+                _linkPositionToCommit(s, ctx.mmPositionManager, id, mmData.commitId);
             }
 
             // get the commitment maxima for the position
@@ -751,7 +747,7 @@ library VTSPositionLib {
                 _updateSettlement(s, id, 0, SafeCast.toInt256(commitmentMaxima.token0));
                 _updateSettlement(s, id, 1, SafeCast.toInt256(commitmentMaxima.token1));
             }
-        } else if (pos.isActive == true) {
+        } else if (posStorage.isActive == true) {
             // EXISTING POSITION: update the liquidity by the liquidity delta
             if (params.liquidityDelta < 0) {
                 // FULL or PARTIAL LIQUIDATION:
@@ -759,7 +755,7 @@ library VTSPositionLib {
                 // validate that RfS is closed before we track position param updates.
                 // Skip calcRFS when seizing
                 if (!isSeizing) {
-                    calcRFS(s, poolManager, id, true);
+                    calcRFS(s, ctx.poolManager, id, true);
                 }
                 _trackCommitment(s, id, params);
 
@@ -835,11 +831,11 @@ library VTSPositionLib {
             }
 
             // Update position liquidity
-            int256 newLiquidity = SafeCast.toInt256(uint256(pos.liquidity)) + params.liquidityDelta;
+            int256 newLiquidity = SafeCast.toInt256(uint256(posStorage.liquidity)) + params.liquidityDelta;
             if (newLiquidity < 0) {
-                pos.liquidity = 0;
+                posStorage.liquidity = 0;
             } else {
-                pos.liquidity = SafeCast.toUint128(uint256(newLiquidity));
+                posStorage.liquidity = SafeCast.toUint128(uint256(newLiquidity));
             }
         } else {
             revert Errors.NotActive(id);
@@ -847,13 +843,212 @@ library VTSPositionLib {
 
         // Update active status based on liquidity
         if (liq == 0) {
-            pos.isActive = false;
+            posStorage.isActive = false;
         } else {
-            pos.isActive = true;
+            posStorage.isActive = true;
         }
 
         // Process position fees - single entry point for fee processing
-        feeAdj = VTSFeeLib.processPositionFees(s, poolManager, id, currency0, currency1);
+        feeAdj = VTSFeeLib.processPositionFees(s, ctx.poolManager, id, poolKey.currency0, poolKey.currency1);
+
+        // Handle MM-specific operations
+        if (PositionModificationHookDataLib.isMMOperation(mmData) && owner == ctx.mmPositionManager) {
+            // Compute principal delta after fee adjustments
+            BalanceDelta accruedFeesAfterAdj = feesAccrued - feeAdj;
+            BalanceDelta principalDelta = callerDelta - accruedFeesAfterAdj;
+
+            // Account fee credits to MMPositionManager contract (not the locker)
+            // This creates a clear separation: MMPM deltas vs VTSO deltas
+            DynamicCurrencyDelta.accountDelta(poolKey.currency0, accruedFeesAfterAdj.amount0(), ctx.mmPositionManager);
+            DynamicCurrencyDelta.accountDelta(poolKey.currency1, accruedFeesAfterAdj.amount1(), ctx.mmPositionManager);
+
+            // Account underlying settlement delta change to MMPositionManager
+            DynamicCurrencyDelta.accountUnderlyingSettlementDeltaChange(
+                ctx.mmPositionManager, requiredSettlementDelta, poolKey.currency0, poolKey.currency1
+            );
+
+            // Handle LCC issuance/cancellation based on liquidity direction
+            if (params.liquidityDelta > 0) {
+                // Adding liquidity: Issue LCCs
+                _handleLiquidityIncrease(s, ctx, poolKey, mmData.commitId, id, params, principalDelta);
+            } else if (params.liquidityDelta < 0) {
+                // Removing liquidity: Cancel LCCs
+                _handleLiquidityDecrease(s, ctx, poolKey, id, principalDelta, requiredSettlementDelta);
+            }
+
+            // Mark RFS checkpoint
+            (bool rfsOpen,) = getRFS(s, id);
+            CheckpointLibrary._markCheckpoint(s, id, rfsOpen);
+        }
+
+        // Return the position struct
+        pos = posStorage;
+    }
+
+    // --------------------------------------------------
+    // LCC Issuance/Cancellation Helpers
+    // --------------------------------------------------
+
+    /// @notice Handle liquidity increase (mint or add liquidity) - issues LCCs
+    /// @param s The VTS storage
+    /// @param ctx The position context
+    /// @param poolKey The pool key
+    /// @param commitId The commit id
+    /// @param positionId The position id
+    /// @param params The modify liquidity params
+    /// @param principalDelta The principal delta after fee adjustments
+    function _handleLiquidityIncrease(
+        VTSStorage storage s,
+        PositionContext memory ctx,
+        PoolKey calldata poolKey,
+        uint256 commitId,
+        PositionId positionId,
+        ModifyLiquidityParams calldata params,
+        BalanceDelta principalDelta
+    ) internal {
+        // Negative delta means LP deposited tokens
+        uint256 amount0 =
+            principalDelta.amount0() < 0 ? LiquidityUtils.safeInt128ToUint256(principalDelta.amount0()) : 0;
+        uint256 amount1 =
+            principalDelta.amount1() < 0 ? LiquidityUtils.safeInt128ToUint256(principalDelta.amount1()) : 0;
+
+        _issueLCCs(
+            s,
+            ctx,
+            poolKey,
+            commitId,
+            positionId,
+            params.tickLower,
+            params.tickUpper,
+            params.liquidityDelta,
+            amount0,
+            amount1
+        );
+    }
+
+    /// @notice Handle liquidity decrease (remove liquidity or burn) - cancels LCCs
+    /// @param s The VTS storage
+    /// @param ctx The position context
+    /// @param poolKey The pool key
+    /// @param positionId The position id
+    /// @param principalDelta The principal delta after fee adjustments
+    /// @param requiredSettlementDelta The required settlement delta from touchPosition
+    function _handleLiquidityDecrease(
+        VTSStorage storage s,
+        PositionContext memory ctx,
+        PoolKey calldata poolKey,
+        PositionId positionId,
+        BalanceDelta principalDelta,
+        BalanceDelta requiredSettlementDelta
+    ) internal {
+        // Zero delta check
+        if (LiquidityUtils.isZeroDelta(principalDelta)) {
+            return;
+        }
+
+        // Clamp settlement delta by available market liquidity
+        BalanceDelta availableDelta =
+            DynamicCurrencyDelta.clampSettlementDeltaByAvailableLiquidities(ctx.marketVault, requiredSettlementDelta);
+
+        // Cancel LCCs and queue any shortfall
+        (, BalanceDelta queuedDelta) =
+            _cancelLCCs(ctx, poolKey, availableDelta, requiredSettlementDelta, principalDelta);
+
+        // Persist shortfall as credits owed by MMP to the MM
+        if (queuedDelta.amount0() > 0 || queuedDelta.amount1() > 0) {
+            DynamicCurrencyDelta.persistUnderlyingDelta(
+                s, ctx.mmPositionManager, queuedDelta, poolKey.currency0, poolKey.currency1
+            );
+        }
+    }
+
+    /// @notice Issues LCC tokens to MMP for a position
+    /// @param s The VTS storage
+    /// @param ctx The position context
+    /// @param poolKey The pool key
+    /// @param commitId The commit id
+    /// @param positionId The position id
+    /// @param tickLower The lower tick of the position
+    /// @param tickUpper The upper tick of the position
+    /// @param liquidityDelta The liquidity delta (for backing validation)
+    /// @param amount0 The amount of token0 to issue
+    /// @param amount1 The amount of token1 to issue
+    function _issueLCCs(
+        VTSStorage storage s,
+        PositionContext memory ctx,
+        PoolKey calldata poolKey,
+        uint256 commitId,
+        PositionId positionId,
+        int24 tickLower,
+        int24 tickUpper,
+        int256 liquidityDelta,
+        uint256 amount0,
+        uint256 amount1
+    ) internal {
+        // No-op if nothing to issue
+        if (amount0 == 0 && amount1 == 0) {
+            return;
+        }
+
+        // Validate commitment backing: effective LCC (including prospective) <= signal + settled
+        ModifyLiquidityParams memory params = ModifyLiquidityParams({
+            tickLower: tickLower,
+            tickUpper: tickUpper,
+            liquidityDelta: liquidityDelta,
+            salt: bytes32(0) // Not used for validation
+        });
+        VTSCommitLib.effectiveCommitmentUsdValue(s, ctx.oracleHelper, commitId, poolKey.toId(), params, true);
+
+        // Issue LCC tokens to MMP (mmPositionManager is the recipient)
+        address lcc0 = Currency.unwrap(poolKey.currency0);
+        address lcc1 = Currency.unwrap(poolKey.currency1);
+        if (amount0 > 0) {
+            ctx.liquidityHub.issue(lcc0, ctx.mmPositionManager, amount0);
+        }
+        if (amount1 > 0) {
+            ctx.liquidityHub.issue(lcc1, ctx.mmPositionManager, amount1);
+        }
+    }
+
+    /// @notice Cancels LCC tokens from MMP when liquidity is decreased
+    /// @param ctx The position context
+    /// @param poolKey The pool key
+    /// @param availableDelta The available liquidity delta (clamped by vault)
+    /// @param settlementDelta The full settlement delta requested
+    /// @param principalDelta The principal delta from the liquidity removal
+    /// @return canceledDelta The amount of LCCs cancelled
+    /// @return queuedDelta The amount queued for later (shortfall)
+    function _cancelLCCs(
+        PositionContext memory ctx,
+        PoolKey calldata poolKey,
+        BalanceDelta availableDelta,
+        BalanceDelta settlementDelta,
+        BalanceDelta principalDelta
+    ) internal returns (BalanceDelta canceledDelta, BalanceDelta queuedDelta) {
+        queuedDelta = settlementDelta - availableDelta;
+
+        // Cancel principal delta minus any shortfall
+        // The shortfall represents unavailable liquidity where LCCs remain backed by pending liquidity
+        canceledDelta = principalDelta - queuedDelta;
+
+        // Queue settlements via cancelWithQueue
+        address lcc0 = Currency.unwrap(poolKey.currency0);
+        address lcc1 = Currency.unwrap(poolKey.currency1);
+
+        ctx.liquidityHub
+            .cancelWithQueue(
+                lcc0,
+                LiquidityUtils.safeInt128ToUint256(canceledDelta.amount0()),
+                LiquidityUtils.safeInt128ToUint256(queuedDelta.amount0()),
+                ctx.mmPositionManager
+            );
+        ctx.liquidityHub
+            .cancelWithQueue(
+                lcc1,
+                LiquidityUtils.safeInt128ToUint256(canceledDelta.amount1()),
+                LiquidityUtils.safeInt128ToUint256(queuedDelta.amount1()),
+                ctx.mmPositionManager
+            );
     }
 
     // --------------------------------------------------

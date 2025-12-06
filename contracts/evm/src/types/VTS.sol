@@ -6,6 +6,9 @@ import {Commit} from "./Commit.sol";
 import {PositionId, Position} from "./Position.sol";
 import {Pool} from "./Pool.sol";
 import {RFSCheckpoint} from "./Checkpoint.sol";
+import {ILiquidityHub} from "../interfaces/ILiquidityHub.sol";
+import {IOracleHelper} from "../interfaces/IOracleHelper.sol";
+import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 
 struct TokenConfiguration {
     // Grace period time
@@ -27,6 +30,21 @@ struct MarketVTSConfiguration {
     uint16 coverageFeeShare;
     // Minimum residual liquidity units threshold for full position closure during seizure
     uint256 minResidualUnits;
+}
+
+/// @notice Context struct for position processing dependencies
+/// @dev Passed to VTSPositionLib.touchPosition to provide access to external contracts
+struct PositionContext {
+    // PoolManager for position queries and state management
+    IPoolManager poolManager;
+    // LiquidityHub for LCC issuance/cancellation
+    ILiquidityHub liquidityHub;
+    // OracleHelper for commitment validation
+    IOracleHelper oracleHelper;
+    // MM Position Manager address for delta accounting
+    address mmPositionManager;
+    // Market vault address for settlement clamping
+    address marketVault;
 }
 
 /// @notice Per-position accounting data (mirrors VTSManager per-position mappings)
