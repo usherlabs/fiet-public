@@ -35,22 +35,21 @@ import {ILiquidityHub} from "../interfaces/ILiquidityHub.sol";
 import {Errors} from "../libraries/Errors.sol";
 import {ReentrancyGuardTransient} from "openzeppelin-contracts/contracts/utils/ReentrancyGuardTransient.sol";
 import {IVTSOrchestrator} from "../interfaces/IVTSOrchestrator.sol";
+import {ImmutableState} from "v4-periphery/src/base/ImmutableState.sol";
 
-abstract contract MarketVault is IMarketVault, ReentrancyGuardTransient {
+abstract contract MarketVault is IMarketVault, ImmutableState, ReentrancyGuardTransient {
     using CurrencySettler for Currency;
 
     event SwapDeficit(PoolId indexed poolId, address indexed lccToken, address deficitRecipient, uint256 deficitAmount);
 
-    IVTSOrchestrator public immutable vtsOrchestrator;
-    IPoolManager public immutable vaultPoolManager;
     IMarketFactory public immutable marketFactory;
     ILiquidityHub public immutable liquidityHub;
+    address public immutable mmPositionManager;
 
-    constructor(address _poolManager, address _marketFactory) {
-        vaultPoolManager = IPoolManager(_poolManager);
+    constructor(address _marketFactory) {
         marketFactory = IMarketFactory(_marketFactory);
         liquidityHub = marketFactory.liquidityHub();
-        vtsOrchestrator = marketFactory.vtsOrchestrator();
+        mmPositionManager = marketFactory.mmPositionManager();
     }
 
     // Market tracking state variables
@@ -83,12 +82,8 @@ abstract contract MarketVault is IMarketVault, ReentrancyGuardTransient {
     }
 
     modifier onlyProtocolBounds() {
-        // authorises calls from protocol bounds (ie. MarketFactory, LiquidityHub, VTSOrchestrator, etc.)
-        // if (!marketFactory.bounds(msg.sender)) {
-        //     revert InvalidSender();
-        // }
         // Being explicit witn these bounds to prevent leaks.
-        if (msg.sender != (address(marketFactory)) && msg.sender != (address(vtsOrchestrator))) {
+        if (msg.sender != (address(marketFactory)) && msg.sender != (address(mmPositionManager))) {
             revert Errors.InvalidSender();
         }
         _;
@@ -118,7 +113,7 @@ abstract contract MarketVault is IMarketVault, ReentrancyGuardTransient {
      * @return The balance of the currency in the market vault
      */
     function inMarketBalanceOf(Currency currency) public view returns (uint256) {
-        return vaultPoolManager.balanceOf(address(this), currency.toId());
+        return poolManager.balanceOf(address(this), currency.toId());
     }
 
     /**
@@ -142,7 +137,7 @@ abstract contract MarketVault is IMarketVault, ReentrancyGuardTransient {
         // Burn ERC-6909 claim tokens to release the underlying ERC20 tokens from the PoolManager
         // This reduces the vault's claim on the PoolManager's balance
         underlyingCurrency.settle(
-            vaultPoolManager,
+            poolManager,
             address(this),
             amount,
             true // burn = true: burn ERC-6909 Claim Tokens
@@ -151,7 +146,7 @@ abstract contract MarketVault is IMarketVault, ReentrancyGuardTransient {
         // Transfer the released ERC20 tokens from PoolManager to the recipient
         // This claims the actual underlying tokens (not claim tokens)
         underlyingCurrency.take(
-            vaultPoolManager,
+            poolManager,
             recipient,
             amount,
             false // mint = false: claim ERC20 tokens (not mint claim tokens)
@@ -274,7 +269,7 @@ abstract contract MarketVault is IMarketVault, ReentrancyGuardTransient {
         // Transfer ERC20 tokens from sender to the PoolManager
         // This moves the actual underlying tokens into the PoolManager's custody
         underlyingCurrency.settle(
-            vaultPoolManager,
+            poolManager,
             sender,
             amount,
             false // burn = false: transfer ERC20 tokens (not burn ERC-6909 claim tokens)
@@ -283,7 +278,7 @@ abstract contract MarketVault is IMarketVault, ReentrancyGuardTransient {
         // Mint ERC-6909 claim tokens to the vault representing its claim on the deposited tokens
         // These claim tokens can later be burned to "take" (retrieve) the underlying tokens
         underlyingCurrency.take(
-            vaultPoolManager,
+            poolManager,
             address(this),
             amount,
             true // mint = true: mint ERC-6909 Claim Tokens to the vault
@@ -390,12 +385,12 @@ abstract contract MarketVault is IMarketVault, ReentrancyGuardTransient {
      *         synchronize the vault's liquidity with the PoolManager's balance changes.
      * @param data Encoded CallbackData containing sender, currencies, and balance delta
      * @return Empty bytes array (required by callback interface)
-     * @custom:reverts InvalidSender If the caller is not the vaultPoolManager
+     * @custom:reverts InvalidSender If the caller is not the poolManager
      * @custom:reverts InsufficientLiquidityToTake If negative deltas exceed available vault liquidity
      * @custom:reverts InsufficientLiquidityToSettle If positive deltas require more than available balance
      */
     function _unlockCallback(bytes memory data) internal returns (bytes memory) {
-        if (msg.sender != address(vaultPoolManager) && msg.sender != address(vtsOrchestrator)) {
+        if (msg.sender != address(poolManager)) {
             revert Errors.InvalidSender();
         }
 
@@ -449,19 +444,7 @@ abstract contract MarketVault is IMarketVault, ReentrancyGuardTransient {
      * @param balanceDelta The balance delta representing the desired liquidity changes
      */
     function _modifyVaultLiquidity(Currency currency0, Currency currency1, BalanceDelta balanceDelta) internal {
-        // if this is vts orchestrator then do not unlock the pool manager as it would have bene unlocked already by the MMPM
-        // we need all the deltas to settle in one transaction and that is checked at the end of the `modifyLiquidities` function
-        // if we run the `decommit` action with the manager unlocked and the `settle` with the manager locked
-        // then we cannot make sure teh deltas at the end balance out
-        if (msg.sender != address(vtsOrchestrator)) {
-            vaultPoolManager.unlock(abi.encode(CallbackData(msg.sender, (currency0), (currency1), balanceDelta)));
-        } else {
-            _unlockCallback(abi.encode(CallbackData(msg.sender, (currency0), (currency1), balanceDelta)));
-        }
-
-        // Account delta in VTSOrchestrator
-        vtsOrchestrator.accountDelta(currency0, -balanceDelta.amount0(), msg.sender);
-        vtsOrchestrator.accountDelta(currency1, -balanceDelta.amount1(), msg.sender);
+        _unlockCallback(abi.encode(CallbackData(msg.sender, (currency0), (currency1), balanceDelta)));
     }
 
     /**
@@ -571,7 +554,7 @@ abstract contract MarketVault is IMarketVault, ReentrancyGuardTransient {
     // Only executes on plain transaction (no selector) (ie. poolManager or WETH9 transfer of assets) to the MarketVault.
     // Mostly used to prevent accidental transfers to the vault.
     receive() external payable {
-        if (msg.sender != address(liquidityHub) && msg.sender != address(vaultPoolManager)) {
+        if (msg.sender != address(liquidityHub) && msg.sender != address(poolManager)) {
             revert Errors.InvalidEthSender();
         }
     }

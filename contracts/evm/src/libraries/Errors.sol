@@ -164,6 +164,10 @@ library Errors {
     /// @param maxPositions The maximum allowed positions per commitment
     error MaxPositionsExceeded(uint256 commitId, uint256 maxPositions);
 
+    /// @notice Thrown when attempting to decommit a signal that still has positions attached
+    /// @param tokenId The token ID of the commitment that cannot be decommitted
+    error CommitNotEmpty(uint256 tokenId);
+
     // ============ PAUSE & STATE ERRORS ============
     // Errors related to contract pause state and state transitions
 

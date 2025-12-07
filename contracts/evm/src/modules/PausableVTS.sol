@@ -5,6 +5,7 @@ import {Ownable} from "openzeppelin-contracts/contracts/access/Ownable.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {VTSStorage} from "../types/VTS.sol";
 import {Errors} from "../libraries/Errors.sol";
+import {IPausableVTS} from "../interfaces/IPausableVTS.sol";
 
 /**
  * @title PausableVTS
@@ -12,23 +13,7 @@ import {Errors} from "../libraries/Errors.sol";
  * @dev Inheriting contracts must implement _vtsStorage() to provide storage access.
  *      Pause control is restricted to contract owner (accessible via GlobalConfig.proxyCall).
  */
-abstract contract PausableVTS is Ownable {
-    // ═══════════════════════════════════════════════════════════════════════════
-    // EVENTS
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    /// @notice Emitted when a specific pool is paused
-    event PoolPaused(address indexed account, PoolId indexed poolId);
-
-    /// @notice Emitted when a specific pool is unpaused
-    event PoolUnpaused(address indexed account, PoolId indexed poolId);
-
-    /// @notice Emitted when global pause is activated
-    event GlobalPaused(address indexed account);
-
-    /// @notice Emitted when global pause is deactivated
-    event GlobalUnpaused(address indexed account);
-
+abstract contract PausableVTS is Ownable, IPausableVTS {
     // ═══════════════════════════════════════════════════════════════════════════
     // ABSTRACT STORAGE ACCESS
     // ═══════════════════════════════════════════════════════════════════════════

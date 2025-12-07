@@ -39,6 +39,7 @@ import {IVTSOrchestrator} from "./interfaces/IVTSOrchestrator.sol";
 import {Position} from "./types/Position.sol";
 import {TransientSlots} from "./libraries/TransientSlots.sol";
 import {PositionManagerLiquidity} from "./modules/PositionManagerLiquidity.sol";
+import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 
 contract MMPositionManager is
     ERC721Permit_v4,
@@ -126,6 +127,27 @@ contract MMPositionManager is
     modifier onlyIfPoolManagerLocked() {
         if (poolManager.isUnlocked()) revert Errors.PoolManagerMustBeLocked();
         _;
+    }
+
+    /// @notice Modifier to check if the commit is valid
+    modifier onlyValidCommit(PoolKey memory poolKey, uint256 tokenId) {
+        _assertSignalValid(tokenId);
+        _;
+    }
+
+    /// @notice Enforces that the commit is valid (not expired)
+    /// @param tokenId The token id (commit id) to validate
+    function _assertSignalValid(uint256 tokenId) internal view {
+        (, uint256 expiresAt,,) = vtsOrchestrator.getCommit(tokenId);
+        if (expiresAt < block.timestamp) {
+            revert Errors.SignalExpired(tokenId);
+        }
+    }
+
+    function _assertPositionForPool(PoolKey memory poolKey, Position memory position) internal view {
+        if (PoolId.unwrap(position.poolId) != PoolId.unwrap(poolKey.toId())) {
+            revert Errors.InvalidMarket(poolKey);
+        }
     }
 
     /// @notice Returns the token URI for a given token id using the commitment descriptor contract
@@ -371,7 +393,7 @@ contract MMPositionManager is
         uint8 settlementTokenIndex,
         uint32 verifierIndex,
         bytes memory settlementProof
-    ) internal {
+    ) internal onlyIfApproved(msgSender(), tokenId) onlyValidCommit(poolKey, tokenId) {
         // extend the grace period for the position
         vtsOrchestrator.extendGracePeriod(
             poolKey, tokenId, positionIndex, settlementTokenIndex, verifierIndex, settlementProof
@@ -461,31 +483,18 @@ contract MMPositionManager is
     }
 
     /**
-     * @dev This function is used to settle a position from deltas
-     * @param poolKey The pool key for the position
-     * @param tokenId The token id to settle the position for
-     * @param positionIndex The position index to settle the position for
-     * @param settleIn0 Whether to settle in token0
-     * @param settleIn1 Whether to settle in token1
+     * @dev Internal helper to get full credit from VTSOrchestrator
      */
-    function _settleFromDeltas(
-        PoolKey memory poolKey,
-        uint256 tokenId,
-        uint256 positionIndex,
-        bool settleIn0,
-        bool settleIn1
-    ) internal {
-        // Settlement happens in underlying terms, so we need to check underlying credits, not LCC credits
-        // Note: settleIn0/settleIn1 flags determine direction. After onMMSettle negates the delta:
-        //       true = negative amount = deposit (settle IN), false = positive amount = withdraw (settle OUT)
-        (uint256 fullCredit0, uint256 fullCredit1) =
-            vtsOrchestrator.getFullCreditPair(poolKey.currency0, poolKey.currency1, msgSender());
-        BalanceDelta sDelta = LiquidityUtils.safeToBalanceDelta(fullCredit0, fullCredit1, settleIn0, settleIn1);
-        _settle(poolKey, tokenId, positionIndex, sDelta.amount0(), sDelta.amount1());
+    function _getFullCreditPair(Currency currency0, Currency currency1, address owner)
+        internal
+        view
+        returns (uint256, uint256)
+    {
+        return vtsOrchestrator.getFullCreditPair(currency0, currency1, owner);
     }
 
     /**
-     * @dev This function is used to get the liquidity from deltas
+     * @dev This function is used to get the liquidity (L) from deltas of underlying currencies. ie. how much to mint/increase from what is owed.
      * @param poolKey The pool key for the position
      * @param tickLower The lower tick of the position
      * @param tickUpper The upper tick of the position
@@ -497,12 +506,15 @@ contract MMPositionManager is
         returns (uint256 liquidity)
     {
         (uint160 sqrtPriceX96,,,) = poolManager.getSlot0(poolKey.toId());
+        (uint256 credit0, uint256 credit1) = _getFullCreditPair(
+            _lccToUnderlyingCurrency(poolKey.currency0), _lccToUnderlyingCurrency(poolKey.currency1), msgSender()
+        );
         return LiquidityAmounts.getLiquidityForAmounts(
             sqrtPriceX96,
             TickMath.getSqrtPriceAtTick(tickLower),
             TickMath.getSqrtPriceAtTick(tickUpper),
-            _getFullCredit(_lccToUnderlyingCurrency(poolKey.currency0), msgSender()),
-            _getFullCredit(_lccToUnderlyingCurrency(poolKey.currency1), msgSender())
+            credit0,
+            credit1
         );
     }
 
@@ -650,11 +662,19 @@ contract MMPositionManager is
         internal
         returns (uint256)
     {
-        PositionId positionId = getPositionId(tokenId, positionIndex);
+        if (amount0 == 0 && amount1 == 0) {
+            // Cannot settle 0 amounts for both assets.
+            revert Errors.InvalidDelta(0, 0);
+        }
+
+        (Position memory position, PositionId positionId) = getPosition(tokenId, positionIndex);
+        _assertPositionForPool(poolKey, position);
+
         bool isSeizing = _isSeizing(positionId);
 
         // Access control: if not seizing, require approval
         if (!isSeizing) {
+            _assertSignalValid(tokenId);
             _assertApprovedOrOwner(msgSender(), tokenId);
         }
 
@@ -663,17 +683,19 @@ contract MMPositionManager is
         );
 
         // Determine Vault
-        address vault = marketFactory.getVault(poolKey.toId());
+        address vault = marketFactory.corePoolToProxyHook(poolKey.toId());
 
         // Handle Deposits (Pull from User)
         int128 delta0 = settlementDelta.amount0();
         int128 delta1 = settlementDelta.amount1();
 
         if (delta0 < 0) {
-            IERC20(Currency.unwrap(poolKey.currency0)).safeTransferFrom(msgSender(), address(this), uint256(-delta0));
+            IERC20(Currency.unwrap(poolKey.currency0))
+                .safeTransferFrom(msgSender(), address(this), LiquidityUtils.safeInt128ToUint256(delta0));
         }
         if (delta1 < 0) {
-            IERC20(Currency.unwrap(poolKey.currency1)).safeTransferFrom(msgSender(), address(this), uint256(-delta1));
+            IERC20(Currency.unwrap(poolKey.currency1))
+                .safeTransferFrom(msgSender(), address(this), LiquidityUtils.safeInt128ToUint256(delta1));
         }
 
         // Execute Settlement via Vault
@@ -681,10 +703,12 @@ contract MMPositionManager is
 
         // Handle Withdrawals (Push to User)
         if (usedDelta.amount0() > 0) {
-            IERC20(Currency.unwrap(poolKey.currency0)).safeTransfer(msgSender(), uint256(usedDelta.amount0()));
+            IERC20(Currency.unwrap(poolKey.currency0))
+                .safeTransfer(msgSender(), LiquidityUtils.safeInt128ToUint256(usedDelta.amount0()));
         }
         if (usedDelta.amount1() > 0) {
-            IERC20(Currency.unwrap(poolKey.currency1)).safeTransfer(msgSender(), uint256(usedDelta.amount1()));
+            IERC20(Currency.unwrap(poolKey.currency1))
+                .safeTransfer(msgSender(), LiquidityUtils.safeInt128ToUint256(usedDelta.amount1()));
         }
 
         // Return nil if no seizure.
@@ -707,11 +731,8 @@ contract MMPositionManager is
         // get the position count from the vts orchestrator
         // ? this logic would be taken out and the user would have to burn each position individually
         (,, uint256 positionCount,) = vtsOrchestrator.getCommit(tokenId);
-        for (uint256 i = 0; i < positionCount; i++) {
-            (Position memory position,) = getPosition(tokenId, i);
-            if (position.isActive) {
-                _burnPositionInternal(poolKey, tokenId, i);
-            }
+        if (positionCount > 0) {
+            revert Errors.CommitNotEmpty(tokenId);
         }
 
         // burn the nft after removing all of the liquidity
@@ -729,14 +750,18 @@ contract MMPositionManager is
     function _burnPosition(PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex)
         internal
         onlyIfApproved(msgSender(), tokenId)
+        onlyValidCommit(poolKey, tokenId)
     {
-        _burnPositionInternal(poolKey, tokenId, positionIndex);
-    }
-
-    function _burnPositionInternal(PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex) internal {
         (Position memory pos,) = getPosition(tokenId, positionIndex);
         uint256 completeLiquidity = uint256(pos.liquidity);
-        _decrease(poolKey, tokenId, positionIndex, completeLiquidity);
+        _decreaseInternal(
+            poolKey,
+            tokenId,
+            positionIndex,
+            PositionLibrary.generateSalt(tokenId, positionIndex),
+            completeLiquidity,
+            Constants.ZERO_BYTES
+        );
     }
 
     /**
@@ -753,7 +778,7 @@ contract MMPositionManager is
         int24 tickLower,
         int24 tickUpper,
         uint256 liquidity
-    ) internal onlyIfApproved(msgSender(), tokenId) {
+    ) internal onlyIfApproved(msgSender(), tokenId) onlyValidCommit(poolKey, tokenId) {
         _increaseInternal(poolKey, tokenId, positionIndex, tickLower, tickUpper, liquidity);
     }
 
@@ -819,8 +844,7 @@ contract MMPositionManager is
         uint256 positionIndex,
         int24 tickLower,
         int24 tickUpper
-    ) internal onlyIfApproved(msgSender(), tokenId) {
-        // onlyValidCommit(poolKey, tokenId)
+    ) internal onlyIfApproved(msgSender(), tokenId) onlyValidCommit(poolKey, tokenId) {
         // Compute liquidity from LCC credits (via router helper)
         uint256 liquidityFromDeltas = _getLiquidityFromDeltas(poolKey, tickLower, tickUpper);
 
@@ -837,11 +861,38 @@ contract MMPositionManager is
     function _mintFromDeltas(PoolKey memory poolKey, uint256 tokenId, int24 tickLower, int24 tickUpper)
         internal
         onlyIfApproved(msgSender(), tokenId)
+        onlyValidCommit(poolKey, tokenId)
     {
         // Compute underying liquidity from credits (via router helper)
         uint256 liquidityFromDeltas = _getLiquidityFromDeltas(poolKey, tickLower, tickUpper);
 
         _mintPositionInternal(poolKey, tokenId, tickLower, tickUpper, liquidityFromDeltas);
+    }
+
+    /**
+     * @dev This function is used to settle a position from deltas
+     * @param poolKey The pool key for the position
+     * @param tokenId The token id to settle the position for
+     * @param positionIndex The position index to settle the position for
+     * @param settleIn0 Whether to settle in token0
+     * @param settleIn1 Whether to settle in token1
+     */
+    function _settleFromDeltas(
+        PoolKey memory poolKey,
+        uint256 tokenId,
+        uint256 positionIndex,
+        bool settleIn0,
+        bool settleIn1
+    ) internal {
+        // Settlement happens in underlying terms, so we need to check underlying credits, not LCC credits
+        // Note: settleIn0/settleIn1 flags determine direction. After onMMSettle negates the delta:
+        //       true = negative amount = deposit (settle IN), false = positive amount = withdraw (settle OUT)
+        (uint256 credit0, uint256 credit1) = _getFullCreditPair(
+            _lccToUnderlyingCurrency(poolKey.currency0), _lccToUnderlyingCurrency(poolKey.currency1), msgSender()
+        );
+        BalanceDelta sDelta = LiquidityUtils.safeToBalanceDelta(credit0, credit1, settleIn0, settleIn1);
+
+        _settle(poolKey, tokenId, positionIndex, sDelta.amount0(), sDelta.amount1());
     }
 
     /**
@@ -910,9 +961,10 @@ contract MMPositionManager is
     function _decrease(PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex, uint256 amountToDecrease)
         internal
         onlyIfApproved(msgSender(), tokenId)
+        onlyValidCommit(poolKey, tokenId)
     {
         // For seizure, hookData is prepared in _seizePosition and passed directly to _decreaseInternal
-        // Call internal logic
+        // Call internal logic - incl. getPosition which validates.
         _decreaseInternal(
             poolKey,
             tokenId,

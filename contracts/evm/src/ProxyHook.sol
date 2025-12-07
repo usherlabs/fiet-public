@@ -62,7 +62,7 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
 
     constructor(address _poolManager, address _marketFactory)
         BaseHook(IPoolManager(_poolManager))
-        MarketVault(_poolManager, _marketFactory)
+        MarketVault(_marketFactory)
     {}
 
     function _underlying() internal view override returns (Currency currency0, Currency currency1) {

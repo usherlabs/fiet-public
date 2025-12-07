@@ -14,6 +14,7 @@ import {ILCC} from "../interfaces/ILCC.sol";
 import {IMarketVault} from "../interfaces/IMarketVault.sol";
 import {VTSStorage} from "../types/VTS.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {console} from "forge-std/console.sol";
 
 /// @title DynamicCurrencyDelta
 /// @notice Library for managing currency deltas and underlying settlement in VTS
@@ -321,8 +322,34 @@ library DynamicCurrencyDelta {
         }
     }
 
+    /// @notice Accounts settlement delta change on underlying currencies for a target address
+    /// @dev Converts LCC currencies to their underlying currencies and accounts the delta.
+    ///      Used to track what underlying assets are owed/credited during settlement operations.
+    /// @param target The address to account the delta for
+    /// @param settlementDelta The settlement delta to account (negative = deposit, positive = withdrawal)
+    /// @param lccCurrency0 The first LCC currency
+    /// @param lccCurrency1 The second LCC currency
+    function accountUnderlyingSettlementDeltaChange(
+        address target,
+        BalanceDelta settlementDelta,
+        Currency lccCurrency0,
+        Currency lccCurrency1
+    ) internal {
+        Currency underlyingCurrency0 = lccToUnderlyingCurrency(lccCurrency0);
+        Currency underlyingCurrency1 = lccToUnderlyingCurrency(lccCurrency1);
+
+        int128 amount0 = settlementDelta.amount0();
+        int128 amount1 = settlementDelta.amount1();
+
+        if (amount0 != 0) {
+            accountDelta(underlyingCurrency0, amount0, target);
+        }
+        if (amount1 != 0) {
+            accountDelta(underlyingCurrency1, amount1, target);
+        }
+    }
+
     /// @notice Asserts that there are no nonzero deltas
-    /// @param s The VTS storage
     function assertNonZeroDeltas() internal view {
         if (NonzeroDeltaCount.read() > 0) {
             // TODO: include revert after clamping deltas is implemented

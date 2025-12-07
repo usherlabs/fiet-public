@@ -139,7 +139,7 @@ library CheckpointLibrary {
      * @param positionId The position ID to mark the checkpoint for
      * @param isOpen Whether the checkpoint should be marked as open (true) or closed (false)
      */
-    function _markCheckpoint(VTSStorage storage s, PositionId positionId, bool isOpen) internal {
+    function markCheckpoint(VTSStorage storage s, PositionId positionId, bool isOpen) internal {
         s.checkpoints[PositionId.unwrap(positionId)].mark(isOpen);
     }
 
@@ -151,7 +151,7 @@ library CheckpointLibrary {
      * @param commitId The commit ID containing the position
      * @param positionIndex The index of the position within the commit
      */
-    function _forceOpenAndElapse(VTSStorage storage s, uint256 commitId, uint256 positionIndex) internal {
+    function forceOpenAndElapse(VTSStorage storage s, uint256 commitId, uint256 positionIndex) internal {
         PositionId positionId = s.commits[commitId].positions[positionIndex];
 
         // Backdate by the larger of the two token max grace windows plus 1 second

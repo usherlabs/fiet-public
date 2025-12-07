@@ -44,12 +44,14 @@ import {RFSCheckpoint} from "./types/Checkpoint.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {MarketHandler} from "./modules/MarketHandler.sol";
 import {CurrencyDelta} from "v4-periphery/lib/v4-core/src/libraries/CurrencyDelta.sol";
+import {VTSCurrencyDelta} from "./modules/VTSCurrencyDelta.sol";
+import {Ownable} from "openzeppelin-contracts/contracts/access/Ownable.sol";
 
 /// @title VTSOrchestrator
 /// @notice Central state management layer and orchestrator for VTS logic
 /// @dev Adopts Bunni-style pattern: state managed in VTSStorage struct, complex logic delegated to linked libraries
 /// @author Fiet Protocol
-contract VTSOrchestrator is MarketHandler, PausableVTS, ImmutableState, IVTSOrchestrator {
+contract VTSOrchestrator is MarketHandler, PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSOrchestrator {
     using CurrencyLibrary for Currency;
     using CurrencyDelta for Currency;
     using StateLibrary for IPoolManager;
@@ -82,7 +84,7 @@ contract VTSOrchestrator is MarketHandler, PausableVTS, ImmutableState, IVTSOrch
         address _oracleHelper,
         address _liquidityHub,
         address _settlementObserver
-    ) Ownable(_msgSender()) MarketHandler(_marketFactory) ImmutableState(IPoolManager(_poolManager)) {
+    ) Ownable(msg.sender) MarketHandler(_marketFactory) ImmutableState(IPoolManager(_poolManager)) {
         if (_poolManager == address(0)) {
             revert Errors.InvalidAddress(_poolManager);
         }
@@ -112,12 +114,6 @@ contract VTSOrchestrator is MarketHandler, PausableVTS, ImmutableState, IVTSOrch
         _;
     }
 
-    /// @notice Modifier to check if the commit is valid
-    modifier onlyValidCommit(uint256 commitId) {
-        _assertSignalValid(commitId);
-        _;
-    }
-
     /// @notice Modifier to check if caller is MM Position Manager
     modifier onlyMMPosition(PositionId positionId) {
         if (!_isMMPosition(positionId)) {
@@ -139,16 +135,8 @@ contract VTSOrchestrator is MarketHandler, PausableVTS, ImmutableState, IVTSOrch
     // ═══════════════════════════════════════════════════════════════════════════
 
     /// @inheritdoc PausableVTS
-    function _vtsStorage() internal view override returns (VTSStorage storage) {
+    function _vtsStorage() internal view override(PausableVTS, VTSCurrencyDelta) returns (VTSStorage storage) {
         return s;
-    }
-
-    /// @notice Asserts that the signal is valid
-    /// @param commitId The commit ID
-    function _assertSignalValid(uint256 commitId) internal view {
-        if (s.commits[commitId].expiresAt < block.timestamp) {
-            revert Errors.SignalExpired(commitId);
-        }
     }
 
     /// @notice Check if a position is MM-managed
@@ -429,79 +417,6 @@ contract VTSOrchestrator is MarketHandler, PausableVTS, ImmutableState, IVTSOrch
         commitId = VTSCommitLib.commitSignal(s, IVRLSignalManager(signalManager), liquiditySignal);
     }
 
-    /// @notice Gets the full credit for a currency and an owner
-    /// @param currency The currency
-    /// @param owner The owner of the credit
-    /// @return The full credit for the currency
-    function getFullCredit(Currency currency, address owner) public view returns (uint256) {
-        return DynamicCurrencyDelta.getFullCredit(currency, owner);
-    }
-
-    /// @notice Gets the full credit for a currency and an owner
-    /// @param currency The currency
-    /// @param owner The owner of the credit
-    /// @return The full credit for the currency
-    function getFullDebt(Currency currency, address owner) public view returns (uint256) {
-        return DynamicCurrencyDelta.getFullCredit(currency, owner);
-    }
-
-    /// @notice Gets the full credit for a pair of currencies and an owner
-    /// @param currency0 The first currency
-    /// @param currency1 The second currency
-    /// @param owner The owner of the credit
-    /// @return The full credit for the pair of currencies
-    function getFullCreditPair(Currency currency0, Currency currency1, address owner)
-        public
-        view
-        returns (uint256, uint256)
-    {
-        return (
-            DynamicCurrencyDelta.getFullCredit(currency0, owner), DynamicCurrencyDelta.getFullCredit(currency1, owner)
-        );
-    }
-
-    /// @notice Gets the full credit for a pair of currencies and an owner
-    /// @param currency0 The first currency
-    /// @param currency1 The second currency
-    /// @param owner The owner of the credit
-    /// @return The full credit for the pair of currencies
-    function getFullDebtPair(Currency currency0, Currency currency1, address owner)
-        public
-        view
-        returns (uint256, uint256)
-    {
-        return (DynamicCurrencyDelta.getFullDebt(currency0, owner), DynamicCurrencyDelta.getFullDebt(currency1, owner));
-    }
-
-    /// @notice Primes the underlying delta for a currency and an owner
-    /// @param sender The sender of the prime
-    /// @param lcc The currency to prime the underlying delta for
-    function primeUnderlyingDelta(address sender, Currency lcc) external {
-        DynamicCurrencyDelta.primeUnderlyingDelta(s, sender, lcc, address(this));
-    }
-
-    /// @notice Takes a currency from an owner to a recipient
-    /// @param currency The currency to take
-    /// @param sender The sender of the take
-    /// @param to The recipient of the take
-    /// @param maxAmount The maximum amount to take
-    function take(Currency currency, address sender, address to, uint256 maxAmount) public {
-        DynamicCurrencyDelta.take(currency, sender, to, maxAmount);
-    }
-
-    /// @notice Gets the underlying delta pair for a user
-    /// @param user The user to get the underlying delta pair for
-    /// @param currency0 The first currency
-    /// @param currency1 The second currency
-    /// @return The underlying delta pair for the user
-    function getUnderlyingDeltaPair(address user, address currency0, address currency1)
-        public
-        view
-        returns (BalanceDelta)
-    {
-        return DynamicCurrencyDelta.getUnderlyingDeltaPair(user, Currency.wrap(currency0), Currency.wrap(currency1));
-    }
-
     /// @notice Extends the grace period for a position
     /// @param poolKey The pool key for the position
     /// @param commitId The commit id of the position
@@ -516,7 +431,7 @@ contract VTSOrchestrator is MarketHandler, PausableVTS, ImmutableState, IVTSOrch
         uint8 settlementTokenIndex,
         uint32 verifierIndex,
         bytes memory settlementProof
-    ) public {
+    ) external onlyMMPositionManager {
         // validate position exists
         PositionId positionId = getPositionId(commitId, positionIndex);
         if (PositionId.unwrap(positionId) == bytes32(0)) {
@@ -558,14 +473,9 @@ contract VTSOrchestrator is MarketHandler, PausableVTS, ImmutableState, IVTSOrch
         onlyMMPositionManager
         returns (BalanceDelta settlementDelta, bool rfsOpen, uint256 seizedLiquidityUnits)
     {
-        (
-            settlementDelta, rfsOpen, seizedLiquidityUnits
-        ) =
-            VTSPositionLib.onMMSettle(
-                s, poolManager, positionId, currency0, currency1, amountDelta, isSeizing, mmPositionManager
-            );
-
-        _markCheckpoint(positionId, rfsOpen);
+        return VTSPositionLib.onMMSettle(
+            s, poolManager, positionId, currency0, currency1, amountDelta, isSeizing, mmPositionManager
+        );
     }
 
     /// @notice This function is called by the MMPositionManager to validate the grace period has elapsed
@@ -605,33 +515,16 @@ contract VTSOrchestrator is MarketHandler, PausableVTS, ImmutableState, IVTSOrch
         );
     }
 
-    /**
-     * @dev This function is used to check if the position is being seized
-     * @param positionId The position id to check if it is being seized
-     * @return bool True if the position is being seized, false otherwise
-     */
-    function _isSeizing(PositionId positionId) internal view returns (bool) {
-        PositionId seizedPositionId = TransientSlots.getSeizedPositionId();
-        return PositionId.unwrap(seizedPositionId) == PositionId.unwrap(positionId);
-    }
-
     // --------------------------------------------------
     // Checkpoint Helper Functions
     // --------------------------------------------------
-
-    /// @notice Marks a checkpoint for a given position
-    /// @param positionId The position ID
-    /// @param isOpen The state of the checkpoint
-    function _markCheckpoint(PositionId positionId, bool isOpen) internal {
-        CheckpointLibrary._markCheckpoint(s, positionId, isOpen);
-    }
 
     /// @notice Marks a checkpoint for a given commit position. Only callable by the MMPositionManager.
     /// @param commitId The commitment identifier (ERC721 token id at MMPM)
     /// @param positionIndex The index of the position within the commitment
     function markCheckpoint(uint256 commitId, uint256 positionIndex) external onlyMMPositionManager {
         (PositionId positionId, bool rfsOpen,) = calcRFS(commitId, positionIndex, false);
-        _markCheckpoint(positionId, rfsOpen);
+        CheckpointLibrary.markCheckpoint(s, positionId, rfsOpen);
     }
 
     /// @notice Gets the checkpoint for a given position
@@ -639,10 +532,6 @@ contract VTSOrchestrator is MarketHandler, PausableVTS, ImmutableState, IVTSOrch
     /// @return checkpoint The checkpoint for the position
     function positionToCheckpoint(PositionId positionId) public view returns (RFSCheckpoint memory) {
         return s.checkpoints[PositionId.unwrap(positionId)];
-    }
-
-    function assertNonZeroDeltas() external view {
-        DynamicCurrencyDelta.assertNonZeroDeltas(s);
     }
 
     // --------------------------------------------------

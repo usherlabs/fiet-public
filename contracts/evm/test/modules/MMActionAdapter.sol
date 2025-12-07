@@ -288,6 +288,20 @@ library MMActionAdapter {
             });
     }
 
+    /**
+     * @notice Prepares an UNWRAP_LCC action
+     */
+    function prepareUnwrapLCC(address lcc, uint256 amount, address recipient, bool payerIsUser)
+        internal
+        pure
+        returns (PreparedAction memory)
+    {
+        return PreparedAction({
+            action: bytes1(uint8(MMPositionManager.MMAction.UNWRAP_LCC)),
+            params: abi.encode(lcc, amount, recipient, payerIsUser)
+        });
+    }
+
     // ============ CONVENIENCE METHODS (for backward compatibility) ============
 
     /**
@@ -419,6 +433,18 @@ library MMActionAdapter {
     function unwrapNative(MMPositionManager mmpm, uint256 amount) internal {
         PreparedAction[] memory prepared = new PreparedAction[](1);
         prepared[0] = prepareUnwrapNative(amount);
+        execute(mmpm, prepared);
+    }
+
+    /**
+     * @notice Unwraps LCC tokens (single action execution)
+     * @dev For backward compatibility - use prepareUnwrapLCC + execute for batching
+     */
+    function unwrapLCC(MMPositionManager mmpm, address lcc, uint256 amount, address recipient, bool payerIsUser)
+        internal
+    {
+        PreparedAction[] memory prepared = new PreparedAction[](1);
+        prepared[0] = prepareUnwrapLCC(lcc, amount, recipient, payerIsUser);
         execute(mmpm, prepared);
     }
 

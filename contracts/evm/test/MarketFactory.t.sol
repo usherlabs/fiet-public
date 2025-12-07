@@ -29,6 +29,8 @@ import {Errors} from "../src/libraries/Errors.sol";
 import {CurrencySortHelper} from "../script/libraries/CurrencySortHelper.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {VTSOrchestrator} from "../src/VTSOrchestrator.sol";
+import {VRLSettlementObserver} from "../src/VRLSettlementObserver.sol";
+import {IVRLSettlementObserver} from "../src/interfaces/IVRLSettlementObserver.sol";
 
 contract MarketFactoryTest is Test, Deployers {
     using PoolIdLibrary for PoolKey;
@@ -42,6 +44,7 @@ contract MarketFactoryTest is Test, Deployers {
     MockERC20 token0;
     MockERC20 token1;
     address owner = makeAddr("owner");
+    VTSOrchestrator vtsOrchestrator;
 
     function setUp() public {
         poolManager = IPoolManager(makeAddr("poolManager"));
@@ -81,11 +84,19 @@ contract MarketFactoryTest is Test, Deployers {
             abi.encode(liquidityHubAddress)
         );
 
-        address vtsOrchestrator = address(makeAddr("vtsOrchestrator"));
-        vm.mockCall(
-            vtsOrchestrator,
-            abi.encodeWithSelector(VTSOrchestrator.setMarketVTSConfiguration.selector),
-            abi.encode(true)
+        // Deploy VRLSettlementObserver
+        vm.prank(owner);
+        IVRLSettlementObserver settlementObserver = new VRLSettlementObserver();
+
+        // Deploy VTSOrchestrator
+        vm.prank(owner);
+        vtsOrchestrator = new VTSOrchestrator(
+            address(poolManager),
+            tempFactoryAddr, // temporary address, will be updated after factory deployment
+            makeAddr("signalManager"),
+            oracleHelperAddress,
+            liquidityHubAddress,
+            address(settlementObserver)
         );
 
         vm.prank(owner);
@@ -93,7 +104,7 @@ contract MarketFactoryTest is Test, Deployers {
             address(poolManager),
             makeAddr("signalManager"),
             tempFactoryAddr, // temporary address, will be updated after factory deployment
-            makeAddr("vtsOrchestrator"),
+            address(vtsOrchestrator),
             commitmentDescriptor,
             weth9
         );
@@ -105,14 +116,14 @@ contract MarketFactoryTest is Test, Deployers {
             liquidityHubAddress,
             oracleHelperAddress,
             address(positionManager),
-            address(makeAddr("vtsOrchestrator")),
+            address(vtsOrchestrator),
             bounds
         );
 
         // Deploy CoreHook at computed address
         deployCodeTo(
             "CoreHook.sol:CoreHook",
-            abi.encode(poolManager, address(factory), address(positionManager), address(makeAddr("vtsOrchestrator"))),
+            abi.encode(poolManager, address(factory), address(positionManager), address(vtsOrchestrator)),
             coreHookAddr
         );
 
@@ -242,73 +253,6 @@ contract MarketFactoryTest is Test, Deployers {
         factory.addBounds(bounds);
 
         assertTrue(factory.bounds(boundAddr));
-    }
-
-    function testPauseMarket() public {
-        vm.mockCall(
-            address(poolManager), abi.encodeWithSelector(IPoolManager.initialize.selector), abi.encode(bytes32(0))
-        );
-
-        vm.prank(owner);
-        (PoolId coreId,) = factory.createMarket(
-            address(token0),
-            address(token1),
-            3000,
-            60,
-            79228162514264337593543950336,
-            salt,
-            VTSConfigs.getDefaultConfig()
-        );
-
-        // Non-owner cannot pause
-        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(this)));
-        factory.pause(coreId);
-
-        // Owner can pause
-        vm.prank(owner);
-        factory.pause(coreId);
-
-        assertTrue(CoreHook(coreHookAddr).paused(coreId));
-
-        // Cannot re-pause
-        vm.prank(owner);
-        vm.expectRevert(abi.encodeWithSelector(Errors.EnforcedPause.selector));
-        factory.pause(coreId);
-    }
-
-    function testUnpauseMarket() public {
-        vm.mockCall(
-            address(poolManager), abi.encodeWithSelector(IPoolManager.initialize.selector), abi.encode(bytes32(0))
-        );
-
-        vm.prank(owner);
-        (PoolId coreId,) = factory.createMarket(
-            address(token0),
-            address(token1),
-            3000,
-            60,
-            79228162514264337593543950336,
-            salt,
-            VTSConfigs.getDefaultConfig()
-        );
-
-        vm.prank(owner);
-        factory.pause(coreId);
-
-        // Non-owner cannot unpause
-        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(this)));
-        factory.unpause(coreId);
-
-        // Owner can unpause
-        vm.prank(owner);
-        factory.unpause(coreId);
-
-        assertFalse(CoreHook(coreHookAddr).paused(coreId));
-
-        // Cannot re-unpause
-        vm.prank(owner);
-        vm.expectRevert(abi.encodeWithSelector(Errors.ExpectedPause.selector));
-        factory.unpause(coreId);
     }
 
     /**

@@ -65,7 +65,7 @@ library VTSCommitLib {
         PoolId poolId,
         uint8 tokenIndex,
         uint256 coveredAmount
-    ) public {
+    ) external {
         if (tokenIndex > 1 || coveredAmount == 0) return;
         uint128 liq = StateLibrary.getLiquidity(poolManager, poolId);
         PoolAccounting storage paPool = s.poolAccounting[poolId];
@@ -92,7 +92,7 @@ library VTSCommitLib {
         IVRLSignalManager signalManager, // Pass as parameter
         bytes memory liquiditySignal
     )
-        public
+        external
         returns (uint256 tokenId)
     {
         // validate the liquidity signal was actually provided
@@ -125,7 +125,7 @@ library VTSCommitLib {
         address mmPositionManager,
         PositionId[] memory ids,
         uint256 totalDeficitBps
-    ) public {
+    ) external {
         _applyCommitmentDeficit(s, mmPositionManager, ids, totalDeficitBps);
     }
 
@@ -198,7 +198,7 @@ library VTSCommitLib {
         PoolId commitPoolId,
         ModifyLiquidityParams memory params,
         bool errorIfInsufficientBacking
-    ) public view returns (uint256 potentialIssuedUsd, uint256 settledUsd, uint256 signalUsd) {
+    ) external view returns (uint256 potentialIssuedUsd, uint256 settledUsd, uint256 signalUsd) {
         potentialIssuedUsd = _potentialIssuedUSDValue(s, oracleHelper, tokenId, commitPoolId, params);
         settledUsd = _settledUSDValue(s, oracleHelper, tokenId);
         signalUsd = _signalUSDValue(s, oracleHelper, tokenId);
@@ -210,6 +210,14 @@ library VTSCommitLib {
         }
     }
 
+    /// @notice Calculates the total USD value of a commitment
+    /// @param s The central VTS storage
+    /// @param oracleHelper The oracle helper for USD price calculations
+    /// @param tokenId The commit NFT id
+    /// @param errorIfInsufficientBacking Whether to revert if the commitment is insufficient
+    /// @return issuedUsd The USD value of the issued commitment maxima
+    /// @return settledUsd The USD value of the settled amounts
+    /// @return signalUsd The USD value of the signal reserves
     function _totalCommitmentUsdValue(
         VTSStorage storage s,
         IOracleHelper oracleHelper,
@@ -232,6 +240,7 @@ library VTSCommitLib {
     /// @param oracleHelper The oracle helper for USD price calculations
     /// @param tokenId The commit NFT id
     /// @return totalUsdValue Total USD value of commitment maxima (averaged)
+    // TODO: Update to use running totals.
     function _potentialIssuedUSDValue(
         VTSStorage storage s,
         IOracleHelper oracleHelper,
@@ -384,7 +393,7 @@ library VTSCommitLib {
     /// @param poolKey The pool key
     /// @param vtsConfiguration The VTS configuration
     function initPool(VTSStorage storage s, PoolKey memory poolKey, MarketVTSConfiguration memory vtsConfiguration)
-        public
+        external
     {
         // initialize the market details in the VTS state
         s.pools[poolKey.toId()] = Pool({
@@ -400,87 +409,6 @@ library VTSCommitLib {
         );
     }
 
-    /// @notice Issues tokens to the pool
-    /// @param s The central VTS storage
-    /// @param oracleHelper The oracle helper
-    /// @param liquidityHub The liquidity hub
-    /// @param poolKey The pool key
-    /// @param params The modify liquidity parameters
-    /// @param positionManager The position manager (LP owner)
-    /// @param commitId The commit id
-    /// @param a0 The amount of token0 to issue
-    /// @param a1 The amount of token1 to issue
-    /// @return positionId The position id
-    function _issueTokens(
-        VTSStorage storage s,
-        IOracleHelper oracleHelper,
-        ILiquidityHub liquidityHub,
-        PoolKey memory poolKey,
-        ModifyLiquidityParams memory params,
-        address positionManager,
-        uint256 commitId,
-        uint256 a0,
-        uint256 a1
-    ) internal returns (PositionId positionId) {
-        positionId = PositionLibrary.generateId(positionManager, params);
-
-        // Prevent overflow when converting to int256/int128 for modifyLiquidity
-        if (uint256(params.liquidityDelta) > type(uint128).max) {
-            revert Errors.InvalidAmount(uint256(params.liquidityDelta), type(uint128).max);
-        }
-
-        // derive the principal delta from the effective token amounts
-        if (uint256(params.liquidityDelta) == 0 || (a0 == 0 && a1 == 0)) {
-            return positionId;
-        }
-
-        // validate the commitment backing
-        // Backing gate: effective LCC (including prospective) <= signal + settled
-        effectiveCommitmentUsdValue(s, oracleHelper, commitId, poolKey.toId(), params, true);
-
-        // issue the lcc tokens to be injected into the pool
-        address lcc0 = Currency.unwrap(poolKey.currency0);
-        address lcc1 = Currency.unwrap(poolKey.currency1);
-        if (a0 > 0) {
-            liquidityHub.issue(lcc0, positionManager, a0);
-        }
-        if (a1 > 0) {
-            liquidityHub.issue(lcc1, positionManager, a1);
-        }
-    }
-
-    function _decreasePosition(
-        address positionManager,
-        ILiquidityHub liquidityHub,
-        BalanceDelta availableDelta,
-        BalanceDelta settlementDelta,
-        BalanceDelta principalDelta,
-        PoolKey memory poolKey
-    ) internal returns (BalanceDelta cancelDelta, BalanceDelta diff) {
-        diff = settlementDelta - availableDelta;
-
-        // Cancel principal delta minus any shortfall. The shortfall represents unavailable liquidity
-        // where LCCs remain backed by pending liquidity to the protocol.
-        cancelDelta = principalDelta - diff;
-
-        // Queue settlements via cancelWithQueue
-        address lcc0 = Currency.unwrap(poolKey.currency0);
-        address lcc1 = Currency.unwrap(poolKey.currency1);
-
-        liquidityHub.cancelWithQueue(
-            lcc0,
-            LiquidityUtils.safeInt128ToUint256(cancelDelta.amount0()),
-            LiquidityUtils.safeInt128ToUint256(diff.amount0()),
-            positionManager
-        );
-        liquidityHub.cancelWithQueue(
-            lcc1,
-            LiquidityUtils.safeInt128ToUint256(cancelDelta.amount1()),
-            LiquidityUtils.safeInt128ToUint256(diff.amount1()),
-            positionManager
-        );
-    }
-
     /// @notice Declares a commitment deficit for a position
     /// @param s The central VTS storage
     function declareCommitmentDeficit(
@@ -491,7 +419,7 @@ library VTSCommitLib {
         IVRLSignalManager signalManager,
         IOracleHelper oracleHelper,
         bytes memory liquiditySignal
-    ) public {
+    ) external {
         // Verify the new liquidity signal provided
         if (liquiditySignal.length == 0) {
             revert Errors.InvalidLiquiditySignal(0, 0);
@@ -542,7 +470,7 @@ library VTSCommitLib {
         for (uint256 i = 0; i < n; i++) {
             ids[i] = s.commits[tokenId].positions[i];
             // Force open and elapse grace for immediate seizure across all positions in this commitment
-            CheckpointLibrary._forceOpenAndElapse(s, tokenId, i);
+            CheckpointLibrary.forceOpenAndElapse(s, tokenId, i);
         }
         _applyCommitmentDeficit(s, positionManager, ids, totalDeficitBps);
     }
@@ -553,7 +481,7 @@ library VTSCommitLib {
         IOracleHelper oracleHelper,
         uint256 tokenId,
         bytes memory liquiditySignal
-    ) public {
+    ) external {
         if (liquiditySignal.length == 0) {
             revert Errors.InvalidLiquiditySignal(0, 0);
         }

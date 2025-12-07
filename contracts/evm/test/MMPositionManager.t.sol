@@ -47,6 +47,9 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
     LiquidityCommitmentCertificate internal lcc0;
     LiquidityCommitmentCertificate internal lcc1;
 
+    Currency internal lccCurrency0;
+    Currency internal lccCurrency1;
+
     address guarantor = makeAddr("guarantor");
     uint256 guarantorInitialBalance = 10000e18;
 
@@ -57,6 +60,8 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         positionManager = MMPositionManager(payable(mmPositionManager));
         lcc0 = LiquidityCommitmentCertificate(payable(Currency.unwrap(_currency2)));
         lcc1 = LiquidityCommitmentCertificate(payable(Currency.unwrap(_currency3)));
+        lccCurrency0 = Currency.wrap(address(lcc0));
+        lccCurrency1 = Currency.wrap(address(lcc1));
 
         marketVTSConfiguration = vtsOrchestrator.getMarketVTSConfiguration(corePoolKey.toId());
 
@@ -433,7 +438,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         // get total settlement for position from mmpm
         BalanceDelta settlementDeltaBeforeDecommit =
-            vtsOrchestrator.getSettlementDelta(address(this), address(lcc0), address(lcc1));
+            vtsOrchestrator.getUnderlyingDeltaPair(address(this), lccCurrency0, lccCurrency1);
 
         console.log("settlementDeltaBeforeDecommit.amount0()", settlementDeltaBeforeDecommit.amount0());
         console.log("settlementDeltaBeforeDecommit.amount1()", settlementDeltaBeforeDecommit.amount1());
@@ -446,7 +451,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         _decommitAndWithdrawDeltas(positionManager, corePoolKey, tokenId, 0, false, false);
 
         BalanceDelta settlementDeltaAfterDecommit =
-            vtsOrchestrator.getSettlementDelta(address(this), address(lcc0), address(lcc1));
+            vtsOrchestrator.getUnderlyingDeltaPair(address(this), lccCurrency0, lccCurrency1);
 
         // get underlying asset balance after decommitment
         uint256 token0BalanceAfter = Currency.wrap(lcc0.underlying()).balanceOf(address(this));
@@ -504,7 +509,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             -int128(int256(settlementAmount1))
         );
 
-        Position memory positionBeforeIncrease = positionManager.getPosition(tokenId, positionIndex);
+        (Position memory positionBeforeIncrease,) = positionManager.getPosition(tokenId, positionIndex);
 
         // increase the liquidity in the position
         uint256 liquidityToIncrease = 1000;
@@ -519,7 +524,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         );
 
         // validate the liquidity in the position is increased
-        Position memory positionAfterIncrease = positionManager.getPosition(tokenId, positionIndex);
+        (Position memory positionAfterIncrease,) = positionManager.getPosition(tokenId, positionIndex);
         assertEq(
             uint256(positionAfterIncrease.liquidity), uint256(positionBeforeIncrease.liquidity) + liquidityToIncrease
         );
@@ -560,7 +565,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             -int128(int256(settlementAmount1))
         );
 
-        Position memory positionBeforeDecrease = positionManager.getPosition(tokenId, positionIndex);
+        (Position memory positionBeforeDecrease,) = positionManager.getPosition(tokenId, positionIndex);
 
         // increase the liquidity in the position
         uint256 liquidityToDecrease = 10000000;
@@ -577,14 +582,14 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         );
 
         // validate the liquidity in the position is decreased
-        Position memory positionAfterIncrease = positionManager.getPosition(tokenId, positionIndex);
+        (Position memory positionAfterIncrease,) = positionManager.getPosition(tokenId, positionIndex);
         assertEq(
             uint256(positionAfterIncrease.liquidity), uint256(positionBeforeDecrease.liquidity) - liquidityToDecrease
         );
 
         // validate the new position was created with the new ticks provided
         uint256 newPositionIndex = 1;
-        Position memory newPosition = positionManager.getPosition(tokenId, newPositionIndex);
+        (Position memory newPosition,) = positionManager.getPosition(tokenId, newPositionIndex);
         assertEq(newPosition.tickLower, liquidityParams.tickLower);
         assertEq(newPosition.tickUpper, liquidityParams.tickUpper);
     }
@@ -870,19 +875,20 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         // validate lcc balance of the user
         assertEq(lcc0.balanceOf(user), amount);
 
-        // unwrap lcc using the orchestrator
-        // approve orchestrator to spend the lcc (must be approved by the user, not the test contract)
+        // unwrap lcc using the position manager
+        // approve position manager to spend the lcc (must be approved by the user, not the test contract)
         vm.startPrank(user);
-        lcc0.approve(address(vtsOrchestrator), amount);
+        lcc0.approve(address(positionManager), amount);
         vm.stopPrank();
 
         // Verify the approval was set correctly (check outside of prank to ensure it persists)
-        uint256 allowance = lcc0.allowance(user, address(vtsOrchestrator));
+        uint256 allowance = lcc0.allowance(user, address(positionManager));
         assertEq(allowance, amount, "Approval should be set before unwrap");
 
         (uint256 wrappedBalance, uint256 marketDerivedBalance) = lcc0.balancesOf(user);
 
-        vtsOrchestrator.unwrapLCC(user, lccTokenAddress, user, user, amount);
+        vm.prank(user);
+        MMA.unwrapLCC(positionManager, lccTokenAddress, amount, user, true);
 
         // validate lcc balance of the user
         assertEq(lcc0.balanceOf(user), 0);
@@ -956,7 +962,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         IERC20(lcc1.underlying()).transfer(guarantor, amount1);
 
         BalanceDelta requiredSettlementDeltaBefore =
-            vtsOrchestrator.getSettlementDelta(address(guarantor), address(lcc0), address(lcc1));
+            vtsOrchestrator.getUnderlyingDeltaPair(address(guarantor), lccCurrency0, lccCurrency1);
 
         vm.startPrank(guarantor);
         IERC20(lcc0.underlying()).approve(address(vtsOrchestrator), amount0);
@@ -977,7 +983,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         // get the position required settlement delta
         BalanceDelta requiredSettlementDeltaAFter =
-            vtsOrchestrator.getSettlementDelta(address(guarantor), address(lcc0), address(lcc1));
+            vtsOrchestrator.getUnderlyingDeltaPair(address(guarantor), lccCurrency0, lccCurrency1);
 
         console.log("requiredSettlementDelta0Before", requiredSettlementDeltaBefore.amount0());
         console.log("requiredSettlementDelta1Before", requiredSettlementDeltaBefore.amount1());

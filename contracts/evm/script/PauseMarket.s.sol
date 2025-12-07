@@ -3,7 +3,7 @@ pragma solidity ^0.8.0;
 
 import {Script, console} from "forge-std/Script.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
-import {MarketFactory} from "../src/MarketFactory.sol";
+import {VTSOrchestrator} from "../src/VTSOrchestrator.sol";
 import {ScriptHelper} from "./libraries/ScriptHelper.s.sol";
 
 contract PauseMarketScript is ScriptHelper {
@@ -16,16 +16,16 @@ contract PauseMarketScript is ScriptHelper {
         PoolId poolId = PoolId.wrap(poolIdBytes);
 
         _setFilename(networkName);
-        address marketFactory = readAddress("marketFactory");
-        console.log("MarketFactory:", marketFactory);
+        address vtsOrchestrator = readAddress("vtsOrchestrator");
+        console.log("VTSOrchestrator:", vtsOrchestrator);
 
         vm.startBroadcast(deployerPrivateKey);
 
         if (pauseFlag == 1) {
-            MarketFactory(marketFactory).pause(poolId);
+            VTSOrchestrator(vtsOrchestrator).pausePool(poolId);
             console.log("Paused market:", vm.toString(PoolId.unwrap(poolId)));
         } else if (pauseFlag == 0) {
-            MarketFactory(marketFactory).unpause(poolId);
+            VTSOrchestrator(vtsOrchestrator).unpausePool(poolId);
             console.log("Unpaused market:", vm.toString(PoolId.unwrap(poolId)));
         } else {
             revert("Invalid PAUSE flag");

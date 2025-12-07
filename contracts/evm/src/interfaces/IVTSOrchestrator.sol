@@ -10,8 +10,10 @@ import {MarketVTSConfiguration} from "../types/VTS.sol";
 import {MarketMaker} from "../libraries/MarketMaker.sol";
 import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {RFSCheckpoint} from "../types/Checkpoint.sol";
+import {IPausableVTS} from "./IPausableVTS.sol";
+import {IVTSCurrencyDelta} from "./IVTSCurrencyDelta.sol";
 
-interface IVTSOrchestrator {
+interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta {
     // Events
     event PoolInitialized(
         PoolId indexed corePoolId,
@@ -22,14 +24,6 @@ interface IVTSOrchestrator {
 
     // Access Control / Config
     function setMMPositionManager(address _mmPositionManager) external;
-
-    // Pause Control (via GlobalConfig.proxyCall)
-    function setGlobalPause(bool paused) external;
-    function isPaused() external view returns (bool);
-    function pausePool(PoolId poolId) external;
-    function unpausePool(PoolId poolId) external;
-    function isPoolPaused(PoolId poolId) external view returns (bool);
-    function isPoolOrGlobalPaused(PoolId poolId) external view returns (bool);
 
     // State Getters
     function getPosition(PositionId positionId) external view returns (Position memory);
@@ -104,11 +98,6 @@ interface IVTSOrchestrator {
 
     // MMPositionManager
     function commitSignal(bytes memory liquiditySignal) external returns (uint256 commitId);
-
-    function getFullCredit(Currency currency, address owner) external view returns (uint256);
-    function primeUnderlyingDelta(address sender, Currency lcc) external;
-
-    function take(Currency currency, address sender, address to, uint256 maxAmount) external;
     function extendGracePeriod(
         PoolKey memory poolKey,
         uint256 commitId,
@@ -134,6 +123,4 @@ interface IVTSOrchestrator {
     // Checkpoints
     function positionToCheckpoint(PositionId positionId) external view returns (RFSCheckpoint memory);
     function markCheckpoint(uint256 commitId, uint256 positionIndex) external;
-
-    function assertNonZeroDeltas() external view;
 }

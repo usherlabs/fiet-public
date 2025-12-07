@@ -878,7 +878,7 @@ library VTSPositionLib {
 
             // Mark RFS checkpoint
             (bool rfsOpen,) = getRFS(s, id);
-            CheckpointLibrary._markCheckpoint(s, id, rfsOpen);
+            CheckpointLibrary.markCheckpoint(s, id, rfsOpen);
         }
 
         // Return the position struct
@@ -991,6 +991,7 @@ library VTSPositionLib {
         }
 
         // Validate commitment backing: effective LCC (including prospective) <= signal + settled
+        // TODO: Remove use of ModifyLiquidityParams and use variables directly.
         ModifyLiquidityParams memory params = ModifyLiquidityParams({
             tickLower: tickLower,
             tickUpper: tickUpper,
@@ -1349,6 +1350,8 @@ library VTSPositionLib {
 
         // Proactive extraction (incremental): fund only increases in pending slashes since last observation to avoid over-funding
         VTSFeeLib.proactiveFunding(s, poolManager, poolId, positionId, lccCurrency0, lccCurrency1);
+
+        CheckpointLibrary.markCheckpoint(s, positionId, rfsOpen);
     }
 
     /// @notice Calculates liquidity units to seize for a given position and settlement delta

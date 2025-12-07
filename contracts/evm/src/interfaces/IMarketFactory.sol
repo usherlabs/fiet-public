@@ -131,18 +131,6 @@ interface IMarketFactory {
     function setHooks(address _coreHook) external;
 
     /**
-     * @notice Pauses a market
-     * @param poolId The Core Pool ID to pause
-     */
-    function pause(PoolId poolId) external;
-
-    /**
-     * @notice Unpauses a market
-     * @param poolId The Core Pool ID to unpause
-     */
-    function unpause(PoolId poolId) external;
-
-    /**
      * @notice Gets the proxy hook address for a given proxy pool ID
      * @param proxyPoolId The proxy pool ID
      * @return The proxy hook address
