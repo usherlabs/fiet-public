@@ -15,7 +15,12 @@ abstract contract ImmutableMarketState {
 
     /// @notice Only allow calls from the MarketFactory contract
     modifier onlyFactory() {
-        _assertFactory();
+        _assertFactory(msg.sender);
+        _;
+    }
+
+    modifier onlyFactoryWithSender(address sender) {
+        _assertFactory(sender);
         _;
     }
 
@@ -24,8 +29,8 @@ abstract contract ImmutableMarketState {
         marketFactory = IMarketFactory(_marketFactory);
     }
 
-    function _assertFactory() internal view {
-        if (msg.sender != address(marketFactory)) revert Errors.InvalidSender();
+    function _assertFactory(address sender) internal view {
+        if (sender != address(marketFactory)) revert Errors.InvalidSender();
     }
 }
 

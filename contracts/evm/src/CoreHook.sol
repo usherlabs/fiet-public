@@ -79,11 +79,9 @@ contract CoreHook is BaseHook, Exttload, ImmutableMarketState {
         view
         virtual
         override
+        onlyFactoryWithSender(sender)
         returns (bytes4)
     {
-        if (sender != address(marketFactory)) {
-            revert Errors.InvalidInitialiser();
-        }
         return this.beforeInitialize.selector;
     }
 

@@ -24,6 +24,7 @@ import {LiquidityUtils} from "../src/libraries/LiquidityUtils.sol";
 import {Exttload} from "v4-periphery/lib/v4-core/src/Exttload.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {Errors} from "./libraries/Errors.sol";
+import {MarketHandlerLib} from "./libraries/MarketHandlerLib.sol";
 
 contract ProxyHook is BaseHook, MarketVault, Exttload {
     using CurrencySettler for Currency;
@@ -44,9 +45,7 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
     PoolKey public proxyPoolKey;
 
     modifier onlyCoreHook() {
-        if (msg.sender != coreHook) {
-            revert Errors.InvalidSender();
-        }
+        MarketHandlerLib.assertCoreHook(marketFactory, msg.sender);
         _;
     }
 
@@ -82,7 +81,7 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
 
     function activate() external onlyFactory {
         if (coreHook == address(0)) {
-            coreHook = IMarketFactory(marketFactory).coreHook();
+            coreHook = MarketHandlerLib.getCoreHook(marketFactory);
         }
     }
 
@@ -130,11 +129,9 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         internal
         virtual
         override
+        onlyFactoryWithSender(sender)
         returns (bytes4)
     {
-        if (sender != address(marketFactory)) {
-            revert Errors.InvalidInitialiser();
-        }
         proxyPoolKey = key;
         // initialise the counterparty hook -- proxy pool is created after the core pool.
         // Note: This is a placeholder for future implementation
