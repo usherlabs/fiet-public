@@ -22,8 +22,12 @@ interface IMMPositionManager {
     /// @notice Returns the position information for a given token ID and position index
     /// @param tokenId the ERC721 tokenId (commitment NFT ID)
     /// @param positionIndex the index of the position within the commitment
-    /// @return Position the position data
-    function getPosition(uint256 tokenId, uint256 positionIndex) external view returns (Position memory);
+    /// @return position The position data
+    /// @return positionId The position ID
+    function getPosition(uint256 tokenId, uint256 positionIndex)
+        external
+        view
+        returns (Position memory position, PositionId positionId);
 
     /// @notice Returns the position ID for a given token ID and position index
     /// @param tokenId the ERC721 tokenId (commitment NFT ID)
