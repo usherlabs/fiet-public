@@ -424,6 +424,7 @@ contract MMPositionManager is
         uint256 amount1
     ) internal {
         (Position memory position, PositionId positionId) = getPosition(tokenId, positionIndex);
+        _assertPositionForPool(poolKey, position);
 
         // -- Validate that caller is not position owner (approved/owner of NFT)
         // use _isApprovedOrOwner to get the owner/approved wallets of the token id, as position.owner is address(this).
@@ -449,12 +450,7 @@ contract MMPositionManager is
 
         // Call _decreaseInternal with hookData
         _decreaseInternal(
-            poolKey,
-            tokenId,
-            positionIndex,
-            PositionLibrary.generateSalt(tokenId, positionIndex),
-            seizedLiquidityUnits,
-            hookData
+            poolKey, position, PositionLibrary.generateSalt(tokenId, positionIndex), seizedLiquidityUnits, hookData
         );
     }
 
@@ -752,15 +748,15 @@ contract MMPositionManager is
         onlyIfApproved(msgSender(), tokenId)
         onlyValidCommit(poolKey, tokenId)
     {
-        (Position memory pos,) = getPosition(tokenId, positionIndex);
-        uint256 completeLiquidity = uint256(pos.liquidity);
+        (Position memory position,) = getPosition(tokenId, positionIndex);
+        _assertPositionForPool(poolKey, position);
+        uint256 completeLiquidity = uint256(position.liquidity);
         _decreaseInternal(
             poolKey,
-            tokenId,
-            positionIndex,
+            position,
             PositionLibrary.generateSalt(tokenId, positionIndex),
             completeLiquidity,
-            Constants.ZERO_BYTES
+            PositionModificationHookDataLib.encode(tokenId, positionIndex)
         );
     }
 
@@ -779,6 +775,9 @@ contract MMPositionManager is
         int24 tickUpper,
         uint256 liquidity
     ) internal onlyIfApproved(msgSender(), tokenId) onlyValidCommit(poolKey, tokenId) {
+        // Validate position within _increase, but not within _increaseInternal (called by _mint);
+        (Position memory position,) = getPosition(tokenId, positionIndex);
+        _assertPositionForPool(poolKey, position);
         _increaseInternal(poolKey, tokenId, positionIndex, tickLower, tickUpper, liquidity);
     }
 
@@ -845,6 +844,10 @@ contract MMPositionManager is
         int24 tickLower,
         int24 tickUpper
     ) internal onlyIfApproved(msgSender(), tokenId) onlyValidCommit(poolKey, tokenId) {
+        // Validate position within _increaseFromDeltas, but not within _increaseInternal (called by _mint);
+        (Position memory position,) = getPosition(tokenId, positionIndex);
+        _assertPositionForPool(poolKey, position);
+
         // Compute liquidity from LCC credits (via router helper)
         uint256 liquidityFromDeltas = _getLiquidityFromDeltas(poolKey, tickLower, tickUpper);
 
@@ -892,6 +895,7 @@ contract MMPositionManager is
         );
         BalanceDelta sDelta = LiquidityUtils.safeToBalanceDelta(credit0, credit1, settleIn0, settleIn1);
 
+        // Includes position validation within _settle
         _settle(poolKey, tokenId, positionIndex, sDelta.amount0(), sDelta.amount1());
     }
 
@@ -905,23 +909,18 @@ contract MMPositionManager is
      *         - Settles with poolManager
      *
      * @param poolKey The pool key for the position
-     * @param tokenId The token id (commit id) to decrease the liquidity for
-     * @param positionIndex The position index to decrease the liquidity for
+     * @param position The position to decrease liquidity for (must be validated by caller)
      * @param salt The salt of the position
      * @param amountToDecrease The amount of liquidity to decrease
      * @param hookData The hook data to pass to modifyLiquidity (for seizure operations)
      */
     function _decreaseInternal(
         PoolKey memory poolKey,
-        uint256 tokenId,
-        uint256 positionIndex,
+        Position memory position,
         bytes32 salt,
         uint256 amountToDecrease,
         bytes memory hookData
     ) internal {
-        // Get position to validate and retrieve tick range
-        (Position memory position,) = getPosition(tokenId, positionIndex);
-
         // Validate liquidity is not over available
         uint256 posLiq = uint256(position.liquidity);
         if (amountToDecrease > posLiq) {
@@ -939,11 +938,6 @@ contract MMPositionManager is
             liquidityDelta: -amountToDecrease.toInt256(),
             salt: salt
         });
-
-        // If hookData is empty, encode standard hook data
-        if (hookData.length == 0) {
-            hookData = PositionModificationHookDataLib.encode(tokenId, positionIndex);
-        }
 
         // Single call: modify liquidity + settle
         // VTSOrchestrator.processPosition handles: fee accounting, LCC cancellation, delta accounting
@@ -963,15 +957,17 @@ contract MMPositionManager is
         onlyIfApproved(msgSender(), tokenId)
         onlyValidCommit(poolKey, tokenId)
     {
-        // For seizure, hookData is prepared in _seizePosition and passed directly to _decreaseInternal
-        // Call internal logic - incl. getPosition which validates.
+        // Get position and validate it belongs to the pool
+        (Position memory position,) = getPosition(tokenId, positionIndex);
+        _assertPositionForPool(poolKey, position);
+
+        // Call internal logic
         _decreaseInternal(
             poolKey,
-            tokenId,
-            positionIndex,
+            position,
             PositionLibrary.generateSalt(tokenId, positionIndex),
             amountToDecrease,
-            Constants.ZERO_BYTES
+            PositionModificationHookDataLib.encode(tokenId, positionIndex)
         );
     }
 
