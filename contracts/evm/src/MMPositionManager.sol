@@ -245,7 +245,7 @@ contract MMPositionManager is
         }
         if (action == uint256(MMAction.RENEW_SIGNAL)) {
             (uint256 tokenId, bytes memory liquiditySignal) = abi.decode(params, (uint256, bytes));
-            vtsOrchestrator.renewSignal(tokenId, liquiditySignal);
+            _renewSignal(tokenId, liquiditySignal);
             return;
         }
         if (action == uint256(MMAction.SEIZE_POSITION)) {
@@ -712,6 +712,15 @@ contract MMPositionManager is
     }
 
     /**
+     * @dev This function is used to renew a signal
+     * @param tokenId The token id to renew the signal for
+     * @param liquiditySignal The liquidity signal to renew the signal for
+     */
+    function _renewSignal(uint256 tokenId, bytes memory liquiditySignal) internal onlyIfApproved(msgSender(), tokenId) {
+        vtsOrchestrator.renewSignal(tokenId, liquiditySignal);
+    }
+
+    /**
      * @dev This function is used to decommit a position for a given token id
      * @param poolKey The pool key for the position
      * @param tokenId The token id to decommit the position for
@@ -1035,7 +1044,7 @@ contract MMPositionManager is
         int24 tickLower,
         int24 tickUpper,
         uint256 liquidity
-    ) internal onlyIfApproved(msgSender(), tokenId) {
+    ) internal onlyIfApproved(msgSender(), tokenId) onlyValidCommit(poolKey, tokenId) {
         _mintPositionInternal(poolKey, tokenId, tickLower, tickUpper, liquidity);
     }
 
