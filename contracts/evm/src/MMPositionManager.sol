@@ -40,6 +40,7 @@ import {Position} from "./types/Position.sol";
 import {TransientSlots} from "./libraries/TransientSlots.sol";
 import {PositionManagerLiquidity} from "./modules/PositionManagerLiquidity.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {CurrencyTransfer} from "./libraries/CurrencyTransfer.sol";
 
 contract MMPositionManager is
     ERC721Permit_v4,
@@ -57,6 +58,7 @@ contract MMPositionManager is
     using TransientStateLibrary for IPoolManager;
     using CurrencyLibrary for Currency;
     using CurrencySettler for Currency;
+    using CurrencyTransfer for Currency;
     using SafeERC20 for IERC20;
 
     event SignalCommitted(uint256 tokenId);
@@ -686,12 +688,10 @@ contract MMPositionManager is
         int128 delta1 = settlementDelta.amount1();
 
         if (delta0 < 0) {
-            IERC20(Currency.unwrap(poolKey.currency0))
-                .safeTransferFrom(msgSender(), address(this), LiquidityUtils.safeInt128ToUint256(delta0));
+            poolKey.currency0.transferFrom(msgSender(), vault, LiquidityUtils.safeInt128ToUint256(delta0));
         }
         if (delta1 < 0) {
-            IERC20(Currency.unwrap(poolKey.currency1))
-                .safeTransferFrom(msgSender(), address(this), LiquidityUtils.safeInt128ToUint256(delta1));
+            poolKey.currency1.transferFrom(msgSender(), vault, LiquidityUtils.safeInt128ToUint256(delta1));
         }
 
         // Execute Settlement via Vault
@@ -699,12 +699,10 @@ contract MMPositionManager is
 
         // Handle Withdrawals (Push to User)
         if (usedDelta.amount0() > 0) {
-            IERC20(Currency.unwrap(poolKey.currency0))
-                .safeTransfer(msgSender(), LiquidityUtils.safeInt128ToUint256(usedDelta.amount0()));
+            poolKey.currency0.transfer(msgSender(), LiquidityUtils.safeInt128ToUint256(usedDelta.amount0()));
         }
         if (usedDelta.amount1() > 0) {
-            IERC20(Currency.unwrap(poolKey.currency1))
-                .safeTransfer(msgSender(), LiquidityUtils.safeInt128ToUint256(usedDelta.amount1()));
+            poolKey.currency1.transfer(msgSender(), LiquidityUtils.safeInt128ToUint256(usedDelta.amount1()));
         }
 
         // Return nil if no seizure.

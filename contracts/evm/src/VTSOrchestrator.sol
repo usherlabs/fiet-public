@@ -53,7 +53,6 @@ import {Ownable} from "openzeppelin-contracts/contracts/access/Ownable.sol";
 /// @author Fiet Protocol
 contract VTSOrchestrator is MarketHandler, PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSOrchestrator {
     using CurrencyLibrary for Currency;
-    using CurrencyDelta for Currency;
     using StateLibrary for IPoolManager;
     using TransientStateLibrary for IPoolManager;
     using SafeCast for uint256;
