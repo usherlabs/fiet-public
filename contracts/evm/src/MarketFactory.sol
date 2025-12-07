@@ -61,7 +61,7 @@ contract MarketFactory is IMarketFactory, Ownable {
         poolManager = IPoolManager(_poolManager);
         liquidityHub = ILiquidityHub(_liquidityHub);
         oracleHelper = IOracleHelper(_oracleHelper);
-        vtsOrchestrator = IVTSOrchestrator(payable(_vtsOrchestrator));
+        vtsOrchestrator = IVTSOrchestrator(_vtsOrchestrator);
         mmPositionManager = _mmPositionManager;
 
         // Set Protocol bounds addresses

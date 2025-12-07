@@ -41,6 +41,10 @@ import {TransientSlots} from "./libraries/TransientSlots.sol";
 import {PositionManagerLiquidity} from "./modules/PositionManagerLiquidity.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {CurrencyTransfer} from "./libraries/CurrencyTransfer.sol";
+import {CurrencyDelta} from "v4-periphery/lib/v4-core/src/libraries/CurrencyDelta.sol";
+import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
+import {MarketHandlerLib} from "./libraries/MarketHandlerLib.sol";
+import {ImmutableMarketState} from "./modules/ImmutableMarketState.sol";
 
 contract MMPositionManager is
     ERC721Permit_v4,
@@ -49,7 +53,8 @@ contract MMPositionManager is
     Multicall_v4,
     BaseActionsRouter,
     NativeWrapper,
-    PositionManagerLiquidity
+    PositionManagerLiquidity,
+    ImmutableMarketState
 {
     using SafeCast for uint256;
     using PositionLibrary for PositionId;
@@ -59,14 +64,13 @@ contract MMPositionManager is
     using CurrencyLibrary for Currency;
     using CurrencySettler for Currency;
     using CurrencyTransfer for Currency;
+    using CurrencyDelta for Currency;
     using SafeERC20 for IERC20;
 
     event SignalCommitted(uint256 tokenId);
     event SignalDecommitted(uint256 tokenId, uint256 positionCount);
 
     ILiquidityHub internal immutable liquidityHub;
-    IMarketFactory internal immutable marketFactory;
-    IVRLSignalManager internal immutable signalManager;
     IOracleHelper internal immutable oracleHelper;
     IVTSOrchestrator internal immutable vtsOrchestrator;
 
@@ -95,22 +99,15 @@ contract MMPositionManager is
         COLLECT_AVAILABLE_LIQUIDITY // params: (address lcc, address recipient, uint256 maxAmount)
     }
 
-    constructor(
-        address _manager,
-        address _signalManager,
-        address _marketFactory,
-        address _vtsOrchestrator,
-        address _descriptor,
-        IWETH9 _weth9
-    )
+    constructor(address _manager, address _marketFactory, address _vtsOrchestrator, address _descriptor, IWETH9 _weth9)
         ERC721Permit_v4("Fiet VRL Commitment Positions Manager", "FIET-VRL-MMP")
         BaseActionsRouter(IPoolManager(_manager))
         NativeWrapper(_weth9)
+        ImmutableMarketState(_marketFactory)
     {
         commitmentDescriptor = _descriptor;
-        signalManager = IVRLSignalManager(_signalManager);
-        vtsOrchestrator = IVTSOrchestrator(payable(_vtsOrchestrator));
-        marketFactory = IMarketFactory(_marketFactory);
+        vtsOrchestrator = IVTSOrchestrator(_vtsOrchestrator);
+        // TODO: Replace with structure of immutable, extendable contracts.
         oracleHelper = marketFactory.oracleHelper();
         liquidityHub = marketFactory.liquidityHub();
     }
@@ -655,6 +652,12 @@ contract MMPositionManager is
      * @param amount0 The amount of token0 to settle. Positive amounts result in deposits, negative amounts result in withdrawals.
      * @param amount1 The amount of token1 to settle. Positive amounts result in deposits, negative amounts result in withdrawals.
      * @return seizedLiquidityUnits The amount of liquidity units seized during seizure path (0 if not seizing)
+     *
+     * @notice Value Transfer Flow:
+     *         Transfers flow from MMPM to MarketVault (MV) and PoolManager (PM) rather than through VTSOrchestrator (VTSO).
+     *         This ensures deposits (including native ETH) are handled correctly, where MMPM can on-transfer to MV
+     *         in cases where ERC20.transferFrom is unavailable (e.g., native ETH deposits via msg.value).
+     *         VTSO is used exclusively for delta management and authentication, maintaining clean separation of concerns.
      */
     function _settle(PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex, int128 amount0, int128 amount1)
         internal
@@ -680,32 +683,75 @@ contract MMPositionManager is
             positionId, poolKey.currency0, poolKey.currency1, toBalanceDelta(amount0, amount1), isSeizing
         );
 
-        // Determine Vault
-        address vault = marketFactory.corePoolToProxyHook(poolKey.toId());
+        // Convert LCC currencies to underlying currencies for settlement
+        Currency underlying0 = _lccToUnderlyingCurrency(poolKey.currency0);
+        Currency underlying1 = _lccToUnderlyingCurrency(poolKey.currency1);
 
-        // Handle Deposits (Pull from User)
+        // Determine Vault (ProxyHook)
+        IMarketVault vault = MarketHandlerLib.getVault(marketFactory, poolKey.toId());
+        address vaultAddress = address(vault);
+
         int128 delta0 = settlementDelta.amount0();
         int128 delta1 = settlementDelta.amount1();
 
+        // Step A: Consume any self positive deltas first for withdrawals
+        // These positive deltas surface from primed credits.
+        // This prioritises contract-held balances that were primed at batch start
+        // TODO: Resole logic here.
+        address sender = msgSender();
+        if (delta0 > 0) {
+            int256 selfDelta0 = underlying0.getDelta(address(this));
+            if (selfDelta0 > 0) {
+                uint256 take0 = Math.min(uint256(selfDelta0), LiquidityUtils.safeInt128ToUint256(delta0));
+                if (take0 > 0) {
+                    // Transfer directly from contract to sender (satisfying primed credit)
+                    underlying0.transfer(sender, take0);
+                    delta0 -= SafeCast.toInt128(take0);
+                }
+            }
+        }
+        if (delta1 > 0) {
+            int256 selfDelta1 = underlying1.getDelta(address(this));
+            if (selfDelta1 > 0) {
+                uint256 take1 = Math.min(uint256(selfDelta1), LiquidityUtils.safeInt128ToUint256(delta1));
+                if (take1 > 0) {
+                    // Transfer directly from contract to sender (satisfying primed credit)
+                    underlying1.transfer(sender, take1);
+                    delta1 -= SafeCast.toInt128(take1);
+                }
+            }
+        }
+
+        // Handle Deposits (Pull underlying from User to Vault)
         if (delta0 < 0) {
-            poolKey.currency0.transferFrom(msgSender(), vault, LiquidityUtils.safeInt128ToUint256(delta0));
+            underlying0.transferFrom(sender, vaultAddress, LiquidityUtils.safeInt128ToUint256(delta0));
         }
         if (delta1 < 0) {
-            poolKey.currency1.transferFrom(msgSender(), vault, LiquidityUtils.safeInt128ToUint256(delta1));
+            underlying1.transferFrom(sender, vaultAddress, LiquidityUtils.safeInt128ToUint256(delta1));
         }
 
-        // Execute Settlement via Vault
-        BalanceDelta usedDelta = IMarketVault(vault).tryModifyLiquidities(settlementDelta);
+        // Execute Settlement via Vault (with remaining delta after self-consumption)
+        BalanceDelta remainingDelta = toBalanceDelta(delta0, delta1);
+        BalanceDelta usedDelta = vault.tryModifyLiquidities(remainingDelta);
 
-        // Handle Withdrawals (Push to User)
+        // Handle Withdrawals (Push underlying from Vault to User)
         if (usedDelta.amount0() > 0) {
-            poolKey.currency0.transfer(msgSender(), LiquidityUtils.safeInt128ToUint256(usedDelta.amount0()));
+            underlying0.transfer(sender, LiquidityUtils.safeInt128ToUint256(usedDelta.amount0()));
         }
         if (usedDelta.amount1() > 0) {
-            poolKey.currency1.transfer(msgSender(), LiquidityUtils.safeInt128ToUint256(usedDelta.amount1()));
+            underlying1.transfer(sender, LiquidityUtils.safeInt128ToUint256(usedDelta.amount1()));
         }
 
-        // Return nil if no seizure.
+        // Handle shortfall: persist any unfulfilled withdrawal as credit owed to user
+        BalanceDelta shortfall = remainingDelta - usedDelta;
+        if (shortfall.amount0() > 0 || shortfall.amount1() > 0) {
+            // Shortfall represents underlying that couldn't be withdrawn from vault
+            // This will be persisted and claimable later when liquidity becomes available
+            vtsOrchestrator.primeUnderlyingDelta(sender, poolKey.currency0);
+            vtsOrchestrator.primeUnderlyingDelta(sender, poolKey.currency1);
+        }
+
+        // Return seized liquidity units (0 if not seizing)
         return seizedLiquidityUnits;
     }
 

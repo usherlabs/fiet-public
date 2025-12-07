@@ -58,7 +58,6 @@ contract HookTest is Test, Deployers {
         IWETH9 weth9 = IWETH9(address(new WETH()));
         mmPositionManager = new MMPositionManager(
             address(poolManager),
-            makeAddr("signalManager"),
             address(factory),
             address(vtsOrchestrator),
             makeAddr("descriptor"),

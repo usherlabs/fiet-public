@@ -29,7 +29,8 @@ import {SafeCast} from "openzeppelin-contracts/contracts/utils/math/SafeCast.sol
 import {ProxySwapFlag} from "./libraries/ProxySwapFlag.sol";
 import {Errors} from "./libraries/Errors.sol";
 import {IVTSOrchestrator} from "./interfaces/IVTSOrchestrator.sol";
-import {MarketHandler} from "./modules/MarketHandler.sol";
+import {ImmutableMarketState} from "./modules/ImmutableMarketState.sol";
+import {MarketHandlerLib} from "./libraries/MarketHandlerLib.sol";
 import {Position} from "./types/Position.sol";
 
 /**
@@ -37,7 +38,7 @@ import {Position} from "./types/Position.sol";
  * This way it can calculate and manage Liquidity Commitments (C_A(r)) for each Position.
  * Furthermore, we need to know when Direct LP occurs, as this determines whether the underlying native tokens are settled to the Pool Manager.
  */
-contract CoreHook is BaseHook, Exttload, MarketHandler {
+contract CoreHook is BaseHook, Exttload, ImmutableMarketState {
     using TransientSlot for *;
     using CurrencySettler for Currency;
     using SafeCast for int256;
@@ -48,9 +49,9 @@ contract CoreHook is BaseHook, Exttload, MarketHandler {
     // Owner will be set to MarketFactory
     constructor(address _poolManager, address _marketFactory, address _mmPositionManager, address _vtsOrchestrator)
         BaseHook(IPoolManager(_poolManager))
-        MarketHandler(_marketFactory)
+        ImmutableMarketState(_marketFactory)
     {
-        vtsOrchestrator = IVTSOrchestrator(payable(_vtsOrchestrator));
+        vtsOrchestrator = IVTSOrchestrator(_vtsOrchestrator);
         mmPositionManager = _mmPositionManager;
     }
 
@@ -218,10 +219,7 @@ contract CoreHook is BaseHook, Exttload, MarketHandler {
 
     // Helper function to get the proxy hook address from the core pool key
     function _getProxyHook(PoolKey calldata corePoolKey) internal view returns (address) {
-        PoolId corePoolId = corePoolKey.toId();
-        PoolId proxyPoolId = marketFactory.coreToProxy(corePoolId);
-
-        return marketFactory.proxyToHook(proxyPoolId);
+        return MarketHandlerLib.getProxyHook(marketFactory, corePoolKey);
     }
 
     // Helper functions to check if the caller is the MM Position Manager

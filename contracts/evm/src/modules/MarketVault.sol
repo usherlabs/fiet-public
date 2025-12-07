@@ -36,18 +36,17 @@ import {Errors} from "../libraries/Errors.sol";
 import {ReentrancyGuardTransient} from "openzeppelin-contracts/contracts/utils/ReentrancyGuardTransient.sol";
 import {IVTSOrchestrator} from "../interfaces/IVTSOrchestrator.sol";
 import {ImmutableState} from "v4-periphery/src/base/ImmutableState.sol";
+import {ImmutableMarketState} from "./ImmutableMarketState.sol";
 
-abstract contract MarketVault is IMarketVault, ImmutableState, ReentrancyGuardTransient {
+abstract contract MarketVault is IMarketVault, ImmutableState, ImmutableMarketState, ReentrancyGuardTransient {
     using CurrencySettler for Currency;
 
     event SwapDeficit(PoolId indexed poolId, address indexed lccToken, address deficitRecipient, uint256 deficitAmount);
 
-    IMarketFactory public immutable marketFactory;
     ILiquidityHub public immutable liquidityHub;
     address public immutable mmPositionManager;
 
-    constructor(address _marketFactory) {
-        marketFactory = IMarketFactory(_marketFactory);
+    constructor(address _marketFactory) ImmutableMarketState(_marketFactory) {
         liquidityHub = marketFactory.liquidityHub();
         mmPositionManager = marketFactory.mmPositionManager();
     }
@@ -84,13 +83,6 @@ abstract contract MarketVault is IMarketVault, ImmutableState, ReentrancyGuardTr
     modifier onlyProtocolBounds() {
         // Being explicit witn these bounds to prevent leaks.
         if (msg.sender != (address(marketFactory)) && msg.sender != (address(mmPositionManager))) {
-            revert Errors.InvalidSender();
-        }
-        _;
-    }
-
-    modifier onlyFactory() {
-        if (msg.sender != address(marketFactory)) {
             revert Errors.InvalidSender();
         }
         _;

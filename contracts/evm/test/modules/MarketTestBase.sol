@@ -220,7 +220,6 @@ abstract contract MarketTestBase is Test, Deployers {
         mmPositionManager = address(
             new MMPositionManager(
                 address(manager),
-                address(signalManager),
                 address(marketFactory),
                 address(vtsOrchestrator),
                 commitmentDescriptor,

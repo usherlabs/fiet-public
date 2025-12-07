@@ -291,9 +291,8 @@ contract CompleteDeployScript is ScriptHelper {
         address commitmentDescriptorAddr = _deployCommitmentDescriptor();
         // Get WETH9 from the PositionManager (which has it as immutable)
         IWETH9 weth9 = PositionManager(positionManagerAddress).WETH9();
-        MMPositionManager positionManager = new MMPositionManager(
-            poolManagerAddress, signalManager, marketFactory, vtsOrchestrator, commitmentDescriptorAddr, weth9
-        );
+        MMPositionManager positionManager =
+            new MMPositionManager(poolManagerAddress, marketFactory, vtsOrchestrator, commitmentDescriptorAddr, weth9);
         console.log("MMPositionManager deployed at:", address(positionManager));
         return address(positionManager);
     }

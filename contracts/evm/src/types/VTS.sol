@@ -9,6 +9,7 @@ import {RFSCheckpoint} from "./Checkpoint.sol";
 import {ILiquidityHub} from "../interfaces/ILiquidityHub.sol";
 import {IOracleHelper} from "../interfaces/IOracleHelper.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
+import {IMarketVault} from "../interfaces/IMarketVault.sol";
 
 struct TokenConfiguration {
     // Grace period time
@@ -44,7 +45,7 @@ struct PositionContext {
     // MM Position Manager address for delta accounting
     address mmPositionManager;
     // Market vault address for settlement clamping
-    address marketVault;
+    IMarketVault marketVault;
 }
 
 /// @notice Per-position accounting data (mirrors VTSManager per-position mappings)

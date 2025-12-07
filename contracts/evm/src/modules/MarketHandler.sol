@@ -4,7 +4,7 @@ pragma solidity ^0.8.26;
 import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Errors} from "../libraries/Errors.sol";
-import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
+import {IMarketVault} from "../interfaces/IMarketVault.sol";
 
 /// @notice Abstract handler for market operations. Receives the MarketFactory in the constructor for read and write access.
 abstract contract MarketHandler {
@@ -43,8 +43,8 @@ abstract contract MarketHandler {
         return marketFactory.proxyHookToCurrencyPair(vault);
     }
 
-    function _getVault(PoolId poolId) internal view returns (address) {
-        return marketFactory.corePoolToProxyHook(poolId);
+    function _getVault(PoolId poolId) internal view returns (IMarketVault) {
+        return IMarketVault(marketFactory.corePoolToProxyHook(poolId));
     }
 
     function _validateToken(address token, address[2] memory currencies) internal view virtual returns (uint8) {

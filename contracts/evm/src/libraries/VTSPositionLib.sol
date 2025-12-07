@@ -947,8 +947,7 @@ library VTSPositionLib {
         }
 
         // Clamp settlement delta by available market liquidity
-        BalanceDelta availableDelta =
-            DynamicCurrencyDelta.clampSettlementDeltaByAvailableLiquidities(ctx.marketVault, requiredSettlementDelta);
+        BalanceDelta availableDelta = ctx.marketVault.dryModifyLiquidities(requiredSettlementDelta);
 
         // Cancel LCCs and queue any shortfall
         (, BalanceDelta queuedDelta) =
@@ -1351,6 +1350,15 @@ library VTSPositionLib {
         // Proactive extraction (incremental): fund only increases in pending slashes since last observation to avoid over-funding
         VTSFeeLib.proactiveFunding(s, poolManager, poolId, positionId, lccCurrency0, lccCurrency1);
 
+        // Account underlying settlement delta to MMPositionManager for delta tracking
+        // This enables MMPM to know what underlying assets are owed/credited during settlement
+        // TODO: Resolve delta accounting here.
+        Currency underlyingCurrency0 = DynamicCurrencyDelta.lccToUnderlyingCurrency(lccCurrency0);
+        Currency underlyingCurrency1 = DynamicCurrencyDelta.lccToUnderlyingCurrency(lccCurrency1);
+        DynamicCurrencyDelta.accountDelta(underlyingCurrency0, settlementDelta.amount0(), mmPositionManager);
+        DynamicCurrencyDelta.accountDelta(underlyingCurrency1, settlementDelta.amount1(), mmPositionManager);
+
+        // Mark RFS checkpoint for the position
         CheckpointLibrary.markCheckpoint(s, positionId, rfsOpen);
     }
 

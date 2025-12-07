@@ -42,7 +42,8 @@ import {CheckpointLibrary} from "./libraries/Checkpoint.sol";
 import {IVRLSettlementObserver} from "./interfaces/IVRLSettlementObserver.sol";
 import {RFSCheckpoint} from "./types/Checkpoint.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
-import {MarketHandler} from "./modules/MarketHandler.sol";
+import {ImmutableMarketState} from "./modules/ImmutableMarketState.sol";
+import {MarketHandlerLib} from "./libraries/MarketHandlerLib.sol";
 import {CurrencyDelta} from "v4-periphery/lib/v4-core/src/libraries/CurrencyDelta.sol";
 import {VTSCurrencyDelta} from "./modules/VTSCurrencyDelta.sol";
 import {Ownable} from "openzeppelin-contracts/contracts/access/Ownable.sol";
@@ -51,7 +52,7 @@ import {Ownable} from "openzeppelin-contracts/contracts/access/Ownable.sol";
 /// @notice Central state management layer and orchestrator for VTS logic
 /// @dev Adopts Bunni-style pattern: state managed in VTSStorage struct, complex logic delegated to linked libraries
 /// @author Fiet Protocol
-contract VTSOrchestrator is MarketHandler, PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSOrchestrator {
+contract VTSOrchestrator is ImmutableMarketState, PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSOrchestrator {
     using CurrencyLibrary for Currency;
     using StateLibrary for IPoolManager;
     using TransientStateLibrary for IPoolManager;
@@ -83,7 +84,7 @@ contract VTSOrchestrator is MarketHandler, PausableVTS, VTSCurrencyDelta, Immuta
         address _oracleHelper,
         address _liquidityHub,
         address _settlementObserver
-    ) Ownable(msg.sender) MarketHandler(_marketFactory) ImmutableState(IPoolManager(_poolManager)) {
+    ) Ownable(msg.sender) ImmutableMarketState(_marketFactory) ImmutableState(IPoolManager(_poolManager)) {
         if (_poolManager == address(0)) {
             revert Errors.InvalidAddress(_poolManager);
         }
@@ -105,11 +106,7 @@ contract VTSOrchestrator is MarketHandler, PausableVTS, VTSCurrencyDelta, Immuta
 
     /// @notice Modifier to check if caller is the CoreHook
     modifier onlyCoreHook() {
-        address coreHook = marketFactory.coreHook();
-        if (coreHook == address(0)) {
-            revert Errors.InvalidAddress(coreHook);
-        }
-        if (msg.sender != coreHook) revert Errors.InvalidSender();
+        MarketHandlerLib.assertCoreHook(marketFactory, _msgSender());
         _;
     }
 
@@ -381,7 +378,7 @@ contract VTSOrchestrator is MarketHandler, PausableVTS, VTSCurrencyDelta, Immuta
             liquidityHub: liquidityHub,
             oracleHelper: oracleHelper,
             mmPositionManager: mmPositionManager,
-            marketVault: _getVault(poolKey.toId())
+            marketVault: MarketHandlerLib.getVault(marketFactory, poolKey.toId())
         });
 
         // Delegate all position processing to VTSPositionLib

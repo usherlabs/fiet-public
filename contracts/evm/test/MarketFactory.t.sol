@@ -102,7 +102,6 @@ contract MarketFactoryTest is Test, Deployers {
         vm.prank(owner);
         positionManager = new MMPositionManager(
             address(poolManager),
-            makeAddr("signalManager"),
             tempFactoryAddr, // temporary address, will be updated after factory deployment
             address(vtsOrchestrator),
             commitmentDescriptor,
