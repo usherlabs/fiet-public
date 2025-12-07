@@ -46,10 +46,10 @@ library Errors {
     error InvalidMarket(PoolKey poolKey);
 
     /// @notice Thrown when an invalid position is provided
-    /// @param tokenId The token ID (0 if not applicable)
+    /// @param commitId The token ID (0 if not applicable)
     /// @param positionIndex The position index (0 if not applicable)
     /// @param positionId The position ID (PositionId.wrap(bytes32(0)) if not applicable)
-    error InvalidPosition(uint256 tokenId, uint256 positionIndex, PositionId positionId);
+    error InvalidPosition(uint256 commitId, uint256 positionIndex, PositionId positionId);
 
     /// @notice Thrown when there are nonzero deltas after a batch of actions
     error CurrencyNotSettled();
@@ -139,7 +139,7 @@ library Errors {
     error DeadlinePassed(uint256 deadline);
 
     /// @notice Thrown when a signal has expired
-    error SignalExpired(uint256 tokenId);
+    error SignalExpired(uint256 commitId);
 
     // ============ POSITION & COMMITMENT ERRORS ============
     // Errors related to positions, commitments, and position management
@@ -160,9 +160,9 @@ library Errors {
     error CommitmentDescriptorNotSet();
 
     /// @notice Thrown when the maximum number of positions per commitment is exceeded
-    /// @param tokenId The token ID of the commitment
+    /// @param commitId The token ID of the commitment
     /// @param maxPositions The maximum allowed positions per commitment
-    error MaxPositionsExceeded(uint256 tokenId, uint256 maxPositions);
+    error MaxPositionsExceeded(uint256 commitId, uint256 maxPositions);
 
     // ============ PAUSE & STATE ERRORS ============
     // Errors related to contract pause state and state transitions
@@ -177,12 +177,12 @@ library Errors {
     // Errors related to grace periods, checkpoints, and settlement timing
 
     /// @notice Thrown when the grace period has not elapsed for a position
-    /// @param tokenId The token ID (0 if not applicable)
+    /// @param commitId The token ID (0 if not applicable)
     /// @param positionIndex The position index (0 if not applicable)
     /// @param positionId The position ID (PositionId.wrap(bytes32(0)) if not applicable)
     /// @param checkpoint The RFS checkpoint (empty struct if not applicable)
     error GracePeriodNotElapsed(
-        uint256 tokenId, uint256 positionIndex, PositionId positionId, RFSCheckpoint checkpoint
+        uint256 commitId, uint256 positionIndex, PositionId positionId, RFSCheckpoint checkpoint
     );
 
     /// @notice Thrown when an invalid token index is provided
@@ -205,14 +205,5 @@ library Errors {
 
     /// @notice Thrown when the MM Position Manager address is not set
     error MMPositionManagerNotSet();
-
-    /// @notice Thrown when the MM Position Manager address is invalid
-    error VTSOrchestrator__Paused();
-
-    error VTSOrchestrator__InvalidPoolManager();
-
-    error VTSOrchestrator__InvalidOwner();
-
-    error VTSOrchestrator__InvalidPosition();
 }
 

@@ -571,27 +571,27 @@ library VTSPositionLib {
     /// @param s The VTS storage
     /// @param positionManager The position manager address
     /// @param positionId The position id
-    /// @param tokenId The token id (commit id)
+    /// @param commitId The token id (commit id)
     function _linkPositionToCommit(
         VTSStorage storage s,
         address positionManager,
         PositionId positionId,
-        uint256 tokenId
+        uint256 commitId
     ) internal {
         // validate there is an existing commit for the token id
-        if (s.commits[tokenId].expiresAt < block.timestamp) {
-            revert Errors.SignalExpired(tokenId);
+        if (s.commits[commitId].expiresAt < block.timestamp) {
+            revert Errors.SignalExpired(commitId);
         }
 
         // Get current position count to use as index for the new position
-        uint256 currentPositionCount = s.commits[tokenId].positionCount;
+        uint256 currentPositionCount = s.commits[commitId].positionCount;
 
         // modify the commit to include the position and update the position count
-        s.commits[tokenId].positions[currentPositionCount] = positionId;
-        s.commits[tokenId].positionCount++;
+        s.commits[commitId].positions[currentPositionCount] = positionId;
+        s.commits[commitId].positionCount++;
 
         // update the commitId of the position i.e associate the position with the commit
-        s.positions[positionId].commitId = tokenId;
+        s.positions[positionId].commitId = commitId;
     }
 
     /// @notice Calculate RFS (Required for Settlement) for a position
@@ -1207,7 +1207,7 @@ library VTSPositionLib {
 
         // Read position required settlement delta from currencyDelta (set by _touchPosition via DynamicCurrencyDelta)
         BalanceDelta positionRequiredSettlementDelta =
-            DynamicCurrencyDelta.getUnderlyingSettlementDelta(mmPositionManager, lccCurrency0, lccCurrency1);
+            DynamicCurrencyDelta.getUnderlyingDeltaPair(mmPositionManager, lccCurrency0, lccCurrency1);
 
         // During withdrawals, delta is positive as per caller context. During deposits, delta is negative.
         // However, _updateSettlement accepts the inverse as a delta of the settled amount.

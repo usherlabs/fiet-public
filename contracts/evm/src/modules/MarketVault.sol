@@ -35,7 +35,6 @@ import {ILiquidityHub} from "../interfaces/ILiquidityHub.sol";
 import {Errors} from "../libraries/Errors.sol";
 import {ReentrancyGuardTransient} from "openzeppelin-contracts/contracts/utils/ReentrancyGuardTransient.sol";
 import {IVTSOrchestrator} from "../interfaces/IVTSOrchestrator.sol";
-import {console} from "forge-std/console.sol";
 
 abstract contract MarketVault is IMarketVault, ReentrancyGuardTransient {
     using CurrencySettler for Currency;
@@ -90,9 +89,6 @@ abstract contract MarketVault is IMarketVault, ReentrancyGuardTransient {
         // }
         // Being explicit witn these bounds to prevent leaks.
         if (msg.sender != (address(marketFactory)) && msg.sender != (address(vtsOrchestrator))) {
-            console.log("msg.sender", msg.sender);
-            console.log("address(marketFactory)", address(marketFactory));
-            console.log("address(vtsOrchestrator)", address(vtsOrchestrator));
             revert Errors.InvalidSender();
         }
         _;
@@ -462,6 +458,10 @@ abstract contract MarketVault is IMarketVault, ReentrancyGuardTransient {
         } else {
             _unlockCallback(abi.encode(CallbackData(msg.sender, (currency0), (currency1), balanceDelta)));
         }
+
+        // Account delta in VTSOrchestrator
+        vtsOrchestrator.accountDelta(currency0, -balanceDelta.amount0(), msg.sender);
+        vtsOrchestrator.accountDelta(currency1, -balanceDelta.amount1(), msg.sender);
     }
 
     /**

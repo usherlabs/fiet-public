@@ -87,7 +87,7 @@ library DynamicCurrencyDelta {
     /// @param lccCurrency0 The first LCC currency
     /// @param lccCurrency1 The second LCC currency
     /// @return settlementDelta The settlement delta for the sender
-    function getUnderlyingSettlementDelta(address sender, Currency lccCurrency0, Currency lccCurrency1)
+    function getUnderlyingDeltaPair(address sender, Currency lccCurrency0, Currency lccCurrency1)
         internal
         view
         returns (BalanceDelta settlementDelta)
@@ -97,35 +97,6 @@ library DynamicCurrencyDelta {
         int256 uDelta0 = uCurrency0.getDelta(sender);
         int256 uDelta1 = uCurrency1.getDelta(sender);
         return toBalanceDelta(SafeCast.toInt128(uDelta0), SafeCast.toInt128(uDelta1));
-    }
-
-    /// @notice Accounts the change in settlement delta for underlying currencies
-    /// @dev Reads the current currency delta, calculates the change needed to reach the target settlement delta,
-    ///      and accounts that change (delta of delta)
-    /// @param sender The address initiating the settlement
-    /// @param targetSettlementDelta The target settlement delta to reach
-    /// @param currency0 The first LCC currency to account the delta change for
-    /// @param currency1 The second LCC currency to account the delta change for
-    function accountUnderlyingSettlementDeltaChange(
-        address sender,
-        BalanceDelta targetSettlementDelta,
-        Currency currency0,
-        Currency currency1
-    ) internal {
-        Currency underlyingCurrency0 = lccToUnderlyingCurrency(currency0);
-        Currency underlyingCurrency1 = lccToUnderlyingCurrency(currency1);
-
-        // Read current currency deltas
-        int256 currentDelta0 = underlyingCurrency0.getDelta(sender);
-        int256 currentDelta1 = underlyingCurrency1.getDelta(sender);
-
-        // Calculate the delta of delta (the change): targetSettlementDelta - currentDelta
-        int128 changeDelta0 = targetSettlementDelta.amount0() - SafeCast.toInt128(currentDelta0);
-        int128 changeDelta1 = targetSettlementDelta.amount1() - SafeCast.toInt128(currentDelta1);
-
-        // Account the delta of delta (the change)
-        accountDelta(underlyingCurrency0, changeDelta0, sender);
-        accountDelta(underlyingCurrency1, changeDelta1, sender);
     }
 
     // ============================================================
@@ -264,6 +235,7 @@ library DynamicCurrencyDelta {
         // A positive balance delta means withdrawing underlying tokens, negative balance means depositing underlying tokens,
         // Call after deposits (so MV is funded), but before withdrawals.
         // To prevent failure when liquidity in market is insufficient to cover the withdrawal, we tryModifyLiquidities and account LCCs for excess.
+        // TODO: Move this back into MMPM - ensuring that funds transfer MMPM <-> MV <-> LiqHub - where VTSO is used for delta management / authentication.
         usedDelta = IMarketVault(marketVault).tryModifyLiquidities(LiquidityUtils.safeToBalanceDelta(amount0, amount1));
 
         if (usedDelta.amount0() > 0) {
@@ -346,6 +318,16 @@ library DynamicCurrencyDelta {
             int128 deltaToAccount = (delta > 0 && int256(amount) > delta) ? SafeCast.toInt128(-delta) : -amount;
             accountDelta(currency, deltaToAccount, sender);
             currency.transfer(sender, LiquidityUtils.safeInt128ToUint256(amount));
+        }
+    }
+
+    /// @notice Asserts that there are no nonzero deltas
+    /// @param s The VTS storage
+    function assertNonZeroDeltas() internal view {
+        if (NonzeroDeltaCount.read() > 0) {
+            // TODO: include revert after clamping deltas is implemented
+            // revert Errors.CurrencyNotSettled();
+            console.log("assertNonZeroDeltas: CurrencyNotSettled", NonzeroDeltaCount.read());
         }
     }
 }

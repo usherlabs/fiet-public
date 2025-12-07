@@ -8,7 +8,6 @@ import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
-import {IHookPausable} from "./interfaces/IHookPausable.sol";
 import {ProxyHook} from "./ProxyHook.sol";
 import {MarketDeployer} from "./MarketDeployer.sol";
 import {IVTSOrchestrator} from "./interfaces/IVTSOrchestrator.sol";
@@ -92,22 +91,6 @@ contract MarketFactory is IMarketFactory, Ownable {
             }
             coreHook = _coreHook;
         }
-    }
-
-    /**
-     * @notice Pauses a market
-     * @param poolId The Core Pool ID to pause
-     */
-    function pause(PoolId poolId) external onlyOwner {
-        IHookPausable(coreHook).pause(poolId);
-    }
-
-    /**
-     * @notice Unpauses a market
-     * @param poolId The Core Pool ID to unpause
-     */
-    function unpause(PoolId poolId) external onlyOwner {
-        IHookPausable(coreHook).unpause(poolId);
     }
 
     /**

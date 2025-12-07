@@ -26,7 +26,6 @@ import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {SqrtPriceMath} from "@uniswap/v4-core/src/libraries/SqrtPriceMath.sol";
 import {TickUtils} from "./libraries/TickUtils.sol";
 import {SafeCast} from "openzeppelin-contracts/contracts/utils/math/SafeCast.sol";
-import {PausablePool} from "./modules/PausablePool.sol";
 import {ProxySwapFlag} from "./libraries/ProxySwapFlag.sol";
 import {Errors} from "./libraries/Errors.sol";
 import {IVTSOrchestrator} from "./interfaces/IVTSOrchestrator.sol";
@@ -38,7 +37,7 @@ import {Position} from "./types/Position.sol";
  * This way it can calculate and manage Liquidity Commitments (C_A(r)) for each Position.
  * Furthermore, we need to know when Direct LP occurs, as this determines whether the underlying native tokens are settled to the Pool Manager.
  */
-contract CoreHook is BaseHook, PausablePool, Exttload, MarketHandler {
+contract CoreHook is BaseHook, Exttload, MarketHandler {
     using TransientSlot for *;
     using CurrencySettler for Currency;
     using SafeCast for int256;
@@ -53,14 +52,6 @@ contract CoreHook is BaseHook, PausablePool, Exttload, MarketHandler {
     {
         vtsOrchestrator = IVTSOrchestrator(payable(_vtsOrchestrator));
         mmPositionManager = _mmPositionManager;
-    }
-
-    function pause(PoolId poolId) external onlyFactory {
-        _pause(poolId);
-    }
-
-    function unpause(PoolId poolId) external onlyFactory {
-        _unpause(poolId);
     }
 
     function getHookPermissions() public pure override returns (Hooks.Permissions memory) {
@@ -144,7 +135,6 @@ contract CoreHook is BaseHook, PausablePool, Exttload, MarketHandler {
         internal
         virtual
         override
-        whenNotPaused(key.toId())
         returns (bytes4, int128)
     {
         uint160 sqrtPBefore = uint160(TransientSlot.asUint256(TransientSlots.SQRTP_BEFORE_SLOT).tload());
@@ -176,9 +166,10 @@ contract CoreHook is BaseHook, PausablePool, Exttload, MarketHandler {
         BalanceDelta delta,
         BalanceDelta feesAccrued,
         bytes calldata hookData
-    ) internal virtual override whenNotPaused(key.toId()) returns (bytes4, BalanceDelta) {
+    ) internal virtual override returns (bytes4, BalanceDelta) {
         // Update VTS position state with registration/update based on actual pool id
         // Pass callerDelta and feesAccrued for consolidated delta management
+        // Note: Pause check is enforced in VTSOrchestrator.processPosition
         (Position memory pos, PositionId id, BalanceDelta feeAdj) =
             vtsOrchestrator.processPosition(sender, key, params, delta, feesAccrued, hookData);
 

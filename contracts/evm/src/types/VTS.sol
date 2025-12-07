@@ -170,13 +170,13 @@ library TokenPairLib {
 
 /// @notice Central storage struct (like Bunni's HubStorage)
 /// @dev Contains all state mappings for pools, commits, positions and accounting
-/// ? need a mapping from tokenId => PositionIndex => PositionId
+/// ? need a mapping from CommitId => PositionIndex => PositionId
 struct VTSStorage {
     /// Per-pool state
     mapping(PoolId => Pool) pools;
     /// Per-pool accounting state
     mapping(PoolId => PoolAccounting) poolAccounting;
-    /// Per-commit (tokenId) state
+    /// Per-commit (CommitId) state
     mapping(uint256 => Commit) commits;
     /// Per-position state
     mapping(PositionId => Position) positions;
@@ -190,7 +190,7 @@ struct VTSStorage {
     mapping(PoolId => mapping(int24 => GrowthPair)) coverageUseGrowthOutside;
     /// Root-level RFS checkpoints, keyed by a generic bytes32 identifier
     /// For positions: use PositionId.unwrap(positionId)
-    /// For commits: use keccak256(abi.encodePacked(commitTokenId))
+    /// For commits: use keccak256(abi.encodePacked(commitCommitId))
     mapping(bytes32 => RFSCheckpoint) checkpoints;
     /// Persistent underlying credits owed by protocol to users (target => underlying => credit)
     /// Used to track unsettled withdrawals that couldn't be fulfilled immediately

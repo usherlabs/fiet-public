@@ -25,14 +25,19 @@ import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 import {ICommitmentDescriptor} from "./interfaces/ICommitmentDescriptor.sol";
 import {ILiquidityHub} from "./interfaces/ILiquidityHub.sol";
 import {IMMPositionManager} from "./interfaces/IMMPositionManager.sol";
+import {IMarketVault} from "./interfaces/IMarketVault.sol";
 import {SafeERC20} from "openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Errors} from "./libraries/Errors.sol";
 import {LiquidityUtils} from "./libraries/LiquidityUtils.sol";
+import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
+import {LiquidityAmounts} from "v4-periphery/src/libraries/LiquidityAmounts.sol";
+import {ILCC} from "./interfaces/ILCC.sol";
 import {NonzeroDeltaCount} from "@uniswap/v4-core/src/libraries/NonzeroDeltaCount.sol";
 import {Constants} from "@uniswap/v4-core/test/utils/Constants.sol";
 import {console} from "forge-std/console.sol";
 import {IVTSOrchestrator} from "./interfaces/IVTSOrchestrator.sol";
 import {Position} from "./types/Position.sol";
+import {TransientSlots} from "./libraries/TransientSlots.sol";
 import {PositionManagerLiquidity} from "./modules/PositionManagerLiquidity.sol";
 
 contract MMPositionManager is
@@ -171,11 +176,7 @@ contract MMPositionManager is
         // _handleNativeValue
 
         _executeActionsWithoutUnlock(actions, params);
-        if (NonzeroDeltaCount.read() > 0) {
-            // TODO: include revert after clamping deltas is implemented
-            // revert Errors.CurrencyNotSettled();
-            console.log("CurrencyNotSettled");
-        }
+        vtsOrchestrator.assertNonZeroDeltas();
     }
 
     function _handleAction(uint256 action, bytes calldata params) internal override {
@@ -229,20 +230,18 @@ contract MMPositionManager is
             (PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex, uint256 amount0, uint256 amount1) =
                 abi.decode(params, (PoolKey, uint256, uint256, uint256, uint256));
             // seize is third-party guarantor action; no approval required by design
-            // get owner of the token
-            vtsOrchestrator.seizePosition(msgSender(), poolKey, tokenId, positionIndex, amount0, amount1);
+            _seizePosition(poolKey, tokenId, positionIndex, amount0, amount1);
             return;
         }
         if (action == uint256(MMAction.DECLARE_UNBACKED_COMMITMENT)) {
             (uint256 tokenId, bytes memory liquiditySignal) = abi.decode(params, (uint256, bytes));
-            // declare an unbacked commitment. A third-party guarantor action; no approval required
-            vtsOrchestrator.declareUnbackedCommitment(msgSender(), tokenId, liquiditySignal);
+            _declareUnbackedCommitment(tokenId, liquiditySignal);
             return;
         }
         if (action == uint256(MMAction.COLLECT_AVAILABLE_LIQUIDITY)) {
             // params: (address lcc, address recipient, uint256 maxAmount)
             (address lcc, address recipient, uint256 maxAmount) = abi.decode(params, (address, address, uint256));
-            vtsOrchestrator.collectAvailableLiquidity(msgSender(), lcc, recipient, maxAmount);
+            _collectAvailableLiquidity(lcc, recipient, maxAmount);
             return;
         }
         if (action == uint256(MMAction.DECOMMIT_SIGNAL)) {
@@ -256,7 +255,7 @@ contract MMPositionManager is
                 abi.decode(params, (address, uint256, address, bool));
             // Pair-agnostic: accept any LCC address. Governance/guards can be added if needed.
             // Unwrap best-effort to recipient; non-reverting, clamps to available manager-held LCC.
-            vtsOrchestrator.unwrapLCC(msgSender(), lccAddr, _mapPayer(payerIsUser), _mapRecipient(recipient), amount);
+            _unwrapLCC(lccAddr, _mapPayer(payerIsUser), _mapRecipient(recipient), amount);
             return;
         }
         if (action == uint256(MMAction.WRAP_NATIVE)) {
@@ -282,9 +281,7 @@ contract MMPositionManager is
                 uint32 verifierIndex,
                 bytes memory settlementProof
             ) = abi.decode(params, (PoolKey, uint256, uint256, uint8, uint32, bytes));
-            vtsOrchestrator.extendGracePeriod(
-                poolKey, tokenId, positionIndex, settlementTokenIndex, verifierIndex, settlementProof
-            );
+            _extendGracePeriod(poolKey, tokenId, positionIndex, settlementTokenIndex, verifierIndex, settlementProof);
             return;
         }
         if (action == uint256(MMAction.TAKE_LCC)) {
@@ -309,10 +306,7 @@ contract MMPositionManager is
         if (action == uint256(MMAction.SETTLE_POSITION_FROM_DELTAS)) {
             (PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex, bool settleIn0, bool settleIn1) =
                 abi.decode(params, (PoolKey, uint256, uint256, bool, bool));
-            // Settlement happens in underlying terms, so we need to check underlying credits, not LCC credits
-            // Note: settleIn0/settleIn1 flags determine direction. After onMMSettle negates the delta:
-            //       true = negative amount = deposit (settle IN), false = positive amount = withdraw (settle OUT)
-            vtsOrchestrator.settleFromDeltas(msgSender(), poolKey, tokenId, positionIndex, settleIn0, settleIn1);
+            _settleFromDeltas(poolKey, tokenId, positionIndex, settleIn0, settleIn1);
             return;
         }
         revert("UnsupportedAction");
@@ -330,9 +324,8 @@ contract MMPositionManager is
     /// @param tokenId the ERC721 tokenId (commitment NFT ID)
     /// @param positionIndex the index of the position within the commitment
     /// @return Position the position information
-    function getPosition(uint256 tokenId, uint256 positionIndex) public view returns (Position memory) {
-        (Position memory position,) = vtsOrchestrator.getPosition(tokenId, positionIndex);
-        return position;
+    function getPosition(uint256 tokenId, uint256 positionIndex) public view returns (Position memory, PositionId) {
+        return vtsOrchestrator.getPosition(tokenId, positionIndex);
     }
 
     /**
@@ -363,7 +356,276 @@ contract MMPositionManager is
     // ------------------------------------------------------------------------------------------------
 
     /**
-     * @dev This function commits a liquidity signal and mints a commitment NFT.
+     * @dev This function is used to extend the grace period for a position
+     * @param poolKey The pool key for the position
+     * @param tokenId The token id to extend the grace period for
+     * @param positionIndex The position index to extend the grace period for
+     * @param settlementTokenIndex The index of the settlement token
+     * @param verifierIndex The verifier index
+     * @param settlementProof The settlement proof
+     */
+    function _extendGracePeriod(
+        PoolKey memory poolKey,
+        uint256 tokenId,
+        uint256 positionIndex,
+        uint8 settlementTokenIndex,
+        uint32 verifierIndex,
+        bytes memory settlementProof
+    ) internal {
+        // extend the grace period for the position
+        vtsOrchestrator.extendGracePeriod(
+            poolKey, tokenId, positionIndex, settlementTokenIndex, verifierIndex, settlementProof
+        );
+    }
+
+    /**
+     * @dev This function is used to check if the position is being seized
+     * @param positionId The position id to check if it is being seized
+     * @return bool True if the position is being seized, false otherwise
+     */
+    function _isSeizing(PositionId positionId) internal view returns (bool) {
+        PositionId seizedPositionId = TransientSlots.getSeizedPositionId();
+        return PositionId.unwrap(seizedPositionId) == PositionId.unwrap(positionId);
+    }
+
+    /**
+     * @dev Seizure of a position by a guarantor (other MM)
+     * @param poolKey The pool key for the position
+     * @param tokenId The token id to settle the position for
+     * @param positionIndex The position index to settle the position for
+     */
+    function _seizePosition(
+        PoolKey memory poolKey,
+        uint256 tokenId,
+        uint256 positionIndex,
+        uint256 amount0,
+        uint256 amount1
+    ) internal {
+        (Position memory position, PositionId positionId) = getPosition(tokenId, positionIndex);
+
+        // -- Validate that caller is not position owner (approved/owner of NFT)
+        // use _isApprovedOrOwner to get the owner/approved wallets of the token id, as position.owner is address(this).
+        // Technically, seizing your own position cannot be stopped (via proxy wallets), but there should be no incentive.
+        if (_isApprovedOrOwner(msgSender(), tokenId) || position.isActive == false) {
+            revert Errors.InvalidPosition(tokenId, positionIndex, positionId);
+        }
+
+        // Run internal seize checks to ensure valid seizure. ie. elapsed grace period, etc.
+        vtsOrchestrator.onSeize(tokenId, positionIndex);
+
+        // Set transient storage for seizure tracking
+        TransientSlots.setSeizedPositionId(positionId);
+
+        // Call _settle - this will return the seizedLiquidityUnits
+        uint256 seizedLiquidityUnits = _settle(poolKey, tokenId, positionIndex, amount0.toInt128(), amount1.toInt128());
+
+        // Prepare hookData
+        BalanceDelta seizureSettlementDelta = LiquidityUtils.safeToBalanceDelta(amount0, amount1, true, true);
+        bytes memory hookData = PositionModificationHookDataLib.encodeSeizure(
+            tokenId, positionIndex, seizureSettlementDelta.amount0(), seizureSettlementDelta.amount1()
+        );
+
+        // Call _decreaseInternal with hookData
+        _decreaseInternal(
+            poolKey,
+            tokenId,
+            positionIndex,
+            PositionLibrary.generateSalt(tokenId, positionIndex),
+            seizedLiquidityUnits,
+            hookData
+        );
+    }
+
+    /**
+     * @dev This function is used to declare an unbacked commitment
+     * @param tokenId The token id to declare the commitment for
+     * @param liquiditySignal The liquidity signal to declare the commitment for
+     */
+    function _declareUnbackedCommitment(uint256 tokenId, bytes memory liquiditySignal) internal {
+        // declare an unbacked commitment. A third-party guarantor action; no approval required
+        vtsOrchestrator.declareUnbackedCommitment(msgSender(), tokenId, liquiditySignal);
+    }
+
+    /**
+     * @dev Internal helper to convert LCC currency to underlying currency
+     */
+    function _lccToUnderlyingCurrency(Currency lcc) internal view returns (Currency) {
+        return Currency.wrap(ILCC(Currency.unwrap(lcc)).underlying());
+    }
+
+    /**
+     * @dev Internal helper to get full credit from VTSOrchestrator
+     */
+    function _getFullCredit(Currency currency, address owner) internal view returns (uint256) {
+        return vtsOrchestrator.getFullCredit(currency, owner);
+    }
+
+    /**
+     * @dev This function is used to settle a position from deltas
+     * @param poolKey The pool key for the position
+     * @param tokenId The token id to settle the position for
+     * @param positionIndex The position index to settle the position for
+     * @param settleIn0 Whether to settle in token0
+     * @param settleIn1 Whether to settle in token1
+     */
+    function _settleFromDeltas(
+        PoolKey memory poolKey,
+        uint256 tokenId,
+        uint256 positionIndex,
+        bool settleIn0,
+        bool settleIn1
+    ) internal {
+        // Settlement happens in underlying terms, so we need to check underlying credits, not LCC credits
+        // Note: settleIn0/settleIn1 flags determine direction. After onMMSettle negates the delta:
+        //       true = negative amount = deposit (settle IN), false = positive amount = withdraw (settle OUT)
+        (uint256 fullCredit0, uint256 fullCredit1) =
+            vtsOrchestrator.getFullCreditPair(poolKey.currency0, poolKey.currency1, msgSender());
+        BalanceDelta sDelta = LiquidityUtils.safeToBalanceDelta(fullCredit0, fullCredit1, settleIn0, settleIn1);
+        _settle(poolKey, tokenId, positionIndex, sDelta.amount0(), sDelta.amount1());
+    }
+
+    /**
+     * @dev This function is used to get the liquidity from deltas
+     * @param poolKey The pool key for the position
+     * @param tickLower The lower tick of the position
+     * @param tickUpper The upper tick of the position
+     * @return liquidity The liquidity from deltas
+     */
+    function _getLiquidityFromDeltas(PoolKey memory poolKey, int24 tickLower, int24 tickUpper)
+        internal
+        view
+        returns (uint256 liquidity)
+    {
+        (uint160 sqrtPriceX96,,,) = poolManager.getSlot0(poolKey.toId());
+        return LiquidityAmounts.getLiquidityForAmounts(
+            sqrtPriceX96,
+            TickMath.getSqrtPriceAtTick(tickLower),
+            TickMath.getSqrtPriceAtTick(tickUpper),
+            _getFullCredit(_lccToUnderlyingCurrency(poolKey.currency0), msgSender()),
+            _getFullCredit(_lccToUnderlyingCurrency(poolKey.currency1), msgSender())
+        );
+    }
+
+    /// @notice Unwrap LCC to underlying asset, either from deltas (requested == 0) or from caller's wallet (requested > 0).
+    /// @dev Non-reverting: clamps to available; returns actually unwrapped amount observed via balance delta.
+    /// @param lccAddr The LCC token address to unwrap
+    /// @param from The address to unwrap from (for deltas or wallet transfer)
+    /// @param to The recipient address to receive the underlying asset
+    /// @param requested The requested LCC amount to unwrap (0 = unwrap from deltas, >0 = unwrap from caller's wallet)
+    /// @return unwrapped The actual amount of underlying delivered to the recipient
+    function _unwrapLCC(address lccAddr, address from, address to, uint256 requested)
+        internal
+        returns (uint256 unwrapped)
+    {
+        ILCC lcc = ILCC(lccAddr);
+        Currency lccCurrency = Currency.wrap(lccAddr);
+        address underlying = lcc.underlying();
+
+        // Measure recipient underlying balance before unwrap
+        uint256 beforeBal = IERC20(underlying).balanceOf(to);
+
+        uint256 toUnwrap;
+
+        if (requested == 0) {
+            // Unwrap from deltas: use available credit from this contract's deltas (or from?)
+            // Note: original logic used `from` for deltas.
+            uint256 available = _getFullCredit(lccCurrency, from);
+            toUnwrap = available; // Unwrap all available deltas
+        } else {
+            // Unwrap from caller's wallet
+            toUnwrap = requested;
+        }
+
+        if (toUnwrap > 0) {
+            // If paying from wallet (not deltas/self), pull LCC first
+            // Note: if requested > 0, caller must have approved MMPM.
+            // If requested == 0, we are unwrapping from 'from's deltas.
+            // If 'from' != 'this', we assume 'from' is the user (msg.sender).
+            // But we can't pull deltas. Deltas are in VTSO.
+            // 'liquidityHub.unwrapTo' burns LCC.
+            // If unwrapping from deltas, we don't have LCC tokens to burn?
+            // VTSO logic was: `VTSPositionLib.unwrapLCC`.
+            // Let's check `VTSPositionLib.unwrapLCC` logic? No, I can't.
+            // But `_getFullCredit` checks VTSO deltas.
+            // If deltas represent "virtual LCCs", then LiquidityHub cannot burn them unless it knows about them.
+            // If `VTSPositionLib` called `liquidityHub.unwrapTo`, it implies `unwrapTo` handles it?
+            // Or maybe VTSO *issued* LCCs to LiquidityHub/MMPM but kept them as delta?
+            // If LCCs are virtual (delta), we can't burn real LCCs.
+            // We must decrement delta.
+            // `unwrapLCC` in VTSO did `accountDelta(-unwrapped)`.
+            // This reduces the delta.
+            // Then `accountDelta(underlying, +unwrapped)`.
+            // This increases underlying delta.
+            // It looks like a SWAP of deltas.
+            // Did `LiquidityHub` get involved?
+            // `VTSPositionLib.unwrapLCC` called `liquidityHub.unwrapTo`.
+            // This suggests LiquidityHub DOES something.
+            // If `LiquidityHub` sends underlying tokens, then `to` gets tokens.
+            // Then `accountDelta(underlying)` is double counting?
+            // UNLESS `LiquidityHub.unwrapTo` supports virtual unwrapping?
+            // Or VTSO logic was: "If I have LCC delta, I can swap it for Underlying delta".
+            // And maybe LiquidityHub is used to check reserves?
+
+            // Let's assume the User Prompt implies "funds transfer".
+            // If funds transfer, we need real tokens.
+            // If tokens are virtual (delta), we can't transfer them.
+            // But `MarketVault` holds underlying.
+            // If I unwrap LCC (Virtual) -> Underlying (Real), I need to reduce LCC delta and send Underlying.
+            // `_unwrapLCC` in Snapshot 2 calls `liquidityHub.unwrapTo`.
+            // I'll stick to Snapshot 2 logic as closely as possible.
+
+            if (from != address(this) && requested > 0) {
+                IERC20(lccAddr).safeTransferFrom(from, address(this), toUnwrap);
+            }
+            // If unwrap from deltas, we rely on LiquidityHub being able to handle it?
+            // Or we just don't call LiquidityHub if it's purely virtual?
+            // Snapshot 2 code:
+            /*
+            if (toUnwrap > 0) {
+                // Route unwrap via LiquidityHub to leverage reserve tracking and settlement queuing
+                if (from != address(this)) {
+                    lcc.safeTransferFrom(from, address(this), toUnwrap);
+                }
+                liquidityHub.unwrapTo(lccAddr, to, toUnwrap);
+            }
+            */
+            // This assumes `address(this)` (MMPM) has the tokens (if from==this) or pulls them.
+            // If unwrap from deltas, MMPM doesn't have tokens?
+            // Then `liquidityHub.unwrapTo` might fail if it tries to burn from MMPM?
+            // Unless `liquidityHub` is VTS-aware.
+            // Assuming it works as per Snapshot 2.
+
+            liquidityHub.unwrapTo(lccAddr, to, toUnwrap);
+        }
+
+        // Compute actually unwrapped by observing recipient balance delta
+        // Note: this requires 'to' to not be malicious reentrant contract masking balance?
+        unwrapped = IERC20(underlying).balanceOf(to) - beforeBal;
+
+        // if (unwrapped > 0) {
+        //     _accountDelta(lccCurrency, -unwrapped.toInt128(), msgSender()); // Debit LCC delta from source
+        //     _accountDelta(Currency.wrap(underlying), unwrapped.toInt128(), to); // Credit underlying delta to recipient
+        // }
+    }
+
+    /**
+     * @dev Collects available liquidity from the settlement queue for the caller
+     * @param lcc The LCC token address to process settlement for
+     * @param recipient The recipient address to receive the underlying assets
+     * @param maxAmount The maximum amount to settle
+     */
+    function _collectAvailableLiquidity(address lcc, address recipient, uint256 maxAmount) internal {
+        address sender = msgSender();
+        uint256 queued = liquidityHub.settleQueue(lcc, sender);
+
+        if (queued > 0) {
+            liquidityHub.processSettlementFor(lcc, recipient, maxAmount);
+        }
+
+        vtsOrchestrator.primeUnderlyingDelta(sender, Currency.wrap(lcc));
+    }
+
+    /**
      * @param liquiditySignal The ABI-encoded LiquiditySignal to verify and record.
      * @param owner The address to receive the commitment NFT (can be mapped constants).
      * @return tokenId The commitment NFT id created.
@@ -388,14 +650,44 @@ contract MMPositionManager is
         internal
         returns (uint256)
     {
-        (uint256 seizedLiquidityUnits, bool isSeizing) =
-            vtsOrchestrator.settle(msgSender(), poolKey, tokenId, positionIndex, toBalanceDelta(amount0, amount1));
+        PositionId positionId = getPositionId(tokenId, positionIndex);
+        bool isSeizing = _isSeizing(positionId);
 
         // Access control: if not seizing, require approval
         if (!isSeizing) {
             _assertApprovedOrOwner(msgSender(), tokenId);
         }
 
+        (BalanceDelta settlementDelta, bool rfsOpen, uint256 seizedLiquidityUnits) = vtsOrchestrator.onMMSettle(
+            positionId, poolKey.currency0, poolKey.currency1, toBalanceDelta(amount0, amount1), isSeizing
+        );
+
+        // Determine Vault
+        address vault = marketFactory.getVault(poolKey.toId());
+
+        // Handle Deposits (Pull from User)
+        int128 delta0 = settlementDelta.amount0();
+        int128 delta1 = settlementDelta.amount1();
+
+        if (delta0 < 0) {
+            IERC20(Currency.unwrap(poolKey.currency0)).safeTransferFrom(msgSender(), address(this), uint256(-delta0));
+        }
+        if (delta1 < 0) {
+            IERC20(Currency.unwrap(poolKey.currency1)).safeTransferFrom(msgSender(), address(this), uint256(-delta1));
+        }
+
+        // Execute Settlement via Vault
+        BalanceDelta usedDelta = IMarketVault(vault).tryModifyLiquidities(settlementDelta);
+
+        // Handle Withdrawals (Push to User)
+        if (usedDelta.amount0() > 0) {
+            IERC20(Currency.unwrap(poolKey.currency0)).safeTransfer(msgSender(), uint256(usedDelta.amount0()));
+        }
+        if (usedDelta.amount1() > 0) {
+            IERC20(Currency.unwrap(poolKey.currency1)).safeTransfer(msgSender(), uint256(usedDelta.amount1()));
+        }
+
+        // Return nil if no seizure.
         return seizedLiquidityUnits;
     }
 
@@ -407,8 +699,7 @@ contract MMPositionManager is
     function _decommitSignal(PoolKey memory poolKey, uint256 tokenId)
         internal
         onlyIfApproved(msgSender(), tokenId)
-        // onlyValidCommit(poolKey, tokenId)
-
+        onlyValidCommit(poolKey, tokenId)
     {
         // this logic would be taken out and the user would have to burn each position individually
         // get all positions attached to this token id
@@ -417,7 +708,7 @@ contract MMPositionManager is
         // ? this logic would be taken out and the user would have to burn each position individually
         (,, uint256 positionCount,) = vtsOrchestrator.getCommit(tokenId);
         for (uint256 i = 0; i < positionCount; i++) {
-            Position memory position = getPosition(tokenId, i);
+            (Position memory position,) = getPosition(tokenId, i);
             if (position.isActive) {
                 _burnPositionInternal(poolKey, tokenId, i);
             }
@@ -443,7 +734,7 @@ contract MMPositionManager is
     }
 
     function _burnPositionInternal(PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex) internal {
-        Position memory pos = getPosition(tokenId, positionIndex);
+        (Position memory pos,) = getPosition(tokenId, positionIndex);
         uint256 completeLiquidity = uint256(pos.liquidity);
         _decrease(poolKey, tokenId, positionIndex, completeLiquidity);
     }
@@ -531,7 +822,7 @@ contract MMPositionManager is
     ) internal onlyIfApproved(msgSender(), tokenId) {
         // onlyValidCommit(poolKey, tokenId)
         // Compute liquidity from LCC credits (via router helper)
-        uint256 liquidityFromDeltas = vtsOrchestrator.getLiquidityFromDeltas(msgSender(), poolKey, tickLower, tickUpper);
+        uint256 liquidityFromDeltas = _getLiquidityFromDeltas(poolKey, tickLower, tickUpper);
 
         _increaseInternal(poolKey, tokenId, positionIndex, tickLower, tickUpper, liquidityFromDeltas);
     }
@@ -548,7 +839,7 @@ contract MMPositionManager is
         onlyIfApproved(msgSender(), tokenId)
     {
         // Compute underying liquidity from credits (via router helper)
-        uint256 liquidityFromDeltas = vtsOrchestrator.getLiquidityFromDeltas(msgSender(), poolKey, tickLower, tickUpper);
+        uint256 liquidityFromDeltas = _getLiquidityFromDeltas(poolKey, tickLower, tickUpper);
 
         _mintPositionInternal(poolKey, tokenId, tickLower, tickUpper, liquidityFromDeltas);
     }
@@ -578,7 +869,7 @@ contract MMPositionManager is
         bytes memory hookData
     ) internal {
         // Get position to validate and retrieve tick range
-        (Position memory position,) = vtsOrchestrator.getPosition(tokenId, positionIndex);
+        (Position memory position,) = getPosition(tokenId, positionIndex);
 
         // Validate liquidity is not over available
         uint256 posLiq = uint256(position.liquidity);
@@ -698,21 +989,6 @@ contract MMPositionManager is
         uint256 liquidity
     ) internal onlyIfApproved(msgSender(), tokenId) {
         _mintPositionInternal(poolKey, tokenId, tickLower, tickUpper, liquidity);
-    }
-
-    /**
-     * @dev This function is used to get the settlement delta for a given user and currency pair
-     * @param user The address of the user to get the settlement delta for
-     * @param currency0 The address of the currency0 to get the settlement delta for
-     * @param currency1 The address of the currency1 to get the settlement delta for
-     * @return settlementDelta The settlement delta for the given user and currency pair
-     */
-    function getSettlementDelta(address user, address currency0, address currency1)
-        external
-        view
-        returns (BalanceDelta)
-    {
-        return vtsOrchestrator.getSettlementDelta(user, currency0, currency1);
     }
 
     // ------------------------------------------------------------------------------------------------

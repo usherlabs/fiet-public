@@ -47,8 +47,8 @@ library VTSFeeLib {
     /// @param positionId The position ID
     /// @return adj0 The pending fee adjustment for token0 (+slash, -bonus)
     /// @return adj1 The pending fee adjustment for token1 (+slash, -bonus)
-    function peekFeeAdjustment(VTSStorage storage s, PositionId positionId)
-        public
+    function _peekFeeAdjustment(VTSStorage storage s, PositionId positionId)
+        internal
         view
         returns (int256 adj0, int256 adj1)
     {
@@ -121,7 +121,7 @@ library VTSFeeLib {
         Currency currency1
     ) internal returns (BalanceDelta adj) {
         // Materialise pending: fund slashed pot for +ve; drain to LP for -ve
-        (int256 pend0, int256 pend1) = peekFeeAdjustment(s, positionId);
+        (int256 pend0, int256 pend1) = _peekFeeAdjustment(s, positionId);
         int256 mat0 = 0;
         int256 mat1 = 0;
 
@@ -195,7 +195,7 @@ library VTSFeeLib {
         PositionId positionId,
         Currency currency0,
         Currency currency1
-    ) public returns (BalanceDelta adj) {
+    ) internal returns (BalanceDelta adj) {
         Position memory pos = s.positions[positionId];
         PoolId poolId = pos.poolId;
         Pool memory pool = s.pools[poolId];
@@ -274,8 +274,8 @@ library VTSFeeLib {
         PositionId positionId,
         Currency lccCurrency0,
         Currency lccCurrency1
-    ) external {
-        (int256 adj0, int256 adj1) = peekFeeAdjustment(s, positionId);
+    ) internal {
+        (int256 adj0, int256 adj1) = _peekFeeAdjustment(s, positionId);
         PositionAccounting storage pa = s.positionAccounting[positionId];
         int256 prev0 = pa.lastFundedPendingAdj.token0;
         int256 prev1 = pa.lastFundedPendingAdj.token1;

@@ -22,8 +22,14 @@ interface IVTSOrchestrator {
 
     // Access Control / Config
     function setMMPositionManager(address _mmPositionManager) external;
-    function setPaused(bool paused) external;
+
+    // Pause Control (via GlobalConfig.proxyCall)
+    function setGlobalPause(bool paused) external;
     function isPaused() external view returns (bool);
+    function pausePool(PoolId poolId) external;
+    function unpausePool(PoolId poolId) external;
+    function isPoolPaused(PoolId poolId) external view returns (bool);
+    function isPoolOrGlobalPaused(PoolId poolId) external view returns (bool);
 
     // State Getters
     function getPosition(PositionId positionId) external view returns (Position memory);
@@ -99,19 +105,8 @@ interface IVTSOrchestrator {
     // MMPositionManager
     function commitSignal(bytes memory liquiditySignal) external returns (uint256 commitId);
 
-    // NOTE: onMintPosition, onIncreaseLiquidity, onDecreaseLiquidity have been removed.
-    // All delta management is now handled in processPosition via CoreHook callbacks.
-
     function getFullCredit(Currency currency, address owner) external view returns (uint256);
-    function collectAvailableLiquidity(address sender, address lcc, address recipient, uint256 maxAmount) external;
-    function settleFromDeltas(
-        address sender,
-        PoolKey memory poolKey,
-        uint256 commitId,
-        uint256 positionIndex,
-        bool settleIn0,
-        bool settleIn1
-    ) external returns (BalanceDelta sDelta);
+    function primeUnderlyingDelta(address sender, Currency lcc) external;
 
     function take(Currency currency, address sender, address to, uint256 maxAmount) external;
     function extendGracePeriod(
@@ -123,37 +118,22 @@ interface IVTSOrchestrator {
         bytes memory settlementProof
     ) external;
 
-    function seizePosition(
-        address sender,
-        PoolKey memory poolKey,
-        uint256 commitId,
-        uint256 positionIndex,
-        uint256 amount0,
-        uint256 amount1
-    ) external;
+    function onMMSettle(
+        PositionId positionId,
+        Currency currency0,
+        Currency currency1,
+        BalanceDelta amountDelta,
+        bool isSeizing
+    ) external returns (BalanceDelta settlementDelta, bool rfsOpen, uint256 seizedLiquidityUnits);
 
-    function unwrapLCC(address sender, address lccAddr, address from, address to, uint256 requested)
-        external
-        returns (uint256 unwrapped, address underlying);
-
-    function getLiquidityFromDeltas(address owner, PoolKey memory poolKey, int24 tickLower, int24 tickUpper)
-        external
-        view
-        returns (uint256 liquidity);
-
-    function settle(
-        address sender,
-        PoolKey memory poolKey,
-        uint256 commitId,
-        uint256 positionIndex,
-        BalanceDelta sDelta
-    ) external returns (uint256 seizedLiquidityUnits, bool isSeizing);
+    function onSeize(uint256 commitId, uint256 positionIndex) external;
 
     function renewSignal(uint256 commitId, bytes memory liquiditySignal) external;
     function declareUnbackedCommitment(address sender, uint256 commitId, bytes memory liquiditySignal) external;
-    function getSettlementDelta(address user, address currency0, address currency1) external view returns (BalanceDelta);
 
     // Checkpoints
     function positionToCheckpoint(PositionId positionId) external view returns (RFSCheckpoint memory);
     function markCheckpoint(uint256 commitId, uint256 positionIndex) external;
+
+    function assertNonZeroDeltas() external view;
 }
