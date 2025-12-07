@@ -143,6 +143,7 @@ contract VTSOrchestrator is ImmutableMarketState, PausableVTS, VTSCurrencyDelta,
     }
 
     /// @notice Set the MM Position Manager address
+    // TODO: Determine proper approach to contract composition.
     function setMMPositionManager(address _mmPositionManager) external onlyOwner {
         if (_mmPositionManager == address(0)) {
             revert Errors.InvalidAddress(_mmPositionManager);
@@ -220,11 +221,10 @@ contract VTSOrchestrator is ImmutableMarketState, PausableVTS, VTSCurrencyDelta,
     function isPositionValid(PositionId id, bool requireActive) public view returns (bool) {
         Position memory pos = s.positions[id];
         if (pos.owner == address(0)) return false;
-        if (requireActive && !pos.isActive) return false;
-        PositionAccounting storage pa = s.positionAccounting[id];
-        // Commitment maxima must be > 0 for active positions
-        if (requireActive && (pa.commitmentMax.token0 == 0 || pa.commitmentMax.token1 == 0)) {
-            return false;
+        if (requireActive) {
+            if (!pos.isActive) return false;
+            PositionAccounting storage pa = s.positionAccounting[id];
+            if (pa.commitmentMax.token0 == 0 || pa.commitmentMax.token1 == 0) return false;
         }
         return true;
     }
@@ -295,6 +295,7 @@ contract VTSOrchestrator is ImmutableMarketState, PausableVTS, VTSCurrencyDelta,
         returns (PositionId, bool, BalanceDelta)
     {
         PositionId positionId = getPositionId(commitId, positionIndex);
+        _assertPositionValid(positionId, true, true);
         (bool rfsOpen, BalanceDelta delta) = VTSPositionLib.calcRFS(s, poolManager, positionId, requireClosedRfS);
         return (positionId, rfsOpen, delta);
     }

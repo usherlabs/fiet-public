@@ -39,9 +39,6 @@ library Errors {
     /// @notice Thrown when an invalid address is provided (zero address or invalid for context)
     error InvalidAddress(address self);
 
-    /// @notice Thrown when an invalid initialiser is provided
-    error InvalidInitialiser();
-
     /// @notice Thrown when an invalid market is provided
     error InvalidMarket(PoolKey poolKey);
 

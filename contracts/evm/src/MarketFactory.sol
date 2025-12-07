@@ -19,21 +19,21 @@ import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {IMarketVault} from "./interfaces/IMarketVault.sol";
 import {LiquidityUtils} from "./libraries/LiquidityUtils.sol";
 import {Errors} from "./libraries/Errors.sol";
+import {ImmutableState} from "v4-periphery/src/base/ImmutableState.sol";
+import {ImmutableVTSState} from "./modules/ImmutableVTSState.sol";
 
 /**
  * @title MarketFactory
  * @notice Factory contract for creating Fiet protocol markets with LCC tokens and pool management
  * @dev Manages LCC token creation, pool deployment, and protocol bounds administration
  */
-contract MarketFactory is IMarketFactory, Ownable {
+contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSState {
     using PoolIdLibrary for PoolKey;
 
-    IPoolManager public immutable poolManager;
     IOracleHelper public immutable oracleHelper;
     address public coreHook;
     address public marketDeployer;
     ILiquidityHub public immutable liquidityHub;
-    IVTSOrchestrator public immutable vtsOrchestrator;
     address public mmPositionManager;
 
     // Mapping from core pool ID to proxy pool ID
@@ -57,11 +57,9 @@ contract MarketFactory is IMarketFactory, Ownable {
         address _mmPositionManager,
         address _vtsOrchestrator,
         address[] memory _bounds
-    ) Ownable(msg.sender) {
-        poolManager = IPoolManager(_poolManager);
+    ) Ownable(msg.sender) ImmutableState(IPoolManager(_poolManager)) ImmutableVTSState(_vtsOrchestrator) {
         liquidityHub = ILiquidityHub(_liquidityHub);
         oracleHelper = IOracleHelper(_oracleHelper);
-        vtsOrchestrator = IVTSOrchestrator(_vtsOrchestrator);
         mmPositionManager = _mmPositionManager;
 
         // Set Protocol bounds addresses

@@ -30,6 +30,7 @@ import {ProxySwapFlag} from "./libraries/ProxySwapFlag.sol";
 import {Errors} from "./libraries/Errors.sol";
 import {IVTSOrchestrator} from "./interfaces/IVTSOrchestrator.sol";
 import {ImmutableMarketState} from "./modules/ImmutableMarketState.sol";
+import {ImmutableVTSState} from "./modules/ImmutableVTSState.sol";
 import {MarketHandlerLib} from "./libraries/MarketHandlerLib.sol";
 import {Position} from "./types/Position.sol";
 
@@ -38,20 +39,19 @@ import {Position} from "./types/Position.sol";
  * This way it can calculate and manage Liquidity Commitments (C_A(r)) for each Position.
  * Furthermore, we need to know when Direct LP occurs, as this determines whether the underlying native tokens are settled to the Pool Manager.
  */
-contract CoreHook is BaseHook, Exttload, ImmutableMarketState {
+contract CoreHook is BaseHook, Exttload, ImmutableMarketState, ImmutableVTSState {
     using TransientSlot for *;
     using CurrencySettler for Currency;
     using SafeCast for int256;
 
-    IVTSOrchestrator internal immutable vtsOrchestrator;
     address internal immutable mmPositionManager;
 
     // Owner will be set to MarketFactory
     constructor(address _poolManager, address _marketFactory, address _mmPositionManager, address _vtsOrchestrator)
         BaseHook(IPoolManager(_poolManager))
         ImmutableMarketState(_marketFactory)
+        ImmutableVTSState(_vtsOrchestrator)
     {
-        vtsOrchestrator = IVTSOrchestrator(_vtsOrchestrator);
         mmPositionManager = _mmPositionManager;
     }
 

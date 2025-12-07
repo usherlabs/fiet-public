@@ -219,25 +219,8 @@ abstract contract MarketTestBase is Test, Deployers {
 
         mmPositionManager = address(
             new MMPositionManager(
-                address(manager),
-                address(marketFactory),
-                address(vtsOrchestrator),
-                commitmentDescriptor,
-                weth9
+                address(manager), address(marketFactory), address(vtsOrchestrator), commitmentDescriptor, weth9
             )
-        );
-
-        // TODO: call duplicated in _mockFactoryCalls, need to take one out
-        // Mock mmPositionManager() call needed for LCC creation
-        vm.mockCall(
-            marketFactory,
-            abi.encodeWithSelector(IMarketFactory.mmPositionManager.selector),
-            abi.encode(address(mmPositionManager))
-        );
-        vm.mockCall(
-            marketFactory,
-            abi.encodeWithSelector(IMarketFactory.vtsOrchestrator.selector),
-            abi.encode(address(vtsOrchestrator))
         );
     }
 

@@ -72,7 +72,6 @@ contract MMPositionManager is
 
     ILiquidityHub internal immutable liquidityHub;
     IOracleHelper internal immutable oracleHelper;
-    IVTSOrchestrator internal immutable vtsOrchestrator;
 
     address public immutable commitmentDescriptor;
 
@@ -103,10 +102,10 @@ contract MMPositionManager is
         ERC721Permit_v4("Fiet VRL Commitment Positions Manager", "FIET-VRL-MMP")
         BaseActionsRouter(IPoolManager(_manager))
         NativeWrapper(_weth9)
+        PositionManagerLiquidity(_vtsOrchestrator)
         ImmutableMarketState(_marketFactory)
     {
         commitmentDescriptor = _descriptor;
-        vtsOrchestrator = IVTSOrchestrator(_vtsOrchestrator);
         // TODO: Replace with structure of immutable, extendable contracts.
         oracleHelper = marketFactory.oracleHelper();
         liquidityHub = marketFactory.liquidityHub();
@@ -332,10 +331,6 @@ contract MMPositionManager is
         }
         revert("UnsupportedAction");
     }
-
-    // ------------------------------------------------------------------------------------------------
-    // PositionManagerLiquidity Implementation
-    // ------------------------------------------------------------------------------------------------
 
     // ------------------------------------------------------------------------------------------------
     // MM Position Manager functions
@@ -695,7 +690,6 @@ contract MMPositionManager is
         int128 delta1 = settlementDelta.amount1();
 
         // Step A: Consume any self positive deltas first for withdrawals
-        // These positive deltas surface from primed credits.
         // This prioritises contract-held balances that were primed at batch start
         // TODO: Resole logic here.
         address sender = msgSender();
@@ -747,8 +741,7 @@ contract MMPositionManager is
         if (shortfall.amount0() > 0 || shortfall.amount1() > 0) {
             // Shortfall represents underlying that couldn't be withdrawn from vault
             // This will be persisted and claimable later when liquidity becomes available
-            vtsOrchestrator.primeUnderlyingDelta(sender, poolKey.currency0);
-            vtsOrchestrator.primeUnderlyingDelta(sender, poolKey.currency1);
+            // TODO: persist?
         }
 
         // Return seized liquidity units (0 if not seizing)

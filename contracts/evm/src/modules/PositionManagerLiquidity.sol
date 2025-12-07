@@ -12,6 +12,7 @@ import {CurrencySettler} from "v4-periphery/lib/v4-core/test/utils/CurrencySettl
 import {Errors} from "../libraries/Errors.sol";
 import {ImmutableState} from "v4-periphery/src/base/ImmutableState.sol";
 import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
+import {ImmutableVTSState} from "./ImmutableVTSState.sol";
 
 /**
  * @title PositionManagerLiquidity
@@ -30,10 +31,12 @@ import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
  *      This contract expects `poolManager` to be provided by the inheriting contract
  *      (e.g., via BaseActionsRouter or ImmutableState).
  */
-abstract contract PositionManagerLiquidity is ImmutableState {
+abstract contract PositionManagerLiquidity is ImmutableState, ImmutableVTSState {
     using StateLibrary for IPoolManager;
     using TransientStateLibrary for IPoolManager;
     using CurrencySettler for Currency;
+
+    constructor(address _vtsOrchestrator) ImmutableVTSState(_vtsOrchestrator) {}
 
     /**
      * @notice Modifies liquidity in a Uniswap V4 pool and immediately settles the deltas
@@ -99,6 +102,12 @@ abstract contract PositionManagerLiquidity is ImmutableState {
         if (delta1 > 0) {
             key.currency1.take(poolManager, self, uint256(uint128(delta1)), false);
         }
+    }
+
+    function _take(Currency currency, address sender, address to, uint256 maxAmount) internal {
+        uint256 amountTaken = vtsOrchestrator.take(currency, sender, to, maxAmount);
+        // Transfer the amount from contract's balance to 'to'
+        currency.transfer(to, amountTaken);
     }
 }
 

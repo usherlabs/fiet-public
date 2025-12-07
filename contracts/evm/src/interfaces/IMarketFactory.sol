@@ -59,22 +59,10 @@ interface IMarketFactory {
     function coreHook() external view returns (address);
 
     /**
-     * @notice Gets the pool manager address
-     * @return The pool manager address
-     */
-    function poolManager() external view returns (IPoolManager);
-
-    /**
      * @notice Gets the market maker position manager address
      * @return The market maker position manager address
      */
     function mmPositionManager() external view returns (address);
-
-    /**
-     * @notice Gets the VTS orchestrator address
-     * @return The VTS orchestrator address
-     */
-    function vtsOrchestrator() external view returns (IVTSOrchestrator);
 
     /**
      * @notice Gets the liquidity hub address

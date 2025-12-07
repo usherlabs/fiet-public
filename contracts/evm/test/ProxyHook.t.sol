@@ -532,7 +532,7 @@ contract ProxyHookTest is MarketVaultBase {
         });
 
         vm.prank(address(manager));
-        vm.expectRevert(Errors.InvalidInitialiser.selector);
+        vm.expectRevert(Errors.InvalidSender.selector);
         proxyHook.beforeInitialize(address(1), testKey, SQRT_PRICE_1_1);
     }
 

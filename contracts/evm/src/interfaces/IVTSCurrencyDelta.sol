@@ -64,8 +64,9 @@ interface IVTSCurrencyDelta {
      * @param sender The sender of the take
      * @param to The recipient of the take
      * @param maxAmount The maximum amount to take
+     * @return The amount taken
      */
-    function take(Currency currency, address sender, address to, uint256 maxAmount) external;
+    function take(Currency currency, address sender, address to, uint256 maxAmount) external returns (uint256);
 
     /**
      * @notice Gets the underlying delta pair for a user

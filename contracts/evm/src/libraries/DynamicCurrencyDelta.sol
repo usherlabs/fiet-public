@@ -134,15 +134,15 @@ library DynamicCurrencyDelta {
         Currency uCurrency1 = lccToUnderlyingCurrency(lccCurrency1);
 
         // Get current transient deltas if settlementDelta is zero
-        if (LiquidityUtils.isZeroDelta(settlementDelta)) {
-            int256 uaDelta0 = uCurrency0.getDelta(sender);
-            int256 uaDelta1 = uCurrency1.getDelta(sender);
-            settlementDelta = toBalanceDelta(SafeCast.toInt128(uaDelta0), SafeCast.toInt128(uaDelta1));
-        }
+        int256 uaDelta0 = uCurrency0.getDelta(sender);
+        int256 uaDelta1 = uCurrency1.getDelta(sender);
+        BalanceDelta baseDelta = toBalanceDelta(SafeCast.toInt128(uaDelta0), SafeCast.toInt128(uaDelta1));
 
         // Persist positive deltas (protocol owes credits) to persistent storage
-        int128 amount0 = settlementDelta.amount0();
-        int128 amount1 = settlementDelta.amount1();
+        BalanceDelta persistentDelta = baseDelta + settlementDelta;
+
+        int128 amount0 = persistentDelta.amount0();
+        int128 amount1 = persistentDelta.amount1();
 
         if (amount0 > 0) {
             address ua0 = Currency.unwrap(uCurrency0);
@@ -160,20 +160,16 @@ library DynamicCurrencyDelta {
     // Settlement Helpers
     // ============================================================
 
-    // ============================================================
-    // Take / Transfer Helpers
-    // ============================================================
-
     /// @notice Takes up to maxAmount from contract's balance of currency to 'to', capping to caller's positive delta
     /// @dev Takes min(caller's positive delta, maxAmount) from contract's balance and nets the delta
     /// @param currency The currency to take
     /// @param sender The address initiating the take
     /// @param to The recipient address
     /// @param maxAmount The maximum amount to take (use 0 for full available)
-    function take(Currency currency, address sender, address to, uint256 maxAmount) internal {
+    function take(Currency currency, address sender, address to, uint256 maxAmount) internal returns (uint256) {
         int256 delta = currency.getDelta(sender);
 
-        if (delta < 0) return; // No positive delta (credit) available
+        if (delta < 0) return 0; // No positive delta (credit) available
 
         // Cap to min of positive delta and maxAmount
         uint256 availableCredit = uint256(delta);
@@ -185,8 +181,7 @@ library DynamicCurrencyDelta {
             : -SafeCast.toInt128(amountToTake);
         accountDelta(currency, deltaToAccount, sender);
 
-        // Transfer the amount from contract's balance to 'to'
-        currency.transfer(to, amountToTake);
+        return amountToTake;
     }
 
     // ============================================================
