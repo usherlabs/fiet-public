@@ -37,6 +37,7 @@ import {ImmutableMarketState} from "./modules/ImmutableMarketState.sol";
 import {MarketHandlerLib} from "./libraries/MarketHandlerLib.sol";
 import {VTSCurrencyDelta} from "./modules/VTSCurrencyDelta.sol";
 import {Ownable} from "openzeppelin-contracts/contracts/access/Ownable.sol";
+import {VTSFeeLib} from "./libraries/VTSFeeLib.sol";
 
 /// @title VTSOrchestrator
 /// @notice Central state management layer and orchestrator for VTS logic
@@ -500,6 +501,44 @@ contract VTSOrchestrator is ImmutableMarketState, PausableVTS, VTSCurrencyDelta,
         VTSCommitLib.declareCommitmentDeficit(
             s, sender, address(this), commitId, IVRLSignalManager(signalManager), oracleHelper, liquiditySignal
         );
+    }
+
+    // --------------------------------------------------
+    // LCC Fee Collection
+    // --------------------------------------------------
+
+    /**
+     * @notice Collects LCC fees by converting ERC-6909 claims to actual ERC20 tokens
+     * @dev Must be called during an active PoolManager unlock context.
+     *      The caller must have:
+     *      1. ERC-6909 claims on PoolManager for the LCC currency
+     *      2. Positive VTS delta credit for the LCC currency
+     *
+     *      This function consolidates the settle/take dance for LCC fee collection:
+     *      1. Burns caller's ERC-6909 claims (credits PoolManager transient delta)
+     *      2. Takes actual ERC20 LCC tokens from PoolManager to recipient
+     *      3. Debits the caller's VTS delta
+     *
+     * @param lccCurrency The LCC currency to collect fees for
+     * @param recipient The recipient of the actual ERC20 tokens
+     * @param maxAmount The maximum amount to collect (0 = collect full available credit)
+     * @return collected The amount actually collected
+     */
+    function collectFees(Currency lccCurrency, address recipient, uint256 maxAmount)
+        external
+        returns (uint256 collected)
+    {
+        // Get caller's available credit
+        uint256 credit = DynamicCurrencyDelta.getFullCredit(lccCurrency, msg.sender);
+        collected = maxAmount == 0 ? credit : Math.min(credit, maxAmount);
+
+        if (collected > 0) {
+            // Delegate to the library function which handles:
+            // 1. Burning ERC-6909 claims from msg.sender (this contract when called via MMPM)
+            // 2. Taking actual ERC20 from PoolManager to recipient
+            // 3. Debiting the VTS delta
+            VTSFeeLib.collectFees(poolManager, lccCurrency, msg.sender, recipient, collected);
+        }
     }
 
     // --------------------------------------------------

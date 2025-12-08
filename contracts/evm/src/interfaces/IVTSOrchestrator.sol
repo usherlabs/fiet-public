@@ -123,4 +123,8 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta {
     // Checkpoints
     function positionToCheckpoint(PositionId positionId) external view returns (RFSCheckpoint memory);
     function markCheckpoint(uint256 commitId, uint256 positionIndex) external;
+
+    function collectFees(Currency lccCurrency, address recipient, uint256 maxAmount)
+        external
+        returns (uint256 collected);
 }

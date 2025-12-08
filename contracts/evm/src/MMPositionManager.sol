@@ -545,9 +545,8 @@ contract MMPositionManager is
 
         uint256 toUnwrap;
 
-        // Unwrap from deltas: use available credit from this contract's deltas (or from?)
+        // Unwrap from locker's deltas: take from MMPM-held deltas on behalf of locker.
         if (from == address(this)) {
-            // conduct a take from the delta of the locker - meaning taking from MMPM-held deltas on behalf of locker.
             toUnwrap = vtsOrchestrator.take(lccCurrency, msgSender(), requested);
         } else {
             toUnwrap = lcc.balanceOf(from);

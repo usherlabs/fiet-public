@@ -224,7 +224,7 @@ abstract contract PositionManagerBase is ImmutableState, ImmutableVTSState {
     /// @notice Takes currency from delta and transfers to recipient
     /// @dev Split model by currency type:
     ///      - LCC: Delta on MMPM, held as ERC-6909 claims on PoolManager
-    ///             Flow: burn claims -> take actual ERC20 -> debit MMPM delta
+    ///             Uses VTSOrchestrator.collectFees to handle the settle/take dance
     ///      - Underlying: Delta on locker, held as ERC20 by MMPM
     ///             Flow: debit locker delta -> direct ERC20 transfer
     /// @param currency The currency to take
@@ -233,19 +233,11 @@ abstract contract PositionManagerBase is ImmutableState, ImmutableVTSState {
     function _take(Currency currency, address to, uint256 maxAmount) internal {
         if (_isLCC(currency)) {
             // LCC: held as ERC-6909 claims on PoolManager, delta on MMPM
-            uint256 credit = _getFullCredit(currency, address(this));
-            uint256 takeAmount = maxAmount == 0 ? credit : Math.min(credit, maxAmount);
-
-            if (takeAmount > 0) {
-                // 1. Burn ERC-6909 claims (releases LCC from PoolManager custody)
-                currency.settle(poolManager, address(this), takeAmount, true);
-
-                // 2. Take actual ERC20 LCC tokens from PoolManager
-                currency.take(poolManager, to, takeAmount, false);
-
-                // 3. Debit MMPM delta
-                vtsOrchestrator.take(currency, address(this), takeAmount);
-            }
+            // Delegate to VTSOrchestrator.collectFees which handles:
+            // 1. Burning ERC-6909 claims (credits PoolManager transient delta)
+            // 2. Taking actual ERC20 LCC tokens from PoolManager to recipient
+            // 3. Debiting MMPM's VTS delta
+            vtsOrchestrator.collectFees(currency, to, maxAmount);
         } else {
             // Underlying: held as ERC20 by MMPM, delta on locker
             address locker = msgSender();
