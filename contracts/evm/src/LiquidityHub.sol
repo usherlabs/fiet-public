@@ -495,32 +495,35 @@ contract LiquidityHub is Ownable, LCCFactory, ReentrancyGuardTransient {
     }
 
     /**
-     * @notice Cancels LCC tokens (burns from issuer)
+     * @notice Cancels LCC tokens (burns from specified address)
      * @param lcc The LCC token address to cancel for
+     * @param from The address to cancel tokens from
      * @param amount The amount to cancel
      */
-    function cancel(address lcc, uint256 amount) external onlyIssuer(lcc) onlyValidLcc(lcc) {
+    function cancel(address lcc, address from, uint256 amount) external onlyIssuer(lcc) onlyValidLcc(lcc) {
         if (amount == 0) {
             revert Errors.InvalidAmount(0, 0);
         }
 
-        address issuer = _msgSender();
-        _burn(lcc, issuer, 0, amount, true);
+        _burn(lcc, from, 0, amount, true);
     }
 
     /**
      * @notice Cancels LCC tokens and queues a settlement for the shortfall
      * @dev Simulates unwrap-with-queue without touching direct supply or market liquidity
      * @param lcc The LCC token address to cancel for
+     * @param from The address to cancel tokens from
      * @param principalAmount Total amount to cancel (burn now) or queue (burn later)
      * @param queueAmount The amount to queue for settlement (must be <= principalAmount)
      * @param recipient The recipient address for the queued settlement
      */
-    function cancelWithQueue(address lcc, uint256 principalAmount, uint256 queueAmount, address recipient)
-        external
-        onlyIssuer(lcc)
-        onlyValidLcc(lcc)
-    {
+    function cancelWithQueue(
+        address lcc,
+        address from,
+        uint256 principalAmount,
+        uint256 queueAmount,
+        address recipient
+    ) external onlyIssuer(lcc) onlyValidLcc(lcc) {
         if (principalAmount == 0) {
             revert Errors.InvalidAmount(0, 0);
         }
@@ -529,9 +532,8 @@ contract LiquidityHub is Ownable, LCCFactory, ReentrancyGuardTransient {
         }
         uint256 cancelAmount = principalAmount - queueAmount;
 
-        address issuer = _msgSender();
         // Burn the cancelled amount (issuer burn path, skip bucket accounting)
-        _burn(lcc, issuer, 0, cancelAmount, true);
+        _burn(lcc, from, 0, cancelAmount, true);
 
         // Queue the settlement for future processing
         if (queueAmount > 0) {

@@ -11,7 +11,6 @@ import {LiquidityUtils} from "./LiquidityUtils.sol";
 import {Errors} from "../libraries/Errors.sol";
 import {IVRLSignalManager} from "../interfaces/IVRLSignalManager.sol";
 import {LiquiditySignal} from "../types/Commit.sol";
-import {ModifyLiquidityParams} from "v4-periphery/lib/v4-core/src/types/PoolOperation.sol";
 import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
 import {IOracleHelper} from "../interfaces/IOracleHelper.sol";
 import {OracleUtils} from "./OracleUtils.sol";
@@ -188,6 +187,11 @@ library VTSCommitLib {
     /// @param s The central VTS storage
     /// @param oracleHelper The oracle helper for USD price calculations
     /// @param tokenId The commit NFT id.
+    /// @param poolId The pool ID for the commitment
+    /// @param tickLower The lower tick of the position
+    /// @param tickUpper The upper tick of the position
+    /// @param liquidityDelta The liquidity delta to add
+    /// @param errorIfInsufficientBacking Whether to revert if backing is insufficient
     /// @return potentialIssuedUsd Total USD value of potential issued commitment maxima across all positions
     /// @return settledUsd Total USD value of settled amounts across all positions
     /// @return signalUsd Total USD value of signal reserves
@@ -195,11 +199,14 @@ library VTSCommitLib {
         VTSStorage storage s,
         IOracleHelper oracleHelper,
         uint256 tokenId,
-        PoolId commitPoolId,
-        ModifyLiquidityParams memory params,
+        PoolId poolId,
+        int24 tickLower,
+        int24 tickUpper,
+        int256 liquidityDelta,
         bool errorIfInsufficientBacking
     ) external view returns (uint256 potentialIssuedUsd, uint256 settledUsd, uint256 signalUsd) {
-        potentialIssuedUsd = _potentialIssuedUSDValue(s, oracleHelper, tokenId, commitPoolId, params);
+        potentialIssuedUsd =
+            _potentialIssuedUSDValue(s, oracleHelper, tokenId, poolId, tickLower, tickUpper, liquidityDelta);
         settledUsd = _settledUSDValue(s, oracleHelper, tokenId);
         signalUsd = _signalUSDValue(s, oracleHelper, tokenId);
 
@@ -239,26 +246,31 @@ library VTSCommitLib {
     /// @param s The central VTS storage
     /// @param oracleHelper The oracle helper for USD price calculations
     /// @param tokenId The commit NFT id
+    /// @param poolId The pool ID / market currencies to reference
+    /// @param tickLower The lower tick of the position
+    /// @param tickUpper The upper tick of the position
+    /// @param liquidityDelta The liquidity delta to add
     /// @return totalUsdValue Total USD value of commitment maxima (averaged)
     // TODO: Update to use running totals.
     function _potentialIssuedUSDValue(
         VTSStorage storage s,
         IOracleHelper oracleHelper,
         uint256 tokenId,
-        PoolId commitPoolId,
-        ModifyLiquidityParams memory params
+        PoolId poolId,
+        int24 tickLower,
+        int24 tickUpper,
+        int256 liquidityDelta
     ) internal view returns (uint256 totalUsdValue) {
         // get the current issued USD value
         totalUsdValue = _issuedUSDValue(s, oracleHelper, tokenId);
 
         // calculate the commitment maxima for the new commitment
-        Pool storage commitPool = s.pools[commitPoolId];
+        Pool storage pool = s.pools[poolId];
 
-        (uint256 addC0, uint256 addC1) = LiquidityUtils.calculateCommitmentMaxima(
-            params.tickLower, params.tickUpper, SafeCast.toUint128(uint256(params.liquidityDelta))
-        );
+        (uint256 addC0, uint256 addC1) =
+            LiquidityUtils.calculateCommitmentMaxima(tickLower, tickUpper, SafeCast.toUint128(uint256(liquidityDelta)));
         uint256 newCommitmentUSDValue = OracleUtils.usdValueLccPair(
-            oracleHelper, Currency.unwrap(commitPool.currency0), addC0, Currency.unwrap(commitPool.currency1), addC1
+            oracleHelper, Currency.unwrap(pool.currency0), addC0, Currency.unwrap(pool.currency1), addC1
         );
 
         totalUsdValue += newCommitmentUSDValue / 2;
@@ -300,6 +312,7 @@ library VTSCommitLib {
             uint256 c1 = pa.commitmentMax.token1;
 
             // Calculate the USD value of the commitment maxima (averaged since both sides are equivalent)
+            // TODO: Update to use running totals instead USD value calculation via iteration.
             uint256 usdValue = OracleUtils.usdValueLccPair(
                 oracleHelper, Currency.unwrap(currency0), c0, Currency.unwrap(currency1), c1
             );

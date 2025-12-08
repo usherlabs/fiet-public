@@ -919,18 +919,32 @@ library VTSPositionLib {
         uint256 amount1 =
             principalDelta.amount1() < 0 ? LiquidityUtils.safeInt128ToUint256(principalDelta.amount1()) : 0;
 
-        _issueLCCs(
+        // No-op if nothing to issue
+        if (amount0 == 0 && amount1 == 0) {
+            return;
+        }
+
+        // Validate commitment backing: effective LCC (including prospective) <= signal + settled
+        VTSCommitLib.effectiveCommitmentUsdValue(
             s,
-            ctx,
-            poolKey,
+            ctx.oracleHelper,
             commitId,
-            positionId,
+            poolKey.toId(),
             params.tickLower,
             params.tickUpper,
             params.liquidityDelta,
-            amount0,
-            amount1
+            true
         );
+
+        // Issue LCC tokens to MMP (mmpmAddress is the recipient)
+        address lcc0 = Currency.unwrap(poolKey.currency0);
+        address lcc1 = Currency.unwrap(poolKey.currency1);
+        if (amount0 > 0) {
+            ctx.liquidityHub.issue(lcc0, ctx.mmpmAddress, amount0);
+        }
+        if (amount1 > 0) {
+            ctx.liquidityHub.issue(lcc1, ctx.mmpmAddress, amount1);
+        }
     }
 
     /// @notice Handle liquidity decrease (remove liquidity or burn) - cancels LCCs
@@ -972,6 +986,7 @@ library VTSPositionLib {
         ctx.liquidityHub
             .cancelWithQueue(
                 lcc0,
+                ctx.mmpmAddress,
                 LiquidityUtils.safeInt128ToUint256(principalDelta.amount0()),
                 LiquidityUtils.safeInt128ToUint256(queuedDelta.amount0()),
                 ctx.mmpmAddress
@@ -979,6 +994,7 @@ library VTSPositionLib {
         ctx.liquidityHub
             .cancelWithQueue(
                 lcc1,
+                ctx.mmpmAddress,
                 LiquidityUtils.safeInt128ToUint256(principalDelta.amount1()),
                 LiquidityUtils.safeInt128ToUint256(queuedDelta.amount1()),
                 ctx.mmpmAddress
@@ -989,55 +1005,6 @@ library VTSPositionLib {
             DynamicCurrencyDelta.persistUnderlyingCredits(
                 s, ctx.mmpmAddress, queuedDelta, poolKey.currency0, poolKey.currency1
             );
-        }
-    }
-
-    /// @notice Issues LCC tokens to MMP for a position
-    /// @param s The VTS storage
-    /// @param ctx The position context
-    /// @param poolKey The pool key
-    /// @param commitId The commit id
-    /// @param positionId The position id
-    /// @param tickLower The lower tick of the position
-    /// @param tickUpper The upper tick of the position
-    /// @param liquidityDelta The liquidity delta (for backing validation)
-    /// @param amount0 The amount of token0 to issue
-    /// @param amount1 The amount of token1 to issue
-    function _issueLCCs(
-        VTSStorage storage s,
-        PositionContext memory ctx,
-        PoolKey calldata poolKey,
-        uint256 commitId,
-        PositionId positionId,
-        int24 tickLower,
-        int24 tickUpper,
-        int256 liquidityDelta,
-        uint256 amount0,
-        uint256 amount1
-    ) internal {
-        // No-op if nothing to issue
-        if (amount0 == 0 && amount1 == 0) {
-            return;
-        }
-
-        // Validate commitment backing: effective LCC (including prospective) <= signal + settled
-        // TODO: Remove use of ModifyLiquidityParams and use variables directly.
-        ModifyLiquidityParams memory params = ModifyLiquidityParams({
-            tickLower: tickLower,
-            tickUpper: tickUpper,
-            liquidityDelta: liquidityDelta,
-            salt: bytes32(0) // Not used for validation
-        });
-        VTSCommitLib.effectiveCommitmentUsdValue(s, ctx.oracleHelper, commitId, poolKey.toId(), params, true);
-
-        // Issue LCC tokens to MMP (mmpmAddress is the recipient)
-        address lcc0 = Currency.unwrap(poolKey.currency0);
-        address lcc1 = Currency.unwrap(poolKey.currency1);
-        if (amount0 > 0) {
-            ctx.liquidityHub.issue(lcc0, ctx.mmpmAddress, amount0);
-        }
-        if (amount1 > 0) {
-            ctx.liquidityHub.issue(lcc1, ctx.mmpmAddress, amount1);
         }
     }
 
