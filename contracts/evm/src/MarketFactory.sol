@@ -64,8 +64,11 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
 
         // Set Protocol bounds addresses
         bounds[address(this)] = true;
-        bounds[_poolManager] = true;
-        bounds[_liquidityHub] = true;
+        bounds[_poolManager] = true; // All uniswap liquidity goes to/from the poolManager.
+        bounds[_liquidityHub] = true; // All LCCs are created and managed by the liquidityHub.
+        // bounds[_vtsOrchestrator] = true; // VTSO context handles all fee fund/slash logic - seem VTSFeeLib.sol
+        // ----- However, it's handled via Uniswap's Claim Tokens. Therefore, LCCs remain inside of PoolManager.
+        bounds[_mmPositionManager] = true; // MMPM is the recipient of the LCCs from VTSO issuance.
         for (uint256 i = 0; i < _bounds.length; i++) {
             bounds[_bounds[i]] = true;
         }
@@ -129,7 +132,8 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
             string.concat("Uv4 ", IERC20Metadata(underlyingAsset0).symbol(), IERC20Metadata(underlyingAsset1).symbol());
 
         address[] memory initialIssuers = new address[](1);
-        initialIssuers[0] = mmPositionManager;
+        // VTSO is the issuer. However, the MMPM receives the LCCs from VTSO issuance.
+        initialIssuers[0] = address(vtsOrchestrator);
 
         // Maintains order of underlying assets passed.
         (address lccToken0, address lccToken1) =

@@ -13,7 +13,6 @@ import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Errors} from "./libraries/Errors.sol";
 import {IMarketVault} from "./interfaces/IMarketVault.sol";
-import {console} from "forge-std/console.sol";
 
 /**
  * @title LiquidityHub
@@ -513,21 +512,22 @@ contract LiquidityHub is Ownable, LCCFactory, ReentrancyGuardTransient {
      * @notice Cancels LCC tokens and queues a settlement for the shortfall
      * @dev Simulates unwrap-with-queue without touching direct supply or market liquidity
      * @param lcc The LCC token address to cancel for
-     * @param cancelAmount The amount to cancel (burn)
-     * @param queueAmount The amount to queue for settlement (must be <= cancelAmount)
+     * @param principalAmount Total amount to cancel (burn now) or queue (burn later)
+     * @param queueAmount The amount to queue for settlement (must be <= principalAmount)
      * @param recipient The recipient address for the queued settlement
      */
-    function cancelWithQueue(address lcc, uint256 cancelAmount, uint256 queueAmount, address recipient)
+    function cancelWithQueue(address lcc, uint256 principalAmount, uint256 queueAmount, address recipient)
         external
         onlyIssuer(lcc)
         onlyValidLcc(lcc)
     {
-        if (cancelAmount == 0) {
+        if (principalAmount == 0) {
             revert Errors.InvalidAmount(0, 0);
         }
-        if (queueAmount > cancelAmount) {
-            revert Errors.InvalidAmount(queueAmount, cancelAmount);
+        if (queueAmount > principalAmount) {
+            revert Errors.InvalidAmount(queueAmount, principalAmount);
         }
+        uint256 cancelAmount = principalAmount - queueAmount;
 
         address issuer = _msgSender();
         // Burn the cancelled amount (issuer burn path, skip bucket accounting)

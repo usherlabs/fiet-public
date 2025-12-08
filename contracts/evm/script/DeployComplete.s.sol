@@ -334,9 +334,14 @@ contract CompleteDeployScript is ScriptHelper {
      */
     function _addAddressesToBounds() internal {
         MarketFactory factoryInstance = MarketFactory(marketFactory);
-        address[] memory bounds = new address[](1);
-        bounds[0] = mmPositionManager;
-        // Note: LiquidityHub is already in bounds via MarketFactory constructor
+        address[] memory bounds = new address[](0);
+        /**
+         *     bounds[address(this)] = true;
+         *     bounds[_poolManager] = true;
+         *     bounds[_liquidityHub] = true;
+         *     bounds[_vtsOrchestrator] = true;
+         *     bounds[_mmPositionManager] = true;
+         */
 
         factoryInstance.addBounds(bounds);
     }

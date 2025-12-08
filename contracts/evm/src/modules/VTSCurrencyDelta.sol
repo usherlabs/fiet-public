@@ -63,14 +63,14 @@ abstract contract VTSCurrencyDelta is IVTSCurrencyDelta {
         DynamicCurrencyDelta.primeUnderlyingDelta(s, sender, lcc, address(this));
     }
 
-    function persistUnderlyingDelta(
+    function persistUnderlyingCredits(
         address sender,
         BalanceDelta settlementDelta,
         Currency lccCurrency0,
         Currency lccCurrency1
     ) external {
         VTSStorage storage s = _vtsStorage();
-        DynamicCurrencyDelta.persistUnderlyingDelta(s, sender, settlementDelta, lccCurrency0, lccCurrency1);
+        DynamicCurrencyDelta.persistUnderlyingCredits(s, sender, settlementDelta, lccCurrency0, lccCurrency1);
     }
 
     /// @inheritdoc IVTSCurrencyDelta

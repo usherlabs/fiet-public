@@ -43,7 +43,7 @@ struct PositionContext {
     // OracleHelper for commitment validation
     IOracleHelper oracleHelper;
     // MM Position Manager address for delta accounting
-    address mmPositionManager;
+    address mmpmAddress;
     // Market vault address for settlement clamping
     IMarketVault marketVault;
 }

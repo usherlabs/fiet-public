@@ -378,7 +378,7 @@ contract VTSOrchestrator is ImmutableMarketState, PausableVTS, VTSCurrencyDelta,
             poolManager: poolManager,
             liquidityHub: liquidityHub,
             oracleHelper: oracleHelper,
-            mmPositionManager: mmPositionManager,
+            mmpmAddress: mmPositionManager,
             marketVault: MarketHandlerLib.getVault(marketFactory, poolKey.toId())
         });
 

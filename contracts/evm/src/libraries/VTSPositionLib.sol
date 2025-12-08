@@ -41,6 +41,7 @@ import {IERC20Minimal} from "@uniswap/v4-core/src/interfaces/external/IERC20Mini
 import {ILiquidityHub} from "../interfaces/ILiquidityHub.sol";
 import {VTSCommitLib} from "./VTSCommitLib.sol";
 import {CheckpointLibrary} from "./Checkpoint.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 /// @title VTSPositionLib
 /// @notice Position lifecycle, registration, RFS, settlement, seizure, and growth accounting for VTS
@@ -698,7 +699,7 @@ library VTSPositionLib {
 
         // pos.owner == address(0) means new position
         bool isNewPosition = posStorage.owner == address(0);
-        bool isMMPosition = isNewPosition ? owner == ctx.mmPositionManager : posStorage.owner == ctx.mmPositionManager;
+        bool isMMPosition = isNewPosition ? owner == ctx.mmpmAddress : posStorage.owner == ctx.mmpmAddress;
         bool isSeizing;
         BalanceDelta requiredSettlementDelta;
 
@@ -724,7 +725,7 @@ library VTSPositionLib {
 
             // Link position to commit for MM positions
             if (isMMPosition && mmData.commitId > 0) {
-                _linkPositionToCommit(s, ctx.mmPositionManager, id, mmData.commitId);
+                _linkPositionToCommit(s, ctx.mmpmAddress, id, mmData.commitId);
             }
 
             // get the commitment maxima for the position
@@ -851,20 +852,26 @@ library VTSPositionLib {
         // Process position fees - single entry point for fee processing
         feeAdj = VTSFeeLib.processPositionFees(s, ctx.poolManager, id, poolKey.currency0, poolKey.currency1);
 
-        // Handle MM-specific operations
-        if (PositionModificationHookDataLib.isMMOperation(mmData) && owner == ctx.mmPositionManager) {
-            // Compute principal delta after fee adjustments
+        // Handle MM-specific delta and LCC management operations
+        if (PositionModificationHookDataLib.isMMOperation(mmData) && isMMPosition) {
+            // CoreHook applies a feeAdj to the callerDelta. ie.  callerDelta = principalDelta - feesAccrued - feeAdj.
+            // Treat feeAdj as part of fees for cancel/transfer purposes.
+            // ? feeAdj bonus is negative, slash is positive. The result is higher fees for bonus, lower for slash.
             BalanceDelta accruedFeesAfterAdj = feesAccrued - feeAdj;
+
+            // positionDelta(a0/a1) are the gross amounts returned by the PoolManager for position modification.
+            // principal0/principal1 = a{0,1} - fees{0,1} reflect the true principal liquidity change
+            // that maps to LCC cancellation. fees are trader-derived, wrapped LCC value and must remain wrapped.
             BalanceDelta principalDelta = callerDelta - accruedFeesAfterAdj;
 
-            // Account fee credits to MMPositionManager contract (not the locker)
+            // Account fee credits (in LCC) to MMPositionManager contract (not the locker)
             // This creates a clear separation: MMPM deltas vs VTSO deltas
-            DynamicCurrencyDelta.accountDelta(poolKey.currency0, accruedFeesAfterAdj.amount0(), ctx.mmPositionManager);
-            DynamicCurrencyDelta.accountDelta(poolKey.currency1, accruedFeesAfterAdj.amount1(), ctx.mmPositionManager);
+            DynamicCurrencyDelta.accountDelta(poolKey.currency0, accruedFeesAfterAdj.amount0(), ctx.mmpmAddress);
+            DynamicCurrencyDelta.accountDelta(poolKey.currency1, accruedFeesAfterAdj.amount1(), ctx.mmpmAddress);
 
-            // Account underlying settlement delta change to MMPositionManager
+            // Account underlying currency delta change to MMPositionManager
             DynamicCurrencyDelta.accountUnderlyingSettlementDeltaChange(
-                ctx.mmPositionManager, requiredSettlementDelta, poolKey.currency0, poolKey.currency1
+                ctx.mmpmAddress, requiredSettlementDelta, poolKey.currency0, poolKey.currency1
             );
 
             // Handle LCC issuance/cancellation based on liquidity direction
@@ -950,13 +957,37 @@ library VTSPositionLib {
         BalanceDelta availableDelta = ctx.marketVault.dryModifyLiquidities(requiredSettlementDelta);
 
         // Cancel LCCs and queue any shortfall
-        (, BalanceDelta queuedDelta) =
-            _cancelLCCs(ctx, poolKey, availableDelta, requiredSettlementDelta, principalDelta);
+        // 1. Determine what amount of available liquidity can be used to cover settlement.
+        BalanceDelta queuedDelta = requiredSettlementDelta - availableDelta;
 
-        // Persist shortfall as credits owed by MMP to the MM
+        // 2. Clamp queuedDelta to non-negative values (negative values become 0)
+        int128 queuedDelta0 = queuedDelta.amount0() > 0 ? queuedDelta.amount0() : int128(0);
+        int128 queuedDelta1 = queuedDelta.amount1() > 0 ? queuedDelta.amount1() : int128(0);
+        queuedDelta = toBalanceDelta(queuedDelta0, queuedDelta1);
+
+        // 3. Queue settlements via cancelWithQueue
+        address lcc0 = Currency.unwrap(poolKey.currency0);
+        address lcc1 = Currency.unwrap(poolKey.currency1);
+
+        ctx.liquidityHub
+            .cancelWithQueue(
+                lcc0,
+                LiquidityUtils.safeInt128ToUint256(principalDelta.amount0()),
+                LiquidityUtils.safeInt128ToUint256(queuedDelta.amount0()),
+                ctx.mmpmAddress
+            );
+        ctx.liquidityHub
+            .cancelWithQueue(
+                lcc1,
+                LiquidityUtils.safeInt128ToUint256(principalDelta.amount1()),
+                LiquidityUtils.safeInt128ToUint256(queuedDelta.amount1()),
+                ctx.mmpmAddress
+            );
+
+        // 4. Persist queued shortfall as credits owed by MMPM Contract to the MM-Locker
         if (queuedDelta.amount0() > 0 || queuedDelta.amount1() > 0) {
-            DynamicCurrencyDelta.persistUnderlyingDelta(
-                s, ctx.mmPositionManager, queuedDelta, poolKey.currency0, poolKey.currency1
+            DynamicCurrencyDelta.persistUnderlyingCredits(
+                s, ctx.mmpmAddress, queuedDelta, poolKey.currency0, poolKey.currency1
             );
         }
     }
@@ -999,56 +1030,15 @@ library VTSPositionLib {
         });
         VTSCommitLib.effectiveCommitmentUsdValue(s, ctx.oracleHelper, commitId, poolKey.toId(), params, true);
 
-        // Issue LCC tokens to MMP (mmPositionManager is the recipient)
+        // Issue LCC tokens to MMP (mmpmAddress is the recipient)
         address lcc0 = Currency.unwrap(poolKey.currency0);
         address lcc1 = Currency.unwrap(poolKey.currency1);
         if (amount0 > 0) {
-            ctx.liquidityHub.issue(lcc0, ctx.mmPositionManager, amount0);
+            ctx.liquidityHub.issue(lcc0, ctx.mmpmAddress, amount0);
         }
         if (amount1 > 0) {
-            ctx.liquidityHub.issue(lcc1, ctx.mmPositionManager, amount1);
+            ctx.liquidityHub.issue(lcc1, ctx.mmpmAddress, amount1);
         }
-    }
-
-    /// @notice Cancels LCC tokens from MMP when liquidity is decreased
-    /// @param ctx The position context
-    /// @param poolKey The pool key
-    /// @param availableDelta The available liquidity delta (clamped by vault)
-    /// @param settlementDelta The full settlement delta requested
-    /// @param principalDelta The principal delta from the liquidity removal
-    /// @return canceledDelta The amount of LCCs cancelled
-    /// @return queuedDelta The amount queued for later (shortfall)
-    function _cancelLCCs(
-        PositionContext memory ctx,
-        PoolKey calldata poolKey,
-        BalanceDelta availableDelta,
-        BalanceDelta settlementDelta,
-        BalanceDelta principalDelta
-    ) internal returns (BalanceDelta canceledDelta, BalanceDelta queuedDelta) {
-        queuedDelta = settlementDelta - availableDelta;
-
-        // Cancel principal delta minus any shortfall
-        // The shortfall represents unavailable liquidity where LCCs remain backed by pending liquidity
-        canceledDelta = principalDelta - queuedDelta;
-
-        // Queue settlements via cancelWithQueue
-        address lcc0 = Currency.unwrap(poolKey.currency0);
-        address lcc1 = Currency.unwrap(poolKey.currency1);
-
-        ctx.liquidityHub
-            .cancelWithQueue(
-                lcc0,
-                LiquidityUtils.safeInt128ToUint256(canceledDelta.amount0()),
-                LiquidityUtils.safeInt128ToUint256(queuedDelta.amount0()),
-                ctx.mmPositionManager
-            );
-        ctx.liquidityHub
-            .cancelWithQueue(
-                lcc1,
-                LiquidityUtils.safeInt128ToUint256(canceledDelta.amount1()),
-                LiquidityUtils.safeInt128ToUint256(queuedDelta.amount1()),
-                ctx.mmPositionManager
-            );
     }
 
     // --------------------------------------------------

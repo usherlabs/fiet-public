@@ -123,7 +123,7 @@ library DynamicCurrencyDelta {
     /// @param settlementDelta The settlement delta to persist
     /// @param lccCurrency0 The currency of the first LCC
     /// @param lccCurrency1 The currency of the second LCC
-    function persistUnderlyingDelta(
+    function persistUnderlyingCredits(
         VTSStorage storage s,
         address sender,
         BalanceDelta settlementDelta,
