@@ -15,7 +15,7 @@ import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
 import {ImmutableVTSState} from "./ImmutableVTSState.sol";
 
 /**
- * @title PositionManagerLiquidity
+ * @title PositionManagerBase
  * @notice Abstract contract that handles liquidity modifications with Uniswap V4 PoolManager.
  * @dev This contract provides a single function to modify liquidity and settle in one call.
  *      The flow is:
@@ -31,12 +31,18 @@ import {ImmutableVTSState} from "./ImmutableVTSState.sol";
  *      This contract expects `poolManager` to be provided by the inheriting contract
  *      (e.g., via BaseActionsRouter or ImmutableState).
  */
-abstract contract PositionManagerLiquidity is ImmutableState, ImmutableVTSState {
+abstract contract PositionManagerBase is ImmutableState, ImmutableVTSState {
     using StateLibrary for IPoolManager;
     using TransientStateLibrary for IPoolManager;
     using CurrencySettler for Currency;
 
     constructor(address _vtsOrchestrator) ImmutableVTSState(_vtsOrchestrator) {}
+
+    /// @dev This function is used to check if the batch is ended and assert that there are no zero deltas
+    modifier assertNonZeroDeltas() {
+        _;
+        vtsOrchestrator.assertNonZeroDeltas();
+    }
 
     /**
      * @notice Modifies liquidity in a Uniswap V4 pool and immediately settles the deltas
@@ -104,10 +110,13 @@ abstract contract PositionManagerLiquidity is ImmutableState, ImmutableVTSState 
         }
     }
 
-    function _take(Currency currency, address sender, address to, uint256 maxAmount) internal {
-        uint256 amountTaken = vtsOrchestrator.take(currency, sender, to, maxAmount);
-        // Transfer the amount from contract's balance to 'to'
-        currency.transfer(to, amountTaken);
+    /// @dev This function is used to take LCC using deltas from the VTSOrchestrator
+    /// @param currency The currency to take
+    /// @param to The address to receive the LCC
+    /// @param maxAmount The maximum amount of LCC to take
+    function _take(Currency currency, address to, uint256 maxAmount) internal {
+        uint256 takeAmount = vtsOrchestrator.take(currency, address(this), to, maxAmount); // sender is address(this)
+        currency.transfer(to, takeAmount);
     }
 }
 

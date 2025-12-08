@@ -169,17 +169,15 @@ library DynamicCurrencyDelta {
     function take(Currency currency, address sender, address to, uint256 maxAmount) internal returns (uint256) {
         int256 delta = currency.getDelta(sender);
 
-        if (delta < 0) return 0; // No positive delta (credit) available
+        if (delta <= 0) return 0; // No positive delta (credit) available
 
         // Cap to min of positive delta and maxAmount
         uint256 availableCredit = uint256(delta);
         uint256 amountToTake = maxAmount == 0 ? availableCredit : Math.min(availableCredit, maxAmount);
 
         // Net the delta by accounting the negative amount taken
-        int128 deltaToAccount = (delta > 0 && SafeCast.toInt256(amountToTake) > delta)
-            ? SafeCast.toInt128(-delta)
-            : -SafeCast.toInt128(amountToTake);
-        accountDelta(currency, deltaToAccount, sender);
+        // amountToTake is either a portion, or total available credit.
+        accountDelta(currency, -SafeCast.toInt128(amountToTake), sender);
 
         return amountToTake;
     }

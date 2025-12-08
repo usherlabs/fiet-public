@@ -33,12 +33,10 @@ import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {LiquidityAmounts} from "v4-periphery/src/libraries/LiquidityAmounts.sol";
 import {ILCC} from "./interfaces/ILCC.sol";
 import {NonzeroDeltaCount} from "@uniswap/v4-core/src/libraries/NonzeroDeltaCount.sol";
-import {Constants} from "@uniswap/v4-core/test/utils/Constants.sol";
-import {console} from "forge-std/console.sol";
 import {IVTSOrchestrator} from "./interfaces/IVTSOrchestrator.sol";
 import {Position} from "./types/Position.sol";
 import {TransientSlots} from "./libraries/TransientSlots.sol";
-import {PositionManagerLiquidity} from "./modules/PositionManagerLiquidity.sol";
+import {PositionManagerBase} from "./modules/PositionManagerBase.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {CurrencyTransfer} from "./libraries/CurrencyTransfer.sol";
 import {CurrencyDelta} from "v4-periphery/lib/v4-core/src/libraries/CurrencyDelta.sol";
@@ -53,7 +51,7 @@ contract MMPositionManager is
     Multicall_v4,
     BaseActionsRouter,
     NativeWrapper,
-    PositionManagerLiquidity,
+    PositionManagerBase,
     ImmutableMarketState
 {
     using SafeCast for uint256;
@@ -102,7 +100,7 @@ contract MMPositionManager is
         ERC721Permit_v4("Fiet VRL Commitment Positions Manager", "FIET-VRL-MMP")
         BaseActionsRouter(IPoolManager(_manager))
         NativeWrapper(_weth9)
-        PositionManagerLiquidity(_vtsOrchestrator)
+        PositionManagerBase(_vtsOrchestrator)
         ImmutableMarketState(_marketFactory)
     {
         commitmentDescriptor = _descriptor;
@@ -192,25 +190,13 @@ contract MMPositionManager is
         external
         payable
         isNotLocked
+        assertNonZeroDeltas
     {
         // _handleNativeValue
-
         _executeActionsWithoutUnlock(actions, params);
-        vtsOrchestrator.assertNonZeroDeltas();
     }
 
-    function _handleAction(uint256 action, bytes calldata params) internal override {
-        if (action == uint256(MMAction.COMMIT_SIGNAL)) {
-            (, bytes memory liquiditySignal, address owner) = abi.decode(params, (PoolKey, bytes, address));
-            _commitSignal(liquiditySignal, _mapRecipient(owner));
-            return;
-        }
-        if (action == uint256(MMAction.MINT_POSITION)) {
-            (PoolKey memory poolKey, uint256 tokenId, int24 tickLower, int24 tickUpper, uint256 liquidity) =
-                abi.decode(params, (PoolKey, uint256, int24, int24, uint256));
-            _mintPosition(poolKey, tokenId, tickLower, tickUpper, liquidity);
-            return;
-        }
+    function _handleAction(uint256 action, bytes calldata params) internal virtual override {
         if (action == uint256(MMAction.SETTLE_POSITION)) {
             (PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex, int128 amount0, int128 amount1) =
                 abi.decode(params, (PoolKey, uint256, uint256, int128, int128));
@@ -305,10 +291,9 @@ contract MMPositionManager is
             return;
         }
         if (action == uint256(MMAction.TAKE_LCC)) {
-            // params: (Currency currency, address recipient, uint256 maxAmount, bool payerIsUser)
-            (Currency currency, address recipient, uint256 maxAmount, bool payerIsUser) =
-                abi.decode(params, (Currency, address, uint256, bool));
-            vtsOrchestrator.take(currency, _mapPayer(payerIsUser), _mapRecipient(recipient), maxAmount);
+            // params: (Currency currency, address to, uint256 maxAmount)
+            (Currency currency, address to, uint256 maxAmount) = abi.decode(params, (Currency, address, uint256));
+            _take(currency, to, maxAmount); // address(this) is the sender of the LCCs to the recipient.
             return;
         }
         if (action == uint256(MMAction.INCREASE_LIQUIDITY_FROM_DELTAS)) {
@@ -528,86 +513,28 @@ contract MMPositionManager is
 
         uint256 toUnwrap;
 
-        if (requested == 0) {
-            // Unwrap from deltas: use available credit from this contract's deltas (or from?)
-            // Note: original logic used `from` for deltas.
-            uint256 available = _getFullCredit(lccCurrency, from);
-            toUnwrap = available; // Unwrap all available deltas
+        // Unwrap from deltas: use available credit from this contract's deltas (or from?)
+        if (from == address(this)) {
+            // conduct a take from the delta.
+            toUnwrap = vtsOrchestrator.take(lccCurrency, from, to, requested);
         } else {
-            // Unwrap from caller's wallet
-            toUnwrap = requested;
+            toUnwrap = lcc.balanceOf(from);
+            if (requested > 0 && toUnwrap > requested) {
+                toUnwrap = requested;
+            }
         }
 
         if (toUnwrap > 0) {
-            // If paying from wallet (not deltas/self), pull LCC first
-            // Note: if requested > 0, caller must have approved MMPM.
-            // If requested == 0, we are unwrapping from 'from's deltas.
-            // If 'from' != 'this', we assume 'from' is the user (msg.sender).
-            // But we can't pull deltas. Deltas are in VTSO.
-            // 'liquidityHub.unwrapTo' burns LCC.
-            // If unwrapping from deltas, we don't have LCC tokens to burn?
-            // VTSO logic was: `VTSPositionLib.unwrapLCC`.
-            // Let's check `VTSPositionLib.unwrapLCC` logic? No, I can't.
-            // But `_getFullCredit` checks VTSO deltas.
-            // If deltas represent "virtual LCCs", then LiquidityHub cannot burn them unless it knows about them.
-            // If `VTSPositionLib` called `liquidityHub.unwrapTo`, it implies `unwrapTo` handles it?
-            // Or maybe VTSO *issued* LCCs to LiquidityHub/MMPM but kept them as delta?
-            // If LCCs are virtual (delta), we can't burn real LCCs.
-            // We must decrement delta.
-            // `unwrapLCC` in VTSO did `accountDelta(-unwrapped)`.
-            // This reduces the delta.
-            // Then `accountDelta(underlying, +unwrapped)`.
-            // This increases underlying delta.
-            // It looks like a SWAP of deltas.
-            // Did `LiquidityHub` get involved?
-            // `VTSPositionLib.unwrapLCC` called `liquidityHub.unwrapTo`.
-            // This suggests LiquidityHub DOES something.
-            // If `LiquidityHub` sends underlying tokens, then `to` gets tokens.
-            // Then `accountDelta(underlying)` is double counting?
-            // UNLESS `LiquidityHub.unwrapTo` supports virtual unwrapping?
-            // Or VTSO logic was: "If I have LCC delta, I can swap it for Underlying delta".
-            // And maybe LiquidityHub is used to check reserves?
-
-            // Let's assume the User Prompt implies "funds transfer".
-            // If funds transfer, we need real tokens.
-            // If tokens are virtual (delta), we can't transfer them.
-            // But `MarketVault` holds underlying.
-            // If I unwrap LCC (Virtual) -> Underlying (Real), I need to reduce LCC delta and send Underlying.
-            // `_unwrapLCC` in Snapshot 2 calls `liquidityHub.unwrapTo`.
-            // I'll stick to Snapshot 2 logic as closely as possible.
-
-            if (from != address(this) && requested > 0) {
-                IERC20(lccAddr).safeTransferFrom(from, address(this), toUnwrap);
+            // Route unwrap via LiquidityHub to leverage and settlement queuing
+            if (from != address(this)) {
+                lcc.safeTransferFrom(from, address(this), toUnwrap);
             }
-            // If unwrap from deltas, we rely on LiquidityHub being able to handle it?
-            // Or we just don't call LiquidityHub if it's purely virtual?
-            // Snapshot 2 code:
-            /*
-            if (toUnwrap > 0) {
-                // Route unwrap via LiquidityHub to leverage reserve tracking and settlement queuing
-                if (from != address(this)) {
-                    lcc.safeTransferFrom(from, address(this), toUnwrap);
-                }
-                liquidityHub.unwrapTo(lccAddr, to, toUnwrap);
-            }
-            */
-            // This assumes `address(this)` (MMPM) has the tokens (if from==this) or pulls them.
-            // If unwrap from deltas, MMPM doesn't have tokens?
-            // Then `liquidityHub.unwrapTo` might fail if it tries to burn from MMPM?
-            // Unless `liquidityHub` is VTS-aware.
-            // Assuming it works as per Snapshot 2.
-
             liquidityHub.unwrapTo(lccAddr, to, toUnwrap);
         }
 
         // Compute actually unwrapped by observing recipient balance delta
         // Note: this requires 'to' to not be malicious reentrant contract masking balance?
         unwrapped = IERC20(underlying).balanceOf(to) - beforeBal;
-
-        // if (unwrapped > 0) {
-        //     _accountDelta(lccCurrency, -unwrapped.toInt128(), msgSender()); // Debit LCC delta from source
-        //     _accountDelta(Currency.wrap(underlying), unwrapped.toInt128(), to); // Credit underlying delta to recipient
-        // }
     }
 
     /**
@@ -624,6 +551,7 @@ contract MMPositionManager is
             liquidityHub.processSettlementFor(lcc, recipient, maxAmount);
         }
 
+        // If there's any persisted deltas, prime them to allow the locker to TAKE_LCC, or SETTLE...
         vtsOrchestrator.primeUnderlyingDelta(sender, Currency.wrap(lcc));
     }
 
