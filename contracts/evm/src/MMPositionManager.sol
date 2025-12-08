@@ -525,10 +525,11 @@ contract MMPositionManager is
         }
 
         if (toUnwrap > 0) {
-            // Route unwrap via LiquidityHub to leverage and settlement queuing
             if (from != address(this)) {
+                // Transfer to this contract first.
                 lcc.safeTransferFrom(from, address(this), toUnwrap);
             }
+            // Route through LiquidityHub to leverage reserve tracking and settlement queuing
             liquidityHub.unwrapTo(lccAddr, to, toUnwrap);
         }
 
