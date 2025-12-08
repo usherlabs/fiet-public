@@ -309,6 +309,15 @@ abstract contract LCCFactory {
     }
 
     /**
+     * @notice Checks if an address is a valid LCC token
+     * @param lcc The address to check
+     * @return True if the address is a valid LCC token
+     */
+    function isLCC(address lcc) external view returns (bool) {
+        return _isValidLcc(lcc);
+    }
+
+    /**
      * @notice Asserts that the given LCC token is valid
      * @param lcc The LCC token address to assert
      */

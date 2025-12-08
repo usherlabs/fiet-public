@@ -13,6 +13,10 @@ import {Errors} from "../libraries/Errors.sol";
 import {ImmutableState} from "v4-periphery/src/base/ImmutableState.sol";
 import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
 import {ImmutableVTSState} from "./ImmutableVTSState.sol";
+import {CurrencyLibrary} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
+import {TransientSlots} from "../libraries/TransientSlots.sol";
+import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
+import {ILiquidityHub} from "../interfaces/ILiquidityHub.sol";
 
 /**
  * @title PositionManagerBase
@@ -43,6 +47,113 @@ abstract contract PositionManagerBase is ImmutableState, ImmutableVTSState {
         _;
         vtsOrchestrator.assertNonZeroDeltas();
     }
+
+    // ------------------------------------------------------------------------------------------------
+    // ABSTRACT FUNCTIONS (must be implemented by inheriting contracts)
+    // ------------------------------------------------------------------------------------------------
+
+    /// @notice Returns the locker address (original caller of the batch)
+    /// @dev Must be implemented by inheriting contracts (e.g., via BaseActionsRouter._getLocker())
+    function msgSender() public view virtual returns (address);
+
+    /// @notice Returns the LiquidityHub contract
+    /// @dev Must be implemented by inheriting contracts
+    function _liquidityHub() internal view virtual returns (ILiquidityHub);
+
+    // ------------------------------------------------------------------------------------------------
+    // CURRENCY TYPE DETECTION
+    // ------------------------------------------------------------------------------------------------
+
+    /// @notice Checks if a currency is an LCC token
+    /// @param currency The currency to check
+    /// @return True if the currency is a valid LCC token
+    function _isLCC(Currency currency) internal view returns (bool) {
+        address token = Currency.unwrap(currency);
+        if (token == address(0)) return false;
+        return _liquidityHub().isLCC(token);
+    }
+
+    /**
+     * @dev Internal helper to convert LCC currency to underlying currency
+     */
+    function _lccToUnderlyingCurrency(Currency lcc) internal view returns (Currency) {
+        return Currency.wrap(ILCC(Currency.unwrap(lcc)).underlying());
+    }
+
+    // ------------------------------------------------------------------------------------------------
+    // CREDIT HELPERS
+    // ------------------------------------------------------------------------------------------------
+
+    /**
+     * @dev Internal helper to get full credit from VTSOrchestrator
+     */
+    function _getFullCredit(Currency currency, address owner) internal view returns (uint256) {
+        return vtsOrchestrator.getFullCredit(currency, owner);
+    }
+
+    /**
+     * @dev Internal helper to get full credit from VTSOrchestrator
+     */
+    function _getFullCreditPair(Currency currency0, Currency currency1, address owner)
+        internal
+        view
+        returns (uint256, uint256)
+    {
+        return vtsOrchestrator.getFullCreditPair(currency0, currency1, owner);
+    }
+
+    /**
+     * @dev This function is used to get the liquidity (L) from deltas of underlying currencies. ie. how much to mint/increase from what is owed.
+     * @param poolKey The pool key for the position
+     * @param tickLower The lower tick of the position
+     * @param tickUpper The upper tick of the position
+     * @return liquidity The liquidity from deltas
+     */
+    function _getLiquidityFromDeltas(PoolKey memory poolKey, address owner, int24 tickLower, int24 tickUpper)
+        internal
+        view
+        returns (uint256 liquidity)
+    {
+        (uint160 sqrtPriceX96,,,) = poolManager.getSlot0(poolKey.toId());
+        (uint256 credit0, uint256 credit1) = _getFullCreditPair(
+            _lccToUnderlyingCurrency(poolKey.currency0), _lccToUnderlyingCurrency(poolKey.currency1), owner
+        );
+        return LiquidityAmounts.getLiquidityForAmounts(
+            sqrtPriceX96,
+            TickMath.getSqrtPriceAtTick(tickLower),
+            TickMath.getSqrtPriceAtTick(tickUpper),
+            credit0,
+            credit1
+        );
+    }
+
+    // ------------------------------------------------------------------------------------------------
+    // Balance-to-Delta Sync Helpers
+    // ------------------------------------------------------------------------------------------------
+
+    /**
+     * @notice Syncs balance to delta for a single currency
+     * @dev Syncs to locker delta (msgSender), not MMPM. This ensures balance syncs
+     *      from wrap/unwrap operations create takeable credits on the locker.
+     * @param currency The currency to sync balance for
+     */
+    function _syncBalanceToDeltas(Currency currency) internal {
+        vtsOrchestrator.syncFor(currency, msgSender());
+    }
+
+    /**
+     * @notice Syncs balance to delta for a currency pair
+     * @dev Syncs to locker delta (msgSender), not MMPM.
+     * @param currency0 The first currency to sync
+     * @param currency1 The second currency to sync
+     */
+    function _syncPairBalanceToDeltas(Currency currency0, Currency currency1) internal {
+        vtsOrchestrator.syncPairFor(currency0, currency1, msgSender());
+    }
+
+    // ------------------------------------------------------------------------------------------------
+    // Liquidity Flow/Modification Handlers
+    // ------------------------------------------------------------------------------------------------
 
     /**
      * @notice Modifies liquidity in a Uniswap V4 pool and immediately settles the deltas
@@ -110,13 +221,41 @@ abstract contract PositionManagerBase is ImmutableState, ImmutableVTSState {
         }
     }
 
-    /// @dev This function is used to take LCC using deltas from the VTSOrchestrator
+    /// @notice Takes currency from delta and transfers to recipient
+    /// @dev Split model by currency type:
+    ///      - LCC: Delta on MMPM, held as ERC-6909 claims on PoolManager
+    ///             Flow: burn claims -> take actual ERC20 -> debit MMPM delta
+    ///      - Underlying: Delta on locker, held as ERC20 by MMPM
+    ///             Flow: debit locker delta -> direct ERC20 transfer
     /// @param currency The currency to take
-    /// @param to The address to receive the LCC
-    /// @param maxAmount The maximum amount of LCC to take
+    /// @param to The recipient address
+    /// @param maxAmount The maximum amount to take (0 = take full available credit)
     function _take(Currency currency, address to, uint256 maxAmount) internal {
-        uint256 takeAmount = vtsOrchestrator.take(currency, address(this), to, maxAmount); // sender is address(this)
-        currency.transfer(to, takeAmount);
+        if (_isLCC(currency)) {
+            // LCC: held as ERC-6909 claims on PoolManager, delta on MMPM
+            uint256 credit = _getFullCredit(currency, address(this));
+            uint256 takeAmount = maxAmount == 0 ? credit : Math.min(credit, maxAmount);
+
+            if (takeAmount > 0) {
+                // 1. Burn ERC-6909 claims (releases LCC from PoolManager custody)
+                currency.settle(poolManager, address(this), takeAmount, true);
+
+                // 2. Take actual ERC20 LCC tokens from PoolManager
+                currency.take(poolManager, to, takeAmount, false);
+
+                // 3. Debit MMPM delta
+                vtsOrchestrator.take(currency, address(this), takeAmount);
+            }
+        } else {
+            // Underlying: held as ERC20 by MMPM, delta on locker
+            address locker = msgSender();
+            uint256 trueMaxAmount = Math.min(maxAmount, currency.balanceOfSelf());
+            uint256 takeAmount = vtsOrchestrator.take(currency, locker, trueMaxAmount);
+
+            if (to != address(this)) {
+                currency.transfer(to, takeAmount);
+            }
+        }
     }
 }
 

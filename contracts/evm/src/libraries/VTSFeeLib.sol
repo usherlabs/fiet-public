@@ -96,6 +96,7 @@ library VTSFeeLib {
         uint256 amount
     ) internal {
         if (amount == 0) return;
+        // TODO: There's something incorrect here... VTSO should not be burning/minting claimables to LCCs.
         lccCurrency.settle(poolManager, address(this), amount, true);
         PoolAccounting storage paPool = s.poolAccounting[poolId];
         uint256 pot = paPool.slashedPot.get(tokenIndex);

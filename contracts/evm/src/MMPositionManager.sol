@@ -86,9 +86,9 @@ contract MMPositionManager is
         DECOMMIT_SIGNAL,
         UNWRAP_LCC, // params: (address lcc, uint256 amount, address recipient, bool payerIsUser)
         WRAP_NATIVE, // params: (uint256 amount)
-        UNWRAP_NATIVE, // params: (uint256 amount)
+        UNWRAP_NATIVE, // params: (uint256 amount, bool payerIsUser)
         EXTEND_GRACE_PERIOD, // params: (PoolKey, uint256 tokenId, uint256 positionIndex, uint8 settlementTokenIndex, uint32 verifierIndex, bytes settlementProof)
-        TAKE_LCC, // params: (Currency currency, address recipient, uint256 maxAmount, bool payerIsUser)
+        TAKE, // params: (Currency currency, address recipient, uint256 maxAmount, bool payerIsUser)
         INCREASE_LIQUIDITY_FROM_DELTAS, // params: (Currency currency, int128 delta, address target)
         MINT_POSITION_FROM_DELTAS, // params: (Currency currency, int128 delta, address target)
         SETTLE_POSITION_FROM_DELTAS, // params: (PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex, bool settleIn0, bool settleIn1)
@@ -166,6 +166,11 @@ contract MMPositionManager is
         return _getLocker();
     }
 
+    /// @inheritdoc PositionManagerBase
+    function _liquidityHub() internal view override returns (ILiquidityHub) {
+        return liquidityHub;
+    }
+
     // --------------------------------------------------------------------------------
     // Uniswap-like batch entrypoints and dispatcher
     // --------------------------------------------------------------------------------
@@ -192,15 +197,22 @@ contract MMPositionManager is
         isNotLocked
         assertNonZeroDeltas
     {
-        // _handleNativeValue
+        _handleNativeValue();
         _executeActionsWithoutUnlock(actions, params);
     }
 
     function _handleAction(uint256 action, bytes calldata params) internal virtual override {
         if (action == uint256(MMAction.SETTLE_POSITION)) {
-            (PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex, int128 amount0, int128 amount1) =
-                abi.decode(params, (PoolKey, uint256, uint256, int128, int128));
-            _settle(poolKey, tokenId, positionIndex, amount0, amount1);
+            (
+                PoolKey memory poolKey,
+                uint256 tokenId,
+                uint256 positionIndex,
+                int128 amount0,
+                int128 amount1,
+                bool withUser0,
+                bool withUser1
+            ) = abi.decode(params, (PoolKey, uint256, uint256, int128, int128, bool, bool));
+            _settle(poolKey, tokenId, positionIndex, amount0, amount1, withUser0, withUser1);
             return;
         }
         if (action == uint256(MMAction.INCREASE_LIQUIDITY)) {
@@ -266,16 +278,16 @@ contract MMPositionManager is
         }
         if (action == uint256(MMAction.WRAP_NATIVE)) {
             // Following Uniswap v4 PositionManager pattern: wrap is a simple WETH9 deposit
-            // No delta accounting - settlement happens via standard settle/take flow
+            // Syncs WETH9 balance to deltas after wrapping
             uint256 amount = abi.decode(params, (uint256));
-            _wrap(amount);
+            _wrapNative(amount);
             return;
         }
         if (action == uint256(MMAction.UNWRAP_NATIVE)) {
             // Following Uniswap v4 PositionManager pattern: unwrap is a simple WETH9 withdraw
-            // No delta accounting - settlement happens via standard settle/take flow
-            uint256 amount = abi.decode(params, (uint256));
-            _unwrap(amount);
+            // Syncs native currency balance to deltas after unwrapping
+            (uint256 amount, bool payerIsUser) = abi.decode(params, (uint256, bool));
+            _unwrapNative(amount, payerIsUser);
             return;
         }
         if (action == uint256(MMAction.EXTEND_GRACE_PERIOD)) {
@@ -290,7 +302,7 @@ contract MMPositionManager is
             _extendGracePeriod(poolKey, tokenId, positionIndex, settlementTokenIndex, verifierIndex, settlementProof);
             return;
         }
-        if (action == uint256(MMAction.TAKE_LCC)) {
+        if (action == uint256(MMAction.TAKE)) {
             // params: (Currency currency, address to, uint256 maxAmount)
             (Currency currency, address to, uint256 maxAmount) = abi.decode(params, (Currency, address, uint256));
             _take(currency, to, maxAmount); // address(this) is the sender of the LCCs to the recipient.
@@ -352,8 +364,75 @@ contract MMPositionManager is
     }
 
     // ------------------------------------------------------------------------------------------------
-    // MM Position Manager functions/actions
+    // Native Asset Wrap/Unwrap Operations
     // ------------------------------------------------------------------------------------------------
+
+    /**
+     * @dev This function is used to handle the native value
+     * @dev Syncs native currency balance to deltas after wrapping so the wrapped amount is available for subsequent operations
+     */
+    function _handleNativeValue() internal {
+        uint256 amount = TransientSlots.readMsgValueOnce();
+        if (amount > 0) {
+            _syncBalanceToDeltas(CurrencyLibrary.ADDRESS_ZERO);
+        }
+    }
+
+    /// @notice Wraps native ETH to WETH, updating deltas accordingly
+    /// @dev Flow: 1) Debits native delta (take), 2) Wraps ETH→WETH, 3) Credits WETH delta (sync)
+    ///      If amount=0, wraps full available native credit.
+    /// @param amount The amount to wrap (0 = wrap full available native credit)
+    function _wrapNative(uint256 amount) internal {
+        uint256 takeAmount = vtsOrchestrator.take(CurrencyLibrary.ADDRESS_ZERO, msgSender(), amount);
+        if (amount > 0 && amount > takeAmount) {
+            revert Errors.InsufficientBalance();
+        } else if (amount == 0) {
+            amount = takeAmount;
+        }
+        if (amount == 0) {
+            return;
+        }
+
+        _wrap(amount);
+        Currency weth = Currency.wrap(address(WETH9));
+        // Sync WETH9 balance to deltas so the wrapped amount is available for subsequent operations
+        _syncBalanceToDeltas(weth);
+    }
+
+    /**
+     * @dev This function is used to unwrap native asset
+     * @param amount The amount of native asset to unwrap
+     * @param payerIsUser Whether the payer is the user
+     * @dev Syncs native currency balance to deltas after unwrapping so the unwrapped amount is available for subsequent operations
+     */
+    function _unwrapNative(uint256 amount, bool payerIsUser) internal {
+        Currency weth = Currency.wrap(address(WETH9));
+        if (payerIsUser) {
+            // Source: User wallet — pull WETH, no delta debit
+            address payer = msgSender();
+            if (amount == 0) {
+                amount = weth.balanceOf(payer);
+            }
+            weth.transferFrom(payer, address(this), amount);
+        } else {
+            // Source: Delta credit — debit WETH delta
+            uint256 takeAmount = vtsOrchestrator.take(weth, msgSender(), amount);
+            if (amount > 0 && amount > takeAmount) {
+                revert Errors.InsufficientBalance();
+            } else if (amount == 0) {
+                amount = takeAmount;
+            }
+            if (amount == 0) {
+                return;
+            }
+        }
+        _unwrap(amount);
+        // Sync native currency (ADDRESS_ZERO) balance to deltas so the unwrapped amount is available
+        _syncBalanceToDeltas(CurrencyLibrary.ADDRESS_ZERO);
+    }
+
+    // ------------------------------------------------------------------------------------------------
+    // MM Position Manager functions/actions
     // ------------------------------------------------------------------------------------------------
 
     /**
@@ -419,7 +498,9 @@ contract MMPositionManager is
         TransientSlots.setSeizedPositionId(positionId);
 
         // Call _settle - this will return the seizedLiquidityUnits
-        uint256 seizedLiquidityUnits = _settle(poolKey, tokenId, positionIndex, amount0.toInt128(), amount1.toInt128());
+        // Seizure operations don't interact with user wallets (withUser = false, false)
+        uint256 seizedLiquidityUnits =
+            _settle(poolKey, tokenId, positionIndex, amount0.toInt128(), amount1.toInt128(), false, false);
 
         // Prepare hookData
         BalanceDelta seizureSettlementDelta = LiquidityUtils.safeToBalanceDelta(amount0, amount1, true, true);
@@ -443,58 +524,9 @@ contract MMPositionManager is
         vtsOrchestrator.declareUnbackedCommitment(msgSender(), tokenId, liquiditySignal);
     }
 
-    /**
-     * @dev Internal helper to convert LCC currency to underlying currency
-     */
-    function _lccToUnderlyingCurrency(Currency lcc) internal view returns (Currency) {
-        return Currency.wrap(ILCC(Currency.unwrap(lcc)).underlying());
-    }
-
-    /**
-     * @dev Internal helper to get full credit from VTSOrchestrator
-     */
-    function _getFullCredit(Currency currency, address owner) internal view returns (uint256) {
-        return vtsOrchestrator.getFullCredit(currency, owner);
-    }
-
-    /**
-     * @dev Internal helper to get full credit from VTSOrchestrator
-     */
-    function _getFullCreditPair(Currency currency0, Currency currency1, address owner)
-        internal
-        view
-        returns (uint256, uint256)
-    {
-        return vtsOrchestrator.getFullCreditPair(currency0, currency1, owner);
-    }
-
-    /**
-     * @dev This function is used to get the liquidity (L) from deltas of underlying currencies. ie. how much to mint/increase from what is owed.
-     * @param poolKey The pool key for the position
-     * @param tickLower The lower tick of the position
-     * @param tickUpper The upper tick of the position
-     * @return liquidity The liquidity from deltas
-     */
-    function _getLiquidityFromDeltas(PoolKey memory poolKey, int24 tickLower, int24 tickUpper)
-        internal
-        view
-        returns (uint256 liquidity)
-    {
-        (uint160 sqrtPriceX96,,,) = poolManager.getSlot0(poolKey.toId());
-        (uint256 credit0, uint256 credit1) = _getFullCreditPair(
-            _lccToUnderlyingCurrency(poolKey.currency0), _lccToUnderlyingCurrency(poolKey.currency1), msgSender()
-        );
-        return LiquidityAmounts.getLiquidityForAmounts(
-            sqrtPriceX96,
-            TickMath.getSqrtPriceAtTick(tickLower),
-            TickMath.getSqrtPriceAtTick(tickUpper),
-            credit0,
-            credit1
-        );
-    }
-
     /// @notice Unwrap LCC to underlying asset, either from deltas (requested == 0) or from caller's wallet (requested > 0).
     /// @dev Non-reverting: clamps to available; returns actually unwrapped amount observed via balance delta.
+    ///      After unwrapping, syncs the underlying currency balance to deltas for the recipient if recipient is this contract.
     /// @param lccAddr The LCC token address to unwrap
     /// @param from The address to unwrap from (for deltas or wallet transfer)
     /// @param to The recipient address to receive the underlying asset
@@ -515,10 +547,11 @@ contract MMPositionManager is
 
         // Unwrap from deltas: use available credit from this contract's deltas (or from?)
         if (from == address(this)) {
-            // conduct a take from the delta.
-            toUnwrap = vtsOrchestrator.take(lccCurrency, from, to, requested);
+            // conduct a take from the delta of the locker - meaning taking from MMPM-held deltas on behalf of locker.
+            toUnwrap = vtsOrchestrator.take(lccCurrency, msgSender(), requested);
         } else {
             toUnwrap = lcc.balanceOf(from);
+            // Clamp toUnwrap by the amount requested. Otherwise, use whatever balance is available.
             if (requested > 0 && toUnwrap > requested) {
                 toUnwrap = requested;
             }
@@ -536,10 +569,17 @@ contract MMPositionManager is
         // Compute actually unwrapped by observing recipient balance delta
         // Note: this requires 'to' to not be malicious reentrant contract masking balance?
         unwrapped = IERC20(underlying).balanceOf(to) - beforeBal;
+
+        // Sync the underlying currency balance to deltas if recipient is this contract
+        // This makes the unwrapped underlying available for subsequent operations in the same batch
+        if (to == address(this) && unwrapped > 0) {
+            _syncBalanceToDeltas(Currency.wrap(underlying));
+        }
     }
 
     /**
-     * @dev Collects available liquidity from the settlement queue for the caller
+     * @dev Collects available liquidity from the settlement queue for the caller.
+     * @dev Allows for subsequent TAKE over amounts in delta.
      * @param lcc The LCC token address to process settlement for
      * @param recipient The recipient address to receive the underlying assets
      * @param maxAmount The maximum amount to settle
@@ -552,8 +592,8 @@ contract MMPositionManager is
             liquidityHub.processSettlementFor(lcc, recipient, maxAmount);
         }
 
-        // If there's any persisted deltas, prime them to allow the locker to TAKE_LCC, or SETTLE...
-        vtsOrchestrator.primeUnderlyingDelta(sender, Currency.wrap(lcc));
+        // If there's any persisted deltas, prime them to allow the locker to TAKE, or SETTLE...
+        vtsOrchestrator.primeUnderlyingCredits(sender, Currency.wrap(lcc));
     }
 
     /**
@@ -575,6 +615,8 @@ contract MMPositionManager is
      * @param positionIndex The position index to settle the position for
      * @param amount0 The amount of token0 to settle. Positive amounts result in deposits, negative amounts result in withdrawals.
      * @param amount1 The amount of token1 to settle. Positive amounts result in deposits, negative amounts result in withdrawals.
+     * @param withUser0 Whether to settle the position for token0 with deposit from the user's balance, or withdraw to the user's balance
+     * @param withUser1 Whether to settle the position for token1 with deposit from the user's balance, or withdraw to the user's balance
      * @return seizedLiquidityUnits The amount of liquidity units seized during seizure path (0 if not seizing)
      *
      * @notice Value Transfer Flow:
@@ -583,10 +625,15 @@ contract MMPositionManager is
      *         in cases where ERC20.transferFrom is unavailable (e.g., native ETH deposits via msg.value).
      *         VTSO is used exclusively for delta management and authentication, maintaining clean separation of concerns.
      */
-    function _settle(PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex, int128 amount0, int128 amount1)
-        internal
-        returns (uint256)
-    {
+    function _settle(
+        PoolKey memory poolKey,
+        uint256 tokenId,
+        uint256 positionIndex,
+        int128 amount0,
+        int128 amount1,
+        bool withUser0,
+        bool withUser1
+    ) internal returns (uint256) {
         if (amount0 == 0 && amount1 == 0) {
             // Cannot settle 0 amounts for both assets.
             revert Errors.InvalidDelta(0, 0);
@@ -615,41 +662,21 @@ contract MMPositionManager is
         IMarketVault vault = MarketHandlerLib.getVault(marketFactory, poolKey.toId());
         address vaultAddress = address(vault);
 
+        // Determine sender for user interactions
+        address sender = msgSender();
+
         int128 delta0 = settlementDelta.amount0();
         int128 delta1 = settlementDelta.amount1();
 
-        // Step A: Consume any self positive deltas first for withdrawals
-        // This prioritises contract-held balances that were primed at batch start
-        // TODO: Resole logic here.
-        address sender = msgSender();
-        if (delta0 > 0) {
-            int256 selfDelta0 = underlying0.getDelta(address(this));
-            if (selfDelta0 > 0) {
-                uint256 take0 = Math.min(uint256(selfDelta0), LiquidityUtils.safeInt128ToUint256(delta0));
-                if (take0 > 0) {
-                    // Transfer directly from contract to sender (satisfying primed credit)
-                    underlying0.transfer(sender, take0);
-                    delta0 -= SafeCast.toInt128(take0);
-                }
-            }
-        }
-        if (delta1 > 0) {
-            int256 selfDelta1 = underlying1.getDelta(address(this));
-            if (selfDelta1 > 0) {
-                uint256 take1 = Math.min(uint256(selfDelta1), LiquidityUtils.safeInt128ToUint256(delta1));
-                if (take1 > 0) {
-                    // Transfer directly from contract to sender (satisfying primed credit)
-                    underlying1.transfer(sender, take1);
-                    delta1 -= SafeCast.toInt128(take1);
-                }
-            }
-        }
+        // // Consume any self positive deltas first for withdrawals
+        // Consumption/withdrawal of any currency with a positive delta is handled by _take()
 
         // Handle Deposits (Pull underlying from User to Vault)
-        if (delta0 < 0) {
+        // withUser flags determine whether to interact with user's wallet
+        if (delta0 < 0 && withUser0) {
             underlying0.transferFrom(sender, vaultAddress, LiquidityUtils.safeInt128ToUint256(delta0));
         }
-        if (delta1 < 0) {
+        if (delta1 < 0 && withUser1) {
             underlying1.transferFrom(sender, vaultAddress, LiquidityUtils.safeInt128ToUint256(delta1));
         }
 
@@ -658,10 +685,10 @@ contract MMPositionManager is
         BalanceDelta usedDelta = vault.tryModifyLiquidities(remainingDelta);
 
         // Handle Withdrawals (Push underlying from Vault to User)
-        if (usedDelta.amount0() > 0) {
+        if (usedDelta.amount0() > 0 && withUser0) {
             underlying0.transfer(sender, LiquidityUtils.safeInt128ToUint256(usedDelta.amount0()));
         }
-        if (usedDelta.amount1() > 0) {
+        if (usedDelta.amount1() > 0 && withUser1) {
             underlying1.transfer(sender, LiquidityUtils.safeInt128ToUint256(usedDelta.amount1()));
         }
 
@@ -824,7 +851,7 @@ contract MMPositionManager is
         _assertPositionForPool(poolKey, position);
 
         // Compute liquidity from LCC credits (via router helper)
-        uint256 liquidityFromDeltas = _getLiquidityFromDeltas(poolKey, tickLower, tickUpper);
+        uint256 liquidityFromDeltas = _getLiquidityFromDeltas(poolKey, address(this), tickLower, tickUpper);
 
         _increaseInternal(poolKey, tokenId, positionIndex, tickLower, tickUpper, liquidityFromDeltas);
     }
@@ -842,7 +869,7 @@ contract MMPositionManager is
         onlyValidCommit(poolKey, tokenId)
     {
         // Compute underying liquidity from credits (via router helper)
-        uint256 liquidityFromDeltas = _getLiquidityFromDeltas(poolKey, tickLower, tickUpper);
+        uint256 liquidityFromDeltas = _getLiquidityFromDeltas(poolKey, address(this), tickLower, tickUpper);
 
         _mintPositionInternal(poolKey, tokenId, tickLower, tickUpper, liquidityFromDeltas);
     }
@@ -855,6 +882,7 @@ contract MMPositionManager is
      * @param settleIn0 Whether to settle in token0
      * @param settleIn1 Whether to settle in token1
      */
+    // TODO: Merge in with _settle?
     function _settleFromDeltas(
         PoolKey memory poolKey,
         uint256 tokenId,
@@ -866,12 +894,13 @@ contract MMPositionManager is
         // Note: settleIn0/settleIn1 flags determine direction. After onMMSettle negates the delta:
         //       true = negative amount = deposit (settle IN), false = positive amount = withdraw (settle OUT)
         (uint256 credit0, uint256 credit1) = _getFullCreditPair(
-            _lccToUnderlyingCurrency(poolKey.currency0), _lccToUnderlyingCurrency(poolKey.currency1), msgSender()
+            _lccToUnderlyingCurrency(poolKey.currency0), _lccToUnderlyingCurrency(poolKey.currency1), address(this)
         );
         BalanceDelta sDelta = LiquidityUtils.safeToBalanceDelta(credit0, credit1, settleIn0, settleIn1);
 
         // Includes position validation within _settle
-        _settle(poolKey, tokenId, positionIndex, sDelta.amount0(), sDelta.amount1());
+        // settleIn flags determine which currencies interact with user wallet
+        _settle(poolKey, tokenId, positionIndex, sDelta.amount0(), sDelta.amount1(), settleIn0, settleIn1);
     }
 
     /**
@@ -917,6 +946,12 @@ contract MMPositionManager is
         // Single call: modify liquidity + settle
         // VTSOrchestrator.processPosition handles: fee accounting, LCC cancellation, delta accounting
         _modifySyntheticLiquidity(poolKey, params, hookData);
+
+        // Persist unavailable underlying credits from MMPM's delta against the locker
+        // Only persists the difference between MMPM's delta and balance (unavailable portion)
+        vtsOrchestrator.persistUnavailableUnderlyingCredits(
+            address(this), msgSender(), poolKey.currency0, poolKey.currency1
+        );
     }
 
     /**

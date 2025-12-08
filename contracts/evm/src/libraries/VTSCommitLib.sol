@@ -22,15 +22,8 @@ import {PoolId} from "../types/VTS.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
 import {TransientStateLibrary} from "v4-periphery/lib/v4-core/src/libraries/TransientStateLibrary.sol";
-import {BalanceDelta, toBalanceDelta, BalanceDeltaLibrary} from "v4-periphery/lib/v4-core/src/types/BalanceDelta.sol";
-import {PositionLibrary} from "../types/Position.sol";
-import {ILiquidityHub} from "../interfaces/ILiquidityHub.sol";
 import {MarketVTSConfiguration} from "../types/VTS.sol";
-import {TransientSlots} from "./TransientSlots.sol";
 import {CheckpointLibrary} from "./Checkpoint.sol";
-import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
-import {IMarketVault} from "../interfaces/IMarketVault.sol";
-import {console} from "forge-std/console.sol";
 
 /// @title VTSCommitLib
 /// @notice Commit and commitment deficit management helpers for VTS, operating on VTSStorage

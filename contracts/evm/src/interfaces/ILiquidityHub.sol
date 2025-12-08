@@ -100,6 +100,13 @@ interface ILiquidityHub {
     function getUnderlying(address lccToken) external view returns (address);
 
     /**
+     * @notice Checks if an address is a valid LCC token
+     * @param lcc The address to check
+     * @return True if the address is a valid LCC token
+     */
+    function isLCC(address lcc) external view returns (bool);
+
+    /**
      * @notice Gets the Market struct for a given LCC token
      * @param lccToken The LCC token address
      * @return factory The factory that created this market

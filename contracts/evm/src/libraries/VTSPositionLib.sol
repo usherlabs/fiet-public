@@ -865,11 +865,14 @@ library VTSPositionLib {
             BalanceDelta principalDelta = callerDelta - accruedFeesAfterAdj;
 
             // Account fee credits (in LCC) to MMPositionManager contract (not the locker)
-            // This creates a clear separation: MMPM deltas vs VTSO deltas
+            // Split model: LCC deltas on MMPM are held as ERC-6909 claims, takeable via settle/take dance
+            // This creates a clear separation: MMPM deltas (LCC fees + settlement) vs locker deltas (balance syncs)
             DynamicCurrencyDelta.accountDelta(poolKey.currency0, accruedFeesAfterAdj.amount0(), ctx.mmpmAddress);
             DynamicCurrencyDelta.accountDelta(poolKey.currency1, accruedFeesAfterAdj.amount1(), ctx.mmpmAddress);
 
-            // Account underlying currency delta change to MMPositionManager
+            // Account underlying currency settlement obligations to MMPositionManager
+            // Split model: Underlying settlement deltas on MMPM represent market liquidity claims (settle-only)
+            // Balance syncs from wrap/unwrap target locker (msgSender) for takeable credits
             DynamicCurrencyDelta.accountUnderlyingSettlementDeltaChange(
                 ctx.mmpmAddress, requiredSettlementDelta, poolKey.currency0, poolKey.currency1
             );
@@ -1000,11 +1003,13 @@ library VTSPositionLib {
                 ctx.mmpmAddress
             );
 
-        // 4. Persist queued shortfall as credits owed by MMPM Contract to the MM-Locker
+        // 4. Account queued shortfall as credits owed by MMPM Contract to the MM-Locker
+        //    Add these deltas via accountDelta where target is the MMPM
         if (queuedDelta.amount0() > 0 || queuedDelta.amount1() > 0) {
-            DynamicCurrencyDelta.persistUnderlyingCredits(
-                s, ctx.mmpmAddress, queuedDelta, poolKey.currency0, poolKey.currency1
-            );
+            Currency underlying0 = DynamicCurrencyDelta.lccToUnderlyingCurrency(poolKey.currency0);
+            Currency underlying1 = DynamicCurrencyDelta.lccToUnderlyingCurrency(poolKey.currency1);
+            DynamicCurrencyDelta.accountDelta(underlying0, queuedDelta.amount0(), ctx.mmpmAddress);
+            DynamicCurrencyDelta.accountDelta(underlying1, queuedDelta.amount1(), ctx.mmpmAddress);
         }
     }
 
@@ -1308,8 +1313,9 @@ library VTSPositionLib {
         VTSFeeLib.proactiveFunding(s, poolManager, poolId, positionId, lccCurrency0, lccCurrency1);
 
         // Account underlying settlement delta to MMPositionManager for delta tracking
-        // This enables MMPM to know what underlying assets are owed/credited during settlement
-        // TODO: Resolve delta accounting here.
+        // Split model: Settlement deltas on MMPM represent market liquidity claims (settle-only, not takeable)
+        // Balance syncs from wrap/unwrap operations target locker (msgSender) for takeable credits
+        // This enables MMPM to track what underlying assets are owed/credited during settlement
         Currency underlyingCurrency0 = DynamicCurrencyDelta.lccToUnderlyingCurrency(lccCurrency0);
         Currency underlyingCurrency1 = DynamicCurrencyDelta.lccToUnderlyingCurrency(lccCurrency1);
         DynamicCurrencyDelta.accountDelta(underlyingCurrency0, settlementDelta.amount0(), mmPositionManager);
