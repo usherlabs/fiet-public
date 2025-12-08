@@ -17,6 +17,9 @@ import {CurrencyLibrary} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {TransientSlots} from "../libraries/TransientSlots.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {ILiquidityHub} from "../interfaces/ILiquidityHub.sol";
+import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
+import {ILCC} from "../interfaces/ILCC.sol";
+import {LiquidityAmounts} from "v4-periphery/src/libraries/LiquidityAmounts.sol";
 
 /**
  * @title PositionManagerBase

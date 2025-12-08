@@ -24,6 +24,7 @@ import {
 import {PositionId, Position} from "../types/Position.sol";
 import {Pool} from "../types/Pool.sol";
 import {LiquidityUtils} from "./LiquidityUtils.sol";
+import {DynamicCurrencyDelta} from "./DynamicCurrencyDelta.sol";
 
 /// @title VTSFeeLib
 /// @notice Fee processing, slashed pot management, and coverage burn logic for VTS
@@ -337,6 +338,6 @@ library VTSFeeLib {
 
         // 3. Debit the VTS delta for the specified target
         //    This ensures the VTS accounting reflects the withdrawal
-        take(lccCurrency, deltaTarget, amount);
+        DynamicCurrencyDelta.take(lccCurrency, deltaTarget, amount);
     }
 }

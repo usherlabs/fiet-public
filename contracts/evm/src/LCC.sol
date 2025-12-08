@@ -193,7 +193,7 @@ contract LiquidityCommitmentCertificate is ERC20, Ownable, ILCC {
             uint256 totalBalance = marketDerivedBalances[from] + wrappedBalances[from];
             if (totalBalance < amount) {
                 // This should never happen, as balanceOf from ERC20 will throw first.
-                revert Errors.InsufficientBalance(from, totalBalance, amount);
+                revert Errors.InsufficientBalance(totalBalance, amount);
             }
             // Before adjusting local buckets, annul any portion that bleeds into queued settlements
             hub.annulSettlementBeforeTransfer(

@@ -121,7 +121,7 @@ library Errors {
     error InsufficientLiquidityToSettle();
 
     /// @notice Thrown when there is insufficient balance for an operation
-    error InsufficientBalance(address sender, uint256 balance, uint256 needed);
+    error InsufficientBalance(uint256 balance, uint256 needed);
 
     /// @notice Thrown when a liquidity error occurs
     error LiquidityError(address lcc, uint256 amount);

@@ -29,8 +29,6 @@ import {IMarketVault} from "./interfaces/IMarketVault.sol";
 import {SafeERC20} from "openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Errors} from "./libraries/Errors.sol";
 import {LiquidityUtils} from "./libraries/LiquidityUtils.sol";
-import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
-import {LiquidityAmounts} from "v4-periphery/src/libraries/LiquidityAmounts.sol";
 import {ILCC} from "./interfaces/ILCC.sol";
 import {NonzeroDeltaCount} from "@uniswap/v4-core/src/libraries/NonzeroDeltaCount.sol";
 import {IVTSOrchestrator} from "./interfaces/IVTSOrchestrator.sol";
@@ -162,7 +160,7 @@ contract MMPositionManager is
     }
 
     /// @inheritdoc BaseActionsRouter
-    function msgSender() public view override returns (address) {
+    function msgSender() public view override(BaseActionsRouter, PositionManagerBase) returns (address) {
         return _getLocker();
     }
 
@@ -385,7 +383,7 @@ contract MMPositionManager is
     function _wrapNative(uint256 amount) internal {
         uint256 takeAmount = vtsOrchestrator.take(CurrencyLibrary.ADDRESS_ZERO, msgSender(), amount);
         if (amount > 0 && amount > takeAmount) {
-            revert Errors.InsufficientBalance();
+            revert Errors.InsufficientBalance(takeAmount, amount);
         } else if (amount == 0) {
             amount = takeAmount;
         }
@@ -418,7 +416,7 @@ contract MMPositionManager is
             // Source: Delta credit — debit WETH delta
             uint256 takeAmount = vtsOrchestrator.take(weth, msgSender(), amount);
             if (amount > 0 && amount > takeAmount) {
-                revert Errors.InsufficientBalance();
+                revert Errors.InsufficientBalance(takeAmount, amount);
             } else if (amount == 0) {
                 amount = takeAmount;
             }
