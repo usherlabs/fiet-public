@@ -7,8 +7,6 @@ import {MarketVTSConfiguration} from "./VTS.sol";
 
 /// @notice Core Pool struct for state management (Bunni-style)
 struct Pool {
-    /// Unique pool identifier
-    PoolId id;
     /// Token0 currency
     Currency currency0;
     /// Token1 currency

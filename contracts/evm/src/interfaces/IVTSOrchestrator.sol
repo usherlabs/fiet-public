@@ -125,20 +125,10 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta {
 
     // Checkpoints
     function positionToCheckpoint(PositionId positionId) external view returns (RFSCheckpoint memory);
-    /// @notice Marks a checkpoint for a single position within a commitment.
-    /// @param tokenId The ERC721 token id (commitment NFT id)
-    /// @param positionIndex The index of the position within the commitment
-    function checkpoint(uint256 tokenId, uint256 positionIndex) external;
-    /// @notice Marks checkpoints for multiple (tokenId, positionIndex) pairs.
-    /// @param tokenIds Array of commitment NFT ids
-    /// @param positionIndexes Array of position indexes within each commitment
-    function checkpoint(uint256[] calldata tokenIds, uint256[] calldata positionIndexes) external;
-    /// @notice Marks checkpoints for all positions within a single commitment.
-    /// @param tokenId The ERC721 token id (commitment NFT id)
-    function checkpoint(uint256 tokenId) external;
-    /// @notice Marks checkpoints for all positions across multiple commitments.
-    /// @param tokenIds Array of commitment NFT ids
-    function checkpoint(uint256[] calldata tokenIds) external;
+    /// @notice Marks a checkpoint for a given position
+    /// @param positionId The position ID
+    /// @param rfsOpen Whether the RFS is open
+    function markCheckpoint(PositionId positionId, bool rfsOpen) external;
 
     function collectFees(Currency lccCurrency, address recipient, uint256 maxAmount)
         external

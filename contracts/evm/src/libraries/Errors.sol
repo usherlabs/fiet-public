@@ -206,5 +206,12 @@ library Errors {
 
     /// @notice Thrown when the MM Position Manager address is not set
     error MMPositionManagerNotSet();
+
+    // ============ ACTION ROUTER ERRORS ============
+    // Errors related to action routing and handling
+
+    /// @notice Thrown when an unsupported action is requested
+    /// @param action The action code that is not supported
+    error UnsupportedAction(uint256 action);
 }
 

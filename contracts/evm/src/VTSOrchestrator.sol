@@ -206,7 +206,7 @@ contract VTSOrchestrator is ImmutableMarketState, PausableVTS, VTSCurrencyDelta,
         )
     {
         Pool storage pool = s.pools[poolId];
-        return (pool.id, pool.currency0, pool.currency1, pool.vtsConfig, pool.isPaused);
+        return (poolId, pool.currency0, pool.currency1, pool.vtsConfig, pool.isPaused);
     }
 
     // --------------------------------------------------
@@ -258,7 +258,13 @@ contract VTSOrchestrator is ImmutableMarketState, PausableVTS, VTSCurrencyDelta,
     /// @param corePoolKey The core pool key
     /// @param vtsConfiguration The VTS configuration
     function initPool(PoolKey memory corePoolKey, MarketVTSConfiguration memory vtsConfiguration) external onlyFactory {
-        VTSCommitLib.initPool(s, corePoolKey, vtsConfiguration);
+        // Initialize the market details in the VTS state
+        s.pools[corePoolKey.toId()] = Pool({
+            currency0: corePoolKey.currency0,
+            currency1: corePoolKey.currency1,
+            vtsConfig: vtsConfiguration,
+            isPaused: false
+        });
     }
 
     /// @inheritdoc IVTSOrchestrator
@@ -557,49 +563,14 @@ contract VTSOrchestrator is ImmutableMarketState, PausableVTS, VTSCurrencyDelta,
     }
 
     // --------------------------------------------------
-    // Checkpoint Helper Functions
+    // Checkpoint Functions
     // --------------------------------------------------
 
-    /// @notice Marks a checkpoint for a given commit position. Only callable by the MMPositionManager.
-    /// @param commitId The commitment identifier (ERC721 token id at MMPM)
-    /// @param positionIndex The index of the position within the commitment
-    function _markCheckpoint(uint256 commitId, uint256 positionIndex) internal {
-        (PositionId positionId, bool rfsOpen,) = calcRFS(commitId, positionIndex, false);
+    /// @notice Marks a checkpoint for a given position
+    /// @param positionId The position ID
+    /// @param rfsOpen Whether the RFS is open
+    function markCheckpoint(PositionId positionId, bool rfsOpen) external onlyMMPositionManager {
         CheckpointLibrary.markCheckpoint(s, positionId, rfsOpen);
-    }
-
-    /// @notice Marks a checkpoint for a single position within a commitment.
-    /// @param tokenId The ERC721 token id (commitment NFT id)
-    /// @param positionIndex The index of the position within the commitment
-    function checkpoint(uint256 tokenId, uint256 positionIndex) public {
-        _markCheckpoint(tokenId, positionIndex);
-    }
-
-    /// @notice Marks checkpoints for multiple (tokenId, positionIndex) pairs.
-    /// @param tokenIds Array of commitment NFT ids
-    /// @param positionIndexes Array of position indexes within each commitment
-    function checkpoint(uint256[] calldata tokenIds, uint256[] calldata positionIndexes) public {
-        require(tokenIds.length == positionIndexes.length, "Invalid input lengths");
-        for (uint256 i = 0; i < tokenIds.length; i++) {
-            _markCheckpoint(tokenIds[i], positionIndexes[i]);
-        }
-    }
-
-    /// @notice Marks checkpoints for all positions within a single commitment.
-    /// @param tokenId The ERC721 token id (commitment NFT id)
-    function checkpoint(uint256 tokenId) public {
-        Commit storage commit = s.commits[tokenId];
-        for (uint256 i = 0; i < commit.positionCount; i++) {
-            _markCheckpoint(tokenId, i);
-        }
-    }
-
-    /// @notice Marks checkpoints for all positions across multiple commitments.
-    /// @param tokenIds Array of commitment NFT ids
-    function checkpoint(uint256[] calldata tokenIds) public {
-        for (uint256 i = 0; i < tokenIds.length; i++) {
-            checkpoint(tokenIds[i]);
-        }
     }
 
     /// @notice Gets the checkpoint for a given position

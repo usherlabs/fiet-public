@@ -31,14 +31,6 @@ import {CheckpointLibrary} from "./Checkpoint.sol";
 ///      Internal functions (called only within this library) have underscore prefix.
 /// @author Fiet Protocol
 library VTSCommitLib {
-    event SignalCommitted(uint256 tokenId);
-    event PoolInitialized(
-        PoolId indexed corePoolId,
-        address indexed currency0,
-        address indexed currency1,
-        MarketVTSConfiguration vtsConfiguration
-    );
-
     using StateLibrary for IPoolManager;
     using TransientStateLibrary for IPoolManager;
     using SafeCast for *;
@@ -103,8 +95,6 @@ library VTSCommitLib {
         // store the signal state (only state and expiresAt are relevant) and bind commit to pool
         s.commits[tokenId].mmState = signal.mmState;
         s.commits[tokenId].expiresAt = block.timestamp + expirySeconds;
-
-        emit SignalCommitted(tokenId);
     }
 
     /// @notice Applies commitment deficit to a batch of positions (external wrapper)
@@ -392,27 +382,6 @@ library VTSCommitLib {
     {
         (string[] memory tickers, uint256[] memory amounts) = MarketMaker.getReserves(mmState);
         totalUsdValue = oracleHelper.getTotalUsdValue(tickers, amounts);
-    }
-
-    /// @notice Initializes a pool in the VTS state
-    /// @param s The central VTS storage
-    /// @param poolKey The pool key
-    /// @param vtsConfiguration The VTS configuration
-    function initPool(VTSStorage storage s, PoolKey memory poolKey, MarketVTSConfiguration memory vtsConfiguration)
-        external
-    {
-        // initialize the market details in the VTS state
-        s.pools[poolKey.toId()] = Pool({
-            id: poolKey.toId(),
-            currency0: poolKey.currency0,
-            currency1: poolKey.currency1,
-            vtsConfig: vtsConfiguration,
-            isPaused: false
-        });
-
-        emit PoolInitialized(
-            poolKey.toId(), Currency.unwrap(poolKey.currency0), Currency.unwrap(poolKey.currency1), vtsConfiguration
-        );
     }
 
     /// @notice Declares a commitment deficit for a position
