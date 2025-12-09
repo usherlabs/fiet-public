@@ -2,7 +2,6 @@
 pragma solidity ^0.8.0;
 
 import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
-import {ActionConstants} from "v4-periphery/src/libraries/ActionConstants.sol";
 import {ImmutableState} from "v4-periphery/src/base/ImmutableState.sol";
 
 /// @title Native Wrapper
