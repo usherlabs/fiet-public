@@ -1051,44 +1051,6 @@ contract MMPositionManager is
         _mintPositionInternal(poolKey, tokenId, tickLower, tickUpper, liquidity);
     }
 
-    // ------------------------------------------------------------------------------------------------
-    // Checkpoint helpers (RFS / deficit lifecycle)
-    // ------------------------------------------------------------------------------------------------
-
-    /// @notice Marks a checkpoint for a single position within a commitment.
-    /// @param tokenId The ERC721 token id (commitment NFT id)
-    /// @param positionIndex The index of the position within the commitment
-    function checkpoint(uint256 tokenId, uint256 positionIndex) public {
-        vtsOrchestrator.markCheckpoint(tokenId, positionIndex);
-    }
-
-    /// @notice Marks checkpoints for multiple (tokenId, positionIndex) pairs.
-    /// @param tokenIds Array of commitment NFT ids
-    /// @param positionIndexes Array of position indexes within each commitment
-    function checkpoint(uint256[] calldata tokenIds, uint256[] calldata positionIndexes) public {
-        require(tokenIds.length == positionIndexes.length, "Invalid input lengths");
-        for (uint256 i = 0; i < tokenIds.length; i++) {
-            vtsOrchestrator.markCheckpoint(tokenIds[i], positionIndexes[i]);
-        }
-    }
-
-    /// @notice Marks checkpoints for all positions within a single commitment.
-    /// @param tokenId The ERC721 token id (commitment NFT id)
-    function checkpoint(uint256 tokenId) public {
-        (,, uint256 positionCount,) = vtsOrchestrator.getCommit(tokenId);
-        for (uint256 i = 0; i < positionCount; i++) {
-            vtsOrchestrator.markCheckpoint(tokenId, i);
-        }
-    }
-
-    /// @notice Marks checkpoints for all positions across multiple commitments.
-    /// @param tokenIds Array of commitment NFT ids
-    function checkpoint(uint256[] calldata tokenIds) public {
-        for (uint256 i = 0; i < tokenIds.length; i++) {
-            checkpoint(tokenIds[i]);
-        }
-    }
-
     /// @dev overrides transferFrom to revert if pool manager is locked
     /// @dev mirrors PositionManager and prevents transfers while an unlock session is active (mid-batch), avoiding inconsistent state/reentrancy around router-locked flows.
     function transferFrom(address from, address to, uint256 id) public virtual override onlyIfPoolManagerLocked {

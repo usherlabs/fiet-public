@@ -563,9 +563,43 @@ contract VTSOrchestrator is ImmutableMarketState, PausableVTS, VTSCurrencyDelta,
     /// @notice Marks a checkpoint for a given commit position. Only callable by the MMPositionManager.
     /// @param commitId The commitment identifier (ERC721 token id at MMPM)
     /// @param positionIndex The index of the position within the commitment
-    function markCheckpoint(uint256 commitId, uint256 positionIndex) external {
+    function _markCheckpoint(uint256 commitId, uint256 positionIndex) internal {
         (PositionId positionId, bool rfsOpen,) = calcRFS(commitId, positionIndex, false);
         CheckpointLibrary.markCheckpoint(s, positionId, rfsOpen);
+    }
+
+    /// @notice Marks a checkpoint for a single position within a commitment.
+    /// @param tokenId The ERC721 token id (commitment NFT id)
+    /// @param positionIndex The index of the position within the commitment
+    function checkpoint(uint256 tokenId, uint256 positionIndex) public {
+        _markCheckpoint(tokenId, positionIndex);
+    }
+
+    /// @notice Marks checkpoints for multiple (tokenId, positionIndex) pairs.
+    /// @param tokenIds Array of commitment NFT ids
+    /// @param positionIndexes Array of position indexes within each commitment
+    function checkpoint(uint256[] calldata tokenIds, uint256[] calldata positionIndexes) public {
+        require(tokenIds.length == positionIndexes.length, "Invalid input lengths");
+        for (uint256 i = 0; i < tokenIds.length; i++) {
+            _markCheckpoint(tokenIds[i], positionIndexes[i]);
+        }
+    }
+
+    /// @notice Marks checkpoints for all positions within a single commitment.
+    /// @param tokenId The ERC721 token id (commitment NFT id)
+    function checkpoint(uint256 tokenId) public {
+        Commit storage commit = s.commits[tokenId];
+        for (uint256 i = 0; i < commit.positionCount; i++) {
+            _markCheckpoint(tokenId, i);
+        }
+    }
+
+    /// @notice Marks checkpoints for all positions across multiple commitments.
+    /// @param tokenIds Array of commitment NFT ids
+    function checkpoint(uint256[] calldata tokenIds) public {
+        for (uint256 i = 0; i < tokenIds.length; i++) {
+            checkpoint(tokenIds[i]);
+        }
     }
 
     /// @notice Gets the checkpoint for a given position
