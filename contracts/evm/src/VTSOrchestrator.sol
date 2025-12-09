@@ -295,13 +295,23 @@ contract VTSOrchestrator is ImmutableMarketState, PausableVTS, VTSCurrencyDelta,
     }
 
     /// @inheritdoc IVTSOrchestrator
+    function calcVTSRequired(PositionId positionId)
+        public
+        onlyPositionValid(positionId)
+        returns (uint256 vtsRequired0, uint256 vtsRequired1)
+    {
+        VTSPositionLib.settlePositionGrowths(s, poolManager, positionId);
+        return VTSPositionLib.getVTSRequired(s, positionId);
+    }
+
+    /// @inheritdoc IVTSOrchestrator
     function calcVTSCurrent(PositionId positionId)
-        external
+        public
         onlyPositionValid(positionId)
         returns (uint256 vtsCurrent0, uint256 vtsCurrent1)
     {
         VTSPositionLib.settlePositionGrowths(s, poolManager, positionId);
-        return _getVTSCurrent(positionId);
+        return VTSPositionLib.getVTSCurrent(s, positionId);
     }
 
     /// @inheritdoc IVTSOrchestrator
@@ -553,7 +563,7 @@ contract VTSOrchestrator is ImmutableMarketState, PausableVTS, VTSCurrencyDelta,
     /// @notice Marks a checkpoint for a given commit position. Only callable by the MMPositionManager.
     /// @param commitId The commitment identifier (ERC721 token id at MMPM)
     /// @param positionIndex The index of the position within the commitment
-    function markCheckpoint(uint256 commitId, uint256 positionIndex) external onlyMMPositionManager {
+    function markCheckpoint(uint256 commitId, uint256 positionIndex) external {
         (PositionId positionId, bool rfsOpen,) = calcRFS(commitId, positionIndex, false);
         CheckpointLibrary.markCheckpoint(s, positionId, rfsOpen);
     }
@@ -561,27 +571,7 @@ contract VTSOrchestrator is ImmutableMarketState, PausableVTS, VTSCurrencyDelta,
     /// @notice Gets the checkpoint for a given position
     /// @param positionId The position ID
     /// @return checkpoint The checkpoint for the position
-    function positionToCheckpoint(PositionId positionId) public view returns (RFSCheckpoint memory) {
+    function positionToCheckpoint(PositionId positionId) external view returns (RFSCheckpoint memory) {
         return s.checkpoints[PositionId.unwrap(positionId)];
-    }
-
-    // --------------------------------------------------
-    // Internal Helper Functions
-    // --------------------------------------------------
-
-    /// @notice Gets the required VTS for a position using cumulative deficits
-    /// @param positionId The position ID
-    /// @return vtsRequired0 The required VTS for token0 (1e18 scale)
-    /// @return vtsRequired1 The required VTS for token1 (1e18 scale)
-    function _getVTSRequired(PositionId positionId) internal view returns (uint256 vtsRequired0, uint256 vtsRequired1) {
-        (vtsRequired0, vtsRequired1) = VTSPositionLib.getVTSRequired(s, positionId);
-    }
-
-    /// @notice Gets the current VTS for a position
-    /// @param positionId The position ID
-    /// @return vtsCurrent0 The current VTS for token0
-    /// @return vtsCurrent1 The current VTS for token1
-    function _getVTSCurrent(PositionId positionId) internal view returns (uint256 vtsCurrent0, uint256 vtsCurrent1) {
-        (vtsCurrent0, vtsCurrent1) = VTSPositionLib.getVTSCurrent(s, positionId);
     }
 }

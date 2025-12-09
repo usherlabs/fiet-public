@@ -62,6 +62,7 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta {
         returns (PositionId, bool, BalanceDelta);
     function getPositionId(uint256 commitId, uint256 positionIndex) external view returns (PositionId);
     function calcVTSCurrent(PositionId positionId) external returns (uint256 vtsCurrent0, uint256 vtsCurrent1);
+    function calcVTSRequired(PositionId positionId) external returns (uint256 vtsRequired0, uint256 vtsRequired1);
     function getPositionSettledAmounts(PositionId positionId) external view returns (uint256 amount0, uint256 amount1);
     function incrementCoverage(PoolId poolId, uint256 amount0, uint256 amount1) external;
     function getCommitment(PositionId positionId) external view returns (uint256 commitment0, uint256 commitment1);

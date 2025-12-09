@@ -20,6 +20,7 @@ import {EthSepoliaConstants} from "./constants/EthSepolia.sol";
 import {MMPositionManager} from "../src/MMPositionManager.sol";
 import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
 import {PositionManager} from "v4-periphery/src/PositionManager.sol";
+import {IAllowanceTransfer} from "permit2/src/interfaces/IAllowanceTransfer.sol";
 import {StubSignalVerifier} from "../src/verifiers/StubSignalVerifier.sol";
 import {VRLSignalManager} from "../src/VRLSignalManager.sol";
 import {VRLSettlementObserver} from "../src/VRLSettlementObserver.sol";
@@ -289,10 +290,11 @@ contract CompleteDeployScript is ScriptHelper {
      */
     function _deployMMPositionManager() internal returns (address) {
         address commitmentDescriptorAddr = _deployCommitmentDescriptor();
-        // Get WETH9 from the PositionManager (which has it as immutable)
+        // Get WETH9 and permit2 from the PositionManager (which has them as immutable)
         IWETH9 weth9 = PositionManager(positionManagerAddress).WETH9();
+        IAllowanceTransfer permit2 = PositionManager(positionManagerAddress).permit2();
         MMPositionManager positionManager =
-            new MMPositionManager(poolManagerAddress, marketFactory, vtsOrchestrator, commitmentDescriptorAddr, weth9);
+            new MMPositionManager(poolManagerAddress, marketFactory, vtsOrchestrator, commitmentDescriptorAddr, weth9, permit2);
         console.log("MMPositionManager deployed at:", address(positionManager));
         return address(positionManager);
     }

@@ -13,6 +13,7 @@ import {HookFlags} from "../src/libraries/HookFlags.sol";
 import {MMPositionManager} from "../src/MMPositionManager.sol";
 import {WETH} from "@uniswap/v4-core/lib/solmate/src/tokens/WETH.sol";
 import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
+import {IAllowanceTransfer} from "permit2/src/interfaces/IAllowanceTransfer.sol";
 import {VTSOrchestrator} from "../src/VTSOrchestrator.sol";
 import {VRLSettlementObserver} from "../src/VRLSettlementObserver.sol";
 import {IVRLSettlementObserver} from "../src/interfaces/IVRLSettlementObserver.sol";
@@ -56,12 +57,14 @@ contract HookTest is Test, Deployers {
             bounds
         );
         IWETH9 weth9 = IWETH9(address(new WETH()));
+        IAllowanceTransfer permit2 = IAllowanceTransfer(makeAddr("permit2"));
         mmPositionManager = new MMPositionManager(
             address(poolManager),
             address(factory),
             address(vtsOrchestrator),
             makeAddr("descriptor"),
-            weth9
+            weth9,
+            permit2
         );
 
         // Compute flags for CoreHook

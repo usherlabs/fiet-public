@@ -21,6 +21,7 @@ import {VTSConfigs} from "../src/libraries/VTSConfigs.sol";
 import {IOracleHelper} from "../src/interfaces/IOracleHelper.sol";
 import {WETH} from "@uniswap/v4-core/lib/solmate/src/tokens/WETH.sol";
 import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
+import {IAllowanceTransfer} from "permit2/src/interfaces/IAllowanceTransfer.sol";
 import {MMPCommitmentDescriptor} from "../src/MMPCommitmentDescriptor.sol";
 import {ILiquidityHub} from "../src/interfaces/ILiquidityHub.sol";
 import {LiquidityHub} from "../src/LiquidityHub.sol";
@@ -99,13 +100,15 @@ contract MarketFactoryTest is Test, Deployers {
             address(settlementObserver)
         );
 
+        IAllowanceTransfer permit2 = IAllowanceTransfer(makeAddr("permit2"));
         vm.prank(owner);
         positionManager = new MMPositionManager(
             address(poolManager),
             tempFactoryAddr, // temporary address, will be updated after factory deployment
             address(vtsOrchestrator),
             commitmentDescriptor,
-            weth9
+            weth9,
+            permit2
         );
 
         // Deploy MarketFactory with all required arguments

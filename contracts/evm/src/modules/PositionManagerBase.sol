@@ -20,6 +20,7 @@ import {ILiquidityHub} from "../interfaces/ILiquidityHub.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {ILCC} from "../interfaces/ILCC.sol";
 import {LiquidityAmounts} from "v4-periphery/src/libraries/LiquidityAmounts.sol";
+import {LiquidityUtils} from "../libraries/LiquidityUtils.sol";
 
 /**
  * @title PositionManagerBase

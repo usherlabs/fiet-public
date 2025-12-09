@@ -16,11 +16,9 @@ import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
 import {PositionId, PositionLibrary, PositionModificationHookDataLib} from "./types/Position.sol";
 import {MarketMaker} from "./libraries/MarketMaker.sol";
 import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
-import {IVRLSignalManager} from "./interfaces/IVRLSignalManager.sol";
 import {IOracleHelper} from "./interfaces/IOracleHelper.sol";
 import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
-import {TransientStateLibrary} from "v4-periphery/lib/v4-core/src/libraries/TransientStateLibrary.sol";
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 import {ICommitmentDescriptor} from "./interfaces/ICommitmentDescriptor.sol";
 import {ILiquidityHub} from "./interfaces/ILiquidityHub.sol";
@@ -30,7 +28,6 @@ import {SafeERC20} from "openzeppelin-contracts/contracts/token/ERC20/utils/Safe
 import {Errors} from "./libraries/Errors.sol";
 import {LiquidityUtils} from "./libraries/LiquidityUtils.sol";
 import {ILCC} from "./interfaces/ILCC.sol";
-import {NonzeroDeltaCount} from "@uniswap/v4-core/src/libraries/NonzeroDeltaCount.sol";
 import {IVTSOrchestrator} from "./interfaces/IVTSOrchestrator.sol";
 import {Position} from "./types/Position.sol";
 import {TransientSlots} from "./libraries/TransientSlots.sol";
@@ -38,10 +35,11 @@ import {PositionManagerBase} from "./modules/PositionManagerBase.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {CurrencyTransfer} from "./libraries/CurrencyTransfer.sol";
 import {CurrencyDelta} from "v4-periphery/lib/v4-core/src/libraries/CurrencyDelta.sol";
-import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {Permit2Forwarder} from "v4-periphery/src/base/Permit2Forwarder.sol";
+import {IAllowanceTransfer} from "permit2/src/interfaces/IAllowanceTransfer.sol";
 import {MarketHandlerLib} from "./libraries/MarketHandlerLib.sol";
 import {ImmutableMarketState} from "./modules/ImmutableMarketState.sol";
+import {TransientStateLibrary} from "v4-periphery/lib/v4-core/src/libraries/TransientStateLibrary.sol";
 
 contract MMPositionManager is
     ERC721Permit_v4,
@@ -96,9 +94,17 @@ contract MMPositionManager is
         COLLECT_AVAILABLE_LIQUIDITY // params: (address lcc, address recipient, uint256 maxAmount)
     }
 
-    constructor(address _manager, address _marketFactory, address _vtsOrchestrator, address _descriptor, IWETH9 _weth9)
+    constructor(
+        address _manager,
+        address _marketFactory,
+        address _vtsOrchestrator,
+        address _descriptor,
+        IWETH9 _weth9,
+        IAllowanceTransfer _permit2
+    )
         ERC721Permit_v4("Fiet VRL Commitment Positions Manager", "FIET-VRL-MMP")
         BaseActionsRouter(IPoolManager(_manager))
+        Permit2Forwarder(_permit2)
         NativeWrapper(_weth9)
         PositionManagerBase(_vtsOrchestrator)
         ImmutableMarketState(_marketFactory)
@@ -1052,24 +1058,23 @@ contract MMPositionManager is
     /// @notice Marks a checkpoint for a single position within a commitment.
     /// @param tokenId The ERC721 token id (commitment NFT id)
     /// @param positionIndex The index of the position within the commitment
-    function checkpoint(uint256 tokenId, uint256 positionIndex) external onlyIfApproved(msg.sender, tokenId) {
+    function checkpoint(uint256 tokenId, uint256 positionIndex) public {
         vtsOrchestrator.markCheckpoint(tokenId, positionIndex);
     }
 
     /// @notice Marks checkpoints for multiple (tokenId, positionIndex) pairs.
     /// @param tokenIds Array of commitment NFT ids
     /// @param positionIndexes Array of position indexes within each commitment
-    function checkpoint(uint256[] calldata tokenIds, uint256[] calldata positionIndexes) external {
+    function checkpoint(uint256[] calldata tokenIds, uint256[] calldata positionIndexes) public {
         require(tokenIds.length == positionIndexes.length, "Invalid input lengths");
         for (uint256 i = 0; i < tokenIds.length; i++) {
-            _assertApprovedOrOwner(msg.sender, tokenIds[i]);
             vtsOrchestrator.markCheckpoint(tokenIds[i], positionIndexes[i]);
         }
     }
 
     /// @notice Marks checkpoints for all positions within a single commitment.
     /// @param tokenId The ERC721 token id (commitment NFT id)
-    function checkpoint(uint256 tokenId) external onlyIfApproved(msg.sender, tokenId) {
+    function checkpoint(uint256 tokenId) public {
         (,, uint256 positionCount,) = vtsOrchestrator.getCommit(tokenId);
         for (uint256 i = 0; i < positionCount; i++) {
             vtsOrchestrator.markCheckpoint(tokenId, i);
@@ -1078,13 +1083,9 @@ contract MMPositionManager is
 
     /// @notice Marks checkpoints for all positions across multiple commitments.
     /// @param tokenIds Array of commitment NFT ids
-    function checkpoint(uint256[] calldata tokenIds) external {
+    function checkpoint(uint256[] calldata tokenIds) public {
         for (uint256 i = 0; i < tokenIds.length; i++) {
-            _assertApprovedOrOwner(msg.sender, tokenIds[i]);
-            (,, uint256 positionCount,) = vtsOrchestrator.getCommit(tokenIds[i]);
-            for (uint256 j = 0; j < positionCount; j++) {
-                vtsOrchestrator.markCheckpoint(tokenIds[i], j);
-            }
+            checkpoint(tokenIds[i]);
         }
     }
 

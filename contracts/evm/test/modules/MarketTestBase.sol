@@ -26,6 +26,7 @@ import {ECDSASignatureSignalVerifier} from "../../src/verifiers/ECDSASignatureSi
 import {StubSignalVerifier} from "../../src/verifiers/StubSignalVerifier.sol";
 import {WETH} from "@uniswap/v4-core/lib/solmate/src/tokens/WETH.sol";
 import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
+import {IAllowanceTransfer} from "permit2/src/interfaces/IAllowanceTransfer.sol";
 import {VTSConfigs} from "../../src/libraries/VTSConfigs.sol";
 import {IVTSOrchestrator} from "../../src/interfaces/IVTSOrchestrator.sol";
 import {VRLSignalManager} from "../../src/VRLSignalManager.sol";
@@ -217,9 +218,10 @@ abstract contract MarketTestBase is Test, Deployers {
             address(settlementObserver)
         );
 
+        IAllowanceTransfer permit2 = IAllowanceTransfer(makeAddr("permit2"));
         mmPositionManager = address(
             new MMPositionManager(
-                address(manager), address(marketFactory), address(vtsOrchestrator), commitmentDescriptor, weth9
+                address(manager), address(marketFactory), address(vtsOrchestrator), commitmentDescriptor, weth9, permit2
             )
         );
     }
