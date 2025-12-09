@@ -70,14 +70,14 @@ library VTSCommitLib {
     /// @param s The central VTS storage
     /// @param signalManager The signal manager address
     /// @param liquiditySignal The liquidity signal to commit
-    /// @return tokenId The token id of the committed signal
+    /// @return commitId The commit id of the committed signal
     function commitSignal(
         VTSStorage storage s,
         IVRLSignalManager signalManager, // Pass as parameter
         bytes memory liquiditySignal
     )
         external
-        returns (uint256 tokenId)
+        returns (uint256 commitId)
     {
         // validate the liquidity signal was actually provided
         if (liquiditySignal.length == 0) {
@@ -88,13 +88,13 @@ library VTSCommitLib {
         (, uint256 expirySeconds) = signalManager.verifyLiquiditySignal(liquiditySignal, true);
         LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
 
-        // get the token id
-        // increment first then assign because nextTokenId starts at 0 and we want to start at 1
-        tokenId = ++s.nextTokenId;
+        // get the commit id
+        // increment first then assign because nextCommitId starts at 0 and we want to start at 1
+        commitId = ++s.nextCommitId;
 
         // store the signal state (only state and expiresAt are relevant) and bind commit to pool
-        s.commits[tokenId].mmState = signal.mmState;
-        s.commits[tokenId].expiresAt = block.timestamp + expirySeconds;
+        s.commits[commitId].mmState = signal.mmState;
+        s.commits[commitId].expiresAt = block.timestamp + expirySeconds;
     }
 
     /// @notice Applies commitment deficit to a batch of positions (external wrapper)
@@ -169,7 +169,7 @@ library VTSCommitLib {
     ///      This reflects the live composition of the commitment rather than any historical issuance tallies.
     /// @param s The central VTS storage
     /// @param oracleHelper The oracle helper for USD price calculations
-    /// @param tokenId The commit NFT id.
+    /// @param commitId The commit NFT id.
     /// @param poolId The pool ID for the commitment
     /// @param tickLower The lower tick of the position
     /// @param tickUpper The upper tick of the position
@@ -181,7 +181,7 @@ library VTSCommitLib {
     function effectiveCommitmentUsdValue(
         VTSStorage storage s,
         IOracleHelper oracleHelper,
-        uint256 tokenId,
+        uint256 commitId,
         PoolId poolId,
         int24 tickLower,
         int24 tickUpper,
@@ -189,9 +189,9 @@ library VTSCommitLib {
         bool errorIfInsufficientBacking
     ) external view returns (uint256 potentialIssuedUsd, uint256 settledUsd, uint256 signalUsd) {
         potentialIssuedUsd =
-            _potentialIssuedUSDValue(s, oracleHelper, tokenId, poolId, tickLower, tickUpper, liquidityDelta);
-        settledUsd = _settledUSDValue(s, oracleHelper, tokenId);
-        signalUsd = _signalUSDValue(s, oracleHelper, tokenId);
+            _potentialIssuedUSDValue(s, oracleHelper, commitId, poolId, tickLower, tickUpper, liquidityDelta);
+        settledUsd = _settledUSDValue(s, oracleHelper, commitId);
+        signalUsd = _signalUSDValue(s, oracleHelper, commitId);
 
         if (errorIfInsufficientBacking) {
             if (potentialIssuedUsd > signalUsd + settledUsd) {
@@ -203,7 +203,7 @@ library VTSCommitLib {
     /// @notice Calculates the total USD value of a commitment
     /// @param s The central VTS storage
     /// @param oracleHelper The oracle helper for USD price calculations
-    /// @param tokenId The commit NFT id
+    /// @param commitId The commit NFT id
     /// @param errorIfInsufficientBacking Whether to revert if the commitment is insufficient
     /// @return issuedUsd The USD value of the issued commitment maxima
     /// @return settledUsd The USD value of the settled amounts
@@ -211,12 +211,12 @@ library VTSCommitLib {
     function _totalCommitmentUsdValue(
         VTSStorage storage s,
         IOracleHelper oracleHelper,
-        uint256 tokenId,
+        uint256 commitId,
         bool errorIfInsufficientBacking
     ) internal view returns (uint256 issuedUsd, uint256 settledUsd, uint256 signalUsd) {
-        issuedUsd = _issuedUSDValue(s, oracleHelper, tokenId);
-        settledUsd = _settledUSDValue(s, oracleHelper, tokenId);
-        signalUsd = _signalUSDValue(s, oracleHelper, tokenId);
+        issuedUsd = _issuedUSDValue(s, oracleHelper, commitId);
+        settledUsd = _settledUSDValue(s, oracleHelper, commitId);
+        signalUsd = _signalUSDValue(s, oracleHelper, commitId);
 
         if (errorIfInsufficientBacking) {
             if (issuedUsd > signalUsd + settledUsd) {
@@ -228,7 +228,7 @@ library VTSCommitLib {
     /// @notice Calculates the USD value of issued commitment maxima across all positions
     /// @param s The central VTS storage
     /// @param oracleHelper The oracle helper for USD price calculations
-    /// @param tokenId The commit NFT id
+    /// @param commitId The commit NFT id
     /// @param poolId The pool ID / market currencies to reference
     /// @param tickLower The lower tick of the position
     /// @param tickUpper The upper tick of the position
@@ -238,14 +238,14 @@ library VTSCommitLib {
     function _potentialIssuedUSDValue(
         VTSStorage storage s,
         IOracleHelper oracleHelper,
-        uint256 tokenId,
+        uint256 commitId,
         PoolId poolId,
         int24 tickLower,
         int24 tickUpper,
         int256 liquidityDelta
     ) internal view returns (uint256 totalUsdValue) {
         // get the current issued USD value
-        totalUsdValue = _issuedUSDValue(s, oracleHelper, tokenId);
+        totalUsdValue = _issuedUSDValue(s, oracleHelper, commitId);
 
         // calculate the commitment maxima for the new commitment
         Pool storage pool = s.pools[poolId];
@@ -262,14 +262,14 @@ library VTSCommitLib {
     /// @notice Calculates the USD value of issued commitment maxima across all positions
     /// @param s The central VTS storage
     /// @param oracleHelper The oracle helper for USD price calculations
-    /// @param tokenId The commit NFT id
+    /// @param commitId The commit NFT id
     /// @return totalUsdValue Total USD value of commitment maxima (averaged)
-    function _issuedUSDValue(VTSStorage storage s, IOracleHelper oracleHelper, uint256 tokenId)
+    function _issuedUSDValue(VTSStorage storage s, IOracleHelper oracleHelper, uint256 commitId)
         internal
         view
         returns (uint256 totalUsdValue)
     {
-        Commit storage commit = s.commits[tokenId];
+        Commit storage commit = s.commits[commitId];
         uint256 positionCount = commit.positionCount;
 
         for (uint256 i = 0; i < positionCount;) {
@@ -313,14 +313,14 @@ library VTSCommitLib {
     /// @notice Calculates the USD value of settled amounts across all positions
     /// @param s The central VTS storage
     /// @param oracleHelper The oracle helper for USD price calculations
-    /// @param tokenId The commit NFT id
+    /// @param commitId The commit NFT id
     /// @return totalUsdValue Total USD value of settled amounts
-    function _settledUSDValue(VTSStorage storage s, IOracleHelper oracleHelper, uint256 tokenId)
+    function _settledUSDValue(VTSStorage storage s, IOracleHelper oracleHelper, uint256 commitId)
         internal
         view
         returns (uint256 totalUsdValue)
     {
-        Commit storage commit = s.commits[tokenId];
+        Commit storage commit = s.commits[commitId];
         uint256 positionCount = commit.positionCount;
 
         for (uint256 i = 0; i < positionCount;) {
@@ -361,14 +361,14 @@ library VTSCommitLib {
     /// @notice Calculates the USD value of the MarketMaker signal reserves
     /// @param s The central VTS storage
     /// @param oracleHelper The oracle helper for USD price calculations
-    /// @param tokenId The commit NFT id
+    /// @param commitId The commit NFT id
     /// @return totalUsdValue Total USD value of signal reserves
-    function _signalUSDValue(VTSStorage storage s, IOracleHelper oracleHelper, uint256 tokenId)
+    function _signalUSDValue(VTSStorage storage s, IOracleHelper oracleHelper, uint256 commitId)
         internal
         view
         returns (uint256 totalUsdValue)
     {
-        Commit storage commit = s.commits[tokenId];
+        Commit storage commit = s.commits[commitId];
         MarketMaker.State memory mmState = commit.mmState;
 
         // Get reserves from MarketMaker.State
@@ -390,7 +390,7 @@ library VTSCommitLib {
         VTSStorage storage s,
         address sender,
         address positionManager,
-        uint256 tokenId,
+        uint256 commitId,
         IVRLSignalManager signalManager,
         IOracleHelper oracleHelper,
         bytes memory liquiditySignal
@@ -404,7 +404,7 @@ library VTSCommitLib {
         signalManager.verifyLiquiditySignal(liquiditySignal, true);
         LiquiditySignal memory newSignal = abi.decode(liquiditySignal, (LiquiditySignal));
 
-        MarketMaker.State memory oldMmState = s.commits[tokenId].mmState;
+        MarketMaker.State memory oldMmState = s.commits[commitId].mmState;
         // Validate declaration conditions:
         // - The signal proof must have a consistent owner (newSignal.owner == oldSignal.owner)
         // - The caller must be the advancer (msgSender() == newSignal.advancer)
@@ -419,8 +419,8 @@ library VTSCommitLib {
         }
 
         // --- Compute commitment-level discrepancy D in USD using helpers
-        uint256 issuedUsd = _issuedUSDValue(s, oracleHelper, tokenId);
-        uint256 settledUsd = _settledUSDValue(s, oracleHelper, tokenId);
+        uint256 issuedUsd = _issuedUSDValue(s, oracleHelper, commitId);
+        uint256 settledUsd = _settledUSDValue(s, oracleHelper, commitId);
         uint256 signalUsd = _mmStateUsdValue(newSignal.mmState, oracleHelper);
 
         // If no discrepancy, revert
@@ -432,9 +432,9 @@ library VTSCommitLib {
         // Simplified allocation: single commitment-level deficit BPS applied uniformly per position on both tokens.
         // Compute deficit as percentage of issued: totalDeficitBps = 10000 * (D / issuedUsd)
         // This ensures BPS <= 10000 (deficit cannot exceed issued)
-        uint256 n = s.commits[tokenId].positionCount;
+        uint256 n = s.commits[commitId].positionCount;
         if (n == 0) {
-            revert Errors.InvalidPosition(tokenId, 0, PositionId.wrap(bytes32(0)));
+            revert Errors.InvalidPosition(commitId, 0, PositionId.wrap(bytes32(0)));
         }
         if (issuedUsd == 0) {
             revert Errors.InvalidLiquiditySignal(0, 0);
@@ -443,9 +443,9 @@ library VTSCommitLib {
 
         PositionId[] memory ids = new PositionId[](n);
         for (uint256 i = 0; i < n; i++) {
-            ids[i] = s.commits[tokenId].positions[i];
+            ids[i] = s.commits[commitId].positions[i];
             // Force open and elapse grace for immediate seizure across all positions in this commitment
-            CheckpointLibrary.forceOpenAndElapse(s, tokenId, i);
+            CheckpointLibrary.forceOpenAndElapse(s, commitId, i);
         }
         _applyCommitmentDeficit(s, positionManager, ids, totalDeficitBps);
     }
@@ -454,7 +454,7 @@ library VTSCommitLib {
         VTSStorage storage s,
         IVRLSignalManager signalManager,
         IOracleHelper oracleHelper,
-        uint256 tokenId,
+        uint256 commitId,
         bytes memory liquiditySignal
     ) external {
         if (liquiditySignal.length == 0) {
@@ -466,10 +466,10 @@ library VTSCommitLib {
         LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
 
         // Compute USD values for invariant check and deficit clearing using helpers
-        _totalCommitmentUsdValue(s, oracleHelper, tokenId, true);
+        _totalCommitmentUsdValue(s, oracleHelper, commitId, true);
 
         // Persist signal state (only state and expiresAt)
-        Commit storage commit = s.commits[tokenId];
+        Commit storage commit = s.commits[commitId];
         commit.mmState = signal.mmState;
         commit.expiresAt = block.timestamp + expirySeconds;
 

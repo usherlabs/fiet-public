@@ -193,8 +193,8 @@ struct VTSStorage {
     /// For positions: use PositionId.unwrap(positionId)
     /// For commits: use keccak256(abi.encodePacked(commitCommitId))
     mapping(bytes32 => RFSCheckpoint) checkpoints;
-    /// Next token ID for commit NFTs (starts at 1)
-    uint256 nextTokenId;
+    /// Next commit ID for commit NFTs (starts at 1)
+    uint256 nextCommitId;
     /// Global pause flag
     bool isPaused;
 }
