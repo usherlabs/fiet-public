@@ -108,6 +108,7 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta {
     ) external;
 
     function onMMSettle(
+        IMarketVault marketVault,
         PositionId positionId,
         Currency currency0,
         Currency currency1,

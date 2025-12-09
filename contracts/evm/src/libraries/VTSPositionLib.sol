@@ -42,6 +42,7 @@ import {ILiquidityHub} from "../interfaces/ILiquidityHub.sol";
 import {VTSCommitLib} from "./VTSCommitLib.sol";
 import {CheckpointLibrary} from "./Checkpoint.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {IMarketVault} from "../interfaces/IMarketVault.sol";
 
 /// @title VTSPositionLib
 /// @notice Position lifecycle, registration, RFS, settlement, seizure, and growth accounting for VTS
@@ -885,7 +886,9 @@ library VTSPositionLib {
                 // Removing liquidity: Cancel LCCs
                 // Use locker from hookData if available, otherwise default to owner (MMPM)
                 address queueRecipient = PositionModificationHookDataLib.getLocker(mmData, owner);
-                _handleLiquidityDecrease(s, ctx, owner, poolKey, id, principalDelta, requiredSettlementDelta, queueRecipient);
+                _handleLiquidityDecrease(
+                    s, ctx, owner, poolKey, id, principalDelta, requiredSettlementDelta, queueRecipient
+                );
             }
 
             // Mark RFS checkpoint
@@ -1141,24 +1144,26 @@ library VTSPositionLib {
     /// @notice Core settlement entrypoint for MM-managed positions
     /// @param s The central VTS storage
     /// @param poolManager The pool manager contract
+    /// @param owner The owner address (MMPM)
+    /// @param vault The market vault interface for liquidity availability checks
     /// @param positionId The position id
     /// @param lccCurrency0 The pool currency of the LCC token for token0
     /// @param lccCurrency1 The pool currency of the LCC token for token1
     /// @param delta The balance delta of the settlement
     /// @param isSeizing Whether the position is being seized
-    /// @param mmPositionManager The MM Position Manager address (to read deltas from)
     /// @return settlementDelta The delta actually applied to underlying
     /// @return rfsOpen Whether the RFS is open for the position
     /// @return seizedLiquidityUnits The amount of liquidity units seized (non-zero only when seizing)
     function onMMSettle(
         VTSStorage storage s,
         IPoolManager poolManager,
-        address owner
+        address owner,
+        IMarketVault vault,
         PositionId positionId,
         Currency lccCurrency0,
         Currency lccCurrency1,
         BalanceDelta delta,
-        bool isSeizing,
+        bool isSeizing
     ) external returns (BalanceDelta settlementDelta, bool rfsOpen, uint256 seizedLiquidityUnits) {
         Position memory pos = s.positions[positionId];
         PoolId poolId = pos.poolId;
@@ -1304,6 +1309,37 @@ library VTSPositionLib {
         // Clamps within _updateSettlement may modify the return delta. Flip the signs on amount0 and amount1 to match caller-context delta.
         settlementDelta = LiquidityUtils.negateBalanceDelta(toBalanceDelta(amount0.toInt128(), amount1.toInt128()));
 
+        // ========================================
+        // PHASE 2: Clamp by available market liquidity & retroactive adjustment
+        // ========================================
+
+        // Only need to clamp withdrawals (positive settlementDelta)
+        if (settlementDelta.amount0() > 0 || settlementDelta.amount1() > 0) {
+            // Get available liquidity from vault
+            BalanceDelta availableDelta = vault.dryModifyLiquidities(settlementDelta);
+
+            // Calculate shortfall for withdrawals only
+            int128 shortfall0 = settlementDelta.amount0() - availableDelta.amount0();
+            int128 shortfall1 = settlementDelta.amount1() - availableDelta.amount1();
+
+            // Retroactively adjust _updateSettlement for any shortfall
+            // Shortfall is positive when we over-settled. We need to add back (positive delta to _updateSettlement)
+            // because we previously called _updateSettlement with negative delta for withdrawals
+            if (shortfall0 > 0) {
+                _updateSettlement(s, positionId, 0, int256(shortfall0));
+            }
+            if (shortfall1 > 0) {
+                _updateSettlement(s, positionId, 1, int256(shortfall1));
+            }
+
+            // Update settlementDelta to reflect actual available amounts
+            settlementDelta = availableDelta;
+        }
+
+        // ========================================
+        // PHASE 3: Seizure calculation and Fee Management
+        // ========================================
+
         // Calculate seized liquidity units when seizing
         if (isSeizing) {
             seizedLiquidityUnits = _calcSeizure(s, poolManager, positionId, settlementDelta);
@@ -1314,17 +1350,81 @@ library VTSPositionLib {
         // Proactive extraction (incremental): fund only increases in pending slashes since last observation to avoid over-funding
         VTSFeeLib.proactiveFunding(s, poolManager, poolId, positionId, lccCurrency0, lccCurrency1);
 
-        // Account underlying settlement delta to owner for delta tracking
-        // Split model: Settlement deltas on MMPM represent market liquidity claims (settle-only, not takeable)
-        // Balance syncs from wrap/unwrap operations target locker (msgSender) for takeable credits
-        // This enables MMPM to track what underlying assets are owed/credited during settlement
+        // ========================================
+        // PHASE 4: Clear currency deltas based on settlement
+        // ========================================
+
         Currency underlyingCurrency0 = DynamicCurrencyDelta.lccToUnderlyingCurrency(lccCurrency0);
         Currency underlyingCurrency1 = DynamicCurrencyDelta.lccToUnderlyingCurrency(lccCurrency1);
-        DynamicCurrencyDelta.accountDelta(underlyingCurrency0, settlementDelta.amount0(), owner);
-        DynamicCurrencyDelta.accountDelta(underlyingCurrency1, settlementDelta.amount1(), owner);
+
+        // Read current owner deltas (these represent what was owed/credited from position modifications)
+        int128 ownerDelta0 = positionRequiredSettlementDelta.amount0();
+        int128 ownerDelta1 = positionRequiredSettlementDelta.amount1();
+
+        // settlementDelta represents actual amounts being moved:
+        // - negative = deposit (caller owes protocol)
+        // - positive = withdrawal (protocol owes caller)
+        int128 settleAmount0 = settlementDelta.amount0();
+        int128 settleAmount1 = settlementDelta.amount1();
+
+        // Clear deltas based on settlement conditions
+        int128 deltaClear0 = _calcDeltaClearance(ownerDelta0, settleAmount0);
+        int128 deltaClear1 = _calcDeltaClearance(ownerDelta1, settleAmount1);
+
+        // Apply delta clearance (negative values reduce positive deltas, positive values reduce negative deltas)
+        if (deltaClear0 != 0) {
+            DynamicCurrencyDelta.accountDelta(underlyingCurrency0, deltaClear0, owner);
+        }
+        if (deltaClear1 != 0) {
+            DynamicCurrencyDelta.accountDelta(underlyingCurrency1, deltaClear1, owner);
+        }
+
+        // ========================================
+        // PHASE 5: Touch ups
+        // ========================================
 
         // Mark RFS checkpoint for the position
         CheckpointLibrary.markCheckpoint(s, positionId, rfsOpen);
+    }
+
+    /// @notice Calculates the delta clearance amount based on settlement conditions
+    /// @param delta The current currency delta for the owner (negative = owes, positive = owed)
+    /// @param amount The settlement amount (negative = deposit, positive = withdrawal)
+    /// @return clearance The amount to clear from delta (negative reduces positive delta, positive reduces negative delta)
+    function _calcDeltaClearance(int128 delta, int128 amount) internal pure returns (int128 clearance) {
+        /**
+         * delta < 0 && amount < 0: eg. DECREASE_LIQUIDITY, caller owes protocol
+         *   -- clamp currency delta net by the amount deposited.
+         *   -- Clear: use min magnitude (max of two negatives)
+         *
+         * delta < 0 && amount > 0: Not allowed. Protocol requires liquidity, caller cannot withdraw.
+         *   -- Should be prevented by earlier clamping. No clearance.
+         *
+         * delta > 0 && amount < 0: NO accounting. Just settling in (deposit above what's owed).
+         *   -- Deposit doesn't clear positive delta (protocol still owes caller).
+         *
+         * delta > 0 && amount > 0: Either net delta to 0, or reduce by withdrawal amount.
+         *   -- Clear: use min(delta, amount)
+         *
+         * delta == 0 && amount < 0: NO accounting. Just depositing, clamped by commitmentMaxima.
+         * delta == 0 && amount > 0: NO accounting. Just withdrawing, clamped by rfsDelta.
+         */
+
+        if (delta < 0 && amount < 0) {
+            // Both negative: clear by min magnitude (max of two negatives gives smaller absolute value)
+            // We want to reduce the negative delta by the amount deposited
+            // eg. delta = -100, amount = -50 → clear +50 (reduce debt by 50)
+            // eg. delta = -50, amount = -100 → clear +50 (reduce debt by 50, can only clear up to debt)
+            int128 minMagnitude = delta > amount ? delta : amount; // max of negatives = smaller absolute
+            clearance = -minMagnitude; // positive clearance reduces negative delta
+        } else if (delta > 0 && amount > 0) {
+            // Both positive: clear by min of the two
+            // eg. delta = 100, amount = 50 → clear -50 (reduce credit by 50)
+            // eg. delta = 50, amount = 100 → clear -50 (reduce credit by 50, can only clear up to credit)
+            int128 minValue = delta < amount ? delta : amount;
+            clearance = -minValue; // negative clearance reduces positive delta
+        }
+        // All other cases: clearance = 0 (no accounting)
     }
 
     /// @notice Calculates liquidity units to seize for a given position and settlement delta

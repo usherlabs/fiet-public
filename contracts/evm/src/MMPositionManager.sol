@@ -655,60 +655,50 @@ contract MMPositionManager is
             _assertApprovedOrOwner(msgSender(), tokenId);
         }
 
-        // Settlement delta here is the amounts the MM is entitled to.
-        (BalanceDelta settlementDelta, bool rfsOpen, uint256 seizedLiquidityUnits) =
-            vtsOrchestrator.onMMSettle(positionId, toBalanceDelta(amount0, amount1), isSeizing);
-
         // Convert LCC currencies to underlying currencies for settlement
         Currency underlying0 = _lccToUnderlyingCurrency(poolKey.currency0);
         Currency underlying1 = _lccToUnderlyingCurrency(poolKey.currency1);
 
-        // Determine Vault (ProxyHook)
+        // Determine Vault (ProxyHook) - needed before onMMSettle for liquidity availability checks
         IMarketVault vault = MarketHandlerLib.getVault(marketFactory, poolKey.toId());
-        address vaultAddress = address(vault);
+
+        // Settlement delta is pre-clamped by position state, RFS, AND available market liquidity.
+        // Delta accounting is also handled within onMMSettle.
+        (BalanceDelta settlementDelta, bool rfsOpen, uint256 seizedLiquidityUnits) = vtsOrchestrator.onMMSettle(
+            vault, positionId, poolKey.currency0, poolKey.currency1, toBalanceDelta(amount0, amount1), isSeizing
+        );
 
         int128 delta0 = settlementDelta.amount0();
         int128 delta1 = settlementDelta.amount1();
-
-        // ? Withdrawal of any currency (with a positive delta) held by this MMPM is handled by _take()
-
-        // TODO: Note that these deltas in place set the stage, but then we need to adjust for deposit/withdraw above/below the delta amounts.
-        // ie. Proactive deposits settlements above what is required. Or, arbitrary withdrawals below what is owed - but allowed.
 
         // Handle Deposits (Pull underlying from User/Deltas to Vault)
         address sender = msgSender();
         address valueSender = withDeltas ? address(this) : sender;
         if (delta0 < 0) {
-            underlying0.transferFrom(valueSender, vaultAddress, LiquidityUtils.safeInt128ToUint256(delta0));
+            underlying0.transferFrom(valueSender, address(vault), LiquidityUtils.safeInt128ToUint256(delta0));
             if (withDeltas) {
                 // Take from the sender's delta if withDeltas.
                 vtsOrchestrator.take(underlying0, sender, LiquidityUtils.safeInt128ToUint256(delta0));
             }
         }
         if (delta1 < 0) {
-            underlying1.transferFrom(valueSender, vaultAddress, LiquidityUtils.safeInt128ToUint256(delta1));
+            underlying1.transferFrom(valueSender, address(vault), LiquidityUtils.safeInt128ToUint256(delta1));
             if (withDeltas) {
                 vtsOrchestrator.take(underlying1, sender, LiquidityUtils.safeInt128ToUint256(delta1));
             }
         }
 
-        // Execute Settlement via Vault (with remaining delta after self-consumption)
-        // A positive balance delta means withdrawing underlying tokens, negative balance means depositing underlying tokens,
-        // Call after deposits (so MV is funded), but before withdrawals.
-        // To prevent failure when liquidity in market is insufficient to cover the withdrawal, we tryModifyLiquidities and account LCCs for excess.
-        // ---- eg. Failure on mass unwrap of LCCs, settled liquidity is used as coverage, then burn position.
-        // ---- Basically, on decrease, return assets to the caller as LCCs in excess of usedDelta.
-        BalanceDelta usedDelta = vault.tryModifyLiquidities(settlementDelta);
-        // TODO: Handle Shortfall on settlements by conducting dryModifyLiquidities inside of onMMSettle, and then using result settlementDelta to conduct direct modifyLiquidities in MMPM.sol
+        // Execute Settlement via Vault - settlementDelta is guaranteed fulfillable
+        vault.modifyLiquidities(settlementDelta);
 
         // Handle Withdrawals (Push underlying from Vault to User/Deltas)
-        if (usedDelta.amount0() > 0) {
-            underlying0.transfer(valueSender, LiquidityUtils.safeInt128ToUint256(usedDelta.amount0()));
+        if (delta0 > 0) {
+            underlying0.transfer(valueSender, LiquidityUtils.safeInt128ToUint256(delta0));
         }
-        if (usedDelta.amount1() > 0) {
-            underlying1.transfer(valueSender, LiquidityUtils.safeInt128ToUint256(usedDelta.amount1()));
+        if (delta1 > 0) {
+            underlying1.transfer(valueSender, LiquidityUtils.safeInt128ToUint256(delta1));
         }
-        if ((usedDelta.amount1() > 0 || usedDelta.amount1() > 0) && withDeltas) {
+        if ((delta0 > 0 || delta1 > 0) && withDeltas) {
             _syncPairBalanceToDeltas(underlying0, underlying1);
         }
 

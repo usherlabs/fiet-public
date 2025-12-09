@@ -443,6 +443,7 @@ contract VTSOrchestrator is ImmutableMarketState, PausableVTS, VTSCurrencyDelta,
 
     /**
      * @dev This function is used to settle a position, it is called from the MMPositionManager contract
+     * @param marketVault The market vault
      * @param positionId The position id
      * @param currency0 The currency 0
      * @param currency1 The currency 1
@@ -453,6 +454,7 @@ contract VTSOrchestrator is ImmutableMarketState, PausableVTS, VTSCurrencyDelta,
      * @return seizedLiquidityUnits The amount of liquidity units seized during seizure path (0 if not seizing)
      */
     function onMMSettle(
+        IMarketVault marketVault,
         PositionId positionId,
         Currency currency0,
         Currency currency1,
@@ -464,7 +466,7 @@ contract VTSOrchestrator is ImmutableMarketState, PausableVTS, VTSCurrencyDelta,
         returns (BalanceDelta settlementDelta, bool rfsOpen, uint256 seizedLiquidityUnits)
     {
         return VTSPositionLib.onMMSettle(
-            s, poolManager, mmPositionManager, positionId, currency0, currency1, amountDelta, isSeizing
+            s, poolManager, marketVault, mmPositionManager, positionId, currency0, currency1, amountDelta, isSeizing
         );
     }
 
