@@ -881,7 +881,7 @@ library VTSPositionLib {
             // Handle LCC issuance/cancellation based on liquidity direction
             if (params.liquidityDelta > 0) {
                 // Adding liquidity: Issue LCCs
-                _handleLiquidityIncrease(s, ctx, poolKey, mmData.commitId, id, params, principalDelta);
+                _handleLiquidityIncrease(s, ctx, owner, poolKey, mmData.commitId, id, params, principalDelta);
             } else if (params.liquidityDelta < 0) {
                 // Removing liquidity: Cancel LCCs
                 // Use locker from hookData if available, otherwise default to owner (MMPM)
@@ -1157,8 +1157,8 @@ library VTSPositionLib {
     function onMMSettle(
         VTSStorage storage s,
         IPoolManager poolManager,
-        address owner,
         IMarketVault vault,
+        address owner,
         PositionId positionId,
         Currency lccCurrency0,
         Currency lccCurrency1,

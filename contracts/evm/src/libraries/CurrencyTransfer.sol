@@ -26,7 +26,7 @@ library CurrencyTransfer {
             // For native ETH, verify msg.value and forward it
             if (msg.value < amount) revert CurrencyLibrary.NativeTransferFailed();
             // Transfer ETH to the destination
-            CurrencyTransferLib.transfer(currency, to, amount);
+            currency.transfer(to, amount);
         } else {
             // For ERC-20 tokens, use standard transferFrom
             IERC20(Currency.unwrap(currency)).safeTransferFrom(from, to, amount);

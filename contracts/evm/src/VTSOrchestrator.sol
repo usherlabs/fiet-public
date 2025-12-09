@@ -40,6 +40,7 @@ import {Ownable} from "openzeppelin-contracts/contracts/access/Ownable.sol";
 import {VTSFeeLib} from "./libraries/VTSFeeLib.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {DynamicCurrencyDelta} from "./libraries/DynamicCurrencyDelta.sol";
+import {IMarketVault} from "./interfaces/IMarketVault.sol";
 
 /// @title VTSOrchestrator
 /// @notice Central state management layer and orchestrator for VTS logic

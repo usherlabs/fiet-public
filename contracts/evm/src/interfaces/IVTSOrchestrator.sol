@@ -12,6 +12,7 @@ import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/Pool
 import {RFSCheckpoint} from "../types/Checkpoint.sol";
 import {IPausableVTS} from "./IPausableVTS.sol";
 import {IVTSCurrencyDelta} from "./IVTSCurrencyDelta.sol";
+import {IMarketVault} from "./IMarketVault.sol";
 
 interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta {
     // Events

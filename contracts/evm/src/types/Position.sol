@@ -136,10 +136,14 @@ library PositionModificationHookDataLib {
 
     /// @notice Gets the effective locker address, defaulting to fallback if not set
     /// @param data The decoded hook data
-    /// @param fallback The fallback address to use if locker is not set
+    /// @param fallbackAddress The fallback address to use if locker is not set
     /// @return The effective locker address
-    function getLocker(PositionModificationHookData memory data, address fallback) internal pure returns (address) {
-        return data.locker != address(0) ? data.locker : fallback;
+    function getLocker(PositionModificationHookData memory data, address fallbackAddress)
+        internal
+        pure
+        returns (address)
+    {
+        return data.locker != address(0) ? data.locker : fallbackAddress;
     }
 }
 

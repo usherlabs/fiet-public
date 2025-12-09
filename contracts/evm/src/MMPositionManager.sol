@@ -621,8 +621,7 @@ contract MMPositionManager is
      * @param positionIndex The position index to settle the position for
      * @param amount0 The amount of token0 to settle. Positive amounts result in deposits, negative amounts result in withdrawals.
      * @param amount1 The amount of token1 to settle. Positive amounts result in deposits, negative amounts result in withdrawals.
-     * @param withUser0 Whether to settle the position for token0 with deposit from the user's balance, or withdraw to the user's balance
-     * @param withUser1 Whether to settle the position for token1 with deposit from the user's balance, or withdraw to the user's balance
+     * @param withDeltas Whether to use deltas for settlement
      * @return seizedLiquidityUnits The amount of liquidity units seized during seizure path (0 if not seizing)
      *
      * @notice Value Transfer Flow:
@@ -760,7 +759,7 @@ contract MMPositionManager is
             position,
             PositionLibrary.generateSalt(tokenId, positionIndex),
             completeLiquidity,
-            PositionModificationHookDataLib.encode(tokenId, positionIndex)
+            PositionModificationHookDataLib.encode(tokenId, positionIndex, msgSender())
         );
     }
 
