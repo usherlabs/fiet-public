@@ -188,8 +188,10 @@ contract MMPositionManager is
         external
         payable
         isNotLocked
+        assertNonZeroDeltas
         checkDeadline(deadline)
     {
+        _handleNativeValue();
         _executeActions(unlockData);
     }
 
