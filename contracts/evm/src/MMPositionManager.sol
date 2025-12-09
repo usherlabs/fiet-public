@@ -39,6 +39,7 @@ import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {CurrencyTransfer} from "./libraries/CurrencyTransfer.sol";
 import {CurrencyDelta} from "v4-periphery/lib/v4-core/src/libraries/CurrencyDelta.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
+import {Permit2Forwarder} from "v4-periphery/src/base/Permit2Forwarder.sol";
 import {MarketHandlerLib} from "./libraries/MarketHandlerLib.sol";
 import {ImmutableMarketState} from "./modules/ImmutableMarketState.sol";
 
@@ -47,6 +48,7 @@ contract MMPositionManager is
     IMMPositionManager,
     ReentrancyLock,
     Multicall_v4,
+    Permit2Forwarder,
     BaseActionsRouter,
     NativeWrapper,
     PositionManagerBase,
@@ -377,7 +379,7 @@ contract MMPositionManager is
     function _handleNativeValue() internal {
         uint256 amount = TransientSlots.readMsgValueOnce();
         if (amount > 0) {
-            _syncBalanceToDeltas(CurrencyLibrary.ADDRESS_ZERO);
+            _syncBalanceAsCredit(CurrencyLibrary.ADDRESS_ZERO);
         }
     }
 
@@ -399,7 +401,7 @@ contract MMPositionManager is
         _wrap(amount);
         Currency weth = Currency.wrap(address(WETH9));
         // Sync WETH9 balance to deltas so the wrapped amount is available for subsequent operations
-        _syncBalanceToDeltas(weth);
+        _syncBalanceAsCredit(weth);
     }
 
     /**
@@ -431,7 +433,7 @@ contract MMPositionManager is
         }
         _unwrap(amount);
         // Sync native currency (ADDRESS_ZERO) balance to deltas so the unwrapped amount is available
-        _syncBalanceToDeltas(CurrencyLibrary.ADDRESS_ZERO);
+        _syncBalanceAsCredit(CurrencyLibrary.ADDRESS_ZERO);
     }
 
     // ------------------------------------------------------------------------------------------------
@@ -576,7 +578,7 @@ contract MMPositionManager is
         // Sync the underlying currency balance to deltas if recipient is this contract
         // This makes the unwrapped underlying available for subsequent operations in the same batch
         if (to == address(this) && unwrapped > 0) {
-            _syncBalanceToDeltas(Currency.wrap(underlying));
+            _syncBalanceAsCredit(Currency.wrap(underlying));
         }
     }
 
@@ -597,7 +599,7 @@ contract MMPositionManager is
             // If MMPM received the underlying (is the recipient), sync to locker's delta
             // This acts as a sweep when no locker was passed into hookData
             if (recipient == address(this)) {
-                _syncBalanceToDeltas(_lccToUnderlyingCurrency(Currency.wrap(lcc)));
+                _syncBalanceAsCredit(_lccToUnderlyingCurrency(Currency.wrap(lcc)));
             }
         }
     }

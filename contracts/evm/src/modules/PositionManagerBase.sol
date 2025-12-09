@@ -141,7 +141,7 @@ abstract contract PositionManagerBase is ImmutableState, ImmutableVTSState {
      *      from wrap/unwrap operations create takeable credits on the locker.
      * @param currency The currency to sync balance for
      */
-    function _syncBalanceToDeltas(Currency currency) internal {
+    function _syncBalanceAsCredit(Currency currency) internal {
         vtsOrchestrator.syncFor(currency, msgSender());
     }
 
@@ -211,18 +211,18 @@ abstract contract PositionManagerBase is ImmutableState, ImmutableVTSState {
 
         // Settle negative deltas: pay tokens owed to PoolManager (LP is depositing)
         if (delta0 < 0) {
-            key.currency0.settle(poolManager, self, uint256(uint128(-delta0)), false);
+            key.currency0.settle(poolManager, self, LiquidityUtils.safeInt128ToUint256(delta0), false);
         }
         if (delta1 < 0) {
-            key.currency1.settle(poolManager, self, uint256(uint128(-delta1)), false);
+            key.currency1.settle(poolManager, self, LiquidityUtils.safeInt128ToUint256(delta1), false);
         }
 
         // Take positive deltas: receive tokens owed from PoolManager (LP is withdrawing)
         if (delta0 > 0) {
-            key.currency0.take(poolManager, self, uint256(uint128(delta0)), false);
+            key.currency0.take(poolManager, self, LiquidityUtils.safeInt128ToUint256(delta0), false);
         }
         if (delta1 > 0) {
-            key.currency1.take(poolManager, self, uint256(uint128(delta1)), false);
+            key.currency1.take(poolManager, self, LiquidityUtils.safeInt128ToUint256(delta1), false);
         }
     }
 
