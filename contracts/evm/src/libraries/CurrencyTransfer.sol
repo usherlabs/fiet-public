@@ -4,14 +4,12 @@ pragma solidity ^0.8.0;
 import {Currency, CurrencyLibrary} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {CurrencyTransfer as CurrencyTransferLib} from "v4-periphery/lib/v4-core/src/libraries/CurrencyTransfer.sol";
 
 /// @title CurrencyTransfer
 /// @notice Library for handling transfers of both native ETH and ERC-20 tokens
 
 library CurrencyTransfer {
     using SafeERC20 for IERC20;
-    using CurrencyTransferLib for Currency;
 
     /**
      * @notice Transfer currency from one address to another
