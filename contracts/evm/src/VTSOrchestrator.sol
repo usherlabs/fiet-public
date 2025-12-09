@@ -567,9 +567,11 @@ contract VTSOrchestrator is ImmutableMarketState, PausableVTS, VTSCurrencyDelta,
     // --------------------------------------------------
 
     /// @notice Marks a checkpoint for a given position
-    /// @param positionId The position ID
-    /// @param rfsOpen Whether the RFS is open
-    function markCheckpoint(PositionId positionId, bool rfsOpen) external onlyMMPositionManager {
+    /// @param commitId The commit ID
+    /// @param positionIndex The position index
+    function markCheckpoint(uint256 commitId, uint256 positionIndex) external onlyMMPositionManager {
+        PositionId positionId = getPositionId(commitId, positionIndex);
+        (bool rfsOpen,) = VTSPositionLib.calcRFS(s, poolManager, positionId, false);
         CheckpointLibrary.markCheckpoint(s, positionId, rfsOpen);
     }
 

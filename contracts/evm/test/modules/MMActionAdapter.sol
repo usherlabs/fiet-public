@@ -3,6 +3,7 @@ pragma solidity ^0.8.0;
 
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {MMPositionManager} from "../../src/MMPositionManager.sol";
+import {MMActions} from "../../src/libraries/MMActions.sol";
 import {ActionConstants} from "v4-periphery/src/libraries/ActionConstants.sol";
 
 library MMActionAdapter {
@@ -85,7 +86,7 @@ library MMActionAdapter {
         returns (PreparedAction memory)
     {
         return PreparedAction({
-            action: bytes1(uint8(MMPositionManager.MMAction.COMMIT_SIGNAL)),
+            action: bytes1(uint8(MMActions.COMMIT_SIGNAL)),
             params: abi.encode(poolKey, liquiditySignal, ActionConstants.MSG_SENDER)
         });
     }
@@ -99,7 +100,7 @@ library MMActionAdapter {
         returns (PreparedAction memory)
     {
         return PreparedAction({
-            action: bytes1(uint8(MMPositionManager.MMAction.COMMIT_SIGNAL)),
+            action: bytes1(uint8(MMActions.COMMIT_SIGNAL)),
             params: abi.encode(poolKey, liquiditySignal, owner)
         });
     }
@@ -113,7 +114,7 @@ library MMActionAdapter {
         returns (PreparedAction memory)
     {
         return PreparedAction({
-            action: bytes1(uint8(MMPositionManager.MMAction.MINT_POSITION)),
+            action: bytes1(uint8(MMActions.MINT_POSITION)),
             params: abi.encode(poolKey, tokenId, tickLower, tickUpper, liquidity)
         });
     }
@@ -124,7 +125,7 @@ library MMActionAdapter {
         returns (PreparedAction memory)
     {
         return PreparedAction({
-            action: bytes1(uint8(MMPositionManager.MMAction.MINT_POSITION_FROM_DELTAS)),
+            action: bytes1(uint8(MMActions.MINT_POSITION_FROM_DELTAS)),
             params: abi.encode(poolKey, tokenId, tickLower, tickUpper)
         });
     }
@@ -140,7 +141,7 @@ library MMActionAdapter {
         int128 amount1
     ) internal pure returns (PreparedAction memory) {
         return PreparedAction({
-            action: bytes1(uint8(MMPositionManager.MMAction.SETTLE_POSITION)),
+            action: bytes1(uint8(MMActions.SETTLE_POSITION)),
             params: abi.encode(poolKey, tokenId, positionIndex, amount0, amount1)
         });
     }
@@ -154,7 +155,7 @@ library MMActionAdapter {
         returns (PreparedAction memory)
     {
         return PreparedAction({
-            action: bytes1(uint8(MMPositionManager.MMAction.DECREASE_LIQUIDITY)),
+            action: bytes1(uint8(MMActions.DECREASE_LIQUIDITY)),
             params: abi.encode(poolKey, tokenId, positionIndex, amount)
         });
     }
@@ -170,7 +171,7 @@ library MMActionAdapter {
         bool settleIn1
     ) internal pure returns (PreparedAction memory) {
         return PreparedAction({
-            action: bytes1(uint8(MMPositionManager.MMAction.SETTLE_POSITION_FROM_DELTAS)),
+            action: bytes1(uint8(MMActions.SETTLE_POSITION_FROM_DELTAS)),
             params: abi.encode(poolKey, tokenId, positionIndex, settleIn0, settleIn1)
         });
     }
@@ -184,7 +185,7 @@ library MMActionAdapter {
         returns (PreparedAction memory)
     {
         return PreparedAction({
-            action: bytes1(uint8(MMPositionManager.MMAction.BURN_POSITION)),
+            action: bytes1(uint8(MMActions.BURN_POSITION)),
             params: abi.encode(poolKey, tokenId, positionIndex)
         });
     }
@@ -194,7 +195,7 @@ library MMActionAdapter {
      */
     function prepareDecommit(PoolKey memory poolKey, uint256 tokenId) internal pure returns (PreparedAction memory) {
         return PreparedAction({
-            action: bytes1(uint8(MMPositionManager.MMAction.DECOMMIT_SIGNAL)), params: abi.encode(poolKey, tokenId)
+            action: bytes1(uint8(MMActions.DECOMMIT_SIGNAL)), params: abi.encode(poolKey, tokenId)
         });
     }
 
@@ -203,7 +204,7 @@ library MMActionAdapter {
      */
     function prepareRenew(uint256 tokenId, bytes memory liquiditySignal) internal pure returns (PreparedAction memory) {
         return PreparedAction({
-            action: bytes1(uint8(MMPositionManager.MMAction.RENEW_SIGNAL)), params: abi.encode(tokenId, liquiditySignal)
+            action: bytes1(uint8(MMActions.RENEW_SIGNAL)), params: abi.encode(tokenId, liquiditySignal)
         });
     }
 
@@ -218,7 +219,7 @@ library MMActionAdapter {
         uint256 amount1
     ) internal pure returns (PreparedAction memory) {
         return PreparedAction({
-            action: bytes1(uint8(MMPositionManager.MMAction.SEIZE_POSITION)),
+            action: bytes1(uint8(MMActions.SEIZE_POSITION)),
             params: abi.encode(poolKey, tokenId, positionIndex, amount0, amount1)
         });
     }
@@ -235,7 +236,7 @@ library MMActionAdapter {
         uint256 liquidity
     ) internal pure returns (PreparedAction memory) {
         return PreparedAction({
-            action: bytes1(uint8(MMPositionManager.MMAction.INCREASE_LIQUIDITY)),
+            action: bytes1(uint8(MMActions.INCREASE_LIQUIDITY)),
             params: abi.encode(poolKey, tokenId, positionIndex, tickLower, tickUpper, liquidity)
         });
     }
@@ -251,7 +252,7 @@ library MMActionAdapter {
         int24 tickUpper
     ) internal pure returns (PreparedAction memory) {
         return PreparedAction({
-            action: bytes1(uint8(MMPositionManager.MMAction.INCREASE_LIQUIDITY_FROM_DELTAS)),
+            action: bytes1(uint8(MMActions.INCREASE_LIQUIDITY_FROM_DELTAS)),
             params: abi.encode(poolKey, tokenId, positionIndex, tickLower, tickUpper)
         });
     }
@@ -265,7 +266,7 @@ library MMActionAdapter {
         bytes memory settlementProof
     ) internal pure returns (PreparedAction memory) {
         return PreparedAction({
-            action: bytes1(uint8(MMPositionManager.MMAction.EXTEND_GRACE_PERIOD)),
+            action: bytes1(uint8(MMActions.EXTEND_GRACE_PERIOD)),
             params: abi.encode(poolKey, tokenId, positionIndex, settlementTokenIndex, verifierIndex, settlementProof)
         });
     }
@@ -275,7 +276,7 @@ library MMActionAdapter {
      */
     function prepareWrapNative(uint256 amount) internal pure returns (PreparedAction memory) {
         return
-            PreparedAction({action: bytes1(uint8(MMPositionManager.MMAction.WRAP_NATIVE)), params: abi.encode(amount)});
+            PreparedAction({action: bytes1(uint8(MMActions.WRAP_NATIVE)), params: abi.encode(amount)});
     }
 
     /**
@@ -284,7 +285,7 @@ library MMActionAdapter {
     function prepareUnwrapNative(uint256 amount) internal pure returns (PreparedAction memory) {
         return
             PreparedAction({
-                action: bytes1(uint8(MMPositionManager.MMAction.UNWRAP_NATIVE)), params: abi.encode(amount)
+                action: bytes1(uint8(MMActions.UNWRAP_NATIVE)), params: abi.encode(amount)
             });
     }
 
@@ -297,7 +298,7 @@ library MMActionAdapter {
         returns (PreparedAction memory)
     {
         return PreparedAction({
-            action: bytes1(uint8(MMPositionManager.MMAction.UNWRAP_LCC)),
+            action: bytes1(uint8(MMActions.UNWRAP_LCC)),
             params: abi.encode(lcc, amount, recipient, payerIsUser)
         });
     }

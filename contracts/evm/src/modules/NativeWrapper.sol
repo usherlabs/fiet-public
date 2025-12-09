@@ -11,7 +11,7 @@ import {MarketHandlerLib} from "../libraries/MarketHandlerLib.sol";
 /// @dev This contract extends UniNativeWrapper. When used with ImmutableMarketState via multiple inheritance
 ///      (e.g., in MMPositionManager), the marketFactory will be available through the inheritance chain.
 abstract contract NativeWrapper is UniNativeWrapper, ImmutableMarketState {
-    constructor(IWETH9 _weth9) UniNativeWrapper(_weth9) {}
+    constructor(IWETH9 _weth9, address _marketFactory) UniNativeWrapper(_weth9) ImmutableMarketState(_marketFactory) {}
 
     /// @notice Validates that the ETH sender is either WETH9, poolManager, or a valid MarketVault
     /// @dev Uses MarketHandlerLib functions to validate the sender

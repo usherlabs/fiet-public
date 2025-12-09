@@ -18,6 +18,7 @@ import {ArbitrumConstants} from "./constants/Arbitrum.sol";
 import {HookFlags} from "../src/libraries/HookFlags.sol";
 import {EthSepoliaConstants} from "./constants/EthSepolia.sol";
 import {MMPositionManager} from "../src/MMPositionManager.sol";
+import {MMPositionActionsImpl} from "../src/MMPositionActionsImpl.sol";
 import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
 import {PositionManager} from "v4-periphery/src/PositionManager.sol";
 import {IAllowanceTransfer} from "permit2/src/interfaces/IAllowanceTransfer.sol";
@@ -293,8 +294,21 @@ contract CompleteDeployScript is ScriptHelper {
         // Get WETH9 and permit2 from the PositionManager (which has them as immutable)
         IWETH9 weth9 = PositionManager(positionManagerAddress).WETH9();
         IAllowanceTransfer permit2 = PositionManager(positionManagerAddress).permit2();
-        MMPositionManager positionManager =
-            new MMPositionManager(poolManagerAddress, marketFactory, vtsOrchestrator, commitmentDescriptorAddr, weth9, permit2);
+
+        // Deploy MMPositionActionsImpl first
+        MMPositionActionsImpl actionsImpl =
+            new MMPositionActionsImpl(poolManagerAddress, marketFactory, vtsOrchestrator);
+        console.log("MMPositionActionsImpl deployed at:", address(actionsImpl));
+
+        MMPositionManager positionManager = new MMPositionManager(
+            poolManagerAddress,
+            marketFactory,
+            vtsOrchestrator,
+            commitmentDescriptorAddr,
+            weth9,
+            permit2,
+            address(actionsImpl)
+        );
         console.log("MMPositionManager deployed at:", address(positionManager));
         return address(positionManager);
     }

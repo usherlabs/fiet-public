@@ -17,6 +17,7 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {HookFlags} from "../src/libraries/HookFlags.sol";
 import {HookMiner} from "v4-periphery/src/utils/HookMiner.sol";
 import {MMPositionManager} from "../src/MMPositionManager.sol";
+import {MMPositionActionsImpl} from "../src/MMPositionActionsImpl.sol";
 import {VTSConfigs} from "../src/libraries/VTSConfigs.sol";
 import {IOracleHelper} from "../src/interfaces/IOracleHelper.sol";
 import {WETH} from "@uniswap/v4-core/lib/solmate/src/tokens/WETH.sol";
@@ -101,6 +102,13 @@ contract MarketFactoryTest is Test, Deployers {
         );
 
         IAllowanceTransfer permit2 = IAllowanceTransfer(makeAddr("permit2"));
+        
+        // Deploy MMPositionActionsImpl first
+        vm.prank(owner);
+        MMPositionActionsImpl actionsImpl = new MMPositionActionsImpl(
+            address(poolManager), tempFactoryAddr, address(vtsOrchestrator)
+        );
+        
         vm.prank(owner);
         positionManager = new MMPositionManager(
             address(poolManager),
@@ -108,7 +116,8 @@ contract MarketFactoryTest is Test, Deployers {
             address(vtsOrchestrator),
             commitmentDescriptor,
             weth9,
-            permit2
+            permit2,
+            address(actionsImpl)
         );
 
         // Deploy MarketFactory with all required arguments

@@ -35,6 +35,7 @@ import {IVRLSettlementObserver} from "../../src/interfaces/IVRLSettlementObserve
 import {StubSettlementVerifier} from "../../src/verifiers/StubSettlementVerifier.sol";
 import {IMarketVault} from "../../src/interfaces/IMarketVault.sol";
 import {MMPCommitmentDescriptor} from "../../src/MMPCommitmentDescriptor.sol";
+import {MMPositionActionsImpl} from "../../src/MMPositionActionsImpl.sol";
 import {CurrencyTransfer} from "../../src/libraries/CurrencyTransfer.sol";
 import {OracleHelper} from "../../src/OracleHelper.sol";
 import {LiquidityHub} from "../../src/LiquidityHub.sol";
@@ -219,9 +220,15 @@ abstract contract MarketTestBase is Test, Deployers {
         );
 
         IAllowanceTransfer permit2 = IAllowanceTransfer(makeAddr("permit2"));
+        
+        // Deploy MMPositionActionsImpl first
+        MMPositionActionsImpl actionsImpl = new MMPositionActionsImpl(
+            address(manager), address(marketFactory), address(vtsOrchestrator)
+        );
+        
         mmPositionManager = address(
             new MMPositionManager(
-                address(manager), address(marketFactory), address(vtsOrchestrator), commitmentDescriptor, weth9, permit2
+                address(manager), address(marketFactory), address(vtsOrchestrator), commitmentDescriptor, weth9, permit2, address(actionsImpl)
             )
         );
     }

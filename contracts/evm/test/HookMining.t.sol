@@ -11,6 +11,7 @@ import {ProxyHook} from "../src/ProxyHook.sol";
 import {MarketFactory} from "../src/MarketFactory.sol";
 import {HookFlags} from "../src/libraries/HookFlags.sol";
 import {MMPositionManager} from "../src/MMPositionManager.sol";
+import {MMPositionActionsImpl} from "../src/MMPositionActionsImpl.sol";
 import {WETH} from "@uniswap/v4-core/lib/solmate/src/tokens/WETH.sol";
 import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
 import {IAllowanceTransfer} from "permit2/src/interfaces/IAllowanceTransfer.sol";
@@ -58,13 +59,20 @@ contract HookTest is Test, Deployers {
         );
         IWETH9 weth9 = IWETH9(address(new WETH()));
         IAllowanceTransfer permit2 = IAllowanceTransfer(makeAddr("permit2"));
+        
+        // Deploy MMPositionActionsImpl first
+        MMPositionActionsImpl actionsImpl = new MMPositionActionsImpl(
+            address(poolManager), address(factory), address(vtsOrchestrator)
+        );
+        
         mmPositionManager = new MMPositionManager(
             address(poolManager),
             address(factory),
             address(vtsOrchestrator),
             makeAddr("descriptor"),
             weth9,
-            permit2
+            permit2,
+            address(actionsImpl)
         );
 
         // Compute flags for CoreHook

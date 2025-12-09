@@ -96,6 +96,33 @@ library MMCalldataDecoder {
         }
     }
 
+    /// @dev MINT_POSITION: (PoolKey, uint256, int24, int24, uint256)
+    /// @param params The calldata bytes to decode
+    /// @return poolKey The pool key (calldata pointer)
+    /// @return tokenId The commitment NFT token ID
+    /// @return tickLower The lower tick of the position
+    /// @return tickUpper The upper tick of the position
+    /// @return liquidity The amount of liquidity to mint
+    function decodeMintPositionParams(bytes calldata params)
+        internal
+        pure
+        returns (PoolKey calldata poolKey, uint256 tokenId, int24 tickLower, int24 tickUpper, uint256 liquidity)
+    {
+        assembly ("memory-safe") {
+            // PoolKey: 5 slots (0xa0), then tokenId, tickLower, tickUpper, liquidity
+            // Minimum length: 0xa0 + 0x20*4 = 0x120
+            if lt(params.length, 0x120) {
+                mstore(0, SLICE_ERROR_SELECTOR)
+                revert(0x1c, 4)
+            }
+            poolKey := params.offset
+            tokenId := calldataload(add(params.offset, 0xa0))
+            tickLower := calldataload(add(params.offset, 0xc0))
+            tickUpper := calldataload(add(params.offset, 0xe0))
+            liquidity := calldataload(add(params.offset, 0x100))
+        }
+    }
+
     /// @dev DECREASE_LIQUIDITY: (PoolKey, uint256, uint256, uint256)
     /// @param params The calldata bytes to decode
     /// @return poolKey The pool key (calldata pointer)

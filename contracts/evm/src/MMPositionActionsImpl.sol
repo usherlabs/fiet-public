@@ -7,51 +7,39 @@ import {BalanceDelta, toBalanceDelta} from "v4-periphery/lib/v4-core/src/types/B
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {Currency, CurrencyLibrary} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {CurrencySettler} from "v4-periphery/lib/v4-core/test/utils/CurrencySettler.sol";
-import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
 import {PositionId, PositionLibrary, PositionModificationHookDataLib} from "./types/Position.sol";
-import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 import {ILiquidityHub} from "./interfaces/ILiquidityHub.sol";
 import {IMarketVault} from "./interfaces/IMarketVault.sol";
-import {SafeERC20} from "openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Errors} from "./libraries/Errors.sol";
 import {LiquidityUtils} from "./libraries/LiquidityUtils.sol";
-import {ILCC} from "./interfaces/ILCC.sol";
 import {IVTSOrchestrator} from "./interfaces/IVTSOrchestrator.sol";
 import {Position} from "./types/Position.sol";
 import {TransientSlots} from "./libraries/TransientSlots.sol";
 import {PositionManagerBase} from "./modules/PositionManagerBase.sol";
+import {PositionManagerImpl} from "./modules/PositionManagerImpl.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {CurrencyTransfer} from "./libraries/CurrencyTransfer.sol";
 import {MarketHandlerLib} from "./libraries/MarketHandlerLib.sol";
 import {ImmutableMarketState} from "./modules/ImmutableMarketState.sol";
 import {TransientStateLibrary} from "v4-periphery/lib/v4-core/src/libraries/TransientStateLibrary.sol";
-import {NativeWrapper} from "./forks/NativeWrapper.sol";
-import {IMMPMActionsImpl} from "./interfaces/IMMPMActionsImpl.sol";
+import {IMMActionsImpl} from "./interfaces/IMMActionsImpl.sol";
 import {ImmutableState} from "v4-periphery/src/base/ImmutableState.sol";
 import {MMActions} from "./libraries/MMActions.sol";
 import {MMCalldataDecoder} from "./libraries/MMCalldataDecoder.sol";
-import {ERC721Permit_v4} from "v4-periphery/src/base/ERC721Permit_v4.sol";
+import {MMHelpers} from "./libraries/MMHelpers.sol";
 import {Locker} from "v4-periphery/src/libraries/Locker.sol";
-import {ICommitmentDescriptor} from "./interfaces/ICommitmentDescriptor.sol";
 import {MarketMaker} from "./libraries/MarketMaker.sol";
-import {CheckpointEntrypoints} from "./modules/CheckpointEntrypoints.sol";
+import {DelegateCallGuard} from "./modules/DelegateCallGuard.sol";
 
-/// @title MMPMActionsImpl
-/// @notice Implementation contract for MMPositionManager action handling
+/// @title MMPositionActionsImpl
+/// @notice Implementation contract for MMPositionManager position operations
 /// @dev Called via delegatecall from MMPositionManager, shares storage context
-/// @dev Immutables must match MMPositionManager's values since they're embedded in bytecode
-contract MMPMActionsImpl is
-    ERC721Permit_v4,
-    IMMPMActionsImpl,
-    ImmutableState,
-    PositionManagerBase,
-    NativeWrapper,
-    ImmutableMarketState,
-    CheckpointEntrypoints
-{
+/// @dev Only handles position operations (actions <= SETTLE_POSITION_FROM_DELTAS)
+/// @dev ERC721 functions accessed via delegatecall context from MMPositionManager
+contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, ImmutableMarketState, DelegateCallGuard {
     using SafeCast for uint256;
     using PositionLibrary for PositionId;
     using StateLibrary for IPoolManager;
@@ -59,49 +47,23 @@ contract MMPMActionsImpl is
     using CurrencyLibrary for Currency;
     using CurrencySettler for Currency;
     using CurrencyTransfer for Currency;
-    using SafeERC20 for IERC20;
     using MMCalldataDecoder for bytes;
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Events (must match MMPositionManager for proper event emission)
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    event SignalCommitted(uint256 tokenId);
-    event SignalDecommitted(uint256 tokenId, uint256 positionCount);
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // DelegateCall Guard
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    /// @dev Address of this contract at deployment - used to detect delegatecall
-    address private immutable __self = address(this);
-
-    error OnlyDelegateCall();
-
-    modifier onlyDelegateCall() {
-        if (address(this) == __self) revert OnlyDelegateCall();
-        _;
-    }
+    using MMHelpers for *;
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Immutables (must match MMPositionManager's values)
     // ═══════════════════════════════════════════════════════════════════════════
 
     ILiquidityHub internal immutable liquidityHub;
-    address public immutable commitmentDescriptor;
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Constructor
     // ═══════════════════════════════════════════════════════════════════════════
 
-    constructor(address _manager, address _marketFactory, address _vtsOrchestrator, address _descriptor, IWETH9 _weth9)
-        ERC721Permit_v4("Fiet VRL Commitment Positions Manager", "FIET-VRL-MMP")
-        ImmutableState(IPoolManager(_manager))
-        PositionManagerBase(_vtsOrchestrator)
-        NativeWrapper(_weth9)
+    constructor(address _manager, address _marketFactory, address _vtsOrchestrator)
+        PositionManagerImpl(IPoolManager(_manager), _vtsOrchestrator)
         ImmutableMarketState(_marketFactory)
     {
-        commitmentDescriptor = _descriptor;
         liquidityHub = marketFactory.liquidityHub();
     }
 
@@ -114,50 +76,13 @@ contract MMPMActionsImpl is
         return Locker.get();
     }
 
-    /// @inheritdoc PositionManagerBase
-    function _liquidityHub() internal view override returns (ILiquidityHub) {
-        return liquidityHub;
-    }
-
-    /// @notice Returns the token URI for a given token id using the commitment descriptor contract
-    function tokenURI(uint256 tokenId) public view override returns (string memory) {
-        if (commitmentDescriptor == address(0)) {
-            revert Errors.CommitmentDescriptorNotSet();
-        }
-        return ICommitmentDescriptor(commitmentDescriptor).tokenURI(tokenId);
-    }
-
     // ═══════════════════════════════════════════════════════════════════════════
-    // Entry Point Hooks (called by MMPM via delegatecall)
+    // Position Action Handler
     // ═══════════════════════════════════════════════════════════════════════════
 
-    /// @inheritdoc IMMPMActionsImpl
-    function beforeEntrypoint(uint256 deadline) external onlyDelegateCall {
-        if (block.timestamp > deadline) revert Errors.DeadlinePassed(deadline);
-
-        // Handle native value
-        uint256 amount = TransientSlots.readMsgValueOnce();
-        if (amount > 0) {
-            _syncBalanceAsCredit(CurrencyLibrary.ADDRESS_ZERO);
-        }
-    }
-
-    /// @inheritdoc IMMPMActionsImpl
-    function afterEntrypoint() external onlyDelegateCall {
-        vtsOrchestrator.assertNonZeroDeltas();
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Main Action Handler
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    /// @inheritdoc IMMPMActionsImpl
+    /// @inheritdoc IMMActionsImpl
+    /// @dev Only handles position operations (actions <= SETTLE_POSITION_FROM_DELTAS)
     function handleAction(uint256 action, bytes calldata params) external override onlyDelegateCall {
-        if (action == MMActions.COMMIT_SIGNAL) {
-            (bytes calldata liquiditySignal, address owner) = params.decodeCommitSignalParams();
-            _commitSignal(liquiditySignal, _mapRecipient(owner));
-            return;
-        }
         if (action == MMActions.SETTLE_POSITION) {
             (
                 PoolKey calldata poolKey,
@@ -168,6 +93,12 @@ contract MMPMActionsImpl is
                 bool withDeltas
             ) = params.decodeSettlePositionParams();
             _settle(poolKey, tokenId, positionIndex, amount0, amount1, withDeltas);
+            return;
+        }
+        if (action == MMActions.MINT_POSITION) {
+            (PoolKey calldata poolKey, uint256 tokenId, int24 tickLower, int24 tickUpper, uint256 liquidity) =
+                params.decodeMintPositionParams();
+            _mintPosition(poolKey, tokenId, tickLower, tickUpper, liquidity);
             return;
         }
         if (action == MMActions.INCREASE_LIQUIDITY) {
@@ -193,11 +124,6 @@ contract MMPMActionsImpl is
             _burnPosition(poolKey, tokenId, positionIndex);
             return;
         }
-        if (action == MMActions.RENEW_SIGNAL) {
-            (uint256 tokenId, bytes calldata liquiditySignal) = params.decodeTokenIdAndBytes();
-            _renewSignal(tokenId, liquiditySignal);
-            return;
-        }
         if (action == MMActions.SEIZE_POSITION) {
             (
                 PoolKey calldata poolKey,
@@ -208,53 +134,6 @@ contract MMPMActionsImpl is
                 bool withDeltas
             ) = params.decodeSeizePositionParams();
             _seizePosition(poolKey, tokenId, positionIndex, amount0, amount1, withDeltas);
-            return;
-        }
-        if (action == MMActions.DECLARE_UNBACKED_COMMITMENT) {
-            (uint256 tokenId, bytes calldata liquiditySignal) = params.decodeTokenIdAndBytes();
-            _declareUnbackedCommitment(tokenId, liquiditySignal);
-            return;
-        }
-        if (action == MMActions.COLLECT_AVAILABLE_LIQUIDITY) {
-            (address lcc, address recipient, uint256 maxAmount) = params.decodeCollectLiquidityParams();
-            _collectAvailableLiquidity(lcc, recipient, maxAmount);
-            return;
-        }
-        if (action == MMActions.DECOMMIT_SIGNAL) {
-            (PoolKey calldata poolKey, uint256 tokenId) = params.decodeDecommitSignalParams();
-            _decommitSignal(poolKey, tokenId);
-            return;
-        }
-        if (action == MMActions.UNWRAP_LCC) {
-            (address lccAddr, uint256 amount, address recipient, bool payerIsUser) = params.decodeUnwrapLCCParams();
-            _unwrapLCC(lccAddr, _mapPayer(payerIsUser), _mapRecipient(recipient), amount);
-            return;
-        }
-        if (action == MMActions.WRAP_NATIVE) {
-            uint256 amount = params.decodeUint256();
-            _wrapNative(amount);
-            return;
-        }
-        if (action == MMActions.UNWRAP_NATIVE) {
-            (uint256 amount, bool payerIsUser) = params.decodeUint256AndBool();
-            _unwrapNative(amount, payerIsUser);
-            return;
-        }
-        if (action == MMActions.EXTEND_GRACE_PERIOD) {
-            (
-                PoolKey calldata poolKey,
-                uint256 tokenId,
-                uint256 positionIndex,
-                uint8 settlementTokenIndex,
-                uint32 verifierIndex,
-                bytes calldata settlementProof
-            ) = params.decodeExtendGracePeriodParams();
-            _extendGracePeriod(poolKey, tokenId, positionIndex, settlementTokenIndex, verifierIndex, settlementProof);
-            return;
-        }
-        if (action == MMActions.TAKE) {
-            (Currency currency, address to, uint256 maxAmount) = params.decodeTakeParams();
-            _take(currency, to, maxAmount);
             return;
         }
         if (action == MMActions.INCREASE_LIQUIDITY_FROM_DELTAS) {
@@ -282,44 +161,11 @@ contract MMPMActionsImpl is
     // Internal Helpers
     // ═══════════════════════════════════════════════════════════════════════════
 
-    /// @dev Asserts that the caller is approved or the owner of the token
-    function _assertApprovedOrOwner(address caller, uint256 tokenId) internal view {
-        if (!_isApprovedOrOwner(caller, tokenId)) {
-            revert Errors.NotApproved(caller);
-        }
-    }
-
-    /// @notice Enforces that the commit is valid (not expired)
-    function _assertSignalValid(uint256 tokenId) internal view {
-        (, uint256 expiresAt,,) = vtsOrchestrator.getCommit(tokenId);
-        if (expiresAt < block.timestamp) {
-            revert Errors.SignalExpired(tokenId);
-        }
-    }
-
-    function _assertPositionForPool(PoolKey calldata poolKey, Position memory position) internal pure {
-        if (PoolId.unwrap(position.poolId) != PoolId.unwrap(poolKey.toId())) {
-            revert Errors.InvalidMarket(poolKey);
-        }
-    }
-
-    /// @dev Map recipient address, handling special constants
-    function _mapRecipient(address recipient) internal view returns (address) {
-        if (recipient == address(0)) return msgSender();
-        if (recipient == address(1)) return address(this);
-        return recipient;
-    }
-
-    /// @dev Map payer based on flag
-    function _mapPayer(bool payerIsUser) internal view returns (address) {
-        return payerIsUser ? msgSender() : address(this);
-    }
-
     /// @notice Returns the position information for a given token ID and position index
-    /// @param tokenId the ERC721 tokenId (commitment NFT ID)
-    /// @param positionIndex the index of the position within the commitment
-    /// @return Position the position information
-    /// @return PositionId the position ID
+    /// @param tokenId The ERC721 tokenId (commitment NFT ID)
+    /// @param positionIndex The index of the position within the commitment
+    /// @return Position The position information
+    /// @return PositionId The position ID
     function getPosition(uint256 tokenId, uint256 positionIndex) public view returns (Position memory, PositionId) {
         return vtsOrchestrator.getPosition(tokenId, positionIndex);
     }
@@ -333,7 +179,7 @@ contract MMPMActionsImpl is
     }
 
     /// @notice Returns the commit information for a given commitment NFT
-    /// @param tokenId the ERC721 tokenId (commitment NFT ID)
+    /// @param tokenId The ERC721 tokenId (commitment NFT ID)
     /// @return mmState The MarketMaker state
     /// @return expiresAt The expiration timestamp
     /// @return positionCount The count of positions
@@ -342,92 +188,25 @@ contract MMPMActionsImpl is
         return vtsOrchestrator.getCommit(tokenId);
     }
 
-    /// @dev Check if position is being seized
+    /// @notice Checks if a position is currently being seized
+    /// @param positionId The position ID to check
+    /// @return True if the position is being seized
     function _isSeizing(PositionId positionId) internal view returns (bool) {
         PositionId seizedPositionId = TransientSlots.getSeizedPositionId();
         return PositionId.unwrap(seizedPositionId) == PositionId.unwrap(positionId);
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // Native Asset Wrap/Unwrap Operations
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    /// @notice Wraps native ETH to WETH, updating deltas accordingly
-    function _wrapNative(uint256 amount) internal {
-        uint256 takeAmount = vtsOrchestrator.take(CurrencyLibrary.ADDRESS_ZERO, msgSender(), amount);
-        if (amount > 0 && amount > takeAmount) {
-            revert Errors.InsufficientBalance(takeAmount, amount);
-        } else if (amount == 0) {
-            amount = takeAmount;
-        }
-        if (amount == 0) {
-            return;
-        }
-
-        _wrap(amount);
-        Currency weth = Currency.wrap(address(WETH9));
-        _syncBalanceAsCredit(weth);
-    }
-
-    /// @notice Unwraps WETH to native ETH
-    function _unwrapNative(uint256 amount, bool payerIsUser) internal {
-        Currency weth = Currency.wrap(address(WETH9));
-        if (payerIsUser) {
-            address payer = msgSender();
-            if (amount == 0) {
-                amount = weth.balanceOf(payer);
-            }
-            weth.transferFrom(payer, address(this), amount);
-        } else {
-            uint256 takeAmount = vtsOrchestrator.take(weth, msgSender(), amount);
-            if (amount > 0 && amount > takeAmount) {
-                revert Errors.InsufficientBalance(takeAmount, amount);
-            } else if (amount == 0) {
-                amount = takeAmount;
-            }
-            if (amount == 0) {
-                return;
-            }
-        }
-        _unwrap(amount);
-        _syncBalanceAsCredit(CurrencyLibrary.ADDRESS_ZERO);
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Signal Management Actions
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    /// @notice Commits a liquidity signal and mints a commitment NFT
-    /// @param liquiditySignal The ABI-encoded LiquiditySignal to verify and record
-    /// @param owner The address to receive the commitment NFT (can be mapped constants)
-    /// @return tokenId The commitment NFT id created
-    function _commitSignal(bytes calldata liquiditySignal, address owner) internal returns (uint256 tokenId) {
-        // Commit the signal to the vts orchestrator
-        tokenId = vtsOrchestrator.commitSignal(liquiditySignal);
-        // Mint the NFT using the returned token id
-        _mint(owner, tokenId);
-        emit SignalCommitted(tokenId);
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════════
     // Position Actions
     // ═══════════════════════════════════════════════════════════════════════════
 
-    function _extendGracePeriod(
-        PoolKey calldata poolKey,
-        uint256 tokenId,
-        uint256 positionIndex,
-        uint8 settlementTokenIndex,
-        uint32 verifierIndex,
-        bytes calldata settlementProof
-    ) internal {
-        _assertApprovedOrOwner(msgSender(), tokenId);
-        _assertSignalValid(tokenId);
-        vtsOrchestrator.extendGracePeriod(
-            poolKey, tokenId, positionIndex, settlementTokenIndex, verifierIndex, settlementProof
-        );
-    }
-
+    /// @notice Seizes a position (third-party guarantor action)
+    /// @param poolKey The pool key
+    /// @param tokenId The commitment NFT token ID
+    /// @param positionIndex The position index within the commitment
+    /// @param amount0 The amount of token0 for seizure settlement
+    /// @param amount1 The amount of token1 for seizure settlement
+    /// @param withDeltas Whether to use deltas for settlement
     function _seizePosition(
         PoolKey calldata poolKey,
         uint256 tokenId,
@@ -437,9 +216,12 @@ contract MMPMActionsImpl is
         bool withDeltas
     ) internal {
         (Position memory position, PositionId positionId) = getPosition(tokenId, positionIndex);
-        _assertPositionForPool(poolKey, position);
+        MMHelpers.assertPositionForPool(poolKey, position);
 
-        if (!_isApprovedOrOwner(msgSender(), tokenId) || position.isActive == false) {
+        // Caller must be approved/owner AND position must be active
+        // Note: Actual seizure eligibility (grace period) is checked in VTSOrchestrator.onSeize
+        MMHelpers.assertApprovedOrOwner(msgSender(), tokenId);
+        if (position.isActive == false) {
             revert Errors.InvalidPosition(tokenId, positionIndex, positionId);
         }
 
@@ -459,57 +241,14 @@ contract MMPMActionsImpl is
         );
     }
 
-    function _declareUnbackedCommitment(uint256 tokenId, bytes calldata liquiditySignal) internal {
-        vtsOrchestrator.declareUnbackedCommitment(msgSender(), tokenId, liquiditySignal);
-    }
-
-    function _unwrapLCC(address lccAddr, address from, address to, uint256 requested)
-        internal
-        returns (uint256 unwrapped)
-    {
-        ILCC lcc = ILCC(lccAddr);
-        Currency lccCurrency = Currency.wrap(lccAddr);
-        address underlying = lcc.underlying();
-
-        uint256 beforeBal = IERC20(underlying).balanceOf(to);
-        uint256 toUnwrap;
-
-        if (from == address(this)) {
-            toUnwrap = vtsOrchestrator.take(lccCurrency, msgSender(), requested);
-        } else {
-            toUnwrap = lcc.balanceOf(from);
-            if (requested > 0 && toUnwrap > requested) {
-                toUnwrap = requested;
-            }
-        }
-
-        if (toUnwrap > 0) {
-            if (from != address(this)) {
-                lcc.safeTransferFrom(from, address(this), toUnwrap);
-            }
-            liquidityHub.unwrapTo(lccAddr, to, toUnwrap);
-        }
-
-        unwrapped = IERC20(underlying).balanceOf(to) - beforeBal;
-
-        if (to == address(this) && unwrapped > 0) {
-            _syncBalanceAsCredit(Currency.wrap(underlying));
-        }
-    }
-
-    function _collectAvailableLiquidity(address lcc, address recipient, uint256 maxAmount) internal {
-        address sender = msgSender();
-        uint256 queued = liquidityHub.settleQueue(lcc, sender);
-
-        if (queued > 0) {
-            liquidityHub.processSettlementFor(lcc, recipient, maxAmount);
-
-            if (recipient == address(this)) {
-                _syncBalanceAsCredit(_lccToUnderlyingCurrency(Currency.wrap(lcc)));
-            }
-        }
-    }
-
+    /// @notice Settles underlying assets to/from a position
+    /// @param poolKey The pool key
+    /// @param tokenId The commitment NFT token ID
+    /// @param positionIndex The position index within the commitment
+    /// @param amount0 The amount of token0 to settle (signed)
+    /// @param amount1 The amount of token1 to settle (signed)
+    /// @param withDeltas Whether to use deltas for settlement
+    /// @return seizedLiquidityUnits The amount of liquidity units seized (if applicable)
     function _settle(
         PoolKey calldata poolKey,
         uint256 tokenId,
@@ -523,13 +262,13 @@ contract MMPMActionsImpl is
         }
 
         (Position memory position, PositionId positionId) = getPosition(tokenId, positionIndex);
-        _assertPositionForPool(poolKey, position);
+        MMHelpers.assertPositionForPool(poolKey, position);
 
         bool isSeizing = _isSeizing(positionId);
 
         if (!isSeizing) {
             _assertSignalValid(tokenId);
-            _assertApprovedOrOwner(msgSender(), tokenId);
+            MMHelpers.assertApprovedOrOwner(msgSender(), tokenId);
         }
 
         Currency underlying0 = _lccToUnderlyingCurrency(poolKey.currency0);
@@ -574,30 +313,17 @@ contract MMPMActionsImpl is
         return seizedLiquidityUnits;
     }
 
-    function _renewSignal(uint256 tokenId, bytes calldata liquiditySignal) internal {
-        _assertApprovedOrOwner(msgSender(), tokenId);
-        vtsOrchestrator.renewSignal(tokenId, liquiditySignal);
-    }
-
-    function _decommitSignal(PoolKey calldata poolKey, uint256 tokenId) internal {
-        _assertApprovedOrOwner(msgSender(), tokenId);
-        _assertSignalValid(tokenId);
-
-        (,, uint256 positionCount,) = vtsOrchestrator.getCommit(tokenId);
-        if (positionCount > 0) {
-            revert Errors.CommitNotEmpty(tokenId);
-        }
-
-        _burn(tokenId);
-        emit SignalDecommitted(tokenId, positionCount);
-    }
-
+    /// @notice Burns (fully decreases) a position
+    /// @param poolKey The pool key
+    /// @param tokenId The commitment NFT token ID
+    /// @param positionIndex The position index within the commitment
     function _burnPosition(PoolKey calldata poolKey, uint256 tokenId, uint256 positionIndex) internal {
-        _assertApprovedOrOwner(msgSender(), tokenId);
+        MMHelpers.assertApprovedOrOwner(msgSender(), tokenId);
         _assertSignalValid(tokenId);
 
         (Position memory position,) = getPosition(tokenId, positionIndex);
-        _assertPositionForPool(poolKey, position);
+        MMHelpers.assertPositionForPool(poolKey, position);
+
         uint256 completeLiquidity = uint256(position.liquidity);
         _decreaseInternal(
             poolKey,
@@ -608,6 +334,13 @@ contract MMPMActionsImpl is
         );
     }
 
+    /// @notice Increases liquidity in an existing position
+    /// @param poolKey The pool key
+    /// @param tokenId The commitment NFT token ID
+    /// @param positionIndex The position index within the commitment
+    /// @param tickLower The lower tick of the position
+    /// @param tickUpper The upper tick of the position
+    /// @param liquidity The amount of liquidity to add
     function _increase(
         PoolKey calldata poolKey,
         uint256 tokenId,
@@ -616,14 +349,22 @@ contract MMPMActionsImpl is
         int24 tickUpper,
         uint256 liquidity
     ) internal {
-        _assertApprovedOrOwner(msgSender(), tokenId);
+        MMHelpers.assertApprovedOrOwner(msgSender(), tokenId);
         _assertSignalValid(tokenId);
 
         (Position memory position,) = getPosition(tokenId, positionIndex);
-        _assertPositionForPool(poolKey, position);
+        MMHelpers.assertPositionForPool(poolKey, position);
         _increaseInternal(poolKey, tokenId, positionIndex, tickLower, tickUpper, liquidity);
     }
 
+    /// @notice Internal helper to increase liquidity
+    /// @param poolKey The pool key
+    /// @param tokenId The commitment NFT token ID
+    /// @param positionIndex The position index within the commitment
+    /// @param tickLower The lower tick of the position
+    /// @param tickUpper The upper tick of the position
+    /// @param liquidity The amount of liquidity to add
+    /// @return positionId The position ID
     function _increaseInternal(
         PoolKey calldata poolKey,
         uint256 tokenId,
@@ -648,6 +389,12 @@ contract MMPMActionsImpl is
         _modifySyntheticLiquidity(poolKey, params, hookData);
     }
 
+    /// @notice Increases liquidity using available delta credits
+    /// @param poolKey The pool key
+    /// @param tokenId The commitment NFT token ID
+    /// @param positionIndex The position index within the commitment
+    /// @param tickLower The lower tick of the position
+    /// @param tickUpper The upper tick of the position
     function _increaseFromDeltas(
         PoolKey calldata poolKey,
         uint256 tokenId,
@@ -655,24 +402,53 @@ contract MMPMActionsImpl is
         int24 tickLower,
         int24 tickUpper
     ) internal {
-        _assertApprovedOrOwner(msgSender(), tokenId);
+        MMHelpers.assertApprovedOrOwner(msgSender(), tokenId);
         _assertSignalValid(tokenId);
 
         (Position memory position,) = getPosition(tokenId, positionIndex);
-        _assertPositionForPool(poolKey, position);
+        MMHelpers.assertPositionForPool(poolKey, position);
 
         uint256 liquidityFromDeltas = _getLiquidityFromDeltas(poolKey, address(this), tickLower, tickUpper);
         _increaseInternal(poolKey, tokenId, positionIndex, tickLower, tickUpper, liquidityFromDeltas);
     }
 
+    /// @notice Mints a new position within a commitment
+    /// @param poolKey The pool key
+    /// @param tokenId The commitment NFT token ID
+    /// @param tickLower The lower tick of the position
+    /// @param tickUpper The upper tick of the position
+    /// @param liquidity The amount of liquidity to mint
+    function _mintPosition(
+        PoolKey calldata poolKey,
+        uint256 tokenId,
+        int24 tickLower,
+        int24 tickUpper,
+        uint256 liquidity
+    ) internal {
+        MMHelpers.assertApprovedOrOwner(msgSender(), tokenId);
+        _assertSignalValid(tokenId);
+        _mintPositionInternal(poolKey, tokenId, tickLower, tickUpper, liquidity);
+    }
+
+    /// @notice Mints a new position using available delta credits
+    /// @param poolKey The pool key
+    /// @param tokenId The commitment NFT token ID
+    /// @param tickLower The lower tick of the position
+    /// @param tickUpper The upper tick of the position
     function _mintFromDeltas(PoolKey calldata poolKey, uint256 tokenId, int24 tickLower, int24 tickUpper) internal {
-        _assertApprovedOrOwner(msgSender(), tokenId);
+        MMHelpers.assertApprovedOrOwner(msgSender(), tokenId);
         _assertSignalValid(tokenId);
 
         uint256 liquidityFromDeltas = _getLiquidityFromDeltas(poolKey, address(this), tickLower, tickUpper);
         _mintPositionInternal(poolKey, tokenId, tickLower, tickUpper, liquidityFromDeltas);
     }
 
+    /// @notice Settles a position using available delta credits
+    /// @param poolKey The pool key
+    /// @param tokenId The commitment NFT token ID
+    /// @param positionIndex The position index within the commitment
+    /// @param settleIn0 Whether to settle in token0
+    /// @param settleIn1 Whether to settle in token1
     function _settleFromDeltas(
         PoolKey calldata poolKey,
         uint256 tokenId,
@@ -687,6 +463,12 @@ contract MMPMActionsImpl is
         _settle(poolKey, tokenId, positionIndex, sDelta.amount0(), sDelta.amount1(), true);
     }
 
+    /// @notice Internal helper to decrease liquidity
+    /// @param poolKey The pool key
+    /// @param position The position to decrease
+    /// @param salt The position salt
+    /// @param amountToDecrease The amount of liquidity to remove
+    /// @param hookData The hook data for the modification
     function _decreaseInternal(
         PoolKey calldata poolKey,
         Position memory position,
@@ -713,14 +495,19 @@ contract MMPMActionsImpl is
         _modifySyntheticLiquidity(poolKey, params, hookData);
     }
 
+    /// @notice Decreases liquidity from an existing position
+    /// @param poolKey The pool key
+    /// @param tokenId The commitment NFT token ID
+    /// @param positionIndex The position index within the commitment
+    /// @param amountToDecrease The amount of liquidity to remove
     function _decrease(PoolKey calldata poolKey, uint256 tokenId, uint256 positionIndex, uint256 amountToDecrease)
         internal
     {
-        _assertApprovedOrOwner(msgSender(), tokenId);
+        MMHelpers.assertApprovedOrOwner(msgSender(), tokenId);
         _assertSignalValid(tokenId);
 
         (Position memory position,) = getPosition(tokenId, positionIndex);
-        _assertPositionForPool(poolKey, position);
+        MMHelpers.assertPositionForPool(poolKey, position);
 
         _decreaseInternal(
             poolKey,
@@ -731,6 +518,14 @@ contract MMPMActionsImpl is
         );
     }
 
+    /// @notice Internal helper to mint a new position
+    /// @param poolKey The pool key
+    /// @param tokenId The commitment NFT token ID
+    /// @param tickLower The lower tick of the position
+    /// @param tickUpper The upper tick of the position
+    /// @param liquidity The amount of liquidity to mint
+    /// @return positionId The position ID
+    /// @return positionIndex The position index within the commitment
     function _mintPositionInternal(
         PoolKey calldata poolKey,
         uint256 tokenId,

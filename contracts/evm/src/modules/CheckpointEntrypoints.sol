@@ -3,17 +3,17 @@ pragma solidity ^0.8.0;
 
 import {PositionId} from "../types/Position.sol";
 import {ImmutableVTSState} from "./ImmutableVTSState.sol";
+import {ICheckpointEntrypoints} from "../interfaces/ICheckpointEntrypoints.sol";
 
 /// @title CheckpointEntrypoints
 /// @notice Abstract module providing checkpoint entrypoint functions
 /// @dev Inherits ImmutableVTSState to access vtsOrchestrator for checkpoint operations
-abstract contract CheckpointEntrypoints is ImmutableVTSState {
+abstract contract CheckpointEntrypoints is ICheckpointEntrypoints, ImmutableVTSState {
     /// @notice Marks a checkpoint for a single position within a commitment
     /// @param tokenId The ERC721 token id (commitment NFT id)
     /// @param positionIndex The index of the position within the commitment
     function checkpoint(uint256 tokenId, uint256 positionIndex) public {
-        (PositionId positionId, bool rfsOpen,) = vtsOrchestrator.calcRFS(tokenId, positionIndex, false);
-        vtsOrchestrator.markCheckpoint(positionId, rfsOpen);
+        vtsOrchestrator.markCheckpoint(tokenId, positionIndex);
     }
 
     /// @notice Marks checkpoints for multiple (tokenId, positionIndex) pairs
