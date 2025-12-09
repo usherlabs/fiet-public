@@ -74,7 +74,7 @@ contract MMPositionManager is
     enum MMAction {
         COMMIT_SIGNAL,
         MINT_POSITION,
-        SETTLE_POSITION,
+        SETTLE_POSITION, // params: (PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex, int128 amount0, int128 amount1, bool withDeltas)
         INCREASE_LIQUIDITY,
         DECREASE_LIQUIDITY,
         BURN_POSITION,
@@ -207,10 +207,9 @@ contract MMPositionManager is
                 uint256 positionIndex,
                 int128 amount0,
                 int128 amount1,
-                bool withUser0,
-                bool withUser1
-            ) = abi.decode(params, (PoolKey, uint256, uint256, int128, int128, bool, bool));
-            _settle(poolKey, tokenId, positionIndex, amount0, amount1, withUser0, withUser1);
+                bool withDeltas
+            ) = abi.decode(params, (PoolKey, uint256, uint256, int128, int128, bool));
+            _settle(poolKey, tokenId, positionIndex, amount0, amount1, withDeltas);
             return;
         }
         if (action == uint256(MMAction.INCREASE_LIQUIDITY)) {
@@ -243,10 +242,16 @@ contract MMPositionManager is
             return;
         }
         if (action == uint256(MMAction.SEIZE_POSITION)) {
-            (PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex, uint256 amount0, uint256 amount1) =
-                abi.decode(params, (PoolKey, uint256, uint256, uint256, uint256));
+            (
+                PoolKey memory poolKey,
+                uint256 tokenId,
+                uint256 positionIndex,
+                uint256 amount0,
+                uint256 amount1,
+                bool withDeltas
+            ) = abi.decode(params, (PoolKey, uint256, uint256, uint256, uint256, bool));
             // seize is third-party guarantor action; no approval required by design
-            _seizePosition(poolKey, tokenId, positionIndex, amount0, amount1);
+            _seizePosition(poolKey, tokenId, positionIndex, amount0, amount1, withDeltas);
             return;
         }
         if (action == uint256(MMAction.DECLARE_UNBACKED_COMMITMENT)) {
@@ -477,7 +482,8 @@ contract MMPositionManager is
         uint256 tokenId,
         uint256 positionIndex,
         uint256 amount0,
-        uint256 amount1
+        uint256 amount1,
+        bool withDeltas
     ) internal {
         (Position memory position, PositionId positionId) = getPosition(tokenId, positionIndex);
         _assertPositionForPool(poolKey, position);
@@ -498,12 +504,12 @@ contract MMPositionManager is
         // Call _settle - this will return the seizedLiquidityUnits
         // Seizure operations don't interact with user wallets (withUser = false, false)
         uint256 seizedLiquidityUnits =
-            _settle(poolKey, tokenId, positionIndex, amount0.toInt128(), amount1.toInt128(), false, false);
+            _settle(poolKey, tokenId, positionIndex, amount0.toInt128(), amount1.toInt128(), withDeltas);
 
         // Prepare hookData
         BalanceDelta seizureSettlementDelta = LiquidityUtils.safeToBalanceDelta(amount0, amount1, true, true);
         bytes memory hookData = PositionModificationHookDataLib.encodeSeizure(
-            tokenId, positionIndex, seizureSettlementDelta.amount0(), seizureSettlementDelta.amount1()
+            tokenId, positionIndex, msgSender(), seizureSettlementDelta.amount0(), seizureSettlementDelta.amount1()
         );
 
         // Call _decreaseInternal with hookData
@@ -587,10 +593,13 @@ contract MMPositionManager is
 
         if (queued > 0) {
             liquidityHub.processSettlementFor(lcc, recipient, maxAmount);
-        }
 
-        // If there's any persisted deltas, prime them to allow the locker to TAKE, or SETTLE...
-        vtsOrchestrator.primeUnderlyingCredits(sender, Currency.wrap(lcc));
+            // If MMPM received the underlying (is the recipient), sync to locker's delta
+            // This acts as a sweep when no locker was passed into hookData
+            if (recipient == address(this)) {
+                _syncBalanceToDeltas(_lccToUnderlyingCurrency(Currency.wrap(lcc)));
+            }
+        }
     }
 
     /**
@@ -628,8 +637,7 @@ contract MMPositionManager is
         uint256 positionIndex,
         int128 amount0,
         int128 amount1,
-        bool withUser0,
-        bool withUser1
+        bool withDeltas
     ) internal returns (uint256) {
         if (amount0 == 0 && amount1 == 0) {
             // Cannot settle 0 amounts for both assets.
@@ -647,9 +655,9 @@ contract MMPositionManager is
             _assertApprovedOrOwner(msgSender(), tokenId);
         }
 
-        (BalanceDelta settlementDelta, bool rfsOpen, uint256 seizedLiquidityUnits) = vtsOrchestrator.onMMSettle(
-            positionId, poolKey.currency0, poolKey.currency1, toBalanceDelta(amount0, amount1), isSeizing
-        );
+        // Settlement delta here is the amounts the MM is entitled to.
+        (BalanceDelta settlementDelta, bool rfsOpen, uint256 seizedLiquidityUnits) =
+            vtsOrchestrator.onMMSettle(positionId, toBalanceDelta(amount0, amount1), isSeizing);
 
         // Convert LCC currencies to underlying currencies for settlement
         Currency underlying0 = _lccToUnderlyingCurrency(poolKey.currency0);
@@ -659,42 +667,49 @@ contract MMPositionManager is
         IMarketVault vault = MarketHandlerLib.getVault(marketFactory, poolKey.toId());
         address vaultAddress = address(vault);
 
-        // Determine sender for user interactions
-        address sender = msgSender();
-
         int128 delta0 = settlementDelta.amount0();
         int128 delta1 = settlementDelta.amount1();
 
-        // // Consume any self positive deltas first for withdrawals
-        // Consumption/withdrawal of any currency with a positive delta is handled by _take()
+        // ? Withdrawal of any currency (with a positive delta) held by this MMPM is handled by _take()
 
-        // Handle Deposits (Pull underlying from User to Vault)
-        // withUser flags determine whether to interact with user's wallet
-        if (delta0 < 0 && withUser0) {
-            underlying0.transferFrom(sender, vaultAddress, LiquidityUtils.safeInt128ToUint256(delta0));
+        // TODO: Note that these deltas in place set the stage, but then we need to adjust for deposit/withdraw above/below the delta amounts.
+        // ie. Proactive deposits settlements above what is required. Or, arbitrary withdrawals below what is owed - but allowed.
+
+        // Handle Deposits (Pull underlying from User/Deltas to Vault)
+        address sender = msgSender();
+        address valueSender = withDeltas ? address(this) : sender;
+        if (delta0 < 0) {
+            underlying0.transferFrom(valueSender, vaultAddress, LiquidityUtils.safeInt128ToUint256(delta0));
+            if (withDeltas) {
+                // Take from the sender's delta if withDeltas.
+                vtsOrchestrator.take(underlying0, sender, LiquidityUtils.safeInt128ToUint256(delta0));
+            }
         }
-        if (delta1 < 0 && withUser1) {
-            underlying1.transferFrom(sender, vaultAddress, LiquidityUtils.safeInt128ToUint256(delta1));
+        if (delta1 < 0) {
+            underlying1.transferFrom(valueSender, vaultAddress, LiquidityUtils.safeInt128ToUint256(delta1));
+            if (withDeltas) {
+                vtsOrchestrator.take(underlying1, sender, LiquidityUtils.safeInt128ToUint256(delta1));
+            }
         }
 
         // Execute Settlement via Vault (with remaining delta after self-consumption)
-        BalanceDelta remainingDelta = toBalanceDelta(delta0, delta1);
-        BalanceDelta usedDelta = vault.tryModifyLiquidities(remainingDelta);
+        // A positive balance delta means withdrawing underlying tokens, negative balance means depositing underlying tokens,
+        // Call after deposits (so MV is funded), but before withdrawals.
+        // To prevent failure when liquidity in market is insufficient to cover the withdrawal, we tryModifyLiquidities and account LCCs for excess.
+        // ---- eg. Failure on mass unwrap of LCCs, settled liquidity is used as coverage, then burn position.
+        // ---- Basically, on decrease, return assets to the caller as LCCs in excess of usedDelta.
+        BalanceDelta usedDelta = vault.tryModifyLiquidities(settlementDelta);
+        // TODO: Handle Shortfall on settlements by conducting dryModifyLiquidities inside of onMMSettle, and then using result settlementDelta to conduct direct modifyLiquidities in MMPM.sol
 
-        // Handle Withdrawals (Push underlying from Vault to User)
-        if (usedDelta.amount0() > 0 && withUser0) {
-            underlying0.transfer(sender, LiquidityUtils.safeInt128ToUint256(usedDelta.amount0()));
+        // Handle Withdrawals (Push underlying from Vault to User/Deltas)
+        if (usedDelta.amount0() > 0) {
+            underlying0.transfer(valueSender, LiquidityUtils.safeInt128ToUint256(usedDelta.amount0()));
         }
-        if (usedDelta.amount1() > 0 && withUser1) {
-            underlying1.transfer(sender, LiquidityUtils.safeInt128ToUint256(usedDelta.amount1()));
+        if (usedDelta.amount1() > 0) {
+            underlying1.transfer(valueSender, LiquidityUtils.safeInt128ToUint256(usedDelta.amount1()));
         }
-
-        // Handle shortfall: persist any unfulfilled withdrawal as credit owed to user
-        BalanceDelta shortfall = remainingDelta - usedDelta;
-        if (shortfall.amount0() > 0 || shortfall.amount1() > 0) {
-            // Shortfall represents underlying that couldn't be withdrawn from vault
-            // This will be persisted and claimable later when liquidity becomes available
-            // TODO: persist?
+        if ((usedDelta.amount1() > 0 || usedDelta.amount1() > 0) && withDeltas) {
+            _syncPairBalanceToDeltas(underlying0, underlying1);
         }
 
         // Return seized liquidity units (0 if not seizing)
@@ -820,8 +835,8 @@ contract MMPositionManager is
         // Generate position ID for return
         positionId = PositionLibrary.generateId(address(this), params);
 
-        // Encode hook data with commitId and positionIndex
-        bytes memory hookData = PositionModificationHookDataLib.encode(tokenId, positionIndex);
+        // Encode hook data with commitId, positionIndex, and locker
+        bytes memory hookData = PositionModificationHookDataLib.encode(tokenId, positionIndex, msgSender());
 
         // Single call: modify liquidity + settle
         // VTSOrchestrator.processPosition handles: fee accounting, LCC issuance, delta accounting
@@ -879,7 +894,6 @@ contract MMPositionManager is
      * @param settleIn0 Whether to settle in token0
      * @param settleIn1 Whether to settle in token1
      */
-    // TODO: Merge in with _settle?
     function _settleFromDeltas(
         PoolKey memory poolKey,
         uint256 tokenId,
@@ -897,7 +911,7 @@ contract MMPositionManager is
 
         // Includes position validation within _settle
         // settleIn flags determine which currencies interact with user wallet
-        _settle(poolKey, tokenId, positionIndex, sDelta.amount0(), sDelta.amount1(), settleIn0, settleIn1);
+        _settle(poolKey, tokenId, positionIndex, sDelta.amount0(), sDelta.amount1(), true);
     }
 
     /**
@@ -943,12 +957,6 @@ contract MMPositionManager is
         // Single call: modify liquidity + settle
         // VTSOrchestrator.processPosition handles: fee accounting, LCC cancellation, delta accounting
         _modifySyntheticLiquidity(poolKey, params, hookData);
-
-        // Persist unavailable underlying credits from MMPM's delta against the locker
-        // Only persists the difference between MMPM's delta and balance (unavailable portion)
-        vtsOrchestrator.persistUnavailableUnderlyingCredits(
-            address(this), msgSender(), poolKey.currency0, poolKey.currency1
-        );
     }
 
     /**
@@ -974,7 +982,7 @@ contract MMPositionManager is
             position,
             PositionLibrary.generateSalt(tokenId, positionIndex),
             amountToDecrease,
-            PositionModificationHookDataLib.encode(tokenId, positionIndex)
+            PositionModificationHookDataLib.encode(tokenId, positionIndex, msgSender())
         );
     }
 
@@ -1020,8 +1028,8 @@ contract MMPositionManager is
         // Generate position ID
         positionId = PositionLibrary.generateId(address(this), params);
 
-        // Encode hook data with commitId and positionIndex
-        bytes memory hookData = PositionModificationHookDataLib.encode(tokenId, positionIndex);
+        // Encode hook data with commitId, positionIndex, and locker
+        bytes memory hookData = PositionModificationHookDataLib.encode(tokenId, positionIndex, msgSender());
 
         // Single call: modify liquidity + settle
         // VTSOrchestrator.processPosition handles: fee accounting, LCC issuance, position linking, delta accounting

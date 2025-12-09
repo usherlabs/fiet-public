@@ -15,7 +15,7 @@ import {console} from "forge-std/console.sol";
 
 /// @title DynamicCurrencyDelta
 /// @notice Library for managing currency deltas and underlying settlement in VTS
-/// @dev Operates on VTSStorage for persistent credits, uses transient storage for deltas.
+/// @dev Operates on VTSStorage, uses transient storage for deltas.
 ///      Follows Uniswap v4 PoolManager patterns for delta accounting.
 /// @author Fiet Protocol
 library DynamicCurrencyDelta {
@@ -86,86 +86,6 @@ library DynamicCurrencyDelta {
         int256 uDelta0 = uCurrency0.getDelta(sender);
         int256 uDelta1 = uCurrency1.getDelta(sender);
         return toBalanceDelta(SafeCast.toInt128(uDelta0), SafeCast.toInt128(uDelta1));
-    }
-
-    // ============================================================
-    // Persistent Credit Management
-    // ============================================================
-
-    /// @notice Primes persistent underlying credits from contract-held balances
-    /// @dev Loads min(persistent credit for sender, contract balance) as positive delta to sender (credit)
-    ///      representing deduction from contract to sender (flash accounting)
-    /// @param s The VTS storage
-    /// @param sender The address to prime credits for
-    /// @param lccCurrency The LCC currency to prime credits for
-    /// @param self The contract address (address(this) of caller)
-    function primeUnderlyingCredits(VTSStorage storage s, address sender, Currency lccCurrency, address self) internal {
-        Currency underlyingCurrency = lccToUnderlyingCurrency(lccCurrency);
-        address ua = Currency.unwrap(underlyingCurrency);
-
-        uint256 persistentCredit = s.persistentUnderlyingCredits[sender][ua];
-        if (persistentCredit > 0) {
-            uint256 balance = underlyingCurrency.balanceOfSelf();
-            uint256 load = Math.min(persistentCredit, balance);
-            if (load > 0) {
-                // Load positive delta to sender (credit) representing deduction from contract
-                accountDelta(underlyingCurrency, SafeCast.toInt128(load), sender);
-                s.persistentUnderlyingCredits[sender][ua] = persistentCredit - load;
-            }
-        }
-    }
-
-    /// @notice Persists unavailable underlying credits to persistent storage for a new owner
-    /// @dev Only persists the difference between the target's delta and balance (unavailable portion).
-    ///      Clears the target's transient delta and persists unavailable credits to newOwner.
-    /// @param s The VTS storage
-    /// @param target The address whose delta/balance to read (e.g., MMPM)
-    /// @param newOwner The address to persist unavailable credits against (e.g., locker)
-    /// @param lccCurrency0 The currency of the first LCC
-    /// @param lccCurrency1 The currency of the second LCC
-    function persistUnavailableUnderlyingCredits(
-        VTSStorage storage s,
-        address target,
-        address newOwner,
-        Currency lccCurrency0,
-        Currency lccCurrency1
-    ) internal {
-        Currency uCurrency0 = lccToUnderlyingCurrency(lccCurrency0);
-        Currency uCurrency1 = lccToUnderlyingCurrency(lccCurrency1);
-
-        // Get current transient deltas for target
-        int256 uaDelta0 = uCurrency0.getDelta(target);
-        int256 uaDelta1 = uCurrency1.getDelta(target);
-
-        // Get target's balance
-        uint256 balance0 = uCurrency0.balanceOf(target);
-        uint256 balance1 = uCurrency1.balanceOf(target);
-
-        // Calculate unavailable amounts (delta - balance, only positive deltas)
-        // If delta > balance, the difference is unavailable and needs to be persisted
-        if (uaDelta0 > 0) {
-            uint256 delta0Uint = uint256(uaDelta0);
-            uint256 unavailable0 = delta0Uint > balance0 ? delta0Uint - balance0 : 0;
-
-            if (unavailable0 > 0) {
-                address ua0 = Currency.unwrap(uCurrency0);
-                s.persistentUnderlyingCredits[newOwner][ua0] += unavailable0;
-            }
-            // Clear target's transient delta
-            accountDelta(uCurrency0, -SafeCast.toInt128(uaDelta0), target);
-        }
-
-        if (uaDelta1 > 0) {
-            uint256 delta1Uint = uint256(uaDelta1);
-            uint256 unavailable1 = delta1Uint > balance1 ? delta1Uint - balance1 : 0;
-
-            if (unavailable1 > 0) {
-                address ua1 = Currency.unwrap(uCurrency1);
-                s.persistentUnderlyingCredits[newOwner][ua1] += unavailable1;
-            }
-            // Clear target's transient delta
-            accountDelta(uCurrency1, -SafeCast.toInt128(uaDelta1), target);
-        }
     }
 
     // ============================================================
@@ -243,15 +163,16 @@ library DynamicCurrencyDelta {
     // Balance-to-Delta Sync
     // ============================================================
 
-    /// @notice Syncs the delta for a given currency and owner based on their balance accumulation
-    /// @dev Adjusts delta to reflect actual balance held. If balance exceeds current positive delta,
-    ///      increases delta to match balance, establishing credit for the locker to take.
-    ///      This is useful after wrap/unwrap operations where balance changes occur outside
+    /// @notice Syncs balance accumulation as credit in the delta system
+    /// @dev Only handles balance increases (accumulation), not decreases (consumption).
+    ///      If balance exceeds current positive delta, increases delta to match balance,
+    ///      establishing credit. Also reduces debt if balance is available and delta is negative.
+    ///      This is useful after wrap/unwrap operations where balance increases occur outside
     ///      of normal delta accounting flows.
     /// @param currency The currency to sync
     /// @param owner The address whose balance/delta to sync
     /// @return deltaChange The amount by which the delta was adjusted (0 if no change)
-    function syncBalanceToDeltas(Currency currency, address owner) internal returns (int128 deltaChange) {
+    function syncBalanceAsCredit(Currency currency, address owner) internal returns (int128 deltaChange) {
         uint256 balance = currency.balanceOf(owner);
         int256 currentDelta = currency.getDelta(owner);
 

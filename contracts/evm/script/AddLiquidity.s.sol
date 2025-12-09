@@ -402,7 +402,7 @@ contract AddLiquidityScript is ScriptHelper {
                 if (from == address(0) && to == recipient) {
                     // GET THE ACTUAL TOKEN ID FROM THE LOG
                     tokenId = mintedTokenId;
-                    // TODO: This stil does not log the accurate tokenId, need to fix this.
+                    // ? This stil does not log the accurate tokenId, need to fix this.
                     console.log("Actual minted Token ID:", tokenId);
                     break;
                 }

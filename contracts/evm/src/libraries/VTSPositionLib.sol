@@ -867,14 +867,14 @@ library VTSPositionLib {
             // Account fee credits (in LCC) to MMPositionManager contract (not the locker)
             // Split model: LCC deltas on MMPM are held as ERC-6909 claims, takeable via settle/take dance
             // This creates a clear separation: MMPM deltas (LCC fees + settlement) vs locker deltas (balance syncs)
-            DynamicCurrencyDelta.accountDelta(poolKey.currency0, accruedFeesAfterAdj.amount0(), ctx.mmpmAddress);
-            DynamicCurrencyDelta.accountDelta(poolKey.currency1, accruedFeesAfterAdj.amount1(), ctx.mmpmAddress);
+            DynamicCurrencyDelta.accountDelta(poolKey.currency0, accruedFeesAfterAdj.amount0(), owner);
+            DynamicCurrencyDelta.accountDelta(poolKey.currency1, accruedFeesAfterAdj.amount1(), owner);
 
             // Account underlying currency settlement obligations to MMPositionManager
             // Split model: Underlying settlement deltas on MMPM represent market liquidity claims (settle-only)
             // Balance syncs from wrap/unwrap target locker (msgSender) for takeable credits
             DynamicCurrencyDelta.accountUnderlyingSettlementDeltaChange(
-                ctx.mmpmAddress, requiredSettlementDelta, poolKey.currency0, poolKey.currency1
+                owner, requiredSettlementDelta, poolKey.currency0, poolKey.currency1
             );
 
             // Handle LCC issuance/cancellation based on liquidity direction
@@ -883,7 +883,9 @@ library VTSPositionLib {
                 _handleLiquidityIncrease(s, ctx, poolKey, mmData.commitId, id, params, principalDelta);
             } else if (params.liquidityDelta < 0) {
                 // Removing liquidity: Cancel LCCs
-                _handleLiquidityDecrease(s, ctx, poolKey, id, principalDelta, requiredSettlementDelta);
+                // Use locker from hookData if available, otherwise default to owner (MMPM)
+                address queueRecipient = PositionModificationHookDataLib.getLocker(mmData, owner);
+                _handleLiquidityDecrease(s, ctx, owner, poolKey, id, principalDelta, requiredSettlementDelta, queueRecipient);
             }
 
             // Mark RFS checkpoint
@@ -910,6 +912,7 @@ library VTSPositionLib {
     function _handleLiquidityIncrease(
         VTSStorage storage s,
         PositionContext memory ctx,
+        address owner,
         PoolKey calldata poolKey,
         uint256 commitId,
         PositionId positionId,
@@ -943,16 +946,17 @@ library VTSPositionLib {
         address lcc0 = Currency.unwrap(poolKey.currency0);
         address lcc1 = Currency.unwrap(poolKey.currency1);
         if (amount0 > 0) {
-            ctx.liquidityHub.issue(lcc0, ctx.mmpmAddress, amount0);
+            ctx.liquidityHub.issue(lcc0, owner, amount0);
         }
         if (amount1 > 0) {
-            ctx.liquidityHub.issue(lcc1, ctx.mmpmAddress, amount1);
+            ctx.liquidityHub.issue(lcc1, owner, amount1);
         }
     }
 
     /// @notice Handle liquidity decrease (remove liquidity or burn) - cancels LCCs
     /// @param s The VTS storage
     /// @param ctx The position context
+    /// @param queueRecipient The recipient for settlement queue (locker or owner)
     /// @param poolKey The pool key
     /// @param positionId The position id
     /// @param principalDelta The principal delta after fee adjustments
@@ -960,10 +964,12 @@ library VTSPositionLib {
     function _handleLiquidityDecrease(
         VTSStorage storage s,
         PositionContext memory ctx,
+        address owner,
         PoolKey calldata poolKey,
         PositionId positionId,
         BalanceDelta principalDelta,
-        BalanceDelta requiredSettlementDelta
+        BalanceDelta requiredSettlementDelta,
+        address queueRecipient
     ) internal {
         // Zero delta check
         if (LiquidityUtils.isZeroDelta(principalDelta)) {
@@ -983,34 +989,30 @@ library VTSPositionLib {
         queuedDelta = toBalanceDelta(queuedDelta0, queuedDelta1);
 
         // 3. Queue settlements via cancelWithQueue
+        // Burns LCCs from MMPM (ctx.mmpmAddress) and queues shortfall for queueRecipient (locker or MMPM)
         address lcc0 = Currency.unwrap(poolKey.currency0);
         address lcc1 = Currency.unwrap(poolKey.currency1);
 
         ctx.liquidityHub
             .cancelWithQueue(
                 lcc0,
-                ctx.mmpmAddress,
+                owner,
                 LiquidityUtils.safeInt128ToUint256(principalDelta.amount0()),
                 LiquidityUtils.safeInt128ToUint256(queuedDelta.amount0()),
-                ctx.mmpmAddress
+                queueRecipient
             );
         ctx.liquidityHub
             .cancelWithQueue(
                 lcc1,
-                ctx.mmpmAddress,
+                owner,
                 LiquidityUtils.safeInt128ToUint256(principalDelta.amount1()),
                 LiquidityUtils.safeInt128ToUint256(queuedDelta.amount1()),
-                ctx.mmpmAddress
+                queueRecipient
             );
 
-        // 4. Account queued shortfall as credits owed by MMPM Contract to the MM-Locker
-        //    Add these deltas via accountDelta where target is the MMPM
-        if (queuedDelta.amount0() > 0 || queuedDelta.amount1() > 0) {
-            Currency underlying0 = DynamicCurrencyDelta.lccToUnderlyingCurrency(poolKey.currency0);
-            Currency underlying1 = DynamicCurrencyDelta.lccToUnderlyingCurrency(poolKey.currency1);
-            DynamicCurrencyDelta.accountDelta(underlying0, queuedDelta.amount0(), ctx.mmpmAddress);
-            DynamicCurrencyDelta.accountDelta(underlying1, queuedDelta.amount1(), ctx.mmpmAddress);
-        }
+        // 4. Queued shortfall is tracked in LiquidityHub as owed to queueRecipient
+        // When _collectAvailableLiquidity is called, underlying is transferred to the recipient.
+        // If recipient is MMPM, the balance is synced to the locker's delta.
     }
 
     // --------------------------------------------------
@@ -1151,25 +1153,25 @@ library VTSPositionLib {
     function onMMSettle(
         VTSStorage storage s,
         IPoolManager poolManager,
+        address owner
         PositionId positionId,
         Currency lccCurrency0,
         Currency lccCurrency1,
         BalanceDelta delta,
         bool isSeizing,
-        address mmPositionManager
-    ) public returns (BalanceDelta settlementDelta, bool rfsOpen, uint256 seizedLiquidityUnits) {
+    ) external returns (BalanceDelta settlementDelta, bool rfsOpen, uint256 seizedLiquidityUnits) {
         Position memory pos = s.positions[positionId];
         PoolId poolId = pos.poolId;
 
         // Validate position exists (commitmentMax > 0 for active positions)
         PositionAccounting storage pa = s.positionAccounting[positionId];
-        if (pos.owner == address(0)) {
+        if (pos.owner == address(0) || pos.owner != owner) {
             revert("VTSPositionLib: Invalid position");
         }
 
         // Read position required settlement delta from currencyDelta (set by _touchPosition via DynamicCurrencyDelta)
         BalanceDelta positionRequiredSettlementDelta =
-            DynamicCurrencyDelta.getUnderlyingDeltaPair(mmPositionManager, lccCurrency0, lccCurrency1);
+            DynamicCurrencyDelta.getUnderlyingDeltaPair(owner, lccCurrency0, lccCurrency1);
 
         // During withdrawals, delta is positive as per caller context. During deposits, delta is negative.
         // However, _updateSettlement accepts the inverse as a delta of the settled amount.
@@ -1312,14 +1314,14 @@ library VTSPositionLib {
         // Proactive extraction (incremental): fund only increases in pending slashes since last observation to avoid over-funding
         VTSFeeLib.proactiveFunding(s, poolManager, poolId, positionId, lccCurrency0, lccCurrency1);
 
-        // Account underlying settlement delta to MMPositionManager for delta tracking
+        // Account underlying settlement delta to owner for delta tracking
         // Split model: Settlement deltas on MMPM represent market liquidity claims (settle-only, not takeable)
         // Balance syncs from wrap/unwrap operations target locker (msgSender) for takeable credits
         // This enables MMPM to track what underlying assets are owed/credited during settlement
         Currency underlyingCurrency0 = DynamicCurrencyDelta.lccToUnderlyingCurrency(lccCurrency0);
         Currency underlyingCurrency1 = DynamicCurrencyDelta.lccToUnderlyingCurrency(lccCurrency1);
-        DynamicCurrencyDelta.accountDelta(underlyingCurrency0, settlementDelta.amount0(), mmPositionManager);
-        DynamicCurrencyDelta.accountDelta(underlyingCurrency1, settlementDelta.amount1(), mmPositionManager);
+        DynamicCurrencyDelta.accountDelta(underlyingCurrency0, settlementDelta.amount0(), owner);
+        DynamicCurrencyDelta.accountDelta(underlyingCurrency1, settlementDelta.amount1(), owner);
 
         // Mark RFS checkpoint for the position
         CheckpointLibrary.markCheckpoint(s, positionId, rfsOpen);
@@ -1393,50 +1395,5 @@ library VTSPositionLib {
         }
 
         return total;
-    }
-
-    /// @notice Unwrap LCC to underlying asset
-    /// @param lcc The LCC token
-    /// @param liquidityHub The liquidity hub
-    /// @param from The address to unwrap from
-    /// @param to The recipient address
-    /// @param requested The requested amount to unwrap
-    /// @param availableCredit The available credit from deltas
-    /// @return unwrapped The amount actually unwrapped
-    /// @return underlying The underlying token address
-    function unwrapLCC(
-        ILCC lcc,
-        ILiquidityHub liquidityHub,
-        address from,
-        address to,
-        uint256 requested,
-        uint256 availableCredit
-    ) public returns (uint256 unwrapped, address underlying) {
-        // unwrap the lcc from the position
-        underlying = lcc.underlying();
-
-        // Measure recipient underlying balance before unwrap
-        uint256 beforeBal = IERC20Minimal(underlying).balanceOf(to);
-
-        uint256 toUnwrap;
-
-        if (requested == 0) {
-            // Unwrap from deltas: use available credit from this contract's deltas
-            toUnwrap = availableCredit; // Unwrap all available deltas
-        } else {
-            // Unwrap from caller's wallet: transfer LCC from caller to this contract first
-            toUnwrap = requested;
-        }
-
-        if (toUnwrap > 0) {
-            // Route unwrap via LiquidityHub to leverage reserve tracking and settlement queuing
-            if (from != address(this)) {
-                lcc.transferFrom(from, address(this), toUnwrap);
-            }
-            liquidityHub.unwrapTo(address(lcc), to, toUnwrap);
-        }
-
-        // Compute actually unwrapped by observing recipient balance delta
-        unwrapped = IERC20Minimal(underlying).balanceOf(to) - beforeBal;
     }
 }

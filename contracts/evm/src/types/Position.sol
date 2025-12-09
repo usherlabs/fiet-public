@@ -44,6 +44,9 @@ struct PositionModificationHookData {
     uint256 commitId;
     /// @notice The position index within the commit
     uint256 positionIndex;
+    /// @notice The locker address (msgSender who initiated the operation via MMPM)
+    /// @dev Used for settlement queue attribution; address(0) defaults to position owner
+    address locker;
     /// @notice Seizure-related data (only populated during seizure operations)
     SeizureData seizure;
     /// @notice Arbitrary additional data for future extensions
@@ -55,12 +58,14 @@ library PositionModificationHookDataLib {
     /// @notice Encodes hook data for standard position modifications
     /// @param commitId The commit ID (ERC721 tokenId)
     /// @param positionIndex The position index within the commit
+    /// @param locker The locker address (msgSender who initiated the operation)
     /// @return Encoded hook data bytes
-    function encode(uint256 commitId, uint256 positionIndex) internal pure returns (bytes memory) {
+    function encode(uint256 commitId, uint256 positionIndex, address locker) internal pure returns (bytes memory) {
         return abi.encode(
             PositionModificationHookData({
                 commitId: commitId,
                 positionIndex: positionIndex,
+                locker: locker,
                 seizure: SeizureData({isSeizing: false, settle0: 0, settle1: 0}),
                 extraData: ""
             })
@@ -70,10 +75,11 @@ library PositionModificationHookDataLib {
     /// @notice Encodes hook data for seizure operations
     /// @param commitId The commit ID (ERC721 tokenId)
     /// @param positionIndex The position index within the commit
+    /// @param locker The locker address (msgSender who initiated the operation)
     /// @param settle0 The settlement amount for token0
     /// @param settle1 The settlement amount for token1
     /// @return Encoded hook data bytes
-    function encodeSeizure(uint256 commitId, uint256 positionIndex, int128 settle0, int128 settle1)
+    function encodeSeizure(uint256 commitId, uint256 positionIndex, address locker, int128 settle0, int128 settle1)
         internal
         pure
         returns (bytes memory)
@@ -82,6 +88,7 @@ library PositionModificationHookDataLib {
             PositionModificationHookData({
                 commitId: commitId,
                 positionIndex: positionIndex,
+                locker: locker,
                 seizure: SeizureData({isSeizing: true, settle0: settle0, settle1: settle1}),
                 extraData: ""
             })
@@ -96,6 +103,7 @@ library PositionModificationHookDataLib {
             return PositionModificationHookData({
                 commitId: 0,
                 positionIndex: 0,
+                locker: address(0),
                 seizure: SeizureData({isSeizing: false, settle0: 0, settle1: 0}),
                 extraData: ""
             });
@@ -111,6 +119,7 @@ library PositionModificationHookDataLib {
             return PositionModificationHookData({
                 commitId: 0,
                 positionIndex: 0,
+                locker: address(0),
                 seizure: SeizureData({isSeizing: false, settle0: 0, settle1: 0}),
                 extraData: ""
             });
@@ -123,6 +132,14 @@ library PositionModificationHookDataLib {
     /// @return True if this is an MM operation
     function isMMOperation(PositionModificationHookData memory data) internal pure returns (bool) {
         return data.commitId > 0;
+    }
+
+    /// @notice Gets the effective locker address, defaulting to fallback if not set
+    /// @param data The decoded hook data
+    /// @param fallback The fallback address to use if locker is not set
+    /// @return The effective locker address
+    function getLocker(PositionModificationHookData memory data, address fallback) internal pure returns (address) {
+        return data.locker != address(0) ? data.locker : fallback;
     }
 }
 

@@ -64,7 +64,7 @@ contract CompleteDeployScript is ScriptHelper {
     address public poolManagerAddress;
     address public create2Deployer;
     address payable public positionManagerAddress;
-    // TODO: Deploy VTSOrchestrator before deploying CoreHook
+    // TODO: Deploy VTSOrchestrator before deploying CoreHook - Contract composition required.
     address public vtsOrchestrator = makeAddr("vtsOrchestrator");
     string public networkName;
 

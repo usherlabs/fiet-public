@@ -51,30 +51,6 @@ interface IVTSCurrencyDelta {
         returns (uint256, uint256);
 
     /**
-     * @notice Primes the underlying delta for a currency and an owner
-     * @dev Moves persistent credits into transient deltas
-     * @param sender The sender of the prime
-     * @param lcc The LCC currency to prime the underlying delta for
-     */
-    function primeUnderlyingCredits(address sender, Currency lcc) external;
-
-    /**
-     * @notice Persists unavailable underlying credits to persistent storage for a new owner
-     * @dev Only persists the difference between the target's delta and balance (unavailable portion).
-     *      Clears the target's transient delta and persists unavailable credits to newOwner.
-     * @param target The address whose delta/balance to read (e.g., MMPM)
-     * @param newOwner The address to persist unavailable credits against (e.g., locker)
-     * @param lccCurrency0 The currency of the first LCC
-     * @param lccCurrency1 The currency of the second LCC
-     */
-    function persistUnavailableUnderlyingCredits(
-        address target,
-        address newOwner,
-        Currency lccCurrency0,
-        Currency lccCurrency1
-    ) external;
-
-    /**
      * @notice Takes up to maxAmount from target's positive delta, capping to available credit
      * @param currency The currency to take
      * @param target The address whose delta to take from
@@ -101,26 +77,30 @@ interface IVTSCurrencyDelta {
     function assertNonZeroDeltas() external view;
 
     /**
-     * @notice Syncs the delta for a given currency based on caller's balance
-     * @dev Adjusts delta to reflect actual balance held by msg.sender.
+     * @notice Syncs balance accumulation as credit in the delta system
+     * @dev Only handles balance increases (accumulation), not decreases (consumption).
      *      If balance exceeds current positive delta, increases delta to match balance,
-     *      establishing credit for the locker to take.
+     *      establishing credit. Useful after wrap/unwrap operations where balance
+     *      increases occur outside normal delta accounting.
      * @param currency The currency to sync
      */
     function sync(Currency currency) external;
 
     /**
-     * @notice Syncs the delta for a given currency and owner based on their balance
-     * @dev Adjusts delta to reflect actual balance held. Useful after wrap/unwrap
-     *      operations where balance changes occur outside normal delta accounting.
+     * @notice Syncs balance accumulation as credit for a given owner
+     * @dev Only handles balance increases (accumulation), not decreases (consumption).
+     *      If balance exceeds current positive delta, increases delta to match balance,
+     *      establishing credit. Useful after wrap/unwrap operations where balance
+     *      increases occur outside normal delta accounting.
      * @param currency The currency to sync
      * @param owner The address whose balance/delta to sync
      */
     function syncFor(Currency currency, address owner) external;
 
     /**
-     * @notice Syncs multiple currencies' deltas for the caller based on their balances
-     * @dev Convenience function to sync both currencies of a pool pair in one call.
+     * @notice Syncs balance accumulation as credit for multiple currencies (caller)
+     * @dev Only handles balance increases (accumulation), not decreases (consumption).
+     *      Convenience function to sync both currencies of a pool pair in one call.
      *      Syncs balances for msg.sender.
      * @param currency0 The first currency to sync
      * @param currency1 The second currency to sync
@@ -128,8 +108,9 @@ interface IVTSCurrencyDelta {
     function syncPair(Currency currency0, Currency currency1) external;
 
     /**
-     * @notice Syncs multiple currencies' deltas for an owner based on their balances
-     * @dev Convenience function to sync both currencies of a pool pair in one call.
+     * @notice Syncs balance accumulation as credit for multiple currencies (owner)
+     * @dev Only handles balance increases (accumulation), not decreases (consumption).
+     *      Convenience function to sync both currencies of a pool pair in one call.
      * @param currency0 The first currency to sync
      * @param currency1 The second currency to sync
      * @param owner The address whose balance/delta to sync

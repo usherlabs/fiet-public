@@ -64,23 +64,6 @@ abstract contract VTSCurrencyDelta is IVTSCurrencyDelta {
     }
 
     /// @inheritdoc IVTSCurrencyDelta
-    function primeUnderlyingCredits(address sender, Currency lcc) external {
-        VTSStorage storage s = _vtsStorage();
-        DynamicCurrencyDelta.primeUnderlyingCredits(s, sender, lcc, address(this));
-    }
-
-    /// @inheritdoc IVTSCurrencyDelta
-    function persistUnavailableUnderlyingCredits(
-        address target,
-        address newOwner,
-        Currency lccCurrency0,
-        Currency lccCurrency1
-    ) external {
-        VTSStorage storage s = _vtsStorage();
-        DynamicCurrencyDelta.persistUnavailableUnderlyingCredits(s, target, newOwner, lccCurrency0, lccCurrency1);
-    }
-
-    /// @inheritdoc IVTSCurrencyDelta
     function take(Currency currency, address target, uint256 maxAmount) public returns (uint256) {
         return DynamicCurrencyDelta.take(currency, target, maxAmount);
     }
@@ -105,23 +88,24 @@ abstract contract VTSCurrencyDelta is IVTSCurrencyDelta {
 
     /// @inheritdoc IVTSCurrencyDelta
     function sync(Currency currency) external {
-        DynamicCurrencyDelta.syncBalanceToDeltas(currency, msg.sender);
+        DynamicCurrencyDelta.syncBalanceAsCredit(currency, msg.sender);
     }
 
     /// @inheritdoc IVTSCurrencyDelta
     function syncPair(Currency currency0, Currency currency1) external {
-        DynamicCurrencyDelta.syncBalanceToDeltas(currency0, msg.sender);
-        DynamicCurrencyDelta.syncBalanceToDeltas(currency1, msg.sender);
+        DynamicCurrencyDelta.syncBalanceAsCredit(currency0, msg.sender);
+        DynamicCurrencyDelta.syncBalanceAsCredit(currency1, msg.sender);
     }
 
     /// @inheritdoc IVTSCurrencyDelta
     function syncFor(Currency currency, address owner) external {
-        DynamicCurrencyDelta.syncBalanceToDeltas(currency, owner);
+        DynamicCurrencyDelta.syncBalanceAsCredit(currency, owner);
     }
 
-    /// @notice Syncs multiple currencies' deltas for an owner based on their balances
-    /// @dev Convenience function to sync both currencies of a pool pair in one call.
-    ///      Useful after operations that may affect multiple currency balances.
+    /// @notice Syncs balance accumulation as credit for multiple currencies
+    /// @dev Only handles balance increases (accumulation), not decreases (consumption).
+    ///      Convenience function to sync both currencies of a pool pair in one call.
+    ///      Useful after operations that increase multiple currency balances.
     /// @param currency0 The first currency to sync
     /// @param currency1 The second currency to sync
     /// @param owner The address whose balance/delta to sync
@@ -131,8 +115,8 @@ abstract contract VTSCurrencyDelta is IVTSCurrencyDelta {
         external
         returns (int128 deltaChange0, int128 deltaChange1)
     {
-        deltaChange0 = DynamicCurrencyDelta.syncBalanceToDeltas(currency0, owner);
-        deltaChange1 = DynamicCurrencyDelta.syncBalanceToDeltas(currency1, owner);
+        deltaChange0 = DynamicCurrencyDelta.syncBalanceAsCredit(currency0, owner);
+        deltaChange1 = DynamicCurrencyDelta.syncBalanceAsCredit(currency1, owner);
     }
 }
 

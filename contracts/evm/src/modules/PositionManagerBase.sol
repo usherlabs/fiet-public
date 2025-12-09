@@ -135,8 +135,9 @@ abstract contract PositionManagerBase is ImmutableState, ImmutableVTSState {
     // ------------------------------------------------------------------------------------------------
 
     /**
-     * @notice Syncs balance to delta for a single currency
-     * @dev Syncs to locker delta (msgSender), not MMPM. This ensures balance syncs
+     * @notice Syncs balance accumulation as credit for a single currency
+     * @dev Only handles balance increases (accumulation), not decreases (consumption).
+     *      Syncs to locker delta (msgSender), not MMPM. This ensures balance increases
      *      from wrap/unwrap operations create takeable credits on the locker.
      * @param currency The currency to sync balance for
      */
@@ -145,8 +146,9 @@ abstract contract PositionManagerBase is ImmutableState, ImmutableVTSState {
     }
 
     /**
-     * @notice Syncs balance to delta for a currency pair
-     * @dev Syncs to locker delta (msgSender), not MMPM.
+     * @notice Syncs balance accumulation as credit for a currency pair
+     * @dev Only handles balance increases (accumulation), not decreases (consumption).
+     *      Syncs to locker delta (msgSender), not MMPM.
      * @param currency0 The first currency to sync
      * @param currency1 The second currency to sync
      */

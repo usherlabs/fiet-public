@@ -464,7 +464,7 @@ contract VTSOrchestrator is ImmutableMarketState, PausableVTS, VTSCurrencyDelta,
         returns (BalanceDelta settlementDelta, bool rfsOpen, uint256 seizedLiquidityUnits)
     {
         return VTSPositionLib.onMMSettle(
-            s, poolManager, positionId, currency0, currency1, amountDelta, isSeizing, mmPositionManager
+            s, poolManager, mmPositionManager, positionId, currency0, currency1, amountDelta, isSeizing
         );
     }
 
