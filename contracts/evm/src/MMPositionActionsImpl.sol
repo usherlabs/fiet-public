@@ -73,6 +73,7 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, Immutable
 
     /// @inheritdoc PositionManagerBase
     function msgSender() public view override returns (address) {
+        // References locker from delegatecall context - MMPositionManager
         return Locker.get();
     }
 

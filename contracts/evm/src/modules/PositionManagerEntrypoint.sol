@@ -16,9 +16,42 @@ import {ILiquidityHub} from "../interfaces/ILiquidityHub.sol";
 abstract contract PositionManagerEntrypoint is PositionManagerBase {
     using CurrencyLibrary for Currency;
 
+    address public immutable actionsImpl;
+
+    constructor(address vtsOrchestrator, address _actionsImpl) PositionManagerBase(vtsOrchestrator) {
+        actionsImpl = _actionsImpl;
+    }
+
     /// @notice Returns the LiquidityHub contract
     /// @dev Must be implemented by inheriting contracts
     function _liquidityHub() internal view virtual returns (ILiquidityHub);
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Delegation Helpers
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// @dev Delegates a call to the implementation contract
+    function _delegateToImpl(bytes memory data) internal {
+        (bool success, bytes memory result) = actionsImpl.delegatecall(data);
+        if (!success) {
+            assembly {
+                revert(add(result, 32), mload(result))
+            }
+        }
+    }
+
+    /// @dev Delegates a view call to the implementation contract
+    function _delegateViewToImpl() internal view returns (bytes memory) {
+        address impl = actionsImpl;
+        assembly {
+            calldatacopy(0, 0, calldatasize())
+            let result := staticcall(gas(), impl, 0, calldatasize(), 0, 0)
+            returndatacopy(0, 0, returndatasize())
+            switch result
+            case 0 { revert(0, returndatasize()) }
+            default { return(0, returndatasize()) }
+        }
+    }
 
     // ------------------------------------------------------------------------------------------------
     // Batch Hooks

@@ -70,7 +70,6 @@ contract MMPositionManager is
     // ═══════════════════════════════════════════════════════════════════════════
 
     /// @notice The implementation contract for position operations
-    address public immutable actionsImpl;
     address public immutable commitmentDescriptor;
     ILiquidityHub internal immutable liquidityHub;
 
@@ -91,11 +90,10 @@ contract MMPositionManager is
         BaseActionsRouter(IPoolManager(_manager))
         Permit2Forwarder(_permit2)
         NativeWrapper(_weth9, _marketFactory)
-        PositionManagerBase(_vtsOrchestrator)
+        PositionManagerEntrypoint(_vtsOrchestrator, _actionsImpl)
     {
         commitmentDescriptor = _descriptor;
         liquidityHub = marketFactory.liquidityHub();
-        actionsImpl = _actionsImpl;
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -179,20 +177,6 @@ contract MMPositionManager is
 
         // Currency/utility actions (>= TAKE) → handle locally
         _handleUtilityAction(action, params);
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Delegation Helpers
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    /// @dev Delegates a call to the implementation contract
-    function _delegateToImpl(bytes memory data) internal {
-        (bool success, bytes memory result) = actionsImpl.delegatecall(data);
-        if (!success) {
-            assembly {
-                revert(add(result, 32), mload(result))
-            }
-        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -470,29 +454,13 @@ contract MMPositionManager is
         view
         returns (Position memory position, PositionId positionId)
     {
-        address impl = actionsImpl;
-        assembly {
-            calldatacopy(0, 0, calldatasize())
-            let result := staticcall(gas(), impl, 0, calldatasize(), 0, 0)
-            returndatacopy(0, 0, returndatasize())
-            switch result
-            case 0 { revert(0, returndatasize()) }
-            default { return(0, returndatasize()) }
-        }
+        _delegateViewToImpl();
     }
 
     /// @inheritdoc IMMPositionManager
     /// @dev Delegates to impl via staticcall to satisfy interface requirements
     function getPositionId(uint256 tokenId, uint256 positionIndex) external view returns (PositionId) {
-        address impl = actionsImpl;
-        assembly {
-            calldatacopy(0, 0, calldatasize())
-            let result := staticcall(gas(), impl, 0, calldatasize(), 0, 0)
-            returndatacopy(0, 0, returndatasize())
-            switch result
-            case 0 { revert(0, returndatasize()) }
-            default { return(0, returndatasize()) }
-        }
+        _delegateViewToImpl();
     }
 
     /// @inheritdoc IMMPositionManager
