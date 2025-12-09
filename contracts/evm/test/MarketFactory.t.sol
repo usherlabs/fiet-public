@@ -130,7 +130,7 @@ contract MarketFactoryTest is Test, Deployers {
         vm.prank(owner);
         LiquidityHub(payable(liquidityHubAddress)).setFactory(address(factory), true);
 
-        address proxyDeployer = MarketFactory(address(factory)).marketDeployer();
+        address proxyDeployer = MarketFactory(address(factory)).marketVaultDeployer();
 
         (salt, proxyHookAddr) =
             _generateProxyHookAddress(address(proxyDeployer), abi.encode(poolManager, address(factory)));

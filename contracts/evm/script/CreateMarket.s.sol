@@ -284,7 +284,7 @@ contract CreateMarketScript is ScriptHelper {
      */
     function _createMarket() internal {
         MarketFactory factory = MarketFactory(marketFactory);
-        address deployer = MarketFactory(marketFactory).marketDeployer();
+        address deployer = MarketFactory(marketFactory).marketVaultDeployer();
 
         bytes memory constructorArgs = abi.encode(poolManager, marketFactory);
 

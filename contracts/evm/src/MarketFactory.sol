@@ -9,7 +9,7 @@ import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 import {ProxyHook} from "./ProxyHook.sol";
-import {MarketDeployer} from "./MarketDeployer.sol";
+import {MarketVaultDeployer} from "./MarketVaultDeployer.sol";
 import {IVTSOrchestrator} from "./interfaces/IVTSOrchestrator.sol";
 import {MarketVTSConfiguration} from "./types/VTS.sol";
 import {IOracleHelper} from "./interfaces/IOracleHelper.sol";
@@ -32,7 +32,7 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
 
     IOracleHelper public immutable oracleHelper;
     address public coreHook;
-    address public marketDeployer;
+    address public immutable marketVaultDeployer;
     ILiquidityHub public immutable liquidityHub;
     address public mmPositionManager;
 
@@ -72,8 +72,8 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
         for (uint256 i = 0; i < _bounds.length; i++) {
             bounds[_bounds[i]] = true;
         }
-        // Deploy MarketDeployer which would be used to deploy proxy hooks on behalf of the factory
-        marketDeployer = address(new MarketDeployer());
+        // Deploy MarketVaultDeployer which would be used to deploy proxy hooks on behalf of the factory
+        marketVaultDeployer = address(new MarketVaultDeployer());
     }
 
     modifier onlyLiquidityHub() {
@@ -114,8 +114,7 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
         MarketVTSConfiguration calldata vtsConfiguration
     ) external onlyOwner returns (PoolId corePoolId, PoolId proxyPoolId) {
         // Deploy proxy hook
-        address proxyHookAddress =
-            MarketDeployer(marketDeployer).deployProxyHook(address(poolManager), address(this), salt);
+        address proxyHookAddress = MarketVaultDeployer(marketVaultDeployer).deployProxyHook(address(poolManager), salt);
 
         if (underlyingAsset0 == address(0)) {
             revert Errors.InvalidAddress(underlyingAsset0);
