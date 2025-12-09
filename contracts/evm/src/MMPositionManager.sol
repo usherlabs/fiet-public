@@ -33,7 +33,6 @@ import {TransientSlots} from "./libraries/TransientSlots.sol";
 import {PositionManagerBase} from "./modules/PositionManagerBase.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {CurrencyTransfer} from "./libraries/CurrencyTransfer.sol";
-import {CurrencyDelta} from "v4-periphery/lib/v4-core/src/libraries/CurrencyDelta.sol";
 import {Permit2Forwarder} from "v4-periphery/src/base/Permit2Forwarder.sol";
 import {IAllowanceTransfer} from "permit2/src/interfaces/IAllowanceTransfer.sol";
 import {MarketHandlerLib} from "./libraries/MarketHandlerLib.sol";
@@ -59,7 +58,6 @@ contract MMPositionManager is
     using CurrencyLibrary for Currency;
     using CurrencySettler for Currency;
     using CurrencyTransfer for Currency;
-    using CurrencyDelta for Currency;
     using SafeERC20 for IERC20;
 
     event SignalCommitted(uint256 tokenId);
@@ -156,7 +154,7 @@ contract MMPositionManager is
         if (commitmentDescriptor == address(0)) {
             revert Errors.CommitmentDescriptorNotSet();
         }
-        return ICommitmentDescriptor(commitmentDescriptor).tokenURI(address(this), tokenId);
+        return ICommitmentDescriptor(commitmentDescriptor).tokenURI(tokenId);
     }
 
     /// @notice Asserts that the caller is approved or the owner of the token

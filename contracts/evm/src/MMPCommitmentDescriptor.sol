@@ -14,8 +14,8 @@ contract MMPCommitmentDescriptor is ICommitmentDescriptor {
      * @param tokenId The token ID of the commitment NFT
      * @return The token URI as a data URI containing JSON metadata
      */
-    function tokenURI(address manager, uint256 tokenId) external view override returns (string memory) {
-        IMMPositionManager positionManager = IMMPositionManager(manager);
+    function tokenURI(uint256 tokenId) external view override returns (string memory) {
+        IMMPositionManager positionManager = IMMPositionManager(msg.sender);
 
         (, uint256 expiresAt, uint256 posCount,) = positionManager.commitOf(tokenId);
 
