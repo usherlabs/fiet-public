@@ -381,7 +381,7 @@ library MMCalldataDecoder {
     /// @return amount The amount to unwrap
     /// @return recipient The recipient address
     /// @return payerIsUser Whether the payer is the user
-    function decodeUnwrapLCCParams(bytes calldata params)
+    function decodeUnwrapLccParams(bytes calldata params)
         internal
         pure
         returns (address lccAddr, uint256 amount, address recipient, bool payerIsUser)

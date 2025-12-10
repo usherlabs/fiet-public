@@ -100,8 +100,7 @@ library MMActionAdapter {
         returns (PreparedAction memory)
     {
         return PreparedAction({
-            action: bytes1(uint8(MMActions.COMMIT_SIGNAL)),
-            params: abi.encode(poolKey, liquiditySignal, owner)
+            action: bytes1(uint8(MMActions.COMMIT_SIGNAL)), params: abi.encode(poolKey, liquiditySignal, owner)
         });
     }
 
@@ -185,8 +184,7 @@ library MMActionAdapter {
         returns (PreparedAction memory)
     {
         return PreparedAction({
-            action: bytes1(uint8(MMActions.BURN_POSITION)),
-            params: abi.encode(poolKey, tokenId, positionIndex)
+            action: bytes1(uint8(MMActions.BURN_POSITION)), params: abi.encode(poolKey, tokenId, positionIndex)
         });
     }
 
@@ -194,18 +192,17 @@ library MMActionAdapter {
      * @notice Prepares a DECOMMIT_SIGNAL action
      */
     function prepareDecommit(PoolKey memory poolKey, uint256 tokenId) internal pure returns (PreparedAction memory) {
-        return PreparedAction({
-            action: bytes1(uint8(MMActions.DECOMMIT_SIGNAL)), params: abi.encode(poolKey, tokenId)
-        });
+        return PreparedAction({action: bytes1(uint8(MMActions.DECOMMIT_SIGNAL)), params: abi.encode(poolKey, tokenId)});
     }
 
     /**
      * @notice Prepares a RENEW_SIGNAL action
      */
     function prepareRenew(uint256 tokenId, bytes memory liquiditySignal) internal pure returns (PreparedAction memory) {
-        return PreparedAction({
-            action: bytes1(uint8(MMActions.RENEW_SIGNAL)), params: abi.encode(tokenId, liquiditySignal)
-        });
+        return
+            PreparedAction({
+                action: bytes1(uint8(MMActions.RENEW_SIGNAL)), params: abi.encode(tokenId, liquiditySignal)
+            });
     }
 
     /**
@@ -275,31 +272,26 @@ library MMActionAdapter {
      * @notice Prepares a WRAP_NATIVE action
      */
     function prepareWrapNative(uint256 amount) internal pure returns (PreparedAction memory) {
-        return
-            PreparedAction({action: bytes1(uint8(MMActions.WRAP_NATIVE)), params: abi.encode(amount)});
+        return PreparedAction({action: bytes1(uint8(MMActions.WRAP_NATIVE)), params: abi.encode(amount)});
     }
 
     /**
      * @notice Prepares an UNWRAP_NATIVE action
      */
     function prepareUnwrapNative(uint256 amount) internal pure returns (PreparedAction memory) {
-        return
-            PreparedAction({
-                action: bytes1(uint8(MMActions.UNWRAP_NATIVE)), params: abi.encode(amount)
-            });
+        return PreparedAction({action: bytes1(uint8(MMActions.UNWRAP_NATIVE)), params: abi.encode(amount)});
     }
 
     /**
      * @notice Prepares an UNWRAP_LCC action
      */
-    function prepareUnwrapLCC(address lcc, uint256 amount, address recipient, bool payerIsUser)
+    function prepareUnwrapLcc(address lcc, uint256 amount, address recipient, bool payerIsUser)
         internal
         pure
         returns (PreparedAction memory)
     {
         return PreparedAction({
-            action: bytes1(uint8(MMActions.UNWRAP_LCC)),
-            params: abi.encode(lcc, amount, recipient, payerIsUser)
+            action: bytes1(uint8(MMActions.UNWRAP_LCC)), params: abi.encode(lcc, amount, recipient, payerIsUser)
         });
     }
 
@@ -441,11 +433,11 @@ library MMActionAdapter {
      * @notice Unwraps LCC tokens (single action execution)
      * @dev For backward compatibility - use prepareUnwrapLCC + execute for batching
      */
-    function unwrapLCC(MMPositionManager mmpm, address lcc, uint256 amount, address recipient, bool payerIsUser)
+    function unwrapLcc(MMPositionManager mmpm, address lcc, uint256 amount, address recipient, bool payerIsUser)
         internal
     {
         PreparedAction[] memory prepared = new PreparedAction[](1);
-        prepared[0] = prepareUnwrapLCC(lcc, amount, recipient, payerIsUser);
+        prepared[0] = prepareUnwrapLcc(lcc, amount, recipient, payerIsUser);
         execute(mmpm, prepared);
     }
 

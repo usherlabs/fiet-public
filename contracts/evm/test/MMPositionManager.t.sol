@@ -847,7 +847,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         assertEq(wethBalanceAfterUnwrap, wethBalanceBefore, "WETH balance should be back to original");
     }
 
-    function testCanUnwrapLCC() public {
+    function testCanUnwrapLcc() public {
         address user = makeAddr("user");
         uint256 amount = 1000;
         // Use lcc0 directly - verify it matches lccToken0 from MarketTestBase
@@ -888,7 +888,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         (uint256 wrappedBalance, uint256 marketDerivedBalance) = lcc0.balancesOf(user);
 
         vm.prank(user);
-        MMA.unwrapLCC(positionManager, lccTokenAddress, amount, user, true);
+        MMA.unwrapLcc(positionManager, lccTokenAddress, amount, user, true);
 
         // validate lcc balance of the user
         assertEq(lcc0.balanceOf(user), 0);

@@ -296,8 +296,8 @@ contract MMPositionManager is
             return;
         }
         if (action == MMActions.UNWRAP_LCC) {
-            (address lccAddr, uint256 amount, address recipient, bool payerIsUser) = params.decodeUnwrapLCCParams();
-            _unwrapLCC(lccAddr, _mapPayer(payerIsUser), _mapRecipient(recipient), amount);
+            (address lccAddr, uint256 amount, address recipient, bool payerIsUser) = params.decodeUnwrapLccParams();
+            _unwrapLcc(lccAddr, _mapPayer(payerIsUser), _mapRecipient(recipient), amount);
             return;
         }
         if (action == MMActions.WRAP_NATIVE) {
@@ -324,7 +324,7 @@ contract MMPositionManager is
     /// @param to The recipient address for the underlying asset
     /// @param requested The amount to unwrap (0 for max)
     /// @return unwrapped The amount of underlying asset unwrapped
-    function _unwrapLCC(address lccAddr, address from, address to, uint256 requested)
+    function _unwrapLcc(address lccAddr, address from, address to, uint256 requested)
         internal
         returns (uint256 unwrapped)
     {

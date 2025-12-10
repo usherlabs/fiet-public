@@ -116,13 +116,6 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
         // Deploy proxy hook
         address proxyHookAddress = MarketVaultDeployer(marketVaultDeployer).deployProxyHook(address(poolManager), salt);
 
-        if (underlyingAsset0 == address(0)) {
-            revert Errors.InvalidAddress(underlyingAsset0);
-        }
-        if (underlyingAsset1 == address(0)) {
-            revert Errors.InvalidAddress(underlyingAsset1);
-        }
-
         // Convert proxyHookAddress to bytes (marketRef)
         // This will be used for LCC token symbol truncation
         bytes memory marketRef = abi.encodePacked(proxyHookAddress);
