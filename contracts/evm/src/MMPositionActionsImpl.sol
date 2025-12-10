@@ -48,7 +48,6 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, Immutable
     using CurrencySettler for Currency;
     using CurrencyTransfer for Currency;
     using MMCalldataDecoder for bytes;
-    using MMHelpers for *;
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Immutables (must match MMPositionManager's values)
