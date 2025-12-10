@@ -116,6 +116,8 @@ library VTSCommitLib {
     /// @param mmPositionManager The MM Position Manager address (for validation)
     /// @param ids Array of position IDs to apply deficit to
     /// @param totalDeficitBps Total deficit basis points to distribute across positions
+
+    // TODO: Remove position iteration. Replace commitmentDeficit per position with a running total.
     function _applyCommitmentDeficit(
         VTSStorage storage s,
         address mmPositionManager,
@@ -264,6 +266,8 @@ library VTSCommitLib {
     /// @param oracleHelper The oracle helper for USD price calculations
     /// @param commitId The commit NFT id
     /// @return totalUsdValue Total USD value of commitment maxima (averaged)
+
+    // TODO: To use issued usd value without iteration, we must use a running total.
     function _issuedUSDValue(VTSStorage storage s, IOracleHelper oracleHelper, uint256 commitId)
         internal
         view
@@ -441,6 +445,7 @@ library VTSCommitLib {
         }
         uint256 totalDeficitBps = FullMath.mulDiv(commitmentDeficitUsd, LiquidityUtils.BPS_DENOMINATOR, issuedUsd);
 
+        // TODO: Remove position iteration.
         PositionId[] memory ids = new PositionId[](n);
         for (uint256 i = 0; i < n; i++) {
             ids[i] = s.commits[commitId].positions[i];
@@ -473,6 +478,7 @@ library VTSCommitLib {
         commit.mmState = signal.mmState;
         commit.expiresAt = block.timestamp + expirySeconds;
 
+        // TODO: Remove position iteration.
         uint256 n = commit.positionCount;
         PositionId[] memory ids = new PositionId[](n);
         for (uint256 i = 0; i < n; i++) {
