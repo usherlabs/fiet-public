@@ -53,6 +53,6 @@ library MarketMaker {
      * @return The leaf hash of the state (`keccak256(abi.encode(v0))`)
      */
     function toLeafHash(State memory state) internal pure returns (bytes32) {
-        return EfficientHashLib.hash(state);
+        return EfficientHashLib.hash(abi.encode(state));
     }
 }
