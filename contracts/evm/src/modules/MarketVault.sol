@@ -357,7 +357,7 @@ abstract contract MarketVault is IMarketVault, ImmutableState, ImmutableMarketSt
 
         if (deficitAmount > 0 && deficitRecipient != address(0)) {
             // ? The MarketVault will have already taken the full LCC amount from the PoolManager.
-            lccToken.transfer(deficitRecipient, deficitAmount);
+            lccToken.safeTransfer(deficitRecipient, deficitAmount);
             emit SwapDeficit(poolId, address(lccToken), deficitRecipient, deficitAmount);
         }
         // Note: If deficit recipient is not specified, but a deficit > 0, then excess will accumulate.
