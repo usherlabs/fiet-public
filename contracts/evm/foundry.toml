@@ -20,6 +20,9 @@ fs_permissions = [{ access = "read-write", path = "./deployments" }]
 
 remappings = ["@openzeppelin/=lib/openzeppelin-contracts/"]
 
+[lint]
+exclude_lints = ["screaming-snake-case-immutable"]
+
 # Foundry automatically instruments linked-libraries if library public/external functions are called.
 # libraries = [
 #   "src/libraries/VTSPositionLib.sol:VTSPositionLib:0x0000000000000000000000000000000000000000",
