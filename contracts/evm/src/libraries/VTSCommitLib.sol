@@ -129,6 +129,32 @@ library VTSCommitLib {
         }
     }
 
+    /// @notice Calculates the total USD value of a commitment
+    /// @dev DEPRECATED: Use _totalCommitmentUsdValueFromTotals for O(1) operations
+    /// @param s The central VTS storage
+    /// @param oracleHelper The oracle helper for USD price calculations
+    /// @param commitId The commit NFT id
+    /// @param errorIfInsufficientBacking Whether to revert if the commitment is insufficient
+    /// @return issuedUsd The USD value of the issued commitment maxima
+    /// @return settledUsd The USD value of the settled amounts
+    /// @return signalUsd The USD value of the signal reserves
+    function _totalCommitmentUsdValue(
+        VTSStorage storage s,
+        IOracleHelper oracleHelper,
+        uint256 commitId,
+        bool errorIfInsufficientBacking
+    ) internal view returns (uint256 issuedUsd, uint256 settledUsd, uint256 signalUsd) {
+        issuedUsd = _issuedUSDValueFromTotals(s, oracleHelper, commitId);
+        settledUsd = _settledUSDValueFromTotals(s, oracleHelper, commitId);
+        signalUsd = _signalUSDValue(s, oracleHelper, commitId);
+
+        if (errorIfInsufficientBacking) {
+            if (issuedUsd > signalUsd + settledUsd) {
+                revert Errors.InvalidLiquiditySignal(signalUsd + settledUsd, issuedUsd);
+            }
+        }
+    }
+
     /// @notice Calculates the USD value of potential issued commitment maxima (including new liquidity)
     /// @dev Uses running totals plus the new liquidity delta for O(1) operation
     /// @param s The central VTS storage
@@ -184,9 +210,9 @@ library VTSCommitLib {
         uint256 c0 = commit.commitmentMaxTotal[pool.currency0];
         uint256 c1 = commit.commitmentMaxTotal[pool.currency1];
 
-        uint256 usdValue = OracleUtils.usdValueLccPair(
+            uint256 usdValue = OracleUtils.usdValueLccPair(
             oracleHelper, Currency.unwrap(pool.currency0), c0, Currency.unwrap(pool.currency1), c1
-        );
+            );
 
         // Divide by 2 because commitment maxima represent equivalent extremes
         return usdValue / 2;
@@ -215,7 +241,7 @@ library VTSCommitLib {
 
         return OracleUtils.usdValueLccPair(
             oracleHelper, Currency.unwrap(pool.currency0), s0, Currency.unwrap(pool.currency1), s1
-        );
+            );
     }
 
     /// @notice Calculates the USD value of the MarketMaker signal reserves
@@ -430,8 +456,10 @@ library VTSCommitLib {
         PositionAccounting storage pa = s.positionAccounting[positionId];
 
         // Derive deficit from commit-level deficitBps
-        uint256 derived0 = FullMath.mulDiv(pa.commitmentMax.token0, commit.deficitBps, LiquidityUtils.BPS_DENOMINATOR);
-        uint256 derived1 = FullMath.mulDiv(pa.commitmentMax.token1, commit.deficitBps, LiquidityUtils.BPS_DENOMINATOR);
+        uint256 derived0 =
+            FullMath.mulDiv(pa.commitmentMax.token0, commit.deficitBps, LiquidityUtils.BPS_DENOMINATOR);
+        uint256 derived1 =
+            FullMath.mulDiv(pa.commitmentMax.token1, commit.deficitBps, LiquidityUtils.BPS_DENOMINATOR);
 
         // Get prior coverage
         uint256 coverage = pa.deficitCoverageApplied;

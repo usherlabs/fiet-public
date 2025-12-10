@@ -36,7 +36,6 @@ struct Commit {
     /// Running total of commitment maxima per currency for this commit
     mapping(Currency => uint256) commitmentMaxTotal;
     /// Deficit basis points (if applicable) - also serves as seizability gate (> 0 means seizable)
-    /// Commit-level isSeizable boolean is derived from deficitBps > 0
     uint256 deficitBps;
     /// Total deficit coverage applied across all positions (for O(1) "fully covered" check)
     uint256 totalDeficitCoverageApplied;

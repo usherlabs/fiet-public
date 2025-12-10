@@ -11,7 +11,6 @@ import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint128.sol";
 import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
-import {RFSCheckpoint} from "../types/Checkpoint.sol";
 
 import {
     VTSStorage,
@@ -605,10 +604,7 @@ library VTSPositionLib {
             tickUpper: params.tickUpper,
             liquidity: SafeCast.toUint128(uint256(params.liquidityDelta)),
             isActive: true,
-            salt: params.salt,
-            checkpoint: RFSCheckpoint({
-                timeOfLastTransition: 0, isOpen: false, gracePeriodExtension0: 0, gracePeriodExtension1: 0
-            })
+            salt: params.salt
         });
     }
 
@@ -1091,17 +1087,16 @@ library VTSPositionLib {
         uint256 req1 = base1 > defReq1 ? base1 : defReq1;
 
         // Inflate by commitment-scoped deficit (insolvency gate), clamp by commitment
-        // TODO: Update to use postion-derived deficit - coverage.
-        // uint256 cd0 = pa.commitmentDeficit.token0;
-        // uint256 cd1 = pa.commitmentDeficit.token1;
-        // if (cd0 > 0) {
-        //     uint256 add0 = req0 + cd0;
-        //     req0 = add0 > c0 ? c0 : add0;
-        // }
-        // if (cd1 > 0) {
-        //     uint256 add1 = req1 + cd1;
-        //     req1 = add1 > c1 ? c1 : add1;
-        // }
+        uint256 cd0 = pa.commitmentDeficit.token0;
+        uint256 cd1 = pa.commitmentDeficit.token1;
+        if (cd0 > 0) {
+            uint256 add0 = req0 + cd0;
+            req0 = add0 > c0 ? c0 : add0;
+        }
+        if (cd1 > 0) {
+            uint256 add1 = req1 + cd1;
+            req1 = add1 > c1 ? c1 : add1;
+        }
 
         int128 amount0 = _rfsDeltaRaw(s0, req0);
         int128 amount1 = _rfsDeltaRaw(s1, req1);
