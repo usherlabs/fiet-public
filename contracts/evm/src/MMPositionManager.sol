@@ -17,21 +17,17 @@ import {ILiquidityHub} from "./interfaces/ILiquidityHub.sol";
 import {IMMPositionManager} from "./interfaces/IMMPositionManager.sol";
 import {IMMActionsImpl} from "./interfaces/IMMActionsImpl.sol";
 import {Errors} from "./libraries/Errors.sol";
-import {LiquidityUtils} from "./libraries/LiquidityUtils.sol";
 import {ILCC} from "./interfaces/ILCC.sol";
 import {PositionManagerBase} from "./modules/PositionManagerBase.sol";
 import {PositionManagerEntrypoint} from "./modules/PositionManagerEntrypoint.sol";
 import {Permit2Forwarder} from "v4-periphery/src/base/Permit2Forwarder.sol";
 import {IAllowanceTransfer} from "permit2/src/interfaces/IAllowanceTransfer.sol";
-import {ImmutableMarketState} from "./modules/ImmutableMarketState.sol";
 import {MMActions} from "./libraries/MMActions.sol";
 import {MMCalldataDecoder} from "./libraries/MMCalldataDecoder.sol";
 import {CheckpointEntrypoints} from "./modules/CheckpointEntrypoints.sol";
 import {MMHelpers} from "./libraries/MMHelpers.sol";
 import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol";
-import {IVTSOrchestrator} from "./interfaces/IVTSOrchestrator.sol";
-import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
 import {TransientStateLibrary} from "v4-periphery/lib/v4-core/src/libraries/TransientStateLibrary.sol";
 import {CurrencyTransfer} from "./libraries/CurrencyTransfer.sol";
@@ -198,8 +194,8 @@ contract MMPositionManager is
             return;
         }
         if (action == MMActions.DECOMMIT_SIGNAL) {
-            (PoolKey calldata poolKey, uint256 tokenId) = params.decodeDecommitSignalParams();
-            _decommitSignal(poolKey, tokenId);
+            uint256 tokenId = params.decodeDecommitSignalParams();
+            _decommitSignal(tokenId);
             return;
         }
         if (action == MMActions.DECLARE_UNBACKED_COMMITMENT) {
@@ -241,9 +237,8 @@ contract MMPositionManager is
     }
 
     /// @notice Decommits a signal and burns the commitment NFT
-    /// @param poolKey The pool key (for validation)
     /// @param tokenId The commitment NFT token ID
-    function _decommitSignal(PoolKey calldata poolKey, uint256 tokenId) internal {
+    function _decommitSignal(uint256 tokenId) internal {
         MMHelpers.assertApprovedOrOwner(msgSender(), tokenId);
         _assertSignalValid(tokenId);
 
@@ -443,17 +438,32 @@ contract MMPositionManager is
 
     /// @inheritdoc IMMPositionManager
     /// @dev Delegates to impl via staticcall to satisfy interface requirements
-    function getPosition(uint256 tokenId, uint256 positionIndex)
+    function getPosition(
+        uint256,
+        /* tokenId */
+        uint256 /* positionIndex */
+    )
         external
         view
-        returns (Position memory position, PositionId positionId)
+        returns (
+            Position memory, /* position */
+            PositionId /* positionId */
+        )
     {
         _delegateViewToImpl();
     }
 
     /// @inheritdoc IMMPositionManager
     /// @dev Delegates to impl via staticcall to satisfy interface requirements
-    function getPositionId(uint256 tokenId, uint256 positionIndex) external view returns (PositionId) {
+    function getPositionId(
+        uint256,
+        /* tokenId */
+        uint256 /* positionIndex */
+    )
+        external
+        view
+        returns (PositionId)
+    {
         _delegateViewToImpl();
     }
 

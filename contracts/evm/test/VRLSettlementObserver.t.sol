@@ -8,7 +8,6 @@ import {StubSettlementVerifier} from "../src/verifiers/StubSettlementVerifier.so
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
-import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {Errors} from "../src/libraries/Errors.sol";
 

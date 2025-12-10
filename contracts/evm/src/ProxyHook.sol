@@ -11,7 +11,6 @@ import {BeforeSwapDelta, toBeforeSwapDelta} from "@uniswap/v4-core/src/types/Bef
 import {BaseHook} from "v4-periphery/src/utils/BaseHook.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
-import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 import {ILCC} from "./interfaces/ILCC.sol";
 import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
@@ -187,7 +186,6 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
             // 3. Notify the LCCs about the new balance
 
             // Try take from vault to LCCs. If there's a deficit, it will surface in settlement queue to the DirectLP on LCC unwrap.
-            bytes32 marketId = PoolId.unwrap(corePoolKey.toId());
             if (amount0 > 0) {
                 _tryTakeUnderlyingFromVaultToHub(lccToken0, amount0, false);
             }
@@ -248,7 +246,6 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         // Get the amount of the token that is being swapped in based on if this is a zero one swap or one for zero swap
         uint256 amountOut = isZeroForOne ? amount1 : amount0;
 
-        bytes32 marketId = PoolId.unwrap(corePoolKey.toId());
         _tryTakeUnderlyingFromVaultToHub(lccTokenOut, amountOut, false); // funds going out are an attempt to deliver on the trade.
 
         // New liquidity in pool, so we try and settle the outstanding obligations, if any

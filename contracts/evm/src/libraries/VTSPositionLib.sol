@@ -36,12 +36,8 @@ import {LiquidityUtils} from "./LiquidityUtils.sol";
 import {Errors} from "./Errors.sol";
 import {VTSFeeLib} from "./VTSFeeLib.sol";
 import {DynamicCurrencyDelta} from "./DynamicCurrencyDelta.sol";
-import {ILCC} from "../interfaces/ILCC.sol";
-import {IERC20Minimal} from "@uniswap/v4-core/src/interfaces/external/IERC20Minimal.sol";
-import {ILiquidityHub} from "../interfaces/ILiquidityHub.sol";
 import {VTSCommitLib} from "./VTSCommitLib.sol";
 import {CheckpointLibrary} from "./Checkpoint.sol";
-import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {IMarketVault} from "../interfaces/IMarketVault.sol";
 
 /// @title VTSPositionLib
@@ -571,15 +567,9 @@ library VTSPositionLib {
 
     /// @notice Link a position to a commit
     /// @param s The VTS storage
-    /// @param positionManager The position manager address
     /// @param positionId The position id
     /// @param commitId The token id (commit id)
-    function _linkPositionToCommit(
-        VTSStorage storage s,
-        address positionManager,
-        PositionId positionId,
-        uint256 commitId
-    ) internal {
+    function _linkPositionToCommit(VTSStorage storage s, PositionId positionId, uint256 commitId) internal {
         // validate there is an existing commit for the token id
         if (s.commits[commitId].expiresAt < block.timestamp) {
             revert Errors.SignalExpired(commitId);
@@ -726,7 +716,7 @@ library VTSPositionLib {
 
             // Link position to commit for MM positions
             if (isMMPosition && mmData.commitId > 0) {
-                _linkPositionToCommit(s, ctx.mmpmAddress, id, mmData.commitId);
+                _linkPositionToCommit(s, id, mmData.commitId);
             }
 
             // get the commitment maxima for the position
@@ -881,14 +871,12 @@ library VTSPositionLib {
             // Handle LCC issuance/cancellation based on liquidity direction
             if (params.liquidityDelta > 0) {
                 // Adding liquidity: Issue LCCs
-                _handleLiquidityIncrease(s, ctx, owner, poolKey, mmData.commitId, id, params, principalDelta);
+                _handleLiquidityIncrease(s, ctx, owner, poolKey, mmData.commitId, params, principalDelta);
             } else if (params.liquidityDelta < 0) {
                 // Removing liquidity: Cancel LCCs
                 // Use locker from hookData if available, otherwise default to owner (MMPM)
                 address queueRecipient = PositionModificationHookDataLib.getLocker(mmData, owner);
-                _handleLiquidityDecrease(
-                    s, ctx, owner, poolKey, id, principalDelta, requiredSettlementDelta, queueRecipient
-                );
+                _handleLiquidityDecrease(ctx, owner, poolKey, principalDelta, requiredSettlementDelta, queueRecipient);
             }
 
             // Mark RFS checkpoint
@@ -907,9 +895,9 @@ library VTSPositionLib {
     /// @notice Handle liquidity increase (mint or add liquidity) - issues LCCs
     /// @param s The VTS storage
     /// @param ctx The position context
+    /// @param owner The position owner
     /// @param poolKey The pool key
     /// @param commitId The commit id
-    /// @param positionId The position id
     /// @param params The modify liquidity params
     /// @param principalDelta The principal delta after fee adjustments
     function _handleLiquidityIncrease(
@@ -918,7 +906,6 @@ library VTSPositionLib {
         address owner,
         PoolKey calldata poolKey,
         uint256 commitId,
-        PositionId positionId,
         ModifyLiquidityParams calldata params,
         BalanceDelta principalDelta
     ) internal {
@@ -957,19 +944,16 @@ library VTSPositionLib {
     }
 
     /// @notice Handle liquidity decrease (remove liquidity or burn) - cancels LCCs
-    /// @param s The VTS storage
     /// @param ctx The position context
-    /// @param queueRecipient The recipient for settlement queue (locker or owner)
+    /// @param owner The position owner
     /// @param poolKey The pool key
-    /// @param positionId The position id
     /// @param principalDelta The principal delta after fee adjustments
     /// @param requiredSettlementDelta The required settlement delta from touchPosition
+    /// @param queueRecipient The recipient for settlement queue (locker or owner)
     function _handleLiquidityDecrease(
-        VTSStorage storage s,
         PositionContext memory ctx,
         address owner,
         PoolKey calldata poolKey,
-        PositionId positionId,
         BalanceDelta principalDelta,
         BalanceDelta requiredSettlementDelta,
         address queueRecipient

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {MarketVTSConfiguration, TokenConfiguration} from "./VTS.sol";
+import {TokenConfiguration} from "./VTS.sol";
 
 /// The checkpoint of the RFS for a position
 struct RFSCheckpoint {

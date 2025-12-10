@@ -7,7 +7,6 @@ import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDe
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
-import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint128.sol";
 import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
 import {CurrencySettler} from "@uniswap/v4-core/test/utils/CurrencySettler.sol";
 
@@ -15,14 +14,11 @@ import {
     VTSStorage,
     PositionAccounting,
     PoolAccounting,
-    GrowthPair,
-    MarketVTSConfiguration,
     TokenPairUint,
     TokenPairInt,
     TokenPairLib
 } from "../types/VTS.sol";
 import {PositionId, Position} from "../types/Position.sol";
-import {Pool} from "../types/Pool.sol";
 import {LiquidityUtils} from "./LiquidityUtils.sol";
 import {DynamicCurrencyDelta} from "./DynamicCurrencyDelta.sol";
 
@@ -199,7 +195,6 @@ library VTSFeeLib {
     ) internal returns (BalanceDelta adj) {
         Position memory pos = s.positions[positionId];
         PoolId poolId = pos.poolId;
-        Pool memory pool = s.pools[poolId];
 
         // If fee sharing is disabled, skip processing (fees handled natively by Uniswap)
         if (!_isFeeSharingEnabled(s, poolId)) {

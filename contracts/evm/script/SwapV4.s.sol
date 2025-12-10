@@ -22,7 +22,6 @@ import {CurrencySortHelper} from "./libraries/CurrencySortHelper.sol";
 import {EthSepoliaConstants} from "./constants/EthSepolia.sol";
 import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
 import {ILiquidityHub} from "../src/interfaces/ILiquidityHub.sol";
-import {LiquidityCommitmentCertificate} from "../src/LCC.sol";
 
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 

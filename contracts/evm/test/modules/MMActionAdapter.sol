@@ -191,8 +191,8 @@ library MMActionAdapter {
     /**
      * @notice Prepares a DECOMMIT_SIGNAL action
      */
-    function prepareDecommit(PoolKey memory poolKey, uint256 tokenId) internal pure returns (PreparedAction memory) {
-        return PreparedAction({action: bytes1(uint8(MMActions.DECOMMIT_SIGNAL)), params: abi.encode(poolKey, tokenId)});
+    function prepareDecommit(uint256 tokenId) internal pure returns (PreparedAction memory) {
+        return PreparedAction({action: bytes1(uint8(MMActions.DECOMMIT_SIGNAL)), params: abi.encode(tokenId)});
     }
 
     /**
@@ -445,9 +445,9 @@ library MMActionAdapter {
      * @notice Decommits a position (single action execution)
      * @dev For backward compatibility - use prepareDecommit + execute for batching
      */
-    function decommit(MMPositionManager mmpm, PoolKey memory poolKey, uint256 tokenId) internal {
+    function decommit(MMPositionManager mmpm, uint256 tokenId) internal {
         PreparedAction[] memory prepared = new PreparedAction[](1);
-        prepared[0] = prepareDecommit(poolKey, tokenId);
+        prepared[0] = prepareDecommit(tokenId);
 
         // unlock the poolmanager and execute the action
         executeWithUnlock(mmpm, prepared, block.timestamp + 3600);

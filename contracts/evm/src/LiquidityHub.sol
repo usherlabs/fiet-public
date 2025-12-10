@@ -420,7 +420,7 @@ contract LiquidityHub is Ownable, ReentrancyGuardTransient {
         internal
         onlyValidLcc(lcc)
     {
-        (uint256 directToMint, uint256 marketToMint) = LiquidityHubLib.wrapWithLogic(s, lcc, withLCC, from, to, amount);
+        LiquidityHubLib.wrapWithLogic(s, lcc, withLCC, from, to, amount);
         emit LccWrappedWith(lcc, withLCC, from, to, amount);
     }
 

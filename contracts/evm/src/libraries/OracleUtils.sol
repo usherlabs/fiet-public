@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import {IResilientOracle} from "../interfaces/IResilientOracle.sol";
 import {IOracleHelper} from "../interfaces/IOracleHelper.sol";
 
 library OracleUtils {

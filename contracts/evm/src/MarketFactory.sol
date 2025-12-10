@@ -10,7 +10,6 @@ import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 import {ProxyHook} from "./ProxyHook.sol";
 import {MarketVaultDeployer} from "./MarketVaultDeployer.sol";
-import {IVTSOrchestrator} from "./interfaces/IVTSOrchestrator.sol";
 import {MarketVTSConfiguration} from "./types/VTS.sol";
 import {IOracleHelper} from "./interfaces/IOracleHelper.sol";
 import {ILiquidityHub} from "./interfaces/ILiquidityHub.sol";

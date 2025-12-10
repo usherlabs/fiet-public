@@ -7,10 +7,7 @@ import {CurrencyDelta} from "v4-periphery/lib/v4-core/src/libraries/CurrencyDelt
 import {NonzeroDeltaCount} from "@uniswap/v4-core/src/libraries/NonzeroDeltaCount.sol";
 import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
-import {LiquidityUtils} from "./LiquidityUtils.sol";
 import {ILCC} from "../interfaces/ILCC.sol";
-import {VTSStorage} from "../types/VTS.sol";
-import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {console} from "forge-std/console.sol";
 
 /// @title DynamicCurrencyDelta

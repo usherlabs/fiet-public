@@ -4,11 +4,9 @@ pragma solidity ^0.8.26;
 import {Currency, CurrencyLibrary} from "@uniswap/v4-core/src/types/Currency.sol";
 import {CurrencyDelta} from "v4-periphery/lib/v4-core/src/libraries/CurrencyDelta.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
-import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {VTSStorage} from "../types/VTS.sol";
 import {DynamicCurrencyDelta} from "../libraries/DynamicCurrencyDelta.sol";
 import {IVTSCurrencyDelta} from "../interfaces/IVTSCurrencyDelta.sol";
-import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 
 /**
  * @title VTSCurrencyDelta

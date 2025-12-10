@@ -290,24 +290,18 @@ library MMCalldataDecoder {
         }
     }
 
-    /// @dev DECOMMIT_SIGNAL: (PoolKey, uint256)
+    /// @dev DECOMMIT_SIGNAL: (uint256)
     /// @param params The calldata bytes to decode
-    /// @return poolKey The pool key (calldata pointer)
     /// @return tokenId The commitment NFT token ID
-    function decodeDecommitSignalParams(bytes calldata params)
-        internal
-        pure
-        returns (PoolKey calldata poolKey, uint256 tokenId)
-    {
+    function decodeDecommitSignalParams(bytes calldata params) internal pure returns (uint256 tokenId) {
         assembly ("memory-safe") {
-            // PoolKey: 5 slots (0xa0), then tokenId
-            // Minimum length: 0xa0 + 0x20 = 0xc0
-            if lt(params.length, 0xc0) {
+            // tokenId: 1 slot (0x20)
+            // Minimum length: 0x20
+            if lt(params.length, 0x20) {
                 mstore(0, SLICE_ERROR_SELECTOR)
                 revert(0x1c, 4)
             }
-            poolKey := params.offset
-            tokenId := calldataload(add(params.offset, 0xa0))
+            tokenId := calldataload(params.offset)
         }
     }
 

@@ -146,7 +146,6 @@ contract AddLiquidityScript is ScriptHelper {
 
         // Get LCC tokens from the market
         PoolId corePoolId = corePoolKey.toId();
-        bytes32 marketId = PoolId.unwrap(corePoolId);
         address[2] memory lccPair = factory.corePoolToCurrencyPair(corePoolId);
         address lcc0Addr = lccPair[0];
         address lcc1Addr = lccPair[1];

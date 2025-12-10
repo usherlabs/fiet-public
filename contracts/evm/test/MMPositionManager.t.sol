@@ -4,7 +4,7 @@ pragma solidity ^0.8.0;
 import "forge-std/Test.sol";
 // solhint-disable max-line-length
 
-import {BalanceDelta, toBalanceDelta, add} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {CurrencyLibrary, Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
@@ -22,17 +22,14 @@ import {PositionId} from "../src/types/Position.sol";
 import {MarketVTSConfiguration} from "../src/types/VTS.sol";
 import {MockERC20} from "./_mocks/MockERC20.sol";
 import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
-import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {IOracleHelper} from "../src/interfaces/IOracleHelper.sol";
-import {Errors} from "../src/libraries/Errors.sol";
 import {Position} from "../src/types/Position.sol";
 import {RFSCheckpoint} from "../src/types/Checkpoint.sol";
 import {ILCC} from "../src/interfaces/ILCC.sol";
-import {ILiquidityHub} from "../src/interfaces/ILiquidityHub.sol";
-import {IVRLSignalManager} from "../src/interfaces/IVRLSignalManager.sol";
 import {LiquiditySignal} from "../src/types/Commit.sol";
+import {ILiquidityHub} from "../src/interfaces/ILiquidityHub.sol";
 
 contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
     using SafeCast for *;
@@ -885,7 +882,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         uint256 allowance = lcc0.allowance(user, address(positionManager));
         assertEq(allowance, amount, "Approval should be set before unwrap");
 
-        (uint256 wrappedBalance, uint256 marketDerivedBalance) = lcc0.balancesOf(user);
+        // lcc0.balancesOf(user);
 
         vm.prank(user);
         MMA.unwrapLcc(positionManager, lccTokenAddress, amount, user, true);
@@ -914,7 +911,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             address(lcc0),
             address(lcc1)
         );
-        uint256 positionIndex = 0;
 
         (, uint256 expiresAtPrevious,,) = vtsOrchestrator.getCommit(tokenId);
 
@@ -1034,13 +1030,13 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         // get the amount of tokens that will be minted using the parameters
         (uint160 sqrtPriceX96, int24 currentTick,,) = manager.getSlot0(corePoolKey.toId());
-        (uint256 a0, uint256 a1) = LiquidityUtils.calculateEffectiveTokenAmounts(
-            sqrtPriceX96,
-            currentTick,
-            liquidityParams.tickLower,
-            liquidityParams.tickUpper,
-            liquidityParams.liquidityDelta
-        );
+        // LiquidityUtils.calculateEffectiveTokenAmounts(
+        //     sqrtPriceX96,
+        //     currentTick,
+        //     liquidityParams.tickLower,
+        //     liquidityParams.tickUpper,
+        //     liquidityParams.liquidityDelta
+        // );
 
         // get liquidity in position 0
         (Position memory positionBeforeDeclare,) = vtsOrchestrator.getPosition(tokenId, positionIndex);

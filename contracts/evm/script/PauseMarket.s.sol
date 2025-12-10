@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import {Script, console} from "forge-std/Script.sol";
+import {console} from "forge-std/Script.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {VTSOrchestrator} from "../src/VTSOrchestrator.sol";
 import {ScriptHelper} from "./libraries/ScriptHelper.s.sol";

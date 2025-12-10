@@ -8,27 +8,19 @@ import {BaseHook} from "v4-periphery/src/utils/BaseHook.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 
-import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 import {ProxyHook} from "./ProxyHook.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {CurrencySettler} from "@uniswap/v4-core/test/utils/CurrencySettler.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
-import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Exttload} from "v4-periphery/lib/v4-core/src/Exttload.sol";
-import {IExttload} from "v4-periphery/lib/v4-core/src/interfaces/IExttload.sol";
 import {TransientSlots} from "./libraries/TransientSlots.sol";
 import {TransientSlot} from "openzeppelin-contracts/contracts/utils/TransientSlot.sol";
 import {LiquidityUtils} from "./libraries/LiquidityUtils.sol";
-import {PositionLibrary, PositionId} from "./types/Position.sol";
+import {PositionLibrary} from "./types/Position.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
-import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
-import {SqrtPriceMath} from "@uniswap/v4-core/src/libraries/SqrtPriceMath.sol";
-import {TickUtils} from "./libraries/TickUtils.sol";
 import {SafeCast} from "openzeppelin-contracts/contracts/utils/math/SafeCast.sol";
 import {ProxySwapFlag} from "./libraries/ProxySwapFlag.sol";
-import {Errors} from "./libraries/Errors.sol";
-import {IVTSOrchestrator} from "./interfaces/IVTSOrchestrator.sol";
 import {ImmutableMarketState} from "./modules/ImmutableMarketState.sol";
 import {ImmutableVTSState} from "./modules/ImmutableVTSState.sol";
 import {MarketHandlerLib} from "./libraries/MarketHandlerLib.sol";
@@ -169,7 +161,7 @@ contract CoreHook is BaseHook, Exttload, ImmutableMarketState, ImmutableVTSState
         // Update VTS position state with registration/update based on actual pool id
         // Pass callerDelta and feesAccrued for consolidated delta management
         // Note: Pause check is enforced in VTSOrchestrator.processPosition
-        (Position memory pos, PositionId id, BalanceDelta feeAdj) =
+        (Position memory pos,, BalanceDelta feeAdj) =
             vtsOrchestrator.processPosition(sender, key, params, delta, feesAccrued, hookData);
 
         // only add direct liquidity if the sender is not the market maker position manager/router

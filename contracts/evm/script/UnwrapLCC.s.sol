@@ -20,8 +20,6 @@ contract UnwrapLCCScript is ScriptHelper {
         address liquidityHubAddr = readAddress("liquidityHub");
         ILiquidityHub liquidityHub = ILiquidityHub(liquidityHubAddr);
 
-        LiquidityCommitmentCertificate lcc = LiquidityCommitmentCertificate(lccAddress);
-
         uint256 balance = IERC20(lccAddress).balanceOf(wallet);
 
         if (balance == 0) {

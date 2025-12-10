@@ -18,7 +18,6 @@
  */
 pragma solidity ^0.8.20;
 
-import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {CurrencySettler} from "@uniswap/v4-core/test/utils/CurrencySettler.sol";
 import {ILCC} from "../interfaces/ILCC.sol";
@@ -27,13 +26,11 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {IMarketVault} from "../interfaces/IMarketVault.sol";
-import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
 import {LiquidityUtils} from "../libraries/LiquidityUtils.sol";
 import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
 import {ILiquidityHub} from "../interfaces/ILiquidityHub.sol";
 import {Errors} from "../libraries/Errors.sol";
 import {ReentrancyGuardTransient} from "openzeppelin-contracts/contracts/utils/ReentrancyGuardTransient.sol";
-import {IVTSOrchestrator} from "../interfaces/IVTSOrchestrator.sol";
 import {ImmutableState} from "v4-periphery/src/base/ImmutableState.sol";
 import {ImmutableMarketState} from "./ImmutableMarketState.sol";
 
@@ -289,7 +286,6 @@ abstract contract MarketVault is IMarketVault, ImmutableState, ImmutableMarketSt
      * @param corePoolKey The core pool key identifying the market
      */
     function _settleObligations(PoolKey memory corePoolKey) internal {
-        bytes32 marketId = PoolId.unwrap(corePoolKey.toId());
         ILCC lccToken0 = ILCC(Currency.unwrap(corePoolKey.currency0));
         ILCC lccToken1 = ILCC(Currency.unwrap(corePoolKey.currency1));
 
@@ -462,10 +458,8 @@ abstract contract MarketVault is IMarketVault, ImmutableState, ImmutableMarketSt
      * @param balanceDelta The desired balance delta to apply
      * @return The actual balance delta that was applied (may be less than requested for withdrawals)
      */
-    function _dryModifyLiquidities(BalanceDelta balanceDelta) internal returns (BalanceDelta) {
+    function _dryModifyLiquidities(BalanceDelta balanceDelta) internal view returns (BalanceDelta) {
         (Currency currency0, Currency currency1) = _underlying();
-        (ILCC lccToken0, ILCC lccToken1) = _lccs();
-        bytes32 marketId = _marketId();
 
         int128 delta0 = balanceDelta.amount0();
         int128 delta1 = balanceDelta.amount1();

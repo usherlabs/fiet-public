@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {EfficientHashLib} from "solady/utils/EfficientHashLib.sol";
 
 library MarketMaker {
     /// @dev The reserve of the market maker
@@ -50,9 +50,9 @@ library MarketMaker {
     /**
      * @dev This function is used to convert the state of the market maker to a leaf hash
      * @param state The state to convert to a leaf hash
-     * @return The leaf hash of the state
+     * @return The leaf hash of the state (`keccak256(abi.encode(v0))`)
      */
     function toLeafHash(State memory state) internal pure returns (bytes32) {
-        return keccak256(abi.encode(state));
+        return EfficientHashLib.hash(state);
     }
 }

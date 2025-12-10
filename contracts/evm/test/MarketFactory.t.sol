@@ -9,11 +9,8 @@ import {MockERC20} from "./_mocks/MockERC20.sol";
 
 import {MarketFactory} from "../src/MarketFactory.sol";
 import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
-import {CoreHook} from "../src/CoreHook.sol";
 import {ProxyHook} from "../src/ProxyHook.sol";
-import {Pausable} from "openzeppelin-contracts/contracts/utils/Pausable.sol";
 import {Deployers} from "@uniswap/v4-core/test/utils/Deployers.sol";
-import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {HookFlags} from "../src/libraries/HookFlags.sol";
 import {HookMiner} from "v4-periphery/src/utils/HookMiner.sol";
 import {MMPositionManager} from "../src/MMPositionManager.sol";
@@ -24,10 +21,8 @@ import {WETH} from "@uniswap/v4-core/lib/solmate/src/tokens/WETH.sol";
 import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
 import {IAllowanceTransfer} from "permit2/src/interfaces/IAllowanceTransfer.sol";
 import {MMPCommitmentDescriptor} from "../src/MMPCommitmentDescriptor.sol";
-import {ILiquidityHub} from "../src/interfaces/ILiquidityHub.sol";
 import {LiquidityHub} from "../src/LiquidityHub.sol";
 import {OracleHelper} from "../src/OracleHelper.sol";
-import {Errors} from "../src/libraries/Errors.sol";
 import {CurrencySortHelper} from "../script/libraries/CurrencySortHelper.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {VTSOrchestrator} from "../src/VTSOrchestrator.sol";
@@ -102,13 +97,12 @@ contract MarketFactoryTest is Test, Deployers {
         );
 
         IAllowanceTransfer permit2 = IAllowanceTransfer(makeAddr("permit2"));
-        
+
         // Deploy MMPositionActionsImpl first
         vm.prank(owner);
-        MMPositionActionsImpl actionsImpl = new MMPositionActionsImpl(
-            address(poolManager), tempFactoryAddr, address(vtsOrchestrator)
-        );
-        
+        MMPositionActionsImpl actionsImpl =
+            new MMPositionActionsImpl(address(poolManager), tempFactoryAddr, address(vtsOrchestrator));
+
         vm.prank(owner);
         positionManager = new MMPositionManager(
             address(poolManager),

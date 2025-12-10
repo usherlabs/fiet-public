@@ -490,7 +490,7 @@ contract VTSOrchestrator is ImmutableMarketState, PausableVTS, VTSCurrencyDelta,
     /// @notice This function is called by the MMPositionManager to validate the grace period has elapsed
     /// @param commitId The commit id of the position
     /// @param positionIndex The position index of the position
-    function onSeize(uint256 commitId, uint256 positionIndex) external onlyMMPositionManager {
+    function onSeize(uint256 commitId, uint256 positionIndex) external view onlyMMPositionManager {
         // validate grace period has elapsed
         CheckpointLibrary.isSeizable(
             s,

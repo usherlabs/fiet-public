@@ -27,8 +27,9 @@ library VTSSwapLib {
     /// @notice Processes the logic for CoreHook.afterSwap
     /// @param s The central VTS storage
     /// @param poolManager The pool manager contract
+    /// @param s The VTS storage
+    /// @param poolManager The pool manager
     /// @param key The pool key
-    /// @param delta The balance delta from the swap
     /// @param sqrtPBefore The sqrt price before the swap
     /// @param liqBefore The liquidity before the swap
     function processSwap(
@@ -36,7 +37,7 @@ library VTSSwapLib {
         IPoolManager poolManager,
         PoolKey calldata key,
         SwapParams calldata,
-        BalanceDelta delta,
+        BalanceDelta, /* delta */
         uint160 sqrtPBefore,
         uint128 liqBefore
     ) external {

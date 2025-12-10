@@ -187,7 +187,7 @@ contract CreateMarketScript is ScriptHelper {
         try vm.envUint("INITIAL_SQRT_PRICE_X96") returns (uint256 price) {
             initialSqrtPriceX96 = uint160(price);
         } catch {
-            MarketFactory factory = MarketFactory(marketFactory);
+            MarketFactory factoryInstance = MarketFactory(marketFactory);
 
             // Note: LCC tokens are created when markets are created, so we can't get them beforehand
             // For price calculation, we'll use the underlying assets directly
@@ -317,7 +317,6 @@ contract CreateMarketScript is ScriptHelper {
 
         // Get LCC tokens from LiquidityHub via MarketFactory
         MarketFactory factory = MarketFactory(marketFactory);
-        bytes32 marketId = PoolId.unwrap(corePoolId);
         address[2] memory lccPair = factory.corePoolToCurrencyPair(corePoolId);
         address lccTokenOfAsset0 = lccPair[0];
         address lccTokenOfAsset1 = lccPair[1];
@@ -351,9 +350,8 @@ contract CreateMarketScript is ScriptHelper {
         string memory marketId = vm.toString(PoolId.unwrap(corePoolId));
 
         // Get LCC tokens from LiquidityHub via MarketFactory
-        MarketFactory factory = MarketFactory(marketFactory);
-        bytes32 marketIdBytes = PoolId.unwrap(corePoolId);
-        address[2] memory lccPair = factory.corePoolToCurrencyPair(corePoolId);
+        MarketFactory factoryInstance = MarketFactory(marketFactory);
+        address[2] memory lccPair = factoryInstance.corePoolToCurrencyPair(corePoolId);
         address lccTokenOfAsset0 = lccPair[0];
         address lccTokenOfAsset1 = lccPair[1];
 
@@ -388,7 +386,6 @@ contract CreateMarketScript is ScriptHelper {
 
         // Verify LCC tokens exist via MarketFactory
         MarketFactory factoryInstance = MarketFactory(marketFactory);
-        bytes32 marketIdBytes = PoolId.unwrap(corePoolId);
         address[2] memory lccPair = factoryInstance.corePoolToCurrencyPair(corePoolId);
         address lccToken0 = lccPair[0];
         address lccToken1 = lccPair[1];

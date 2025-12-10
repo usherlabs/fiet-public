@@ -69,7 +69,7 @@ abstract contract PositionManagerEntrypoint is PositionManagerBase {
 
     /// @notice Hook called after batch execution
     /// @dev Asserts that deltas are non-zero after batch execution
-    function _afterBatch() internal {
+    function _afterBatch() internal view {
         vtsOrchestrator.assertNonZeroDeltas();
     }
 

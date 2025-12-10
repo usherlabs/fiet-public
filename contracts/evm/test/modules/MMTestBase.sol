@@ -4,7 +4,6 @@ pragma solidity ^0.8.0;
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 import {MarketMaker} from "../../src/libraries/MarketMaker.sol";
-import {console} from "forge-std/console.sol";
 import {MerkleProofGenerator} from "../libraries/MerkleProofGenerator.sol";
 import {LiquiditySignal} from "../../src/types/Commit.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
@@ -229,7 +228,7 @@ abstract contract MarketMakerTestBase is Test {
         bool settleIn1
     ) internal {
         MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
-        actions[0] = MMA.prepareDecommit(poolKey, tokenId);
+        actions[0] = MMA.prepareDecommit(tokenId);
         actions[1] = MMA.prepareSettleFromDeltas(poolKey, tokenId, idx, settleIn0, settleIn1);
 
         // Use modifyLiquidities which handles unlocking automatically

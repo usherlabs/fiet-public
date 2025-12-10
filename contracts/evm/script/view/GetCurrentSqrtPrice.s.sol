@@ -3,10 +3,9 @@ pragma solidity ^0.8.0;
 
 import "forge-std/Script.sol";
 
-import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
-import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {SepoliaConstants} from "../constants/ArbitrumSepolia.sol";
 import {EthSepoliaConstants} from "../constants/EthSepolia.sol";
 import {ArbitrumConstants} from "../constants/Arbitrum.sol";

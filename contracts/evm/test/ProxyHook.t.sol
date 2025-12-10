@@ -4,30 +4,20 @@ pragma solidity ^0.8.0;
 import "forge-std/Test.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
-import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
-import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 
-import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {CurrencyLibrary, Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {PoolSwapTest} from "@uniswap/v4-core/src/test/PoolSwapTest.sol";
-import {Deployers} from "@uniswap/v4-core/test/utils/Deployers.sol";
-import {Constants} from "@uniswap/v4-core/test/utils/Constants.sol";
-import {IERC20Minimal} from "@uniswap/v4-core/src/interfaces/external/IERC20Minimal.sol";
 import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {CurrencySortHelper} from "../script/libraries/CurrencySortHelper.sol";
-import {ProxyHook} from "../src/ProxyHook.sol";
-import {CoreHook} from "../src/CoreHook.sol";
 import {LiquidityCommitmentCertificate} from "../src/LCC.sol";
 import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
 import {LiquidityUtils} from "../src/libraries/LiquidityUtils.sol";
 import {console} from "forge-std/console.sol";
-import {HookFlags} from "../src/libraries/HookFlags.sol";
 // inherit from the MarketVaultBase contract which provides shared helper functions
 import {MarketVaultBase} from "./modules/MarketVaultBase.sol";
-import {SwapSimulator} from "../src/libraries/SwapSimulator.sol";
-import {IMarketVault} from "../src/interfaces/IMarketVault.sol";
 import {Errors} from "../src/libraries/Errors.sol";
 import {LiquidityHub} from "../src/LiquidityHub.sol";
 import {MarketTestBase} from "./modules/MarketTestBase.sol";
@@ -694,7 +684,7 @@ contract ProxyHookTest is MarketVaultBase {
         console.log("expectedOutput", expectedOutput);
         uint256 expectedDeficit = expectedOutput > mockAvailableLiquidity ? expectedOutput - mockAvailableLiquidity : 0;
         console.log("expectedDeficit", expectedDeficit);
-        uint256 recipientBalanceBefore = lccOut.balanceOf(recipient);
+        // uint256 recipientBalanceBefore = lccOut.balanceOf(recipient);
 
         _executeSwap(
             proxyPoolKey,
@@ -754,7 +744,7 @@ contract ProxyHookTest is MarketVaultBase {
 
 contract DifferentTokenDecimalsProxyHookTest is MarketTestBase {
     // Make currency A 8 decimal places and currency B 18 decimal places
-    function _deployCurrencies(address hookAddr) internal override {
+    function _deployCurrencies() internal override {
         uint256 mintAmount = 2 ** 255;
         MockERC20 tokenA = new MockERC20("TestA", "A", 8);
         tokenA.mint(address(this), mintAmount);

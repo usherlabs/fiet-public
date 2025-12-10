@@ -3,10 +3,8 @@ pragma solidity ^0.8.20;
 
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {MarketVTSConfiguration} from "../types/VTS.sol";
-import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IOracleHelper} from "./IOracleHelper.sol";
 import {ILiquidityHub} from "./ILiquidityHub.sol";
-import {IVTSOrchestrator} from "./IVTSOrchestrator.sol";
 
 /**
  * @title IMarketFactory

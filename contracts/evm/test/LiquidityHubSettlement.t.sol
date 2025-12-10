@@ -9,7 +9,6 @@ import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
 import {ILCC} from "../src/interfaces/ILCC.sol";
 import {MockERC20} from "./_mocks/MockERC20.sol";
 import {Errors} from "../src/libraries/Errors.sol";
-import {ILCCAdmin} from "../src/libraries/LCCFactoryLib.sol";
 
 /**
  * @title LiquidityHubSettlementTest
@@ -294,7 +293,7 @@ contract LiquidityHubSettlementTest is Test {
 
     /// @notice Tests that different LCC tokens have isolated settlement queues
     function testLccIsolation() public {
-        (address lccToken3, address lccToken4) = _createSecondLCCPair();
+        (address lccToken3,) = _createSecondLCCPair();
 
         // Verify queues are separate
         assertEq(liquidityHub.totalQueued(lccToken1), 0);
@@ -357,11 +356,10 @@ contract LiquidityHubSettlementTest is Test {
             factory, abi.encodeWithSelector(IMarketFactory.bounds.selector, address(liquidityHub)), abi.encode(true)
         );
 
-        (address lccToken3, address lccToken4) = _createSecondLCCPair();
+        (address lccToken3,) = _createSecondLCCPair();
 
         // Wrap some LCC for user1
         uint256 wrapAmount = 100;
-        address underlying = address(underlyingAsset1);
 
         // Wrap underlying to create withLCC balance
         _wrapDirectLCC(user1, lccToken1, wrapAmount);

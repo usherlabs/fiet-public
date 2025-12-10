@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {TransientSlot} from "openzeppelin-contracts/contracts/utils/TransientSlot.sol";
-import {IExttload} from "v4-periphery/lib/v4-core/src/interfaces/IExttload.sol";
 import {PositionId} from "../types/Position.sol";
 
 library TransientSlots {

@@ -11,7 +11,7 @@ import {CurrencyLibrary, Currency} from "@uniswap/v4-core/src/types/Currency.sol
 import {Deployers} from "@uniswap/v4-core/test/utils/Deployers.sol";
 import {Constants} from "@uniswap/v4-core/test/utils/Constants.sol";
 import {IERC20Minimal} from "@uniswap/v4-core/src/interfaces/external/IERC20Minimal.sol";
-import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
+import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 
 import {CurrencySortHelper} from "../../script/libraries/CurrencySortHelper.sol";
 import {CoreHook} from "../../src/CoreHook.sol";
@@ -113,7 +113,7 @@ abstract contract MarketTestBase is Test, Deployers {
         }
     }
 
-    function deployAndApproveLCC(address underlyingAsset, address hookAddr) internal returns (Currency currency) {
+    function deployAndApproveLCC(address underlyingAsset) internal returns (Currency currency) {
         LiquidityCommitmentCertificate token =
             new LiquidityCommitmentCertificate(marketFactory, underlyingAsset, "Test LCC", "TLCC", 18, resilientOracle);
         approveLCCForMarketUse(token);
@@ -128,7 +128,7 @@ abstract contract MarketTestBase is Test, Deployers {
         return deployMintAndApproveCurrency();
     }
 
-    function _deployCurrencies(address hookAddr) internal virtual {
+    function _deployCurrencies() internal virtual {
         Currency _currencyA = _deployCurrencyA();
         Currency _currencyB = _deployCurrencyB();
 
@@ -220,15 +220,20 @@ abstract contract MarketTestBase is Test, Deployers {
         );
 
         IAllowanceTransfer permit2 = IAllowanceTransfer(makeAddr("permit2"));
-        
+
         // Deploy MMPositionActionsImpl first
-        MMPositionActionsImpl actionsImpl = new MMPositionActionsImpl(
-            address(manager), address(marketFactory), address(vtsOrchestrator)
-        );
-        
+        MMPositionActionsImpl actionsImpl =
+            new MMPositionActionsImpl(address(manager), address(marketFactory), address(vtsOrchestrator));
+
         mmPositionManager = address(
             new MMPositionManager(
-                address(manager), address(marketFactory), address(vtsOrchestrator), commitmentDescriptor, weth9, permit2, address(actionsImpl)
+                address(manager),
+                address(marketFactory),
+                address(vtsOrchestrator),
+                commitmentDescriptor,
+                weth9,
+                permit2,
+                address(actionsImpl)
             )
         );
     }
@@ -326,7 +331,7 @@ abstract contract MarketTestBase is Test, Deployers {
     function _setupMarket() internal {
         _deployFreshManagerAndRouters();
         _deployHooks();
-        _deployCurrencies(address(proxyHook));
+        _deployCurrencies();
         _deployCorePool(SQRT_PRICE_1_1);
         _deployProxyPool(SQRT_PRICE_1_1);
         _initContracts();

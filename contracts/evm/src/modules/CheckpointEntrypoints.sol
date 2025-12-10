@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import {PositionId} from "../types/Position.sol";
 import {ImmutableVTSState} from "./ImmutableVTSState.sol";
 import {ICheckpointEntrypoints} from "../interfaces/ICheckpointEntrypoints.sol";
 

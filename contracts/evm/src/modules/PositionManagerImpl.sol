@@ -15,7 +15,6 @@ import {LiquidityAmounts} from "v4-periphery/src/libraries/LiquidityAmounts.sol"
 import {LiquidityUtils} from "../libraries/LiquidityUtils.sol";
 import {ImmutableState} from "v4-periphery/src/base/ImmutableState.sol";
 import {PositionManagerBase} from "./PositionManagerBase.sol";
-import {MMHelpers} from "../libraries/MMHelpers.sol";
 
 /**
  * @title PositionManagerImpl

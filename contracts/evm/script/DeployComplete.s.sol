@@ -1,15 +1,12 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import {Script, console} from "forge-std/Script.sol";
-import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {console} from "forge-std/Script.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
-import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {HookMiner} from "v4-periphery/src/utils/HookMiner.sol";
 import {Ownable} from "openzeppelin-contracts/contracts/access/Ownable.sol";
 
 import {CoreHook} from "../src/CoreHook.sol";
-import {ProxyHook} from "../src/ProxyHook.sol";
 import {MarketFactory} from "../src/MarketFactory.sol";
 import {ScriptHelper} from "./libraries/ScriptHelper.s.sol";
 
@@ -22,10 +19,8 @@ import {MMPositionActionsImpl} from "../src/MMPositionActionsImpl.sol";
 import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
 import {PositionManager} from "v4-periphery/src/PositionManager.sol";
 import {IAllowanceTransfer} from "permit2/src/interfaces/IAllowanceTransfer.sol";
-import {StubSignalVerifier} from "../src/verifiers/StubSignalVerifier.sol";
 import {VRLSignalManager} from "../src/VRLSignalManager.sol";
 import {VRLSettlementObserver} from "../src/VRLSettlementObserver.sol";
-import {StubSettlementVerifier} from "../src/verifiers/StubSettlementVerifier.sol";
 import {OracleHelper} from "../src/OracleHelper.sol";
 import {MMPCommitmentDescriptor} from "../src/MMPCommitmentDescriptor.sol";
 import {LiquidityHub} from "../src/LiquidityHub.sol";
