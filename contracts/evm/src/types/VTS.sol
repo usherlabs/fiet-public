@@ -5,7 +5,6 @@ import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Commit} from "./Commit.sol";
 import {PositionId, Position} from "./Position.sol";
 import {Pool} from "./Pool.sol";
-import {RFSCheckpoint} from "./Checkpoint.sol";
 import {ILiquidityHub} from "../interfaces/ILiquidityHub.sol";
 import {IOracleHelper} from "../interfaces/IOracleHelper.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
@@ -69,8 +68,9 @@ struct PositionAccounting {
     TokenPairUint cumulativeOutflows;
     // Outflow snapshots at last fee snap per token
     TokenPairUint outflowsAtFeeSnap;
-    // Commitment-scoped deficit (insolvency gate) per token
-    TokenPairUint commitmentDeficit;
+    // Cumulative deficit coverage applied to this position
+    // Never needs resetting - derived deficit changes with commit.deficitBps
+    uint256 deficitCoverageApplied;
     // Fees shared by position per token
     TokenPairUint feesShared;
     // Pending fee adjustments per token: +slash (reduces payout), -bonus (increases payout)
@@ -189,10 +189,6 @@ struct VTSStorage {
     mapping(PoolId => mapping(int24 => GrowthPair)) inflowGrowthOutside;
     /// Per-pool per-tick coverage usage growth outside
     mapping(PoolId => mapping(int24 => GrowthPair)) coverageUseGrowthOutside;
-    /// Root-level RFS checkpoints, keyed by a generic bytes32 identifier
-    /// For positions: use PositionId.unwrap(positionId)
-    /// For commits: use keccak256(abi.encodePacked(commitCommitId))
-    mapping(bytes32 => RFSCheckpoint) checkpoints;
     /// Next commit ID for commit NFTs (starts at 1)
     uint256 nextCommitId;
     /// Global pause flag

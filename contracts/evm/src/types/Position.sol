@@ -4,6 +4,7 @@ pragma solidity ^0.8.20;
 import {ModifyLiquidityParams} from "v4-periphery/lib/v4-core/src/types/PoolOperation.sol";
 import {Position as UniPosition} from "v4-periphery/lib/v4-core/src/libraries/Position.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {RFSCheckpoint} from "./Checkpoint.sol";
 
 type PositionId is bytes32;
 
@@ -25,6 +26,8 @@ struct Position {
     bool isActive;
     // Unique salt for position ID generation
     bytes32 salt;
+    // Position-level RFS checkpoint.
+    RFSCheckpoint checkpoint;
 }
 
 /// @notice Seizure-specific data for position seizure operations

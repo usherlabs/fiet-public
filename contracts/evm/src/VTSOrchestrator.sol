@@ -7,8 +7,12 @@ import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {PausableVTS} from "./modules/PausableVTS.sol";
 import {Currency, CurrencyLibrary} from "@uniswap/v4-core/src/types/Currency.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
-import {PositionId} from "./types/Position.sol";
-import {Position} from "./types/Position.sol";
+import {
+    PositionId,
+    Position,
+    PositionModificationHookData,
+    PositionModificationHookDataLib
+} from "./types/Position.sol";
 import {Commit} from "./types/Commit.sol";
 import {Pool} from "./types/Pool.sol";
 import {MarketVTSConfiguration, PositionAccounting, PositionContext} from "./types/VTS.sol";
@@ -52,6 +56,9 @@ contract VTSOrchestrator is ImmutableMarketState, PausableVTS, VTSCurrencyDelta,
     using TransientStateLibrary for IPoolManager;
     using SafeCast for uint256;
     using PoolIdLibrary for PoolKey;
+
+    event Checkpointed(uint256 commitId, uint256 positionIndex, RFSCheckpoint checkpoint);
+    event GracePeriodExtended(uint256 commitId, uint256 positionIndex, uint8 tokenIndex, RFSCheckpoint checkpoint);
 
     /// @notice Central storage pointer (passed to libraries)
     VTSStorage internal s;
@@ -347,12 +354,6 @@ contract VTSOrchestrator is ImmutableMarketState, PausableVTS, VTSCurrencyDelta,
         return (pa.commitmentMax.token0, pa.commitmentMax.token1);
     }
 
-    /// @inheritdoc IVTSOrchestrator
-    function applyCommitmentDeficit(PositionId[] calldata ids, uint256 totalDeficitBps) external {
-        if (msg.sender != mmPositionManager) revert Errors.InvalidSender();
-        VTSCommitLib.applyCommitmentDeficit(s, mmPositionManager, ids, totalDeficitBps);
-    }
-
     // --------------------------------------------------
     // CoreHook VTS Functionality
     // --------------------------------------------------
@@ -456,12 +457,16 @@ contract VTSOrchestrator is ImmutableMarketState, PausableVTS, VTSCurrencyDelta,
             verifierIndex,
             settlementProof
         );
+
+        // Emit event to notify the market maker that the grace period has been extended
+        emit GracePeriodExtended(commitId, positionIndex, settlementTokenIndex, s.positions[positionId].checkpoint);
     }
 
     /**
      * @dev This function is used to settle a position, it is called from the MMPositionManager contract
      * @param marketVault The market vault
-     * @param positionId The position id
+     * @param commitId The commit id
+     * @param positionIndex The position index
      * @param currency0 The currency 0
      * @param currency1 The currency 1
      * @param amountDelta The amount delta
@@ -472,7 +477,8 @@ contract VTSOrchestrator is ImmutableMarketState, PausableVTS, VTSCurrencyDelta,
      */
     function onMMSettle(
         IMarketVault marketVault,
-        PositionId positionId,
+        uint256 commitId,
+        uint256 positionIndex,
         Currency currency0,
         Currency currency1,
         BalanceDelta amountDelta,
@@ -482,9 +488,13 @@ contract VTSOrchestrator is ImmutableMarketState, PausableVTS, VTSCurrencyDelta,
         onlyMMPositionManager
         returns (BalanceDelta settlementDelta, bool rfsOpen, uint256 seizedLiquidityUnits)
     {
-        return VTSPositionLib.onMMSettle(
+        PositionId positionId = getPositionId(commitId, positionIndex);
+
+        (settlementDelta, rfsOpen, seizedLiquidityUnits) = VTSPositionLib.onMMSettle(
             s, poolManager, marketVault, mmPositionManager, positionId, currency0, currency1, amountDelta, isSeizing
         );
+
+        emit Checkpointed(commitId, positionIndex, s.positions[positionId].checkpoint);
     }
 
     /// @notice This function is called by the MMPositionManager to validate the grace period has elapsed
@@ -519,8 +529,9 @@ contract VTSOrchestrator is ImmutableMarketState, PausableVTS, VTSCurrencyDelta,
         external
         onlyMMPositionManager
     {
+        address owner = msg.sender;
         VTSCommitLib.declareCommitmentDeficit(
-            s, sender, address(this), commitId, IVRLSignalManager(signalManager), oracleHelper, liquiditySignal
+            s, sender, owner, commitId, IVRLSignalManager(signalManager), oracleHelper, liquiditySignal
         );
     }
 
@@ -573,12 +584,13 @@ contract VTSOrchestrator is ImmutableMarketState, PausableVTS, VTSCurrencyDelta,
         PositionId positionId = getPositionId(commitId, positionIndex);
         (bool rfsOpen,) = VTSPositionLib.calcRFS(s, poolManager, positionId, false);
         CheckpointLibrary.markCheckpoint(s, positionId, rfsOpen);
+        emit Checkpointed(commitId, positionIndex, s.positions[positionId].checkpoint);
     }
 
     /// @notice Gets the checkpoint for a given position
     /// @param positionId The position ID
     /// @return checkpoint The checkpoint for the position
     function positionToCheckpoint(PositionId positionId) external view returns (RFSCheckpoint memory) {
-        return s.checkpoints[PositionId.unwrap(positionId)];
+        return s.positions[positionId].checkpoint;
     }
 }

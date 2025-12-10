@@ -273,7 +273,13 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, Immutable
         IMarketVault vault = MarketHandlerLib.getVault(marketFactory, poolKey.toId());
 
         (BalanceDelta settlementDelta,, uint256 seizedLiquidityUnits) = vtsOrchestrator.onMMSettle(
-            vault, positionId, poolKey.currency0, poolKey.currency1, toBalanceDelta(amount0, amount1), isSeizing
+            vault,
+            tokenId,
+            positionIndex,
+            poolKey.currency0,
+            poolKey.currency1,
+            toBalanceDelta(amount0, amount1),
+            isSeizing
         );
 
         int128 delta0 = settlementDelta.amount0();

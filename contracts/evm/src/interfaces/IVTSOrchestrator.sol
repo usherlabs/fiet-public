@@ -66,7 +66,6 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta {
     function getPositionSettledAmounts(PositionId positionId) external view returns (uint256 amount0, uint256 amount1);
     function incrementCoverage(PoolId poolId, uint256 amount0, uint256 amount1) external;
     function getCommitment(PositionId positionId) external view returns (uint256 commitment0, uint256 commitment1);
-    function applyCommitmentDeficit(PositionId[] calldata ids, uint256 totalDeficitBps) external;
 
     // CoreHook
     /// @notice Called by CoreHook after add/remove liquidity to update position state and process fees
@@ -111,7 +110,8 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta {
 
     function onMMSettle(
         IMarketVault marketVault,
-        PositionId positionId,
+        uint256 commitId,
+        uint256 positionIndex,
         Currency currency0,
         Currency currency1,
         BalanceDelta amountDelta,

@@ -11,6 +11,7 @@ import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint128.sol";
 import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {RFSCheckpoint} from "../types/Checkpoint.sol";
 
 import {
     VTSStorage,
@@ -61,6 +62,7 @@ library VTSPositionLib {
     // --------------------------------------------------
 
     /// @notice Tracks the maximum potential commitment for both tokens in a position
+    /// @dev Also updates commit-level running totals for O(1) aggregation
     /// @param s The central VTS storage
     /// @param positionId The ascribed id of the position
     /// @param params The parameters of the transaction
@@ -68,6 +70,7 @@ library VTSPositionLib {
         internal
     {
         PositionAccounting storage pa = s.positionAccounting[positionId];
+        Position memory pos = s.positions[positionId];
 
         // Current tracked maxima for this position
         uint256 currentC0 = pa.commitmentMax.token0;
@@ -82,6 +85,14 @@ library VTSPositionLib {
 
             pa.commitmentMax.token0 = currentC0 + addC0;
             pa.commitmentMax.token1 = currentC1 + addC1;
+
+            // Update commit-level running totals
+            if (pos.commitId > 0) {
+                Pool storage pool = s.pools[pos.poolId];
+                Commit storage commit = s.commits[pos.commitId];
+                commit.commitmentMaxTotal[pool.currency0] += addC0;
+                commit.commitmentMaxTotal[pool.currency1] += addC1;
+            }
         } else if (params.liquidityDelta < 0) {
             // Liquidity removed: decrease tracked maxima by the delta's maxima over the tick range
             uint128 liquidityRemoved = uint256(-params.liquidityDelta).toUint128();
@@ -91,6 +102,16 @@ library VTSPositionLib {
             // Clamp at zero to avoid underflow; if fully removed, both become zero
             pa.commitmentMax.token0 = currentC0 > subC0 ? (currentC0 - subC0) : 0;
             pa.commitmentMax.token1 = currentC1 > subC1 ? (currentC1 - subC1) : 0;
+
+            // Update commit-level running totals
+            if (pos.commitId > 0) {
+                Pool storage pool = s.pools[pos.poolId];
+                Commit storage commit = s.commits[pos.commitId];
+                uint256 commitTotal0 = commit.commitmentMaxTotal[pool.currency0];
+                uint256 commitTotal1 = commit.commitmentMaxTotal[pool.currency1];
+                commit.commitmentMaxTotal[pool.currency0] = commitTotal0 > subC0 ? (commitTotal0 - subC0) : 0;
+                commit.commitmentMaxTotal[pool.currency1] = commitTotal1 > subC1 ? (commitTotal1 - subC1) : 0;
+            }
         } else {
             // No-op if liquidityDelta == 0 (poke)
             return;
@@ -102,6 +123,7 @@ library VTSPositionLib {
     // --------------------------------------------------
 
     /// @notice Updates the settlement amount by a delta which could be positive or negative
+    /// @dev Nets against cumulative deficit, then derived commit deficit, then applies to settled
     /// @param s The central VTS storage
     /// @param id The position id
     /// @param tokenIndex The token index (0 or 1)
@@ -121,7 +143,6 @@ library VTSPositionLib {
         uint256 cur = pa.settled.get(tokenIndex);
         uint256 c = pa.commitmentMax.get(tokenIndex);
         uint256 cumulativeDef = pa.cumulativeDeficit.get(tokenIndex);
-        uint256 commitmentDef = pa.commitmentDeficit.get(tokenIndex);
         int256 netSinceLastMod = pa.netSettlementSinceLastMod.get(tokenIndex);
         uint256 poolNetSinceLastMod = paPool.poolNetSinceLastMod.get(tokenIndex);
 
@@ -142,12 +163,36 @@ library VTSPositionLib {
                     delta -= int256(cover);
                 }
             }
-            // Then net against commitment-scoped deficit (insolvency gate)
-            if (delta > 0 && commitmentDef > 0) {
-                uint256 coverCd = uint256(delta) > commitmentDef ? commitmentDef : uint256(delta);
-                if (coverCd > 0) {
-                    commitmentDef -= coverCd;
-                    delta -= int256(coverCd);
+
+            // Net against derived commit deficit (from deficitBps)
+            // This replaces the old commitmentDeficit per-position storage
+            if (delta > 0 && pos.commitId > 0) {
+                Commit storage commit = s.commits[pos.commitId];
+                if (commit.deficitBps > 0) {
+                    // Derive position's deficit share from commit-level deficitBps
+                    uint256 derivedDeficit = FullMath.mulDiv(
+                        pa.commitmentMax.get(tokenIndex), commit.deficitBps, LiquidityUtils.BPS_DENOMINATOR
+                    );
+
+                    // Calculate remaining uncovered deficit for this position
+                    uint256 priorCoverage = pa.deficitCoverageApplied; // TODO: this value never decrements.
+                    uint256 remainingDeficit = derivedDeficit > priorCoverage ? derivedDeficit - priorCoverage : 0;
+
+                    // Cap coverage at remaining deficit
+                    if (remainingDeficit > 0) {
+                        uint256 coverNow = uint256(delta) > remainingDeficit ? remainingDeficit : uint256(delta);
+
+                        // Update position-level coverage (cumulative, never reset)
+                        pa.deficitCoverageApplied += coverNow;
+
+                        // Update commit-level total coverage (for O(1) "fully covered" check)
+                        // TODO: Wonder if this should take the form of bps - to check against deficitBps in isSeizable.
+                        // Or maybe once deficitBps is fully covered, we reset values to 0.
+                        commit.totalDeficitCoverageApplied += coverNow;
+
+                        // Consume from settlement delta
+                        delta -= int256(coverNow);
+                    }
                 }
             }
 
@@ -170,7 +215,6 @@ library VTSPositionLib {
         // Write back updated settlement and accounting fields based on token index
         pa.settled.set(tokenIndex, next);
         pa.cumulativeDeficit.set(tokenIndex, cumulativeDef);
-        pa.commitmentDeficit.set(tokenIndex, commitmentDef);
 
         applied = next.toInt256() - cur.toInt256(); // output delta
 
@@ -561,7 +605,10 @@ library VTSPositionLib {
             tickUpper: params.tickUpper,
             liquidity: SafeCast.toUint128(uint256(params.liquidityDelta)),
             isActive: true,
-            salt: params.salt
+            salt: params.salt,
+            checkpoint: RFSCheckpoint({
+                timeOfLastTransition: 0, isOpen: false, gracePeriodExtension0: 0, gracePeriodExtension1: 0
+            })
         });
     }
 
@@ -711,13 +758,13 @@ library VTSPositionLib {
         if (isNewPosition) {
             // NEW POSITION: initialize the liquidity to the liquidity delta
             _registerPosition(s, owner, poolId, params);
-            _initPositionSnapshots(s, ctx.poolManager, id);
-            _trackCommitment(s, id, params);
-
             // Link position to commit for MM positions
             if (isMMPosition && mmData.commitId > 0) {
                 _linkPositionToCommit(s, id, mmData.commitId);
             }
+
+            _initPositionSnapshots(s, ctx.poolManager, id);
+            _trackCommitment(s, id, params);
 
             // get the commitment maxima for the position
             TokenPairUint memory commitmentMaxima = s.positionAccounting[id].commitmentMax;
@@ -1044,16 +1091,17 @@ library VTSPositionLib {
         uint256 req1 = base1 > defReq1 ? base1 : defReq1;
 
         // Inflate by commitment-scoped deficit (insolvency gate), clamp by commitment
-        uint256 cd0 = pa.commitmentDeficit.token0;
-        uint256 cd1 = pa.commitmentDeficit.token1;
-        if (cd0 > 0) {
-            uint256 add0 = req0 + cd0;
-            req0 = add0 > c0 ? c0 : add0;
-        }
-        if (cd1 > 0) {
-            uint256 add1 = req1 + cd1;
-            req1 = add1 > c1 ? c1 : add1;
-        }
+        // TODO: Update to use postion-derived deficit - coverage.
+        // uint256 cd0 = pa.commitmentDeficit.token0;
+        // uint256 cd1 = pa.commitmentDeficit.token1;
+        // if (cd0 > 0) {
+        //     uint256 add0 = req0 + cd0;
+        //     req0 = add0 > c0 ? c0 : add0;
+        // }
+        // if (cd1 > 0) {
+        //     uint256 add1 = req1 + cd1;
+        //     req1 = add1 > c1 ? c1 : add1;
+        // }
 
         int128 amount0 = _rfsDeltaRaw(s0, req0);
         int128 amount1 = _rfsDeltaRaw(s1, req1);
