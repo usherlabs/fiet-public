@@ -20,13 +20,16 @@ library LiquidityHubLib {
     using CurrencyTransfer for Currency;
 
     // ============ ADAPTER FUNCTIONS ============
-    // These reuse LCCFactoryLib functions - no callbacks needed!
-    // Functions that don't need storage can call LCCFactoryLib directly
-    // Functions that need storage access fields directly (same layout as LCCFactoryState)
 
-    /// @dev Adapter to validate LCC - accesses fields directly since layout matches
+    /**
+     * @notice Validates that an address is a valid LCC token
+     * @dev Adapter function that accesses storage fields directly to validate LCC.
+     *      Checks that the LCC has a valid market ID, market ref, and factory address.
+     * @param s The liquidity hub storage
+     * @param lcc The LCC token address to validate
+     * @custom:reverts InvalidLcc if the address is not a valid LCC token
+     */
     function assertValidLcc(LiquidityHubStorage storage s, address lcc) internal view {
-        // Access fields directly - same layout as LCCFactoryState
         if (
             s.lccToMarket[lcc].id == bytes32(0) || s.lccToMarket[lcc].ref.length == 0
                 || s.lccToMarket[lcc].factory == address(0)
@@ -35,12 +38,27 @@ library LiquidityHubLib {
         }
     }
 
-    /// @dev Reuse LCCFactoryLib.balanceOf (no storage needed, just calls ILCC)
+    /**
+     * @notice Gets the total balance (wrapped + market-derived) of an account for an LCC token
+     * @dev Adapter function that delegates to LCCFactoryLib.balanceOf.
+     *      No storage access needed as it directly calls the ILCC interface.
+     * @param lccToken The LCC token address
+     * @param account The account address
+     * @return The total balance
+     */
     function balanceOf(address lccToken, address account) internal view returns (uint256) {
         return LCCFactoryLib.balanceOf(lccToken, account);
     }
 
-    /// @dev Reuse LCCFactoryLib.balancesOf (no storage needed, just calls ILCC)
+    /**
+     * @notice Gets the bucketed balances (wrapped and market-derived) of an account for an LCC token
+     * @dev Adapter function that delegates to LCCFactoryLib.balancesOf.
+     *      No storage access needed as it directly calls the ILCC interface.
+     * @param lccToken The LCC token address
+     * @param account The account address
+     * @return wrapped The wrapped (direct) balance
+     * @return marketDerived The market-derived balance
+     */
     function balancesOf(address lccToken, address account)
         internal
         view
@@ -49,15 +67,35 @@ library LiquidityHubLib {
         return LCCFactoryLib.balancesOf(lccToken, account);
     }
 
-    /// @dev Reuse LCCFactoryLib.mint (no storage needed, just calls ILCCAdmin)
+    /**
+     * @notice Mints LCC tokens to an address
+     * @dev Adapter function that delegates to LCCFactoryLib.mint.
+     *      No storage access needed as it directly calls the ILCCAdmin interface.
+     * @param lccToken The LCC token address
+     * @param to The address to mint tokens to
+     * @param directAmount The amount to mint as direct supply
+     * @param marketAmount The amount to mint as market-derived supply
+     * @param issued Whether this is an issuer-initiated mint
+     */
     function mint(address lccToken, address to, uint256 directAmount, uint256 marketAmount, bool issued) internal {
         LCCFactoryLib.mint(lccToken, to, directAmount, marketAmount, issued);
     }
 
-    /// @dev Reuse LCCFactoryLib.burn (no storage needed, just calls ILCCAdmin)
+    /**
+     * @notice Burns LCC tokens from an address
+     * @dev Adapter function that delegates to LCCFactoryLib.burn.
+     *      No storage access needed as it directly calls the ILCCAdmin interface.
+     * @param lccToken The LCC token address
+     * @param from The address to burn tokens from
+     * @param directAmount The amount to burn from direct supply
+     * @param marketAmount The amount to burn from market-derived supply
+     * @param issued Whether this is an issuer-initiated burn
+     */
     function burn(address lccToken, address from, uint256 directAmount, uint256 marketAmount, bool issued) internal {
         LCCFactoryLib.burn(lccToken, from, directAmount, marketAmount, issued);
     }
+
+    // ============ CORE LOGIC FUNCTIONS ============
 
     /// @notice Wrap LCC using another LCC as backing, with O(1) flattening and netting
     /// @dev Strategy:
@@ -234,15 +272,20 @@ library LiquidityHubLib {
         mint(lcc, to, directToMint, marketToMint, false);
     }
 
-    /// @notice Core unwrap logic without external transfer
-    /// @param s The liquidity hub state
-    /// @param lcc The LCC token address
-    /// @param to The recipient of the underlying asset
-    /// @param amount The amount to unwrap
-    /// @param wrappedBalance The wrapped balance of the account
-    /// @param marketDerivedBalance The market-derived balance of the account
-    /// @return directUnwrapped The amount unwrapped from direct supply
-    /// @return marketUnwrapped The amount unwrapped from market liquidity
+    /**
+     * @notice Core unwrap logic without external transfer
+     * @dev Handles the unwrapping of LCC tokens by consuming direct supply first, then market liquidity.
+     *      Any shortfall is queued for settlement. This function does not transfer underlying assets;
+     *      that is handled by the calling contract.
+     * @param s The liquidity hub storage
+     * @param lcc The LCC token address
+     * @param to The recipient of the underlying asset (used for queueing shortfall)
+     * @param amount The amount to unwrap
+     * @param wrappedBalance The wrapped balance of the account
+     * @param marketDerivedBalance The market-derived balance of the account
+     * @return directUnwrapped The amount unwrapped from direct supply
+     * @return marketUnwrapped The amount unwrapped from market liquidity
+     */
     function unwrapInternalLogic(
         LiquidityHubStorage storage s,
         address lcc,
@@ -279,21 +322,30 @@ library LiquidityHubLib {
         }
     }
 
-    /// @notice Use market liquidity
-    /// @param s The liquidity hub state
-    /// @param lcc The LCC token address
-    /// @param amount The amount to use
-    /// @return The amount used
+    /**
+     * @notice Uses market liquidity to unwrap LCC tokens
+     * @dev Calls the MarketFactory to use market liquidity for unwrapping.
+     *      This pulls liquidity from the market pool and increases reserves via confirmTake callbacks.
+     * @param s The liquidity hub storage
+     * @param lcc The LCC token address
+     * @param amount The amount of market liquidity to use
+     * @return The actual amount of market liquidity used (may be less than requested)
+     */
     function useMarketLiquidity(LiquidityHubStorage storage s, address lcc, uint256 amount) internal returns (uint256) {
         Market memory market = s.lccToMarket[lcc];
         return IMarketFactory(market.factory).useMarketLiquidity(s.lccToUnderlying[lcc], market.id, amount);
     }
 
-    /// @notice Queue a settlement
-    /// @param s The liquidity hub state
-    /// @param lcc The LCC token address
-    /// @param recipient The recipient address
-    /// @param amount The amount to queue
+    /**
+     * @notice Queues a settlement request for later processing
+     * @dev Adds a settlement amount to the queue for a specific recipient.
+     *      The settlement will be processed when liquidity becomes available.
+     *      Note: Events are emitted by the calling contract, not this library.
+     * @param s The liquidity hub storage
+     * @param lcc The LCC token address
+     * @param recipient The recipient address for the settlement
+     * @param amount The amount to queue for settlement
+     */
     function queueSettlement(LiquidityHubStorage storage s, address lcc, address recipient, uint256 amount) internal {
         s.settleQueue[lcc][recipient] += amount;
         s.totalQueued[lcc] += amount;

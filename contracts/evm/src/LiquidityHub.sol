@@ -44,6 +44,13 @@ contract LiquidityHub is Ownable, ReentrancyGuardTransient {
     // Map of market factories
     mapping(address => bool) public isFactory;
 
+    /**
+     * @notice Constructs the LiquidityHub contract
+     * @param _oracleHelper The oracle helper contract address
+     * @param _nativeAssetName The name of the native asset (e.g., "Ether")
+     * @param _nativeAssetSymbol The symbol of the native asset (e.g., "ETH")
+     * @param _nativeAssetDecimals The decimals of the native asset (typically 18)
+     */
     constructor(
         address _oracleHelper,
         string memory _nativeAssetName,
@@ -54,6 +61,9 @@ contract LiquidityHub is Ownable, ReentrancyGuardTransient {
         LCCFactoryLib.initNativeAsset(s, _nativeAssetName, _nativeAssetSymbol, _nativeAssetDecimals);
     }
 
+    /**
+     * @notice Modifier to restrict access to registered factory contracts only
+     */
     modifier onlyFactory() {
         if (!isFactory[_msgSender()]) {
             revert Errors.InvalidSender();
@@ -61,6 +71,9 @@ contract LiquidityHub is Ownable, ReentrancyGuardTransient {
         _;
     }
 
+    /**
+     * @notice Modifier to restrict access to registered factory contracts or the owner
+     */
     modifier onlyFactoryOrOwner() {
         if (!isFactory[_msgSender()] && _msgSender() != owner()) {
             revert Errors.InvalidSender();
@@ -68,11 +81,19 @@ contract LiquidityHub is Ownable, ReentrancyGuardTransient {
         _;
     }
 
+    /**
+     * @notice Modifier to ensure the provided LCC address is valid
+     * @param lcc The LCC token address to validate
+     */
     modifier onlyValidLcc(address lcc) {
         LiquidityHubLib.assertValidLcc(s, lcc);
         _;
     }
 
+    /**
+     * @notice Modifier to restrict access to issuers of a specific LCC token
+     * @param lcc The LCC token address to check issuer status for
+     */
     modifier onlyIssuer(address lcc) {
         if (!LCCFactoryLib.isCallerIssuer(s, lcc, msg.sender)) {
             revert Errors.NotApproved(msg.sender);
@@ -82,46 +103,105 @@ contract LiquidityHub is Ownable, ReentrancyGuardTransient {
 
     // ============ PUBLIC ACCESSORS ============
 
+    /**
+     * @notice Returns the LCC token address for a given market and underlying asset
+     * @param marketId The market ID
+     * @param underlying The underlying asset address
+     * @return The LCC token address, or address(0) if not found
+     */
     function marketUnderlyingToLCC(bytes32 marketId, address underlying) external view returns (address) {
         return s.marketUnderlyingToLCC[marketId][underlying];
     }
 
+    /**
+     * @notice Returns the underlying asset address for a given LCC token
+     * @param lcc The LCC token address
+     * @return The underlying asset address (address(0) for native ETH)
+     */
     function lccToUnderlying(address lcc) public view returns (address) {
         return s.lccToUnderlying[lcc];
     }
 
+    /**
+     * @notice Returns the Market struct for a given LCC token
+     * @param lcc The LCC token address
+     * @return The Market struct containing factory, id, ref, and refIsValidIssuer
+     */
     function lccToMarket(address lcc) external view returns (Market memory) {
         return s.lccToMarket[lcc];
     }
 
+    /**
+     * @notice Checks if an address is an issuer for a given LCC token
+     * @param lcc The LCC token address
+     * @param issuer The address to check
+     * @return True if the address is an issuer, false otherwise
+     */
     function issuers(address lcc, address issuer) external view returns (bool) {
         return s.issuers[lcc][issuer];
     }
 
+    /**
+     * @notice Gets the LCC token address for a given market and underlying asset
+     * @param marketId The market ID
+     * @param underlying The underlying asset address
+     * @return The LCC token address
+     */
     function getLCC(bytes32 marketId, address underlying) external view returns (address) {
         return LCCFactoryLib.getLCC(s, marketId, underlying);
     }
 
+    /**
+     * @notice Gets the underlying asset address for a given LCC token
+     * @param lccToken The LCC token address
+     * @return The underlying asset address
+     */
     function getUnderlying(address lccToken) external view returns (address) {
         return LCCFactoryLib.getUnderlying(s, lccToken);
     }
 
+    /**
+     * @notice Checks if an address is a valid LCC token
+     * @param lcc The address to check
+     * @return True if the address is a valid LCC token, false otherwise
+     */
     function isLCC(address lcc) external view returns (bool) {
         return LCCFactoryLib.isValidLcc(s, lcc);
     }
 
+    /**
+     * @notice Returns the direct supply (wrapped underlying) for a given LCC token
+     * @param lcc The LCC token address
+     * @return The amount of direct supply
+     */
     function directSupply(address lcc) external view returns (uint256) {
         return s.directSupply[lcc];
     }
 
-    function reserveOfUnderlying(address underlying) external view returns (uint256) {
-        return s.reserveOfUnderlying[underlying];
+    /**
+     * @notice Returns the shared reserve of underlying assets for a given LCC token
+     * @param lcc The LCC token address
+     * @return The amount of underlying assets held in reserve for this LCC
+     */
+    function sharedReserveOf(address lcc) external view onlyValidLcc(lcc) returns (uint256) {
+        return s.reserveOfUnderlying[s.lccToUnderlying[lcc]];
     }
 
+    /**
+     * @notice Returns the queued settlement amount for a specific LCC and recipient
+     * @param lcc The LCC token address
+     * @param recipient The recipient address
+     * @return The amount queued for settlement
+     */
     function settleQueue(address lcc, address recipient) external view returns (uint256) {
         return s.settleQueue[lcc][recipient];
     }
 
+    /**
+     * @notice Returns the total queued settlement amount for a given LCC token
+     * @param lcc The LCC token address
+     * @return The total amount queued across all recipients
+     */
     function totalQueued(address lcc) external view returns (uint256) {
         return s.totalQueued[lcc];
     }
@@ -186,30 +266,73 @@ contract LiquidityHub is Ownable, ReentrancyGuardTransient {
 
     // ============ INTERNAL HELPERS (delegate to library) ============
 
+    /**
+     * @notice Checks if the current caller is an issuer for a given LCC token
+     * @param lcc The LCC token address
+     * @return True if the caller is an issuer, false otherwise
+     */
     function _isCallerIssuer(address lcc) internal view returns (bool) {
         return LCCFactoryLib.isCallerIssuer(s, lcc, msg.sender);
     }
 
+    /**
+     * @notice Checks if an address is a valid LCC token
+     * @param lcc The address to check
+     * @return True if the address is a valid LCC token, false otherwise
+     */
     function _isValidLcc(address lcc) internal view returns (bool) {
         return LCCFactoryLib.isValidLcc(s, lcc);
     }
 
+    /**
+     * @notice Asserts that an address is a valid LCC token, reverting if not
+     * @param lcc The LCC token address to validate
+     */
     function _assertValidLcc(address lcc) internal view {
         LiquidityHubLib.assertValidLcc(s, lcc);
     }
 
+    /**
+     * @notice Mints LCC tokens to an address
+     * @param lccToken The LCC token address
+     * @param to The address to mint tokens to
+     * @param directAmount The amount to mint as direct supply
+     * @param marketAmount The amount to mint as market-derived supply
+     * @param issued Whether this is an issuer-initiated mint
+     */
     function _mint(address lccToken, address to, uint256 directAmount, uint256 marketAmount, bool issued) internal {
         LCCFactoryLib.mint(lccToken, to, directAmount, marketAmount, issued);
     }
 
+    /**
+     * @notice Burns LCC tokens from an address
+     * @param lccToken The LCC token address
+     * @param from The address to burn tokens from
+     * @param directAmount The amount to burn from direct supply
+     * @param marketAmount The amount to burn from market-derived supply
+     * @param issued Whether this is an issuer-initiated burn
+     */
     function _burn(address lccToken, address from, uint256 directAmount, uint256 marketAmount, bool issued) internal {
         LCCFactoryLib.burn(lccToken, from, directAmount, marketAmount, issued);
     }
 
+    /**
+     * @notice Gets the total balance (wrapped + market-derived) of an account for an LCC token
+     * @param lccToken The LCC token address
+     * @param account The account address
+     * @return The total balance
+     */
     function _balanceOf(address lccToken, address account) internal view returns (uint256) {
         return LCCFactoryLib.balanceOf(lccToken, account);
     }
 
+    /**
+     * @notice Gets the bucketed balances (wrapped and market-derived) of an account for an LCC token
+     * @param lccToken The LCC token address
+     * @param account The account address
+     * @return wrapped The wrapped (direct) balance
+     * @return marketDerived The market-derived balance
+     */
     function _balancesOf(address lccToken, address account)
         internal
         view
@@ -254,21 +377,44 @@ contract LiquidityHub is Ownable, ReentrancyGuardTransient {
         _wrap(lcc, _msgSender(), to, amount);
     }
 
+    /**
+     * @notice Wraps underlying assets into LCC tokens and sends them to a specified recipient
+     * @param underlying The underlying asset address
+     * @param marketId The market ID
+     * @param to The recipient address
+     * @param amount The amount of underlying assets to wrap
+     */
     function wrapTo(address underlying, bytes32 marketId, address to, uint256 amount) external payable nonReentrant {
         _wrap(s.marketUnderlyingToLCC[marketId][underlying], _msgSender(), to, amount);
     }
 
+    /**
+     * @notice Wraps underlying assets into LCC tokens for the caller
+     * @param lcc The LCC token address
+     * @param amount The amount of underlying assets to wrap
+     */
     function wrap(address lcc, uint256 amount) external payable nonReentrant {
         _wrap(lcc, _msgSender(), _msgSender(), amount);
     }
 
+    /**
+     * @notice Wraps underlying assets into LCC tokens for the caller (overloaded with underlying and marketId)
+     * @param underlying The underlying asset address
+     * @param marketId The market ID
+     * @param amount The amount of underlying assets to wrap
+     */
     function wrap(address underlying, bytes32 marketId, uint256 amount) external payable nonReentrant {
         _wrap(s.marketUnderlyingToLCC[marketId][underlying], _msgSender(), _msgSender(), amount);
     }
 
     /**
-     * @notice Wrap LCC using another LCC as backing, with O(1) flattening and netting
+     * @notice Internal function to wrap LCC using another LCC as backing, with O(1) flattening and netting
      * @dev Delegates to LiquidityHubLib.wrapWithLogic - heavy logic moved to library
+     * @param lcc The target LCC token address
+     * @param withLCC The backing LCC token address
+     * @param from The address providing the backing LCC
+     * @param to The address receiving the target LCC
+     * @param amount The amount to wrap
      */
     function _wrapWith(address lcc, address withLCC, address from, address to, uint256 amount)
         internal
@@ -278,10 +424,23 @@ contract LiquidityHub is Ownable, ReentrancyGuardTransient {
         emit LccWrappedWith(lcc, withLCC, from, to, amount);
     }
 
+    /**
+     * @notice Wraps LCC using another LCC as backing for the caller
+     * @param lcc The target LCC token address
+     * @param withLCC The backing LCC token address
+     * @param amount The amount to wrap
+     */
     function wrapWith(address lcc, address withLCC, uint256 amount) external nonReentrant {
         _wrapWith(lcc, withLCC, _msgSender(), _msgSender(), amount);
     }
 
+    /**
+     * @notice Wraps LCC using another LCC as backing and sends to a specified recipient
+     * @param lcc The target LCC token address
+     * @param withLCC The backing LCC token address
+     * @param to The recipient address
+     * @param amount The amount to wrap
+     */
     function wrapWithTo(address lcc, address withLCC, address to, uint256 amount) external nonReentrant {
         _wrapWith(lcc, withLCC, _msgSender(), to, amount);
     }
@@ -323,14 +482,33 @@ contract LiquidityHub is Ownable, ReentrancyGuardTransient {
         _unwrap(lcc, _msgSender(), _msgSender(), amount);
     }
 
+    /**
+     * @notice Unwraps LCC tokens back to underlying assets for the caller (overloaded with underlying and marketId)
+     * @param underlying The underlying asset address
+     * @param marketId The market ID
+     * @param amount The amount of LCC tokens to unwrap
+     */
     function unwrap(address underlying, bytes32 marketId, uint256 amount) external nonReentrant {
         _unwrap(s.marketUnderlyingToLCC[marketId][underlying], _msgSender(), _msgSender(), amount);
     }
 
+    /**
+     * @notice Unwraps LCC tokens back to underlying assets and sends them to a specified recipient
+     * @param lcc The LCC token address to unwrap
+     * @param to The recipient address
+     * @param amount The amount of LCC tokens to unwrap
+     */
     function unwrapTo(address lcc, address to, uint256 amount) external nonReentrant {
         _unwrap(lcc, _msgSender(), to, amount);
     }
 
+    /**
+     * @notice Unwraps LCC tokens back to underlying assets and sends them to a specified recipient (overloaded)
+     * @param underlying The underlying asset address
+     * @param marketId The market ID
+     * @param to The recipient address
+     * @param amount The amount of LCC tokens to unwrap
+     */
     function unwrapTo(address underlying, bytes32 marketId, address to, uint256 amount) external nonReentrant {
         _unwrap(s.marketUnderlyingToLCC[marketId][underlying], _msgSender(), to, amount);
     }
@@ -477,6 +655,13 @@ contract LiquidityHub is Ownable, ReentrancyGuardTransient {
         _processSettlementFor(lcc, recipient, maxAmount);
     }
 
+    /**
+     * @notice Internal function to process settlement for a specific recipient
+     * @dev Delegates to LiquidityHubLib.processSettlementLogic
+     * @param lcc The LCC token address
+     * @param recipient The recipient address to settle for
+     * @param maxAmount The maximum amount to settle
+     */
     function _processSettlementFor(address lcc, address recipient, uint256 maxAmount) internal {
         LiquidityHubLib.processSettlementLogic(s, lcc, recipient, maxAmount, msg.sender);
     }
@@ -545,17 +730,6 @@ contract LiquidityHub is Ownable, ReentrancyGuardTransient {
         emit SettlementQueued(lcc, recipient, amount);
     }
 
-    // ============ VIEW FUNCTIONS ============
-
-    /**
-     * @notice Returns the shared reserve of underlying assets for a given LCC token
-     * @param lcc The LCC token address
-     * @return The amount of underlying assets held in reserve for this LCC
-     */
-    function sharedReserveOf(address lcc) external view onlyValidLcc(lcc) returns (uint256) {
-        return s.reserveOfUnderlying[s.lccToUnderlying[lcc]];
-    }
-
     // ============ INTERNAL FUNCTIONS ============
 
     /**
@@ -573,9 +747,12 @@ contract LiquidityHub is Ownable, ReentrancyGuardTransient {
         }
     }
 
-    // Best practice: be explicit about intent
-    // Plain transactions are performed by the market vault in native asset routes.
-    // ie. Only be executed if the msg.sender is the market vault in route: PM -> MV -> LH
+    /**
+     * @notice Receives native ETH transfers from MarketVault contracts
+     * @dev Only accepts transfers from valid MarketVault contracts with at least one native ETH LCC.
+     *      This enables the route: PoolManager -> MarketVault -> LiquidityHub for native asset settlements.
+     *      Reverts if the sender is not a valid MarketVault or if neither LCC uses native ETH as underlying.
+     */
     receive() external payable {
         // plain ETH transfer must come from a market vault.
         _assertValidEthSender();
