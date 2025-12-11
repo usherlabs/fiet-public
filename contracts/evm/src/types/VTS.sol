@@ -71,8 +71,6 @@ struct PositionAccounting {
     TokenPairUint outflowsAtFeeSnap;
     // Commitment-scoped deficit (insolvency gate) per token
     TokenPairUint commitmentDeficit;
-    // Cumulative deficit coverage applied to this position
-    uint256 deficitCoverageApplied;
     // Fees shared by position per token
     TokenPairUint feesShared;
     // Pending fee adjustments per token: +slash (reduces payout), -bonus (increases payout)

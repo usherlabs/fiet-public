@@ -119,7 +119,7 @@ library CheckpointLibrary {
         TokenConfiguration memory tokenConfiguration =
             settlementTokenIndex == 0 ? vtsConfiguration.token0 : vtsConfiguration.token1;
         // extend the grace period for the position using the `CheckpointLibrary` type
-        s.checkpoints[PositionId.unwrap(positionId)].extendGracePeriod(tokenConfiguration, settlementTokenIndex);
+        s.positions[positionId].checkpoint.extendGracePeriod(tokenConfiguration, settlementTokenIndex);
     }
 
     /**
@@ -130,6 +130,6 @@ library CheckpointLibrary {
      * @param isOpen Whether the checkpoint should be marked as open (true) or closed (false)
      */
     function markCheckpoint(VTSStorage storage s, PositionId positionId, bool isOpen) internal {
-        s.checkpoints[PositionId.unwrap(positionId)].mark(isOpen);
+        s.positions[positionId].checkpoint.mark(isOpen);
     }
 }
