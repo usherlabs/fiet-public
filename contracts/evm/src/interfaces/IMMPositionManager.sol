@@ -40,9 +40,8 @@ interface IMMPositionManager {
     /// @return state the MarketMaker.State associated with the commitment
     /// @return expiresAt the expiry timestamp of the commitment
     /// @return positionCount the number of positions associated with the commitment
-    /// @return deficitBps the deficit basis points associated with the commitment
     function commitOf(uint256 tokenId)
         external
         view
-        returns (MarketMaker.State memory state, uint256 expiresAt, uint256 positionCount, uint256 deficitBps);
+        returns (MarketMaker.State memory state, uint256 expiresAt, uint256 positionCount);
 }
