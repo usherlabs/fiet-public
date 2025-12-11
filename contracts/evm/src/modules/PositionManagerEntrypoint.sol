@@ -86,6 +86,10 @@ abstract contract PositionManagerEntrypoint is PositionManagerBase {
         vtsOrchestrator.syncFor(currency, msgSender());
     }
 
+    // ------------------------------------------------------------------------------------------------
+    // MM Utility Helpers
+    // ------------------------------------------------------------------------------------------------
+
     /// @notice Checks if a currency is an LCC token
     /// @param currency The currency to check
     /// @return True if the currency is a valid LCC token

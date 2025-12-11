@@ -84,12 +84,12 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         // mock the price oracles to return prices
         vm.mockCall(
             address(oracleHelper),
-            abi.encodeWithSelector(IOracleHelper.getPricesForLCCPair.selector),
+            abi.encodeWithSelector(IOracleHelper.getPricesForLccPair.selector),
             abi.encode(uint256(1), uint256(1))
         );
         // supply enough
         vm.mockCall(
-            address(oracleHelper), abi.encodeWithSelector(IOracleHelper.getTotalUsdValue.selector), abi.encode(1e18)
+            address(oracleHelper), abi.encodeWithSelector(IOracleHelper.getTotalValue.selector), abi.encode(1e18)
         );
     }
 
@@ -1045,7 +1045,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         // need to inflate the value of issuedusd to be greater than the signalusd by 20%
         vm.mockCall(
             address(oracleHelper),
-            abi.encodeWithSelector(IOracleHelper.getPricesForLCCPair.selector),
+            abi.encodeWithSelector(IOracleHelper.getPricesForLccPair.selector),
             abi.encode(50000000000, 50000000000)
         );
 

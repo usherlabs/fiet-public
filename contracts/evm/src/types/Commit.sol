@@ -31,12 +31,4 @@ struct Commit {
     mapping(uint256 => PositionId) positions;
     /// Count of positions (for management)
     uint256 positionCount;
-    /// Running total of settled liquidity per currency for this commit
-    mapping(Currency => uint256) settled;
-    /// Running total of commitment maxima per currency for this commit
-    mapping(Currency => uint256) commitmentMaxTotal;
-    /// Deficit basis points (if applicable) - also serves as seizability gate (> 0 means seizable)
-    uint256 deficitBps;
-    /// Total deficit coverage applied across all positions (for O(1) "fully covered" check)
-    uint256 totalDeficitCoverageApplied;
 }

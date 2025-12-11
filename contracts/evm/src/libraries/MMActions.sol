@@ -51,8 +51,8 @@ library MMActions {
     /// @notice Decommit a signal and burn the commitment NFT
     uint256 internal constant DECOMMIT_SIGNAL = 0x22;
 
-    /// @notice Declare a commitment as unbacked (third-party guarantor action)
-    uint256 internal constant DECLARE_UNBACKED_COMMITMENT = 0x23;
+    /// @notice Checkpoint a position (optionally run commitment backing check)
+    uint256 internal constant CHECKPOINT = 0x23;
 
     /// @notice Extend grace period for a commitment via proof
     uint256 internal constant EXTEND_GRACE_PERIOD = 0x24;

@@ -60,7 +60,7 @@ contract OracleHelperTest is Test {
         assertEq(price, MOCK_ETH_PRICE);
     }
 
-    function test_canGetTotalUsdValue() public {
+    function test_cangetTotalValue() public {
         // register the address of the asset with the ticker
         oracleHelper.registerTicker(TICKER, ASSET);
 
@@ -71,18 +71,18 @@ contract OracleHelperTest is Test {
         amounts[0] = 2;
 
         // get the total USD value of the assets which should be 2 * eth price
-        uint256 totalUsdValue = oracleHelper.getTotalUsdValue(tickers, amounts);
+        uint256 totalUsdValue = oracleHelper.getTotalValue(tickers, amounts);
         assertEq(totalUsdValue, 2 * MOCK_ETH_PRICE);
     }
 
     function test_canGetPricesForLCCPair() public view {
-        (uint256 price0, uint256 price1) = oracleHelper.getPricesForLCCPair(LCC0, LCC1);
+        (uint256 price0, uint256 price1) = oracleHelper.getPricesForLccPair(LCC0, LCC1);
         assertEq(price0, MOCK_ETH_PRICE);
         assertEq(price1, MOCK_ETH_PRICE);
     }
 
     function test_canGetPricesForLCCPairAndCalculateUSDValue() public view {
-        (uint256 price0, uint256 price1) = oracleHelper.getPricesForLCCPair(LCC0, LCC1);
+        (uint256 price0, uint256 price1) = oracleHelper.getPricesForLccPair(LCC0, LCC1);
         uint256 totalUsdValue = (price0 * 2) + (price1 * 2);
         assertEq(totalUsdValue, 4 * MOCK_ETH_PRICE);
     }

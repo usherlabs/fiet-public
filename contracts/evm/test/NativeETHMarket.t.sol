@@ -81,11 +81,11 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
         // mock the oracle helper to return prices
         vm.mockCall(
             address(oracleHelper),
-            abi.encodeWithSelector(IOracleHelper.getPricesForLCCPair.selector),
+            abi.encodeWithSelector(IOracleHelper.getPricesForLccPair.selector),
             abi.encode(uint256(1), uint256(1))
         );
         vm.mockCall(
-            address(oracleHelper), abi.encodeWithSelector(IOracleHelper.getTotalUsdValue.selector), abi.encode(1e18)
+            address(oracleHelper), abi.encodeWithSelector(IOracleHelper.getTotalValue.selector), abi.encode(1e18)
         );
 
         console.log("lcc0", address(lcc0));

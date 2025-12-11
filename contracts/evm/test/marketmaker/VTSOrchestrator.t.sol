@@ -81,12 +81,12 @@ pragma solidity ^0.8.0;
 //         // mock the price oracles to return prices
 //         vm.mockCall(
 //             address(oracleHelper),
-//             abi.encodeWithSelector(IOracleHelper.getPricesForLCCPair.selector),
+//             abi.encodeWithSelector(IOracleHelper.getPricesForLccPair.selector),
 //             abi.encode(uint256(1), uint256(1))
 //         );
 //         // supply enough
 //         vm.mockCall(
-//             address(oracleHelper), abi.encodeWithSelector(IOracleHelper.getTotalUsdValue.selector), abi.encode(1e18)
+//             address(oracleHelper), abi.encodeWithSelector(IOracleHelper.getTotalValue.selector), abi.encode(1e18)
 //         );
 //     }
 

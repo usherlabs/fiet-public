@@ -8,38 +8,28 @@ import {ICheckpointEntrypoints} from "../interfaces/ICheckpointEntrypoints.sol";
 /// @notice Abstract module providing checkpoint entrypoint functions
 /// @dev Inherits ImmutableVTSState to access vtsOrchestrator for checkpoint operations
 abstract contract CheckpointEntrypoints is ICheckpointEntrypoints, ImmutableVTSState {
+    /// @notice Internal checkpoint function that can be overridden
+    /// @param tokenId The ERC721 token id (commitment NFT id)
+    /// @param positionIndex The index of the position within the commitment
+    /// @param liquiditySignal The liquidity signal to verify backing (empty if withCommitment is false)
+    /// @param withCommitment Whether to run commitment backing checks
+    function _checkpoint(uint256 tokenId, uint256 positionIndex, bytes calldata liquiditySignal, bool withCommitment)
+        internal
+        virtual;
+
     /// @notice Marks a checkpoint for a single position within a commitment
     /// @param tokenId The ERC721 token id (commitment NFT id)
     /// @param positionIndex The index of the position within the commitment
-    function checkpoint(uint256 tokenId, uint256 positionIndex) public {
-        vtsOrchestrator.markCheckpoint(tokenId, positionIndex);
+    function checkpoint(uint256 tokenId, uint256 positionIndex) external {
+        _checkpoint(tokenId, positionIndex, bytes(""), false);
     }
 
-    /// @notice Marks checkpoints for multiple (tokenId, positionIndex) pairs
-    /// @param tokenIds Array of commitment NFT ids
-    /// @param positionIndexes Array of position indexes within each commitment
-    function checkpoint(uint256[] calldata tokenIds, uint256[] calldata positionIndexes) public {
-        require(tokenIds.length == positionIndexes.length, "Invalid input lengths");
-        for (uint256 i = 0; i < tokenIds.length; i++) {
-            checkpoint(tokenIds[i], positionIndexes[i]);
-        }
-    }
-
-    /// @notice Marks checkpoints for all positions within a single commitment
+    /// @notice Marks a checkpoint for a single position with commitment backing check
     /// @param tokenId The ERC721 token id (commitment NFT id)
-    function checkpoint(uint256 tokenId) public {
-        (,, uint256 positionCount,) = vtsOrchestrator.getCommit(tokenId);
-        for (uint256 i = 0; i < positionCount; i++) {
-            checkpoint(tokenId, i);
-        }
-    }
-
-    /// @notice Marks checkpoints for all positions across multiple commitments
-    /// @param tokenIds Array of commitment NFT ids
-    function checkpoint(uint256[] calldata tokenIds) public {
-        for (uint256 i = 0; i < tokenIds.length; i++) {
-            checkpoint(tokenIds[i]);
-        }
+    /// @param positionIndex The index of the position within the commitment
+    /// @param liquiditySignal The liquidity signal to verify backing
+    function checkpoint(uint256 tokenId, uint256 positionIndex, bytes calldata liquiditySignal) external {
+        _checkpoint(tokenId, positionIndex, liquiditySignal, true);
     }
 }
 

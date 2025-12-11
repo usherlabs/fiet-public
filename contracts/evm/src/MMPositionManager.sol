@@ -198,9 +198,10 @@ contract MMPositionManager is
             _decommitSignal(tokenId);
             return;
         }
-        if (action == MMActions.DECLARE_UNBACKED_COMMITMENT) {
-            (uint256 tokenId, bytes calldata liquiditySignal) = params.decodeTokenIdAndBytes();
-            _declareUnbackedCommitment(tokenId, liquiditySignal);
+        if (action == MMActions.CHECKPOINT) {
+            (uint256 tokenId, uint256 positionIndex, bytes calldata liquiditySignal, bool withCommitment) =
+                params.decodeCheckpointParams();
+            _checkpoint(tokenId, positionIndex, liquiditySignal, withCommitment);
             return;
         }
         if (action == MMActions.EXTEND_GRACE_PERIOD) {
@@ -232,7 +233,6 @@ contract MMPositionManager is
     /// @param tokenId The commitment NFT token ID
     /// @param liquiditySignal The new liquidity signal
     function _renewSignal(uint256 tokenId, bytes calldata liquiditySignal) internal {
-        MMHelpers.assertApprovedOrOwner(msgSender(), tokenId);
         vtsOrchestrator.renewSignal(tokenId, liquiditySignal);
     }
 
@@ -242,7 +242,7 @@ contract MMPositionManager is
         MMHelpers.assertApprovedOrOwner(msgSender(), tokenId);
         _assertSignalValid(tokenId);
 
-        (,, uint256 positionCount,) = vtsOrchestrator.getCommit(tokenId);
+        (,, uint256 positionCount) = vtsOrchestrator.getCommit(tokenId);
         if (positionCount > 0) {
             revert Errors.CommitNotEmpty(tokenId);
         }
@@ -251,11 +251,16 @@ contract MMPositionManager is
         emit SignalDecommitted(tokenId, positionCount);
     }
 
-    /// @notice Declares a commitment as unbacked (third-party guarantor action)
+    /// @notice Marks a checkpoint for a position, optionally running commitment backing checks
     /// @param tokenId The commitment NFT token ID
-    /// @param liquiditySignal The liquidity signal
-    function _declareUnbackedCommitment(uint256 tokenId, bytes calldata liquiditySignal) internal {
-        vtsOrchestrator.declareUnbackedCommitment(msgSender(), tokenId, liquiditySignal);
+    /// @param positionIndex The position index within the commitment
+    /// @param liquiditySignal The liquidity signal (required if withCommitment = true)
+    /// @param withCommitment Whether to run commitment backing checks and update deficits
+    function _checkpoint(uint256 tokenId, uint256 positionIndex, bytes calldata liquiditySignal, bool withCommitment)
+        internal
+        override
+    {
+        vtsOrchestrator.checkpoint(msgSender(), tokenId, positionIndex, liquiditySignal, withCommitment);
     }
 
     /// @notice Extends grace period for a commitment via proof
@@ -471,7 +476,7 @@ contract MMPositionManager is
     function commitOf(uint256 tokenId)
         external
         view
-        returns (MarketMaker.State memory state, uint256 expiresAt, uint256 positionCount, uint256 deficitBps)
+        returns (MarketMaker.State memory state, uint256 expiresAt, uint256 positionCount)
     {
         return vtsOrchestrator.getCommit(tokenId);
     }

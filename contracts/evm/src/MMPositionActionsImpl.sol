@@ -166,24 +166,6 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, Immutable
         return vtsOrchestrator.getPosition(tokenId, positionIndex);
     }
 
-    /// @notice Returns the position ID for a given token ID and position index
-    /// @param tokenId The ERC721 tokenId (commitment NFT ID)
-    /// @param positionIndex The index of the position within the commitment
-    /// @return PositionId The position ID
-    function getPositionId(uint256 tokenId, uint256 positionIndex) public view returns (PositionId) {
-        return vtsOrchestrator.getPositionId(tokenId, positionIndex);
-    }
-
-    /// @notice Returns the commit information for a given commitment NFT
-    /// @param tokenId The ERC721 tokenId (commitment NFT ID)
-    /// @return mmState The MarketMaker state
-    /// @return expiresAt The expiration timestamp
-    /// @return positionCount The count of positions
-    /// @return deficitBps The deficit basis points
-    function commitOf(uint256 tokenId) public view returns (MarketMaker.State memory, uint256, uint256, uint256) {
-        return vtsOrchestrator.getCommit(tokenId);
-    }
-
     /// @notice Checks if a position is currently being seized
     /// @param positionId The position ID to check
     /// @return True if the position is being seized
@@ -539,7 +521,7 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, Immutable
             revert Errors.InvalidAmount(liquidity, type(uint128).max);
         }
 
-        (,, positionIndex,) = vtsOrchestrator.getCommit(tokenId);
+        (,, positionIndex) = vtsOrchestrator.getCommit(tokenId);
 
         ModifyLiquidityParams memory params = ModifyLiquidityParams({
             tickLower: tickLower,

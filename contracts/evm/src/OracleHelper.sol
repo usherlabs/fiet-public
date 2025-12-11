@@ -81,18 +81,28 @@ contract OracleHelper is Ownable {
     }
 
     /**
-     * @notice Gets the total USD value of a list of assets
+     * @notice Gets the total value of a list of assets
      * @param tickers The list of tickers
      * @param amounts The list of amounts
-     * @return totalUsdValue The total USD value
+     * @return totalValue The total USD value
      */
-    function getTotalUsdValue(string[] memory tickers, uint256[] memory amounts) public view returns (uint256) {
-        uint256 totalUsdValue = 0;
+    function getTotalValue(string[] memory tickers, uint256[] memory amounts) public view returns (uint256) {
+        uint256 totalValue = 0;
         for (uint256 i = 0; i < tickers.length; i++) {
             uint256 price = getPriceByTicker(tickers[i]);
-            totalUsdValue += price * amounts[i];
+            totalValue += price * amounts[i];
         }
-        return totalUsdValue;
+        return totalValue;
+    }
+
+    /**
+     * @notice Gets the price of an LCC
+     * @param lcc The address of the LCC
+     * @return price The price of the LCC in USD (18 decimals)
+     */
+    function getPriceForLcc(address lcc) external view returns (uint256 price) {
+        address underlying = OracleUtils.unifyNativeTokenAddress(ILCC(lcc).underlying());
+        return oracle.getPrice(underlying);
     }
 
     /**
@@ -102,7 +112,7 @@ contract OracleHelper is Ownable {
      * @return price0 USD price of lcc0's underlying (normalized by ResilientOracle).
      * @return price1 USD price of lcc1's underlying (normalized by ResilientOracle).
      */
-    function getPricesForLCCPair(address lcc0, address lcc1) external view returns (uint256 price0, uint256 price1) {
+    function getPricesForLccPair(address lcc0, address lcc1) external view returns (uint256 price0, uint256 price1) {
         address underlying0 = OracleUtils.unifyNativeTokenAddress(ILCC(lcc0).underlying());
         address underlying1 = OracleUtils.unifyNativeTokenAddress(ILCC(lcc1).underlying());
 

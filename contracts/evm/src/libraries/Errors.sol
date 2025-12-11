@@ -156,11 +156,6 @@ library Errors {
     /// @notice Thrown when a commitment descriptor is not set
     error CommitmentDescriptorNotSet();
 
-    /// @notice Thrown when the maximum number of positions per commitment is exceeded
-    /// @param commitId The token ID of the commitment
-    /// @param maxPositions The maximum allowed positions per commitment
-    error MaxPositionsExceeded(uint256 commitId, uint256 maxPositions);
-
     /// @notice Thrown when attempting to decommit a signal that still has positions attached
     /// @param tokenId The token ID of the commitment that cannot be decommitted
     error CommitNotEmpty(uint256 tokenId);

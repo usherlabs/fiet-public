@@ -353,7 +353,7 @@ library MMCalldataDecoder {
         liquiditySignal = params.toBytes(0);
     }
 
-    /// @dev RENEW_SIGNAL / DECLARE_UNBACKED_COMMITMENT: (uint256, bytes)
+    /// @dev RENEW_SIGNAL: (uint256, bytes)
     /// @param params The calldata bytes to decode
     /// @return tokenId The commitment NFT token ID
     /// @return data The liquidity signal bytes
@@ -363,6 +363,26 @@ library MMCalldataDecoder {
         }
         // Use CalldataDecoder.toBytes for dynamic bytes (index 1 = 2nd argument)
         data = params.toBytes(1);
+    }
+
+    /// @dev CHECKPOINT: (uint256, uint256, bytes, bool)
+    /// @param params The calldata bytes to decode
+    /// @return tokenId The commitment NFT token ID
+    /// @return positionIndex The index of the position within the commitment
+    /// @return data The liquidity signal bytes
+    /// @return withCommitment Whether to run commitment backing checks
+    function decodeCheckpointParams(bytes calldata params)
+        internal
+        pure
+        returns (uint256 tokenId, uint256 positionIndex, bytes calldata data, bool withCommitment)
+    {
+        assembly ("memory-safe") {
+            tokenId := calldataload(params.offset)
+            positionIndex := calldataload(add(params.offset, 0x20))
+            withCommitment := calldataload(add(params.offset, 0x40))
+        }
+        // Use CalldataDecoder.toBytes for dynamic bytes (index 2 = 3rd argument)
+        data = params.toBytes(2);
     }
 
     // ═══════════════════════════════════════════════════════════════════════════════════════════

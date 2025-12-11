@@ -9,17 +9,10 @@ interface ICheckpointEntrypoints {
     /// @param positionIndex The index of the position within the commitment
     function checkpoint(uint256 tokenId, uint256 positionIndex) external;
 
-    /// @notice Marks checkpoints for multiple (tokenId, positionIndex) pairs
-    /// @param tokenIds Array of commitment NFT ids
-    /// @param positionIndexes Array of position indexes within each commitment
-    function checkpoint(uint256[] calldata tokenIds, uint256[] calldata positionIndexes) external;
-
-    /// @notice Marks checkpoints for all positions within a single commitment
+    /// @notice Marks a checkpoint for a single position with commitment backing check
     /// @param tokenId The ERC721 token id (commitment NFT id)
-    function checkpoint(uint256 tokenId) external;
-
-    /// @notice Marks checkpoints for all positions across multiple commitments
-    /// @param tokenIds Array of commitment NFT ids
-    function checkpoint(uint256[] calldata tokenIds) external;
+    /// @param positionIndex The index of the position within the commitment
+    /// @param liquiditySignal The liquidity signal to verify backing (required if withCommitment)
+    function checkpoint(uint256 tokenId, uint256 positionIndex, bytes calldata liquiditySignal) external;
 }
 

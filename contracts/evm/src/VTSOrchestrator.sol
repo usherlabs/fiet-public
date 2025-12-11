@@ -57,9 +57,6 @@ contract VTSOrchestrator is ImmutableMarketState, PausableVTS, VTSCurrencyDelta,
     using SafeCast for uint256;
     using PoolIdLibrary for PoolKey;
 
-    event Checkpointed(uint256 commitId, uint256 positionIndex, RFSCheckpoint checkpoint);
-    event GracePeriodExtended(uint256 commitId, uint256 positionIndex, uint8 tokenIndex, RFSCheckpoint checkpoint);
-
     /// @notice Central storage pointer (passed to libraries)
     VTSStorage internal s;
 
@@ -73,7 +70,7 @@ contract VTSOrchestrator is ImmutableMarketState, PausableVTS, VTSCurrencyDelta,
     /// @notice MM Position Manager address (for access control)
     address public mmPositionManager;
 
-    address public immutable signalManager;
+    IVRLSignalManager public immutable signalManager;
 
     /// @notice Constructor
     /// @param _poolManager The Uniswap V4 PoolManager address
@@ -91,7 +88,7 @@ contract VTSOrchestrator is ImmutableMarketState, PausableVTS, VTSCurrencyDelta,
         }
         if (_marketFactory == address(0)) revert Errors.InvalidSender();
         oracleHelper = IOracleHelper(_oracleHelper);
-        signalManager = _signalManager;
+        signalManager = IVRLSignalManager(_signalManager);
         liquidityHub = ILiquidityHub(_liquidityHub);
         settlementObserver = IVRLSettlementObserver(_settlementObserver);
     }
@@ -183,14 +180,13 @@ contract VTSOrchestrator is ImmutableMarketState, PausableVTS, VTSCurrencyDelta,
     /// @return mmState The MarketMaker state
     /// @return expiresAt The expiration timestamp
     /// @return positionCount The count of positions
-    /// @return deficitBps The deficit basis points
     function getCommit(uint256 commitId)
         external
         view
-        returns (MarketMaker.State memory mmState, uint256 expiresAt, uint256 positionCount, uint256 deficitBps)
+        returns (MarketMaker.State memory mmState, uint256 expiresAt, uint256 positionCount)
     {
         Commit storage commit = s.commits[commitId];
-        return (commit.mmState, commit.expiresAt, commit.positionCount, commit.deficitBps);
+        return (commit.mmState, commit.expiresAt, commit.positionCount);
     }
 
     /// @notice Get pool by PoolId
@@ -247,32 +243,8 @@ contract VTSOrchestrator is ImmutableMarketState, PausableVTS, VTSCurrencyDelta,
     }
 
     // --------------------------------------------------
-    // IVTSOrchestrator Implementation
+    // Lens Functions
     // --------------------------------------------------
-
-    /// @notice Settle the position growths
-    /// @param positionId The position ID
-    /// @dev This function is called by the CoreHook to settle the position growths
-    /// @dev this function is used to settle the position growths before the liquidity is added or removed
-    function settlePositionGrowths(PositionId positionId) external onlyCoreHook {
-        // if the provided position id is valid, then settle the position growths
-        if (isPositionValid(positionId, true)) {
-            VTSPositionLib.settlePositionGrowths(s, poolManager, positionId);
-        }
-    }
-
-    /// @notice Initialize a market's config in the VTS state, it is called by the MarketFactory contract
-    /// @param corePoolKey The core pool key
-    /// @param vtsConfiguration The VTS configuration
-    function initPool(PoolKey memory corePoolKey, MarketVTSConfiguration memory vtsConfiguration) external onlyFactory {
-        // Initialize the market details in the VTS state
-        s.pools[corePoolKey.toId()] = Pool({
-            currency0: corePoolKey.currency0,
-            currency1: corePoolKey.currency1,
-            vtsConfig: vtsConfiguration,
-            isPaused: false
-        });
-    }
 
     /// @inheritdoc IVTSOrchestrator
     function setMarketVTSConfiguration(PoolId corePoolId, MarketVTSConfiguration memory vtsConfiguration)
@@ -344,7 +316,7 @@ contract VTSOrchestrator is ImmutableMarketState, PausableVTS, VTSCurrencyDelta,
     }
 
     /// @inheritdoc IVTSOrchestrator
-    function getCommitment(PositionId positionId)
+    function getCommitmentMaxima(PositionId positionId)
         external
         view
         onlyPositionValid(positionId)
@@ -354,9 +326,44 @@ contract VTSOrchestrator is ImmutableMarketState, PausableVTS, VTSCurrencyDelta,
         return (pa.commitmentMax.token0, pa.commitmentMax.token1);
     }
 
+    /// @notice Gets the checkpoint for a given position
+    /// @param positionId The position ID
+    /// @return checkpoint The checkpoint for the position
+    function positionToCheckpoint(PositionId positionId) external view returns (RFSCheckpoint memory) {
+        return s.positions[positionId].checkpoint;
+    }
+
+    // --------------------------------------------------
+    // Factory Helpers
+    // --------------------------------------------------
+
+    /// @notice Initialize a market's config in the VTS state, it is called by the MarketFactory contract
+    /// @param corePoolKey The core pool key
+    /// @param vtsConfiguration The VTS configuration
+    function initPool(PoolKey memory corePoolKey, MarketVTSConfiguration memory vtsConfiguration) external onlyFactory {
+        // Initialize the market details in the VTS state
+        s.pools[corePoolKey.toId()] = Pool({
+            currency0: corePoolKey.currency0,
+            currency1: corePoolKey.currency1,
+            vtsConfig: vtsConfiguration,
+            isPaused: false
+        });
+    }
+
     // --------------------------------------------------
     // CoreHook VTS Functionality
     // --------------------------------------------------
+
+    /// @notice Settle the position growths
+    /// @param positionId The position ID
+    /// @dev This function is called by the CoreHook to settle the position growths
+    /// @dev this function is used to settle the position growths before the liquidity is added or removed
+    function settlePositionGrowths(PositionId positionId) external onlyCoreHook {
+        // if the provided position id is valid, then settle the position growths
+        if (isPositionValid(positionId, true)) {
+            VTSPositionLib.settlePositionGrowths(s, poolManager, positionId);
+        }
+    }
 
     /// @notice Called by CoreHook after add/remove liquidity to update position state and process fees
     /// @dev Consolidates all delta management for both MM and DirectLP positions.
@@ -422,7 +429,7 @@ contract VTSOrchestrator is ImmutableMarketState, PausableVTS, VTSCurrencyDelta,
      */
     function commitSignal(bytes memory liquiditySignal) external onlyMMPositionManager returns (uint256 commitId) {
         // verify and commit the signal to state
-        commitId = VTSCommitLib.commitSignal(s, IVRLSignalManager(signalManager), liquiditySignal);
+        commitId = VTSCommitLib.commitSignal(s, signalManager, liquiditySignal);
     }
 
     /// @notice Extends the grace period for a position
@@ -442,9 +449,7 @@ contract VTSOrchestrator is ImmutableMarketState, PausableVTS, VTSCurrencyDelta,
     ) external onlyMMPositionManager {
         // validate position exists
         PositionId positionId = getPositionId(commitId, positionIndex);
-        if (PositionId.unwrap(positionId) == bytes32(0)) {
-            revert Errors.InvalidPosition(commitId, positionIndex, PositionId.wrap(bytes32(0)));
-        }
+        _assertPositionValid(positionId, true, true);
 
         // using the RFSCheckpoint module to extend the grace period
         CheckpointLibrary.extendGracePeriod(
@@ -494,7 +499,17 @@ contract VTSOrchestrator is ImmutableMarketState, PausableVTS, VTSCurrencyDelta,
             s, poolManager, marketVault, mmPositionManager, positionId, currency0, currency1, amountDelta, isSeizing
         );
 
-        emit Checkpointed(commitId, positionIndex, s.positions[positionId].checkpoint);
+        PositionAccounting storage pa = s.positionAccounting[positionId];
+        emit PositionSettled(
+            commitId,
+            positionIndex,
+            settlementDelta.amount0(),
+            settlementDelta.amount1(),
+            pa.settled.token0,
+            pa.settled.token1,
+            isSeizing,
+            rfsOpen,
+        );
     }
 
     /// @notice This function is called by the MMPositionManager to validate the grace period has elapsed
@@ -516,28 +531,39 @@ contract VTSOrchestrator is ImmutableMarketState, PausableVTS, VTSCurrencyDelta,
      * @param liquiditySignal The liquidity signal of the commitment
      */
     function renewSignal(uint256 commitId, bytes memory liquiditySignal) external onlyMMPositionManager {
-        VTSCommitLib.renewSignal(s, IVRLSignalManager(signalManager), oracleHelper, commitId, liquiditySignal);
+        VTSCommitLib.renewSignal(s, signalManager, oracleHelper, commitId, liquiditySignal);
     }
 
     /**
-     * @dev This function is used to declare an unbacked commitment
-     * @param sender The sender of the declaration
+     * @dev Checkpoint a position and optionally run commitment backing checks.
+     * @param sender The caller (used for advancer validation when withCommitment is true)
      * @param commitId The commit id of the commitment
-     * @param liquiditySignal The liquidity signal of the commitment
+     * @param positionIndex The index of the position within the commitment
+     * @param liquiditySignal The liquidity signal (required when withCommitment is true)
+     * @param withCommitment Whether to run commitment backing checks and update position deficits
      */
-    function declareUnbackedCommitment(address sender, uint256 commitId, bytes memory liquiditySignal)
-        external
-        onlyMMPositionManager
-    {
-        address owner = msg.sender;
-        VTSCommitLib.declareCommitmentDeficit(
-            s, sender, owner, commitId, IVRLSignalManager(signalManager), oracleHelper, liquiditySignal
+    function checkpoint(
+        address sender,
+        uint256 commitId,
+        uint256 positionIndex,
+        bytes memory liquiditySignal,
+        bool withCommitment
+    ) external onlyMMPositionManager {
+        PositionId positionId = getPositionId(commitId, positionIndex);
+
+        // Mark the RFS checkpoint for the position
+        (bool rfsOpen,) = VTSPositionLib.calcRFS(s, poolManager, positionId, false);
+        CheckpointLibrary.markCheckpoint(s, positionId, rfsOpen);
+        emit Checkpointed(commitId, positionIndex, s.positions[positionId].checkpoint, withCommitment);
+
+        if (!withCommitment) {
+            return;
+        }
+
+        VTSCommitLib.checkpoint(
+            s, poolManager, signalManager, oracleHelper, sender, commitId, positionId, liquiditySignal
         );
     }
-
-    // --------------------------------------------------
-    // LCC Fee Collection
-    // --------------------------------------------------
 
     /**
      * @notice Collects LCC fees by converting ERC-6909 claims to actual ERC20 tokens
@@ -558,6 +584,7 @@ contract VTSOrchestrator is ImmutableMarketState, PausableVTS, VTSCurrencyDelta,
      */
     function collectFees(Currency lccCurrency, address recipient, uint256 maxAmount)
         external
+        onlyMMPositionManager
         returns (uint256 collected)
     {
         // Get caller's available credit
@@ -571,26 +598,5 @@ contract VTSOrchestrator is ImmutableMarketState, PausableVTS, VTSCurrencyDelta,
             // 3. Debiting the VTS delta
             VTSFeeLib.collectFees(poolManager, lccCurrency, msg.sender, recipient, collected);
         }
-    }
-
-    // --------------------------------------------------
-    // Checkpoint Functions
-    // --------------------------------------------------
-
-    /// @notice Marks a checkpoint for a given position
-    /// @param commitId The commit ID
-    /// @param positionIndex The position index
-    function markCheckpoint(uint256 commitId, uint256 positionIndex) external onlyMMPositionManager {
-        PositionId positionId = getPositionId(commitId, positionIndex);
-        (bool rfsOpen,) = VTSPositionLib.calcRFS(s, poolManager, positionId, false);
-        CheckpointLibrary.markCheckpoint(s, positionId, rfsOpen);
-        emit Checkpointed(commitId, positionIndex, s.positions[positionId].checkpoint);
-    }
-
-    /// @notice Gets the checkpoint for a given position
-    /// @param positionId The position ID
-    /// @return checkpoint The checkpoint for the position
-    function positionToCheckpoint(PositionId positionId) external view returns (RFSCheckpoint memory) {
-        return s.positions[positionId].checkpoint;
     }
 }

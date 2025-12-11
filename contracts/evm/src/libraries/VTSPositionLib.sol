@@ -61,7 +61,7 @@ library VTSPositionLib {
     // --------------------------------------------------
 
     /// @notice Tracks the maximum potential commitment for both tokens in a position
-    /// @dev Also updates commit-level running totals for O(1) aggregation
+    /// @dev Tracks per-position maxima only (no commit-level aggregation)
     /// @param s The central VTS storage
     /// @param positionId The ascribed id of the position
     /// @param params The parameters of the transaction
@@ -84,14 +84,6 @@ library VTSPositionLib {
 
             pa.commitmentMax.token0 = currentC0 + addC0;
             pa.commitmentMax.token1 = currentC1 + addC1;
-
-            // Update commit-level running totals
-            if (pos.commitId > 0) {
-                Pool storage pool = s.pools[pos.poolId];
-                Commit storage commit = s.commits[pos.commitId];
-                commit.commitmentMaxTotal[pool.currency0] += addC0;
-                commit.commitmentMaxTotal[pool.currency1] += addC1;
-            }
         } else if (params.liquidityDelta < 0) {
             // Liquidity removed: decrease tracked maxima by the delta's maxima over the tick range
             uint128 liquidityRemoved = uint256(-params.liquidityDelta).toUint128();
@@ -101,16 +93,6 @@ library VTSPositionLib {
             // Clamp at zero to avoid underflow; if fully removed, both become zero
             pa.commitmentMax.token0 = currentC0 > subC0 ? (currentC0 - subC0) : 0;
             pa.commitmentMax.token1 = currentC1 > subC1 ? (currentC1 - subC1) : 0;
-
-            // Update commit-level running totals
-            if (pos.commitId > 0) {
-                Pool storage pool = s.pools[pos.poolId];
-                Commit storage commit = s.commits[pos.commitId];
-                uint256 commitTotal0 = commit.commitmentMaxTotal[pool.currency0];
-                uint256 commitTotal1 = commit.commitmentMaxTotal[pool.currency1];
-                commit.commitmentMaxTotal[pool.currency0] = commitTotal0 > subC0 ? (commitTotal0 - subC0) : 0;
-                commit.commitmentMaxTotal[pool.currency1] = commitTotal1 > subC1 ? (commitTotal1 - subC1) : 0;
-            }
         } else {
             // No-op if liquidityDelta == 0 (poke)
             return;
@@ -163,35 +145,13 @@ library VTSPositionLib {
                 }
             }
 
-            // Net against derived commit deficit (from deficitBps)
-            // This replaces the old commitmentDeficit per-position storage
-            if (delta > 0 && pos.commitId > 0) {
-                Commit storage commit = s.commits[pos.commitId];
-                if (commit.deficitBps > 0) {
-                    // Derive position's deficit share from commit-level deficitBps
-                    uint256 derivedDeficit = FullMath.mulDiv(
-                        pa.commitmentMax.get(tokenIndex), commit.deficitBps, LiquidityUtils.BPS_DENOMINATOR
-                    );
-
-                    // Calculate remaining uncovered deficit for this position
-                    uint256 priorCoverage = pa.deficitCoverageApplied; // TODO: this value never decrements.
-                    uint256 remainingDeficit = derivedDeficit > priorCoverage ? derivedDeficit - priorCoverage : 0;
-
-                    // Cap coverage at remaining deficit
-                    if (remainingDeficit > 0) {
-                        uint256 coverNow = uint256(delta) > remainingDeficit ? remainingDeficit : uint256(delta);
-
-                        // Update position-level coverage (cumulative, never reset)
-                        pa.deficitCoverageApplied += coverNow;
-
-                        // Update commit-level total coverage (for O(1) "fully covered" check)
-                        // TODO: Wonder if this should take the form of bps - to check against deficitBps in isSeizable.
-                        // Or maybe once deficitBps is fully covered, we reset values to 0.
-                        commit.totalDeficitCoverageApplied += coverNow;
-
-                        // Consume from settlement delta
-                        delta -= int256(coverNow);
-                    }
+            // Net against position-level commitment deficit (insolvency gate)
+            uint256 cd = pa.commitmentDeficit.get(tokenIndex);
+            if (delta > 0 && cd > 0) {
+                uint256 coverCd = uint256(delta) > cd ? cd : uint256(delta);
+                if (coverCd > 0) {
+                    pa.commitmentDeficit.set(tokenIndex, cd - coverCd);
+                    delta -= int256(coverCd);
                 }
             }
 
@@ -216,21 +176,6 @@ library VTSPositionLib {
         pa.cumulativeDeficit.set(tokenIndex, cumulativeDef);
 
         applied = next.toInt256() - cur.toInt256(); // output delta
-
-        // Update commit-level settled amounts if position belongs to a commit
-        if (pos.commitId > 0) {
-            Commit storage commit = s.commits[pos.commitId];
-            Pool storage pool = s.pools[poolId];
-            Currency currency = tokenIndex == 0 ? pool.currency0 : pool.currency1;
-
-            uint256 commitSettled = commit.settled[currency];
-            if (applied > 0) {
-                commit.settled[currency] = commitSettled + uint256(applied);
-            } else if (applied < 0) {
-                uint256 subtract = uint256(-applied);
-                commit.settled[currency] = subtract > commitSettled ? 0 : (commitSettled - subtract);
-            }
-        }
 
         // Accrue persistent nets since last fee finalisation
         pa.netSettlementSinceLastMod.set(tokenIndex, netSinceLastMod + applied);
@@ -949,6 +894,7 @@ library VTSPositionLib {
         address owner,
         PoolKey calldata poolKey,
         uint256 commitId,
+        PositionId positionId,
         ModifyLiquidityParams calldata params,
         BalanceDelta principalDelta
     ) internal {
@@ -964,11 +910,17 @@ library VTSPositionLib {
         }
 
         // Validate commitment backing: effective LCC (including prospective) <= signal + settled
-        VTSCommitLib.effectiveCommitmentUsdValue(
+        // Get current pool state for price if needed
+        (uint160 sqrtPriceX96, int24 currentTick,,) = ctx.poolManager.getSlot0(poolKey.toId());
+        VTSCommitLib.validateLiquidityDelta(
             s,
             ctx.oracleHelper,
             commitId,
-            poolKey.toId(),
+            positionId,
+            poolKey.currency0,
+            poolKey.currency1,
+            sqrtPriceX96,
+            currentTick,
             params.tickLower,
             params.tickUpper,
             params.liquidityDelta,

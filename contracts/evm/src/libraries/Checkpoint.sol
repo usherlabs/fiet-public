@@ -2,9 +2,9 @@
 pragma solidity ^0.8.26;
 
 import {RFSCheckpoint} from "../types/Checkpoint.sol";
-import {VTSStorage} from "../types/VTS.sol";
+import {VTSStorage, PositionAccounting} from "../types/VTS.sol";
 import {Position, PositionId} from "../types/Position.sol";
-import {MarketVTSConfiguration, VTSStorage} from "../types/VTS.sol";
+import {MarketVTSConfiguration} from "../types/VTS.sol";
 import {Commit} from "../types/Commit.sol";
 import {Errors} from "./Errors.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
@@ -14,9 +14,6 @@ import {console} from "forge-std/console.sol";
 import {EfficientHashLib} from "solady/utils/EfficientHashLib.sol";
 
 library CheckpointLibrary {
-    event Checkpointed(uint256 commitId, uint256 positionIndex, RFSCheckpoint checkpoint);
-    event GracePeriodExtended(uint256 commitId, uint256 positionIndex, uint8 tokenIndex, RFSCheckpoint checkpoint);
-
     /**
      * @notice Retrieves the checkpoint for a given position
      * @dev Returns a storage reference to the checkpoint associated with the position ID
@@ -24,30 +21,14 @@ library CheckpointLibrary {
      * @param positionId The position ID to retrieve the checkpoint for
      * @return A storage reference to the RFSCheckpoint for the position
      */
-    function getPositionCheckpoint(VTSStorage storage s, PositionId positionId)
-        internal
-        view
-        returns (RFSCheckpoint storage)
-    {
-        return s.checkpoints[PositionId.unwrap(positionId)];
-    }
-
-    /**
-     * @notice Retrieves the checkpoint for a given commit
-     * @dev Returns a storage reference to the checkpoint associated with the commit ID
-     *      The checkpoint key is derived by hashing the commit ID
-     * @param s The VTS storage struct
-     * @param commitId The commit ID to retrieve the checkpoint for
-     * @return A storage reference to the RFSCheckpoint for the commit
-     */
-    function getCommitCheckpoint(VTSStorage storage s, uint256 commitId) internal view returns (RFSCheckpoint storage) {
-        return s.checkpoints[EfficientHashLib.hash(commitId)];
+    function getCheckpoint(VTSStorage storage s, PositionId positionId) internal view returns (RFSCheckpoint storage) {
+        return s.positions[PositionId.unwrap(positionId)].checkpoint;
     }
 
     /**
      * @notice Determines if a position is open for seizure
      * @dev Two paths to seizability:
-     *      1. Deficit path: deficitBps > 0 means immediately seizable (no grace period check)
+     *      1. Deficit path: position-level commitment deficit > 0 means immediately seizable (no grace period check)
      *      2. Normal RFS path: checkpoint isOpen AND grace period elapsed
      * @param s The VTS storage struct
      * @param commitId The token ID to check
@@ -61,17 +42,19 @@ library CheckpointLibrary {
         returns (bool canSeize)
     {
         Commit storage commit = s.commits[commitId];
+        PositionId positionId = commit.positions[positionIndex];
 
-        // Deficit path: immediately seizable if deficitBps > 0
-        // This replaces the need for forceOpenAndElapse iteration
-        if (commit.deficitBps > 0) {
+        // Deficit path: immediately seizable if position-level commitment deficit exists
+        // RfS amounts are inflated by these position-level commitment deficit amounts
+        PositionAccounting storage pa = s.positionAccounting[positionId];
+        if (pa.commitmentDeficit.token0 > 0 || pa.commitmentDeficit.token1 > 0) {
             return true;
         }
 
         // Normal RFS path: check checkpoint + grace period
-        PositionId positionId = commit.positions[positionIndex];
-        RFSCheckpoint memory checkpoint = getPositionCheckpoint(s, positionId);
+        RFSCheckpoint memory checkpoint = getCheckpoint(s, positionId);
 
+        // TODO: Remove this after debugging
         console.log("checkpoint.isOpen", checkpoint.isOpen);
         console.log("revertOnFalse", revertOnFalse);
         console.log("checkpoint.timeOfLastTransition", checkpoint.timeOfLastTransition);
@@ -137,11 +120,6 @@ library CheckpointLibrary {
             settlementTokenIndex == 0 ? vtsConfiguration.token0 : vtsConfiguration.token1;
         // extend the grace period for the position using the `CheckpointLibrary` type
         s.checkpoints[PositionId.unwrap(positionId)].extendGracePeriod(tokenConfiguration, settlementTokenIndex);
-
-        // emit an event to notify the market maker that the grace period has been extended
-        emit GracePeriodExtended(
-            commitId, positionIndex, settlementTokenIndex, s.checkpoints[PositionId.unwrap(positionId)]
-        );
     }
 
     /**
@@ -153,31 +131,5 @@ library CheckpointLibrary {
      */
     function markCheckpoint(VTSStorage storage s, PositionId positionId, bool isOpen) internal {
         s.checkpoints[PositionId.unwrap(positionId)].mark(isOpen);
-    }
-
-    /**
-     * @notice Forces a checkpoint to open and elapse the grace period
-     * @dev DEPRECATED: No longer needed for deficit declaration as seizability is now derived from
-     *      commit.deficitBps > 0. Kept for potential administrative uses.
-     * @dev This function backdates the checkpoint by the maximum grace period time (plus 1 second)
-     *      to ensure the grace period has elapsed.
-     * @param s The VTS storage struct
-     * @param commitId The commit ID containing the position
-     * @param positionIndex The index of the position within the commit
-     */
-    function forceOpenAndElapse(VTSStorage storage s, uint256 commitId, uint256 positionIndex) internal {
-        PositionId positionId = s.commits[commitId].positions[positionIndex];
-
-        // Backdate by the larger of the two token max grace windows plus 1 second
-        MarketVTSConfiguration memory vtsConfiguration = s.pools[s.positions[positionId].poolId].vtsConfig;
-        uint256 max0 = vtsConfiguration.token0.maxGracePeriodTime;
-        uint256 max1 = vtsConfiguration.token1.maxGracePeriodTime;
-        uint256 backdate = max0 > max1 ? max0 : max1;
-        unchecked {
-            backdate = backdate + 1;
-        }
-        // update the checkpoint to open and elapse the grace period
-        s.checkpoints[PositionId.unwrap(positionId)].forceOpenAndElapse(backdate);
-        emit Checkpointed(commitId, positionIndex, s.checkpoints[PositionId.unwrap(positionId)]);
     }
 }

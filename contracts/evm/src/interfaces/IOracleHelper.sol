@@ -17,7 +17,9 @@ interface IOracleHelper {
 
     function validateMarketOracles(address lcc0, address lcc1) external view;
 
-    function getTotalUsdValue(string[] memory tickers, uint256[] memory amounts) external view returns (uint256);
+    function getTotalValue(string[] memory tickers, uint256[] memory amounts) external view returns (uint256);
 
-    function getPricesForLCCPair(address lcc0, address lcc1) external view returns (uint256 price0, uint256 price1);
+    function getPriceForLcc(address lcc) external view returns (uint256 price);
+
+    function getPricesForLccPair(address lcc0, address lcc1) external view returns (uint256 price0, uint256 price1);
 }

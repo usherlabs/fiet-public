@@ -16,11 +16,17 @@ import {IMarketVault} from "./IMarketVault.sol";
 
 interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta {
     // Events
-    event PoolInitialized(
-        PoolId indexed corePoolId,
-        address indexed currency0,
-        address indexed currency1,
-        MarketVTSConfiguration vtsConfiguration
+    event Checkpointed(uint256 commitId, uint256 positionIndex, RFSCheckpoint checkpoint, bool withCommitment);
+    event GracePeriodExtended(uint256 commitId, uint256 positionIndex, uint8 tokenIndex, RFSCheckpoint checkpoint);
+    event PositionSettled(
+        uint256 indexed commitId,
+        uint256 indexed positionIndex,
+        int128 settlementDelta0,
+        int128 settlementDelta1,
+        uint256 settledToken0,
+        uint256 settledToken1,
+        bool isSeizing,
+        bool rfsOpen
     );
 
     // Access Control / Config
@@ -32,7 +38,7 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta {
     function getCommit(uint256 commitId)
         external
         view
-        returns (MarketMaker.State memory mmState, uint256 expiresAt, uint256 positionCount, uint256 deficitBps);
+        returns (MarketMaker.State memory mmState, uint256 expiresAt, uint256 positionCount);
     function getPool(PoolId poolId)
         external
         view
@@ -65,7 +71,7 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta {
     function calcVTSRequired(PositionId positionId) external returns (uint256 vtsRequired0, uint256 vtsRequired1);
     function getPositionSettledAmounts(PositionId positionId) external view returns (uint256 amount0, uint256 amount1);
     function incrementCoverage(PoolId poolId, uint256 amount0, uint256 amount1) external;
-    function getCommitment(PositionId positionId) external view returns (uint256 commitment0, uint256 commitment1);
+    function getCommitmentMaxima(PositionId positionId) external view returns (uint256 commitment0, uint256 commitment1);
 
     // CoreHook
     /// @notice Called by CoreHook after add/remove liquidity to update position state and process fees
@@ -121,15 +127,16 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta {
     function onSeize(uint256 commitId, uint256 positionIndex) external;
 
     function renewSignal(uint256 commitId, bytes memory liquiditySignal) external;
-    function declareUnbackedCommitment(address sender, uint256 commitId, bytes memory liquiditySignal) external;
+    function checkpoint(
+        address sender,
+        uint256 commitId,
+        uint256 positionIndex,
+        bytes memory liquiditySignal,
+        bool withCommitment
+    ) external;
 
     // Checkpoints
     function positionToCheckpoint(PositionId positionId) external view returns (RFSCheckpoint memory);
-
-    /// @notice Marks a checkpoint for a given position
-    /// @param commitId The commit ID
-    /// @param positionIndex The position index
-    function markCheckpoint(uint256 commitId, uint256 positionIndex) external;
 
     function collectFees(Currency lccCurrency, address recipient, uint256 maxAmount)
         external
