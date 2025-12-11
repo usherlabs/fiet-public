@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: BUSL-1.1
 pragma solidity ^0.8.20;
 
 import "forge-std/Test.sol";
@@ -59,12 +59,11 @@ contract HookTest is Test, Deployers {
         );
         IWETH9 weth9 = IWETH9(address(new WETH()));
         IAllowanceTransfer permit2 = IAllowanceTransfer(makeAddr("permit2"));
-        
+
         // Deploy MMPositionActionsImpl first
-        MMPositionActionsImpl actionsImpl = new MMPositionActionsImpl(
-            address(poolManager), address(factory), address(vtsOrchestrator)
-        );
-        
+        MMPositionActionsImpl actionsImpl =
+            new MMPositionActionsImpl(address(poolManager), address(factory), address(vtsOrchestrator));
+
         mmPositionManager = new MMPositionManager(
             address(poolManager),
             address(factory),

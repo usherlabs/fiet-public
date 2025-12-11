@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: BUSL-1.1
 // The VRLSpokeReceiver is a module that is responsible for verifying the liquidity signal and returning the tickers and amounts of the assets
 // It is used by the `MMPositionManager` to verify the liquidity signal and return the tickers and amounts of the assets
 // and to ensure that the MM has enough reserves in their signal to cover their liquidity commitment to the Market

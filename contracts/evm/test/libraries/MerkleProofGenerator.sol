@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: BUSL-1.1
 
 import {MerkleTreeLib} from "solady/utils/MerkleTreeLib.sol";
 

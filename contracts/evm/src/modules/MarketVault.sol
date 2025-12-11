@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: BUSL-1.1
 /**
  * @title MarketVault
  * @notice Abstract contract providing vault functionality for managing liquidity in Uniswap V4 pools.

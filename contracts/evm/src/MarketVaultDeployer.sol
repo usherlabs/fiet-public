@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: BUSL-1.1
 // This contract is used to deploy proxy hooks for the market factory
 pragma solidity ^0.8.20;
 

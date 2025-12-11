@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: BUSL-1.1
 /// Stub implementation of the SpokeVerifier interface
 /// This implementation does not perform any verification
 /// It is used for development and testing purposes
