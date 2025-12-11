@@ -47,12 +47,8 @@ library OracleUtils {
      * @param a The amount of the first LCC
      * @return The USD value of the pair of LCC amounts
      */
-    function lccValue(IOracleHelper oracleHelper, address lcc, uint256 a)
-        internal
-        view
-        returns (uint256)
-    {
+    function lccValue(IOracleHelper oracleHelper, address lcc, uint256 a) internal view returns (uint256) {
         (uint256 p) = oracleHelper.getPriceForLcc(lcc);
-        return (p * a)
+        return (p * a);
     }
 }

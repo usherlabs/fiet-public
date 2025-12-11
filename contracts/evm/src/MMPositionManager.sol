@@ -256,7 +256,7 @@ contract MMPositionManager is
     /// @param positionIndex The position index within the commitment
     /// @param liquiditySignal The liquidity signal (required if withCommitment = true)
     /// @param withCommitment Whether to run commitment backing checks and update deficits
-    function _checkpoint(uint256 tokenId, uint256 positionIndex, bytes calldata liquiditySignal, bool withCommitment)
+    function _checkpoint(uint256 tokenId, uint256 positionIndex, bytes memory liquiditySignal, bool withCommitment)
         internal
         override
     {

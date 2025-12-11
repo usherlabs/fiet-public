@@ -495,6 +495,7 @@ contract VTSOrchestrator is ImmutableMarketState, PausableVTS, VTSCurrencyDelta,
     {
         PositionId positionId = getPositionId(commitId, positionIndex);
 
+        // position validation is performed inside of VTSPositionLib.onMMSettle
         (settlementDelta, rfsOpen, seizedLiquidityUnits) = VTSPositionLib.onMMSettle(
             s, poolManager, marketVault, mmPositionManager, positionId, currency0, currency1, amountDelta, isSeizing
         );
@@ -508,7 +509,7 @@ contract VTSOrchestrator is ImmutableMarketState, PausableVTS, VTSCurrencyDelta,
             pa.settled.token0,
             pa.settled.token1,
             isSeizing,
-            rfsOpen,
+            rfsOpen
         );
     }
 

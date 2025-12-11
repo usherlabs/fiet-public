@@ -269,6 +269,20 @@ library MMActionAdapter {
     }
 
     /**
+     * @notice Prepares a CHECKPOINT action
+     */
+    function prepareCheckpoint(uint256 tokenId, uint256 positionIndex, bytes memory liquiditySignal)
+        internal
+        pure
+        returns (PreparedAction memory)
+    {
+        return PreparedAction({
+            action: bytes1(uint8(MMActions.CHECKPOINT)),
+            params: abi.encode(tokenId, positionIndex, liquiditySignal, liquiditySignal.length > 0)
+        });
+    }
+
+    /**
      * @notice Prepares a WRAP_NATIVE action
      */
     function prepareWrapNative(uint256 amount) internal pure returns (PreparedAction memory) {
@@ -477,6 +491,18 @@ library MMActionAdapter {
     ) internal {
         PreparedAction[] memory prepared = new PreparedAction[](1);
         prepared[0] = prepareSeize(poolKey, tokenId, idx, a0, a1);
+        execute(mmpm, prepared);
+    }
+
+    /**
+     * @notice Checkpoints a position (single action execution)
+     * @dev For backward compatibility - use prepareCheckpoint + execute for batching
+     */
+    function checkpoint(MMPositionManager mmpm, uint256 tokenId, uint256 positionIndex, bytes memory liquiditySignal)
+        internal
+    {
+        PreparedAction[] memory prepared = new PreparedAction[](1);
+        prepared[0] = prepareCheckpoint(tokenId, positionIndex, liquiditySignal);
         execute(mmpm, prepared);
     }
 }

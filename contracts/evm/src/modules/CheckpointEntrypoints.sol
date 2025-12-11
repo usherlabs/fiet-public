@@ -13,7 +13,7 @@ abstract contract CheckpointEntrypoints is ICheckpointEntrypoints, ImmutableVTSS
     /// @param positionIndex The index of the position within the commitment
     /// @param liquiditySignal The liquidity signal to verify backing (empty if withCommitment is false)
     /// @param withCommitment Whether to run commitment backing checks
-    function _checkpoint(uint256 tokenId, uint256 positionIndex, bytes calldata liquiditySignal, bool withCommitment)
+    function _checkpoint(uint256 tokenId, uint256 positionIndex, bytes memory liquiditySignal, bool withCommitment)
         internal
         virtual;
 
@@ -21,7 +21,8 @@ abstract contract CheckpointEntrypoints is ICheckpointEntrypoints, ImmutableVTSS
     /// @param tokenId The ERC721 token id (commitment NFT id)
     /// @param positionIndex The index of the position within the commitment
     function checkpoint(uint256 tokenId, uint256 positionIndex) external {
-        _checkpoint(tokenId, positionIndex, bytes(""), false);
+        bytes memory emptySignal;
+        _checkpoint(tokenId, positionIndex, emptySignal, false);
     }
 
     /// @notice Marks a checkpoint for a single position with commitment backing check
@@ -29,7 +30,7 @@ abstract contract CheckpointEntrypoints is ICheckpointEntrypoints, ImmutableVTSS
     /// @param positionIndex The index of the position within the commitment
     /// @param liquiditySignal The liquidity signal to verify backing
     function checkpoint(uint256 tokenId, uint256 positionIndex, bytes calldata liquiditySignal) external {
-        _checkpoint(tokenId, positionIndex, liquiditySignal, true);
+        _checkpoint(tokenId, positionIndex, bytes(liquiditySignal), true);
     }
 }
 

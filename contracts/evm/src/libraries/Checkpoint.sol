@@ -22,7 +22,7 @@ library CheckpointLibrary {
      * @return A storage reference to the RFSCheckpoint for the position
      */
     function getCheckpoint(VTSStorage storage s, PositionId positionId) internal view returns (RFSCheckpoint storage) {
-        return s.positions[PositionId.unwrap(positionId)].checkpoint;
+        return s.positions[positionId].checkpoint;
     }
 
     /**

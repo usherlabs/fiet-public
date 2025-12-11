@@ -912,14 +912,14 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             address(lcc1)
         );
 
-        (, uint256 expiresAtPrevious,,) = vtsOrchestrator.getCommit(tokenId);
+        (, uint256 expiresAtPrevious,) = vtsOrchestrator.getCommit(tokenId);
 
         // renew the signal
         uint256 newTimestamp = 1000;
         vm.warp(newTimestamp);
         MMA.renew(positionManager, tokenId, abi.encode(renewSignal));
 
-        (, uint256 expiresAtAfter,,) = vtsOrchestrator.getCommit(tokenId);
+        (, uint256 expiresAtAfter,) = vtsOrchestrator.getCommit(tokenId);
 
         console.log("expiresAtPrevious", expiresAtPrevious);
         console.log("expiresAtAfter", expiresAtAfter);
@@ -993,11 +993,11 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         assertGt(requiredSettlementDeltaAFter.amount1(), requiredSettlementDeltaBefore.amount1());
     }
 
-    function testCanDeclareUnbackedCommitment() public {
-        // get the default market confiration so we can tweak it
+    function testCanCheckpointWithCommitment() public {
+        // get the default market configuration so we can tweak it
         LiquiditySignal memory renewSignal = liquiditySignal;
 
-        bytes memory liquiditySignal = abi.encode(liquiditySignal);
+        bytes memory liquiditySignalBytes = abi.encode(liquiditySignal);
         ModifyLiquidityParams memory liquidityParams =
             ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
 
@@ -1006,7 +1006,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             positionManager,
             vtsOrchestrator,
             corePoolKey,
-            liquiditySignal,
+            liquiditySignalBytes,
             liquidityParams,
             marketVTSConfiguration,
             address(lcc0),
@@ -1015,11 +1015,9 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         uint256 positionIndex = 0;
         address advancer = renewSignal.mmState.advancer;
 
-        // declare the unbacked commitment
-        vm.startPrank(renewSignal.mmState.advancer);
+        // checkpoint with commitment backing check
         bytes memory unbackedLiquiditySignal = abi.encode(renewSignal);
 
-        // IVRLSignalManager(signalManager).verifyLiquiditySignal(liquiditySignal, true);
         vm.mockCall(
             address(signalManager),
             abi.encodeWithSelector(
@@ -1028,19 +1026,9 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             abi.encode(true, 10)
         );
 
-        // get the amount of tokens that will be minted using the parameters
-        (uint160 sqrtPriceX96, int24 currentTick,,) = manager.getSlot0(corePoolKey.toId());
-        // LiquidityUtils.calculateEffectiveTokenAmounts(
-        //     sqrtPriceX96,
-        //     currentTick,
-        //     liquidityParams.tickLower,
-        //     liquidityParams.tickUpper,
-        //     liquidityParams.liquidityDelta
-        // );
-
         // get liquidity in position 0
-        (Position memory positionBeforeDeclare,) = vtsOrchestrator.getPosition(tokenId, positionIndex);
-        console.log("positionLiquidityBeforeDeclare", uint256(positionBeforeDeclare.liquidity));
+        (Position memory positionBeforeCheckpoint,) = vtsOrchestrator.getPosition(tokenId, positionIndex);
+        console.log("positionLiquidityBeforeCheckpoint", uint256(positionBeforeCheckpoint.liquidity));
 
         // need to inflate the value of issuedusd to be greater than the signalusd by 20%
         vm.mockCall(
@@ -1049,13 +1037,14 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             abi.encode(50000000000, 50000000000)
         );
 
-        vm.startPrank(mmPositionManager);
-        vtsOrchestrator.declareUnbackedCommitment(advancer, tokenId, liquiditySignal);
+        // Checkpoint with commitment backing check (liquiditySignal provided means withCommitment = true)
+        // Call directly through CheckpointEntrypoints which uses msg.sender for validation
+        vm.prank(advancer);
+        positionManager.checkpoint(tokenId, positionIndex, unbackedLiquiditySignal);
 
-        vm.stopPrank();
         // get liquidity in position 0
-        (Position memory positionAfterDeclare,) = vtsOrchestrator.getPosition(tokenId, positionIndex);
-        console.log("positionLiquidityAfterDeclare", uint256(positionAfterDeclare.liquidity));
+        (Position memory positionAfterCheckpoint,) = vtsOrchestrator.getPosition(tokenId, positionIndex);
+        console.log("positionLiquidityAfterCheckpoint", uint256(positionAfterCheckpoint.liquidity));
     }
 
     /**

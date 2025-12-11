@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {VTSStorage, PositionAccounting} from "../types/VTS.sol";
+import {VTSStorage, PositionAccounting, TokenPairUint, TokenPairLib} from "../types/VTS.sol";
 import {PositionId, Position} from "../types/Position.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint128.sol";
@@ -18,7 +18,9 @@ import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {MarketMaker} from "../libraries/MarketMaker.sol";
 import {PoolId} from "../types/VTS.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
+import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
 import {CheckpointLibrary} from "./Checkpoint.sol";
+import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
 
 /// @title VTSCommitLib
 /// @notice Commit and commitment deficit management helpers for VTS, operating on VTSStorage
@@ -26,6 +28,9 @@ import {CheckpointLibrary} from "./Checkpoint.sol";
 ///      Internal functions (called only within this library) have underscore prefix.
 /// @author Fiet Protocol
 library VTSCommitLib {
+    using TokenPairLib for TokenPairUint;
+    using StateLibrary for IPoolManager;
+
     /// @notice Calculates the USD value of the position's issued commitment
     /// @param oracleHelper The oracle helper for USD price calculations
     /// @param currency0 The currency 0
@@ -44,7 +49,7 @@ library VTSCommitLib {
         int24 currentTick,
         int24 tickLower,
         int24 tickUpper,
-        uint256 liquidity
+        int256 liquidity
     ) internal view returns (uint256 value) {
         (uint256 a0, uint256 a1) = LiquidityUtils.calculateEffectiveTokenAmounts(
             sqrtPriceX96, currentTick, tickLower, tickUpper, liquidity
@@ -96,7 +101,7 @@ library VTSCommitLib {
         bool revertIfInsufficientBacking
     ) external view returns (bool success, uint256 issuedValue, uint256 settledValue, uint256 signalValue) {
         issuedValue = _issuedValueForLiquidity(
-            oracleHelper, currency0, currency1, sqrtPriceX96, tickLower, tickUpper, liquidityDelta
+            oracleHelper, currency0, currency1, sqrtPriceX96, currentTick, tickLower, tickUpper, liquidityDelta
         ); // value of total effective issued LCCs in position.
         settledValue = _settledValueForPosition(s, oracleHelper, currency0, currency1, positionId); // what is in-market.
         signalValue = _signalValueForCommit(s, oracleHelper, commitId); // what is off-chain / out of market.
@@ -122,7 +127,7 @@ library VTSCommitLib {
         uint256 coveredAmount
     ) external {
         if (tokenIndex > 1 || coveredAmount == 0) return;
-        uint128 liq = poolManager.getLiquidity(poolManager);
+        uint128 liq = poolManager.getLiquidity(poolId);
         PoolAccounting storage paPool = s.poolAccounting[poolId];
 
         if (liq > 0) {
@@ -271,7 +276,7 @@ library VTSCommitLib {
         // Compute effective issued amounts for this position at current price
         (uint160 sqrtPriceX96, int24 currentTick,,) = poolManager.getSlot0(pos.poolId);
         (uint256 eff0, uint256 eff1) = LiquidityUtils.calculateEffectiveTokenAmounts(
-            sqrtPriceX96, currentTick, pos.tickLower, pos.tickUpper, pos.liquidity
+            sqrtPriceX96, currentTick, pos.tickLower, pos.tickUpper, SafeCast.toInt256(uint128(pos.liquidity))
         );
         uint256 issuedUsd = OracleUtils.lccPairValue(
             oracleHelper, Currency.unwrap(pool.currency0), eff0, Currency.unwrap(pool.currency1), eff1
@@ -312,6 +317,7 @@ library VTSCommitLib {
             );
 
             if (currentDeficitUsd > 0) {
+                // Settling native tokens in NOT increase backing. However, it does decrease/net against the deficit.
                 uint256 surplusUsd = backingUsd - issuedUsd;
                 if (surplusUsd >= currentDeficitUsd) {
                     // Is the difference in value backing vs issued sufficient to cover the deficit?

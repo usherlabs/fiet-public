@@ -106,7 +106,7 @@ pragma solidity ^0.8.0;
 //         uint256 tokenId = vtsOrchestrator.commitSignal(liquiditySignal);
 
 //         // get the commit and validate that it was made
-//         (MarketMaker.State memory mmState, uint256 expiresAt, uint256 positionCount, uint256 deficitBps) =
+//         (MarketMaker.State memory mmState, uint256 expiresAt, uint256 positionCount) =
 //             vtsOrchestrator.getCommit(tokenId);
 //         MarketMaker.State memory expectedMMState = abi.decode(liquiditySignal, (LiquiditySignal)).mmState;
 //         // Validate the commit was saved to state correctly
@@ -114,7 +114,6 @@ pragma solidity ^0.8.0;
 //         assertEq(expiresAt, block.timestamp + signalExpiryInSeconds);
 //         assertEq(abi.encode(mmState), abi.encode(expectedMMState));
 //         assertEq(positionCount, 0);
-//         assertEq(deficitBps, 0);
 //     }
 
 //     function testCanMintPositionToVTSOrchestrator() public {

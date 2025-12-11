@@ -30,7 +30,7 @@ library MMHelpers {
     /// @param vtsOrchestrator The VTS orchestrator to query commit data
     /// @param tokenId The commitment NFT token ID
     function assertSignalValid(IVTSOrchestrator vtsOrchestrator, uint256 tokenId) internal view {
-        (, uint256 expiresAt,,) = vtsOrchestrator.getCommit(tokenId);
+        (, uint256 expiresAt,) = vtsOrchestrator.getCommit(tokenId);
         if (expiresAt < block.timestamp) {
             revert Errors.SignalExpired(tokenId);
         }

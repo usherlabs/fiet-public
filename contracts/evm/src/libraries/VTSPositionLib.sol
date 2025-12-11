@@ -11,6 +11,7 @@ import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint128.sol";
 import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {RFSCheckpoint} from "../types/Checkpoint.sol";
 
 import {
     VTSStorage,
@@ -549,7 +550,10 @@ library VTSPositionLib {
             tickUpper: params.tickUpper,
             liquidity: SafeCast.toUint128(uint256(params.liquidityDelta)),
             isActive: true,
-            salt: params.salt
+            salt: params.salt,
+            checkpoint: RFSCheckpoint({
+                timeOfLastTransition: block.timestamp, isOpen: false, gracePeriodExtension0: 0, gracePeriodExtension1: 0
+            })
         });
     }
 
@@ -859,7 +863,7 @@ library VTSPositionLib {
             // Handle LCC issuance/cancellation based on liquidity direction
             if (params.liquidityDelta > 0) {
                 // Adding liquidity: Issue LCCs
-                _handleLiquidityIncrease(s, ctx, owner, poolKey, mmData.commitId, params, principalDelta);
+                _handleLiquidityIncrease(s, ctx, owner, poolKey, mmData.commitId, id, params, principalDelta);
             } else if (params.liquidityDelta < 0) {
                 // Removing liquidity: Cancel LCCs
                 // Use locker from hookData if available, otherwise default to owner (MMPM)
