@@ -45,6 +45,76 @@ Currency deltas are tracked on different target addresses based on their source 
 
 ---
 
+## Delta Target Semantics
+
+The delta system tracks obligations between the protocol (MMPM) and external entities (lockers). The **delta target** determines the perspective of the accounting:
+
+### MMPM as Delta Target (`address(this)`)
+
+When deltas are tracked against MMPM, they represent the **protocol's obligations**:
+
+| Delta Sign | Meaning |
+|------------|---------|
+| **Positive (Credit)** | Protocol **owes** value to external sources |
+| **Negative (Debt)** | Protocol **is owed** value from external sources |
+
+**Use Cases**:
+- LCC fee credits (ERC-6909 claims the protocol owes to users)
+- Settlement obligations from position operations
+- Credits accumulated from position outputs
+
+### Locker as Delta Target (`msgSender()`)
+
+When deltas are tracked against the locker, they represent the **external entity's obligations**:
+
+| Delta Sign | Meaning |
+|------------|---------|
+| **Positive (Credit)** | External entity **is owed** value by the protocol |
+| **Negative (Debt)** | External entity **owes** value to the protocol |
+
+**Use Cases**:
+- Balance syncs from wrap/unwrap operations
+- Direct token credits from external transfers
+- Locker-held delta for take operations
+
+### Why This Distinction Matters
+
+The delta target semantics explain the `payerIsUser` parameter in FromDeltas actions:
+
+```solidity
+// payerIsUser = true: User consumes credit protocol owes them
+// Delta target = address(this) = MMPM
+// Reads: "What does the protocol owe the user?"
+address deltaTarget = payerIsUser ? address(this) : msgSender();
+```
+
+| `payerIsUser` | Delta Target | Meaning |
+|---------------|--------------|---------|
+| `true` | MMPM (`address(this)`) | User consumes credit the **protocol owes them** |
+| `false` | Locker (`msgSender()`) | User uses their own **direct credit** on the locker |
+
+**Example: FromDeltas Settlement**
+
+```
+Scenario: User has earned fees, protocol owes them 100 underlying
+
+State:
+  - MMPM underlying delta: +100 (protocol owes user 100)
+  - Locker underlying delta: 0
+
+_settleFromDeltas(payerIsUser=true):
+  1. deltaTarget = address(this) = MMPM
+  2. Reads credit from MMPM delta: 100
+  3. Uses this credit to settle position
+  
+_settleFromDeltas(payerIsUser=false):
+  1. deltaTarget = msgSender() = Locker
+  2. Reads credit from locker delta: 0
+  3. Cannot settle (no credit available)
+```
+
+---
+
 ## Core Operations
 
 ### 1. `sync()` — Credit Locker Delta from Balance Increase

@@ -86,9 +86,9 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, Immutable
                 uint256 positionIndex,
                 int128 amount0,
                 int128 amount1,
-                bool withDeltas
+                bool usePositionManagerBalance
             ) = params.decodeSettlePositionParams();
-            _settle(poolKey, tokenId, positionIndex, amount0, amount1, withDeltas);
+            _settle(poolKey, tokenId, positionIndex, amount0, amount1, usePositionManagerBalance);
             return;
         }
         if (action == MMActions.MINT_POSITION) {
@@ -127,27 +127,39 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, Immutable
                 uint256 positionIndex,
                 uint256 amount0,
                 uint256 amount1,
-                bool withDeltas
+                bool usePositionManagerBalance
             ) = params.decodeSeizePositionParams();
-            _seizePosition(poolKey, tokenId, positionIndex, amount0, amount1, withDeltas);
+            _seizePosition(poolKey, tokenId, positionIndex, amount0, amount1, usePositionManagerBalance);
             return;
         }
         if (action == MMActions.INCREASE_LIQUIDITY_FROM_DELTAS) {
-            (PoolKey calldata poolKey, uint256 tokenId, uint256 positionIndex, int24 tickLower, int24 tickUpper) =
-                params.decodeIncreaseFromDeltasParams();
-            _increaseFromDeltas(poolKey, tokenId, positionIndex, tickLower, tickUpper);
+            (
+                PoolKey calldata poolKey,
+                uint256 tokenId,
+                uint256 positionIndex,
+                int24 tickLower,
+                int24 tickUpper,
+                bool payerIsUser
+            ) = params.decodeIncreaseFromDeltasParams();
+            _increaseFromDeltas(poolKey, tokenId, positionIndex, tickLower, tickUpper, payerIsUser);
             return;
         }
         if (action == MMActions.MINT_POSITION_FROM_DELTAS) {
-            (PoolKey calldata poolKey, uint256 tokenId, int24 tickLower, int24 tickUpper) =
+            (PoolKey calldata poolKey, uint256 tokenId, int24 tickLower, int24 tickUpper, bool payerIsUser) =
                 params.decodeMintFromDeltasParams();
-            _mintFromDeltas(poolKey, tokenId, tickLower, tickUpper);
+            _mintFromDeltas(poolKey, tokenId, tickLower, tickUpper, payerIsUser);
             return;
         }
         if (action == MMActions.SETTLE_POSITION_FROM_DELTAS) {
-            (PoolKey calldata poolKey, uint256 tokenId, uint256 positionIndex, bool settleIn0, bool settleIn1) =
-                params.decodeSettleFromDeltasParams();
-            _settleFromDeltas(poolKey, tokenId, positionIndex, settleIn0, settleIn1);
+            (
+                PoolKey calldata poolKey,
+                uint256 tokenId,
+                uint256 positionIndex,
+                bool settleIn0,
+                bool settleIn1,
+                bool payerIsUser
+            ) = params.decodeSettleFromDeltasParams();
+            _settleFromDeltas(poolKey, tokenId, positionIndex, settleIn0, settleIn1, payerIsUser);
             return;
         }
         revert Errors.UnsupportedAction(action);
@@ -184,14 +196,14 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, Immutable
     /// @param positionIndex The position index within the commitment
     /// @param amount0 The amount of token0 for seizure settlement
     /// @param amount1 The amount of token1 for seizure settlement
-    /// @param withDeltas Whether to use deltas for settlement
+    /// @param usePositionManagerBalance If true, tokens flow via MMPM balance and locker's deltas are adjusted
     function _seizePosition(
         PoolKey calldata poolKey,
         uint256 tokenId,
         uint256 positionIndex,
         uint256 amount0,
         uint256 amount1,
-        bool withDeltas
+        bool usePositionManagerBalance
     ) internal {
         (Position memory position, PositionId positionId) = getPosition(tokenId, positionIndex);
         MMHelpers.assertPositionForPool(poolKey, position);
@@ -207,7 +219,7 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, Immutable
         TransientSlots.setSeizedPositionId(positionId);
 
         uint256 seizedLiquidityUnits =
-            _settle(poolKey, tokenId, positionIndex, amount0.toInt128(), amount1.toInt128(), withDeltas);
+            _settle(poolKey, tokenId, positionIndex, amount0.toInt128(), amount1.toInt128(), usePositionManagerBalance);
 
         BalanceDelta seizureSettlementDelta = LiquidityUtils.safeToBalanceDelta(amount0, amount1, true, true);
         bytes memory hookData = PositionModificationHookDataLib.encodeSeizure(
@@ -225,7 +237,8 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, Immutable
     /// @param positionIndex The position index within the commitment
     /// @param amount0 The amount of token0 to settle (signed)
     /// @param amount1 The amount of token1 to settle (signed)
-    /// @param withDeltas Whether to use deltas for settlement
+    /// @param usePositionManagerBalance If true, tokens flow via MMPM balance and locker's deltas are adjusted.
+    ///        If false, tokens flow directly from/to locker (external transfer).
     /// @return seizedLiquidityUnits The amount of liquidity units seized (if applicable)
     function _settle(
         PoolKey calldata poolKey,
@@ -233,7 +246,7 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, Immutable
         uint256 positionIndex,
         int128 amount0,
         int128 amount1,
-        bool withDeltas
+        bool usePositionManagerBalance
     ) internal returns (uint256) {
         if (amount0 == 0 && amount1 == 0) {
             revert Errors.InvalidDelta(0, 0);
@@ -267,16 +280,16 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, Immutable
         int128 delta1 = settlementDelta.amount1();
 
         address sender = msgSender();
-        address valueSender = withDeltas ? address(this) : sender;
+        address valueSender = usePositionManagerBalance ? address(this) : sender;
         if (delta0 < 0) {
             underlying0.transferFrom(valueSender, address(vault), LiquidityUtils.safeInt128ToUint256(delta0));
-            if (withDeltas) {
+            if (usePositionManagerBalance) {
                 vtsOrchestrator.take(underlying0, sender, LiquidityUtils.safeInt128ToUint256(delta0));
             }
         }
         if (delta1 < 0) {
             underlying1.transferFrom(valueSender, address(vault), LiquidityUtils.safeInt128ToUint256(delta1));
-            if (withDeltas) {
+            if (usePositionManagerBalance) {
                 vtsOrchestrator.take(underlying1, sender, LiquidityUtils.safeInt128ToUint256(delta1));
             }
         }
@@ -289,7 +302,7 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, Immutable
         if (delta1 > 0) {
             underlying1.transfer(valueSender, LiquidityUtils.safeInt128ToUint256(delta1));
         }
-        if ((delta0 > 0 || delta1 > 0) && withDeltas) {
+        if ((delta0 > 0 || delta1 > 0) && usePositionManagerBalance) {
             _syncPairBalanceToDeltas(underlying0, underlying1);
         }
 
@@ -376,19 +389,28 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, Immutable
     /// @param positionIndex The position index within the commitment
     /// @param tickLower The lower tick of the position
     /// @param tickUpper The upper tick of the position
+    /// @param payerIsUser If true, user consumes credit the protocol owes them (delta target = MMPM).
+    ///        If false, uses locker's direct credit (delta target = locker).
+    /// @dev Delta target semantics:
+    ///      - MMPM (address(this)): Protocol owes/is owed by external sources
+    ///      - Locker (msgSender()): External entity owes/is owed by protocol
     function _increaseFromDeltas(
         PoolKey calldata poolKey,
         uint256 tokenId,
         uint256 positionIndex,
         int24 tickLower,
-        int24 tickUpper
+        int24 tickUpper,
+        bool payerIsUser
     ) internal {
         MMHelpers.assertApprovedOrOwner(msgSender(), tokenId);
 
         (Position memory position,) = getPosition(tokenId, positionIndex);
         MMHelpers.assertPositionForPool(poolKey, position);
 
-        uint256 liquidityFromDeltas = _getLiquidityFromDeltas(poolKey, address(this), tickLower, tickUpper);
+        // payerIsUser = true: User consumes credit protocol owes them (tracked on MMPM)
+        // payerIsUser = false: Locker uses their own direct credit
+        address deltaTarget = payerIsUser ? address(this) : msgSender();
+        uint256 liquidityFromDeltas = _getLiquidityFromDeltas(poolKey, deltaTarget, tickLower, tickUpper);
         _increaseInternal(poolKey, tokenId, positionIndex, tickLower, tickUpper, liquidityFromDeltas);
     }
 
@@ -414,10 +436,24 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, Immutable
     /// @param tokenId The commitment NFT token ID
     /// @param tickLower The lower tick of the position
     /// @param tickUpper The upper tick of the position
-    function _mintFromDeltas(PoolKey calldata poolKey, uint256 tokenId, int24 tickLower, int24 tickUpper) internal {
+    /// @param payerIsUser If true, user consumes credit the protocol owes them (delta target = MMPM).
+    ///        If false, uses locker's direct credit (delta target = locker).
+    /// @dev Delta target semantics:
+    ///      - MMPM (address(this)): Protocol owes/is owed by external sources
+    ///      - Locker (msgSender()): External entity owes/is owed by protocol
+    function _mintFromDeltas(
+        PoolKey calldata poolKey,
+        uint256 tokenId,
+        int24 tickLower,
+        int24 tickUpper,
+        bool payerIsUser
+    ) internal {
         MMHelpers.assertApprovedOrOwner(msgSender(), tokenId);
 
-        uint256 liquidityFromDeltas = _getLiquidityFromDeltas(poolKey, address(this), tickLower, tickUpper);
+        // payerIsUser = true: User consumes credit protocol owes them (tracked on MMPM)
+        // payerIsUser = false: Locker uses their own direct credit
+        address deltaTarget = payerIsUser ? address(this) : msgSender();
+        uint256 liquidityFromDeltas = _getLiquidityFromDeltas(poolKey, deltaTarget, tickLower, tickUpper);
         _mintPositionInternal(poolKey, tokenId, tickLower, tickUpper, liquidityFromDeltas);
     }
 
@@ -427,16 +463,24 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, Immutable
     /// @param positionIndex The position index within the commitment
     /// @param settleIn0 Whether to settle in token0
     /// @param settleIn1 Whether to settle in token1
+    /// @param payerIsUser If true, user consumes credit the protocol owes them (delta target = MMPM).
+    ///        If false, uses locker's direct credit (delta target = locker).
+    /// @dev Delta target semantics:
+    ///      - MMPM (address(this)): Protocol owes/is owed by external sources
+    ///      - Locker (msgSender()): External entity owes/is owed by protocol
     function _settleFromDeltas(
         PoolKey calldata poolKey,
         uint256 tokenId,
         uint256 positionIndex,
         bool settleIn0,
-        bool settleIn1
+        bool settleIn1,
+        bool payerIsUser
     ) internal {
-        // TODO: Allow delta target to be defined. Potentially change the action name to be more explicit.
+        // payerIsUser = true: User consumes credit protocol owes them (tracked on MMPM)
+        // payerIsUser = false: Locker uses their own direct credit
+        address deltaTarget = payerIsUser ? address(this) : msgSender();
         (uint256 credit0, uint256 credit1) = _getFullCreditPair(
-            _lccToUnderlyingCurrency(poolKey.currency0), _lccToUnderlyingCurrency(poolKey.currency1), address(this)
+            _lccToUnderlyingCurrency(poolKey.currency0), _lccToUnderlyingCurrency(poolKey.currency1), deltaTarget
         );
         BalanceDelta sDelta = LiquidityUtils.safeToBalanceDelta(credit0, credit1, settleIn0, settleIn1);
         _settle(poolKey, tokenId, positionIndex, sDelta.amount0(), sDelta.amount1(), true);

@@ -31,7 +31,7 @@ library MMCalldataDecoder {
     /// @return positionIndex The position index within the commitment
     /// @return amount0 The amount of token0 to settle
     /// @return amount1 The amount of token1 to settle
-    /// @return withDeltas Whether to use deltas for settlement
+    /// @return usePositionManagerBalance If true, tokens flow via MMPM balance and locker's deltas are adjusted
     function decodeSettlePositionParams(bytes calldata params)
         internal
         pure
@@ -41,11 +41,11 @@ library MMCalldataDecoder {
             uint256 positionIndex,
             int128 amount0,
             int128 amount1,
-            bool withDeltas
+            bool usePositionManagerBalance
         )
     {
         assembly ("memory-safe") {
-            // PoolKey: 5 slots (0xa0), then tokenId, positionIndex, amount0, amount1, withDeltas
+            // PoolKey: 5 slots (0xa0), then tokenId, positionIndex, amount0, amount1, usePositionManagerBalance
             // Minimum length: 0xa0 + 0x20*5 = 0x140
             if lt(params.length, 0x140) {
                 mstore(0, SLICE_ERROR_SELECTOR)
@@ -56,7 +56,7 @@ library MMCalldataDecoder {
             positionIndex := calldataload(add(params.offset, 0xc0))
             amount0 := calldataload(add(params.offset, 0xe0))
             amount1 := calldataload(add(params.offset, 0x100))
-            withDeltas := calldataload(add(params.offset, 0x120))
+            usePositionManagerBalance := calldataload(add(params.offset, 0x120))
         }
     }
 
@@ -178,7 +178,7 @@ library MMCalldataDecoder {
     /// @return positionIndex The position index within the commitment
     /// @return amount0 The amount of token0 for seizure
     /// @return amount1 The amount of token1 for seizure
-    /// @return withDeltas Whether to use deltas for settlement
+    /// @return usePositionManagerBalance If true, tokens flow via MMPM balance and locker's deltas are adjusted
     function decodeSeizePositionParams(bytes calldata params)
         internal
         pure
@@ -188,11 +188,11 @@ library MMCalldataDecoder {
             uint256 positionIndex,
             uint256 amount0,
             uint256 amount1,
-            bool withDeltas
+            bool usePositionManagerBalance
         )
     {
         assembly ("memory-safe") {
-            // PoolKey: 5 slots (0xa0), then tokenId, positionIndex, amount0, amount1, withDeltas
+            // PoolKey: 5 slots (0xa0), then tokenId, positionIndex, amount0, amount1, usePositionManagerBalance
             // Minimum length: 0xa0 + 0x20*5 = 0x140
             if lt(params.length, 0x140) {
                 mstore(0, SLICE_ERROR_SELECTOR)
@@ -203,7 +203,7 @@ library MMCalldataDecoder {
             positionIndex := calldataload(add(params.offset, 0xc0))
             amount0 := calldataload(add(params.offset, 0xe0))
             amount1 := calldataload(add(params.offset, 0x100))
-            withDeltas := calldataload(add(params.offset, 0x120))
+            usePositionManagerBalance := calldataload(add(params.offset, 0x120))
         }
     }
 
@@ -211,22 +211,31 @@ library MMCalldataDecoder {
     // Medium Priority Decoders (Delta Operations & Signal Management)
     // ═══════════════════════════════════════════════════════════════════════════════════════════
 
-    /// @dev INCREASE_LIQUIDITY_FROM_DELTAS: (PoolKey, uint256, uint256, int24, int24)
+    /// @dev INCREASE_LIQUIDITY_FROM_DELTAS: (PoolKey, uint256, uint256, int24, int24, bool)
     /// @param params The calldata bytes to decode
     /// @return poolKey The pool key (calldata pointer)
     /// @return tokenId The commitment NFT token ID
     /// @return positionIndex The position index within the commitment
     /// @return tickLower The lower tick of the position
     /// @return tickUpper The upper tick of the position
+    /// @return payerIsUser If true, user consumes credit protocol owes them (MMPM delta).
+    ///         If false, uses locker's direct credit.
     function decodeIncreaseFromDeltasParams(bytes calldata params)
         internal
         pure
-        returns (PoolKey calldata poolKey, uint256 tokenId, uint256 positionIndex, int24 tickLower, int24 tickUpper)
+        returns (
+            PoolKey calldata poolKey,
+            uint256 tokenId,
+            uint256 positionIndex,
+            int24 tickLower,
+            int24 tickUpper,
+            bool payerIsUser
+        )
     {
         assembly ("memory-safe") {
-            // PoolKey: 5 slots (0xa0), then tokenId, positionIndex, tickLower, tickUpper
-            // Minimum length: 0xa0 + 0x20*4 = 0x120
-            if lt(params.length, 0x120) {
+            // PoolKey: 5 slots (0xa0), then tokenId, positionIndex, tickLower, tickUpper, payerIsUser
+            // Minimum length: 0xa0 + 0x20*5 = 0x140
+            if lt(params.length, 0x140) {
                 mstore(0, SLICE_ERROR_SELECTOR)
                 revert(0x1c, 4)
             }
@@ -235,24 +244,27 @@ library MMCalldataDecoder {
             positionIndex := calldataload(add(params.offset, 0xc0))
             tickLower := calldataload(add(params.offset, 0xe0))
             tickUpper := calldataload(add(params.offset, 0x100))
+            payerIsUser := calldataload(add(params.offset, 0x120))
         }
     }
 
-    /// @dev MINT_POSITION_FROM_DELTAS: (PoolKey, uint256, int24, int24)
+    /// @dev MINT_POSITION_FROM_DELTAS: (PoolKey, uint256, int24, int24, bool)
     /// @param params The calldata bytes to decode
     /// @return poolKey The pool key (calldata pointer)
     /// @return tokenId The commitment NFT token ID
     /// @return tickLower The lower tick of the position
     /// @return tickUpper The upper tick of the position
+    /// @return payerIsUser If true, user consumes credit protocol owes them (MMPM delta).
+    ///         If false, uses locker's direct credit.
     function decodeMintFromDeltasParams(bytes calldata params)
         internal
         pure
-        returns (PoolKey calldata poolKey, uint256 tokenId, int24 tickLower, int24 tickUpper)
+        returns (PoolKey calldata poolKey, uint256 tokenId, int24 tickLower, int24 tickUpper, bool payerIsUser)
     {
         assembly ("memory-safe") {
-            // PoolKey: 5 slots (0xa0), then tokenId, tickLower, tickUpper
-            // Minimum length: 0xa0 + 0x20*3 = 0x100
-            if lt(params.length, 0x100) {
+            // PoolKey: 5 slots (0xa0), then tokenId, tickLower, tickUpper, payerIsUser
+            // Minimum length: 0xa0 + 0x20*4 = 0x120
+            if lt(params.length, 0x120) {
                 mstore(0, SLICE_ERROR_SELECTOR)
                 revert(0x1c, 4)
             }
@@ -260,25 +272,35 @@ library MMCalldataDecoder {
             tokenId := calldataload(add(params.offset, 0xa0))
             tickLower := calldataload(add(params.offset, 0xc0))
             tickUpper := calldataload(add(params.offset, 0xe0))
+            payerIsUser := calldataload(add(params.offset, 0x100))
         }
     }
 
-    /// @dev SETTLE_POSITION_FROM_DELTAS: (PoolKey, uint256, uint256, bool, bool)
+    /// @dev SETTLE_POSITION_FROM_DELTAS: (PoolKey, uint256, uint256, bool, bool, bool)
     /// @param params The calldata bytes to decode
     /// @return poolKey The pool key (calldata pointer)
     /// @return tokenId The commitment NFT token ID
     /// @return positionIndex The position index within the commitment
     /// @return settleIn0 Whether to settle in token0
     /// @return settleIn1 Whether to settle in token1
+    /// @return payerIsUser If true, user consumes credit protocol owes them (MMPM delta).
+    ///         If false, uses locker's direct credit.
     function decodeSettleFromDeltasParams(bytes calldata params)
         internal
         pure
-        returns (PoolKey calldata poolKey, uint256 tokenId, uint256 positionIndex, bool settleIn0, bool settleIn1)
+        returns (
+            PoolKey calldata poolKey,
+            uint256 tokenId,
+            uint256 positionIndex,
+            bool settleIn0,
+            bool settleIn1,
+            bool payerIsUser
+        )
     {
         assembly ("memory-safe") {
-            // PoolKey: 5 slots (0xa0), then tokenId, positionIndex, settleIn0, settleIn1
-            // Minimum length: 0xa0 + 0x20*4 = 0x120
-            if lt(params.length, 0x120) {
+            // PoolKey: 5 slots (0xa0), then tokenId, positionIndex, settleIn0, settleIn1, payerIsUser
+            // Minimum length: 0xa0 + 0x20*5 = 0x140
+            if lt(params.length, 0x140) {
                 mstore(0, SLICE_ERROR_SELECTOR)
                 revert(0x1c, 4)
             }
@@ -287,6 +309,7 @@ library MMCalldataDecoder {
             positionIndex := calldataload(add(params.offset, 0xc0))
             settleIn0 := calldataload(add(params.offset, 0xe0))
             settleIn1 := calldataload(add(params.offset, 0x100))
+            payerIsUser := calldataload(add(params.offset, 0x120))
         }
     }
 
