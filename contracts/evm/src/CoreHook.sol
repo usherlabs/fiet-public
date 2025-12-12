@@ -194,6 +194,7 @@ contract CoreHook is BaseHook, Exttload, ImmutableMarketState, ImmutableVTSState
     ) internal virtual override returns (bytes4, BalanceDelta) {
         // Update VTS position state with registration/update based on actual pool id
         // Pass callerDelta and feesAccrued for consolidated delta management
+        // TODO: Return isMMOperation flag in response.
         (Position memory pos,, BalanceDelta feeAdj) =
             vtsOrchestrator.processPosition(sender, key, params, delta, feesAccrued, hookData);
 

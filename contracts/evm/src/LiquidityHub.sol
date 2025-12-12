@@ -11,8 +11,6 @@ import {CurrencyTransfer} from "./libraries/CurrencyTransfer.sol";
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {ReentrancyGuardTransient} from "openzeppelin-contracts/contracts/utils/ReentrancyGuardTransient.sol";
-import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Errors} from "./libraries/Errors.sol";
 import {IMarketVault} from "./interfaces/IMarketVault.sol";
 
@@ -23,7 +21,6 @@ import {IMarketVault} from "./interfaces/IMarketVault.sol";
  */
 contract LiquidityHub is Ownable, ReentrancyGuardTransient {
     using CurrencyTransfer for Currency;
-    using SafeERC20 for ERC20;
 
     // ============ UNIFIED STATE ============
     LiquidityHubStorage internal s;
@@ -65,20 +62,28 @@ contract LiquidityHub is Ownable, ReentrancyGuardTransient {
      * @notice Modifier to restrict access to registered factory contracts only
      */
     modifier onlyFactory() {
+        _onlyFactory();
+        _;
+    }
+
+    function _onlyFactory() internal view {
         if (!isFactory[_msgSender()]) {
             revert Errors.InvalidSender();
         }
-        _;
     }
 
     /**
      * @notice Modifier to restrict access to registered factory contracts or the owner
      */
     modifier onlyFactoryOrOwner() {
+        _onlyFactoryOrOwner();
+        _;
+    }
+
+    function _onlyFactoryOrOwner() internal view {
         if (!isFactory[_msgSender()] && _msgSender() != owner()) {
             revert Errors.InvalidSender();
         }
-        _;
     }
 
     /**
@@ -95,10 +100,14 @@ contract LiquidityHub is Ownable, ReentrancyGuardTransient {
      * @param lcc The LCC token address to check issuer status for
      */
     modifier onlyIssuer(address lcc) {
+        _onlyIssuer(lcc);
+        _;
+    }
+
+    function _onlyIssuer(address lcc) internal view {
         if (!LCCFactoryLib.isCallerIssuer(s, lcc, msg.sender)) {
             revert Errors.NotApproved(msg.sender);
         }
-        _;
     }
 
     // ============ PUBLIC ACCESSORS ============
@@ -360,8 +369,8 @@ contract LiquidityHub is Ownable, ReentrancyGuardTransient {
                 revert Errors.InvalidAmount(0, 0);
             }
         } else {
-            // safe to make ERC20 call here since we have verified that from address is not a native asset
-            ERC20(underlying).safeTransferFrom(from, address(this), amount);
+            // Use CurrencyTransfer which has Permit2 fallback for ERC20 transfers
+            Currency.wrap(underlying).transferFrom(from, address(this), amount);
         }
 
         s.directSupply[lcc] += amount;

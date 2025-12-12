@@ -320,8 +320,6 @@ abstract contract MarketTestBase is Test, Deployers {
 
     // initialise the contracts that need to be initialized and set the dependencies
     function _initContracts() internal {
-        // set the mmposition manager in the vts orchestrator
-        vtsOrchestrator.setMMPositionManager(mmPositionManager);
         // The hook needs to initialise the pool, this should automatically be called when the pool is created from the factory
         // until the factory is deployed in this test we will mock as below
         vm.prank(marketFactory);

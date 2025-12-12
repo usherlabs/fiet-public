@@ -76,10 +76,14 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
     }
 
     modifier onlyLiquidityHub() {
+        _onlyLiquidityHub();
+        _;
+    }
+
+    function _onlyLiquidityHub() internal view {
         if (msg.sender != address(liquidityHub)) {
             revert Errors.InvalidSender();
         }
-        _;
     }
 
     function setHooks(address _coreHook) external onlyOwner {

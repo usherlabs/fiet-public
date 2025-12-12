@@ -24,14 +24,11 @@ import {Permit2Forwarder} from "v4-periphery/src/base/Permit2Forwarder.sol";
 import {IAllowanceTransfer} from "permit2/src/interfaces/IAllowanceTransfer.sol";
 import {MMActions} from "./libraries/MMActions.sol";
 import {MMCalldataDecoder} from "./libraries/MMCalldataDecoder.sol";
-import {CheckpointEntrypoints} from "./modules/CheckpointEntrypoints.sol";
 import {MMHelpers} from "./libraries/MMHelpers.sol";
 import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
-import {SafeERC20} from "openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol";
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
 import {TransientStateLibrary} from "v4-periphery/lib/v4-core/src/libraries/TransientStateLibrary.sol";
 import {CurrencyTransfer} from "./libraries/CurrencyTransfer.sol";
-import {PoolManagerUnlockGuard} from "./modules/PoolManagerUnlockGuard.sol";
 
 /// @title MMPositionManager
 /// @notice Entry point for VRL commitment position management
@@ -45,12 +42,9 @@ contract MMPositionManager is
     Permit2Forwarder,
     BaseActionsRouter,
     NativeWrapper,
-    PositionManagerEntrypoint,
-    CheckpointEntrypoints,
-    PoolManagerUnlockGuard
+    PositionManagerEntrypoint
 {
     using MMCalldataDecoder for bytes;
-    using SafeERC20 for IERC20;
     using CurrencyLibrary for Currency;
     using CurrencyTransfer for Currency;
     using StateLibrary for IPoolManager;
@@ -99,8 +93,22 @@ contract MMPositionManager is
     // ═══════════════════════════════════════════════════════════════════════════
 
     modifier checkDeadline(uint256 deadline) {
-        if (block.timestamp > deadline) revert Errors.DeadlinePassed(deadline);
+        _checkDeadline(deadline);
         _;
+    }
+
+    function _checkDeadline(uint256 deadline) internal view {
+        if (block.timestamp > deadline) revert Errors.DeadlinePassed(deadline);
+    }
+
+    /// @notice Requires PoolManager to be locked (not within an active batch)
+    modifier onlyIfPoolManagerLocked() {
+        _onlyIfPoolManagerLocked();
+        _;
+    }
+
+    function _onlyIfPoolManagerLocked() internal view {
+        if (poolManager.isUnlocked()) revert Errors.PoolManagerMustBeLocked();
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -257,7 +265,7 @@ contract MMPositionManager is
         uint256 positionIndex,
         bytes memory liquiditySignal,
         bool withCommitment
-    ) internal override {
+    ) internal {
         vtsOrchestrator.checkpoint(sender, tokenId, positionIndex, liquiditySignal, withCommitment);
     }
 
@@ -343,7 +351,8 @@ contract MMPositionManager is
 
         if (toUnwrap > 0) {
             if (from != address(this)) {
-                lcc.safeTransferFrom(from, address(this), toUnwrap);
+                // Use CurrencyTransfer with Permit2 fallback for user transfers
+                lccCurrency.transferFrom(from, address(this), toUnwrap);
             }
             liquidityHub.unwrapTo(lccAddr, to, toUnwrap);
         }
@@ -400,6 +409,7 @@ contract MMPositionManager is
             if (amount == 0) {
                 amount = weth.balanceOf(payer);
             }
+            // Use CurrencyTransfer with Permit2 fallback for user transfers
             weth.transferFrom(payer, address(this), amount);
         } else {
             uint256 takeAmount = vtsOrchestrator.take(weth, msgSender(), amount);
@@ -476,5 +486,28 @@ contract MMPositionManager is
         returns (MarketMaker.State memory state, uint256 expiresAt, uint256 positionCount)
     {
         return vtsOrchestrator.getCommit(tokenId);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // No-Locking Checkpoint Functions
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// @notice Marks a checkpoint for a single position within a commitment
+    /// @param tokenId The ERC721 token id (commitment NFT id)
+    /// @param positionIndex The index of the position within the commitment
+    function checkpoint(uint256 tokenId, uint256 positionIndex) external onlyIfPoolManagerLocked {
+        bytes memory emptySignal;
+        _checkpoint(msg.sender, tokenId, positionIndex, emptySignal, false);
+    }
+
+    /// @notice Marks a checkpoint for a single position with commitment backing check
+    /// @param tokenId The ERC721 token id (commitment NFT id)
+    /// @param positionIndex The index of the position within the commitment
+    /// @param liquiditySignal The liquidity signal to verify backing
+    function checkpoint(uint256 tokenId, uint256 positionIndex, bytes calldata liquiditySignal)
+        external
+        onlyIfPoolManagerLocked
+    {
+        _checkpoint(msg.sender, tokenId, positionIndex, bytes(liquiditySignal), true);
     }
 }

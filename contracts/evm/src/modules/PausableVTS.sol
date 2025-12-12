@@ -32,18 +32,26 @@ abstract contract PausableVTS is Ownable, IPausableVTS {
      * @param poolId The pool to check pause status for
      */
     modifier notPoolPaused(PoolId poolId) {
+        _notPoolPaused(poolId);
+        _;
+    }
+
+    function _notPoolPaused(PoolId poolId) internal view {
         VTSStorage storage s = _vtsStorage();
         if (s.isPaused) revert Errors.EnforcedPause();
         if (s.pools[poolId].isPaused) revert Errors.EnforcedPause();
-        _;
     }
 
     /**
      * @dev Modifier to check if global pause is not active.
      */
     modifier notGlobalPaused() {
-        if (_vtsStorage().isPaused) revert Errors.EnforcedPause();
+        _notGlobalPaused();
         _;
+    }
+
+    function _notGlobalPaused() internal view {
+        if (_vtsStorage().isPaused) revert Errors.EnforcedPause();
     }
 
     // ═══════════════════════════════════════════════════════════════════════════

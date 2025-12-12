@@ -5,8 +5,6 @@ import {LiquidityHubStorage, Market} from "../types/Liquidity.sol";
 import {LCCFactoryLib} from "./LCCFactoryLib.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {Errors} from "./Errors.sol";
-import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {CurrencyTransfer} from "./CurrencyTransfer.sol";
@@ -16,7 +14,6 @@ import {CurrencyTransfer} from "./CurrencyTransfer.sol";
 /// @dev Integrates with LCCFactoryLib to reuse functions without callbacks
 ///      Uses adapter pattern to bridge LiquidityHubStorage to LCCFactoryLib functions
 library LiquidityHubLib {
-    using SafeERC20 for ERC20;
     using CurrencyTransfer for Currency;
 
     // ============ ADAPTER FUNCTIONS ============
@@ -145,8 +142,8 @@ library LiquidityHubLib {
         uint256 fromMarketDerivedAmount = Math.min(amount, fromMarketDerivedBalance);
         uint256 fromWrappedAmount = amount - fromMarketDerivedAmount;
 
-        // Pull backing LCC from user to Hub
-        ERC20(withLCC).safeTransferFrom(from, address(this), amount);
+        // Pull backing LCC from user to Hub with Permit2 fallback
+        Currency.wrap(withLCC).transferFrom(from, address(this), amount);
 
         uint256 targetToBurn = 0;
         uint256 backingToBurn = 0;

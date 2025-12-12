@@ -15,15 +15,23 @@ abstract contract MarketHandler {
     }
 
     modifier onlyFactory() {
-        if (msg.sender != address(marketFactory)) revert Errors.InvalidSender();
+        _onlyFactory();
         _;
     }
 
+    function _onlyFactory() internal view {
+        if (msg.sender != address(marketFactory)) revert Errors.InvalidSender();
+    }
+
     modifier onlyBounds() {
+        _onlyBounds();
+        _;
+    }
+
+    function _onlyBounds() internal view {
         if (!marketFactory.bounds(msg.sender)) {
             revert Errors.InvalidSender();
         }
-        _;
     }
 
     modifier onlyMarketAssets(PoolId poolId) {

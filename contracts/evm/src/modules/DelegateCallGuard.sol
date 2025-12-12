@@ -14,8 +14,12 @@ abstract contract DelegateCallGuard {
     /// @notice Modifier that ensures function is only called via delegatecall
     /// @dev Reverts if called directly on the implementation contract
     modifier onlyDelegateCall() {
-        if (address(this) == __self) revert OnlyDelegateCall();
+        _onlyDelegateCall();
         _;
+    }
+
+    function _onlyDelegateCall() internal view {
+        if (address(this) == __self) revert OnlyDelegateCall();
     }
 }
 

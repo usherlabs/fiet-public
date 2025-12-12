@@ -70,7 +70,6 @@ library VTSPositionLib {
         internal
     {
         PositionAccounting storage pa = s.positionAccounting[positionId];
-        Position memory pos = s.positions[positionId];
 
         // Current tracked maxima for this position
         uint256 currentC0 = pa.commitmentMax.token0;
@@ -1129,7 +1128,6 @@ library VTSPositionLib {
     /// @notice Core settlement entrypoint for MM-managed positions
     /// @param s The central VTS storage
     /// @param poolManager The pool manager contract
-    /// @param owner The owner address (MMPM)
     /// @param vault The market vault interface for liquidity availability checks
     /// @param positionId The position id
     /// @param lccCurrency0 The pool currency of the LCC token for token0

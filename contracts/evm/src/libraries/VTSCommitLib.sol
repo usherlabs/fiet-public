@@ -177,13 +177,11 @@ library VTSCommitLib {
     /// @dev Uses O(1) operations - no position iteration required
     /// @param s The central VTS storage
     /// @param signalManager The signal manager for verification
-    /// @param oracleHelper The oracle helper for USD calculations
     /// @param commitId The commit ID
     /// @param liquiditySignal The new liquidity signal
     function renewSignal(
         VTSStorage storage s,
         IVRLSignalManager signalManager,
-        IOracleHelper oracleHelper,
         uint256 commitId,
         bytes memory liquiditySignal
     ) external {

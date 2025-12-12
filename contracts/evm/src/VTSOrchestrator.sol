@@ -45,20 +45,12 @@ import {VTSFeeLib} from "./libraries/VTSFeeLib.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {DynamicCurrencyDelta} from "./libraries/DynamicCurrencyDelta.sol";
 import {IMarketVault} from "./interfaces/IMarketVault.sol";
-import {PoolManagerUnlockGuard} from "./modules/PoolManagerUnlockGuard.sol";
 
 /// @title VTSOrchestrator
 /// @notice Central state management layer and orchestrator for VTS logic
 /// @dev Adopts Bunni-style pattern: state managed in VTSStorage struct, complex logic delegated to linked libraries
 /// @author Fiet Protocol
-contract VTSOrchestrator is
-    ImmutableMarketState,
-    PausableVTS,
-    VTSCurrencyDelta,
-    ImmutableState,
-    IVTSOrchestrator,
-    PoolManagerUnlockGuard
-{
+contract VTSOrchestrator is ImmutableMarketState, PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSOrchestrator {
     using CurrencyLibrary for Currency;
     using StateLibrary for IPoolManager;
     using TransientStateLibrary for IPoolManager;
@@ -113,10 +105,24 @@ contract VTSOrchestrator is
 
     /// @notice Modifier to check if position is valid
     modifier onlyPositionValid(PositionId positionId) {
+        _onlyPositionValid(positionId);
+        _;
+    }
+
+    function _onlyPositionValid(PositionId positionId) internal view {
         if (!isPositionValid(positionId, true)) {
             revert Errors.InvalidPosition(0, 0, positionId);
         }
+    }
+
+    /// @notice Requires PoolManager to be unlocked (within an active batch)
+    modifier onlyIfPoolManagerUnlocked() {
+        _onlyIfPoolManagerUnlocked();
         _;
+    }
+
+    function _onlyIfPoolManagerUnlocked() internal view {
+        if (!poolManager.isUnlocked()) revert Errors.PoolManagerMustBeUnlocked();
     }
 
     /// @inheritdoc PausableVTS
@@ -582,7 +588,7 @@ contract VTSOrchestrator is
     function renewSignal(uint256 commitId, bytes memory liquiditySignal) external onlyIfPoolManagerUnlocked {
         // Validate commit exists (but don't require live signal - expired signals can be seized)
         _assertSignalValid(commitId, false);
-        VTSCommitLib.renewSignal(s, signalManager, oracleHelper, commitId, liquiditySignal);
+        VTSCommitLib.renewSignal(s, signalManager, commitId, liquiditySignal);
     }
 
     /// @notice Checkpoint a position and optionally run commitment backing checks

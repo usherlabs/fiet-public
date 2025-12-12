@@ -77,11 +77,15 @@ abstract contract MarketVault is IMarketVault, ImmutableState, ImmutableMarketSt
     }
 
     modifier onlyProtocolBounds() {
+        _onlyProtocolBounds();
+        _;
+    }
+
+    function _onlyProtocolBounds() internal view {
         // Being explicit witn these bounds to prevent leaks.
         if (msg.sender != (address(marketFactory)) && msg.sender != (address(mmPositionManager))) {
             revert Errors.InvalidSender();
         }
-        _;
     }
 
     function _underlying() internal view virtual returns (Currency currency0, Currency currency1);
@@ -502,7 +506,7 @@ abstract contract MarketVault is IMarketVault, ImmutableState, ImmutableMarketSt
      * @param balanceDelta The desired balance delta to apply
      * @return The actual balance delta that was applied (may be less than requested for withdrawals)
      */
-    function dryModifyLiquidities(BalanceDelta balanceDelta) external onlyProtocolBounds returns (BalanceDelta) {
+    function dryModifyLiquidities(BalanceDelta balanceDelta) external view onlyProtocolBounds returns (BalanceDelta) {
         return _dryModifyLiquidities(balanceDelta);
     }
 
