@@ -31,6 +31,7 @@ import {SafeERC20} from "openzeppelin-contracts/contracts/token/ERC20/utils/Safe
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
 import {TransientStateLibrary} from "v4-periphery/lib/v4-core/src/libraries/TransientStateLibrary.sol";
 import {CurrencyTransfer} from "./libraries/CurrencyTransfer.sol";
+import {PoolManagerUnlockGuard} from "./modules/PoolManagerUnlockGuard.sol";
 
 /// @title MMPositionManager
 /// @notice Entry point for VRL commitment position management
@@ -45,7 +46,8 @@ contract MMPositionManager is
     BaseActionsRouter,
     NativeWrapper,
     PositionManagerEntrypoint,
-    CheckpointEntrypoints
+    CheckpointEntrypoints,
+    PoolManagerUnlockGuard
 {
     using MMCalldataDecoder for bytes;
     using SafeERC20 for IERC20;
@@ -98,12 +100,6 @@ contract MMPositionManager is
 
     modifier checkDeadline(uint256 deadline) {
         if (block.timestamp > deadline) revert Errors.DeadlinePassed(deadline);
-        _;
-    }
-
-    /// @notice Enforces that the PoolManager is locked
-    modifier onlyIfPoolManagerLocked() {
-        if (poolManager.isUnlocked()) revert Errors.PoolManagerMustBeLocked();
         _;
     }
 
@@ -201,7 +197,7 @@ contract MMPositionManager is
         if (action == MMActions.CHECKPOINT) {
             (uint256 tokenId, uint256 positionIndex, bytes calldata liquiditySignal, bool withCommitment) =
                 params.decodeCheckpointParams();
-            _checkpoint(tokenId, positionIndex, liquiditySignal, withCommitment);
+            _checkpoint(msgSender(), tokenId, positionIndex, liquiditySignal, withCommitment);
             return;
         }
         if (action == MMActions.EXTEND_GRACE_PERIOD) {
@@ -240,7 +236,6 @@ contract MMPositionManager is
     /// @param tokenId The commitment NFT token ID
     function _decommitSignal(uint256 tokenId) internal {
         MMHelpers.assertApprovedOrOwner(msgSender(), tokenId);
-        _assertSignalValid(tokenId);
 
         (,, uint256 positionCount) = vtsOrchestrator.getCommit(tokenId);
         if (positionCount > 0) {
@@ -256,11 +251,14 @@ contract MMPositionManager is
     /// @param positionIndex The position index within the commitment
     /// @param liquiditySignal The liquidity signal (required if withCommitment = true)
     /// @param withCommitment Whether to run commitment backing checks and update deficits
-    function _checkpoint(uint256 tokenId, uint256 positionIndex, bytes memory liquiditySignal, bool withCommitment)
-        internal
-        override
-    {
-        vtsOrchestrator.checkpoint(msgSender(), tokenId, positionIndex, liquiditySignal, withCommitment);
+    function _checkpoint(
+        address sender,
+        uint256 tokenId,
+        uint256 positionIndex,
+        bytes memory liquiditySignal,
+        bool withCommitment
+    ) internal override {
+        vtsOrchestrator.checkpoint(sender, tokenId, positionIndex, liquiditySignal, withCommitment);
     }
 
     /// @notice Extends grace period for a commitment via proof
@@ -279,7 +277,6 @@ contract MMPositionManager is
         bytes calldata settlementProof
     ) internal {
         MMHelpers.assertApprovedOrOwner(msgSender(), tokenId);
-        _assertSignalValid(tokenId);
         vtsOrchestrator.extendGracePeriod(
             poolKey, tokenId, positionIndex, settlementTokenIndex, verifierIndex, settlementProof
         );

@@ -245,7 +245,6 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, Immutable
         bool isSeizing = _isSeizing(positionId);
 
         if (!isSeizing) {
-            _assertSignalValid(tokenId);
             MMHelpers.assertApprovedOrOwner(msgSender(), tokenId);
         }
 
@@ -303,7 +302,6 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, Immutable
     /// @param positionIndex The position index within the commitment
     function _burnPosition(PoolKey calldata poolKey, uint256 tokenId, uint256 positionIndex) internal {
         MMHelpers.assertApprovedOrOwner(msgSender(), tokenId);
-        _assertSignalValid(tokenId);
 
         (Position memory position,) = getPosition(tokenId, positionIndex);
         MMHelpers.assertPositionForPool(poolKey, position);
@@ -334,7 +332,6 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, Immutable
         uint256 liquidity
     ) internal {
         MMHelpers.assertApprovedOrOwner(msgSender(), tokenId);
-        _assertSignalValid(tokenId);
 
         (Position memory position,) = getPosition(tokenId, positionIndex);
         MMHelpers.assertPositionForPool(poolKey, position);
@@ -387,7 +384,6 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, Immutable
         int24 tickUpper
     ) internal {
         MMHelpers.assertApprovedOrOwner(msgSender(), tokenId);
-        _assertSignalValid(tokenId);
 
         (Position memory position,) = getPosition(tokenId, positionIndex);
         MMHelpers.assertPositionForPool(poolKey, position);
@@ -410,7 +406,6 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, Immutable
         uint256 liquidity
     ) internal {
         MMHelpers.assertApprovedOrOwner(msgSender(), tokenId);
-        _assertSignalValid(tokenId);
         _mintPositionInternal(poolKey, tokenId, tickLower, tickUpper, liquidity);
     }
 
@@ -421,7 +416,6 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, Immutable
     /// @param tickUpper The upper tick of the position
     function _mintFromDeltas(PoolKey calldata poolKey, uint256 tokenId, int24 tickLower, int24 tickUpper) internal {
         MMHelpers.assertApprovedOrOwner(msgSender(), tokenId);
-        _assertSignalValid(tokenId);
 
         uint256 liquidityFromDeltas = _getLiquidityFromDeltas(poolKey, address(this), tickLower, tickUpper);
         _mintPositionInternal(poolKey, tokenId, tickLower, tickUpper, liquidityFromDeltas);
@@ -440,6 +434,7 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, Immutable
         bool settleIn0,
         bool settleIn1
     ) internal {
+        // TODO: Allow delta target to be defined. Potentially change the action name to be more explicit.
         (uint256 credit0, uint256 credit1) = _getFullCreditPair(
             _lccToUnderlyingCurrency(poolKey.currency0), _lccToUnderlyingCurrency(poolKey.currency1), address(this)
         );
@@ -488,7 +483,6 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, Immutable
         internal
     {
         MMHelpers.assertApprovedOrOwner(msgSender(), tokenId);
-        _assertSignalValid(tokenId);
 
         (Position memory position,) = getPosition(tokenId, positionIndex);
         MMHelpers.assertPositionForPool(poolKey, position);

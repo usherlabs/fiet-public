@@ -4,7 +4,6 @@ pragma solidity ^0.8.26;
 import {ImmutableVTSState} from "./ImmutableVTSState.sol";
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {ILCC} from "../interfaces/ILCC.sol";
-import {MMHelpers} from "../libraries/MMHelpers.sol";
 
 /**
  * @title PositionManagerBase
@@ -22,14 +21,6 @@ abstract contract PositionManagerBase is ImmutableVTSState {
     /// @notice Returns the locker address (original caller of the batch)
     /// @dev Must be implemented by inheriting contracts (e.g., via BaseActionsRouter._getLocker())
     function msgSender() public view virtual returns (address);
-
-    // ------------------------------------------------------------------------------------------------
-    // ACCESS HELPERS
-    // ------------------------------------------------------------------------------------------------
-
-    function _assertSignalValid(uint256 tokenId) internal view {
-        MMHelpers.assertSignalValid(vtsOrchestrator, tokenId);
-    }
 
     // ------------------------------------------------------------------------------------------------
     // SHARED UTILITIES

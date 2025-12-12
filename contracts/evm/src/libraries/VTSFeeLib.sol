@@ -301,9 +301,9 @@ library VTSFeeLib {
     /// @dev Must be called from a context with an active PoolManager lock.
     ///      The caller (address(this) in the calling contract's context) must hold the ERC-6909 claims.
     ///      Flow:
-    ///      1. Burns caller's ERC-6909 claims (credits caller's PoolManager transient delta)
-    ///      2. Takes actual ERC20 tokens from PoolManager to recipient
-    ///      3. Debits the VTS delta for the specified target
+    ///      1. Debits the VTS delta for the specified target (caps to available credit)
+    ///      2. Burns caller's ERC-6909 claims (credits caller's PoolManager transient delta)
+    ///      3. Takes actual ERC20 tokens from PoolManager to recipient
     ///
     ///      This consolidates the fee collection logic used by both:
     ///      - VTSFeeLib (during hook callbacks from CoreHook context)
@@ -313,26 +313,29 @@ library VTSFeeLib {
     /// @param lccCurrency The LCC currency to collect
     /// @param deltaTarget The address whose VTS delta to debit (may differ from caller)
     /// @param recipient The recipient of the actual ERC20 tokens
-    /// @param amount The amount to collect
+    /// @param maxAmount The maximum amount to collect (capped to available delta credit)
+    /// @return collected The actual amount collected (may be less than maxAmount if insufficient credit)
     function collectFees(
         IPoolManager poolManager,
         Currency lccCurrency,
         address deltaTarget,
         address recipient,
-        uint256 amount
-    ) internal {
-        if (amount == 0) return;
+        uint256 maxAmount
+    ) internal returns (uint256 collected) {
+        if (maxAmount == 0) return 0;
 
-        // 1. Burn ERC-6909 claims held by this contract (caller context)
+        // 1. Debit the VTS delta first - this caps to available credit and returns actual amount
+        //    This ensures we never collect more than the target's available delta credit
+        collected = DynamicCurrencyDelta.take(lccCurrency, deltaTarget, maxAmount);
+
+        if (collected == 0) return 0;
+
+        // 2. Burn ERC-6909 claims held by this contract (caller context)
         //    This credits the caller's PoolManager transient delta
-        lccCurrency.settle(poolManager, address(this), amount, true);
+        lccCurrency.settle(poolManager, address(this), collected, true);
 
-        // 2. Take actual ERC20 tokens from PoolManager to recipient
+        // 3. Take actual ERC20 tokens from PoolManager to recipient
         //    This debits the caller's PoolManager transient delta
-        lccCurrency.take(poolManager, recipient, amount, false);
-
-        // 3. Debit the VTS delta for the specified target
-        //    This ensures the VTS accounting reflects the withdrawal
-        DynamicCurrencyDelta.take(lccCurrency, deltaTarget, amount);
+        lccCurrency.take(poolManager, recipient, collected, false);
     }
 }

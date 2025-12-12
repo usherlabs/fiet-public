@@ -5,7 +5,6 @@ import {ERC721Permit_v4} from "v4-periphery/src/base/ERC721Permit_v4.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Errors} from "./Errors.sol";
-import {IVTSOrchestrator} from "../interfaces/IVTSOrchestrator.sol";
 import {Position} from "../types/Position.sol";
 
 /// @title MMHelpers
@@ -24,16 +23,6 @@ library MMHelpers {
         if (ERC721Permit_v4(address(this)).getApproved(tokenId) == caller) return;
         if (ERC721Permit_v4(address(this)).isApprovedForAll(owner, caller)) return;
         revert Errors.NotApproved(caller);
-    }
-
-    /// @notice Enforces that the commit is valid (not expired)
-    /// @param vtsOrchestrator The VTS orchestrator to query commit data
-    /// @param tokenId The commitment NFT token ID
-    function assertSignalValid(IVTSOrchestrator vtsOrchestrator, uint256 tokenId) internal view {
-        (, uint256 expiresAt,) = vtsOrchestrator.getCommit(tokenId);
-        if (expiresAt < block.timestamp) {
-            revert Errors.SignalExpired(tokenId);
-        }
     }
 
     /// @notice Asserts that the position belongs to the specified pool

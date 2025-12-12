@@ -564,7 +564,7 @@ library VTSPositionLib {
     function _linkPositionToCommit(VTSStorage storage s, PositionId positionId, uint256 commitId) internal {
         // validate there is an existing commit for the token id
         if (s.commits[commitId].expiresAt < block.timestamp) {
-            revert Errors.SignalExpired(commitId);
+            revert Errors.InvalidSignal(commitId);
         }
 
         // Get current position count to use as index for the new position
@@ -682,7 +682,6 @@ library VTSPositionLib {
 
         // pos.owner == address(0) means new position
         bool isNewPosition = posStorage.owner == address(0);
-        bool isMMPosition = isNewPosition ? owner == ctx.mmpmAddress : posStorage.owner == ctx.mmpmAddress;
         bool isSeizing;
         BalanceDelta requiredSettlementDelta;
 
@@ -691,6 +690,9 @@ library VTSPositionLib {
         // Decode hookData using the PositionModificationHookData struct
         BalanceDelta seizureSettlementDelta = BalanceDelta.wrap(0);
         PositionModificationHookData memory mmData = PositionModificationHookDataLib.decodeCalldata(hookData);
+
+        // Signal validated in detail by caller (VTSOrchestrator).
+        bool isMMOperation = PositionModificationHookDataLib.isMMOperation(mmData);
 
         if (mmData.seizure.isSeizing) {
             isSeizing = true;
@@ -704,7 +706,7 @@ library VTSPositionLib {
             // NEW POSITION: initialize the liquidity to the liquidity delta
             _registerPosition(s, owner, poolId, params);
             // Link position to commit for MM positions
-            if (isMMPosition && mmData.commitId > 0) {
+            if (isMMOperation && mmData.commitId > 0) {
                 _linkPositionToCommit(s, id, mmData.commitId);
             }
 
@@ -714,7 +716,7 @@ library VTSPositionLib {
             // get the commitment maxima for the position
             TokenPairUint memory commitmentMaxima = s.positionAccounting[id].commitmentMax;
 
-            if (isMMPosition) {
+            if (isMMOperation) {
                 // New positions mean base settlement.
                 MarketVTSConfiguration memory vtsConfiguration = s.pools[poolId].vtsConfig;
                 (uint256 amountToSettle0, uint256 amountToSettle1) = LiquidityUtils.getBaseSettlementAmounts(
@@ -772,7 +774,7 @@ library VTSPositionLib {
                     }
                 }
 
-                if (isMMPosition) {
+                if (isMMOperation) {
                     // Positive delta = protocol owes (withdrawal)
                     requiredSettlementDelta = LiquidityUtils.safeToBalanceDelta(excess0, excess1, false, false);
                 } else {
@@ -793,7 +795,7 @@ library VTSPositionLib {
                 uint256 s1 = pa.settled.token1;
                 TokenPairUint memory commitmentMaxima = pa.commitmentMax;
 
-                if (isMMPosition) {
+                if (isMMOperation) {
                     // commitment maxima increases, recalculate base settlement requirements
                     MarketVTSConfiguration memory vtsConfiguration = s.pools[poolId].vtsConfig;
                     (uint256 baseAmountToSettle0, uint256 baseAmountToSettle1) = LiquidityUtils.getBaseSettlementAmounts(
@@ -836,7 +838,7 @@ library VTSPositionLib {
         feeAdj = VTSFeeLib.processPositionFees(s, ctx.poolManager, id, poolKey.currency0, poolKey.currency1);
 
         // Handle MM-specific delta and LCC management operations
-        if (PositionModificationHookDataLib.isMMOperation(mmData) && isMMPosition) {
+        if (isMMOperation) {
             // CoreHook applies a feeAdj to the callerDelta. ie.  callerDelta = principalDelta - feesAccrued - feeAdj.
             // Treat feeAdj as part of fees for cancel/transfer purposes.
             // ? feeAdj bonus is negative, slash is positive. The result is higher fees for bonus, lower for slash.
@@ -1141,7 +1143,6 @@ library VTSPositionLib {
         VTSStorage storage s,
         IPoolManager poolManager,
         IMarketVault vault,
-        address owner,
         PositionId positionId,
         Currency lccCurrency0,
         Currency lccCurrency1,
@@ -1153,7 +1154,8 @@ library VTSPositionLib {
 
         // Validate position exists (commitmentMax > 0 for active positions)
         PositionAccounting storage pa = s.positionAccounting[positionId];
-        if (pos.owner == address(0) || pos.owner != owner) {
+        address owner = pos.owner;
+        if (owner == address(0)) {
             revert("VTSPositionLib: Invalid position");
         }
 

@@ -105,6 +105,9 @@ library Errors {
     /// @notice Thrown when the pool manager must be locked
     error PoolManagerMustBeLocked();
 
+    /// @notice Thrown when the pool manager must be unlocked
+    error PoolManagerMustBeUnlocked();
+
     /// @notice Thrown when a ticker is not registered in the oracle
     error TickerNotRegistered(string ticker);
 
@@ -135,8 +138,8 @@ library Errors {
     /// @notice Thrown when a deadline has passed
     error DeadlinePassed(uint256 deadline);
 
-    /// @notice Thrown when a signal has expired
-    error SignalExpired(uint256 commitId);
+    /// @notice Thrown when a signal is invalid (expired or doesn't exist)
+    error InvalidSignal(uint256 commitId);
 
     // ============ POSITION & COMMITMENT ERRORS ============
     // Errors related to positions, commitments, and position management
