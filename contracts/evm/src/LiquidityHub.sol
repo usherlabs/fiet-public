@@ -544,7 +544,7 @@ contract LiquidityHub is Ownable, ReentrancyGuardTransient {
      * @param lcc The LCC token address to issue for
      * @param amount The amount to issue
      */
-    function issue(address lcc, address to, uint256 amount) external onlyIssuer(lcc) onlyValidLcc(lcc) {
+    function issue(address lcc, address to, uint256 amount) external onlyIssuer(lcc) onlyValidLcc(lcc) nonReentrant {
         if (amount == 0) {
             revert Errors.InvalidAmount(0, 0);
         }
@@ -558,7 +558,7 @@ contract LiquidityHub is Ownable, ReentrancyGuardTransient {
      * @param from The address to cancel tokens from
      * @param amount The amount to cancel
      */
-    function cancel(address lcc, address from, uint256 amount) external onlyIssuer(lcc) onlyValidLcc(lcc) {
+    function cancel(address lcc, address from, uint256 amount) external onlyIssuer(lcc) onlyValidLcc(lcc) nonReentrant {
         if (amount == 0) {
             revert Errors.InvalidAmount(0, 0);
         }
@@ -581,7 +581,7 @@ contract LiquidityHub is Ownable, ReentrancyGuardTransient {
         uint256 principalAmount,
         uint256 queueAmount,
         address recipient
-    ) external onlyIssuer(lcc) onlyValidLcc(lcc) {
+    ) external onlyIssuer(lcc) onlyValidLcc(lcc) nonReentrant {
         if (principalAmount == 0) {
             revert Errors.InvalidAmount(0, 0);
         }
