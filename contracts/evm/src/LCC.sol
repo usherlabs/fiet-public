@@ -5,14 +5,13 @@ import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
-import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {ILCC} from "./interfaces/ILCC.sol";
 import {ILiquidityHub} from "./interfaces/ILiquidityHub.sol";
 import {OracleUtils} from "./libraries/OracleUtils.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Errors} from "./libraries/Errors.sol";
 
-contract LiquidityCommitmentCertificate is ERC20, Ownable, ILCC {
+contract LiquidityCommitmentCertificate is ERC20, ILCC {
     uint8 private immutable _decimals;
     address private immutable underlyingAsset;
     IMarketFactory private immutable marketFactory;
@@ -37,7 +36,7 @@ contract LiquidityCommitmentCertificate is ERC20, Ownable, ILCC {
         string memory symbol,
         uint8 __decimals,
         address _resilientOracleAddress
-    ) ERC20(name, symbol) Ownable(_msgSender()) {
+    ) ERC20(name, symbol) {
         _decimals = __decimals;
         underlyingAsset = _underlyingAsset;
         resilientOracleAddress = _resilientOracleAddress;
@@ -45,6 +44,17 @@ contract LiquidityCommitmentCertificate is ERC20, Ownable, ILCC {
         hub = ILiquidityHub(_msgSender());
 
         // Note: bounds are managed by the MarketFactory, not set in constructor
+    }
+
+    modifier onlyHub() {
+        _onlyHub();
+        _;
+    }
+
+    function _onlyHub() internal view {
+        if (_msgSender() != address(hub)) {
+            revert Errors.InvalidSender();
+        }
     }
 
     function _isProtocolTransfer(address from, address to, bool fromProtocol, bool toProtocol)
@@ -81,7 +91,7 @@ contract LiquidityCommitmentCertificate is ERC20, Ownable, ILCC {
      * @return The market ID of the LCC
      */
     function marketId() external view returns (bytes32) {
-        (, bytes32 id,,) = hub.lccToMarket(address(this));
+        (bytes32 id,) = hub.lccToMarket(address(this));
         return id;
     }
 
@@ -130,7 +140,7 @@ contract LiquidityCommitmentCertificate is ERC20, Ownable, ILCC {
      * @param marketAmount The amount to issue to market-derived balance
      * @param issued Whether the tokens are issued
      */
-    function mint(address to, uint256 directAmount, uint256 marketAmount, bool issued) external onlyOwner {
+    function mint(address to, uint256 directAmount, uint256 marketAmount, bool issued) external onlyHub {
         uint256 amount = directAmount + marketAmount;
         if (amount == 0) {
             revert Errors.InvalidAmount(0, 0);
@@ -154,7 +164,7 @@ contract LiquidityCommitmentCertificate is ERC20, Ownable, ILCC {
      * @param marketAmount The amount to cancel from market-derived balance
      * @param issued Whether the tokens are issued
      */
-    function burn(address from, uint256 directAmount, uint256 marketAmount, bool issued) external onlyOwner {
+    function burn(address from, uint256 directAmount, uint256 marketAmount, bool issued) external onlyHub {
         uint256 amount = directAmount + marketAmount;
         if (amount == 0) {
             revert Errors.InvalidAmount(0, 0);

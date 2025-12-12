@@ -37,7 +37,6 @@ import {CheckpointLibrary} from "./libraries/Checkpoint.sol";
 import {IVRLSettlementObserver} from "./interfaces/IVRLSettlementObserver.sol";
 import {RFSCheckpoint} from "./types/Checkpoint.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
-import {ImmutableMarketState} from "./modules/ImmutableMarketState.sol";
 import {MarketHandlerLib} from "./libraries/MarketHandlerLib.sol";
 import {VTSCurrencyDelta} from "./modules/VTSCurrencyDelta.sol";
 import {Ownable} from "openzeppelin-contracts/contracts/access/Ownable.sol";
@@ -45,12 +44,13 @@ import {VTSFeeLib} from "./libraries/VTSFeeLib.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {DynamicCurrencyDelta} from "./libraries/DynamicCurrencyDelta.sol";
 import {IMarketVault} from "./interfaces/IMarketVault.sol";
+import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 
 /// @title VTSOrchestrator
 /// @notice Central state management layer and orchestrator for VTS logic
 /// @dev Adopts Bunni-style pattern: state managed in VTSStorage struct, complex logic delegated to linked libraries
 /// @author Fiet Protocol
-contract VTSOrchestrator is ImmutableMarketState, PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSOrchestrator {
+contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSOrchestrator {
     using CurrencyLibrary for Currency;
     using StateLibrary for IPoolManager;
     using TransientStateLibrary for IPoolManager;
@@ -74,45 +74,30 @@ contract VTSOrchestrator is ImmutableMarketState, PausableVTS, VTSCurrencyDelta,
 
     /// @notice Constructor
     /// @param _poolManager The Uniswap V4 PoolManager address
-    /// @param _marketFactory The MarketFactory address
     /// @param _signalManager The VRL Signal Manager address
     /// @param _oracleHelper The OracleHelper address
     /// @param _liquidityHub The LiquidityHub address
     /// @param _settlementObserver The VRL Settlement Observer address
     constructor(
         address _poolManager,
-        address _marketFactory,
         address _signalManager,
         address _oracleHelper,
         address _liquidityHub,
         address _settlementObserver
-    ) Ownable(msg.sender) ImmutableMarketState(_marketFactory) ImmutableState(IPoolManager(_poolManager)) {
+    ) Ownable(msg.sender) ImmutableState(IPoolManager(_poolManager)) {
         if (_poolManager == address(0)) {
             revert Errors.InvalidAddress(_poolManager);
         }
-        if (_marketFactory == address(0)) revert Errors.InvalidSender();
         oracleHelper = IOracleHelper(_oracleHelper);
         signalManager = IVRLSignalManager(_signalManager);
         liquidityHub = ILiquidityHub(_liquidityHub);
         settlementObserver = IVRLSettlementObserver(_settlementObserver);
     }
 
-    /// @notice Modifier to check if caller is the CoreHook
-    modifier onlyCoreHook() {
-        MarketHandlerLib.assertCoreHook(marketFactory, _msgSender());
-        _;
-    }
-
     /// @notice Modifier to check if position is valid
     modifier onlyPositionValid(PositionId positionId) {
-        _onlyPositionValid(positionId);
+        _assertPositionValid(positionId, true);
         _;
-    }
-
-    function _onlyPositionValid(PositionId positionId) internal view {
-        if (!isPositionValid(positionId, true)) {
-            revert Errors.InvalidPosition(0, 0, positionId);
-        }
     }
 
     /// @notice Requires PoolManager to be unlocked (within an active batch)
@@ -123,6 +108,29 @@ contract VTSOrchestrator is ImmutableMarketState, PausableVTS, VTSCurrencyDelta,
 
     function _onlyIfPoolManagerUnlocked() internal view {
         if (!poolManager.isUnlocked()) revert Errors.PoolManagerMustBeUnlocked();
+    }
+
+    /// @notice Only allow calls from registered market factory contracts via LiquidityHub
+    modifier onlyFactory() {
+        _onlyFactory();
+        _;
+    }
+
+    function _onlyFactory() internal view {
+        if (!liquidityHub.isFactory(msg.sender)) {
+            revert Errors.InvalidSender();
+        }
+    }
+
+    /// @notice Only allow calls from core hook contracts via LiquidityHub
+    modifier onlyCoreHook(Currency currency0, Currency currency1) {
+        _onlyCoreHook(currency0, currency1);
+        _;
+    }
+
+    function _onlyCoreHook(Currency currency0, Currency currency1) internal view {
+        IMarketFactory factory = liquidityHub.getFactory(Currency.unwrap(currency0), Currency.unwrap(currency1));
+        MarketHandlerLib.assertCoreHook(factory, _msgSender());
     }
 
     /// @inheritdoc PausableVTS
@@ -397,11 +405,8 @@ contract VTSOrchestrator is ImmutableMarketState, PausableVTS, VTSCurrencyDelta,
     /// @dev Called by CoreHook to settle position growths before adding or removing liquidity.
     ///      Only processes valid, active positions.
     /// @param positionId The position identifier
-    function settlePositionGrowths(PositionId positionId) external onlyCoreHook {
-        // If the provided position ID is valid, settle the position growths
-        if (isPositionValid(positionId, true)) {
-            VTSPositionLib.settlePositionGrowths(s, poolManager, positionId);
-        }
+    function settlePositionGrowths(PositionId positionId) public onlyPositionValid(positionId) {
+        VTSPositionLib.settlePositionGrowths(s, poolManager, positionId);
     }
 
     /// @notice Called by CoreHook after add/remove liquidity to update position state and process fees
@@ -427,7 +432,7 @@ contract VTSOrchestrator is ImmutableMarketState, PausableVTS, VTSCurrencyDelta,
         bytes calldata hookData
     )
         external
-        onlyCoreHook
+        onlyCoreHook(poolKey.currency0, poolKey.currency1)
         notPoolPaused(poolKey.toId())
         returns (Position memory pos, PositionId id, BalanceDelta feeAdj, bool isMMPosition)
     {
@@ -443,11 +448,11 @@ contract VTSOrchestrator is ImmutableMarketState, PausableVTS, VTSCurrencyDelta,
         }
 
         // Build position context with dependency references
+        IMarketFactory factory =
+            liquidityHub.getFactory(Currency.unwrap(poolKey.currency0), Currency.unwrap(poolKey.currency1));
+        IMarketVault vault = MarketHandlerLib.getVault(factory, poolKey.toId());
         PositionContext memory ctx = PositionContext({
-            poolManager: poolManager,
-            liquidityHub: liquidityHub,
-            oracleHelper: oracleHelper,
-            marketVault: MarketHandlerLib.getVault(marketFactory, poolKey.toId())
+            poolManager: poolManager, liquidityHub: liquidityHub, oracleHelper: oracleHelper, marketVault: vault
         });
 
         // Delegate all position processing to VTSPositionLib
@@ -469,7 +474,7 @@ contract VTSOrchestrator is ImmutableMarketState, PausableVTS, VTSCurrencyDelta,
         BalanceDelta delta,
         uint160 sqrtPBefore,
         uint128 liqBefore
-    ) external onlyCoreHook notPoolPaused(key.toId()) {
+    ) external onlyCoreHook(key.currency0, key.currency1) notPoolPaused(key.toId()) {
         VTSSwapLib.processSwap(s, poolManager, key, params, delta, sqrtPBefore, liqBefore);
     }
 

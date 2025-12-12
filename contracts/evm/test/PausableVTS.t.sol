@@ -27,7 +27,6 @@ contract PausableVTSTest is Test {
         vm.prank(owner);
         vtsOrchestrator = new VTSOrchestrator(
             address(poolManager),
-            makeAddr("marketFactory"),
             makeAddr("signalManager"),
             makeAddr("oracleHelper"),
             makeAddr("liquidityHub"),

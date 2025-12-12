@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity ^0.8.20;
 
+import {IMarketFactory} from "./IMarketFactory.sol";
+
 /**
  * @title ILiquidityHub
  * @notice Interface for LiquidityHub contract that manages LCC token creation
@@ -107,17 +109,20 @@ interface ILiquidityHub {
     function isLCC(address lcc) external view returns (bool);
 
     /**
-     * @notice Gets the Market struct for a given LCC token
+     * @notice Gets the Market ID and Factory Address for a given LCC token
      * @param lccToken The LCC token address
-     * @return factory The factory that created this market
      * @return id The market ID (core pool id as market)
-     * @return ref The market reference (proxy)
-     * @return refIsValidIssuer Whether the market ref address is a valid issuer
+     * @return factory The factory that created this market
      */
-    function lccToMarket(address lccToken)
-        external
-        view
-        returns (address factory, bytes32 id, bytes memory ref, bool refIsValidIssuer);
+    function lccToMarket(address lccToken) external view returns (bytes32 id, address factory);
+
+    /**
+     * @notice Gets the Market factory for a given two LCC tokens
+     * @param lcc0 The first LCC token address
+     * @param lcc1 The second LCC token address
+     * @return The Market factory
+     */
+    function getFactory(address lcc0, address lcc1) external view returns (IMarketFactory);
 
     /**
      * @notice Gets the total amount queued for settlement for a given LCC token
@@ -205,6 +210,13 @@ interface ILiquidityHub {
     ) external;
 
     // ============ Factory Management ============
+
+    /**
+     * @notice Checks if an address is a registered factory
+     * @param factory The factory address to check
+     * @return True if the address is a registered factory
+     */
+    function isFactory(address factory) external view returns (bool);
 
     /**
      * @notice Sets a factory address as enabled or disabled

@@ -18,13 +18,11 @@ abstract contract PositionManagerEntrypoint is PositionManagerBase {
 
     address public immutable actionsImpl;
 
-    constructor(address vtsOrchestrator, address _actionsImpl) PositionManagerBase(vtsOrchestrator) {
+    constructor(address _liquidityHub, address _vtsOrchestrator, address _actionsImpl)
+        PositionManagerBase(_liquidityHub, _vtsOrchestrator)
+    {
         actionsImpl = _actionsImpl;
     }
-
-    /// @notice Returns the LiquidityHub contract
-    /// @dev Must be implemented by inheriting contracts
-    function _liquidityHub() internal view virtual returns (ILiquidityHub);
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Delegation Helpers
@@ -96,7 +94,7 @@ abstract contract PositionManagerEntrypoint is PositionManagerBase {
     function _isLCC(Currency currency) internal view returns (bool) {
         address token = Currency.unwrap(currency);
         if (token == address(0)) return false;
-        return _liquidityHub().isLCC(token);
+        return liquidityHub.isLCC(token);
     }
 
     /// @notice Takes currency from delta and transfers to recipient

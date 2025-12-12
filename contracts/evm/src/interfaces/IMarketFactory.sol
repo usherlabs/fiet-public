@@ -57,12 +57,6 @@ interface IMarketFactory {
     function coreHook() external view returns (address);
 
     /**
-     * @notice Gets the market maker position manager address
-     * @return The market maker position manager address
-     */
-    function mmPositionManager() external view returns (address);
-
-    /**
      * @notice Gets the liquidity hub address
      * @return The liquidity hub address
      */

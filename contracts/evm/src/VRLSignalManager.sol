@@ -5,7 +5,6 @@
 pragma solidity ^0.8.0;
 
 import {MarketMaker} from "./libraries/MarketMaker.sol";
-import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 import {ISignalVerifier} from "./interfaces/ISignalVerifier.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {LiquiditySignal} from "./types/Commit.sol";
@@ -16,7 +15,6 @@ contract VRLSignalManager is Ownable, IVRLSignalManager {
     using MarketMaker for MarketMaker.State;
 
     ISignalVerifier internal verifier;
-    IMarketFactory internal marketFactory;
 
     /**
      * @dev Tracks the latest nonce per Market Maker (MM) address.
@@ -38,9 +36,8 @@ contract VRLSignalManager is Ownable, IVRLSignalManager {
     mapping(address => uint256) public mmNonce;
     uint256 public signalExpiryInSeconds;
 
-    constructor(address _marketFactory, address _verifier, uint256 _signalExpiryInSeconds) Ownable(msg.sender) {
+    constructor(address _verifier, uint256 _signalExpiryInSeconds) Ownable(msg.sender) {
         verifier = ISignalVerifier(_verifier);
-        marketFactory = IMarketFactory(_marketFactory);
         signalExpiryInSeconds = _signalExpiryInSeconds;
     }
 

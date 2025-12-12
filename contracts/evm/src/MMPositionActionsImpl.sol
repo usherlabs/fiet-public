@@ -20,7 +20,6 @@ import {PositionManagerBase} from "./modules/PositionManagerBase.sol";
 import {PositionManagerImpl} from "./modules/PositionManagerImpl.sol";
 import {CurrencyTransfer} from "./libraries/CurrencyTransfer.sol";
 import {MarketHandlerLib} from "./libraries/MarketHandlerLib.sol";
-import {ImmutableMarketState} from "./modules/ImmutableMarketState.sol";
 import {TransientStateLibrary} from "v4-periphery/lib/v4-core/src/libraries/TransientStateLibrary.sol";
 import {IMMActionsImpl} from "./interfaces/IMMActionsImpl.sol";
 import {MMActions} from "./libraries/MMActions.sol";
@@ -29,13 +28,14 @@ import {MMHelpers} from "./libraries/MMHelpers.sol";
 import {Locker} from "v4-periphery/src/libraries/Locker.sol";
 import {MarketMaker} from "./libraries/MarketMaker.sol";
 import {DelegateCallGuard} from "./modules/DelegateCallGuard.sol";
+import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 
 /// @title MMPositionActionsImpl
 /// @notice Implementation contract for MMPositionManager position operations
 /// @dev Called via delegatecall from MMPositionManager, shares storage context
 /// @dev Only handles position operations (actions <= SETTLE_POSITION_FROM_DELTAS)
 /// @dev ERC721 functions accessed via delegatecall context from MMPositionManager
-contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, ImmutableMarketState, DelegateCallGuard {
+contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateCallGuard {
     using SafeCast for uint256;
     using PositionLibrary for PositionId;
     using StateLibrary for IPoolManager;
@@ -49,18 +49,13 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, Immutable
     // Immutables (must match MMPositionManager's values)
     // ═══════════════════════════════════════════════════════════════════════════
 
-    ILiquidityHub internal immutable liquidityHub;
-
     // ═══════════════════════════════════════════════════════════════════════════
     // Constructor
     // ═══════════════════════════════════════════════════════════════════════════
 
-    constructor(address _manager, address _marketFactory, address _vtsOrchestrator)
-        PositionManagerImpl(IPoolManager(_manager), _vtsOrchestrator)
-        ImmutableMarketState(_marketFactory)
-    {
-        liquidityHub = marketFactory.liquidityHub();
-    }
+    constructor(address _manager, address _liquidityHub, address _vtsOrchestrator)
+        PositionManagerImpl(IPoolManager(_manager), _liquidityHub, _vtsOrchestrator)
+    {}
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Overrides for abstract functions
@@ -180,6 +175,15 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, Immutable
         return PositionId.unwrap(seizedPositionId) == PositionId.unwrap(positionId);
     }
 
+    /// @notice Gets the vault for a pool key
+    /// @param poolKey The pool key
+    /// @return The vault
+    function _getVault(PoolKey calldata poolKey) internal view returns (IMarketVault) {
+        IMarketFactory marketFactory =
+            liquidityHub.getFactory(Currency.unwrap(poolKey.currency0), Currency.unwrap(poolKey.currency1));
+        return MarketHandlerLib.getVault(marketFactory, poolKey.toId());
+    }
+
     // ═══════════════════════════════════════════════════════════════════════════
     // Position Actions
     // ═══════════════════════════════════════════════════════════════════════════
@@ -255,7 +259,7 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, Immutable
             MMHelpers.assertApprovedOrOwner(msgSender(), tokenId);
         }
 
-        IMarketVault vault = MarketHandlerLib.getVault(marketFactory, poolKey.toId());
+        IMarketVault vault = _getVault(poolKey);
 
         (BalanceDelta settlementDelta,, uint256 seizedLiquidityUnits) = vtsOrchestrator.onMMSettle(
             vault,
@@ -499,13 +503,7 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, Immutable
             }
 
             (BalanceDelta settlementDelta,, uint256 seizedLiquidityUnits) = vtsOrchestrator.onMMSettle(
-                MarketHandlerLib.getVault(marketFactory, poolKey.toId()),
-                tokenId,
-                positionIndex,
-                poolKey.currency0,
-                poolKey.currency1,
-                sDelta,
-                isSeizing
+                _getVault(poolKey), tokenId, positionIndex, poolKey.currency0, poolKey.currency1, sDelta, isSeizing
             );
         } else {
             _settle(poolKey, tokenId, positionIndex, sDelta.amount0(), sDelta.amount1(), true);

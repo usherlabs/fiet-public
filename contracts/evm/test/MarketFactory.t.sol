@@ -89,7 +89,6 @@ contract MarketFactoryTest is Test, Deployers {
         vm.prank(owner);
         vtsOrchestrator = new VTSOrchestrator(
             address(poolManager),
-            tempFactoryAddr, // temporary address, will be updated after factory deployment
             makeAddr("signalManager"),
             oracleHelperAddress,
             liquidityHubAddress,
@@ -120,7 +119,6 @@ contract MarketFactoryTest is Test, Deployers {
             address(poolManager),
             liquidityHubAddress,
             oracleHelperAddress,
-            address(positionManager),
             address(vtsOrchestrator),
             bounds
         );

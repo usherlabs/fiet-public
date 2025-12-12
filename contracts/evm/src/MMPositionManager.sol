@@ -63,7 +63,6 @@ contract MMPositionManager is
 
     /// @notice The implementation contract for position operations
     address public immutable commitmentDescriptor;
-    ILiquidityHub internal immutable liquidityHub;
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Constructor
@@ -71,7 +70,7 @@ contract MMPositionManager is
 
     constructor(
         address _manager,
-        address _marketFactory,
+        address _liquidityHub,
         address _vtsOrchestrator,
         address _descriptor,
         IWETH9 _weth9,
@@ -81,11 +80,10 @@ contract MMPositionManager is
         ERC721Permit_v4("Fiet VRL Commitment Positions Manager", "FIET-VRL-MMP")
         BaseActionsRouter(IPoolManager(_manager))
         Permit2Forwarder(_permit2)
-        NativeWrapper(_weth9, _marketFactory)
-        PositionManagerEntrypoint(_vtsOrchestrator, _actionsImpl)
+        NativeWrapper(_weth9)
+        PositionManagerEntrypoint(_liquidityHub, _vtsOrchestrator, _actionsImpl)
     {
         commitmentDescriptor = _descriptor;
-        liquidityHub = marketFactory.liquidityHub();
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -118,11 +116,6 @@ contract MMPositionManager is
     /// @inheritdoc BaseActionsRouter
     function msgSender() public view override(BaseActionsRouter, PositionManagerBase) returns (address) {
         return _getLocker();
-    }
-
-    /// @inheritdoc PositionManagerEntrypoint
-    function _liquidityHub() internal view override returns (ILiquidityHub) {
-        return liquidityHub;
     }
 
     // ═══════════════════════════════════════════════════════════════════════════

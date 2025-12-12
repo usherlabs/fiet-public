@@ -6,14 +6,9 @@ import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 contract MockMarketFactory {
     mapping(PoolId => address[2]) public currencies;
     address public coreHook;
-    address public mmPositionManager;
 
     function setCoreHook(address _hook) external {
         coreHook = _hook;
-    }
-
-    function setMM(address _mm) external {
-        mmPositionManager = _mm;
     }
 
     function setCurrencies(PoolId poolId, address c0, address c1) external {

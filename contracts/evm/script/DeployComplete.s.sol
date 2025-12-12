@@ -21,6 +21,7 @@ import {PositionManager} from "v4-periphery/src/PositionManager.sol";
 import {IAllowanceTransfer} from "permit2/src/interfaces/IAllowanceTransfer.sol";
 import {VRLSignalManager} from "../src/VRLSignalManager.sol";
 import {VRLSettlementObserver} from "../src/VRLSettlementObserver.sol";
+import {VTSOrchestrator} from "../src/VTSOrchestrator.sol";
 import {OracleHelper} from "../src/OracleHelper.sol";
 import {MMPCommitmentDescriptor} from "../src/MMPCommitmentDescriptor.sol";
 import {LiquidityHub} from "../src/LiquidityHub.sol";
@@ -34,16 +35,17 @@ import {ECDSASignatureSignalVerifier} from "../src/verifiers/ECDSASignatureSigna
  *
  * Deployment Order:
  * 1. Deploy OracleHelper
- * 2. Deploy LiquidityHub (must be before MarketFactory)
- * 3. Deploy MarketFactory (with LiquidityHub, without hooks or mmPositionManager initially)
- * 4. Enable MarketFactory in LiquidityHub
- * 5. Deploy Verifiers (needs MarketFactory)
- * 6. Deploy MMPositionManager (must be deployed before CoreHook)
- * 7. Deploy CoreHook (with proper flags and MarketFactory address)
- * 8. Set hooks in MarketFactory using setHooks()
- * 9. Verify hooks (set cross-references)
- * 10. Add protocol addresses to bounds array (LiquidityHub already in bounds via constructor)
- * 11. Deploy GlobalConfig and transfer ownership
+ * 2. Deploy LiquidityHub (must be before VTSO and MarketFactory)
+ * 3. Deploy Verifiers (VTSO dependencies)
+ * 4. Deploy VTSOrchestrator (must be before MMPositionManager and MarketFactory)
+ * 5. Deploy MMPositionManager (must be before MarketFactory for bounds)
+ * 6. Deploy MarketFactory (with LiquidityHub and VTSO, without hooks initially)
+ * 7. Enable MarketFactory in LiquidityHub
+ * 8. Deploy CoreHook (with proper flags and MarketFactory address)
+ * 9. Set hooks in MarketFactory using setHooks()
+ * 10. Verify hooks (set cross-references)
+ * 11. Add protocol addresses to bounds array (including MMPositionManager)
+ * 12. Deploy GlobalConfig and transfer ownership
  */
 contract CompleteDeployScript is ScriptHelper {
     // Deployed contract addresses
@@ -61,9 +63,10 @@ contract CompleteDeployScript is ScriptHelper {
     address public poolManagerAddress;
     address public create2Deployer;
     address payable public positionManagerAddress;
-    // TODO: Deploy VTSOrchestrator before deploying CoreHook - Contract composition required.
-    address public vtsOrchestrator = makeAddr("vtsOrchestrator");
+    address public vtsOrchestrator;
     string public networkName;
+    // Track Ownable contracts for ownership migration to GlobalConfig
+    address[] public ownedContracts;
 
     function run() external {
         uint256 deployerPrivateKey = uint256(vm.envBytes32("PRIVATE_KEY"));
@@ -91,55 +94,65 @@ contract CompleteDeployScript is ScriptHelper {
 
         // Step 1: Deploy OracleHelper
         // @dev the ResilientOracle would have been deployed and provided as an env var `RESILIENT_ORACLE_ADDRESS`
-        console.log("\n=== Deploying OracleHelper ===");
+        console.log("\n=== Step 1: Deploying OracleHelper ===");
         oracleHelper = _deployOracleHelper();
         console.log("OracleHelper deployed at:", oracleHelper);
+        ownedContracts.push(oracleHelper);
 
-        // Step 2: Deploy LiquidityHub (must be before MarketFactory)
-        console.log("\n=== Deploying LiquidityHub ===");
+        // Step 2: Deploy LiquidityHub (must be before VTSO and MarketFactory)
+        console.log("\n=== Step 2: Deploying LiquidityHub ===");
         liquidityHub = _deployLiquidityHub();
         console.log("LiquidityHub deployed at:", liquidityHub);
+        ownedContracts.push(liquidityHub);
 
-        // Step 3: Deploy MarketFactory (with LiquidityHub, without hooks or mmPositionManager initially)
-        console.log("\n=== Deploying MarketFactory ===");
-        marketFactory = _deployMarketFactory();
-        console.log("MarketFactory deployed at:", marketFactory);
-
-        // Step 4: Enable MarketFactory in LiquidityHub
-        console.log("\n=== Enabling MarketFactory in LiquidityHub ===");
-        _enableFactoryInLiquidityHub();
-
-        // Step 5: Deploy Verifiers
-        console.log("\n=== Deploying Verifiers ===");
+        // Step 3: Deploy Verifiers (VTSO dependencies)
+        console.log("\n=== Step 3: Deploying Verifiers (VTSO Dependencies) ===");
         _deployVerifiers();
         console.log("SignalManager deployed at:", signalManager);
         console.log("SettlementObserver deployed at:", settlementObserver);
 
-        // Step 6: Deploy MMPositionManager (must be before CoreHook)
-        console.log("\n=== Deploying MMPositionManager ===");
+        // Step 4: Deploy VTSOrchestrator (must be before MMPositionManager and MarketFactory)
+        console.log("\n=== Step 4: Deploying VTSOrchestrator ===");
+        vtsOrchestrator = _deployVTSOrchestrator();
+        console.log("VTSOrchestrator deployed at:", vtsOrchestrator);
+        ownedContracts.push(vtsOrchestrator);
+
+        // Step 5: Deploy MMPositionManager (must be before MarketFactory for bounds)
+        console.log("\n=== Step 5: Deploying MMPositionManager ===");
         mmPositionManager = _deployMMPositionManager();
         console.log("MMPositionManager deployed at:", mmPositionManager);
 
-        // Step 7: Deploy CoreHook
-        console.log("\n=== Deploying CoreHook ===");
+        // Step 6: Deploy MarketFactory (with LiquidityHub and VTSOrchestrator, without hooks initially)
+        console.log("\n=== Step 6: Deploying MarketFactory ===");
+        marketFactory = _deployMarketFactory();
+        console.log("MarketFactory deployed at:", marketFactory);
+        ownedContracts.push(marketFactory);
+
+        // Step 7: Enable MarketFactory in LiquidityHub
+        console.log("\n=== Step 7: Enabling MarketFactory in LiquidityHub ===");
+        _enableFactoryInLiquidityHub();
+
+        // Step 8: Deploy CoreHook
+        console.log("\n=== Step 8: Deploying CoreHook ===");
         coreHook = _deployCoreHook();
         console.log("CoreHook deployed at:", coreHook);
 
-        // Step 8: Set hooks in MarketFactory
-        console.log("\n=== Setting Hooks in MarketFactory ===");
+        // Step 9: Set hooks in MarketFactory
+        console.log("\n=== Step 9: Setting Hooks in MarketFactory ===");
         _setHooksInFactory();
 
-        // Step 9: Verify hooks addresses across the contracts
-        console.log("\n=== Verifying Hooks ===");
+        // Step 10: Verify hooks addresses across the contracts
+        console.log("\n=== Step 10: Verifying Hooks ===");
         _verifyHooks();
 
-        // Step 10: Add all the protocol addresses expected to hold LCC as a protocol bound address in the market factory
+        // Step 11: Add all the protocol addresses expected to hold LCC as a protocol bound address in the market factory
         // Note: LiquidityHub is already added to bounds in MarketFactory constructor
-        console.log("\n=== Adding addresses to bounds array ===");
+        // MMPositionManager is added here since it's no longer passed to constructor
+        console.log("\n=== Step 11: Adding addresses to bounds array ===");
         _addAddressesToBounds();
 
-        // Step 11: Deploy GlobalConfig and assign ownership to the market factory
-        console.log("\n=== Deploying GlobalConfig ===");
+        // Step 12: Deploy GlobalConfig and assign ownership to the market factory
+        console.log("\n=== Step 12: Deploying GlobalConfig ===");
         globalConfig = _setupGlobalConfig();
         console.log("GlobalConfig deployed at:", globalConfig);
 
@@ -152,6 +165,7 @@ contract CompleteDeployScript is ScriptHelper {
         console.log("CoreHook:", coreHook);
         console.log("MarketFactory:", marketFactory);
         console.log("LiquidityHub:", liquidityHub);
+        console.log("VTSOrchestrator:", vtsOrchestrator);
         console.log("MMPositionManager:", mmPositionManager);
     }
 
@@ -160,14 +174,12 @@ contract CompleteDeployScript is ScriptHelper {
         GlobalConfig config = new GlobalConfig();
         console.log("GlobalConfig deployed at:", address(config));
 
-        // Populate the owned contracts array with the contracts that need to be owned by the global config
-        address[] memory ownedContracts = new address[](1);
-        ownedContracts[0] = marketFactory;
-
-        // Transfer ownership of the contracts to the global config
+        // Transfer ownership of all Ownable contracts to the global config
         uint256 len = ownedContracts.length;
+        console.log("Transferring ownership of", len, "contracts to GlobalConfig");
         for (uint256 i = 0; i < len; i++) {
             Ownable(ownedContracts[i]).transferOwnership(address(config));
+            console.log("  - Transferred ownership of", ownedContracts[i]);
         }
         return address(config);
     }
@@ -226,27 +238,18 @@ contract CompleteDeployScript is ScriptHelper {
     }
 
     /**
-     * @dev Deploys MarketFactory with LiquidityHub (hooks and mmPositionManager will be set later)
+     * @dev Deploys MarketFactory with LiquidityHub and VTSOrchestrator
      * @return The deployed MarketFactory address
-     * @notice mmPositionManager is set to address(0) initially due to circular dependency.
-     *         It will be used when creating markets, but MarketFactory is already deployed.
+     * @notice MMPositionManager is added to bounds separately via _addAddressesToBounds()
      */
     function _deployMarketFactory() internal returns (address) {
-        // Initial bounds array (empty for now, can be updated later)
+        // Initial bounds array (empty for now, mmPositionManager added later via _addAddressesToBounds)
         // Note: LiquidityHub is automatically added to bounds in MarketFactory constructor
         address[] memory initialBounds = new address[](0);
 
-        // Deploy MarketFactory with LiquidityHub, OracleHelper, and address(0) for mmPositionManager
-        // mmPositionManager will be deployed later but MarketFactory constructor requires it
-        // This is acceptable as mmPositionManager is only used when creating markets
-        MarketFactory factory = new MarketFactory(
-            poolManagerAddress,
-            liquidityHub,
-            oracleHelper,
-            address(0), // mmPositionManager - will be set when creating markets
-            vtsOrchestrator,
-            initialBounds
-        );
+        // Deploy MarketFactory with LiquidityHub, OracleHelper, and VTSOrchestrator
+        MarketFactory factory =
+            new MarketFactory(poolManagerAddress, liquidityHub, oracleHelper, vtsOrchestrator, initialBounds);
 
         return address(factory);
     }
@@ -261,11 +264,24 @@ contract CompleteDeployScript is ScriptHelper {
         address publicKeyAddress = vm.envAddress("PUBLIC_KEY_SIGNAL_VERIFIER_ADDRESS");
         address signalVerifier = address(new ECDSASignatureSignalVerifier(publicKeyAddress));
 
-        signalManager = address(new VRLSignalManager(marketFactory, signalVerifier, signalExpiryInSeconds));
+        signalManager = address(new VRLSignalManager(signalVerifier, signalExpiryInSeconds));
         console.log("SignalManager deployed at:", signalManager);
+        ownedContracts.push(signalManager);
 
         // ? deploy settlement observer without verifiers. No verifiers developed yet.
         settlementObserver = address(new VRLSettlementObserver());
+        ownedContracts.push(settlementObserver);
+    }
+
+    /**
+     * @dev Deploys VTSOrchestrator
+     * @return The deployed VTSOrchestrator address
+     */
+    function _deployVTSOrchestrator() internal returns (address) {
+        VTSOrchestrator orchestrator =
+            new VTSOrchestrator(poolManagerAddress, signalManager, oracleHelper, liquidityHub, settlementObserver);
+        console.log("VTSOrchestrator deployed at:", address(orchestrator));
+        return address(orchestrator);
     }
 
     /**
@@ -279,7 +295,7 @@ contract CompleteDeployScript is ScriptHelper {
     }
 
     /**
-     * @dev Deploys MMPositionManager with a stub verifier
+     * @dev Deploys MMPositionManager with LiquidityHub and VTSOrchestrator
      * @return The deployed MMPositionManager address
      */
     function _deployMMPositionManager() internal returns (address) {
@@ -288,14 +304,14 @@ contract CompleteDeployScript is ScriptHelper {
         IWETH9 weth9 = PositionManager(positionManagerAddress).WETH9();
         IAllowanceTransfer permit2 = PositionManager(positionManagerAddress).permit2();
 
-        // Deploy MMPositionActionsImpl first
-        MMPositionActionsImpl actionsImpl =
-            new MMPositionActionsImpl(poolManagerAddress, marketFactory, vtsOrchestrator);
+        // Deploy MMPositionActionsImpl first (requires poolManager, liquidityHub, vtsOrchestrator)
+        MMPositionActionsImpl actionsImpl = new MMPositionActionsImpl(poolManagerAddress, liquidityHub, vtsOrchestrator);
         console.log("MMPositionActionsImpl deployed at:", address(actionsImpl));
 
+        // Deploy MMPositionManager (requires poolManager, liquidityHub, vtsOrchestrator, descriptor, weth9, permit2, actionsImpl)
         MMPositionManager positionManager = new MMPositionManager(
             poolManagerAddress,
-            marketFactory,
+            liquidityHub,
             vtsOrchestrator,
             commitmentDescriptorAddr,
             weth9,
@@ -339,20 +355,22 @@ contract CompleteDeployScript is ScriptHelper {
     /**
      * @dev adds all relevant addresses to bounds array in the market factory
      * Whitelist protocol addresses
-     * @notice LiquidityHub is already added to bounds in MarketFactory constructor
+     * @notice The following are already added to bounds in MarketFactory constructor:
+     *         - address(this) [MarketFactory]
+     *         - poolManager
+     *         - liquidityHub
+     * @notice MMPositionManager is added here as it's not passed to the constructor
      */
     function _addAddressesToBounds() internal {
         MarketFactory factoryInstance = MarketFactory(marketFactory);
-        address[] memory bounds = new address[](0);
-        /**
-         *     bounds[address(this)] = true;
-         *     bounds[_poolManager] = true;
-         *     bounds[_liquidityHub] = true;
-         *     bounds[_vtsOrchestrator] = true;
-         *     bounds[_mmPositionManager] = true;
-         */
+
+        // MMPositionManager is the recipient of LCCs from VTSO issuance
+        // It must be a bounds address to hold LCC tokens
+        address[] memory bounds = new address[](1);
+        bounds[0] = mmPositionManager;
 
         factoryInstance.addBounds(bounds);
+        console.log("MMPositionManager added to bounds:", mmPositionManager);
     }
 
     /**

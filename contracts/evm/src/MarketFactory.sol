@@ -33,7 +33,6 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
     address public coreHook;
     address public immutable marketVaultDeployer;
     ILiquidityHub public immutable liquidityHub;
-    address public mmPositionManager;
 
     // Mapping from core pool ID to proxy pool ID
     mapping(PoolId => PoolId) public coreToProxy;
@@ -53,21 +52,16 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
         address _poolManager,
         address _liquidityHub,
         address _oracleHelper,
-        address _mmPositionManager,
         address _vtsOrchestrator,
         address[] memory _bounds
     ) Ownable(msg.sender) ImmutableState(IPoolManager(_poolManager)) ImmutableVTSState(_vtsOrchestrator) {
         liquidityHub = ILiquidityHub(_liquidityHub);
         oracleHelper = IOracleHelper(_oracleHelper);
-        mmPositionManager = _mmPositionManager;
 
         // Set Protocol bounds addresses
         bounds[address(this)] = true;
         bounds[_poolManager] = true; // All uniswap liquidity goes to/from the poolManager.
         bounds[_liquidityHub] = true; // All LCCs are created and managed by the liquidityHub.
-        // bounds[_vtsOrchestrator] = true; // VTSO context handles all fee fund/slash logic - seem VTSFeeLib.sol
-        // ----- However, it's handled via Uniswap's Claim Tokens. Therefore, LCCs remain inside of PoolManager.
-        bounds[_mmPositionManager] = true; // MMPM is the recipient of the LCCs from VTSO issuance.
         for (uint256 i = 0; i < _bounds.length; i++) {
             bounds[_bounds[i]] = true;
         }

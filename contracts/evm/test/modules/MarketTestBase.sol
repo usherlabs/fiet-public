@@ -198,7 +198,7 @@ abstract contract MarketTestBase is Test, Deployers {
         // deploy custom router and verifier
         icVerifier = new ECDSASignatureSignalVerifier(makeAddr("signatureVerifier"));
         stubSignalVerifier = new StubSignalVerifier();
-        signalManager = new VRLSignalManager(marketFactory, address(stubSignalVerifier), signalExpiryInSeconds);
+        signalManager = new VRLSignalManager(address(stubSignalVerifier), signalExpiryInSeconds);
 
         // deploy LiquidityHub and authorise factory
         LiquidityHub(payable(liquidityHub)).setFactory(marketFactory, true);
@@ -212,7 +212,6 @@ abstract contract MarketTestBase is Test, Deployers {
 
         vtsOrchestrator = new VTSOrchestrator(
             address(manager),
-            address(marketFactory),
             address(signalManager),
             address(oracleHelper),
             address(liquidityHub),
@@ -271,11 +270,6 @@ abstract contract MarketTestBase is Test, Deployers {
 
     // TODO: deploy market factory and reduce mocked calls
     function _mockFactoryCalls() internal {
-        vm.mockCall(
-            marketFactory,
-            abi.encodeWithSelector(IMarketFactory.mmPositionManager.selector),
-            abi.encode(address(mmPositionManager))
-        );
         // LCC makes a call onTransfer to check if transfer is within bounds
         // set it to true i.e Market Tracking would be disabled since we do not track addresses that are within bounds
         vm.mockCall(marketFactory, abi.encodeWithSelector(IMarketFactory.bounds.selector), abi.encode(true));

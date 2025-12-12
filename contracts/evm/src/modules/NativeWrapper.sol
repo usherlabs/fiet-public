@@ -3,26 +3,41 @@ pragma solidity ^0.8.26;
 
 import {NativeWrapper as UniNativeWrapper} from "../forks/NativeWrapper.sol";
 import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
-import {ImmutableMarketState} from "./ImmutableMarketState.sol";
-import {MarketHandlerLib} from "../libraries/MarketHandlerLib.sol";
+import {Errors} from "../libraries/Errors.sol";
+import {IMarketVault} from "../interfaces/IMarketVault.sol";
+import {ILCC} from "../interfaces/ILCC.sol";
 
 /// @title NativeWrapper
 /// @notice Used for wrapping and unwrapping native assets in PositionManagers.
-/// @dev This contract extends UniNativeWrapper. When used with ImmutableMarketState via multiple inheritance
-///      (e.g., in MMPositionManager), the marketFactory will be available through the inheritance chain.
-abstract contract NativeWrapper is UniNativeWrapper, ImmutableMarketState {
-    constructor(IWETH9 _weth9, address _marketFactory) UniNativeWrapper(_weth9) ImmutableMarketState(_marketFactory) {}
+abstract contract NativeWrapper is UniNativeWrapper {
+    constructor(IWETH9 _weth9) UniNativeWrapper(_weth9) {}
 
     /// @notice Validates that the ETH sender is either WETH9, poolManager, or a valid MarketVault
-    /// @dev Uses MarketHandlerLib functions to validate the sender
+    /// @dev Validates MarketVault by checking its LCC tokens and verifying at least one underlying is native ETH
     function _assertValidEthSender() internal view {
         // If sender is WETH9 or poolManager, allow it (these are trusted sources)
         if (msg.sender == address(WETH9) || msg.sender == address(poolManager)) {
             return;
         }
-        // otherwise check if the caller is a valid MarketVault
-        address[2] memory currencies = MarketHandlerLib.vaultToCurrencyPair(marketFactory, msg.sender);
-        MarketHandlerLib.validateToken(msg.sender, currencies);
+
+        // otherwise check if the caller is a valid MarketVault with native ETH support
+        IMarketVault marketVault = IMarketVault(msg.sender);
+
+        // Check if lccs() function exists by attempting to call it
+        (bool success, bytes memory returnData) =
+            address(marketVault).staticcall(abi.encodeWithSelector(IMarketVault.lccs.selector));
+
+        if (!success) {
+            revert Errors.InvalidSender();
+        }
+
+        (address lccToken0, address lccToken1) = abi.decode(returnData, (address, address));
+        address underlying0 = ILCC(lccToken0).underlying();
+        address underlying1 = ILCC(lccToken1).underlying();
+        // Validate that at least one underlying is native ETH (address(0))
+        if (underlying0 != address(0) && underlying1 != address(0)) {
+            revert Errors.InvalidSender();
+        }
     }
 
     // Best practice: be explicit about intent

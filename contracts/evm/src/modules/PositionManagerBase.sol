@@ -4,6 +4,7 @@ pragma solidity ^0.8.26;
 import {ImmutableVTSState} from "./ImmutableVTSState.sol";
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {ILCC} from "../interfaces/ILCC.sol";
+import {ILiquidityHub} from "../interfaces/ILiquidityHub.sol";
 
 /**
  * @title PositionManagerBase
@@ -12,7 +13,11 @@ import {ILCC} from "../interfaces/ILCC.sol";
  * @dev Note: ImmutableState is provided by inheriting contracts (BaseActionsRouter for entrypoint, direct for impl)
  */
 abstract contract PositionManagerBase is ImmutableVTSState {
-    constructor(address _vtsOrchestrator) ImmutableVTSState(_vtsOrchestrator) {}
+    ILiquidityHub internal immutable liquidityHub;
+
+    constructor(address _liquidityHub, address _vtsOrchestrator) ImmutableVTSState(_vtsOrchestrator) {
+        liquidityHub = ILiquidityHub(_liquidityHub);
+    }
 
     // ------------------------------------------------------------------------------------------------
     // ABSTRACT FUNCTIONS (must be implemented by inheriting contracts)

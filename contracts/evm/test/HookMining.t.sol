@@ -36,12 +36,10 @@ contract HookTest is Test, Deployers {
         vm.prank(owner);
         IVRLSettlementObserver settlementObserver = new VRLSettlementObserver();
 
-        // Deploy VTSOrchestrator with temporary factory address
-        // (Factory will be created afterwards with actual VTSOrchestrator address)
+        // Deploy VTSOrchestrator
         vm.prank(owner);
         vtsOrchestrator = new VTSOrchestrator(
             address(poolManager),
-            address(makeAddr("marketFactory")), // temporary address
             makeAddr("signalManager"),
             address(makeAddr("OracleHelper")),
             address(makeAddr("liquidityHub")),
@@ -53,7 +51,6 @@ contract HookTest is Test, Deployers {
             address(poolManager),
             address(makeAddr("liquidityHub")),
             address(makeAddr("OracleHelper")),
-            address(mmPositionManager),
             address(vtsOrchestrator),
             bounds
         );

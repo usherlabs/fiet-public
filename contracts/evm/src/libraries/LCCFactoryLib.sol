@@ -79,7 +79,7 @@ library LCCFactoryLib {
                 name,
                 symbol,
                 decimals,
-                IMarketFactory(marketFactoryAddress).oracleHelper().oracle()
+                address(IMarketFactory(marketFactoryAddress).oracleHelper().oracle())
             )
         );
 

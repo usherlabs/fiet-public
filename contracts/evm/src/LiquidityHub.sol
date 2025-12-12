@@ -136,8 +136,22 @@ contract LiquidityHub is Ownable, ReentrancyGuardTransient {
      * @param lcc The LCC token address
      * @return The Market struct containing factory, id, ref, and refIsValidIssuer
      */
-    function lccToMarket(address lcc) external view returns (Market memory) {
-        return s.lccToMarket[lcc];
+    function lccToMarket(address lcc) external view returns (bytes32, address) {
+        return (s.lccToMarket[lcc].id, s.lccToMarket[lcc].factory);
+    }
+
+    /**
+     * @notice
+     * @param lcc The LCC token address
+     * @return The Market struct containing factory, id, ref, and refIsValidIssuer
+     */
+    function getFactory(address lcc0, address lcc1) external view returns (IMarketFactory) {
+        address factory0 = s.lccToMarket[lcc0].factory;
+        address factory1 = s.lccToMarket[lcc1].factory;
+        if (factory0 != factory1) {
+            revert Errors.InvariantViolated("LCCs are not from the same market");
+        }
+        return IMarketFactory(factory0);
     }
 
     /**
