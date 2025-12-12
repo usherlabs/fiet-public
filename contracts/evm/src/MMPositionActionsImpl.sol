@@ -151,15 +151,9 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, Immutable
             return;
         }
         if (action == MMActions.SETTLE_POSITION_FROM_DELTAS) {
-            (
-                PoolKey calldata poolKey,
-                uint256 tokenId,
-                uint256 positionIndex,
-                bool settleIn0,
-                bool settleIn1,
-                bool payerIsUser
-            ) = params.decodeSettleFromDeltasParams();
-            _settleFromDeltas(poolKey, tokenId, positionIndex, settleIn0, settleIn1, payerIsUser);
+            (PoolKey calldata poolKey, uint256 tokenId, uint256 positionIndex, bool payerIsUser) =
+                params.decodeSettleFromDeltasParams();
+            _settleFromDeltas(poolKey, tokenId, positionIndex, payerIsUser);
             return;
         }
         revert Errors.UnsupportedAction(action);
@@ -261,9 +255,6 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, Immutable
             MMHelpers.assertApprovedOrOwner(msgSender(), tokenId);
         }
 
-        Currency underlying0 = _lccToUnderlyingCurrency(poolKey.currency0);
-        Currency underlying1 = _lccToUnderlyingCurrency(poolKey.currency1);
-
         IMarketVault vault = MarketHandlerLib.getVault(marketFactory, poolKey.toId());
 
         (BalanceDelta settlementDelta,, uint256 seizedLiquidityUnits) = vtsOrchestrator.onMMSettle(
@@ -275,6 +266,9 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, Immutable
             toBalanceDelta(amount0, amount1),
             isSeizing
         );
+
+        Currency underlying0 = _lccToUnderlyingCurrency(poolKey.currency0);
+        Currency underlying1 = _lccToUnderlyingCurrency(poolKey.currency1);
 
         int128 delta0 = settlementDelta.amount0();
         int128 delta1 = settlementDelta.amount1();
@@ -402,16 +396,22 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, Immutable
         int24 tickUpper,
         bool payerIsUser
     ) internal {
-        MMHelpers.assertApprovedOrOwner(msgSender(), tokenId);
+        address sender = msgSender();
+        MMHelpers.assertApprovedOrOwner(sender, tokenId);
 
         (Position memory position,) = getPosition(tokenId, positionIndex);
         MMHelpers.assertPositionForPool(poolKey, position);
 
         // payerIsUser = true: User consumes credit protocol owes them (tracked on MMPM)
         // payerIsUser = false: Locker uses their own direct credit
-        address deltaTarget = payerIsUser ? address(this) : msgSender();
-        uint256 liquidityFromDeltas = _getLiquidityFromDeltas(poolKey, deltaTarget, tickLower, tickUpper);
+        address deltaTarget = payerIsUser ? address(this) : sender;
+        (uint256 liquidityFromDeltas, uint256 credit0, uint256 credit1) =
+            _getLiquidityFromDeltas(poolKey, deltaTarget, tickLower, tickUpper);
         _increaseInternal(poolKey, tokenId, positionIndex, tickLower, tickUpper, liquidityFromDeltas);
+        if (!payerIsUser) {
+            // Settle into the position the underlying tokens that are owed.
+            _settle(poolKey, tokenId, positionIndex, -credit0.toInt128(), -credit1.toInt128(), true);
+        }
     }
 
     /// @notice Mints a new position within a commitment
@@ -453,37 +453,63 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, Immutable
         // payerIsUser = true: User consumes credit protocol owes them (tracked on MMPM)
         // payerIsUser = false: Locker uses their own direct credit
         address deltaTarget = payerIsUser ? address(this) : msgSender();
-        uint256 liquidityFromDeltas = _getLiquidityFromDeltas(poolKey, deltaTarget, tickLower, tickUpper);
-        _mintPositionInternal(poolKey, tokenId, tickLower, tickUpper, liquidityFromDeltas);
+        (uint256 liquidityFromDeltas, uint256 credit0, uint256 credit1) =
+            _getLiquidityFromDeltas(poolKey, deltaTarget, tickLower, tickUpper);
+        // This works as LCCs are issued, capitalised by underlying tokens owed to the MM.
+        (, uint256 positionIndex) = _mintPositionInternal(poolKey, tokenId, tickLower, tickUpper, liquidityFromDeltas);
+        if (!payerIsUser) {
+            // Settle into the position the underlying tokens that are owed.
+            _settle(poolKey, tokenId, positionIndex, -credit0.toInt128(), -credit1.toInt128(), true);
+        }
     }
 
-    /// @notice Settles a position using available delta credits
+    /// @notice Settles into the position using available delta credits (positive deltas owed to the user)
     /// @param poolKey The pool key
     /// @param tokenId The commitment NFT token ID
     /// @param positionIndex The position index within the commitment
-    /// @param settleIn0 Whether to settle in token0
-    /// @param settleIn1 Whether to settle in token1
     /// @param payerIsUser If true, user consumes credit the protocol owes them (delta target = MMPM).
     ///        If false, uses locker's direct credit (delta target = locker).
     /// @dev Delta target semantics:
     ///      - MMPM (address(this)): Protocol owes/is owed by external sources
     ///      - Locker (msgSender()): External entity owes/is owed by protocol
-    function _settleFromDeltas(
-        PoolKey calldata poolKey,
-        uint256 tokenId,
-        uint256 positionIndex,
-        bool settleIn0,
-        bool settleIn1,
-        bool payerIsUser
-    ) internal {
+    function _settleFromDeltas(PoolKey calldata poolKey, uint256 tokenId, uint256 positionIndex, bool payerIsUser)
+        internal
+    {
         // payerIsUser = true: User consumes credit protocol owes them (tracked on MMPM)
         // payerIsUser = false: Locker uses their own direct credit
         address deltaTarget = payerIsUser ? address(this) : msgSender();
         (uint256 credit0, uint256 credit1) = _getFullCreditPair(
             _lccToUnderlyingCurrency(poolKey.currency0), _lccToUnderlyingCurrency(poolKey.currency1), deltaTarget
         );
-        BalanceDelta sDelta = LiquidityUtils.safeToBalanceDelta(credit0, credit1, settleIn0, settleIn1);
-        _settle(poolKey, tokenId, positionIndex, sDelta.amount0(), sDelta.amount1(), true);
+        if (credit0 == 0 && credit1 == 0) {
+            revert Errors.InvalidDelta(0, 0);
+        }
+
+        BalanceDelta sDelta = LiquidityUtils.safeToBalanceDelta(credit0, credit1, true, true);
+        if (payerIsUser) {
+            // The MM is settling in tokens that are owed to them.
+            // Skip _settle and call onMMSettle directly - as we're not moving any tokens.
+            (Position memory position, PositionId positionId) = getPosition(tokenId, positionIndex);
+            MMHelpers.assertPositionForPool(poolKey, position);
+
+            bool isSeizing = _isSeizing(positionId);
+
+            if (!isSeizing) {
+                MMHelpers.assertApprovedOrOwner(msgSender(), tokenId);
+            }
+
+            (BalanceDelta settlementDelta,, uint256 seizedLiquidityUnits) = vtsOrchestrator.onMMSettle(
+                MarketHandlerLib.getVault(marketFactory, poolKey.toId()),
+                tokenId,
+                positionIndex,
+                poolKey.currency0,
+                poolKey.currency1,
+                sDelta,
+                isSeizing
+            );
+        } else {
+            _settle(poolKey, tokenId, positionIndex, sDelta.amount0(), sDelta.amount1(), true);
+        }
     }
 
     /// @notice Internal helper to decrease liquidity

@@ -162,16 +162,14 @@ library MMActionAdapter {
     /**
      * @notice Prepares a SETTLE_POSITION_FROM_DELTAS action
      */
-    function prepareSettleFromDeltas(
-        PoolKey memory poolKey,
-        uint256 tokenId,
-        uint256 positionIndex,
-        bool settleIn0,
-        bool settleIn1
-    ) internal pure returns (PreparedAction memory) {
+    function prepareSettleFromDeltas(PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex, bool payerIsUser)
+        internal
+        pure
+        returns (PreparedAction memory)
+    {
         return PreparedAction({
             action: bytes1(uint8(MMActions.SETTLE_POSITION_FROM_DELTAS)),
-            params: abi.encode(poolKey, tokenId, positionIndex, settleIn0, settleIn1)
+            params: abi.encode(poolKey, tokenId, positionIndex, payerIsUser)
         });
     }
 

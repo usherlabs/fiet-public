@@ -445,7 +445,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         uint256 token1BalanceBefore = Currency.wrap(lcc1.underlying()).balanceOf(address(this));
         console.log("===== start decommit ======");
         // MMA.decommit(positionManager, corePoolKey, tokenId);
-        _decommitAndWithdrawDeltas(positionManager, corePoolKey, tokenId, 0, false, false);
+        _decommitAndWithdrawDeltas(positionManager, corePoolKey, tokenId, 0, false);
 
         BalanceDelta settlementDeltaAfterDecommit =
             vtsOrchestrator.getUnderlyingDeltaPair(address(this), lccCurrency0, lccCurrency1);
@@ -649,7 +649,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         // decrease from one position and settle to another position
         _decreaseAndSettlePositionFromDeltas(
-            positionManager, corePoolKey, tokenId, positionIndex, newPositionIndex, liquidityToDecrease, true, true
+            positionManager, corePoolKey, tokenId, positionIndex, newPositionIndex, liquidityToDecrease, true
         );
 
         // get settlement amounts for this newly created position

@@ -68,13 +68,16 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
     function _getLiquidityFromDeltas(PoolKey memory poolKey, address owner, int24 tickLower, int24 tickUpper)
         internal
         view
-        returns (uint256 liquidity)
+        returns (uint256 liquidity, uint256 credit0, uint256 credit1)
     {
         (uint160 sqrtPriceX96,,,) = poolManager.getSlot0(poolKey.toId());
-        (uint256 credit0, uint256 credit1) = _getFullCreditPair(
+        (credit0, credit1) = _getFullCreditPair(
             _lccToUnderlyingCurrency(poolKey.currency0), _lccToUnderlyingCurrency(poolKey.currency1), owner
         );
-        return LiquidityAmounts.getLiquidityForAmounts(
+        if (credit0 == 0 && credit1 == 0) {
+            revert Errors.InvalidDelta(0, 0);
+        }
+        liquidity = LiquidityAmounts.getLiquidityForAmounts(
             sqrtPriceX96,
             TickMath.getSqrtPriceAtTick(tickLower),
             TickMath.getSqrtPriceAtTick(tickUpper),

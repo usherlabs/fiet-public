@@ -224,12 +224,11 @@ abstract contract MarketMakerTestBase is Test {
         PoolKey memory poolKey,
         uint256 tokenId,
         uint256 idx,
-        bool settleIn0,
-        bool settleIn1
+        bool payerIsUser
     ) internal {
         MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
         actions[0] = MMA.prepareDecommit(tokenId);
-        actions[1] = MMA.prepareSettleFromDeltas(poolKey, tokenId, idx, settleIn0, settleIn1);
+        actions[1] = MMA.prepareSettleFromDeltas(poolKey, tokenId, idx, payerIsUser);
 
         // Use modifyLiquidities which handles unlocking automatically
         (bytes memory actionsBytes, bytes[] memory params) = MMA.concatPrepared(actions);
@@ -263,12 +262,11 @@ abstract contract MarketMakerTestBase is Test {
         uint256 positionIndexToDecrease,
         uint256 positionIndexToSettle,
         uint256 amountToDecrease,
-        bool settleIn0,
-        bool settleIn1
+        bool payerIsUser
     ) internal {
         MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
         actions[0] = MMA.prepareDecrease(poolKey, tokenId, positionIndexToDecrease, amountToDecrease);
-        actions[1] = MMA.prepareSettleFromDeltas(poolKey, tokenId, positionIndexToSettle, settleIn0, settleIn1);
+        actions[1] = MMA.prepareSettleFromDeltas(poolKey, tokenId, positionIndexToSettle, payerIsUser);
 
         // Use modifyLiquidities which handles unlocking automatically
         (bytes memory actionsBytes, bytes[] memory params) = MMA.concatPrepared(actions);
@@ -306,7 +304,7 @@ abstract contract MarketMakerTestBase is Test {
     ) internal {
         MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
         actions[0] = MMA.prepareSeize(poolKey, tokenId, positionIndexToSeize, amount0ToSettle, amount1ToSettle);
-        actions[1] = MMA.prepareSettleFromDeltas(poolKey, tokenId, positionIndexToSeize, false, false); //take
+        actions[1] = MMA.prepareSettleFromDeltas(poolKey, tokenId, positionIndexToSeize, false); //take
         // Use modifyLiquidities which handles unlocking automatically
         (bytes memory actionsBytes, bytes[] memory params) = MMA.concatPrepared(actions);
         bytes memory unlockData = abi.encode(actionsBytes, params);
