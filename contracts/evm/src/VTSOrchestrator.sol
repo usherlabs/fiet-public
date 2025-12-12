@@ -152,16 +152,57 @@ contract VTSOrchestrator is ImmutableMarketState, PausableVTS, VTSCurrencyDelta,
     /// @dev Internal assertion helper mirroring legacy registry semantics.
     /// @param id The position id
     /// @param requireActive Whether the position must be active
-    /// @param revertIfInvalid Whether to revert on invalid positions
     /// @return isValid True if the position is valid under the requested constraints
-    function _assertPositionValid(PositionId id, bool requireActive, bool revertIfInvalid)
-        internal
-        view
-        returns (bool isValid)
-    {
+    function _assertPositionValid(PositionId id, bool requireActive) internal view returns (bool isValid) {
         isValid = isPositionValid(id, requireActive);
         if (!isValid && revertIfInvalid) {
             revert Errors.InvalidPosition(0, 0, id);
+        }
+    }
+
+    /// @notice Checks if a commit exists and optionally checks if signal hasn't expired
+    /// @param commitId The commit identifier
+    /// @param requireLiveSignal If true, checks expiry. If false, skips expiry check.
+    /// @return isValid True if the signal is valid (commit exists and, if requireLiveSignal is true, hasn't expired)
+    function isSignalValid(uint256 commitId, bool requireLiveSignal) public view returns (bool isValid) {
+        // Check if commit exists (commitId must be > 0)
+        if (commitId == 0) {
+            return false;
+        }
+
+        Commit storage commit = s.commits[commitId];
+
+        // Check if commit actually exists (expiresAt > 0 indicates commit was initialized)
+        if (commit.expiresAt == 0) {
+            return false;
+        }
+
+        // Validate that mmState has valid parameters
+        MarketMaker.State memory mmState = commit.mmState;
+        if (mmState.owner == address(0)) {
+            return false;
+        }
+        if (mmState.reserves.length == 0) {
+            return false;
+        }
+
+        // Only check expiry if requireLiveSignal is true
+        if (requireLiveSignal) {
+            bool isExpired = commit.expiresAt < block.timestamp;
+            if (isExpired) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// @notice Validates that a commit exists and optionally checks if signal hasn't expired
+    /// @param commitId The commit identifier
+    /// @param requireLiveSignal If true, checks expiry and reverts if expired. If false, skips expiry check.
+    function _assertSignalValid(uint256 commitId, bool requireLiveSignal) internal view {
+        if (!isSignalValid(commitId, requireLiveSignal)) {
+            revert Errors.InvalidSignal(commitId);
         }
     }
 
@@ -177,43 +218,6 @@ contract VTSOrchestrator is ImmutableMarketState, PausableVTS, VTSCurrencyDelta,
         onlyOwner
     {
         s.pools[corePoolId].vtsConfig = vtsConfiguration;
-    }
-
-    /// @notice Validates that a commit exists and optionally checks if signal hasn't expired
-    /// @param commitId The commit identifier
-    /// @param requireLiveSignal If true, checks expiry and reverts if expired. If false, skips expiry check.
-    /// @return isValid True if the signal is valid (commit exists and, if requireLiveSignal is true, hasn't expired)
-    function _assertSignalValid(uint256 commitId, bool requireLiveSignal) internal view returns (bool isValid) {
-        // Check if commit exists (commitId must be > 0)
-        if (commitId == 0) {
-            revert Errors.InvalidSignal(commitId);
-        }
-
-        Commit storage commit = s.commits[commitId];
-
-        // Check if commit actually exists (expiresAt > 0 indicates commit was initialized)
-        if (commit.expiresAt == 0) {
-            revert Errors.InvalidSignal(commitId);
-        }
-
-        // Validate that mmState has valid parameters
-        MarketMaker.State memory mmState = commit.mmState;
-        if (mmState.owner == address(0)) {
-            revert Errors.InvalidSignal(commitId);
-        }
-        if (mmState.reserves.length == 0) {
-            revert Errors.InvalidSignal(commitId);
-        }
-
-        // Only check expiry if requireLiveSignal is true
-        if (requireLiveSignal) {
-            bool isExpired = commit.expiresAt < block.timestamp;
-            if (isExpired) {
-                revert Errors.InvalidSignal(commitId);
-            }
-        }
-
-        return true;
     }
 
     // --------------------------------------------------
@@ -235,7 +239,7 @@ contract VTSOrchestrator is ImmutableMarketState, PausableVTS, VTSCurrencyDelta,
     function getPosition(uint256 commitId, uint256 positionIndex) public view returns (Position memory, PositionId) {
         PositionId positionId = s.commits[commitId].positions[positionIndex];
         // Assert position validity when accessing via commit/position index (used by MM helpers)
-        _assertPositionValid(positionId, true, true);
+        _assertPositionValid(positionId, true);
         return (s.positions[positionId], positionId);
     }
 
@@ -305,7 +309,7 @@ contract VTSOrchestrator is ImmutableMarketState, PausableVTS, VTSCurrencyDelta,
         returns (PositionId, bool, BalanceDelta)
     {
         PositionId positionId = getPositionId(commitId, positionIndex);
-        _assertPositionValid(positionId, true, true);
+        _assertPositionValid(positionId, true);
         (bool rfsOpen, BalanceDelta delta) = VTSPositionLib.calcRFS(s, poolManager, positionId, requireClosedRfS);
         return (positionId, rfsOpen, delta);
     }
@@ -413,6 +417,7 @@ contract VTSOrchestrator is ImmutableMarketState, PausableVTS, VTSCurrencyDelta,
     /// @return pos The position struct
     /// @return id The position identifier
     /// @return feeAdj The fee adjustment delta
+    /// @return isMMPosition True if this is an MM position operation with valid signal
     function processPosition(
         address owner,
         PoolKey calldata poolKey,
@@ -424,14 +429,17 @@ contract VTSOrchestrator is ImmutableMarketState, PausableVTS, VTSCurrencyDelta,
         external
         onlyCoreHook
         notPoolPaused(poolKey.toId())
-        returns (Position memory pos, PositionId id, BalanceDelta feeAdj)
+        returns (Position memory pos, PositionId id, BalanceDelta feeAdj, bool isMMPosition)
     {
         // Decode hookData to check if this is an MM operation
         PositionModificationHookData memory mmData = PositionModificationHookDataLib.decodeCalldata(hookData);
 
-        // Validate signal for MM positions (skip for seizure)
+        isMMPosition = false;
+        // Determine if this is a valid MM position (MM operation with valid signal)
         if (PositionModificationHookDataLib.isMMOperation(mmData)) {
-            _assertSignalValid(mmData.commitId, !mmData.seizure.isSeizing); // Skip expiry check for seizure
+            // Validate signal for MM positions (skip expiry check for seizure)
+            _assertSignalValid(mmData.commitId, !mmData.seizure.isSeizing);
+            isMMPosition = true;
         }
 
         // Build position context with dependency references
@@ -497,7 +505,7 @@ contract VTSOrchestrator is ImmutableMarketState, PausableVTS, VTSCurrencyDelta,
         _assertSignalValid(commitId, true);
         // Validate position exists
         PositionId positionId = getPositionId(commitId, positionIndex);
-        _assertPositionValid(positionId, true, true);
+        _assertPositionValid(positionId, true);
 
         // Use the RFSCheckpoint module to extend the grace period
         CheckpointLibrary.extendGracePeriod(

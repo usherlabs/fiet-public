@@ -36,16 +36,12 @@ contract CoreHook is BaseHook, Exttload, ImmutableMarketState, ImmutableVTSState
     using CurrencySettler for Currency;
     using SafeCast for int256;
 
-    address internal immutable mmPositionManager;
-
     // Owner will be set to MarketFactory
-    constructor(address _poolManager, address _marketFactory, address _mmPositionManager, address _vtsOrchestrator)
+    constructor(address _poolManager, address _marketFactory, address _vtsOrchestrator)
         BaseHook(IPoolManager(_poolManager))
         ImmutableMarketState(_marketFactory)
         ImmutableVTSState(_vtsOrchestrator)
-    {
-        mmPositionManager = _mmPositionManager;
-    }
+    {}
 
     function getHookPermissions() public pure override returns (Hooks.Permissions memory) {
         return Hooks.Permissions({
@@ -161,11 +157,11 @@ contract CoreHook is BaseHook, Exttload, ImmutableMarketState, ImmutableVTSState
         // Update VTS position state with registration/update based on actual pool id
         // Pass callerDelta and feesAccrued for consolidated delta management
         // Note: Pause check is enforced in VTSOrchestrator.processPosition
-        (Position memory pos,, BalanceDelta feeAdj) =
+        (Position memory pos,, BalanceDelta feeAdj, bool isMMPosition) =
             vtsOrchestrator.processPosition(sender, key, params, delta, feesAccrued, hookData);
 
-        // only add direct liquidity if the sender is not the market maker position manager/router
-        if (!_isCallerMMP(sender) && !_isMMPosition(pos)) {
+        // only add direct liquidity if this is not an MM position operation
+        if (!isMMPosition) {
             // Forward effective caller delta including fee adjustment (Uniswap will apply callerDelta - hookDelta)
             BalanceDelta effective = delta - feeAdj; //  equivalent to doing (delta1.amount0 + delta2.amount0, delta1.amount1 + delta2.amount1)
             ProxyHook(payable(_getProxyHook(key))).onDirectLP(effective, LiquidityUtils.ActionType.DirectLPAddLiquidity); // Fetching ProxyHook by corePoolKey, therefore no need to pass again.
@@ -194,11 +190,11 @@ contract CoreHook is BaseHook, Exttload, ImmutableMarketState, ImmutableVTSState
     ) internal virtual override returns (bytes4, BalanceDelta) {
         // Update VTS position state with registration/update based on actual pool id
         // Pass callerDelta and feesAccrued for consolidated delta management
-        // TODO: Return isMMOperation flag in response.
-        (Position memory pos,, BalanceDelta feeAdj) =
+        (Position memory pos,, BalanceDelta feeAdj, bool isMMPosition) =
             vtsOrchestrator.processPosition(sender, key, params, delta, feesAccrued, hookData);
 
-        if (!_isCallerMMP(sender) && !_isMMPosition(pos)) {
+        // only remove direct liquidity if this is not an MM position operation
+        if (!isMMPosition) {
             // Forward effective caller delta including fee adjustment (Uniswap will apply callerDelta - hookDelta)
             BalanceDelta effective = delta - feeAdj;
             ProxyHook(payable(_getProxyHook(key)))
@@ -211,15 +207,5 @@ contract CoreHook is BaseHook, Exttload, ImmutableMarketState, ImmutableVTSState
     // Helper function to get the proxy hook address from the core pool key
     function _getProxyHook(PoolKey calldata corePoolKey) internal view returns (address) {
         return MarketHandlerLib.getProxyHook(marketFactory, corePoolKey);
-    }
-
-    // Helper functions to check if the caller is the MM Position Manager
-    function _isCallerMMP(address caller) internal view returns (bool) {
-        return caller == mmPositionManager;
-    }
-
-    // Helper function to check if the position is MM-managed
-    function _isMMPosition(Position memory position) internal view returns (bool) {
-        return position.owner == mmPositionManager;
     }
 }

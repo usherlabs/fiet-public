@@ -127,9 +127,7 @@ contract MarketFactoryTest is Test, Deployers {
 
         // Deploy CoreHook at computed address
         deployCodeTo(
-            "CoreHook.sol:CoreHook",
-            abi.encode(poolManager, address(factory), address(positionManager), address(vtsOrchestrator)),
-            coreHookAddr
+            "CoreHook.sol:CoreHook", abi.encode(poolManager, address(factory), address(vtsOrchestrator)), coreHookAddr
         );
 
         // Authorise factory in LiquidityHub (owner-only)

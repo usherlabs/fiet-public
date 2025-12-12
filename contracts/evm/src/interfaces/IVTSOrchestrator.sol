@@ -81,6 +81,12 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta {
     /// @return True if the position is valid under the requested constraints
     function isPositionValid(PositionId id, bool requireActive) external view returns (bool);
 
+    /// @notice Checks if a commit exists and optionally checks if signal hasn't expired
+    /// @param commitId The commit identifier
+    /// @param requireLiveSignal If true, checks expiry. If false, skips expiry check.
+    /// @return isValid True if the signal is valid (commit exists and, if requireLiveSignal is true, hasn't expired)
+    function isSignalValid(uint256 commitId, bool requireLiveSignal) external view returns (bool isValid);
+
     // VTS Logic & Settlement
     /// @notice Settle position growths before liquidity modifications
     /// @dev Called by CoreHook to settle position growths before adding or removing liquidity
@@ -170,6 +176,7 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta {
     /// @return pos The position struct
     /// @return id The position id
     /// @return feeAdj The fee adjustment delta
+    /// @return isMMPosition True if this is an MM position operation with valid signal
     function processPosition(
         address owner,
         PoolKey calldata poolKey,
@@ -177,7 +184,7 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta {
         BalanceDelta callerDelta,
         BalanceDelta feesAccrued,
         bytes calldata hookData
-    ) external returns (Position memory pos, PositionId id, BalanceDelta feeAdj);
+    ) external returns (Position memory pos, PositionId id, BalanceDelta feeAdj, bool isMMPosition);
 
     /// @notice Called by CoreHook after a swap to process swap-related accounting
     /// @param key The pool key

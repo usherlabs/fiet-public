@@ -241,14 +241,12 @@ abstract contract MarketTestBase is Test, Deployers {
     function _deployHooks() internal {
         // Mine CREATE2 salt for CoreHook and deploy to a flags-compliant address
         bytes memory coreCreationCode = type(CoreHook).creationCode;
-        bytes memory coreArgs =
-            abi.encode(address(manager), address(marketFactory), address(mmPositionManager), address(vtsOrchestrator));
+        bytes memory coreArgs = abi.encode(address(manager), address(marketFactory), address(vtsOrchestrator));
         (address minedCoreAddr, bytes32 coreSalt) =
             HookMiner.find(address(this), HookFlags.CORE_HOOK_FLAGS, coreCreationCode, coreArgs);
         coreHookAddress = minedCoreAddr;
-        CoreHook coreDeployed = new CoreHook{
-            salt: coreSalt
-        }(address(manager), address(marketFactory), address(mmPositionManager), address(vtsOrchestrator));
+        CoreHook coreDeployed =
+            new CoreHook{salt: coreSalt}(address(manager), address(marketFactory), address(vtsOrchestrator));
         require(address(coreDeployed) == coreHookAddress, "CoreHook deployed at unexpected address");
 
         // Compute proxy hook address
