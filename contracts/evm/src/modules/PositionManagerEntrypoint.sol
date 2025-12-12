@@ -6,7 +6,6 @@ import {CurrencyLibrary} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {TransientSlots} from "../libraries/TransientSlots.sol";
 import {PositionManagerBase} from "./PositionManagerBase.sol";
-import {ILiquidityHub} from "../interfaces/ILiquidityHub.sol";
 
 /**
  * @title PositionManagerEntrypoint

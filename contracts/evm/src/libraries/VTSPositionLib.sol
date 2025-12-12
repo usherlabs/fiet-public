@@ -32,7 +32,6 @@ import {
     PositionModificationHookDataLib
 } from "../types/Position.sol";
 import {Pool} from "../types/Pool.sol";
-import {Commit} from "../types/Commit.sol";
 import {LiquidityUtils} from "./LiquidityUtils.sol";
 import {Errors} from "./Errors.sol";
 import {VTSFeeLib} from "./VTSFeeLib.sol";

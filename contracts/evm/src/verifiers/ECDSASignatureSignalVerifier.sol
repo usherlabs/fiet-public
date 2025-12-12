@@ -8,6 +8,7 @@ import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/Messa
 import {ISignalVerifier} from "../interfaces/ISignalVerifier.sol";
 import {MarketMaker} from "../libraries/MarketMaker.sol";
 import {MerkleProofLib} from "solady/utils/MerkleProofLib.sol";
+import {EfficientHashLib} from "solady/utils/EfficientHashLib.sol";
 
 contract ECDSASignatureSignalVerifier is ISignalVerifier {
     using ECDSA for bytes32;
@@ -65,7 +66,7 @@ contract ECDSASignatureSignalVerifier is ISignalVerifier {
         }
 
         // verify signature of the canister on the root state hash
-        bytes32 message = keccak256(abi.encodePacked(nonce, rootStateHash));
+        bytes32 message = EfficientHashLib.hash(abi.encodePacked(nonce, rootStateHash));
         bool isRootStateHashValid =
             MessageHashUtils.toEthSignedMessageHash(message).recover(rootStateHashSignature) == publicKeyAddress;
 

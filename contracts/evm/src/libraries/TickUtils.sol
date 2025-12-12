@@ -53,6 +53,7 @@ library TickUtils {
                 (int16 wordPos, uint8 bitPos) = TickBitmap.position(++compressed);
 
                 // Create mask for bits at or to the left of current position
+                // forge-lint: disable-next-line(incorrect-shift)
                 uint256 mask = ~((1 << bitPos) - 1);
                 uint256 masked = StateLibrary.getTickBitmap(poolManager, poolId, wordPos) & mask;
 

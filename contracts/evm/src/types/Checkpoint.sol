@@ -4,6 +4,7 @@ pragma solidity ^0.8.20;
 import {TokenConfiguration} from "./VTS.sol";
 
 /// The checkpoint of the RFS for a position
+// forge-lint: disable-next-line(pascal-case-struct)
 struct RFSCheckpoint {
     // the time of the open or close of the RFS for this position
     uint256 timeOfLastTransition;
@@ -19,6 +20,7 @@ using RFSCheckpointLibrary for RFSCheckpoint global;
 
 // initially the checkpoint wouls be set to (0,false)
 // and it can remain that way until the first transition(change from false to true or true to false for `rfsopen`) occurs
+// forge-lint: disable-next-line(pascal-case-struct)
 library RFSCheckpointLibrary {
     // this function is used to mark the checkpoint of the RFS for a position
     // if the RFS is already in the same state as the `isOpen` parameter, it does nothing

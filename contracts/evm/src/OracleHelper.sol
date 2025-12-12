@@ -6,6 +6,7 @@ import {ILCC} from "./interfaces/ILCC.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {OracleUtils} from "./libraries/OracleUtils.sol";
 import {Errors} from "./libraries/Errors.sol";
+import {EfficientHashLib} from "solady/utils/EfficientHashLib.sol";
 
 contract OracleHelper is Ownable {
     IResilientOracle public oracle;
@@ -29,7 +30,7 @@ contract OracleHelper is Ownable {
     function registerTicker(string calldata ticker, address asset) external onlyOwner {
         if (asset == address(0)) revert Errors.InvalidAddress(asset);
 
-        bytes32 tickerHash = keccak256(bytes(ticker));
+        bytes32 tickerHash = EfficientHashLib.hash(bytes(ticker));
 
         tickerHashToAsset[tickerHash] = asset;
 
@@ -42,7 +43,7 @@ contract OracleHelper is Ownable {
      * @return asset The asset address
      */
     function getAssetByTicker(string memory ticker) public view returns (address) {
-        bytes32 tickerHash = keccak256(bytes(ticker));
+        bytes32 tickerHash = EfficientHashLib.hash(bytes(ticker));
         address asset = tickerHashToAsset[tickerHash];
         if (asset == address(0)) revert Errors.TickerNotRegistered(ticker);
         return asset;

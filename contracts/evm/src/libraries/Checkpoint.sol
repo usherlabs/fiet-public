@@ -11,7 +11,6 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {IVRLSettlementObserver} from "../interfaces/IVRLSettlementObserver.sol";
 import {TokenConfiguration} from "../types/VTS.sol";
 import {console} from "forge-std/console.sol";
-import {EfficientHashLib} from "solady/utils/EfficientHashLib.sol";
 
 library CheckpointLibrary {
     /**

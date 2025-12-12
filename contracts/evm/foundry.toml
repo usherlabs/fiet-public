@@ -21,7 +21,11 @@ fs_permissions = [{ access = "read-write", path = "./deployments" }]
 remappings = ["@openzeppelin/=lib/openzeppelin-contracts/"]
 
 [lint]
-exclude_lints = ["screaming-snake-case-immutable"]
+exclude_lints = [
+  "screaming-snake-case-immutable",
+  "mixed-case-variable",
+  "mixed-case-function",
+]
 
 # Foundry automatically instruments linked-libraries if library public/external functions are called.
 # libraries = [

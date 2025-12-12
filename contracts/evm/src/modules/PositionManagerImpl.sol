@@ -15,6 +15,7 @@ import {LiquidityAmounts} from "v4-periphery/src/libraries/LiquidityAmounts.sol"
 import {LiquidityUtils} from "../libraries/LiquidityUtils.sol";
 import {ImmutableState} from "v4-periphery/src/base/ImmutableState.sol";
 import {PositionManagerBase} from "./PositionManagerBase.sol";
+import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
 
 /**
  * @title PositionManagerImpl
@@ -139,7 +140,7 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
             poolManager.getPositionInfo(key.toId(), self, params.tickLower, params.tickUpper, params.salt);
 
         // Validate that liquidity change matches expected delta
-        if (int128(liquidityBefore) + params.liquidityDelta != int128(liquidityAfter)) {
+        if (SafeCast.toInt128(liquidityBefore) + params.liquidityDelta != SafeCast.toInt128(liquidityAfter)) {
             revert Errors.InvariantViolated("liquidity change incorrect");
         }
 

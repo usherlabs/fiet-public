@@ -24,7 +24,6 @@ import {ProxySwapFlag} from "./libraries/ProxySwapFlag.sol";
 import {ImmutableMarketState} from "./modules/ImmutableMarketState.sol";
 import {ImmutableVTSState} from "./modules/ImmutableVTSState.sol";
 import {MarketHandlerLib} from "./libraries/MarketHandlerLib.sol";
-import {Position} from "./types/Position.sol";
 
 /**
  * Core Pool should be aware of Positions.
@@ -157,7 +156,7 @@ contract CoreHook is BaseHook, Exttload, ImmutableMarketState, ImmutableVTSState
         // Update VTS position state with registration/update based on actual pool id
         // Pass callerDelta and feesAccrued for consolidated delta management
         // Note: Pause check is enforced in VTSOrchestrator.processPosition
-        (Position memory pos,, BalanceDelta feeAdj, bool isMMPosition) =
+        (,, BalanceDelta feeAdj, bool isMMPosition) =
             vtsOrchestrator.processPosition(sender, key, params, delta, feesAccrued, hookData);
 
         // only add direct liquidity if this is not an MM position operation
@@ -190,7 +189,7 @@ contract CoreHook is BaseHook, Exttload, ImmutableMarketState, ImmutableVTSState
     ) internal virtual override returns (bytes4, BalanceDelta) {
         // Update VTS position state with registration/update based on actual pool id
         // Pass callerDelta and feesAccrued for consolidated delta management
-        (Position memory pos,, BalanceDelta feeAdj, bool isMMPosition) =
+        (,, BalanceDelta feeAdj, bool isMMPosition) =
             vtsOrchestrator.processPosition(sender, key, params, delta, feesAccrued, hookData);
 
         // only remove direct liquidity if this is not an MM position operation

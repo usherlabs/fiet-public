@@ -2,7 +2,6 @@
 pragma solidity ^0.8.20;
 
 import {MarketMaker} from "../libraries/MarketMaker.sol";
-import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {PositionId} from "./Position.sol";
 
 /// The parameters of the proof to verify the state of the market maker

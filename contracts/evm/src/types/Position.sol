@@ -5,6 +5,7 @@ import {ModifyLiquidityParams} from "v4-periphery/lib/v4-core/src/types/PoolOper
 import {Position as UniPosition} from "v4-periphery/lib/v4-core/src/libraries/Position.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {RFSCheckpoint} from "./Checkpoint.sol";
+import {EfficientHashLib} from "solady/utils/EfficientHashLib.sol";
 
 type PositionId is bytes32;
 
@@ -176,6 +177,6 @@ library PositionLibrary {
      * @return salt The unique salt
      */
     function generateSalt(uint256 tokenId, uint256 positionIndex) internal pure returns (bytes32) {
-        return keccak256(abi.encodePacked(tokenId, positionIndex));
+        return EfficientHashLib.hash(abi.encodePacked(tokenId, positionIndex));
     }
 }

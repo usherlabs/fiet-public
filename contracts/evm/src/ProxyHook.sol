@@ -470,7 +470,7 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
             uint256 cappedOutput = Math.min(originalAmount, maxOutputAvailable);
             adjustedParams = SwapParams({
                 zeroForOne: params.zeroForOne,
-                amountSpecified: int256(cappedOutput),
+                amountSpecified: SafeCast.toInt256(cappedOutput),
                 sqrtPriceLimitX96: params.sqrtPriceLimitX96
             });
             return adjustedParams;
@@ -488,7 +488,7 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
             }
             adjustedParams = SwapParams({
                 zeroForOne: params.zeroForOne,
-                amountSpecified: -int256(scaledIn),
+                amountSpecified: -SafeCast.toInt256(scaledIn),
                 sqrtPriceLimitX96: params.sqrtPriceLimitX96
             });
         } else {
@@ -563,7 +563,7 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         // Create a swap simulation with the desired output
         SwapParams memory outputParams = SwapParams({
             zeroForOne: zeroForOne,
-            amountSpecified: int256(desiredOutput), // Positive for exact output
+            amountSpecified: SafeCast.toInt256(desiredOutput), // Positive for exact output
             sqrtPriceLimitX96: zeroForOne ? LiquidityUtils.ZERO_FOR_ONE_LIMIT : LiquidityUtils.ONE_FOR_ZERO_LIMIT // No price limit for this calculation
         });
 

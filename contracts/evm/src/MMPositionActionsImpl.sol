@@ -10,7 +10,6 @@ import {CurrencySettler} from "v4-periphery/lib/v4-core/test/utils/CurrencySettl
 import {PositionId, PositionLibrary, PositionModificationHookDataLib} from "./types/Position.sol";
 import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
-import {ILiquidityHub} from "./interfaces/ILiquidityHub.sol";
 import {IMarketVault} from "./interfaces/IMarketVault.sol";
 import {Errors} from "./libraries/Errors.sol";
 import {LiquidityUtils} from "./libraries/LiquidityUtils.sol";
@@ -26,7 +25,6 @@ import {MMActions} from "./libraries/MMActions.sol";
 import {MMCalldataDecoder} from "./libraries/MMCalldataDecoder.sol";
 import {MMHelpers} from "./libraries/MMHelpers.sol";
 import {Locker} from "v4-periphery/src/libraries/Locker.sol";
-import {MarketMaker} from "./libraries/MarketMaker.sol";
 import {DelegateCallGuard} from "./modules/DelegateCallGuard.sol";
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 
@@ -502,7 +500,7 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
                 MMHelpers.assertApprovedOrOwner(msgSender(), tokenId);
             }
 
-            (BalanceDelta settlementDelta,, uint256 seizedLiquidityUnits) = vtsOrchestrator.onMMSettle(
+            vtsOrchestrator.onMMSettle(
                 _getVault(poolKey), tokenId, positionIndex, poolKey.currency0, poolKey.currency1, sDelta, isSeizing
             );
         } else {
