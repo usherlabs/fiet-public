@@ -40,11 +40,9 @@ abstract contract MarketVault is IMarketVault, ImmutableState, ImmutableMarketSt
     event SwapDeficit(PoolId indexed poolId, address indexed lccToken, address deficitRecipient, uint256 deficitAmount);
 
     ILiquidityHub public immutable liquidityHub;
-    address public immutable mmPositionManager;
 
     constructor(address _marketFactory) ImmutableMarketState(_marketFactory) {
         liquidityHub = marketFactory.liquidityHub();
-        mmPositionManager = marketFactory.mmPositionManager();
     }
 
     // Market tracking state variables
@@ -82,8 +80,7 @@ abstract contract MarketVault is IMarketVault, ImmutableState, ImmutableMarketSt
     }
 
     function _onlyProtocolBounds() internal view {
-        // Being explicit witn these bounds to prevent leaks.
-        if (msg.sender != (address(marketFactory)) && msg.sender != (address(mmPositionManager))) {
+        if (!marketFactory.bounds(msg.sender)) {
             revert Errors.InvalidSender();
         }
     }
@@ -369,91 +366,39 @@ abstract contract MarketVault is IMarketVault, ImmutableState, ImmutableMarketSt
     }
 
     /**
-     * @dev Unlock callback function called by the PoolManager during unlock operations
-     * @notice This callback is invoked by the PoolManager when the vault needs to handle balance deltas.
-     *         It processes positive deltas (incoming tokens) by settling them to the vault, and
-     *         negative deltas (outgoing tokens) by taking them from the vault. This is used to
-     *         synchronize the vault's liquidity with the PoolManager's balance changes.
-     * @param data Encoded CallbackData containing sender, currencies, and balance delta
-     * @return Empty bytes array (required by callback interface)
-     * @custom:reverts InvalidSender If the caller is not the poolManager
-     * @custom:reverts InsufficientLiquidityToTake If negative deltas exceed available vault liquidity
-     * @custom:reverts InsufficientLiquidityToSettle If positive deltas require more than available balance
+     * @dev Modify vault liquidity. Called during a poolManager unlock operation.
+     * @notice This function modifies the vault's liquidity by taking or settling underlying tokens from the vault to the sender or vice versa.
+     * @param currency0 The first currency
+     * @param currency1 The second currency
+     * @param balanceDelta The balance delta representing the desired liquidity changes
      */
-    function _unlockCallback(bytes memory data) internal returns (bytes memory) {
-        if (msg.sender != address(poolManager)) {
-            revert Errors.InvalidSender();
-        }
-
-        // Decode the callback data to extract sender, currencies, and balance delta
-        CallbackData memory callbackData = abi.decode(data, (CallbackData));
+    function _modifyVaultLiquidity(Currency currency0, Currency currency1, BalanceDelta balanceDelta) internal {
+        address sender = msg.sender;
 
         // Extract the balance deltas for both currencies
         // Negative values indicate tokens need to be taken from the vault
         // Positive values indicate tokens need to be settled to the vault
-        (int128 amount0, int128 amount1) = (callbackData.balanceDelta.amount0(), callbackData.balanceDelta.amount1());
+        (int128 amount0, int128 amount1) = (balanceDelta.amount0(), balanceDelta.amount1());
 
         // Handle positive delta for currency0: take underlying tokens from vault to sender
         if (amount0 > 0) {
-            _takeUnderlyingFromVaultToRecipient(
-                callbackData.currency0, callbackData.sender, LiquidityUtils.safeInt128ToUint256(amount0)
-            );
+            _takeUnderlyingFromVaultToRecipient(currency0, sender, LiquidityUtils.safeInt128ToUint256(amount0));
         }
 
         // Handle positive delta for currency1: take underlying tokens from vault to sender
         if (amount1 > 0) {
-            _takeUnderlyingFromVaultToRecipient(
-                callbackData.currency1, callbackData.sender, LiquidityUtils.safeInt128ToUint256(amount1)
-            );
+            _takeUnderlyingFromVaultToRecipient(currency1, sender, LiquidityUtils.safeInt128ToUint256(amount1));
         }
 
-        // Handle negative delta for currency0: settle underlying tokens from sender to vault
+        // Handle negative delta for currency0: settle underlying tokens from this contract to vault
+        // ? Expects underlying native currency (eg. ETH, WETH, USDC, etc.) to be transferred to this contract in advance.
         if (amount0 < 0) {
-            _settleUnderlyingToVaultFromSender(
-                callbackData.currency0, address(this), LiquidityUtils.safeInt128ToUint256(amount0)
-            );
+            _settleUnderlyingToVaultFromSender(currency0, address(this), LiquidityUtils.safeInt128ToUint256(amount0));
         }
 
-        // Handle negative delta for currency1: settle underlying tokens from sender to vault
+        // Handle negative delta for currency1: settle underlying tokens this contract to vault
         if (amount1 < 0) {
-            _settleUnderlyingToVaultFromSender(
-                callbackData.currency1, address(this), LiquidityUtils.safeInt128ToUint256(amount1)
-            );
-        }
-
-        return "";
-    }
-
-    /**
-     * @dev Manually unlock the PoolManager and modify vault liquidity
-     * @notice This function initiates a manual liquidity modification operation by unlocking the
-     *         PoolManager and providing callback data. The actual liquidity changes are handled
-     *         in the unlockCallback function. This is used for operations that need to modify
-     *         the vault's liquidity state (e.g., adding liquidity via direct LP operations).
-     * @param currency0 The first currency address
-     * @param currency1 The second currency address
-     * @param balanceDelta The balance delta representing the desired liquidity changes
-     */
-    function _modifyVaultLiquidity(Currency currency0, Currency currency1, BalanceDelta balanceDelta) internal {
-        _unlockCallback(abi.encode(CallbackData(msg.sender, (currency0), (currency1), balanceDelta)));
-    }
-
-    /**
-     * @dev This function is called by the MMPositionManager to add liquidity directly to the vault
-     * @param balanceDelta The balance delta of the currency0 and currency1
-     * @notice Derive the ProxyHook address from the Pool Id, assumes the (LCC underlying) currencies for the Proxy Pool.
-     */
-    function modifyLiquidities(BalanceDelta balanceDelta) external onlyProtocolBounds nonReentrant {
-        (Currency currency0, Currency currency1) = _underlying();
-        (ILCC lccToken0, ILCC lccToken1) = _lccs();
-        _modifyVaultLiquidity(currency0, currency1, balanceDelta);
-        // if there was an addition, then settle the obligations to the lcc tokens
-        // ? caller context means negative delta liquidity leaving the caller, and entering the vault.
-        if (balanceDelta.amount0() < 0) {
-            _settleObligationsForLCC(lccToken0);
-        }
-        if (balanceDelta.amount1() < 0) {
-            _settleObligationsForLCC(lccToken1);
+            _settleUnderlyingToVaultFromSender(currency1, address(this), LiquidityUtils.safeInt128ToUint256(amount1));
         }
     }
 
@@ -462,7 +407,7 @@ abstract contract MarketVault is IMarketVault, ImmutableState, ImmutableMarketSt
      * @param balanceDelta The desired balance delta to apply
      * @return The actual balance delta that was applied (may be less than requested for withdrawals)
      */
-    function _dryModifyLiquidities(BalanceDelta balanceDelta) internal view returns (BalanceDelta) {
+    function dryModifyLiquidities(BalanceDelta balanceDelta) public view returns (BalanceDelta) {
         (Currency currency0, Currency currency1) = _underlying();
 
         int128 delta0 = balanceDelta.amount0();
@@ -502,12 +447,22 @@ abstract contract MarketVault is IMarketVault, ImmutableState, ImmutableMarketSt
     }
 
     /**
-     * @dev Dry run to modify vault liquidity, handling partial withdrawals gracefully
-     * @param balanceDelta The desired balance delta to apply
-     * @return The actual balance delta that was applied (may be less than requested for withdrawals)
+     * @dev This function is called by the MMPositionManager to add liquidity directly to the vault
+     * @param balanceDelta The balance delta of the currency0 and currency1
+     * @notice Derive the ProxyHook address from the Pool Id, assumes the (LCC underlying) currencies for the Proxy Pool.
      */
-    function dryModifyLiquidities(BalanceDelta balanceDelta) external view onlyProtocolBounds returns (BalanceDelta) {
-        return _dryModifyLiquidities(balanceDelta);
+    function modifyLiquidities(BalanceDelta balanceDelta) external onlyProtocolBounds nonReentrant {
+        (Currency currency0, Currency currency1) = _underlying();
+        (ILCC lccToken0, ILCC lccToken1) = _lccs();
+        _modifyVaultLiquidity(currency0, currency1, balanceDelta);
+        // if there was an addition, then settle the obligations to the lcc tokens
+        // ? caller context means negative delta liquidity leaving the caller, and entering the vault.
+        if (balanceDelta.amount0() < 0) {
+            _settleObligationsForLCC(lccToken0);
+        }
+        if (balanceDelta.amount1() < 0) {
+            _settleObligationsForLCC(lccToken1);
+        }
     }
 
     /**
@@ -524,7 +479,7 @@ abstract contract MarketVault is IMarketVault, ImmutableState, ImmutableMarketSt
         (ILCC lccToken0, ILCC lccToken1) = _lccs();
         (Currency currency0, Currency currency1) = _underlying();
 
-        BalanceDelta usedDelta = _dryModifyLiquidities(balanceDelta);
+        BalanceDelta usedDelta = dryModifyLiquidities(balanceDelta);
         // if caller is vtsorchstrator then do not unl
         _modifyVaultLiquidity(currency0, currency1, usedDelta);
 
@@ -539,12 +494,19 @@ abstract contract MarketVault is IMarketVault, ImmutableState, ImmutableMarketSt
         return usedDelta;
     }
 
+    /**
+     * @dev Assert that the sender is a valid ETH sender
+     */
+    function _assertValidEthSender() internal view {
+        if (msg.sender != address(poolManager)) {
+            _onlyProtocolBounds();
+        }
+    }
+
     // Best practice: be explicit about intent
     // Only executes on plain transaction (no selector) (ie. poolManager or WETH9 transfer of assets) to the MarketVault.
     // Mostly used to prevent accidental transfers to the vault.
     receive() external payable {
-        if (msg.sender != address(liquidityHub) && msg.sender != address(poolManager)) {
-            revert Errors.InvalidEthSender();
-        }
+        _assertValidEthSender();
     }
 }

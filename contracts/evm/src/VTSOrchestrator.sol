@@ -155,7 +155,7 @@ contract VTSOrchestrator is ImmutableMarketState, PausableVTS, VTSCurrencyDelta,
     /// @return isValid True if the position is valid under the requested constraints
     function _assertPositionValid(PositionId id, bool requireActive) internal view returns (bool isValid) {
         isValid = isPositionValid(id, requireActive);
-        if (!isValid && revertIfInvalid) {
+        if (!isValid) {
             revert Errors.InvalidPosition(0, 0, id);
         }
     }
