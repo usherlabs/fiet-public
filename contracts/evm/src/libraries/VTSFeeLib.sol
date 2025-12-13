@@ -24,8 +24,6 @@ import {DynamicCurrencyDelta} from "./DynamicCurrencyDelta.sol";
 
 /// @title VTSFeeLib
 /// @notice Fee processing, slashed pot management, and coverage burn logic for VTS
-/// @dev External functions (called via VTSFeeLib.func()) have no underscore prefix.
-///      Internal functions (called only within this library) have underscore prefix.
 /// @author Fiet Protocol
 library VTSFeeLib {
     using SafeCast for uint256;
