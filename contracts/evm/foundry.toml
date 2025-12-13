@@ -10,15 +10,44 @@ ignored_error_codes = [
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
 solc_version = '0.8.26'
-evm_version = "cancun"  # hard fork that enabled EIP-1153
+evm_version = "cancun"   # hard fork that enabled EIP-1153
+gas_limit = "3000000000"
+fuzz_runs = 10_000
 optimizer_runs = 20000
+# optimizer_runs = 44444444
 optimizer = true
 via_ir = true
 ffi = true
 
-fs_permissions = [{ access = "read-write", path = "./deployments" }]
+bytecode_hash = "none"
+
+fs_permissions = [
+  { access = "read-write", path = "./deployments" },
+  { access = "read-write", path = ".forge-snapshots/" },
+  { access = "read", path = "out/" },
+]
 
 remappings = ["@openzeppelin/=lib/openzeppelin-contracts/"]
+
+
+# additional_compiler_profiles = [
+#   { name = "market", via_ir = true, optimizer_runs = 30000 },
+#   { name = "descriptor", via_ir = true, optimizer_runs = 1 },
+#   { name = "test", via_ir = false },
+# ]
+
+# compilation_restrictions = [
+#   { paths = "src/MMPositionManager.sol", optimizer_runs = 30000 },
+#   { paths = "src/MMPositionActionsImpl.sol", optimizer_runs = 30000 },
+#   { paths = "src/MarketVaultDeployer.sol", optimizer_runs = 30000 },
+#   { paths = "src/MMPCommitmentDescriptor.sol", optimizer_runs = 1 },
+#   { paths = "test/**", via_ir = false },
+# ]
+
+# The above compilation_restrictions and additional_compiler_profiles are not working as expected.
+# The real conflict is your Foundry “compilation restrictions” forcing different optimizer_runs for different source files that end up in the same compilation unit (your test imports them together).
+# TODO: VTSManager.t.sol import list includes both src/MMPositionManager.sol (30000 runs) and src/MMPCommitmentDescriptor.sol (1 run) (and MMPositionActionsImpl.sol at 30000), so Forge can’t compile that test in a single job
+# We must split this up. MarketFactory overhaul should resolve this.
 
 [lint]
 exclude_lints = [
@@ -35,13 +64,13 @@ exclude_lints = [
 #   "src/libraries/VTSCommitLib.sol:VTSCommitLib:0x0000000000000000000000000000000000000000",
 # ]
 
-[profile.hub]
-optimizer_runs = 1000
-
 [profile.debug]
 via_ir = false
 optimizer_runs = 200
 fuzz.runs = 100
+
+[profile.ci]
+fuzz_runs = 100_000
 
 [rpc_endpoints]
 local = "${ANVIL_FORK_URL}"
