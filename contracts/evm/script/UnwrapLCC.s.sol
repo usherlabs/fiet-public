@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity ^0.8.0;
+pragma solidity 0.8.26;
 
 import "forge-std/Script.sol";
 import {LiquidityCommitmentCertificate} from "../src/LCC.sol";
 import {ILiquidityHub} from "../src/interfaces/ILiquidityHub.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {ScriptHelper} from "./libraries/ScriptHelper.s.sol";
+import {FileHelper} from "./base/FileHelper.sol";
 
-contract UnwrapLCCScript is ScriptHelper {
+contract UnwrapLCCScript is FileHelper {
     function run() external {
         uint256 privateKey = uint256(vm.envBytes32("LP_PRIVATE_KEY"));
         address wallet = vm.addr(privateKey);

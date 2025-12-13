@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity ^0.8.20;
+pragma solidity 0.8.26;
 
 import "forge-std/Test.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
@@ -116,11 +116,7 @@ contract MarketFactoryTest is Test, Deployers {
         // Deploy MarketFactory with all required arguments
         vm.prank(owner);
         factory = new MarketFactory(
-            address(poolManager),
-            liquidityHubAddress,
-            oracleHelperAddress,
-            address(vtsOrchestrator),
-            bounds
+            address(poolManager), liquidityHubAddress, oracleHelperAddress, address(vtsOrchestrator), bounds
         );
 
         // Deploy CoreHook at computed address

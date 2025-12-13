@@ -105,62 +105,60 @@ fork:
 deploy-tokenA:
 	$(FORGE) script $(SCRIPT_DIR)/dev/MockERC20.s.sol:TokenScriptUSDT \
 		--rpc-url $(RPC_URL) \
-		--broadcast $(VERIFY_FLAGS) -vvv
+		$(VERIFY_FLAGS) -vvv
 
 deploy-tokenB:
 	$(FORGE) script $(SCRIPT_DIR)/dev/MockERC20.s.sol:TokenScriptUSDC \
 		--rpc-url $(RPC_URL) \
-		--broadcast $(VERIFY_FLAGS) -vvv
+		$(VERIFY_FLAGS) -vvv
 
 deploy:
-	$(FORGE) script $(SCRIPT_DIR)/DeployComplete.s.sol \
+	$(FORGE) script $(SCRIPT_DIR)/deploy/DeployLibraries.s.sol:DeployLibraries \
 		--rpc-url $(RPC_URL) \
-		--broadcast -vvv
-
-deploy-verify:
-	$(FORGE) script $(SCRIPT_DIR)/DeployComplete.s.sol \
+		-vvv
+	$(FORGE) script $(SCRIPT_DIR)/deploy/DeployContracts.s.sol:DeployContracts \
 		--rpc-url $(RPC_URL) \
-		--verify -vvv
+		-vvv
 
 read-deployment:
 	$(FORGE) script $(SCRIPT_DIR)/ReadDeployment.s.sol \
 		--rpc-url $(RPC_URL) \
-		--broadcast $(VERIFY_FLAGS) -vvv
+		$(VERIFY_FLAGS) -vvv
 
 create-market:
 	$(FORGE) script $(SCRIPT_DIR)/CreateMarket.s.sol \
 		--rpc-url $(RPC_URL) \
-		--broadcast -vvv
+		-vvv
 
 pause-market:
 	$(FORGE) script $(SCRIPT_DIR)/PauseMarket.s.sol \
 		--rpc-url $(RPC_URL) \
-		--broadcast -vvv
+		-vvv
 
 transfer-ownership:
 	$(FORGE) script $(SCRIPT_DIR)/TransferOwnership.s.sol \
 		--rpc-url $(RPC_URL) \
-		--broadcast -vvv
+		-vvv
 
 add-liquidity:
 	$(FORGE) script $(SCRIPT_DIR)/AddLiquidity.s.sol \
 		--rpc-url $(RPC_URL) \
-		--broadcast -vvv
+		-vvv
 
 remove-liquidity:
 	$(FORGE) script $(SCRIPT_DIR)/RemoveLiquidity.s.sol \
 		--rpc-url $(RPC_URL) \
-		--broadcast -vvv
+		-vvv
 
 swap:
 	$(FORGE) script $(SCRIPT_DIR)/SwapV4.s.sol \
 		--rpc-url $(RPC_URL) \
-		--broadcast -vvv
+		-vvv
 
 unwrap-all:
 	$(FORGE) script $(SCRIPT_DIR)/UnwrapLCC.s.sol \
 		--rpc-url $(RPC_URL) \
-		--broadcast -vvv
+		-vvv
 
 # Linting and Formatting
 .PHONY: install-deps lint lint-fix format format-check

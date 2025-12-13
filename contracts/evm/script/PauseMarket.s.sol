@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity ^0.8.0;
+pragma solidity 0.8.26;
 
 import {console} from "forge-std/Script.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {VTSOrchestrator} from "../src/VTSOrchestrator.sol";
-import {ScriptHelper} from "./libraries/ScriptHelper.s.sol";
+import {FileHelper} from "./base/FileHelper.sol";
 
-contract PauseMarketScript is ScriptHelper {
+contract PauseMarketScript is FileHelper {
     function run() external {
         uint256 deployerPrivateKey = uint256(vm.envBytes32("PRIVATE_KEY"));
         string memory networkName = vm.envString("NETWORK"); // "sepolia" | "arbitrum"

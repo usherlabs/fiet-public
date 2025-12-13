@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity ^0.8.0;
+pragma solidity 0.8.26;
 
 interface IOracleHelper {
     event OracleUpdated(address indexed oldOracle, address indexed newOracle);

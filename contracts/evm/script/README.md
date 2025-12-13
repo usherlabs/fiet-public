@@ -4,7 +4,7 @@ This directory contains deployment scripts for the Fiet Protocol contracts.
 
 ## Scripts Overview
 
-### 1. `DeployComplete.s.sol` - Main Deployment Script
+### 1. `deploy/DeployContracts.s.sol` - Main Deployment Script
 The comprehensive deployment script that deploys all contracts in the correct order:
 
 1. **MarketFactory** - Deployed first (without hooks)
@@ -38,7 +38,7 @@ forge script script/TestDeploy.s.sol:TestDeployScript --rpc-url <your_rpc_url>
 
 #### Run the complete deployment:
 ```bash
-forge script script/DeployComplete.s.sol:CompleteDeployScript --rpc-url <your_rpc_url> --broadcast
+forge script script/deploy/DeployContracts.s.sol:DeployContracts --rpc-url <your_rpc_url> --broadcast
 ```
 
 ### Verification
@@ -46,7 +46,7 @@ forge script script/DeployComplete.s.sol:CompleteDeployScript --rpc-url <your_rp
 After deployment, you can verify the deployment using the built-in verification function:
 
 ```bash
-forge script script/DeployComplete.s.sol:CompleteDeployScript --sig "verifyDeployment()" --rpc-url <your_rpc_url>
+forge script script/deploy/DeployContracts.s.sol:DeployContracts --sig "verifyDeployment()" --rpc-url <your_rpc_url>
 ```
 
 ## Hook Flags
@@ -196,5 +196,5 @@ forge script script/TestDeploy.s.sol:TestDeployScript --sig "_testCoreHookMining
 forge script script/ReadDeployment.s.sol:ReadDeploymentScript --rpc-url <your_rpc_url>
 
 # Verify deployment
-forge script script/DeployComplete.s.sol:CompleteDeployScript --sig "verifyDeployment()" --rpc-url <your_rpc_url>
+forge script script/deploy/DeployContracts.s.sol:DeployContracts --sig "verifyDeployment()" --rpc-url <your_rpc_url>
 ``` 

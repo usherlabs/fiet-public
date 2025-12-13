@@ -2,7 +2,7 @@
 
 import {MerkleTreeLib} from "solady/utils/MerkleTreeLib.sol";
 
-pragma solidity ^0.8.20;
+pragma solidity 0.8.26;
 
 /// @title MerkleTree
 /// @notice Library for verifying and generating Merkle proofs

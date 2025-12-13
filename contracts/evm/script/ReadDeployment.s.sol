@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity ^0.8.0;
+pragma solidity 0.8.26;
 
 import {console} from "forge-std/Script.sol";
-import {ScriptHelper} from "./libraries/ScriptHelper.s.sol";
+import {FileHelper} from "./base/FileHelper.sol";
 
 /**
  * @title ReadDeploymentScript
  * @notice Script to read deployment addresses from JSON file
  * @dev Useful for other scripts that need to reference deployed contracts
  */
-contract ReadDeploymentScript is ScriptHelper {
+contract ReadDeploymentScript is FileHelper {
     string public networkName;
 
     function run() external {

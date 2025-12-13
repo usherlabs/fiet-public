@@ -1,7 +1,7 @@
 // https://github.com/Uniswap/universal-router/blob/5db48b149a6654c96f89cc75e964b6d28b0362a6/contracts/interfaces/IUniversalRouter.sol
 
 // SPDX-License-Identifier: GPL-3.0-or-later
-pragma solidity ^0.8.24;
+pragma solidity 0.8.26;
 
 interface IUniversalRouter {
     /// @notice Thrown when a required command has failed

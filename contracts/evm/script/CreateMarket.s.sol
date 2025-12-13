@@ -1,18 +1,16 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity ^0.8.0;
+pragma solidity 0.8.26;
 
 import "forge-std/Script.sol";
 import {MarketFactory} from "../src/MarketFactory.sol";
-import {SepoliaConstants} from "./constants/ArbitrumSepolia.sol";
-import {ScriptHelper} from "./libraries/ScriptHelper.s.sol";
+import {NetworkConfig} from "./base/NetworkConfig.sol";
+import {EthSepoliaConstants} from "./constants/EthSepolia.sol";
 import {PositionManager} from "v4-periphery/src/PositionManager.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {CurrencySortHelper} from "./libraries/CurrencySortHelper.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
-import {EthSepoliaConstants} from "./constants/EthSepolia.sol";
-import {ArbitrumConstants} from "./constants/Arbitrum.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
@@ -34,11 +32,9 @@ import {ILiquidityHub} from "../src/interfaces/ILiquidityHub.sol";
  * 3. Create market with core and proxy pools
  * 4. Log market details and pool IDs
  */
-contract CreateMarketScript is ScriptHelper {
+contract CreateMarketScript is NetworkConfig {
     using PoolIdLibrary for PoolId;
     using StateLibrary for IPoolManager;
-
-    string public networkName;
 
     // Market parameters - can be configured via environment variables
     address public underlyingAsset0;
@@ -49,12 +45,8 @@ contract CreateMarketScript is ScriptHelper {
     int24 public tickSpacing;
     uint160 public initialSqrtPriceX96;
 
-    address public poolManager;
-
     // Deployed contract addresses
     address public marketFactory;
-    address public create2Deployer;
-    address payable public positionManagerAddress;
 
     // Created market details
     PoolId public corePoolId;
@@ -63,7 +55,8 @@ contract CreateMarketScript is ScriptHelper {
     function run() external {
         uint256 deployerPrivateKey = uint256(vm.envBytes32("PRIVATE_KEY"));
 
-        networkName = vm.envString("NETWORK");
+        // Initialise network configuration
+        _initNetwork();
 
         console.log("Starting market creation via Market Factory...");
 
@@ -105,27 +98,9 @@ contract CreateMarketScript is ScriptHelper {
      * @dev Loads deployed contract addresses from deployment file
      */
     function _loadDeploymentAddresses() internal {
-        _setFilename(networkName);
-
         marketFactory = readAddress("marketFactory");
         console.log("MarketFactory address loaded:", marketFactory);
-
-        if (keccak256(bytes(networkName)) == keccak256(bytes("arbitrum"))) {
-            poolManager = ArbitrumConstants.POOL_MANAGER;
-            create2Deployer = ArbitrumConstants.DEPLOYER_CREATE2;
-            positionManagerAddress = payable(ArbitrumConstants.POSITION_MANAGER);
-        } else if (keccak256(bytes(networkName)) == keccak256(bytes("sepolia"))) {
-            poolManager = SepoliaConstants.POOL_MANAGER;
-            create2Deployer = SepoliaConstants.DEPLOYER_CREATE2;
-            positionManagerAddress = payable(SepoliaConstants.POSITION_MANAGER);
-        } else if (keccak256(bytes(networkName)) == keccak256(bytes("ethsepolia"))) {
-            poolManager = EthSepoliaConstants.POOL_MANAGER;
-            create2Deployer = EthSepoliaConstants.DEPLOYER_CREATE2;
-            positionManagerAddress = payable(EthSepoliaConstants.POSITION_MANAGER);
-        } else {
-            revert("Unsupported network");
-        }
-        console.log("PoolManager address loaded:", poolManager);
+        console.log("PoolManager address loaded:", config.poolManager);
     }
 
     /**
@@ -154,7 +129,7 @@ contract CreateMarketScript is ScriptHelper {
                 underlyingAsset1 = readAddress("usdcToken");
             } else if (keccak256(bytes(networkName)) == keccak256(bytes("ethsepolia"))) {
                 // Query WETH9 from PositionManager instead of using constant
-                underlyingAsset1 = address(PositionManager(positionManagerAddress).WETH9());
+                underlyingAsset1 = address(PositionManager(payable(config.positionManager)).WETH9());
             } else {
                 revert("Please specify UNDERLYING_ASSET_1 via environment variable for this network");
             }
@@ -187,8 +162,6 @@ contract CreateMarketScript is ScriptHelper {
         try vm.envUint("INITIAL_SQRT_PRICE_X96") returns (uint256 price) {
             initialSqrtPriceX96 = uint160(price);
         } catch {
-            MarketFactory factoryInstance = MarketFactory(marketFactory);
-
             // Note: LCC tokens are created when markets are created, so we can't get them beforehand
             // For price calculation, we'll use the underlying assets directly
             // The market creation will handle LCC token creation automatically
@@ -199,7 +172,7 @@ contract CreateMarketScript is ScriptHelper {
                 bytes32 poolIdBytes = vm.parseBytes32(referencePoolIdStr);
                 PoolId referencePoolId = PoolId.wrap(poolIdBytes);
 
-                IPoolManager manager = IPoolManager(poolManager);
+                IPoolManager manager = IPoolManager(config.poolManager);
 
                 (uint160 sqrtPrice,,,) = manager.getSlot0(referencePoolId);
 
@@ -286,7 +259,7 @@ contract CreateMarketScript is ScriptHelper {
         MarketFactory factory = MarketFactory(marketFactory);
         address deployer = MarketFactory(marketFactory).marketVaultDeployer();
 
-        bytes memory constructorArgs = abi.encode(poolManager, marketFactory);
+        bytes memory constructorArgs = abi.encode(config.poolManager, marketFactory);
 
         (bytes32 salt,) = _generateProxyHookAddress(deployer, constructorArgs);
 
@@ -416,6 +389,9 @@ contract CreateMarketScript is ScriptHelper {
         uint160 _initialSqrtPriceX96
     ) external {
         uint256 deployerPrivateKey = uint256(vm.envBytes32("PRIVATE_KEY"));
+
+        // Initialise network configuration
+        _initNetwork();
 
         // Load deployment addresses
         _loadDeploymentAddresses();

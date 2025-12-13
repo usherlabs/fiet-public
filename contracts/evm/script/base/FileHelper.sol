@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity ^0.8.0;
+pragma solidity 0.8.26;
 
 import {Script} from "forge-std/Script.sol";
 
-abstract contract ScriptHelper is Script {
+abstract contract FileHelper is Script {
     string constant FILE_START = "deployments/";
     string constant FILE_END = "_deployments.json";
 

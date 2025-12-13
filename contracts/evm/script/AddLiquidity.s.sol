@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity ^0.8.0;
+pragma solidity 0.8.26;
 
 import {console, VmSafe} from "forge-std/Script.sol";
 import {IPositionManager} from "v4-periphery/src/interfaces/IPositionManager.sol";
@@ -19,16 +19,13 @@ import {IPermit2} from "permit2/src/interfaces/IPermit2.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 
 import {LiquidityCommitmentCertificate} from "../src/LCC.sol";
-import {SepoliaConstants} from "./constants/ArbitrumSepolia.sol";
-import {ScriptHelper} from "./libraries/ScriptHelper.s.sol";
+import {NetworkConfig} from "./base/NetworkConfig.sol";
 import {ProxyHook} from "../src/ProxyHook.sol";
 import {CurrencySortHelper} from "./libraries/CurrencySortHelper.sol";
 import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
 import {ILiquidityHub} from "../src/interfaces/ILiquidityHub.sol";
-import {ArbitrumConstants} from "./constants/Arbitrum.sol";
-import {EthSepoliaConstants} from "./constants/EthSepolia.sol";
 
-contract AddLiquidityScript is ScriptHelper {
+contract AddLiquidityScript is NetworkConfig {
     using StateLibrary for IPoolManager;
     using PoolIdLibrary for PoolKey;
 
@@ -55,11 +52,7 @@ contract AddLiquidityScript is ScriptHelper {
     PoolKey corePoolKey;
     PoolKey proxyPoolKey;
 
-    string public networkName;
     bool public isSepolia;
-    address poolManagerAddr;
-    address positionManagerAddr;
-    address permit2Addr;
 
     function run() external {
         uint256 deployerPrivateKey = uint256(vm.envBytes32("PRIVATE_KEY"));
@@ -73,32 +66,14 @@ contract AddLiquidityScript is ScriptHelper {
         } catch {
             isLocal = true;
         }
-        try vm.envString("NETWORK") returns (string memory envNetworkName) {
-            networkName = envNetworkName;
-        } catch {
-            networkName = "sepolia";
-        }
+
+        // Initialise network configuration
+        _initNetwork();
         isSepolia = keccak256(bytes(networkName)) == keccak256(bytes("sepolia"));
 
-        if (isSepolia) {
-            poolManagerAddr = SepoliaConstants.POOL_MANAGER;
-            positionManagerAddr = SepoliaConstants.POSITION_MANAGER;
-            permit2Addr = SepoliaConstants.PERMIT2;
-        } else if (keccak256(bytes(networkName)) == keccak256(bytes("arbitrum"))) {
-            poolManagerAddr = ArbitrumConstants.POOL_MANAGER;
-            positionManagerAddr = ArbitrumConstants.POSITION_MANAGER;
-            permit2Addr = ArbitrumConstants.PERMIT2;
-        } else if (keccak256(bytes(networkName)) == keccak256(bytes("ethsepolia"))) {
-            poolManagerAddr = EthSepoliaConstants.POOL_MANAGER;
-            positionManagerAddr = EthSepoliaConstants.POSITION_MANAGER;
-            permit2Addr = EthSepoliaConstants.PERMIT2;
-        } else {
-            revert("Unsupported network");
-        }
-
-        positionManager = IPositionManager(positionManagerAddr);
-        poolManager = IPoolManager(poolManagerAddr);
-        permit2 = IPermit2(permit2Addr);
+        positionManager = IPositionManager(payable(config.positionManager));
+        poolManager = IPoolManager(config.poolManager);
+        permit2 = IPermit2(config.permit2);
 
         // Load deployment addresses
         _setFilename(networkName);

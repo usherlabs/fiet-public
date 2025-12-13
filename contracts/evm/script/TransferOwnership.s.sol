@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity ^0.8.0;
+pragma solidity 0.8.26;
 
 import "forge-std/Script.sol";
 import {MarketFactory} from "../src/MarketFactory.sol";
-import {ScriptHelper} from "./libraries/ScriptHelper.s.sol";
+import {FileHelper} from "./base/FileHelper.sol";
 
 // Transfer ownership of MarketFactory to a new address
 
-contract TransferOwnershipScript is ScriptHelper {
+contract TransferOwnershipScript is FileHelper {
     string public networkName;
     address public marketFactory;
     address public newOwner;

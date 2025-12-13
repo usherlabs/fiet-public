@@ -22,7 +22,7 @@ contracts/evm/
 │   ├── LCC.sol           # Liquidity Commitment Certificate
 │   └── interfaces/       # Contract interfaces
 ├── script/                # Deployment and utility scripts
-│   ├── DeployComplete.s.sol    # Main deployment script
+│   ├── deploy/DeployContracts.s.sol    # Main deployment script
 │   ├── ReadDeployment.s.sol    # Read deployment addresses
 │   ├── AddLiquidity.s.sol      # Add liquidity script
 │   ├── RemoveLiquidity.s.sol   # Remove liquidity script
@@ -293,7 +293,7 @@ forge coverage --report lcov
 
    ```bash
    # Verify hook flags
-   forge script script/DeployComplete.s.sol --sig "verifyDeployment()"
+   forge script script/deploy/DeployContracts.s.sol:DeployContracts --sig "verifyDeployment()"
    ```
 
 2. **Insufficient Funds**
@@ -311,7 +311,7 @@ forge coverage --report lcov
 forge script script/ReadDeployment.s.sol --rpc-url <rpc_url>
 
 # Verify deployment
-forge script script/DeployComplete.s.sol --sig "verifyDeployment()" --rpc-url <rpc_url>
+forge script script/deploy/DeployContracts.s.sol:DeployContracts --sig "verifyDeployment()" --rpc-url <rpc_url>
 
 ```
 

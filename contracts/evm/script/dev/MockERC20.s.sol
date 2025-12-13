@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity ^0.8.0;
+pragma solidity 0.8.26;
 
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-import {ScriptHelper} from "../libraries/ScriptHelper.s.sol";
+import {FileHelper} from "../base/FileHelper.sol";
 
 // ? This will default to 18 decimals, but we can override it for testing purposes when required.
 contract Token is ERC20 {
@@ -12,7 +12,7 @@ contract Token is ERC20 {
 }
 
 /// Deploying mock USDT / USDC token
-contract TokenScriptUSDT is ScriptHelper {
+contract TokenScriptUSDT is FileHelper {
     Token token;
 
     function run() external {
@@ -26,7 +26,7 @@ contract TokenScriptUSDT is ScriptHelper {
     }
 }
 
-contract TokenScriptUSDC is ScriptHelper {
+contract TokenScriptUSDC is FileHelper {
     Token token;
 
     function run() external {

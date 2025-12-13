@@ -1,14 +1,12 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity ^0.8.0;
+pragma solidity 0.8.26;
 
 import "forge-std/Script.sol";
 
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
-import {SepoliaConstants} from "../constants/ArbitrumSepolia.sol";
-import {EthSepoliaConstants} from "../constants/EthSepolia.sol";
-import {ArbitrumConstants} from "../constants/Arbitrum.sol";
+import {NetworkConfig} from "../base/NetworkConfig.sol";
 import {CurrencySortHelper} from "../libraries/CurrencySortHelper.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 
@@ -16,24 +14,14 @@ interface IERC20 {
     function decimals() external view returns (uint8);
 }
 
-contract GetCurrentSqrtPrice is Script {
+contract GetCurrentSqrtPrice is NetworkConfig {
     using StateLibrary for IPoolManager;
 
-    function run() external view {
-        string memory networkName = vm.envString("NETWORK");
+    function run() external {
+        // Initialise network configuration
+        _initNetwork();
 
-        address poolManagerAddress;
-        if (keccak256(bytes(networkName)) == keccak256(bytes("arbitrum"))) {
-            poolManagerAddress = ArbitrumConstants.POOL_MANAGER;
-        } else if (keccak256(bytes(networkName)) == keccak256(bytes("sepolia"))) {
-            poolManagerAddress = SepoliaConstants.POOL_MANAGER;
-        } else if (keccak256(bytes(networkName)) == keccak256(bytes("ethsepolia"))) {
-            poolManagerAddress = EthSepoliaConstants.POOL_MANAGER;
-        } else {
-            revert("Unsupported network");
-        }
-
-        IPoolManager manager = IPoolManager(poolManagerAddress);
+        IPoolManager manager = IPoolManager(config.poolManager);
 
         string memory poolIdStr = vm.envString("POOL_ID");
         require(bytes(poolIdStr).length > 0, "POOL_ID must be provided");

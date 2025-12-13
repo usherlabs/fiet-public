@@ -1,5 +1,5 @@
 //SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
+pragma solidity 0.8.26;
 
 import {console} from "forge-std/Script.sol";
 import {IUniversalRouter} from "./external/IUniversalRouter.sol";
@@ -15,17 +15,14 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {IHooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 
-import {SepoliaConstants} from "./constants/ArbitrumSepolia.sol";
-import {ArbitrumConstants} from "./constants/Arbitrum.sol";
-import {ScriptHelper} from "./libraries/ScriptHelper.s.sol";
+import {NetworkConfig} from "./base/NetworkConfig.sol";
 import {CurrencySortHelper} from "./libraries/CurrencySortHelper.sol";
-import {EthSepoliaConstants} from "./constants/EthSepolia.sol";
 import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
 import {ILiquidityHub} from "../src/interfaces/ILiquidityHub.sol";
 
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 
-contract SwapV4 is ScriptHelper {
+contract SwapV4 is NetworkConfig {
     using StateLibrary for IPoolManager;
 
     IUniversalRouter router;
@@ -48,12 +45,8 @@ contract SwapV4 is ScriptHelper {
     function run() external {
         console.log("Starting SwapV4 script...");
 
-        string memory networkName;
-        try vm.envString("NETWORK") returns (string memory envNetworkName) {
-            networkName = envNetworkName;
-        } catch {
-            networkName = "sepolia";
-        }
+        // Initialise network configuration
+        _initNetwork();
 
         // Fetch the mode from the env to determine if we are running a local fork
         string memory mode;
@@ -64,7 +57,6 @@ contract SwapV4 is ScriptHelper {
         }
 
         // Load deployment addresses
-        _setFilename(networkName);
         address marketFactoryAddr = readAddress("marketFactory");
         address liquidityHubAddr = readAddress("liquidityHub");
         IMarketFactory marketFactory = IMarketFactory(marketFactoryAddr);
@@ -72,34 +64,13 @@ contract SwapV4 is ScriptHelper {
         console.log("Market Factory loaded: ", marketFactoryAddr);
         console.log("Liquidity Hub loaded: ", liquidityHubAddr);
 
-        address universalRouterAddr;
-        address poolManagerAddr;
-        address permit2Addr;
-
-        bool isSepolia = keccak256(bytes(networkName)) == keccak256(bytes("sepolia"));
-        if (isSepolia) {
-            universalRouterAddr = SepoliaConstants.UNIVERSAL_ROUTER;
-            poolManagerAddr = SepoliaConstants.POOL_MANAGER;
-            permit2Addr = SepoliaConstants.PERMIT2;
-        } else if (keccak256(bytes(networkName)) == keccak256(bytes("arbitrum"))) {
-            universalRouterAddr = ArbitrumConstants.UNIVERSAL_ROUTER;
-            poolManagerAddr = ArbitrumConstants.POOL_MANAGER;
-            permit2Addr = ArbitrumConstants.PERMIT2;
-        } else if (keccak256(bytes(networkName)) == keccak256(bytes("ethsepolia"))) {
-            universalRouterAddr = EthSepoliaConstants.UNIVERSAL_ROUTER;
-            poolManagerAddr = EthSepoliaConstants.POOL_MANAGER;
-            permit2Addr = EthSepoliaConstants.PERMIT2;
-        } else {
-            revert("Unsupported network");
-        }
-
-        router = IUniversalRouter(payable(universalRouterAddr));
+        router = IUniversalRouter(payable(config.universalRouter));
         console.log("Universal Router loaded");
 
-        poolManager = IPoolManager(poolManagerAddr);
+        poolManager = IPoolManager(config.poolManager);
         console.log("Pool Manager loaded");
 
-        permit2 = IPermit2(permit2Addr);
+        permit2 = IPermit2(config.permit2);
         console.log("Permit2 loaded");
 
         // Require CORE_POOL_ID to be provided
@@ -124,7 +95,8 @@ contract SwapV4 is ScriptHelper {
         int24 tickSpacing;
 
         // Load market parameters from markets deployment file
-        bool isLocalSepolia = isSepolia && keccak256(bytes(mode)) == keccak256(bytes("LOCAL"));
+        bool isLocalSepolia = keccak256(bytes(networkName)) == keccak256(bytes("sepolia"))
+            && keccak256(bytes(mode)) == keccak256(bytes("LOCAL"));
         string memory prefix = isLocalSepolia ? "local_" : "";
         string memory filePath = string.concat("./deployments/", prefix, networkName, "_markets_deployments.json");
         string memory json = vm.readFile(filePath);

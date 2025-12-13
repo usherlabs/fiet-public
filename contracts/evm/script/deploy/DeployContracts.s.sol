@@ -1,35 +1,31 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity ^0.8.0;
+pragma solidity 0.8.26;
 
 import {console} from "forge-std/Script.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {HookMiner} from "v4-periphery/src/utils/HookMiner.sol";
 import {Ownable} from "openzeppelin-contracts/contracts/access/Ownable.sol";
 
-import {CoreHook} from "../src/CoreHook.sol";
-import {MarketFactory} from "../src/MarketFactory.sol";
-import {ScriptHelper} from "./libraries/ScriptHelper.s.sol";
-
-import {SepoliaConstants} from "./constants/ArbitrumSepolia.sol";
-import {ArbitrumConstants} from "./constants/Arbitrum.sol";
-import {HookFlags} from "../src/libraries/HookFlags.sol";
-import {EthSepoliaConstants} from "./constants/EthSepolia.sol";
-import {MMPositionManager} from "../src/MMPositionManager.sol";
-import {MMPositionActionsImpl} from "../src/MMPositionActionsImpl.sol";
+import {CoreHook} from "../../src/CoreHook.sol";
+import {MarketFactory} from "../../src/MarketFactory.sol";
+import {NetworkConfig} from "../base/NetworkConfig.sol";
+import {HookFlags} from "../../src/libraries/HookFlags.sol";
+import {MMPositionManager} from "../../src/MMPositionManager.sol";
+import {MMPositionActionsImpl} from "../../src/MMPositionActionsImpl.sol";
 import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
 import {PositionManager} from "v4-periphery/src/PositionManager.sol";
 import {IAllowanceTransfer} from "permit2/src/interfaces/IAllowanceTransfer.sol";
-import {VRLSignalManager} from "../src/VRLSignalManager.sol";
-import {VRLSettlementObserver} from "../src/VRLSettlementObserver.sol";
-import {VTSOrchestrator} from "../src/VTSOrchestrator.sol";
-import {OracleHelper} from "../src/OracleHelper.sol";
-import {MMPCommitmentDescriptor} from "../src/MMPCommitmentDescriptor.sol";
-import {LiquidityHub} from "../src/LiquidityHub.sol";
-import {GlobalConfig} from "../src/GlobalConfig.sol";
-import {ECDSASignatureSignalVerifier} from "../src/verifiers/ECDSASignatureSignalVerifier.sol";
+import {VRLSignalManager} from "../../src/VRLSignalManager.sol";
+import {VRLSettlementObserver} from "../../src/VRLSettlementObserver.sol";
+import {VTSOrchestrator} from "../../src/VTSOrchestrator.sol";
+import {OracleHelper} from "../../src/OracleHelper.sol";
+import {MMPCommitmentDescriptor} from "../../src/MMPCommitmentDescriptor.sol";
+import {LiquidityHub} from "../../src/LiquidityHub.sol";
+import {GlobalConfig} from "../../src/GlobalConfig.sol";
+import {ECDSASignatureSignalVerifier} from "../../src/verifiers/ECDSASignatureSignalVerifier.sol";
 
 /**
- * @title CompleteDeployScript
+ * @title DeployContracts
  * @notice Comprehensive deployment script for CoreHook, ProxyHook, and MarketFactory
  * @dev Deploys contracts in the correct order with proper HookMiner logic
  *
@@ -47,7 +43,7 @@ import {ECDSASignatureSignalVerifier} from "../src/verifiers/ECDSASignatureSigna
  * 11. Add protocol addresses to bounds array (including MMPositionManager)
  * 12. Deploy GlobalConfig and transfer ownership
  */
-contract CompleteDeployScript is ScriptHelper {
+contract DeployContracts is NetworkConfig {
     // Deployed contract addresses
     address public coreHook;
     address public proxyHook;
@@ -59,36 +55,19 @@ contract CompleteDeployScript is ScriptHelper {
     address public settlementObserver;
     address public globalConfig;
     address public commitmentDescriptor;
-    // Network-specific constants set from environment
-    address public poolManagerAddress;
-    address public create2Deployer;
-    address payable public positionManagerAddress;
     address public vtsOrchestrator;
-    string public networkName;
     // Track Ownable contracts for ownership migration to GlobalConfig
     address[] public ownedContracts;
 
     function run() external {
         uint256 deployerPrivateKey = uint256(vm.envBytes32("PRIVATE_KEY"));
 
-        networkName = vm.envString("NETWORK"); // "sepolia" | "arbitrum"
-        if (keccak256(bytes(networkName)) == keccak256(bytes("sepolia"))) {
-            poolManagerAddress = SepoliaConstants.POOL_MANAGER;
-            create2Deployer = SepoliaConstants.DEPLOYER_CREATE2;
-            positionManagerAddress = payable(SepoliaConstants.POSITION_MANAGER);
-        } else if (keccak256(bytes(networkName)) == keccak256(bytes("arbitrum"))) {
-            poolManagerAddress = ArbitrumConstants.POOL_MANAGER;
-            create2Deployer = ArbitrumConstants.DEPLOYER_CREATE2;
-            positionManagerAddress = payable(ArbitrumConstants.POSITION_MANAGER);
-        } else if (keccak256(bytes(networkName)) == keccak256(bytes("ethsepolia"))) {
-            poolManagerAddress = EthSepoliaConstants.POOL_MANAGER;
-            create2Deployer = EthSepoliaConstants.DEPLOYER_CREATE2;
-            positionManagerAddress = payable(EthSepoliaConstants.POSITION_MANAGER);
-        }
+        // Initialise network configuration
+        _initNetwork();
 
         console.log("Starting deployment of CoreHook, ProxyHook, and MarketFactory on %s...", networkName);
-        console.log("Pool Manager:", poolManagerAddress);
-        console.log("CREATE2 Deployer:", create2Deployer);
+        console.log("Pool Manager:", config.poolManager);
+        console.log("CREATE2 Deployer:", config.create2Deployer);
 
         vm.startBroadcast(deployerPrivateKey);
 
@@ -223,15 +202,16 @@ contract CompleteDeployScript is ScriptHelper {
      * @return The deployed CoreHook address
      */
     function _deployCoreHook() internal returns (address) {
-        bytes memory constructorArgs = abi.encode(poolManagerAddress, marketFactory, address(vtsOrchestrator));
+        bytes memory constructorArgs = abi.encode(config.poolManager, marketFactory, address(vtsOrchestrator));
 
-        (address hookAddress, bytes32 salt) =
-            HookMiner.find(create2Deployer, HookFlags.CORE_HOOK_FLAGS, type(CoreHook).creationCode, constructorArgs);
+        (address hookAddress, bytes32 salt) = HookMiner.find(
+            config.create2Deployer, HookFlags.CORE_HOOK_FLAGS, type(CoreHook).creationCode, constructorArgs
+        );
 
         console.log("CoreHook will be deployed to:", hookAddress);
         console.log("CoreHook salt:", vm.toString(salt));
 
-        CoreHook deployedHook = new CoreHook{salt: salt}(poolManagerAddress, marketFactory, address(vtsOrchestrator));
+        CoreHook deployedHook = new CoreHook{salt: salt}(config.poolManager, marketFactory, address(vtsOrchestrator));
         require(address(deployedHook) == hookAddress, "CoreHook: address mismatch");
 
         return address(deployedHook);
@@ -249,7 +229,7 @@ contract CompleteDeployScript is ScriptHelper {
 
         // Deploy MarketFactory with LiquidityHub, OracleHelper, and VTSOrchestrator
         MarketFactory factory =
-            new MarketFactory(poolManagerAddress, liquidityHub, oracleHelper, vtsOrchestrator, initialBounds);
+            new MarketFactory(config.poolManager, liquidityHub, oracleHelper, vtsOrchestrator, initialBounds);
 
         return address(factory);
     }
@@ -279,7 +259,7 @@ contract CompleteDeployScript is ScriptHelper {
      */
     function _deployVTSOrchestrator() internal returns (address) {
         VTSOrchestrator orchestrator =
-            new VTSOrchestrator(poolManagerAddress, signalManager, oracleHelper, liquidityHub, settlementObserver);
+            new VTSOrchestrator(config.poolManager, signalManager, oracleHelper, liquidityHub, settlementObserver);
         console.log("VTSOrchestrator deployed at:", address(orchestrator));
         return address(orchestrator);
     }
@@ -301,16 +281,16 @@ contract CompleteDeployScript is ScriptHelper {
     function _deployMMPositionManager() internal returns (address) {
         address commitmentDescriptorAddr = _deployCommitmentDescriptor();
         // Get WETH9 and permit2 from the PositionManager (which has them as immutable)
-        IWETH9 weth9 = PositionManager(positionManagerAddress).WETH9();
-        IAllowanceTransfer permit2 = PositionManager(positionManagerAddress).permit2();
+        IWETH9 weth9 = PositionManager(payable(config.positionManager)).WETH9();
+        IAllowanceTransfer permit2 = PositionManager(payable(config.positionManager)).permit2();
 
         // Deploy MMPositionActionsImpl first (requires poolManager, liquidityHub, vtsOrchestrator)
-        MMPositionActionsImpl actionsImpl = new MMPositionActionsImpl(poolManagerAddress, liquidityHub, vtsOrchestrator);
+        MMPositionActionsImpl actionsImpl = new MMPositionActionsImpl(config.poolManager, liquidityHub, vtsOrchestrator);
         console.log("MMPositionActionsImpl deployed at:", address(actionsImpl));
 
         // Deploy MMPositionManager (requires poolManager, liquidityHub, vtsOrchestrator, descriptor, weth9, permit2, actionsImpl)
         MMPositionManager positionManager = new MMPositionManager(
-            poolManagerAddress,
+            config.poolManager,
             liquidityHub,
             vtsOrchestrator,
             commitmentDescriptorAddr,
@@ -377,7 +357,7 @@ contract CompleteDeployScript is ScriptHelper {
      * @dev Writes deployment addresses to JSON file for future reference
      */
     function _writeDeploymentAddresses() internal {
-        // Write addresses to JSON file using ScriptHelper
+        // Write addresses to JSON file using FileHelper
         _setFilename(networkName);
         writeAddress("coreHook", coreHook);
         writeAddress("marketFactory", marketFactory);
@@ -413,7 +393,7 @@ contract CompleteDeployScript is ScriptHelper {
 
         // Verify MarketFactory configuration
         MarketFactory factory = MarketFactory(marketFactory);
-        require(address(factory.poolManager()) == poolManagerAddress, "MarketFactory: wrong poolManager");
+        require(address(factory.poolManager()) == config.poolManager, "MarketFactory: wrong poolManager");
         require(factory.coreHook() == coreHook, "MarketFactory: wrong coreHook");
 
         console.log("MarketFactory configuration verified");
