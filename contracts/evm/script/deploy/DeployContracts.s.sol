@@ -9,6 +9,7 @@ import {Ownable} from "openzeppelin-contracts/contracts/access/Ownable.sol";
 import {CoreHook} from "../../src/CoreHook.sol";
 import {MarketFactory} from "../../src/MarketFactory.sol";
 import {NetworkConfig} from "../base/NetworkConfig.sol";
+import {CREATE3Script} from "../base/CREATE3Script.sol";
 import {HookFlags} from "../../src/libraries/HookFlags.sol";
 import {MMPositionManager} from "../../src/MMPositionManager.sol";
 import {MMPositionActionsImpl} from "../../src/MMPositionActionsImpl.sol";
@@ -37,13 +38,16 @@ import {ECDSASignatureSignalVerifier} from "../../src/verifiers/ECDSASignatureSi
  * 5. Deploy MMPositionManager (must be before MarketFactory for bounds)
  * 6. Deploy MarketFactory (with LiquidityHub and VTSO, without hooks initially)
  * 7. Enable MarketFactory in LiquidityHub
- * 8. Deploy CoreHook (with proper flags and MarketFactory address)
+ * 8. Deploy CoreHook (with proper flags and MarketFactory address) - uses CREATE2 for hook flags
  * 9. Set hooks in MarketFactory using setHooks()
  * 10. Verify hooks (set cross-references)
  * 11. Add protocol addresses to bounds array (including MMPositionManager)
  * 12. Deploy GlobalConfig and transfer ownership
+ *
+ * @notice Most contracts use CREATE3 for deterministic addresses across chains.
+ *         CoreHook uses CREATE2 with HookMiner to ensure correct hook flags.
  */
-contract DeployContracts is NetworkConfig {
+contract DeployContracts is CREATE3Script, NetworkConfig {
     // Deployed contract addresses
     address public coreHook;
     address public proxyHook;
@@ -56,8 +60,58 @@ contract DeployContracts is NetworkConfig {
     address public globalConfig;
     address public commitmentDescriptor;
     address public vtsOrchestrator;
+    address public actionsImpl;
     // Track Ownable contracts for ownership migration to GlobalConfig
     address[] public ownedContracts;
+
+    // Contract names for CREATE3 salt generation
+    string constant ORACLE_HELPER = "OracleHelper";
+    string constant LIQUIDITY_HUB = "LiquidityHub";
+    string constant SIGNAL_VERIFIER = "ECDSASignatureSignalVerifier";
+    string constant SIGNAL_MANAGER = "VRLSignalManager";
+    string constant SETTLEMENT_OBSERVER = "VRLSettlementObserver";
+    string constant VTS_ORCHESTRATOR = "VTSOrchestrator";
+    string constant COMMITMENT_DESCRIPTOR = "MMPCommitmentDescriptor";
+    string constant ACTIONS_IMPL = "MMPositionActionsImpl";
+    string constant MM_POSITION_MANAGER = "MMPositionManager";
+    string constant MARKET_FACTORY = "MarketFactory";
+    string constant GLOBAL_CONFIG = "GlobalConfig";
+
+    constructor() CREATE3Script("1") {}
+
+    /**
+     * @dev Deploys a contract using CREATE3
+     * @param name The contract name for salt generation
+     * @param creationCode The contract creation bytecode (including constructor args)
+     * @return deployed The deployed contract address
+     */
+    function _deployCreate3(string memory name, bytes memory creationCode) internal returns (address deployed) {
+        bytes32 salt = getCreate3ContractSalt(name);
+        deployed = create3.deploy(salt, creationCode);
+
+        // Verify deployment address matches prediction
+        address predicted = getCreate3Contract(name);
+        require(deployed == predicted, string.concat(name, ": address mismatch"));
+    }
+
+    /**
+     * @dev Logs predicted addresses before deployment
+     */
+    function _logPredictedAddresses() internal view {
+        console.log("\n=== Predicted Addresses (CREATE3) ===");
+        console.log("OracleHelper:", getCreate3Contract(ORACLE_HELPER));
+        console.log("LiquidityHub:", getCreate3Contract(LIQUIDITY_HUB));
+        console.log("ECDSASignatureSignalVerifier:", getCreate3Contract(SIGNAL_VERIFIER));
+        console.log("VRLSignalManager:", getCreate3Contract(SIGNAL_MANAGER));
+        console.log("VRLSettlementObserver:", getCreate3Contract(SETTLEMENT_OBSERVER));
+        console.log("VTSOrchestrator:", getCreate3Contract(VTS_ORCHESTRATOR));
+        console.log("MMPCommitmentDescriptor:", getCreate3Contract(COMMITMENT_DESCRIPTOR));
+        console.log("MMPositionActionsImpl:", getCreate3Contract(ACTIONS_IMPL));
+        console.log("MMPositionManager:", getCreate3Contract(MM_POSITION_MANAGER));
+        console.log("MarketFactory:", getCreate3Contract(MARKET_FACTORY));
+        console.log("GlobalConfig:", getCreate3Contract(GLOBAL_CONFIG));
+        console.log("\nNote: CoreHook uses CREATE2 (not CREATE3) due to hook flag requirements");
+    }
 
     function run() external {
         uint256 deployerPrivateKey = uint256(vm.envBytes32("PRIVATE_KEY"));
@@ -68,6 +122,10 @@ contract DeployContracts is NetworkConfig {
         console.log("Starting deployment of CoreHook, ProxyHook, and MarketFactory on %s...", networkName);
         console.log("Pool Manager:", config.poolManager);
         console.log("CREATE2 Deployer:", config.create2Deployer);
+        console.log("CREATE3 Factory:", address(create3));
+
+        // Log predicted addresses before deployment
+        _logPredictedAddresses();
 
         vm.startBroadcast(deployerPrivateKey);
 
@@ -150,27 +208,32 @@ contract DeployContracts is NetworkConfig {
 
     function _setupGlobalConfig() internal returns (address) {
         // deploy the global config
-        GlobalConfig config = new GlobalConfig();
-        console.log("GlobalConfig deployed at:", address(config));
+        bytes memory creationCode = type(GlobalConfig).creationCode;
+        address deployed = _deployCreate3(GLOBAL_CONFIG, creationCode);
+        console.log("GlobalConfig deployed at:", deployed);
 
         // Transfer ownership of all Ownable contracts to the global config
         uint256 len = ownedContracts.length;
         console.log("Transferring ownership of", len, "contracts to GlobalConfig");
         for (uint256 i = 0; i < len; i++) {
-            Ownable(ownedContracts[i]).transferOwnership(address(config));
+            Ownable(ownedContracts[i]).transferOwnership(deployed);
             console.log("  - Transferred ownership of", ownedContracts[i]);
         }
-        return address(config);
+        return deployed;
     }
 
     function _deployOracleHelper() internal returns (address) {
         // read in the predeployed address of the resilient oracle from the env
         address resilientOracleAddress = vm.envAddress("RESILIENT_ORACLE_ADDRESS");
         console.log("Oracle loaded at address:", resilientOracleAddress);
-        OracleHelper helper = new OracleHelper(resilientOracleAddress);
-        console.log("OracleHelper deployed at:", address(helper));
 
-        return address(helper);
+        bytes memory constructorArgs = abi.encode(resilientOracleAddress);
+        bytes memory creationCode = abi.encodePacked(type(OracleHelper).creationCode, constructorArgs);
+
+        address deployed = _deployCreate3(ORACLE_HELPER, creationCode);
+        console.log("OracleHelper deployed at:", deployed);
+
+        return deployed;
     }
 
     /**
@@ -183,9 +246,13 @@ contract DeployContracts is NetworkConfig {
         string memory nativeAssetSymbol = vm.envOr("NATIVE_ASSET_SYMBOL", string("ETH"));
         uint8 nativeAssetDecimals = uint8(vm.envOr("NATIVE_ASSET_DECIMALS", uint256(18)));
 
-        LiquidityHub hub = new LiquidityHub(oracleHelper, nativeAssetName, nativeAssetSymbol, nativeAssetDecimals);
+        bytes memory constructorArgs = abi.encode(oracleHelper, nativeAssetName, nativeAssetSymbol, nativeAssetDecimals);
+        bytes memory creationCode = abi.encodePacked(type(LiquidityHub).creationCode, constructorArgs);
 
-        return payable(address(hub));
+        address deployed = _deployCreate3(LIQUIDITY_HUB, creationCode);
+        console.log("LiquidityHub deployed at:", deployed);
+
+        return payable(deployed);
     }
 
     /**
@@ -228,10 +295,13 @@ contract DeployContracts is NetworkConfig {
         address[] memory initialBounds = new address[](0);
 
         // Deploy MarketFactory with LiquidityHub, OracleHelper, and VTSOrchestrator
-        MarketFactory factory =
-            new MarketFactory(config.poolManager, liquidityHub, oracleHelper, vtsOrchestrator, initialBounds);
+        bytes memory constructorArgs =
+            abi.encode(config.poolManager, liquidityHub, oracleHelper, vtsOrchestrator, initialBounds);
+        bytes memory creationCode = abi.encodePacked(type(MarketFactory).creationCode, constructorArgs);
 
-        return address(factory);
+        address deployed = _deployCreate3(MARKET_FACTORY, creationCode);
+        console.log("MarketFactory deployed at:", deployed);
+        return deployed;
     }
 
     /**
@@ -242,14 +312,24 @@ contract DeployContracts is NetworkConfig {
 
         // deploy the proof verifiers
         address publicKeyAddress = vm.envAddress("PUBLIC_KEY_SIGNAL_VERIFIER_ADDRESS");
-        address signalVerifier = address(new ECDSASignatureSignalVerifier(publicKeyAddress));
 
-        signalManager = address(new VRLSignalManager(signalVerifier, signalExpiryInSeconds));
+        bytes memory verifierConstructorArgs = abi.encode(publicKeyAddress);
+        bytes memory verifierCreationCode =
+            abi.encodePacked(type(ECDSASignatureSignalVerifier).creationCode, verifierConstructorArgs);
+        address signalVerifier = _deployCreate3(SIGNAL_VERIFIER, verifierCreationCode);
+        console.log("ECDSASignatureSignalVerifier deployed at:", signalVerifier);
+
+        bytes memory signalManagerConstructorArgs = abi.encode(signalVerifier, signalExpiryInSeconds);
+        bytes memory signalManagerCreationCode =
+            abi.encodePacked(type(VRLSignalManager).creationCode, signalManagerConstructorArgs);
+        signalManager = _deployCreate3(SIGNAL_MANAGER, signalManagerCreationCode);
         console.log("SignalManager deployed at:", signalManager);
         ownedContracts.push(signalManager);
 
         // ? deploy settlement observer without verifiers. No verifiers developed yet.
-        settlementObserver = address(new VRLSettlementObserver());
+        bytes memory observerCreationCode = type(VRLSettlementObserver).creationCode;
+        settlementObserver = _deployCreate3(SETTLEMENT_OBSERVER, observerCreationCode);
+        console.log("SettlementObserver deployed at:", settlementObserver);
         ownedContracts.push(settlementObserver);
     }
 
@@ -258,10 +338,13 @@ contract DeployContracts is NetworkConfig {
      * @return The deployed VTSOrchestrator address
      */
     function _deployVTSOrchestrator() internal returns (address) {
-        VTSOrchestrator orchestrator =
-            new VTSOrchestrator(config.poolManager, signalManager, oracleHelper, liquidityHub, settlementObserver);
-        console.log("VTSOrchestrator deployed at:", address(orchestrator));
-        return address(orchestrator);
+        bytes memory constructorArgs =
+            abi.encode(config.poolManager, signalManager, oracleHelper, liquidityHub, settlementObserver);
+        bytes memory creationCode = abi.encodePacked(type(VTSOrchestrator).creationCode, constructorArgs);
+
+        address deployed = _deployCreate3(VTS_ORCHESTRATOR, creationCode);
+        console.log("VTSOrchestrator deployed at:", deployed);
+        return deployed;
     }
 
     /**
@@ -269,9 +352,10 @@ contract DeployContracts is NetworkConfig {
      * @return The deployed MMPCommitmentDescriptor address
      */
     function _deployCommitmentDescriptor() internal returns (address) {
-        MMPCommitmentDescriptor descriptor = new MMPCommitmentDescriptor();
-        console.log("MMPCommitmentDescriptor deployed at:", address(descriptor));
-        return address(descriptor);
+        bytes memory creationCode = type(MMPCommitmentDescriptor).creationCode;
+        address deployed = _deployCreate3(COMMITMENT_DESCRIPTOR, creationCode);
+        console.log("MMPCommitmentDescriptor deployed at:", deployed);
+        return deployed;
     }
 
     /**
@@ -285,21 +369,21 @@ contract DeployContracts is NetworkConfig {
         IAllowanceTransfer permit2 = PositionManager(payable(config.positionManager)).permit2();
 
         // Deploy MMPositionActionsImpl first (requires poolManager, liquidityHub, vtsOrchestrator)
-        MMPositionActionsImpl actionsImpl = new MMPositionActionsImpl(config.poolManager, liquidityHub, vtsOrchestrator);
-        console.log("MMPositionActionsImpl deployed at:", address(actionsImpl));
+        bytes memory actionsImplConstructorArgs = abi.encode(config.poolManager, liquidityHub, vtsOrchestrator);
+        bytes memory actionsImplCreationCode =
+            abi.encodePacked(type(MMPositionActionsImpl).creationCode, actionsImplConstructorArgs);
+        actionsImpl = _deployCreate3(ACTIONS_IMPL, actionsImplCreationCode);
+        console.log("MMPositionActionsImpl deployed at:", actionsImpl);
 
         // Deploy MMPositionManager (requires poolManager, liquidityHub, vtsOrchestrator, descriptor, weth9, permit2, actionsImpl)
-        MMPositionManager positionManager = new MMPositionManager(
-            config.poolManager,
-            liquidityHub,
-            vtsOrchestrator,
-            commitmentDescriptorAddr,
-            weth9,
-            permit2,
-            address(actionsImpl)
+        bytes memory positionManagerConstructorArgs = abi.encode(
+            config.poolManager, liquidityHub, vtsOrchestrator, commitmentDescriptorAddr, weth9, permit2, actionsImpl
         );
-        console.log("MMPositionManager deployed at:", address(positionManager));
-        return address(positionManager);
+        bytes memory positionManagerCreationCode =
+            abi.encodePacked(type(MMPositionManager).creationCode, positionManagerConstructorArgs);
+        address deployed = _deployCreate3(MM_POSITION_MANAGER, positionManagerCreationCode);
+        console.log("MMPositionManager deployed at:", deployed);
+        return deployed;
     }
 
     /**
