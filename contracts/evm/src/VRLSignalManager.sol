@@ -36,7 +36,7 @@ contract VRLSignalManager is Ownable, IVRLSignalManager {
     mapping(address => uint256) public mmNonce;
     uint256 public signalExpiryInSeconds;
 
-    constructor(address _verifier, uint256 _signalExpiryInSeconds) Ownable(msg.sender) {
+    constructor(address _verifier, uint256 _signalExpiryInSeconds, address _initialOwner) Ownable(_initialOwner) {
         verifier = ISignalVerifier(_verifier);
         signalExpiryInSeconds = _signalExpiryInSeconds;
     }

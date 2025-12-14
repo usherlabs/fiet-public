@@ -18,7 +18,7 @@ contract OracleHelperTest is Test {
 
     function setUp() public {
         resilientOracle = IResilientOracle(makeAddr("ResilientOracle"));
-        oracleHelper = new OracleHelper(address(resilientOracle));
+        oracleHelper = new OracleHelper(address(resilientOracle), address(this));
 
         // mock calls to the resilient oracle
         vm.mockCall(

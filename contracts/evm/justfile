@@ -48,9 +48,10 @@ help:
     @echo "📋 Available Commands:"
     @echo ""
     @echo "🔧 Development Commands:"
-    @echo "  just dev                    - Complete development setup (deploy tokens, contracts, create market)"
+    @echo "  just dev                    - Complete development setup (setup create3, deploy tokens, contracts, create market)"
     @echo "  just build                  - Build all Solidity contracts"
     @echo "  just fork                   - Start Anvil fork for local development"
+    @echo "  just setup-create3          - Setup CREATE3Factory for local development (etch at canonical address)"
     @echo ""
     @echo "🚀 Deployment Commands:"
     @echo "  just deploy-tokenA          - Deploy USDT mock token"
@@ -97,8 +98,8 @@ help:
 
 # === Development Workflows ===
 
-# Complete development setup (deploy tokens, contracts, create market)
-dev: deploy-tokenA deploy-tokenB deploy create-market
+# Complete development setup (setup create3, deploy tokens, contracts, create market)
+dev: setup-create3 deploy-tokenA deploy-tokenB deploy create-market
 
 # E2E flow: deploy everything and test swap
 # Note: Make sure fork is running and wallet has ETH, WETH, and USDC
@@ -117,17 +118,27 @@ fork:
     @echo "⛽ Starting anvil forked from Network: {{ network }}..."
     anvil --fork-url {{ fork_source_rpc }} --port {{ anvil_port }}
 
+# === Setup ===
+
+# Setup CREATE3Factory for local development (etch at canonical address)
+setup-create3:
+    forge script {{ script_dir }}/setup/SetupCreate3Factory.s.sol:SetupCreate3Factory \
+        --rpc-url {{ rpc_url }} \
+        --broadcast -vvv
+
+fork-and-setup: fork setup-create3
+
 # === Deployments ===
 
 # Deploy USDT mock token
 deploy-tokenA:
-    forge script {{ script_dir }}/dev/MockERC20.s.sol:TokenScriptUSDT \
+    forge script {{ script_dir }}/setup/MockERC20.s.sol:TokenScriptUSDT \
         --rpc-url {{ rpc_url }} \
         {{ broadcast_flag }} {{ verify_flags }} -vvv
 
 # Deploy USDC mock token
 deploy-tokenB:
-    forge script {{ script_dir }}/dev/MockERC20.s.sol:TokenScriptUSDC \
+    forge script {{ script_dir }}/setup/MockERC20.s.sol:TokenScriptUSDC \
         --rpc-url {{ rpc_url }} \
         {{ broadcast_flag }} {{ verify_flags }} -vvv
 

@@ -77,13 +77,15 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
     /// @param _oracleHelper The OracleHelper address
     /// @param _liquidityHub The LiquidityHub address
     /// @param _settlementObserver The VRL Settlement Observer address
+    /// @param _initialOwner The initial owner of the contract
     constructor(
         address _poolManager,
         address _signalManager,
         address _oracleHelper,
         address _liquidityHub,
-        address _settlementObserver
-    ) Ownable(msg.sender) ImmutableState(IPoolManager(_poolManager)) {
+        address _settlementObserver,
+        address _initialOwner
+    ) Ownable(_initialOwner) ImmutableState(IPoolManager(_poolManager)) {
         if (_poolManager == address(0)) {
             revert Errors.InvalidAddress(_poolManager);
         }

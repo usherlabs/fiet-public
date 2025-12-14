@@ -13,8 +13,9 @@ import {Address} from "@openzeppelin/contracts/utils/Address.sol";
 contract GlobalConfig is Ownable2Step {
     /**
      * @notice Initializes the global configuration
+     * @param _initialOwner The initial owner of the contract (typically EOA or multisig)
      */
-    constructor() Ownable(msg.sender) {}
+    constructor(address _initialOwner) Ownable(_initialOwner) {}
 
     /**
      * @notice Executes an arbitrary call to another contract as an admin-level action

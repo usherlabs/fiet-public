@@ -14,7 +14,7 @@ contract VRLSettlementObserver is Ownable, IVRLSettlementObserver {
     uint32 public nextVerifierIndex;
     mapping(address => mapping(uint32 => bool)) public allowedVerifiersForToken;
 
-    constructor() Ownable(msg.sender) {}
+    constructor(address _initialOwner) Ownable(_initialOwner) {}
 
     // New function to add a verifier
     function addVerifier(address _verifier) external onlyOwner returns (uint32) {

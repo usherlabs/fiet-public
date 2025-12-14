@@ -21,7 +21,7 @@ contract PausableVTSTest is Test {
 
         // Deploy VRLSettlementObserver
         vm.prank(owner);
-        IVRLSettlementObserver settlementObserver = new VRLSettlementObserver();
+        IVRLSettlementObserver settlementObserver = new VRLSettlementObserver(owner);
 
         // Deploy VTSOrchestrator
         vm.prank(owner);
@@ -30,7 +30,8 @@ contract PausableVTSTest is Test {
             makeAddr("signalManager"),
             makeAddr("oracleHelper"),
             makeAddr("liquidityHub"),
-            address(settlementObserver)
+            address(settlementObserver),
+            owner
         );
     }
 

@@ -53,8 +53,9 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
         address _liquidityHub,
         address _oracleHelper,
         address _vtsOrchestrator,
-        address[] memory _bounds
-    ) Ownable(msg.sender) ImmutableState(IPoolManager(_poolManager)) ImmutableVTSState(_vtsOrchestrator) {
+        address[] memory _bounds,
+        address _initialOwner
+    ) Ownable(_initialOwner) ImmutableState(IPoolManager(_poolManager)) ImmutableVTSState(_vtsOrchestrator) {
         liquidityHub = ILiquidityHub(_liquidityHub);
         oracleHelper = IOracleHelper(_oracleHelper);
 

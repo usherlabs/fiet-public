@@ -56,13 +56,13 @@ contract MarketFactoryTest is Test, Deployers {
 
         vm.prank(owner);
         address resilientOracle = makeAddr("ResilientOracle");
-        OracleHelper oracleHelper = new OracleHelper(resilientOracle);
+        OracleHelper oracleHelper = new OracleHelper(resilientOracle, owner);
         address oracleHelperAddress = address(oracleHelper);
 
         // Deploy LiquidityHub as `owner` so subsequent owner-only calls succeed
         vm.prank(owner);
         address payable liquidityHubAddress =
-            payable(address(new LiquidityHub(address(oracleHelperAddress), "Ether", "ETH", 18)));
+            payable(address(new LiquidityHub(address(oracleHelperAddress), "Ether", "ETH", 18, owner)));
 
         // Deploy MMPositionManager first (needed for MarketFactory constructor)
         IWETH9 weth9 = IWETH9(address(new WETH()));
@@ -83,7 +83,7 @@ contract MarketFactoryTest is Test, Deployers {
 
         // Deploy VRLSettlementObserver
         vm.prank(owner);
-        IVRLSettlementObserver settlementObserver = new VRLSettlementObserver();
+        IVRLSettlementObserver settlementObserver = new VRLSettlementObserver(owner);
 
         // Deploy VTSOrchestrator
         vm.prank(owner);
@@ -92,7 +92,8 @@ contract MarketFactoryTest is Test, Deployers {
             makeAddr("signalManager"),
             oracleHelperAddress,
             liquidityHubAddress,
-            address(settlementObserver)
+            address(settlementObserver),
+            owner
         );
 
         IAllowanceTransfer permit2 = IAllowanceTransfer(makeAddr("permit2"));
@@ -116,7 +117,7 @@ contract MarketFactoryTest is Test, Deployers {
         // Deploy MarketFactory with all required arguments
         vm.prank(owner);
         factory = new MarketFactory(
-            address(poolManager), liquidityHubAddress, oracleHelperAddress, address(vtsOrchestrator), bounds
+            address(poolManager), liquidityHubAddress, oracleHelperAddress, address(vtsOrchestrator), bounds, owner
         );
 
         // Deploy CoreHook at computed address

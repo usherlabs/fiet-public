@@ -34,7 +34,7 @@ contract HookTest is Test, Deployers {
 
         // Deploy VRLSettlementObserver
         vm.prank(owner);
-        IVRLSettlementObserver settlementObserver = new VRLSettlementObserver();
+        IVRLSettlementObserver settlementObserver = new VRLSettlementObserver(owner);
 
         // Deploy VTSOrchestrator
         vm.prank(owner);
@@ -43,7 +43,8 @@ contract HookTest is Test, Deployers {
             makeAddr("signalManager"),
             address(makeAddr("OracleHelper")),
             address(makeAddr("liquidityHub")),
-            address(settlementObserver)
+            address(settlementObserver),
+            owner
         );
 
         vm.prank(owner);
@@ -52,7 +53,8 @@ contract HookTest is Test, Deployers {
             address(makeAddr("liquidityHub")),
             address(makeAddr("OracleHelper")),
             address(vtsOrchestrator),
-            bounds
+            bounds,
+            owner
         );
         IWETH9 weth9 = IWETH9(address(new WETH()));
         IAllowanceTransfer permit2 = IAllowanceTransfer(makeAddr("permit2"));

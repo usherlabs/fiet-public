@@ -177,7 +177,8 @@ abstract contract MarketTestBase is Test, Deployers {
 
     function _deployFreshManagerAndRouters() internal {
         deployFreshManagerAndRouters(); // univ4 core contract deployment
-        oracleHelper = new OracleHelper(resilientOracle);
+        address testOwner = address(this); // Use test contract as owner for test scenarios
+        oracleHelper = new OracleHelper(resilientOracle, testOwner);
         marketFactory = makeAddr("marketFactory"); // stub market factory.
 
         // Mock oracleHelper() call needed for LCC creation
@@ -188,7 +189,7 @@ abstract contract MarketTestBase is Test, Deployers {
         );
 
         // Mock liquidityHub() before constructing MMPositionManager, since its constructor reads this from factory
-        liquidityHub = payable(address(new LiquidityHub(address(oracleHelper), "Ether", "ETH", 18)));
+        liquidityHub = payable(address(new LiquidityHub(address(oracleHelper), "Ether", "ETH", 18, testOwner)));
         vm.mockCall(
             marketFactory, abi.encodeWithSelector(IMarketFactory.liquidityHub.selector), abi.encode(liquidityHub)
         );
@@ -198,13 +199,13 @@ abstract contract MarketTestBase is Test, Deployers {
         // deploy custom router and verifier
         icVerifier = new ECDSASignatureSignalVerifier(makeAddr("signatureVerifier"));
         stubSignalVerifier = new StubSignalVerifier();
-        signalManager = new VRLSignalManager(address(stubSignalVerifier), signalExpiryInSeconds);
+        signalManager = new VRLSignalManager(address(stubSignalVerifier), signalExpiryInSeconds, testOwner);
 
         // deploy LiquidityHub and authorise factory
         LiquidityHub(payable(liquidityHub)).setFactory(marketFactory, true);
 
         // deploy the settlement observer
-        settlementObserver = new VRLSettlementObserver();
+        settlementObserver = new VRLSettlementObserver(testOwner);
         settlementObserver.addVerifier(address(new StubSettlementVerifier()));
 
         // deploy commitment descriptor
@@ -215,7 +216,8 @@ abstract contract MarketTestBase is Test, Deployers {
             address(signalManager),
             address(oracleHelper),
             address(liquidityHub),
-            address(settlementObserver)
+            address(settlementObserver),
+            testOwner
         );
 
         IAllowanceTransfer permit2 = IAllowanceTransfer(makeAddr("permit2"));

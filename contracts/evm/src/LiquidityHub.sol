@@ -47,13 +47,15 @@ contract LiquidityHub is Ownable, ReentrancyGuardTransient {
      * @param _nativeAssetName The name of the native asset (e.g., "Ether")
      * @param _nativeAssetSymbol The symbol of the native asset (e.g., "ETH")
      * @param _nativeAssetDecimals The decimals of the native asset (typically 18)
+     * @param _initialOwner The initial owner of the contract
      */
     constructor(
         address _oracleHelper,
         string memory _nativeAssetName,
         string memory _nativeAssetSymbol,
-        uint8 _nativeAssetDecimals
-    ) Ownable(msg.sender) {
+        uint8 _nativeAssetDecimals,
+        address _initialOwner
+    ) Ownable(_initialOwner) {
         oracleHelper = IOracleHelper(_oracleHelper);
         LCCFactoryLib.initNativeAsset(s, _nativeAssetName, _nativeAssetSymbol, _nativeAssetDecimals);
     }

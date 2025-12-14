@@ -23,7 +23,7 @@ contract VRLSettlementObserverTest is Test {
     function setUp() public {
         // Deploy as owner so owner is set correctly
         vm.prank(owner);
-        observer = new VRLSettlementObserver();
+        observer = new VRLSettlementObserver(owner);
 
         // Deploy stub verifiers for testing
         stubVerifier = new StubSettlementVerifier();

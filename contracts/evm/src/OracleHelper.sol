@@ -16,7 +16,7 @@ contract OracleHelper is Ownable {
 
     event TickerUpdated(string indexed ticker, bytes32 indexed tickerHash, address indexed newAsset);
 
-    constructor(address _oracle) Ownable(msg.sender) {
+    constructor(address _oracle, address _initialOwner) Ownable(_initialOwner) {
         if (_oracle == address(0)) revert Errors.InvalidAddress(_oracle);
         oracle = IResilientOracle(_oracle);
     }

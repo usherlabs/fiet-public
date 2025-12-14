@@ -31,21 +31,24 @@ import {ECDSASignatureSignalVerifier} from "../../src/verifiers/ECDSASignatureSi
  * @dev Deploys contracts in the correct order with proper HookMiner logic
  *
  * Deployment Order:
- * 1. Deploy OracleHelper
- * 2. Deploy LiquidityHub (must be before VTSO and MarketFactory)
- * 3. Deploy Verifiers (VTSO dependencies)
- * 4. Deploy VTSOrchestrator (must be before MMPositionManager and MarketFactory)
- * 5. Deploy MMPositionManager (must be before MarketFactory for bounds)
- * 6. Deploy MarketFactory (with LiquidityHub and VTSO, without hooks initially)
- * 7. Enable MarketFactory in LiquidityHub
- * 8. Deploy CoreHook (with proper flags and MarketFactory address) - uses CREATE2 for hook flags
- * 9. Set hooks in MarketFactory using setHooks()
- * 10. Verify hooks (set cross-references)
- * 11. Add protocol addresses to bounds array (including MMPositionManager)
- * 12. Deploy GlobalConfig and transfer ownership
+ * 1. Deploy GlobalConfig FIRST (used as initialOwner for all Ownable contracts via CREATE3)
+ * 2. Deploy OracleHelper (with GlobalConfig as initialOwner)
+ * 3. Deploy LiquidityHub (with GlobalConfig as initialOwner)
+ * 4. Deploy Verifiers (VTSO dependencies, with GlobalConfig as initialOwner)
+ * 5. Deploy VTSOrchestrator (with GlobalConfig as initialOwner)
+ * 6. Deploy MMPositionManager (must be before MarketFactory for bounds)
+ * 7. Deploy MarketFactory (with GlobalConfig as initialOwner)
+ * 8. Enable MarketFactory in LiquidityHub
+ * 9. Deploy CoreHook (with proper flags and MarketFactory address) - uses CREATE2 for hook flags
+ * 10. Set hooks in MarketFactory using setHooks()
+ * 11. Verify hooks (set cross-references)
  *
  * @notice Most contracts use CREATE3 for deterministic addresses across chains.
  *         CoreHook uses CREATE2 with HookMiner to ensure correct hook flags.
+ * @notice GlobalConfig is deployed first and passed as initialOwner to all Ownable contracts.
+ *         This is required because CREATE3 uses a temporary proxy contract as msg.sender in constructors,
+ *         so contracts cannot rely on msg.sender being the deployer.
+ *         Reference: https://github.com/ZeframLou/create3-factory
  */
 contract DeployContracts is CREATE3Script, NetworkConfig {
     // Deployed contract addresses
@@ -61,8 +64,6 @@ contract DeployContracts is CREATE3Script, NetworkConfig {
     address public commitmentDescriptor;
     address public vtsOrchestrator;
     address public actionsImpl;
-    // Track Ownable contracts for ownership migration to GlobalConfig
-    address[] public ownedContracts;
 
     // Contract names for CREATE3 salt generation
     string constant ORACLE_HELPER = "OracleHelper";
@@ -129,69 +130,61 @@ contract DeployContracts is CREATE3Script, NetworkConfig {
 
         vm.startBroadcast(deployerPrivateKey);
 
-        // Step 1: Deploy OracleHelper
+        // Step 1: Deploy GlobalConfig FIRST
+        // GlobalConfig is deployed first so it can be passed as initialOwner to all Ownable contracts.
+        // This is required because CREATE3 uses a temporary proxy contract as msg.sender in constructors.
+        console.log("\n=== Step 1: Deploying GlobalConfig ===");
+        globalConfig = _deployGlobalConfig();
+        console.log("GlobalConfig deployed at:", globalConfig);
+
+        // Step 2: Deploy OracleHelper (with GlobalConfig as initialOwner)
         // @dev the ResilientOracle would have been deployed and provided as an env var `RESILIENT_ORACLE_ADDRESS`
-        console.log("\n=== Step 1: Deploying OracleHelper ===");
+        console.log("\n=== Step 2: Deploying OracleHelper ===");
         oracleHelper = _deployOracleHelper();
         console.log("OracleHelper deployed at:", oracleHelper);
-        ownedContracts.push(oracleHelper);
 
-        // Step 2: Deploy LiquidityHub (must be before VTSO and MarketFactory)
-        console.log("\n=== Step 2: Deploying LiquidityHub ===");
+        // Step 3: Deploy LiquidityHub (with GlobalConfig as initialOwner)
+        console.log("\n=== Step 3: Deploying LiquidityHub ===");
         liquidityHub = _deployLiquidityHub();
         console.log("LiquidityHub deployed at:", liquidityHub);
-        ownedContracts.push(liquidityHub);
 
-        // Step 3: Deploy Verifiers (VTSO dependencies)
-        console.log("\n=== Step 3: Deploying Verifiers (VTSO Dependencies) ===");
+        // Step 4: Deploy Verifiers (VTSO dependencies, with GlobalConfig as initialOwner)
+        console.log("\n=== Step 4: Deploying Verifiers (VTSO Dependencies) ===");
         _deployVerifiers();
         console.log("SignalManager deployed at:", signalManager);
         console.log("SettlementObserver deployed at:", settlementObserver);
 
-        // Step 4: Deploy VTSOrchestrator (must be before MMPositionManager and MarketFactory)
-        console.log("\n=== Step 4: Deploying VTSOrchestrator ===");
+        // Step 5: Deploy VTSOrchestrator (with GlobalConfig as initialOwner)
+        console.log("\n=== Step 5: Deploying VTSOrchestrator ===");
         vtsOrchestrator = _deployVTSOrchestrator();
         console.log("VTSOrchestrator deployed at:", vtsOrchestrator);
-        ownedContracts.push(vtsOrchestrator);
 
-        // Step 5: Deploy MMPositionManager (must be before MarketFactory for bounds)
-        console.log("\n=== Step 5: Deploying MMPositionManager ===");
+        // Step 6: Deploy MMPositionManager (must be before MarketFactory for bounds)
+        console.log("\n=== Step 6: Deploying MMPositionManager ===");
         mmPositionManager = _deployMMPositionManager();
         console.log("MMPositionManager deployed at:", mmPositionManager);
 
-        // Step 6: Deploy MarketFactory (with LiquidityHub and VTSOrchestrator, without hooks initially)
-        console.log("\n=== Step 6: Deploying MarketFactory ===");
+        // Step 7: Deploy MarketFactory (with GlobalConfig as initialOwner)
+        console.log("\n=== Step 7: Deploying MarketFactory ===");
         marketFactory = _deployMarketFactory();
         console.log("MarketFactory deployed at:", marketFactory);
-        ownedContracts.push(marketFactory);
 
-        // Step 7: Enable MarketFactory in LiquidityHub
-        console.log("\n=== Step 7: Enabling MarketFactory in LiquidityHub ===");
+        // Step 8: Enable MarketFactory in LiquidityHub
+        console.log("\n=== Step 8: Enabling MarketFactory in LiquidityHub ===");
         _enableFactoryInLiquidityHub();
 
-        // Step 8: Deploy CoreHook
-        console.log("\n=== Step 8: Deploying CoreHook ===");
+        // Step 9: Deploy CoreHook
+        console.log("\n=== Step 9: Deploying CoreHook ===");
         coreHook = _deployCoreHook();
         console.log("CoreHook deployed at:", coreHook);
 
-        // Step 9: Set hooks in MarketFactory
-        console.log("\n=== Step 9: Setting Hooks in MarketFactory ===");
+        // Step 10: Set hooks in MarketFactory
+        console.log("\n=== Step 10: Setting Hooks in MarketFactory ===");
         _setHooksInFactory();
 
-        // Step 10: Verify hooks addresses across the contracts
-        console.log("\n=== Step 10: Verifying Hooks ===");
+        // Step 11: Verify hooks addresses across the contracts
+        console.log("\n=== Step 11: Verifying Hooks ===");
         _verifyHooks();
-
-        // Step 11: Add all the protocol addresses expected to hold LCC as a protocol bound address in the market factory
-        // Note: LiquidityHub is already added to bounds in MarketFactory constructor
-        // MMPositionManager is added here since it's no longer passed to constructor
-        console.log("\n=== Step 11: Adding addresses to bounds array ===");
-        _addAddressesToBounds();
-
-        // Step 12: Deploy GlobalConfig and assign ownership to the market factory
-        console.log("\n=== Step 12: Deploying GlobalConfig ===");
-        globalConfig = _setupGlobalConfig();
-        console.log("GlobalConfig deployed at:", globalConfig);
 
         vm.stopBroadcast();
 
@@ -206,19 +199,22 @@ contract DeployContracts is CREATE3Script, NetworkConfig {
         console.log("MMPositionManager:", mmPositionManager);
     }
 
-    function _setupGlobalConfig() internal returns (address) {
-        // deploy the global config
-        bytes memory creationCode = type(GlobalConfig).creationCode;
+    /**
+     * @dev Deploys GlobalConfig with the deployer as initial owner
+     * @return The deployed GlobalConfig address
+     * @notice GlobalConfig is deployed first so it can be passed as initialOwner to all other Ownable contracts.
+     *         The deployer remains the owner of GlobalConfig to perform admin operations via proxyCall.
+     */
+    function _deployGlobalConfig() internal returns (address) {
+        // GlobalConfig's owner is the deployer (so they can call proxyCall for admin operations)
+        address deployer = _getDeployer();
+        bytes memory constructorArgs = abi.encode(deployer);
+        bytes memory creationCode = abi.encodePacked(type(GlobalConfig).creationCode, constructorArgs);
+
         address deployed = _deployCreate3(GLOBAL_CONFIG, creationCode);
         console.log("GlobalConfig deployed at:", deployed);
+        console.log("GlobalConfig owner:", deployer);
 
-        // Transfer ownership of all Ownable contracts to the global config
-        uint256 len = ownedContracts.length;
-        console.log("Transferring ownership of", len, "contracts to GlobalConfig");
-        for (uint256 i = 0; i < len; i++) {
-            Ownable(ownedContracts[i]).transferOwnership(deployed);
-            console.log("  - Transferred ownership of", ownedContracts[i]);
-        }
         return deployed;
     }
 
@@ -227,11 +223,13 @@ contract DeployContracts is CREATE3Script, NetworkConfig {
         address resilientOracleAddress = vm.envAddress("RESILIENT_ORACLE_ADDRESS");
         console.log("Oracle loaded at address:", resilientOracleAddress);
 
-        bytes memory constructorArgs = abi.encode(resilientOracleAddress);
+        // Pass globalConfig as initialOwner (required for CREATE3 compatibility)
+        bytes memory constructorArgs = abi.encode(resilientOracleAddress, globalConfig);
         bytes memory creationCode = abi.encodePacked(type(OracleHelper).creationCode, constructorArgs);
 
         address deployed = _deployCreate3(ORACLE_HELPER, creationCode);
         console.log("OracleHelper deployed at:", deployed);
+        console.log("OracleHelper owner:", globalConfig);
 
         return deployed;
     }
@@ -246,22 +244,26 @@ contract DeployContracts is CREATE3Script, NetworkConfig {
         string memory nativeAssetSymbol = vm.envOr("NATIVE_ASSET_SYMBOL", string("ETH"));
         uint8 nativeAssetDecimals = uint8(vm.envOr("NATIVE_ASSET_DECIMALS", uint256(18)));
 
-        bytes memory constructorArgs = abi.encode(oracleHelper, nativeAssetName, nativeAssetSymbol, nativeAssetDecimals);
+        // Pass globalConfig as initialOwner (required for CREATE3 compatibility)
+        bytes memory constructorArgs =
+            abi.encode(oracleHelper, nativeAssetName, nativeAssetSymbol, nativeAssetDecimals, globalConfig);
         bytes memory creationCode = abi.encodePacked(type(LiquidityHub).creationCode, constructorArgs);
 
         address deployed = _deployCreate3(LIQUIDITY_HUB, creationCode);
         console.log("LiquidityHub deployed at:", deployed);
+        console.log("LiquidityHub owner:", globalConfig);
 
         return payable(deployed);
     }
 
     /**
      * @dev Enables MarketFactory in LiquidityHub so it can create LCC pairs
+     * @notice Since LiquidityHub is owned by GlobalConfig, we must use proxyCall
      */
     function _enableFactoryInLiquidityHub() internal {
-        LiquidityHub hub = LiquidityHub(payable(liquidityHub));
-        hub.setFactory(marketFactory, true);
-        console.log("MarketFactory enabled in LiquidityHub");
+        bytes memory callData = abi.encodeWithSelector(LiquidityHub.setFactory.selector, marketFactory, true);
+        GlobalConfig(globalConfig).proxyCall(liquidityHub, callData);
+        console.log("MarketFactory enabled in LiquidityHub (via GlobalConfig.proxyCall)");
     }
 
     /**
@@ -287,20 +289,23 @@ contract DeployContracts is CREATE3Script, NetworkConfig {
     /**
      * @dev Deploys MarketFactory with LiquidityHub and VTSOrchestrator
      * @return The deployed MarketFactory address
-     * @notice MMPositionManager is added to bounds separately via _addAddressesToBounds()
+     * @notice MMPositionManager is included in initialBounds since it's deployed before MarketFactory
      */
     function _deployMarketFactory() internal returns (address) {
-        // Initial bounds array (empty for now, mmPositionManager added later via _addAddressesToBounds)
+        // Initial bounds array includes MMPositionManager (deployed before MarketFactory)
         // Note: LiquidityHub is automatically added to bounds in MarketFactory constructor
-        address[] memory initialBounds = new address[](0);
+        address[] memory initialBounds = new address[](1);
+        initialBounds[0] = mmPositionManager;
 
-        // Deploy MarketFactory with LiquidityHub, OracleHelper, and VTSOrchestrator
+        // Pass globalConfig as initialOwner (required for CREATE3 compatibility)
         bytes memory constructorArgs =
-            abi.encode(config.poolManager, liquidityHub, oracleHelper, vtsOrchestrator, initialBounds);
+            abi.encode(config.poolManager, liquidityHub, oracleHelper, vtsOrchestrator, initialBounds, globalConfig);
         bytes memory creationCode = abi.encodePacked(type(MarketFactory).creationCode, constructorArgs);
 
         address deployed = _deployCreate3(MARKET_FACTORY, creationCode);
         console.log("MarketFactory deployed at:", deployed);
+        console.log("MarketFactory owner:", globalConfig);
+        console.log("MMPositionManager added to bounds:", mmPositionManager);
         return deployed;
     }
 
@@ -319,18 +324,21 @@ contract DeployContracts is CREATE3Script, NetworkConfig {
         address signalVerifier = _deployCreate3(SIGNAL_VERIFIER, verifierCreationCode);
         console.log("ECDSASignatureSignalVerifier deployed at:", signalVerifier);
 
-        bytes memory signalManagerConstructorArgs = abi.encode(signalVerifier, signalExpiryInSeconds);
+        // Pass globalConfig as initialOwner (required for CREATE3 compatibility)
+        bytes memory signalManagerConstructorArgs = abi.encode(signalVerifier, signalExpiryInSeconds, globalConfig);
         bytes memory signalManagerCreationCode =
             abi.encodePacked(type(VRLSignalManager).creationCode, signalManagerConstructorArgs);
         signalManager = _deployCreate3(SIGNAL_MANAGER, signalManagerCreationCode);
         console.log("SignalManager deployed at:", signalManager);
-        ownedContracts.push(signalManager);
+        console.log("SignalManager owner:", globalConfig);
 
-        // ? deploy settlement observer without verifiers. No verifiers developed yet.
-        bytes memory observerCreationCode = type(VRLSettlementObserver).creationCode;
+        // Pass globalConfig as initialOwner (required for CREATE3 compatibility)
+        bytes memory observerConstructorArgs = abi.encode(globalConfig);
+        bytes memory observerCreationCode =
+            abi.encodePacked(type(VRLSettlementObserver).creationCode, observerConstructorArgs);
         settlementObserver = _deployCreate3(SETTLEMENT_OBSERVER, observerCreationCode);
         console.log("SettlementObserver deployed at:", settlementObserver);
-        ownedContracts.push(settlementObserver);
+        console.log("SettlementObserver owner:", globalConfig);
     }
 
     /**
@@ -338,12 +346,14 @@ contract DeployContracts is CREATE3Script, NetworkConfig {
      * @return The deployed VTSOrchestrator address
      */
     function _deployVTSOrchestrator() internal returns (address) {
+        // Pass globalConfig as initialOwner (required for CREATE3 compatibility)
         bytes memory constructorArgs =
-            abi.encode(config.poolManager, signalManager, oracleHelper, liquidityHub, settlementObserver);
+            abi.encode(config.poolManager, signalManager, oracleHelper, liquidityHub, settlementObserver, globalConfig);
         bytes memory creationCode = abi.encodePacked(type(VTSOrchestrator).creationCode, constructorArgs);
 
         address deployed = _deployCreate3(VTS_ORCHESTRATOR, creationCode);
         console.log("VTSOrchestrator deployed at:", deployed);
+        console.log("VTSOrchestrator owner:", globalConfig);
         return deployed;
     }
 
@@ -389,14 +399,13 @@ contract DeployContracts is CREATE3Script, NetworkConfig {
     /**
      * @dev Sets hooks in MarketFactory using the setHooks() function
      * This is called after MarketFactory deployment to establish the relationship
+     * @notice Since MarketFactory is owned by GlobalConfig, we must use proxyCall
      */
     function _setHooksInFactory() internal {
-        MarketFactory factoryInstance = MarketFactory(marketFactory);
+        bytes memory callData = abi.encodeWithSelector(MarketFactory.setHooks.selector, coreHook);
+        GlobalConfig(globalConfig).proxyCall(marketFactory, callData);
 
-        // Call setHooks to configure the hooks in MarketFactory
-        factoryInstance.setHooks(coreHook);
-
-        console.log("Hooks set in MarketFactory successfully");
+        console.log("Hooks set in MarketFactory successfully (via GlobalConfig.proxyCall)");
     }
 
     /**
@@ -414,27 +423,6 @@ contract DeployContracts is CREATE3Script, NetworkConfig {
         require(factoryInstance.coreHook() == coreHook, "MarketFactory: coreHook not set");
 
         console.log("Hooks activated successfully");
-    }
-
-    /**
-     * @dev adds all relevant addresses to bounds array in the market factory
-     * Whitelist protocol addresses
-     * @notice The following are already added to bounds in MarketFactory constructor:
-     *         - address(this) [MarketFactory]
-     *         - poolManager
-     *         - liquidityHub
-     * @notice MMPositionManager is added here as it's not passed to the constructor
-     */
-    function _addAddressesToBounds() internal {
-        MarketFactory factoryInstance = MarketFactory(marketFactory);
-
-        // MMPositionManager is the recipient of LCCs from VTSO issuance
-        // It must be a bounds address to hold LCC tokens
-        address[] memory bounds = new address[](1);
-        bounds[0] = mmPositionManager;
-
-        factoryInstance.addBounds(bounds);
-        console.log("MMPositionManager added to bounds:", mmPositionManager);
     }
 
     /**

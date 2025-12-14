@@ -13,7 +13,7 @@ contract GlobalConfigTest is Test {
 
     function setUp() public {
         console.log("working");
-        globalConfig = new GlobalConfig();
+        globalConfig = new GlobalConfig(address(this));
 
         // Deploy the mock contract
         mockContract = new MockContract();

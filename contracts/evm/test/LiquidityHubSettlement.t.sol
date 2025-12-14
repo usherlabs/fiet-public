@@ -42,10 +42,10 @@ contract LiquidityHubSettlementTest is Test {
 
         // Deploy mock oracle
         resilientOracle = IResilientOracle(makeAddr("ResilientOracle"));
-        oracleHelper = new OracleHelper(address(resilientOracle));
+        oracleHelper = new OracleHelper(address(resilientOracle), address(this));
 
         // Deploy LiquidityHub
-        liquidityHub = new LiquidityHub(address(oracleHelper), "Ethereum", "ETH", 18);
+        liquidityHub = new LiquidityHub(address(oracleHelper), "Ethereum", "ETH", 18, address(this));
 
         // Deploy mock underlying assets
         underlyingAsset1 = new MockERC20("Token1", "TK1", 18);
