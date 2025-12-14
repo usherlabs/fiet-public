@@ -114,7 +114,7 @@ contract DeployContracts is CREATE3Script, NetworkConfig {
     }
 
     function run() external {
-        uint256 deployerPrivateKey = uint256(vm.envBytes32("PRIVATE_KEY"));
+        uint256 deployerPrivateKey = _getDeployerPrivateKey();
 
         // Initialise network configuration
         _initNetwork();

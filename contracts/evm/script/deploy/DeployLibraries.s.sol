@@ -31,7 +31,7 @@ import {LCCFactoryLinkedLib} from "../../src/libraries/LCCFactoryLib.sol";
  * 4. Deploy VTSPositionLib (uses VTSCommitLib, VTSFeeLib - but VTSFeeLib is internal)
  *
  * Usage:
- *   DEPLOYER=<address> PRIVATE_KEY=<key> forge script script/deploy/DeployLibraries.s.sol \
+ *   PRIVATE_KEY=<key> forge script script/deploy/DeployLibraries.s.sol \
  *     --rpc-url $RPC_URL --broadcast --verify
  *
  * After deployment, update foundry.toml with library addresses:
@@ -59,7 +59,7 @@ contract DeployLibraries is CREATE3Script, NetworkConfig {
     constructor() CREATE3Script("1") {}
 
     function run() external {
-        uint256 deployerPrivateKey = uint256(vm.envBytes32("PRIVATE_KEY"));
+        uint256 deployerPrivateKey = _getDeployerPrivateKey();
 
         // Initialise network configuration
         _initNetwork();

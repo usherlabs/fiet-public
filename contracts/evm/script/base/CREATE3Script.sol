@@ -56,16 +56,22 @@ abstract contract CREATE3Script is Script {
         version = version_;
     }
 
-    function getCreate3Contract(string memory name) internal view virtual returns (address) {
-        address deployer = vm.envAddress("DEPLOYER");
+    /// @dev Loads the deployer private key from the PRIVATE_KEY environment variable
+    function _getDeployerPrivateKey() internal view returns (uint256) {
+        return uint256(vm.envBytes32("PRIVATE_KEY"));
+    }
 
-        return create3.getDeployed(deployer, getCreate3ContractSalt(name));
+    /// @dev Derives the deployer address from the PRIVATE_KEY environment variable
+    function _getDeployer() internal view returns (address) {
+        return vm.addr(_getDeployerPrivateKey());
+    }
+
+    function getCreate3Contract(string memory name) internal view virtual returns (address) {
+        return create3.getDeployed(_getDeployer(), getCreate3ContractSalt(name));
     }
 
     function getCreate3Contract(string memory name, string memory _version) internal view virtual returns (address) {
-        address deployer = vm.envAddress("DEPLOYER");
-
-        return create3.getDeployed(deployer, getCreate3ContractSalt(name, _version));
+        return create3.getDeployed(_getDeployer(), getCreate3ContractSalt(name, _version));
     }
 
     function getCreate3ContractSalt(string memory name) internal view virtual returns (bytes32) {
@@ -87,9 +93,8 @@ abstract contract CREATE3Script is Script {
     }
 
     function getCreate3ContractFromEnvSalt(string memory name) internal view virtual returns (address) {
-        address deployer = vm.envAddress("DEPLOYER");
         bytes32 salt = vm.envBytes32(string.concat("SALT_", name));
 
-        return create3.getDeployed(deployer, salt);
+        return create3.getDeployed(_getDeployer(), salt);
     }
 }
