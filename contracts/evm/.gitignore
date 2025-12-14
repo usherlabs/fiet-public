@@ -1,3 +1,6 @@
+# Custom oracle config (inside submodule)
+lib/oracle/hardhat.fiet.config.ts
+
 # Dependencies
 node_modules/
 npm-debug.log*

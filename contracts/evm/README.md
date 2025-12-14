@@ -11,29 +11,6 @@ The Solidity contracts provide the automated market maker (AMM) functionality fo
 - **MarketFactory**: Coordinates between hooks and manages market creation
 - **LiquidityCommitmentCertificate (LCC)**: Wrapped tokens representing liquidity commitments
 
-## Directory Structure
-
-```
-contracts/evm/
-├── src/                    # Contract source files
-│   ├── CoreHook.sol       # Core pool hook implementation
-│   ├── ProxyHook.sol      # Proxy pool hook implementation
-│   ├── MarketFactory.sol  # Market factory contract
-│   ├── LCC.sol           # Liquidity Commitment Certificate
-│   └── interfaces/       # Contract interfaces
-├── script/                # Deployment and utility scripts
-│   ├── deploy/DeployContracts.s.sol    # Main deployment script
-│   ├── ReadDeployment.s.sol    # Read deployment addresses
-│   ├── AddLiquidity.s.sol      # Add liquidity script
-│   ├── RemoveLiquidity.s.sol   # Remove liquidity script
-│   ├── CreateMarket.s.sol      # Create market script
-│   └── constants/              # Network-specific constants
-├── test/                 # Test files
-├── lib/                  # Dependencies (Forge libraries)
-├── deployments/          # Deployment address files
-└── Makefile             # Build and deployment commands
-```
-
 ## Prerequisites
 
 ### 1. Install Foundry
@@ -56,11 +33,14 @@ forge --version
 After cloning the repository, install dependencies and initialise git submodules:
 
 ```bash
-# Install Node.js dependencies
-pnpm install
+# 0. Install Just - See https://github.com/casey/just
+brew install just
 
-# Install Forge dependencies
+# 1. Install Forge dependencies
 forge install
+
+# 2. Install Node.js dependencies (includes lib/oracle)
+yarn install
 ```
 
 ### 3. Deploy `ResilientOracle`
@@ -71,8 +51,7 @@ The protocol depends on an external deployment of the **ResilientOracle** from V
 
 ```bash
 # Deploy oracle to your target network
-cd oracle
-sh ./deploy.sh <chain>  # e.g., sepolia, arbitrumsepolia, arbitrumone
+make deploy-oracle <chain>  # e.g., sepolia, arbitrumsepolia, arbitrumone - defaults to 
 ```
 
 The deployed oracle address must be available as `RESILIENT_ORACLE_ADDRESS` in your environment variables when deploying the main protocol contracts.

@@ -1,3 +1,4 @@
+// @dev Run from within lib/oracle directory
 // @ts-nocheck
 
 import "module-alias/register";
@@ -9,6 +10,7 @@ import "@typechain/hardhat";
 import * as dotenv from "dotenv";
 import "hardhat-dependency-compiler";
 import "hardhat-deploy";
+import "hardhat-deploy-ethers";
 import { HardhatUserConfig, extendConfig } from "hardhat/config";
 import { HardhatConfig } from "hardhat/types";
 import "solidity-coverage";
@@ -169,10 +171,11 @@ const config: HardhatUserConfig = {
   external: {
     contracts: [
       {
-        artifacts: "node_modules/@venusprotocol/venus-protocol/artifacts",
+        // Path relative to lib/oracle where this config runs from
+        artifacts: "../../node_modules/@venusprotocol/venus-protocol/artifacts",
       },
       {
-        artifacts: "node_modules/@venusprotocol/governance-contracts/artifacts",
+        artifacts: "../../node_modules/@venusprotocol/governance-contracts/artifacts",
       },
     ],
   },
