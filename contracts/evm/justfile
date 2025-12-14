@@ -120,13 +120,31 @@ fork:
 
 # === Setup ===
 
-# Setup CREATE3Factory for local development (etch at canonical address)
+# Setup CREATE3Factory for local development (persisted on Anvil via anvil_setCode)
 setup-create3:
-    forge script {{ script_dir }}/setup/SetupCreate3Factory.s.sol:SetupCreate3Factory \
-        --rpc-url {{ rpc_url }} \
-        --broadcast -vvv
-
-fork-and-setup: fork setup-create3
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ "{{ mode }}" != "LOCAL" ]; then
+        echo "setup-create3 is intended for MODE=LOCAL (Anvil). Skipping."
+        exit 0
+    fi
+    ADDR="0x9fBB3DF7C40Da2e5A0dE984fFE2CCB7C47cd0ABf"
+    echo "Checking CREATE3Factory code at $ADDR via {{ rpc_url }} ..."
+    EXISTING_CODE="$(cast code "$ADDR" --rpc-url {{ rpc_url }})"
+    if [ "$EXISTING_CODE" != "0x" ]; then
+        echo "CREATE3Factory already present at $ADDR (codesize > 0)."
+        exit 0
+    fi
+    echo "CREATE3Factory not found. Installing bytecode with anvil_setCode..."
+    BYTECODE="$(forge inspect CREATE3Factory deployedBytecode)"
+    cast rpc anvil_setCode "$ADDR" "$BYTECODE" --rpc-url {{ rpc_url }}
+    # Verify
+    NEW_CODE="$(cast code "$ADDR" --rpc-url {{ rpc_url }})"
+    if [ "$NEW_CODE" = "0x" ]; then
+        echo "Failed to install CREATE3Factory bytecode at $ADDR"
+        exit 1
+    fi
+    echo "CREATE3Factory installed at $ADDR"
 
 # === Deployments ===
 
