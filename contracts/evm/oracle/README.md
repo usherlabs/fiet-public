@@ -2,6 +2,20 @@
 
 This directory contains custom deployment scripts for integrating the ResilientOracle protocol. Whilst we utilise the [ResilientOracle repository from Venus Protocol as a git submodule](http://github.com/venusProtocol/oracle/), Fiet is **not dependent on externally deployed contracts**. Instead, we require custom deployment of this Oracle protocol to ensure isolated utility for Fiet protocol's specific requirements.
 
+## Quick Start
+
+```bash
+# 1. Install dependencies (from contracts/evm/)
+yarn install
+
+# 2. Deploy oracle
+just deploy-oracle
+
+# For local development with fork
+just fork                    # In another terminal
+MODE=LOCAL just deploy-oracle
+```
+
 ## Overview
 
 The oracle deployment scripts provide a customised deployment process that:
@@ -17,6 +31,7 @@ The oracle deployment scripts provide a customised deployment process that:
 - Access to the target network RPC endpoints
 - Private key configured in `.env` file (for non-development networks)
 - Git submodule initialised (`contracts/evm/lib/oracle` directory) via Forge (`forge install`)
+- Dependencies installed from project root: `yarn install` (run from `contracts/evm/`)
 
 ## Network Configuration
 
@@ -29,47 +44,61 @@ The deployment supports the following networks:
 
 ## Deployment Process
 
+### Setup
+
+First, ensure dependencies are installed from the project root:
+
+```bash
+cd contracts/evm
+yarn install
+```
+
 ### Running Oracle Deployment
 
-```bash
-sh ./deploy.sh <chain>
-```
-
-Example for local development on Arbitrum mainnet Anvil fork:
+Deploy the oracle using the `just` command runner:
 
 ```bash
-make fork
-
-CHAIN_ID=421614 ./deploy.sh development
+just deploy-oracle
 ```
 
-Replace `<chain>` with one of the supported network names:
+The deployment automatically detects the network based on the `NETWORK` environment variable (defaults to `sepolia`). For local development:
 
 ```bash
-# Examples
-sh ./deploy.sh development
-sh ./deploy.sh sepolia
-sh ./deploy.sh arbitrumsepolia
-sh ./deploy.sh arbitrumone
+# Start local fork first
+just fork
+
+# Deploy oracle to development network
+MODE=LOCAL NETWORK=sepolia just deploy-oracle
 ```
+
+### Network Selection
+
+The deployment script maps network names as follows:
+
+- `NETWORK=sepolia` → deploys to `arbitrumsepolia` (Arbitrum Sepolia testnet)
+- `NETWORK=arbitrum` → deploys to `arbitrumone` (Arbitrum One mainnet)
+- `NETWORK=ethsepolia` → deploys to `sepolia` (Ethereum Sepolia testnet)
+- `MODE=LOCAL` → deploys to `development` (local Hardhat node)
 
 ### How It Works
 
-The deployment script (`deploy.sh`) performs the following steps:
+The `just deploy-oracle` command performs the following steps:
 
-1. **Configuration Setup**: Copies the custom Hardhat configuration (`hardhat.custom.config.ts`) into the `lib/oracle` submodule directory, overriding the default configuration
-2. **Dependency Installation**: Installs required dependencies within the `lib/oracle` directory
-3. **Deployment Execution**: Runs Hardhat deployment with the specified network and deployment tags
-4. **Artifact Storage**: Saves deployment artifacts to `deployments/oracle_deployments/<chain>/`
+1. **Configuration Setup**: Copies the custom Hardhat configuration (`hardhat.custom.config.ts`) into the `lib/oracle` submodule directory as `hardhat.fiet.config.ts`
+2. **Network Mapping**: Maps the Fiet protocol network names to oracle network names
+3. **Deployment Execution**: Changes directory to `lib/oracle` and runs Hardhat deployment with the specified network and `--tags deploy --reset` flags
+4. **Artifact Storage**: Saves deployment artifacts to `deployments/oracle_deployments/<network>/`
 
 ### Custom Configuration
 
 The custom Hardhat configuration (`hardhat.custom.config.ts`) provides:
 
 - **Custom Deployment Paths**: Deployment artifacts are stored in `deployments/oracle_deployments/` instead of the default oracle repository location
-- **Environment Variable Loading**: Loads environment variables from the project root `.env` file
+- **Environment Variable Loading**: Loads environment variables from the project root `.env` file (`contracts/evm/.env`)
 - **Network Configuration**: Configures RPC URLs, chain IDs, and account management for supported networks
 - **Etherscan Integration**: Enables contract verification on supported networks
+- **External Dependencies**: Points to `node_modules` in the parent directory (`contracts/evm/node_modules`) for accessing Venus Protocol dependencies
+- **Hardhat Deploy Ethers**: Includes `hardhat-deploy-ethers` plugin for contract interaction utilities
 
 ## Integration with Protocol Deployment
 
@@ -107,4 +136,7 @@ The deployment script uses environment variables from the project root `.env` fi
 - The `--reset` flag is used by default to force fresh deployments and bypass cache
 - The deployment uses the `--tags deploy` flag to execute only tagged deployment scripts
 - Ensure the oracle git submodule is initialised via Forge (`forge install`) and up to date before deployment (located at `contracts/evm/lib/oracle`)
+- Dependencies must be installed from `contracts/evm/` root directory, not from within `lib/oracle/`
+- The custom config file (`hardhat.fiet.config.ts`) is automatically generated in `lib/oracle/` during deployment and is gitignored
 - For production deployments, verify all contract addresses and configuration parameters
+- The deployment runs from within `lib/oracle/` directory to ensure correct relative imports in deployment scripts
