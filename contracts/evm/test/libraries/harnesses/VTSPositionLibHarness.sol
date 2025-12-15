@@ -76,14 +76,18 @@ contract VTSPositionLibHarness {
 
     // ============ Storage Getters (for assertions) ============
 
-    function getPositionAccounting(PositionId id) external view returns (
-        uint256 commitmentMax0,
-        uint256 commitmentMax1,
-        uint256 settled0,
-        uint256 settled1,
-        uint256 cumulativeDeficit0,
-        uint256 cumulativeDeficit1
-    ) {
+    function getPositionAccounting(PositionId id)
+        external
+        view
+        returns (
+            uint256 commitmentMax0,
+            uint256 commitmentMax1,
+            uint256 settled0,
+            uint256 settled1,
+            uint256 cumulativeDeficit0,
+            uint256 cumulativeDeficit1
+        )
+    {
         return (
             s.positionAccounting[id].commitmentMax.token0,
             s.positionAccounting[id].commitmentMax.token1,
@@ -99,10 +103,7 @@ contract VTSPositionLibHarness {
     }
 
     function getCommitmentDeficit(PositionId id) external view returns (uint256 cd0, uint256 cd1) {
-        return (
-            s.positionAccounting[id].commitmentDeficit.token0,
-            s.positionAccounting[id].commitmentDeficit.token1
-        );
+        return (s.positionAccounting[id].commitmentDeficit.token0, s.positionAccounting[id].commitmentDeficit.token1);
     }
 
     function getNetSettlementSinceLastMod(PositionId id) external view returns (int256 net0, int256 net1) {
@@ -113,17 +114,12 @@ contract VTSPositionLibHarness {
     }
 
     function getPoolNetSinceLastMod(PoolId poolId) external view returns (uint256 net0, uint256 net1) {
-        return (
-            s.poolAccounting[poolId].poolNetSinceLastMod.token0,
-            s.poolAccounting[poolId].poolNetSinceLastMod.token1
-        );
+        return
+            (s.poolAccounting[poolId].poolNetSinceLastMod.token0, s.poolAccounting[poolId].poolNetSinceLastMod.token1);
     }
 
     function getGlobalDeficit(PoolId poolId) external view returns (uint256 d0, uint256 d1) {
-        return (
-            s.poolAccounting[poolId].globalDeficit.token0,
-            s.poolAccounting[poolId].globalDeficit.token1
-        );
+        return (s.poolAccounting[poolId].globalDeficit.token0, s.poolAccounting[poolId].globalDeficit.token1);
     }
 
     // ============ Storage Setters (for test setup) ============

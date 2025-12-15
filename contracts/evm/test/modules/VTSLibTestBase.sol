@@ -32,13 +32,13 @@ abstract contract VTSLibTestBase is MarketTestBase {
     using StateLibrary for IPoolManager;
 
     // ============ Default Test Values ============
-    
+
     address internal constant DEFAULT_OWNER = address(0xBEEF);
     int24 internal constant DEFAULT_TICK_LOWER = -600;
     int24 internal constant DEFAULT_TICK_UPPER = 600;
     uint128 internal constant DEFAULT_LIQUIDITY = 1000e18;
     bytes32 internal constant DEFAULT_SALT = bytes32(uint256(0));
-    
+
     // Default VTS configuration
     uint256 internal constant DEFAULT_GRACE_PERIOD = 1 hours;
     uint256 internal constant DEFAULT_SEIZURE_UNLOCK = 24 hours;
@@ -64,7 +64,7 @@ abstract contract VTSLibTestBase is MarketTestBase {
             baseVTSRate: DEFAULT_BASE_VTS_RATE,
             maxGracePeriodTime: DEFAULT_MAX_GRACE_PERIOD
         });
-        
+
         return MarketVTSConfiguration({
             token0: tokenConfig,
             token1: tokenConfig,
@@ -76,12 +76,11 @@ abstract contract VTSLibTestBase is MarketTestBase {
     // ============ Position Helpers ============
 
     /// @notice Generates a position ID from parameters
-    function _generatePositionId(
-        address owner,
-        int24 tickLower,
-        int24 tickUpper,
-        bytes32 salt
-    ) internal pure returns (PositionId) {
+    function _generatePositionId(address owner, int24 tickLower, int24 tickUpper, bytes32 salt)
+        internal
+        pure
+        returns (PositionId)
+    {
         ModifyLiquidityParams memory params = ModifyLiquidityParams({
             tickLower: tickLower,
             tickUpper: tickUpper,

@@ -82,38 +82,24 @@ contract VTSFeeLibHarness {
     // ============ Storage Getters (for assertions) ============
 
     function getPendingFeeAdj(PositionId id) external view returns (int256 adj0, int256 adj1) {
-        return (
-            s.positionAccounting[id].pendingFeeAdj.token0,
-            s.positionAccounting[id].pendingFeeAdj.token1
-        );
+        return (s.positionAccounting[id].pendingFeeAdj.token0, s.positionAccounting[id].pendingFeeAdj.token1);
     }
 
     function getLastFundedPendingAdj(PositionId id) external view returns (int256 adj0, int256 adj1) {
-        return (
-            s.positionAccounting[id].lastFundedPendingAdj.token0,
-            s.positionAccounting[id].lastFundedPendingAdj.token1
-        );
+        return
+            (s.positionAccounting[id].lastFundedPendingAdj.token0, s.positionAccounting[id].lastFundedPendingAdj.token1);
     }
 
     function getSlashedPot(PoolId poolId) external view returns (uint256 pot0, uint256 pot1) {
-        return (
-            s.poolAccounting[poolId].slashedPot.token0,
-            s.poolAccounting[poolId].slashedPot.token1
-        );
+        return (s.poolAccounting[poolId].slashedPot.token0, s.poolAccounting[poolId].slashedPot.token1);
     }
 
     function getProtocolFeeAccrued(PoolId poolId) external view returns (uint256 fee0, uint256 fee1) {
-        return (
-            s.poolAccounting[poolId].protocolFeeAccrued.token0,
-            s.poolAccounting[poolId].protocolFeeAccrued.token1
-        );
+        return (s.poolAccounting[poolId].protocolFeeAccrued.token0, s.poolAccounting[poolId].protocolFeeAccrued.token1);
     }
 
     function getFeesShared(PositionId id) external view returns (uint256 fee0, uint256 fee1) {
-        return (
-            s.positionAccounting[id].feesShared.token0,
-            s.positionAccounting[id].feesShared.token1
-        );
+        return (s.positionAccounting[id].feesShared.token0, s.positionAccounting[id].feesShared.token1);
     }
 
     function getNetSettlementSinceLastMod(PositionId id) external view returns (int256 net0, int256 net1) {
@@ -124,10 +110,8 @@ contract VTSFeeLibHarness {
     }
 
     function getPoolNetSinceLastMod(PoolId poolId) external view returns (uint256 net0, uint256 net1) {
-        return (
-            s.poolAccounting[poolId].poolNetSinceLastMod.token0,
-            s.poolAccounting[poolId].poolNetSinceLastMod.token1
-        );
+        return
+            (s.poolAccounting[poolId].poolNetSinceLastMod.token0, s.poolAccounting[poolId].poolNetSinceLastMod.token1);
     }
 
     // ============ Storage Setters (for test setup) ============
@@ -154,10 +138,7 @@ contract VTSFeeLibHarness {
             isActive: true,
             salt: bytes32(0),
             checkpoint: RFSCheckpoint({
-                timeOfLastTransition: block.timestamp,
-                isOpen: false,
-                gracePeriodExtension0: 0,
-                gracePeriodExtension1: 0
+                timeOfLastTransition: block.timestamp, isOpen: false, gracePeriodExtension0: 0, gracePeriodExtension1: 0
             })
         });
     }

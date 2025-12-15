@@ -22,26 +22,20 @@ contract VTSPositionLibTest is VTSLibTestBase {
         super.setUp();
         harness = new VTSPositionLibHarness();
         testPoolId = PoolId.wrap(bytes32(uint256(0xDEAD)));
-        
+
         // Setup default pool in harness
         harness.setupPool(testPoolId, _createDefaultVTSConfig());
     }
 
     /// @notice Helper to register a position in harness and return its ID
-    function _registerHarnessPosition(
-        address owner,
-        int24 tickLower,
-        int24 tickUpper,
-        uint128 liquidity,
-        bytes32 salt
-    ) internal returns (PositionId positionId) {
+    function _registerHarnessPosition(address owner, int24 tickLower, int24 tickUpper, uint128 liquidity, bytes32 salt)
+        internal
+        returns (PositionId positionId)
+    {
         ModifyLiquidityParams memory params = ModifyLiquidityParams({
-            tickLower: tickLower,
-            tickUpper: tickUpper,
-            liquidityDelta: int256(uint256(liquidity)),
-            salt: salt
+            tickLower: tickLower, tickUpper: tickUpper, liquidityDelta: int256(uint256(liquidity)), salt: salt
         });
-        
+
         harness.registerPosition(owner, testPoolId, params);
         positionId = PositionLibrary.generateId(owner, params);
     }
@@ -49,11 +43,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
     /// @notice Helper to register default position
     function _registerDefaultPosition() internal returns (PositionId) {
         return _registerHarnessPosition(
-            DEFAULT_OWNER,
-            DEFAULT_TICK_LOWER,
-            DEFAULT_TICK_UPPER,
-            DEFAULT_LIQUIDITY,
-            DEFAULT_SALT
+            DEFAULT_OWNER, DEFAULT_TICK_LOWER, DEFAULT_TICK_UPPER, DEFAULT_LIQUIDITY, DEFAULT_SALT
         );
     }
 
@@ -71,9 +61,8 @@ contract VTSPositionLibTest is VTSLibTestBase {
             salt: DEFAULT_SALT
         });
 
-        (uint256 expectedC0, uint256 expectedC1) = LiquidityUtils.calculateCommitmentMaxima(
-            DEFAULT_TICK_LOWER, DEFAULT_TICK_UPPER, DEFAULT_LIQUIDITY
-        );
+        (uint256 expectedC0, uint256 expectedC1) =
+            LiquidityUtils.calculateCommitmentMaxima(DEFAULT_TICK_LOWER, DEFAULT_TICK_UPPER, DEFAULT_LIQUIDITY);
 
         harness.trackCommitment(positionId, params);
 
@@ -84,7 +73,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
     function test_trackCommitment_removesLiquidity_decreasesCommitmentMax() public {
         PositionId positionId = _registerDefaultPosition();
-        
+
         uint256 initialC0 = 1000e18;
         uint256 initialC1 = 1000e18;
         harness.setCommitmentMax(positionId, initialC0, initialC1);
@@ -97,9 +86,8 @@ contract VTSPositionLibTest is VTSLibTestBase {
             salt: DEFAULT_SALT
         });
 
-        (uint256 subC0, uint256 subC1) = LiquidityUtils.calculateCommitmentMaxima(
-            DEFAULT_TICK_LOWER, DEFAULT_TICK_UPPER, liquidityToRemove
-        );
+        (uint256 subC0, uint256 subC1) =
+            LiquidityUtils.calculateCommitmentMaxima(DEFAULT_TICK_LOWER, DEFAULT_TICK_UPPER, liquidityToRemove);
 
         harness.trackCommitment(positionId, params);
 
@@ -110,7 +98,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
     function test_trackCommitment_fullRemoval_resetsToZero() public {
         PositionId positionId = _registerDefaultPosition();
-        
+
         // First add liquidity
         ModifyLiquidityParams memory addParams = ModifyLiquidityParams({
             tickLower: DEFAULT_TICK_LOWER,
@@ -154,7 +142,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
     function test_trackCommitment_partialRemoval_clampsToZero() public {
         PositionId positionId = _registerDefaultPosition();
-        
+
         // Set initial commitment less than what we're removing
         harness.setCommitmentMax(positionId, 100e18, 100e18);
 
@@ -179,7 +167,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
     function test_updateSettlement_positiveDeposit_increasesSettled() public {
         PositionId positionId = _registerDefaultPosition();
-        
+
         harness.setCommitmentMax(positionId, 1000e18, 0);
         harness.setSettled(positionId, 100e18, 0);
         harness.setNetSettlementSinceLastMod(positionId, 0, 0);
@@ -193,7 +181,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
     function test_updateSettlement_netsAgainstDeficitFirst() public {
         PositionId positionId = _registerDefaultPosition();
-        
+
         harness.setCommitmentMax(positionId, 1000e18, 0);
         harness.setCumulativeDeficit(positionId, 100e18, 0);
         harness.setSettled(positionId, 0, 0);
@@ -205,7 +193,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
         (,, uint256 settled0,, uint256 deficit0,) = harness.getPositionAccounting(positionId);
         (uint256 globalDeficit0,) = harness.getGlobalDeficit(testPoolId);
-        
+
         assertEq(deficit0, 0, "deficit should be netted to zero");
         assertEq(globalDeficit0, 0, "global deficit should be netted to zero");
         assertEq(settled0, 50e18, "remaining should be credited to settled");
@@ -214,7 +202,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
     function test_updateSettlement_netsAgainstCommitmentDeficit() public {
         PositionId positionId = _registerDefaultPosition();
-        
+
         harness.setCommitmentMax(positionId, 1000e18, 0);
         harness.setCumulativeDeficit(positionId, 0, 0);
         harness.setCommitmentDeficit(positionId, 50e18, 0);
@@ -226,7 +214,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
         (uint256 cd0,) = harness.getCommitmentDeficit(positionId);
         (,, uint256 settled0,,,) = harness.getPositionAccounting(positionId);
-        
+
         assertEq(cd0, 0, "commitment deficit should be netted");
         assertEq(settled0, 50e18, "remaining should be credited to settled");
         assertEq(applied, 50e18, "applied should be net of commitment deficit");
@@ -234,7 +222,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
     function test_updateSettlement_clampsToCommitmentMax() public {
         PositionId positionId = _registerDefaultPosition();
-        
+
         harness.setCommitmentMax(positionId, 100e18, 0);
         harness.setSettled(positionId, 90e18, 0);
         harness.setNetSettlementSinceLastMod(positionId, 0, 0);
@@ -249,7 +237,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
     function test_updateSettlement_negativeWithdrawal_decreasesSettled() public {
         PositionId positionId = _registerDefaultPosition();
-        
+
         harness.setCommitmentMax(positionId, 1000e18, 0);
         harness.setSettled(positionId, 100e18, 0);
         harness.setNetSettlementSinceLastMod(positionId, 0, 0);
@@ -264,7 +252,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
     function test_updateSettlement_withdrawal_neverCreatesDeficit() public {
         PositionId positionId = _registerDefaultPosition();
-        
+
         harness.setCommitmentMax(positionId, 1000e18, 0);
         harness.setSettled(positionId, 50e18, 0);
         harness.setNetSettlementSinceLastMod(positionId, 0, 0);
@@ -281,7 +269,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
     function test_updateSettlement_zeroDelta_noOp() public {
         PositionId positionId = _registerDefaultPosition();
-        
+
         harness.setCommitmentMax(positionId, 1000e18, 0);
         harness.setSettled(positionId, 100e18, 0);
         harness.setNetSettlementSinceLastMod(positionId, 0, 0);
@@ -300,7 +288,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
     function test_getRFS_fullySettled_returnsClosed() public {
         PositionId positionId = _registerDefaultPosition();
-        
+
         harness.setCommitmentMax(positionId, 1000e18, 1000e18);
         // Base VTS rate is 5% (500 bps), so base requirement is 50e18
         harness.setSettled(positionId, 50e18, 50e18);
@@ -313,7 +301,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
     function test_getRFS_underSettled_returnsOpen() public {
         PositionId positionId = _registerDefaultPosition();
-        
+
         harness.setCommitmentMax(positionId, 1000e18, 1000e18);
         harness.setSettled(positionId, 10e18, 10e18); // Under base requirement
 
@@ -325,7 +313,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
     function test_getRFS_withDeficit_requiresMoreSettlement() public {
         PositionId positionId = _registerDefaultPosition();
-        
+
         harness.setCommitmentMax(positionId, 1000e18, 1000e18);
         harness.setSettled(positionId, 50e18, 50e18); // Base met
         harness.setCumulativeDeficit(positionId, 100e18, 0); // But deficit exists
@@ -338,7 +326,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
     function test_getRFS_withCommitmentDeficit_inflatesRequirement() public {
         PositionId positionId = _registerDefaultPosition();
-        
+
         harness.setCommitmentMax(positionId, 1000e18, 1000e18);
         harness.setSettled(positionId, 50e18, 50e18); // Base met
         harness.setCommitmentDeficit(positionId, 50e18, 0); // Insolvency gate
@@ -355,7 +343,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
     function test_getVTSCurrent_calculatesRatioCorrectly() public {
         PositionId positionId = _registerDefaultPosition();
-        
+
         harness.setCommitmentMax(positionId, 1000e18, 2000e18);
         harness.setSettled(positionId, 500e18, 1000e18);
 
@@ -367,7 +355,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
     function test_getVTSCurrent_zeroCommitment_returnsZero() public {
         PositionId positionId = _registerDefaultPosition();
-        
+
         harness.setCommitmentMax(positionId, 0, 1000e18);
         harness.setSettled(positionId, 100e18, 500e18);
 
@@ -379,7 +367,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
     function test_getVTSCurrent_fullSettlement_returnsOne() public {
         PositionId positionId = _registerDefaultPosition();
-        
+
         harness.setCommitmentMax(positionId, 1000e18, 1000e18);
         harness.setSettled(positionId, 1000e18, 1000e18);
 
@@ -395,7 +383,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
     function test_getVTSRequired_calculatesDeficitRatio() public {
         PositionId positionId = _registerDefaultPosition();
-        
+
         harness.setCommitmentMax(positionId, 1000e18, 2000e18);
         harness.setCumulativeDeficit(positionId, 500e18, 1000e18);
 
@@ -407,7 +395,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
     function test_getVTSRequired_deficitExceedsCommitment_returnsOne() public {
         PositionId positionId = _registerDefaultPosition();
-        
+
         harness.setCommitmentMax(positionId, 1000e18, 1000e18);
         harness.setCumulativeDeficit(positionId, 1500e18, 0); // Exceeds commitment
 
@@ -433,7 +421,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
         PositionId expectedId = PositionLibrary.generateId(owner, params);
         Position memory pos = harness.getPosition(expectedId);
-        
+
         assertEq(pos.owner, owner, "Position owner should match");
         assertEq(PoolId.unwrap(pos.poolId), PoolId.unwrap(testPoolId), "Pool ID should match");
         assertEq(pos.tickLower, DEFAULT_TICK_LOWER, "Tick lower should match");
@@ -454,7 +442,9 @@ contract VTSPositionLibTest is VTSLibTestBase {
         harness.registerPosition(owner, testPoolId, params);
 
         // Try to register again
-        vm.expectRevert(abi.encodeWithSelector(Errors.AlreadyRegistered.selector, PositionLibrary.generateId(owner, params)));
+        vm.expectRevert(
+            abi.encodeWithSelector(Errors.AlreadyRegistered.selector, PositionLibrary.generateId(owner, params))
+        );
         harness.registerPosition(owner, testPoolId, params);
     }
 
@@ -474,19 +464,13 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
         // Add liquidity
         ModifyLiquidityParams memory addParams = ModifyLiquidityParams({
-            tickLower: tickLower,
-            tickUpper: tickUpper,
-            liquidityDelta: int256(uint256(liquidity)),
-            salt: DEFAULT_SALT
+            tickLower: tickLower, tickUpper: tickUpper, liquidityDelta: int256(uint256(liquidity)), salt: DEFAULT_SALT
         });
         harness.trackCommitment(positionId, addParams);
 
         // Remove same liquidity
         ModifyLiquidityParams memory removeParams = ModifyLiquidityParams({
-            tickLower: tickLower,
-            tickUpper: tickUpper,
-            liquidityDelta: -int256(uint256(liquidity)),
-            salt: DEFAULT_SALT
+            tickLower: tickLower, tickUpper: tickUpper, liquidityDelta: -int256(uint256(liquidity)), salt: DEFAULT_SALT
         });
         harness.trackCommitment(positionId, removeParams);
 
@@ -496,18 +480,16 @@ contract VTSPositionLibTest is VTSLibTestBase {
         assertEq(afterRemove1, 0, "Should return to zero after symmetric add/remove");
     }
 
-    function testFuzz_updateSettlement_neverExceedsCommitment(
-        uint256 commitment, 
-        uint256 initialSettled, 
-        int256 delta
-    ) public {
+    function testFuzz_updateSettlement_neverExceedsCommitment(uint256 commitment, uint256 initialSettled, int256 delta)
+        public
+    {
         // Bound inputs
         commitment = bound(commitment, 1, type(uint128).max);
         initialSettled = bound(initialSettled, 0, commitment);
         delta = bound(delta, -int256(commitment), int256(commitment));
 
         PositionId positionId = _registerDefaultPosition();
-        
+
         harness.setCommitmentMax(positionId, commitment, 0);
         harness.setSettled(positionId, initialSettled, 0);
         harness.setNetSettlementSinceLastMod(positionId, 0, 0);
@@ -525,7 +507,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
         settled = bound(settled, 0, commitment);
 
         PositionId positionId = _registerDefaultPosition();
-        
+
         harness.setCommitmentMax(positionId, commitment, 0);
         harness.setSettled(positionId, settled, 0);
 
