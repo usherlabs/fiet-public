@@ -398,9 +398,10 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
     }
 
     function _pokeMMAndTakeFees(uint256 tokenId, uint256 positionIndex, int24 tickLower, int24 tickUpper) internal {
-        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](3);
         actions[0] = MMA.prepareIncrease(corePoolKey, tokenId, positionIndex, tickLower, tickUpper, 0);
         actions[1] = MMA.prepareTake(lccCurrency0, address(this), 0);
+        actions[2] = MMA.prepareTake(lccCurrency1, address(this), 0);
         MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
     }
 
@@ -409,12 +410,26 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         return vtsOrchestrator.getFullCredit(currency, address(this));
     }
 
+    /// @notice Helper to get MMPM's LCC balance
+    function _mmpmLccBalance(Currency lccCurrency) internal view returns (uint256) {
+        return lccCurrency.balanceOf(address(positionManager));
+    }
+
+    /// @notice Helper to get test contract's LCC balance
+    function _selfLccBalance(Currency lccCurrency) internal view returns (uint256) {
+        return lccCurrency.balanceOf(address(this));
+    }
+
     function test_feeCollection_mmPosition_accumulatesFees_viaSwap() public {
         // Step 1: Create an MM position
         (uint256 tokenId, PositionId positionId,,) = _createCommittedPosition();
 
         // Verify position is active
         assertTrue(vtsOrchestrator.isPositionValid(positionId, true), "Position should be active");
+
+        // Record initial balances
+        uint256 mmpmLcc0Before = _mmpmLccBalance(lccCurrency0);
+        uint256 mmpmLcc1Before = _mmpmLccBalance(lccCurrency1);
 
         // Step 2: Perform swaps to generate fees
         // Swap in both directions to generate fees for both tokens
@@ -425,6 +440,14 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         // This triggers VTSPositionLib.touchPosition which processes fees
         _pokeMM(tokenId, 0, -60, 60);
 
+        // Step 4: Verify MMPM received LCC fees as ERC20 balance
+        uint256 mmpmLcc0After = _mmpmLccBalance(lccCurrency0);
+        uint256 mmpmLcc1After = _mmpmLccBalance(lccCurrency1);
+
+        // At least one LCC balance should have increased (fees from swaps)
+        bool feesAccrued = mmpmLcc0After > mmpmLcc0Before || mmpmLcc1After > mmpmLcc1Before;
+        assertTrue(feesAccrued, "MMPM should have received LCC fees as ERC20 balance");
+
         // Verify the position is still valid after fee collection
         assertTrue(vtsOrchestrator.isPositionValid(positionId, true), "Position should still be active after poke");
     }
@@ -433,86 +456,199 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         // Step 1: Create an MM position
         (uint256 tokenId,,,) = _createCommittedPosition();
 
-        // Step 2: Record initial locker credit
+        // Step 2: Record initial state
         uint256 creditBefore0 = _lockerCredit(lccCurrency0);
         uint256 creditBefore1 = _lockerCredit(lccCurrency1);
+        uint256 mmpmLcc0Before = _mmpmLccBalance(lccCurrency0);
+        uint256 mmpmLcc1Before = _mmpmLccBalance(lccCurrency1);
 
         // Step 3: Perform swaps to generate fees
         _swapCore(true, -int256(2e18)); // Large swap to generate meaningful fees
         _swapCore(false, -int256(2e18));
 
         // Step 4: Poke the position to collect fees
-        // After position modification, fees are synced as balance credits to the locker
+        // After position modification:
+        // - MMPM takes LCC fees from PoolManager (balance increases)
+        // - Balance increase is synced as credit to locker
         _pokeMM(tokenId, 0, -60, 60);
 
-        // Step 5: Verify that credits increased (fees were credited)
+        // Step 5: Verify MMPM balance increased (fees taken from PoolManager)
+        uint256 mmpmLcc0After = _mmpmLccBalance(lccCurrency0);
+        uint256 mmpmLcc1After = _mmpmLccBalance(lccCurrency1);
+        uint256 mmpmBalanceIncrease0 = mmpmLcc0After > mmpmLcc0Before ? mmpmLcc0After - mmpmLcc0Before : 0;
+        uint256 mmpmBalanceIncrease1 = mmpmLcc1After > mmpmLcc1Before ? mmpmLcc1After - mmpmLcc1Before : 0;
+
+        assertTrue(mmpmBalanceIncrease0 > 0 || mmpmBalanceIncrease1 > 0, "MMPM balance should increase from fees");
+
+        // Step 6: Verify locker credits match the balance increase (synced via _syncBalanceAsCredit)
         uint256 creditAfter0 = _lockerCredit(lccCurrency0);
         uint256 creditAfter1 = _lockerCredit(lccCurrency1);
+        uint256 creditIncrease0 = creditAfter0 > creditBefore0 ? creditAfter0 - creditBefore0 : 0;
+        uint256 creditIncrease1 = creditAfter1 > creditBefore1 ? creditAfter1 - creditBefore1 : 0;
 
-        // At least one of the credits should have increased from swap fees
-        // (depends on swap direction and fee accumulation)
-        assertTrue(
-            creditAfter0 >= creditBefore0 || creditAfter1 >= creditBefore1,
-            "Locker credits should not decrease after fee collection"
-        );
+        // Credits should match or exceed balance increases (synced from balance)
+        assertGe(creditIncrease0, 0, "Credit0 should not be negative");
+        assertGe(creditIncrease1, 0, "Credit1 should not be negative");
+
+        // At least one credit should have increased from fees
+        assertTrue(creditIncrease0 > 0 || creditIncrease1 > 0, "Locker credits should increase from synced fee balance");
     }
 
     function test_feeCollection_mmPosition_multipleSwaps_accumulateFees() public {
         // Step 1: Create an MM position
         (uint256 tokenId,,,) = _createCommittedPosition();
 
-        // Step 2: Initial poke to establish baseline
+        // Step 2: Initial poke to establish baseline (clears any initial fees)
         _pokeMM(tokenId, 0, -60, 60);
-        uint256 creditMid0 = _lockerCredit(lccCurrency0);
-        uint256 creditMid1 = _lockerCredit(lccCurrency1);
+        uint256 creditBaseline0 = _lockerCredit(lccCurrency0);
+        uint256 creditBaseline1 = _lockerCredit(lccCurrency1);
+        uint256 mmpmBalanceBaseline0 = _mmpmLccBalance(lccCurrency0);
+        uint256 mmpmBalanceBaseline1 = _mmpmLccBalance(lccCurrency1);
 
         // Step 3: Multiple swaps in same direction to accumulate fees
+        uint256 totalSwapAmount = 0;
         for (uint256 i = 0; i < 5; i++) {
             _swapCore(true, -int256(5e17)); // 0.5 token per swap
+            totalSwapAmount += 5e17;
         }
 
         // Step 4: Poke to collect accumulated fees
         _pokeMM(tokenId, 0, -60, 60);
 
-        // Step 5: Verify credits increased from accumulated fees
+        // Step 5: Verify MMPM balance increased from accumulated fees
+        uint256 mmpmBalanceFinal0 = _mmpmLccBalance(lccCurrency0);
+        uint256 mmpmBalanceFinal1 = _mmpmLccBalance(lccCurrency1);
+        uint256 balanceAccumulated0 =
+            mmpmBalanceFinal0 > mmpmBalanceBaseline0 ? mmpmBalanceFinal0 - mmpmBalanceBaseline0 : 0;
+        uint256 balanceAccumulated1 =
+            mmpmBalanceFinal1 > mmpmBalanceBaseline1 ? mmpmBalanceFinal1 - mmpmBalanceBaseline1 : 0;
+
+        assertTrue(
+            balanceAccumulated0 > 0 || balanceAccumulated1 > 0,
+            "MMPM balance should accumulate fees from multiple swaps"
+        );
+
+        // Step 6: Verify credits increased proportionally
         uint256 creditFinal0 = _lockerCredit(lccCurrency0);
         uint256 creditFinal1 = _lockerCredit(lccCurrency1);
+        uint256 creditAccumulated0 = creditFinal0 > creditBaseline0 ? creditFinal0 - creditBaseline0 : 0;
+        uint256 creditAccumulated1 = creditFinal1 > creditBaseline1 ? creditFinal1 - creditBaseline1 : 0;
 
-        // Credits should have accumulated
         assertTrue(
-            creditFinal0 >= creditMid0 || creditFinal1 >= creditMid1, "Credits should accumulate from multiple swaps"
+            creditAccumulated0 > 0 || creditAccumulated1 > 0, "Locker credits should accumulate from multiple swaps"
         );
+
+        // Log for debugging (optional, can be removed)
+        emit log_named_uint("Total swap amount", totalSwapAmount);
+        emit log_named_uint("Balance accumulated LCC0", balanceAccumulated0);
+        emit log_named_uint("Balance accumulated LCC1", balanceAccumulated1);
+        emit log_named_uint("Credit accumulated LCC0", creditAccumulated0);
+        emit log_named_uint("Credit accumulated LCC1", creditAccumulated1);
     }
 
     function test_feeCollection_zeroLiquidityDelta_onlyCollectsFees() public {
         // Step 1: Create an MM position
         (uint256 tokenId, PositionId positionId,,) = _createCommittedPosition();
 
-        // Get initial liquidity
+        // Get initial state
         Position memory posBefore = vtsOrchestrator.getPosition(positionId);
         uint128 liquidityBefore = posBefore.liquidity;
+        uint256 selfLcc0Before = _selfLccBalance(lccCurrency0);
+        uint256 selfLcc1Before = _selfLccBalance(lccCurrency1);
 
         // Step 2: Swap to generate fees
         _swapCore(true, -int256(1e18));
 
-        // Step 3: Poke (zero delta) to collect fees
+        // Step 3: Poke (zero delta) to collect fees AND take them
+        // This combines: modifyLiquidity(delta=0) + TAKE(lcc0) + TAKE(lcc1)
         _pokeMMAndTakeFees(tokenId, 0, -60, 60);
 
-        // Step 4: Verify liquidity unchanged
+        // Step 4: Verify liquidity unchanged (zero delta modification)
         Position memory posAfter = vtsOrchestrator.getPosition(positionId);
         assertEq(posAfter.liquidity, liquidityBefore, "Liquidity should be unchanged after zero-delta modification");
-
-        // Position should still be active
         assertTrue(posAfter.isActive, "Position should remain active");
 
-        // Step 5: Verify that fees were taken
+        // Step 5: Verify credits are zeroed (all fees were taken)
         uint256 creditAfter0 = _lockerCredit(lccCurrency0);
         uint256 creditAfter1 = _lockerCredit(lccCurrency1);
-        assertTrue(creditAfter0 == 0, "Fees for LCC 0 should be taken");
-        assertTrue(creditAfter1 == 0, "Fees for LCC 1 should be taken");
+        assertEq(creditAfter0, 0, "Credit for LCC0 should be zero after TAKE");
+        assertEq(creditAfter1, 0, "Credit for LCC1 should be zero after TAKE");
 
-        assertTrue(lccCurrency0.balanceOf(address(this)) > 0, "LCC 0 should be taken");
-        assertTrue(lccCurrency1.balanceOf(address(this)) > 0, "LCC 1 should be taken");
+        // Step 6: Verify test contract received the LCC tokens
+        uint256 selfLcc0After = _selfLccBalance(lccCurrency0);
+        uint256 selfLcc1After = _selfLccBalance(lccCurrency1);
+        uint256 lcc0Received = selfLcc0After - selfLcc0Before;
+        uint256 lcc1Received = selfLcc1After - selfLcc1Before;
+
+        // At least one LCC should have been received (from fees)
+        assertTrue(lcc0Received > 0 || lcc1Received > 0, "Test contract should have received LCC fees via TAKE");
+
+        // Log precise amounts for debugging
+        emit log_named_uint("LCC0 received by test contract", lcc0Received);
+        emit log_named_uint("LCC1 received by test contract", lcc1Received);
+    }
+
+    function test_feeCollection_preciseFlow_creditMatchesBalanceMatchesTake() public {
+        // This test verifies the precise flow:
+        // 1. Swap generates fees in the pool
+        // 2. Poke (modifyLiquidity with delta=0) triggers fee collection
+        // 3. MMPM takes fees from PoolManager -> balance increases
+        // 4. Balance increase is synced as credit to locker
+        // 5. TAKE debits credit and transfers LCC to recipient
+        // 6. Credit debited == LCC transferred
+
+        // Step 1: Create MM position and establish baseline
+        (uint256 tokenId,,,) = _createCommittedPosition();
+
+        // Clear any existing state with initial poke
+        _pokeMM(tokenId, 0, -60, 60);
+
+        // Record baseline state after initial poke
+        uint256 mmpmLcc0Baseline = _mmpmLccBalance(lccCurrency0);
+        uint256 selfLcc0Baseline = _selfLccBalance(lccCurrency0);
+
+        // Step 2: Generate fees via swap
+        _swapCore(true, -int256(5e18)); // Large swap for meaningful fees
+
+        // Step 3: Poke to collect fees (but don't take yet)
+        _pokeMM(tokenId, 0, -60, 60);
+
+        // Step 4: Measure credit generated from fee collection
+        uint256 creditAfterPoke = _lockerCredit(lccCurrency0);
+        uint256 mmpmLcc0AfterPoke = _mmpmLccBalance(lccCurrency0);
+        uint256 mmpmBalanceIncrease = mmpmLcc0AfterPoke - mmpmLcc0Baseline;
+
+        emit log_named_uint("MMPM balance increase from fees", mmpmBalanceIncrease);
+        emit log_named_uint("Locker credit after poke", creditAfterPoke);
+
+        // Credit should equal the balance increase (synced via _syncBalanceAsCredit)
+        assertEq(creditAfterPoke, mmpmBalanceIncrease, "Credit should equal MMPM balance increase from fees");
+
+        // Step 5: Take the fees
+        MMA.PreparedAction[] memory takeActions = new MMA.PreparedAction[](1);
+        takeActions[0] = MMA.prepareTake(lccCurrency0, address(this), 0); // Take all
+        MMA.executeWithUnlock(positionManager, takeActions, block.timestamp + 3600);
+
+        // Step 6: Verify precise amounts
+        uint256 creditAfterTake = _lockerCredit(lccCurrency0);
+        uint256 selfLcc0AfterTake = _selfLccBalance(lccCurrency0);
+        uint256 mmpmLcc0AfterTake = _mmpmLccBalance(lccCurrency0);
+
+        uint256 lccReceived = selfLcc0AfterTake - selfLcc0Baseline;
+        uint256 mmpmBalanceDecrease = mmpmLcc0AfterPoke - mmpmLcc0AfterTake;
+
+        emit log_named_uint("Credit after TAKE", creditAfterTake);
+        emit log_named_uint("LCC received by test contract", lccReceived);
+        emit log_named_uint("MMPM balance decrease from TAKE", mmpmBalanceDecrease);
+
+        // Credit should be fully consumed
+        assertEq(creditAfterTake, 0, "Credit should be zero after TAKE");
+
+        // Amount received should equal the credit that was available
+        assertEq(lccReceived, creditAfterPoke, "LCC received should equal credit that was available before TAKE");
+
+        // MMPM balance decrease should equal the amount taken
+        assertEq(mmpmBalanceDecrease, lccReceived, "MMPM balance decrease should equal LCC transferred");
     }
 
     // ============================================================

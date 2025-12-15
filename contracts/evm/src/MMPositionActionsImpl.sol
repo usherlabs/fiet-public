@@ -550,6 +550,7 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
         _modifySyntheticLiquidity(poolKey, params, hookData);
 
         if (params.liquidityDelta < 0) {
+            // TODO: Clean this up.
             vtsOrchestrator.onDecreaseLiquidity(address(this), poolKey, params, hookData);
         }
     }
