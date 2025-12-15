@@ -12,7 +12,7 @@ ignored_error_codes = [
 solc_version = '0.8.26'
 evm_version = "cancun"   # hard fork that enabled EIP-1153
 gas_limit = "3000000000"
-fuzz_runs = 10_000
+# fuzz_runs = 10_000
 optimizer_runs = 20000
 # optimizer_runs = 44444444
 optimizer = true
@@ -25,6 +25,8 @@ fs_permissions = [
   { access = "read-write", path = "./deployments" },
   { access = "read-write", path = ".forge-snapshots/" },
   { access = "read", path = "out/" },
+  # Allow debug-mode NDJSON logging from tests via `vm.writeLine`.
+  { access = "read-write", path = "../../.cursor/" },
 ]
 
 remappings = ["@openzeppelin/=lib/openzeppelin-contracts/"]
@@ -46,7 +48,7 @@ remappings = ["@openzeppelin/=lib/openzeppelin-contracts/"]
 
 # The above compilation_restrictions and additional_compiler_profiles are not working as expected.
 # The real conflict is your Foundry “compilation restrictions” forcing different optimizer_runs for different source files that end up in the same compilation unit (your test imports them together).
-# TODO: VTSManager.t.sol import list includes both src/MMPositionManager.sol (30000 runs) and src/MMPCommitmentDescriptor.sol (1 run) (and MMPositionActionsImpl.sol at 30000), so Forge can’t compile that test in a single job
+# TODO: MarketTestBase.sol import list includes both src/MMPositionManager.sol (30000 runs) and src/MMPCommitmentDescriptor.sol (1 run) (and MMPositionActionsImpl.sol at 30000), so Forge can’t compile that test in a single job
 # We must split this up. MarketFactory overhaul should resolve this.
 
 [lint]
@@ -70,8 +72,8 @@ via_ir = false
 optimizer_runs = 200
 fuzz.runs = 100
 
-[profile.ci]
-fuzz_runs = 100_000
+# [profile.ci]
+# fuzz_runs = 100_000
 
 [rpc_endpoints]
 local = "${ANVIL_FORK_URL}"
