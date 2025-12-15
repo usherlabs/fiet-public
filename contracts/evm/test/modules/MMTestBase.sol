@@ -126,8 +126,8 @@ abstract contract MarketMakerTestBase is Test {
 
         // Add reserves
         state.reserves = new MarketMaker.Reserve[](2);
-        state.reserves[0] = MarketMaker.Reserve({source: "bybit", asset: "BTC", amount: 1e20});
-        state.reserves[1] = MarketMaker.Reserve({source: "bybit", asset: "USDT", amount: 5e18});
+        state.reserves[0] = MarketMaker.Reserve({asset: "BTC", amount: 1e20});
+        state.reserves[1] = MarketMaker.Reserve({asset: "USDT", amount: 5e18});
 
         return StatePayload({privateKey: privateKey, state: state});
     }
