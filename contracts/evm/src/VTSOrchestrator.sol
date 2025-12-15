@@ -471,7 +471,6 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
             VTSPositionLib.touchPosition(s, ctx, owner, poolKey, params, callerDelta, feesAccrued, hookData);
     }
 
-
     // called by the mmpm afer liquidity has been decreased
     function onDecreaseLiquidity(
         address owner,
@@ -479,8 +478,9 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
         ModifyLiquidityParams calldata params,
         bytes calldata hookData
     ) external onlyIfPoolManagerUnlocked {
-        IMarketFactory factory =
-            liquidityHub.getFactory(Currency.unwrap(poolKey.currency0), Currency.unwrap(poolKey.currency1));
+        IMarketFactory factory = liquidityHub.getFactory(
+            Currency.unwrap(poolKey.currency0), Currency.unwrap(poolKey.currency1)
+        );
         IMarketVault vault = MarketHandlerLib.getVault(factory, poolKey.toId());
         PositionContext memory ctx = PositionContext({
             poolManager: poolManager, liquidityHub: liquidityHub, oracleHelper: oracleHelper, marketVault: vault
@@ -495,7 +495,7 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
         address queueRecipient = PositionModificationHookDataLib.getLocker(mmData, owner);
 
         VTSPositionLib._handleLiquidityDecrease(
-            ctx,owner,poolKey,principalDelta, requiredSettlementDelta, queueRecipient
+            ctx, owner, poolKey, principalDelta, requiredSettlementDelta, queueRecipient
         );
     }
 

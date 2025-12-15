@@ -183,11 +183,8 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
 
         // test conditions to ensure that a position was committed and minted and settled to
         // for commitment testing:
-        (
-            MarketMaker.State memory mmState,
-            uint256 expiresAt,
-            uint256 positionCount
-        ) = vtsOrchestrator.getCommit(tokenId);
+        (MarketMaker.State memory mmState, uint256 expiresAt, uint256 positionCount) =
+            vtsOrchestrator.getCommit(tokenId);
         assertEq(mmState.owner, liquiditySignal.mmState.owner);
         assertEq(expiresAt, block.timestamp + 3600);
         assertEq(positionCount, 1);
@@ -196,46 +193,26 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         assertEq(positionManager.ownerOf(tokenId), address(this));
 
         // for minting testing:
-        (Position memory positionAfter, PositionId positionId) = positionManager.getPosition(
-            tokenId,
-            positionIndex
-        );
+        (Position memory positionAfter, PositionId positionId) = positionManager.getPosition(tokenId, positionIndex);
         assertEq(positionAfter.owner, address(positionManager));
-        assertEq(
-            PoolId.unwrap(positionAfter.poolId),
-            PoolId.unwrap(corePoolKey.toId())
-        );
+        assertEq(PoolId.unwrap(positionAfter.poolId), PoolId.unwrap(corePoolKey.toId()));
         assertEq(positionAfter.commitId, tokenId);
         assertEq(positionAfter.tickLower, defaultlLiquidityParams.tickLower);
         assertEq(positionAfter.tickUpper, defaultlLiquidityParams.tickUpper);
-        assertEq(
-            uint256(positionAfter.liquidity),
-            uint256(defaultlLiquidityParams.liquidityDelta)
-        );
+        assertEq(uint256(positionAfter.liquidity), uint256(defaultlLiquidityParams.liquidityDelta));
         assertEq(positionAfter.isActive, true);
 
-        (
-            uint256 vtsCurrent0AfterSettlement,
-            uint256 vtsCurrent1AfterSettlement
-        ) = vtsOrchestrator.calcVTSCurrent(positionId);
+        (uint256 vtsCurrent0AfterSettlement, uint256 vtsCurrent1AfterSettlement) =
+            vtsOrchestrator.calcVTSCurrent(positionId);
         console.log("vtsCurrent0AfterSettlement", vtsCurrent0AfterSettlement);
         console.log("vtsCurrent1AfterSettlement", vtsCurrent1AfterSettlement);
 
         // since we basically just made another settlement equal to the base vts, the vts should be doubled
-        uint256 vtsCurrent0AfterSettlementBips = (vtsCurrent0AfterSettlement *
-            10000) / 1e18;
-        uint256 vtsCurrent1AfterSettlementBips = (vtsCurrent1AfterSettlement *
-            10000) / 1e18;
+        uint256 vtsCurrent0AfterSettlementBips = (vtsCurrent0AfterSettlement * 10000) / 1e18;
+        uint256 vtsCurrent1AfterSettlementBips = (vtsCurrent1AfterSettlement * 10000) / 1e18;
 
-        assertEq(
-            vtsCurrent0AfterSettlementBips,
-            marketVTSConfiguration.token0.baseVTSRate
-        );
-        assertEq(
-            vtsCurrent1AfterSettlementBips,
-            marketVTSConfiguration.token1.baseVTSRate
-        );
-
+        assertEq(vtsCurrent0AfterSettlementBips, marketVTSConfiguration.token0.baseVTSRate);
+        assertEq(vtsCurrent1AfterSettlementBips, marketVTSConfiguration.token1.baseVTSRate);
     }
 
     function testCanBurnAndWithdrawCreatedPosition() public {
@@ -243,39 +220,21 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         uint256 positionIndex = 0;
 
         // create a new position with the default liquidity params and liquidity signal
-        createPosition(
-            defaultlLiquidityParams,
-            abi.encode(liquiditySignal),
-            tokenId,
-            positionIndex
-        );
+        createPosition(defaultlLiquidityParams, abi.encode(liquiditySignal), tokenId, positionIndex);
 
         // get underlying asset balance before burning a position
-        uint256 token0BalanceBefore = Currency
-            .wrap(lcc0.underlying())
-            .balanceOf(address(this));
-        uint256 token1BalanceBefore = Currency
-            .wrap(lcc1.underlying())
-            .balanceOf(address(this));
+        uint256 token0BalanceBefore = Currency.wrap(lcc0.underlying()).balanceOf(address(this));
+        uint256 token1BalanceBefore = Currency.wrap(lcc1.underlying()).balanceOf(address(this));
 
         // Batch burn and withdraw from the position
         MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
         actions[0] = MMA.prepareBurn(corePoolKey, tokenId, positionIndex);
-        actions[1] = MMA.prepareSettleFromDeltas(
-            corePoolKey,
-            tokenId,
-            0,
-            true
-        );
+        actions[1] = MMA.prepareSettleFromDeltas(corePoolKey, tokenId, 0, true);
         MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
 
         // get the underlying asset balance after burning a position
-        uint256 token0BalanceAfter = Currency.wrap(lcc0.underlying()).balanceOf(
-            address(this)
-        );
-        uint256 token1BalanceAfter = Currency.wrap(lcc1.underlying()).balanceOf(
-            address(this)
-        );
+        uint256 token0BalanceAfter = Currency.wrap(lcc0.underlying()).balanceOf(address(this));
+        uint256 token1BalanceAfter = Currency.wrap(lcc1.underlying()).balanceOf(address(this));
 
         console.log("token0BalanceBefore", token0BalanceBefore);
         console.log("token0BalanceAfter ", token0BalanceAfter);

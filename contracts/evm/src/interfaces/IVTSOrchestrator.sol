@@ -284,7 +284,6 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta {
         external
         returns (uint256 collected);
 
-
     /// @notice Called by the PositionManagerImpl after decreasing liquidity from the pool
     /// @param owner The owner of the position
     /// @param poolKey The pool key

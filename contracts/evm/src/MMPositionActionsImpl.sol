@@ -539,11 +539,14 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
             salt: salt
         });
 
-
         _modifySyntheticLiquidityInternal(poolKey, params, hookData);
     }
 
-    function _modifySyntheticLiquidityInternal(PoolKey calldata poolKey, ModifyLiquidityParams memory params, bytes memory hookData) internal {
+    function _modifySyntheticLiquidityInternal(
+        PoolKey calldata poolKey,
+        ModifyLiquidityParams memory params,
+        bytes memory hookData
+    ) internal {
         _modifySyntheticLiquidity(poolKey, params, hookData);
 
         if (params.liquidityDelta < 0) {

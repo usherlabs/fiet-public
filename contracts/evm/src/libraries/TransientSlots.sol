@@ -46,7 +46,11 @@ library TransientSlots {
     // ------------------------------
     // Liquidity helpers
     // ------------------------------
-    function _computePositionDynamicSlot(PositionId positionId, bytes32 namespaceSlot) internal pure returns (bytes32 hashSlot) {
+    function _computePositionDynamicSlot(PositionId positionId, bytes32 namespaceSlot)
+        internal
+        pure
+        returns (bytes32 hashSlot)
+    {
         bytes32 key = PositionId.unwrap(positionId);
         hashSlot = keccak256(abi.encodePacked(namespaceSlot, key));
     }
