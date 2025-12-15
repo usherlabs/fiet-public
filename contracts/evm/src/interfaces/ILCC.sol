@@ -8,9 +8,4 @@ interface ILCC is IERC20 {
 
     function underlying() external view returns (address);
     function balancesOf(address account) external view returns (uint256 wrapped, uint256 marketDerived);
-
-    // ============ Safe Transfer Methods ============
-
-    function safeTransfer(address to, uint256 amount) external returns (bool);
-    function safeTransferFrom(address from, address to, uint256 amount) external returns (bool);
 }
