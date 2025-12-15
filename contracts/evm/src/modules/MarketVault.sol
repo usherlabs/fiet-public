@@ -506,4 +506,19 @@ abstract contract MarketVault is IMarketVault, ImmutableState, ImmutableMarketSt
 
         return usedDelta;
     }
+
+    /**
+     * @notice Receives native ETH transfers from LiquidityHub
+     * @dev This function is called when LiquidityHub::prepareSettle() transfers native ETH
+     *      to this MarketVault during settlement operations. The ETH is expected to be
+     *      immediately used in _settleUnderlyingToVaultFromSender() via CurrencySettler.
+     *      Only accepts transfers from LiquidityHub to prevent accidental ETH deposits.
+     */
+    receive() external payable {
+        // Only accept ETH from LiquidityHub during prepareSettle operations
+        // Only accept ETH from PoolManager when taking to settle to LiquidityHub
+        if (msg.sender != address(liquidityHub) && msg.sender != address(poolManager)) {
+            revert Errors.InvalidEthSender();
+        }
+    }
 }
