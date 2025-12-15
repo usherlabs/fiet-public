@@ -33,11 +33,9 @@ import {Errors} from "../libraries/Errors.sol";
 import {ReentrancyGuardTransient} from "openzeppelin-contracts/contracts/utils/ReentrancyGuardTransient.sol";
 import {ImmutableState} from "v4-periphery/src/base/ImmutableState.sol";
 import {ImmutableMarketState} from "./ImmutableMarketState.sol";
-import {LccSafeTransfer} from "../libraries/LccSafeTransfer.sol";
 
 abstract contract MarketVault is IMarketVault, ImmutableState, ImmutableMarketState, ReentrancyGuardTransient {
     using CurrencySettler for Currency;
-    using LccSafeTransfer for ILCC;
 
     event SwapDeficit(PoolId indexed poolId, address indexed lccToken, address deficitRecipient, uint256 deficitAmount);
 
@@ -373,7 +371,7 @@ abstract contract MarketVault is IMarketVault, ImmutableState, ImmutableMarketSt
 
         if (deficitAmount > 0 && deficitRecipient != address(0)) {
             // ? The MarketVault will have already taken the full LCC amount from the PoolManager.
-            lccToken.safeTransfer(deficitRecipient, deficitAmount);
+            Currency.wrap(address(lccToken)).transfer(deficitRecipient, deficitAmount);
             emit SwapDeficit(poolId, address(lccToken), deficitRecipient, deficitAmount);
         }
         // Note: If deficit recipient is not specified, but a deficit > 0, then excess will accumulate.
