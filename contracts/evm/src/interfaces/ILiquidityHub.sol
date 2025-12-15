@@ -132,25 +132,18 @@ interface ILiquidityHub {
     function totalQueued(address lcc) external view returns (uint256);
 
     /**
-     * @notice Gets the reserve of underlying for a given LCC token
-     * @param underlying The underlying asset address
-     * @return The reserve of underlying
-     */
-    function reserveOfUnderlying(address underlying) external view returns (uint256);
-
-    /**
-     * @notice Gets the LCC's shared reserve of underlying
+     * @notice Gets the LCC's reserve of underlying assets
      * @param lcc The LCC token address
      * @return The reserve of underlying
      */
-    function sharedReserveOf(address lcc) external view returns (uint256);
+    function reserveOfUnderlying(address lcc) external view returns (uint256);
 
     /**
-     * @notice Gets the direct supply of underlying for a given LCC token
-     * @param underlying The underlying asset address
-     * @return The direct supply of underlying
+     * @notice Returns the direct supply (wrapped underlying) for a given LCC token
+     * @param lcc The LCC token address
+     * @return The amount of direct supply
      */
-    function directSupply(address underlying) external view returns (uint256);
+    function directSupply(address lcc) external view returns (uint256);
 
     /**
      * @notice Gets the settle queue for a given LCC -> recipient mapping

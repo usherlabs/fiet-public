@@ -220,11 +220,7 @@ contract LiquidityHubSettlementTest is Test {
 
         // Verify directSupply is set correctly
         assertEq(liquidityHub.directSupply(lccToken1), wrapAmount, "directSupply should equal wrapAmount");
-        assertEq(
-            liquidityHub.sharedReserveOf(address(underlyingAsset1)),
-            wrapAmount,
-            "reserveOfUnderlying should equal wrapAmount"
-        );
+        assertEq(liquidityHub.reserveOfUnderlying(lccToken1), wrapAmount, "reserveOfUnderlying should equal wrapAmount");
 
         // Mock factory to return insufficient liquidity for market unwrap
         // useMarketLiquidity returns uint256 (amount used)
@@ -256,7 +252,7 @@ contract LiquidityHubSettlementTest is Test {
     }
 
     /// @notice Tests that settlements are cumulative for the same recipient
-    function testCumulativeSettlement() public {
+    function testCumulativeSettlement() public view {
         // Verify the settlement queue structure supports cumulative settlements
         // In production, multiple failed unwraps would add to the same queue
 
@@ -305,7 +301,7 @@ contract LiquidityHubSettlementTest is Test {
     }
 
     /// @notice Tests that totalQueued tracks the sum of all queued settlements
-    function testTotalQueuedTracking() public {
+    function testTotalQueuedTracking() public view {
         // Verify totalQueued starts at 0
         assertEq(liquidityHub.totalQueued(lccToken1), 0);
 
@@ -315,7 +311,7 @@ contract LiquidityHubSettlementTest is Test {
     }
 
     /// @notice Tests that settleQueue correctly maps LCC -> recipient -> amount
-    function testSettleQueueMapping() public {
+    function testSettleQueueMapping() public view {
         // Verify the mapping structure
         assertEq(liquidityHub.settleQueue(lccToken1, user1), 0);
         assertEq(liquidityHub.settleQueue(lccToken1, user2), 0);
@@ -334,14 +330,6 @@ contract LiquidityHubSettlementTest is Test {
         // Try with different recipient
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAmount.selector, uint256(0), uint256(0)));
         liquidityHub.processSettlementFor(lccToken1, user2, type(uint256).max);
-    }
-
-    /// @notice Tests that SettlementQueued event exists
-    function testSettlementQueuedEvent() public {
-        // Verify the event signature exists in the contract
-        // The event is: SettlementQueued(address indexed lcc, address indexed recipient, uint256 amount)
-        bytes32 eventSig = keccak256("SettlementQueued(address,address,uint256)");
-        assertTrue(eventSig != bytes32(0));
     }
 
     // ============ WRAP WITH LCC : O(1) FLATTENING TESTS ============

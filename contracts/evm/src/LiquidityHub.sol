@@ -208,7 +208,7 @@ contract LiquidityHub is Ownable, ReentrancyGuardTransient {
      * @param lcc The LCC token address
      * @return The amount of underlying assets held in reserve for this LCC
      */
-    function sharedReserveOf(address lcc) external view onlyValidLcc(lcc) returns (uint256) {
+    function reserveOfUnderlying(address lcc) external view onlyValidLcc(lcc) returns (uint256) {
         return s.reserveOfUnderlying[s.lccToUnderlying[lcc]];
     }
 
