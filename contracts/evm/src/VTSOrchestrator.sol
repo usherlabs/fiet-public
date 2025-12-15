@@ -406,8 +406,11 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
     /// @dev Called by CoreHook to settle position growths before adding or removing liquidity.
     ///      Only processes valid, active positions.
     /// @param positionId The position identifier
-    function settlePositionGrowths(PositionId positionId) public onlyPositionValid(positionId) {
-        VTSPositionLib.settlePositionGrowths(s, poolManager, positionId);
+    function settlePositionGrowths(PositionId positionId) public {
+        // Only check for active valid position - as new positions are not yet registered in VTS when this method is called.
+        if (isPositionValid(positionId, true)) {
+            VTSPositionLib.settlePositionGrowths(s, poolManager, positionId);
+        }
     }
 
     /// @notice Called by CoreHook after add/remove liquidity to update position state and process fees

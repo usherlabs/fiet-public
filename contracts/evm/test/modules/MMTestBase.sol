@@ -201,7 +201,7 @@ abstract contract MarketMakerTestBase is Test {
     ) internal returns (uint256 tokenId, PositionId positionId) {
         // Batch commit and mint
         MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
-        actions[0] = MMA.prepareCommit(corePoolKey, signalBytes);
+        actions[0] = MMA.prepareCommit(signalBytes);
         actions[1] = MMA.prepareMint(
             corePoolKey,
             1,

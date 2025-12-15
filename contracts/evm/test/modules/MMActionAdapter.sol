@@ -79,28 +79,26 @@ library MMActionAdapter {
 
     /**
      * @notice Prepares a COMMIT_SIGNAL action
+     * @dev Params are (bytes liquiditySignal, address owner)
      */
-    function prepareCommit(PoolKey memory poolKey, bytes memory liquiditySignal)
-        internal
-        pure
-        returns (PreparedAction memory)
-    {
+    function prepareCommit(bytes memory liquiditySignal) internal pure returns (PreparedAction memory) {
         return PreparedAction({
             action: bytes1(uint8(MMActions.COMMIT_SIGNAL)),
-            params: abi.encode(poolKey, liquiditySignal, ActionConstants.MSG_SENDER)
+            params: abi.encode(liquiditySignal, ActionConstants.MSG_SENDER)
         });
     }
 
     /**
      * @notice Prepares a COMMIT_SIGNAL action with a specific owner
+     * @dev Params are (bytes liquiditySignal, address owner)
      */
-    function prepareCommitWithOwner(PoolKey memory poolKey, bytes memory liquiditySignal, address owner)
+    function prepareCommitWithOwner(bytes memory liquiditySignal, address owner)
         internal
         pure
         returns (PreparedAction memory)
     {
         return PreparedAction({
-            action: bytes1(uint8(MMActions.COMMIT_SIGNAL)), params: abi.encode(poolKey, liquiditySignal, owner)
+            action: bytes1(uint8(MMActions.COMMIT_SIGNAL)), params: abi.encode(liquiditySignal, owner)
         });
     }
 
@@ -315,7 +313,8 @@ library MMActionAdapter {
      */
     function commit(MMPositionManager mmpm, PoolKey memory poolKey, bytes memory liquiditySignal) internal {
         PreparedAction[] memory prepared = new PreparedAction[](1);
-        prepared[0] = prepareCommit(poolKey, liquiditySignal);
+        poolKey; // poolKey no longer required for COMMIT_SIGNAL params
+        prepared[0] = prepareCommit(liquiditySignal);
         execute(mmpm, prepared);
     }
 
@@ -330,7 +329,8 @@ library MMActionAdapter {
         address owner
     ) internal {
         PreparedAction[] memory prepared = new PreparedAction[](1);
-        prepared[0] = prepareCommitWithOwner(poolKey, liquiditySignal, owner);
+        poolKey; // poolKey no longer required for COMMIT_SIGNAL params
+        prepared[0] = prepareCommitWithOwner(liquiditySignal, owner);
         execute(mmpm, prepared);
     }
 
