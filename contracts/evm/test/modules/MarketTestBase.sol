@@ -84,15 +84,26 @@ abstract contract MarketTestBase is Test, Deployers {
     function approveLCCForMarketUse(LiquidityCommitmentCertificate token) internal returns (Currency currency) {
         // Approve the required `market` contracts to be able to spend the LCC token
         approveTokenForMarketUse(address(token));
-        Currency underlyingAssetCurrency = approveTokenForMarketUse(token.underlying());
 
-        // Approve the LCC token to be able to spend the underlying asset
-        underlyingAssetCurrency.approve(address(token), Constants.MAX_UINT256);
+        address underlying = token.underlying();
+        // Skip approvals for native ETH (address(0)) - native ETH doesn't require ERC20 approvals
+        if (underlying != address(0)) {
+            Currency underlyingAssetCurrency = approveTokenForMarketUse(underlying);
+            // Approve the LCC token to be able to spend the underlying asset
+            underlyingAssetCurrency.approve(address(token), Constants.MAX_UINT256);
+        }
 
         return Currency.wrap(address(token));
     }
 
     function approveTokenForMarketUse(address token) internal returns (Currency currency) {
+        currency = Currency.wrap(token);
+
+        // Skip approvals for native ETH (address(0)) - native ETH doesn't require ERC20 approvals
+        if (token == address(0)) {
+            return currency;
+        }
+
         address[10] memory toApprove = [
             address(swapRouter),
             address(swapRouterNoChecks),
@@ -105,8 +116,6 @@ abstract contract MarketTestBase is Test, Deployers {
             address(actionsRouter),
             address(manager)
         ];
-
-        currency = Currency.wrap(token);
 
         for (uint256 i = 0; i < toApprove.length; i++) {
             currency.approve(toApprove[i], Constants.MAX_UINT256);
@@ -348,11 +357,8 @@ abstract contract MarketTestBase is Test, Deployers {
         if (ua0 != address(0)) {
             IERC20Minimal(ua0).approve(liquidityHub, initialLiquidity);
             LiquidityHub(payable(liquidityHub)).wrap(address(lcc0), initialLiquidity);
-        }
-        if (ua0 == address(0)) {
-            // send the liquidity hub some eth
-            // have the liquidity hub wrap some lcc-ETH
-            vm.deal(liquidityHub, initialLiquidity);
+        } else {
+            // For native ETH: send ETH with the wrap call (caller must have sufficient ETH)
             LiquidityHub(payable(liquidityHub)).wrap{value: initialLiquidity}(address(lcc0), initialLiquidity);
         }
 
@@ -360,11 +366,8 @@ abstract contract MarketTestBase is Test, Deployers {
         if (ua1 != address(0)) {
             IERC20Minimal(ua1).approve(liquidityHub, initialLiquidity);
             LiquidityHub(payable(liquidityHub)).wrap(address(lcc1), initialLiquidity);
-        }
-        if (ua1 == address(0)) {
-            // send the liquidity hub some eth
-            // have the liquidity hub wrap some lcc-ETH
-            vm.deal(liquidityHub, initialLiquidity);
+        } else {
+            // For native ETH: send ETH with the wrap call (caller must have sufficient ETH)
             LiquidityHub(payable(liquidityHub)).wrap{value: initialLiquidity}(address(lcc1), initialLiquidity);
         }
 

@@ -9,7 +9,6 @@ import {ILCC} from "../src/interfaces/ILCC.sol";
 import {MarketMakerTestBase} from "./modules/MMTestBase.sol";
 
 import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
-import {LiquidityCommitmentCertificate} from "../src/LCC.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {PoolSwapTest} from "@uniswap/v4-core/src/test/PoolSwapTest.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
@@ -18,7 +17,7 @@ import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {CurrencyLibrary, Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {MarketMaker} from "../src/libraries/MarketMaker.sol";
-import {MMPositionManager} from "../src/MMPositionManager.sol";
+import {IMMPositionManager} from "../src/interfaces/IMMPositionManager.sol";
 import {MarketVTSConfiguration} from "../src/types/VTS.sol";
 import {LiquidityUtils} from "../src/libraries/LiquidityUtils.sol";
 import {IOracleHelper} from "../src/interfaces/IOracleHelper.sol";
@@ -37,7 +36,7 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
     using MarketMaker for MarketMaker.State;
     using StateLibrary for IPoolManager;
 
-    MMPositionManager internal positionManager;
+    IMMPositionManager internal positionManager;
     MarketVTSConfiguration internal marketVTSConfiguration;
 
     ILCC internal lcc0;
@@ -46,32 +45,50 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
     address guarantor = makeAddr("guarantor");
     uint256 guarantorInitialBalance = 10000e18;
 
+    // ETH price in USD (scaled by 1e18) - approximately $3200
+    uint256 constant ETH_PRICE_USD = 3200e18;
+    // ERC20 token price in USD (scaled by 1e18) - assuming stablecoin or similar at $1
+    uint256 constant TOKEN_PRICE_USD = 1e18;
+
+    // Override the _deployCurrencyA function to return a currency with native ETH as underlying
     function _deployCurrencyA() internal pure override returns (Currency currency) {
         return Currency.wrap(address(0));
     }
 
     function setUp() public {
+        // Fund this test contract with ETH for native operations
+        // Need at least initialLiquidity (10000e18) + extra for test operations
+        vm.deal(address(this), 20000 ether);
+
         _setupMarket();
         _setUpMM();
 
         // set up mocks for the mmposition manager
-        console.log("setUP() mmPositionManager", address(mmPositionManager));
-        positionManager = MMPositionManager(payable(mmPositionManager));
-        lcc0 = LiquidityCommitmentCertificate(payable(Currency.unwrap(_currency2)));
-        lcc1 = LiquidityCommitmentCertificate(payable(Currency.unwrap(_currency3)));
+        positionManager = IMMPositionManager(payable(mmPositionManager));
+
+        // Determine which LCC has native ETH as underlying by checking the underlying assets
+        // _currency2 and _currency3 are the sorted LCC token addresses
+        ILCC _lcc2 = ILCC(payable(Currency.unwrap(_currency2)));
+        ILCC _lcc3 = ILCC(payable(Currency.unwrap(_currency3)));
+
+        // Assign lcc0 to native ETH underlying and lcc1 to ERC20 underlying for clarity
+        if (_lcc2.underlying() == address(0)) {
+            lcc0 = _lcc2;
+            lcc1 = _lcc3;
+        } else {
+            lcc0 = _lcc3;
+            lcc1 = _lcc2;
+        }
 
         marketVTSConfiguration = vtsOrchestrator.getMarketVTSConfiguration(corePoolKey.toId());
 
-        // approve the lccs to the mmPositionManager to be able to route tokens to the pool manager
-        // lcc0.approve(address(mmPositionManager), Constants.MAX_UINT256);
-        // lcc1.approve(address(mmPositionManager), Constants.MAX_UINT256);
         // Mock the proxyHookToCurrencyPair function in order to make this caller appear to be an issuer
-        // when deploying the factory the mmposiiton manager will be provided and thus whitelsited
+        // when deploying the factory the mmposiiton manager will be provided and thus whitelisted
         // but since we are mocking the factory, we need to mock a way to return the mmposition manager as an issuer
-        address[2] memory mockCurrencies = [address(lcc0.underlying()), address(lcc1.underlying())];
+        address[2] memory mockCurrencies = [lcc0.underlying(), lcc1.underlying()];
         vm.mockCall(
             marketFactory,
-            abi.encodeWithSelector(IMarketFactory.proxyHookToCurrencyPair.selector, address(mmPositionManager)),
+            abi.encodeWithSelector(IMarketFactory.proxyHookToCurrencyPair.selector, address(proxyHook)),
             abi.encode(mockCurrencies)
         );
         // mock the factory to return the right core hook
@@ -81,63 +98,34 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
         // mock the factory to return the right proxy hook
         vm.mockCall(marketFactory, abi.encodeWithSelector(IMarketFactory.proxyToHook.selector), abi.encode(proxyHook));
 
-        // mock the oracle helper to return prices
+        // Mock the oracle helper to return realistic ETH price (~$3200) and token price (~$1)
+        // The order depends on which LCC is currency0 vs currency1 in the core pool
+        address corePoolCurrency0Underlying = ILCC(payable(Currency.unwrap(corePoolKey.currency0))).underlying();
+
+        // Set prices based on which underlying is native ETH
+        uint256 price0 = corePoolCurrency0Underlying == address(0) ? ETH_PRICE_USD : TOKEN_PRICE_USD;
+        uint256 price1 = corePoolCurrency0Underlying == address(0) ? TOKEN_PRICE_USD : ETH_PRICE_USD;
+
         vm.mockCall(
             address(oracleHelper),
             abi.encodeWithSelector(IOracleHelper.getPricesForLccPair.selector),
-            abi.encode(uint256(1), uint256(1))
+            abi.encode(price0, price1)
         );
+        // Mock getTotalValue to return a reasonable value scaled for the prices
         vm.mockCall(
-            address(oracleHelper), abi.encodeWithSelector(IOracleHelper.getTotalValue.selector), abi.encode(1e18)
+            address(oracleHelper),
+            abi.encodeWithSelector(IOracleHelper.getTotalValue.selector),
+            abi.encode(ETH_PRICE_USD)
         );
 
-        console.log("lcc0", address(lcc0));
-        console.log("lcc1", address(lcc1));
+        console.log("=== Native ETH Market Setup ===");
+        console.log("lcc0 (native ETH underlying)", address(lcc0));
+        console.log("lcc1 (ERC20 underlying)", address(lcc1));
         console.log("lcc0 underlying asset", lcc0.underlying());
         console.log("lcc1 underlying asset", lcc1.underlying());
+        console.log("ETH price (USD)", ETH_PRICE_USD);
+        console.log("Token price (USD)", TOKEN_PRICE_USD);
     }
-
-    // #region agent log (debug)
-    string internal constant _DEBUG_LOG_PATH = "/Users/ryansoury/dev/fiet/protocol/.cursor/debug.log";
-    string internal constant _DEBUG_SESSION_ID = "debug-session";
-    string internal constant _DEBUG_RUN_ID = "pre-fix";
-
-    function _ndjson(string memory location, string memory message, string memory dataJson, string memory hypothesisId)
-        internal
-    {
-        // Writes one NDJSON line to the provisioned debug log file.
-        // NOTE: `dataJson` must already be a valid JSON object string like {"k":"v"}.
-        vm.writeLine(
-            _DEBUG_LOG_PATH,
-            string(
-                abi.encodePacked(
-                    '{"sessionId":"',
-                    _DEBUG_SESSION_ID,
-                    '","runId":"',
-                    _DEBUG_RUN_ID,
-                    '","hypothesisId":"',
-                    hypothesisId,
-                    '","location":"',
-                    location,
-                    '","message":"',
-                    message,
-                    '","data":',
-                    dataJson,
-                    ',"timestamp":',
-                    vm.toString(block.timestamp),
-                    "}"
-                )
-            )
-        );
-    }
-
-    function _first4(bytes memory data) internal pure returns (bytes4 sel) {
-        if (data.length < 4) return bytes4(0);
-        assembly {
-            sel := mload(add(data, 0x20))
-        }
-    }
-    // #endregion agent log (debug)
 
     function test_canAddLiquidityToPoolWithNativeAsunderlying() public {
         // add liquidity to the core pool
@@ -216,10 +204,8 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
 
         // get balances of underlying token of the pool manager and lcc contracts
         // get the underlying asset of the lcc token A
-        address underlyingAssetLCC0 =
-            LiquidityCommitmentCertificate(payable(Currency.unwrap(corePoolKey.currency0))).underlying();
-        address underlyingAssetLCC1 =
-            LiquidityCommitmentCertificate(payable(Currency.unwrap(corePoolKey.currency1))).underlying();
+        address underlyingAssetLCC0 = ILCC(payable(Currency.unwrap(corePoolKey.currency0))).underlying();
+        address underlyingAssetLCC1 = ILCC(payable(Currency.unwrap(corePoolKey.currency1))).underlying();
 
         console.log("underlyingAsset-LCC0", underlyingAssetLCC0);
         console.log("underlyingAsset-LCC1", underlyingAssetLCC1);
@@ -280,63 +266,10 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
         PoolSwapTest.TestSettings memory settings =
             PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false});
 
-        // #region agent log (debug)
-        address underlyingAssetLCC0 =
-            LiquidityCommitmentCertificate(payable(Currency.unwrap(corePoolKey.currency0))).underlying();
-        address underlyingAssetLCC1 =
-            LiquidityCommitmentCertificate(payable(Currency.unwrap(corePoolKey.currency1))).underlying();
-        _ndjson(
-            "contracts/evm/test/NativeETHMarket.t.sol:test_swapWithNativeAsUnderlyingAsset_oneForZeroOnCore",
-            "pre-swap core oneForZero config",
-            string(
-                abi.encodePacked(
-                    '{"corePoolId":"',
-                    vm.toString(PoolId.unwrap(corePoolKey.toId())),
-                    '","currency0":"',
-                    vm.toString(Currency.unwrap(corePoolKey.currency0)),
-                    '","currency1":"',
-                    vm.toString(Currency.unwrap(corePoolKey.currency1)),
-                    '","ua0":"',
-                    vm.toString(underlyingAssetLCC0),
-                    '","ua1":"',
-                    vm.toString(underlyingAssetLCC1),
-                    '","ua0IsNative":',
-                    (underlyingAssetLCC0 == address(0) ? "true" : "false"),
-                    ',"ua1IsNative":',
-                    (underlyingAssetLCC1 == address(0) ? "true" : "false"),
-                    "}"
-                )
-            ),
-            "H_native_value_or_sign"
-        );
-        _ndjson(
-            "contracts/evm/test/NativeETHMarket.t.sol:test_swapWithNativeAsUnderlyingAsset_oneForZeroOnCore",
-            "pre-swap balances",
-            string(
-                abi.encodePacked(
-                    '{"thisEth":"',
-                    vm.toString(address(this).balance),
-                    '","hubEth":"',
-                    vm.toString(liquidityHub.balance),
-                    '","pmEth":"',
-                    vm.toString(address(manager).balance),
-                    '","hubUa0":"',
-                    vm.toString(Currency.wrap(underlyingAssetLCC0).balanceOf(liquidityHub)),
-                    '","hubUa1":"',
-                    vm.toString(Currency.wrap(underlyingAssetLCC1).balanceOf(liquidityHub)),
-                    '","pmUa0":"',
-                    vm.toString(Currency.wrap(underlyingAssetLCC0).balanceOf(address(manager))),
-                    '","pmUa1":"',
-                    vm.toString(Currency.wrap(underlyingAssetLCC1).balanceOf(address(manager))),
-                    "}"
-                )
-            ),
-            "H_balance_or_settle_path"
-        );
-        // #endregion agent log (debug)
-
         // get balances of underlying token of the pool manager and lcc contracts
         // get the underlying asset of the lcc token A
+        address underlyingAssetLCC0 = ILCC(payable(Currency.unwrap(corePoolKey.currency0))).underlying();
+        address underlyingAssetLCC1 = ILCC(payable(Currency.unwrap(corePoolKey.currency1))).underlying();
         console.log("underlyingAsset-LCC0", underlyingAssetLCC0);
         console.log("underlyingAsset-LCC1", underlyingAssetLCC1);
 
@@ -358,25 +291,6 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
         ) {
             delta = d;
         } catch (bytes memory err) {
-            // #region agent log (debug)
-            bytes4 sel = _first4(err);
-            _ndjson(
-                "contracts/evm/test/NativeETHMarket.t.sol:test_swapWithNativeAsUnderlyingAsset_oneForZeroOnCore",
-                "swap reverted (low-level)",
-                string(
-                    abi.encodePacked(
-                        '{"errLen":"',
-                        vm.toString(err.length),
-                        '","selector":"',
-                        vm.toString(uint256(uint32(sel))),
-                        '","errHex":"',
-                        vm.toString(err),
-                        '"}'
-                    )
-                ),
-                "H_identify_revert"
-            );
-            // #endregion agent log (debug)
             assembly {
                 revert(add(err, 0x20), mload(err))
             }
