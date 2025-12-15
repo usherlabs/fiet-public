@@ -6,8 +6,6 @@ import {EfficientHashLib} from "solady/utils/EfficientHashLib.sol";
 library MarketMaker {
     /// @dev The reserve of the market maker
     struct Reserve {
-        /// The source of the reserve
-        string source;
         /// The asset of the reserve
         string asset;
         /// The amount of the reserve
