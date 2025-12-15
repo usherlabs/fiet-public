@@ -153,30 +153,6 @@ abstract contract VTSOrchestratorFixture is MarketTestBase, MarketMakerTestBase 
         }
     }
 
-    /// @notice Helper to sync LCC balance as delta credit for a user
-    function _syncLccDelta(Currency lccCurrency, address user) internal {
-        vtsOrchestrator.syncFor(lccCurrency, user);
-    }
-
-    /// @notice Helper to give orchestrator ERC-6909 claims for an LCC currency
-    /// @dev Wraps the take call in PoolManager unlock context since Currency.take() requires unlock
-    function _giveOrchestratorClaims(Currency lccCurrency, uint256 amount) internal {
-        // Currency.take() requires PoolManager to be unlocked, so we wrap it in unlock context
-        unlockCaller.run(
-            address(this),
-            abi.encodeWithSelector(
-                VTSOrchestratorFixture._executeTakeClaims.selector, lccCurrency, address(vtsOrchestrator), amount
-            )
-        );
-    }
-
-    /// @notice Executes take claims call - must be called within unlock context
-    /// @dev This is called via unlockCaller.run() which provides the unlock context
-    function _executeTakeClaims(Currency lccCurrency, address to, uint256 amount) external {
-        require(msg.sender == address(unlockCaller), "Only unlockCaller");
-        lccCurrency.take(manager, to, amount, true);
-    }
-
     /// @notice Helper to create a committed position
     function _createCommittedPosition()
         internal

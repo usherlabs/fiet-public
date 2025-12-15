@@ -107,7 +107,7 @@ library VTSCommitLib {
         success = issuedValue <= signalValue + settledValue;
 
         if (revertIfInsufficientBacking && !success) {
-            revert Errors.InvalidLiquiditySignal(signalValue + settledValue, issuedValue);
+            revert Errors.InvalidLiquiditySignal(issuedValue, signalValue, settledValue);
         }
     }
 
@@ -156,7 +156,7 @@ library VTSCommitLib {
     {
         // validate the liquidity signal was actually provided
         if (liquiditySignal.length == 0) {
-            revert Errors.InvalidLiquiditySignal(0, 0);
+            revert Errors.InvalidLiquiditySignal(0, 0, 0);
         }
 
         // verify the proofs associated with the state
@@ -185,7 +185,7 @@ library VTSCommitLib {
         bytes memory liquiditySignal
     ) external {
         if (liquiditySignal.length == 0) {
-            revert Errors.InvalidLiquiditySignal(0, 0);
+            revert Errors.InvalidLiquiditySignal(0, 0, 0);
         }
 
         // Verify new signal once (nonce bump) and decode
@@ -250,7 +250,7 @@ library VTSCommitLib {
         bytes memory liquiditySignal
     ) external {
         if (liquiditySignal.length == 0) {
-            revert Errors.InvalidLiquiditySignal(0, 0);
+            revert Errors.InvalidLiquiditySignal(0, 0, 0);
         }
 
         (, uint256 expirySeconds) = signalManager.verifyLiquiditySignal(liquiditySignal, true);

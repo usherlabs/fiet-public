@@ -166,29 +166,33 @@ library DynamicCurrencyDelta {
     ///      This is useful after wrap/unwrap operations where balance increases occur outside
     ///      of normal delta accounting flows.
     /// @param currency The currency to sync
-    /// @param owner The address whose balance/delta to sync
+    /// @param owner The address whose balance to check (e.g., MMPM which holds the tokens)
+    /// @param target The address whose delta to credit (e.g., locker/msgSender)
     /// @return deltaChange The amount by which the delta was adjusted (0 if no change)
-    function syncBalanceAsCredit(Currency currency, address owner) internal returns (int128 deltaChange) {
+    function syncBalanceAsCredit(Currency currency, address owner, address target)
+        internal
+        returns (int128 deltaChange)
+    {
         uint256 balance = currency.balanceOf(owner);
-        int256 currentDelta = currency.getDelta(owner);
+        int256 currentDelta = currency.getDelta(target);
 
-        // Case 1: Owner has balance and current delta is non-negative
-        // Increase delta to match balance if balance exceeds delta
+        // Case 1: Owner has balance and target's current delta is non-negative
+        // Increase target's delta to match owner's balance if balance exceeds delta
         if (balance > 0 && currentDelta >= 0) {
             uint256 currentDeltaUint = uint256(currentDelta);
             if (balance > currentDeltaUint) {
                 uint256 diff = balance - currentDeltaUint;
                 deltaChange = SafeCast.toInt128(diff);
-                accountDelta(currency, deltaChange, owner);
+                accountDelta(currency, deltaChange, target);
             }
         }
-        // Case 2: Owner has balance and owes (negative delta)
-        // Use balance to reduce debt
+        // Case 2: Owner has balance and target owes (negative delta)
+        // Use owner's balance to reduce target's debt
         else if (balance > 0 && currentDelta < 0) {
             uint256 debt = uint256(-currentDelta);
             uint256 reduction = balance < debt ? balance : debt;
             deltaChange = SafeCast.toInt128(reduction);
-            accountDelta(currency, deltaChange, owner);
+            accountDelta(currency, deltaChange, target);
         }
         // Case 3: No balance - cannot establish credit from nothing
         // (No action needed)

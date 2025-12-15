@@ -93,11 +93,13 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
 
     /// @notice Syncs balance accumulation as credit for a currency pair
     /// @dev Only handles balance increases (accumulation), not decreases (consumption).
-    ///      Syncs to locker delta (msgSender), not MMPM.
+    ///      Checks MMPM's balance (address(this)) and credits locker's delta (msgSender).
     /// @param currency0 The first currency to sync
     /// @param currency1 The second currency to sync
     function _syncPairBalanceToDeltas(Currency currency0, Currency currency1) internal {
-        vtsOrchestrator.syncPairFor(currency0, currency1, msgSender());
+        // owner = address(this) = MMPM (balance holder)
+        // target = msgSender() = locker (delta recipient)
+        vtsOrchestrator.syncPair(currency0, currency1, address(this), msgSender());
     }
 
     // ------------------------------------------------------------------------------------------------

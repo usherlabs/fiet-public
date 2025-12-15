@@ -363,98 +363,22 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
     }
 
     // ============================================================
-    // collectFees Tests - Real LCC + ERC-6909 Claims
+    // Fee Collection Tests
     // ============================================================
-
-    function test_collectFees_withRealClaimsAndDelta() public {
-        uint256 amount = 1000e18;
-
-        // Step 1: Mint LCC to test user and sync as delta credit
-        _mintLccTo(testUser, lccCurrency0, amount);
-        _syncLccDelta(lccCurrency0, testUser);
-
-        uint256 creditBefore = vtsOrchestrator.getFullCredit(lccCurrency0, testUser);
-        assertGt(creditBefore, 0, "User should have delta credit");
-
-        // Step 2: Give orchestrator ERC-6909 claims
-        _giveOrchestratorClaims(lccCurrency0, amount);
-
-        uint256 orchestratorClaimsBefore = manager.balanceOf(address(vtsOrchestrator), lccCurrency0.toId());
-        assertGt(orchestratorClaimsBefore, 0, "Orchestrator should have claims");
-
-        // Step 3: Collect fees under unlock
-        uint256 maxAmount = 500e18;
-        bytes memory result = unlockCaller.run(
-            address(vtsOrchestrator),
-            abi.encodeWithSelector(VTSOrchestrator.collectFees.selector, lccCurrency0, testUser, maxAmount)
-        );
-        uint256 collected = abi.decode(result, (uint256));
-
-        // Step 4: Verify results
-        assertEq(collected, maxAmount, "Should collect requested amount");
-        assertLt(collected, creditBefore, "Collected should not exceed credit");
-
-        uint256 creditAfter = vtsOrchestrator.getFullCredit(lccCurrency0, testUser);
-        assertEq(creditBefore - creditAfter, collected, "Credit should decrease by collected amount");
-
-        uint256 orchestratorClaimsAfter = manager.balanceOf(address(vtsOrchestrator), lccCurrency0.toId());
-        assertEq(
-            orchestratorClaimsBefore - orchestratorClaimsAfter, collected, "Claims should decrease by collected amount"
-        );
-
-        uint256 userBalance = lcc0.balanceOf(testUser);
-        assertEq(userBalance, collected, "User should receive LCC tokens");
-    }
-
-    function test_collectFees_maxAmountZero_collectsFullCredit() public {
-        uint256 amount = 1000e18;
-
-        _mintLccTo(testUser, lccCurrency0, amount);
-        _syncLccDelta(lccCurrency0, testUser);
-        _giveOrchestratorClaims(lccCurrency0, amount);
-
-        uint256 fullCredit = vtsOrchestrator.getFullCredit(lccCurrency0, testUser);
-
-        bytes memory result = unlockCaller.run(
-            address(vtsOrchestrator),
-            abi.encodeWithSelector(VTSOrchestrator.collectFees.selector, lccCurrency0, testUser, 0)
-        );
-        uint256 collected = abi.decode(result, (uint256));
-
-        assertEq(collected, fullCredit, "Should collect full credit when maxAmount is 0");
-    }
-
-    function test_collectFees_zeroCredit_returnsZero() public {
-        _giveOrchestratorClaims(lccCurrency0, 1000e18);
-
-        bytes memory result = unlockCaller.run(
-            address(vtsOrchestrator),
-            abi.encodeWithSelector(VTSOrchestrator.collectFees.selector, lccCurrency0, testUser, 100)
-        );
-        uint256 collected = abi.decode(result, (uint256));
-
-        assertEq(collected, 0, "Should return 0 when no credit available");
-    }
-
-    function test_collectFees_capsToAvailableCredit() public {
-        uint256 amount = 1000e18;
-        uint256 maxAmount = 2000e18; // More than available
-
-        _mintLccTo(testUser, lccCurrency0, amount);
-        _syncLccDelta(lccCurrency0, testUser);
-        _giveOrchestratorClaims(lccCurrency0, amount);
-
-        uint256 fullCredit = vtsOrchestrator.getFullCredit(lccCurrency0, testUser);
-
-        bytes memory result = unlockCaller.run(
-            address(vtsOrchestrator),
-            abi.encodeWithSelector(VTSOrchestrator.collectFees.selector, lccCurrency0, testUser, maxAmount)
-        );
-        uint256 collected = abi.decode(result, (uint256));
-
-        assertEq(collected, fullCredit, "Should cap to available credit");
-        assertLt(collected, maxAmount, "Collected should be less than maxAmount");
-    }
+    //
+    // NOTE: Fee collection does NOT require a separate `collectFees` function.
+    // Fees accrue and surface during position modification, even when liquidityDelta is 0.
+    //
+    // The proper flow for fee collection is:
+    // 1. Establish a position (MM via commitSignal + addLiquidity, or DirectLP with fee-share enabled)
+    // 2. Perform swaps that accumulate fees to that position
+    // 3. Call modifyLiquidity with liquidityDelta=0 - feesAccrued are returned and processed
+    //
+    // For MM positions: fees are credited as LCC delta to MMPositionManager
+    // For DirectLP with fee-sharing: fees are shared via the fee pot mechanism
+    //
+    // See: VTSPositionLib.processPosition() and VTSFeeLib.processPositionFees()
+    // ============================================================
 
     // ============================================================
     // Checkpoint / Grace Period / Seizure Tests

@@ -84,19 +84,10 @@ abstract contract VTSCurrencyDelta is IVTSCurrencyDelta {
     // ═══════════════════════════════════════════════════════════════════════════
 
     /// @inheritdoc IVTSCurrencyDelta
-    function sync(Currency currency) external {
-        DynamicCurrencyDelta.syncBalanceAsCredit(currency, msg.sender);
-    }
-
-    /// @inheritdoc IVTSCurrencyDelta
-    function syncPair(Currency currency0, Currency currency1) external {
-        DynamicCurrencyDelta.syncBalanceAsCredit(currency0, msg.sender);
-        DynamicCurrencyDelta.syncBalanceAsCredit(currency1, msg.sender);
-    }
-
-    /// @inheritdoc IVTSCurrencyDelta
-    function syncFor(Currency currency, address owner) external {
-        DynamicCurrencyDelta.syncBalanceAsCredit(currency, owner);
+    function sync(Currency currency, address owner, address target) external {
+        // Sync owner's balance as credit to target's delta
+        // Use case: MMPM receives msg.value (owner=MMPM), credit goes to locker (target=msgSender)
+        DynamicCurrencyDelta.syncBalanceAsCredit(currency, owner, target);
     }
 
     /// @notice Syncs balance accumulation as credit for multiple currencies
@@ -105,15 +96,16 @@ abstract contract VTSCurrencyDelta is IVTSCurrencyDelta {
     ///      Useful after operations that increase multiple currency balances.
     /// @param currency0 The first currency to sync
     /// @param currency1 The second currency to sync
-    /// @param owner The address whose balance/delta to sync
+    /// @param owner The address whose balance to check (balance holder)
+    /// @param target The address whose delta to credit
     /// @return deltaChange0 The amount by which currency0 delta was adjusted
     /// @return deltaChange1 The amount by which currency1 delta was adjusted
-    function syncPairFor(Currency currency0, Currency currency1, address owner)
+    function syncPair(Currency currency0, Currency currency1, address owner, address target)
         external
         returns (int128 deltaChange0, int128 deltaChange1)
     {
-        deltaChange0 = DynamicCurrencyDelta.syncBalanceAsCredit(currency0, owner);
-        deltaChange1 = DynamicCurrencyDelta.syncBalanceAsCredit(currency1, owner);
+        deltaChange0 = DynamicCurrencyDelta.syncBalanceAsCredit(currency0, owner, target);
+        deltaChange1 = DynamicCurrencyDelta.syncBalanceAsCredit(currency1, owner, target);
     }
 }
 

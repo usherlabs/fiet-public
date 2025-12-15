@@ -73,11 +73,13 @@ abstract contract PositionManagerEntrypoint is PositionManagerBase {
 
     /// @notice Syncs balance accumulation as credit for a single currency
     /// @dev Only handles balance increases (accumulation), not decreases (consumption).
-    ///      Syncs to locker delta (msgSender), not MMPM. This ensures balance increases
-    ///      from wrap/unwrap operations create takeable credits on the locker.
+    ///      Checks MMPM's balance (address(this)) and credits locker's delta (msgSender).
+    ///      This ensures balance increases from wrap/unwrap operations create takeable credits on the locker.
     /// @param currency The currency to sync balance for
     function _syncBalanceAsCredit(Currency currency) internal {
-        vtsOrchestrator.syncFor(currency, msgSender());
+        // owner = address(this) = MMPM (balance holder)
+        // target = msgSender() = locker (delta recipient)
+        vtsOrchestrator.sync(currency, address(this), msgSender());
     }
 
     // ------------------------------------------------------------------------------------------------
@@ -104,6 +106,7 @@ abstract contract PositionManagerEntrypoint is PositionManagerBase {
     /// @param maxAmount The maximum amount to take (0 = take full available credit)
     function _take(Currency currency, address to, uint256 maxAmount) internal {
         if (_isLCC(currency)) {
+            // TODO: I realise fee taking is conducted via position modification with 0 delta. Need to update this.
             // LCC: held as ERC-6909 claims on PoolManager, delta on MMPM
             // Delegate to VTSOrchestrator.collectFees which handles:
             // 1. Burning ERC-6909 claims (credits PoolManager transient delta)

@@ -58,7 +58,10 @@ library Errors {
     error InvalidProxyHookFlags();
 
     /// @notice Thrown when an invalid liquidity signal is provided
-    error InvalidLiquiditySignal(uint256 totalSignalUsdValue, uint256 totalLCCValue);
+    /// @param issuedValue Total issued LCC value
+    /// @param signalValue Signal value from MarketMaker reserves
+    /// @param settledValue Settled value already in-market
+    error InvalidLiquiditySignal(uint256 issuedValue, uint256 signalValue, uint256 settledValue);
 
     /// @notice Thrown when an invalid LCC token is provided
     error InvalidLcc(address lcc);

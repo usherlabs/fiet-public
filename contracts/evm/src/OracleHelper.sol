@@ -7,6 +7,7 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {OracleUtils} from "./libraries/OracleUtils.sol";
 import {Errors} from "./libraries/Errors.sol";
 import {EfficientHashLib} from "solady/utils/EfficientHashLib.sol";
+import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 
 contract OracleHelper is Ownable {
     IResilientOracle public oracle;
@@ -82,24 +83,31 @@ contract OracleHelper is Ownable {
     }
 
     /**
-     * @notice Gets the total value of a list of assets
-     * @param tickers The list of tickers
-     * @param amounts The list of amounts
-     * @return totalValue The total USD value
+     * @notice Gets the total USD value of a list of assets by ticker
+     * @dev Oracle prices are pre-normalised to 18 decimals by ChainlinkOracle:
+     *      `uint256 decimalDelta = 18 - decimals; return price * (10 ** decimalDelta);`
+     *      Formula: value = sum((price_18d * amount_18d) / 1e18) = totalValue_18d
+     *      Uses FullMath.mulDiv to prevent overflow and maintain precision.
+     * @param tickers The list of asset tickers (e.g., ["ETH", "USDC"])
+     * @param amounts The list of amounts (in token units, 18 decimals)
+     * @return totalValue The total USD value (18 decimals)
      */
     function getTotalValue(string[] memory tickers, uint256[] memory amounts) public view returns (uint256) {
         uint256 totalValue = 0;
         for (uint256 i = 0; i < tickers.length; i++) {
             uint256 price = getPriceByTicker(tickers[i]);
-            totalValue += price * amounts[i];
+            // Oracle returns price in 18 decimals. Amount is in 18 decimals.
+            // Multiply then divide by 1e18 to normalise result to 18 decimals.
+            totalValue += FullMath.mulDiv(price, amounts[i], 1e18);
         }
         return totalValue;
     }
 
     /**
-     * @notice Gets the price of an LCC
-     * @param lcc The address of the LCC
-     * @return price The price of the LCC in USD (18 decimals)
+     * @notice Gets the USD price of an LCC's underlying asset
+     * @dev Price is normalised to 18 decimals by ChainlinkOracle internally.
+     * @param lcc The address of the LCC token
+     * @return price The price in USD (18 decimals, e.g., 3200e18 = $3200)
      */
     function getPriceForLcc(address lcc) external view returns (uint256 price) {
         address underlying = OracleUtils.unifyNativeTokenAddress(ILCC(lcc).underlying());
@@ -107,17 +115,19 @@ contract OracleHelper is Ownable {
     }
 
     /**
-     * @notice Gets USD prices for an LCC pair (batched for efficiency).
-     * @param lcc0 Address of the first LCC.
-     * @param lcc1 Address of the second LCC.
-     * @return price0 USD price of lcc0's underlying (normalized by ResilientOracle).
-     * @return price1 USD price of lcc1's underlying (normalized by ResilientOracle).
+     * @notice Gets USD prices for an LCC pair (batched for gas efficiency)
+     * @dev Prices are normalised to 18 decimals by ChainlinkOracle internally:
+     *      `uint256 decimalDelta = 18 - decimals; return price * (10 ** decimalDelta);`
+     * @param lcc0 Address of the first LCC token
+     * @param lcc1 Address of the second LCC token
+     * @return price0 USD price of lcc0's underlying (18 decimals)
+     * @return price1 USD price of lcc1's underlying (18 decimals)
      */
     function getPricesForLccPair(address lcc0, address lcc1) external view returns (uint256 price0, uint256 price1) {
         address underlying0 = OracleUtils.unifyNativeTokenAddress(ILCC(lcc0).underlying());
         address underlying1 = OracleUtils.unifyNativeTokenAddress(ILCC(lcc1).underlying());
 
-        // Fetch from ResilientOracle, which handles decimals internally
+        // ResilientOracle -> ChainlinkOracle normalises prices to 18 decimals
         price0 = oracle.getPrice(underlying0);
         price1 = oracle.getPrice(underlying1);
     }

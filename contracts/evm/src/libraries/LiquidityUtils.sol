@@ -28,6 +28,8 @@ library LiquidityUtils {
     uint160 internal constant ZERO_FOR_ONE_LIMIT = TickMath.MIN_SQRT_PRICE + 1;
     uint160 internal constant ONE_FOR_ZERO_LIMIT = TickMath.MAX_SQRT_PRICE - 1;
     uint256 internal constant BPS_DENOMINATOR = 10000; // 100% (10000 basis points)
+
+    /// @dev Standard ERC20 decimal precision (1e18) used for normalisation
     uint256 internal constant ONE_WAD = 1e18;
 
     /**

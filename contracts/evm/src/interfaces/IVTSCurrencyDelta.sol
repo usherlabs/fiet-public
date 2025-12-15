@@ -77,47 +77,28 @@ interface IVTSCurrencyDelta {
     function assertNonZeroDeltas() external view;
 
     /**
-     * @notice Syncs balance accumulation as credit in the delta system
+     * @notice Syncs owner's balance as credit to target's delta
      * @dev Only handles balance increases (accumulation), not decreases (consumption).
-     *      If balance exceeds current positive delta, increases delta to match balance,
-     *      establishing credit. Useful after wrap/unwrap operations where balance
-     *      increases occur outside normal delta accounting.
+     *      Checks owner's balance and credits target's delta.
+     *      Use case: MMPM receives msg.value (owner=MMPM), credit goes to locker (target=msgSender).
      * @param currency The currency to sync
+     * @param owner The address whose balance to check (balance holder)
+     * @param target The address whose delta to credit
      */
-    function sync(Currency currency) external;
+    function sync(Currency currency, address owner, address target) external;
 
     /**
-     * @notice Syncs balance accumulation as credit for a given owner
-     * @dev Only handles balance increases (accumulation), not decreases (consumption).
-     *      If balance exceeds current positive delta, increases delta to match balance,
-     *      establishing credit. Useful after wrap/unwrap operations where balance
-     *      increases occur outside normal delta accounting.
-     * @param currency The currency to sync
-     * @param owner The address whose balance/delta to sync
-     */
-    function syncFor(Currency currency, address owner) external;
-
-    /**
-     * @notice Syncs balance accumulation as credit for multiple currencies (caller)
-     * @dev Only handles balance increases (accumulation), not decreases (consumption).
-     *      Convenience function to sync both currencies of a pool pair in one call.
-     *      Syncs balances for msg.sender.
-     * @param currency0 The first currency to sync
-     * @param currency1 The second currency to sync
-     */
-    function syncPair(Currency currency0, Currency currency1) external;
-
-    /**
-     * @notice Syncs balance accumulation as credit for multiple currencies (owner)
+     * @notice Syncs owner's balance as credit to target's delta for multiple currencies
      * @dev Only handles balance increases (accumulation), not decreases (consumption).
      *      Convenience function to sync both currencies of a pool pair in one call.
      * @param currency0 The first currency to sync
      * @param currency1 The second currency to sync
-     * @param owner The address whose balance/delta to sync
+     * @param owner The address whose balance to check (balance holder)
+     * @param target The address whose delta to credit
      * @return deltaChange0 The amount by which currency0 delta was adjusted
      * @return deltaChange1 The amount by which currency1 delta was adjusted
      */
-    function syncPairFor(Currency currency0, Currency currency1, address owner)
+    function syncPair(Currency currency0, Currency currency1, address owner, address target)
         external
         returns (int128 deltaChange0, int128 deltaChange1);
 }

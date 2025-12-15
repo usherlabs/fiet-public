@@ -11,7 +11,7 @@ contract OracleHelperTest is Test {
     IResilientOracle public resilientOracle;
 
     string public constant TICKER = "ETH";
-    uint256 public constant MOCK_ETH_PRICE = 42069;
+    uint256 public constant MOCK_ETH_PRICE = 42069e18; // TODO: ResilientOracle returns price in 18 decimals
     address public ASSET = makeAddr("Asset");
     address public LCC0 = makeAddr("LCC0");
     address public LCC1 = makeAddr("LCC1");
