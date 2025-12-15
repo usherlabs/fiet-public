@@ -14,7 +14,7 @@ import {LiquidityUtils} from "../../src/libraries/LiquidityUtils.sol";
 import {console} from "forge-std/console.sol";
 import {MarketTestBase} from "../modules/MarketTestBase.sol";
 import {MMPositionManager} from "../../src/MMPositionManager.sol";
-import {MMActionAdapter as MMA} from "../modules/MMActionAdapter.sol";
+import {MMActionAdapter as MMA} from "../libraries/MMActionAdapter.sol";
 import {MarketMakerTestBase} from "../modules/MMTestBase.sol";
 import {MarketMaker} from "../../src/libraries/MarketMaker.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
