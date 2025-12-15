@@ -865,14 +865,14 @@ library VTSPositionLib {
                 // Adding liquidity: Issue LCCs
                 _handleLiquidityIncrease(s, ctx, owner, poolKey, mmData.commitId, id, params, principalDelta);
             } else if (params.liquidityDelta < 0) {
-                // We need to store deltas that will be used in the `_handleLiquidityDecrease` function
-                // We cannot cancel the LCC's here because at this point in the flow,
-                // the LCC's are not yet deposited into the MMPM by the poolManager on modification of liquidity
-                // store the deltas required to facilitate the burning of the LCC'S in transient storage
-                // they will then be consumed in the `_handleLiquidityDecrease` function after modification of liquidity is complete
-                TransientSlots.setRequiredSettlementDelta(id, requiredSettlementDelta);
-                // store the principalDelta in transient storage
-                TransientSlots.setPrincipalDelta(id, principalDelta);
+                // Removing liquidity: Cancel LCCs
+                // Use locker from hookData if available, otherwise default to owner (MMPM)
+
+                // @note We cannot cancel directly at this point in the flow,
+                // The LCC's are not yet deposited into the MMPM by the poolManager - as we're during modification of liquidity.
+                // Therefore, we plan to cancel the LCC's and queue the settlement once this settlement occurs.
+                address queueRecipient = PositionModificationHookDataLib.getLocker(mmData, owner);
+                _handleLiquidityDecrease(ctx, owner, poolKey, principalDelta, requiredSettlementDelta, queueRecipient);
             }
 
             // Mark RFS checkpoint
@@ -984,16 +984,18 @@ library VTSPositionLib {
         address lcc1 = Currency.unwrap(poolKey.currency1);
 
         ctx.liquidityHub
-            .cancelWithQueue(
+            .planCancelWithQueue(
                 lcc0,
+                address(ctx.poolManager),
                 owner,
                 LiquidityUtils.safeInt128ToUint256(principalDelta.amount0()),
                 LiquidityUtils.safeInt128ToUint256(queuedDelta.amount0()),
                 queueRecipient
             );
         ctx.liquidityHub
-            .cancelWithQueue(
+            .planCancelWithQueue(
                 lcc1,
+                address(ctx.poolManager),
                 owner,
                 LiquidityUtils.safeInt128ToUint256(principalDelta.amount1()),
                 LiquidityUtils.safeInt128ToUint256(queuedDelta.amount1()),

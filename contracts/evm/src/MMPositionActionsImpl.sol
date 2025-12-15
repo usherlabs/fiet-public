@@ -378,7 +378,7 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
 
         positionId = PositionLibrary.generateId(address(this), params);
         bytes memory hookData = PositionModificationHookDataLib.encode(tokenId, positionIndex, msgSender());
-        _modifySyntheticLiquidityInternal(poolKey, params, hookData);
+        _modifySyntheticLiquidity(poolKey, params, hookData);
     }
 
     /// @notice Increases liquidity using available delta credits
@@ -539,20 +539,7 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
             salt: salt
         });
 
-        _modifySyntheticLiquidityInternal(poolKey, params, hookData);
-    }
-
-    function _modifySyntheticLiquidityInternal(
-        PoolKey calldata poolKey,
-        ModifyLiquidityParams memory params,
-        bytes memory hookData
-    ) internal {
         _modifySyntheticLiquidity(poolKey, params, hookData);
-
-        if (params.liquidityDelta < 0) {
-            // TODO: Clean this up.
-            vtsOrchestrator.onDecreaseLiquidity(address(this), poolKey, params, hookData);
-        }
     }
 
     /// @notice Decreases liquidity from an existing position
@@ -607,7 +594,7 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
 
         positionId = PositionLibrary.generateId(address(this), params);
         bytes memory hookData = PositionModificationHookDataLib.encode(tokenId, positionIndex, msgSender());
-        _modifySyntheticLiquidityInternal(poolKey, params, hookData);
+        _modifySyntheticLiquidity(poolKey, params, hookData);
     }
 }
 

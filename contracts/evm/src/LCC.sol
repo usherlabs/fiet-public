@@ -192,6 +192,9 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
             revert Errors.TransferNotAllowed();
         }
 
+        // Check for planned cancellations on this transfer path
+        hub.executePlannedCancel(from, to);
+
         if (fromProtocol && toProtocol) {
             // Protocol -> Protocol: do not accrue buckets to protocol addresses
             return;
@@ -206,9 +209,7 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
                 revert Errors.InsufficientBalance(totalBalance, amount);
             }
             // Before adjusting local buckets, annul any portion that bleeds into queued settlements
-            hub.annulSettlementBeforeTransfer(
-                address(this), from, wrappedBalances[from], marketDerivedBalances[from], amount
-            );
+            hub.annulSettlementBeforeTransfer(from, wrappedBalances[from], marketDerivedBalances[from], amount);
             uint256 fromMarketDerived = Math.min(marketDerivedBalances[from], amount);
             marketDerivedBalances[from] -= fromMarketDerived;
             uint256 remaining = amount - fromMarketDerived;

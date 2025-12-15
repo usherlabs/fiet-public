@@ -272,16 +272,4 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta {
     /// @param positionId The position identifier
     /// @return checkpoint The RFS checkpoint for the position
     function positionToCheckpoint(PositionId positionId) external view returns (RFSCheckpoint memory);
-
-    /// @notice Called by the PositionManagerImpl after decreasing liquidity from the pool
-    /// @param owner The owner of the position
-    /// @param poolKey The pool key
-    /// @param params The modify liquidity params
-    /// @param hookData The hook data containing PositionModificationHookData for MM operations
-    function onDecreaseLiquidity(
-        address owner,
-        PoolKey calldata poolKey,
-        ModifyLiquidityParams calldata params,
-        bytes calldata hookData
-    ) external;
 }

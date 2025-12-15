@@ -13,13 +13,15 @@ import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {ReentrancyGuardTransient} from "openzeppelin-contracts/contracts/utils/ReentrancyGuardTransient.sol";
 import {Errors} from "./libraries/Errors.sol";
 import {IMarketVault} from "./interfaces/IMarketVault.sol";
+import {TransientSlots} from "./libraries/TransientSlots.sol";
+import {ILiquidityHub} from "./interfaces/ILiquidityHub.sol";
 
 /**
  * @title LiquidityHub
  * @notice Factory contract for creating Fiet protocol markets with LCC tokens and pool management
  * @dev Manages LCC token creation, pool deployment, and protocol bounds administration
  */
-contract LiquidityHub is Ownable, ReentrancyGuardTransient {
+contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
     using CurrencyTransfer for Currency;
 
     // ============ UNIFIED STATE ============
@@ -597,7 +599,7 @@ contract LiquidityHub is Ownable, ReentrancyGuardTransient {
         uint256 principalAmount,
         uint256 queueAmount,
         address recipient
-    ) external onlyIssuer(lcc) onlyValidLcc(lcc) nonReentrant {
+    ) public onlyIssuer(lcc) onlyValidLcc(lcc) nonReentrant {
         if (principalAmount == 0) {
             revert Errors.InvalidAmount(0, 0);
         }
@@ -613,6 +615,57 @@ contract LiquidityHub is Ownable, ReentrancyGuardTransient {
         if (queueAmount > 0) {
             _queueSettlement(lcc, recipient, queueAmount);
         }
+    }
+
+    /**
+     * @notice Plans a cancel operation to be executed on a specific transfer path
+     * @dev Stores cancellation parameters in transient storage, keyed by transfer path (lcc, from, to)
+     * @param lcc The LCC token address
+     * @param sender The expected sender of the transfer (e.g., poolManager)
+     * @param cancelFromRecipient The expected recipient of the transfer (e.g., MMPM owner)
+     * @param amount The amount to cancel
+     */
+    function planCancel(address lcc, address sender, address cancelFromRecipient, uint256 amount)
+        external
+        onlyIssuer(lcc)
+        onlyValidLcc(lcc)
+        nonReentrant
+    {
+        if (amount == 0) {
+            revert Errors.InvalidAmount(0, 0);
+        }
+
+        // Store the planned cancel in transient storage
+        TransientSlots.setPlanCancel(lcc, sender, cancelFromRecipient, amount);
+    }
+
+    /**
+     * @notice Plans a cancel with queue operation to be executed on a specific transfer path
+     * @dev Stores cancellation parameters in transient storage, keyed by transfer path (lcc, from, to)
+     * @param lcc The LCC token address
+     * @param sender The expected sender of the transfer (e.g., poolManager)
+     * @param cancelFromRecipient The expected recipient of the transfer (e.g., MMPM owner)
+     * @param principalAmount Total amount to cancel (burn now) or queue (burn later)
+     * @param queueAmount The amount to queue for settlement (must be <= principalAmount)
+     * @param recipient The recipient address for the queued settlement
+     */
+    function planCancelWithQueue(
+        address lcc,
+        address sender,
+        address cancelFromRecipient,
+        uint256 principalAmount,
+        uint256 queueAmount,
+        address recipient
+    ) external onlyIssuer(lcc) onlyValidLcc(lcc) nonReentrant {
+        if (principalAmount == 0) {
+            revert Errors.InvalidAmount(0, 0);
+        }
+        if (queueAmount > principalAmount) {
+            revert Errors.InvalidAmount(queueAmount, principalAmount);
+        }
+
+        // Store the planned cancel with queue in transient storage
+        TransientSlots.setPlanCancelWithQueue(lcc, sender, cancelFromRecipient, principalAmount, queueAmount, recipient);
     }
 
     /**
@@ -691,24 +744,38 @@ contract LiquidityHub is Ownable, ReentrancyGuardTransient {
         LiquidityHubLib.processSettlementLogic(s, lcc, recipient, maxAmount, msg.sender);
     }
 
-    /**
-     * @notice Annul a user's queued settlement prior to a protocol-bound transfer
-     * @dev If the transfer amount exceeds the user's current liquid balance (wrapped + marketDerived),
-     *      the excess "bleed" will be removed from their queued settlement up to the queued amount.
-     * @param lcc The LCC token address
-     * @param from The user initiating the transfer
-     * @param amountToTransfer The amount intended to be transferred
-     */
+    // -----------------------------------
+    // LCC triggered functions
+    // -----------------------------------
+
+    /// @inheritdoc ILiquidityHub
+    function executePlannedCancel(address sender, address cancelFromRecipient) external onlyValidLcc(_msgSender()) {
+        address lcc = _msgSender();
+
+        // Check for planned cancel with queue first (more specific)
+        (uint256 principalAmount, uint256 queueAmount, address queueRecipient) =
+            TransientSlots.consumePlanCancelWithQueue(lcc, sender, cancelFromRecipient);
+
+        if (principalAmount > 0) {
+            cancelWithQueue(lcc, cancelFromRecipient, principalAmount, queueAmount, queueRecipient);
+            return;
+        }
+
+        // Check for simple planned cancel
+        uint256 amount = TransientSlots.consumePlanCancel(lcc, sender, cancelFromRecipient);
+        if (amount > 0) {
+            _burn(lcc, cancelFromRecipient, 0, amount, true);
+        }
+    }
+
+    /// @inheritdoc ILiquidityHub
     function annulSettlementBeforeTransfer(
-        address lcc,
         address from,
         uint256 wrappedBalance,
         uint256 marketDerivedBalance,
         uint256 amountToTransfer
-    ) external onlyValidLcc(lcc) {
-        if (_msgSender() != lcc) {
-            revert Errors.InvalidSender();
-        }
+    ) external onlyValidLcc(_msgSender()) {
+        address lcc = _msgSender();
 
         uint256 queued = s.settleQueue[lcc][from];
         if (queued == 0 || amountToTransfer == 0) {

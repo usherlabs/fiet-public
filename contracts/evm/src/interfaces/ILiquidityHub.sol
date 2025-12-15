@@ -76,6 +76,33 @@ interface ILiquidityHub {
         address recipient
     ) external;
 
+    /**
+     * @notice Plans a cancel operation to be executed on a specific transfer path
+     * @param lcc The LCC token address
+     * @param awaitingLastOwner The expected sender of the transfer
+     * @param cancelFromNextOwner The expected recipient of the transfer
+     * @param amount The amount to cancel
+     */
+    function planCancel(address lcc, address awaitingLastOwner, address cancelFromNextOwner, uint256 amount) external;
+
+    /**
+     * @notice Plans a cancel with queue operation to be executed on a specific transfer path
+     * @param lcc The LCC token address
+     * @param awaitingLastOwner The expected sender of the transfer
+     * @param cancelFromNextOwner The expected recipient of the transfer
+     * @param principalAmount Total amount to cancel (burn now) or queue (burn later)
+     * @param queueAmount The amount to queue for settlement
+     * @param recipient The recipient address for the queued settlement
+     */
+    function planCancelWithQueue(
+        address lcc,
+        address awaitingLastOwner,
+        address cancelFromNextOwner,
+        uint256 principalAmount,
+        uint256 queueAmount,
+        address recipient
+    ) external;
+
     // ============ Trader wrapping/unwrapping ============
     function wrapTo(address lcc, address to, uint256 amount) external payable;
     function wrapTo(address underlying, bytes32 marketId, address to, uint256 amount) external payable;
@@ -188,19 +215,24 @@ interface ILiquidityHub {
      * @notice Annul a user's queued settlement prior to a protocol-bound transfer
      * @dev If the transfer amount exceeds the user's current liquid balance (wrapped + marketDerived),
      *      the excess "bleed" will be removed from their queued settlement up to the queued amount.
-     * @param lcc The LCC token address
      * @param from The user initiating the transfer
      * @param wrappedBalance The user's wrapped balance
      * @param marketDerivedBalance The user's market-derived balance
      * @param amountToTransfer The amount intended to be transferred
      */
     function annulSettlementBeforeTransfer(
-        address lcc,
         address from,
         uint256 wrappedBalance,
         uint256 marketDerivedBalance,
         uint256 amountToTransfer
     ) external;
+
+    /**
+     * @notice Called by LCC on transfer to execute any planned cancellations
+     * @param sender The expected sender of the transfer (e.g., poolManager)
+     * @param cancelFromRecipient The expected recipient of the transfer (e.g., MMPM)
+     */
+    function executePlannedCancel(address sender, address cancelFromRecipient) external;
 
     // ============ Factory Management ============
 
