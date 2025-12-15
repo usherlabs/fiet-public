@@ -272,4 +272,28 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta {
     /// @param positionId The position identifier
     /// @return checkpoint The RFS checkpoint for the position
     function positionToCheckpoint(PositionId positionId) external view returns (RFSCheckpoint memory);
+
+    /// @notice Collect LCC fees by converting ERC-6909 claims to actual ERC20 tokens
+    /// @dev Must be called during an active PoolManager unlock context. The caller must have ERC-6909 claims
+    ///      and positive VTS delta credit for the LCC currency.
+    /// @param lccCurrency The LCC currency to collect fees for
+    /// @param recipient The recipient of the actual ERC20 tokens
+    /// @param maxAmount The maximum amount to collect (0 = collect full available credit)
+    /// @return collected The amount actually collected
+    function collectFees(Currency lccCurrency, address recipient, uint256 maxAmount)
+        external
+        returns (uint256 collected);
+
+
+    /// @notice Called by the PositionManagerImpl after decreasing liquidity from the pool
+    /// @param owner The owner of the position
+    /// @param poolKey The pool key
+    /// @param params The modify liquidity params
+    /// @param hookData The hook data containing PositionModificationHookData for MM operations
+    function onDecreaseLiquidity(
+        address owner,
+        PoolKey calldata poolKey,
+        ModifyLiquidityParams calldata params,
+        bytes calldata hookData
+    ) external;
 }
