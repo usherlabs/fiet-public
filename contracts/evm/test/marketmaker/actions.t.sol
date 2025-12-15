@@ -1,0 +1,485 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+import "forge-std/Test.sol";
+// solhint-disable max-line-length
+
+import {BalanceDelta, toBalanceDelta, add} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {CurrencyLibrary, Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
+import {LiquidityCommitmentCertificate} from "../../src/LCC.sol";
+import {IMarketFactory} from "../../src/interfaces/IMarketFactory.sol";
+import {LiquidityUtils} from "../../src/libraries/LiquidityUtils.sol";
+import {console} from "forge-std/console.sol";
+import {MarketTestBase} from "../modules/MarketTestBase.sol";
+import {MMPositionManager} from "../../src/MMPositionManager.sol";
+import {MMActionAdapter as MMA} from "../libraries/MMActionAdapter.sol";
+import {MarketMakerTestBase} from "../modules/MMTestBase.sol";
+import {MarketMaker} from "../../src/libraries/MarketMaker.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {PositionId} from "../../src/types/Position.sol";
+import {MarketVTSConfiguration} from "../../src/types/VTS.sol";
+import {MockERC20} from "../_mocks/MockERC20.sol";
+import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
+import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
+import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
+import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
+import {IOracleHelper} from "../../src/interfaces/IOracleHelper.sol";
+import {Errors} from "../../src/libraries/Errors.sol";
+import {Position} from "../../src/types/Position.sol";
+import {RFSCheckpoint} from "../../src/types/Checkpoint.sol";
+import {ILCC} from "../../src/interfaces/ILCC.sol";
+import {ILiquidityHub} from "../../src/interfaces/ILiquidityHub.sol";
+import {IVRLSignalManager} from "../../src/interfaces/IVRLSignalManager.sol";
+import {LiquiditySignal} from "../../src/types/Commit.sol";
+import {IVTSOrchestrator} from "../../src/interfaces/IVTSOrchestrator.sol";
+
+contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
+    using SafeCast for *;
+    using PoolIdLibrary for PoolId;
+    using CurrencyLibrary for Currency;
+    using MarketMaker for MarketMaker.State;
+    using StateLibrary for IPoolManager;
+
+    MMPositionManager internal positionManager;
+    MarketVTSConfiguration internal marketVTSConfiguration;
+
+    LiquidityCommitmentCertificate internal lcc0;
+    LiquidityCommitmentCertificate internal lcc1;
+
+    address guarantor = makeAddr("guarantor");
+    uint256 guarantorInitialBalance = 10000e18;
+    ModifyLiquidityParams defaultlLiquidityParams =
+        ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e18, salt: bytes32(0)});
+
+    function setUp() public {
+        _setupMarket();
+        _setUpMM();
+        console.log("setUP() mmPositionManager", address(mmPositionManager));
+        positionManager = MMPositionManager(payable(mmPositionManager));
+        lcc0 = LiquidityCommitmentCertificate(payable(Currency.unwrap(_currency2)));
+        lcc1 = LiquidityCommitmentCertificate(payable(Currency.unwrap(_currency3)));
+
+        marketVTSConfiguration = IVTSOrchestrator(vtsOrchestrator).getMarketVTSConfiguration(corePoolKey.toId());
+
+        // approve the lccs to the mmPositionManager to be able to route tokens to the pool manager
+        // lcc0.approve(address(mmPositionManager), Constants.MAX_UINT256);
+        // lcc1.approve(address(mmPositionManager), Constants.MAX_UINT256);
+        // Mock the proxyHookToCurrencyPair function in order to make this caller appear to be an issuer
+        // when deploying the factory the mmposiiton manager will be provided and thus whitelsited
+        // but since we are mocking the factory, we need to mock a way to return the mmposition manager as an issuer
+        address[2] memory mockCurrencies = [address(lcc0.underlying()), address(lcc1.underlying())];
+        vm.mockCall(
+            marketFactory,
+            abi.encodeWithSelector(IMarketFactory.proxyHookToCurrencyPair.selector, address(mmPositionManager)),
+            abi.encode(mockCurrencies)
+        );
+        // mock the factory to return the right core hook
+        vm.mockCall(
+            marketFactory, abi.encodeWithSelector(IMarketFactory.coreToProxy.selector), abi.encode(proxyPoolKey.toId())
+        );
+        // mock the factory to return the right proxy hook
+        vm.mockCall(marketFactory, abi.encodeWithSelector(IMarketFactory.proxyToHook.selector), abi.encode(proxyHook));
+
+        // mock liquidityHub.getFactory to return the mocked marketFactory
+        vm.mockCall(
+            liquidityHub,
+            abi.encodeWithSelector(ILiquidityHub.getFactory.selector, address(lcc0), address(lcc1)),
+            abi.encode(marketFactory)
+        );
+
+        // mock the price oracles to return prices
+        vm.mockCall(
+            address(oracleHelper),
+            abi.encodeWithSelector(IOracleHelper.getPricesForLccPair.selector),
+            abi.encode(uint256(1), uint256(1))
+        );
+        // supply enough
+        vm.mockCall(
+            address(oracleHelper), abi.encodeWithSelector(IOracleHelper.getTotalValue.selector), abi.encode(1e18)
+        );
+    }
+
+    // use this function to calculate the minumum amount of underlying assets that need to be settled in order to mint a position
+    function approveRequiredSettlementAmounts(ModifyLiquidityParams memory liquidityParams)
+        public
+        returns (uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1)
+    {
+        // Calculate settlement amounts
+        (requiredSettlementAmount0, requiredSettlementAmount1) =
+            _calculateSettlementAmounts(liquidityParams, marketVTSConfiguration);
+
+        // Approve underlying tokens since they will be used to settle the position
+        _approveForPositionManager(
+            address(lcc0.underlying()),
+            address(lcc1.underlying()),
+            address(positionManager),
+            requiredSettlementAmount0,
+            requiredSettlementAmount1
+        );
+    }
+
+    function approveAndSettleUnderlyingToPosition(
+        uint256 tokenId,
+        uint256 positionIndex,
+        uint256 settlementAmount0,
+        uint256 settlementAmount1
+    ) public {
+        // Approve the underlying tokens to be used to settle the position
+        IERC20(lcc0.underlying()).approve(address(positionManager), settlementAmount0);
+        IERC20(lcc1.underlying()).approve(address(positionManager), settlementAmount1);
+
+        // Settle the position
+        MMA.settle(
+            positionManager,
+            corePoolKey,
+            tokenId,
+            positionIndex,
+            -int128(int256(settlementAmount0)),
+            -int128(int256(settlementAmount1))
+        );
+    }
+
+    function createPosition(
+        ModifyLiquidityParams memory liquidityParams,
+        bytes memory liquiditySignalBytes,
+        uint256 tokenId,
+        uint256 positionIndex
+    ) public {
+        // Approve the required settlement amounts to be taken by the manager
+        (uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) =
+            approveRequiredSettlementAmounts(liquidityParams);
+
+        // Batch commit and mint and settle the position
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](3);
+        actions[0] = MMA.prepareCommit(liquiditySignalBytes);
+        actions[1] = MMA.prepareMint(
+            corePoolKey,
+            tokenId,
+            liquidityParams.tickLower,
+            liquidityParams.tickUpper,
+            uint256(liquidityParams.liquidityDelta)
+        );
+        actions[2] = MMA.prepareSettle(
+            corePoolKey,
+            tokenId,
+            positionIndex,
+            -int128(int256(requiredSettlementAmount0)),
+            -int128(int256(requiredSettlementAmount1)),
+            false // usePositionManagerBalance
+        );
+
+        // Use modifyLiquidities which handles unlocking automatically
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+    }
+
+    function testCanCommitMintAndSettlePosition() public {
+        uint256 tokenId = 1;
+        uint256 positionIndex = 0;
+
+        // create a new position with the default liquidity params and liquidity signal
+        createPosition(defaultlLiquidityParams, abi.encode(liquiditySignal), tokenId, positionIndex);
+
+        // test conditions to ensure that a position was committed and minted and settled to
+        // for commitment testing:
+        (MarketMaker.State memory mmState, uint256 expiresAt, uint256 positionCount) =
+            vtsOrchestrator.getCommit(tokenId);
+        assertEq(mmState.owner, liquiditySignal.mmState.owner);
+        assertEq(expiresAt, block.timestamp + 3600);
+        assertEq(positionCount, 1);
+
+        // validate the owner of the NFT minted is the caller of the function
+        assertEq(positionManager.ownerOf(tokenId), address(this));
+
+        // for minting testing:
+        (Position memory positionAfter, PositionId positionId) = positionManager.getPosition(tokenId, positionIndex);
+        assertEq(positionAfter.owner, address(positionManager));
+        assertEq(PoolId.unwrap(positionAfter.poolId), PoolId.unwrap(corePoolKey.toId()));
+        assertEq(positionAfter.commitId, tokenId);
+        assertEq(positionAfter.tickLower, defaultlLiquidityParams.tickLower);
+        assertEq(positionAfter.tickUpper, defaultlLiquidityParams.tickUpper);
+        assertEq(uint256(positionAfter.liquidity), uint256(defaultlLiquidityParams.liquidityDelta));
+        assertEq(positionAfter.isActive, true);
+
+        (uint256 vtsCurrent0AfterSettlement, uint256 vtsCurrent1AfterSettlement) =
+            vtsOrchestrator.calcVTSCurrent(positionId);
+        console.log("vtsCurrent0AfterSettlement", vtsCurrent0AfterSettlement);
+        console.log("vtsCurrent1AfterSettlement", vtsCurrent1AfterSettlement);
+
+        // since we basically just made another settlement equal to the base vts, the vts should be doubled
+        uint256 vtsCurrent0AfterSettlementBips = (vtsCurrent0AfterSettlement * 10000) / 1e18;
+        uint256 vtsCurrent1AfterSettlementBips = (vtsCurrent1AfterSettlement * 10000) / 1e18;
+
+        assertEq(vtsCurrent0AfterSettlementBips, marketVTSConfiguration.token0.baseVTSRate);
+        assertEq(vtsCurrent1AfterSettlementBips, marketVTSConfiguration.token1.baseVTSRate);
+    }
+
+    function testCanBurnAndWithdrawCreatedPosition() public {
+        uint256 tokenId = 1;
+        uint256 positionIndex = 0;
+
+        // create a new position with the default liquidity params and liquidity signal
+        createPosition(defaultlLiquidityParams, abi.encode(liquiditySignal), tokenId, positionIndex);
+
+        // get underlying asset balance before burning a position
+        uint256 token0BalanceBefore = Currency.wrap(lcc0.underlying()).balanceOf(address(this));
+        uint256 token1BalanceBefore = Currency.wrap(lcc1.underlying()).balanceOf(address(this));
+
+        // Batch burn and withdraw from the position
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
+        actions[0] = MMA.prepareBurn(corePoolKey, tokenId, positionIndex);
+        actions[1] = MMA.prepareSettleFromDeltas(corePoolKey, tokenId, 0, true);
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+
+        // get the underlying asset balance after burning a position
+        uint256 token0BalanceAfter = Currency.wrap(lcc0.underlying()).balanceOf(address(this));
+        uint256 token1BalanceAfter = Currency.wrap(lcc1.underlying()).balanceOf(address(this));
+
+        console.log("token0BalanceBefore", token0BalanceBefore);
+        console.log("token0BalanceAfter ", token0BalanceAfter);
+        console.log("token1BalanceBefore", token1BalanceBefore);
+        console.log("token1BalanceAfter ", token1BalanceAfter);
+
+        // validate the underlying tokens were redeemed and thus the balance of the caller has increased
+        assertGt(token0BalanceAfter, token0BalanceBefore);
+        assertGt(token1BalanceAfter, token1BalanceBefore);
+    }
+
+    //     function testCanDecommitAndWithdrawByTokenId() public {
+    //         uint256 tokenId = 1;
+    //         uint256 positionIndex = 0;
+
+    //         // create a new position with the default liquidity params and liquidity signal
+    //         createPosition(
+    //             defaultlLiquidityParams,
+    //             abi.encode(liquiditySignal),
+    //             tokenId,
+    //             positionIndex
+    //         );
+
+    //         // get underlying asset balance before decommitment
+    //         uint256 token0BalanceBefore = Currency
+    //             .wrap(lcc0.underlying())
+    //             .balanceOf(address(this));
+    //         uint256 token1BalanceBefore = Currency
+    //             .wrap(lcc1.underlying())
+    //             .balanceOf(address(this));
+
+    //         MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
+    //         actions[0] = MMA.prepareDecommit(corePoolKey, tokenId);
+    //         actions[1] = MMA.prepareSettleFromDeltas(
+    //             corePoolKey,
+    //             tokenId,
+    //             0,
+    //             false,
+    //             false
+    //         );
+    //         MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+
+    //         // get underlying asset balance after decommitment
+    //         uint256 token0BalanceAfter = Currency.wrap(lcc0.underlying()).balanceOf(
+    //             address(this)
+    //         );
+    //         uint256 token1BalanceAfter = Currency.wrap(lcc1.underlying()).balanceOf(
+    //             address(this)
+    //         );
+
+    //         // Validate the underlying tokens were redeemed and thus the balance of the caller has increased
+    //         assertGt(token0BalanceAfter, token0BalanceBefore);
+    //         assertGt(token1BalanceAfter, token1BalanceBefore);
+    //     }
+
+    //     function testCanSettleAndIncreasePositionLiquidity() public {
+    //         uint256 tokenId = 1;
+    //         uint256 positionIndex = 0;
+
+    //         // create a new position with the default liquidity params and liquidity signal
+    //         createPosition(
+    //             defaultlLiquidityParams,
+    //             abi.encode(liquiditySignal),
+    //             tokenId,
+    //             positionIndex
+    //         );
+
+    //         // make settlements for the position
+    //         uint256 settlementAmount = 1000000e18;
+
+    //         // make a settlement for the position over the required settlement amounts, so we can usea the excess funds to increase the liquidity
+    //         approveAndSettleUnderlyingToPosition(
+    //             tokenId,
+    //             positionIndex,
+    //             settlementAmount,
+    //             settlementAmount
+    //         );
+
+    //         Position memory positionBeforeIncrease = positionManager.getPosition(
+    //             tokenId,
+    //             positionIndex
+    //         );
+
+    //         // increase the liquidity in the position by a specified amount
+    //         uint256 liquidityToIncrease = 1000;
+    //         MMA.increase(
+    //             positionManager,
+    //             corePoolKey,
+    //             tokenId,
+    //             positionIndex,
+    //             defaultlLiquidityParams.tickLower,
+    //             defaultlLiquidityParams.tickUpper,
+    //             liquidityToIncrease
+    //         );
+
+    //         // validate the liquidity in the position is increased
+    //         Position memory positionAfterIncrease = positionManager.getPosition(
+    //             tokenId,
+    //             positionIndex
+    //         );
+    //         assertEq(
+    //             uint256(positionAfterIncrease.liquidity),
+    //             uint256(positionBeforeIncrease.liquidity) + liquidityToIncrease
+    //         );
+
+    //         // get the settlement delta after the increase in position liquidity, and it should be zero because we have settled excess funds to the position
+    //         BalanceDelta settlementDeltaAfterIncrease = vtsOrchestrator
+    //             .getSettlementDelta(address(this), address(lcc0), address(lcc1));
+    //         assertEq(settlementDeltaAfterIncrease.amount0(), 0);
+    //         assertEq(settlementDeltaAfterIncrease.amount1(), 0);
+    //     }
+
+    //     function testCanDecreaseAndWithdraw() public {
+    //         uint256 tokenId = 1;
+    //         uint256 positionIndex = 0;
+
+    //         // create a new position with the default liquidity params and liquidity signal
+    //         createPosition(
+    //             defaultlLiquidityParams,
+    //             abi.encode(liquiditySignal),
+    //             tokenId,
+    //             positionIndex
+    //         );
+
+    //         // make settlements for the position
+    //         uint256 settlementAmount = 100e18;
+    //         approveAndSettleUnderlyingToPosition(
+    //             tokenId,
+    //             positionIndex,
+    //             settlementAmount,
+    //             settlementAmount
+    //         );
+
+    //         // get the user's underlying asset balance before decreasing the liquidity
+    //         uint256 token0BalanceBefore = Currency
+    //             .wrap(lcc0.underlying())
+    //             .balanceOf(address(this));
+    //         uint256 token1BalanceBefore = Currency
+    //             .wrap(lcc1.underlying())
+    //             .balanceOf(address(this));
+
+    //         // decrease the liquidity in the position by a specified amount and withdraw the credits to the user
+    //         uint256 liquidityToDecrease = 100000;
+    //         MMA.decrease(
+    //             positionManager,
+    //             corePoolKey,
+    //             tokenId,
+    //             positionIndex,
+    //             liquidityToDecrease
+    //         );
+
+    //         // get the user's required settlement amounts
+    //         MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
+    //         actions[0] = MMA.prepareDecommit(corePoolKey, tokenId);
+    //         actions[1] = MMA.prepareSettleFromDeltas(
+    //             corePoolKey,
+    //             tokenId,
+    //             0,
+    //             false,
+    //             false
+    //         );
+    //         MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+
+    //         // get the user's underlying asset balance after decreasing the liquidity and withdrawing the credits
+    //         uint256 token0BalanceAfter = Currency.wrap(lcc0.underlying()).balanceOf(
+    //             address(this)
+    //         );
+    //         uint256 token1BalanceAfter = Currency.wrap(lcc1.underlying()).balanceOf(
+    //             address(this)
+    //         );
+
+    //         // validate the user's underlying asset balance has increased
+    //         assertGt(token0BalanceAfter, token0BalanceBefore);
+    //         assertGt(token1BalanceAfter, token1BalanceBefore);
+
+    //         // TODO: uncomment this when the tests re migrated to the branch including clamping
+    //         // validate the required settlement amounts are greater than or equal to zero ie. the user does not owe any funds to the pool manager
+    //         // BalanceDelta requiredSettlementAmount = vtsOrchestrator.getSettlementDelta(address(this), address(lcc0), address(lcc1));
+    //         // console.log("requiredSettlementAmount.amount0()", requiredSettlementAmount.amount0());
+    //         // console.log("requiredSettlementAmount.amount1()", requiredSettlementAmount.amount1());
+    //         // assertEq(requiredSettlementAmount.amount0(), 0);
+    //         // assertEq(requiredSettlementAmount.amount1(), 0);
+    //     }
+
+    //     function testCanDecreaseAndSettleAnotherPositionFromDeltas() public {
+    //         uint256 tokenId = 1;
+    //         uint256 positionIndexToDecrease = 0;
+
+    //         // create a new position with the default liquidity params and liquidity signal
+    //         createPosition(
+    //             defaultlLiquidityParams,
+    //             abi.encode(liquiditySignal),
+    //             tokenId,
+    //             positionIndexToDecrease
+    //         );
+
+    //         // make an excess settlement for the position
+    //         uint256 settlementAmount = 10000e18;
+    //         approveAndSettleUnderlyingToPosition(
+    //             tokenId,
+    //             positionIndexToDecrease,
+    //             settlementAmount,
+    //             settlementAmount
+    //         );
+
+    //         // create a new position using the decrease and mint new position
+    //         uint256 positionIndexToSettle = 1;
+    //         uint256 liquidityToDecrease = 10000;
+
+    //         // create another position using another signal
+    //         createPosition(
+    //             defaultlLiquidityParams,
+    //             abi.encode(renewSignal),
+    //             tokenId,
+    //             positionIndexToSettle
+    //         );
+
+    //         // get the settlement amounts made for the created position
+    //         (
+    //             uint256 positionSettledAmount0,
+    //             uint256 positionSettledAmount1
+    //         ) = vtsOrchestrator.getPositionSettledAmounts(
+    //                 vtsOrchestrator.getPositionId(tokenId, positionIndexToSettle)
+    //             );
+
+    //         console.log("positionSettledAmount0", positionSettledAmount0);
+    //         console.log("positionSettledAmount1", positionSettledAmount1);
+
+    //         // decrease from one position and settle to another position
+    //         MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
+    //         actions[0] = MMA.prepareDecrease(
+    //             corePoolKey,
+    //             tokenId,
+    //             positionIndexToDecrease,
+    //             liquidityToDecrease
+    //         );
+    //         actions[1] = MMA.prepareSettleFromDeltas(
+    //             corePoolKey,
+    //             tokenId,
+    //             positionIndexToSettle,
+    //             true,
+    //             true
+    //         );
+    //         MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+
+    //         // get the settlement amounts made for the newly created position
+    //     }
+}

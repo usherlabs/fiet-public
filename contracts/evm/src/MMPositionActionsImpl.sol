@@ -27,6 +27,8 @@ import {MMHelpers} from "./libraries/MMHelpers.sol";
 import {Locker} from "v4-periphery/src/libraries/Locker.sol";
 import {DelegateCallGuard} from "./modules/DelegateCallGuard.sol";
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
+import {console} from "forge-std/console.sol";
+import {ILCC} from "./interfaces/ILCC.sol";
 
 /// @title MMPositionActionsImpl
 /// @notice Implementation contract for MMPositionManager position operations
@@ -276,6 +278,7 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
 
         address sender = msgSender();
         address valueSender = usePositionManagerBalance ? address(this) : sender;
+
         if (delta0 < 0) {
             underlying0.transferFrom(valueSender, address(vault), LiquidityUtils.safeInt128ToUint256(delta0));
             if (usePositionManagerBalance) {
@@ -375,7 +378,7 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
 
         positionId = PositionLibrary.generateId(address(this), params);
         bytes memory hookData = PositionModificationHookDataLib.encode(tokenId, positionIndex, msgSender());
-        _modifySyntheticLiquidity(poolKey, params, hookData);
+        _modifySyntheticLiquidityInternal(poolKey, params, hookData);
     }
 
     /// @notice Increases liquidity using available delta credits
@@ -536,7 +539,19 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
             salt: salt
         });
 
+        _modifySyntheticLiquidityInternal(poolKey, params, hookData);
+    }
+
+    function _modifySyntheticLiquidityInternal(
+        PoolKey calldata poolKey,
+        ModifyLiquidityParams memory params,
+        bytes memory hookData
+    ) internal {
         _modifySyntheticLiquidity(poolKey, params, hookData);
+
+        if (params.liquidityDelta < 0) {
+            vtsOrchestrator.onDecreaseLiquidity(address(this), poolKey, params, hookData);
+        }
     }
 
     /// @notice Decreases liquidity from an existing position
@@ -591,7 +606,7 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
 
         positionId = PositionLibrary.generateId(address(this), params);
         bytes memory hookData = PositionModificationHookDataLib.encode(tokenId, positionIndex, msgSender());
-        _modifySyntheticLiquidity(poolKey, params, hookData);
+        _modifySyntheticLiquidityInternal(poolKey, params, hookData);
     }
 }
 

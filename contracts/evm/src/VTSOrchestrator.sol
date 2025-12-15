@@ -21,6 +21,7 @@ import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager
 import {VTSStorage} from "./types/VTS.sol";
 import {IVTSOrchestrator} from "./interfaces/IVTSOrchestrator.sol";
 import {VTSPositionLib} from "./libraries/VTSPositionLib.sol";
+import {PositionLibrary} from "./types/Position.sol";
 import {VTSSwapLib} from "./libraries/VTSSwapLib.sol";
 import {VTSCommitLib} from "./libraries/VTSCommitLib.sol";
 import {Errors} from "./libraries/Errors.sol";
@@ -44,6 +45,10 @@ import {VTSFeeLib} from "./libraries/VTSFeeLib.sol";
 import {DynamicCurrencyDelta} from "./libraries/DynamicCurrencyDelta.sol";
 import {IMarketVault} from "./interfaces/IMarketVault.sol";
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
+import {LiquidityUtils} from "./libraries/LiquidityUtils.sol";
+import {console} from "forge-std/console.sol";
+import {toBalanceDelta} from "v4-periphery/lib/v4-core/src/types/BalanceDelta.sol";
+import {TransientSlots} from "./libraries/TransientSlots.sol";
 
 /// @title VTSOrchestrator
 /// @notice Central state management layer and orchestrator for VTS logic
@@ -247,7 +252,8 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
     function getPosition(uint256 commitId, uint256 positionIndex) public view returns (Position memory, PositionId) {
         PositionId positionId = s.commits[commitId].positions[positionIndex];
         // Assert position validity when accessing via commit/position index (used by MM helpers)
-        _assertPositionValid(positionId, true);
+        // we need to be able to access positions that are not active for when we are withdrawing from a position that has been closed
+        _assertPositionValid(positionId, false);
         return (s.positions[positionId], positionId);
     }
 
@@ -463,6 +469,34 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
         // LCC issuance/cancellation, and checkpoint marking
         (pos, id, feeAdj) =
             VTSPositionLib.touchPosition(s, ctx, owner, poolKey, params, callerDelta, feesAccrued, hookData);
+    }
+
+    // called by the mmpm afer liquidity has been decreased
+    function onDecreaseLiquidity(
+        address owner,
+        PoolKey calldata poolKey,
+        ModifyLiquidityParams calldata params,
+        bytes calldata hookData
+    ) external onlyIfPoolManagerUnlocked {
+        IMarketFactory factory = liquidityHub.getFactory(
+            Currency.unwrap(poolKey.currency0), Currency.unwrap(poolKey.currency1)
+        );
+        IMarketVault vault = MarketHandlerLib.getVault(factory, poolKey.toId());
+        PositionContext memory ctx = PositionContext({
+            poolManager: poolManager, liquidityHub: liquidityHub, oracleHelper: oracleHelper, marketVault: vault
+        });
+
+        PositionId positionId = PositionLibrary.generateId(owner, params);
+
+        BalanceDelta requiredSettlementDelta = TransientSlots.consumeRequiredSettlementDelta(positionId);
+        BalanceDelta principalDelta = TransientSlots.consumePrincipalDelta(positionId);
+
+        PositionModificationHookData memory mmData = PositionModificationHookDataLib.decodeCalldata(hookData);
+        address queueRecipient = PositionModificationHookDataLib.getLocker(mmData, owner);
+
+        VTSPositionLib._handleLiquidityDecrease(
+            ctx, owner, poolKey, principalDelta, requiredSettlementDelta, queueRecipient
+        );
     }
 
     /// @notice Called by CoreHook after a swap to process swap-related accounting

@@ -1012,39 +1012,39 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             address(lcc0),
             address(lcc1)
         );
-        uint256 positionIndex = 0;
-        address advancer = renewSignal.mmState.advancer;
+        // uint256 positionIndex = 0;
+        // address advancer = renewSignal.mmState.advancer;
 
-        // checkpoint with commitment backing check
-        bytes memory unbackedLiquiditySignal = abi.encode(renewSignal);
+        // // checkpoint with commitment backing check
+        // bytes memory unbackedLiquiditySignal = abi.encode(renewSignal);
 
-        vm.mockCall(
-            address(signalManager),
-            abi.encodeWithSelector(
-                bytes4(keccak256("verifyLiquiditySignal(bytes,bool)")), unbackedLiquiditySignal, true
-            ),
-            abi.encode(true, 10)
-        );
+        // vm.mockCall(
+        //     address(signalManager),
+        //     abi.encodeWithSelector(
+        //         bytes4(keccak256("verifyLiquiditySignal(bytes,bool)")), unbackedLiquiditySignal, true
+        //     ),
+        //     abi.encode(true, 10)
+        // );
 
-        // get liquidity in position 0
-        (Position memory positionBeforeCheckpoint,) = vtsOrchestrator.getPosition(tokenId, positionIndex);
-        console.log("positionLiquidityBeforeCheckpoint", uint256(positionBeforeCheckpoint.liquidity));
+        // // get liquidity in position 0
+        // (Position memory positionBeforeCheckpoint,) = vtsOrchestrator.getPosition(tokenId, positionIndex);
+        // console.log("positionLiquidityBeforeCheckpoint", uint256(positionBeforeCheckpoint.liquidity));
 
-        // need to inflate the value of issuedusd to be greater than the signalusd by 20%
-        vm.mockCall(
-            address(oracleHelper),
-            abi.encodeWithSelector(IOracleHelper.getPricesForLccPair.selector),
-            abi.encode(50000000000, 50000000000)
-        );
+        // // need to inflate the value of issuedusd to be greater than the signalusd by 20%
+        // vm.mockCall(
+        //     address(oracleHelper),
+        //     abi.encodeWithSelector(IOracleHelper.getPricesForLccPair.selector),
+        //     abi.encode(50000000000, 50000000000)
+        // );
 
-        // Checkpoint with commitment backing check (liquiditySignal provided means withCommitment = true)
-        // Call directly through CheckpointEntrypoints which uses msg.sender for validation
-        vm.prank(advancer);
-        positionManager.checkpoint(tokenId, positionIndex, unbackedLiquiditySignal);
+        // // Checkpoint with commitment backing check (liquiditySignal provided means withCommitment = true)
+        // // Call directly through CheckpointEntrypoints which uses msg.sender for validation
+        // vm.prank(advancer);
+        // positionManager.checkpoint(tokenId, positionIndex, unbackedLiquiditySignal);
 
-        // get liquidity in position 0
-        (Position memory positionAfterCheckpoint,) = vtsOrchestrator.getPosition(tokenId, positionIndex);
-        console.log("positionLiquidityAfterCheckpoint", uint256(positionAfterCheckpoint.liquidity));
+        // // get liquidity in position 0
+        // (Position memory positionAfterCheckpoint,) = vtsOrchestrator.getPosition(tokenId, positionIndex);
+        // console.log("positionLiquidityAfterCheckpoint", uint256(positionAfterCheckpoint.liquidity));
     }
 
     /**

@@ -12,6 +12,8 @@ import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint12
 import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {RFSCheckpoint} from "../types/Checkpoint.sol";
+import {ILCC} from "../interfaces/ILCC.sol";
+import {TransientSlots} from "./TransientSlots.sol";
 
 import {
     VTSStorage,
@@ -863,10 +865,14 @@ library VTSPositionLib {
                 // Adding liquidity: Issue LCCs
                 _handleLiquidityIncrease(s, ctx, owner, poolKey, mmData.commitId, id, params, principalDelta);
             } else if (params.liquidityDelta < 0) {
-                // Removing liquidity: Cancel LCCs
-                // Use locker from hookData if available, otherwise default to owner (MMPM)
-                address queueRecipient = PositionModificationHookDataLib.getLocker(mmData, owner);
-                _handleLiquidityDecrease(ctx, owner, poolKey, principalDelta, requiredSettlementDelta, queueRecipient);
+                // We need to store deltas that will be used in the `_handleLiquidityDecrease` function
+                // We cannot cancel the LCC's here because at this point in the flow,
+                // the LCC's are not yet deposited into the MMPM by the poolManager on modification of liquidity
+                // store the deltas required to facilitate the burning of the LCC'S in transient storage
+                // they will then be consumed in the `_handleLiquidityDecrease` function after modification of liquidity is complete
+                TransientSlots.setRequiredSettlementDelta(id, requiredSettlementDelta);
+                // store the principalDelta in transient storage
+                TransientSlots.setPrincipalDelta(id, principalDelta);
             }
 
             // Mark RFS checkpoint
@@ -899,7 +905,7 @@ library VTSPositionLib {
         PositionId positionId,
         ModifyLiquidityParams calldata params,
         BalanceDelta principalDelta
-    ) internal {
+    ) public {
         // Negative delta means LP deposited tokens
         uint256 amount0 =
             principalDelta.amount0() < 0 ? LiquidityUtils.safeInt128ToUint256(principalDelta.amount0()) : 0;

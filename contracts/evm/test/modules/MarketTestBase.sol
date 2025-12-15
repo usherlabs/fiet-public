@@ -188,6 +188,7 @@ abstract contract MarketTestBase is Test, Deployers {
         deployFreshManagerAndRouters(); // univ4 core contract deployment
         address testOwner = address(this); // Use test contract as owner for test scenarios
         oracleHelper = new OracleHelper(resilientOracle, testOwner);
+
         marketFactory = makeAddr("marketFactory"); // stub market factory.
 
         // Mock oracleHelper() call needed for LCC creation
@@ -233,7 +234,7 @@ abstract contract MarketTestBase is Test, Deployers {
 
         // Deploy MMPositionActionsImpl first
         MMPositionActionsImpl actionsImpl =
-            new MMPositionActionsImpl(address(manager), address(marketFactory), address(vtsOrchestrator));
+            new MMPositionActionsImpl(address(manager), address(liquidityHub), address(vtsOrchestrator));
 
         mmPositionManager = address(
             new MMPositionManager(
