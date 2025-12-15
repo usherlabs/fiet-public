@@ -71,57 +71,25 @@ abstract contract PositionManagerEntrypoint is PositionManagerBase {
     // Balance-to-Delta Sync Helpers
     // ------------------------------------------------------------------------------------------------
 
-    /// @notice Syncs balance accumulation as credit for a single currency
-    /// @dev Only handles balance increases (accumulation), not decreases (consumption).
-    ///      Checks MMPM's balance (address(this)) and credits locker's delta (msgSender).
-    ///      This ensures balance increases from wrap/unwrap operations create takeable credits on the locker.
-    /// @param currency The currency to sync balance for
-    function _syncBalanceAsCredit(Currency currency) internal {
-        // owner = address(this) = MMPM (balance holder)
-        // target = msgSender() = locker (delta recipient)
-        vtsOrchestrator.sync(currency, address(this), msgSender());
-    }
-
     // ------------------------------------------------------------------------------------------------
     // MM Utility Helpers
     // ------------------------------------------------------------------------------------------------
 
-    /// @notice Checks if a currency is an LCC token
-    /// @param currency The currency to check
-    /// @return True if the currency is a valid LCC token
-    function _isLCC(Currency currency) internal view returns (bool) {
-        address token = Currency.unwrap(currency);
-        if (token == address(0)) return false;
-        return liquidityHub.isLCC(token);
-    }
-
     /// @notice Takes currency from delta and transfers to recipient
-    /// @dev Split model by currency type:
-    ///      - LCC: Delta on MMPM, held as ERC-6909 claims on PoolManager
-    ///             Uses VTSOrchestrator.collectFees to handle the settle/take dance
-    ///      - Underlying: Delta on locker, held as ERC20 by MMPM
-    ///             Flow: debit locker delta -> direct ERC20 transfer
+    /// @dev Unified flow for both LCC and underlying currencies:
+    ///      - Balance held as ERC20 by MMPM
+    ///      - Delta on locker (LCC fees synced via _syncBalanceAsCredit after position modification)
+    ///      - Flow: debit locker delta -> direct ERC20 transfer
     /// @param currency The currency to take
     /// @param to The recipient address
     /// @param maxAmount The maximum amount to take (0 = take full available credit)
     function _take(Currency currency, address to, uint256 maxAmount) internal {
-        if (_isLCC(currency)) {
-            // TODO: I realise fee taking is conducted via position modification with 0 delta. Need to update this.
-            // LCC: held as ERC-6909 claims on PoolManager, delta on MMPM
-            // Delegate to VTSOrchestrator.collectFees which handles:
-            // 1. Burning ERC-6909 claims (credits PoolManager transient delta)
-            // 2. Taking actual ERC20 LCC tokens from PoolManager to recipient
-            // 3. Debiting MMPM's VTS delta
-            vtsOrchestrator.collectFees(currency, to, maxAmount);
-        } else {
-            // Underlying: held as ERC20 by MMPM, delta on locker
-            address locker = msgSender();
-            uint256 trueMaxAmount = Math.min(maxAmount, currency.balanceOfSelf());
-            uint256 takeAmount = vtsOrchestrator.take(currency, locker, trueMaxAmount);
+        address locker = msgSender();
+        uint256 trueMaxAmount = Math.min(maxAmount, currency.balanceOfSelf());
+        uint256 takeAmount = vtsOrchestrator.take(currency, locker, trueMaxAmount);
 
-            if (to != address(this)) {
-                currency.transfer(to, takeAmount);
-            }
+        if (to != address(this)) {
+            currency.transfer(to, takeAmount);
         }
     }
 }

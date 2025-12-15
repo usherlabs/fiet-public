@@ -11,7 +11,7 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PositionId} from "../../src/types/Position.sol";
 import {MarketVTSConfiguration} from "../../src/types/VTS.sol";
 import {MMPositionManager} from "../../src/MMPositionManager.sol";
-import {MMActionAdapter as MMA} from "../modules/MMActionAdapter.sol";
+import {MMActionAdapter as MMA} from "../libraries/MMActionAdapter.sol";
 import {LiquidityUtils} from "../../src/libraries/LiquidityUtils.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {VTSOrchestrator} from "../../src/VTSOrchestrator.sol";

@@ -847,11 +847,9 @@ library VTSPositionLib {
             // that maps to LCC cancellation. fees are trader-derived, wrapped LCC value and must remain wrapped.
             BalanceDelta principalDelta = callerDelta - accruedFeesAfterAdj;
 
-            // Account fee credits (in LCC) to MMPositionManager contract (not the locker)
-            // Split model: LCC deltas on MMPM are held as ERC-6909 claims, takeable via settle/take dance
-            // This creates a clear separation: MMPM deltas (LCC fees + settlement) vs locker deltas (balance syncs)
-            DynamicCurrencyDelta.accountDelta(poolKey.currency0, accruedFeesAfterAdj.amount0(), owner);
-            DynamicCurrencyDelta.accountDelta(poolKey.currency1, accruedFeesAfterAdj.amount1(), owner);
+            // NOTE: LCC fee credits are handled at the MMPM level via balance sync pattern.
+            // After MMPM takes from PoolManager, it syncs the LCC balance as credit to locker.
+            // This allows direct _take calls for LCC without a separate collectFees function.
 
             // Account underlying currency settlement obligations to MMPositionManager
             // Split model: Underlying settlement deltas on MMPM represent market liquidity claims (settle-only)

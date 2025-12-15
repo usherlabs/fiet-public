@@ -13,7 +13,7 @@ import {PositionId} from "../../src/types/Position.sol";
 import {IMarketVault} from "../../src/interfaces/IMarketVault.sol";
 import {VTSOrchestrator} from "../../src/VTSOrchestrator.sol";
 
-import {MMActionAdapter as MMA} from "../modules/MMActionAdapter.sol";
+import {MMActionAdapter as MMA} from "../libraries/MMActionAdapter.sol";
 
 contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
     using CurrencyLibrary for Currency;

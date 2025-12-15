@@ -167,6 +167,15 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
         if (delta1 > 0) {
             key.currency1.take(poolManager, self, LiquidityUtils.safeInt128ToUint256(delta1), false);
         }
+
+        // Sync LCC fee balance increases as credit to locker
+        // After taking from PoolManager, MMPM now holds LCC as ERC20 - sync as takeable credit to locker
+        if (delta0 > 0 && _isLCC(key.currency0)) {
+            _syncBalanceAsCredit(key.currency0);
+        }
+        if (delta1 > 0 && _isLCC(key.currency1)) {
+            _syncBalanceAsCredit(key.currency1);
+        }
     }
 }
 

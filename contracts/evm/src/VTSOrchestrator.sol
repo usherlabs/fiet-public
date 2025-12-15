@@ -641,38 +641,4 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
             s, poolManager, signalManager, oracleHelper, sender, commitId, positionId, liquiditySignal
         );
     }
-
-    /**
-     * @notice Collects LCC fees by converting ERC-6909 claims to actual ERC20 tokens
-     * @dev Must be called during an active PoolManager unlock context.
-     *      The caller must have:
-     *      1. ERC-6909 claims on PoolManager for the LCC currency
-     *      2. Positive VTS delta credit for the LCC currency
-     *
-     *      This function consolidates the settle/take dance for LCC fee collection:
-     *      1. Debits the caller's VTS delta (caps to available credit)
-     *      2. Burns caller's ERC-6909 claims (credits PoolManager transient delta)
-     *      3. Takes actual ERC20 LCC tokens from PoolManager to recipient
-     *
-     * @param lccCurrency The LCC currency to collect fees for
-     * @param recipient The recipient of the actual ERC20 tokens
-     * @param maxAmount The maximum amount to collect (0 = collect full available credit)
-     * @return collected The amount actually collected (capped to available delta credit)
-     */
-    function collectFees(Currency lccCurrency, address recipient, uint256 maxAmount)
-        external
-        onlyIfPoolManagerUnlocked
-        returns (uint256 collected)
-    {
-        address sender = msg.sender;
-
-        // Get full credit if maxAmount is 0
-        uint256 requestedAmount = maxAmount == 0 ? DynamicCurrencyDelta.getFullCredit(lccCurrency, sender) : maxAmount;
-
-        // Delegate to the library function which handles:
-        // 1. Debiting VTS delta (caps to available credit, returns actual amount)
-        // 2. Burning ERC-6909 claims from sender
-        // 3. Taking actual ERC20 from PoolManager to recipient
-        collected = VTSFeeLib.collectFees(poolManager, lccCurrency, sender, recipient, requestedAmount);
-    }
 }

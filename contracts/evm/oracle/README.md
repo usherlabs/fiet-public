@@ -140,3 +140,56 @@ The deployment script uses environment variables from the project root `.env` fi
 - The custom config file (`hardhat.fiet.config.ts`) is automatically generated in `lib/oracle/` during deployment and is gitignored
 - For production deployments, verify all contract addresses and configuration parameters
 - The deployment runs from within `lib/oracle/` directory to ensure correct relative imports in deployment scripts
+
+## Technical Reference: Price Decimal Normalisation
+
+The `ChainlinkOracle` contract performs **two layers of decimal normalisation** to ensure consistent 18-decimal precision pricing across all assets, regardless of their native token decimals or the Chainlink feed's precision.
+
+### Layer 1: Chainlink Feed Normalisation
+
+Chainlink USD price feeds typically return prices with **8 decimals of precision**. The oracle scales the raw Chainlink answer up to 18 decimals:
+
+```solidity
+// In _getChainlinkPrice()
+uint256 decimalDelta = 18 - feed.decimals();
+return uint256(answer) * (10 ** decimalDelta);
+```
+
+**Example – ETH/USD:**
+
+- Chainlink returns: `200000000000` (represents $2,000.00 with 8 decimals)
+- `decimalDelta = 18 - 8 = 10`
+- Result: `200000000000 × 10^10 = 2000 × 10^18` (i.e., $2,000 in 18-decimal format)
+
+### Layer 2: Asset Decimal Normalisation
+
+The second transformation in `_getPriceInternal` adjusts the price based on the **asset's own token decimals**:
+
+```solidity
+// In _getPriceInternal()
+uint256 decimalDelta = 18 - decimals;
+return price * (10 ** decimalDelta);
+```
+
+This creates a "scaling multiplier" so that downstream calculations work uniformly with the formula:
+
+```
+USD_value (18 decimals) = (raw_token_amount × scaled_price) / 1e18
+```
+
+### Worked Examples
+
+| Asset | Token Decimals | Chainlink Price | After Layer 1 | After Layer 2 | 1 Token Value Calculation |
+|-------|----------------|-----------------|---------------|---------------|---------------------------|
+| ETH   | 18             | $2,000          | `2000e18`     | `2000e18`     | `(1e18 × 2000e18) / 1e18 = 2000e18` ✓ |
+| USDC  | 6              | $1              | `1e18`        | `1e30`        | `(1e6 × 1e30) / 1e18 = 1e18` ✓ |
+| WBTC  | 8              | $40,000         | `40000e18`    | `40000e28`    | `(1e8 × 40000e28) / 1e18 = 40000e18` ✓ |
+
+### Why This Matters
+
+This double normalisation ensures that regardless of:
+
+1. The Chainlink feed's native precision (usually 8 decimals)
+2. The token's native decimals (6, 8, 18, etc.)
+
+...the final price can be used uniformly across the protocol for accurate USD value calculations. This is a common pattern in DeFi to avoid precision loss and enable apples-to-apples comparisons between assets with different decimal configurations.

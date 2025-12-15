@@ -11,7 +11,8 @@ contract OracleHelperTest is Test {
     IResilientOracle public resilientOracle;
 
     string public constant TICKER = "ETH";
-    uint256 public constant MOCK_ETH_PRICE = 42069e18; // TODO: ResilientOracle returns price in 18 decimals
+    // ResilientOracle returns prices in 18 decimals (e.g., $3,200.00 USD = 3200e18)
+    uint256 public constant MOCK_ETH_PRICE = 3200e18;
     address public ASSET = makeAddr("Asset");
     address public LCC0 = makeAddr("LCC0");
     address public LCC1 = makeAddr("LCC1");
@@ -64,15 +65,16 @@ contract OracleHelperTest is Test {
         // register the address of the asset with the ticker
         oracleHelper.registerTicker(TICKER, ASSET);
 
-        // create a list of tickers and amounts
+        // create a list of tickers and amounts (amounts in 18 decimals)
         string[] memory tickers = new string[](1);
         tickers[0] = TICKER;
         uint256[] memory amounts = new uint256[](1);
-        amounts[0] = 2;
+        amounts[0] = 2e18; // 2 ETH in 18 decimal representation
 
-        // get the total USD value of the assets which should be 2 * eth price
+        // get the total USD value of the assets
+        // Formula: mulDiv(price_18d, amount_18d, 1e18) = (3200e18 * 2e18) / 1e18 = 6400e18
         uint256 totalUsdValue = oracleHelper.getTotalValue(tickers, amounts);
-        assertEq(totalUsdValue, 2 * MOCK_ETH_PRICE);
+        assertEq(totalUsdValue, 2 * MOCK_ETH_PRICE); // 2 * 3200e18 = $6,400 in 18 decimals
     }
 
     function test_canGetPricesForLCCPair() public view {
@@ -83,7 +85,16 @@ contract OracleHelperTest is Test {
 
     function test_canGetPricesForLCCPairAndCalculateUSDValue() public view {
         (uint256 price0, uint256 price1) = oracleHelper.getPricesForLccPair(LCC0, LCC1);
-        uint256 totalUsdValue = (price0 * 2) + (price1 * 2);
-        assertEq(totalUsdValue, 4 * MOCK_ETH_PRICE);
+
+        // Simulate real USD value calculation with 18-decimal amounts
+        // Using same formula as getTotalValue: mulDiv(price, amount, 1e18)
+        uint256 amount0 = 2e18; // 2 tokens
+        uint256 amount1 = 2e18; // 2 tokens
+
+        // value0 = (3200e18 * 2e18) / 1e18 = 6400e18 ($6,400)
+        // value1 = (3200e18 * 2e18) / 1e18 = 6400e18 ($6,400)
+        // totalUsdValue = 12800e18 ($12,800)
+        uint256 totalUsdValue = (price0 * amount0 / 1e18) + (price1 * amount1 / 1e18);
+        assertEq(totalUsdValue, 4 * MOCK_ETH_PRICE); // 4 * 3200e18 = $12,800 in 18 decimals
     }
 }
