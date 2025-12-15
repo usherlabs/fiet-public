@@ -235,27 +235,4 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
         _onTransfer(from, to, amount);
         return super.transferFrom(from, to, amount);
     }
-
-    /**
-     * @notice Safe transfer using SafeERC20
-     * @param to The address to transfer to
-     * @param amount The amount to transfer
-     */
-    function safeTransfer(address to, uint256 amount) external returns (bool) {
-        _onTransfer(_msgSender(), to, amount);
-        SafeERC20.safeTransfer(IERC20(address(this)), to, amount);
-        return true;
-    }
-
-    /**
-     * @notice Safe transferFrom using SafeERC20
-     * @param from The address to transfer from
-     * @param to The address to transfer to
-     * @param amount The amount to transfer
-     */
-    function safeTransferFrom(address from, address to, uint256 amount) external returns (bool) {
-        _onTransfer(from, to, amount);
-        SafeERC20.safeTransferFrom(IERC20(address(this)), from, to, amount);
-        return true;
-    }
 }

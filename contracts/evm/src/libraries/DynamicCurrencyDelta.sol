@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.26;
 
-import {Currency, CurrencyLibrary} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
+import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {BalanceDelta, toBalanceDelta} from "v4-periphery/lib/v4-core/src/types/BalanceDelta.sol";
 import {CurrencyDelta} from "v4-periphery/lib/v4-core/src/libraries/CurrencyDelta.sol";
 import {NonzeroDeltaCount} from "@uniswap/v4-core/src/libraries/NonzeroDeltaCount.sol";
@@ -17,7 +17,6 @@ import {console} from "forge-std/console.sol";
 /// @author Fiet Protocol
 library DynamicCurrencyDelta {
     using CurrencyDelta for Currency;
-    using CurrencyLibrary for Currency;
 
     // ============================================================
     // Core Delta Accounting (mirrors PoolManager._accountDelta)

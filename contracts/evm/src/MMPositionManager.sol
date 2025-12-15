@@ -44,7 +44,6 @@ contract MMPositionManager is
     PositionManagerEntrypoint
 {
     using MMCalldataDecoder for bytes;
-    using CurrencyLibrary for Currency;
     using CurrencyTransfer for Currency;
     using StateLibrary for IPoolManager;
     using TransientStateLibrary for IPoolManager;

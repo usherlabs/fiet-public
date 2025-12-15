@@ -12,6 +12,7 @@ import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {CurrencyTransfer} from "../src/libraries/CurrencyTransfer.sol";
 import {MarketVault} from "../src/modules/MarketVault.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 /**
  * @title MarketVaultTest
@@ -159,15 +160,23 @@ contract MarketVaultTest is MarketVaultBase {
         // Calculate expected deficit
         (, uint256 expectedOutput) = _simulateSwap(corePoolKey, true, -int256(swapAmount));
 
-        console.log("expectedOutput", expectedOutput);
-
         uint256 expectedDeficit = expectedOutput > mockAvailableLiquidity ? expectedOutput - mockAvailableLiquidity : 0;
-
-        console.log("expectedDeficit", expectedDeficit);
+        uint256 expectedAmountToCancel =
+            expectedOutput > mockAvailableLiquidity ? mockAvailableLiquidity : expectedOutput;
 
         if (expectedDeficit > 0) {
+            // Expect Transfer event for burn first (emitted by liquidityHub.cancel -> _burn)
+            // This burns amountToCancel tokens from MarketVault to address(0)
+            vm.expectEmit(true, true, false, true, address(lccOut));
+            emit IERC20.Transfer(address(mv), address(0), expectedAmountToCancel);
+
+            // Expect Transfer event for deficit transfer (emitted by lccToken.safeTransfer)
+            // This transfers deficitAmount tokens from MarketVault to recipient
+            vm.expectEmit(true, true, false, true, address(lccOut));
+            emit IERC20.Transfer(address(mv), recipient, expectedDeficit);
+
+            // Then expect SwapDeficit event from MarketVault
             vm.expectEmit(true, true, true, true, address(mv));
-            // The emit below doesn't actually emit - it tells Foundry what to expect
             emit MarketVault.SwapDeficit(PoolId.wrap(marketId), address(lccOut), recipient, expectedDeficit);
         }
 

@@ -2,6 +2,7 @@
 pragma solidity 0.8.26;
 
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {MMPositionManager} from "../../src/MMPositionManager.sol";
 import {MMActions} from "../../src/libraries/MMActions.sol";
 import {ActionConstants} from "v4-periphery/src/libraries/ActionConstants.sol";
@@ -305,6 +306,20 @@ library MMActionAdapter {
         });
     }
 
+    /**
+     * @notice Prepares a TAKE action to withdraw currency from delta credits
+     * @param currency The currency to take (address(0) for native ETH)
+     * @param to The recipient address
+     * @param maxAmount The maximum amount to take (0 for max available)
+     */
+    function prepareTake(Currency currency, address to, uint256 maxAmount)
+        internal
+        pure
+        returns (PreparedAction memory)
+    {
+        return PreparedAction({action: bytes1(uint8(MMActions.TAKE)), params: abi.encode(currency, to, maxAmount)});
+    }
+
     // ============ CONVENIENCE METHODS (for backward compatibility) ============
 
     /**
@@ -501,6 +516,20 @@ library MMActionAdapter {
     {
         PreparedAction[] memory prepared = new PreparedAction[](1);
         prepared[0] = prepareCheckpoint(tokenId, positionIndex, liquiditySignal);
+        execute(mmpm, prepared);
+    }
+
+    /**
+     * @notice Takes currency from delta credits (single action execution)
+     * @dev For backward compatibility - use prepareTake + execute for batching
+     * @param mmpm The MMPositionManager instance
+     * @param currency The currency to take (address(0) for native ETH)
+     * @param to The recipient address
+     * @param maxAmount The maximum amount to take (0 for max available)
+     */
+    function take(MMPositionManager mmpm, Currency currency, address to, uint256 maxAmount) internal {
+        PreparedAction[] memory prepared = new PreparedAction[](1);
+        prepared[0] = prepareTake(currency, to, maxAmount);
         execute(mmpm, prepared);
     }
 }

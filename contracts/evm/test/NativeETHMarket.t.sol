@@ -25,6 +25,9 @@ import {IOracleHelper} from "../src/interfaces/IOracleHelper.sol";
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {CurrencyTransfer} from "../src/libraries/CurrencyTransfer.sol";
+import {Position} from "../src/types/Position.sol";
+import {MMActionAdapter as MMA} from "./modules/MMActionAdapter.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
     using SafeCast for *;
@@ -93,6 +96,48 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
         console.log("lcc0 underlying asset", lcc0.underlying());
         console.log("lcc1 underlying asset", lcc1.underlying());
     }
+
+    // #region agent log (debug)
+    string internal constant _DEBUG_LOG_PATH = "/Users/ryansoury/dev/fiet/protocol/.cursor/debug.log";
+    string internal constant _DEBUG_SESSION_ID = "debug-session";
+    string internal constant _DEBUG_RUN_ID = "pre-fix";
+
+    function _ndjson(string memory location, string memory message, string memory dataJson, string memory hypothesisId)
+        internal
+    {
+        // Writes one NDJSON line to the provisioned debug log file.
+        // NOTE: `dataJson` must already be a valid JSON object string like {"k":"v"}.
+        vm.writeLine(
+            _DEBUG_LOG_PATH,
+            string(
+                abi.encodePacked(
+                    '{"sessionId":"',
+                    _DEBUG_SESSION_ID,
+                    '","runId":"',
+                    _DEBUG_RUN_ID,
+                    '","hypothesisId":"',
+                    hypothesisId,
+                    '","location":"',
+                    location,
+                    '","message":"',
+                    message,
+                    '","data":',
+                    dataJson,
+                    ',"timestamp":',
+                    vm.toString(block.timestamp),
+                    "}"
+                )
+            )
+        );
+    }
+
+    function _first4(bytes memory data) internal pure returns (bytes4 sel) {
+        if (data.length < 4) return bytes4(0);
+        assembly {
+            sel := mload(add(data, 0x20))
+        }
+    }
+    // #endregion agent log (debug)
 
     function test_canAddLiquidityToPoolWithNativeAsunderlying() public {
         // add liquidity to the core pool
@@ -235,13 +280,63 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
         PoolSwapTest.TestSettings memory settings =
             PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false});
 
-        // get balances of underlying token of the pool manager and lcc contracts
-        // get the underlying asset of the lcc token A
+        // #region agent log (debug)
         address underlyingAssetLCC0 =
             LiquidityCommitmentCertificate(payable(Currency.unwrap(corePoolKey.currency0))).underlying();
         address underlyingAssetLCC1 =
             LiquidityCommitmentCertificate(payable(Currency.unwrap(corePoolKey.currency1))).underlying();
+        _ndjson(
+            "contracts/evm/test/NativeETHMarket.t.sol:test_swapWithNativeAsUnderlyingAsset_oneForZeroOnCore",
+            "pre-swap core oneForZero config",
+            string(
+                abi.encodePacked(
+                    '{"corePoolId":"',
+                    vm.toString(PoolId.unwrap(corePoolKey.toId())),
+                    '","currency0":"',
+                    vm.toString(Currency.unwrap(corePoolKey.currency0)),
+                    '","currency1":"',
+                    vm.toString(Currency.unwrap(corePoolKey.currency1)),
+                    '","ua0":"',
+                    vm.toString(underlyingAssetLCC0),
+                    '","ua1":"',
+                    vm.toString(underlyingAssetLCC1),
+                    '","ua0IsNative":',
+                    (underlyingAssetLCC0 == address(0) ? "true" : "false"),
+                    ',"ua1IsNative":',
+                    (underlyingAssetLCC1 == address(0) ? "true" : "false"),
+                    "}"
+                )
+            ),
+            "H_native_value_or_sign"
+        );
+        _ndjson(
+            "contracts/evm/test/NativeETHMarket.t.sol:test_swapWithNativeAsUnderlyingAsset_oneForZeroOnCore",
+            "pre-swap balances",
+            string(
+                abi.encodePacked(
+                    '{"thisEth":"',
+                    vm.toString(address(this).balance),
+                    '","hubEth":"',
+                    vm.toString(liquidityHub.balance),
+                    '","pmEth":"',
+                    vm.toString(address(manager).balance),
+                    '","hubUa0":"',
+                    vm.toString(Currency.wrap(underlyingAssetLCC0).balanceOf(liquidityHub)),
+                    '","hubUa1":"',
+                    vm.toString(Currency.wrap(underlyingAssetLCC1).balanceOf(liquidityHub)),
+                    '","pmUa0":"',
+                    vm.toString(Currency.wrap(underlyingAssetLCC0).balanceOf(address(manager))),
+                    '","pmUa1":"',
+                    vm.toString(Currency.wrap(underlyingAssetLCC1).balanceOf(address(manager))),
+                    "}"
+                )
+            ),
+            "H_balance_or_settle_path"
+        );
+        // #endregion agent log (debug)
 
+        // get balances of underlying token of the pool manager and lcc contracts
+        // get the underlying asset of the lcc token A
         console.log("underlyingAsset-LCC0", underlyingAssetLCC0);
         console.log("underlyingAsset-LCC1", underlyingAssetLCC1);
 
@@ -252,12 +347,40 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
         uint256 preBalanceOfToken1UnderlyingAssetInHub = Currency.wrap(underlyingAssetLCC1).balanceOf(liquidityHub);
 
         int256 swapAmount = 100;
-        BalanceDelta delta = swapRouter.swap(
+        BalanceDelta delta;
+        try swapRouter.swap(
             corePoolKey,
             SwapParams({zeroForOne: false, amountSpecified: int256(swapAmount), sqrtPriceLimitX96: ONE_FOR_ZERO_LIMIT}),
             settings,
             ZERO_BYTES
-        );
+        ) returns (
+            BalanceDelta d
+        ) {
+            delta = d;
+        } catch (bytes memory err) {
+            // #region agent log (debug)
+            bytes4 sel = _first4(err);
+            _ndjson(
+                "contracts/evm/test/NativeETHMarket.t.sol:test_swapWithNativeAsUnderlyingAsset_oneForZeroOnCore",
+                "swap reverted (low-level)",
+                string(
+                    abi.encodePacked(
+                        '{"errLen":"',
+                        vm.toString(err.length),
+                        '","selector":"',
+                        vm.toString(uint256(uint32(sel))),
+                        '","errHex":"',
+                        vm.toString(err),
+                        '"}'
+                    )
+                ),
+                "H_identify_revert"
+            );
+            // #endregion agent log (debug)
+            assembly {
+                revert(add(err, 0x20), mload(err))
+            }
+        }
 
         uint256 deltaAmount0 = LiquidityUtils.safeInt128ToUint256(delta.amount0());
         uint256 deltaAmount1 = LiquidityUtils.safeInt128ToUint256(delta.amount1());
@@ -292,106 +415,123 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
         assertEq(postBalanceOfToken1UnderlyingAssetInPM - preBalanceOfToken1UnderlyingAssetInPM, deltaAmount1);
     }
 
-    // TODO: To be fixed along with the mmpm tests
-    // function test_swapWithNativeAsUnderlyingAsset_CanCommitPosition_withRefund() public {
-    //     ModifyLiquidityParams memory liquidityParams =
-    //         ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
+    /// @notice Tests creating a position in a native ETH market via MMPM with excess msg.value refund
+    /// @dev Verifies that when sending more ETH than required for the position, the excess is refunded
+    function test_swapWithNativeAsUnderlyingAsset_CanCommitPosition_withRefund() public {
+        ModifyLiquidityParams memory liquidityParams =
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
 
-    //     bytes memory liquiditySignal = abi.encode(liquiditySignal);
+        bytes memory signalBytes = abi.encode(liquiditySignal);
 
-    //     // Get the amount of LCC tokens that will be minted
-    //     (uint160 sqrtPriceX96, int24 currentTick,,) = manager.getSlot0(corePoolKey.toId());
-    //     (uint256 token0AmountMinted, uint256 token1AmountMinted) = LiquidityUtils.calculateEffectiveTokenAmounts(
-    //         sqrtPriceX96,
-    //         currentTick,
-    //         liquidityParams.tickLower,
-    //         liquidityParams.tickUpper,
-    //         liquidityParams.liquidityDelta
-    //     );
+        // Calculate settlement amounts based on commitment maxima
+        (uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) =
+            _calculateSettlementAmounts(liquidityParams, marketVTSConfiguration);
 
-    //     // Get amount of underlying liquidity to transfer from the issuer to the lcc
-    //     (uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) = LiquidityUtils.getBaseSettlementAmounts(
-    //         token0AmountMinted,
-    //         token1AmountMinted,
-    //         marketVTSConfiguration.token0.baseVTSRate,
-    //         marketVTSConfiguration.token1.baseVTSRate
-    //     );
+        // Approve token1 (non-native) to the vtsOrchestrator
+        Currency.wrap(lcc1.underlying()).approve(address(vtsOrchestrator), requiredSettlementAmount1);
 
-    //     // Approve
-    //     Currency.wrap(lcc0.underlying()).approve(address(mmPositionManager), requiredSettlementAmount0);
-    //     Currency.wrap(lcc1.underlying()).approve(address(mmPositionManager), requiredSettlementAmount1);
+        // Record balances before the operation
+        uint256 pmLcc0BalanceBefore = IERC20(address(lcc0)).balanceOf(address(manager));
+        uint256 pmLcc1BalanceBefore = IERC20(address(lcc1)).balanceOf(address(manager));
 
-    //     uint256 pmLcc0BalanceBefore = IERC20(address(lcc0)).balanceOf(address(manager));
-    //     uint256 pmLcc1BalanceBefore = IERC20(address(lcc1)).balanceOf(address(manager));
+        uint256 proxyCurrency0BalanceBefore = manager.balanceOf(address(proxyHook), proxyPoolKey.currency0.toId());
+        uint256 proxyCurrency1BalanceBefore = manager.balanceOf(address(proxyHook), proxyPoolKey.currency1.toId());
 
-    //     uint256 proxyCurrency0BalanceBefore = manager.balanceOf(address(proxyHook), proxyPoolKey.currency0.toId());
-    //     uint256 proxyCurrency1BalanceBefore = manager.balanceOf(address(proxyHook), proxyPoolKey.currency1.toId());
+        uint256 lcc1UnderlyingAssetBalanceBefore = Currency.wrap(lcc1.underlying()).balanceOfSelf();
+        uint256 selfEthBalanceBefore = address(this).balance;
 
-    //     uint256 lcc0UnderlyingAssetBalanceBefore = Currency.wrap(lcc0.underlying()).balanceOfSelf();
-    //     uint256 lcc1UnderlyingAssetBalanceBefore = Currency.wrap(lcc1.underlying()).balanceOfSelf();
+        // Get the amount of ETH to send over (token0 is native ETH - zero address)
+        uint256 ethAmount = requiredSettlementAmount0;
+        // Send significantly more ETH than required to test refund mechanism
+        uint256 excessEth = 1 ether;
+        uint256 ethToSend = ethAmount + excessEth;
 
-    //     // get the amount of ETH to send over
-    //     // eth is zero address, so it will always be token0
-    //     uint256 ethAmount = requiredSettlementAmount0;
-    //     console.log("ethAmount", ethAmount);
-    //     console.log("requiredSettlementAmount0", requiredSettlementAmount0);
-    //     console.log("requiredSettlementAmount1", requiredSettlementAmount1);
-    //     console.log("self eth balance", address(this).balance);
+        console.log("ethAmount (required)", ethAmount);
+        console.log("excessEth", excessEth);
+        console.log("ethToSend (total)", ethToSend);
+        console.log("requiredSettlementAmount0", requiredSettlementAmount0);
+        console.log("requiredSettlementAmount1", requiredSettlementAmount1);
+        console.log("self eth balance before", selfEthBalanceBefore);
 
-    //     // Prepare actions using the adapter pattern
-    //     MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
-    //     actions[0] = MMA.prepareCommit(corePoolKey, liquiditySignal);
-    //     actions[1] = MMA.prepareMint(
-    //         corePoolKey,
-    //         1,
-    //         liquidityParams.tickLower,
-    //         liquidityParams.tickUpper,
-    //         uint256(liquidityParams.liquidityDelta)
-    //     );
+        // Prepare actions using the adapter pattern:
+        // 1. Commit the signal
+        // 2. Mint the position
+        // 3. Take excess native ETH back to sender
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](3);
+        actions[0] = MMA.prepareCommit(signalBytes);
+        actions[1] = MMA.prepareMint(
+            corePoolKey,
+            1,
+            liquidityParams.tickLower,
+            liquidityParams.tickUpper,
+            uint256(liquidityParams.liquidityDelta)
+        );
+        // Take any remaining native ETH delta back to self (0 = max available)
+        actions[2] = MMA.prepareTake(CurrencyLibrary.ADDRESS_ZERO, address(this), 0);
 
-    //     // Execute both actions in a single modifyLiquiditiesWithoutUnlock call
-    //     // send the entire balance of ETH to the position manager
-    //     // we should get a refund of the left over ETH
-    //     MMA.execute(positionManager, actions, address(this).balance);
-    //     // First commit mints the first NFT
-    //     uint256 tokenId = 1;
-    //     PositionMeta memory m = positionManager.getPosition(tokenId, 0);
+        // Execute with unlock, sending excess ETH to test the refund
+        (bytes memory actionsBytes, bytes[] memory params) = MMA.concatPrepared(actions);
+        bytes memory unlockData = abi.encode(actionsBytes, params);
+        positionManager.modifyLiquidities{value: ethToSend}(unlockData, block.timestamp + 3600);
 
-    //     uint256 pmLcc0BalanceAfter = IERC20(address(lcc0)).balanceOf(address(manager));
-    //     uint256 pmLcc1BalanceAfter = IERC20(address(lcc1)).balanceOf(address(manager));
+        // First commit mints the first NFT
+        uint256 tokenId = 1;
+        (Position memory position,) = positionManager.getPosition(tokenId, 0);
 
-    //     // get user balances of underlying assets
+        uint256 pmLcc0BalanceAfter = IERC20(address(lcc0)).balanceOf(address(manager));
+        uint256 pmLcc1BalanceAfter = IERC20(address(lcc1)).balanceOf(address(manager));
 
-    //     uint256 lcc0UnderlyingAssetBalanceAfter = Currency.wrap(lcc0.underlying()).balanceOfSelf();
-    //     uint256 lcc1UnderlyingAssetBalanceAfter = Currency.wrap(lcc1.underlying()).balanceOfSelf();
+        uint256 lcc1UnderlyingAssetBalanceAfter = Currency.wrap(lcc1.underlying()).balanceOfSelf();
+        uint256 selfEthBalanceAfter = address(this).balance;
 
-    //     console.log("lcc0UnderlyingAssetBalanceBefore", lcc0UnderlyingAssetBalanceBefore);
-    //     console.log("lcc0UnderlyingAssetBalanceAfter", lcc0UnderlyingAssetBalanceAfter);
-    //     console.log("lcc1UnderlyingAssetBalanceBefore", lcc1UnderlyingAssetBalanceBefore);
-    //     console.log("lcc1UnderlyingAssetBalanceAfter", lcc1UnderlyingAssetBalanceAfter);
+        console.log("selfEthBalanceBefore", selfEthBalanceBefore);
+        console.log("selfEthBalanceAfter", selfEthBalanceAfter);
+        console.log("lcc1UnderlyingAssetBalanceBefore", lcc1UnderlyingAssetBalanceBefore);
+        console.log("lcc1UnderlyingAssetBalanceAfter", lcc1UnderlyingAssetBalanceAfter);
 
-    //     // validate lcc liquidity has been taken from user's balance
-    //     assertEq(lcc0UnderlyingAssetBalanceAfter, lcc0UnderlyingAssetBalanceBefore - requiredSettlementAmount0);
-    //     assertEq(lcc1UnderlyingAssetBalanceAfter, lcc1UnderlyingAssetBalanceBefore - requiredSettlementAmount1);
+        // Calculate the expected LCC token amounts minted (commitment maxima)
+        (uint256 token0Commitment, uint256 token1Commitment) = LiquidityUtils.calculateCommitmentMaxima(
+            liquidityParams.tickLower, liquidityParams.tickUpper, uint128(uint256(liquidityParams.liquidityDelta))
+        );
 
-    //     // validate lcc liquidity has been added to the core pool
-    //     assertEq(pmLcc0BalanceAfter, pmLcc0BalanceBefore + token0AmountMinted);
-    //     assertEq(pmLcc1BalanceAfter, pmLcc1BalanceBefore + token1AmountMinted);
+        // Validate ETH was refunded: only the required amount was used
+        // The excess ETH should have been returned via the TAKE action
+        assertEq(selfEthBalanceAfter, selfEthBalanceBefore - requiredSettlementAmount0, "Excess ETH should be refunded");
 
-    //     // validate underlying tokens have been transferred to proxy pool
-    //     // and proxy hook has claim tokens
-    //     uint256 proxyCurrency0BalanceAfter = manager.balanceOf(address(proxyHook), proxyPoolKey.currency0.toId());
-    //     uint256 proxyCurrency1BalanceAfter = manager.balanceOf(address(proxyHook), proxyPoolKey.currency1.toId());
+        // Validate token1 liquidity has been taken from user's balance
+        assertEq(
+            lcc1UnderlyingAssetBalanceAfter,
+            lcc1UnderlyingAssetBalanceBefore - requiredSettlementAmount1,
+            "Token1 settlement amount mismatch"
+        );
 
-    //     assertEq(proxyCurrency0BalanceAfter, proxyCurrency0BalanceBefore + requiredSettlementAmount0);
-    //     assertEq(proxyCurrency1BalanceAfter, proxyCurrency1BalanceBefore + requiredSettlementAmount1);
+        // Validate LCC tokens have been added to the pool manager
+        assertEq(pmLcc0BalanceAfter, pmLcc0BalanceBefore + token0Commitment, "LCC0 balance mismatch");
+        assertEq(pmLcc1BalanceAfter, pmLcc1BalanceBefore + token1Commitment, "LCC1 balance mismatch");
 
-    //     assertEq(PoolId.unwrap(m.poolId), PoolId.unwrap(corePoolKey.toId()));
-    //     assertEq(m.tickLower, liquidityParams.tickLower);
-    //     assertEq(m.tickUpper, liquidityParams.tickUpper);
-    //     assertEq(m.liquidity, liquidityParams.liquidityDelta);
-    //     // Position owner is the manager contract
-    //     assertEq(m.owner, address(mmPositionManager));
-    //     assertEq(m.isActive, true);
-    // }
+        // Validate underlying tokens have been transferred to proxy pool
+        // and proxy hook has claim tokens
+        uint256 proxyCurrency0BalanceAfter = manager.balanceOf(address(proxyHook), proxyPoolKey.currency0.toId());
+        uint256 proxyCurrency1BalanceAfter = manager.balanceOf(address(proxyHook), proxyPoolKey.currency1.toId());
+
+        assertEq(
+            proxyCurrency0BalanceAfter,
+            proxyCurrency0BalanceBefore + requiredSettlementAmount0,
+            "Proxy currency0 balance mismatch"
+        );
+        assertEq(
+            proxyCurrency1BalanceAfter,
+            proxyCurrency1BalanceBefore + requiredSettlementAmount1,
+            "Proxy currency1 balance mismatch"
+        );
+
+        // Validate position metadata
+        assertEq(PoolId.unwrap(position.poolId), PoolId.unwrap(corePoolKey.toId()), "Pool ID mismatch");
+        assertEq(position.tickLower, liquidityParams.tickLower, "Tick lower mismatch");
+        assertEq(position.tickUpper, liquidityParams.tickUpper, "Tick upper mismatch");
+        assertEq(position.liquidity, uint128(uint256(liquidityParams.liquidityDelta)), "Liquidity mismatch");
+        // Position owner is the mmPositionManager contract
+        assertEq(position.owner, address(mmPositionManager), "Position owner mismatch");
+        assertEq(position.isActive, true, "Position should be active");
+    }
 }

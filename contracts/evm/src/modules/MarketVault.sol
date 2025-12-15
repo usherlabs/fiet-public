@@ -33,9 +33,11 @@ import {Errors} from "../libraries/Errors.sol";
 import {ReentrancyGuardTransient} from "openzeppelin-contracts/contracts/utils/ReentrancyGuardTransient.sol";
 import {ImmutableState} from "v4-periphery/src/base/ImmutableState.sol";
 import {ImmutableMarketState} from "./ImmutableMarketState.sol";
+import {LccSafeTransfer} from "../libraries/LccSafeTransfer.sol";
 
 abstract contract MarketVault is IMarketVault, ImmutableState, ImmutableMarketState, ReentrancyGuardTransient {
     using CurrencySettler for Currency;
+    using LccSafeTransfer for ILCC;
 
     event SwapDeficit(PoolId indexed poolId, address indexed lccToken, address deficitRecipient, uint256 deficitAmount);
 
@@ -132,14 +134,27 @@ abstract contract MarketVault is IMarketVault, ImmutableState, ImmutableMarketSt
             true // burn = true: burn ERC-6909 Claim Tokens
         );
 
-        // Transfer the released ERC20 tokens from PoolManager to the recipient
+        // Transfer the released ERC20 tokens (or native ETH) from PoolManager to the recipient
         // This claims the actual underlying tokens (not claim tokens)
-        underlyingCurrency.take(
-            poolManager,
-            recipient,
-            amount,
-            false // mint = false: claim ERC20 tokens (not mint claim tokens)
-        );
+        if (underlyingCurrency.isAddressZero() && recipient == address(liquidityHub)) {
+            // For native ETH, we must route via this MarketVault.
+            // Otherwise PoolManager sends ETH directly to LiquidityHub, whose receive() only accepts MarketVault senders.
+            underlyingCurrency.take(
+                poolManager,
+                address(this),
+                amount,
+                false // mint = false: claim native ETH (not mint claim tokens)
+            );
+            (bool ok,) = payable(recipient).call{value: amount}("");
+            if (!ok) revert Errors.InvariantViolated("Native transfer to LiquidityHub failed");
+        } else {
+            underlyingCurrency.take(
+                poolManager,
+                recipient,
+                amount,
+                false // mint = false: claim ERC20 tokens (not mint claim tokens)
+            );
+        }
 
         emit LiquidityTakenFromVault(msg.sender, recipient, Currency.unwrap(underlyingCurrency), amount);
     }
@@ -492,21 +507,5 @@ abstract contract MarketVault is IMarketVault, ImmutableState, ImmutableMarketSt
         }
 
         return usedDelta;
-    }
-
-    /**
-     * @dev Assert that the sender is a valid ETH sender
-     */
-    function _assertValidEthSender() internal view {
-        if (msg.sender != address(poolManager)) {
-            _onlyProtocolBounds();
-        }
-    }
-
-    // Best practice: be explicit about intent
-    // Only executes on plain transaction (no selector) (ie. poolManager or WETH9 transfer of assets) to the MarketVault.
-    // Mostly used to prevent accidental transfers to the vault.
-    receive() external payable {
-        _assertValidEthSender();
     }
 }

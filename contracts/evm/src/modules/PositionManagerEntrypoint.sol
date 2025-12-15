@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity 0.8.26;
 
-import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
-import {CurrencyLibrary} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
+import {Currency, CurrencyLibrary} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {TransientSlots} from "../libraries/TransientSlots.sol";
 import {PositionManagerBase} from "./PositionManagerBase.sol";
@@ -13,8 +12,6 @@ import {PositionManagerBase} from "./PositionManagerBase.sol";
  * @dev Contains functions used only by MMPositionManager (entrypoint)
  */
 abstract contract PositionManagerEntrypoint is PositionManagerBase {
-    using CurrencyLibrary for Currency;
-
     address public immutable actionsImpl;
 
     constructor(address _liquidityHub, address _vtsOrchestrator, address _actionsImpl)
