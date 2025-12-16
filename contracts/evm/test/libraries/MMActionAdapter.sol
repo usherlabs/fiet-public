@@ -117,14 +117,16 @@ library MMActionAdapter {
         });
     }
 
-    function prepareMintFromDeltas(PoolKey memory poolKey, uint256 tokenId, int24 tickLower, int24 tickUpper)
-        internal
-        pure
-        returns (PreparedAction memory)
-    {
+    function prepareMintFromDeltas(
+        PoolKey memory poolKey,
+        uint256 tokenId,
+        int24 tickLower,
+        int24 tickUpper,
+        bool payerIsUser
+    ) internal pure returns (PreparedAction memory) {
         return PreparedAction({
             action: bytes1(uint8(MMActions.MINT_POSITION_FROM_DELTAS)),
-            params: abi.encode(poolKey, tokenId, tickLower, tickUpper)
+            params: abi.encode(poolKey, tokenId, tickLower, tickUpper, payerIsUser)
         });
     }
 

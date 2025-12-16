@@ -247,7 +247,7 @@ abstract contract MarketMakerTestBase is Test {
     ) internal {
         MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
         actions[0] = MMA.prepareDecrease(poolKey, tokenId, positionIndex, amountToDecrease);
-        actions[1] = MMA.prepareMintFromDeltas(poolKey, tokenId, tickLower, tickUpper);
+        actions[1] = MMA.prepareMintFromDeltas(poolKey, tokenId, tickLower, tickUpper, true);
 
         // Use modifyLiquidities which handles unlocking automatically
         (bytes memory actionsBytes, bytes[] memory params) = MMA.concatPrepared(actions);

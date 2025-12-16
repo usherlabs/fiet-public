@@ -242,7 +242,6 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         actions[1] = MMA.prepareSettleFromDeltas(corePoolKey, tokenId, 0, true, true);
         MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
 
-
         // get the active position count after burning
         (,,, uint256 activePositionCountAfterBurn) = vtsOrchestrator.getCommit(tokenId);
         assertEq(activePositionCountAfterBurn, 0);
@@ -327,5 +326,52 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         // get the active position count after increasing the liquidity
         (,,, uint256 activePositionCountAfterIncrease) = vtsOrchestrator.getCommit(tokenId);
         assertEq(activePositionCountAfterIncrease, 1);
+    }
+
+    function testCanDecreaseMintNewPositionFromDeltas() public {
+        uint256 tokenId = 1;
+        uint256 positionIndex = 0;
+
+        // create a new position with the default liquidity params and liquidity signal
+        createPosition(defaultlLiquidityParams, abi.encode(liquiditySignal), tokenId, positionIndex);
+
+        // make settlements for the position
+        uint256 settlementAmount = 1000000e18;
+
+        // make a settlement for the position over the required settlement amounts, so we can use the excess funds to increase the liquidity
+        approveAndSettleUnderlyingToPosition(tokenId, positionIndex, settlementAmount, settlementAmount);
+
+        (Position memory positionBeforeDecrease,) = positionManager.getPosition(tokenId, positionIndex);
+
+        // decrease the liquidity in the position
+        uint256 liquidityToDecrease = 1000000000;
+
+        // get amounts from liquidity params
+        uint256 newPositionIndex = 1;
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
+        int24 newUpperTick = 0;
+        actions[0] = MMA.prepareDecrease(corePoolKey, tokenId, positionIndex, liquidityToDecrease);
+        actions[1] =
+            MMA.prepareMintFromDeltas(corePoolKey, tokenId, newUpperTick, defaultlLiquidityParams.tickUpper, true);
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+
+        // validate liquidity of the initial position is decreased
+        (Position memory positionAfterDecrease, PositionId newPositionId) =
+            positionManager.getPosition(tokenId, positionIndex);
+        assertEq(
+            uint256(positionAfterDecrease.liquidity), uint256(positionBeforeDecrease.liquidity) - liquidityToDecrease
+        );
+
+        // validate the new position was created with the new ticks provided
+        (Position memory newPosition,) = positionManager.getPosition(tokenId, newPositionIndex);
+        assertEq(newPosition.tickLower, newUpperTick);
+        assertEq(newPosition.tickUpper, defaultlLiquidityParams.tickUpper);
+
+        // validate the new position has some settlement
+        (uint256 newPositionSettledAmount0, uint256 newPositionSettledAmount1) =
+            vtsOrchestrator.getPositionSettledAmounts(newPositionId);
+
+        assertGt(newPositionSettledAmount0, 0);
+        assertGt(newPositionSettledAmount1, 0);
     }
 }
