@@ -234,7 +234,7 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         // 4. _settle() withdraws underlying from the vault to the user
         MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
         actions[0] = MMA.prepareBurn(corePoolKey, tokenId, positionIndex);
-        actions[1] = MMA.prepareSettleFromDeltas(corePoolKey, tokenId, 0, true, true, true);
+        actions[1] = MMA.prepareSettleFromDeltas(corePoolKey, tokenId, 0, true, true);
         MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
 
         // get the underlying asset balance after burning a position

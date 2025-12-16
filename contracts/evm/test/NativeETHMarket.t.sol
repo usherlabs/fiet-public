@@ -342,7 +342,8 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
             _calculateSettlementAmounts(liquidityParams, marketVTSConfiguration);
 
         // Approve token1 (non-native) to the vtsOrchestrator
-        Currency.wrap(lcc1.underlying()).approve(address(vtsOrchestrator), requiredSettlementAmount1);
+        Currency underlyingCurrency1 = Currency.wrap(lcc1.underlying());
+        underlyingCurrency1.approve(address(vtsOrchestrator), requiredSettlementAmount1);
 
         // Record balances before the operation
         uint256 pmLcc0BalanceBefore = IERC20(address(lcc0)).balanceOf(address(manager));
@@ -351,7 +352,7 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
         uint256 proxyCurrency0BalanceBefore = manager.balanceOf(address(proxyHook), proxyPoolKey.currency0.toId());
         uint256 proxyCurrency1BalanceBefore = manager.balanceOf(address(proxyHook), proxyPoolKey.currency1.toId());
 
-        uint256 lcc1UnderlyingAssetBalanceBefore = Currency.wrap(lcc1.underlying()).balanceOfSelf();
+        uint256 lcc1UnderlyingAssetBalanceBefore = underlyingCurrency1.balanceOfSelf();
         uint256 selfEthBalanceBefore = address(this).balance;
 
         // Get the amount of ETH to send over (token0 is native ETH - zero address)
@@ -367,11 +368,18 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
         console.log("requiredSettlementAmount1", requiredSettlementAmount1);
         console.log("self eth balance before", selfEthBalanceBefore);
 
+        // Transfer counterparty asset (token1 underlying) to MMPM so that payerIsUser = false
+        // (usePositionManagerBalance) functions as expected. This allows settlement to use
+        // MMPM's balance instead of requiring user to transfer during settlement.
+        underlyingCurrency1.transfer(address(positionManager), requiredSettlementAmount1);
+
         // Prepare actions using the adapter pattern:
         // 1. Commit the signal
         // 2. Mint the position
-        // 3. Take excess native ETH back to sender
-        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](3);
+        // 3. Sync the counterparty asset balance as credit to locker (so it can be used for settlement)
+        // 4. Settle the underlying into the position (consumes deltas)
+        // 5. Take excess native ETH back to sender
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](5);
         actions[0] = MMA.prepareCommit(signalBytes);
         actions[1] = MMA.prepareMint(
             corePoolKey,
@@ -380,8 +388,14 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
             liquidityParams.tickUpper,
             uint256(liquidityParams.liquidityDelta)
         );
+        // Sync the counterparty asset balance in MMPM as credit to locker
+        // owner=MMPM (address(this)), target=locker (msgSender())
+        actions[2] = MMA.prepareSync(underlyingCurrency1);
+        // Settle underlying currencies into the position (payerIsUser=false uses locker's credits)
+        // shouldTake=false means deposit both currencies (not withdraw)
+        actions[3] = MMA.prepareSettleFromDeltas(corePoolKey, 1, 0, false, false);
         // Take any remaining native ETH delta back to self (0 = max available)
-        actions[2] = MMA.prepareTake(CurrencyLibrary.ADDRESS_ZERO, address(this), 0);
+        actions[4] = MMA.prepareTake(CurrencyLibrary.ADDRESS_ZERO, address(this), 0);
 
         // Execute with unlock, sending excess ETH to test the refund
         (bytes memory actionsBytes, bytes[] memory params) = MMA.concatPrepared(actions);
@@ -408,7 +422,7 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
             liquidityParams.tickLower, liquidityParams.tickUpper, uint128(uint256(liquidityParams.liquidityDelta))
         );
 
-        // Validate ETH was refunded: only the required amount was used
+        // Validate ETH was consumed for settlement: only the required amount was used
         // The excess ETH should have been returned via the TAKE action
         assertEq(selfEthBalanceAfter, selfEthBalanceBefore - requiredSettlementAmount0, "Excess ETH should be refunded");
 

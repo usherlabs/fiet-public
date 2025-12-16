@@ -75,5 +75,8 @@ library MMActions {
 
     /// @notice Collect available liquidity from settlement queue
     uint256 internal constant COLLECT_AVAILABLE_LIQUIDITY = 0x44;
+
+    /// @notice Sync currency balance as credit to delta
+    uint256 internal constant SYNC = 0x45;
 }
 

@@ -16,6 +16,7 @@ library CurrencyTransfer {
      * @dev If addressZero, then the transaction must include a transfer of ETH to address(this), allowing for forwarding to destination.
      *     This emulates transferFrom. Native transferFrom does NOT include an initial inherited transfer for forwarding.
      *     For ERC-20 tokens, uses Solady's safeTransferFrom2 which falls back to Permit2 if standard transferFrom fails.
+     *     Optimised to use transfer instead of transferFrom when `from == address(this)` to avoid self-approval requirement.
      *
      * @param currency The currency to transfer (can be native ETH or ERC-20)
      * @param from The address to transfer from
@@ -24,10 +25,11 @@ library CurrencyTransfer {
      */
     function transferFrom(Currency currency, address from, address to, uint256 amount) internal {
         if (currency.isAddressZero()) {
-            // For native ETH, verify msg.value and forward it
-            if (msg.value < amount) revert CurrencyLibrary.NativeTransferFailed();
             // Transfer ETH to the destination
             currency.transfer(to, amount);
+        } else if (from == address(this)) {
+            // When transferring from self, use transfer directly to avoid self-approval requirement
+            Currency.unwrap(currency).safeTransfer(to, amount);
         } else {
             // For ERC-20 tokens, use Solady's safeTransferFrom2 with Permit2 fallback
             // This tries standard transferFrom first, falls back to Permit2 if it fails

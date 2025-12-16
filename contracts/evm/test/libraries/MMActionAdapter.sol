@@ -167,12 +167,11 @@ library MMActionAdapter {
         uint256 tokenId,
         uint256 positionIndex,
         bool payerIsUser,
-        bool take0,
-        bool take1
+        bool shouldTake
     ) internal pure returns (PreparedAction memory) {
         return PreparedAction({
             action: bytes1(uint8(MMActions.SETTLE_POSITION_FROM_DELTAS)),
-            params: abi.encode(poolKey, tokenId, positionIndex, payerIsUser, take0, take1)
+            params: abi.encode(poolKey, tokenId, positionIndex, payerIsUser, shouldTake)
         });
     }
 
@@ -338,6 +337,15 @@ library MMActionAdapter {
         returns (PreparedAction memory)
     {
         return PreparedAction({action: bytes1(uint8(MMActions.TAKE)), params: abi.encode(currency, to, maxAmount)});
+    }
+
+    /**
+     * @notice Prepares a SYNC action to sync currency balance as credit to delta
+     * @param currency The currency to sync
+     * @dev owner is always address(this) (MMPM) and target is always msgSender() (locker)
+     */
+    function prepareSync(Currency currency) internal pure returns (PreparedAction memory) {
+        return PreparedAction({action: bytes1(uint8(MMActions.SYNC)), params: abi.encode(currency)});
     }
 
     // ============ CONVENIENCE METHODS (for backward compatibility) ============
