@@ -679,6 +679,7 @@ library VTSPositionLib {
         PoolId poolId = poolKey.toId();
         id = PositionLibrary.generateId(owner, params);
         Position storage posStorage = s.positions[id];
+        uint256 initialLiquidity = posStorage.liquidity;
 
         // pos.owner == address(0) means new position
         bool isNewPosition = posStorage.owner == address(0);
@@ -828,10 +829,21 @@ library VTSPositionLib {
         }
 
         // Update active status based on liquidity
+        // Track transitions to update activePositionCount for commits
+        uint256 commitId = posStorage.commitId;
+
         if (liq == 0) {
             posStorage.isActive = false;
+            // Decrement activePositionCount if transitioning from active(liq > 0) to inactive(liq == 0)
+            if (initialLiquidity > 0 && commitId > 0) {
+                s.commits[commitId].activePositionCount--;
+            }
         } else {
             posStorage.isActive = true;
+            // Increment activePositionCount if transitioning from inactive(liq == 0) to active(liq > 0)
+            if (initialLiquidity == 0 && commitId > 0) {
+                s.commits[commitId].activePositionCount++;
+            }
         }
 
         // Process position fees - single entry point for fee processing

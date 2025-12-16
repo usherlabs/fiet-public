@@ -286,13 +286,7 @@ library MMCalldataDecoder {
     function decodeSettleFromDeltasParams(bytes calldata params)
         internal
         pure
-        returns (
-            PoolKey calldata poolKey,
-            uint256 tokenId,
-            uint256 positionIndex,
-            bool payerIsUser,
-            bool shouldTake
-        )
+        returns (PoolKey calldata poolKey, uint256 tokenId, uint256 positionIndex, bool payerIsUser, bool shouldTake)
     {
         assembly ("memory-safe") {
             // PoolKey: 5 slots (0xa0), then tokenId, positionIndex, payerIsUser, shouldTake

@@ -27,8 +27,6 @@ import {MMHelpers} from "./libraries/MMHelpers.sol";
 import {Locker} from "v4-periphery/src/libraries/Locker.sol";
 import {DelegateCallGuard} from "./modules/DelegateCallGuard.sol";
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
-import {console} from "forge-std/console.sol";
-import {ILCC} from "./interfaces/ILCC.sol";
 
 /// @title MMPositionActionsImpl
 /// @notice Implementation contract for MMPositionManager position operations
@@ -610,7 +608,7 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
             revert Errors.InvalidAmount(liquidity, type(uint128).max);
         }
 
-        (,, positionIndex) = vtsOrchestrator.getCommit(tokenId);
+        (,, positionIndex,) = vtsOrchestrator.getCommit(tokenId);
 
         ModifyLiquidityParams memory params = ModifyLiquidityParams({
             tickLower: tickLower,

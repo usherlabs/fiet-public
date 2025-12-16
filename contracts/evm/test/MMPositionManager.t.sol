@@ -847,19 +847,19 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             address(lcc1)
         );
 
-        (, uint256 expiresAtPrevious,) = vtsOrchestrator.getCommit(tokenId);
+        (, uint256 expiresAtPrevious,,) = vtsOrchestrator.getCommit(tokenId);
 
         // renew the signal
         uint256 newTimestamp = 1000;
         vm.warp(newTimestamp);
         MMA.renew(positionManager, tokenId, abi.encode(renewSignal));
 
-        (, uint256 expiresAtAfter,) = vtsOrchestrator.getCommit(tokenId);
+        (, uint256 expiresAtAfter,,) = vtsOrchestrator.getCommit(tokenId);
 
         console.log("expiresAtPrevious", expiresAtPrevious);
         console.log("expiresAtAfter", expiresAtAfter);
 
-        // // validate the expiry is updated
+        // validate the expiry is updated
         assertEq(expiresAtAfter + 1, newTimestamp + expiresAtPrevious);
     }
 

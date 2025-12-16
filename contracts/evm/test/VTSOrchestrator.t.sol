@@ -265,7 +265,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         );
         uint256 commitId = abi.decode(result, (uint256));
 
-        (, uint256 expiresAtBefore,) = vtsOrchestrator.getCommit(commitId);
+        (, uint256 expiresAtBefore,,) = vtsOrchestrator.getCommit(commitId);
 
         // Warp forward
         vm.warp(block.timestamp + 1000);
@@ -282,7 +282,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
             abi.encodeWithSelector(VTSOrchestrator.renewSignal.selector, commitId, renewSignalBytes)
         );
 
-        (, uint256 expiresAtAfter,) = vtsOrchestrator.getCommit(commitId);
+        (, uint256 expiresAtAfter,,) = vtsOrchestrator.getCommit(commitId);
         assertGt(expiresAtAfter, expiresAtBefore, "Expiry should be extended");
     }
 
