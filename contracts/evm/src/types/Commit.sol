@@ -30,4 +30,6 @@ struct Commit {
     mapping(uint256 => PositionId) positions;
     /// Count of positions (for management)
     uint256 positionCount;
+    /// Count of active positions
+    uint256 activePositionCount;
 }
