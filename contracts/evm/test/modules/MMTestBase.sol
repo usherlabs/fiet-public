@@ -228,7 +228,7 @@ abstract contract MarketMakerTestBase is Test {
     ) internal {
         MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
         actions[0] = MMA.prepareDecommit(tokenId);
-        actions[1] = MMA.prepareSettleFromDeltas(poolKey, tokenId, idx, payerIsUser);
+        actions[1] = MMA.prepareSettleFromDeltas(poolKey, tokenId, idx, payerIsUser, true, true);
 
         // Use modifyLiquidities which handles unlocking automatically
         (bytes memory actionsBytes, bytes[] memory params) = MMA.concatPrepared(actions);
@@ -266,7 +266,7 @@ abstract contract MarketMakerTestBase is Test {
     ) internal {
         MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
         actions[0] = MMA.prepareDecrease(poolKey, tokenId, positionIndexToDecrease, amountToDecrease);
-        actions[1] = MMA.prepareSettleFromDeltas(poolKey, tokenId, positionIndexToSettle, payerIsUser);
+        actions[1] = MMA.prepareSettleFromDeltas(poolKey, tokenId, positionIndexToSettle, payerIsUser, false, false);
 
         // Use modifyLiquidities which handles unlocking automatically
         (bytes memory actionsBytes, bytes[] memory params) = MMA.concatPrepared(actions);
@@ -304,7 +304,7 @@ abstract contract MarketMakerTestBase is Test {
     ) internal {
         MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
         actions[0] = MMA.prepareSeize(poolKey, tokenId, positionIndexToSeize, amount0ToSettle, amount1ToSettle);
-        actions[1] = MMA.prepareSettleFromDeltas(poolKey, tokenId, positionIndexToSeize, false); //take
+        actions[1] = MMA.prepareSettleFromDeltas(poolKey, tokenId, positionIndexToSeize, false, true, true); //take
         // Use modifyLiquidities which handles unlocking automatically
         (bytes memory actionsBytes, bytes[] memory params) = MMA.concatPrepared(actions);
         bytes memory unlockData = abi.encode(actionsBytes, params);

@@ -16,6 +16,7 @@ import {LiquidityUtils} from "../libraries/LiquidityUtils.sol";
 import {ImmutableState} from "v4-periphery/src/base/ImmutableState.sol";
 import {PositionManagerBase} from "./PositionManagerBase.sol";
 import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
+import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 
 /**
  * @title PositionManagerImpl
@@ -59,6 +60,28 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
         return vtsOrchestrator.getFullCreditPair(currency0, currency1, owner);
     }
 
+    /// @notice Gets full debt for a single currency from VTSOrchestrator
+    /// @param currency The currency to get debt for
+    /// @param owner The owner address
+    /// @return The full debt amount
+    function _getFullDebt(Currency currency, address owner) internal view returns (uint256) {
+        return vtsOrchestrator.getFullDebt(currency, owner);
+    }
+
+    /// @notice Gets full debt pair from VTSOrchestrator
+    /// @param currency0 The first currency
+    /// @param currency1 The second currency
+    /// @param owner The owner address
+    /// @return debt0 The debt for currency0
+    /// @return debt1 The debt for currency1
+    function _getFullDebtPair(Currency currency0, Currency currency1, address owner)
+        internal
+        view
+        returns (uint256, uint256)
+    {
+        return vtsOrchestrator.getFullDebtPair(currency0, currency1, owner);
+    }
+
     /// @notice Gets liquidity from deltas of underlying currencies
     /// @dev Calculates how much liquidity to mint/increase from what is owed
     /// @param poolKey The pool key for the position
@@ -100,6 +123,28 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
         // owner = address(this) = MMPM (balance holder)
         // target = msgSender() = locker (delta recipient)
         vtsOrchestrator.syncPair(currency0, currency1, address(this), msgSender());
+    }
+
+    // ------------------------------------------------------------------------------------------------
+    // Currency Withdrawal Helpers
+    // ------------------------------------------------------------------------------------------------
+
+    /// @notice Takes currency from delta and transfers to recipient
+    /// @dev Unified flow for both LCC and underlying currencies:
+    ///      - Balance held as ERC20 by MMPM
+    ///      - Delta on locker (LCC fees synced via _syncBalanceAsCredit after position modification)
+    ///      - Flow: debit locker delta -> direct ERC20 transfer
+    /// @param currency The currency to take
+    /// @param to The recipient address
+    /// @param maxAmount The maximum amount to take (0 = take full available credit)
+    function _take(Currency currency, address to, uint256 maxAmount) internal {
+        address locker = msgSender();
+        uint256 trueMaxAmount = Math.min(maxAmount, currency.balanceOfSelf());
+        uint256 takeAmount = vtsOrchestrator.take(currency, locker, trueMaxAmount);
+
+        if (to != address(this)) {
+            currency.transfer(to, takeAmount);
+        }
     }
 
     // ------------------------------------------------------------------------------------------------

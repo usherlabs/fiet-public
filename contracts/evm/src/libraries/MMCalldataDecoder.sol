@@ -276,22 +276,31 @@ library MMCalldataDecoder {
         }
     }
 
-    /// @dev SETTLE_POSITION_FROM_DELTAS: (PoolKey, uint256, uint256, bool)
+    /// @dev SETTLE_POSITION_FROM_DELTAS: (PoolKey, uint256, uint256, bool, bool, bool)
     /// @param params The calldata bytes to decode
     /// @return poolKey The pool key (calldata pointer)
     /// @return tokenId The commitment NFT token ID
     /// @return positionIndex The position index within the commitment
     /// @return payerIsUser If true, user consumes credit protocol owes them (MMPM delta).
     ///         If false, uses locker's direct credit.
+    /// @return take0 If true, withdraw currency0 (debt). If false, deposit currency0 (credit).
+    /// @return take1 If true, withdraw currency1 (debt). If false, deposit currency1 (credit).
     function decodeSettleFromDeltasParams(bytes calldata params)
         internal
         pure
-        returns (PoolKey calldata poolKey, uint256 tokenId, uint256 positionIndex, bool payerIsUser)
+        returns (
+            PoolKey calldata poolKey,
+            uint256 tokenId,
+            uint256 positionIndex,
+            bool payerIsUser,
+            bool take0,
+            bool take1
+        )
     {
         assembly ("memory-safe") {
-            // PoolKey: 5 slots (0xa0), then tokenId, positionIndex, payerIsUser
-            // Minimum length: 0xa0 + 0x20*3 = 0x100
-            if lt(params.length, 0x100) {
+            // PoolKey: 5 slots (0xa0), then tokenId, positionIndex, payerIsUser, take0, take1
+            // Minimum length: 0xa0 + 0x20*5 = 0x140
+            if lt(params.length, 0x140) {
                 mstore(0, SLICE_ERROR_SELECTOR)
                 revert(0x1c, 4)
             }
@@ -299,6 +308,8 @@ library MMCalldataDecoder {
             tokenId := calldataload(add(params.offset, 0xa0))
             positionIndex := calldataload(add(params.offset, 0xc0))
             payerIsUser := calldataload(add(params.offset, 0xe0))
+            take0 := calldataload(add(params.offset, 0x100))
+            take1 := calldataload(add(params.offset, 0x120))
         }
     }
 
