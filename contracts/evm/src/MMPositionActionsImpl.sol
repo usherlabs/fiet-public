@@ -166,6 +166,14 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
         return vtsOrchestrator.getPosition(tokenId, positionIndex);
     }
 
+    /// @notice Returns the position ID for a given token ID and position index
+    /// @param tokenId The ERC721 tokenId (commitment NFT ID)
+    /// @param positionIndex The index of the position within the commitment
+    /// @return The position ID
+    function getPositionId(uint256 tokenId, uint256 positionIndex) public view returns (PositionId) {
+        return vtsOrchestrator.getPositionId(tokenId, positionIndex);
+    }
+
     /// @notice Checks if a position is currently being seized
     /// @param positionId The position ID to check
     /// @return True if the position is being seized
