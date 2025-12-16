@@ -848,7 +848,19 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
      */
     function _assertValidEthSender() internal view {
         address sender = _msgSender();
-        (address l0, address l1) = IMarketVault(sender).lccs();
+        // otherwise check if the caller is a valid MarketVault with native ETH support
+        IMarketVault marketVault = IMarketVault(sender);
+
+        // Check if lccs() function exists by attempting to call it
+        (bool success, bytes memory returnData) =
+            address(marketVault).staticcall(abi.encodeWithSelector(IMarketVault.lccs.selector));
+
+        if (!success) {
+            revert Errors.InvalidEthSender();
+        }
+
+        (address l0, address l1) = abi.decode(returnData, (address, address));
+
         bool valid0 = LCCFactoryLib.isValidLcc(s, l0);
         bool valid1 = LCCFactoryLib.isValidLcc(s, l1);
         // Revert if either asset is not an LCC OR at least one of the underlying assets is NOT native ETH
