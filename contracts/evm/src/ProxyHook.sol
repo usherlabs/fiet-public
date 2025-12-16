@@ -68,11 +68,7 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
     }
 
     function _lccs() internal view override returns (ILCC lccToken0, ILCC lccToken1) {
-        return
-            (
-                ILCC(Currency.unwrap(corePoolKey.currency0)),
-                ILCC(Currency.unwrap(corePoolKey.currency1))
-            );
+        return (ILCC(Currency.unwrap(corePoolKey.currency0)), ILCC(Currency.unwrap(corePoolKey.currency1)));
     }
 
     function _marketId() internal view override returns (bytes32) {

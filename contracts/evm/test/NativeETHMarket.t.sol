@@ -481,25 +481,15 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
         bytes memory signalBytes = abi.encode(liquiditySignal);
 
         // Calculate settlement amounts based on commitment maxima
-        (uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) =
-            _calculateSettlementAmounts(liquidityParams, marketVTSConfiguration);
+        (, uint256 requiredSettlementAmount1) = _calculateSettlementAmounts(liquidityParams, marketVTSConfiguration);
 
-        (uint256 c0, uint256 c1) = LiquidityUtils.calculateCommitmentMaxima(
+        (uint256 c0,) = LiquidityUtils.calculateCommitmentMaxima(
             liquidityParams.tickLower, liquidityParams.tickUpper, uint128(uint256(liquidityParams.liquidityDelta))
         );
 
         // Approve token1 (non-native) to the vtsOrchestrator
         Currency underlyingCurrency1 = Currency.wrap(lcc1.underlying());
         underlyingCurrency1.approve(address(vtsOrchestrator), requiredSettlementAmount1);
-
-        // Record balances before the operation
-        uint256 pmLcc0BalanceBefore = IERC20(address(lcc0)).balanceOf(address(manager));
-        uint256 pmLcc1BalanceBefore = IERC20(address(lcc1)).balanceOf(address(manager));
-
-        uint256 proxyCurrency0BalanceBefore = manager.balanceOf(address(proxyHook), proxyPoolKey.currency0.toId());
-        uint256 proxyCurrency1BalanceBefore = manager.balanceOf(address(proxyHook), proxyPoolKey.currency1.toId());
-
-        uint256 lcc1UnderlyingAssetBalanceBefore = underlyingCurrency1.balanceOfSelf();
         uint256 selfEthBalanceBefore = address(this).balance;
 
         uint256 excessEth = 1 ether;
