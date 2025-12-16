@@ -281,10 +281,8 @@ library MMCalldataDecoder {
     /// @return poolKey The pool key (calldata pointer)
     /// @return tokenId The commitment NFT token ID
     /// @return positionIndex The position index within the commitment
-    /// @return payerIsUser If true, user consumes credit protocol owes them (MMPM delta).
-    ///         If false, uses locker's direct credit.
-    /// @return take0 If true, withdraw currency0 (debt). If false, deposit currency0 (credit).
-    /// @return take1 If true, withdraw currency1 (debt). If false, deposit currency1 (credit).
+    /// @return payerIsUser If true, use protocol delta (address(this)). If false, use locker delta (msgSender()).
+    /// @return shouldTake If true, withdraw (consume credit). If false, deposit (settle credit into position).
     function decodeSettleFromDeltasParams(bytes calldata params)
         internal
         pure
@@ -293,14 +291,13 @@ library MMCalldataDecoder {
             uint256 tokenId,
             uint256 positionIndex,
             bool payerIsUser,
-            bool take0,
-            bool take1
+            bool shouldTake
         )
     {
         assembly ("memory-safe") {
-            // PoolKey: 5 slots (0xa0), then tokenId, positionIndex, payerIsUser, take0, take1
-            // Minimum length: 0xa0 + 0x20*5 = 0x140
-            if lt(params.length, 0x140) {
+            // PoolKey: 5 slots (0xa0), then tokenId, positionIndex, payerIsUser, shouldTake
+            // Minimum length: 0xa0 + 0x20*4 = 0x120
+            if lt(params.length, 0x120) {
                 mstore(0, SLICE_ERROR_SELECTOR)
                 revert(0x1c, 4)
             }
@@ -308,8 +305,7 @@ library MMCalldataDecoder {
             tokenId := calldataload(add(params.offset, 0xa0))
             positionIndex := calldataload(add(params.offset, 0xc0))
             payerIsUser := calldataload(add(params.offset, 0xe0))
-            take0 := calldataload(add(params.offset, 0x100))
-            take1 := calldataload(add(params.offset, 0x120))
+            shouldTake := calldataload(add(params.offset, 0x100))
         }
     }
 
@@ -504,6 +500,20 @@ library MMCalldataDecoder {
                 revert(0x1c, 4)
             }
             amount := calldataload(params.offset)
+        }
+    }
+
+    /// @dev SYNC: (Currency)
+    /// @param params The calldata bytes to decode
+    /// @return currency The currency to sync
+    /// @dev owner is always address(this) (MMPM) and target is always msgSender() (locker)
+    function decodeSyncParams(bytes calldata params) internal pure returns (Currency currency) {
+        assembly ("memory-safe") {
+            if lt(params.length, 0x20) {
+                mstore(0, SLICE_ERROR_SELECTOR)
+                revert(0x1c, 4)
+            }
+            currency := calldataload(params.offset)
         }
     }
 }

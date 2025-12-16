@@ -68,10 +68,7 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
     }
 
     function _lccs() internal view override returns (ILCC lccToken0, ILCC lccToken1) {
-        return (
-            ILCC(payable(Currency.unwrap(proxyPoolKey.currency0))),
-            ILCC(payable(Currency.unwrap(proxyPoolKey.currency1)))
-        );
+        return (ILCC(Currency.unwrap(corePoolKey.currency0)), ILCC(Currency.unwrap(corePoolKey.currency1)));
     }
 
     function _marketId() internal view override returns (bytes32) {
@@ -153,8 +150,8 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
     // Liquidity is managed by the Proxy Hook here to ensure PM credits the Proxy Hook (msg.sender) with relevant Currency Delta.
     // THIS IS ALREADY UNLOCKED FOR DIRECT LP ON CORE POOL.
     function onDirectLP(BalanceDelta delta, LiquidityUtils.ActionType actionType) external virtual onlyCoreHook {
-        ILCC lccToken0 = ILCC(payable(Currency.unwrap(corePoolKey.currency0)));
-        ILCC lccToken1 = ILCC(payable(Currency.unwrap(corePoolKey.currency1)));
+        ILCC lccToken0 = ILCC(Currency.unwrap(corePoolKey.currency0));
+        ILCC lccToken1 = ILCC(Currency.unwrap(corePoolKey.currency1));
 
         uint256 amount0 = LiquidityUtils.safeInt128ToUint256(delta.amount0());
         uint256 amount1 = LiquidityUtils.safeInt128ToUint256(delta.amount1());
@@ -231,8 +228,8 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         uint256 amount1 = LiquidityUtils.safeInt128ToUint256(delta.amount1());
 
         // Get the LCC tokens for the core pool
-        ILCC lccToken0 = ILCC(payable(Currency.unwrap(corePoolKey.currency0)));
-        ILCC lccToken1 = ILCC(payable(Currency.unwrap(corePoolKey.currency1)));
+        ILCC lccToken0 = ILCC(Currency.unwrap(corePoolKey.currency0));
+        ILCC lccToken1 = ILCC(Currency.unwrap(corePoolKey.currency1));
 
         // Handle Token IN liquidity (move to PoolManager from lcc token)
         ILCC lccTokenIn = isZeroForOne ? lccToken0 : lccToken1;
@@ -270,8 +267,8 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         bool coreZeroForOne;
         PoolKey memory coreKey = corePoolKey;
 
-        ILCC coreLccToken0 = ILCC(payable(Currency.unwrap(coreKey.currency0)));
-        ILCC coreLccToken1 = ILCC(payable(Currency.unwrap(coreKey.currency1)));
+        ILCC coreLccToken0 = ILCC(Currency.unwrap(coreKey.currency0));
+        ILCC coreLccToken1 = ILCC(Currency.unwrap(coreKey.currency1));
 
         if (
             Currency.unwrap(key.currency0) == coreLccToken0.underlying()

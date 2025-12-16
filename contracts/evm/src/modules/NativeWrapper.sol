@@ -28,7 +28,7 @@ abstract contract NativeWrapper is UniNativeWrapper {
             address(marketVault).staticcall(abi.encodeWithSelector(IMarketVault.lccs.selector));
 
         if (!success) {
-            revert Errors.InvalidSender();
+            revert Errors.InvalidEthSender();
         }
 
         (address lccToken0, address lccToken1) = abi.decode(returnData, (address, address));
@@ -36,7 +36,7 @@ abstract contract NativeWrapper is UniNativeWrapper {
         address underlying1 = ILCC(lccToken1).underlying();
         // Validate that at least one underlying is native ETH (address(0))
         if (underlying0 != address(0) && underlying1 != address(0)) {
-            revert Errors.InvalidSender();
+            revert Errors.InvalidEthSender();
         }
     }
 

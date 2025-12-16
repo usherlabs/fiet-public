@@ -311,6 +311,11 @@ contract MMPositionManager is
             _collectAvailableLiquidity(lcc, recipient, maxAmount);
             return;
         }
+        if (action == MMActions.SYNC) {
+            Currency currency = params.decodeSyncParams();
+            _sync(currency);
+            return;
+        }
         revert Errors.UnsupportedAction(action);
     }
 
@@ -370,6 +375,13 @@ contract MMPositionManager is
                 _syncBalanceAsCredit(_lccToUnderlyingCurrency(Currency.wrap(lcc)));
             }
         }
+    }
+
+    /// @notice Syncs currency balance as credit to delta
+    /// @param currency The currency to sync
+    /// @dev owner is always address(this) (MMPM) and target is always msgSender() (locker)
+    function _sync(Currency currency) internal {
+        vtsOrchestrator.sync(currency, address(this), msgSender());
     }
 
     /// @notice Wraps native ETH to WETH

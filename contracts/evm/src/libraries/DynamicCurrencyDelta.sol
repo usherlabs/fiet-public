@@ -8,7 +8,7 @@ import {NonzeroDeltaCount} from "@uniswap/v4-core/src/libraries/NonzeroDeltaCoun
 import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {ILCC} from "../interfaces/ILCC.sol";
-import {console} from "forge-std/console.sol";
+import {Errors} from "./Errors.sol";
 
 /// @title DynamicCurrencyDelta
 /// @notice Library for managing currency deltas and underlying settlement in VTS
@@ -149,9 +149,7 @@ library DynamicCurrencyDelta {
     /// @notice Asserts that there are no nonzero deltas
     function assertNonZeroDeltas() internal view {
         if (NonzeroDeltaCount.read() > 0) {
-            // TODO: include revert after clamping deltas is implemented
-            // revert Errors.CurrencyNotSettled();
-            console.log("assertNonZeroDeltas: CurrencyNotSettled", NonzeroDeltaCount.read());
+            revert Errors.CurrencyNotSettled();
         }
     }
 

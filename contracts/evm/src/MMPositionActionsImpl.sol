@@ -145,15 +145,9 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
             return;
         }
         if (action == MMActions.SETTLE_POSITION_FROM_DELTAS) {
-            (
-                PoolKey calldata poolKey,
-                uint256 tokenId,
-                uint256 positionIndex,
-                bool payerIsUser,
-                bool take0,
-                bool take1
-            ) = params.decodeSettleFromDeltasParams();
-            _settleFromDeltas(poolKey, tokenId, positionIndex, payerIsUser, take0, take1);
+            (PoolKey calldata poolKey, uint256 tokenId, uint256 positionIndex, bool payerIsUser, bool shouldTake) =
+                params.decodeSettleFromDeltasParams();
+            _settleFromDeltas(poolKey, tokenId, positionIndex, payerIsUser, shouldTake);
             return;
         }
         revert Errors.UnsupportedAction(action);
@@ -473,120 +467,65 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
         }
     }
 
-    /// @notice Settles into/from the position using available delta credits/debts
+    /// @notice Settles into/from the position using available delta credits
     /// @dev Note: We can only do additional actions (such as settle in or out) on credits (deltas that are positive).
     ///      Credits represent amounts the system owes to the user, which can be settled into positions or withdrawn.
     /// @param poolKey The pool key
     /// @param tokenId The commitment NFT token ID
     /// @param positionIndex The position index within the commitment
-    /// @param payerIsUser If true, user consumes credit the protocol owes them (delta target = MMPM).
-    ///        If false, uses locker's direct credit (delta target = locker).
-    /// @param take0 If true, withdraw currency0 (debt). If false, deposit currency0 (credit).
-    /// @param take1 If true, withdraw currency1 (debt). If false, deposit currency1 (credit).
-    /// @dev Delta target semantics:
-    ///      - MMPM (address(this)): Protocol owes/is owed by external sources
-    ///      - Locker (msgSender()): External entity owes/is owed by protocol
+    /// @param payerIsUser If true, use protocol delta (address(this)). If false, use locker delta (msgSender()).
+    /// @param shouldTake If true, withdraw (consume credit). If false, deposit (settle credit into position).
+    /// @dev Delta semantics:
+    ///      - Protocol delta (address(this)): Protocol owes/is owed by external sources
+    ///      - Locker delta (msgSender()): External entity owes/is owed by protocol
     function _settleFromDeltas(
         PoolKey calldata poolKey,
         uint256 tokenId,
         uint256 positionIndex,
         bool payerIsUser,
-        bool take0,
-        bool take1
+        bool shouldTake
     ) internal {
         address sender = msgSender();
-        address deltaTarget = payerIsUser ? address(this) : sender;
 
         Currency underlying0 = _lccToUnderlyingCurrency(poolKey.currency0);
         Currency underlying1 = _lccToUnderlyingCurrency(poolKey.currency1);
 
-        uint256 credit0;
-        uint256 credit1;
+        // Behaviour matrix:
+        // - shouldTake=true && payerIsUser=true:  Withdraw to locker from protocol delta via _settle
+        // - shouldTake=false && payerIsUser=true: Net protocol delta with onMMSettle (no token movement)
+        // - shouldTake=true && payerIsUser=false: Withdraw to MMPM and sync credits
+        // - shouldTake=false && payerIsUser=false: Settle from MMPM balance via _settle
 
-        // ─────────────────────────────────────────────────────────
-        // CASE 1: Both take0 && take1 — Withdraw both currencies (credits)
-        // ─────────────────────────────────────────────────────────
-        if (take0 && take1) {
-            // When taking (withdrawing), we use credits (system owes user tokens)
-            (credit0, credit1) = _getFullCreditPair(underlying0, underlying1, deltaTarget);
-            if (credit0 == 0 && credit1 == 0) {
-                revert Errors.InvalidDelta(0, 0);
-            }
+        // Get protocol delta credits (address(this))
+        (uint256 credit0, uint256 credit1) = _getFullCreditPair(underlying0, underlying1, address(this));
 
-            if (deltaTarget == sender) {
-                // Locker delta → use _take to withdraw
-                if (credit0 > 0) _take(underlying0, sender, credit0);
-                if (credit1 > 0) _take(underlying1, sender, credit1);
-            } else {
-                // MMPM delta → use _settle to withdraw via vault
+        if (credit0 > 0 || credit1 > 0) {
+            if (shouldTake) {
+                // WITHDRAW: Move credits out as tokens
+                // Protocol owes user → withdraw to locker via _settle
                 _settle(poolKey, tokenId, positionIndex, credit0.toInt128(), credit1.toInt128(), !payerIsUser);
-            }
-            return;
-        }
-
-        // ─────────────────────────────────────────────────────────
-        // CASE 2: take0 != take1 — Independent currency handling
-        // ─────────────────────────────────────────────────────────
-        if (take0 != take1) {
-            int128 amount0;
-            int128 amount1;
-
-            if (take0) {
-                // Withdrawing currency0 (credit - system owes user)
-                credit0 = _getFullCredit(underlying0, deltaTarget);
-                if (credit0 == 0) revert Errors.InvalidDelta(0, 0);
-                amount0 = credit0.toInt128(); // Positive for withdrawal
+                // if !payerIsUser, balance sync handled in _settle
             } else {
-                // Depositing currency0 (credit)
-                credit0 = _getFullCredit(underlying0, deltaTarget);
-                amount0 = credit0.toInt128(); // Positive = deposit
-            }
+                // DEPOSIT: Settle credits into position
+                // Net protocol delta via onMMSettle (no token movement)
+                (Position memory position, PositionId positionId) = getPosition(tokenId, positionIndex);
+                MMHelpers.assertPositionForPool(poolKey, position);
 
-            if (take1) {
-                // Withdrawing currency1 (credit - system owes user)
-                credit1 = _getFullCredit(underlying1, deltaTarget);
-                if (credit1 == 0) revert Errors.InvalidDelta(0, 0);
-                amount1 = credit1.toInt128(); // Positive for withdrawal
-            } else {
-                // Depositing currency1 (credit)
-                credit1 = _getFullCredit(underlying1, deltaTarget);
-                amount1 = credit1.toInt128(); // Positive = deposit
-            }
+                bool isSeizing = _isSeizing(positionId);
+                if (!isSeizing) {
+                    MMHelpers.assertApprovedOrOwner(sender, tokenId);
+                }
 
-            if (amount0 == 0 && amount1 == 0) {
-                revert Errors.InvalidDelta(0, 0);
+                BalanceDelta sDelta = LiquidityUtils.safeToBalanceDelta(credit0, credit1, true, true);
+                vtsOrchestrator.onMMSettle(
+                    _getVault(poolKey), tokenId, positionIndex, poolKey.currency0, poolKey.currency1, sDelta, isSeizing
+                );
             }
-
-            // For mixed operations, always use _settle (handles both deposit and withdrawal)
-            _settle(poolKey, tokenId, positionIndex, amount0, amount1, !payerIsUser);
-            return;
         }
-
-        // ─────────────────────────────────────────────────────────
-        // CASE 3: Both !take0 && !take1 — Original deposit-only logic
-        // ─────────────────────────────────────────────────────────
-        (credit0, credit1) = _getFullCreditPair(underlying0, underlying1, deltaTarget);
-        if (credit0 == 0 && credit1 == 0) {
-            revert Errors.InvalidDelta(0, 0);
-        }
-
-        BalanceDelta sDelta = LiquidityUtils.safeToBalanceDelta(credit0, credit1, true, true);
-
-        if (payerIsUser) {
-            // Direct onMMSettle — no token movement
-            (Position memory position, PositionId positionId) = getPosition(tokenId, positionIndex);
-            MMHelpers.assertPositionForPool(poolKey, position);
-
-            bool isSeizing = _isSeizing(positionId);
-            if (!isSeizing) {
-                MMHelpers.assertApprovedOrOwner(sender, tokenId);
-            }
-
-            vtsOrchestrator.onMMSettle(
-                _getVault(poolKey), tokenId, positionIndex, poolKey.currency0, poolKey.currency1, sDelta, isSeizing
-            );
-        } else {
-            _settle(poolKey, tokenId, positionIndex, sDelta.amount0(), sDelta.amount1(), !payerIsUser);
+        if (!payerIsUser && !shouldTake) {
+            // Settle from MMPM balance (actual token movement)
+            (uint256 lockerCredit0, uint256 lockerCredit1) = _getFullCreditPair(underlying0, underlying1, sender);
+            _settle(poolKey, tokenId, positionIndex, -lockerCredit0.toInt128(), -lockerCredit1.toInt128(), true);
         }
     }
 

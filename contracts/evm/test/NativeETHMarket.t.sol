@@ -342,7 +342,8 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
             _calculateSettlementAmounts(liquidityParams, marketVTSConfiguration);
 
         // Approve token1 (non-native) to the vtsOrchestrator
-        Currency.wrap(lcc1.underlying()).approve(address(vtsOrchestrator), requiredSettlementAmount1);
+        Currency underlyingCurrency1 = Currency.wrap(lcc1.underlying());
+        underlyingCurrency1.approve(address(vtsOrchestrator), requiredSettlementAmount1);
 
         // Record balances before the operation
         uint256 pmLcc0BalanceBefore = IERC20(address(lcc0)).balanceOf(address(manager));
@@ -351,7 +352,7 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
         uint256 proxyCurrency0BalanceBefore = manager.balanceOf(address(proxyHook), proxyPoolKey.currency0.toId());
         uint256 proxyCurrency1BalanceBefore = manager.balanceOf(address(proxyHook), proxyPoolKey.currency1.toId());
 
-        uint256 lcc1UnderlyingAssetBalanceBefore = Currency.wrap(lcc1.underlying()).balanceOfSelf();
+        uint256 lcc1UnderlyingAssetBalanceBefore = underlyingCurrency1.balanceOfSelf();
         uint256 selfEthBalanceBefore = address(this).balance;
 
         // Get the amount of ETH to send over (token0 is native ETH - zero address)
@@ -367,11 +368,18 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
         console.log("requiredSettlementAmount1", requiredSettlementAmount1);
         console.log("self eth balance before", selfEthBalanceBefore);
 
+        // Transfer counterparty asset (token1 underlying) to MMPM so that payerIsUser = false
+        // (usePositionManagerBalance) functions as expected. This allows settlement to use
+        // MMPM's balance instead of requiring user to transfer during settlement.
+        underlyingCurrency1.transfer(address(positionManager), requiredSettlementAmount1);
+
         // Prepare actions using the adapter pattern:
         // 1. Commit the signal
         // 2. Mint the position
-        // 3. Take excess native ETH back to sender
-        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](3);
+        // 3. Sync the counterparty asset balance as credit to locker (so it can be used for settlement)
+        // 4. Settle the underlying into the position (consumes deltas)
+        // 5. Take excess native ETH back to sender
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](5);
         actions[0] = MMA.prepareCommit(signalBytes);
         actions[1] = MMA.prepareMint(
             corePoolKey,
@@ -380,8 +388,18 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
             liquidityParams.tickUpper,
             uint256(liquidityParams.liquidityDelta)
         );
+        // Sync the counterparty asset balance in MMPM as credit to locker
+        // owner=MMPM (address(this)), target=locker (msgSender())
+        actions[2] = MMA.prepareSync(underlyingCurrency1);
+        // Settle underlying currencies into the position (payerIsUser=false uses locker's credits)
+        // shouldTake=false means deposit both currencies (not withdraw)
+        // ! DO NOT SETTLE FROM DELTAS HERE - IT WILL SETTLE THE FULL ETH AMOUNT SYNCED INTO THE POSITION, WHICH IS NOT WHAT WE WANT
+        // actions[3] = MMA.prepareSettleFromDeltas(corePoolKey, 1, 0, false, false);
+        actions[3] = MMA.prepareSettle(
+            corePoolKey, 1, 0, -requiredSettlementAmount0.toInt128(), -requiredSettlementAmount1.toInt128(), true
+        ); // usePositionManagerBalance=true means settle from MMPM balance
         // Take any remaining native ETH delta back to self (0 = max available)
-        actions[2] = MMA.prepareTake(CurrencyLibrary.ADDRESS_ZERO, address(this), 0);
+        actions[4] = MMA.prepareTake(CurrencyLibrary.ADDRESS_ZERO, address(this), 0);
 
         // Execute with unlock, sending excess ETH to test the refund
         (bytes memory actionsBytes, bytes[] memory params) = MMA.concatPrepared(actions);
@@ -404,11 +422,16 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
         console.log("lcc1UnderlyingAssetBalanceAfter", lcc1UnderlyingAssetBalanceAfter);
 
         // Calculate the expected LCC token amounts minted (commitment maxima)
-        (uint256 token0Commitment, uint256 token1Commitment) = LiquidityUtils.calculateCommitmentMaxima(
-            liquidityParams.tickLower, liquidityParams.tickUpper, uint128(uint256(liquidityParams.liquidityDelta))
+        (uint160 sqrtPriceX96, int24 currentTick,,) = manager.getSlot0(corePoolKey.toId());
+        (uint256 token0EffectiveLiquidity, uint256 token1EffectiveLiquidity) = LiquidityUtils.calculateEffectiveTokenAmounts(
+            sqrtPriceX96,
+            currentTick,
+            liquidityParams.tickLower,
+            liquidityParams.tickUpper,
+            int256(uint256(liquidityParams.liquidityDelta))
         );
 
-        // Validate ETH was refunded: only the required amount was used
+        // Validate ETH was consumed for settlement: only the required amount was used
         // The excess ETH should have been returned via the TAKE action
         assertEq(selfEthBalanceAfter, selfEthBalanceBefore - requiredSettlementAmount0, "Excess ETH should be refunded");
 
@@ -420,8 +443,8 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
         );
 
         // Validate LCC tokens have been added to the pool manager
-        assertEq(pmLcc0BalanceAfter, pmLcc0BalanceBefore + token0Commitment, "LCC0 balance mismatch");
-        assertEq(pmLcc1BalanceAfter, pmLcc1BalanceBefore + token1Commitment, "LCC1 balance mismatch");
+        assertEq(pmLcc0BalanceAfter, pmLcc0BalanceBefore + token0EffectiveLiquidity, "LCC0 balance mismatch");
+        assertEq(pmLcc1BalanceAfter, pmLcc1BalanceBefore + token1EffectiveLiquidity, "LCC1 balance mismatch");
 
         // Validate underlying tokens have been transferred to proxy pool
         // and proxy hook has claim tokens
@@ -447,5 +470,67 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
         // Position owner is the mmPositionManager contract
         assertEq(position.owner, address(mmPositionManager), "Position owner mismatch");
         assertEq(position.isActive, true, "Position should be active");
+    }
+
+    // @notice Tests creating a position in a native ETH market via MMPM with excess msg.value refund
+    /// @dev Verifies that when sending more ETH than required for the position, the excess is refunded
+    function test_swapWithNativeAsUnderlyingAsset_CanSettleFromDeltas_withRefund() public {
+        ModifyLiquidityParams memory liquidityParams =
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
+
+        bytes memory signalBytes = abi.encode(liquiditySignal);
+
+        // Calculate settlement amounts based on commitment maxima
+        (, uint256 requiredSettlementAmount1) = _calculateSettlementAmounts(liquidityParams, marketVTSConfiguration);
+
+        (uint256 c0,) = LiquidityUtils.calculateCommitmentMaxima(
+            liquidityParams.tickLower, liquidityParams.tickUpper, uint128(uint256(liquidityParams.liquidityDelta))
+        );
+
+        // Approve token1 (non-native) to the vtsOrchestrator
+        Currency underlyingCurrency1 = Currency.wrap(lcc1.underlying());
+        underlyingCurrency1.approve(address(vtsOrchestrator), requiredSettlementAmount1);
+        uint256 selfEthBalanceBefore = address(this).balance;
+
+        uint256 excessEth = 1 ether;
+        uint256 ethToSend = c0 + excessEth;
+
+        // Transfer counterparty asset (token1 underlying) to MMPM so that payerIsUser = false
+        // (usePositionManagerBalance) functions as expected. This allows settlement to use
+        // MMPM's balance instead of requiring user to transfer during settlement.
+        underlyingCurrency1.transfer(address(positionManager), requiredSettlementAmount1);
+
+        // Prepare actions using the adapter pattern:
+        // 1. Commit the signal
+        // 2. Mint the position
+        // 3. Sync the counterparty asset balance as credit to locker (so it can be used for settlement)
+        // 4. Settle the underlying into the position (consumes deltas)
+        // 5. Take excess native ETH back to sender
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](5);
+        actions[0] = MMA.prepareCommit(signalBytes);
+        actions[1] = MMA.prepareMint(
+            corePoolKey,
+            1,
+            liquidityParams.tickLower,
+            liquidityParams.tickUpper,
+            uint256(liquidityParams.liquidityDelta)
+        );
+        // Sync the counterparty asset balance in MMPM as credit to locker
+        // owner=MMPM (address(this)), target=locker (msgSender())
+        actions[2] = MMA.prepareSync(underlyingCurrency1);
+        actions[3] = MMA.prepareSettleFromDeltas(corePoolKey, 1, 0, false, false);
+        // Take any remaining native ETH delta back to self (0 = max available)
+        actions[4] = MMA.prepareTake(CurrencyLibrary.ADDRESS_ZERO, address(this), 0);
+
+        // Execute with unlock, sending excess ETH to test the refund
+        (bytes memory actionsBytes, bytes[] memory params) = MMA.concatPrepared(actions);
+        bytes memory unlockData = abi.encode(actionsBytes, params);
+        positionManager.modifyLiquidities{value: ethToSend}(unlockData, block.timestamp + 3600);
+
+        uint256 selfEthBalanceAfter = address(this).balance;
+
+        // Validate ETH was consumed for settlement: only the required amount was used
+        // The excess ETH should have been returned via the TAKE action
+        assertEq(selfEthBalanceAfter, selfEthBalanceBefore - c0, "Some excess ETH should be refunded");
     }
 }
