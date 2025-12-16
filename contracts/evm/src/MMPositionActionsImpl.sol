@@ -507,31 +507,26 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
             // WITHDRAW: Move credits out as tokens
             // Protocol owes user → withdraw to locker via _settle
             _settle(poolKey, tokenId, positionIndex, credit0.toInt128(), credit1.toInt128(), !payerIsUser);
-            if (!payerIsUser) {
-                _syncPairBalanceToDeltas(underlying0, underlying1);
-            }
+            // if !payerIsUser, balance sync handled in _settle
         } else {
             // DEPOSIT: Settle credits into position
-            if (payerIsUser) {
-                // Net protocol delta via onMMSettle (no token movement)
-                (Position memory position, PositionId positionId) = getPosition(tokenId, positionIndex);
-                MMHelpers.assertPositionForPool(poolKey, position);
+            // Net protocol delta via onMMSettle (no token movement)
+            (Position memory position, PositionId positionId) = getPosition(tokenId, positionIndex);
+            MMHelpers.assertPositionForPool(poolKey, position);
 
-                bool isSeizing = _isSeizing(positionId);
-                if (!isSeizing) {
-                    MMHelpers.assertApprovedOrOwner(sender, tokenId);
-                }
+            bool isSeizing = _isSeizing(positionId);
+            if (!isSeizing) {
+                MMHelpers.assertApprovedOrOwner(sender, tokenId);
+            }
 
-                BalanceDelta sDelta = LiquidityUtils.safeToBalanceDelta(credit0, credit1, true, true);
-                vtsOrchestrator.onMMSettle(
-                    _getVault(poolKey), tokenId, positionIndex, poolKey.currency0, poolKey.currency1, sDelta, isSeizing
-                );
-            } else {
+            BalanceDelta sDelta = LiquidityUtils.safeToBalanceDelta(credit0, credit1, true, true);
+            vtsOrchestrator.onMMSettle(
+                _getVault(poolKey), tokenId, positionIndex, poolKey.currency0, poolKey.currency1, sDelta, isSeizing
+            );
+            if (!payerIsUser) {
                 // Settle from MMPM balance (actual token movement)
                 (uint256 lockerCredit0, uint256 lockerCredit1) = _getFullCreditPair(underlying0, underlying1, sender);
-                uint256 settle0 = credit0 < lockerCredit0 ? credit0 : lockerCredit0;
-                uint256 settle1 = credit1 < lockerCredit1 ? credit1 : lockerCredit1;
-                _settle(poolKey, tokenId, positionIndex, -settle0.toInt128(), -settle1.toInt128(), true);
+                _settle(poolKey, tokenId, positionIndex, -lockerCredit0.toInt128(), -lockerCredit1.toInt128(), true);
             }
         }
     }
