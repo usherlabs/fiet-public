@@ -183,7 +183,13 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
         }
     }
 
-    function _onTransfer(address from, address to, uint256 amount) internal {
+    /**
+     * @dev Hook called before token transfer
+     * @param from The sender address
+     * @param to The recipient address
+     * @param amount The transfer amount
+     */
+    function _beforeTransfer(address from, address to, uint256 amount) internal {
         bool fromProtocol = marketFactory.bounds(from);
         bool toProtocol = marketFactory.bounds(to);
         bool isProtocolTransfer = _isProtocolTransfer(from, to, fromProtocol, toProtocol);
@@ -192,9 +198,18 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
             revert Errors.TransferNotAllowed();
         }
 
-        // Check for planned cancellations on this transfer path
-        hub.executePlannedCancel(from, to);
+        // For non-protocol -> protocol transfers, annul settlement before adjusting balances
+        if (!fromProtocol && toProtocol) {
+            uint256 totalBalance = marketDerivedBalances[from] + wrappedBalances[from];
+            if (totalBalance < amount) {
+                // This should never happen, as balanceOf from ERC20 will throw first.
+                revert Errors.InsufficientBalance(totalBalance, amount);
+            }
+            // Before adjusting local buckets, annul any portion that bleeds into queued settlements
+            hub.annulSettlementBeforeTransfer(from, wrappedBalances[from], marketDerivedBalances[from], amount);
+        }
 
+        // Update balance buckets before transfer
         if (fromProtocol && toProtocol) {
             // Protocol -> Protocol: do not accrue buckets to protocol addresses
             return;
@@ -203,13 +218,6 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
             marketDerivedBalances[to] += amount;
         } else if (!fromProtocol && toProtocol) {
             // Non-protocol -> Protocol: decrement sender balances (market-derived first, then wrapped). Protocol accrues nothing
-            uint256 totalBalance = marketDerivedBalances[from] + wrappedBalances[from];
-            if (totalBalance < amount) {
-                // This should never happen, as balanceOf from ERC20 will throw first.
-                revert Errors.InsufficientBalance(totalBalance, amount);
-            }
-            // Before adjusting local buckets, annul any portion that bleeds into queued settlements
-            hub.annulSettlementBeforeTransfer(from, wrappedBalances[from], marketDerivedBalances[from], amount);
             uint256 fromMarketDerived = Math.min(marketDerivedBalances[from], amount);
             marketDerivedBalances[from] -= fromMarketDerived;
             uint256 remaining = amount - fromMarketDerived;
@@ -219,21 +227,40 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
             }
             // Protocol should not accrue bucket balances
         }
-        // Non-protocol -> Non-protocol: blocked by modifier, shouldn't reach here
+        // Non-protocol -> Non-protocol: blocked above, shouldn't reach here
     }
 
-    function transfer(address to, uint256 amount) public virtual override(ERC20, IERC20) returns (bool) {
-        _onTransfer(_msgSender(), to, amount);
-        return super.transfer(to, amount);
-    }
-
-    function transferFrom(address from, address to, uint256 amount)
-        public
-        virtual
-        override(ERC20, IERC20)
-        returns (bool)
+    /**
+     * @dev Hook called after token transfer
+     * @param from The sender address
+     * @param to The recipient address
+     */
+    function _afterTransfer(
+        address from,
+        address to,
+        uint256 /* amount */
+    )
+        internal
     {
-        _onTransfer(from, to, amount);
-        return super.transferFrom(from, to, amount);
+        // Execute planned cancellations after transfer completes (tokens are now in recipient's balance)
+        hub.executePlannedCancel(from, to);
+    }
+
+    /**
+     * @dev Override _update to add before/after transfer hooks
+     */
+    function _update(address from, address to, uint256 value) internal virtual override {
+        // Call before hook for validation and settlement annulment
+        if (from != address(0) && to != address(0)) {
+            _beforeTransfer(from, to, value);
+        }
+
+        // Execute the actual transfer
+        super._update(from, to, value);
+
+        // Call after hook for planned cancel execution and balance bucket updates
+        if (from != address(0) && to != address(0)) {
+            _afterTransfer(from, to, value);
+        }
     }
 }

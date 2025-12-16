@@ -600,18 +600,35 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
         uint256 queueAmount,
         address recipient
     ) public onlyIssuer(lcc) onlyValidLcc(lcc) nonReentrant {
+        _cancelWithQueue(lcc, from, principalAmount, queueAmount, recipient);
+    }
+
+    /**
+     * @dev Internal implementation of cancelWithQueue without access control
+     * @param lcc The LCC token address
+     * @param from The address to cancel tokens from
+     * @param principalAmount The total principal amount being cancelled (full amount is burned from `from`)
+     * @param queueAmount The amount to queue for settlement (portion of principalAmount queued for `recipient`)
+     * @param recipient The recipient of the queued settlement
+     */
+    function _cancelWithQueue(
+        address lcc,
+        address from,
+        uint256 principalAmount,
+        uint256 queueAmount,
+        address recipient
+    ) internal {
         if (principalAmount == 0) {
             revert Errors.InvalidAmount(0, 0);
         }
         if (queueAmount > principalAmount) {
             revert Errors.InvalidAmount(queueAmount, principalAmount);
         }
-        uint256 cancelAmount = principalAmount - queueAmount;
 
-        // Burn the cancelled amount (issuer burn path, skip bucket accounting)
-        _burn(lcc, from, 0, cancelAmount, true);
+        // Burn the full principal amount from the sender (issuer burn path, skip bucket accounting)
+        _burn(lcc, from, 0, principalAmount, true);
 
-        // Queue the settlement for future processing
+        // Queue a portion for settlement to the specified recipient
         if (queueAmount > 0) {
             _queueSettlement(lcc, recipient, queueAmount);
         }
@@ -757,7 +774,8 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
             TransientSlots.consumePlanCancelWithQueue(lcc, sender, cancelFromRecipient);
 
         if (principalAmount > 0) {
-            cancelWithQueue(lcc, cancelFromRecipient, principalAmount, queueAmount, queueRecipient);
+            // Use internal function to bypass onlyIssuer check (LCC is the caller, not an issuer)
+            _cancelWithQueue(lcc, cancelFromRecipient, principalAmount, queueAmount, queueRecipient);
             return;
         }
 
