@@ -226,10 +226,15 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         uint256 token0BalanceBefore = Currency.wrap(lcc0.underlying()).balanceOf(address(this));
         uint256 token1BalanceBefore = Currency.wrap(lcc1.underlying()).balanceOf(address(this));
 
-        // Batch burn and withdraw from the position
+        // Batch burn and settle from deltas
+        // The burn flow:
+        // 1. LCCs are cancelled on receipt (planCancelWithQueue → executePlannedCancel)
+        // 2. Underlying credits are created on MMPM (accountUnderlyingSettlementDeltaChange)
+        // 3. settleFromDeltas with payerIsUser=true reads MMPM's underlying credits
+        // 4. _settle() withdraws underlying from the vault to the user
         MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
         actions[0] = MMA.prepareBurn(corePoolKey, tokenId, positionIndex);
-        actions[1] = MMA.prepareSettleFromDeltas(corePoolKey, tokenId, 0, true);
+        actions[1] = MMA.prepareSettleFromDeltas(corePoolKey, tokenId, 0, true, true, true);
         MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
 
         // get the underlying asset balance after burning a position

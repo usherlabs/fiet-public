@@ -162,14 +162,17 @@ library MMActionAdapter {
     /**
      * @notice Prepares a SETTLE_POSITION_FROM_DELTAS action
      */
-    function prepareSettleFromDeltas(PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex, bool payerIsUser)
-        internal
-        pure
-        returns (PreparedAction memory)
-    {
+    function prepareSettleFromDeltas(
+        PoolKey memory poolKey,
+        uint256 tokenId,
+        uint256 positionIndex,
+        bool payerIsUser,
+        bool take0,
+        bool take1
+    ) internal pure returns (PreparedAction memory) {
         return PreparedAction({
             action: bytes1(uint8(MMActions.SETTLE_POSITION_FROM_DELTAS)),
-            params: abi.encode(poolKey, tokenId, positionIndex, payerIsUser)
+            params: abi.encode(poolKey, tokenId, positionIndex, payerIsUser, take0, take1)
         });
     }
 
@@ -304,6 +307,22 @@ library MMActionAdapter {
     {
         return PreparedAction({
             action: bytes1(uint8(MMActions.UNWRAP_LCC)), params: abi.encode(lcc, amount, recipient, payerIsUser)
+        });
+    }
+
+    /**
+     * @notice Prepares a COLLECT_AVAILABLE_LIQUIDITY action to collect queued settlement
+     * @param lcc The LCC token address
+     * @param recipient The recipient address for the underlying
+     * @param maxAmount The maximum amount to collect (0 for max)
+     */
+    function prepareCollectAvailableLiquidity(address lcc, address recipient, uint256 maxAmount)
+        internal
+        pure
+        returns (PreparedAction memory)
+    {
+        return PreparedAction({
+            action: bytes1(uint8(MMActions.COLLECT_AVAILABLE_LIQUIDITY)), params: abi.encode(lcc, recipient, maxAmount)
         });
     }
 
