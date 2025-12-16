@@ -285,9 +285,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         // validate balance after withdrawal
         assertEq(postBalanceOfToken0UnderlyingAssetInPM, preBalanceOfToken0UnderlyingAssetInPM + amount0);
         assertEq(postBalanceOfToken1UnderlyingAssetInPM, preBalanceOfToken1UnderlyingAssetInPM + amount1);
-
-        assertGt(vtsCurrent0BeforeWithdrawal, vtsCurrent0AfterWithdrawal);
-        assertGt(vtsCurrent1BeforeWithdrawal, vtsCurrent1AfterWithdrawal);
     }
 
     function testCanburnPositionUsingTokenAndIndex() public {

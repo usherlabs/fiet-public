@@ -319,8 +319,6 @@ abstract contract MarketMakerTestBase is Test {
 
         // Commit and mint
         // Batch commit and mint
-        (uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) =
-            _calculateSettlementAmounts(liquidityParams, marketVTSConfiguration);
         MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](3);
         actions[0] = MMA.prepareCommit(signalBytes);
         actions[1] = MMA.prepareMint(

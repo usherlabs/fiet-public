@@ -62,9 +62,18 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
     }
 
     function _mockSignalUsd(uint256 signalUsd) internal {
-        // VTSCommitLib checkpoint path uses oracleHelper.getTotalValue(tickers, amounts)
+        // VTSCommitLib._signalValue() calls oracleHelper.getTotalValue(tickers, amounts)
         vm.mockCall(
             address(oracleHelper), abi.encodeWithSelector(IOracleHelper.getTotalValue.selector), abi.encode(signalUsd)
+        );
+    }
+
+    function _mockLccPrices(uint256 price0, uint256 price1) internal {
+        // VTSCommitLib uses OracleUtils.lccPairValue() -> getPricesForLccPair for issuedUsd/settledUsd
+        vm.mockCall(
+            address(oracleHelper),
+            abi.encodeWithSelector(IOracleHelper.getPricesForLccPair.selector),
+            abi.encode(price0, price1)
         );
     }
 
@@ -683,6 +692,8 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
 
         RFSCheckpoint memory checkpointBefore = vtsOrchestrator.positionToCheckpoint(positionId);
 
+        // Set the block timestamp
+        vm.warp(block.timestamp + 10000000);
         bytes memory emptySignal;
         unlockCaller.run(
             address(vtsOrchestrator),
@@ -746,6 +757,8 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
             abi.encode(true, 10)
         );
 
+        // Mock proper LCC prices (1e18 = $1 in 18 decimals) so issuedUsd is non-zero
+        _mockLccPrices(1e18, 1e18);
         // Force insufficient backing from the signal (settled starts at 0)
         _mockSignalUsd(0);
 
@@ -782,6 +795,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
             abi.encodeWithSelector(bytes4(keccak256("verifyLiquiditySignal(bytes,bool)")), signalBytes, true),
             abi.encode(true, 10)
         );
+        _mockLccPrices(1e18, 1e18);
         _mockSignalUsd(0);
         vm.prank(advancer);
         unlockCaller.run(
@@ -832,6 +846,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         );
 
         // First checkpoint: force a deficit
+        _mockLccPrices(1e18, 1e18);
         _mockSignalUsd(0);
         vm.prank(advancer);
         unlockCaller.run(
@@ -873,6 +888,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
             abi.encodeWithSelector(bytes4(keccak256("verifyLiquiditySignal(bytes,bool)")), signalBytes, true),
             abi.encode(true, 10)
         );
+        _mockLccPrices(1e18, 1e18);
         _mockSignalUsd(0);
         vm.prank(advancer);
         unlockCaller.run(

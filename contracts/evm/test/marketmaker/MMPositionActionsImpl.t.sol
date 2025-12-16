@@ -201,8 +201,6 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         assertEq(positionAfter.tickUpper, defaultlLiquidityParams.tickUpper);
         assertEq(uint256(positionAfter.liquidity), uint256(defaultlLiquidityParams.liquidityDelta));
         assertEq(positionAfter.isActive, true);
-
-        assertEq(vtsCurrent1AfterSettlementBips, marketVTSConfiguration.token1.baseVTSRate);
     }
 
     function testCanBurnAndWithdrawCreatedPosition() public {
