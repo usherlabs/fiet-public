@@ -280,6 +280,23 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
         return (commit.mmState, commit.expiresAt, commit.positionCount);
     }
 
+    /// @notice Check if a commit has any active positions
+    /// @param commitId The commit identifier
+    /// @return True if the commit has at least one active position, returns early if any active position is found
+    function hasActivePositions(uint256 commitId) external view returns (bool) {
+        Commit storage commit = s.commits[commitId];
+        uint256 count = commit.positionCount;
+
+        // Check each position to see if any are active
+        for (uint256 i = 0; i < count; i++) {
+            Position memory pos = s.positions[commit.positions[i]];
+            if (pos.isActive) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /// @notice Get pool by PoolId
     /// @dev Note: Cannot return Pool directly due to mapping in struct
     /// @param poolId The pool identifier

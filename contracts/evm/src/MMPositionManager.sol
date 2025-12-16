@@ -53,7 +53,7 @@ contract MMPositionManager is
     // ═══════════════════════════════════════════════════════════════════════════
 
     event SignalCommitted(uint256 tokenId);
-    event SignalDecommitted(uint256 tokenId, uint256 positionCount);
+    event SignalDecommitted(uint256 tokenId);
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Immutables
@@ -236,13 +236,13 @@ contract MMPositionManager is
     function _decommitSignal(uint256 tokenId) internal {
         MMHelpers.assertApprovedOrOwner(msgSender(), tokenId);
 
-        (,, uint256 positionCount) = vtsOrchestrator.getCommit(tokenId);
-        if (positionCount > 0) {
+        // Check if commit has any active positions (burned positions are inactive)
+        if (vtsOrchestrator.hasActivePositions(tokenId)) {
             revert Errors.CommitNotEmpty(tokenId);
         }
 
         _burn(tokenId);
-        emit SignalDecommitted(tokenId, positionCount);
+        emit SignalDecommitted(tokenId);
     }
 
     /// @notice Marks a checkpoint for a position, optionally running commitment backing checks
