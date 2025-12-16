@@ -50,15 +50,12 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta {
     /// @return mmState The MarketMaker state
     /// @return expiresAt The expiration timestamp
     /// @return positionCount The count of positions in the commit
+    /// @return activePositionCount The count of active positions in the commit
     function getCommit(uint256 commitId)
         external
         view
-        returns (MarketMaker.State memory mmState, uint256 expiresAt, uint256 positionCount);
+        returns (MarketMaker.State memory mmState, uint256 expiresAt, uint256 positionCount, uint256 activePositionCount);
 
-    /// @notice Check if a commit has any active positions
-    /// @param commitId The commit identifier
-    /// @return True if the commit has at least one active position
-    function hasActivePositions(uint256 commitId) external view returns (bool);
 
     /// @notice Get pool information by PoolId
     /// @dev Note: Cannot return Pool directly due to mapping in struct

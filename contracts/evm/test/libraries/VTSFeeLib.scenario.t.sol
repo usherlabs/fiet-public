@@ -55,7 +55,7 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         internal
         returns (uint256 positionIndex, PositionId positionId)
     {
-        (,, uint256 countBefore) = vtsOrchestrator.getCommit(tokenId);
+        (,, uint256 countBefore,) = vtsOrchestrator.getCommit(tokenId);
 
         MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](1);
         actions[0] = MMA.prepareMint(corePoolKey, tokenId, tickLower, tickUpper, liquidity);

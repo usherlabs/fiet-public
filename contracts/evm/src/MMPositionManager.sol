@@ -53,7 +53,7 @@ contract MMPositionManager is
     // ═══════════════════════════════════════════════════════════════════════════
 
     event SignalCommitted(uint256 tokenId);
-    event SignalDecommitted(uint256 tokenId);
+    event SignalDecommitted(uint256 tokenId, uint256 positionCount);
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Immutables
@@ -237,12 +237,13 @@ contract MMPositionManager is
         MMHelpers.assertApprovedOrOwner(msgSender(), tokenId);
 
         // Check if commit has any active positions (burned positions are inactive)
-        if (vtsOrchestrator.hasActivePositions(tokenId)) {
+        (,,uint256 positionCount, uint256 activePositionCount) = vtsOrchestrator.getCommit(tokenId);
+        if (activePositionCount > 0) {
             revert Errors.CommitNotEmpty(tokenId);
         }
 
         _burn(tokenId);
-        emit SignalDecommitted(tokenId);
+        emit SignalDecommitted(tokenId, uint256(positionCount));
     }
 
     /// @notice Marks a checkpoint for a position, optionally running commitment backing checks
@@ -486,7 +487,7 @@ contract MMPositionManager is
     function commitOf(uint256 tokenId)
         external
         view
-        returns (MarketMaker.State memory state, uint256 expiresAt, uint256 positionCount)
+        returns (MarketMaker.State memory state, uint256 expiresAt, uint256 positionCount, uint256 activePositionCount)
     {
         return vtsOrchestrator.getCommit(tokenId);
     }

@@ -600,7 +600,7 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
             revert Errors.InvalidAmount(liquidity, type(uint128).max);
         }
 
-        (,, positionIndex) = vtsOrchestrator.getCommit(tokenId);
+        (,, positionIndex,) = vtsOrchestrator.getCommit(tokenId);
 
         ModifyLiquidityParams memory params = ModifyLiquidityParams({
             tickLower: tickLower,

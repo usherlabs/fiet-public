@@ -183,11 +183,12 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
 
         // test conditions to ensure that a position was committed and minted and settled to
         // for commitment testing:
-        (MarketMaker.State memory mmState, uint256 expiresAt, uint256 positionCount) =
+        (MarketMaker.State memory mmState, uint256 expiresAt, uint256 positionCount, uint256 activePositionCount) =
             vtsOrchestrator.getCommit(tokenId);
         assertEq(mmState.owner, liquiditySignal.mmState.owner);
         assertEq(expiresAt, block.timestamp + 3600);
         assertEq(positionCount, 1);
+        assertEq(activePositionCount, 1);
 
         // validate the owner of the NFT minted is the caller of the function
         assertEq(positionManager.ownerOf(tokenId), address(this));
@@ -226,6 +227,10 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         uint256 token0BalanceBefore = Currency.wrap(lcc0.underlying()).balanceOf(address(this));
         uint256 token1BalanceBefore = Currency.wrap(lcc1.underlying()).balanceOf(address(this));
 
+        // get the active position count before burning
+        (,,, uint256 activePositionCountBeforeBurn) = vtsOrchestrator.getCommit(tokenId);
+        assertEq(activePositionCountBeforeBurn, 1);
+
         // Batch burn and settle from deltas
         // The burn flow:
         // 1. LCCs are cancelled on receipt (planCancelWithQueue → executePlannedCancel)
@@ -236,6 +241,11 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         actions[0] = MMA.prepareBurn(corePoolKey, tokenId, positionIndex);
         actions[1] = MMA.prepareSettleFromDeltas(corePoolKey, tokenId, 0, true, true);
         MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+
+
+        // get the active position count after burning
+        (,,, uint256 activePositionCountAfterBurn) = vtsOrchestrator.getCommit(tokenId);
+        assertEq(activePositionCountAfterBurn, 0);
 
         // get the underlying asset balance after burning a position
         uint256 token0BalanceAfter = Currency.wrap(lcc0.underlying()).balanceOf(address(this));
@@ -292,6 +302,10 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
 
         (Position memory positionBeforeIncrease,) = positionManager.getPosition(tokenId, positionIndex);
 
+        // get the active position count before increasing the liquidity
+        (,,, uint256 activePositionCountBeforeIncrease) = vtsOrchestrator.getCommit(tokenId);
+        assertEq(activePositionCountBeforeIncrease, 1);
+
         // increase the liquidity in the position by a specified amount
         uint256 liquidityToIncrease = 1000;
         MMA.increase(
@@ -309,5 +323,9 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         assertEq(
             uint256(positionAfterIncrease.liquidity), uint256(positionBeforeIncrease.liquidity) + liquidityToIncrease
         );
+
+        // get the active position count after increasing the liquidity
+        (,,, uint256 activePositionCountAfterIncrease) = vtsOrchestrator.getCommit(tokenId);
+        assertEq(activePositionCountAfterIncrease, 1);
     }
 }
