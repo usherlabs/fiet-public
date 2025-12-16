@@ -329,26 +329,6 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
     }
 
     /// @inheritdoc IVTSOrchestrator
-    function calcVTSRequired(PositionId positionId)
-        public
-        onlyPositionValid(positionId)
-        returns (uint256 vtsRequired0, uint256 vtsRequired1)
-    {
-        VTSPositionLib.settlePositionGrowths(s, poolManager, positionId);
-        return VTSPositionLib.getVTSRequired(s, positionId);
-    }
-
-    /// @inheritdoc IVTSOrchestrator
-    function calcVTSCurrent(PositionId positionId)
-        public
-        onlyPositionValid(positionId)
-        returns (uint256 vtsCurrent0, uint256 vtsCurrent1)
-    {
-        VTSPositionLib.settlePositionGrowths(s, poolManager, positionId);
-        return VTSPositionLib.getVTSCurrent(s, positionId);
-    }
-
-    /// @inheritdoc IVTSOrchestrator
     function getPositionSettledAmounts(PositionId positionId) external view returns (uint256 amount0, uint256 amount1) {
         PositionAccounting storage pa = s.positionAccounting[positionId];
         return (pa.settled.token0, pa.settled.token1);

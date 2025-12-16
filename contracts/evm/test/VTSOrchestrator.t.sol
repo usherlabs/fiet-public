@@ -327,22 +327,6 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         assertTrue(true, "calcRFS should not revert");
     }
 
-    function test_calcVTSRequired_returnsNonZero() public {
-        (, PositionId positionId,,) = _createCommittedPosition();
-
-        (uint256 vtsRequired0, uint256 vtsRequired1) = vtsOrchestrator.calcVTSRequired(positionId);
-        assertGt(vtsRequired0, 0, "VTS required 0 should be non-zero");
-        assertGt(vtsRequired1, 0, "VTS required 1 should be non-zero");
-    }
-
-    function test_calcVTSCurrent_returnsNonZero() public {
-        (, PositionId positionId,,) = _createCommittedPosition();
-
-        (uint256 vtsCurrent0, uint256 vtsCurrent1) = vtsOrchestrator.calcVTSCurrent(positionId);
-        assertGt(vtsCurrent0, 0, "VTS current 0 should be non-zero");
-        assertGt(vtsCurrent1, 0, "VTS current 1 should be non-zero");
-    }
-
     function test_getCommitmentMaxima_returnsNonZero() public {
         (, PositionId positionId,,) = _createCommittedPosition();
 

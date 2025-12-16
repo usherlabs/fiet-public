@@ -1084,48 +1084,6 @@ library VTSPositionLib {
         return -magnitude;
     }
 
-    /// @notice Gets the current VTS for a position
-    /// @param s The central VTS storage
-    /// @param positionId The position id
-    /// @return vtsCurrent0 The current VTS for token0
-    /// @return vtsCurrent1 The current VTS for token1
-    function getVTSCurrent(VTSStorage storage s, PositionId positionId)
-        public
-        view
-        returns (uint256 vtsCurrent0, uint256 vtsCurrent1)
-    {
-        PositionAccounting storage pa = s.positionAccounting[positionId];
-        uint256 c0 = pa.commitmentMax.token0;
-        uint256 c1 = pa.commitmentMax.token1;
-        uint256 s0 = pa.settled.token0;
-        uint256 s1 = pa.settled.token1;
-
-        uint256 v0 = c0 > 0 ? FullMath.mulDiv(s0, LiquidityUtils.ONE_WAD, c0) : 0;
-        uint256 v1 = c1 > 0 ? FullMath.mulDiv(s1, LiquidityUtils.ONE_WAD, c1) : 0;
-        return (v0, v1);
-    }
-
-    /// @notice Gets the required VTS for a position
-    /// @param s The central VTS storage
-    /// @param positionId The position id
-    /// @return vtsRequired0 The required VTS for token0 (1e18 scale)
-    /// @return vtsRequired1 The required VTS for token1 (1e18 scale)
-    function getVTSRequired(VTSStorage storage s, PositionId positionId)
-        public
-        view
-        returns (uint256 vtsRequired0, uint256 vtsRequired1)
-    {
-        PositionAccounting storage pa = s.positionAccounting[positionId];
-        uint256 c0 = pa.commitmentMax.token0;
-        uint256 c1 = pa.commitmentMax.token1;
-        uint256 d0 = pa.cumulativeDeficit.token0;
-        uint256 d1 = pa.cumulativeDeficit.token1;
-        vtsRequired0 =
-            c0 == 0 ? 0 : (d0 >= c0 ? LiquidityUtils.ONE_WAD : FullMath.mulDiv(d0, LiquidityUtils.ONE_WAD, c0));
-        vtsRequired1 =
-            c1 == 0 ? 0 : (d1 >= c1 ? LiquidityUtils.ONE_WAD : FullMath.mulDiv(d1, LiquidityUtils.ONE_WAD, c1));
-    }
-
     // --------------------------------------------------
     // Settlement Functions (from VTSSettleLib)
     // --------------------------------------------------
