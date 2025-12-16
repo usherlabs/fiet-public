@@ -16,6 +16,7 @@ import {LiquidityUtils} from "../../src/libraries/LiquidityUtils.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {VTSOrchestrator} from "../../src/VTSOrchestrator.sol";
 import {Test} from "forge-std/Test.sol";
+import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
 
 abstract contract MarketMakerTestBase is Test {
     using MarketMaker for MarketMaker.State;
@@ -184,41 +185,6 @@ abstract contract MarketMakerTestBase is Test {
         IERC20(lcc1).approve(positionManager, amount1);
     }
 
-    /**
-     * @notice Commits a signal and mints a position in a single batched transaction
-     * @param positionManager The MMPositionManager instance
-     * @param corePoolKey The pool key for the core pool
-     * @param signalBytes The liquidity signal bytes
-     * @param liquidityParams The liquidity parameters for the position
-     * @return tokenId The token ID of the committed position (always 1 for first commit)
-     * @return positionId The position ID of the minted position
-     */
-    function _commitAndMintPosition(
-        MMPositionManager positionManager,
-        PoolKey memory corePoolKey,
-        bytes memory signalBytes,
-        ModifyLiquidityParams memory liquidityParams
-    ) internal returns (uint256 tokenId, PositionId positionId) {
-        // Batch commit and mint
-        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
-        actions[0] = MMA.prepareCommit(signalBytes);
-        actions[1] = MMA.prepareMint(
-            corePoolKey,
-            1,
-            liquidityParams.tickLower,
-            liquidityParams.tickUpper,
-            uint256(liquidityParams.liquidityDelta)
-        );
-
-        // Use modifyLiquidities which handles unlocking automatically
-        (bytes memory actionsBytes, bytes[] memory params) = MMA.concatPrepared(actions);
-        bytes memory unlockData = abi.encode(actionsBytes, params);
-        positionManager.modifyLiquidities(unlockData, block.timestamp + 3600);
-
-        tokenId = 1;
-        positionId = positionManager.getPositionId(tokenId, 0);
-    }
-
     function _decommitAndWithdrawDeltas(
         MMPositionManager positionManager,
         PoolKey memory poolKey,
@@ -314,7 +280,6 @@ abstract contract MarketMakerTestBase is Test {
     /**
      * @notice Full workflow: calculates settlement amounts, approves tokens, and commits+mints a position
      * @param positionManager The MMPositionManager instance
-     * @param vtsOrchestrator The VTSOrchestrator instance
      * @param corePoolKey The pool key for the core pool
      * @param signalBytes The liquidity signal bytes
      * @param liquidityParams The liquidity parameters for the position
@@ -328,7 +293,6 @@ abstract contract MarketMakerTestBase is Test {
      */
     function _setupCommittedPosition(
         MMPositionManager positionManager,
-        VTSOrchestrator vtsOrchestrator,
         PoolKey memory corePoolKey,
         bytes memory signalBytes,
         ModifyLiquidityParams memory liquidityParams,
@@ -350,10 +314,37 @@ abstract contract MarketMakerTestBase is Test {
 
         // Approve tokens
         _approveForPositionManager(
-            lcc0, lcc1, address(vtsOrchestrator), requiredSettlementAmount0, requiredSettlementAmount1
+            lcc0, lcc1, address(positionManager), requiredSettlementAmount0, requiredSettlementAmount1
         );
 
         // Commit and mint
-        (tokenId, positionId) = _commitAndMintPosition(positionManager, corePoolKey, signalBytes, liquidityParams);
+        // Batch commit and mint
+        (uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) =
+            _calculateSettlementAmounts(liquidityParams, marketVTSConfiguration);
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](3);
+        actions[0] = MMA.prepareCommit(signalBytes);
+        actions[1] = MMA.prepareMint(
+            corePoolKey,
+            1,
+            liquidityParams.tickLower,
+            liquidityParams.tickUpper,
+            uint256(liquidityParams.liquidityDelta)
+        );
+        actions[2] = MMA.prepareSettle(
+            corePoolKey,
+            1,
+            0,
+            -SafeCast.toInt128(requiredSettlementAmount0),
+            -SafeCast.toInt128(requiredSettlementAmount1),
+            false
+        );
+
+        // Use modifyLiquidities which handles unlocking automatically
+        (bytes memory actionsBytes, bytes[] memory params) = MMA.concatPrepared(actions);
+        bytes memory unlockData = abi.encode(actionsBytes, params);
+        positionManager.modifyLiquidities(unlockData, block.timestamp + 3600);
+
+        tokenId = 1;
+        positionId = positionManager.getPositionId(tokenId, 0);
     }
 }

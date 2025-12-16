@@ -22,6 +22,7 @@ import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.
 import {IMarketFactory} from "../../src/interfaces/IMarketFactory.sol";
 import {IOracleHelper} from "../../src/interfaces/IOracleHelper.sol";
 import {ImmutableState} from "v4-periphery/src/base/ImmutableState.sol";
+import {MockERC20} from "../_mocks/MockERC20.sol";
 
 /// @title UnlockCaller
 /// @notice Helper contract to execute orchestrator calls within PoolManager unlock context
@@ -167,9 +168,24 @@ abstract contract VTSOrchestratorFixture is MarketTestBase, MarketMakerTestBase 
         ModifyLiquidityParams memory liquidityParams =
             ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
 
+        // Calculate settlement amounts first so we can mint and approve underlying tokens
+        (requiredSettlementAmount0, requiredSettlementAmount1) =
+            _calculateSettlementAmounts(liquidityParams, marketVTSConfiguration);
+
+        // Mint underlying tokens to this contract for settlement
+        address underlying0 = lcc0.underlying();
+        address underlying1 = lcc1.underlying();
+        if (underlying0 != address(0)) {
+            MockERC20(underlying0).mint(address(this), requiredSettlementAmount0);
+            IERC20(underlying0).approve(address(positionManager), requiredSettlementAmount0);
+        }
+        if (underlying1 != address(0)) {
+            MockERC20(underlying1).mint(address(this), requiredSettlementAmount1);
+            IERC20(underlying1).approve(address(positionManager), requiredSettlementAmount1);
+        }
+
         return _setupCommittedPosition(
             positionManager,
-            vtsOrchestrator,
             corePoolKey,
             liquiditySignalBytes,
             liquidityParams,

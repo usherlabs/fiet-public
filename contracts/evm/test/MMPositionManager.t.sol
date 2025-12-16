@@ -130,7 +130,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             uint256 requiredSettlementAmount1
         ) = _setupCommittedPosition(
             positionManager,
-            vtsOrchestrator,
             corePoolKey,
             liquiditySignal,
             liquidityParams,
@@ -203,7 +202,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             uint256 requiredSettlementAmount1
         ) = _setupCommittedPosition(
             positionManager,
-            vtsOrchestrator,
             corePoolKey,
             liquiditySignal,
             liquidityParams,
@@ -271,7 +269,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             uint256 requiredSettlementAmount1
         ) = _setupCommittedPosition(
             positionManager,
-            vtsOrchestrator,
             corePoolKey,
             liquiditySignal,
             liquidityParams,
@@ -353,7 +350,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         // Setup committed position using helper
         (uint256 tokenId,, uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) = _setupCommittedPosition(
             positionManager,
-            vtsOrchestrator,
             corePoolKey,
             liquiditySignal,
             liquidityParams,
@@ -408,7 +404,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             uint256 requiredSettlementAmount1
         ) = _setupCommittedPosition(
             positionManager,
-            vtsOrchestrator,
             corePoolKey,
             liquiditySignal,
             liquidityParams,
@@ -480,7 +475,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             uint256 requiredSettlementAmount1
         ) = _setupCommittedPosition(
             positionManager,
-            vtsOrchestrator,
             corePoolKey,
             liquiditySignal,
             liquidityParams,
@@ -536,7 +530,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         // Setup committed position using helper
         (uint256 tokenId,, uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) = _setupCommittedPosition(
             positionManager,
-            vtsOrchestrator,
             corePoolKey,
             liquiditySignal,
             liquidityParams,
@@ -600,7 +593,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         // Setup committed position using helper
         (uint256 tokenId,, uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) = _setupCommittedPosition(
             positionManager,
-            vtsOrchestrator,
             corePoolKey,
             liquiditySignal,
             liquidityParams,
@@ -678,7 +670,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         // Setup committed position using helper
         (uint256 tokenId,, uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) = _setupCommittedPosition(
             positionManager,
-            vtsOrchestrator,
             corePoolKey,
             liquiditySignal,
             liquidityParams,
@@ -759,7 +750,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         // Setup committed position using helper
         (uint256 tokenId,,,) = _setupCommittedPosition(
             positionManager,
-            vtsOrchestrator,
             corePoolKey,
             liquiditySignal,
             liquidityParams,
@@ -903,7 +893,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         // Setup committed position using helper
         (uint256 tokenId,,,) = _setupCommittedPosition(
             positionManager,
-            vtsOrchestrator,
             corePoolKey,
             liquiditySignal,
             liquidityParams,
@@ -938,7 +927,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         // Setup committed position using helper
         (uint256 tokenId,,,) = _setupCommittedPosition(
             positionManager,
-            vtsOrchestrator,
             corePoolKey,
             liquiditySignal,
             liquidityParams,
@@ -1004,7 +992,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         // Setup committed position using helper
         (uint256 tokenId,,,) = _setupCommittedPosition(
             positionManager,
-            vtsOrchestrator,
             corePoolKey,
             liquiditySignalBytes,
             liquidityParams,
