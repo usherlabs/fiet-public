@@ -421,8 +421,8 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         assertTrue(vtsOrchestrator.isPositionValid(positionId, true), "Position should be active");
 
         // Record initial balances
-        uint256 mmpmLcc0Before = _mmpmLccBalance(lccCurrency0);
-        uint256 mmpmLcc1Before = _mmpmLccBalance(lccCurrency1);
+        uint256 lcc0Before = _selfLccBalance(lccCurrency0);
+        uint256 lcc1Before = _selfLccBalance(lccCurrency1);
 
         // Step 2: Perform swaps to generate fees
         // Swap in both directions to generate fees for both tokens
@@ -431,14 +431,18 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
 
         // Step 3: Poke the position to collect fees (modifyLiquidity with liquidityDelta=0)
         // This triggers VTSPositionLib.touchPosition which processes fees
-        _pokeMM(tokenId, 0, -60, 60);
+        _pokeMMAndTakeFees(tokenId, 0, -60, 60);
 
-        // Step 4: Verify MMPM received LCC fees as ERC20 balance
-        uint256 mmpmLcc0After = _mmpmLccBalance(lccCurrency0);
-        uint256 mmpmLcc1After = _mmpmLccBalance(lccCurrency1);
+        // Step 4: Verify Locker received LCC fees as ERC20 balance
+        uint256 lcc0After = _selfLccBalance(lccCurrency0);
+        uint256 lcc1After = _selfLccBalance(lccCurrency1);
 
         // At least one LCC balance should have increased (fees from swaps)
-        bool feesAccrued = mmpmLcc0After > mmpmLcc0Before || mmpmLcc1After > mmpmLcc1Before;
+        bool feesAccrued = lcc0After > lcc0Before || lcc1After > lcc1Before;
+        console.log("lcc0Before", lcc0Before);
+        console.log("lcc0After", lcc0After);
+        console.log("lcc1Before", lcc1Before);
+        console.log("lcc1After", lcc1After);
         assertTrue(feesAccrued, "MMPM should have received LCC fees as ERC20 balance");
 
         // Verify the position is still valid after fee collection
