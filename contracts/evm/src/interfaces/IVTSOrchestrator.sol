@@ -54,8 +54,12 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta {
     function getCommit(uint256 commitId)
         external
         view
-        returns (MarketMaker.State memory mmState, uint256 expiresAt, uint256 positionCount, uint256 activePositionCount);
-
+        returns (
+            MarketMaker.State memory mmState,
+            uint256 expiresAt,
+            uint256 positionCount,
+            uint256 activePositionCount
+        );
 
     /// @notice Get pool information by PoolId
     /// @dev Note: Cannot return Pool directly due to mapping in struct

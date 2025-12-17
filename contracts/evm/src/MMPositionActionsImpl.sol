@@ -467,6 +467,12 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
         if (!payerIsUser) {
             // Settle into the position the underlying tokens that are owed.
             _settle(poolKey, tokenId, positionIndex, -credit0.toInt128(), -credit1.toInt128(), true);
+        } else {
+            // since credits exist, settle them into the position
+            BalanceDelta sDelta = LiquidityUtils.safeToBalanceDelta(credit0, credit1, true, true);
+            vtsOrchestrator.onMMSettle(
+                _getVault(poolKey), tokenId, positionIndex, poolKey.currency0, poolKey.currency1, sDelta, false
+            );
         }
     }
 
