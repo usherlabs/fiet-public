@@ -323,9 +323,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
     }
 
     function test_revert_getPosition_invalidPosition() public {
-        vm.expectRevert(
-            abi.encodeWithSelector(Errors.InvalidPosition.selector, 0, 0, PositionId.wrap(bytes32(uint256(999))))
-        );
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidPosition.selector, 0, 0, PositionId.wrap(bytes32(0))));
         vtsOrchestrator.getPosition(999, 0);
     }
 
@@ -345,12 +343,25 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         assertGt(commitment1, 0, "Commitment 1 should be non-zero");
     }
 
-    function test_getPositionSettledAmounts_returnsZeroInitially() public {
-        (, PositionId positionId,,) = _createCommittedPosition();
+    function test_getPositionSettledAmounts() public {
+        (, PositionId positionId, uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) =
+            _createCommittedPosition();
 
         (uint256 amount0, uint256 amount1) = vtsOrchestrator.getPositionSettledAmounts(positionId);
-        assertEq(amount0, 0, "Settled amount0 should be zero initially");
-        assertEq(amount1, 0, "Settled amount1 should be zero initially");
+        assertEq(amount0, requiredSettlementAmount0, "Settled amount0 should be the required settlement amount");
+        assertEq(amount1, requiredSettlementAmount1, "Settled amount1 should be the required settlement amount");
+    }
+
+    function test_revert_CurrencyNotSettled_whenPositionNotSettled() public {
+        // Prepare actions for commit and mint WITHOUT settlement
+        (MMA.PreparedAction[] memory actions,,) = _prepareCommitAndMintWithoutSettlement();
+
+        // Execute actions - this should revert with CurrencyNotSettled because deltas aren't settled
+        (bytes memory actionsBytes, bytes[] memory params) = MMA.concatPrepared(actions);
+        bytes memory unlockData = abi.encode(actionsBytes, params);
+
+        vm.expectRevert(IPoolManager.CurrencyNotSettled.selector);
+        positionManager.modifyLiquidities(unlockData, block.timestamp + 3600);
     }
 
     // ============================================================

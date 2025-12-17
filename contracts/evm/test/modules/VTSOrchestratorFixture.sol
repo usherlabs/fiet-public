@@ -23,6 +23,7 @@ import {IMarketFactory} from "../../src/interfaces/IMarketFactory.sol";
 import {IOracleHelper} from "../../src/interfaces/IOracleHelper.sol";
 import {ImmutableState} from "v4-periphery/src/base/ImmutableState.sol";
 import {MockERC20} from "../_mocks/MockERC20.sol";
+import {MMActionAdapter as MMA} from "../libraries/MMActionAdapter.sol";
 
 /// @title UnlockCaller
 /// @notice Helper contract to execute orchestrator calls within PoolManager unlock context
@@ -192,6 +193,38 @@ abstract contract VTSOrchestratorFixture is MarketTestBase, MarketMakerTestBase 
             marketVTSConfiguration,
             address(lcc0),
             address(lcc1)
+        );
+    }
+
+    /// @notice Helper to prepare actions for committing and minting WITHOUT settlement
+    /// @dev Returns prepared actions that will leave nonzero deltas, causing CurrencyNotSettled on unlock
+    function _prepareCommitAndMintWithoutSettlement()
+        internal
+        view
+        returns (
+            MMA.PreparedAction[] memory actions,
+            uint256 requiredSettlementAmount0,
+            uint256 requiredSettlementAmount1
+        )
+    {
+        bytes memory liquiditySignalBytes = abi.encode(liquiditySignal);
+        ModifyLiquidityParams memory liquidityParams =
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
+
+        // Calculate settlement amounts for reference (but we won't settle)
+        (requiredSettlementAmount0, requiredSettlementAmount1) =
+            _calculateSettlementAmounts(liquidityParams, marketVTSConfiguration);
+
+        // Commit and mint WITHOUT settle - this will leave nonzero deltas
+        // Note: MMA is available from MMTestBase inheritance
+        actions = new MMA.PreparedAction[](2);
+        actions[0] = MMA.prepareCommit(liquiditySignalBytes);
+        actions[1] = MMA.prepareMint(
+            corePoolKey,
+            1,
+            liquidityParams.tickLower,
+            liquidityParams.tickUpper,
+            uint256(liquidityParams.liquidityDelta)
         );
     }
 }
