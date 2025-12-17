@@ -14,6 +14,7 @@ import {IMarketVault} from "../../src/interfaces/IMarketVault.sol";
 import {VTSOrchestrator} from "../../src/VTSOrchestrator.sol";
 import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
 import {MMActionAdapter as MMA} from "../libraries/MMActionAdapter.sol";
+import {LiquiditySignal} from "../../src/types/Commit.sol";
 
 /// @title VTSFeeLibScenarioTest
 /// @notice Scenario-driven integration tests for VTS fee-sharing paradigm (slashes, bonuses, materialisation)
@@ -27,10 +28,71 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
     using CurrencyLibrary for Currency;
 
     // ============================================================
+    // Multi-Commit Support
+    // ============================================================
+
+    /// @notice Array of liquidity signals for creating multiple independent commits
+    LiquiditySignal[] internal multiSignals;
+
+    /// @notice Index tracking which signal to use next
+    uint256 internal nextSignalIndex;
+
+    /// @notice Override setUp to generate additional signals for multi-commit tests
+    function setUp() public virtual override {
+        super.setUp();
+        // Generate additional signals for multi-commit scenarios (nonces 3, 4, 5, ...)
+        // Note: nonces 1 and 2 are already used by liquiditySignal and renewSignal
+        multiSignals = generateLiquiditySignals(10);
+        nextSignalIndex = 0;
+    }
+
+    // ============================================================
     // Helper Functions
     // ============================================================
 
-    /// @notice Creates the first MM position (commit + mint) for a test scenario
+    /// @notice Creates a new MM commit with a unique signal (supports multiple independent commits)
+    /// @return tokenId The commitment NFT token ID
+    /// @return positionId The position ID of the minted position
+    function _createNewMMCommit() internal returns (uint256 tokenId, PositionId positionId) {
+        require(nextSignalIndex < multiSignals.length, "No more signals available");
+        LiquiditySignal memory signal = multiSignals[nextSignalIndex++];
+        (tokenId, positionId,,) = _createCommittedPositionWithSignal(signal);
+    }
+
+    /// @notice Creates a committed position using a specific liquidity signal
+    /// @param signal The liquidity signal to use for the commit
+    function _createCommittedPositionWithSignal(LiquiditySignal memory signal)
+        internal
+        returns (
+            uint256 tokenId,
+            PositionId positionId,
+            uint256 requiredSettlementAmount0,
+            uint256 requiredSettlementAmount1
+        )
+    {
+        bytes memory liquiditySignalBytes = abi.encode(signal);
+        ModifyLiquidityParams memory liquidityParams =
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
+
+        // Calculate settlement amounts first so we can mint and approve underlying tokens
+        (requiredSettlementAmount0, requiredSettlementAmount1) =
+            _calculateSettlementAmounts(liquidityParams, marketVTSConfiguration);
+
+        // Mint underlying tokens and approve via Permit2 for settlement
+        _mintAndApproveUnderlyingForSettlement(requiredSettlementAmount0, requiredSettlementAmount1);
+
+        return _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            liquiditySignalBytes,
+            liquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+    }
+
+    /// @notice Creates the first MM position using the default signal (backwards compatible)
     /// @return tokenId The commitment NFT token ID (always 1 for first commit)
     /// @return positionId The position ID of the minted position
     function _commitAndMintFirstMM() internal returns (uint256 tokenId, PositionId positionId) {
@@ -104,10 +166,10 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
     // Example Scenarios (from spec discussion)
     // ============================================================
 
-    /// @notice Scenario 1: Multiple MMs, only one MM has deficit, protocol covers unwraps
+    /// @notice Scenario 1: Multiple MM commits, only one MM has deficit, protocol covers unwraps
     /// @dev Tests that fee slashing only applies to positions with deficits, not solvent positions.
     ///      Setup:
-    ///      - 3 MM positions (all in-range, same ticks)
+    ///      - 3 independent MM commits (each with their own tokenId and unique signal nonce)
     ///      - MM2 and MM3 are made solvent via settlement deposits
     ///      - MM1 remains under-settled (will have deficit)
     ///      Actions:
@@ -120,22 +182,26 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
     ///      - Fee pot should increase from swap fees and slash materialisation
     ///      - Assertions verify pot increases after swap + coverage operations
     function test_multiMM_oneDeficit_protocolCovers_slashOnlyDeficitMM() public {
-        // 3 MM positions in-range
-        (uint256 tokenId, PositionId mm1) = _commitAndMintFirstMM(); // idx 0
-        (uint256 idx2, PositionId mm2) = _mintAdditionalMM(tokenId, -60, 60, 1e10);
-        (uint256 idx3, PositionId mm3) = _mintAdditionalMM(tokenId, -60, 60, 1e10);
-        assertEq(idx2, 1);
-        assertEq(idx3, 2);
+        // 3 independent MM commits (each with unique signal nonce)
+        (uint256 mm1,) = _createNewMMCommit();
+        (uint256 mm2,) = _createNewMMCommit();
+        (uint256 mm3,) = _createNewMMCommit();
+        assertEq(mm1, 1);
+        assertEq(mm2, 2);
+        assertEq(mm3, 3);
 
         // Make MM2 and MM3 solvent by depositing some settlement
-        _mmSettle(tokenId, idx2, _negInt128Capped(5e18), _negInt128Capped(5e18));
-        _mmSettle(tokenId, idx3, _negInt128Capped(5e18), _negInt128Capped(5e18));
+        // Note: For independent commits, position index is always 0
+        _mmSettle(mm2, 0, _negInt128Capped(5e18), _negInt128Capped(5e18));
+        _mmSettle(mm3, 0, _negInt128Capped(5e18), _negInt128Capped(5e18));
 
         uint256 potBefore = _feeHolderClaims(lccCurrency0);
 
         // Swap to accrue fees + outflow growth (choose direction that accrues token0 outflow)
         // Fee pot should be affected on swap, not on position modification
         _swapCore(false, -int256(5e18));
+
+        // Only MM1 should be in a deficit (MM2 and MM3 are solvent)
 
         // Protocol covers unwraps: increment coverage (token0 only)
         vm.prank(marketFactory);
@@ -146,10 +212,6 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         // Expect some funding into the pot from swap fees and coverage processing
         // Fee pot changes happen during swap and coverage operations, not position modifications
         assertGe(potAfter, potBefore, "Pot should not decrease after swap + coverage");
-
-        mm1;
-        mm2;
-        mm3;
     }
 
     /// @notice Scenario 2: Multiple MMs, two MMs have deficits, protocol covers unwraps
