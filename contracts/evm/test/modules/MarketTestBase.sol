@@ -40,8 +40,9 @@ import {CurrencyTransfer} from "../../src/libraries/CurrencyTransfer.sol";
 import {OracleHelper} from "../../src/OracleHelper.sol";
 import {LiquidityHub} from "../../src/LiquidityHub.sol";
 import {VTSOrchestrator} from "../../src/VTSOrchestrator.sol";
+import {DeployPermit2} from "permit2/test/utils/DeployPermit2.sol";
 
-abstract contract MarketTestBase is Test, Deployers {
+abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
     using PoolIdLibrary for PoolId;
     using CurrencyLibrary for Currency;
     using CurrencyTransfer for Currency;
@@ -230,7 +231,9 @@ abstract contract MarketTestBase is Test, Deployers {
             testOwner
         );
 
-        IAllowanceTransfer permit2 = IAllowanceTransfer(makeAddr("permit2"));
+        // Deploy Permit2 at the canonical address using vm.etch()
+        // This deploys the bytecode at 0x000000000022D473030F116dDEE9F6B43aC78BA3
+        IAllowanceTransfer permit2 = IAllowanceTransfer(deployPermit2());
 
         // Deploy MMPositionActionsImpl first
         MMPositionActionsImpl actionsImpl =

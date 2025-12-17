@@ -24,6 +24,11 @@ import {IOracleHelper} from "../../src/interfaces/IOracleHelper.sol";
 import {ImmutableState} from "v4-periphery/src/base/ImmutableState.sol";
 import {MockERC20} from "../_mocks/MockERC20.sol";
 import {MMActionAdapter as MMA} from "../libraries/MMActionAdapter.sol";
+import {PoolSwapTest} from "@uniswap/v4-core/src/test/PoolSwapTest.sol";
+import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
+import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {IAllowanceTransfer} from "permit2/src/interfaces/IAllowanceTransfer.sol";
+import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
 
 /// @title UnlockCaller
 /// @notice Helper contract to execute orchestrator calls within PoolManager unlock context
@@ -132,6 +137,34 @@ abstract contract VTSOrchestratorFixture is MarketTestBase, MarketMakerTestBase 
     // Helper Functions
     // ============================================================
 
+    /// @notice Helper to mint underlying tokens and approve them for settlement via Permit2
+    /// @dev Mints underlying tokens to this contract and sets up Permit2 approvals for positionManager
+    /// @param requiredSettlementAmount0 Amount of token0 to mint and approve
+    /// @param requiredSettlementAmount1 Amount of token1 to mint and approve
+    function _mintAndApproveUnderlyingForSettlement(
+        uint256 requiredSettlementAmount0,
+        uint256 requiredSettlementAmount1
+    ) internal {
+        address underlying0 = lcc0.underlying();
+        address underlying1 = lcc1.underlying();
+        IAllowanceTransfer permit2 = positionManager.permit2();
+
+        if (underlying0 != address(0) && requiredSettlementAmount0 > 0) {
+            MockERC20(underlying0).mint(address(this), requiredSettlementAmount0);
+            // Approve Permit2 on the token
+            IERC20(underlying0).approve(address(permit2), type(uint256).max);
+            // Approve positionManager via Permit2
+            permit2.approve(underlying0, address(positionManager), type(uint160).max, type(uint48).max);
+        }
+        if (underlying1 != address(0) && requiredSettlementAmount1 > 0) {
+            MockERC20(underlying1).mint(address(this), requiredSettlementAmount1);
+            // Approve Permit2 on the token
+            IERC20(underlying1).approve(address(permit2), type(uint256).max);
+            // Approve positionManager via Permit2
+            permit2.approve(underlying1, address(positionManager), type(uint160).max, type(uint48).max);
+        }
+    }
+
     /// @notice Helper to mint LCC tokens to a user via LiquidityHub
     function _mintLccTo(address user, Currency lccCurrency, uint256 amount) internal {
         LiquidityCommitmentCertificate lcc = LiquidityCommitmentCertificate(Currency.unwrap(lccCurrency));
@@ -173,17 +206,8 @@ abstract contract VTSOrchestratorFixture is MarketTestBase, MarketMakerTestBase 
         (requiredSettlementAmount0, requiredSettlementAmount1) =
             _calculateSettlementAmounts(liquidityParams, marketVTSConfiguration);
 
-        // Mint underlying tokens to this contract for settlement
-        address underlying0 = lcc0.underlying();
-        address underlying1 = lcc1.underlying();
-        if (underlying0 != address(0)) {
-            MockERC20(underlying0).mint(address(this), requiredSettlementAmount0);
-            IERC20(underlying0).approve(address(positionManager), requiredSettlementAmount0);
-        }
-        if (underlying1 != address(0)) {
-            MockERC20(underlying1).mint(address(this), requiredSettlementAmount1);
-            IERC20(underlying1).approve(address(positionManager), requiredSettlementAmount1);
-        }
+        // Mint underlying tokens and approve via Permit2 for settlement
+        _mintAndApproveUnderlyingForSettlement(requiredSettlementAmount0, requiredSettlementAmount1);
 
         return _setupCommittedPosition(
             positionManager,
@@ -226,5 +250,106 @@ abstract contract VTSOrchestratorFixture is MarketTestBase, MarketMakerTestBase 
             liquidityParams.tickUpper,
             uint256(liquidityParams.liquidityDelta)
         );
+    }
+
+    // ============================================================
+    // Common Helper Functions
+    // ============================================================
+
+    /// @notice Helper to get swap settings consistent with integration tests
+    function _swapSettings() internal pure returns (PoolSwapTest.TestSettings memory) {
+        return PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false});
+    }
+
+    /// @notice Helper to execute swaps on the core pool
+    function _swapCore(bool zeroForOne, int256 amountSpecified) internal returns (BalanceDelta) {
+        uint160 sqrtPriceLimit = zeroForOne ? ZERO_FOR_ONE_LIMIT : ONE_FOR_ZERO_LIMIT;
+        return swapRouter.swap(
+            corePoolKey,
+            SwapParams({zeroForOne: zeroForOne, amountSpecified: amountSpecified, sqrtPriceLimitX96: sqrtPriceLimit}),
+            _swapSettings(),
+            ZERO_BYTES
+        );
+    }
+
+    /// @notice Helper to cap a uint256 amount to int128 max and return as negative int128
+    function _negInt128Capped(uint256 amount) internal pure returns (int128) {
+        if (amount == 0) return int128(0);
+        uint256 cap = uint256(uint128(type(int128).max));
+        uint256 capped = amount > cap ? cap : amount;
+        return -SafeCast.toInt128(capped);
+    }
+
+    /// @notice Helper to poke an MM position (modifyLiquidity with liquidityDelta=0) to collect fees
+    function _pokeMM(uint256 tokenId, uint256 positionIndex, int24 tickLower, int24 tickUpper) internal {
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](1);
+        actions[0] = MMA.prepareIncrease(corePoolKey, tokenId, positionIndex, tickLower, tickUpper, 0);
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+    }
+
+    /// @notice Helper to poke an MM position and take fees (for fee collection tests)
+    function _pokeMMAndTakeFees(uint256 tokenId, uint256 positionIndex, int24 tickLower, int24 tickUpper) internal {
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](3);
+        actions[0] = MMA.prepareIncrease(corePoolKey, tokenId, positionIndex, tickLower, tickUpper, 0);
+        actions[1] = MMA.prepareTake(lccCurrency0, address(this), 0);
+        actions[2] = MMA.prepareTake(lccCurrency1, address(this), 0);
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+    }
+
+    /// @notice Helper to get MMPM's LCC balance
+    function _mmpmLccBalance(Currency lccCurrency) internal view returns (uint256) {
+        return lccCurrency.balanceOf(address(positionManager));
+    }
+
+    /// @notice Helper to get test contract's LCC balance
+    function _selfLccBalance(Currency lccCurrency) internal view returns (uint256) {
+        return lccCurrency.balanceOf(address(this));
+    }
+
+    /// @notice Helper to get VTSOrchestrator's LCC claims balance (fee pot)
+    /// @dev During fee pot management, the caller context is VTSOrchestrator via VTSPositionLib
+    function _feeHolderClaims(Currency lccCurrency) internal view returns (uint256) {
+        return manager.balanceOf(address(vtsOrchestrator), lccCurrency.toId());
+    }
+
+    /// @notice Helper to settle an MM position using prepareSettle
+    /// @dev Mints and approves underlying tokens if amounts are negative (deposits)
+    /// @param tokenId The commitment NFT token ID
+    /// @param positionIndex The position index within the commitment
+    /// @param amount0 Amount of token0 to settle (negative = deposit, positive = withdraw)
+    /// @param amount1 Amount of token1 to settle (negative = deposit, positive = withdraw)
+    function _mmSettle(uint256 tokenId, uint256 positionIndex, int128 amount0, int128 amount1) internal {
+        // Get Permit2 instance once if we need to approve tokens
+        IAllowanceTransfer permit2;
+        bool needsPermit2 =
+            (amount0 < 0 && lcc0.underlying() != address(0)) || (amount1 < 0 && lcc1.underlying() != address(0));
+        if (needsPermit2) {
+            permit2 = positionManager.permit2();
+        }
+
+        // If depositing (negative amounts), mint and approve underlying tokens
+        if (amount0 < 0) {
+            uint256 amount0Abs = uint256(uint128(-amount0));
+            address underlying0 = lcc0.underlying();
+            if (underlying0 != address(0) && amount0Abs > 0) {
+                MockERC20(underlying0).mint(address(this), amount0Abs);
+                IERC20(underlying0).approve(address(permit2), type(uint256).max);
+                permit2.approve(underlying0, address(positionManager), type(uint160).max, type(uint48).max);
+            }
+        }
+        if (amount1 < 0) {
+            uint256 amount1Abs = uint256(uint128(-amount1));
+            address underlying1 = lcc1.underlying();
+            if (underlying1 != address(0) && amount1Abs > 0) {
+                MockERC20(underlying1).mint(address(this), amount1Abs);
+                IERC20(underlying1).approve(address(permit2), type(uint256).max);
+                permit2.approve(underlying1, address(positionManager), type(uint160).max, type(uint48).max);
+            }
+        }
+
+        // Prepare and execute settle action
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](1);
+        actions[0] = MMA.prepareSettle(corePoolKey, tokenId, positionIndex, amount0, amount1, false);
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
     }
 }

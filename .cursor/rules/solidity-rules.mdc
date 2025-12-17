@@ -90,6 +90,7 @@ globs:
 - Use property-based testing for edge cases.
 - Test all error conditions.
 - Mock external dependencies.
+- **CRITICAL: Never assert on transient currency deltas (credits/debits) in unit tests.** In Uniswap V4's PoolManager, currency deltas are transient values that exist only within an unlock context and net to zero after each batch of actions. Assertions on `getFullCredit`, `getDebt`, or similar delta-returning functions outside of the unlock callback are unreliable and meaningless. Instead, assert on persistent state such as `manager.balanceOf()` claims, token balances, or contract storage values.
 
 ## Documentation
 

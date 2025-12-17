@@ -78,12 +78,6 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         );
     }
 
-    function _negInt128Capped(uint256 amount) internal pure returns (int128) {
-        uint256 cap = uint256(uint128(type(int128).max));
-        uint256 a = amount > cap ? cap : amount;
-        return a == 0 ? int128(0) : -int128(int256(a));
-    }
-
     // ============================================================
     // Guard Tests - onlyIfPoolManagerUnlocked
     // ============================================================
@@ -381,44 +375,6 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
     //
     // See: VTSPositionLib.processPosition() and VTSFeeLib.processPositionFees()
     // ============================================================
-
-    /// @notice Helper to execute swaps on the core pool
-    function _swapCore(bool zeroForOne, int256 amountSpecified) internal returns (BalanceDelta) {
-        PoolSwapTest.TestSettings memory settings =
-            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false});
-        uint160 sqrtPriceLimit = zeroForOne ? ZERO_FOR_ONE_LIMIT : ONE_FOR_ZERO_LIMIT;
-        return swapRouter.swap(
-            corePoolKey,
-            SwapParams({zeroForOne: zeroForOne, amountSpecified: amountSpecified, sqrtPriceLimitX96: sqrtPriceLimit}),
-            settings,
-            ZERO_BYTES
-        );
-    }
-
-    /// @notice Helper to poke an MM position (modifyLiquidity with liquidityDelta=0) to collect fees
-    function _pokeMM(uint256 tokenId, uint256 positionIndex, int24 tickLower, int24 tickUpper) internal {
-        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](1);
-        actions[0] = MMA.prepareIncrease(corePoolKey, tokenId, positionIndex, tickLower, tickUpper, 0);
-        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
-    }
-
-    function _pokeMMAndTakeFees(uint256 tokenId, uint256 positionIndex, int24 tickLower, int24 tickUpper) internal {
-        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](3);
-        actions[0] = MMA.prepareIncrease(corePoolKey, tokenId, positionIndex, tickLower, tickUpper, 0);
-        actions[1] = MMA.prepareTake(lccCurrency0, address(this), 0);
-        actions[2] = MMA.prepareTake(lccCurrency1, address(this), 0);
-        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
-    }
-
-    /// @notice Helper to get MMPM's LCC balance
-    function _mmpmLccBalance(Currency lccCurrency) internal view returns (uint256) {
-        return lccCurrency.balanceOf(address(positionManager));
-    }
-
-    /// @notice Helper to get test contract's LCC balance
-    function _selfLccBalance(Currency lccCurrency) internal view returns (uint256) {
-        return lccCurrency.balanceOf(address(this));
-    }
 
     /// @notice Helper to get test contract's fee collection mechanic
     function test_feeCollection_mmPosition_accumulatesFees_viaSwap() public {
