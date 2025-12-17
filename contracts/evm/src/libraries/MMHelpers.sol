@@ -11,18 +11,22 @@ import {Position} from "../types/Position.sol";
 /// @notice Library providing shared helper functions for MMPositionManager
 /// @dev Used by both MMPositionManager and MMPositionActionsImpl
 library MMHelpers {
+    function isApprovedOrOwner(address caller, uint256 tokenId) internal view returns (bool) {
+        address owner = ERC721Permit_v4(address(this)).ownerOf(tokenId);
+        if (caller == owner) return true;
+        if (ERC721Permit_v4(address(this)).getApproved(tokenId) == caller) return true;
+        if (ERC721Permit_v4(address(this)).isApprovedForAll(owner, caller)) return true;
+        return false;
+    }
+
     /// @dev Asserts that the caller is approved or the owner of the token
     /// @dev Accesses ERC721 storage via delegatecall context from MMPositionManager
     /// @param caller The address to check approval for
     /// @param tokenId The token ID to check
     function assertApprovedOrOwner(address caller, uint256 tokenId) internal view {
-        // Access ERC721 functions via delegatecall context
-        // MMPositionManager has ERC721Permit_v4, so we can call public functions
-        address owner = ERC721Permit_v4(address(this)).ownerOf(tokenId);
-        if (caller == owner) return;
-        if (ERC721Permit_v4(address(this)).getApproved(tokenId) == caller) return;
-        if (ERC721Permit_v4(address(this)).isApprovedForAll(owner, caller)) return;
-        revert Errors.NotApproved(caller);
+        if (!isApprovedOrOwner(caller, tokenId)) {
+            revert Errors.NotApproved(caller);
+        }
     }
 
     /// @notice Asserts that the position belongs to the specified pool

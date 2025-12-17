@@ -64,15 +64,6 @@ contract VTSPositionLibHarness {
         return VTSPositionLib.getRFS(s, positionId);
     }
 
-    /// @notice Exposes getVTSCurrent (view)
-    function getVTSCurrent(PositionId positionId) external view returns (uint256 vtsCurrent0, uint256 vtsCurrent1) {
-        return VTSPositionLib.getVTSCurrent(s, positionId);
-    }
-
-    /// @notice Exposes getVTSRequired (view)
-    function getVTSRequired(PositionId positionId) external view returns (uint256 vtsRequired0, uint256 vtsRequired1) {
-        return VTSPositionLib.getVTSRequired(s, positionId);
-    }
 
     // ============ Storage Getters (for assertions) ============
 

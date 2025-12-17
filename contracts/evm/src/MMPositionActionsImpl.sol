@@ -164,6 +164,14 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
         return vtsOrchestrator.getPosition(tokenId, positionIndex);
     }
 
+    /// @notice Returns the position ID for a given token ID and position index
+    /// @param tokenId The ERC721 tokenId (commitment NFT ID)
+    /// @param positionIndex The index of the position within the commitment
+    /// @return The position ID
+    function getPositionId(uint256 tokenId, uint256 positionIndex) public view returns (PositionId) {
+        return vtsOrchestrator.getPositionId(tokenId, positionIndex);
+    }
+
     /// @notice Checks if a position is currently being seized
     /// @param positionId The position ID to check
     /// @return True if the position is being seized
@@ -203,10 +211,7 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
         (Position memory position, PositionId positionId) = getPosition(tokenId, positionIndex);
         MMHelpers.assertPositionForPool(poolKey, position);
 
-        // Caller must be approved/owner AND position must be active
-        // Note: Actual seizure eligibility (grace period) is checked in VTSOrchestrator.onSeize
-        // MMHelpers.assertApprovedOrOwner(msgSender(), tokenId);
-        if (position.isActive == false) {
+        if (MMHelpers.isApprovedOrOwner(msgSender(), tokenId) || position.isActive == false) {
             revert Errors.InvalidPosition(tokenId, positionIndex, positionId);
         }
 
@@ -412,7 +417,13 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
         (uint256 liquidityFromDeltas, uint256 credit0, uint256 credit1) =
             _getLiquidityFromDeltas(poolKey, deltaTarget, tickLower, tickUpper);
         _increaseInternal(poolKey, tokenId, positionIndex, tickLower, tickUpper, liquidityFromDeltas);
-        if (!payerIsUser) {
+        if (payerIsUser) {
+            // since credits exist (and already in market), net settlement for position
+            BalanceDelta sDelta = LiquidityUtils.safeToBalanceDelta(credit0, credit1, true, true);
+            vtsOrchestrator.onMMSettle(
+                _getVault(poolKey), tokenId, positionIndex, poolKey.currency0, poolKey.currency1, sDelta, false
+            );
+        } else {
             // Settle into the position the underlying tokens that are owed.
             _settle(poolKey, tokenId, positionIndex, -credit0.toInt128(), -credit1.toInt128(), true);
         }
@@ -461,15 +472,15 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
             _getLiquidityFromDeltas(poolKey, deltaTarget, tickLower, tickUpper);
         // This works as LCCs are issued, capitalised by underlying tokens owed to the MM.
         (, uint256 positionIndex) = _mintPositionInternal(poolKey, tokenId, tickLower, tickUpper, liquidityFromDeltas);
-        if (!payerIsUser) {
-            // Settle into the position the underlying tokens that are owed.
-            _settle(poolKey, tokenId, positionIndex, -credit0.toInt128(), -credit1.toInt128(), true);
-        } else {
-            // since credits exist, settle them into the position
+        if (payerIsUser) {
+            // since credits exist (and already in market), net settlement for position
             BalanceDelta sDelta = LiquidityUtils.safeToBalanceDelta(credit0, credit1, true, true);
             vtsOrchestrator.onMMSettle(
                 _getVault(poolKey), tokenId, positionIndex, poolKey.currency0, poolKey.currency1, sDelta, false
             );
+        } else {
+            // Settle into the position the underlying tokens that are owed.
+            _settle(poolKey, tokenId, positionIndex, -credit0.toInt128(), -credit1.toInt128(), true);
         }
     }
 

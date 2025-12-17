@@ -130,7 +130,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             uint256 requiredSettlementAmount1
         ) = _setupCommittedPosition(
             positionManager,
-            vtsOrchestrator,
             corePoolKey,
             liquiditySignal,
             liquidityParams,
@@ -203,7 +202,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             uint256 requiredSettlementAmount1
         ) = _setupCommittedPosition(
             positionManager,
-            vtsOrchestrator,
             corePoolKey,
             liquiditySignal,
             liquidityParams,
@@ -218,12 +216,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         IERC20(lcc0.underlying()).approve(address(vtsOrchestrator), requiredSettlementAmount0);
         IERC20(lcc1.underlying()).approve(address(vtsOrchestrator), requiredSettlementAmount1);
 
-        // log vts before settlement
-        (uint256 vtsCurrent0BeforeSettlement, uint256 vtsCurrent1BeforeSettlement) =
-            vtsOrchestrator.calcVTSCurrent(positionId);
-        console.log("vtsCurrent0BeforeSettlement", vtsCurrent0BeforeSettlement);
-        console.log("vtsCurrent1BeforeSettlement", vtsCurrent1BeforeSettlement);
-
         // -- make a settlement to the created position
         MMA.settle(
             positionManager,
@@ -232,28 +224,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             0,
             -int128(int256(requiredSettlementAmount0)),
             -int128(int256(requiredSettlementAmount1))
-        );
-
-        // get the current vts for this position
-        (uint256 vtsCurrent0AfterSettlement, uint256 vtsCurrent1AfterSettlement) =
-            vtsOrchestrator.calcVTSCurrent(positionId);
-        console.log("vtsCurrent0AfterSettlement", vtsCurrent0AfterSettlement);
-        console.log("vtsCurrent1AfterSettlement", vtsCurrent1AfterSettlement);
-
-        // since we basically just made another settlement equal to the base vts, the vts should be doubled
-        uint256 vtsCurrent0AfterSettlementBips = (vtsCurrent0AfterSettlement * 10000) / 1e18;
-        uint256 vtsCurrent1AfterSettlementBips = (vtsCurrent1AfterSettlement * 10000) / 1e18;
-
-        console.log("vtsCurrent0AfterSettlementBips", vtsCurrent0AfterSettlementBips);
-        console.log("vtsCurrent1AfterSettlementBips", vtsCurrent1AfterSettlementBips);
-        console.log("marketVTSConfiguration.token0.baseVTSRate", marketVTSConfiguration.token0.baseVTSRate);
-        console.log("marketVTSConfiguration.token1.baseVTSRate", marketVTSConfiguration.token1.baseVTSRate);
-
-        assertApproxEqRel(
-            vtsCurrent0AfterSettlementBips, marketVTSConfiguration.token0.baseVTSRate, 1e16, "Price within 1%"
-        );
-        assertApproxEqRel(
-            vtsCurrent1AfterSettlementBips, marketVTSConfiguration.token1.baseVTSRate, 1e16, "Price within 1%"
         );
     }
 
@@ -271,7 +241,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             uint256 requiredSettlementAmount1
         ) = _setupCommittedPosition(
             positionManager,
-            vtsOrchestrator,
             corePoolKey,
             liquiditySignal,
             liquidityParams,
@@ -279,12 +248,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             address(lcc0),
             address(lcc1)
         );
-
-        // get the current vts for this position
-        (uint256 vtsCurrent0BeforeSettlement, uint256 vtsCurrent1BeforeSettlement) =
-            vtsOrchestrator.calcVTSCurrent(positionId);
-        console.log("vtsCurrent0BeforeSettlement", vtsCurrent0BeforeSettlement);
-        console.log("vtsCurrent1BeforeSettlement", vtsCurrent1BeforeSettlement);
 
         uint256 settlementAmount0 = requiredSettlementAmount0 * 3;
         uint256 settlementAmount1 = requiredSettlementAmount1 * 3;
@@ -301,31 +264,14 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             -int128(int256(settlementAmount1))
         );
 
-        // get the current vts for this position
-        (uint256 vtsCurrent0AfterSettlement, uint256 vtsCurrent1AfterSettlement) =
-            vtsOrchestrator.calcVTSCurrent(positionId);
-        console.log("vtsCurrent0AfterSettlement", vtsCurrent0AfterSettlement);
-        console.log("vtsCurrent1AfterSettlement", vtsCurrent1AfterSettlement);
-
         // get balance of underlying tokens of position manager
         uint256 preBalanceOfToken0UnderlyingAssetInPM = Currency.wrap(lcc0.underlying()).balanceOf(address(this));
         uint256 preBalanceOfToken1UnderlyingAssetInPM = Currency.wrap(lcc1.underlying()).balanceOf(address(this));
-
-        console.log("========================");
-        // validate vts current before withdrawal
-        (uint256 vtsCurrent0BeforeWithdrawal, uint256 vtsCurrent1BeforeWithdrawal) =
-            vtsOrchestrator.calcVTSCurrent(positionId);
 
         // withdraw from the position by settling out
         uint256 amount0 = 100;
         uint256 amount1 = 100;
         MMA.settle(positionManager, corePoolKey, tokenId, 0, int128(int256(amount0)), int128(int256(amount1)));
-
-        // get the current vts for this position after withdrawal
-        (uint256 vtsCurrent0AfterWithdrawal, uint256 vtsCurrent1AfterWithdrawal) =
-            vtsOrchestrator.calcVTSCurrent(positionId);
-        console.log("vtsCurrent0AfterWithdrawal", vtsCurrent0AfterWithdrawal);
-        console.log("vtsCurrent1AfterWithdrawal", vtsCurrent1AfterWithdrawal);
 
         // get balance of underlying tokens of position manager after withdrawal
         uint256 postBalanceOfToken0UnderlyingAssetInPM = Currency.wrap(lcc0.underlying()).balanceOf(address(this));
@@ -339,9 +285,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         // validate balance after withdrawal
         assertEq(postBalanceOfToken0UnderlyingAssetInPM, preBalanceOfToken0UnderlyingAssetInPM + amount0);
         assertEq(postBalanceOfToken1UnderlyingAssetInPM, preBalanceOfToken1UnderlyingAssetInPM + amount1);
-
-        assertGt(vtsCurrent0BeforeWithdrawal, vtsCurrent0AfterWithdrawal);
-        assertGt(vtsCurrent1BeforeWithdrawal, vtsCurrent1AfterWithdrawal);
     }
 
     function testCanburnPositionUsingTokenAndIndex() public {
@@ -353,7 +296,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         // Setup committed position using helper
         (uint256 tokenId,, uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) = _setupCommittedPosition(
             positionManager,
-            vtsOrchestrator,
             corePoolKey,
             liquiditySignal,
             liquidityParams,
@@ -408,7 +350,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             uint256 requiredSettlementAmount1
         ) = _setupCommittedPosition(
             positionManager,
-            vtsOrchestrator,
             corePoolKey,
             liquiditySignal,
             liquidityParams,
@@ -480,7 +421,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             uint256 requiredSettlementAmount1
         ) = _setupCommittedPosition(
             positionManager,
-            vtsOrchestrator,
             corePoolKey,
             liquiditySignal,
             liquidityParams,
@@ -536,7 +476,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         // Setup committed position using helper
         (uint256 tokenId,, uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) = _setupCommittedPosition(
             positionManager,
-            vtsOrchestrator,
             corePoolKey,
             liquiditySignal,
             liquidityParams,
@@ -600,7 +539,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         // Setup committed position using helper
         (uint256 tokenId,, uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) = _setupCommittedPosition(
             positionManager,
-            vtsOrchestrator,
             corePoolKey,
             liquiditySignal,
             liquidityParams,
@@ -678,7 +616,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         // Setup committed position using helper
         (uint256 tokenId,, uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) = _setupCommittedPosition(
             positionManager,
-            vtsOrchestrator,
             corePoolKey,
             liquiditySignal,
             liquidityParams,
@@ -759,7 +696,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         // Setup committed position using helper
         (uint256 tokenId,,,) = _setupCommittedPosition(
             positionManager,
-            vtsOrchestrator,
             corePoolKey,
             liquiditySignal,
             liquidityParams,
@@ -903,7 +839,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         // Setup committed position using helper
         (uint256 tokenId,,,) = _setupCommittedPosition(
             positionManager,
-            vtsOrchestrator,
             corePoolKey,
             liquiditySignal,
             liquidityParams,
@@ -938,7 +873,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         // Setup committed position using helper
         (uint256 tokenId,,,) = _setupCommittedPosition(
             positionManager,
-            vtsOrchestrator,
             corePoolKey,
             liquiditySignal,
             liquidityParams,
@@ -1004,7 +938,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         // Setup committed position using helper
         (uint256 tokenId,,,) = _setupCommittedPosition(
             positionManager,
-            vtsOrchestrator,
             corePoolKey,
             liquiditySignalBytes,
             liquidityParams,

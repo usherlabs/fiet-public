@@ -204,18 +204,6 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         assertEq(positionAfter.tickUpper, defaultlLiquidityParams.tickUpper);
         assertEq(uint256(positionAfter.liquidity), uint256(defaultlLiquidityParams.liquidityDelta));
         assertEq(positionAfter.isActive, true);
-
-        (uint256 vtsCurrent0AfterSettlement, uint256 vtsCurrent1AfterSettlement) =
-            vtsOrchestrator.calcVTSCurrent(positionId);
-        console.log("vtsCurrent0AfterSettlement", vtsCurrent0AfterSettlement);
-        console.log("vtsCurrent1AfterSettlement", vtsCurrent1AfterSettlement);
-
-        // since we basically just made another settlement equal to the base vts, the vts should be doubled
-        uint256 vtsCurrent0AfterSettlementBips = (vtsCurrent0AfterSettlement * 10000) / 1e18;
-        uint256 vtsCurrent1AfterSettlementBips = (vtsCurrent1AfterSettlement * 10000) / 1e18;
-
-        assertEq(vtsCurrent0AfterSettlementBips, marketVTSConfiguration.token0.baseVTSRate);
-        assertEq(vtsCurrent1AfterSettlementBips, marketVTSConfiguration.token1.baseVTSRate);
     }
 
     function testCanBurnAndWithdrawCreatedPosition() public {

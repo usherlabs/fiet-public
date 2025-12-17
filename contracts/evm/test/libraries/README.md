@@ -55,11 +55,6 @@ Comprehensive tests covering:
   - Deficits require additional settlement
   - Commitment deficits inflate requirements
 
-- **VTS Metrics** (`getVTSCurrent`, `getVTSRequired`):
-  - Correct ratio calculations
-  - Zero commitment handling
-  - Full settlement returns 100%
-
 - **Position Registration** (`_registerPosition`):
   - Creates new positions correctly
   - Prevents duplicate registration

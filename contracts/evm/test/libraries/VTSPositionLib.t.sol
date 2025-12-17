@@ -337,72 +337,6 @@ contract VTSPositionLibTest is VTSLibTestBase {
         assertTrue(delta.amount0() > 0, "Should require more settlement for token0");
     }
 
-    // ============================================================
-    // getVTSCurrent Tests
-    // ============================================================
-
-    function test_getVTSCurrent_calculatesRatioCorrectly() public {
-        PositionId positionId = _registerDefaultPosition();
-
-        harness.setCommitmentMax(positionId, 1000e18, 2000e18);
-        harness.setSettled(positionId, 500e18, 1000e18);
-
-        (uint256 vts0, uint256 vts1) = harness.getVTSCurrent(positionId);
-
-        assertEq(vts0, 0.5e18, "VTS0 should be 50%");
-        assertEq(vts1, 0.5e18, "VTS1 should be 50%");
-    }
-
-    function test_getVTSCurrent_zeroCommitment_returnsZero() public {
-        PositionId positionId = _registerDefaultPosition();
-
-        harness.setCommitmentMax(positionId, 0, 1000e18);
-        harness.setSettled(positionId, 100e18, 500e18);
-
-        (uint256 vts0, uint256 vts1) = harness.getVTSCurrent(positionId);
-
-        assertEq(vts0, 0, "VTS0 should be zero when commitment is zero");
-        assertEq(vts1, 0.5e18, "VTS1 should calculate normally");
-    }
-
-    function test_getVTSCurrent_fullSettlement_returnsOne() public {
-        PositionId positionId = _registerDefaultPosition();
-
-        harness.setCommitmentMax(positionId, 1000e18, 1000e18);
-        harness.setSettled(positionId, 1000e18, 1000e18);
-
-        (uint256 vts0, uint256 vts1) = harness.getVTSCurrent(positionId);
-
-        assertEq(vts0, 1e18, "VTS0 should be 100%");
-        assertEq(vts1, 1e18, "VTS1 should be 100%");
-    }
-
-    // ============================================================
-    // getVTSRequired Tests
-    // ============================================================
-
-    function test_getVTSRequired_calculatesDeficitRatio() public {
-        PositionId positionId = _registerDefaultPosition();
-
-        harness.setCommitmentMax(positionId, 1000e18, 2000e18);
-        harness.setCumulativeDeficit(positionId, 500e18, 1000e18);
-
-        (uint256 vts0, uint256 vts1) = harness.getVTSRequired(positionId);
-
-        assertEq(vts0, 0.5e18, "VTS0 required should be 50%");
-        assertEq(vts1, 0.5e18, "VTS1 required should be 50%");
-    }
-
-    function test_getVTSRequired_deficitExceedsCommitment_returnsOne() public {
-        PositionId positionId = _registerDefaultPosition();
-
-        harness.setCommitmentMax(positionId, 1000e18, 1000e18);
-        harness.setCumulativeDeficit(positionId, 1500e18, 0); // Exceeds commitment
-
-        (uint256 vts0,) = harness.getVTSRequired(positionId);
-
-        assertEq(vts0, 1e18, "VTS0 should be capped at 100%");
-    }
 
     // ============================================================
     // _registerPosition Tests
@@ -502,18 +436,4 @@ contract VTSPositionLibTest is VTSLibTestBase {
         assertLe(settled0, commitment, "Settled should never exceed commitment");
     }
 
-    function testFuzz_getVTSCurrent_ratioInvariant(uint256 commitment, uint256 settled) public {
-        commitment = bound(commitment, 1, type(uint128).max);
-        settled = bound(settled, 0, commitment);
-
-        PositionId positionId = _registerDefaultPosition();
-
-        harness.setCommitmentMax(positionId, commitment, 0);
-        harness.setSettled(positionId, settled, 0);
-
-        (uint256 vts0,) = harness.getVTSCurrent(positionId);
-
-        uint256 expectedVTS = (settled * 1e18) / commitment;
-        assertEq(vts0, expectedVTS, "VTS should match calculated ratio");
-    }
 }

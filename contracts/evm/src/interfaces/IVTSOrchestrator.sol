@@ -139,17 +139,6 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta {
     /// @return The position identifier
     function getPositionId(uint256 commitId, uint256 positionIndex) external view returns (PositionId);
 
-    /// @notice Calculate the current VTS amounts for a position
-    /// @param positionId The position identifier
-    /// @return vtsCurrent0 Current VTS amount for token0
-    /// @return vtsCurrent1 Current VTS amount for token1
-    function calcVTSCurrent(PositionId positionId) external returns (uint256 vtsCurrent0, uint256 vtsCurrent1);
-
-    /// @notice Calculate the required VTS amounts for a position
-    /// @param positionId The position identifier
-    /// @return vtsRequired0 Required VTS amount for token0
-    /// @return vtsRequired1 Required VTS amount for token1
-    function calcVTSRequired(PositionId positionId) external returns (uint256 vtsRequired0, uint256 vtsRequired1);
 
     /// @notice Get the settled amounts for a position
     /// @param positionId The position identifier
