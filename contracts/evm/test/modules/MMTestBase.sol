@@ -303,7 +303,7 @@ abstract contract MarketMakerTestBase is Test {
         uint256 amount1ToSettle
     ) internal {
         MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
-        actions[0] = MMA.prepareSeize(poolKey, tokenId, positionIndexToSeize, amount0ToSettle, amount1ToSettle);
+        actions[0] = MMA.prepareSeize(poolKey, tokenId, positionIndexToSeize, amount0ToSettle, amount1ToSettle, false);
         actions[1] = MMA.prepareSettleFromDeltas(poolKey, tokenId, positionIndexToSeize, false, true); //take
         // Use modifyLiquidities which handles unlocking automatically
         (bytes memory actionsBytes, bytes[] memory params) = MMA.concatPrepared(actions);

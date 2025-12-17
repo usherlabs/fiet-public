@@ -992,27 +992,35 @@ library VTSPositionLib {
 
         // 3. Queue settlements via cancelWithQueue
         // Burns LCCs from MMPM (ctx.mmpmAddress) and queues shortfall for queueRecipient (locker or MMPM)
+        // Only cancel LCCs for tokens that have non-zero principal delta (tokens actually removed from liquidity)
         address lcc0 = Currency.unwrap(poolKey.currency0);
         address lcc1 = Currency.unwrap(poolKey.currency1);
 
-        ctx.liquidityHub
-            .planCancelWithQueue(
-                lcc0,
-                address(ctx.poolManager),
-                owner,
-                LiquidityUtils.safeInt128ToUint256(principalDelta.amount0()),
-                LiquidityUtils.safeInt128ToUint256(queuedDelta.amount0()),
-                queueRecipient
-            );
-        ctx.liquidityHub
-            .planCancelWithQueue(
-                lcc1,
-                address(ctx.poolManager),
-                owner,
-                LiquidityUtils.safeInt128ToUint256(principalDelta.amount1()),
-                LiquidityUtils.safeInt128ToUint256(queuedDelta.amount1()),
-                queueRecipient
-            );
+        uint256 principalAmount0 = LiquidityUtils.safeInt128ToUint256(principalDelta.amount0());
+        uint256 principalAmount1 = LiquidityUtils.safeInt128ToUint256(principalDelta.amount1());
+
+        if (principalAmount0 > 0) {
+            ctx.liquidityHub
+                .planCancelWithQueue(
+                    lcc0,
+                    address(ctx.poolManager),
+                    owner,
+                    principalAmount0,
+                    LiquidityUtils.safeInt128ToUint256(queuedDelta.amount0()),
+                    queueRecipient
+                );
+        }
+        if (principalAmount1 > 0) {
+            ctx.liquidityHub
+                .planCancelWithQueue(
+                    lcc1,
+                    address(ctx.poolManager),
+                    owner,
+                    principalAmount1,
+                    LiquidityUtils.safeInt128ToUint256(queuedDelta.amount1()),
+                    queueRecipient
+                );
+        }
 
         // 4. Queued shortfall is tracked in LiquidityHub as owed to queueRecipient
         // When _collectAvailableLiquidity is called, underlying is transferred to the recipient.
@@ -1211,13 +1219,19 @@ library VTSPositionLib {
             if (amount0 < 0) {
                 // deposit: clamp by positive rfsDelta
                 // If rfs0 > 0, we can deposit up to rfs0 (clamp amount0 to -rfs0 minimum)
+                // If rfs0 <= 0, no RFS requirement, so don't deposit (clamp to 0)
                 if (rfs0 > 0) {
                     int128 maxDeposit0 = -rfs0; // negative because deposits are negative
                     if (amount0 < maxDeposit0) {
                         amount0 = maxDeposit0;
                     }
+                    _updateSettlement(s, positionId, 0, -amount0);
+                    // need to use amount settled rather than 'applied' delta
+                    amount0 = -amount0; //get abs value of amount0 settled
+                } else {
+                    // No RFS requirement for token0, don't deposit
+                    amount0 = 0;
                 }
-                amount0 = _updateSettlement(s, positionId, 0, -amount0);
             } else if (amount0 > 0) {
                 // withdrawal: clamp by positionRequiredSettlementDelta
                 // If positionRequiredSettlementDelta > 0, clamp to min(amount0, positionRequiredSettlementDelta)
@@ -1229,19 +1243,26 @@ library VTSPositionLib {
                 } else {
                     amount0 = 0;
                 }
+
                 amount0 = _updateSettlement(s, positionId, 0, -amount0);
             }
 
             if (amount1 < 0) {
                 // deposit: clamp by positive rfsDelta
                 // If rfs1 > 0, we can deposit up to rfs1 (clamp amount1 to -rfs1 minimum)
+                // If rfs1 <= 0, no RFS requirement, so don't deposit (set to 0)
                 if (rfs1 > 0) {
                     int128 maxDeposit1 = -rfs1; // negative because deposits are negative
                     if (amount1 < maxDeposit1) {
                         amount1 = maxDeposit1;
                     }
+                    _updateSettlement(s, positionId, 1, -amount1);
+                    // use amount settled instead of applied amount since we need the amount actually settled by the seizer of the position
+                    amount1 = -amount1; //get abs value of amount1 settled
+                } else {
+                    // No RFS requirement for token1, clamp deposit to 0
+                    amount1 = 0;
                 }
-                amount1 = _updateSettlement(s, positionId, 1, -amount1);
             } else if (amount1 > 0) {
                 // withdrawal: clamp by positionRequiredSettlementDelta
                 // If positionRequiredSettlementDelta > 0, clamp to min(amount1, positionRequiredSettlementDelta)
@@ -1445,7 +1466,8 @@ library VTSPositionLib {
         Position memory pos = s.positions[positionId];
         (bool rfsOpen, BalanceDelta rfsDelta) = getRFS(s, positionId);
         if (!rfsOpen) {
-            revert("VTSPositionLib: RFS not open");
+            // if RFS is not open, return 0 as nothing can be seized
+            return 0;
         }
 
         PositionAccounting storage pa = s.positionAccounting[positionId];
@@ -1454,10 +1476,19 @@ library VTSPositionLib {
         // Commitments and RfS amounts
         uint256 c0 = pa.commitmentMax.token0;
         uint256 c1 = pa.commitmentMax.token1;
-        uint256 r0 = LiquidityUtils.safeInt128ToUint256(rfsDelta.amount0());
-        uint256 r1 = LiquidityUtils.safeInt128ToUint256(rfsDelta.amount1());
-        uint256 s0 = LiquidityUtils.safeInt128ToUint256(settlementDelta.amount0());
-        uint256 s1 = LiquidityUtils.safeInt128ToUint256(settlementDelta.amount1());
+
+        // Only consider tokens with positive RFS deltas (needs settlement)
+        // Negative RFS deltas indicate excess, not requirements, so they don't contribute to seizure
+        int128 rfs0 = rfsDelta.amount0();
+        int128 rfs1 = rfsDelta.amount1();
+
+        uint256 r0 = rfs0 > 0 ? LiquidityUtils.safeInt128ToUint256(rfs0) : 0;
+        uint256 r1 = rfs1 > 0 ? LiquidityUtils.safeInt128ToUint256(rfs1) : 0;
+
+        // settlementDelta: negative = deposit, positive = withdrawal
+        // For seizure calculation, we only care about deposits (negative), so take absolute value
+        uint256 s0 = settlementDelta.amount0() < 0 ? LiquidityUtils.safeInt128ToUint256(settlementDelta.amount0()) : 0;
+        uint256 s1 = settlementDelta.amount1() < 0 ? LiquidityUtils.safeInt128ToUint256(settlementDelta.amount1()) : 0;
 
         MarketVTSConfiguration memory cfg = pool.vtsConfig;
 

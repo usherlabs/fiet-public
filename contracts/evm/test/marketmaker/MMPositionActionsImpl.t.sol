@@ -34,6 +34,8 @@ import {ILiquidityHub} from "../../src/interfaces/ILiquidityHub.sol";
 import {IVRLSignalManager} from "../../src/interfaces/IVRLSignalManager.sol";
 import {LiquiditySignal} from "../../src/types/Commit.sol";
 import {IVTSOrchestrator} from "../../src/interfaces/IVTSOrchestrator.sol";
+import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
+import {PoolSwapTest} from "@uniswap/v4-core/src/test/PoolSwapTest.sol";
 
 contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
     using SafeCast for *;
@@ -373,5 +375,72 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
 
         assertGt(newPositionSettledAmount0, 0);
         assertGt(newPositionSettledAmount1, 0);
+    }
+
+    function testCanSeizeAndTakeDeltasFromPosition() public {
+        uint256 tokenId = 1;
+        uint256 positionIndex = 0;
+
+        // create a new position with the default liquidity params and liquidity signal
+        createPosition(defaultlLiquidityParams, abi.encode(liquiditySignal), tokenId, positionIndex);
+        (, PositionId positionId) = positionManager.getPosition(tokenId, positionIndex);
+
+        // perform a swap in order to drain some liquidity from the pool and cause a deficit for the market maker
+        // forcing their position to be open for RFS
+        swapRouter.swap(
+            proxyPoolKey,
+            SwapParams({zeroForOne: true, amountSpecified: -1e25, sqrtPriceLimitX96: ZERO_FOR_ONE_LIMIT}),
+            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}),
+            ZERO_BYTES
+        );
+
+        // Now check if RFS is open (should be if deficit > settled)
+        (bool rfsOpen,) = vtsOrchestrator.calcRFS(positionId, false);
+        assertEq(rfsOpen, true);
+
+        // log the positions deficit amounts
+        (uint256 settledAmount0, uint256 settledAmount1) = vtsOrchestrator.getPositionSettledAmounts(positionId);
+        console.log("settledAmount0", settledAmount0);
+        console.log("settledAmount1", settledAmount1);
+
+        // advance timestamp to after grace period elapsed
+        vm.warp(block.timestamp + 300000 + 1);
+
+        // approve the position manager to spend the underlying assets
+        uint256 settleAmount0 = 5999709018652707;
+        uint256 settleAmount1 = 5999709018652707;
+
+        // transfer enough underlying assets to the guarantor to settle the position
+        IERC20(lcc0.underlying()).transfer(guarantor, settleAmount0);
+        IERC20(lcc1.underlying()).transfer(guarantor, settleAmount1);
+
+        // act as the guarantor and settle and sieze some parts the position
+        vm.startPrank(guarantor);
+        IERC20(lcc0.underlying()).approve(address(positionManager), settleAmount0);
+        IERC20(lcc1.underlying()).approve(address(positionManager), settleAmount1);
+
+        // get position liquidity
+        (Position memory positionBeforeSeize,) = vtsOrchestrator.getPosition(tokenId, positionIndex);
+
+        assertEq(Currency.wrap(address(lcc0)).balanceOf(address(guarantor)), 0);
+
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](3);
+        actions[0] = MMA.prepareSeize(corePoolKey, tokenId, positionIndex, settleAmount0, settleAmount1, false);
+        actions[1] = MMA.prepareSettleFromDeltas(corePoolKey, tokenId, positionIndex, true, true); //take
+        actions[2] = MMA.prepareTake(Currency.wrap(address(lcc0)), address(guarantor), 0); // collect all lcc fees
+        // Use modifyLiquidities which handles unlocking automatically
+        (bytes memory actionsBytes, bytes[] memory params) = MMA.concatPrepared(actions);
+        bytes memory unlockData = abi.encode(actionsBytes, params);
+        positionManager.modifyLiquidities(unlockData, block.timestamp + 3600);
+
+        vm.stopPrank();
+
+        // validate liquidity was taken from the original position
+        (Position memory positionAfterSeize,) = vtsOrchestrator.getPosition(tokenId, positionIndex);
+
+        // validate some liquidity was taken from the original position
+        assertLt(uint256(positionAfterSeize.liquidity), uint256(positionBeforeSeize.liquidity));
+        // validate some lcc balance as fees
+        assertGt(Currency.wrap(address(lcc0)).balanceOf(address(guarantor)), 0);
     }
 }
