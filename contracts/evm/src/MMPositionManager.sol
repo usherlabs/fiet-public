@@ -237,7 +237,7 @@ contract MMPositionManager is
         MMHelpers.assertApprovedOrOwner(msgSender(), tokenId);
 
         // Check if commit has any active positions (burned positions are inactive)
-        (,,uint256 positionCount, uint256 activePositionCount) = vtsOrchestrator.getCommit(tokenId);
+        (,, uint256 positionCount, uint256 activePositionCount) = vtsOrchestrator.getCommit(tokenId);
         if (activePositionCount > 0) {
             revert Errors.CommitNotEmpty(tokenId);
         }

@@ -274,12 +274,16 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
     function getCommit(uint256 commitId)
         external
         view
-        returns (MarketMaker.State memory mmState, uint256 expiresAt, uint256 positionCount, uint256 activePositionCount)
+        returns (
+            MarketMaker.State memory mmState,
+            uint256 expiresAt,
+            uint256 positionCount,
+            uint256 activePositionCount
+        )
     {
         Commit storage commit = s.commits[commitId];
         return (commit.mmState, commit.expiresAt, commit.positionCount, commit.activePositionCount);
     }
-
 
     /// @notice Get pool by PoolId
     /// @dev Note: Cannot return Pool directly due to mapping in struct
