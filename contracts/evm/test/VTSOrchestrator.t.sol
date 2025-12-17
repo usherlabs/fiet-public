@@ -20,6 +20,7 @@ import {IOracleHelper} from "../src/interfaces/IOracleHelper.sol";
 import {IVRLSettlementObserver} from "../src/interfaces/IVRLSettlementObserver.sol";
 import {PoolSwapTest} from "@uniswap/v4-core/src/test/PoolSwapTest.sol";
 import {MMActionAdapter as MMA} from "./libraries/MMActionAdapter.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 contract VTSOrchestratorTest is VTSOrchestratorFixture {
     using PoolIdLibrary for PoolId;
@@ -420,30 +421,47 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         // Verify position is active
         assertTrue(vtsOrchestrator.isPositionValid(positionId, true), "Position should be active");
 
-        // Record initial balances
-        uint256 lcc0Before = _selfLccBalance(lccCurrency0);
-        uint256 lcc1Before = _selfLccBalance(lccCurrency1);
+        uint256 swapVolume = 1e18;
 
         // Step 2: Perform swaps to generate fees
-        // Swap in both directions to generate fees for both tokens
-        _swapCore(true, -int256(1e18)); // zeroForOne
-        _swapCore(false, -int256(1e18)); // oneForZero
+        // zeroForOne: input LCC0, output LCC1
+        _swapCore(true, -int256(swapVolume));
+        // oneForZero: input LCC1, output LCC0
+        _swapCore(false, -int256(swapVolume));
 
-        // Step 3: Poke the position to collect fees (modifyLiquidity with liquidityDelta=0)
+        // Step 3: Record balances after swaps (before poke/take)
+        // We measure from this point to isolate fees received from swap costs
+        uint256 lcc0AfterSwaps = _selfLccBalance(lccCurrency0);
+        uint256 lcc1AfterSwaps = _selfLccBalance(lccCurrency1);
+
+        // Step 4: Expect Transfer events from MMPM to test contract via _take()
+        // Check event signature and from/to addresses, but not the exact amount (checkData = false)
+        vm.expectEmit(true, true, false, false, Currency.unwrap(lccCurrency0));
+        emit IERC20.Transfer(address(positionManager), address(this), 0);
+
+        vm.expectEmit(true, true, false, false, Currency.unwrap(lccCurrency1));
+        emit IERC20.Transfer(address(positionManager), address(this), 0);
+
+        // Step 5: Poke the position to collect fees (modifyLiquidity with liquidityDelta=0)
         // This triggers VTSPositionLib.touchPosition which processes fees
+        // Then _take() transfers the fees from MMPM to test contract
         _pokeMMAndTakeFees(tokenId, 0, -60, 60);
 
-        // Step 4: Verify Locker received LCC fees as ERC20 balance
-        uint256 lcc0After = _selfLccBalance(lccCurrency0);
-        uint256 lcc1After = _selfLccBalance(lccCurrency1);
+        // Step 6: Record final balances AFTER poke/take
+        uint256 lcc0Final = _selfLccBalance(lccCurrency0);
+        uint256 lcc1Final = _selfLccBalance(lccCurrency1);
 
-        // At least one LCC balance should have increased (fees from swaps)
-        bool feesAccrued = lcc0After > lcc0Before || lcc1After > lcc1Before;
-        console.log("lcc0Before", lcc0Before);
-        console.log("lcc0After", lcc0After);
-        console.log("lcc1Before", lcc1Before);
-        console.log("lcc1After", lcc1After);
-        assertTrue(feesAccrued, "MMPM should have received LCC fees as ERC20 balance");
+        // Calculate fees received (balance change from poke/take, after swaps already accounted)
+        uint256 feesReceived0 = lcc0Final > lcc0AfterSwaps ? lcc0Final - lcc0AfterSwaps : 0;
+        uint256 feesReceived1 = lcc1Final > lcc1AfterSwaps ? lcc1Final - lcc1AfterSwaps : 0;
+
+        // Log for debugging
+        console.log("Fees received LCC0:", feesReceived0);
+        console.log("Fees received LCC1:", feesReceived1);
+
+        // At least one currency should have had fees received
+        bool feesCollected = feesReceived0 > 0 || feesReceived1 > 0;
+        assertTrue(feesCollected, "Fees should have been transferred from MMPM to test contract");
 
         // Verify the position is still valid after fee collection
         assertTrue(vtsOrchestrator.isPositionValid(positionId, true), "Position should still be active after poke");
