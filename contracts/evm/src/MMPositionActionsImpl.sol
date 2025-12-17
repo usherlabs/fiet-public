@@ -203,10 +203,7 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
         (Position memory position, PositionId positionId) = getPosition(tokenId, positionIndex);
         MMHelpers.assertPositionForPool(poolKey, position);
 
-        // Caller must be approved/owner AND position must be active
-        // Note: Actual seizure eligibility (grace period) is checked in VTSOrchestrator.onSeize
-        MMHelpers.assertApprovedOrOwner(msgSender(), tokenId);
-        if (position.isActive == false) {
+        if (MMHelpers.isApprovedOrOwner(msgSender(), tokenId) || position.isActive == false) {
             revert Errors.InvalidPosition(tokenId, positionIndex, positionId);
         }
 
