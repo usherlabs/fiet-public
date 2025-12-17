@@ -30,8 +30,8 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
     IOracleHelper public immutable oracleHelper;
 
     event FactorySet(address indexed factory, bool enabled);
-    event LCCCreated(address indexed underlyingAsset, address indexed lccToken);
-    event LiquidityAvailable(address indexed lcc, uint256 amount);
+    event LCCCreated(address indexed underlyingAsset, address indexed lccToken, bytes32 marketId);
+    event LiquidityAvailable(address indexed lcc, address underlyingAsset, uint256 amount, bytes32 marketId);
     event SettlementQueued(address indexed lcc, address indexed recipient, uint256 amount);
     event LccWrappedWith(address indexed lcc, address indexed withLCC, address from, address to, uint256 amount);
     event LccWrapped(address indexed lcc, address from, address to, uint256 amount);
@@ -269,8 +269,8 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
             LCCFactoryLinkedLib.createLCC(s, _msgSender(), marketRef, underlyingPair, 1, marketName, initialIssuers);
 
         // Emit events for LCC creation
-        emit LCCCreated(underlyingAsset0, lccToken0);
-        emit LCCCreated(underlyingAsset1, lccToken1);
+        emit LCCCreated(underlyingAsset0, lccToken0, s.lccToMarket[lccToken0].id);
+        emit LCCCreated(underlyingAsset1, lccToken1, s.lccToMarket[lccToken1].id);
     }
 
     /**
@@ -703,7 +703,7 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
 
         if (shouldEmit && hubQueue < amount) {
             // Only emit if there is new liquidity available and not consumed greedily by the Hub
-            emit LiquidityAvailable(lcc, amount);
+            emit LiquidityAvailable(lcc, s.lccToUnderlying[lcc], amount, s.lccToMarket[lcc].id);
         }
     }
 
