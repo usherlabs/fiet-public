@@ -415,7 +415,13 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
         (uint256 liquidityFromDeltas, uint256 credit0, uint256 credit1) =
             _getLiquidityFromDeltas(poolKey, deltaTarget, tickLower, tickUpper);
         _increaseInternal(poolKey, tokenId, positionIndex, tickLower, tickUpper, liquidityFromDeltas);
-        if (!payerIsUser) {
+        if (payerIsUser) {
+            // since credits exist (and already in market), net settlement for position
+            BalanceDelta sDelta = LiquidityUtils.safeToBalanceDelta(credit0, credit1, true, true);
+            vtsOrchestrator.onMMSettle(
+                _getVault(poolKey), tokenId, positionIndex, poolKey.currency0, poolKey.currency1, sDelta, false
+            );
+        } else {
             // Settle into the position the underlying tokens that are owed.
             _settle(poolKey, tokenId, positionIndex, -credit0.toInt128(), -credit1.toInt128(), true);
         }
@@ -464,15 +470,15 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
             _getLiquidityFromDeltas(poolKey, deltaTarget, tickLower, tickUpper);
         // This works as LCCs are issued, capitalised by underlying tokens owed to the MM.
         (, uint256 positionIndex) = _mintPositionInternal(poolKey, tokenId, tickLower, tickUpper, liquidityFromDeltas);
-        if (!payerIsUser) {
-            // Settle into the position the underlying tokens that are owed.
-            _settle(poolKey, tokenId, positionIndex, -credit0.toInt128(), -credit1.toInt128(), true);
-        } else {
-            // since credits exist, settle them into the position
+        if (payerIsUser) {
+            // since credits exist (and already in market), net settlement for position
             BalanceDelta sDelta = LiquidityUtils.safeToBalanceDelta(credit0, credit1, true, true);
             vtsOrchestrator.onMMSettle(
                 _getVault(poolKey), tokenId, positionIndex, poolKey.currency0, poolKey.currency1, sDelta, false
             );
+        } else {
+            // Settle into the position the underlying tokens that are owed.
+            _settle(poolKey, tokenId, positionIndex, -credit0.toInt128(), -credit1.toInt128(), true);
         }
     }
 
