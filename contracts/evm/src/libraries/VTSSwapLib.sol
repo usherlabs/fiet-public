@@ -188,7 +188,7 @@ library VTSSwapLib {
 
         if (growthType == 0) {
             // Deficit growth
-            g = paPool.deficitGrowthGlobal.get(token);
+            g = paPool.deficitGrowthGlobal.get(token); // Same thing as: g = token == 0 ? paPool.deficitGrowthGlobal.token0 : paPool.deficitGrowthGlobal.token1;
             outsidePair = s.deficitGrowthOutside[poolId][tick];
         } else if (growthType == 1) {
             // Inflow growth
