@@ -312,6 +312,14 @@ abstract contract VTSOrchestratorFixture is MarketTestBase, MarketMakerTestBase 
         return manager.balanceOf(address(vtsOrchestrator), lccCurrency.toId());
     }
 
+    /// @notice Helper to get protocol fee accrued for a pool (slashed fees internal accounting)
+    /// @param poolId The pool identifier
+    /// @return fee0 The accrued fee for token0
+    /// @return fee1 The accrued fee for token1
+    function _protocolFeeAccrued(PoolId poolId) internal view returns (uint256 fee0, uint256 fee1) {
+        return vtsOrchestrator.getProtocolFeeAccrued(poolId);
+    }
+
     /// @notice Helper to settle an MM position using prepareSettle
     /// @dev Mints and approves underlying tokens if amounts are negative (deposits)
     /// @param tokenId The commitment NFT token ID

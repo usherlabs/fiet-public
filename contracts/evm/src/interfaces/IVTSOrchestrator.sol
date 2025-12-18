@@ -103,6 +103,12 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta {
     /// @param positionId The position identifier
     function settlePositionGrowths(PositionId positionId) external;
 
+    /// @notice Get the protocol fee accrued (slashed fees) for a pool
+    /// @param poolId The pool identifier
+    /// @return fee0 The accrued fee for token0
+    /// @return fee1 The accrued fee for token1
+    function getProtocolFeeAccrued(PoolId poolId) external view returns (uint256 fee0, uint256 fee1);
+
     /// @notice Initialize a market's configuration in the VTS state
     /// @dev Called by MarketFactory contract during market creation
     /// @param corePoolKey The core pool key

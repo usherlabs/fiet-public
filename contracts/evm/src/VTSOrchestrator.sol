@@ -46,9 +46,9 @@ import {DynamicCurrencyDelta} from "./libraries/DynamicCurrencyDelta.sol";
 import {IMarketVault} from "./interfaces/IMarketVault.sol";
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 import {LiquidityUtils} from "./libraries/LiquidityUtils.sol";
-import {console} from "forge-std/console.sol";
 import {toBalanceDelta} from "v4-periphery/lib/v4-core/src/types/BalanceDelta.sol";
 import {TransientSlots} from "./libraries/TransientSlots.sol";
+import {PoolAccounting} from "./types/VTS.sol";
 
 /// @title VTSOrchestrator
 /// @notice Central state management layer and orchestrator for VTS logic
@@ -267,7 +267,7 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
 
     /// @notice Get the next commit ID that will be assigned
     /// @return The next commit ID (will be assigned on next commitSignal call)
-    /// @dev Returns s.nextCommitId + 1 because commitSignal uses pre-increment (++s.nextCommitId)
+    /// @dev Returns s.nextCommitId + 1 because nextCommitId starts at 0 and commitSignal uses pre-increment (++s.nextCommitId)
     function nextCommitId() public view returns (uint256) {
         return s.nextCommitId + 1;
     }
@@ -355,6 +355,12 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
     {
         PositionAccounting storage pa = s.positionAccounting[positionId];
         return (pa.commitmentMax.token0, pa.commitmentMax.token1);
+    }
+
+    /// @inheritdoc IVTSOrchestrator
+    function getProtocolFeeAccrued(PoolId poolId) external view returns (uint256 fee0, uint256 fee1) {
+        PoolAccounting storage paPool = s.poolAccounting[poolId];
+        return (paPool.protocolFeeAccrued.token0, paPool.protocolFeeAccrued.token1);
     }
 
     /// @notice Get the checkpoint for a given position

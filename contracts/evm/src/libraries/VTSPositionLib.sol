@@ -12,8 +12,6 @@ import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint12
 import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {RFSCheckpoint} from "../types/Checkpoint.sol";
-import {ILCC} from "../interfaces/ILCC.sol";
-import {TransientSlots} from "./TransientSlots.sol";
 
 import {
     VTSStorage,
@@ -140,9 +138,6 @@ library VTSPositionLib {
                 uint256 cover = uint256(delta) > cumulativeDef ? cumulativeDef : uint256(delta);
                 if (cover > 0) {
                     cumulativeDef -= cover;
-                    // keep global coherent
-                    uint256 gD = paPool.globalDeficit.get(tokenIndex);
-                    paPool.globalDeficit.set(tokenIndex, cover <= gD ? (gD - cover) : 0);
                     delta -= int256(cover);
                     deficitCoverage += cover; // Accumulate deficit coverage
                 }
@@ -201,10 +196,21 @@ library VTSPositionLib {
     // Growth Accounting Helper Functions
     // --------------------------------------------------
 
-    /// @notice Compute inside growth for a position range using GrowthPair-based outside mappings
+    /// @notice Compute inside growth for a position range using Uniswap-style "global/outside" accounting.
+    /// @dev This mirrors Uniswap v4 core fee accounting:
+    ///      - Branching formula: `Pool.getFeeGrowthInside()` in
+    ///        `contracts/evm/lib/v4-periphery/lib/v4-core/src/libraries/Pool.sol`
+    ///      - Unchecked arithmetic is used intentionally to match Uniswap's modulo \(2^{256}\) behaviour.
+    ///
+    ///      Intuition:
+    ///      - `global*` accumulators are "amount-per-liquidity-unit" in Q128.
+    ///      - `outsideMap[poolId][tick]` stores growth on the _other_ side of that tick relative to the current tick,
+    ///        maintained by flipping on each tick cross (see `VTSSwapLib._flipOutside`, derived from `Pool.crossTick`).
+    ///      - "inside growth" for [tickLower, tickUpper) depends on where the current tick sits relative to the range.
     /// @param poolId The pool ID
     /// @param tickLower The lower tick
     /// @param tickUpper The upper tick
+    /// @param tickCurrent The current pool tick
     /// @param global0 The global growth for token0
     /// @param global1 The global growth for token1
     /// @param outsideMap The outside growth mapping (deficitGrowthOutside, inflowGrowthOutside, or coverageUseGrowthOutside)
@@ -214,17 +220,57 @@ library VTSPositionLib {
         PoolId poolId,
         int24 tickLower,
         int24 tickUpper,
+        int24 tickCurrent,
         uint256 global0,
         uint256 global1,
         mapping(PoolId => mapping(int24 => GrowthPair)) storage outsideMap
     ) private view returns (uint256 inside0, uint256 inside1) {
         GrowthPair memory lower = outsideMap[poolId][tickLower];
         GrowthPair memory upper = outsideMap[poolId][tickUpper];
-        inside0 = global0 - lower.token0 - upper.token0;
-        inside1 = global1 - lower.token1 - upper.token1;
+        inside0 = _growthInsideSingle(global0, lower.token0, upper.token0, tickCurrent, tickLower, tickUpper);
+        inside1 = _growthInsideSingle(global1, lower.token1, upper.token1, tickCurrent, tickLower, tickUpper);
+    }
+
+    /// @notice Compute inside growth for a single token, branching on current tick (Uniswap-style)
+    /// @dev Derived from Uniswap v4 core `Pool.getFeeGrowthInside()`:
+    ///      `contracts/evm/lib/v4-periphery/lib/v4-core/src/libraries/Pool.sol`.
+    ///
+    ///      Why branching matters:
+    ///      - Growth accrues to the active tick/liquidity at the moment it occurs (in our case, per swap segment).
+    ///      - A position should only accrue growth while it is in-range (i.e. while current tick is within its bounds).
+    ///      - When out-of-range, the position's "inside growth" should remain stable until price re-enters the range.
+    ///
+    ///      Why `unchecked`:
+    ///      - Uniswap treats these accumulators as values modulo \(2^{256}\) (wraparound is acceptable and expected).
+    function _growthInsideSingle(
+        uint256 global,
+        uint256 outsideLower,
+        uint256 outsideUpper,
+        int24 tickCurrent,
+        int24 tickLower,
+        int24 tickUpper
+    ) private pure returns (uint256 inside) {
+        unchecked {
+            if (tickCurrent < tickLower) {
+                // Current tick below range: inside = outsideLower - outsideUpper
+                inside = outsideLower - outsideUpper;
+            } else if (tickCurrent >= tickUpper) {
+                // Current tick at/above range: inside = outsideUpper - outsideLower
+                inside = outsideUpper - outsideLower;
+            } else {
+                // Current tick inside range: inside = global - outsideLower - outsideUpper
+                inside = global - outsideLower - outsideUpper;
+            }
+        }
     }
 
     /// @notice Compute delta and checkpoint for growth settlement
+    /// @dev This is the exact same pattern as Uniswap fees:
+    ///      owed = (growthInsideNow - growthInsideLast) * liquidity / Q128, then checkpoint growthInsideLast = growthInsideNow.
+    ///
+    ///      We checkpoint *before* liquidity changes (see `CoreHook._beforeAddLiquidity/_beforeRemoveLiquidity`) to ensure:
+    ///      - no retroactive capture (new liquidity cannot claim historical accrual), and
+    ///      - fair attribution across partial adds/removes.
     /// @param poolId The pool ID
     /// @param tickLower The lower tick
     /// @param tickUpper The upper tick
@@ -241,6 +287,7 @@ library VTSPositionLib {
         PoolId poolId,
         int24 tickLower,
         int24 tickUpper,
+        int24 tickCurrent,
         uint128 liquidity,
         uint256 global0,
         uint256 global1,
@@ -249,7 +296,8 @@ library VTSPositionLib {
         uint8 snapField0,
         uint8 snapField1
     ) private returns (uint256 add0, uint256 add1) {
-        (uint256 inside0, uint256 inside1) = _growthInside(poolId, tickLower, tickUpper, global0, global1, outsideMap);
+        (uint256 inside0, uint256 inside1) =
+            _growthInside(poolId, tickLower, tickUpper, tickCurrent, global0, global1, outsideMap);
 
         // Read last snapshots based on field identifier
         uint256 lastSnap0;
@@ -276,14 +324,16 @@ library VTSPositionLib {
             pa.coverageUseGrowthInsideLast.token1 = inside1;
         }
 
-        uint256 d0 = inside0 - lastSnap0;
-        uint256 d1 = inside1 - lastSnap1;
-        if (liquidity > 0) {
-            if (d0 > 0) {
-                add0 = FullMath.mulDiv(d0, uint256(liquidity), FixedPoint128.Q128);
-            }
-            if (d1 > 0) {
-                add1 = FullMath.mulDiv(d1, uint256(liquidity), FixedPoint128.Q128);
+        unchecked {
+            uint256 d0 = inside0 - lastSnap0;
+            uint256 d1 = inside1 - lastSnap1;
+            if (liquidity > 0) {
+                if (d0 > 0) {
+                    add0 = FullMath.mulDiv(d0, uint256(liquidity), FixedPoint128.Q128);
+                }
+                if (d1 > 0) {
+                    add1 = FullMath.mulDiv(d1, uint256(liquidity), FixedPoint128.Q128);
+                }
             }
         }
     }
@@ -297,6 +347,8 @@ library VTSPositionLib {
     {
         Position memory pos = s.positions[positionId];
         PoolId poolId = pos.poolId;
+        // We must branch on the current tick to compute "inside growth" correctly, per Uniswap's `getFeeGrowthInside`.
+        (, int24 tickCurrent,,) = StateLibrary.getSlot0(poolManager, poolId);
         uint128 liq = StateLibrary.getPositionLiquidity(poolManager, poolId, PositionId.unwrap(positionId));
 
         PoolAccounting storage paPool = s.poolAccounting[poolId];
@@ -306,6 +358,7 @@ library VTSPositionLib {
             poolId,
             pos.tickLower,
             pos.tickUpper,
+            tickCurrent,
             liq,
             paPool.deficitGrowthGlobal.token0,
             paPool.deficitGrowthGlobal.token1,
@@ -326,7 +379,6 @@ library VTSPositionLib {
             } else {
                 uint256 netAdd0 = add0 - s0;
                 pa.cumulativeDeficit.token0 += netAdd0;
-                paPool.globalDeficit.token0 += netAdd0;
                 _updateSettlement(s, positionId, 0, -int256(s0)); // set total settlement amount to 0
             }
         }
@@ -339,7 +391,6 @@ library VTSPositionLib {
             } else {
                 uint256 netAdd1 = add1 - s1;
                 pa.cumulativeDeficit.token1 += netAdd1;
-                paPool.globalDeficit.token1 += netAdd1;
                 _updateSettlement(s, positionId, 1, -int256(s1)); // set total settlement amount to 0
             }
         }
@@ -354,6 +405,8 @@ library VTSPositionLib {
     {
         Position memory pos = s.positions[positionId];
         PoolId poolId = pos.poolId;
+        // Current tick is required for correct inside-growth branching (Uniswap-style).
+        (, int24 tickCurrent,,) = StateLibrary.getSlot0(poolManager, poolId);
         uint128 liq = StateLibrary.getPositionLiquidity(poolManager, poolId, PositionId.unwrap(positionId));
 
         PoolAccounting storage paPool = s.poolAccounting[poolId];
@@ -363,6 +416,7 @@ library VTSPositionLib {
             poolId,
             pos.tickLower,
             pos.tickUpper,
+            tickCurrent,
             liq,
             paPool.inflowGrowthGlobal.token0,
             paPool.inflowGrowthGlobal.token1,
@@ -490,6 +544,8 @@ library VTSPositionLib {
     function _settleCoverageUsage(VTSStorage storage s, IPoolManager poolManager, PositionId positionId) internal {
         Position memory pos = s.positions[positionId];
         PoolId poolId = pos.poolId;
+        // Current tick is required for correct inside-growth branching (Uniswap-style).
+        (, int24 tickCurrent,,) = StateLibrary.getSlot0(poolManager, poolId);
         uint128 liq = StateLibrary.getPositionLiquidity(poolManager, poolId, PositionId.unwrap(positionId));
 
         PoolAccounting storage paPool = s.poolAccounting[poolId];
@@ -499,6 +555,7 @@ library VTSPositionLib {
             poolId,
             pos.tickLower,
             pos.tickUpper,
+            tickCurrent,
             liq,
             paPool.coverageUseGrowthGlobal.token0,
             paPool.coverageUseGrowthGlobal.token1,
@@ -617,12 +674,15 @@ library VTSPositionLib {
         PoolId p = pos.poolId;
         PoolAccounting storage paPool = s.poolAccounting[p];
         PositionAccounting storage pa = s.positionAccounting[id];
+        // Snapshot uses current tick branching to prevent new positions inheriting historical tick-indexed growth.
+        (, int24 tickCurrent,,) = StateLibrary.getSlot0(poolManager, p);
 
         // Deficit growth snapshot
         (uint256 d0, uint256 d1) = _growthInside(
             p,
             pos.tickLower,
             pos.tickUpper,
+            tickCurrent,
             paPool.deficitGrowthGlobal.token0,
             paPool.deficitGrowthGlobal.token1,
             s.deficitGrowthOutside
@@ -635,6 +695,7 @@ library VTSPositionLib {
             p,
             pos.tickLower,
             pos.tickUpper,
+            tickCurrent,
             paPool.inflowGrowthGlobal.token0,
             paPool.inflowGrowthGlobal.token1,
             s.inflowGrowthOutside
@@ -652,6 +713,7 @@ library VTSPositionLib {
             p,
             pos.tickLower,
             pos.tickUpper,
+            tickCurrent,
             paPool.coverageUseGrowthGlobal.token0,
             paPool.coverageUseGrowthGlobal.token1,
             s.coverageUseGrowthOutside

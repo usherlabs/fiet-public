@@ -186,16 +186,13 @@ contract VTSPositionLibTest is VTSLibTestBase {
         harness.setCumulativeDeficit(positionId, 100e18, 0);
         harness.setSettled(positionId, 0, 0);
         harness.setNetSettlementSinceLastMod(positionId, 0, 0);
-        harness.setGlobalDeficit(testPoolId, 100e18, 0);
         harness.setPoolNetSinceLastMod(testPoolId, 0, 0);
 
         int256 applied = harness.updateSettlement(positionId, 0, 150e18);
 
         (,, uint256 settled0,, uint256 deficit0,) = harness.getPositionAccounting(positionId);
-        (uint256 globalDeficit0,) = harness.getGlobalDeficit(testPoolId);
 
         assertEq(deficit0, 0, "deficit should be netted to zero");
-        assertEq(globalDeficit0, 0, "global deficit should be netted to zero");
         assertEq(settled0, 50e18, "remaining should be credited to settled");
         assertEq(applied, 50e18, "applied should be net of deficit cover");
     }

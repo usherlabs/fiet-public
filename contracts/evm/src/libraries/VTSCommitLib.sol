@@ -20,7 +20,6 @@ import {PoolId} from "../types/VTS.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
 import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
-import {console} from "forge-std/console.sol";
 
 /// @title VTSCommitLib
 /// @notice Commit and commitment deficit management helpers for VTS, operating on VTSStorage
@@ -291,9 +290,6 @@ library VTSCommitLib {
 
         // Signal USD value from new state
         uint256 signalUsd = _signalValue(newSignal.mmState, oracleHelper);
-        console.log("signalUsd", signalUsd);
-        console.log("settledUsd", settledUsd);
-        console.log("issuedUsd", issuedUsd);
 
         // Update commit state/expiry using verified signal
         commit.mmState = newSignal.mmState;

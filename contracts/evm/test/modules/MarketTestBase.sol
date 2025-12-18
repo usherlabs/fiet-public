@@ -382,6 +382,10 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
         // mock the calls that would be made to the factory when we interact with the market
         _mockFactoryCalls();
 
+        _addInitialLiquidityToPool();
+    }
+
+    function _addInitialLiquidityToPool() internal virtual {
         // add some liquidity to the pool
         modifyLiquidityRouter.modifyLiquidity(
             corePoolKey,

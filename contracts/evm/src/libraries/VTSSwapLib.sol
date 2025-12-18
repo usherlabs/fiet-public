@@ -203,6 +203,18 @@ library VTSSwapLib {
         }
 
         uint256 o = token == 0 ? outsidePair.token0 : outsidePair.token1;
+        // Uniswap-style tick-cross flip:
+        // outside := global - outside
+        //
+        // Reference implementation:
+        // - Uniswap v4 core `Pool.crossTick()` in
+        //   `contracts/evm/lib/v4-periphery/lib/v4-core/src/libraries/Pool.sol`
+        //
+        // This invariant is what makes "inside growth" queryable later from:
+        // - global growth accumulator, and
+        // - the two boundary ticks' outside values,
+        // branching on current tick (see `VTSPositionLib._growthInsideSingle`,
+        // derived from Uniswap's `Pool.getFeeGrowthInside()`).
         uint256 newOutside = g - o;
         if (token == 0) {
             outsidePair.token0 = newOutside;

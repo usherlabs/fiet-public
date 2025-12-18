@@ -128,10 +128,6 @@ contract VTSPositionLibHarness {
             (s.poolAccounting[poolId].poolNetSinceLastMod.token0, s.poolAccounting[poolId].poolNetSinceLastMod.token1);
     }
 
-    function getGlobalDeficit(PoolId poolId) external view returns (uint256 d0, uint256 d1) {
-        return (s.poolAccounting[poolId].globalDeficit.token0, s.poolAccounting[poolId].globalDeficit.token1);
-    }
-
     // ============ Storage Setters (for test setup) ============
 
     /// @notice Sets up a pool with VTS configuration
@@ -172,12 +168,6 @@ contract VTSPositionLibHarness {
     function setNetSettlementSinceLastMod(PositionId id, int256 net0, int256 net1) external {
         s.positionAccounting[id].netSettlementSinceLastMod.token0 = net0;
         s.positionAccounting[id].netSettlementSinceLastMod.token1 = net1;
-    }
-
-    /// @notice Sets global deficit for a pool
-    function setGlobalDeficit(PoolId poolId, uint256 d0, uint256 d1) external {
-        s.poolAccounting[poolId].globalDeficit.token0 = d0;
-        s.poolAccounting[poolId].globalDeficit.token1 = d1;
     }
 
     /// @notice Sets pool net since last mod

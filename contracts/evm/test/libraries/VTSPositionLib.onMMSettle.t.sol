@@ -402,7 +402,6 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         harness.setCommitmentMax(positionId, 1000e18, 1000e18);
         harness.setSettled(positionId, 0, 0);
         harness.setCumulativeDeficit(positionId, 60e18, 40e18);
-        harness.setGlobalDeficit(testPoolId, 60e18, 40e18);
         harness.setPositionActive(positionId, false);
 
         // Deposit 100 each
@@ -430,7 +429,6 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         harness.setCommitmentMax(positionId, 100e18, 100e18);
         harness.setSettled(positionId, 80e18, 80e18);
         harness.setCumulativeDeficit(positionId, 30e18, 20e18);
-        harness.setGlobalDeficit(testPoolId, 30e18, 20e18);
         harness.setPositionActive(positionId, false);
 
         // Deposit 50 each

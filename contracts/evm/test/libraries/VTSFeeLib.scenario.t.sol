@@ -46,6 +46,10 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         nextSignalIndex = 0;
     }
 
+    function _addInitialLiquidityToPool() internal override {
+        // do nothing
+    }
+
     // ============================================================
     // Helper Functions
     // ============================================================
@@ -74,9 +78,24 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
             uint256 requiredSettlementAmount1
         )
     {
+        return _createCommittedPositionWithSignalAndLiquidity(signal, 1e10);
+    }
+
+    /// @notice Creates a committed position using a specific liquidity signal and custom liquidity
+    /// @param signal The liquidity signal to use for the commit
+    /// @param liquidity The liquidity amount to mint
+    function _createCommittedPositionWithSignalAndLiquidity(LiquiditySignal memory signal, uint256 liquidity)
+        internal
+        returns (
+            uint256 tokenId,
+            PositionId positionId,
+            uint256 requiredSettlementAmount0,
+            uint256 requiredSettlementAmount1
+        )
+    {
         bytes memory liquiditySignalBytes = abi.encode(signal);
         ModifyLiquidityParams memory liquidityParams =
-            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: int256(liquidity), salt: bytes32(0)});
 
         // Calculate settlement amounts first so we can mint and approve underlying tokens
         (requiredSettlementAmount0, requiredSettlementAmount1) =
@@ -101,6 +120,17 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
     /// @return positionId The position ID of the minted position
     function _commitAndMintFirstMM() internal returns (uint256 tokenId, PositionId positionId) {
         (tokenId, positionId,,) = _createCommittedPosition();
+    }
+
+    /// @notice Creates the first MM position with custom liquidity
+    /// @param liquidity The liquidity amount to mint
+    /// @return tokenId The commitment NFT token ID (always 1 for first commit)
+    /// @return positionId The position ID of the minted position
+    function _commitAndMintFirstMMWithLiquidity(uint256 liquidity)
+        internal
+        returns (uint256 tokenId, PositionId positionId)
+    {
+        (tokenId, positionId,,) = _createCommittedPositionWithSignalAndLiquidity(liquiditySignal, liquidity);
     }
 
     /// @notice Mints an additional MM position under an existing commit
@@ -361,32 +391,50 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         // Step 1: Add out-of-range DirectLP position
         // This creates positive net settlement for the DirectLP (it has deposited LCC tokens)
         // Out-of-range ticks ensure it won't be attributed coverage usage
-        _addDirectLP(600, 1200, int256(1e18));
+        _addDirectLP(600, 1200, int256(50e18));
 
-        // Step 2: Create MM and fund fee pot via slash
-        (uint256 tokenId,) = _commitAndMintFirstMM(); // idx0
+        // Step 2: Create MM position with meaningful liquidity (1000e18 gives ~10% share of pool)
+        // Note: Initial pool has 10000e18 liquidity, so MM needs comparable liquidity to accrue
+        // meaningful fees and deficits for slashing to occur
+        (uint256 tokenId, PositionId mmPositionId) = _commitAndMintFirstMMWithLiquidity(50e18);
 
-        uint256 potInitial = _feeHolderClaims(lccCurrency0);
+        // Record initial protocol fee accrued
+        (uint256 feeAccruedInitial0,) = _protocolFeeAccrued(corePoolKey.toId());
 
-        // Swap + coverage creates deficit on MM, triggering slash which funds pot
-        _swapCore(false, -int256(6e18));
+        // Step 3: Swap + coverage creates deficit on MM
+        // Swap must be large enough to create outflows exceeding MM's base settlement,
+        // but small enough to keep price within the -60 to 60 tick range (otherwise no in-range liquidity)
+        _swapCore(false, -int256(20e18));
         vm.prank(marketFactory);
-        vtsOrchestrator.incrementCoverage(corePoolKey.toId(), 3e18, 0);
+        vtsOrchestrator.incrementCoverage(corePoolKey.toId(), 10e18, 0);
 
-        uint256 potAfterSlash = _feeHolderClaims(lccCurrency0);
-        assertGt(potAfterSlash, potInitial, "Expected pot to be funded by MM slash");
+        // Step 4: Settle MM position growths to process coverage and queue slashes
+        // This updates protocolFeeAccrued internally (slashes are queued in pendingFeeAdj)
+        vtsOrchestrator.settlePositionGrowths(mmPositionId);
 
-        uint256 potBeforePoke = _feeHolderClaims(lccCurrency0);
+        // Step 5: Verify protocolFeeAccrued increased from MM slash
+        (uint256 feeAccruedAfterSlash0,) = _protocolFeeAccrued(corePoolKey.toId());
+        assertGt(feeAccruedAfterSlash0, feeAccruedInitial0, "Expected protocolFeeAccrued to increase from MM slash");
 
-        // Step 3: Poke DirectLP to trigger fee processing
-        // This calls processPositionFees which should allocate bonus from potAvail
+        uint256 slashedAmount = feeAccruedAfterSlash0 - feeAccruedInitial0;
+
+        // Step 6: Record DirectLP LCC balance before poke
+        uint256 directLPBalanceBefore = _selfLccBalance(lccCurrency0);
+
+        // Step 7: Poke DirectLP to trigger fee processing and receive bonus
+        // This calls processPositionFees which allocates bonus from potAvail
         _pokeDirectLP(600, 1200);
 
-        uint256 potAfterPoke = _feeHolderClaims(lccCurrency0);
+        uint256 directLPBalanceAfter = _selfLccBalance(lccCurrency0);
 
-        // Step 4: Verify bonus was allocated (pot should decrease)
+        // Step 8: Verify DirectLP received bonus from slashed fees
         // DirectLP has positive net settlement, so it should receive bonus from pot
-        assertLe(potAfterPoke, potBeforePoke, "DirectLP bonus should drain from pot (or leave unchanged)");
+        uint256 bonusReceived =
+            directLPBalanceAfter > directLPBalanceBefore ? directLPBalanceAfter - directLPBalanceBefore : 0;
+
+        assertGt(bonusReceived, 0, "DirectLP should receive bonus from MM slash");
+        // Bonus should be <= slashed amount (can't receive more than what was slashed)
+        assertLe(bonusReceived, slashedAmount, "Bonus should not exceed slashed amount");
 
         // Suppress unused variable warning
         tokenId;
