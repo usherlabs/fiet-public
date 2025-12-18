@@ -265,6 +265,13 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
         return s.commits[commitId].positions[positionIndex];
     }
 
+    /// @notice Get the next commit ID that will be assigned
+    /// @return The next commit ID (will be assigned on next commitSignal call)
+    /// @dev Returns s.nextCommitId + 1 because commitSignal uses pre-increment (++s.nextCommitId)
+    function nextCommitId() public view returns (uint256) {
+        return s.nextCommitId + 1;
+    }
+
     /// @notice Get commit by commitId
     /// @dev Note: Cannot return Commit directly due to mapping in struct
     /// @param commitId The commit identifier

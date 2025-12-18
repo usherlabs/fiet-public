@@ -56,7 +56,11 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
     function _createNewMMCommit() internal returns (uint256 tokenId, PositionId positionId) {
         require(nextSignalIndex < multiSignals.length, "No more signals available");
         LiquiditySignal memory signal = multiSignals[nextSignalIndex++];
+        // Get the next commit ID before creating the commit (for reference/verification)
+        uint256 expectedTokenId = vtsOrchestrator.nextCommitId();
         (tokenId, positionId,,) = _createCommittedPositionWithSignal(signal);
+        // Verify the tokenId matches what we expected
+        assertEq(tokenId, expectedTokenId, "TokenId should match nextCommitId");
     }
 
     /// @notice Creates a committed position using a specific liquidity signal

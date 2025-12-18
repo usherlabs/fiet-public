@@ -317,20 +317,23 @@ abstract contract MarketMakerTestBase is Test {
             lcc0, lcc1, address(positionManager), requiredSettlementAmount0, requiredSettlementAmount1
         );
 
+        // Get the next commit ID before committing (so we can reference it in prepareMint)
+        tokenId = positionManager.nextTokenId();
+
         // Commit and mint
         // Batch commit and mint
         MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](3);
         actions[0] = MMA.prepareCommit(signalBytes);
         actions[1] = MMA.prepareMint(
             corePoolKey,
-            1,
+            tokenId,
             liquidityParams.tickLower,
             liquidityParams.tickUpper,
             uint256(liquidityParams.liquidityDelta)
         );
         actions[2] = MMA.prepareSettle(
             corePoolKey,
-            1,
+            tokenId,
             0,
             -SafeCast.toInt128(requiredSettlementAmount0),
             -SafeCast.toInt128(requiredSettlementAmount1),
@@ -342,7 +345,6 @@ abstract contract MarketMakerTestBase is Test {
         bytes memory unlockData = abi.encode(actionsBytes, params);
         positionManager.modifyLiquidities(unlockData, block.timestamp + 3600);
 
-        tokenId = 1;
         positionId = positionManager.getPositionId(tokenId, 0);
     }
 }

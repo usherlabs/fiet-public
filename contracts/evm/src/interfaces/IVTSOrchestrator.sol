@@ -44,6 +44,10 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta {
     /// @return The PositionId
     function getPosition(uint256 commitId, uint256 positionIndex) external view returns (Position memory, PositionId);
 
+    /// @notice Get the next commit ID that will be assigned
+    /// @return The next commit ID (will be assigned on next commitSignal call)
+    function nextCommitId() external view returns (uint256);
+
     /// @notice Get commit information by commit ID
     /// @dev Note: Cannot return Commit directly due to mapping in struct
     /// @param commitId The commit identifier

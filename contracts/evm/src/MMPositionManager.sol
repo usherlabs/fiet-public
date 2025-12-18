@@ -145,6 +145,13 @@ contract MMPositionManager is
         _afterBatch();
     }
 
+    /// @notice Get the next token ID that will be assigned
+    /// @dev Returns the next commit ID from VTSOrchestrator, matching Uniswap PositionManager interface
+    /// @return The next token ID (will be assigned on next commitSignal call)
+    function nextTokenId() public view returns (uint256) {
+        return vtsOrchestrator.nextCommitId();
+    }
+
     // ═══════════════════════════════════════════════════════════════════════════
     // Action Routing (Comparison-Based)
     // ═══════════════════════════════════════════════════════════════════════════
