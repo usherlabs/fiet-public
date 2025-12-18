@@ -12,7 +12,6 @@ import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint12
 import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {RFSCheckpoint} from "../types/Checkpoint.sol";
-import {console} from "forge-std/console.sol";
 
 import {
     VTSStorage,
@@ -316,9 +315,6 @@ library VTSPositionLib {
             lastSnap1 = pa.coverageUseGrowthInsideLast.token1;
             pa.coverageUseGrowthInsideLast.token0 = inside0;
             pa.coverageUseGrowthInsideLast.token1 = inside1;
-
-            console.log("inside0", inside0);
-            console.log("inside1", inside1);
         }
 
         unchecked {
@@ -558,10 +554,6 @@ library VTSPositionLib {
             s.coverageUseGrowthOutside,
             2 // coverage growth type
         );
-
-        // TODO: Remove.
-        console.log("cov0", cov0);
-        console.log("cov1", cov1);
 
         if (cov0 > 0) {
             _applyCoverageBurn(s, poolManager, positionId, poolId, 0, cov0, liq);
@@ -1255,13 +1247,6 @@ library VTSPositionLib {
             int128 posRequiredSettlement0 = positionRequiredSettlementDelta.amount0();
             int128 posRequiredSettlement1 = positionRequiredSettlementDelta.amount1();
 
-            console.log("onMMSettle: amount0", amount0);
-            console.log("onMMSettle: amount1", amount1);
-            console.log("onMMSettle: rfs0", rfs0);
-            console.log("onMMSettle: rfs1", rfs1);
-            console.log("onMMSettle: posRequiredSettlement0", posRequiredSettlement0);
-            console.log("onMMSettle: posRequiredSettlement1", posRequiredSettlement1);
-
             if (amount0 < 0) {
                 // deposit: clamp by positive rfsDelta
                 // If rfs0 > 0, we can deposit up to rfs0 (clamp amount0 to -rfs0 minimum)
@@ -1491,10 +1476,6 @@ library VTSPositionLib {
             clearance = -minValue; // negative clearance reduces positive delta
         }
         // All other cases: clearance = 0 (no accounting)
-
-        console.log("calcDeltaClearance: owner delta", delta);
-        console.log("calcDeltaClearance: settle amount", amount);
-        console.log("calcDeltaClearance: clearance", clearance);
     }
 
     /// @notice Calculates liquidity units to seize for a given position and settlement delta

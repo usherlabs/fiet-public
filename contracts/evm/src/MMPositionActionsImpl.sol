@@ -27,7 +27,6 @@ import {MMHelpers} from "./libraries/MMHelpers.sol";
 import {Locker} from "v4-periphery/src/libraries/Locker.sol";
 import {DelegateCallGuard} from "./modules/DelegateCallGuard.sol";
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
-import {console} from "forge-std/console.sol";
 
 /// @title MMPositionActionsImpl
 /// @notice Implementation contract for MMPositionManager position operations
@@ -224,8 +223,6 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
             poolKey, tokenId, positionIndex, -amount0.toInt128(), -amount1.toInt128(), usePositionManagerBalance
         );
 
-        console.log("seizedLiquidityUnits", seizedLiquidityUnits);
-
         // Use returned maxima clamped settlementDelta
         bytes memory hookData = PositionModificationHookDataLib.encodeSeizure(
             tokenId, positionIndex, msgSender(), settlementDelta.amount0(), settlementDelta.amount1()
@@ -277,10 +274,6 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
             toBalanceDelta(amount0, amount1),
             isSeizing
         );
-
-        console.log("_SETTLE: isSeizing", isSeizing);
-        console.log("_SETTLE: currency0 amount", settlementDelta.amount0());
-        console.log("_SETTLE: currency1 amount", settlementDelta.amount1());
 
         Currency underlying0 = _lccToUnderlyingCurrency(poolKey.currency0);
         Currency underlying1 = _lccToUnderlyingCurrency(poolKey.currency1);
@@ -523,16 +516,10 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
         // Get protocol delta credits (address(this))
         (uint256 credit0, uint256 credit1) = _getFullCreditPair(underlying0, underlying1, address(this));
 
-        // TODO: Remove this
-        console.log("credit0", credit0);
-        console.log("credit1", credit1);
-
         if (credit0 > 0 || credit1 > 0) {
             if (shouldTake) {
                 // WITHDRAW: Move credits out as tokens
                 // Protocol owes user → withdraw to locker via _settle
-                console.log("SETTLE FROM DELTAS: currency0", Currency.unwrap(underlying0));
-                console.log("SETTLE FROM DELTAS: currency1", Currency.unwrap(underlying1));
                 _settle(poolKey, tokenId, positionIndex, credit0.toInt128(), credit1.toInt128(), !payerIsUser);
                 // if !payerIsUser, balance sync handled in _settle
             } else {
