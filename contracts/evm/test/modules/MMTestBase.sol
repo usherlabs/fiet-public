@@ -17,6 +17,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {VTSOrchestrator} from "../../src/VTSOrchestrator.sol";
 import {Test} from "forge-std/Test.sol";
 import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
+import {ILCC} from "../../src/interfaces/ILCC.sol";
 
 abstract contract MarketMakerTestBase is Test {
     using MarketMaker for MarketMaker.State;
@@ -185,98 +186,6 @@ abstract contract MarketMakerTestBase is Test {
         IERC20(lcc1).approve(positionManager, amount1);
     }
 
-    function _decommitAndWithdrawDeltas(
-        MMPositionManager positionManager,
-        PoolKey memory poolKey,
-        uint256 tokenId,
-        uint256 idx,
-        bool payerIsUser
-    ) internal {
-        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
-        actions[0] = MMA.prepareDecommit(tokenId);
-        actions[1] = MMA.prepareSettleFromDeltas(poolKey, tokenId, idx, payerIsUser, true);
-
-        // Use modifyLiquidities which handles unlocking automatically
-        (bytes memory actionsBytes, bytes[] memory params) = MMA.concatPrepared(actions);
-        bytes memory unlockData = abi.encode(actionsBytes, params);
-        positionManager.modifyLiquidities(unlockData, block.timestamp + 3600);
-    }
-
-    function _decreaseAndMintPositionFromDeltas(
-        MMPositionManager positionManager,
-        PoolKey memory poolKey,
-        uint256 tokenId,
-        uint256 positionIndex,
-        uint256 amountToDecrease,
-        int24 tickLower,
-        int24 tickUpper
-    ) internal {
-        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
-        actions[0] = MMA.prepareDecrease(poolKey, tokenId, positionIndex, amountToDecrease);
-        actions[1] = MMA.prepareMintFromDeltas(poolKey, tokenId, tickLower, tickUpper, true);
-
-        // Use modifyLiquidities which handles unlocking automatically
-        (bytes memory actionsBytes, bytes[] memory params) = MMA.concatPrepared(actions);
-        bytes memory unlockData = abi.encode(actionsBytes, params);
-        positionManager.modifyLiquidities(unlockData, block.timestamp + 3600);
-    }
-
-    function _decreaseAndSettlePositionFromDeltas(
-        MMPositionManager positionManager,
-        PoolKey memory poolKey,
-        uint256 tokenId,
-        uint256 positionIndexToDecrease,
-        uint256 positionIndexToSettle,
-        uint256 amountToDecrease,
-        bool payerIsUser
-    ) internal {
-        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
-        actions[0] = MMA.prepareDecrease(poolKey, tokenId, positionIndexToDecrease, amountToDecrease);
-        actions[1] = MMA.prepareSettleFromDeltas(poolKey, tokenId, positionIndexToSettle, payerIsUser, false);
-
-        // Use modifyLiquidities which handles unlocking automatically
-        (bytes memory actionsBytes, bytes[] memory params) = MMA.concatPrepared(actions);
-        bytes memory unlockData = abi.encode(actionsBytes, params);
-        positionManager.modifyLiquidities(unlockData, block.timestamp + 3600);
-    }
-
-    function _decreaseAndIncreasePositionFromDeltas(
-        MMPositionManager positionManager,
-        PoolKey memory poolKey,
-        uint256 tokenId,
-        uint256 positionIndexToDecrease,
-        uint256 positionIndexToIncrease,
-        uint256 amountToDecrease,
-        int24 tickLower,
-        int24 tickUpper
-    ) internal {
-        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
-        actions[0] = MMA.prepareDecrease(poolKey, tokenId, positionIndexToDecrease, amountToDecrease);
-        actions[1] = MMA.prepareIncreaseFromDeltas(poolKey, tokenId, positionIndexToIncrease, tickLower, tickUpper);
-
-        // Use modifyLiquidities which handles unlocking automatically
-        (bytes memory actionsBytes, bytes[] memory params) = MMA.concatPrepared(actions);
-        bytes memory unlockData = abi.encode(actionsBytes, params);
-        positionManager.modifyLiquidities(unlockData, block.timestamp + 3600);
-    }
-
-    function _seizeAndTakeDeltas(
-        MMPositionManager positionManager,
-        PoolKey memory poolKey,
-        uint256 tokenId,
-        uint256 positionIndexToSeize,
-        uint256 amount0ToSettle,
-        uint256 amount1ToSettle
-    ) internal {
-        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
-        actions[0] = MMA.prepareSeize(poolKey, tokenId, positionIndexToSeize, amount0ToSettle, amount1ToSettle, false);
-        actions[1] = MMA.prepareSettleFromDeltas(poolKey, tokenId, positionIndexToSeize, false, true); //take
-        // Use modifyLiquidities which handles unlocking automatically
-        (bytes memory actionsBytes, bytes[] memory params) = MMA.concatPrepared(actions);
-        bytes memory unlockData = abi.encode(actionsBytes, params);
-        positionManager.modifyLiquidities(unlockData, block.timestamp + 3600);
-    }
-
     /**
      * @notice Full workflow: calculates settlement amounts, approves tokens, and commits+mints a position
      * @param positionManager The MMPositionManager instance
@@ -314,7 +223,11 @@ abstract contract MarketMakerTestBase is Test {
 
         // Approve tokens
         _approveForPositionManager(
-            lcc0, lcc1, address(positionManager), requiredSettlementAmount0, requiredSettlementAmount1
+            ILCC(lcc0).underlying(),
+            ILCC(lcc1).underlying(),
+            address(positionManager),
+            requiredSettlementAmount0,
+            requiredSettlementAmount1
         );
 
         // Get the next commit ID before committing (so we can reference it in prepareMint)
