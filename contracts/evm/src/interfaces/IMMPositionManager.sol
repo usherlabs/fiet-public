@@ -45,4 +45,9 @@ interface IMMPositionManager {
         external
         view
         returns (MarketMaker.State memory state, uint256 expiresAt, uint256 positionCount, uint256 activePositionCount);
+
+    /// @notice Get the next token ID that will be assigned
+    /// @dev Returns the next commit ID from VTSOrchestrator, matching Uniswap PositionManager interface
+    /// @return The next token ID (will be assigned on next commitSignal call)
+    function nextTokenId() external view returns (uint256);
 }
