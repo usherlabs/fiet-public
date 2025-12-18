@@ -1,0 +1,7 @@
+lib/**
+out/**
+broadcast/**
+node_modules/**
+test/**
+cache/**
+

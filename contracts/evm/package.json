@@ -1,0 +1,22 @@
+{
+  "packageManager": "yarn@3.2.0",
+  "name": "fiet-protocol-solidity",
+  "version": "1.0.0",
+  "description": "Fiet Protocol Solidity Contracts",
+  "private": true,
+  "workspaces": [
+    "lib/oracle"
+  ],
+  "scripts": {
+    "lint": "solhint 'src/**/*.sol'",
+    "lint:fix": "solhint 'src/**/*.sol' --fix",
+    "format": "forge fmt",
+    "format:check": "forge fmt --check",
+    "slither": "slither .",
+    "mythril": "myth analyze src/",
+    "security": "yarn run slither && yarn run mythril"
+  },
+  "devDependencies": {
+    "solhint": "^4.0.0"
+  }
+}

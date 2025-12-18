@@ -1,7 +1,2 @@
-**/target
-*/.env
-
-.env
-abi.sol
-
 .DS_Store
+.cursor/debug.log

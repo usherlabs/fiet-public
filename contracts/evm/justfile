@@ -1,0 +1,290 @@
+# Fiet Protocol - Solidity Development Commands
+# Run `just` or `just help` to see available commands
+
+set dotenv-load
+set export
+
+# === Submodules ===
+mod exp "exp/justfile"
+
+# === Configuration ===
+mode := env_var_or_default("MODE", "LOCAL")
+network := env_var_or_default("NETWORK", "sepolia")
+broadcast := env_var_or_default("BROADCAST", "false")
+anvil_port := "8545"
+anvil_fork_url := "http://localhost:" + anvil_port
+script_dir := "script"
+
+# Computed values
+fork_source_rpc := if network == "sepolia" {
+    env_var("ARB_SEPOLIA_RPC_URL")
+} else if network == "arbitrum" {
+    env_var("ARB_MAINNET_RPC_URL")
+} else if network == "ethsepolia" {
+    env_var("ETH_SEPOLIA_RPC_URL")
+} else {
+    error("Invalid NETWORK value: " + network + ". Must be sepolia, arbitrum, or ethsepolia")
+}
+
+rpc_url := if mode == "LOCAL" { anvil_fork_url } else { fork_source_rpc }
+deployments := "deployments/" + network + "_deployments.json"
+broadcast_flag := if broadcast == "true" { "--broadcast" } else { "" }
+
+# TODO: Solve etherscan issue
+verify_flags := ""
+
+# === Help ===
+
+# Show all available commands
+[private]
+default:
+    @just --list --unsorted
+
+# Show detailed help message
+help:
+    @echo "🚀 Fiet Protocol - Solidity Development Commands"
+    @echo "================================================"
+    @echo ""
+    @echo "📋 Available Commands:"
+    @echo ""
+    @echo "🔧 Development Commands:"
+    @echo "  just dev                    - Complete development setup (setup create3, deploy tokens, contracts, create market)"
+    @echo "  just build                  - Build all Solidity contracts"
+    @echo "  just fork                   - Start Anvil fork for local development"
+    @echo "  just setup-create3          - Setup CREATE3Factory for local development (etch at canonical address)"
+    @echo ""
+    @echo "🚀 Deployment Commands:"
+    @echo "  just deploy-tokenA          - Deploy USDT mock token"
+    @echo "  just deploy-tokenB          - Deploy USDC mock token"
+    @echo "  just deploy                 - Deploy all core contracts"
+    @echo "  just read-deployment        - Read deployment information"
+    @echo ""
+    @echo "📊 Market Operations:"
+    @echo "  just create-market          - Create a new market"
+    @echo "  just pause-market           - Pause market operations"
+    @echo "  just add-liquidity          - Add liquidity to market"
+    @echo "  just remove-liquidity       - Remove liquidity from market"
+    @echo "  just swap                   - Execute a swap"
+    @echo ""
+    @echo "🔍 Quality & Security:"
+    @echo "  just install-deps           - Install project dependencies"
+    @echo "  just lint                   - Run linting checks"
+    @echo "  just lint-fix               - Fix linting issues"
+    @echo "  just format                 - Format code"
+    @echo "  just format-check           - Check code formatting"
+    @echo "  just security               - Run security analysis"
+    @echo "  just quality                - Run all quality checks (format, lint, security)"
+    @echo ""
+    @echo "⚙️  Configuration:"
+    @echo "  MODE=LOCAL|REMOTE           - Set deployment mode (default: LOCAL)"
+    @echo "  NETWORK=sepolia|arbitrum    - Set target network (default: sepolia)"
+    @echo "  BROADCAST=true|false        - Broadcast transactions (default: false)"
+    @echo ""
+    @echo "🧪 Experimental Commands:"
+    @echo "  just exp                    - Show experimental commands (submodule)"
+    @echo "  just exp help               - Show detailed experimental help"
+    @echo "  just exp wrap-eth-sepolia   - Wrap ETH on Arbitrum Sepolia"
+    @echo "  just exp create-market-sepolia - Create market on Arbitrum Sepolia"
+    @echo ""
+    @echo "💡 Examples:"
+    @echo "  just help                   - Show this help message"
+    @echo "  just dev                    - Complete development setup"
+    @echo "  just fork                   - Start local fork"
+    @echo "  NETWORK=arbitrum just deploy - Deploy to Arbitrum mainnet"
+    @echo "  MODE=REMOTE just deploy     - Deploy to remote network"
+    @echo "  BROADCAST=true just deploy - Actually broadcast transactions"
+    @echo ""
+    @echo "📖 For more information, see the documentation in docs/"
+
+# === Development Workflows ===
+
+# Complete development setup (setup create3, deploy tokens, contracts, create market)
+dev: setup-create3 deploy-tokenA deploy-tokenB deploy create-market
+
+# E2E flow: deploy everything and test swap
+# Note: Make sure fork is running and wallet has ETH, WETH, and USDC
+e2e: deploy-tokenA deploy-tokenB deploy create-market add-liquidity swap
+
+# === Build ===
+
+# Build all Solidity contracts
+build:
+    forge build
+
+# === Fork ===
+
+# Start Anvil fork for local development
+fork:
+    @echo "⛽ Starting anvil forked from Network: {{ network }}..."
+    anvil --fork-url {{ fork_source_rpc }} --port {{ anvil_port }}
+
+# === Setup ===
+
+# Setup CREATE3Factory for local development (persisted on Anvil via anvil_setCode)
+setup-create3:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ "{{ mode }}" != "LOCAL" ]; then
+        echo "setup-create3 is intended for MODE=LOCAL (Anvil). Skipping."
+        exit 0
+    fi
+    ADDR="0x9fBB3DF7C40Da2e5A0dE984fFE2CCB7C47cd0ABf"
+    echo "Checking CREATE3Factory code at $ADDR via {{ rpc_url }} ..."
+    EXISTING_CODE="$(cast code "$ADDR" --rpc-url {{ rpc_url }})"
+    if [ "$EXISTING_CODE" != "0x" ]; then
+        echo "CREATE3Factory already present at $ADDR (codesize > 0)."
+        exit 0
+    fi
+    echo "CREATE3Factory not found. Installing bytecode with anvil_setCode..."
+    BYTECODE="$(forge inspect CREATE3Factory deployedBytecode)"
+    cast rpc anvil_setCode "$ADDR" "$BYTECODE" --rpc-url {{ rpc_url }}
+    # Verify
+    NEW_CODE="$(cast code "$ADDR" --rpc-url {{ rpc_url }})"
+    if [ "$NEW_CODE" = "0x" ]; then
+        echo "Failed to install CREATE3Factory bytecode at $ADDR"
+        exit 1
+    fi
+    echo "CREATE3Factory installed at $ADDR"
+
+# === Deployments ===
+
+# Deploy USDT mock token
+deploy-tokenA:
+    forge script {{ script_dir }}/setup/MockERC20.s.sol:TokenScriptUSDT \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} {{ verify_flags }} -vvv
+
+# Deploy USDC mock token
+deploy-tokenB:
+    forge script {{ script_dir }}/setup/MockERC20.s.sol:TokenScriptUSDC \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} {{ verify_flags }} -vvv
+
+# Deploy all core contracts
+deploy: deploy-oracle deploy-libraries deploy-contracts
+
+deploy-libraries:
+    forge script {{ script_dir }}/deploy/DeployLibraries.s.sol:DeployLibraries \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+deploy-contracts:
+    forge script {{ script_dir }}/deploy/DeployContracts.s.sol:DeployContracts \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+# Deploy oracle contracts via Hardhat
+deploy-oracle:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ "{{ mode }}" = "LOCAL" ]; then
+        ORACLE_NETWORK_ARG="development"
+    elif [ "{{ network }}" = "ethsepolia" ]; then
+        ORACLE_NETWORK_ARG="sepolia"
+    elif [ "{{ network }}" = "sepolia" ]; then
+        ORACLE_NETWORK_ARG="arbitrumsepolia"
+    elif [ "{{ network }}" = "arbitrum" ]; then
+        ORACLE_NETWORK_ARG="arbitrumone"
+    else
+        ORACLE_NETWORK_ARG="{{ network }}"
+    fi
+    echo "Deploying oracle to network: $ORACLE_NETWORK_ARG"
+    cp ./oracle/hardhat.custom.config.ts ./lib/oracle/hardhat.fiet.config.ts
+    cd lib/oracle && npx hardhat --config ./hardhat.fiet.config.ts deploy --network "$ORACLE_NETWORK_ARG" --tags deploy --reset
+
+# Read deployment information
+read-deployment:
+    forge script {{ script_dir }}/ReadDeployment.s.sol \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} {{ verify_flags }} -vvv
+
+# === Market Operations ===
+
+# Create a new market
+create-market:
+    forge script {{ script_dir }}/CreateMarket.s.sol \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+# Pause market operations
+pause-market:
+    forge script {{ script_dir }}/PauseMarket.s.sol \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+# Transfer ownership
+transfer-ownership:
+    forge script {{ script_dir }}/TransferOwnership.s.sol \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+# Add liquidity to market
+add-liquidity:
+    forge script {{ script_dir }}/AddLiquidity.s.sol \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+# Remove liquidity from market
+remove-liquidity:
+    forge script {{ script_dir }}/RemoveLiquidity.s.sol \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+# Execute a swap
+swap:
+    forge script {{ script_dir }}/SwapV4.s.sol \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+# Unwrap all LCC tokens
+unwrap-all:
+    forge script {{ script_dir }}/UnwrapLCC.s.sol \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+# === Quality & Security ===
+
+# Install project dependencies
+install-deps:
+    yarn install
+
+# Run linting checks
+lint:
+    yarn run lint
+
+# Fix linting issues
+lint-fix:
+    yarn run lint:fix
+
+# Format code
+format:
+    yarn run format
+
+# Check code formatting
+format-check:
+    yarn run format:check
+
+# Run security analysis
+security:
+    yarn run security
+
+# Run all quality checks (format, lint, security)
+quality: format-check lint security
+
+# === CLI Utilities ===
+
+# Read proxy PoolId from Core PoolId
+core-to-proxy core_pool_id:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ADDRESS=$(jq -r '.marketFactory' {{ deployments }})
+    echo "Reading coreToProxy for CORE_POOL_ID={{ core_pool_id }} on {{ network }} via $ADDRESS"
+    cast call "$ADDRESS" "coreToProxy(bytes32)(bytes32)" {{ core_pool_id }} --rpc-url {{ rpc_url }}
+
+# Read hook address from Proxy PoolId
+proxy-to-hook proxy_pool_id:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ADDRESS=$(jq -r '.marketFactory' {{ deployments }})
+    echo "Reading proxyToHook for PROXY_POOL_ID={{ proxy_pool_id }} on {{ network }} via $ADDRESS"
+    cast call "$ADDRESS" "proxyToHook(bytes32)(address)" {{ proxy_pool_id }} --rpc-url {{ rpc_url }}
