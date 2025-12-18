@@ -110,7 +110,7 @@ library VTSPositionLib {
     /// @param id The position id
     /// @param tokenIndex The token index (0 or 1)
     /// @param delta The delta of the settlement
-    /// @return applied The applied delta to the total settlement amount
+    /// @return applied The total amount applied (deficit coverage + settled increase)
     function _updateSettlement(VTSStorage storage s, PositionId id, uint8 tokenIndex, int256 delta)
         internal
         returns (int256 applied)
@@ -132,6 +132,7 @@ library VTSPositionLib {
             return 0;
         }
         uint256 next = cur;
+        uint256 deficitCoverage = 0; // Track total amount used for deficit netting
 
         if (delta > 0) {
             // Auto-net any lingering deficit first
@@ -143,6 +144,7 @@ library VTSPositionLib {
                     uint256 gD = paPool.globalDeficit.get(tokenIndex);
                     paPool.globalDeficit.set(tokenIndex, cover <= gD ? (gD - cover) : 0);
                     delta -= int256(cover);
+                    deficitCoverage += cover; // Accumulate deficit coverage
                 }
             }
 
@@ -153,6 +155,7 @@ library VTSPositionLib {
                 if (coverCd > 0) {
                     pa.commitmentDeficit.set(tokenIndex, cd - coverCd);
                     delta -= int256(coverCd);
+                    deficitCoverage += coverCd; // Accumulate deficit coverage
                 }
             }
 
@@ -176,17 +179,22 @@ library VTSPositionLib {
         pa.settled.set(tokenIndex, next);
         pa.cumulativeDeficit.set(tokenIndex, cumulativeDef);
 
-        applied = next.toInt256() - cur.toInt256(); // output delta
+        int256 settledDelta = next.toInt256() - cur.toInt256(); // Actual change to settled storage
 
-        // Accrue persistent nets since last fee finalisation
-        pa.netSettlementSinceLastMod.set(tokenIndex, netSinceLastMod + applied);
-        if (applied >= 0) {
-            paPool.poolNetSinceLastMod.set(tokenIndex, poolNetSinceLastMod + uint256(applied));
+        // Accrue persistent nets since last fee finalisation (uses settledDelta, not total)
+        pa.netSettlementSinceLastMod.set(tokenIndex, netSinceLastMod + settledDelta);
+        if (settledDelta >= 0) {
+            paPool.poolNetSinceLastMod.set(tokenIndex, poolNetSinceLastMod + uint256(settledDelta));
         } else {
-            uint256 dec = uint256(-applied);
+            uint256 dec = uint256(-settledDelta);
             uint256 curPoolNet = poolNetSinceLastMod;
             paPool.poolNetSinceLastMod.set(tokenIndex, dec > curPoolNet ? 0 : (curPoolNet - dec));
         }
+
+        // Return total consumed: deficit coverage + settled change
+        // Deposits (positive delta to _updateSettlement): returns positive value (deficitCoverage + settledDelta, both ≥ 0)
+        // Withdrawals (negative delta to _updateSettlement): returns negative value (0 + negative settledDelta)
+        applied = int256(deficitCoverage) + settledDelta;
     }
 
     // --------------------------------------------------
@@ -1183,9 +1191,8 @@ library VTSPositionLib {
                     if (amount0 < maxDeposit0) {
                         amount0 = maxDeposit0;
                     }
-                    _updateSettlement(s, positionId, 0, -amount0);
-                    // need to use amount settled rather than 'applied' delta
-                    amount0 = -amount0; //get abs value of amount0 settled
+                    // Return value is total (deficit coverage + settled increase)
+                    amount0 = _updateSettlement(s, positionId, 0, -amount0);
                 } else {
                     // No RFS requirement for token0, don't deposit
                     amount0 = 0;
@@ -1214,9 +1221,8 @@ library VTSPositionLib {
                     if (amount1 < maxDeposit1) {
                         amount1 = maxDeposit1;
                     }
-                    _updateSettlement(s, positionId, 1, -amount1);
-                    // use amount settled instead of applied amount since we need the amount actually settled by the seizer of the position
-                    amount1 = -amount1; //get abs value of amount1 settled
+                    // Return value is total (deficit coverage + settled increase)
+                    amount1 = _updateSettlement(s, positionId, 1, -amount1);
                 } else {
                     // No RFS requirement for token1, clamp deposit to 0
                     amount1 = 0;
