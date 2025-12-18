@@ -1,0 +1,49 @@
+---
+title: Fiet Markets
+description: Discover how Fiet Markets enable efficient, liquid trading in DeFi with dynamic liquidity.
+---
+
+Fiet Markets are trading pools within the Fiet Protocol that extend decentralised finance (DeFi) automated market makers (AMMs), such as Uniswap, to offer deeper liquidity and lower trading costs. By allowing market makers to commit verified reserve liquidity without locking funds, Fiet Markets facilitate efficient trading for cryptocurrencies, local stablecoins, and real-world assets.
+
+<Card icon="chart-line" horizontal>
+Fiet Markets reduce slippage and costs by integrating virtual liquidity verified through zkTLS proofs.
+</Card>
+
+## What Are Fiet Markets?
+
+Fiet Markets pair two assets, like USDC and AUDD, in an AMM pool using Liquidity Commitment Certificates (LCCs) to represent committed liquidity. Unlike traditional AMMs, where liquidity is locked on-chain, Fiet uses *virtual liquidity* — verified reserves held in banks or exchanges—to enable trading. Market makers settle funds only when demand requires, ensuring capital efficiency while maintaining low-slippage trading for users.
+
+## Key Features
+
+- **Dynamic Liquidity**: Market makers commit reserves via zkTLS, settling funds based on market demand, reducing opportunity costs.
+- **Low Slippage**: Virtual liquidity creates deeper pools, minimising price impact for large trades.
+- **Permissionless Creation**: Anyone can create a Fiet Market, fostering open access.
+- **Regulatory Alignment**: LCCs are non-transferable, ensuring compliance within Fiet’s decentralised exchange (DEX).
+
+<Note>
+Fiet Markets integrate with AMMs like Uniswap v4 on Arbitrum, with plans for cross-chain expansion.
+</Note>
+
+## How They Work
+
+Fiet Markets operate by combining settled on-chain funds with verified off-chain reserves. For example, in a USDC/ETH market, a market maker might commit \$1 million in USD reserves, settling only 2% (\$20,000) on-chain as LCCs (lcc-USDC/lcc-ETH). Traders use these LCCs in Fiet’s integrated DEX, while the Value-to-Signal (VTS) model adjusts settlements to match demand, ensuring liquidity without locking large capital.
+
+<Frame caption="Fiet Market Structure">
+  <img src="/images/Fiet-Protocol---Simple-5x.jpg" alt="Fiet Market Structure Diagram" width="100%" height="auto" />
+</Frame>
+
+## Sequence Diagram
+
+<Frame caption="Fiet Market Structure">
+  <img src="/images/Fiet-for-Traders---Sequence-Diagram.jpg" alt="Fiet for Traders Sequence Diagram" width="100%" height="auto" />
+</Frame>
+
+## Learn More
+
+Explore related concepts and dive deeper:
+
+- **[Verified Reserve Liquidity](/concepts/verified-reserve-liquidity)**: Learn how liquidity is verified with zkTLS.
+- **[Liquidity Commitment Certificates](/concepts/liquidity-commitment-certificates)**: Understand LCCs’ role in trading.
+- **[Use Cases](/use-cases)**: See how Fiet Markets power foreign exchange and real-world assets.
+- **[Technical Specification](/resources/technical-specification)**: Review detailed market mechanics.
+- **[Join the Community](https://go.usher.so/discord)**: Connect on Discord to discuss market opportunities.
