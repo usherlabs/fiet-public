@@ -354,45 +354,6 @@ library MMActionAdapter {
     // ============ CONVENIENCE METHODS (for backward compatibility) ============
 
     /**
-     * @notice Commits a signal (single action execution)
-     * @dev For backward compatibility - use prepareCommit + execute for batching
-     */
-    function commit(MMPositionManager mmpm, PoolKey memory poolKey, bytes memory liquiditySignal) internal {
-        PreparedAction[] memory prepared = new PreparedAction[](1);
-        poolKey; // poolKey no longer required for COMMIT_SIGNAL params
-        prepared[0] = prepareCommit(liquiditySignal);
-        execute(mmpm, prepared);
-    }
-
-    /**
-     * @notice Commits a signal with owner (single action execution)
-     * @dev For backward compatibility - use prepareCommitWithOwner + execute for batching
-     */
-    function commitWithOwner(
-        MMPositionManager mmpm,
-        PoolKey memory poolKey,
-        bytes memory liquiditySignal,
-        address owner
-    ) internal {
-        PreparedAction[] memory prepared = new PreparedAction[](1);
-        poolKey; // poolKey no longer required for COMMIT_SIGNAL params
-        prepared[0] = prepareCommitWithOwner(liquiditySignal, owner);
-        execute(mmpm, prepared);
-    }
-
-    /**
-     * @notice Mints a position (single action execution)
-     * @dev For backward compatibility - use prepareMint + execute for batching
-     */
-    function mint(MMPositionManager mmpm, PoolKey memory poolKey, uint256 tokenId, int24 tl, int24 tu, uint256 liq)
-        internal
-    {
-        PreparedAction[] memory prepared = new PreparedAction[](1);
-        prepared[0] = prepareMint(poolKey, tokenId, tl, tu, liq);
-        execute(mmpm, prepared);
-    }
-
-    /**
      * @notice Settles a position (single action execution)
      * @dev For backward compatibility - use prepareSettle + execute for batching
      */
@@ -412,18 +373,6 @@ library MMActionAdapter {
     }
 
     /**
-     * @notice Decreases liquidity (single action execution)
-     * @dev For backward compatibility - use prepareDecrease + execute for batching
-     */
-    function decrease(MMPositionManager mmpm, PoolKey memory poolKey, uint256 tokenId, uint256 idx, uint256 amt)
-        internal
-    {
-        PreparedAction[] memory prepared = new PreparedAction[](1);
-        prepared[0] = prepareDecrease(poolKey, tokenId, idx, amt);
-        executeWithUnlock(mmpm, prepared, block.timestamp + 3600);
-    }
-
-    /**
      * @notice Increases liquidity (single action execution)
      * @dev For backward compatibility - use prepareIncrease + execute for batching
      */
@@ -438,18 +387,6 @@ library MMActionAdapter {
     ) internal {
         PreparedAction[] memory prepared = new PreparedAction[](1);
         prepared[0] = prepareIncrease(poolKey, tokenId, positionIndex, tickLower, tickUpper, liquidity);
-        executeWithUnlock(mmpm, prepared, block.timestamp + 3600);
-    }
-
-    /**
-     * @notice Burns a position (single action execution)
-     * @dev For backward compatibility - use prepareBurn + execute for batching
-     */
-    function burn(MMPositionManager mmpm, PoolKey memory poolKey, uint256 tokenId, uint256 idx) internal {
-        PreparedAction[] memory prepared = new PreparedAction[](1);
-        prepared[0] = prepareBurn(poolKey, tokenId, idx);
-
-        // unlock pm and execute the actions
         executeWithUnlock(mmpm, prepared, block.timestamp + 3600);
     }
 
@@ -507,68 +444,12 @@ library MMActionAdapter {
     }
 
     /**
-     * @notice Decommits a position (single action execution)
-     * @dev For backward compatibility - use prepareDecommit + execute for batching
-     */
-    function decommit(MMPositionManager mmpm, uint256 tokenId) internal {
-        PreparedAction[] memory prepared = new PreparedAction[](1);
-        prepared[0] = prepareDecommit(tokenId);
-
-        // unlock the poolmanager and execute the action
-        executeWithUnlock(mmpm, prepared, block.timestamp + 3600);
-    }
-
-    /**
      * @notice Renews a signal (single action execution)
      * @dev For backward compatibility - use prepareRenew + execute for batching
      */
     function renew(MMPositionManager mmpm, uint256 tokenId, bytes memory liquiditySignal) internal {
         PreparedAction[] memory prepared = new PreparedAction[](1);
         prepared[0] = prepareRenew(tokenId, liquiditySignal);
-        execute(mmpm, prepared);
-    }
-
-    /**
-     * @notice Seizes a position (single action execution)
-     * @dev For backward compatibility - use prepareSeize + execute for batching
-     */
-    function seize(
-        MMPositionManager mmpm,
-        PoolKey memory poolKey,
-        uint256 tokenId,
-        uint256 idx,
-        uint256 a0,
-        uint256 a1,
-        bool usePositionManagerBalance
-    ) internal {
-        PreparedAction[] memory prepared = new PreparedAction[](1);
-        prepared[0] = prepareSeize(poolKey, tokenId, idx, a0, a1, usePositionManagerBalance);
-        execute(mmpm, prepared);
-    }
-
-    /**
-     * @notice Checkpoints a position (single action execution)
-     * @dev For backward compatibility - use prepareCheckpoint + execute for batching
-     */
-    function checkpoint(MMPositionManager mmpm, uint256 tokenId, uint256 positionIndex, bytes memory liquiditySignal)
-        internal
-    {
-        PreparedAction[] memory prepared = new PreparedAction[](1);
-        prepared[0] = prepareCheckpoint(tokenId, positionIndex, liquiditySignal);
-        execute(mmpm, prepared);
-    }
-
-    /**
-     * @notice Takes currency from delta credits (single action execution)
-     * @dev For backward compatibility - use prepareTake + execute for batching
-     * @param mmpm The MMPositionManager instance
-     * @param currency The currency to take (address(0) for native ETH)
-     * @param to The recipient address
-     * @param maxAmount The maximum amount to take (0 for max available)
-     */
-    function take(MMPositionManager mmpm, Currency currency, address to, uint256 maxAmount) internal {
-        PreparedAction[] memory prepared = new PreparedAction[](1);
-        prepared[0] = prepareTake(currency, to, maxAmount);
-        execute(mmpm, prepared);
+        executeWithUnlock(mmpm, prepared, block.timestamp + 3600);
     }
 }

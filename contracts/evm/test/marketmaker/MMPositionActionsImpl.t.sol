@@ -65,32 +65,6 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
 
         marketVTSConfiguration = IVTSOrchestrator(vtsOrchestrator).getMarketVTSConfiguration(corePoolKey.toId());
 
-        // approve the lccs to the mmPositionManager to be able to route tokens to the pool manager
-        // lcc0.approve(address(mmPositionManager), Constants.MAX_UINT256);
-        // lcc1.approve(address(mmPositionManager), Constants.MAX_UINT256);
-        // Mock the proxyHookToCurrencyPair function in order to make this caller appear to be an issuer
-        // when deploying the factory the mmposiiton manager will be provided and thus whitelsited
-        // but since we are mocking the factory, we need to mock a way to return the mmposition manager as an issuer
-        address[2] memory mockCurrencies = [address(lcc0.underlying()), address(lcc1.underlying())];
-        vm.mockCall(
-            marketFactory,
-            abi.encodeWithSelector(IMarketFactory.proxyHookToCurrencyPair.selector),
-            abi.encode(mockCurrencies)
-        );
-        // mock the factory to return the right core hook
-        vm.mockCall(
-            marketFactory, abi.encodeWithSelector(IMarketFactory.coreToProxy.selector), abi.encode(proxyPoolKey.toId())
-        );
-        // mock the factory to return the right proxy hook
-        vm.mockCall(marketFactory, abi.encodeWithSelector(IMarketFactory.proxyToHook.selector), abi.encode(proxyHook));
-
-        // mock liquidityHub.getFactory to return the mocked marketFactory
-        vm.mockCall(
-            liquidityHub,
-            abi.encodeWithSelector(ILiquidityHub.getFactory.selector, address(lcc0), address(lcc1)),
-            abi.encode(marketFactory)
-        );
-
         // mock the price oracles to return prices
         vm.mockCall(
             address(oracleHelper),
@@ -181,7 +155,15 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         uint256 positionIndex = 0;
 
         // create a new position with the default liquidity params and liquidity signal
-        createPosition(defaultlLiquidityParams, abi.encode(liquiditySignal), tokenId, positionIndex);
+        _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            defaultlLiquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
 
         // test conditions to ensure that a position was committed and minted and settled to
         // for commitment testing:
@@ -196,7 +178,7 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         assertEq(positionManager.ownerOf(tokenId), address(this));
 
         // for minting testing:
-        (Position memory positionAfter, PositionId positionId) = positionManager.getPosition(tokenId, positionIndex);
+        (Position memory positionAfter,) = positionManager.getPosition(tokenId, positionIndex);
         assertEq(positionAfter.owner, address(positionManager));
         assertEq(PoolId.unwrap(positionAfter.poolId), PoolId.unwrap(corePoolKey.toId()));
         assertEq(positionAfter.commitId, tokenId);
@@ -211,7 +193,15 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         uint256 positionIndex = 0;
 
         // create a new position with the default liquidity params and liquidity signal
-        createPosition(defaultlLiquidityParams, abi.encode(liquiditySignal), tokenId, positionIndex);
+        _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            defaultlLiquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
 
         // get underlying asset balance before burning a position
         uint256 token0BalanceBefore = Currency.wrap(lcc0.underlying()).balanceOf(address(this));
@@ -255,7 +245,15 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         uint256 positionIndex = 0;
 
         // create a new position with the default liquidity params and liquidity signal
-        createPosition(defaultlLiquidityParams, abi.encode(liquiditySignal), tokenId, positionIndex);
+        _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            defaultlLiquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
 
         // get underlying asset balance before decommitment
         uint256 token0BalanceBefore = Currency.wrap(lcc0.underlying()).balanceOf(address(this));
@@ -281,7 +279,15 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         uint256 positionIndex = 0;
 
         // create a new position with the default liquidity params and liquidity signal
-        createPosition(defaultlLiquidityParams, abi.encode(liquiditySignal), tokenId, positionIndex);
+        _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            defaultlLiquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
 
         // make settlements for the position
         uint256 settlementAmount = 1000000e18;
@@ -323,7 +329,15 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         uint256 positionIndex = 0;
 
         // create a new position with the default liquidity params and liquidity signal
-        createPosition(defaultlLiquidityParams, abi.encode(liquiditySignal), tokenId, positionIndex);
+        _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            defaultlLiquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
 
         // make settlements for the position
         uint256 settlementAmount = 1000000e18;
@@ -370,7 +384,15 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         uint256 positionIndex = 0;
 
         // create a new position with the default liquidity params and liquidity signal
-        createPosition(defaultlLiquidityParams, abi.encode(liquiditySignal), tokenId, positionIndex);
+        _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            defaultlLiquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
         (, PositionId positionId) = positionManager.getPosition(tokenId, positionIndex);
 
         // perform a swap in order to drain some liquidity from the pool and cause a deficit for the market maker

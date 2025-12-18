@@ -744,7 +744,7 @@ contract ProxyHookTest is MarketVaultBase {
 
 contract DifferentTokenDecimalsProxyHookTest is MarketTestBase {
     // Make currency A 8 decimal places and currency B 18 decimal places
-    function _deployCurrencies() internal override {
+    function _deployUnderlyingCurrencies() internal override {
         uint256 mintAmount = 2 ** 255;
         MockERC20 tokenA = new MockERC20("TestA", "A", 8);
         tokenA.mint(address(this), mintAmount);
