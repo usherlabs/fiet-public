@@ -218,8 +218,10 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
         vtsOrchestrator.onSeize(tokenId, positionIndex);
         TransientSlots.setSeizedPositionId(positionId);
 
-        uint256 seizedLiquidityUnits =
-            _settle(poolKey, tokenId, positionIndex, amount0.toInt128(), amount1.toInt128(), usePositionManagerBalance);
+        // negative amounts since we are settling into a position
+        uint256 seizedLiquidityUnits = _settle(
+            poolKey, tokenId, positionIndex, -amount0.toInt128(), -amount1.toInt128(), usePositionManagerBalance
+        );
 
         BalanceDelta seizureSettlementDelta = LiquidityUtils.safeToBalanceDelta(amount0, amount1, true, true);
         bytes memory hookData = PositionModificationHookDataLib.encodeSeizure(
