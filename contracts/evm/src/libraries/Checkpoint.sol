@@ -53,13 +53,6 @@ library CheckpointLibrary {
         // Normal RFS path: check checkpoint + grace period
         RFSCheckpoint memory checkpoint = getCheckpoint(s, positionId);
 
-        // TODO: Remove this after debugging
-        console.log("checkpoint.isOpen", checkpoint.isOpen);
-        console.log("revertOnFalse", revertOnFalse);
-        console.log("checkpoint.timeOfLastTransition", checkpoint.timeOfLastTransition);
-        console.log("checkpoint.gracePeriodExtension0", checkpoint.gracePeriodExtension0);
-        console.log("checkpoint.gracePeriodExtension1", checkpoint.gracePeriodExtension1);
-
         if (!checkpoint.isOpen) {
             if (revertOnFalse) {
                 revert Errors.RFSNotOpenForPosition(positionId);

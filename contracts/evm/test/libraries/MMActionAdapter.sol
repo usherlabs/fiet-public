@@ -215,11 +215,12 @@ library MMActionAdapter {
         uint256 tokenId,
         uint256 positionIndex,
         uint256 amount0,
-        uint256 amount1
+        uint256 amount1,
+        bool usePositionManagerBalance
     ) internal pure returns (PreparedAction memory) {
         return PreparedAction({
             action: bytes1(uint8(MMActions.SEIZE_POSITION)),
-            params: abi.encode(poolKey, tokenId, positionIndex, amount0, amount1)
+            params: abi.encode(poolKey, tokenId, positionIndex, amount0, amount1, usePositionManagerBalance)
         });
     }
 
@@ -537,10 +538,11 @@ library MMActionAdapter {
         uint256 tokenId,
         uint256 idx,
         uint256 a0,
-        uint256 a1
+        uint256 a1,
+        bool usePositionManagerBalance
     ) internal {
         PreparedAction[] memory prepared = new PreparedAction[](1);
-        prepared[0] = prepareSeize(poolKey, tokenId, idx, a0, a1);
+        prepared[0] = prepareSeize(poolKey, tokenId, idx, a0, a1, usePositionManagerBalance);
         execute(mmpm, prepared);
     }
 
