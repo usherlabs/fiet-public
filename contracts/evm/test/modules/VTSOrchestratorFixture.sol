@@ -188,8 +188,23 @@ abstract contract VTSOrchestratorFixture is MarketTestBase, MarketMakerTestBase 
         }
     }
 
-    /// @notice Helper to create a committed position
-    function _createCommittedPosition()
+    /// @notice Helper to create a committed position with fully configurable parameters
+    /// @param signal The liquidity signal to use for the commit
+    /// @param tickLower Lower tick of the position range
+    /// @param tickUpper Upper tick of the position range
+    /// @param liquidity The liquidity amount to mint
+    /// @param salt The salt for the position
+    /// @return tokenId The commitment NFT token ID
+    /// @return positionId The position ID of the minted position
+    /// @return requiredSettlementAmount0 The amount of token0 settled
+    /// @return requiredSettlementAmount1 The amount of token1 settled
+    function _createCommittedPosition(
+        LiquiditySignal memory signal,
+        int24 tickLower,
+        int24 tickUpper,
+        uint256 liquidity,
+        bytes32 salt
+    )
         internal
         returns (
             uint256 tokenId,
@@ -198,9 +213,10 @@ abstract contract VTSOrchestratorFixture is MarketTestBase, MarketMakerTestBase 
             uint256 requiredSettlementAmount1
         )
     {
-        bytes memory liquiditySignalBytes = abi.encode(liquiditySignal);
-        ModifyLiquidityParams memory liquidityParams =
-            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
+        bytes memory liquiditySignalBytes = abi.encode(signal);
+        ModifyLiquidityParams memory liquidityParams = ModifyLiquidityParams({
+            tickLower: tickLower, tickUpper: tickUpper, liquidityDelta: int256(liquidity), salt: salt
+        });
 
         // Calculate settlement amounts first so we can mint and approve underlying tokens
         (requiredSettlementAmount0, requiredSettlementAmount1) =
@@ -218,6 +234,44 @@ abstract contract VTSOrchestratorFixture is MarketTestBase, MarketMakerTestBase 
             address(lcc0),
             address(lcc1)
         );
+    }
+
+    /// @notice Helper to create a committed position with default signal and salt (backwards compatible)
+    /// @param tickLower Lower tick of the position range
+    /// @param tickUpper Upper tick of the position range
+    /// @param liquidity The liquidity amount to mint
+    /// @return tokenId The commitment NFT token ID
+    /// @return positionId The position ID of the minted position
+    /// @return requiredSettlementAmount0 The amount of token0 settled
+    /// @return requiredSettlementAmount1 The amount of token1 settled
+    function _createCommittedPosition(int24 tickLower, int24 tickUpper, uint256 liquidity)
+        internal
+        returns (
+            uint256 tokenId,
+            PositionId positionId,
+            uint256 requiredSettlementAmount0,
+            uint256 requiredSettlementAmount1
+        )
+    {
+        return _createCommittedPosition(liquiditySignal, tickLower, tickUpper, liquidity, bytes32(0));
+    }
+
+    /// @notice Helper to create a committed position with all defaults (backwards compatible)
+    /// @dev Uses default signal, default range (-60, 60), and default liquidity (1e10)
+    /// @return tokenId The commitment NFT token ID
+    /// @return positionId The position ID of the minted position
+    /// @return requiredSettlementAmount0 The amount of token0 settled
+    /// @return requiredSettlementAmount1 The amount of token1 settled
+    function _createCommittedPosition()
+        internal
+        returns (
+            uint256 tokenId,
+            PositionId positionId,
+            uint256 requiredSettlementAmount0,
+            uint256 requiredSettlementAmount1
+        )
+    {
+        return _createCommittedPosition(liquiditySignal, -60, 60, 1e10, bytes32(0));
     }
 
     /// @notice Helper to prepare actions for committing and minting WITHOUT settlement

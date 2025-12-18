@@ -607,7 +607,7 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
      * @dev Internal implementation of cancelWithQueue without access control
      * @param lcc The LCC token address
      * @param from The address to cancel tokens from
-     * @param principalAmount The total principal amount being cancelled (full amount is burned from `from`)
+     * @param principalAmount The total principal amount being cancelled (cancellable amount is burned from `from`)
      * @param queueAmount The amount to queue for settlement (portion of principalAmount queued for `recipient`)
      * @param recipient The recipient of the queued settlement
      */
@@ -625,8 +625,10 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
             revert Errors.InvalidAmount(queueAmount, principalAmount);
         }
 
-        // Burn the full principal amount from the sender (issuer burn path, skip bucket accounting)
-        _burn(lcc, from, 0, principalAmount, true);
+        uint256 cancelAmount = principalAmount - queueAmount;
+
+        // Burn the full a portion of the principal amount from the sender (issuer burn path, skip bucket accounting)
+        _burn(lcc, from, 0, cancelAmount, true);
 
         // Queue a portion for settlement to the specified recipient
         if (queueAmount > 0) {

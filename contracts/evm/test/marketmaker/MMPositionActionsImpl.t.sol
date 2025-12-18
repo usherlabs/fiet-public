@@ -74,7 +74,7 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         address[2] memory mockCurrencies = [address(lcc0.underlying()), address(lcc1.underlying())];
         vm.mockCall(
             marketFactory,
-            abi.encodeWithSelector(IMarketFactory.proxyHookToCurrencyPair.selector, address(mmPositionManager)),
+            abi.encodeWithSelector(IMarketFactory.proxyHookToCurrencyPair.selector),
             abi.encode(mockCurrencies)
         );
         // mock the factory to return the right core hook
@@ -224,7 +224,7 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         // Batch burn and settle from deltas
         // The burn flow:
         // 1. LCCs are cancelled on receipt (planCancelWithQueue → executePlannedCancel)
-        // 2. Underlying credits are created on MMPM (accountUnderlyingSettlementDeltaChange)
+        // 2. Underlying credits are created on MMPM (accountUnderlyingSettlementDelta)
         // 3. settleFromDeltas with payerIsUser=true reads MMPM's underlying credits
         // 4. _settle() withdraws underlying from the vault to the user
         MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
@@ -377,14 +377,17 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         // forcing their position to be open for RFS
         swapRouter.swap(
             proxyPoolKey,
-            SwapParams({zeroForOne: true, amountSpecified: -1e25, sqrtPriceLimitX96: ZERO_FOR_ONE_LIMIT}),
+            SwapParams({zeroForOne: true, amountSpecified: -1e18, sqrtPriceLimitX96: ZERO_FOR_ONE_LIMIT}),
             PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}),
             ZERO_BYTES
         );
 
         // Now check if RFS is open (should be if deficit > settled)
-        (bool rfsOpen,) = vtsOrchestrator.calcRFS(positionId, false);
-        assertEq(rfsOpen, true);
+        (bool rfsOpen, BalanceDelta rfsDelta) = vtsOrchestrator.calcRFS(positionId, false);
+        assertEq(rfsOpen, true, "RFS should be open");
+
+        console.log("rfsDelta.amount0()", rfsDelta.amount0());
+        console.log("rfsDelta.amount1()", rfsDelta.amount1());
 
         // log the positions deficit amounts
         (uint256 settledAmount0, uint256 settledAmount1) = vtsOrchestrator.getPositionSettledAmounts(positionId);
@@ -395,7 +398,7 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         vm.warp(block.timestamp + 300000 + 1);
 
         // approve the position manager to spend the underlying assets
-        uint256 settleAmount0 = 5999709018652707;
+        uint256 settleAmount0 = 5999709018652707; // The settle amounts don't matter, as partial seizure is valid.
         uint256 settleAmount1 = 5999709018652707;
 
         // transfer enough underlying assets to the guarantor to settle the position
@@ -412,10 +415,12 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
 
         assertEq(Currency.wrap(address(lcc0)).balanceOf(address(guarantor)), 0);
 
-        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](3);
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](4);
         actions[0] = MMA.prepareSeize(corePoolKey, tokenId, positionIndex, settleAmount0, settleAmount1, false);
         actions[1] = MMA.prepareSettleFromDeltas(corePoolKey, tokenId, positionIndex, true, true); //take
-        actions[2] = MMA.prepareTake(Currency.wrap(address(lcc0)), address(guarantor), 0); // collect all lcc fees
+        // Take both LCCs into wallet for future ops.
+        actions[2] = MMA.prepareTake(Currency.wrap(address(lcc0)), address(guarantor), 0); // collect all lccs directly.
+        actions[3] = MMA.prepareTake(Currency.wrap(address(lcc1)), address(guarantor), 0); // collect all lccs directly.
         // Use modifyLiquidities which handles unlocking automatically
         (bytes memory actionsBytes, bytes[] memory params) = MMA.concatPrepared(actions);
         bytes memory unlockData = abi.encode(actionsBytes, params);
@@ -428,7 +433,7 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
 
         // validate some liquidity was taken from the original position
         assertLt(uint256(positionAfterSeize.liquidity), uint256(positionBeforeSeize.liquidity));
-        // validate some lcc balance as fees
+        // validate lcc balance
         assertGt(Currency.wrap(address(lcc0)).balanceOf(address(guarantor)), 0);
     }
 }

@@ -270,13 +270,11 @@ library LiquidityUtils {
         uint256 apportionedS0 = FullMath.mulDiv(totalSettlement0, liquidityRatio, ONE_WAD);
         uint256 apportionedS1 = FullMath.mulDiv(totalSettlement1, liquidityRatio, ONE_WAD);
 
-        // Excess = max(apportioned, seizureSettlementDelta)
-        // Seizure calculation ensures settlement of the greater side, always results in apportionedS_A = seizureS_A.
-        // Therefore, the reward dervies from the counterparty asset, which is also apportioned.
-        uint256 seizureS0 = safeInt128ToUint256(seizureSettlementDelta.amount0());
-        uint256 seizureS1 = safeInt128ToUint256(seizureSettlementDelta.amount1());
+        // If we take whatever native assets are available, that leaves the position open to immediate subsequent seizure.
+        // Return the apportioned amounts as native assets.
+        // The rest of the liquidity position must await available liquidity collection.
+        // This draws on liquidity from all positions in-range, including the current position - staggering seizures over a sequence of transactions.
 
-        excess0 = apportionedS0 > seizureS0 ? apportionedS0 : seizureS0;
-        excess1 = apportionedS1 > seizureS1 ? apportionedS1 : seizureS1;
+        return (apportionedS0, apportionedS1);
     }
 }

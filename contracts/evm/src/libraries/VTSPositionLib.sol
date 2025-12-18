@@ -12,6 +12,7 @@ import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint12
 import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {RFSCheckpoint} from "../types/Checkpoint.sol";
+import {console} from "forge-std/console.sol";
 
 import {
     VTSStorage,
@@ -271,6 +272,7 @@ library VTSPositionLib {
     ///      We checkpoint *before* liquidity changes (see `CoreHook._beforeAddLiquidity/_beforeRemoveLiquidity`) to ensure:
     ///      - no retroactive capture (new liquidity cannot claim historical accrual), and
     ///      - fair attribution across partial adds/removes.
+    /// @param pa The position accounting storage reference
     /// @param poolId The pool ID
     /// @param tickLower The lower tick
     /// @param tickUpper The upper tick
@@ -278,12 +280,11 @@ library VTSPositionLib {
     /// @param global0 The global growth for token0
     /// @param global1 The global growth for token1
     /// @param outsideMap The outside growth mapping
-    /// @param pa The position accounting storage reference
-    /// @param snapField0 The field name identifier for token0 snapshot (0=deficit, 1=inflow, 2=coverage)
-    /// @param snapField1 The field name identifier for token1 snapshot (0=deficit, 1=inflow, 2=coverage)
+    /// @param growthType The growth type (0=deficit, 1=inflow, 2=coverage)
     /// @return add0 The attributed growth delta for token0
     /// @return add1 The attributed growth delta for token1
     function _deltaAndCheckpointGrowth(
+        PositionAccounting storage pa,
         PoolId poolId,
         int24 tickLower,
         int24 tickUpper,
@@ -292,9 +293,7 @@ library VTSPositionLib {
         uint256 global0,
         uint256 global1,
         mapping(PoolId => mapping(int24 => GrowthPair)) storage outsideMap,
-        PositionAccounting storage pa,
-        uint8 snapField0,
-        uint8 snapField1
+        uint8 growthType
     ) private returns (uint256 add0, uint256 add1) {
         (uint256 inside0, uint256 inside1) =
             _growthInside(poolId, tickLower, tickUpper, tickCurrent, global0, global1, outsideMap);
@@ -302,26 +301,24 @@ library VTSPositionLib {
         // Read last snapshots based on field identifier
         uint256 lastSnap0;
         uint256 lastSnap1;
-        if (snapField0 == 0) {
+        if (growthType == 0) {
             lastSnap0 = pa.deficitGrowthInsideLast.token0;
-            pa.deficitGrowthInsideLast.token0 = inside0;
-        } else if (snapField0 == 1) {
-            lastSnap0 = pa.inflowGrowthInsideLast.token0;
-            pa.inflowGrowthInsideLast.token0 = inside0;
-        } else {
-            lastSnap0 = pa.coverageUseGrowthInsideLast.token0;
-            pa.coverageUseGrowthInsideLast.token0 = inside0;
-        }
-
-        if (snapField1 == 0) {
             lastSnap1 = pa.deficitGrowthInsideLast.token1;
+            pa.deficitGrowthInsideLast.token0 = inside0;
             pa.deficitGrowthInsideLast.token1 = inside1;
-        } else if (snapField1 == 1) {
+        } else if (growthType == 1) {
+            lastSnap0 = pa.inflowGrowthInsideLast.token0;
             lastSnap1 = pa.inflowGrowthInsideLast.token1;
+            pa.inflowGrowthInsideLast.token0 = inside0;
             pa.inflowGrowthInsideLast.token1 = inside1;
         } else {
+            lastSnap0 = pa.coverageUseGrowthInsideLast.token0;
             lastSnap1 = pa.coverageUseGrowthInsideLast.token1;
+            pa.coverageUseGrowthInsideLast.token0 = inside0;
             pa.coverageUseGrowthInsideLast.token1 = inside1;
+
+            console.log("inside0", inside0);
+            console.log("inside1", inside1);
         }
 
         unchecked {
@@ -355,6 +352,7 @@ library VTSPositionLib {
         PositionAccounting storage pa = s.positionAccounting[positionId];
 
         (uint256 add0, uint256 add1) = _deltaAndCheckpointGrowth(
+            pa,
             poolId,
             pos.tickLower,
             pos.tickUpper,
@@ -363,9 +361,7 @@ library VTSPositionLib {
             paPool.deficitGrowthGlobal.token0,
             paPool.deficitGrowthGlobal.token1,
             s.deficitGrowthOutside,
-            pa,
-            0, // deficit growth field
-            0 // deficit growth field
+            0 // deficit growth type
         );
 
         if (add0 > 0) {
@@ -413,6 +409,7 @@ library VTSPositionLib {
         PositionAccounting storage pa = s.positionAccounting[positionId];
 
         (uint256 add0, uint256 add1) = _deltaAndCheckpointGrowth(
+            pa,
             poolId,
             pos.tickLower,
             pos.tickUpper,
@@ -421,9 +418,7 @@ library VTSPositionLib {
             paPool.inflowGrowthGlobal.token0,
             paPool.inflowGrowthGlobal.token1,
             s.inflowGrowthOutside,
-            pa,
-            1, // inflow growth field
-            1 // inflow growth field
+            1 // inflow growth type
         );
 
         // Token0: net against deficit first
@@ -552,6 +547,7 @@ library VTSPositionLib {
         PositionAccounting storage pa = s.positionAccounting[positionId];
 
         (uint256 cov0, uint256 cov1) = _deltaAndCheckpointGrowth(
+            pa,
             poolId,
             pos.tickLower,
             pos.tickUpper,
@@ -560,10 +556,12 @@ library VTSPositionLib {
             paPool.coverageUseGrowthGlobal.token0,
             paPool.coverageUseGrowthGlobal.token1,
             s.coverageUseGrowthOutside,
-            pa,
-            2, // coverage growth field
-            2 // coverage growth field
+            2 // coverage growth type
         );
+
+        // TODO: Remove.
+        console.log("cov0", cov0);
+        console.log("cov1", cov1);
 
         if (cov0 > 0) {
             _applyCoverageBurn(s, poolManager, positionId, poolId, 0, cov0, liq);
@@ -829,19 +827,12 @@ library VTSPositionLib {
                 } else {
                     // partial liquidation
                     TokenPairUint memory commitmentMaxima = pa.commitmentMax;
-                    if (isSeizing) {
-                        // Use seizure-specific excess calculation
-                        (excess0, excess1) = LiquidityUtils.calculateSeizureExcess(
-                            s0, s1, uint256(liq), uint256(-params.liquidityDelta), seizureSettlementDelta
-                        );
-                    } else {
-                        // Standard excess calculation
-                        if (s0 > commitmentMaxima.token0) {
-                            excess0 = s0 - commitmentMaxima.token0;
-                        }
-                        if (s1 > commitmentMaxima.token1) {
-                            excess1 = s1 - commitmentMaxima.token1;
-                        }
+                    // Standard excess calculation
+                    if (s0 > commitmentMaxima.token0) {
+                        excess0 = s0 - commitmentMaxima.token0;
+                    }
+                    if (s1 > commitmentMaxima.token1) {
+                        excess1 = s1 - commitmentMaxima.token1;
                     }
                 }
 
@@ -867,6 +858,10 @@ library VTSPositionLib {
                 TokenPairUint memory commitmentMaxima = pa.commitmentMax;
 
                 if (isMMOperation) {
+                    if (isSeizing) {
+                        revert Errors.InvariantViolated("Invalid operation: Seizures cannot issue LCCs");
+                    }
+
                     // commitment maxima increases, recalculate base settlement requirements
                     MarketVTSConfiguration memory vtsConfiguration = s.pools[poolId].vtsConfig;
                     (uint256 baseAmountToSettle0, uint256 baseAmountToSettle1) = LiquidityUtils.getBaseSettlementAmounts(
@@ -935,26 +930,42 @@ library VTSPositionLib {
             // After MMPM takes from PoolManager, it syncs the LCC balance as credit to locker.
             // This allows direct _take calls for LCC without a separate collectFees function.
 
-            // Account underlying currency settlement obligations to MMPositionManager
-            // Split model: Underlying settlement deltas on MMPM represent market liquidity claims (settle-only)
-            // Balance syncs from wrap/unwrap target locker (msgSender) for takeable credits
-            DynamicCurrencyDelta.accountUnderlyingSettlementDeltaChange(
-                owner, requiredSettlementDelta, poolKey.currency0, poolKey.currency1
-            );
-
             // Handle LCC issuance/cancellation based on liquidity direction
             if (params.liquidityDelta > 0) {
                 // Adding liquidity: Issue LCCs
                 _handleLiquidityIncrease(s, ctx, owner, poolKey, mmData.commitId, id, params, principalDelta);
             } else if (params.liquidityDelta < 0) {
-                // Removing liquidity: Cancel LCCs
                 // Use locker from hookData if available, otherwise default to owner (MMPM)
-
-                // @note We cannot cancel directly at this point in the flow,
-                // The LCC's are not yet deposited into the MMPM by the poolManager - as we're during modification of liquidity.
-                // Therefore, we plan to cancel the LCC's and queue the settlement once this settlement occurs.
                 address queueRecipient = PositionModificationHookDataLib.getLocker(mmData, owner);
-                _handleLiquidityDecrease(ctx, owner, poolKey, principalDelta, requiredSettlementDelta, queueRecipient);
+                if (isSeizing) {
+                    // @note: For Seizures,
+                    // - LCCs are received directly by locker simiarly to fees.
+                    // - Unwrapping these LCCs draws from the MM settled amounts, either immediately or via settlement queue - allowing protocol coverage to be maintained.
+                    // - For any excess, this can also be settled immediately via MM operations.
+
+                    // Only cancel excess settled received.
+                    _handleLiquidityDecrease(
+                        ctx, owner, poolKey, requiredSettlementDelta, requiredSettlementDelta, queueRecipient
+                    );
+                } else {
+                    // Removing liquidity: Cancel LCCs without seizing.
+
+                    // @note We cannot cancel directly at this point in the flow,
+                    // The LCC's are not yet deposited into the MMPM by the poolManager - as we're during modification of liquidity.
+                    // Therefore, we plan to cancel the LCC's and queue the settlement once this settlement occurs.
+                    _handleLiquidityDecrease(
+                        ctx, owner, poolKey, principalDelta, requiredSettlementDelta, queueRecipient
+                    );
+                }
+            }
+
+            if (!LiquidityUtils.isZeroDelta(requiredSettlementDelta)) {
+                // Account underlying currency settlement obligations to MMPositionManager
+                // Split model: Underlying settlement deltas on MMPM represent market liquidity claims (settle-only)
+                // Balance syncs from wrap/unwrap target locker (msgSender) for takeable credits
+                DynamicCurrencyDelta.accountUnderlyingSettlementDelta(
+                    owner, requiredSettlementDelta, poolKey.currency0, poolKey.currency1
+                );
             }
 
             // Mark RFS checkpoint
@@ -1244,6 +1255,13 @@ library VTSPositionLib {
             int128 posRequiredSettlement0 = positionRequiredSettlementDelta.amount0();
             int128 posRequiredSettlement1 = positionRequiredSettlementDelta.amount1();
 
+            console.log("onMMSettle: amount0", amount0);
+            console.log("onMMSettle: amount1", amount1);
+            console.log("onMMSettle: rfs0", rfs0);
+            console.log("onMMSettle: rfs1", rfs1);
+            console.log("onMMSettle: posRequiredSettlement0", posRequiredSettlement0);
+            console.log("onMMSettle: posRequiredSettlement1", posRequiredSettlement1);
+
             if (amount0 < 0) {
                 // deposit: clamp by positive rfsDelta
                 // If rfs0 > 0, we can deposit up to rfs0 (clamp amount0 to -rfs0 minimum)
@@ -1363,6 +1381,7 @@ library VTSPositionLib {
         // Only need to clamp withdrawals (positive settlementDelta)
         if (settlementDelta.amount0() > 0 || settlementDelta.amount1() > 0) {
             // Get available liquidity from vault
+            // This does not include deposits during seizing, as liquidity has not tranferred yet.
             BalanceDelta availableDelta = vault.dryModifyLiquidities(settlementDelta);
 
             // Calculate shortfall for withdrawals only
@@ -1472,6 +1491,10 @@ library VTSPositionLib {
             clearance = -minValue; // negative clearance reduces positive delta
         }
         // All other cases: clearance = 0 (no accounting)
+
+        console.log("calcDeltaClearance: owner delta", delta);
+        console.log("calcDeltaClearance: settle amount", amount);
+        console.log("calcDeltaClearance: clearance", clearance);
     }
 
     /// @notice Calculates liquidity units to seize for a given position and settlement delta

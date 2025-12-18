@@ -48,7 +48,7 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
     using CurrencyTransfer for Currency;
 
     // Provide initial liquidity to core pool
-    uint256 initialLiquidity = 10000e18;
+    uint256 initialLiquidity = 1000e18;
 
     ProxyHook proxyHook;
     Currency internal _currency0;

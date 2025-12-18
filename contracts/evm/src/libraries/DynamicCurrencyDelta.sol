@@ -9,6 +9,7 @@ import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {ILCC} from "../interfaces/ILCC.sol";
 import {Errors} from "./Errors.sol";
+import {console} from "forge-std/console.sol";
 
 /// @title DynamicCurrencyDelta
 /// @notice Library for managing currency deltas and underlying settlement in VTS
@@ -36,6 +37,10 @@ library DynamicCurrencyDelta {
         } else if (previous == 0) {
             NonzeroDeltaCount.increment();
         }
+
+        console.log("accountDelta: currency", Currency.unwrap(currency));
+        console.log("accountDelta: next delta", next);
+        console.log("accountDelta: target", target);
     }
 
     /// @notice Gets the full positive delta (credit) for a currency and target
@@ -120,7 +125,7 @@ library DynamicCurrencyDelta {
     /// @param targetSettlementDelta The settlement delta to account (negative = deposit, positive = withdrawal)
     /// @param lccCurrency0 The first LCC currency
     /// @param lccCurrency1 The second LCC currency
-    function accountUnderlyingSettlementDeltaChange(
+    function accountUnderlyingSettlementDelta(
         address target,
         BalanceDelta targetSettlementDelta,
         Currency lccCurrency0,
