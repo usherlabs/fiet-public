@@ -337,7 +337,6 @@ contract VTSPositionLibTest is VTSLibTestBase {
         assertTrue(delta.amount0() > 0, "Should require more settlement for token0");
     }
 
-
     // ============================================================
     // _registerPosition Tests
     // ============================================================
@@ -435,5 +434,4 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
         assertLe(settled0, commitment, "Settled should never exceed commitment");
     }
-
 }

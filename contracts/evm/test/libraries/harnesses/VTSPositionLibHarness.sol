@@ -11,11 +11,16 @@ import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {VTSPositionLib} from "../../../src/libraries/VTSPositionLib.sol";
 import {RFSCheckpoint} from "../../../src/types/Checkpoint.sol";
+import {IMarketVault} from "../../../src/interfaces/IMarketVault.sol";
+import {DynamicCurrencyDelta} from "../../../src/libraries/DynamicCurrencyDelta.sol";
+import {CurrencyDelta} from "v4-periphery/lib/v4-core/src/libraries/CurrencyDelta.sol";
 
 /// @title VTSPositionLibHarness
 /// @notice Exposes internal VTSPositionLib functions for unit testing
 /// @dev Manages its own VTSStorage that tests manipulate via setup functions
 contract VTSPositionLibHarness {
+    using CurrencyDelta for Currency;
+
     /// @notice Internal VTSStorage for testing
     VTSStorage internal s;
 
@@ -64,6 +69,20 @@ contract VTSPositionLibHarness {
         return VTSPositionLib.getRFS(s, positionId);
     }
 
+    /// @notice Exposes onMMSettle for testing
+    function onMMSettle(
+        IPoolManager poolManager,
+        IMarketVault vault,
+        PositionId positionId,
+        Currency lccCurrency0,
+        Currency lccCurrency1,
+        BalanceDelta delta,
+        bool isSeizing
+    ) external returns (BalanceDelta settlementDelta, bool rfsOpen, uint256 seizedLiquidityUnits) {
+        return VTSPositionLib.onMMSettle(
+                s, poolManager, vault, positionId, lccCurrency0, lccCurrency1, delta, isSeizing
+            );
+    }
 
     // ============ Storage Getters (for assertions) ============
 
@@ -189,5 +208,31 @@ contract VTSPositionLibHarness {
     function setInflowGrowthInsideLast(PositionId id, uint256 ig0, uint256 ig1) external {
         s.positionAccounting[id].inflowGrowthInsideLast.token0 = ig0;
         s.positionAccounting[id].inflowGrowthInsideLast.token1 = ig1;
+    }
+
+    /// @notice Sets position isActive state
+    function setPositionActive(PositionId id, bool active) external {
+        s.positions[id].isActive = active;
+    }
+
+    /// @notice Sets underlying currency delta using DynamicCurrencyDelta.accountDelta
+    /// @dev Uses DynamicCurrencyDelta to match the actual implementation
+    function setUnderlyingDelta(Currency currency, address target, int128 delta) external {
+        DynamicCurrencyDelta.accountDelta(currency, delta, target);
+    }
+
+    /// @notice Gets RFS checkpoint for a position
+    function getRFSCheckpoint(PositionId id) external view returns (RFSCheckpoint memory) {
+        return s.positions[id].checkpoint;
+    }
+
+    /// @notice Sets RFS checkpoint manually for testing
+    function setRFSCheckpoint(PositionId id, RFSCheckpoint memory checkpoint) external {
+        s.positions[id].checkpoint = checkpoint;
+    }
+
+    /// @notice Gets underlying currency delta for a target address
+    function getUnderlyingDelta(Currency currency, address target) external view returns (int256) {
+        return currency.getDelta(target);
     }
 }

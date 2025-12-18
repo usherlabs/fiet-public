@@ -139,7 +139,6 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta {
     /// @return The position identifier
     function getPositionId(uint256 commitId, uint256 positionIndex) external view returns (PositionId);
 
-
     /// @notice Get the settled amounts for a position
     /// @param positionId The position identifier
     /// @return amount0 Settled amount for token0

@@ -36,5 +36,5 @@ interface IMarketVault {
      * @param balanceDelta The desired balance delta to apply
      * @return The actual balance delta that was applied (may be less than requested for withdrawals)
      */
-    function dryModifyLiquidities(BalanceDelta balanceDelta) external returns (BalanceDelta);
+    function dryModifyLiquidities(BalanceDelta balanceDelta) external view returns (BalanceDelta);
 }

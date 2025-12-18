@@ -93,7 +93,7 @@ struct PoolAccounting {
     // Residual coverage per token (when no in-range liquidity)
     TokenPairUint coverageResidual;
     // Sum of all position cumulative deficits per token
-    TokenPairUint globalDeficit;
+    TokenPairUint globalDeficit; // TODO: Is this necessary?
     // Protocol/LPs fee pot accrued from fee sharing per token
     TokenPairUint protocolFeeAccrued;
     // Slashed pot balances per token
