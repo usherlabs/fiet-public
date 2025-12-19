@@ -338,16 +338,38 @@ library MMCalldataDecoder {
             bytes calldata settlementProof
         )
     {
-        // No length check here as toBytes will do it
         assembly ("memory-safe") {
+            // PoolKey: 5 slots (0xa0), then tokenId (0x20), positionIndex (0x20), settlementTokenIndex (0x20), verifierIndex (0x20)
+            // settlementProof offset pointer is at 0x120 (after all fixed-size params)
+            // Minimum length: 0x120 + 0x20 (offset pointer) + 0x20 (length) = 0x160
+            if lt(params.length, 0x160) {
+                mstore(0, SLICE_ERROR_SELECTOR)
+                revert(0x1c, 4)
+            }
             poolKey := params.offset
             tokenId := calldataload(add(params.offset, 0xa0))
             positionIndex := calldataload(add(params.offset, 0xc0))
             settlementTokenIndex := calldataload(add(params.offset, 0xe0))
             verifierIndex := calldataload(add(params.offset, 0x100))
+            
+            // Read the offset pointer for settlementProof (dynamic bytes, index 5)
+            // The offset pointer is stored at params.offset + 0x120 (after all fixed-size params)
+            let proofOffsetPtr := add(params.offset, 0x120)
+            let proofDataOffset := add(params.offset, and(calldataload(proofOffsetPtr), OFFSET_OR_LENGTH_MASK))
+            
+            // Read the length of the bytes
+            let proofLength := and(calldataload(proofDataOffset), OFFSET_OR_LENGTH_MASK)
+            
+            // Set settlementProof calldata slice
+            settlementProof.offset := add(proofDataOffset, 0x20)
+            settlementProof.length := proofLength
+            
+            // Verify the bytes string fits within params
+            if lt(add(params.length, params.offset), add(settlementProof.length, settlementProof.offset)) {
+                mstore(0, SLICE_ERROR_SELECTOR)
+                revert(0x1c, 4)
+            }
         }
-        // Use CalldataDecoder.toBytes for dynamic bytes (index 5 = 6th argument)
-        settlementProof = params.toBytes(5);
     }
 
     /// @dev COMMIT_SIGNAL: (bytes, address)
