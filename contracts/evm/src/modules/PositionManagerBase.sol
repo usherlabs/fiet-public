@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.26;
+pragma solidity ^0.8.26;
 
 import {ImmutableVTSState} from "./ImmutableVTSState.sol";
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";

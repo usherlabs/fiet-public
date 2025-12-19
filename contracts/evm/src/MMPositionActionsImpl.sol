@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.26;
+pragma solidity ^0.8.26;
 
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
@@ -254,10 +254,15 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
             revert Errors.InvalidDelta(0, 0);
         }
 
-        (Position memory position, PositionId positionId) = getPosition(tokenId, positionIndex);
-        MMHelpers.assertPositionForPool(poolKey, position);
-
-        bool isSeizing = _isSeizing(positionId);
+        // Scoped block for position validation to free positionId from stack early
+        bool isSeizing;
+        {
+            Position memory position;
+            PositionId positionId;
+            (position, positionId) = getPosition(tokenId, positionIndex);
+            MMHelpers.assertPositionForPool(poolKey, position);
+            isSeizing = _isSeizing(positionId);
+        }
 
         if (!isSeizing) {
             MMHelpers.assertApprovedOrOwner(msgSender(), tokenId);
@@ -278,35 +283,38 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
         Currency underlying0 = _lccToUnderlyingCurrency(poolKey.currency0);
         Currency underlying1 = _lccToUnderlyingCurrency(poolKey.currency1);
 
-        int128 delta0 = settlementDelta.amount0();
-        int128 delta1 = settlementDelta.amount1();
+        // Scoped block for settlement transfers
+        {
+            int128 delta0 = settlementDelta.amount0();
+            int128 delta1 = settlementDelta.amount1();
 
-        address sender = msgSender();
-        address valueSender = usePositionManagerBalance ? address(this) : sender;
+            address sender = msgSender();
+            address valueSender = usePositionManagerBalance ? address(this) : sender;
 
-        if (delta0 < 0) {
-            underlying0.transferFrom(valueSender, address(vault), LiquidityUtils.safeInt128ToUint256(delta0));
-            if (usePositionManagerBalance) {
-                vtsOrchestrator.take(underlying0, sender, LiquidityUtils.safeInt128ToUint256(delta0));
+            if (delta0 < 0) {
+                underlying0.transferFrom(valueSender, address(vault), LiquidityUtils.safeInt128ToUint256(delta0));
+                if (usePositionManagerBalance) {
+                    vtsOrchestrator.take(underlying0, sender, LiquidityUtils.safeInt128ToUint256(delta0));
+                }
             }
-        }
-        if (delta1 < 0) {
-            underlying1.transferFrom(valueSender, address(vault), LiquidityUtils.safeInt128ToUint256(delta1));
-            if (usePositionManagerBalance) {
-                vtsOrchestrator.take(underlying1, sender, LiquidityUtils.safeInt128ToUint256(delta1));
+            if (delta1 < 0) {
+                underlying1.transferFrom(valueSender, address(vault), LiquidityUtils.safeInt128ToUint256(delta1));
+                if (usePositionManagerBalance) {
+                    vtsOrchestrator.take(underlying1, sender, LiquidityUtils.safeInt128ToUint256(delta1));
+                }
             }
-        }
 
-        vault.modifyLiquidities(settlementDelta);
+            vault.modifyLiquidities(settlementDelta);
 
-        if (delta0 > 0) {
-            underlying0.transfer(valueSender, LiquidityUtils.safeInt128ToUint256(delta0));
-        }
-        if (delta1 > 0) {
-            underlying1.transfer(valueSender, LiquidityUtils.safeInt128ToUint256(delta1));
-        }
-        if ((delta0 > 0 || delta1 > 0) && usePositionManagerBalance) {
-            _syncPairBalanceToDeltas(underlying0, underlying1);
+            if (delta0 > 0) {
+                underlying0.transfer(valueSender, LiquidityUtils.safeInt128ToUint256(delta0));
+            }
+            if (delta1 > 0) {
+                underlying1.transfer(valueSender, LiquidityUtils.safeInt128ToUint256(delta1));
+            }
+            if ((delta0 > 0 || delta1 > 0) && usePositionManagerBalance) {
+                _syncPairBalanceToDeltas(underlying0, underlying1);
+            }
         }
 
         return (settlementDelta, seizedLiquidityUnits);
@@ -525,10 +533,16 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
             } else {
                 // DEPOSIT: Settle credits into position
                 // Net protocol delta via onMMSettle (no token movement) regardless of payerIsUser
-                (Position memory position, PositionId positionId) = getPosition(tokenId, positionIndex);
-                MMHelpers.assertPositionForPool(poolKey, position);
+                // Scoped block for position validation to free positionId from stack early
+                bool isSeizing;
+                {
+                    Position memory position;
+                    PositionId positionId;
+                    (position, positionId) = getPosition(tokenId, positionIndex);
+                    MMHelpers.assertPositionForPool(poolKey, position);
+                    isSeizing = _isSeizing(positionId);
+                }
 
-                bool isSeizing = _isSeizing(positionId);
                 if (!isSeizing) {
                     MMHelpers.assertApprovedOrOwner(sender, tokenId);
                 }

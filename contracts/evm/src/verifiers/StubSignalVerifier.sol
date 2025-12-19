@@ -3,7 +3,7 @@
 /// This implementation does not perform any verification
 /// It is used for development and testing purposes
 
-pragma solidity 0.8.26;
+pragma solidity ^0.8.26;
 
 import {MarketMaker} from "../libraries/MarketMaker.sol";
 import {ISignalVerifier} from "../interfaces/ISignalVerifier.sol";

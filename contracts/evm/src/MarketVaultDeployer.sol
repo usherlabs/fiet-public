@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 // This contract is used to deploy proxy hooks for the market factory
-pragma solidity 0.8.26;
+pragma solidity ^0.8.26;
 
 import {HookFlags} from "./libraries/HookFlags.sol";
 import {ProxyHook} from "./ProxyHook.sol";

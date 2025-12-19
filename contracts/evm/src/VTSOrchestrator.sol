@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 // This contract is the central state management layer and orchestrator for VTS logic
 // Adopts Bunni-style pattern: state in storage struct, logic delegated to linked libraries
-pragma solidity 0.8.26;
+pragma solidity ^0.8.26;
 
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {PausableVTS} from "./modules/PausableVTS.sol";
@@ -15,7 +15,15 @@ import {
 } from "./types/Position.sol";
 import {Commit} from "./types/Commit.sol";
 import {Pool} from "./types/Pool.sol";
-import {MarketVTSConfiguration, PositionAccounting, PositionContext} from "./types/VTS.sol";
+import {
+    MarketVTSConfiguration,
+    PositionAccounting,
+    PositionContext,
+    TouchPositionParams,
+    TouchPositionResult,
+    MMSettleParams,
+    MMSettleResult
+} from "./types/VTS.sol";
 import {MarketMaker} from "./libraries/MarketMaker.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {VTSStorage} from "./types/VTS.sol";
@@ -465,8 +473,21 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
         // Delegate all position processing to VTSPositionLib
         // This handles registration, linking, fee processing, delta accounting,
         // LCC issuance/cancellation, and checkpoint marking
-        (pos, id, feeAdj) =
-            VTSPositionLib.touchPosition(s, ctx, owner, poolKey, params, callerDelta, feesAccrued, hookData);
+        TouchPositionResult memory result = VTSPositionLib.touchPosition(
+            s,
+            ctx,
+            TouchPositionParams({
+                owner: owner,
+                poolKey: poolKey,
+                params: params,
+                callerDelta: callerDelta,
+                feesAccrued: feesAccrued,
+                hookData: hookData
+            })
+        );
+        pos = result.pos;
+        id = result.id;
+        feeAdj = result.feeAdj;
     }
 
     /// @notice Called by CoreHook after a swap to process swap-related accounting
@@ -567,9 +588,21 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
         PositionId positionId = getPositionId(commitId, positionIndex);
 
         // position validation is performed inside of VTSPositionLib.onMMSettle
-        (settlementDelta, rfsOpen, seizedLiquidityUnits) = VTSPositionLib.onMMSettle(
-            s, poolManager, marketVault, positionId, currency0, currency1, amountDelta, isSeizing
+        MMSettleResult memory result = VTSPositionLib.onMMSettle(
+            s,
+            poolManager,
+            MMSettleParams({
+                vault: marketVault,
+                positionId: positionId,
+                lccCurrency0: currency0,
+                lccCurrency1: currency1,
+                delta: amountDelta,
+                isSeizing: isSeizing
+            })
         );
+        settlementDelta = result.settlementDelta;
+        rfsOpen = result.rfsOpen;
+        seizedLiquidityUnits = result.seizedLiquidityUnits;
 
         PositionAccounting storage pa = s.positionAccounting[positionId];
         emit PositionSettled(

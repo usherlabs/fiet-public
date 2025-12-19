@@ -1,5 +1,5 @@
 //SPDX-License-Identifier: MIT
-pragma solidity 0.8.26;
+pragma solidity ^0.8.26;
 
 import {console} from "forge-std/Script.sol";
 import {IUniversalRouter} from "./external/IUniversalRouter.sol";

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.26;
+pragma solidity ^0.8.26;
 
 import "forge-std/Test.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
@@ -11,7 +11,7 @@ import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {CurrencyLibrary, Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {PoolSwapTest} from "@uniswap/v4-core/src/test/PoolSwapTest.sol";
 import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
-import {CurrencySortHelper} from "../script/libraries/CurrencySortHelper.sol";
+import {CurrencySortHelper} from "./libraries/CurrencySortHelper.sol";
 import {LiquidityCommitmentCertificate} from "../src/LCC.sol";
 import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
 import {LiquidityUtils} from "../src/libraries/LiquidityUtils.sol";

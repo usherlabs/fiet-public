@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.26;
+pragma solidity ^0.8.26;
 
 import {VTSStorage, PositionAccounting, TokenPairUint, TokenPairLib} from "../types/VTS.sol";
 import {PositionId, Position} from "../types/Position.sol";
@@ -168,7 +168,7 @@ library VTSCommitLib {
         commitId = ++s.nextCommitId;
 
         // store the signal state (only state and expiresAt are relevant) and bind commit to pool
-        s.commits[commitId].mmState = signal.mmState;
+        MarketMaker.copyToStorage(s.commits[commitId].mmState, signal.mmState);
         s.commits[commitId].expiresAt = block.timestamp + expirySeconds;
     }
 
@@ -194,7 +194,7 @@ library VTSCommitLib {
 
         // Persist signal state (only state and expiresAt)
         Commit storage commit = s.commits[commitId];
-        commit.mmState = signal.mmState;
+        MarketMaker.copyToStorage(commit.mmState, signal.mmState);
         commit.expiresAt = block.timestamp + expirySeconds;
     }
 
@@ -292,7 +292,7 @@ library VTSCommitLib {
         uint256 signalUsd = _signalValue(newSignal.mmState, oracleHelper);
 
         // Update commit state/expiry using verified signal
-        commit.mmState = newSignal.mmState;
+        MarketMaker.copyToStorage(commit.mmState, newSignal.mmState);
         commit.expiresAt = block.timestamp + expirySeconds;
 
         if (issuedUsd == 0) {

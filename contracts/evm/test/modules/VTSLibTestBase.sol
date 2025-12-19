@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.26;
+pragma solidity ^0.8.26;
 
 import {MarketTestBase} from "./MarketTestBase.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";

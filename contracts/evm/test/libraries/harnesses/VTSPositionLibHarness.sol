@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.26;
+pragma solidity ^0.8.26;
 
-import {VTSStorage, MarketVTSConfiguration, TokenConfiguration} from "../../../src/types/VTS.sol";
+import {VTSStorage, MarketVTSConfiguration, TokenConfiguration, MMSettleParams, MMSettleResult} from "../../../src/types/VTS.sol";
 import {PositionId, Position} from "../../../src/types/Position.sol";
 import {Pool} from "../../../src/types/Pool.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
@@ -79,9 +79,19 @@ contract VTSPositionLibHarness {
         BalanceDelta delta,
         bool isSeizing
     ) external returns (BalanceDelta settlementDelta, bool rfsOpen, uint256 seizedLiquidityUnits) {
-        return VTSPositionLib.onMMSettle(
-                s, poolManager, vault, positionId, lccCurrency0, lccCurrency1, delta, isSeizing
-            );
+        MMSettleResult memory result = VTSPositionLib.onMMSettle(
+            s,
+            poolManager,
+            MMSettleParams({
+                vault: vault,
+                positionId: positionId,
+                lccCurrency0: lccCurrency0,
+                lccCurrency1: lccCurrency1,
+                delta: delta,
+                isSeizing: isSeizing
+            })
+        );
+        return (result.settlementDelta, result.rfsOpen, result.seizedLiquidityUnits);
     }
 
     // ============ Storage Getters (for assertions) ============
