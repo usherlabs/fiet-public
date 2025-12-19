@@ -1,3 +1,4 @@
 .DS_Store
 .cursor/debug.log
 coverage-*.txt
+.solx
