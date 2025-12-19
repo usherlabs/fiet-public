@@ -195,14 +195,7 @@ library LCCFactoryLib {
         if (market.refIsValidIssuer && market.ref.length >= 20) {
             bytes32 word = LibBytes.load(market.ref, 0);
             address refAddress = LibBytes.msbToAddress(word);
-            if (caller == refAddress) {
-                return true;
-            }
-        }
-
-        // Check if caller is protocol-bound (e.g., MMPositionManager)
-        if (market.factory != address(0)) {
-            return IMarketFactory(market.factory).bounds(caller);
+            return caller == refAddress;
         }
 
         return false;

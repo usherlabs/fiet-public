@@ -211,7 +211,9 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         // Mock mmPositionManager as protocol so it skips bucket accounting when tokens are transferred/burned to/from it
         vm.mockCall(
-            marketFactory, abi.encodeWithSelector(IMarketFactory.bounds.selector, address(mmPositionManager)), abi.encode(true)
+            marketFactory,
+            abi.encodeWithSelector(IMarketFactory.bounds.selector, address(mmPositionManager)),
+            abi.encode(true)
         );
 
         // wrap some lcc tokens
