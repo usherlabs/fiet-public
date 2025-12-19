@@ -140,112 +140,118 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
     //     assertEq(wethBalanceAfterUnwrap, wethBalanceBefore, "WETH balance should be back to original");
     // }
 
-    // function testCanExtendGracePeriod() public {
-    //     // get the default market confiration so we can tweak it
-    //     bytes memory liquiditySignal = abi.encode(liquiditySignal);
-    //     ModifyLiquidityParams memory liquidityParams =
-    //         ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
+    function testCanExtendGracePeriod() public {
+        // get the default market confiration so we can tweak it
+        bytes memory liquiditySignal = abi.encode(liquiditySignal);
+        ModifyLiquidityParams memory liquidityParams =
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
 
-    //     // Setup committed position using helper
-    //     (uint256 tokenId,,,) = _setupCommittedPosition(
-    //         positionManager,
-    //         corePoolKey,
-    //         liquiditySignal,
-    //         liquidityParams,
-    //         marketVTSConfiguration,
-    //         address(lcc0),
-    //         address(lcc1)
-    //     );
-    //     uint256 positionIndex = 0;
+        // Setup committed position using helper
+        (uint256 tokenId,,,) = _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            liquiditySignal,
+            liquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+        uint256 positionIndex = 0;
 
-    //     // extend the grace period of the commitment
-    //     bytes memory settlementProof = abi.encode(1);
-    //     uint8 settlementTokenIndex0 = 0;
-    //     uint8 settlementTokenIndex1 = 1;
-    //     uint32 verifierIndex = 0;
+        // extend the grace period of the commitment
+        bytes memory settlementProof = abi.encode(1);
+        uint8 settlementTokenIndex0 = 0;
+        uint8 settlementTokenIndex1 = 1;
+        uint32 verifierIndex = 0;
 
-    //     // mock the call made to the settlement observer to verify the settlement proof
-    //     vm.mockCall(
-    //         address(settlementObserver),
-    //         abi.encodeWithSelector(settlementObserver.verifySettlementProof.selector),
-    //         abi.encode(true)
-    //     );
+        // mock the call made to the settlement observer to verify the settlement proof
+        vm.mockCall(
+            address(settlementObserver),
+            abi.encodeWithSelector(settlementObserver.verifySettlementProof.selector),
+            abi.encode(true)
+        );
 
-    //     PositionId positionId = vtsOrchestrator.getPositionId(tokenId, positionIndex);
+        PositionId positionId = vtsOrchestrator.getPositionId(tokenId, positionIndex);
 
-    //     // get the checkpoint of the position
-    //     RFSCheckpoint memory checkpointBefore = vtsOrchestrator.positionToCheckpoint(positionId);
-    //     vtsOrchestrator.positionToCheckpoint(positionId);
+        // get the checkpoint of the position
+        RFSCheckpoint memory checkpointBefore = vtsOrchestrator.positionToCheckpoint(positionId);
 
-    //     // extend the grace period of both tokens in the market
-    //     MMA.extendGracePeriod(
-    //         positionManager, corePoolKey, tokenId, positionIndex, settlementTokenIndex0, verifierIndex, settlementProof
-    //     );
-    //     MMA.extendGracePeriod(
-    //         positionManager, corePoolKey, tokenId, positionIndex, settlementTokenIndex1, verifierIndex, settlementProof
-    //     );
+        // extend the grace period of both tokens in the market
+        MMA.extendGracePeriod(
+            positionManager, corePoolKey, tokenId, positionIndex, settlementTokenIndex0, verifierIndex, settlementProof
+        );
+        MMA.extendGracePeriod(
+            positionManager, corePoolKey, tokenId, positionIndex, settlementTokenIndex1, verifierIndex, settlementProof
+        );
 
-    //     // // validate the extension
-    //     // RFSCheckpoint memory checkpointAfter = vtsOrchestrator.positionToCheckpoint(positionId);
-    //     // vtsOrchestrator.positionToCheckpoint(positionId);
+        // validate the extension
+        RFSCheckpoint memory checkpointAfter = vtsOrchestrator.positionToCheckpoint(positionId);
+        vtsOrchestrator.positionToCheckpoint(positionId);
 
-    //     // console.log("gracePeriodExtension0Before", checkpointBefore.gracePeriodExtension0);
-    //     // console.log("gracePeriodExtension1Before", checkpointBefore.gracePeriodExtension1);
-    //     // console.log("gracePeriodExtension0After", checkpointAfter.gracePeriodExtension0);
-    //     // console.log("gracePeriodExtension1After", checkpointAfter.gracePeriodExtension1);
-    //     // assertGt(checkpointAfter.gracePeriodExtension0, checkpointBefore.gracePeriodExtension0);
-    //     // assertGt(checkpointAfter.gracePeriodExtension1, checkpointBefore.gracePeriodExtension1);
-    // }
+        console.log("gracePeriodExtension0Before", checkpointBefore.gracePeriodExtension0);
+        console.log("gracePeriodExtension1Before", checkpointBefore.gracePeriodExtension1);
+        console.log("gracePeriodExtension0After", checkpointAfter.gracePeriodExtension0);
+        console.log("gracePeriodExtension1After", checkpointAfter.gracePeriodExtension1);
+        assertGt(checkpointAfter.gracePeriodExtension0, checkpointBefore.gracePeriodExtension0);
+        assertGt(checkpointAfter.gracePeriodExtension1, checkpointBefore.gracePeriodExtension1);
+    }
 
-    // function testCanUnwrapLcc() public {
-    //     address user = makeAddr("user");
-    //     uint256 amount = 1000;
-    //     // Use lcc0 directly - verify it matches lccToken0 from MarketTestBase
-    //     address lccTokenAddress = address(lcc0);
-    //     // Verify addresses match (they should both be from _currency2)
-    //     assertEq(lccTokenAddress, lccToken0, "lcc0 and lccToken0 should match");
+    function testCanUnwrapLcc() public {
+        address user = makeAddr("user");
+        uint256 amount = 1000;
+        // Use lcc0 directly - verify it matches lccToken0 from MarketTestBase
+        address lccTokenAddress = address(lcc0);
+        // Verify addresses match (they should both be from _currency2)
+        assertEq(lccTokenAddress, lccToken0, "lcc0 and lccToken0 should match");
 
-    //     // Mock VTSOrchestrator as non-protocol so it accumulates LCC balance when tokens are transferred to it
-    //     vm.mockCall(
-    //         marketFactory, abi.encodeWithSelector(IMarketFactory.bounds.selector, address(user)), abi.encode(false)
-    //     );
+        // Mock user as non-protocol so it accumulates LCC balance when tokens are transferred to it
+        vm.mockCall(
+            marketFactory, abi.encodeWithSelector(IMarketFactory.bounds.selector, address(user)), abi.encode(false)
+        );
 
-    //     // wrap some lcc tokens
-    //     MockERC20 underlyingAsset = MockERC20(lcc0.underlying());
-    //     // mint the underlying asset to the user
-    //     underlyingAsset.mint(user, amount);
-    //     // approve the liquidity hub to spend(move) the underlying asset
-    //     // hub then spends(moves) underlying assets to itself
-    //     // and then gives LCC tokens to the user
-    //     vm.startPrank(user);
-    //     underlyingAsset.approve(address(liquidityHub), amount);
-    //     ILiquidityHub(liquidityHub).wrap(lccTokenAddress, amount);
-    //     vm.stopPrank();
+        // Mock mmPositionManager as protocol so it skips bucket accounting when tokens are transferred/burned to/from it
+        vm.mockCall(
+            marketFactory,
+            abi.encodeWithSelector(IMarketFactory.bounds.selector, address(mmPositionManager)),
+            abi.encode(true)
+        );
 
-    //     // validate lcc balance of the user
-    //     assertEq(lcc0.balanceOf(user), amount);
+        // wrap some lcc tokens
+        MockERC20 underlyingAsset = MockERC20(lcc0.underlying());
+        // mint the underlying asset to the user
+        underlyingAsset.mint(user, amount);
+        // approve the liquidity hub to spend(move) the underlying asset
+        // hub then spends(moves) underlying assets to itself
+        // and then gives LCC tokens to the user
+        vm.startPrank(user);
+        underlyingAsset.approve(address(liquidityHub), amount);
+        ILiquidityHub(liquidityHub).wrap(lccTokenAddress, amount);
+        vm.stopPrank();
 
-    //     // unwrap lcc using the position manager
-    //     // approve position manager to spend the lcc (must be approved by the user, not the test contract)
-    //     vm.startPrank(user);
-    //     lcc0.approve(address(positionManager), amount);
-    //     vm.stopPrank();
+        // validate lcc balance of the user
+        assertEq(lcc0.balanceOf(user), amount);
 
-    //     // Verify the approval was set correctly (check outside of prank to ensure it persists)
-    //     uint256 allowance = lcc0.allowance(user, address(positionManager));
-    //     assertEq(allowance, amount, "Approval should be set before unwrap");
+        // unwrap lcc using the position manager
+        // approve position manager to spend the lcc (must be approved by the user, not the test contract)
+        vm.startPrank(user);
+        lcc0.approve(address(positionManager), amount);
+        vm.stopPrank();
 
-    //     // lcc0.balancesOf(user);
+        // Verify the approval was set correctly (check outside of prank to ensure it persists)
+        uint256 allowance = lcc0.allowance(user, address(positionManager));
+        assertEq(allowance, amount, "Approval should be set before unwrap");
 
-    //     vm.prank(user);
-    //     MMA.unwrapLcc(positionManager, lccTokenAddress, amount, user, true);
+        // lcc0.balancesOf(user);
 
-    //     // validate lcc balance of the user
-    //     assertEq(lcc0.balanceOf(user), 0);
+        vm.prank(user);
+        MMA.unwrapLcc(positionManager, lccTokenAddress, amount, user, true);
 
-    //     // validate underlying balance of the user
-    //     assertEq(underlyingAsset.balanceOf(user), amount);
-    // }
+        // validate lcc balance of the user
+        assertEq(lcc0.balanceOf(user), 0);
+
+        // validate underlying balance of the user
+        assertEq(underlyingAsset.balanceOf(user), amount);
+    }
 
     // function testCanCheckpointWithCommitment() public {
     //     // get the default market configuration so we can tweak it

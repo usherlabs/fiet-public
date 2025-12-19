@@ -172,7 +172,7 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
         _burn(from, amount);
         // If burning from a protocol-bound address, bucket accounting is skipped.
         // Protocol addresses are intentionally not tracked in bucket maps.
-        if (issued) {
+        if (issued || marketFactory.bounds(from)) {
             return;
         }
         if (marketAmount > 0) {
