@@ -402,7 +402,7 @@ library MMActionAdapter {
         PreparedAction[] memory prepared = new PreparedAction[](1);
         prepared[0] =
             prepareExtendGracePeriod(poolKey, tokenId, idx, settlementTokenIndex, verifierIndex, settlementProof);
-        execute(mmpm, prepared);
+        executeWithUnlock(mmpm, prepared, block.timestamp + 3600);
     }
 
     /**
