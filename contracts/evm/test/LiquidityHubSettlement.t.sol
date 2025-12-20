@@ -9,6 +9,7 @@ import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
 import {ILCC} from "../src/interfaces/ILCC.sol";
 import {MockERC20} from "./_mocks/MockERC20.sol";
 import {Errors} from "../src/libraries/Errors.sol";
+import {IVTSOrchestrator} from "../src/interfaces/IVTSOrchestrator.sol";
 
 /**
  * @title LiquidityHubSettlementTest
@@ -52,7 +53,11 @@ contract LiquidityHubSettlementTest is Test {
         underlyingAsset2 = new MockERC20("Token2", "TK2", 18);
 
         // Deploy mock market factory
-        mockMarketFactory = IMarketFactory(makeAddr("MarketFactory"));
+        address mockMarketFactoryAddress = makeAddr("MarketFactory");
+        mockMarketFactory = IMarketFactory(mockMarketFactoryAddress);
+
+        // address vtsOrchestratorAddress = makeAddr("VTSOrchestrator");
+        // IVTSOrchestrator vtsOrchestrator = IVTSOrchestrator(vtsOrchestratorAddress);
 
         // Mock oracleHelper() call needed for LCC creation
         vm.mockCall(
@@ -65,7 +70,7 @@ contract LiquidityHubSettlementTest is Test {
         // Create LCC tokens via factory
         vm.startPrank(factory);
         address[] memory issuers = new address[](1);
-        issuers[0] = address(factory); // set the factory to be an issuer
+        issuers[0] = address(factory); // arbitrary issuer address. in production it's the VTSOrchestrator.
         (lccToken1, lccToken2) = liquidityHub.createLCCPair(
             abi.encodePacked(address(0x1234)), // marketRef
             address(underlyingAsset1),
@@ -751,8 +756,8 @@ contract LiquidityHubSettlementTest is Test {
         lcc.transfer(user1, principalAmount);
 
         // After transfer:
-        // 1. user1 should have 0 LCC (all canceled)
-        assertEq(lcc.balanceOf(user1), 0, "user1 should have 0 LCC after planned cancel");
+        // 1. user1 should have 40 LCCs (queueAmount) since: (principal - queueAmount) is cancelled. The rest still transfers to destination
+        assertEq(lcc.balanceOf(user1), queueAmount, "user1 should have 40 LCCs after planned cancel");
 
         // 2. user2 should have queueAmount queued for settlement
         assertEq(liquidityHub.settleQueue(lccToken1, user2), queueAmount, "user2 should have queued settlement");
@@ -780,8 +785,8 @@ contract LiquidityHubSettlementTest is Test {
         vm.prank(factory);
         ILCC(lccToken1).transfer(user1, principalAmount);
 
-        // user1 should have 0 (everything burned/queued)
-        assertEq(ILCC(lccToken1).balanceOf(user1), 0, "user1 should have 0 LCC");
+        // user1 should have the queueAmount LCCs since the entire principal amount is queued (everything burned/queued)
+        assertEq(ILCC(lccToken1).balanceOf(user1), queueAmount, "user1 should have queueAmount LCCs");
 
         // user3 should have full amount in queue
         assertEq(liquidityHub.settleQueue(lccToken1, user3), queueAmount, "user3 should have full amount queued");
@@ -897,6 +902,6 @@ contract LiquidityHubSettlementTest is Test {
 
         // planCancelWithQueue was executed (check queue exists)
         assertEq(liquidityHub.settleQueue(lccToken1, user2), queueAmount, "Queue should exist from planCancelWithQueue");
-        assertEq(ILCC(lccToken1).balanceOf(user1), 0, "user1 should have 0 LCC");
+        assertEq(ILCC(lccToken1).balanceOf(user1), queueAmount, "user1 should have queueAmount LCCs");
     }
 }
