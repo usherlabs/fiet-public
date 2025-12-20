@@ -49,6 +49,7 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
     // State Variables
     // ═══════════════════════════════════════════════════════════════════════════
 
+    string public constant MARKET_NAME = "Uv4";
     IOracleHelper public immutable oracleHelper;
     address public coreHook;
     address public immutable marketVaultDeployer;
@@ -112,11 +113,6 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
         }
     }
 
-    function _marketName(address underlyingAsset0, address underlyingAsset1) internal view returns (string memory) {
-        return
-            string.concat("Uv4 ", IERC20Metadata(underlyingAsset0).symbol(), IERC20Metadata(underlyingAsset1).symbol());
-    }
-
     /**
      * @notice Creates a new market with core and proxy pools
      * @param underlyingAsset0 First underlying asset address
@@ -145,11 +141,10 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
 
             // Create LCC pair with initialIssuers in nested scope
             {
-                string memory marketName = _marketName(underlyingAsset0, underlyingAsset1);
                 address[] memory initialIssuers = new address[](1);
                 initialIssuers[0] = address(vtsOrchestrator);
                 (ctx.lccToken0, ctx.lccToken1) = liquidityHub.createLCCPair(
-                    ctx.marketRef, underlyingAsset0, underlyingAsset1, marketName, initialIssuers
+                    ctx.marketRef, underlyingAsset0, underlyingAsset1, MARKET_NAME, initialIssuers
                 );
             }
 

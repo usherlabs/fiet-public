@@ -92,14 +92,10 @@ library LCCMetadataLib {
 
     /// @notice Build the LCC token symbol from components
     /// @param uaSymbol The underlying asset symbol
-    /// @param truncatedMarketRefStr The truncated market reference hex string
+    /// @param symbolMarketId The truncated market reference hex string
     /// @return The full LCC symbol (e.g., "lcc-ETH-a1b2c3d4")
-    function buildSymbol(string memory uaSymbol, string memory truncatedMarketRefStr)
-        internal
-        pure
-        returns (string memory)
-    {
-        return string.concat("lcc-", uaSymbol, "-", truncatedMarketRefStr);
+    function buildSymbol(string memory uaSymbol, string memory symbolMarketId) internal pure returns (string memory) {
+        return string.concat("lcc-", uaSymbol, "-", symbolMarketId);
     }
 
     /// @notice Truncate marketRef to specified length and convert to hex string
