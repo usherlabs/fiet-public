@@ -414,10 +414,19 @@ contract VTSPositionLibTest is VTSLibTestBase {
     function testFuzz_trackCommitment_addRemove_symmetric(uint128 liquidity, int24 tickLower, int24 tickUpper) public {
         // Bound inputs
         vm.assume(liquidity > 0 && liquidity < type(uint128).max / 2);
-        tickLower = int24(bound(tickLower, -887220, 887219));
-        tickUpper = int24(bound(tickUpper, tickLower + 1, 887220));
-        vm.assume(tickLower < tickUpper);
-        vm.assume(tickLower % 60 == 0 && tickUpper % 60 == 0); // Valid tick spacing
+
+        // Generate valid tick values as multiples of 60 (tick spacing)
+        // Range: -887220 to 887220 in steps of 60 = 29574 valid ticks
+        int24 tickSpacing = 60;
+        int24 minTick = -887220;
+        int24 maxTick = 887220;
+
+        // Bound to valid tick indices, then multiply by spacing
+        int256 lowerIdx = bound(int256(tickLower), minTick / tickSpacing, (maxTick / tickSpacing) - 1);
+        int256 upperIdx = bound(int256(tickUpper), lowerIdx + 1, maxTick / tickSpacing);
+
+        tickLower = int24(lowerIdx * tickSpacing);
+        tickUpper = int24(upperIdx * tickSpacing);
 
         PositionId positionId = _registerHarnessPosition(DEFAULT_OWNER, tickLower, tickUpper, liquidity, DEFAULT_SALT);
 
