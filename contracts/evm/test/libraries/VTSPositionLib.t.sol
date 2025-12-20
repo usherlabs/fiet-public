@@ -200,7 +200,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
         assertEq(deficit0, 0, "deficit should be netted to zero");
         assertEq(settled0, 50e18, "remaining should be credited to settled");
-        assertEq(applied, 50e18, "applied should be net of deficit cover");
+        assertEq(applied, 150e18, "applied should be the sum of deficit coverage and settled increase");
     }
 
     function test_updateSettlement_netsAgainstCommitmentDeficit() public {
@@ -213,6 +213,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
         harness.setNetSettlementSinceLastMod(positionId, 0, 0);
         harness.setPoolNetSinceLastMod(testPoolId, 0, 0);
 
+        // Applied is now the total of deficit coverage and settled increase
         int256 applied = harness.updateSettlement(positionId, 0, 100e18);
 
         (uint256 cd0,) = harness.getCommitmentDeficit(positionId);
@@ -220,7 +221,29 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
         assertEq(cd0, 0, "commitment deficit should be netted");
         assertEq(settled0, 50e18, "remaining should be credited to settled");
-        assertEq(applied, 50e18, "applied should be net of commitment deficit");
+        assertEq(applied, 100e18, "applied should be the sum of deficit coverage and settled increase");
+    }
+
+    function test_updateSettlement_netsAgainstCombinedDeficit() public {
+        PositionId positionId = _registerDefaultPosition();
+
+        harness.setCommitmentMax(positionId, 1000e18, 0);
+        harness.setCumulativeDeficit(positionId, 100e18, 0);
+        harness.setCommitmentDeficit(positionId, 50e18, 0);
+        harness.setSettled(positionId, 0, 0); // set settled before.
+        harness.setNetSettlementSinceLastMod(positionId, 0, 0);
+        harness.setPoolNetSinceLastMod(testPoolId, 0, 0);
+
+        // Applied is now the total of deficit coverage and settled increase
+        int256 applied = harness.updateSettlement(positionId, 0, 120e18);
+
+        (uint256 cd0,) = harness.getCommitmentDeficit(positionId);
+        (,, uint256 settled0,, uint256 def0,) = harness.getPositionAccounting(positionId);
+
+        assertEq(def0, 0, "cumulative deficit should be netted");
+        assertEq(cd0, 30e18, "commitment deficit should partially be netted");
+        assertEq(settled0, 0, "No settled should be credited");
+        assertEq(applied, 120e18, "applied should be the sum of deficit coverage and settled increase");
     }
 
     function test_updateSettlement_clampsToCommitmentMax() public {
