@@ -355,13 +355,6 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
                 _calculateSettlementAmounts(liquidityParams, marketVTSConfiguration);
         }
 
-        // Setup approvals and transfers in scoped block
-        {
-            Currency underlyingCurrency1 = Currency.wrap(lcc1.underlying());
-            underlyingCurrency1.approve(address(vtsOrchestrator), requiredSettlementAmount1);
-            underlyingCurrency1.transfer(address(positionManager), requiredSettlementAmount1);
-        }
-
         // Calculate ETH amounts
         uint256 ethToSend = requiredSettlementAmount0 + 1 ether;
 
@@ -376,9 +369,16 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
             balancesBefore.lcc1UnderlyingAsset = Currency.wrap(lcc1.underlying()).balanceOfSelf();
         }
 
+        // Setup approvals and transfer counterparty asset to MMPM in scoped block
+        {
+            Currency underlyingCurrency1 = Currency.wrap(lcc1.underlying());
+            underlyingCurrency1.approve(address(vtsOrchestrator), requiredSettlementAmount1);
+            underlyingCurrency1.transfer(address(positionManager), requiredSettlementAmount1);
+        }
+
         // Prepare and execute actions in scoped block
         {
-            MMA.PreparedAction[] memory actions = _prepareNativeETHActions(
+            MMA.PreparedAction[] memory actions = _commitMintSettleFromPositionManager(
                 signalBytes, liquidityParams, requiredSettlementAmount0, requiredSettlementAmount1
             );
             (bytes memory actionsBytes, bytes[] memory params) = MMA.concatPrepared(actions);
@@ -451,12 +451,19 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
     }
 
     /// @dev Helper to prepare actions for native ETH position
-    function _prepareNativeETHActions(
+    function _commitMintSettleFromPositionManager(
         bytes memory signalBytes,
         ModifyLiquidityParams memory liquidityParams,
         uint256 requiredSettlementAmount0,
         uint256 requiredSettlementAmount1
     ) internal view returns (MMA.PreparedAction[] memory actions) {
+        // Prepare actions using the adapter pattern:
+        // 1. Commit the signal
+        // 2. Mint the position
+        // 3. Sync the counterparty asset balance as credit to locker (so it can be used for settlement)
+        // 4. Settle the underlying into the position (consumes deltas)
+        // 5. Take excess native ETH back to sender
+
         Currency underlyingCurrency1 = Currency.wrap(lcc1.underlying());
         actions = new MMA.PreparedAction[](5);
         actions[0] = MMA.prepareCommit(signalBytes);
