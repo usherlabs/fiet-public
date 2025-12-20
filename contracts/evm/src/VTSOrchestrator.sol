@@ -227,6 +227,13 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
         }
     }
 
+    /// @dev Resolve market vault for a pool key (reduces stack depth in callers)
+    function _resolveVault(PoolKey calldata poolKey) internal view returns (IMarketVault) {
+        IMarketFactory factory =
+            liquidityHub.getFactory(Currency.unwrap(poolKey.currency0), Currency.unwrap(poolKey.currency1));
+        return MarketHandlerLib.getVault(factory, poolKey.toId());
+    }
+
     // --------------------------------------------------
     // Admin Helpers
     // --------------------------------------------------
@@ -451,40 +458,55 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
         notPoolPaused(poolKey.toId())
         returns (Position memory pos, PositionId id, BalanceDelta feeAdj, bool isMMPosition)
     {
-        // Decode hookData to check if this is an MM operation
-        PositionModificationHookData memory mmData = PositionModificationHookDataLib.decodeCalldata(hookData);
+        isMMPosition = _validateMMOperation(hookData);
+        (pos, id, feeAdj) = _executeProcessPosition(owner, poolKey, params, callerDelta, feesAccrued, hookData);
+    }
 
-        isMMPosition = false;
-        // Determine if this is a valid MM position (MM operation with valid signal)
+    /// @dev Validate MM operation from hook data (helper to reduce stack depth)
+    function _validateMMOperation(bytes calldata hookData) private view returns (bool isMMPosition) {
+        PositionModificationHookData memory mmData = PositionModificationHookDataLib.decodeCalldata(hookData);
         if (PositionModificationHookDataLib.isMMOperation(mmData)) {
-            // Validate signal for MM positions (skip expiry check for seizure)
             _assertSignalValid(mmData.commitId, !mmData.seizure.isSeizing);
-            isMMPosition = true;
+            return true;
+        }
+        return false;
+    }
+
+    /// @dev Execute process position logic (helper to reduce stack depth)
+    function _executeProcessPosition(
+        address owner,
+        PoolKey calldata poolKey,
+        ModifyLiquidityParams calldata params,
+        BalanceDelta callerDelta,
+        BalanceDelta feesAccrued,
+        bytes calldata hookData
+    ) private returns (Position memory pos, PositionId id, BalanceDelta feeAdj) {
+        // Build context in scoped block
+        PositionContext memory ctx;
+        {
+            ctx = PositionContext({
+                poolManager: poolManager,
+                liquidityHub: liquidityHub,
+                oracleHelper: oracleHelper,
+                marketVault: _resolveVault(poolKey)
+            });
         }
 
-        // Build position context with dependency references
-        IMarketFactory factory =
-            liquidityHub.getFactory(Currency.unwrap(poolKey.currency0), Currency.unwrap(poolKey.currency1));
-        IMarketVault vault = MarketHandlerLib.getVault(factory, poolKey.toId());
-        PositionContext memory ctx = PositionContext({
-            poolManager: poolManager, liquidityHub: liquidityHub, oracleHelper: oracleHelper, marketVault: vault
-        });
-
-        // Delegate all position processing to VTSPositionLib
-        // This handles registration, linking, fee processing, delta accounting,
-        // LCC issuance/cancellation, and checkpoint marking
-        TouchPositionResult memory result = VTSPositionLib.touchPosition(
-            s,
-            ctx,
-            TouchPositionParams({
+        // Build params in scoped block
+        TouchPositionParams memory tpParams;
+        {
+            tpParams = TouchPositionParams({
                 owner: owner,
                 poolKey: poolKey,
                 params: params,
                 callerDelta: callerDelta,
                 feesAccrued: feesAccrued,
                 hookData: hookData
-            })
-        );
+            });
+        }
+
+        // Execute
+        TouchPositionResult memory result = VTSPositionLib.touchPosition(s, ctx, tpParams);
         pos = result.pos;
         id = result.id;
         feeAdj = result.feeAdj;
@@ -582,39 +604,41 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
         onlyIfPoolManagerUnlocked
         returns (BalanceDelta settlementDelta, bool rfsOpen, uint256 seizedLiquidityUnits)
     {
-        // Validate signal only for normal settlement, not seizure
-        _assertSignalValid(commitId, !isSeizing); // Skip expiry check for seizure
+        _assertSignalValid(commitId, !isSeizing);
 
-        PositionId positionId = getPositionId(commitId, positionIndex);
-
-        // position validation is performed inside of VTSPositionLib.onMMSettle
-        MMSettleResult memory result = VTSPositionLib.onMMSettle(
-            s,
-            poolManager,
-            MMSettleParams({
+        // Build params in scoped block to free stack
+        MMSettleParams memory params;
+        {
+            params = MMSettleParams({
                 vault: marketVault,
-                positionId: positionId,
+                positionId: getPositionId(commitId, positionIndex),
                 lccCurrency0: currency0,
                 lccCurrency1: currency1,
                 delta: amountDelta,
                 isSeizing: isSeizing
-            })
-        );
+            });
+        }
+
+        // Execute settlement
+        MMSettleResult memory result = VTSPositionLib.onMMSettle(s, poolManager, params);
         settlementDelta = result.settlementDelta;
         rfsOpen = result.rfsOpen;
         seizedLiquidityUnits = result.seizedLiquidityUnits;
 
-        PositionAccounting storage pa = s.positionAccounting[positionId];
-        emit PositionSettled(
-            commitId,
-            positionIndex,
-            settlementDelta.amount0(),
-            settlementDelta.amount1(),
-            pa.settled.token0,
-            pa.settled.token1,
-            isSeizing,
-            rfsOpen
-        );
+        // Emit event
+        {
+            PositionAccounting storage pa = s.positionAccounting[params.positionId];
+            emit PositionSettled(
+                commitId,
+                positionIndex,
+                settlementDelta.amount0(),
+                settlementDelta.amount1(),
+                pa.settled.token0,
+                pa.settled.token1,
+                isSeizing,
+                rfsOpen
+            );
+        }
     }
 
     /// @notice Validate that the grace period has elapsed for a position (required before seizure)

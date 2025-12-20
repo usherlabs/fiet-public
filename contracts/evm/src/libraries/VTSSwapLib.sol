@@ -24,11 +24,21 @@ library VTSSwapLib {
     using StateLibrary for IPoolManager;
     using TokenPairLib for TokenPairUint;
 
+    /// @dev Swap loop state to reduce stack depth
+    struct SwapLoopState {
+        PoolId poolId;
+        int24 tickSpacing;
+        uint160 sqrtPAfter;
+        bool zeroForOne;
+        uint160 sqrtCurrent;
+        uint128 segmentLiquidity;
+        int24 stepTick;
+    }
+
     /// @notice Processes the logic for CoreHook.afterSwap
+    /// @dev Inflow growth is net of (excludes) LP/protocol fees.
     /// @param s The central VTS storage
     /// @param poolManager The pool manager contract
-    /// @param s The VTS storage
-    /// @param poolManager The pool manager
     /// @param key The pool key
     /// @param sqrtPBefore The sqrt price before the swap
     /// @param liqBefore The liquidity before the swap
@@ -41,107 +51,143 @@ library VTSSwapLib {
         uint160 sqrtPBefore,
         uint128 liqBefore
     ) external {
-        // Inflow growth is net of (excludes) LP/protocol fees.
+        PoolId poolId = key.toId();
+        // Read start tick from transient sqrtP_before and end tick from state
+        (uint160 sqrtPAfter, int24 tickAfter,,) = StateLibrary.getSlot0(poolManager, poolId);
+        int24 tickBefore = TickMath.getTickAtSqrtPrice(sqrtPBefore);
 
-        // Tick cross flips + per-segment accrual: iterate initialised ticks crossed during the swap
-        {
-            // read start tick from transient sqrtP_before and end tick from state
-            (uint160 sqrtPAfter, int24 tickAfter,,) = StateLibrary.getSlot0(poolManager, key.toId());
-            int24 tickBefore = TickMath.getTickAtSqrtPrice(sqrtPBefore);
-
-            if (tickAfter != tickBefore) {
-                bool zeroForOne = tickAfter < tickBefore;
-                // running sqrt for segment starts
-                uint160 sqrtCurrent = sqrtPBefore;
-                // running segment liquidity snapshot (from beforeSwap)
-                uint128 segmentLiquidity = liqBefore;
-                int24 stepTick = tickBefore;
-                while (true) {
-                    // next initialised tick in the direction of the swap
-                    (int24 next, bool initialized) = TickUtils.nextInitializedTickWithinOneWord(
-                        poolManager, key.toId(), stepTick, key.tickSpacing, zeroForOne
-                    );
-                    // compute target sqrt for this segment (either next tick or final price)
-                    // Ensure we don't go beyond valid tick bounds
-                    int24 boundedNext = next;
-                    if (boundedNext <= TickMath.MIN_TICK) {
-                        boundedNext = TickMath.MIN_TICK;
-                    }
-                    if (boundedNext >= TickMath.MAX_TICK) {
-                        boundedNext = TickMath.MAX_TICK;
-                    }
-                    uint160 sqrtNext = TickMath.getSqrtPriceAtTick(boundedNext);
-                    uint160 sqrtTarget = zeroForOne
-                        ? (sqrtPAfter < sqrtNext ? sqrtPAfter : sqrtNext)
-                        : (sqrtPAfter > sqrtNext ? sqrtPAfter : sqrtNext);
-                    if (segmentLiquidity > 0 && sqrtTarget != sqrtCurrent) {
-                        // amountOut per segment from price delta and liquidity
-                        // see reference: https://github.com/Uniswap/v4-core/blob/0f17b65aa61edee384d5129b7ea080f22905faa0/src/libraries/SwapMath.sol#L88
-                        uint256 outSeg = zeroForOne
-                            ? SqrtPriceMath.getAmount1Delta(sqrtTarget, sqrtCurrent, segmentLiquidity, false)
-                            : SqrtPriceMath.getAmount0Delta(sqrtCurrent, sqrtTarget, segmentLiquidity, false);
-                        if (outSeg > 0) {
-                            _accrueDeficitGlobalGrowth(s, key.toId(), zeroForOne ? 1 : 0, outSeg, segmentLiquidity);
-                        }
-                        // Inflow accrual per segment using no-fee input (net of LP/protocol fees)
-                        {
-                            uint8 tokenIn = zeroForOne ? 0 : 1;
-                            uint256 inNoFee = zeroForOne
-                                ? SqrtPriceMath.getAmount0Delta(sqrtCurrent, sqrtTarget, segmentLiquidity, true)
-                                : SqrtPriceMath.getAmount1Delta(sqrtTarget, sqrtCurrent, segmentLiquidity, true);
-                            if (inNoFee > 0) {
-                                _accrueInflowGlobalGrowth(s, key.toId(), tokenIn, inNoFee, segmentLiquidity);
-                            }
-                        }
-                        sqrtCurrent = sqrtTarget;
-                    }
-                    // stop if we've reached final price
-                    if (sqrtTarget == sqrtPAfter) {
-                        break;
-                    }
-                    // otherwise, we crossed an initialised tick; flip outside and update liquidity
-                    if (initialized) {
-                        _onTickCross(s, poolManager, key.toId(), next, 0);
-                        _onTickCross(s, poolManager, key.toId(), next, 1);
-                        // apply liquidity net change for subsequent segments (direction-aware)
-                        (, int128 liquidityNet) = StateLibrary.getTickLiquidity(poolManager, key.toId(), next);
-                        if (zeroForOne) liquidityNet = -liquidityNet;
-                        unchecked {
-                            if (liquidityNet < 0) {
-                                segmentLiquidity = uint128(uint256(segmentLiquidity) - uint256(uint128(-liquidityNet)));
-                            } else if (liquidityNet > 0) {
-                                segmentLiquidity = uint128(uint256(segmentLiquidity) + uint256(uint128(liquidityNet)));
-                            }
-                        }
-                    }
-                    stepTick = next;
-                }
-            } else {
-                // Intra-tick swap: accrue a single segment from sqrtPBefore to sqrtPAfter
-                // Determine direction by price movement
-                bool zeroForOne = sqrtPAfter < sqrtPBefore;
-                // Load liquidity snapshot from beforeSwap
-                uint128 segmentLiquidity = liqBefore;
-                if (segmentLiquidity > 0 && sqrtPAfter != sqrtPBefore) {
-                    uint256 outSeg = zeroForOne
-                        ? SqrtPriceMath.getAmount1Delta(sqrtPAfter, sqrtPBefore, segmentLiquidity, false)
-                        : SqrtPriceMath.getAmount0Delta(sqrtPBefore, sqrtPAfter, segmentLiquidity, false);
-                    if (outSeg > 0) {
-                        _accrueDeficitGlobalGrowth(s, key.toId(), zeroForOne ? 1 : 0, outSeg, segmentLiquidity);
-                    }
-                    // Inflow accrual for intra-tick segment (no-fee input)
-                    {
-                        uint8 tokenIn = zeroForOne ? 0 : 1;
-                        uint256 inNoFee = zeroForOne
-                            ? SqrtPriceMath.getAmount0Delta(sqrtPBefore, sqrtPAfter, segmentLiquidity, true)
-                            : SqrtPriceMath.getAmount1Delta(sqrtPAfter, sqrtPBefore, segmentLiquidity, true);
-                        if (inNoFee > 0) {
-                            _accrueInflowGlobalGrowth(s, key.toId(), tokenIn, inNoFee, segmentLiquidity);
-                        }
-                    }
-                }
-            }
+        if (tickAfter != tickBefore) {
+            // Tick cross flips + per-segment accrual: iterate initialised ticks crossed during the swap
+            _processMultiTickSwap(
+                s,
+                poolManager,
+                SwapLoopState({
+                    poolId: poolId,
+                    tickSpacing: key.tickSpacing,
+                    sqrtPAfter: sqrtPAfter,
+                    zeroForOne: tickAfter < tickBefore,
+                    sqrtCurrent: sqrtPBefore,
+                    segmentLiquidity: liqBefore,
+                    stepTick: tickBefore
+                })
+            );
+        } else {
+            // Intra-tick swap: accrue a single segment from sqrtPBefore to sqrtPAfter
+            _processIntraTickSwap(s, poolId, sqrtPBefore, sqrtPAfter, liqBefore);
         }
+    }
+
+    /// @dev Process a swap that crosses multiple ticks
+    /// @notice Iterates through initialised ticks crossed during the swap, accruing growth per segment
+    function _processMultiTickSwap(VTSStorage storage s, IPoolManager poolManager, SwapLoopState memory st) private {
+        while (true) {
+            // Next initialised tick in the direction of the swap
+            (int24 next, bool initialized) = TickUtils.nextInitializedTickWithinOneWord(
+                poolManager, st.poolId, st.stepTick, st.tickSpacing, st.zeroForOne
+            );
+
+            // Compute target sqrt for this segment (either next tick or final price)
+            uint160 sqrtTarget = _calcSqrtTarget(next, st.sqrtPAfter, st.zeroForOne);
+
+            if (st.segmentLiquidity > 0 && sqrtTarget != st.sqrtCurrent) {
+                // Accrue growth for this segment
+                _accrueSegmentGrowth(s, st.poolId, st.zeroForOne, st.sqrtCurrent, sqrtTarget, st.segmentLiquidity);
+                st.sqrtCurrent = sqrtTarget;
+            }
+
+            // Stop if we've reached final price
+            if (sqrtTarget == st.sqrtPAfter) break;
+
+            // Otherwise, we crossed an initialised tick; flip outside and update liquidity
+            if (initialized) {
+                _onTickCross(s, poolManager, st.poolId, next, 0);
+                _onTickCross(s, poolManager, st.poolId, next, 1);
+                // Apply liquidity net change for subsequent segments (direction-aware)
+                st.segmentLiquidity =
+                    _applyLiquidityNet(poolManager, st.poolId, next, st.segmentLiquidity, st.zeroForOne);
+            }
+            st.stepTick = next;
+        }
+    }
+
+    /// @dev Calculate bounded sqrtTarget for a swap step
+    /// @notice Computes target sqrt for this segment (either next tick or final price)
+    /// @dev Ensure we don't go beyond valid tick bounds
+    function _calcSqrtTarget(int24 next, uint160 sqrtPAfter, bool zeroForOne) private pure returns (uint160) {
+        int24 boundedNext = next;
+        if (boundedNext <= TickMath.MIN_TICK) boundedNext = TickMath.MIN_TICK;
+        if (boundedNext >= TickMath.MAX_TICK) boundedNext = TickMath.MAX_TICK;
+        uint160 sqrtNext = TickMath.getSqrtPriceAtTick(boundedNext);
+        return
+            zeroForOne
+                ? (sqrtPAfter < sqrtNext ? sqrtPAfter : sqrtNext)
+                : (sqrtPAfter > sqrtNext ? sqrtPAfter : sqrtNext);
+    }
+
+    /// @dev Accrue deficit and inflow growth for a segment
+    /// @notice Processes a single price segment within a swap, accruing both deficit (output) and inflow (input net of fees) growth
+    function _accrueSegmentGrowth(
+        VTSStorage storage s,
+        PoolId poolId,
+        bool zeroForOne,
+        uint160 sqrtCurrent,
+        uint160 sqrtTarget,
+        uint128 liquidity
+    ) private {
+        // AmountOut per segment from price delta and liquidity
+        // See reference: https://github.com/Uniswap/v4-core/blob/0f17b65aa61edee384d5129b7ea080f22905faa0/src/libraries/SwapMath.sol#L88
+        uint256 outSeg = zeroForOne
+            ? SqrtPriceMath.getAmount1Delta(sqrtTarget, sqrtCurrent, liquidity, false)
+            : SqrtPriceMath.getAmount0Delta(sqrtCurrent, sqrtTarget, liquidity, false);
+        if (outSeg > 0) {
+            _accrueDeficitGlobalGrowth(s, poolId, zeroForOne ? 1 : 0, outSeg, liquidity);
+        }
+
+        // Inflow accrual per segment using no-fee input (net of LP/protocol fees)
+        uint256 inNoFee = zeroForOne
+            ? SqrtPriceMath.getAmount0Delta(sqrtCurrent, sqrtTarget, liquidity, true)
+            : SqrtPriceMath.getAmount1Delta(sqrtTarget, sqrtCurrent, liquidity, true);
+        if (inNoFee > 0) {
+            _accrueInflowGlobalGrowth(s, poolId, zeroForOne ? 0 : 1, inNoFee, liquidity);
+        }
+    }
+
+    /// @dev Apply liquidity net change after tick cross
+    /// @notice Apply liquidity net change for subsequent segments (direction-aware)
+    function _applyLiquidityNet(
+        IPoolManager poolManager,
+        PoolId poolId,
+        int24 tick,
+        uint128 currentLiq,
+        bool zeroForOne
+    ) private view returns (uint128) {
+        (, int128 liquidityNet) = StateLibrary.getTickLiquidity(poolManager, poolId, tick);
+        if (zeroForOne) liquidityNet = -liquidityNet;
+        unchecked {
+            if (liquidityNet < 0) {
+                return uint128(uint256(currentLiq) - uint256(uint128(-liquidityNet)));
+            } else if (liquidityNet > 0) {
+                return uint128(uint256(currentLiq) + uint256(uint128(liquidityNet)));
+            }
+            return currentLiq;
+        }
+    }
+
+    /// @dev Process an intra-tick swap (no tick crossing)
+    /// @notice Intra-tick swap: accrue a single segment from sqrtPBefore to sqrtPAfter
+    /// @dev Determine direction by price movement and load liquidity snapshot from beforeSwap
+    function _processIntraTickSwap(
+        VTSStorage storage s,
+        PoolId poolId,
+        uint160 sqrtPBefore,
+        uint160 sqrtPAfter,
+        uint128 liquidity
+    ) private {
+        if (liquidity == 0 || sqrtPAfter == sqrtPBefore) return;
+        // Determine direction by price movement
+        bool zeroForOne = sqrtPAfter < sqrtPBefore;
+        // Load liquidity snapshot from beforeSwap
+        _accrueSegmentGrowth(s, poolId, zeroForOne, sqrtPBefore, sqrtPAfter, liquidity);
     }
 
     /// @notice Called on tick cross to flip outside growth for a tick

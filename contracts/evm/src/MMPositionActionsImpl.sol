@@ -43,6 +43,31 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
     using MMCalldataDecoder for bytes;
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // Internal Structs
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// @dev Internal struct to reduce stack depth in _settle
+    /// @notice Groups transfer-related parameters to avoid stack-too-deep errors
+    struct SettleTransferParams {
+        Currency underlying0;
+        Currency underlying1;
+        IMarketVault vault;
+        bool usePositionManagerBalance;
+    }
+
+    /// @dev Internal struct to reduce stack depth in _settle
+    /// @notice Groups onMMSettle call parameters
+    struct SettleCallParams {
+        IMarketVault vault;
+        uint256 tokenId;
+        uint256 positionIndex;
+        Currency currency0;
+        Currency currency1;
+        BalanceDelta requestedDelta;
+        bool isSeizing;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // Immutables (must match MMPositionManager's values)
     // ═══════════════════════════════════════════════════════════════════════════
 
@@ -233,6 +258,67 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
         );
     }
 
+    /// @notice Calls VTS orchestrator onMMSettle with bundled parameters
+    /// @dev Extracted to reduce stack depth in _settle (avoids stack-too-deep with coverage instrumentation)
+    /// @param params The call parameters bundled in a struct
+    /// @return settlementDelta The settlement delta
+    /// @return seizedLiquidityUnits The amount of liquidity units seized
+    function _callOnMMSettle(SettleCallParams memory params)
+        internal
+        returns (BalanceDelta settlementDelta, uint256 seizedLiquidityUnits)
+    {
+        (settlementDelta,, seizedLiquidityUnits) = vtsOrchestrator.onMMSettle(
+            params.vault,
+            params.tokenId,
+            params.positionIndex,
+            params.currency0,
+            params.currency1,
+            params.requestedDelta,
+            params.isSeizing
+        );
+    }
+
+    /// @notice Processes settlement transfers for a position
+    /// @dev Extracted to reduce stack depth in _settle (avoids stack-too-deep with coverage instrumentation)
+    /// @param params The transfer parameters bundled in a struct
+    /// @param settlementDelta The settlement delta from VTS
+    function _processSettlementTransfers(SettleTransferParams memory params, BalanceDelta settlementDelta) internal {
+        int128 delta0 = settlementDelta.amount0();
+        int128 delta1 = settlementDelta.amount1();
+
+        address sender = msgSender();
+        address valueSender = params.usePositionManagerBalance ? address(this) : sender;
+
+        // Process negative deltas (inflows to vault)
+        if (delta0 < 0) {
+            params.underlying0
+                .transferFrom(valueSender, address(params.vault), LiquidityUtils.safeInt128ToUint256(delta0));
+            if (params.usePositionManagerBalance) {
+                vtsOrchestrator.take(params.underlying0, sender, LiquidityUtils.safeInt128ToUint256(delta0));
+            }
+        }
+        if (delta1 < 0) {
+            params.underlying1
+                .transferFrom(valueSender, address(params.vault), LiquidityUtils.safeInt128ToUint256(delta1));
+            if (params.usePositionManagerBalance) {
+                vtsOrchestrator.take(params.underlying1, sender, LiquidityUtils.safeInt128ToUint256(delta1));
+            }
+        }
+
+        params.vault.modifyLiquidities(settlementDelta);
+
+        // Process positive deltas (outflows from vault)
+        if (delta0 > 0) {
+            params.underlying0.transfer(valueSender, LiquidityUtils.safeInt128ToUint256(delta0));
+        }
+        if (delta1 > 0) {
+            params.underlying1.transfer(valueSender, LiquidityUtils.safeInt128ToUint256(delta1));
+        }
+        if ((delta0 > 0 || delta1 > 0) && params.usePositionManagerBalance) {
+            _syncPairBalanceToDeltas(params.underlying0, params.underlying1);
+        }
+    }
+
     /// @notice Settles underlying assets to/from a position
     /// @param poolKey The pool key
     /// @param tokenId The commitment NFT token ID
@@ -254,68 +340,47 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
             revert Errors.InvalidDelta(0, 0);
         }
 
-        // Scoped block for position validation to free positionId from stack early
-        bool isSeizing;
+        // Build call params in scoped block to release intermediate variables
+        SettleCallParams memory callParams;
         {
-            Position memory position;
-            PositionId positionId;
-            (position, positionId) = getPosition(tokenId, positionIndex);
-            MMHelpers.assertPositionForPool(poolKey, position);
-            isSeizing = _isSeizing(positionId);
+            // Position validation in nested scope
+            bool isSeizing;
+            {
+                Position memory position;
+                PositionId positionId;
+                (position, positionId) = getPosition(tokenId, positionIndex);
+                MMHelpers.assertPositionForPool(poolKey, position);
+                isSeizing = _isSeizing(positionId);
+            }
+
+            if (!isSeizing) {
+                MMHelpers.assertApprovedOrOwner(msgSender(), tokenId);
+            }
+
+            callParams = SettleCallParams({
+                vault: _getVault(poolKey),
+                tokenId: tokenId,
+                positionIndex: positionIndex,
+                currency0: poolKey.currency0,
+                currency1: poolKey.currency1,
+                requestedDelta: toBalanceDelta(amount0, amount1),
+                isSeizing: isSeizing
+            });
         }
 
-        if (!isSeizing) {
-            MMHelpers.assertApprovedOrOwner(msgSender(), tokenId);
-        }
+        // Call onMMSettle via helper
+        (BalanceDelta settlementDelta, uint256 seizedLiquidityUnits) = _callOnMMSettle(callParams);
 
-        IMarketVault vault = _getVault(poolKey);
-
-        (BalanceDelta settlementDelta,, uint256 seizedLiquidityUnits) = vtsOrchestrator.onMMSettle(
-            vault,
-            tokenId,
-            positionIndex,
-            poolKey.currency0,
-            poolKey.currency1,
-            toBalanceDelta(amount0, amount1),
-            isSeizing
+        // Process settlement transfers via helper (reduces stack depth)
+        _processSettlementTransfers(
+            SettleTransferParams({
+                underlying0: _lccToUnderlyingCurrency(poolKey.currency0),
+                underlying1: _lccToUnderlyingCurrency(poolKey.currency1),
+                vault: callParams.vault,
+                usePositionManagerBalance: usePositionManagerBalance
+            }),
+            settlementDelta
         );
-
-        Currency underlying0 = _lccToUnderlyingCurrency(poolKey.currency0);
-        Currency underlying1 = _lccToUnderlyingCurrency(poolKey.currency1);
-
-        // Scoped block for settlement transfers
-        {
-            int128 delta0 = settlementDelta.amount0();
-            int128 delta1 = settlementDelta.amount1();
-
-            address sender = msgSender();
-            address valueSender = usePositionManagerBalance ? address(this) : sender;
-
-            if (delta0 < 0) {
-                underlying0.transferFrom(valueSender, address(vault), LiquidityUtils.safeInt128ToUint256(delta0));
-                if (usePositionManagerBalance) {
-                    vtsOrchestrator.take(underlying0, sender, LiquidityUtils.safeInt128ToUint256(delta0));
-                }
-            }
-            if (delta1 < 0) {
-                underlying1.transferFrom(valueSender, address(vault), LiquidityUtils.safeInt128ToUint256(delta1));
-                if (usePositionManagerBalance) {
-                    vtsOrchestrator.take(underlying1, sender, LiquidityUtils.safeInt128ToUint256(delta1));
-                }
-            }
-
-            vault.modifyLiquidities(settlementDelta);
-
-            if (delta0 > 0) {
-                underlying0.transfer(valueSender, LiquidityUtils.safeInt128ToUint256(delta0));
-            }
-            if (delta1 > 0) {
-                underlying1.transfer(valueSender, LiquidityUtils.safeInt128ToUint256(delta1));
-            }
-            if ((delta0 > 0 || delta1 > 0) && usePositionManagerBalance) {
-                _syncPairBalanceToDeltas(underlying0, underlying1);
-            }
-        }
 
         return (settlementDelta, seizedLiquidityUnits);
     }
@@ -427,9 +492,16 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
         _increaseInternal(poolKey, tokenId, positionIndex, tickLower, tickUpper, liquidityFromDeltas);
         if (payerIsUser) {
             // since credits exist (and already in market), net settlement for position
-            BalanceDelta sDelta = LiquidityUtils.safeToBalanceDelta(credit0, credit1, true, true);
-            vtsOrchestrator.onMMSettle(
-                _getVault(poolKey), tokenId, positionIndex, poolKey.currency0, poolKey.currency1, sDelta, false
+            _callOnMMSettle(
+                SettleCallParams({
+                    vault: _getVault(poolKey),
+                    tokenId: tokenId,
+                    positionIndex: positionIndex,
+                    currency0: poolKey.currency0,
+                    currency1: poolKey.currency1,
+                    requestedDelta: LiquidityUtils.safeToBalanceDelta(credit0, credit1, true, true),
+                    isSeizing: false
+                })
             );
         } else {
             // Settle into the position the underlying tokens that are owed.
@@ -482,9 +554,16 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
         (, uint256 positionIndex) = _mintPositionInternal(poolKey, tokenId, tickLower, tickUpper, liquidityFromDeltas);
         if (payerIsUser) {
             // since credits exist (and already in market), net settlement for position
-            BalanceDelta sDelta = LiquidityUtils.safeToBalanceDelta(credit0, credit1, true, true);
-            vtsOrchestrator.onMMSettle(
-                _getVault(poolKey), tokenId, positionIndex, poolKey.currency0, poolKey.currency1, sDelta, false
+            _callOnMMSettle(
+                SettleCallParams({
+                    vault: _getVault(poolKey),
+                    tokenId: tokenId,
+                    positionIndex: positionIndex,
+                    currency0: poolKey.currency0,
+                    currency1: poolKey.currency1,
+                    requestedDelta: LiquidityUtils.safeToBalanceDelta(credit0, credit1, true, true),
+                    isSeizing: false
+                })
             );
         } else {
             // Settle into the position the underlying tokens that are owed.
@@ -533,24 +612,33 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
             } else {
                 // DEPOSIT: Settle credits into position
                 // Net protocol delta via onMMSettle (no token movement) regardless of payerIsUser
-                // Scoped block for position validation to free positionId from stack early
-                bool isSeizing;
+                // Build call params in scoped block to reduce stack depth
+                SettleCallParams memory callParams;
                 {
-                    Position memory position;
-                    PositionId positionId;
-                    (position, positionId) = getPosition(tokenId, positionIndex);
-                    MMHelpers.assertPositionForPool(poolKey, position);
-                    isSeizing = _isSeizing(positionId);
-                }
+                    bool isSeizing;
+                    {
+                        Position memory position;
+                        PositionId positionId;
+                        (position, positionId) = getPosition(tokenId, positionIndex);
+                        MMHelpers.assertPositionForPool(poolKey, position);
+                        isSeizing = _isSeizing(positionId);
+                    }
 
-                if (!isSeizing) {
-                    MMHelpers.assertApprovedOrOwner(sender, tokenId);
-                }
+                    if (!isSeizing) {
+                        MMHelpers.assertApprovedOrOwner(sender, tokenId);
+                    }
 
-                BalanceDelta sDelta = LiquidityUtils.safeToBalanceDelta(credit0, credit1, true, true);
-                vtsOrchestrator.onMMSettle(
-                    _getVault(poolKey), tokenId, positionIndex, poolKey.currency0, poolKey.currency1, sDelta, isSeizing
-                );
+                    callParams = SettleCallParams({
+                        vault: _getVault(poolKey),
+                        tokenId: tokenId,
+                        positionIndex: positionIndex,
+                        currency0: poolKey.currency0,
+                        currency1: poolKey.currency1,
+                        requestedDelta: LiquidityUtils.safeToBalanceDelta(credit0, credit1, true, true),
+                        isSeizing: isSeizing
+                    });
+                }
+                _callOnMMSettle(callParams);
             }
         }
         if (!payerIsUser && !shouldTake) {

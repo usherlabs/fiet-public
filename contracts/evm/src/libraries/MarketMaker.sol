@@ -61,7 +61,7 @@ library MarketMaker {
      * @param dest The destination storage pointer
      * @param src The source memory State
      */
-    function copyToStorage(State storage dest, State memory src) internal {
+    function save(State storage dest, State memory src) internal {
         dest.owner = src.owner;
         dest.sourceState = src.sourceState;
         dest.prover = src.prover;
