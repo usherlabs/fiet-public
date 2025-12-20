@@ -25,6 +25,7 @@ jobs:
           egress-policy: block
           allowed-domains: |
             api.github.com
+            release-assets.githubusercontent.com
 
       - uses: actions/checkout@v4
         with:
