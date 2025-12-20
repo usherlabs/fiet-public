@@ -40,7 +40,7 @@ jobs:
         id: fmt
 
       - name: Run Forge build
-        run: forge build --sizes
+        run: forge build --sizes # fails if sizes are above limit
         working-directory: contracts/evm
         id: build
 
