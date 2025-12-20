@@ -143,10 +143,16 @@ contract VTSPositionLibTest is VTSLibTestBase {
     function test_trackCommitment_partialRemoval_clampsToZero() public {
         PositionId positionId = _registerDefaultPosition();
 
-        // Set initial commitment less than what we're removing
-        harness.setCommitmentMax(positionId, 100e18, 100e18);
-
         uint128 liquidityToRemove = 500e18;
+
+        // Calculate the commitment that corresponds to the liquidity being removed
+        (uint256 subC0, uint256 subC1) =
+            LiquidityUtils.calculateCommitmentMaxima(DEFAULT_TICK_LOWER, DEFAULT_TICK_UPPER, liquidityToRemove);
+
+        // Set initial commitment to LESS than what the removal will subtract
+        // This ensures the subtraction will clamp to zero rather than underflow
+        harness.setCommitmentMax(positionId, subC0 / 2, subC1 / 2);
+
         ModifyLiquidityParams memory params = ModifyLiquidityParams({
             tickLower: DEFAULT_TICK_LOWER,
             tickUpper: DEFAULT_TICK_UPPER,
