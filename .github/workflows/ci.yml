@@ -14,16 +14,22 @@ jobs:
   solidity:
     name: Solidity Tests
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
       - name: Restrict network egress
         uses: bullfrogsec/bullfrog@1831f79cce8ad602eef14d2163873f27081ebfb3 # v0.8.4
         if: ${{ !env.ACT }} # Skip when running locally with act
         with:
           egress-policy: block
+          allowed-domains: |
+            api.github.com
 
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
@@ -49,34 +55,8 @@ jobs:
         working-directory: contracts/evm
         id: test
 
-  solidity-coverage:
-    name: Solidity Coverage
-    runs-on: ubuntu-latest
-    # Only run on PRs to generate coverage comments
-    if: github.event_name == 'pull_request'
-    permissions:
-      contents: read
-      pull-requests: write
-    steps:
-      - name: Restrict network egress
-        uses: bullfrogsec/bullfrog@1831f79cce8ad602eef14d2163873f27081ebfb3 # v0.8.4
-        if: ${{ !env.ACT }} # Skip when running locally with act
-        with:
-          egress-policy: block
-          allowed-domains: |
-            api.github.com
-
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Install Foundry
-        uses: foundry-rs/foundry-toolchain@v1
-        with:
-          version: "v1.4.2"
-
       - name: Run Forge coverage
+        if: github.event_name == 'pull_request'
         id: coverage
         working-directory: contracts/evm
         run: |
@@ -136,6 +116,7 @@ jobs:
           echo "coverage_failed=$FAILED" >> $GITHUB_OUTPUT
 
       - name: Generate coverage comment body
+        if: github.event_name == 'pull_request'
         id: comment_body
         working-directory: contracts/evm
         run: |
@@ -195,13 +176,14 @@ jobs:
           EOF
 
       - name: Post coverage comment on PR
+        if: github.event_name == 'pull_request'
         uses: mshick/add-pr-comment@v2
         with:
           message-path: contracts/evm/comment.md
           message-id: forge-coverage-report
 
       - name: Fail if coverage is below threshold
-        if: steps.coverage.outputs.coverage_failed == 'true'
+        if: github.event_name == 'pull_request' && steps.coverage.outputs.coverage_failed == 'true'
         run: |
           echo "❌ Coverage is below the 90% threshold!"
           echo "Please improve test coverage before merging."
