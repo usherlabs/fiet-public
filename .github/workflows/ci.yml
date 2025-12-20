@@ -79,7 +79,7 @@ jobs:
         working-directory: contracts/evm
         run: |
           # Run forge coverage and capture output
-          COVERAGE_OUTPUT=$(forge coverage --report summary 2>&1) || true
+          COVERAGE_OUTPUT=$(bash coverage.sh 2>&1) || true
           echo "$COVERAGE_OUTPUT"
           
           # Save full output to file for the PR comment
