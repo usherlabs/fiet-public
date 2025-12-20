@@ -104,41 +104,43 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         assertEq(expiresAtAfter + 1, newTimestamp + expiresAtPrevious);
     }
 
-    // function testCanWrapAndUnwrapNativeAsset() public {
-    //     // NOTE: Following Uniswap v4 PositionManager pattern, wrap/unwrap are now simple
-    //     // WETH9 deposit/withdraw operations without delta accounting.
-    //     // The wrap/unwrap operations are handled by MMPositionManager which inherits NativeWrapper.
-    //     // Settlement happens via the standard settle/take flow.
+    function testCanWrapAndUnwrapNativeAsset() public {
+        // NOTE: Following Uniswap v4 PositionManager pattern, wrap/unwrap are now simple
+        // WETH9 deposit/withdraw operations without delta accounting.
+        // The wrap/unwrap operations are handled by MMPositionManager which inherits NativeWrapper.
+        // Settlement happens via the standard settle/take flow.
 
-    //     uint256 wrapAmount = 1 ether;
+        uint256 wrapAmount = 1 ether;
 
-    //     // Deal ETH to MMPositionManager
-    //     deal(address(mmPositionManager), wrapAmount);
+        // Deal ETH to MMPositionManager
+        deal(address(mmPositionManager), wrapAmount);
 
-    //     // Get WETH balance before wrap
-    //     uint256 wethBalanceBefore = weth9.balanceOf(address(mmPositionManager));
+        // Get WETH balance before wrap
+        uint256 wethBalanceBefore = weth9.balanceOf(address(mmPositionManager));
 
-    //     // Wrap native ETH to WETH via MMPositionManager's NativeWrapper
-    //     // This is a simple WETH9.deposit() call - no delta accounting
-    //     vm.prank(address(mmPositionManager));
-    //     MMPositionManager(payable(mmPositionManager)).WETH9().deposit{value: wrapAmount}();
+        // Wrap native ETH to WETH via MMPositionManager's NativeWrapper
+        // This is a simple WETH9.deposit() call - no delta accounting
+        vm.startPrank(address(mmPositionManager));
+        MMPositionManager(payable(mmPositionManager)).WETH9().deposit{value: wrapAmount}();
+        vm.stopPrank();
 
-    //     // Get WETH balance after wrap
-    //     uint256 wethBalanceAfter = weth9.balanceOf(address(mmPositionManager));
+        // Get WETH balance after wrap
+        uint256 wethBalanceAfter = weth9.balanceOf(address(mmPositionManager));
 
-    //     // Validate: WETH balance should increase by wrap amount
-    //     assertEq(wethBalanceAfter - wethBalanceBefore, wrapAmount, "WETH balance should increase by wrap amount");
+        // Validate: WETH balance should increase by wrap amount
+        assertEq(wethBalanceAfter - wethBalanceBefore, wrapAmount, "WETH balance should increase by wrap amount");
 
-    //     // Unwrap WETH to native ETH
-    //     vm.prank(address(mmPositionManager));
-    //     MMPositionManager(payable(mmPositionManager)).WETH9().withdraw(wrapAmount);
+        // Unwrap WETH to native ETH
+        vm.startPrank(address(mmPositionManager));
+        MMPositionManager(payable(mmPositionManager)).WETH9().withdraw(wrapAmount);
+        vm.stopPrank();
 
-    //     // Get WETH balance after unwrap
-    //     uint256 wethBalanceAfterUnwrap = weth9.balanceOf(address(mmPositionManager));
+        // Get WETH balance after unwrap
+        uint256 wethBalanceAfterUnwrap = weth9.balanceOf(address(mmPositionManager));
 
-    //     // Validate: WETH balance should be back to original
-    //     assertEq(wethBalanceAfterUnwrap, wethBalanceBefore, "WETH balance should be back to original");
-    // }
+        // Validate: WETH balance should be back to original
+        assertEq(wethBalanceAfterUnwrap, wethBalanceBefore, "WETH balance should be back to original");
+    }
 
     function testCanExtendGracePeriod() public {
         // get the default market confiration so we can tweak it
@@ -253,56 +255,56 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         assertEq(underlyingAsset.balanceOf(user), amount);
     }
 
-    // function testCanCheckpointWithCommitment() public {
-    //     // get the default market configuration so we can tweak it
-    //     LiquiditySignal memory renewSignal = liquiditySignal;
+    function testCanCheckpointWithCommitment() public {
+        // get the default market configuration so we can tweak it
+        LiquiditySignal memory renewSignal = liquiditySignal;
 
-    //     bytes memory liquiditySignalBytes = abi.encode(liquiditySignal);
-    //     ModifyLiquidityParams memory liquidityParams =
-    //         ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
+        bytes memory liquiditySignalBytes = abi.encode(liquiditySignal);
+        ModifyLiquidityParams memory liquidityParams =
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
 
-    //     // Setup committed position using helper
-    //     (uint256 tokenId,,,) = _setupCommittedPosition(
-    //         positionManager,
-    //         corePoolKey,
-    //         liquiditySignalBytes,
-    //         liquidityParams,
-    //         marketVTSConfiguration,
-    //         address(lcc0),
-    //         address(lcc1)
-    //     );
-    //     // uint256 positionIndex = 0;
-    //     // address advancer = renewSignal.mmState.advancer;
+        // Setup committed position using helper
+        (uint256 tokenId,,,) = _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            liquiditySignalBytes,
+            liquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+        uint256 positionIndex = 0;
+        address advancer = renewSignal.mmState.advancer;
 
-    //     // // checkpoint with commitment backing check
-    //     // bytes memory unbackedLiquiditySignal = abi.encode(renewSignal);
+        // checkpoint with commitment backing check
+        bytes memory unbackedLiquiditySignal = abi.encode(renewSignal);
 
-    //     // vm.mockCall(
-    //     //     address(signalManager),
-    //     //     abi.encodeWithSelector(
-    //     //         bytes4(keccak256("verifyLiquiditySignal(bytes,bool)")), unbackedLiquiditySignal, true
-    //     //     ),
-    //     //     abi.encode(true, 10)
-    //     // );
+        vm.mockCall(
+            address(signalManager),
+            abi.encodeWithSelector(
+                bytes4(keccak256("verifyLiquiditySignal(bytes,bool)")), unbackedLiquiditySignal, true
+            ),
+            abi.encode(true, 10)
+        );
 
-    //     // // get liquidity in position 0
-    //     // (Position memory positionBeforeCheckpoint,) = vtsOrchestrator.getPosition(tokenId, positionIndex);
-    //     // console.log("positionLiquidityBeforeCheckpoint", uint256(positionBeforeCheckpoint.liquidity));
+        // get liquidity in position 0
+        (Position memory positionBeforeCheckpoint,) = vtsOrchestrator.getPosition(tokenId, positionIndex);
+        console.log("positionLiquidityBeforeCheckpoint", uint256(positionBeforeCheckpoint.liquidity));
 
-    //     // // need to inflate the value of issuedusd to be greater than the signalusd by 20%
-    //     // vm.mockCall(
-    //     //     address(oracleHelper),
-    //     //     abi.encodeWithSelector(IOracleHelper.getPricesForLccPair.selector),
-    //     //     abi.encode(50000000000, 50000000000)
-    //     // );
+        // need to inflate the value of issuedusd to be greater than the signalusd by 20%
+        vm.mockCall(
+            address(oracleHelper),
+            abi.encodeWithSelector(IOracleHelper.getPricesForLccPair.selector),
+            abi.encode(50000000000, 50000000000)
+        );
 
-    //     // // Checkpoint with commitment backing check (liquiditySignal provided means withCommitment = true)
-    //     // // Call directly through CheckpointEntrypoints which uses msg.sender for validation
-    //     // vm.prank(advancer);
-    //     // positionManager.checkpoint(tokenId, positionIndex, unbackedLiquiditySignal);
+        // Checkpoint with commitment backing check (liquiditySignal provided means withCommitment = true)
+        // Call directly through CheckpointEntrypoints which uses msg.sender for validation
+        vm.prank(advancer);
+        positionManager.checkpoint(tokenId, positionIndex, unbackedLiquiditySignal);
 
-    //     // // get liquidity in position 0
-    //     // (Position memory positionAfterCheckpoint,) = vtsOrchestrator.getPosition(tokenId, positionIndex);
-    //     // console.log("positionLiquidityAfterCheckpoint", uint256(positionAfterCheckpoint.liquidity));
-    // }
+        // get liquidity in position 0
+        (Position memory positionAfterCheckpoint,) = vtsOrchestrator.getPosition(tokenId, positionIndex);
+        console.log("positionLiquidityAfterCheckpoint", uint256(positionAfterCheckpoint.liquidity));
+    }
 }
