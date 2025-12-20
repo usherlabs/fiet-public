@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.26;
+pragma solidity ^0.8.26;
 
 import {IResilientOracle} from "./interfaces/IResilientOracle.sol";
 import {ILCC} from "./interfaces/ILCC.sol";
@@ -8,6 +8,7 @@ import {OracleUtils} from "./libraries/OracleUtils.sol";
 import {Errors} from "./libraries/Errors.sol";
 import {EfficientHashLib} from "solady/utils/EfficientHashLib.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
+import {LiquidityUtils} from "./libraries/LiquidityUtils.sol";
 
 contract OracleHelper is Ownable {
     IResilientOracle public oracle;
@@ -98,7 +99,7 @@ contract OracleHelper is Ownable {
             uint256 price = getPriceByTicker(tickers[i]);
             // Oracle returns price in 18 decimals. Amount is in 18 decimals.
             // Multiply then divide by 1e18 to normalise result to 18 decimals.
-            totalValue += FullMath.mulDiv(price, amounts[i], 1e18);
+            totalValue += FullMath.mulDiv(price, amounts[i], LiquidityUtils.ONE_WAD);
         }
         return totalValue;
     }

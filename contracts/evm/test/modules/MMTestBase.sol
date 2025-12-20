@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.26;
+pragma solidity ^0.8.26;
 
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
@@ -46,8 +46,23 @@ abstract contract MarketMakerTestBase is Test {
         signatureVerifier = vm.addr(signatureVerifierPrivateKey);
         // Create a liquidity signal
         LiquiditySignal[] memory signals = generateLiquiditySignals(2);
-        liquiditySignal = signals[0];
-        renewSignal = signals[1];
+        _saveSignal(liquiditySignal, signals[0]);
+        _saveSignal(renewSignal, signals[1]);
+    }
+
+    /// @dev Copies LiquiditySignal from memory to storage (legacy pipeline compatible)
+    function _saveSignal(LiquiditySignal storage dest, LiquiditySignal memory src) internal {
+        dest.nonce = src.nonce;
+        dest.rootHash = src.rootHash;
+        dest.rootHashSignature = src.rootHashSignature;
+        // Clear and copy merkle proof
+        delete dest.merkleProof;
+        for (uint256 i = 0; i < src.merkleProof.length; i++) {
+            dest.merkleProof.push(src.merkleProof[i]);
+        }
+        // Copy mmState using helper
+        MarketMaker.save(dest.mmState, src.mmState);
+        dest.mmSignature = src.mmSignature;
     }
 
     /**

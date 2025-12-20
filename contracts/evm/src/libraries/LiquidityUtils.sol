@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.26;
+pragma solidity ^0.8.26;
 
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
@@ -243,38 +243,5 @@ library LiquidityUtils {
      */
     function isZeroDelta(BalanceDelta delta) internal pure returns (bool) {
         return BalanceDelta.unwrap(delta) == BalanceDelta.unwrap(BalanceDeltaLibrary.ZERO_DELTA);
-    }
-
-    /**
-     * @dev Calculates the excess settlement amounts for seizure scenarios.
-     *      Apportions totalSettlementAmount by liquidity delta ratio, then takes the maximum
-     *      of the apportioned amount and the seizureSettlementDelta.
-     * @param totalSettlement0 The total settlement amount for token0
-     * @param totalSettlement1 The total settlement amount for token1
-     * @param currentLiquidity The current liquidity of the position
-     * @param negativeLiquidityDelta The liquidity delta (negative for decreases)
-     * @param seizureSettlementDelta The settlement delta from the seizure
-     * @return excess0 The excess settlement amount for token0
-     * @return excess1 The excess settlement amount for token1
-     */
-    function calculateSeizureExcess(
-        uint256 totalSettlement0,
-        uint256 totalSettlement1,
-        uint256 currentLiquidity,
-        uint256 negativeLiquidityDelta, // negative delta means decrease in liquidity
-        BalanceDelta seizureSettlementDelta
-    ) internal pure returns (uint256 excess0, uint256 excess1) {
-        // Apportion totalSettlementAmount by liquidity delta ratio
-        // ie. change in liquidity / current liquidity
-        uint256 liquidityRatio = FullMath.mulDiv(negativeLiquidityDelta, ONE_WAD, currentLiquidity);
-        uint256 apportionedS0 = FullMath.mulDiv(totalSettlement0, liquidityRatio, ONE_WAD);
-        uint256 apportionedS1 = FullMath.mulDiv(totalSettlement1, liquidityRatio, ONE_WAD);
-
-        // If we take whatever native assets are available, that leaves the position open to immediate subsequent seizure.
-        // Return the apportioned amounts as native assets.
-        // The rest of the liquidity position must await available liquidity collection.
-        // This draws on liquidity from all positions in-range, including the current position - staggering seizures over a sequence of transactions.
-
-        return (apportionedS0, apportionedS1);
     }
 }

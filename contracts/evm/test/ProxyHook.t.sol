@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.26;
+pragma solidity ^0.8.26;
 
 import "forge-std/Test.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
@@ -11,7 +11,7 @@ import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {CurrencyLibrary, Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {PoolSwapTest} from "@uniswap/v4-core/src/test/PoolSwapTest.sol";
 import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
-import {CurrencySortHelper} from "../script/libraries/CurrencySortHelper.sol";
+import {CurrencySortHelper} from "./libraries/CurrencySortHelper.sol";
 import {LiquidityCommitmentCertificate} from "../src/LCC.sol";
 import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
 import {LiquidityUtils} from "../src/libraries/LiquidityUtils.sol";
@@ -331,82 +331,55 @@ contract ProxyHookTest is MarketVaultBase {
     // Test that a swap with limited liquidity on the proxy pool works as expected
     // when hookData with recipient IS provided, the swap should NOT be restricted and excess LCC should go to recipient
     function test_swap_exactInput_zeroForOneOnProxy_withLimitedLiquidity_withHookData() public {
-        console.log("====== test_swap_exactInput_zeroForOneOnProxy_withLimitedLiquidity_withHookData =======");
-
         bytes32 marketId = PoolId.unwrap(corePoolKey.toId());
         address lcc_recipient = makeAddr("lcc_recipient");
         _setupRecipient(lcc_recipient);
-        console.log("excess lcc_recipient", lcc_recipient);
-        console.log("marketId:");
-        console.logBytes32(marketId);
 
         uint256 mockAvailableOutputLiquidity = 50;
         _mockLimitedLiquidity(_currency1, mockAvailableOutputLiquidity);
 
-        uint256 swapAmount = 100;
-        (uint256 expectedInput, uint256 expectedOutput) = _simulateSwap(corePoolKey, true, -int256(swapAmount));
+        // Simulate and execute swap in scoped block
+        uint256 deficit;
+        uint256 expectedOutput;
+        {
+            uint256 swapAmount = 100;
+            uint256 expectedInput;
+            (expectedInput, expectedOutput) = _simulateSwap(corePoolKey, true, -int256(swapAmount));
 
-        console.log("====== simulated deltas =======");
-        console.log("Expected input:", expectedInput);
-        console.log("Expected output:", expectedOutput);
+            BalanceDelta swapDelta = _executeSwap(proxyPoolKey, true, -int256(swapAmount), abi.encode(lcc_recipient));
+            (uint256 actualInput, uint256 actualOutput) = _getSwapDeltas(swapDelta, true);
 
-        uint256 selfBalanceOfTokenABefore = proxyPoolKey.currency0.balanceOfSelf();
-        uint256 selfBalanceOfTokenBBefore = proxyPoolKey.currency1.balanceOfSelf();
+            // KEY BEHAVIOR: With hookData recipient provided, swap should NOT be restricted
+            // The actual output should match the expected full output, not be limited to available liquidity
+            deficit = expectedOutput - mockAvailableOutputLiquidity;
+            assertEq(
+                actualOutput + deficit, expectedOutput, "Output should NOT be restricted when recipient is provided"
+            );
+            assertEq(actualInput, expectedInput, "Input should match full swap when recipient is provided");
+        }
 
-        console.log("selfBalanceOfTokenABefore", selfBalanceOfTokenABefore);
-        console.log("selfBalanceOfTokenBBefore", selfBalanceOfTokenBBefore);
-
-        BalanceDelta swapDelta = _executeSwap(
-            proxyPoolKey,
-            true, // zeroForOne
-            -int256(swapAmount),
-            abi.encode(lcc_recipient)
-        );
-
-        (uint256 actualInput, uint256 actualOutput) = _getSwapDeltas(swapDelta, true);
-
-        console.log("====== actual deltas =======");
-        console.log("delta 0:", swapDelta.amount0());
-        console.log("delta 1:", swapDelta.amount1());
-
-        uint256 selfBalanceOfTokenAAfter = proxyPoolKey.currency0.balanceOfSelf();
-        uint256 selfBalanceOfTokenBAfter = proxyPoolKey.currency1.balanceOfSelf();
-
-        console.log("selfBalanceOfTokenAAfter", selfBalanceOfTokenAAfter);
-        console.log("selfBalanceOfTokenBAfter", selfBalanceOfTokenBAfter);
-
-        // check how much the balance of the tokens have changed
-        // this should be equal to the swap amount
-        console.log("diff0", int256(selfBalanceOfTokenAAfter) - int256(selfBalanceOfTokenABefore));
-        // validate that the balance of the output token has increased by the output of the swap
-        console.log("diff1", int256(selfBalanceOfTokenBAfter) - int256(selfBalanceOfTokenBBefore));
-
-        // KEY BEHAVIOR: With hookData recipient provided, swap should NOT be restricted
-        // The actual output should match the expected full output, not be limited to available liquidity
-        uint256 deficit = expectedOutput - mockAvailableOutputLiquidity;
-        assertEq(actualOutput + deficit, expectedOutput, "Output should NOT be restricted when recipient is provided");
-        assertEq(actualInput, expectedInput, "Input should match full swap when recipient is provided");
-
-        // check settlement queue for lcc_recipient in LCC token
+        // Validate LCC balance in scoped block
         LiquidityCommitmentCertificate lccOut = _getLCCOut(_currency1);
+        {
+            // KEY BEHAVIOR: Excess LCC should be minted to the recipient
+            assertGt(deficit, 0, "Deficit should exist when output exceeds available liquidity");
+            // validate the market tracking logic works and the lcc is mapped to the current market
+            // Check market-derived balance (this is what users receive from protocol transfers)
+            (, uint256 marketDerivedBalance) = lccOut.balancesOf(lcc_recipient);
+            assertEq(marketDerivedBalance, deficit, "Recipient should receive LCC equal to deficit");
+        }
 
-        // validate user got lcc tokens and a pending settlement from this market
-
-        // KEY BEHAVIOR: Excess LCC should be minted to the recipient
-        assertGt(deficit, 0, "Deficit should exist when output exceeds available liquidity");
-        // validate the market tracking logic works and the lcc is mapped to the current market
-        // Check market-derived balance (this is what users receive from protocol transfers)
-        (, uint256 marketDerivedBalance) = lccOut.balancesOf(lcc_recipient);
-        assertEq(marketDerivedBalance, deficit, "Recipient should receive LCC equal to deficit");
-
-        // mock the call to factory to use market liquidity, this would make sure that the market appears to have a liquidity of zero
-        // this way unwrapps would be queued for settlement upon unwrap
-        _mockLimitedMarketLiquidity(address(lccOut.underlying()), marketId, 0);
-        // mock as the lcc recipient
-        // unwrap the lcc tokens to get the underlying asset
-        vm.prank(lcc_recipient);
-        LiquidityHub(payable(liquidityHub)).unwrap(address(lccOut), deficit);
-        vm.stopPrank();
+        // Unwrap in scoped block
+        {
+            // mock the call to factory to use market liquidity, this would make sure that the market appears to have a liquidity of zero
+            // this way unwrapps would be queued for settlement upon unwrap
+            _mockLimitedMarketLiquidity(address(lccOut.underlying()), marketId, 0);
+            // mock as the lcc recipient
+            // unwrap the lcc tokens to get the underlying asset
+            vm.prank(lcc_recipient);
+            LiquidityHub(payable(liquidityHub)).unwrap(address(lccOut), deficit);
+            vm.stopPrank();
+        }
 
         // get amount owed to this particular recipient from settlement queue
         uint256 amountOwedToRecipient = LiquidityHub(payable(liquidityHub)).settleQueue(address(lccOut), lcc_recipient);

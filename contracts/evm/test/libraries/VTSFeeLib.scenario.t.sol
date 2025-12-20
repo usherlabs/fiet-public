@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.26;
+pragma solidity ^0.8.26;
 
 import {VTSOrchestratorFixture} from "../modules/VTSOrchestratorFixture.sol";
 
@@ -46,7 +46,12 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         super.setUp();
         // Generate additional signals for multi-commit scenarios (nonces 3, 4, 5, ...)
         // Note: nonces 1 and 2 are already used by liquiditySignal and renewSignal
-        multiSignals = generateLiquiditySignals(10);
+        LiquiditySignal[] memory signals = generateLiquiditySignals(10);
+        // Copy each signal to storage manually (avoids memory[] to storage[] issue)
+        for (uint256 i = 0; i < signals.length; i++) {
+            multiSignals.push();
+            _saveSignal(multiSignals[i], signals[i]);
+        }
         nextSignalIndex = 0;
     }
 

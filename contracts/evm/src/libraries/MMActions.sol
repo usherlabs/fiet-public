@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.26;
+pragma solidity ^0.8.26;
 
 /// @notice Library to define MM Position Manager actions
 /// @dev These action codes are used by MMPositionManager and MMPMActions for action dispatch

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.26;
+pragma solidity ^0.8.26;
 
 import "forge-std/Test.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
@@ -23,7 +23,7 @@ import {IAllowanceTransfer} from "permit2/src/interfaces/IAllowanceTransfer.sol"
 import {MMPCommitmentDescriptor} from "../src/MMPCommitmentDescriptor.sol";
 import {LiquidityHub} from "../src/LiquidityHub.sol";
 import {OracleHelper} from "../src/OracleHelper.sol";
-import {CurrencySortHelper} from "../script/libraries/CurrencySortHelper.sol";
+import {CurrencySortHelper} from "./libraries/CurrencySortHelper.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {VTSOrchestrator} from "../src/VTSOrchestrator.sol";
 import {VRLSettlementObserver} from "../src/VRLSettlementObserver.sol";

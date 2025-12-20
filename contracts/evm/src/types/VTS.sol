@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.26;
+pragma solidity ^0.8.26;
 
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Commit} from "./Commit.sol";
@@ -9,6 +9,10 @@ import {ILiquidityHub} from "../interfaces/ILiquidityHub.sol";
 import {IOracleHelper} from "../interfaces/IOracleHelper.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {IMarketVault} from "../interfaces/IMarketVault.sol";
+import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
+import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 
 struct TokenConfiguration {
     // Grace period time
@@ -44,6 +48,62 @@ struct PositionContext {
     IOracleHelper oracleHelper;
     // Market vault address for settlement clamping
     IMarketVault marketVault;
+}
+
+/// @notice Parameters for touchPosition to reduce stack pressure
+/// @dev Bundles external call parameters into single struct
+struct TouchPositionParams {
+    // The owner of the position
+    address owner;
+    // The pool key (needed for LCC operations and currency access)
+    PoolKey poolKey;
+    // The modify liquidity params
+    ModifyLiquidityParams params;
+    // The caller delta from poolManager.modifyLiquidity
+    BalanceDelta callerDelta;
+    // The fees accrued from poolManager.modifyLiquidity
+    BalanceDelta feesAccrued;
+    // The hook data containing PositionModificationHookData
+    bytes hookData;
+}
+
+/// @notice Result of touchPosition to reduce stack pressure
+/// @dev Bundles return values into single struct
+struct TouchPositionResult {
+    // The position struct
+    Position pos;
+    // The position id
+    PositionId id;
+    // The fee adjustment delta
+    BalanceDelta feeAdj;
+}
+
+/// @notice Parameters for onMMSettle to reduce stack pressure
+/// @dev Bundles settlement parameters into single struct
+struct SettleParams {
+    // The market vault interface for liquidity availability checks
+    IMarketVault vault;
+    // The position id
+    PositionId positionId;
+    // The pool currency of the LCC token for token0
+    Currency lccCurrency0;
+    // The pool currency of the LCC token for token1
+    Currency lccCurrency1;
+    // The balance delta of the settlement
+    BalanceDelta delta;
+    // Whether the position is being seized
+    bool isSeizing;
+}
+
+/// @notice Result of onMMSettle to reduce stack pressure
+/// @dev Bundles return values into single struct
+struct SettleResult {
+    // The delta actually applied to underlying
+    BalanceDelta settlementDelta;
+    // Whether the RFS is open for the position
+    bool rfsOpen;
+    // The amount of liquidity units seized (non-zero only when seizing)
+    uint256 seizedLiquidityUnits;
 }
 
 /// @notice Per-position accounting data (mirrors VTSManager per-position mappings)
