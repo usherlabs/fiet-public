@@ -200,9 +200,6 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
         }
 
         // Initialize liquidity hub and VTS
-
-        // Initialize the pool
-        poolManager.initialize(corePoolKey, initialSqrtPriceX96);
         liquidityHub.initialize(ctx.lccToken0, ctx.lccToken1, PoolId.unwrap(corePoolId), ctx.marketRef, true);
         vtsOrchestrator.initPool(corePoolKey, vtsConfiguration);
 
@@ -253,6 +250,9 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
         if (PoolId.unwrap(coreToProxy[poolId]) != bytes32(0)) {
             revert Errors.CorePoolAlreadyExists();
         }
+
+        // Initialize the pool. Reverts on any failure.
+        poolManager.initialize(poolKey, initialSqrtPriceX96);
     }
 
     /**

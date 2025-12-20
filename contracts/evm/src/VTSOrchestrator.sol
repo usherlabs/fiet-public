@@ -21,8 +21,8 @@ import {
     PositionContext,
     TouchPositionParams,
     TouchPositionResult,
-    MMSettleParams,
-    MMSettleResult
+    SettleParams,
+    SettleResult
 } from "./types/VTS.sol";
 import {MarketMaker} from "./libraries/MarketMaker.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
@@ -607,9 +607,9 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
         _assertSignalValid(commitId, !isSeizing);
 
         // Build params in scoped block to free stack
-        MMSettleParams memory params;
+        SettleParams memory params;
         {
-            params = MMSettleParams({
+            params = SettleParams({
                 vault: marketVault,
                 positionId: getPositionId(commitId, positionIndex),
                 lccCurrency0: currency0,
@@ -620,7 +620,7 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
         }
 
         // Execute settlement
-        MMSettleResult memory result = VTSPositionLib.onMMSettle(s, poolManager, params);
+        SettleResult memory result = VTSPositionLib.onMMSettle(s, poolManager, params);
         settlementDelta = result.settlementDelta;
         rfsOpen = result.rfsOpen;
         seizedLiquidityUnits = result.seizedLiquidityUnits;

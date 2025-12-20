@@ -5,8 +5,8 @@ import {
     VTSStorage,
     MarketVTSConfiguration,
     TokenConfiguration,
-    MMSettleParams,
-    MMSettleResult
+    SettleParams,
+    SettleResult
 } from "../../../src/types/VTS.sol";
 import {PositionId, Position} from "../../../src/types/Position.sol";
 import {Pool} from "../../../src/types/Pool.sol";
@@ -85,10 +85,10 @@ contract VTSPositionLibHarness {
         BalanceDelta delta,
         bool isSeizing
     ) external returns (BalanceDelta settlementDelta, bool rfsOpen, uint256 seizedLiquidityUnits) {
-        MMSettleResult memory result = VTSPositionLib.onMMSettle(
+        SettleResult memory result = VTSPositionLib.onMMSettle(
             s,
             poolManager,
-            MMSettleParams({
+            SettleParams({
                 vault: vault,
                 positionId: positionId,
                 lccCurrency0: lccCurrency0,

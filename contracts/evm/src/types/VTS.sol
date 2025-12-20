@@ -80,7 +80,7 @@ struct TouchPositionResult {
 
 /// @notice Parameters for onMMSettle to reduce stack pressure
 /// @dev Bundles settlement parameters into single struct
-struct MMSettleParams {
+struct SettleParams {
     // The market vault interface for liquidity availability checks
     IMarketVault vault;
     // The position id
@@ -97,7 +97,7 @@ struct MMSettleParams {
 
 /// @notice Result of onMMSettle to reduce stack pressure
 /// @dev Bundles return values into single struct
-struct MMSettleResult {
+struct SettleResult {
     // The delta actually applied to underlying
     BalanceDelta settlementDelta;
     // Whether the RFS is open for the position

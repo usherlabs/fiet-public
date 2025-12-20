@@ -25,8 +25,8 @@ import {
     PositionContext,
     TouchPositionParams,
     TouchPositionResult,
-    MMSettleParams,
-    MMSettleResult
+    SettleParams,
+    SettleResult
 } from "../types/VTS.sol";
 import {
     PositionId,
@@ -1298,9 +1298,9 @@ library VTSPositionLib {
     /// @param poolManager The pool manager contract
     /// @param p The MM settle parameters (vault, positionId, currencies, delta, isSeizing)
     /// @return result The MM settle result (settlementDelta, rfsOpen, seizedLiquidityUnits)
-    function onMMSettle(VTSStorage storage s, IPoolManager poolManager, MMSettleParams calldata p)
+    function onMMSettle(VTSStorage storage s, IPoolManager poolManager, SettleParams calldata p)
         external
-        returns (MMSettleResult memory result)
+        returns (SettleResult memory result)
     {
         Position memory pos = s.positions[p.positionId];
         PoolId poolId = pos.poolId;

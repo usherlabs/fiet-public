@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity ^0.8.26;
 
-import {Currency, CurrencyLibrary} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
+import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
 
 /// @title CurrencyTransfer
@@ -24,12 +24,9 @@ library CurrencyTransfer {
      * @param amount The amount to transfer
      */
     function transferFrom(Currency currency, address from, address to, uint256 amount) internal {
-        if (currency.isAddressZero()) {
-            // Transfer ETH to the destination
+        if (currency.isAddressZero() || from == address(this)) {
+            // When currency is native ETH OR When transferring from self, use native safe currency transfer directly to avoid self-approval requirement
             currency.transfer(to, amount);
-        } else if (from == address(this)) {
-            // When transferring from self, use transfer directly to avoid self-approval requirement
-            Currency.unwrap(currency).safeTransfer(to, amount);
         } else {
             // For ERC-20 tokens, use Solady's safeTransferFrom2 with Permit2 fallback
             // This tries standard transferFrom first, falls back to Permit2 if it fails
