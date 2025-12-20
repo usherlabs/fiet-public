@@ -98,7 +98,7 @@ library SwapSimulator {
         returns (BalanceDelta swapDelta, uint256 amountToProtocol, uint24 swapFee, SwapResult memory result)
     {
         SimulationState memory state;
-        
+
         // Initialize result and state from pool
         (result, swapFee, state) = _initializeSimulation(poolManager, corePoolKey, params);
 
@@ -116,11 +116,11 @@ library SwapSimulator {
     }
 
     /// @dev Initializes simulation state from pool storage
-    function _initializeSimulation(
-        IPoolManager poolManager,
-        PoolKey memory corePoolKey,
-        SwapParams memory params
-    ) private view returns (SwapResult memory result, uint24 swapFee, SimulationState memory state) {
+    function _initializeSimulation(IPoolManager poolManager, PoolKey memory corePoolKey, SwapParams memory params)
+        private
+        view
+        returns (SwapResult memory result, uint24 swapFee, SimulationState memory state)
+    {
         // Get current pool state from storage
         (uint160 sqrtPriceX96, int24 tick, uint24 protocolFee, uint24 lpFee) =
             StateLibrary.getSlot0(poolManager, corePoolKey.toId());
@@ -222,8 +222,7 @@ library SwapSimulator {
         // Handle tick transition
         if (result.sqrtPriceX96 == step.sqrtPriceNextX96) {
             if (step.initialized) {
-                (, int128 liquidityNet) =
-                    StateLibrary.getTickLiquidity(poolManager, corePoolKey.toId(), step.tickNext);
+                (, int128 liquidityNet) = StateLibrary.getTickLiquidity(poolManager, corePoolKey.toId(), step.tickNext);
                 if (state.zeroForOne) liquidityNet = -liquidityNet;
                 result.liquidity = LiquidityMath.addDelta(result.liquidity, liquidityNet);
             }
@@ -236,19 +235,18 @@ library SwapSimulator {
     }
 
     /// @dev Calculates the final balance delta
-    function _calculateFinalDelta(
-        SwapParams memory params,
-        SimulationState memory state
-    ) private pure returns (BalanceDelta) {
+    function _calculateFinalDelta(SwapParams memory params, SimulationState memory state)
+        private
+        pure
+        returns (BalanceDelta)
+    {
         if (state.zeroForOne != (params.amountSpecified < 0)) {
             return toBalanceDelta(
-                state.amountCalculated.toInt128(),
-                (params.amountSpecified - state.amountSpecifiedRemaining).toInt128()
+                state.amountCalculated.toInt128(), (params.amountSpecified - state.amountSpecifiedRemaining).toInt128()
             );
         } else {
             return toBalanceDelta(
-                (params.amountSpecified - state.amountSpecifiedRemaining).toInt128(),
-                state.amountCalculated.toInt128()
+                (params.amountSpecified - state.amountSpecifiedRemaining).toInt128(), state.amountCalculated.toInt128()
             );
         }
     }

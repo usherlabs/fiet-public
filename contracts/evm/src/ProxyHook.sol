@@ -260,20 +260,20 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
     }
 
     /// @dev Builds the proxy swap context (LCC mappings and direction)
-    function _buildSwapContext(PoolKey calldata key, bool paramsZeroForOne) 
-        private 
-        view 
-        returns (ProxySwapContext memory ctx) 
+    function _buildSwapContext(PoolKey calldata key, bool paramsZeroForOne)
+        private
+        view
+        returns (ProxySwapContext memory ctx)
     {
         PoolKey memory coreKey = corePoolKey;
         ILCC coreLccToken0 = ILCC(Currency.unwrap(coreKey.currency0));
         ILCC coreLccToken1 = ILCC(Currency.unwrap(coreKey.currency1));
 
         // Determine if proxy direction matches core direction
-        ctx.coreZeroForOne = (
-            Currency.unwrap(key.currency0) == coreLccToken0.underlying()
-                && Currency.unwrap(key.currency1) == coreLccToken1.underlying()
-        ) ? paramsZeroForOne : !paramsZeroForOne;
+        ctx.coreZeroForOne = (Currency.unwrap(key.currency0) == coreLccToken0.underlying()
+                    && Currency.unwrap(key.currency1) == coreLccToken1.underlying())
+            ? paramsZeroForOne
+            : !paramsZeroForOne;
 
         // Map LCC tokens based on direction alignment
         bool aligned = paramsZeroForOne == ctx.coreZeroForOne;
@@ -284,13 +284,9 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
     }
 
     /// @dev Calculates the adjusted sqrt price limit for the core pool when direction is flipped
-    function _calcCoreSqrtPriceLimit(uint160 sqrtPriceLimitX96, bool flipped) 
-        private 
-        pure 
-        returns (uint160) 
-    {
+    function _calcCoreSqrtPriceLimit(uint160 sqrtPriceLimitX96, bool flipped) private pure returns (uint160) {
         if (!flipped) return sqrtPriceLimitX96;
-        
+
         if (sqrtPriceLimitX96 == TickMath.MIN_SQRT_PRICE + 1) {
             return TickMath.MAX_SQRT_PRICE - 1;
         } else if (sqrtPriceLimitX96 == TickMath.MAX_SQRT_PRICE - 1) {
@@ -312,9 +308,7 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
     ) private view returns (SwapParams memory) {
         if (hasExcessRecipient) {
             return SwapParams({
-                zeroForOne: coreZeroForOne,
-                amountSpecified: amountSpecified,
-                sqrtPriceLimitX96: sqrtPriceLimitX96Core
+                zeroForOne: coreZeroForOne, amountSpecified: amountSpecified, sqrtPriceLimitX96: sqrtPriceLimitX96Core
             });
         }
 
@@ -322,17 +316,13 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         uint256 outUpper = _upperBoundOutAtCurrentPrice(corePoolKey, amountSpecified, coreZeroForOne);
         if (outUpper <= maxOutputAvailable) {
             return SwapParams({
-                zeroForOne: coreZeroForOne,
-                amountSpecified: amountSpecified,
-                sqrtPriceLimitX96: sqrtPriceLimitX96Core
+                zeroForOne: coreZeroForOne, amountSpecified: amountSpecified, sqrtPriceLimitX96: sqrtPriceLimitX96Core
             });
         }
 
         return _adjustSwapParamsForAvailableLiquidity(
             SwapParams({
-                zeroForOne: coreZeroForOne,
-                amountSpecified: amountSpecified,
-                sqrtPriceLimitX96: sqrtPriceLimitX96Core
+                zeroForOne: coreZeroForOne, amountSpecified: amountSpecified, sqrtPriceLimitX96: sqrtPriceLimitX96Core
             }),
             corePoolKey,
             maxOutputAvailable
@@ -406,15 +396,13 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         returns (bytes4, BeforeSwapDelta, uint24)
     {
         address excessRecipient = _determineExcessRecipient(hookData);
-        
+
         // Build swap context with LCC mappings
         ProxySwapContext memory ctx = _buildSwapContext(key, params.zeroForOne);
-        
+
         // Calculate adjusted sqrt price limit
-        ctx.sqrtPriceLimitX96Core = _calcCoreSqrtPriceLimit(
-            params.sqrtPriceLimitX96, 
-            params.zeroForOne != ctx.coreZeroForOne
-        );
+        ctx.sqrtPriceLimitX96Core =
+            _calcCoreSqrtPriceLimit(params.sqrtPriceLimitX96, params.zeroForOne != ctx.coreZeroForOne);
 
         // Build core swap params
         SwapParams memory coreSwapParams = _buildCoreSwapParams(

@@ -58,7 +58,8 @@ library LCCFactoryLib {
         string memory truncatedMarketRefStr
     ) private view returns (LCCParams memory params) {
         params.symbol = symbol;
-        params.name = LCCMetadataLib.buildNameFromAsset(underlying, s.nativeAssetName, marketName, truncatedMarketRefStr);
+        params.name =
+            LCCMetadataLib.buildNameFromAsset(underlying, s.nativeAssetName, marketName, truncatedMarketRefStr);
         params.decimals = LCCMetadataLib.getAssetDecimals(underlying, s.nativeAssetDecimals);
         params.oracle = address(IMarketFactory(marketFactoryAddress).oracleHelper().oracle());
     }
@@ -88,17 +89,13 @@ library LCCFactoryLib {
             _getSymbol(s, underlying, marketRef, underlyingPair);
 
         // Build params in helper to reduce stack depth
-        LCCParams memory params = _buildLCCParams(s, marketFactoryAddress, underlying, marketName, symbol, truncatedMarketRefStr);
+        LCCParams memory params =
+            _buildLCCParams(s, marketFactoryAddress, underlying, marketName, symbol, truncatedMarketRefStr);
 
         // Create LCC token
         lccToken = address(
             new LiquidityCommitmentCertificate(
-                marketFactoryAddress,
-                underlying,
-                params.name,
-                params.symbol,
-                params.decimals,
-                params.oracle
+                marketFactoryAddress, underlying, params.name, params.symbol, params.decimals, params.oracle
             )
         );
 

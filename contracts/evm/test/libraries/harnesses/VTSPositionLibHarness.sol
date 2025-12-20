@@ -1,7 +1,13 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity ^0.8.26;
 
-import {VTSStorage, MarketVTSConfiguration, TokenConfiguration, MMSettleParams, MMSettleResult} from "../../../src/types/VTS.sol";
+import {
+    VTSStorage,
+    MarketVTSConfiguration,
+    TokenConfiguration,
+    MMSettleParams,
+    MMSettleResult
+} from "../../../src/types/VTS.sol";
 import {PositionId, Position} from "../../../src/types/Position.sol";
 import {Pool} from "../../../src/types/Pool.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
