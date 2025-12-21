@@ -347,6 +347,7 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
 
     function _addInitialLiquidityToPool() internal virtual {
         // add some liquidity to the pool
+        // As this is a new position, settleCoverageUsage is intentionally skipped for initial liquidity adds.
         modifyLiquidityRouter.modifyLiquidity(
             corePoolKey,
             ModifyLiquidityParams({

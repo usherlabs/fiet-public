@@ -12,7 +12,7 @@ import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint12
 import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {RFSCheckpoint} from "../types/Checkpoint.sol";
-import "forge-std/console.sol";
+import {console} from "forge-std/console.sol";
 
 import {
     VTSStorage,
@@ -518,10 +518,14 @@ library VTSPositionLib {
     ) internal {
         PositionAccounting storage pa = s.positionAccounting[id];
 
-        console.log("====== APPLY COVERAGE BURN =======");
-        console.log("tokenIndex", tokenIndex);
-        console.log("cov", cov);
-        console.log("====== end of apply coverage burn =======");
+        // console.log("====== APPLY COVERAGE BURN =======");
+        // console.log("tokenIndex", tokenIndex);
+        // console.log("cov", cov);
+        // console.log("cumulativeDeficit", pa.cumulativeDeficit.get(tokenIndex));
+        // console.log("settled", pa.settled.get(tokenIndex));
+        // console.log("coverageUseGrowthGlobal", s.poolAccounting[p].coverageUseGrowthGlobal.get(tokenIndex));
+        // console.log("positionLiquidity", positionLiquidity);
+        // console.log("====== end of apply coverage burn =======");
 
         // Calculate burnBase in scoped block
         uint256 burnBase;
@@ -598,6 +602,21 @@ library VTSPositionLib {
                 growthType: 2
             })
         );
+
+        console.log("====== SETTLE COVERAGE USAGE =======");
+        console.log("tickCurrent", tickCurrent);
+        console.log("pos.tickLower", pos.tickLower);
+        console.log("pos.tickUpper", pos.tickUpper);
+        console.log("liq", liq);
+        console.log("cumulativeDeficit.token0", pa.cumulativeDeficit.token0);
+        console.log("cumulativeDeficit.token1", pa.cumulativeDeficit.token1);
+        console.log("settled.token0", pa.settled.token0);
+        console.log("coverageUseGrowthGlobal.token0", paPool.coverageUseGrowthGlobal.token0);
+        console.log("coverageUseGrowthGlobal.token1", paPool.coverageUseGrowthGlobal.token1);
+        console.log("positionLiquidity", liq);
+        console.log("cov0", cov0);
+        console.log("cov1", cov1);
+        console.log("====== end of settle coverage usage =======");
 
         if (cov0 > 0) {
             _applyCoverageBurn(s, poolManager, positionId, poolId, 0, cov0, liq);

@@ -56,13 +56,21 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
     }
 
     // function _addInitialLiquidityToPool() internal override {
-    //     // override to add liquidity to the full range of the pool
+    //     /**
+    //      * For L = 1000e18, the price range spans only 0.6% of price movement (from 0.994 to 1.006). This means:
+    //      * amount0 ≈ L × 0.003 ≈ 3e18
+    //      * amount1 ≈ L × 0.003 ≈ 3e18
+    //      * So 1000e18 liquidity in a narrow (-60, 60) range only provides ~3e18 of each token — not 1000e18!
+    //      * When you swap 5e18 token1 for token0, you're requesting more token0 than exists in the liquidity range, so the swap exhausts the liquidity and pushes the tick to MAX_TICK.
+    //      */
     //     modifyLiquidityRouter.modifyLiquidity(
     //         corePoolKey,
     //         ModifyLiquidityParams({
-    //             tickLower: TickMath.minUsableTick(corePoolKey.tickSpacing),
-    //             tickUpper: TickMath.maxUsableTick(corePoolKey.tickSpacing),
-    //             liquidityDelta: int256(initialLiquidity),
+    //             // tickLower: TickMath.minUsableTick(corePoolKey.tickSpacing),
+    //             // tickUpper: TickMath.maxUsableTick(corePoolKey.tickSpacing),
+    //             tickLower: -1020,
+    //             tickUpper: 1020,
+    //             liquidityDelta: int256(initialLiquidity * 10),
     //             salt: bytes32(0)
     //         }),
     //         ZERO_BYTES
@@ -77,12 +85,15 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
     /// @dev Uses default range (-60, 60) and default liquidity (1e10)
     /// @return tokenId The commitment NFT token ID
     /// @return positionId The position ID of the minted position
-    function _createNewMMCommit() internal returns (uint256 tokenId, PositionId positionId) {
+    function _createNewMMCommit(int24 tickLower, int24 tickUpper, uint256 liquidity)
+        internal
+        returns (uint256 tokenId, PositionId positionId)
+    {
         require(nextSignalIndex < multiSignals.length, "No more signals available");
         LiquiditySignal memory signal = multiSignals[nextSignalIndex++];
         // Get the next commit ID before creating the commit (for reference/verification)
         uint256 expectedTokenId = vtsOrchestrator.nextCommitId();
-        (tokenId, positionId,,) = _createCommittedPosition(signal, -60, 60, 1e10, bytes32(0));
+        (tokenId, positionId,,) = _createCommittedPosition(signal, tickLower, tickUpper, liquidity, bytes32(0));
         // Verify the tokenId matches what we expected
         assertEq(tokenId, expectedTokenId, "TokenId should match nextCommitId");
     }
@@ -191,9 +202,9 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
     ///      - Assertions verify pot increases after swap + coverage operations
     function test_multiMM_oneDeficit_protocolCovers_slashOnlyDeficitMM() public {
         // 3 independent MM commits (each with unique signal nonce)
-        (uint256 mm1, PositionId mm1PositionId) = _createNewMMCommit();
-        (uint256 mm2,) = _createNewMMCommit();
-        (uint256 mm3,) = _createNewMMCommit();
+        (uint256 mm1, PositionId mm1PositionId) = _createNewMMCommit(-60, 60, 3e10);
+        (uint256 mm2,) = _createNewMMCommit(-60, 60, 3e10);
+        (uint256 mm3,) = _createNewMMCommit(-60, 60, 3e10);
         assertEq(mm1, 1);
         assertEq(mm2, 2);
         assertEq(mm3, 3);
@@ -208,11 +219,16 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
 
         // Swap to accrue fees + outflow growth (choose direction that accrues token0 outflow)
         // Fee pot should be affected on swap, not on position modification
-        _swapCore(false, -int256(5e18)); // ? one for zero, therefore protocolFeeAccruedBefore1 should increase
+        _swapCore(false, -int256(50e18)); // ? one for zero, therefore protocolFeeAccruedBefore1 should increase
 
         // Protocol covers unwraps: increment coverage (token0 only)
         vm.prank(marketFactory);
         vtsOrchestrator.incrementCoverage(corePoolKey.toId(), 2e18, 0);
+        // ! Problem: Increment Coverage occurs after the swap has advanced the tick.
+        // Therefore, there is no coverage to settle after the last swap.
+        // In order to settle accruedProtocolFees, we'll need back and forth swaps instead.
+
+        // TODO: Wondering whether this is a bug - since deficits accrued at swap time should be what is liable for the coverage.
 
         uint256 potAfter = _feeHolderClaims(lccCurrency0);
 
