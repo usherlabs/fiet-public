@@ -5,14 +5,11 @@ import {Test} from "forge-std/Test.sol";
 import {MockContract} from "./_mocks/MockContract.t.sol";
 import {GlobalConfig} from "../src/GlobalConfig.sol";
 
-import "forge-std/console.sol";
-
 contract GlobalConfigTest is Test {
     GlobalConfig public globalConfig;
     MockContract public mockContract;
 
     function setUp() public {
-        console.log("working");
         globalConfig = new GlobalConfig(address(this));
 
         // Deploy the mock contract

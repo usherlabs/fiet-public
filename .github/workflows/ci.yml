@@ -4,7 +4,7 @@ on:
   push:
     branches: [main, develop]
   pull_request:
-    branches: [main, develop]
+    branches: [main, develop, audit/*]
   workflow_dispatch:
 
 env:
@@ -14,16 +14,24 @@ jobs:
   solidity:
     name: Solidity Tests
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
       - name: Restrict network egress
         uses: bullfrogsec/bullfrog@1831f79cce8ad602eef14d2163873f27081ebfb3 # v0.8.4
         if: ${{ !env.ACT }} # Skip when running locally with act
         with:
           egress-policy: block
+          allowed-domains: |
+            api.github.com
+            release-assets.githubusercontent.com
+            binaries.soliditylang.org
 
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
@@ -49,91 +57,68 @@ jobs:
         working-directory: contracts/evm
         id: test
 
-  solidity-coverage:
-    name: Solidity Coverage
-    runs-on: ubuntu-latest
-    # Only run on PRs to generate coverage comments
-    if: github.event_name == 'pull_request'
-    permissions:
-      pull-requests: write
-    steps:
-      - name: Restrict network egress
-        uses: bullfrogsec/bullfrog@1831f79cce8ad602eef14d2163873f27081ebfb3 # v0.8.4
-        if: ${{ !env.ACT }} # Skip when running locally with act
-        with:
-          egress-policy: block
-          allowed-domains: |
-            api.github.com
-
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Install Foundry
-        uses: foundry-rs/foundry-toolchain@v1
-        with:
-          version: "v1.4.2"
-
       - name: Run Forge coverage
+        if: github.event_name == 'pull_request'
         id: coverage
         working-directory: contracts/evm
         run: |
           # Run forge coverage and capture output
-          COVERAGE_OUTPUT=$(forge coverage --report summary 2>&1) || true
+          COVERAGE_OUTPUT=$(bash coverage.sh 2>&1) || true
           echo "$COVERAGE_OUTPUT"
-          
+
           # Save full output to file for the PR comment
           echo "$COVERAGE_OUTPUT" > coverage_report.txt
-          
+
           # Extract the summary line (last line with percentages)
           # Format: | Total | X.XX% | X.XX% | X.XX% | X.XX% |
           SUMMARY_LINE=$(echo "$COVERAGE_OUTPUT" | grep -E "^\| Total" | tail -1)
           echo "Summary line: $SUMMARY_LINE"
-          
-          # Extract percentages using awk
-          LINE_COV=$(echo "$SUMMARY_LINE" | awk -F'|' '{print $3}' | tr -d ' %')
-          STMT_COV=$(echo "$SUMMARY_LINE" | awk -F'|' '{print $4}' | tr -d ' %')
-          BRANCH_COV=$(echo "$SUMMARY_LINE" | awk -F'|' '{print $5}' | tr -d ' %')
-          FUNC_COV=$(echo "$SUMMARY_LINE" | awk -F'|' '{print $6}' | tr -d ' %')
-          
+
+          # Extract percentages using awk (handles format like "80.62(2645/3281)%")
+          LINE_COV=$(echo "$SUMMARY_LINE" | awk -F'|' '{print $3}' | grep -oE '[0-9]+\.[0-9]+' | head -1)
+          STMT_COV=$(echo "$SUMMARY_LINE" | awk -F'|' '{print $4}' | grep -oE '[0-9]+\.[0-9]+' | head -1)
+          BRANCH_COV=$(echo "$SUMMARY_LINE" | awk -F'|' '{print $5}' | grep -oE '[0-9]+\.[0-9]+' | head -1)
+          FUNC_COV=$(echo "$SUMMARY_LINE" | awk -F'|' '{print $6}' | grep -oE '[0-9]+\.[0-9]+' | head -1)
+
           echo "Line Coverage: $LINE_COV%"
           echo "Statement Coverage: $STMT_COV%"
           echo "Branch Coverage: $BRANCH_COV%"
           echo "Function Coverage: $FUNC_COV%"
-          
+
           # Set outputs
           echo "line_cov=$LINE_COV" >> $GITHUB_OUTPUT
           echo "stmt_cov=$STMT_COV" >> $GITHUB_OUTPUT
           echo "branch_cov=$BRANCH_COV" >> $GITHUB_OUTPUT
           echo "func_cov=$FUNC_COV" >> $GITHUB_OUTPUT
-          
+
           # Check if any coverage is below 90%
           THRESHOLD=90
           FAILED=false
-          
+
           if [ -n "$LINE_COV" ] && [ "$(echo "$LINE_COV < $THRESHOLD" | bc -l)" -eq 1 ]; then
             echo "❌ Line coverage ($LINE_COV%) is below ${THRESHOLD}%"
             FAILED=true
           fi
-          
+
           if [ -n "$STMT_COV" ] && [ "$(echo "$STMT_COV < $THRESHOLD" | bc -l)" -eq 1 ]; then
             echo "❌ Statement coverage ($STMT_COV%) is below ${THRESHOLD}%"
             FAILED=true
           fi
-          
+
           if [ -n "$BRANCH_COV" ] && [ "$(echo "$BRANCH_COV < $THRESHOLD" | bc -l)" -eq 1 ]; then
             echo "❌ Branch coverage ($BRANCH_COV%) is below ${THRESHOLD}%"
             FAILED=true
           fi
-          
+
           if [ -n "$FUNC_COV" ] && [ "$(echo "$FUNC_COV < $THRESHOLD" | bc -l)" -eq 1 ]; then
             echo "❌ Function coverage ($FUNC_COV%) is below ${THRESHOLD}%"
             FAILED=true
           fi
-          
+
           echo "coverage_failed=$FAILED" >> $GITHUB_OUTPUT
 
       - name: Generate coverage comment body
+        if: github.event_name == 'pull_request'
         id: comment_body
         working-directory: contracts/evm
         run: |
@@ -142,7 +127,7 @@ jobs:
           BRANCH_COV="${{ steps.coverage.outputs.branch_cov }}"
           FUNC_COV="${{ steps.coverage.outputs.func_cov }}"
           THRESHOLD=90
-          
+
           # Determine status emoji for each metric
           get_status() {
             if [ -z "$1" ]; then
@@ -153,53 +138,56 @@ jobs:
               echo "❌"
             fi
           }
-          
+
           LINE_STATUS=$(get_status "$LINE_COV")
           STMT_STATUS=$(get_status "$STMT_COV")
           BRANCH_STATUS=$(get_status "$BRANCH_COV")
           FUNC_STATUS=$(get_status "$FUNC_COV")
-          
+
           # Overall status
           if [ "${{ steps.coverage.outputs.coverage_failed }}" == "true" ]; then
             OVERALL_STATUS="❌ **Coverage below ${THRESHOLD}% threshold**"
           else
             OVERALL_STATUS="✅ **All coverage metrics meet ${THRESHOLD}% threshold**"
           fi
-          
+
           # Create the comment body
           cat << EOF > comment.md
           ## 📊 Forge Coverage Report
-          
+
           $OVERALL_STATUS
-          
+
           | Metric | Coverage | Status |
           |--------|----------|--------|
           | Line Coverage | ${LINE_COV:-N/A}% | $LINE_STATUS |
           | Statement Coverage | ${STMT_COV:-N/A}% | $STMT_STATUS |
           | Branch Coverage | ${BRANCH_COV:-N/A}% | $BRANCH_STATUS |
           | Function Coverage | ${FUNC_COV:-N/A}% | $FUNC_STATUS |
-          
+
           <details>
           <summary>📋 Full Coverage Report</summary>
-          
+
           \`\`\`
           $(cat coverage_report.txt)
           \`\`\`
-          
+
           </details>
-          
+
           ---
           *Coverage threshold: ${THRESHOLD}%*
           EOF
 
       - name: Post coverage comment on PR
+        if: github.event_name == 'pull_request'
         uses: mshick/add-pr-comment@v2
         with:
           message-path: contracts/evm/comment.md
           message-id: forge-coverage-report
 
       - name: Fail if coverage is below threshold
-        if: steps.coverage.outputs.coverage_failed == 'true'
+        if:
+          github.event_name == 'pull_request' &&
+          steps.coverage.outputs.coverage_failed == 'true'
         run: |
           echo "❌ Coverage is below the 90% threshold!"
           echo "Please improve test coverage before merging."

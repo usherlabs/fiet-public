@@ -776,8 +776,12 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
             TransientSlots.consumePlanCancelWithQueue(lcc, sender, cancelFromRecipient);
 
         if (principalAmount > 0) {
-            // Use internal function to bypass onlyIssuer check (LCC is the caller, not an issuer)
-            _cancelWithQueue(lcc, cancelFromRecipient, principalAmount, queueAmount, queueRecipient);
+            if (principalAmount > queueAmount) {
+                // Use internal function to bypass onlyIssuer check (LCC is the caller, not an issuer)
+                _cancelWithQueue(lcc, cancelFromRecipient, principalAmount, queueAmount, queueRecipient);
+            } else if (principalAmount == queueAmount) {
+                _queueSettlement(lcc, queueRecipient, queueAmount);
+            }
             return;
         }
 

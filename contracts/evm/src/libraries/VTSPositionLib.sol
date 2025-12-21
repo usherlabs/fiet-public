@@ -12,6 +12,7 @@ import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint12
 import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {RFSCheckpoint} from "../types/Checkpoint.sol";
+import "forge-std/console.sol";
 
 import {
     VTSStorage,
@@ -516,6 +517,11 @@ library VTSPositionLib {
         uint128 positionLiquidity
     ) internal {
         PositionAccounting storage pa = s.positionAccounting[id];
+
+        console.log("====== APPLY COVERAGE BURN =======");
+        console.log("tokenIndex", tokenIndex);
+        console.log("cov", cov);
+        console.log("====== end of apply coverage burn =======");
 
         // Calculate burnBase in scoped block
         uint256 burnBase;

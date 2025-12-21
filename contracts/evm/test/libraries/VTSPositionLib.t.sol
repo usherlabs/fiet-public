@@ -143,10 +143,16 @@ contract VTSPositionLibTest is VTSLibTestBase {
     function test_trackCommitment_partialRemoval_clampsToZero() public {
         PositionId positionId = _registerDefaultPosition();
 
-        // Set initial commitment less than what we're removing
-        harness.setCommitmentMax(positionId, 100e18, 100e18);
-
         uint128 liquidityToRemove = 500e18;
+
+        // Calculate the commitment that corresponds to the liquidity being removed
+        (uint256 subC0, uint256 subC1) =
+            LiquidityUtils.calculateCommitmentMaxima(DEFAULT_TICK_LOWER, DEFAULT_TICK_UPPER, liquidityToRemove);
+
+        // Set initial commitment to LESS than what the removal will subtract
+        // This ensures the subtraction will clamp to zero rather than underflow
+        harness.setCommitmentMax(positionId, subC0 / 2, subC1 / 2);
+
         ModifyLiquidityParams memory params = ModifyLiquidityParams({
             tickLower: DEFAULT_TICK_LOWER,
             tickUpper: DEFAULT_TICK_UPPER,
@@ -194,7 +200,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
         assertEq(deficit0, 0, "deficit should be netted to zero");
         assertEq(settled0, 50e18, "remaining should be credited to settled");
-        assertEq(applied, 50e18, "applied should be net of deficit cover");
+        assertEq(applied, 150e18, "applied should be the sum of deficit coverage and settled increase");
     }
 
     function test_updateSettlement_netsAgainstCommitmentDeficit() public {
@@ -207,6 +213,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
         harness.setNetSettlementSinceLastMod(positionId, 0, 0);
         harness.setPoolNetSinceLastMod(testPoolId, 0, 0);
 
+        // Applied is now the total of deficit coverage and settled increase
         int256 applied = harness.updateSettlement(positionId, 0, 100e18);
 
         (uint256 cd0,) = harness.getCommitmentDeficit(positionId);
@@ -214,7 +221,29 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
         assertEq(cd0, 0, "commitment deficit should be netted");
         assertEq(settled0, 50e18, "remaining should be credited to settled");
-        assertEq(applied, 50e18, "applied should be net of commitment deficit");
+        assertEq(applied, 100e18, "applied should be the sum of deficit coverage and settled increase");
+    }
+
+    function test_updateSettlement_netsAgainstCombinedDeficit() public {
+        PositionId positionId = _registerDefaultPosition();
+
+        harness.setCommitmentMax(positionId, 1000e18, 0);
+        harness.setCumulativeDeficit(positionId, 100e18, 0);
+        harness.setCommitmentDeficit(positionId, 50e18, 0);
+        harness.setSettled(positionId, 0, 0); // set settled before.
+        harness.setNetSettlementSinceLastMod(positionId, 0, 0);
+        harness.setPoolNetSinceLastMod(testPoolId, 0, 0);
+
+        // Applied is now the total of deficit coverage and settled increase
+        int256 applied = harness.updateSettlement(positionId, 0, 120e18);
+
+        (uint256 cd0,) = harness.getCommitmentDeficit(positionId);
+        (,, uint256 settled0,, uint256 def0,) = harness.getPositionAccounting(positionId);
+
+        assertEq(def0, 0, "cumulative deficit should be netted");
+        assertEq(cd0, 30e18, "commitment deficit should partially be netted");
+        assertEq(settled0, 0, "No settled should be credited");
+        assertEq(applied, 120e18, "applied should be the sum of deficit coverage and settled increase");
     }
 
     function test_updateSettlement_clampsToCommitmentMax() public {
@@ -385,10 +414,19 @@ contract VTSPositionLibTest is VTSLibTestBase {
     function testFuzz_trackCommitment_addRemove_symmetric(uint128 liquidity, int24 tickLower, int24 tickUpper) public {
         // Bound inputs
         vm.assume(liquidity > 0 && liquidity < type(uint128).max / 2);
-        tickLower = int24(bound(tickLower, -887220, 887219));
-        tickUpper = int24(bound(tickUpper, tickLower + 1, 887220));
-        vm.assume(tickLower < tickUpper);
-        vm.assume(tickLower % 60 == 0 && tickUpper % 60 == 0); // Valid tick spacing
+
+        // Generate valid tick values as multiples of 60 (tick spacing)
+        // Range: -887220 to 887220 in steps of 60 = 29574 valid ticks
+        int24 tickSpacing = 60;
+        int24 minTick = -887220;
+        int24 maxTick = 887220;
+
+        // Bound to valid tick indices, then multiply by spacing
+        int256 lowerIdx = bound(int256(tickLower), minTick / tickSpacing, (maxTick / tickSpacing) - 1);
+        int256 upperIdx = bound(int256(tickUpper), lowerIdx + 1, maxTick / tickSpacing);
+
+        tickLower = int24(lowerIdx * tickSpacing);
+        tickUpper = int24(upperIdx * tickSpacing);
 
         PositionId positionId = _registerHarnessPosition(DEFAULT_OWNER, tickLower, tickUpper, liquidity, DEFAULT_SALT);
 
