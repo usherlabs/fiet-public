@@ -223,15 +223,14 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         // Expect some funding into the pot from swap fees and coverage processing
         // Fee pot changes happen during swap and coverage operations, not position modifications
         assertGe(potAfter, potBefore, "Pot should not decrease after swap + coverage");
-        //TODO:
-        // assertEq(
-        //     protocolFeeAccruedAfter0, protocolFeeAccruedBefore0, "Protocol fee accrued should not change for token0"
-        // );
-        // assertGt(
-        //     protocolFeeAccruedAfter1,
-        //     protocolFeeAccruedBefore1,
-        //     "Protocol fee accrued should increase after swap + coverage"
-        // );
+        assertEq(
+            protocolFeeAccruedAfter0, protocolFeeAccruedBefore0, "Protocol fee accrued should not change for token0"
+        );
+        assertGt(
+            protocolFeeAccruedAfter1,
+            protocolFeeAccruedBefore1,
+            "Protocol fee accrued should increase after swap + coverage"
+        );
     }
 
     /// @notice Scenario 2: Multiple MMs, two MMs have deficits, protocol covers unwraps
@@ -373,73 +372,73 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
     /// @dev Note: Out-of-range positions don't contribute to coverage attribution (never slashed),
     ///      but they can still benefit from bonuses because they've contributed settled liquidity.
     ///      DirectLP uses modifyLiquidityRouter which properly settles deltas.
-    // function test_directLP_outOfRange_earnsBonus_fromMMslashes() public {
-    //     // Step 1: Add out-of-range DirectLP position
-    //     // This creates positive net settlement for the DirectLP (it has deposited LCC tokens)
-    //     // Out-of-range ticks ensure it won't be attributed coverage usage
-    //     // int24 directTickUpper = TickMath.maxUsableTick(corePoolKey.tickSpacing);
-    //     // _addDirectLP(directTickUpper - 1, directTickUpper, int256(50e18));
-    //     // _addDirectLP(600, 1200, int256(50e18));
+    function test_directLP_outOfRange_earnsBonus_fromMMslashes() public {
+        // Step 1: Add out-of-range DirectLP position
+        // This creates positive net settlement for the DirectLP (it has deposited LCC tokens)
+        // Out-of-range ticks ensure it won't be attributed coverage usage
+        // int24 directTickUpper = TickMath.maxUsableTick(corePoolKey.tickSpacing);
+        // _addDirectLP(directTickUpper - 1, directTickUpper, int256(50e18));
+        // _addDirectLP(600, 1200, int256(50e18));
 
-    //     // Step 2: Create MM position with meaningful liquidity (1000e18 gives ~10% share of pool)
-    //     // Note: Initial pool has 10000e18 liquidity, so MM needs comparable liquidity to accrue
-    //     // meaningful fees and deficits for slashing to occur
+        // Step 2: Create MM position with meaningful liquidity (1000e18 gives ~10% share of pool)
+        // Note: Initial pool has 10000e18 liquidity, so MM needs comparable liquidity to accrue
+        // meaningful fees and deficits for slashing to occur
 
-    //     // ? Increment coverage occurs after swap, and can occur of MM Position.
-    //     // ? This causes residual collection of coverage usage growth - that applies to next in-range.
-    //     // ? Therefore, we need a range that spans the tick advancement of the swap.
-    //     // ? But the swap amount must put the position in a deficit.
+        // ? Increment coverage occurs after swap, and can occur of MM Position.
+        // ? This causes residual collection of coverage usage growth - that applies to next in-range.
+        // ? Therefore, we need a range that spans the tick advancement of the swap.
+        // ? But the swap amount must put the position in a deficit.
 
-    //     // @note - TickMisaligned error means range is not aligned with tick spacing.
-    //     // tick spacing of 60 means [-1000, 1000] is not aligned with tick spacing. Must be multiples of 60 eg. [-960, 960]
-    //     (uint256 tokenId, PositionId mmPositionId,,) = _createCommittedPosition(-1020, 1020, 50e10);
+        // @note - TickMisaligned error means range is not aligned with tick spacing.
+        // tick spacing of 60 means [-1000, 1000] is not aligned with tick spacing. Must be multiples of 60 eg. [-960, 960]
+        (uint256 tokenId, PositionId mmPositionId,,) = _createCommittedPosition(-1020, 1020, 50e10);
 
-    //     // Record initial protocol fee accrued
-    //     (uint256 feeAccruedInitial0,) = _protocolFeeAccrued(corePoolKey.toId());
+        // Record initial protocol fee accrued
+        (uint256 feeAccruedInitial0,) = _protocolFeeAccrued(corePoolKey.toId());
 
-    //     // Step 3: Swap + coverage creates deficit on MM
-    //     // Swap must be large enough to create outflows exceeding MM's base settlement,
-    //     // but small enough to keep price within the -60 to 60 tick range (otherwise no in-range liquidity)
-    //     (, int24 currentTickBefore,,) = StateLibrary.getSlot0(manager, corePoolKey.toId());
-    //     _swapCore(false, -int256(10e18));
-    //     vm.prank(marketFactory);
-    //     vtsOrchestrator.incrementCoverage(corePoolKey.toId(), 10e18, 0); // in the coverage range after the swap.
-    //     (, int24 currentTickAfter,,) = StateLibrary.getSlot0(manager, corePoolKey.toId());
+        // Step 3: Swap + coverage creates deficit on MM
+        // Swap must be large enough to create outflows exceeding MM's base settlement,
+        // but small enough to keep price within the -60 to 60 tick range (otherwise no in-range liquidity)
+        (, int24 currentTickBefore,,) = StateLibrary.getSlot0(manager, corePoolKey.toId());
+        _swapCore(false, -int256(10e18));
+        vm.prank(marketFactory);
+        vtsOrchestrator.incrementCoverage(corePoolKey.toId(), 10e18, 0); // in the coverage range after the swap.
+        (, int24 currentTickAfter,,) = StateLibrary.getSlot0(manager, corePoolKey.toId());
 
-    //     console.log("currentTickBefore", currentTickBefore);
-    //     console.log("currentTickAfter", currentTickAfter);
+        console.log("currentTickBefore", currentTickBefore);
+        console.log("currentTickAfter", currentTickAfter);
 
-    //     // Step 4: Settle MM position growths to process coverage and queue slashes
-    //     // This updates protocolFeeAccrued internally (slashes are queued in pendingFeeAdj)
-    //     vtsOrchestrator.settlePositionGrowths(mmPositionId);
+        // Step 4: Settle MM position growths to process coverage and queue slashes
+        // This updates protocolFeeAccrued internally (slashes are queued in pendingFeeAdj)
+        vtsOrchestrator.settlePositionGrowths(mmPositionId);
 
-    //     // Step 5: Verify protocolFeeAccrued increased from MM slash
-    //     (uint256 feeAccruedAfterSlash0,) = _protocolFeeAccrued(corePoolKey.toId());
-    //     assertGt(feeAccruedAfterSlash0, feeAccruedInitial0, "Expected protocolFeeAccrued to increase from MM slash");
+        // Step 5: Verify protocolFeeAccrued increased from MM slash
+        (uint256 feeAccruedAfterSlash0,) = _protocolFeeAccrued(corePoolKey.toId());
+        assertGt(feeAccruedAfterSlash0, feeAccruedInitial0, "Expected protocolFeeAccrued to increase from MM slash");
 
-    //     // uint256 slashedAmount = feeAccruedAfterSlash0 - feeAccruedInitial0;
+        // uint256 slashedAmount = feeAccruedAfterSlash0 - feeAccruedInitial0;
 
-    //     // // Step 6: Record DirectLP LCC balance before poke
-    //     // uint256 directLPBalanceBefore = _selfLccBalance(lccCurrency0);
+        // // Step 6: Record DirectLP LCC balance before poke
+        // uint256 directLPBalanceBefore = _selfLccBalance(lccCurrency0);
 
-    //     // // Step 7: Poke DirectLP to trigger fee processing and receive bonus
-    //     // // This calls processPositionFees which allocates bonus from potAvail
-    //     // _pokeDirectLP(600, 1200);
+        // // Step 7: Poke DirectLP to trigger fee processing and receive bonus
+        // // This calls processPositionFees which allocates bonus from potAvail
+        // _pokeDirectLP(600, 1200);
 
-    //     // uint256 directLPBalanceAfter = _selfLccBalance(lccCurrency0);
+        // uint256 directLPBalanceAfter = _selfLccBalance(lccCurrency0);
 
-    //     // // Step 8: Verify DirectLP received bonus from slashed fees
-    //     // // DirectLP has positive net settlement, so it should receive bonus from pot
-    //     // uint256 bonusReceived =
-    //     //     directLPBalanceAfter > directLPBalanceBefore ? directLPBalanceAfter - directLPBalanceBefore : 0;
+        // // Step 8: Verify DirectLP received bonus from slashed fees
+        // // DirectLP has positive net settlement, so it should receive bonus from pot
+        // uint256 bonusReceived =
+        //     directLPBalanceAfter > directLPBalanceBefore ? directLPBalanceAfter - directLPBalanceBefore : 0;
 
-    //     // assertGt(bonusReceived, 0, "DirectLP should receive bonus from MM slash");
-    //     // // Bonus should be <= slashed amount (can't receive more than what was slashed)
-    //     // assertLe(bonusReceived, slashedAmount, "Bonus should not exceed slashed amount");
+        // assertGt(bonusReceived, 0, "DirectLP should receive bonus from MM slash");
+        // // Bonus should be <= slashed amount (can't receive more than what was slashed)
+        // assertLe(bonusReceived, slashedAmount, "Bonus should not exceed slashed amount");
 
-    //     // Suppress unused variable warning
-    //     tokenId;
-    // }
+        // Suppress unused variable warning
+        tokenId;
+    }
 
     // ============================================================
     // Core Edge Cases (Maths Paradigms)
