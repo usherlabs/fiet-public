@@ -111,6 +111,56 @@ contract VTSOrchestratorTestable is VTSOrchestrator {
         return (pa.commitmentDeficit.token0, pa.commitmentDeficit.token1);
     }
 
-    // Note: fee/pot view functions are now exposed on production VTSOrchestrator,
-    // so we no longer duplicate them here to avoid override ambiguity.
+    /// @notice Get bonus weighting inputs for a position
+    /// @dev Bonus eligibility uses `netSettlementSinceLastMod` (positive only), while distribution is weighted by
+    ///      native Uniswap `feesAccruedSinceLastMod` (modifyLiquidity-time).
+    /// @param positionId The position identifier
+    /// @return net0 Signed net settlement since last fee processing for token0
+    /// @return net1 Signed net settlement since last fee processing for token1
+    /// @return feeWeight0 Native Uniswap fees accrued since last processing for token0
+    /// @return feeWeight1 Native Uniswap fees accrued since last processing for token1
+    function getPositionBonusWeights(PositionId positionId)
+        external
+        view
+        returns (int256 net0, int256 net1, uint256 feeWeight0, uint256 feeWeight1)
+    {
+        PositionAccounting storage pa = s.positionAccounting[positionId];
+        return (
+            pa.netSettlementSinceLastMod.token0,
+            pa.netSettlementSinceLastMod.token1,
+            pa.feesAccruedSinceLastMod.token0,
+            pa.feesAccruedSinceLastMod.token1
+        );
+    }
+
+    /// @notice Get pool-wide bonus weighting totals (debug/observability)
+    /// @param poolId The pool identifier
+    /// @return poolNet0 Pool-wide sum of positive nets since last processing for token0
+    /// @return poolNet1 Pool-wide sum of positive nets since last processing for token1
+    /// @return poolFees0 Pool-wide sum of native fees accrued since last processing for token0
+    /// @return poolFees1 Pool-wide sum of native fees accrued since last processing for token1
+    /// @return poolWeight0 Pool-wide sum of (positive net * feeWeight) since last processing for token0
+    /// @return poolWeight1 Pool-wide sum of (positive net * feeWeight) since last processing for token1
+    function getPoolBonusWeightTotals(PoolId poolId)
+        external
+        view
+        returns (
+            uint256 poolNet0,
+            uint256 poolNet1,
+            uint256 poolFees0,
+            uint256 poolFees1,
+            uint256 poolWeight0,
+            uint256 poolWeight1
+        )
+    {
+        PoolAccounting storage paPool = s.poolAccounting[poolId];
+        return (
+            paPool.poolNetSinceLastMod.token0,
+            paPool.poolNetSinceLastMod.token1,
+            paPool.poolFeesAccruedSinceLastMod.token0,
+            paPool.poolFeesAccruedSinceLastMod.token1,
+            paPool.poolNetFeeWeightSinceLastMod.token0,
+            paPool.poolNetFeeWeightSinceLastMod.token1
+        );
+    }
 }

@@ -935,6 +935,95 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         assertGt(dlPending1Final, dlPending1AfterRemove, "Pending bonus should be reduced after inactive poke");
     }
 
+    /// @notice Edge Case 7: Banked selfNet/feeWeight across touches when potAvail == 0, then allocate once potAvail > 0.
+    /// @dev Covers both cases:
+    ///      - potAvail == 0: no allocation occurs; windows remain banked
+    ///      - potAvail > 0: allocation occurs; windows are cleared for the allocated token
+    function test_bankedSelfNet_feeWeight_allocatesOnlyWhenPotAvailPositive() public {
+        // ------------------------------------------------------------
+        // 0) Create an in-range DirectLP position so it can accrue native fees (feeWeight)
+        // ------------------------------------------------------------
+        int24 dlTickLower = -960;
+        int24 dlTickUpper = 960;
+        uint256 dlLiquidity = 1e18;
+        // Wrap underlying to LCC - this funds hub.reserveOfUnderlying for swap settlement
+        _mintLccTo(address(this), corePoolKey.currency0, 1e18);
+        _mintLccTo(address(this), corePoolKey.currency1, 1e18);
+        ModifyLiquidityParams memory dlAddParams = ModifyLiquidityParams({
+            tickLower: dlTickLower, tickUpper: dlTickUpper, liquidityDelta: int256(dlLiquidity), salt: 0
+        });
+
+        modifyLiquidityRouter.modifyLiquidity(corePoolKey, dlAddParams, ZERO_BYTES);
+
+        PositionId directPosId = PositionLibrary.generateId(address(modifyLiquidityRouter), dlAddParams);
+
+        // ------------------------------------------------------------
+        // 1) potAvail == 0 case: accrue fees, touch, ensure no bonus is allocated and windows remain banked
+        // ------------------------------------------------------------
+        // Accrue some fees on token1 (one-for-zero swap => fee token is token1)
+        _swapCore(false, -int256(2e18));
+
+        // Touch DirectLP (poke): this should record feesAccruedSinceLastMod, but potAvail is still 0
+        ModifyLiquidityParams memory dlPokeParams =
+            ModifyLiquidityParams({tickLower: dlTickLower, tickUpper: dlTickUpper, liquidityDelta: 0, salt: 0});
+
+        // Precondition: no protocolFeeAccrued yet (no slashes have occurred), so potAvail == 0
+        (, uint256 feeAccruedBefore1) = _protocolFeeAccrued(corePoolKey.toId());
+        assertEq(feeAccruedBefore1, 0, "Precondition: protocolFeeAccrued1 should be 0 before any slashing");
+
+        modifyLiquidityRouter.modifyLiquidity(corePoolKey, dlPokeParams, ZERO_BYTES);
+
+        // No bonus should be queued because potAvail == 0
+        (,, int256 pending0AfterPoke, int256 pending1AfterPoke) =
+            _testableOrchestrator().getPositionFeeAccounting(directPosId);
+        pending0AfterPoke; // silence
+        assertEq(pending1AfterPoke, 0, "potAvail==0: should not queue bonus (pendingFeeAdj1 stays 0)");
+
+        // Windows should remain banked (selfNet from initial settlement; feeWeight from poke)
+        (int256 net0, int256 net1, uint256 feeW0, uint256 feeW1) =
+            _testableOrchestrator().getPositionBonusWeights(directPosId);
+        net0; // silence
+        assertGt(net1, 0, "potAvail==0: selfNet1 should remain banked");
+        assertEq(feeW0, 0, "potAvail==0: feeWeight0 expected 0 in one-for-zero fee direction");
+        assertGt(feeW1, 0, "potAvail==0: feeWeight1 should be recorded and banked");
+
+        // ------------------------------------------------------------
+        // 2) potAvail > 0 case: create slashes so protocolFeeAccrued > 0, then touch and ensure allocation occurs
+        // ------------------------------------------------------------
+        // Create MM slasher and queue slashes (protocolFeeAccrued increases on settlePositionGrowths)
+        int24 mmTickLower = -960;
+        int24 mmTickUpper = 960;
+        (uint256 tokenId, PositionId slasherPosId,,) = _createCommittedPosition(mmTickLower, mmTickUpper, 50e10);
+
+        _swapCore(false, -int256(50e18));
+        vtsOrchestrator.settlePositionGrowths(slasherPosId);
+        vm.prank(marketFactory);
+        vtsOrchestrator.incrementCoverage(corePoolKey.toId(), 5e18, 0);
+        vtsOrchestrator.settlePositionGrowths(slasherPosId);
+
+        (, uint256 feeAccruedAfterSlash1) = _protocolFeeAccrued(corePoolKey.toId());
+        assertGt(feeAccruedAfterSlash1, 0, "Precondition: protocolFeeAccrued1 should be > 0 after slashing queued");
+
+        // Touch DirectLP again: now potAvail > 0, so it should allocate and queue a bonus
+        modifyLiquidityRouter.modifyLiquidity(corePoolKey, dlPokeParams, ZERO_BYTES);
+
+        (,, int256 pending0AfterAlloc, int256 pending1AfterAlloc) =
+            _testableOrchestrator().getPositionFeeAccounting(directPosId);
+        pending0AfterAlloc; // silence
+        assertLt(pending1AfterAlloc, 0, "potAvail>0: should queue a bonus (pendingFeeAdj1 < 0)");
+
+        // After a successful allocation, windows for token1 should be cleared (bank consumed)
+        (int256 net0After, int256 net1After, uint256 feeW0After, uint256 feeW1After) =
+            _testableOrchestrator().getPositionBonusWeights(directPosId);
+        net0After; // silence
+        feeW0After; // silence
+        assertEq(net1After, 0, "potAvail>0: net1 window should be cleared after allocation");
+        assertEq(feeW1After, 0, "potAvail>0: feeWeight1 window should be cleared after allocation");
+
+        // Suppress unused variable warnings
+        tokenId;
+    }
+
     // ============================================================
     // DICE (Deficit-Indexed Coverage Exercise) Tests
     // ============================================================
