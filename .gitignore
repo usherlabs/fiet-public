@@ -2,3 +2,9 @@
 .cursor/debug.log
 coverage-*.txt
 .solx
+forge.toml
+forge.lock
+!contracts/evm/foundry.toml
+!contracts/evm-scripts/foundry.toml
+!contracts/evm/foundry.lock
+!contracts/evm-scripts/foundry.lock
