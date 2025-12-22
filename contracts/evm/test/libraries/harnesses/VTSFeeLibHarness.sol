@@ -5,11 +5,10 @@ import {VTSStorage, MarketVTSConfiguration} from "../../../src/types/VTS.sol";
 import {PositionId, Position} from "../../../src/types/Position.sol";
 import {Pool} from "../../../src/types/Pool.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
-import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
-import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {VTSFeeLib} from "../../../src/libraries/VTSFeeLib.sol";
 import {RFSCheckpoint} from "../../../src/types/Checkpoint.sol";
+import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 
 /// @title VTSFeeLibHarness
 /// @notice Exposes internal VTSFeeLib functions for unit testing
@@ -25,58 +24,29 @@ contract VTSFeeLibHarness {
         return VTSFeeLib._peekFeeAdjustment(s, positionId);
     }
 
-    /// @notice Exposes _fundFeePot (requires actual poolManager)
-    function fundFeePot(
-        IPoolManager poolManager,
-        PoolId poolId,
-        Currency lccCurrency,
-        uint8 tokenIndex,
-        uint256 amount
-    ) external {
-        VTSFeeLib._fundFeePot(s, poolManager, poolId, lccCurrency, tokenIndex, amount);
+    /// @notice Exposes _fundFeePot (accounting only, no PoolManager interaction)
+    function fundFeePot(PoolId poolId, uint8 tokenIndex, uint256 amount) external {
+        VTSFeeLib._fundFeePot(s, poolId, tokenIndex, amount);
     }
 
-    /// @notice Exposes _drainFeePot (requires actual poolManager)
-    function drainFeePot(
-        IPoolManager poolManager,
-        PoolId poolId,
-        Currency lccCurrency,
-        uint8 tokenIndex,
-        uint256 amount
-    ) external {
-        VTSFeeLib._drainFeePot(s, poolManager, poolId, lccCurrency, tokenIndex, amount);
+    /// @notice Exposes _drainFeePot (accounting only, no PoolManager interaction)
+    function drainFeePot(PoolId poolId, uint8 tokenIndex, uint256 amount) external {
+        VTSFeeLib._drainFeePot(s, poolId, tokenIndex, amount);
     }
 
-    /// @notice Exposes _finaliseFeeAdjustment (requires actual poolManager)
-    function finaliseFeeAdjustment(
-        IPoolManager poolManager,
-        PositionId positionId,
-        PoolId poolId,
-        Currency currency0,
-        Currency currency1
-    ) external returns (BalanceDelta adj) {
-        return VTSFeeLib._finaliseFeeAdjustment(s, poolManager, positionId, poolId, currency0, currency1);
+    /// @notice Exposes _finaliseFeeAdjustment (accounting only, no PoolManager interaction)
+    function finaliseFeeAdjustment(PositionId positionId, PoolId poolId) external returns (BalanceDelta adj) {
+        return VTSFeeLib._finaliseFeeAdjustment(s, positionId, poolId);
     }
 
-    /// @notice Exposes processPositionFees (requires actual poolManager)
-    function processPositionFees(
-        IPoolManager poolManager,
-        PositionId positionId,
-        Currency currency0,
-        Currency currency1
-    ) external returns (BalanceDelta adj) {
-        return VTSFeeLib.processPositionFees(s, poolManager, positionId, currency0, currency1);
+    /// @notice Exposes processPositionFees (accounting only, no PoolManager interaction)
+    function processPositionFees(PositionId positionId) external returns (BalanceDelta adj) {
+        return VTSFeeLib.processPositionFees(s, positionId);
     }
 
-    /// @notice Exposes proactiveFunding (requires actual poolManager)
-    function proactiveFunding(
-        IPoolManager poolManager,
-        PoolId poolId,
-        PositionId positionId,
-        Currency lccCurrency0,
-        Currency lccCurrency1
-    ) external {
-        VTSFeeLib.proactiveFunding(s, poolManager, poolId, positionId, lccCurrency0, lccCurrency1);
+    /// @notice Exposes proactiveFunding (accounting only, no PoolManager interaction)
+    function proactiveFunding(PoolId poolId, PositionId positionId) external {
+        VTSFeeLib.proactiveFunding(s, poolId, positionId);
     }
 
     // ============ Storage Getters (for assertions) ============

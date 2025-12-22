@@ -2,6 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {MarketVTSConfiguration} from "../types/VTS.sol";
 import {IOracleHelper} from "./IOracleHelper.sol";
 import {ILiquidityHub} from "./ILiquidityHub.sol";
@@ -146,4 +147,11 @@ interface IMarketFactory {
      * @param amount The amount to use
      */
     function useMarketLiquidity(address underlyingAsset, bytes32 marketId, uint256 amount) external returns (uint256);
+
+    /**
+     * @notice Called after modifyLiquidity to settle CoreHook's PoolManager deltas
+     * @dev Triggers CoreHook to mint/burn ERC6909 claims to clear its hook deltas.
+     * @param key The pool key for the currencies to settle
+     */
+    function afterModifyLiquidity(PoolKey calldata key) external;
 }

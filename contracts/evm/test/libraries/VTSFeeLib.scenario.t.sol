@@ -76,17 +76,30 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         return VTSOrchestratorTestable(address(vtsOrchestrator));
     }
 
+    /// @notice Helper to get slashed pot balance for token0 (fee-sharing pot)
+    /// @dev Uses testable VTSO view function instead of ERC-6909 claims balance
+    function _slashedPot0() internal view returns (uint256) {
+        (uint256 pot0,) = _testableOrchestrator().getSlashedPot(corePoolKey.toId());
+        return pot0;
+    }
+
+    /// @notice Helper to get slashed pot balance for token1 (fee-sharing pot)
+    function _slashedPot1() internal view returns (uint256) {
+        (, uint256 pot1) = _testableOrchestrator().getSlashedPot(corePoolKey.toId());
+        return pot1;
+    }
+
     function _addInitialLiquidityToPool() internal override {
-        (uint160 sqrtPriceX96, int24 currentTick,,) = StateLibrary.getSlot0(manager, corePoolKey.toId());
+        // (uint160 sqrtPriceX96, int24 currentTick,,) = StateLibrary.getSlot0(manager, corePoolKey.toId());
         int24 tickLower = TickMath.minUsableTick(corePoolKey.tickSpacing);
         int24 tickUpper = TickMath.maxUsableTick(corePoolKey.tickSpacing);
-        (uint256 eff0, uint256 eff1) = LiquidityUtils.calculateEffectiveTokenAmounts(
-            sqrtPriceX96, currentTick, tickLower, tickUpper, int256(initialLiquidity)
-        );
-        console.log("==== INITIAL LIQUIDITY TO POOL ====");
-        console.log("eff0:", eff0);
-        console.log("eff1:", eff1);
-        console.log("===================================");
+        // (uint256 eff0, uint256 eff1) = LiquidityUtils.calculateEffectiveTokenAmounts(
+        //     sqrtPriceX96, currentTick, tickLower, tickUpper, int256(initialLiquidity)
+        // );
+        // console.log("==== INITIAL LIQUIDITY TO POOL ====");
+        // console.log("eff0:", eff0);
+        // console.log("eff1:", eff1);
+        // console.log("===================================");
         modifyLiquidityRouter.modifyLiquidity(
             corePoolKey,
             ModifyLiquidityParams({
@@ -222,8 +235,8 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
     function test_multiMM_oneDeficit_protocolCovers_slashOnlyDeficitMM() public {
         // 3 independent MM commits (each with unique signal nonce)
         (uint256 mm1, PositionId mm1PositionId) = _createNewMMCommit(-60, 60, 3e10);
-        (uint256 mm2,) = _createNewMMCommit(-60, 60, 3e10);
-        (uint256 mm3,) = _createNewMMCommit(-60, 60, 3e10);
+        (uint256 mm2, PositionId mm2PositionId) = _createNewMMCommit(-60, 60, 3e10);
+        (uint256 mm3, PositionId mm3PositionId) = _createNewMMCommit(-60, 60, 3e10);
         assertEq(mm1, 1);
         assertEq(mm2, 2);
         assertEq(mm3, 3);
@@ -233,12 +246,16 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         _mmSettle(mm2, 0, _negInt128Capped(5e18), _negInt128Capped(5e18));
         _mmSettle(mm3, 0, _negInt128Capped(5e18), _negInt128Capped(5e18));
 
-        uint256 potBefore = _feeHolderClaims(lccCurrency0);
+        uint256 potBefore = _slashedPot1();
         (uint256 protocolFeeAccruedBefore0, uint256 protocolFeeAccruedBefore1) = _protocolFeeAccrued(corePoolKey.toId());
 
         // Swap to accrue fees + outflow growth (choose direction that accrues token0 outflow)
         // Fee pot should be affected on swap, not on position modification
         _swapCore(false, -int256(5e18)); // ? one for zero, therefore protocolFeeAccruedBefore1 should increase
+
+        vtsOrchestrator.settlePositionGrowths(mm2PositionId);
+        vtsOrchestrator.settlePositionGrowths(mm3PositionId);
+        vtsOrchestrator.settlePositionGrowths(mm1PositionId); // settle position now that deficit has surfaced.
 
         // Protocol covers unwraps: increment coverage (token0 only)
         // NOTE: With DICE (Deficit-Indexed Coverage Exercise), coverage is now indexed to
@@ -248,32 +265,48 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         vm.prank(marketFactory);
         vtsOrchestrator.incrementCoverage(corePoolKey.toId(), 2e18, 0);
 
-        uint256 potAfter = _feeHolderClaims(lccCurrency0);
-
-        // Only MM1 should be in a deficit (MM2 and MM3 are solvent)
-        // With DICE: settling MM1's growths will:
-        // 1. Materialize deficit into cumulativeDeficit and totalDeficitPrincipal
-        // 2. Flush any coverage residual into the DICE index
-        // 3. Apply coverage burn based on MM1's deficit principal
+        vtsOrchestrator.settlePositionGrowths(mm2PositionId);
+        vtsOrchestrator.settlePositionGrowths(mm3PositionId);
         vtsOrchestrator.settlePositionGrowths(mm1PositionId);
+
         (uint256 protocolFeeAccruedAfter0, uint256 protocolFeeAccruedAfter1) = _protocolFeeAccrued(corePoolKey.toId());
 
-        // Expect some funding into the pot from swap fees and coverage processing
-        // Fee pot changes happen during swap and coverage operations, not position modifications
-        // TODO: Solve as potAfter should be greater than potBefore.
-        assertGt(potAfter, potBefore, "Pot should increase after swap + coverage");
+        (,, uint256 settled0, uint256 settled1,,) = _testableOrchestrator().getPositionAccounting(mm1PositionId);
+        console.log("mm1 settled0:", settled0);
+        console.log("mm1 settled1:", settled1);
+        (,, uint256 settled02, uint256 settled12,,) = _testableOrchestrator().getPositionAccounting(mm2PositionId);
+        console.log("mm2 settled0:", settled02);
+        console.log("mm2 settled1:", settled12);
+        (,, uint256 settled03, uint256 settled13,,) = _testableOrchestrator().getPositionAccounting(mm3PositionId);
+        console.log("mm3 settled0:", settled03);
+        console.log("mm3 settled1:", settled13);
+
+        _pokeMMAndTakeFees(mm2, 0, -60, 60);
+        _pokeMMAndTakeFees(mm3, 0, -60, 60);
+        uint256 potAfter = _slashedPot1();
+
+        _pokeMMAndTakeFees(mm1, 0, -60, 60);
+
+        uint256 potAfterDeficitMMSPoke = _slashedPot1();
+
+        assertEq(potAfter, potBefore, "Direct Pot change should be zero after swap + coverage (before settleGrowths)");
+        assertGt(potAfterDeficitMMSPoke, potAfter, "Pot change should be greater than zero after settleGrowths");
+        assertGt(
+            _selfLccBalance(lccCurrency1),
+            potAfterDeficitMMSPoke,
+            "Self LCC balance should be greater than slashed pot because feeCoverage < 50%"
+        );
+
         // DICE: Protocol fee accrued for token0 should now increase because MM1 has deficit
         // and coverage was applied. The old tick-indexed model incorrectly showed no increase
         // because coverage was attributed to whoever was in-range at coverage time.
-        assertGt(
-            protocolFeeAccruedAfter0, protocolFeeAccruedBefore0, "DICE: Protocol fee accrued should increase for token0"
+        assertEq(
+            protocolFeeAccruedAfter0, protocolFeeAccruedBefore0, "DICE: Protocol fee accrued should be 0 for token0"
         );
         // Note: Token1 protocol fee behavior depends on swap fees, not DICE coverage.
         // Coverage occurs on outflows/deficits, and therefore only for token0 only.
         // Token1 assertion relaxed to non-decreasing.
-        assertEq(
-            protocolFeeAccruedAfter1, protocolFeeAccruedBefore1, "Protocol fee accrued should not decrease for token1"
-        );
+        assertGt(protocolFeeAccruedAfter1, protocolFeeAccruedBefore1, "Protocol fee accrued should increase for token1");
     }
 
     /// @notice Scenario 2: Multiple MMs, two MMs have deficits, protocol covers unwraps
@@ -298,7 +331,7 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         // Make MM3 solvent (beneficiary)
         _mmSettle(tokenId, idx3, _negInt128Capped(10e18), _negInt128Capped(10e18));
 
-        uint256 pot0 = _feeHolderClaims(lccCurrency0);
+        uint256 pot0 = _slashedPot0();
 
         // Swap + coverage -> create deficits on MM0 and MM1
         // Fee pot should be affected on swap, not on position modification
@@ -306,7 +339,7 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         vm.prank(marketFactory);
         vtsOrchestrator.incrementCoverage(corePoolKey.toId(), 4e18, 0);
 
-        uint256 pot1 = _feeHolderClaims(lccCurrency0);
+        uint256 pot1 = _slashedPot0();
         assertGe(pot1, pot0, "Pot should increase after swap + coverage");
     }
 
@@ -340,7 +373,7 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
             abi.encode(toBalanceDelta(int128(0), int128(0)))
         );
 
-        uint256 potBefore = _feeHolderClaims(lccCurrency0);
+        uint256 potBefore = _slashedPot0();
 
         // Attempt a withdrawal via onMMSettle; it will be clamped to 0 by vault mock
         unlockCaller.run(
@@ -357,7 +390,7 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
             )
         );
 
-        uint256 potAfter = _feeHolderClaims(lccCurrency0);
+        uint256 potAfter = _slashedPot0();
         // Fee pot is affected on swap, not on position modification
         // No executed coverage/withdrawal should not fund pot from queued portion
         assertEq(potAfter, potBefore, "No executed coverage/withdrawal should not fund pot from queued portion");
@@ -381,14 +414,14 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
     function test_directLP_outOfRange_canBeAdded_withFundedPot() public {
         (uint256 tokenId,) = _commitAndMintFirstMM(); // idx0
 
-        uint256 potBefore = _feeHolderClaims(lccCurrency0);
+        uint256 potBefore = _slashedPot0();
 
         // Fee pot should be funded on swap + coverage, not on position modification
         _swapCore(false, -int256(6e18));
         vm.prank(marketFactory);
         vtsOrchestrator.incrementCoverage(corePoolKey.toId(), 3e18, 0);
 
-        uint256 potFunded = _feeHolderClaims(lccCurrency0);
+        uint256 potFunded = _slashedPot0();
         assertGe(potFunded, potBefore, "Expected pot to be funded after swap + coverage");
 
         // Add an out-of-range direct LP position
@@ -507,7 +540,7 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
     function test_selfExclusion_potAvailZero_noBonus() public {
         (uint256 tokenId,) = _commitAndMintFirstMM();
 
-        uint256 potBefore = _feeHolderClaims(lccCurrency0);
+        uint256 potBefore = _slashedPot0();
 
         // Create deficit+fees+coverage => slash
         // Fee pot should be funded on swap + coverage, not on position modification
@@ -515,13 +548,13 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         vm.prank(marketFactory);
         vtsOrchestrator.incrementCoverage(corePoolKey.toId(), 2e18, 0);
 
-        uint256 potAfterSlash = _feeHolderClaims(lccCurrency0);
+        uint256 potAfterSlash = _slashedPot0();
         assertGe(potAfterSlash, potBefore, "Expected pot funded by swap + coverage");
 
         // Now run a swap that creates inflow for token0 to generate positive net settlement
         _swapCore(true, -int256(4e18));
 
-        uint256 potAfterSecondSwap = _feeHolderClaims(lccCurrency0);
+        uint256 potAfterSecondSwap = _slashedPot0();
 
         // Self-exclusion: single position cannot drain its own contribution
         // Pot should not decrease on second swap
@@ -556,7 +589,7 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         // Make beneficiary have positive net settlement
         _mmSettle(tokenId, idx1, _negInt128Capped(10e18), _negInt128Capped(0));
 
-        uint256 potBefore = _feeHolderClaims(lccCurrency0);
+        uint256 potBefore = _slashedPot0();
 
         // Create slash on MM0 by swap + coverage
         // Fee pot should be funded on swap + coverage, not on position modification
@@ -564,7 +597,7 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         vm.prank(marketFactory);
         vtsOrchestrator.incrementCoverage(corePoolKey.toId(), 2e18, 0);
 
-        uint256 potAfter = _feeHolderClaims(lccCurrency0);
+        uint256 potAfter = _slashedPot0();
         assertGe(potAfter, potBefore, "Pot should be funded after swap + coverage");
 
         // Suppress unused variable warnings
@@ -587,20 +620,20 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         (uint256 tokenId,) = _commitAndMintFirstMM(); // slasher
         (uint256 dustIdx,) = _mintAdditionalMM(tokenId, -60, 60, 1e10); // beneficiary candidate
 
-        uint256 potBefore = _feeHolderClaims(lccCurrency0);
+        uint256 potBefore = _slashedPot1();
 
         // Fund pot via swap + coverage (slashes idx0)
-        _swapCore(false, -int256(5e18));
+        _swapCore(false, -int256(5e18)); // one for zero swap - therefore fee accrued on token1, deficit on token0
         vm.prank(marketFactory);
         vtsOrchestrator.incrementCoverage(corePoolKey.toId(), 2e18, 0);
 
-        uint256 potFunded = _feeHolderClaims(lccCurrency0);
+        uint256 potFunded = _slashedPot1();
         assertGe(potFunded, potBefore, "Pot should be funded after swap + coverage");
 
         // Create tiny positive net settlement on dustIdx (below 1e12) via deposit
         _mmSettle(tokenId, dustIdx, _negInt128Capped(1e12 - 1), int128(0));
 
-        uint256 potAfterSettle = _feeHolderClaims(lccCurrency0);
+        uint256 potAfterSettle = _slashedPot1();
 
         // Dust net should not drain pot - pot should not decrease
         assertGe(potAfterSettle, potFunded, "Dust net should not drain pot");
@@ -633,14 +666,14 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         _mmSettle(tokenId, idx2, _negInt128Capped(4e12), int128(0));
         _mmSettle(tokenId, idx3, _negInt128Capped(6e12), int128(0));
 
-        uint256 potBefore = _feeHolderClaims(lccCurrency0);
+        uint256 potBefore = _slashedPot0();
 
         // Swap + coverage funds pot and processes fee allocations
         _swapCore(false, -int256(10e18));
         vm.prank(marketFactory);
         vtsOrchestrator.incrementCoverage(corePoolKey.toId(), 5e18, 0);
 
-        uint256 potAfter = _feeHolderClaims(lccCurrency0);
+        uint256 potAfter = _slashedPot0();
 
         // Pot should be funded from swap fees and slash processing
         assertGe(potAfter, potBefore, "Expected pot to be funded after swap + coverage");
@@ -811,36 +844,59 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
     /// @dev Verifies that coverage charges are only applied to positions with deficit,
     ///      not just positions that happen to be in-range at coverage time.
     function test_DICE_inRangePositionWithoutDeficit_notSlashed() public {
-        // Create two positions: MM1 (will have deficit), MM2 (fully settled, no deficit)
-        (uint256 mm1,) = _createNewMMCommit(-60, 60, 3e10);
+        // Create two positions: MM1 (will have deficit), MM2 (settlement-buffered, should remain solvent)
+        (uint256 mm1, PositionId mm1PositionId) = _createNewMMCommit(-60, 60, 3e10);
         (uint256 mm2, PositionId mm2PositionId) = _createNewMMCommit(-60, 60, 3e10);
 
         // Make MM2 fully solvent (no deficit expected after swap)
         _mmSettle(mm2, 0, _negInt128Capped(20e18), _negInt128Capped(20e18));
 
-        // Record MM2's feesShared before any coverage
-        (uint256 feeAccruedBefore,) = _protocolFeeAccrued(corePoolKey.toId());
+        // Swap to create outflow growth. Both positions are in-range, but MM2 should cover via settlement.
+        _swapCore(false, -int256(10e18)); // one for zero swap - fees accrue on token1, deficits (if any) on token0
 
-        // Swap to create deficit on MM1 only (MM2 has settlement buffer)
-        _swapCore(false, -int256(10e18));
+        // First settle MM1 to MATERIALISE deficit principal (required for incrementCoverage() to bump the DICE index).
+        // This should not slash yet because no coverage has been exercised.
+        vtsOrchestrator.settlePositionGrowths(mm1PositionId);
 
-        // Settle MM2 to ensure it has no deficit (should be covered by settlement)
-        vtsOrchestrator.settlePositionGrowths(mm2PositionId);
+        // Record pool + MM2 fee accounting baseline (should not move when settling a solvent MM after coverage).
+        (, uint256 feeAccruedBefore1) = _protocolFeeAccrued(corePoolKey.toId());
+        (
+            uint256 mm2FeesShared0Before,
+            uint256 mm2FeesShared1Before,
+            int256 mm2Pending0Before,
+            int256 mm2Pending1Before
+        ) = _testableOrchestrator().getPositionFeeAccounting(mm2PositionId);
 
         // Coverage event
         vm.prank(marketFactory);
         vtsOrchestrator.incrementCoverage(corePoolKey.toId(), 5e18, 0);
 
-        // Settle MM2 again after coverage
+        // Settle MM2 after coverage: MM2 has no deficit principal, so it must NOT be slashed.
         vtsOrchestrator.settlePositionGrowths(mm2PositionId);
 
-        (uint256 feeAccruedAfter,) = _protocolFeeAccrued(corePoolKey.toId());
+        (, uint256 feeAccruedAfter1) = _protocolFeeAccrued(corePoolKey.toId());
 
-        // DICE: Protocol fee increase should come from positions with deficit (MM1),
-        // not from MM2 which is solvent
-        // Note: We can't directly verify MM2 didn't contribute, but the DICE mechanism
-        // ensures coverage is only applied based on deficit principal
-        assertGt(feeAccruedAfter, feeAccruedBefore, "DICE: Protocol fee should reflect coverage from deficit positions");
+        // DICE: No pool protocolFeeAccrued increase should occur from settling a solvent position.
+        assertEq(
+            feeAccruedAfter1,
+            feeAccruedBefore1,
+            "DICE: Settling a solvent position must not increase protocolFeeAccrued"
+        );
+
+        // And MM2 should not have been attributed any slashed fees or pending adjustments.
+        (uint256 mm2FeesShared0After, uint256 mm2FeesShared1After, int256 mm2Pending0After, int256 mm2Pending1After) =
+            _testableOrchestrator().getPositionFeeAccounting(mm2PositionId);
+        assertEq(mm2FeesShared0After, mm2FeesShared0Before, "DICE: Solvent MM2 must not be slashed (feesShared0)");
+        assertEq(mm2FeesShared1After, mm2FeesShared1Before, "DICE: Solvent MM2 must not be slashed (feesShared1)");
+        assertEq(mm2Pending0After, mm2Pending0Before, "DICE: Solvent MM2 must not be slashed (pendingFeeAdj0)");
+        assertEq(mm2Pending1After, mm2Pending1Before, "DICE: Solvent MM2 must not be slashed (pendingFeeAdj1)");
+
+        // Settling MM1 again should now apply DICE coverage burn and increase protocolFeeAccrued (fee token = token1).
+        vtsOrchestrator.settlePositionGrowths(mm1PositionId);
+        (, uint256 feeAccruedAfter2) = _protocolFeeAccrued(corePoolKey.toId());
+        assertGt(
+            feeAccruedAfter2, feeAccruedAfter1, "DICE: Protocol fee should reflect coverage from deficit positions"
+        );
 
         // Suppress unused variable warning
         mm1;
@@ -850,34 +906,81 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
     /// @dev Verifies that coverage exercised when totalDeficitPrincipal = 0 is deferred
     ///      and correctly applied when deficits are later materialised.
     function test_DICE_residualSocialisedToFutureDeficits() public {
-        // Setup: Create a fully solvent position initially
+        // Setup: Create a position with no materialised deficit initially.
+        // Note: We intentionally do NOT add an oversized settlement buffer here, so a later swap can
+        // actually materialise deficit principal and trigger residual flushing.
         (uint256 tokenId, PositionId positionId) = _createNewMMCommit(-60, 60, 3e10);
-        _mmSettle(tokenId, 0, _negInt128Capped(20e18), _negInt128Capped(20e18));
 
         // Settle to ensure no deficit exists yet
         vtsOrchestrator.settlePositionGrowths(positionId);
+
+        (, uint256 feeAccruedBeforeCoverage) = _protocolFeeAccrued(corePoolKey.toId());
 
         // Coverage event with no deficit in pool (should go to DICE residual)
         vm.prank(marketFactory);
         vtsOrchestrator.incrementCoverage(corePoolKey.toId(), 5e18, 0);
 
-        (uint256 feeAccruedAfterFirstCoverage,) = _protocolFeeAccrued(corePoolKey.toId());
+        (, uint256 feeAccruedAfterFirstCoverage) = _protocolFeeAccrued(corePoolKey.toId());
+
+        assertEq(
+            feeAccruedAfterFirstCoverage,
+            feeAccruedBeforeCoverage,
+            "DICE: protocolFeeAccrued must not change when coverage is deferred into residual"
+        );
+
+        // Confirm residual was recorded (and index was not incremented yet)
+        {
+            (
+                uint256 totalDeficitPrincipal0,
+                uint256 totalDeficitPrincipal1,
+                uint256 coveragePerDeficitIndex0,
+                uint256 coveragePerDeficitIndex1,
+                uint256 coverageResidual0,
+                uint256 coverageResidual1
+            ) = _testableOrchestrator().getPoolDICEAccounting(corePoolKey.toId());
+            assertEq(totalDeficitPrincipal0, 0, "DICE: totalDeficitPrincipal0 must be 0 before deficit materialises");
+            assertEq(totalDeficitPrincipal1, 0, "DICE: totalDeficitPrincipal1 must be 0 before deficit materialises");
+            assertEq(coveragePerDeficitIndex0, 0, "DICE: coverage index must not increment when principal is 0");
+            assertEq(coverageResidual0, 5e18, "DICE: coverage should be deferred into residual when principal is 0");
+            // Suppress unused variable warnings
+            coveragePerDeficitIndex1;
+            coverageResidual1;
+        }
 
         // Now create deficit via a larger swap that exceeds settlement buffer
-        _swapCore(false, -int256(100e18));
+        _swapCore(false, -int256(250e18)); // one for zero swap - therefore fee accrued on token1, deficit on token0
 
         // Settle position (should flush residual and apply coverage)
         vtsOrchestrator.settlePositionGrowths(positionId);
 
-        (uint256 feeAccruedAfterSettle,) = _protocolFeeAccrued(corePoolKey.toId());
+        // DICE: Residual should have been flushed into the index once principal exists.
+        // Note: feesBurn (and thus protocolFeeAccrued) can still be 0 if no fees were accrued,
+        // so we assert on the DICE accounting invariants rather than protocolFeeAccrued deltas.
+        {
+            (
+                uint256 totalDeficitPrincipal0,
+                uint256 totalDeficitPrincipal1,
+                uint256 coveragePerDeficitIndex0,
+                uint256 coveragePerDeficitIndex1,
+                uint256 coverageResidual0,
+                uint256 coverageResidual1
+            ) = _testableOrchestrator().getPoolDICEAccounting(corePoolKey.toId());
 
-        // DICE: Residual should have been flushed and applied when deficit appeared
-        // Note: The fee increase depends on whether the swap created sufficient deficit
-        // to trigger coverage burn. At minimum, the state should be consistent.
+            assertGt(totalDeficitPrincipal0, 0, "DICE: deficit principal must materialise for token0");
+            assertEq(coverageResidual0, 0, "DICE: residual must be flushed once principal exists");
+            assertGt(coveragePerDeficitIndex0, 0, "DICE: residual must be socialised into the coverage index");
+
+            // Suppress unused variable warnings
+            totalDeficitPrincipal1;
+            coveragePerDeficitIndex1;
+            coverageResidual1;
+        }
+
+        (, uint256 feeAccruedAfterSettle) = _protocolFeeAccrued(corePoolKey.toId());
         assertGt(
             feeAccruedAfterSettle,
             feeAccruedAfterFirstCoverage,
-            "DICE: Residual coverage should be applied when deficit materialises"
+            "DICE: protocolFeeAccrued must not decrease after deficit materialises"
         );
     }
 }

@@ -366,6 +366,24 @@ abstract contract VTSOrchestratorFixture is MarketTestBase, MarketMakerTestBase 
         MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
     }
 
+    /// @notice Helper to poke an MM position and take fees (for fee collection tests)
+    function _pokeMMSettleAndTakeFees(
+        uint256 tokenId,
+        uint256 positionIndex,
+        int24 tickLower,
+        int24 tickUpper,
+        bool payerIsUser,
+        bool shouldTake
+    ) internal {
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](4);
+        actions[0] = MMA.prepareIncrease(corePoolKey, tokenId, positionIndex, tickLower, tickUpper, 0);
+        actions[1] = MMA.prepareTake(lccCurrency0, address(this), 0);
+        actions[2] = MMA.prepareTake(lccCurrency1, address(this), 0);
+        actions[3] = MMA.prepareSettleFromDeltas(corePoolKey, tokenId, positionIndex, true, false);
+
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+    }
+
     /// @notice Helper to get MMPM's LCC balance
     function _mmpmLccBalance(Currency lccCurrency) internal view returns (uint256) {
         return lccCurrency.balanceOf(address(positionManager));
@@ -390,13 +408,11 @@ abstract contract VTSOrchestratorFixture is MarketTestBase, MarketMakerTestBase 
         return vtsOrchestrator.getProtocolFeeAccrued(poolId);
     }
 
-    /// @notice Helper to settle an MM position using prepareSettle
+    /// @notice Helper to prepare permits for settle in MM position
     /// @dev Mints and approves underlying tokens if amounts are negative (deposits)
-    /// @param tokenId The commitment NFT token ID
-    /// @param positionIndex The position index within the commitment
     /// @param amount0 Amount of token0 to settle (negative = deposit, positive = withdraw)
     /// @param amount1 Amount of token1 to settle (negative = deposit, positive = withdraw)
-    function _mmSettle(uint256 tokenId, uint256 positionIndex, int128 amount0, int128 amount1) internal {
+    function _permitSettle(int128 amount0, int128 amount1) internal {
         // Get Permit2 instance once if we need to approve tokens
         IAllowanceTransfer permit2;
         bool needsPermit2 =
@@ -424,6 +440,16 @@ abstract contract VTSOrchestratorFixture is MarketTestBase, MarketMakerTestBase 
                 permit2.approve(underlying1, address(positionManager), type(uint160).max, type(uint48).max);
             }
         }
+    }
+
+    /// @notice Helper to settle an MM position using prepareSettle
+    /// @dev Mints and approves underlying tokens if amounts are negative (deposits)
+    /// @param tokenId The commitment NFT token ID
+    /// @param positionIndex The position index within the commitment
+    /// @param amount0 Amount of token0 to settle (negative = deposit, positive = withdraw)
+    /// @param amount1 Amount of token1 to settle (negative = deposit, positive = withdraw)
+    function _mmSettle(uint256 tokenId, uint256 positionIndex, int128 amount0, int128 amount1) internal {
+        _permitSettle(amount0, amount1);
 
         // Prepare and execute settle action
         MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](1);

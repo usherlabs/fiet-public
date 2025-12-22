@@ -2,13 +2,9 @@
 pragma solidity ^0.8.26;
 
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
-import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
-import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
-import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
-import {CurrencySettler} from "@uniswap/v4-core/test/utils/CurrencySettler.sol";
 
 import {
     VTSStorage,
@@ -20,7 +16,6 @@ import {
 } from "../types/VTS.sol";
 import {PositionId, Position} from "../types/Position.sol";
 import {LiquidityUtils} from "./LiquidityUtils.sol";
-import {DynamicCurrencyDelta} from "./DynamicCurrencyDelta.sol";
 
 /// @title VTSFeeLib
 /// @notice Fee processing, slashed pot management, and coverage burn logic for VTS
@@ -28,10 +23,8 @@ import {DynamicCurrencyDelta} from "./DynamicCurrencyDelta.sol";
 library VTSFeeLib {
     using SafeCast for uint256;
     using SafeCast for int256;
-    using CurrencySettler for Currency;
     using TokenPairLib for TokenPairUint;
     using TokenPairLib for TokenPairInt;
-    using StateLibrary for IPoolManager;
 
     // --------------------------------------------------
     // Fee Adjustment Helpers
@@ -52,46 +45,27 @@ library VTSFeeLib {
         adj1 = pa.pendingFeeAdj.token1;
     }
 
-    /// @notice Increase the slashed pot for a pool/token when a take() succeeds
+    /// @notice Increase the slashed pot accounting for a pool/token
+    /// @dev Only updates accounting state. Actual ERC6909 mint is handled by CoreHook.settleHookDeltasToPot
     /// @param s The central VTS storage
-    /// @param poolManager The pool manager contract
     /// @param poolId The pool ID
-    /// @param lccCurrency The LCC currency
     /// @param tokenIndex The token index (0 or 1)
     /// @param amount The amount to fund
-    function _fundFeePot(
-        VTSStorage storage s,
-        IPoolManager poolManager,
-        PoolId poolId,
-        Currency lccCurrency,
-        uint8 tokenIndex,
-        uint256 amount
-    ) internal {
+    function _fundFeePot(VTSStorage storage s, PoolId poolId, uint8 tokenIndex, uint256 amount) internal {
         if (amount == 0) return;
-        // In linked libraries, address(this) refers to the calling contract via DELEGATECALL
-        lccCurrency.take(poolManager, address(this), amount, true);
         PoolAccounting storage paPool = s.poolAccounting[poolId];
         uint256 currentPot = paPool.slashedPot.get(tokenIndex);
         paPool.slashedPot.set(tokenIndex, currentPot + amount);
     }
 
-    /// @notice Decrease the slashed pot when settling bonuses (giving out from CoreHook to PoolManager)
+    /// @notice Decrease the slashed pot accounting when settling bonuses
+    /// @dev Only updates accounting state. Actual ERC6909 burn is handled by CoreHook.settleHookDeltasToPot
     /// @param s The central VTS storage
-    /// @param poolManager The pool manager contract
     /// @param poolId The pool ID
-    /// @param lccCurrency The LCC currency
     /// @param tokenIndex The token index (0 or 1)
     /// @param amount The amount to drain
-    function _drainFeePot(
-        VTSStorage storage s,
-        IPoolManager poolManager,
-        PoolId poolId,
-        Currency lccCurrency,
-        uint8 tokenIndex,
-        uint256 amount
-    ) internal {
+    function _drainFeePot(VTSStorage storage s, PoolId poolId, uint8 tokenIndex, uint256 amount) internal {
         if (amount == 0) return;
-        lccCurrency.settle(poolManager, address(this), amount, true);
         PoolAccounting storage paPool = s.poolAccounting[poolId];
         uint256 pot = paPool.slashedPot.get(tokenIndex);
         // Clamp to available pot to avoid underflow; caller must have already bounded the amount
@@ -100,28 +74,22 @@ library VTSFeeLib {
     }
 
     /// @notice Finalise a portion of the pending fee adjustment as materialised in the current hook call
+    /// @dev Updates accounting state only. Actual ERC6909 mint/burn is handled by CoreHook.settleHookDeltasToPot
     /// @param s The central VTS storage
-    /// @param poolManager The pool manager contract
     /// @param positionId The position ID
     /// @param poolId The pool ID
-    /// @param currency0 The currency for token0
-    /// @param currency1 The currency for token1
     /// @return adj The materialised delta as BalanceDelta for the hook to apply this call only
-    function _finaliseFeeAdjustment(
-        VTSStorage storage s,
-        IPoolManager poolManager,
-        PositionId positionId,
-        PoolId poolId,
-        Currency currency0,
-        Currency currency1
-    ) internal returns (BalanceDelta adj) {
+    function _finaliseFeeAdjustment(VTSStorage storage s, PositionId positionId, PoolId poolId)
+        internal
+        returns (BalanceDelta adj)
+    {
         // Materialise pending: fund slashed pot for +ve; drain to LP for -ve
         (int256 pend0, int256 pend1) = _peekFeeAdjustment(s, positionId);
         int256 mat0 = 0;
         int256 mat1 = 0;
 
         if (pend0 > 0) {
-            _fundFeePot(s, poolManager, poolId, currency0, 0, uint256(pend0));
+            _fundFeePot(s, poolId, 0, uint256(pend0));
             mat0 = pend0;
         } else if (pend0 < 0) {
             uint256 need0 = uint256(-pend0);
@@ -129,13 +97,13 @@ library VTSFeeLib {
             uint256 pot0 = paPool.slashedPot.token0;
             uint256 pay0 = pot0 < need0 ? pot0 : need0;
             if (pay0 > 0) {
-                _drainFeePot(s, poolManager, poolId, currency0, 0, pay0);
+                _drainFeePot(s, poolId, 0, pay0);
                 mat0 = -pay0.toInt256();
             }
         }
 
         if (pend1 > 0) {
-            _fundFeePot(s, poolManager, poolId, currency1, 1, uint256(pend1));
+            _fundFeePot(s, poolId, 1, uint256(pend1));
             mat1 = pend1;
         } else if (pend1 < 0) {
             uint256 need1 = uint256(-pend1);
@@ -143,7 +111,7 @@ library VTSFeeLib {
             uint256 pot1 = paPool.slashedPot.token1;
             uint256 pay1 = pot1 < need1 ? pot1 : need1;
             if (pay1 > 0) {
-                _drainFeePot(s, poolManager, poolId, currency1, 1, pay1);
+                _drainFeePot(s, poolId, 1, pay1);
                 mat1 = -pay1.toInt256();
             }
         }
@@ -178,19 +146,11 @@ library VTSFeeLib {
     }
 
     /// @notice Consolidated fee processing for a position during modification: applies and zeros nets, queues bonus using net weighting
+    /// @dev Updates accounting state only. Actual ERC6909 mint/burn is handled by CoreHook.settleHookDeltasToPot
     /// @param s The central VTS storage
-    /// @param poolManager The pool manager contract
     /// @param positionId The position ID
-    /// @param currency0 The currency for token0
-    /// @param currency1 The currency for token1
     /// @return adj The materialised fee adjustment delta
-    function processPositionFees(
-        VTSStorage storage s,
-        IPoolManager poolManager,
-        PositionId positionId,
-        Currency currency0,
-        Currency currency1
-    ) internal returns (BalanceDelta adj) {
+    function processPositionFees(VTSStorage storage s, PositionId positionId) internal returns (BalanceDelta adj) {
         Position memory pos = s.positions[positionId];
         PoolId poolId = pos.poolId;
 
@@ -252,34 +212,25 @@ library VTSFeeLib {
             }
         }
 
-        return _finaliseFeeAdjustment(s, poolManager, positionId, poolId, currency0, currency1);
+        return _finaliseFeeAdjustment(s, positionId, poolId);
     }
 
     /// @notice Proactive extraction (incremental): fund only increases in pending slashes since last observation
+    /// @dev Updates accounting state only. Actual ERC6909 mint is handled by CoreHook.settleHookDeltasToPot
     /// @param s The central VTS storage
-    /// @param poolManager The pool manager contract
     /// @param poolId The pool ID
     /// @param positionId The position ID
-    /// @param lccCurrency0 The LCC currency for token0
-    /// @param lccCurrency1 The LCC currency for token1
-    function proactiveFunding(
-        VTSStorage storage s,
-        IPoolManager poolManager,
-        PoolId poolId,
-        PositionId positionId,
-        Currency lccCurrency0,
-        Currency lccCurrency1
-    ) internal {
+    function proactiveFunding(VTSStorage storage s, PoolId poolId, PositionId positionId) internal {
         (int256 adj0, int256 adj1) = _peekFeeAdjustment(s, positionId);
         PositionAccounting storage pa = s.positionAccounting[positionId];
         int256 prev0 = pa.lastFundedPendingAdj.token0;
         int256 prev1 = pa.lastFundedPendingAdj.token1;
 
         if (adj0 > prev0) {
-            _fundFeePot(s, poolManager, poolId, lccCurrency0, 0, uint256(adj0 - prev0));
+            _fundFeePot(s, poolId, 0, uint256(adj0 - prev0));
         }
         if (adj1 > prev1) {
-            _fundFeePot(s, poolManager, poolId, lccCurrency1, 1, uint256(adj1 - prev1));
+            _fundFeePot(s, poolId, 1, uint256(adj1 - prev1));
         }
 
         // Snapshot current pending as baseline for the next settle
@@ -298,37 +249,20 @@ library VTSFeeLib {
 /// @dev Operates on VTSStorage storage struct via storage pointers
 library VTSFeeLinkedLib {
     /// @notice Processes the fees for a position
+    /// @dev Updates accounting state only. Actual ERC6909 mint/burn is handled by CoreHook.settleHookDeltasToPot
     /// @param s The VTS storage
-    /// @param poolManager The pool manager
     /// @param positionId The position ID
-    /// @param currency0 The currency for token0
-    /// @param currency1 The currency for token1
     /// @return adj The materialised fee adjustment delta
-    function processPositionFees(
-        VTSStorage storage s,
-        IPoolManager poolManager,
-        PositionId positionId,
-        Currency currency0,
-        Currency currency1
-    ) external returns (BalanceDelta adj) {
-        return VTSFeeLib.processPositionFees(s, poolManager, positionId, currency0, currency1);
+    function processPositionFees(VTSStorage storage s, PositionId positionId) external returns (BalanceDelta adj) {
+        return VTSFeeLib.processPositionFees(s, positionId);
     }
 
     /// @notice Proactive extraction (incremental): fund only increases in pending slashes since last observation
+    /// @dev Updates accounting state only. Actual ERC6909 mint is handled by CoreHook.settleHookDeltasToPot
     /// @param s The VTS storage
-    /// @param poolManager The pool manager
     /// @param poolId The pool ID
     /// @param positionId The position ID
-    /// @param lccCurrency0 The LCC currency for token0
-    /// @param lccCurrency1 The LCC currency for token1
-    function proactiveFunding(
-        VTSStorage storage s,
-        IPoolManager poolManager,
-        PoolId poolId,
-        PositionId positionId,
-        Currency lccCurrency0,
-        Currency lccCurrency1
-    ) external {
-        VTSFeeLib.proactiveFunding(s, poolManager, poolId, positionId, lccCurrency0, lccCurrency1);
+    function proactiveFunding(VTSStorage storage s, PoolId poolId, PositionId positionId) external {
+        VTSFeeLib.proactiveFunding(s, poolId, positionId);
     }
 }

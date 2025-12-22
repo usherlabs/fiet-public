@@ -17,6 +17,7 @@ import {ImmutableState} from "v4-periphery/src/base/ImmutableState.sol";
 import {PositionManagerBase} from "./PositionManagerBase.sol";
 import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
+import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
 
 /**
  * @title PositionManagerImpl
@@ -221,6 +222,11 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
         if (delta1 > 0 && _isLCC(key.currency1)) {
             _syncBalanceAsCredit(key.currency1);
         }
+
+        // Settle CoreHook's PoolManager deltas (hook delta applied after hook returned)
+        // This ensures feeAdj-based claims are minted/burned to/from the fee pot held by CoreHook
+        IMarketFactory factory = liquidityHub.getFactory(Currency.unwrap(key.currency0), Currency.unwrap(key.currency1));
+        factory.afterModifyLiquidity(key);
     }
 }
 

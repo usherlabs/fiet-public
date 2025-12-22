@@ -110,4 +110,29 @@ contract VTSOrchestratorTestable is VTSOrchestrator {
         PositionAccounting storage pa = s.positionAccounting[positionId];
         return (pa.commitmentDeficit.token0, pa.commitmentDeficit.token1);
     }
+
+    /// @notice Get fee-sharing accounting for a position (debug)
+    /// @param positionId The position identifier
+    /// @return feesShared0 Total fees attributed to this position for token0
+    /// @return feesShared1 Total fees attributed to this position for token1
+    /// @return pendingFeeAdj0 Pending fee adjustment for token0 (+slash, -bonus)
+    /// @return pendingFeeAdj1 Pending fee adjustment for token1 (+slash, -bonus)
+    function getPositionFeeAccounting(PositionId positionId)
+        external
+        view
+        returns (uint256 feesShared0, uint256 feesShared1, int256 pendingFeeAdj0, int256 pendingFeeAdj1)
+    {
+        PositionAccounting storage pa = s.positionAccounting[positionId];
+        return (pa.feesShared.token0, pa.feesShared.token1, pa.pendingFeeAdj.token0, pa.pendingFeeAdj.token1);
+    }
+
+    /// @notice Get slashed pot balances for a pool (debug)
+    /// @dev The slashed pot holds LCC claims used for fee-sharing bonus payouts
+    /// @param poolId The pool identifier
+    /// @return slashedPot0 Slashed pot balance for token0
+    /// @return slashedPot1 Slashed pot balance for token1
+    function getSlashedPot(PoolId poolId) external view returns (uint256 slashedPot0, uint256 slashedPot1) {
+        PoolAccounting storage paPool = s.poolAccounting[poolId];
+        return (paPool.slashedPot.token0, paPool.slashedPot.token1);
+    }
 }

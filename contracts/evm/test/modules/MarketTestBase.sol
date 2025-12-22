@@ -155,14 +155,6 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
         address testOwner = address(this); // Use test contract as owner for test scenarios
         oracleHelper = new OracleHelper(resilientOracle, testOwner);
 
-        // Mock oracleHelper() call needed for LCC creation in the market factory
-        // this is used in the MarketFactory.createMarket() function to get the oracleHelper address
-        vm.mockCall(
-            marketFactory,
-            abi.encodeWithSelector(IMarketFactory.oracleHelper.selector),
-            abi.encode(address(oracleHelper))
-        );
-
         // Deploy WETH9 contract
         weth9 = IWETH9(address(new WETH()));
 
@@ -194,20 +186,6 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
         // Deploy Permit2 at the canonical address using vm.etch()
         // This deploys the bytecode at 0x000000000022D473030F116dDEE9F6B43aC78BA3
         IAllowanceTransfer permit2 = IAllowanceTransfer(deployPermit2());
-        // Deploy MarketFactory
-        marketFactory = address(
-            new MarketFactory(
-                address(manager),
-                address(liquidityHub),
-                address(oracleHelper),
-                address(vtsOrchestrator),
-                new address[](0),
-                testOwner
-            )
-        );
-
-        // After market factory is deployed, sett the factory in the liquidity hub
-        LiquidityHub(payable(liquidityHub)).setFactory(marketFactory, true);
 
         // Deploy MMPositionActionsImpl first
         MMPositionActionsImpl actionsImpl =
@@ -225,6 +203,24 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
                 address(actionsImpl)
             )
         );
+
+        // Deploy MarketFactory (after MMPositionManager so it can be included as an initial protocol bound)
+        // Mirrors production deployment (see DeployContracts.s.sol): MMPositionManager is protocol-bound.
+        address[] memory initialBounds = new address[](1);
+        initialBounds[0] = mmPositionManager;
+        marketFactory = address(
+            new MarketFactory(
+                address(manager),
+                address(liquidityHub),
+                address(oracleHelper),
+                address(vtsOrchestrator),
+                initialBounds,
+                testOwner
+            )
+        );
+
+        // After market factory is deployed, set the factory in the liquidity hub
+        LiquidityHub(payable(liquidityHub)).setFactory(marketFactory, true);
     }
 
     // Mine the corehook address and Deploy the core hook
@@ -338,9 +334,11 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
         approveLCCForMarketUse(lcc0);
         approveLCCForMarketUse(lcc1);
 
-        // mock the calls that would be made to the factory when we interact with the market
-        // this essentially marks an address as a protocol bound address, unless that address is specifically whitelisted via mocking
-        vm.mockCall(marketFactory, abi.encodeWithSelector(IMarketFactory.bounds.selector), abi.encode(true));
+        // Mock protocol bounds checks for test harness callers.
+        // In production deployment (see DeployContracts.s.sol), MMPositionManager is a protocol-bound address.
+        vm.mockCall(
+            marketFactory, abi.encodeWithSelector(IMarketFactory.bounds.selector, mmPositionManager), abi.encode(true)
+        );
 
         _addInitialLiquidityToPool();
     }

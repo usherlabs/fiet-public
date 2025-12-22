@@ -20,6 +20,8 @@ import {LiquidityUtils} from "./libraries/LiquidityUtils.sol";
 import {Errors} from "./libraries/Errors.sol";
 import {ImmutableState} from "v4-periphery/src/base/ImmutableState.sol";
 import {ImmutableVTSState} from "./modules/ImmutableVTSState.sol";
+import {ICoreHook} from "./interfaces/ICoreHook.sol";
+import {TransientStateLibrary} from "@uniswap/v4-core/src/libraries/TransientStateLibrary.sol";
 
 /**
  * @title MarketFactory
@@ -28,6 +30,7 @@ import {ImmutableVTSState} from "./modules/ImmutableVTSState.sol";
  */
 contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSState {
     using PoolIdLibrary for PoolKey;
+    using TransientStateLibrary for IPoolManager;
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Internal Structs
@@ -100,6 +103,16 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
         if (msg.sender != address(liquidityHub)) {
             revert Errors.InvalidSender();
         }
+    }
+
+    /// @notice Requires PoolManager to be unlocked (within an active batch)
+    modifier onlyIfPoolManagerUnlocked() {
+        _onlyIfPoolManagerUnlocked();
+        _;
+    }
+
+    function _onlyIfPoolManagerUnlocked() internal view {
+        if (!poolManager.isUnlocked()) revert Errors.PoolManagerMustBeUnlocked();
     }
 
     function setHooks(address _coreHook) external onlyOwner {
@@ -353,6 +366,17 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
             LiquidityUtils.safeInt128ToUint256(usedDelta.amount1())
         );
         used = LiquidityUtils.safeInt128ToUint256(usedDelta.amount0() + usedDelta.amount1());
+    }
+
+    /// @notice Called after modifyLiquidity to settle CoreHook's PoolManager deltas
+    /// @dev Triggers CoreHook to mint/burn ERC6909 claims to clear its hook deltas.
+    ///      Must be called after poolManager.modifyLiquidity() returns (when hook deltas are applied).
+    /// @param key The pool key for the currencies to settle
+    function afterModifyLiquidity(PoolKey calldata key) external onlyIfPoolManagerUnlocked {
+        if (!bounds[msg.sender]) {
+            revert Errors.InvalidSender();
+        }
+        ICoreHook(coreHook).settleHookDeltasToPot(key);
     }
 
     // ============ VIEW FUNCTIONS ============

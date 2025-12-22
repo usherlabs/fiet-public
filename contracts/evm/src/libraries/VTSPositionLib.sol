@@ -12,7 +12,6 @@ import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint12
 import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {RFSCheckpoint} from "../types/Checkpoint.sol";
-
 import {console} from "forge-std/console.sol";
 
 import {
@@ -1059,9 +1058,7 @@ library VTSPositionLib {
         }
 
         _updateActiveStatus(s, posStorage, initialLiquidity, liq);
-        result.feeAdj = VTSFeeLinkedLib.processPositionFees(
-            s, ctx.poolManager, result.id, p.poolKey.currency0, p.poolKey.currency1
-        );
+        result.feeAdj = VTSFeeLinkedLib.processPositionFees(s, result.id);
 
         if (hookData.isMMOperation) {
             _processMMOperations(s, ctx, p, result, hookData.commitId, hookData.isSeizing, requiredSettlementDelta);
@@ -1492,7 +1489,8 @@ library VTSPositionLib {
         }
 
         // Proactive extraction (incremental): fund only increases in pending slashes since last observation to avoid over-funding
-        VTSFeeLinkedLib.proactiveFunding(s, poolManager, poolId, p.positionId, p.lccCurrency0, p.lccCurrency1);
+        // TODO: Disabled - hook delta settlement now handled by CoreHook.settleHookDeltasToPot called from PositionManagerImpl
+        // VTSFeeLinkedLib.proactiveFunding(s, poolId, p.positionId);
 
         // ========================================
         // PHASE 4: Clear currency deltas based on settlement
