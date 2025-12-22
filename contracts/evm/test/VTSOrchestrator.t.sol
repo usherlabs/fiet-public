@@ -3,6 +3,7 @@ pragma solidity ^0.8.26;
 
 import "forge-std/Test.sol";
 import {VTSOrchestratorFixture} from "./modules/VTSOrchestratorFixture.sol";
+import {VTSOrchestratorTestable} from "./modules/VTSOrchestratorTestable.sol";
 import {VTSOrchestrator} from "../src/VTSOrchestrator.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency, CurrencyLibrary} from "@uniswap/v4-core/src/types/Currency.sol";
@@ -28,38 +29,38 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
     using StateLibrary for IPoolManager;
 
     // ============================================================
-    // Storage inspection helpers (direct VTSStorage reads)
+    // Deploy VTSOrchestratorTestable for storage inspection
     // ============================================================
-    // Verified via `forge inspect VTSOrchestrator storage-layout`:
-    // - `_owner` is slot 0
-    // - `s` (VTSStorage) is slot 1
-    //
-    // In `VTSStorage` (types/VTS.sol) the 5th member is:
-    // mapping(PositionId => PositionAccounting) positionAccounting;
-    // which lives at slotOffset=4 within the struct.
-    uint256 internal constant _VTS_STORAGE_SLOT = 1;
-    uint256 internal constant _POSITION_ACCOUNTING_MAPPING_SLOT = _VTS_STORAGE_SLOT + 4; // == 5
-    // PositionAccounting layout (types/VTS.sol):
-    // commitmentMax(2), settled(2), cumulativeDeficit(2), coverageUse(2), deficitGrowth(2), inflowGrowth(2),
-    // feeGrowth(2), cumulativeOutflows(2), outflowsAtFeeSnap(2), commitmentDeficit(2), ...
-    uint256 internal constant _PA_CUMULATIVE_DEFICIT_TOKEN0_OFFSET = 4;
-    uint256 internal constant _PA_CUMULATIVE_DEFICIT_TOKEN1_OFFSET = 5;
-    uint256 internal constant _PA_COMMITMENT_DEFICIT_TOKEN0_OFFSET = 18;
-    uint256 internal constant _PA_COMMITMENT_DEFICIT_TOKEN1_OFFSET = 19;
 
-    function _paUint(PositionId positionId, uint256 slotOffset) internal view returns (uint256) {
-        bytes32 base = keccak256(abi.encode(PositionId.unwrap(positionId), uint256(_POSITION_ACCOUNTING_MAPPING_SLOT)));
-        return uint256(vm.load(address(vtsOrchestrator), bytes32(uint256(base) + slotOffset)));
+    /// @notice Override to deploy VTSOrchestratorTestable with debug view functions
+    function _deployVTSOrchestrator(
+        address _poolManager,
+        address _signalManager,
+        address _oracleHelper,
+        address _liquidityHub,
+        address _settlementObserver,
+        address _owner
+    ) internal override returns (VTSOrchestrator) {
+        return new VTSOrchestratorTestable(
+            _poolManager, _signalManager, _oracleHelper, _liquidityHub, _settlementObserver, _owner
+        );
     }
 
+    /// @notice Helper to access testable VTSOrchestrator with debug functions
+    function _testableOrchestrator() internal view returns (VTSOrchestratorTestable) {
+        return VTSOrchestratorTestable(address(vtsOrchestrator));
+    }
+
+    // ============================================================
+    // Storage inspection helpers (via VTSOrchestratorTestable)
+    // ============================================================
+
     function _commitmentDeficit(PositionId positionId) internal view returns (uint256 def0, uint256 def1) {
-        def0 = _paUint(positionId, _PA_COMMITMENT_DEFICIT_TOKEN0_OFFSET);
-        def1 = _paUint(positionId, _PA_COMMITMENT_DEFICIT_TOKEN1_OFFSET);
+        (def0, def1) = _testableOrchestrator().getCommitmentDeficit(positionId);
     }
 
     function _cumulativeDeficit(PositionId positionId) internal view returns (uint256 def0, uint256 def1) {
-        def0 = _paUint(positionId, _PA_CUMULATIVE_DEFICIT_TOKEN0_OFFSET);
-        def1 = _paUint(positionId, _PA_CUMULATIVE_DEFICIT_TOKEN1_OFFSET);
+        (def0, def1,,,,) = _testableOrchestrator().getPositionAccounting(positionId);
     }
 
     function _mockSignalUsd(uint256 signalUsd) internal {

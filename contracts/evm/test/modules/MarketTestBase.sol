@@ -181,8 +181,8 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
         // Deploy LiquidityHub BEFORE VTSOrchestrator (VTSOrchestrator needs liquidityHub address)
         liquidityHub = payable(address(new LiquidityHub(address(oracleHelper), "Ether", "ETH", 18, testOwner)));
 
-        // Deploy VTSOrchestrator
-        vtsOrchestrator = new VTSOrchestrator(
+        // Deploy VTSOrchestrator (virtual to allow test overrides)
+        vtsOrchestrator = _deployVTSOrchestrator(
             address(manager),
             address(signalManager),
             address(oracleHelper),
@@ -354,6 +354,21 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
                 tickLower: -60, tickUpper: 60, liquidityDelta: int256(initialLiquidity), salt: bytes32(0)
             }),
             ZERO_BYTES
+        );
+    }
+
+    /// @notice Deploy VTSOrchestrator - virtual to allow test overrides for testable versions
+    /// @dev Override this in test contracts to deploy a VTSOrchestratorTestable with debug view functions
+    function _deployVTSOrchestrator(
+        address _poolManager,
+        address _signalManager,
+        address _oracleHelper,
+        address _liquidityHub,
+        address _settlementObserver,
+        address _owner
+    ) internal virtual returns (VTSOrchestrator) {
+        return new VTSOrchestrator(
+            _poolManager, _signalManager, _oracleHelper, _liquidityHub, _settlementObserver, _owner
         );
     }
 }

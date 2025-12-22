@@ -316,7 +316,23 @@ abstract contract VTSOrchestratorFixture is MarketTestBase, MarketMakerTestBase 
     }
 
     /// @notice Helper to execute swaps on the core pool
+    /// @dev Wraps underlying to LCC before swap to fund hub reserves for settlement
     function _swapCore(bool zeroForOne, int256 amountSpecified) internal returns (BalanceDelta) {
+        // Determine which token is the input token for this swap
+        // For exact output (amountSpecified < 0): input is the token being sold
+        // For exact input (amountSpecified > 0): input is the token being sold
+        // zeroForOne = true: selling token0, buying token1
+        // zeroForOne = false: selling token1, buying token0
+        Currency inputCurrency = zeroForOne ? lccCurrency0 : lccCurrency1;
+
+        // Calculate input amount (use absolute value, add buffer for exact output swaps)
+        uint256 inputAmount = amountSpecified < 0
+            ? uint256(-amountSpecified) * 2  // Buffer for exact output (price impact)
+            : uint256(amountSpecified);
+
+        // Wrap underlying to LCC - this funds hub.reserveOfUnderlying for swap settlement
+        _mintLccTo(address(this), inputCurrency, inputAmount);
+
         uint160 sqrtPriceLimit = zeroForOne ? ZERO_FOR_ONE_LIMIT : ONE_FOR_ZERO_LIMIT;
         return swapRouter.swap(
             corePoolKey,

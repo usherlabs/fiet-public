@@ -100,8 +100,8 @@ library VTSSwapLib {
 
             // Otherwise, we crossed an initialised tick; flip outside and update liquidity
             if (initialized) {
-                _onTickCross(s, poolManager, st.poolId, next, 0);
-                _onTickCross(s, poolManager, st.poolId, next, 1);
+                _onTickCross(s, st.poolId, next, 0);
+                _onTickCross(s, st.poolId, next, 1);
                 // Apply liquidity net change for subsequent segments (direction-aware)
                 st.segmentLiquidity =
                     _applyLiquidityNet(poolManager, st.poolId, next, st.segmentLiquidity, st.zeroForOne);
@@ -113,15 +113,23 @@ library VTSSwapLib {
     /// @dev Calculate bounded sqrtTarget for a swap step
     /// @notice Computes target sqrt for this segment (either next tick or final price)
     /// @dev Ensure we don't go beyond valid tick bounds
+    /// @dev For zeroForOne (price decreasing), pick the larger (closer) value
+    /// @dev For !zeroForOne (price increasing), pick the smaller (closer) value
+    /// @dev zeroForOne requires a lower sqrtPriceLimitX96 than the current price, i.e. the swap is constrained to move downwards in sqrtPriceX96: (src/libraries/Pool.sol).
+    /// @dev The swap loop also explicitly treats zeroForOne as “moving leftward” (and decrements the tick), consistent with price decreasing.
     function _calcSqrtTarget(int24 next, uint160 sqrtPAfter, bool zeroForOne) private pure returns (uint160) {
         int24 boundedNext = next;
         if (boundedNext <= TickMath.MIN_TICK) boundedNext = TickMath.MIN_TICK;
         if (boundedNext >= TickMath.MAX_TICK) boundedNext = TickMath.MAX_TICK;
         uint160 sqrtNext = TickMath.getSqrtPriceAtTick(boundedNext);
+
+        // For a swap step, we move towards the next initialised tick, but never past the final price.
+        // - zeroForOne: price decreases => sqrt decreases => clamp with max()
+        // - !zeroForOne: price increases => sqrt increases => clamp with min()
         return
             zeroForOne
-                ? (sqrtPAfter < sqrtNext ? sqrtPAfter : sqrtNext)
-                : (sqrtPAfter > sqrtNext ? sqrtPAfter : sqrtNext);
+                ? (sqrtPAfter > sqrtNext ? sqrtPAfter : sqrtNext)
+                : (sqrtPAfter < sqrtNext ? sqrtPAfter : sqrtNext);
     }
 
     /// @dev Accrue deficit and inflow growth for a segment
@@ -192,32 +200,18 @@ library VTSSwapLib {
 
     /// @notice Called on tick cross to flip outside growth for a tick
     /// @param s The central VTS storage
-    /// @param poolManager The pool manager contract
     /// @param poolId The pool ID
     /// @param tick The tick that was crossed
     /// @param token The token index (0 or 1)
-    function _onTickCross(VTSStorage storage s, IPoolManager poolManager, PoolId poolId, int24 tick, uint8 token)
-        internal
-    {
+    function _onTickCross(VTSStorage storage s, PoolId poolId, int24 tick, uint8 token) internal {
         // Flip deficit growth outside
         _flipOutside(s, poolId, tick, token, 0);
         // Flip inflow growth outside
         _flipOutside(s, poolId, tick, token, 1);
-        // Flip coverage usage growth outside
-        _flipOutside(s, poolId, tick, token, 2);
-
-        // Apply residual if any when liquidity becomes active
-        PoolAccounting storage paPool = s.poolAccounting[poolId];
-        uint256 residual = paPool.coverageResidual.get(token);
-        if (residual > 0) {
-            uint128 liq = StateLibrary.getLiquidity(poolManager, poolId);
-            if (liq > 0) {
-                uint256 deltaG = FullMath.mulDiv(residual, FixedPoint128.Q128, uint256(liq));
-                uint256 currentGrowth = paPool.coverageUseGrowthGlobal.get(token);
-                paPool.coverageUseGrowthGlobal.set(token, currentGrowth + deltaG);
-                paPool.coverageResidual.set(token, 0);
-            }
-        }
+        // NOTE: Coverage usage growth flip REMOVED - DICE uses deficit-indexed coverage,
+        // not tick-indexed. Coverage is now attributed based on deficit principal,
+        // not which positions are in-range at the time of coverage exercise.
+        // Old tick-indexed residual logic also removed; DICE uses coverageResidualDICE.
     }
 
     /// @notice Flip outside growth for a tick
@@ -225,7 +219,8 @@ library VTSSwapLib {
     /// @param poolId The pool ID
     /// @param tick The tick
     /// @param token The token index (0 or 1)
-    /// @param growthType The growth type (0 = deficit, 1 = inflow, 2 = coverage usage)
+    /// @param growthType The growth type (0 = deficit, 1 = inflow)
+    /// @dev Coverage usage growth (growthType == 2) removed - DICE uses deficit-indexed coverage
     function _flipOutside(VTSStorage storage s, PoolId poolId, int24 tick, uint8 token, uint8 growthType) internal {
         if (token > 1) return;
         PoolAccounting storage paPool = s.poolAccounting[poolId];
@@ -240,12 +235,9 @@ library VTSSwapLib {
             // Inflow growth
             g = paPool.inflowGrowthGlobal.get(token);
             outsidePair = s.inflowGrowthOutside[poolId][tick];
-        } else if (growthType == 2) {
-            // Coverage usage growth
-            g = paPool.coverageUseGrowthGlobal.get(token);
-            outsidePair = s.coverageUseGrowthOutside[poolId][tick];
         } else {
-            return;
+            // Invalid growthType (coverage usage growthType == 2 removed with DICE)
+            revert("VTSSwapLib: Invalid growthType");
         }
 
         uint256 o = token == 0 ? outsidePair.token0 : outsidePair.token1;

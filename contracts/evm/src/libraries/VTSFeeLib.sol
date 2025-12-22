@@ -292,3 +292,43 @@ library VTSFeeLib {
         return s.pools[p].vtsConfig.coverageFeeShare > 0;
     }
 }
+
+/// @title VTSFeeLinkedLib
+/// @notice Library for VTS fee processing
+/// @dev Operates on VTSStorage storage struct via storage pointers
+library VTSFeeLinkedLib {
+    /// @notice Processes the fees for a position
+    /// @param s The VTS storage
+    /// @param poolManager The pool manager
+    /// @param positionId The position ID
+    /// @param currency0 The currency for token0
+    /// @param currency1 The currency for token1
+    /// @return adj The materialised fee adjustment delta
+    function processPositionFees(
+        VTSStorage storage s,
+        IPoolManager poolManager,
+        PositionId positionId,
+        Currency currency0,
+        Currency currency1
+    ) external returns (BalanceDelta adj) {
+        return VTSFeeLib.processPositionFees(s, poolManager, positionId, currency0, currency1);
+    }
+
+    /// @notice Proactive extraction (incremental): fund only increases in pending slashes since last observation
+    /// @param s The VTS storage
+    /// @param poolManager The pool manager
+    /// @param poolId The pool ID
+    /// @param positionId The position ID
+    /// @param lccCurrency0 The LCC currency for token0
+    /// @param lccCurrency1 The LCC currency for token1
+    function proactiveFunding(
+        VTSStorage storage s,
+        IPoolManager poolManager,
+        PoolId poolId,
+        PositionId positionId,
+        Currency lccCurrency0,
+        Currency lccCurrency1
+    ) external {
+        VTSFeeLib.proactiveFunding(s, poolManager, poolId, positionId, lccCurrency0, lccCurrency1);
+    }
+}
