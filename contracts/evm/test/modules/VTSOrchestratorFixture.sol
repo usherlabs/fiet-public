@@ -350,38 +350,22 @@ abstract contract VTSOrchestratorFixture is MarketTestBase, MarketMakerTestBase 
         return -SafeCast.toInt128(capped);
     }
 
-    /// @notice Helper to poke an MM position (modifyLiquidity with liquidityDelta=0) to collect fees
-    function _pokeMM(uint256 tokenId, uint256 positionIndex, int24 tickLower, int24 tickUpper) internal {
-        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](1);
-        actions[0] = MMA.prepareIncrease(corePoolKey, tokenId, positionIndex, tickLower, tickUpper, 0);
-        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
-    }
-
     /// @notice Helper to poke an MM position and take fees (for fee collection tests)
-    function _pokeMMAndTakeFees(uint256 tokenId, uint256 positionIndex, int24 tickLower, int24 tickUpper) internal {
+    function _pokeMM(uint256 tokenId, uint256 positionIndex, int24 tickLower, int24 tickUpper, bool execute)
+        internal
+        returns (MMA.PreparedAction[] memory)
+    {
         MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](3);
         actions[0] = MMA.prepareIncrease(corePoolKey, tokenId, positionIndex, tickLower, tickUpper, 0);
         actions[1] = MMA.prepareTake(lccCurrency0, address(this), 0);
         actions[2] = MMA.prepareTake(lccCurrency1, address(this), 0);
-        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+        if (execute) {
+            MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+        }
     }
 
-    /// @notice Helper to poke an MM position and take fees (for fee collection tests)
-    function _pokeMMSettleAndTakeFees(
-        uint256 tokenId,
-        uint256 positionIndex,
-        int24 tickLower,
-        int24 tickUpper,
-        bool payerIsUser,
-        bool shouldTake
-    ) internal {
-        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](4);
-        actions[0] = MMA.prepareIncrease(corePoolKey, tokenId, positionIndex, tickLower, tickUpper, 0);
-        actions[1] = MMA.prepareTake(lccCurrency0, address(this), 0);
-        actions[2] = MMA.prepareTake(lccCurrency1, address(this), 0);
-        actions[3] = MMA.prepareSettleFromDeltas(corePoolKey, tokenId, positionIndex, true, false);
-
-        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+    function _pokeMM(uint256 tokenId, uint256 positionIndex, int24 tickLower, int24 tickUpper) internal {
+        _pokeMM(tokenId, positionIndex, tickLower, tickUpper, true);
     }
 
     /// @notice Helper to get MMPM's LCC balance

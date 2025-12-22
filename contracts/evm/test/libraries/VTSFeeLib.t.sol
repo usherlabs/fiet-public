@@ -155,51 +155,6 @@ contract VTSFeeLibTest is VTSLibTestBase {
     }
 
     // ============================================================
-    // proactiveFunding Logic Tests
-    // ============================================================
-
-    function test_proactiveFunding_setup_incrementalIncrease() public {
-        harness.setPendingFeeAdj(testPositionId, 150e18, 75e18);
-        harness.setLastFundedPendingAdj(testPositionId, 100e18, 50e18);
-
-        // Should fund difference: (150 - 100) = 50e18 for token0, (75 - 50) = 25e18 for token1
-        (int256 pending0, int256 pending1) = harness.getPendingFeeAdj(testPositionId);
-        (int256 lastFunded0, int256 lastFunded1) = harness.getLastFundedPendingAdj(testPositionId);
-
-        assertGt(pending0, lastFunded0, "Pending should be greater than last funded for token0");
-        assertGt(pending1, lastFunded1, "Pending should be greater than last funded for token1");
-
-        int256 diff0 = pending0 - lastFunded0;
-        int256 diff1 = pending1 - lastFunded1;
-        assertEq(diff0, 50e18, "Difference should be 50e18 for token0");
-        assertEq(diff1, 25e18, "Difference should be 25e18 for token1");
-    }
-
-    function test_proactiveFunding_setup_noIncrease() public {
-        harness.setPendingFeeAdj(testPositionId, 100e18, 50e18);
-        harness.setLastFundedPendingAdj(testPositionId, 100e18, 50e18);
-
-        // No increase, should not fund
-        (int256 pending0, int256 pending1) = harness.getPendingFeeAdj(testPositionId);
-        (int256 lastFunded0, int256 lastFunded1) = harness.getLastFundedPendingAdj(testPositionId);
-
-        assertEq(pending0, lastFunded0, "Pending should equal last funded for token0");
-        assertEq(pending1, lastFunded1, "Pending should equal last funded for token1");
-    }
-
-    function test_proactiveFunding_setup_decrease() public {
-        harness.setPendingFeeAdj(testPositionId, 50e18, 25e18);
-        harness.setLastFundedPendingAdj(testPositionId, 100e18, 50e18);
-
-        // Decrease, should not fund (only funds increases)
-        (int256 pending0, int256 pending1) = harness.getPendingFeeAdj(testPositionId);
-        (int256 lastFunded0, int256 lastFunded1) = harness.getLastFundedPendingAdj(testPositionId);
-
-        assertLt(pending0, lastFunded0, "Pending should be less than last funded for token0");
-        assertLt(pending1, lastFunded1, "Pending should be less than last funded for token1");
-    }
-
-    // ============================================================
     // Fuzz Tests
     // ============================================================
 

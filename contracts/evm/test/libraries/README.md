@@ -88,12 +88,7 @@ Comprehensive tests covering:
   - Positive pending funds pot
   - Negative pending drains pot
   - Insufficient pot clamps drain
-  - Updates last funded snapshot
-
-- **Proactive Funding** (`proactiveFunding`):
-  - Incremental increases fund difference
-  - No increase is a no-op
-  - Decreases are no-op
+  - No incremental funding snapshot (proactive funding removed)
 
 - **Fuzz Tests**:
   - Fee adjustment invariants

@@ -44,20 +44,10 @@ contract VTSFeeLibHarness {
         return VTSFeeLib.processPositionFees(s, positionId);
     }
 
-    /// @notice Exposes proactiveFunding (accounting only, no PoolManager interaction)
-    function proactiveFunding(PoolId poolId, PositionId positionId) external {
-        VTSFeeLib.proactiveFunding(s, poolId, positionId);
-    }
-
     // ============ Storage Getters (for assertions) ============
 
     function getPendingFeeAdj(PositionId id) external view returns (int256 adj0, int256 adj1) {
         return (s.positionAccounting[id].pendingFeeAdj.token0, s.positionAccounting[id].pendingFeeAdj.token1);
-    }
-
-    function getLastFundedPendingAdj(PositionId id) external view returns (int256 adj0, int256 adj1) {
-        return
-            (s.positionAccounting[id].lastFundedPendingAdj.token0, s.positionAccounting[id].lastFundedPendingAdj.token1);
     }
 
     function getSlashedPot(PoolId poolId) external view returns (uint256 pot0, uint256 pot1) {
@@ -117,12 +107,6 @@ contract VTSFeeLibHarness {
     function setPendingFeeAdj(PositionId id, int256 adj0, int256 adj1) external {
         s.positionAccounting[id].pendingFeeAdj.token0 = adj0;
         s.positionAccounting[id].pendingFeeAdj.token1 = adj1;
-    }
-
-    /// @notice Sets last funded pending adjustment for a position
-    function setLastFundedPendingAdj(PositionId id, int256 adj0, int256 adj1) external {
-        s.positionAccounting[id].lastFundedPendingAdj.token0 = adj0;
-        s.positionAccounting[id].lastFundedPendingAdj.token1 = adj1;
     }
 
     /// @notice Sets slashed pot for a pool

@@ -30,6 +30,80 @@ library VTSFeeLib {
     // Fee Adjustment Helpers
     // --------------------------------------------------
 
+    /// @dev Queue a bonus for a single token using fee-accrual weighted positive net settlement since last modification.
+    /// @return allocated True iff a non-zero bonus was queued (i.e. pendingFeeAdj was decreased).
+    function _queueBonusForToken(
+        PositionAccounting storage pa,
+        PoolAccounting storage paPool,
+        uint8 tokenIndex,
+        int256 selfNet
+    ) internal returns (bool allocated) {
+        if (selfNet <= 0) return false;
+
+        uint256 pot = paPool.protocolFeeAccrued.get(tokenIndex);
+        uint256 selfContrib = pa.feesShared.get(tokenIndex);
+        uint256 potAvail = pot > selfContrib ? (pot - selfContrib) : 0;
+        if (potAvail == 0) return false;
+
+        // Dust guard
+        if (uint256(selfNet) < 1e12) return false;
+
+        // Fee-accrual weighting (per token)
+        uint256 selfFeeWeight = pa.feesAccruedSinceLastMod.get(tokenIndex);
+        if (selfFeeWeight == 0) return false;
+
+        uint256 totalWeightBefore = paPool.poolNetFeeWeightSinceLastMod.get(tokenIndex);
+        if (totalWeightBefore == 0) return false;
+
+        uint256 selfWeight = uint256(selfNet) * selfFeeWeight;
+        if (selfWeight == 0) return false;
+
+        // bonus = potAvail * selfWeight / totalWeightBefore
+        uint256 bonus = FullMath.mulDiv(potAvail, selfWeight, totalWeightBefore);
+        if (bonus > potAvail) bonus = potAvail;
+        // Banked selfNet/feeWeight: if rounding yields 0, do not clear windows so it can be allocated later.
+        if (bonus == 0) return false;
+
+        // Deduct from pot, keep self-contrib excluded
+        paPool.protocolFeeAccrued.set(tokenIndex, potAvail - bonus + selfContrib);
+        // Queue negative pending (bonus increases payout at materialisation)
+        int256 currentPending = pa.pendingFeeAdj.get(tokenIndex);
+        pa.pendingFeeAdj.set(tokenIndex, currentPending - bonus.toInt256());
+        return true;
+    }
+
+    /// @dev After bonus allocation, clear/decrement per-position and per-pool windows so future allocations don't double-count.
+    function _cleanupAfterAllocationForToken(
+        PositionAccounting storage pa,
+        PoolAccounting storage paPool,
+        uint8 tokenIndex,
+        int256 selfNet
+    ) internal {
+        if (selfNet == 0) return;
+
+        uint256 feeW = pa.feesAccruedSinceLastMod.get(tokenIndex);
+        pa.netSettlementSinceLastMod.set(tokenIndex, 0);
+
+        if (selfNet > 0) {
+            uint256 curNet = paPool.poolNetSinceLastMod.get(tokenIndex);
+            uint256 decNet = uint256(selfNet);
+            paPool.poolNetSinceLastMod.set(tokenIndex, decNet > curNet ? 0 : (curNet - decNet));
+        }
+
+        // Decrement product-weight accumulator and fee-weight pool totals, then clear position fee weight window.
+        if (feeW > 0) {
+            if (selfNet > 0) {
+                uint256 curW = paPool.poolNetFeeWeightSinceLastMod.get(tokenIndex);
+                uint256 decW = uint256(selfNet) * feeW;
+                paPool.poolNetFeeWeightSinceLastMod.set(tokenIndex, decW > curW ? 0 : (curW - decW));
+            }
+
+            uint256 curF = paPool.poolFeesAccruedSinceLastMod.get(tokenIndex);
+            paPool.poolFeesAccruedSinceLastMod.set(tokenIndex, feeW > curF ? 0 : (curF - feeW));
+            pa.feesAccruedSinceLastMod.set(tokenIndex, 0);
+        }
+    }
+
     /// @notice Peek the current pending fee adjustments for a position without mutating state
     /// @param s The central VTS storage
     /// @param positionId The position ID
@@ -139,10 +213,6 @@ library VTSFeeLib {
         pa.pendingFeeAdj.token1 = pend1 - mat1;
 
         adj = LiquidityUtils.safeToBalanceDelta(mat0, mat1);
-
-        // Snapshot current pending after finalisation to keep future settle-time funding incremental
-        pa.lastFundedPendingAdj.token0 = pa.pendingFeeAdj.token0;
-        pa.lastFundedPendingAdj.token1 = pa.pendingFeeAdj.token1;
     }
 
     /// @notice Consolidated fee processing for a position during modification: applies and zeros nets, queues bonus using net weighting
@@ -166,76 +236,20 @@ library VTSFeeLib {
         int256 selfNet0 = pa.netSettlementSinceLastMod.token0;
         int256 selfNet1 = pa.netSettlementSinceLastMod.token1;
 
-        // Queue bonuses using positive nets since last modification
-        for (uint8 t = 0; t < 2; t++) {
-            int256 selfNet = (t == 0) ? selfNet0 : selfNet1;
-            if (selfNet <= 0) continue;
+        // Queue bonuses using positive nets since last modification, and distribute proportionally
+        // to native Uniswap fees accrued (modifyLiquidity-time) as a proxy for time/exposure.
+        //
+        // Weight per token: w = selfNet * feeWeight, where feeWeight is feesAccruedSinceLastMod.
+        bool allocated0 = _queueBonusForToken(pa, paPool, 0, selfNet0);
+        bool allocated1 = _queueBonusForToken(pa, paPool, 1, selfNet1);
 
-            uint256 pot = paPool.protocolFeeAccrued.get(t);
-            uint256 selfContrib = pa.feesShared.get(t);
-            uint256 potAvail = pot > selfContrib ? (pot - selfContrib) : 0;
-            if (potAvail == 0) continue;
-
-            uint256 totalNetBefore = paPool.poolNetSinceLastMod.get(t);
-            // totalNetBefore is UNSIGNED. Only positive when settled > 0 - preventing positive nets that cover deficits from being used
-            if (totalNetBefore == 0) continue;
-
-            // Dust guard
-            if (uint256(selfNet) < 1e12) continue;
-
-            // bonus = fraction of the pot based on amount settled by the position since last check, relative to amount settled in total.
-            uint256 bonus = FullMath.mulDiv(potAvail, uint256(selfNet), totalNetBefore);
-            if (bonus > potAvail) bonus = potAvail;
-
-            // Deduct from pot, keep self-contrib excluded
-            paPool.protocolFeeAccrued.set(t, potAvail - bonus + selfContrib);
-            // Queue negative pending (bonus increases payout at materialisation)
-            int256 currentPending = pa.pendingFeeAdj.get(t);
-            pa.pendingFeeAdj.set(t, currentPending - bonus.toInt256());
-        }
-
-        // After allocation, zero/decrement nets so future allocations don't double-count
-        if (selfNet0 != 0) {
-            pa.netSettlementSinceLastMod.token0 = 0;
-            if (selfNet0 > 0) {
-                uint256 cur0 = paPool.poolNetSinceLastMod.token0;
-                uint256 dec0 = uint256(selfNet0);
-                paPool.poolNetSinceLastMod.token0 = dec0 > cur0 ? 0 : (cur0 - dec0);
-            }
-        }
-        if (selfNet1 != 0) {
-            pa.netSettlementSinceLastMod.token1 = 0;
-            if (selfNet1 > 0) {
-                uint256 cur1 = paPool.poolNetSinceLastMod.token1;
-                uint256 dec1 = uint256(selfNet1);
-                paPool.poolNetSinceLastMod.token1 = dec1 > cur1 ? 0 : (cur1 - dec1);
-            }
-        }
+        // Banked selfNet:
+        // Only clear/decrement the windows if we actually queued a bonus for that token.
+        // This ensures contributions remain eligible if potAvail was 0 at touch time.
+        if (allocated0) _cleanupAfterAllocationForToken(pa, paPool, 0, selfNet0);
+        if (allocated1) _cleanupAfterAllocationForToken(pa, paPool, 1, selfNet1);
 
         return _finaliseFeeAdjustment(s, positionId, poolId);
-    }
-
-    /// @notice Proactive extraction (incremental): fund only increases in pending slashes since last observation
-    /// @dev Updates accounting state only. Actual ERC6909 mint is handled by CoreHook.settleHookDeltasToPot
-    /// @param s The central VTS storage
-    /// @param poolId The pool ID
-    /// @param positionId The position ID
-    function proactiveFunding(VTSStorage storage s, PoolId poolId, PositionId positionId) internal {
-        (int256 adj0, int256 adj1) = _peekFeeAdjustment(s, positionId);
-        PositionAccounting storage pa = s.positionAccounting[positionId];
-        int256 prev0 = pa.lastFundedPendingAdj.token0;
-        int256 prev1 = pa.lastFundedPendingAdj.token1;
-
-        if (adj0 > prev0) {
-            _fundFeePot(s, poolId, 0, uint256(adj0 - prev0));
-        }
-        if (adj1 > prev1) {
-            _fundFeePot(s, poolId, 1, uint256(adj1 - prev1));
-        }
-
-        // Snapshot current pending as baseline for the next settle
-        pa.lastFundedPendingAdj.token0 = adj0;
-        pa.lastFundedPendingAdj.token1 = adj1;
     }
 
     /// @dev Check if fee sharing is enabled for a pool
@@ -255,14 +269,5 @@ library VTSFeeLinkedLib {
     /// @return adj The materialised fee adjustment delta
     function processPositionFees(VTSStorage storage s, PositionId positionId) external returns (BalanceDelta adj) {
         return VTSFeeLib.processPositionFees(s, positionId);
-    }
-
-    /// @notice Proactive extraction (incremental): fund only increases in pending slashes since last observation
-    /// @dev Updates accounting state only. Actual ERC6909 mint is handled by CoreHook.settleHookDeltasToPot
-    /// @param s The VTS storage
-    /// @param poolId The pool ID
-    /// @param positionId The position ID
-    function proactiveFunding(VTSStorage storage s, PoolId poolId, PositionId positionId) external {
-        VTSFeeLib.proactiveFunding(s, poolId, positionId);
     }
 }

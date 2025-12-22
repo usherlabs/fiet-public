@@ -86,8 +86,18 @@ library VTSSwapLib {
                 poolManager, st.poolId, st.stepTick, st.tickSpacing, st.zeroForOne
             );
 
-            // Compute target sqrt for this segment (either next tick or final price)
-            uint160 sqrtTarget = _calcSqrtTarget(next, st.sqrtPAfter, st.zeroForOne);
+            // Compute target sqrt for this segment (either next tick or final price).
+            // IMPORTANT: we must ensure forward progress in the tick scan.
+            // Uniswap's swap loop updates `state.tick` to `tickNext - 1` when moving left (zeroForOne),
+            // otherwise `nextInitializedTickWithinOneWord()` can repeatedly return the same `tickNext`
+            // when `bitPos == 0` and the bitmap word contains no initialised ticks.
+            int24 boundedNext = next;
+            if (boundedNext <= TickMath.MIN_TICK) boundedNext = TickMath.MIN_TICK;
+            if (boundedNext >= TickMath.MAX_TICK) boundedNext = TickMath.MAX_TICK;
+            uint160 sqrtNext = TickMath.getSqrtPriceAtTick(boundedNext);
+            uint160 sqrtTarget = st.zeroForOne
+                ? (st.sqrtPAfter > sqrtNext ? st.sqrtPAfter : sqrtNext)
+                : (st.sqrtPAfter < sqrtNext ? st.sqrtPAfter : sqrtNext);
 
             if (st.segmentLiquidity > 0 && sqrtTarget != st.sqrtCurrent) {
                 // Accrue growth for this segment
@@ -100,36 +110,22 @@ library VTSSwapLib {
 
             // Otherwise, we crossed an initialised tick; flip outside and update liquidity
             if (initialized) {
-                _onTickCross(s, st.poolId, next, 0);
-                _onTickCross(s, st.poolId, next, 1);
+                _onTickCross(s, st.poolId, boundedNext, 0);
+                _onTickCross(s, st.poolId, boundedNext, 1);
                 // Apply liquidity net change for subsequent segments (direction-aware)
                 st.segmentLiquidity =
-                    _applyLiquidityNet(poolManager, st.poolId, next, st.segmentLiquidity, st.zeroForOne);
+                    _applyLiquidityNet(poolManager, st.poolId, boundedNext, st.segmentLiquidity, st.zeroForOne);
             }
-            st.stepTick = next;
+
+            // Ensure tick scan progresses (Uniswap-style).
+            // - For zeroForOne (moving left), resume search from `tickNext - 1`
+            // - For !zeroForOne (moving right), resume from `tickNext`
+            if (st.zeroForOne) {
+                st.stepTick = boundedNext > TickMath.MIN_TICK ? (boundedNext - 1) : TickMath.MIN_TICK;
+            } else {
+                st.stepTick = boundedNext;
+            }
         }
-    }
-
-    /// @dev Calculate bounded sqrtTarget for a swap step
-    /// @notice Computes target sqrt for this segment (either next tick or final price)
-    /// @dev Ensure we don't go beyond valid tick bounds
-    /// @dev For zeroForOne (price decreasing), pick the larger (closer) value
-    /// @dev For !zeroForOne (price increasing), pick the smaller (closer) value
-    /// @dev zeroForOne requires a lower sqrtPriceLimitX96 than the current price, i.e. the swap is constrained to move downwards in sqrtPriceX96: (src/libraries/Pool.sol).
-    /// @dev The swap loop also explicitly treats zeroForOne as “moving leftward” (and decrements the tick), consistent with price decreasing.
-    function _calcSqrtTarget(int24 next, uint160 sqrtPAfter, bool zeroForOne) private pure returns (uint160) {
-        int24 boundedNext = next;
-        if (boundedNext <= TickMath.MIN_TICK) boundedNext = TickMath.MIN_TICK;
-        if (boundedNext >= TickMath.MAX_TICK) boundedNext = TickMath.MAX_TICK;
-        uint160 sqrtNext = TickMath.getSqrtPriceAtTick(boundedNext);
-
-        // For a swap step, we move towards the next initialised tick, but never past the final price.
-        // - zeroForOne: price decreases => sqrt decreases => clamp with max()
-        // - !zeroForOne: price increases => sqrt increases => clamp with min()
-        return
-            zeroForOne
-                ? (sqrtPAfter > sqrtNext ? sqrtPAfter : sqrtNext)
-                : (sqrtPAfter < sqrtNext ? sqrtPAfter : sqrtNext);
     }
 
     /// @dev Accrue deficit and inflow growth for a segment

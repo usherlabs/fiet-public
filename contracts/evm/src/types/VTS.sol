@@ -133,8 +133,8 @@ struct PositionAccounting {
     TokenPairInt pendingFeeAdj;
     // Net settlement since last modification per token
     TokenPairInt netSettlementSinceLastMod;
-    // Last funded pending adjustment per token
-    TokenPairInt lastFundedPendingAdj;
+    // Native Uniswap fees accrued since last fee processing per token (used for bonus weighting)
+    TokenPairUint feesAccruedSinceLastMod;
     // DICE: Coverage index checkpoint per token (snapshot of pool index at last settlement)
     TokenPairUint coverageIndexLastX128;
 }
@@ -154,6 +154,10 @@ struct PoolAccounting {
     TokenPairUint slashedPot;
     // Pool-wide sum of positive nets since last modification per token
     TokenPairUint poolNetSinceLastMod;
+    // Pool-wide sum of native Uniswap fees accrued since last fee processing per token
+    TokenPairUint poolFeesAccruedSinceLastMod;
+    // Pool-wide sum of (positive selfNet * feeWeight) since last fee processing per token
+    TokenPairUint poolNetFeeWeightSinceLastMod;
     // DICE: Pool-wide outstanding deficit principal per token
     TokenPairUint totalDeficitPrincipal;
     // DICE: Coverage-per-deficit-unit index (Q128) per token

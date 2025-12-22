@@ -409,7 +409,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         // Step 5: Poke the position to collect fees (modifyLiquidity with liquidityDelta=0)
         // This triggers VTSPositionLib.touchPosition which processes fees
         // Then _take() transfers the fees from MMPM to test contract
-        _pokeMMAndTakeFees(tokenId, 0, -60, 60);
+        _pokeMM(tokenId, 0, -60, 60);
 
         // Step 6: Record final balances AFTER poke/take
         uint256 lcc0Final = _selfLccBalance(lccCurrency0);
