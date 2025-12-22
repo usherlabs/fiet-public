@@ -65,6 +65,7 @@ libraries = [
   "src/libraries/VTSSwapLib.sol:VTSSwapLib:0x8AF1433f3d2b0547A63f7004B9dA9C5953fD522D",
   "src/libraries/VTSCommitLib.sol:VTSCommitLib:0x6EBB20A904a9CA505e7d4A253c7FbF72DF5a777b",
   "src/libraries/LCCFactoryLib.sol:LCCFactoryLinkedLib:0x3209860215dB283218CBc8f0D5acf57Ae8874C85",
+  "src/libraries/VTSFeeLib.sol:VTSFeeLinkedLib:0x0000000000000000000000000000000000000000",
 ]
 
 [profile.debug]
