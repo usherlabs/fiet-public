@@ -8,11 +8,12 @@ The Fiet Protocol is a comprehensive DeFi solution combining automated market ma
 
 ```
 fiet-protocol/
-├── contracts/evm/     # Uniswap V4 hooks and AMM contracts
-├── contracts/stylus/  # Core protocol contracts (Rust/WASM)
-├── tests/             # Integration tests
-├── scripts/           # Deployment scripts
-└── docs/              # Protocol documentation
+├── contracts/evm/             # Fiet Protocol on EVM: Uniswap V4 hooks and AMM contracts
+├── contracts/evm-scripts/     # Administrative and Developer scripts for EVM deployments 
+├── contracts/stylus/          # Core protocol contracts (Rust/WASM)
+├── tests/                     # Integration tests
+├── scripts/                   # Deployment scripts
+└── docs/                      # Protocol documentation
 ```
 
 ## Getting Started
@@ -20,6 +21,12 @@ fiet-protocol/
 ### For Solidity Development
 
 See [contracts/evm/README.md](contracts/evm/README.md) for comprehensive Solidity development documentation, including deployment, testing, and local development setup.
+
+#### Notes & Standards
+
+- The `evm-scripts` folder is a standalone Foundry project and is not included in the main contract compilation (such as when running with `--via-IR=false`, e.g. for coverage reports).
+- For the best developer experience and to minimize risk of version incompatibilities, use Foundry version **1.4.2** (the same version as used in CI).
+- All contracts should be formatted with the default forge fmt config. Run forge fmt.
 
 ### For Rust (Arbitrum Stylus) Development  
 
