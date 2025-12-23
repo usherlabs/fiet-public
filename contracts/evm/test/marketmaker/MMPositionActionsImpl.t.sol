@@ -563,7 +563,6 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         ModifyLiquidityParams memory newLiquidityParams =
             ModifyLiquidityParams({tickLower: 0, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
 
-
         // create a new position with the default liquidity params and liquidity signal
         (uint256 tokenId,,,) = _setupCommittedPosition(
             positionManager,
@@ -590,7 +589,6 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
             address(lcc1)
         );
 
-
         // batch actions;
         // decrease the liquidity in the initial position with index 0
         // increase the liquidity in the new position with index 1
@@ -598,13 +596,16 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         uint256 decreaseLiquidityDelta = 1000;
 
         (Position memory position1Before,) = positionManager.getPosition(tokenId, positionIndex);
-        (Position memory position2Before, PositionId position2Id) = positionManager.getPosition(newTokenId, positionIndex);
+        (Position memory position2Before, PositionId position2Id) =
+            positionManager.getPosition(newTokenId, positionIndex);
         (uint256 position2SettledAmount0, uint256 position2SettledAmount1) =
             vtsOrchestrator.getPositionSettledAmounts(position2Id);
 
         MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
         actions[0] = MMA.prepareDecrease(corePoolKey, tokenId, positionIndex, decreaseLiquidityDelta);
-        actions[1] = MMA.prepareIncreaseFromDeltas(corePoolKey, newTokenId, positionIndex, newLiquidityParams.tickLower, newLiquidityParams.tickUpper, true);
+        actions[1] = MMA.prepareIncreaseFromDeltas(
+            corePoolKey, newTokenId, positionIndex, newLiquidityParams.tickLower, newLiquidityParams.tickUpper, true
+        );
         MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
 
         // validate the liquidity of the initial position is decreased
