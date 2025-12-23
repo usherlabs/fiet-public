@@ -144,10 +144,9 @@ library VTSCommitLib {
         if (tokenIndex > 1 || coveredAmount == 0) return;
         PoolAccounting storage paPool = s.poolAccounting[poolId];
 
+        // DICE: Increment coverage-per-deficit index (for slash attribution)
         uint256 totalPrincipal = paPool.totalDeficitPrincipal.get(tokenIndex);
-
         if (totalPrincipal > 0) {
-            // DICE: Increment coverage-per-deficit index
             uint256 deltaIndex = FullMath.mulDiv(coveredAmount, FixedPoint128.Q128, totalPrincipal);
             uint256 currentIndex = paPool.coveragePerDeficitIndexX128.get(tokenIndex);
             paPool.coveragePerDeficitIndexX128.set(tokenIndex, currentIndex + deltaIndex);
@@ -155,6 +154,18 @@ library VTSCommitLib {
             // No materialised deficit principal: defer to residual (socialised)
             uint256 currentResidual = paPool.coverageResidualDICE.get(tokenIndex);
             paPool.coverageResidualDICE.set(tokenIndex, currentResidual + coveredAmount);
+        }
+
+        // CISE: Increment coverage-per-settled index (for bonus allocation)
+        uint256 totalSettled = paPool.totalSettled.get(tokenIndex);
+        if (totalSettled > 0) {
+            uint256 deltaIndexCISE = FullMath.mulDiv(coveredAmount, FixedPoint128.Q128, totalSettled);
+            uint256 currentIndexCISE = paPool.coveragePerSettledIndexX128.get(tokenIndex);
+            paPool.coveragePerSettledIndexX128.set(tokenIndex, currentIndexCISE + deltaIndexCISE);
+        } else {
+            // No settled liquidity: defer to CISE residual (socialised when settled becomes non-zero)
+            uint256 currentResidualCISE = paPool.coverageResidualCISE.get(tokenIndex);
+            paPool.coverageResidualCISE.set(tokenIndex, currentResidualCISE + coveredAmount);
         }
     }
 

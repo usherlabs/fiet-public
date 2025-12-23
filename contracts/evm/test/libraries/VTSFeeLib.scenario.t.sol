@@ -927,9 +927,8 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
             uniPositionManager.modifyLiquidities(abi.encode(actions, params), block.timestamp + 3600);
         }
 
-        // selfNet (pa.netSettlementSinceLastMod) is only updated when _updateSettlement runs
-        // (e.g. via settlePositionGrowths or direct settlement changes), not at swap-time directly.
-        // Bonus allocation requires selfNet > 0 at fee-processing time (during modifyLiquidity touch).
+        // CISE exposure is realised when incrementCoverage is called during swaps.
+        // Bonus allocation requires CISE exposure > 0 at fee-processing time (during modifyLiquidity touch).
 
         (,, int256 dlPending0AfterIncrease, int256 dlPending1AfterIncrease) =
             vtsOrchestrator.getPositionFeeAccounting(directPosId);
@@ -1197,7 +1196,7 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         // Accrue some fees on token1 (one-for-zero swap => fee token is token1)
         _swapCore(false, -int256(2e18));
 
-        // Touch DirectLP (poke): this should record feesAccruedSinceLastMod, but potAvail is still 0
+        // Touch DirectLP (poke): potAvail is still 0 (no slashes have occurred)
         ModifyLiquidityParams memory dlPokeParams =
             ModifyLiquidityParams({tickLower: dlTickLower, tickUpper: dlTickUpper, liquidityDelta: 0, salt: 0});
 
@@ -1213,13 +1212,10 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         pending0AfterPoke; // silence
         assertEq(pending1AfterPoke, 0, "potAvail==0: should not queue bonus (pendingFeeAdj1 stays 0)");
 
-        // Windows should remain banked (selfNet from initial settlement; feeWeight from poke)
-        (int256 net0, int256 net1, uint256 feeW0, uint256 feeW1) =
-            _testableOrchestrator().getPositionBonusWeights(directPosId);
-        net0; // silence
-        assertGt(net1, 0, "potAvail==0: selfNet1 should remain banked");
-        assertEq(feeW0, 0, "potAvail==0: feeWeight0 expected 0 in one-for-zero fee direction");
-        assertGt(feeW1, 0, "potAvail==0: feeWeight1 should be recorded and banked");
+        // CISE exposure is 0 because no coverage has been exercised yet
+        (uint256 ciseExp0, uint256 ciseExp1) = _testableOrchestrator().getPositionBonusWeights(directPosId);
+        assertEq(ciseExp0, 0, "potAvail==0: ciseExposure0 should be 0 (no coverage exercised)");
+        assertEq(ciseExp1, 0, "potAvail==0: ciseExposure1 should be 0 (no coverage exercised)");
 
         // ------------------------------------------------------------
         // 2) potAvail > 0 case: create slashes so protocolFeeAccrued > 0, then touch and ensure allocation occurs
@@ -1246,13 +1242,14 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         pending0AfterAlloc; // silence
         assertLt(pending1AfterAlloc, 0, "potAvail>0: should queue a bonus (pendingFeeAdj1 < 0)");
 
-        // After a successful allocation, windows for token1 should be cleared (bank consumed)
-        (int256 net0After, int256 net1After, uint256 feeW0After, uint256 feeW1After) =
-            _testableOrchestrator().getPositionBonusWeights(directPosId);
-        net0After; // silence
-        feeW0After; // silence
-        assertEq(net1After, 0, "potAvail>0: net1 window should be cleared after allocation");
-        assertEq(feeW1After, 0, "potAvail>0: feeWeight1 window should be cleared after allocation");
+        // After a successful allocation, CISE exposure windows for the coverage token should be cleared
+        // Note: token1 pot is funded by token0 deficits, so token0 exposure is cleared when token1 bonus is allocated
+        (uint256 ciseExp0After, uint256 ciseExp1After) = _testableOrchestrator().getPositionBonusWeights(directPosId);
+        // token0 exposure should be cleared because it was used for token1 bonus allocation
+        assertEq(
+            ciseExp0After, 0, "potAvail>0: ciseExposure0 should be cleared after allocation (used for token1 bonus)"
+        );
+        ciseExp1After; // silence - token1 exposure wasn't consumed since token0 pot is empty
 
         // Suppress unused variable warnings
         tokenId;

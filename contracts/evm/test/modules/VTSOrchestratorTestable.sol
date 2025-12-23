@@ -111,56 +111,80 @@ contract VTSOrchestratorTestable is VTSOrchestrator {
         return (pa.commitmentDeficit.token0, pa.commitmentDeficit.token1);
     }
 
-    /// @notice Get bonus weighting inputs for a position
-    /// @dev Bonus eligibility uses `netSettlementSinceLastMod` (positive only), while distribution is weighted by
-    ///      native Uniswap `feesAccruedSinceLastMod` (modifyLiquidity-time).
+    /// @notice Get bonus weighting inputs for a position (CISE-only)
+    /// @dev Bonus eligibility uses CISE exposure (coverage-indexed settled exposure).
     /// @param positionId The position identifier
-    /// @return net0 Signed net settlement since last fee processing for token0
-    /// @return net1 Signed net settlement since last fee processing for token1
-    /// @return feeWeight0 Native Uniswap fees accrued since last processing for token0
-    /// @return feeWeight1 Native Uniswap fees accrued since last processing for token1
+    /// @return ciseExposure0 CISE exposure since last allocation for token0
+    /// @return ciseExposure1 CISE exposure since last allocation for token1
     function getPositionBonusWeights(PositionId positionId)
         external
         view
-        returns (int256 net0, int256 net1, uint256 feeWeight0, uint256 feeWeight1)
+        returns (uint256 ciseExposure0, uint256 ciseExposure1)
     {
         PositionAccounting storage pa = s.positionAccounting[positionId];
-        return (
-            pa.netSettlementSinceLastMod.token0,
-            pa.netSettlementSinceLastMod.token1,
-            pa.feesAccruedSinceLastMod.token0,
-            pa.feesAccruedSinceLastMod.token1
-        );
+        return (pa.ciseExposureSinceLastMod.token0, pa.ciseExposureSinceLastMod.token1);
     }
 
-    /// @notice Get pool-wide bonus weighting totals (debug/observability)
+    /// @notice Get pool-wide CISE bonus weighting totals (debug/observability)
     /// @param poolId The pool identifier
-    /// @return poolNet0 Pool-wide sum of positive nets since last processing for token0
-    /// @return poolNet1 Pool-wide sum of positive nets since last processing for token1
-    /// @return poolFees0 Pool-wide sum of native fees accrued since last processing for token0
-    /// @return poolFees1 Pool-wide sum of native fees accrued since last processing for token1
-    /// @return poolWeight0 Pool-wide sum of (positive net * feeWeight) since last processing for token0
-    /// @return poolWeight1 Pool-wide sum of (positive net * feeWeight) since last processing for token1
+    /// @return totalCISEExposure0 Pool-wide CISE exposure since last modification for token0
+    /// @return totalCISEExposure1 Pool-wide CISE exposure since last modification for token1
     function getPoolBonusWeightTotals(PoolId poolId)
         external
         view
+        returns (uint256 totalCISEExposure0, uint256 totalCISEExposure1)
+    {
+        PoolAccounting storage paPool = s.poolAccounting[poolId];
+        return (paPool.totalCISEExposureSinceLastMod.token0, paPool.totalCISEExposureSinceLastMod.token1);
+    }
+
+    /// @notice Get pool CISE (Coverage-Indexed Settled Exposure) accounting for debugging
+    /// @param poolId The pool identifier
+    /// @return totalSettled0 Total settled aggregate for token0
+    /// @return totalSettled1 Total settled aggregate for token1
+    /// @return coveragePerSettledIndex0 Coverage per settled index (Q128) for token0
+    /// @return coveragePerSettledIndex1 Coverage per settled index (Q128) for token1
+    /// @return coverageResidualCISE0 Deferred CISE residual for token0
+    /// @return coverageResidualCISE1 Deferred CISE residual for token1
+    /// @return totalCISEExposure0 Pool-wide CISE exposure since last modification for token0
+    /// @return totalCISEExposure1 Pool-wide CISE exposure since last modification for token1
+    function getPoolCISEAccounting(PoolId poolId)
+        external
+        view
         returns (
-            uint256 poolNet0,
-            uint256 poolNet1,
-            uint256 poolFees0,
-            uint256 poolFees1,
-            uint256 poolWeight0,
-            uint256 poolWeight1
+            uint256 totalSettled0,
+            uint256 totalSettled1,
+            uint256 coveragePerSettledIndex0,
+            uint256 coveragePerSettledIndex1,
+            uint256 coverageResidualCISE0,
+            uint256 coverageResidualCISE1,
+            uint256 totalCISEExposure0,
+            uint256 totalCISEExposure1
         )
     {
         PoolAccounting storage paPool = s.poolAccounting[poolId];
         return (
-            paPool.poolNetSinceLastMod.token0,
-            paPool.poolNetSinceLastMod.token1,
-            paPool.poolFeesAccruedSinceLastMod.token0,
-            paPool.poolFeesAccruedSinceLastMod.token1,
-            paPool.poolNetFeeWeightSinceLastMod.token0,
-            paPool.poolNetFeeWeightSinceLastMod.token1
+            paPool.totalSettled.token0,
+            paPool.totalSettled.token1,
+            paPool.coveragePerSettledIndexX128.token0,
+            paPool.coveragePerSettledIndexX128.token1,
+            paPool.coverageResidualCISE.token0,
+            paPool.coverageResidualCISE.token1,
+            paPool.totalCISEExposureSinceLastMod.token0,
+            paPool.totalCISEExposureSinceLastMod.token1
         );
+    }
+
+    /// @notice Get position's CISE index checkpoint for debugging
+    /// @param positionId The position identifier
+    /// @return ciseIndexLast0 Last CISE index checkpoint for token0
+    /// @return ciseIndexLast1 Last CISE index checkpoint for token1
+    function getPositionCISEIndex(PositionId positionId)
+        external
+        view
+        returns (uint256 ciseIndexLast0, uint256 ciseIndexLast1)
+    {
+        PositionAccounting storage pa = s.positionAccounting[positionId];
+        return (pa.ciseIndexLastX128.token0, pa.ciseIndexLastX128.token1);
     }
 }

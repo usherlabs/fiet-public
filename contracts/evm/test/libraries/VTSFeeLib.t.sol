@@ -96,10 +96,10 @@ contract VTSFeeLibTest is VTSLibTestBase {
         assertEq(config.coverageFeeShare, 0, "Fee sharing should be disabled");
     }
 
-    function test_bonusAllocation_setup_positiveNetSettlement() public {
-        // Setup: position has positive net settlement
-        harness.setNetSettlementSinceLastMod(testPositionId, 100e18, 50e18);
-        harness.setPoolNetSinceLastMod(testPoolId, 200e18, 100e18);
+    function test_bonusAllocation_setup_positiveCISEExposure() public {
+        // Setup: position has positive CISE exposure
+        harness.setCISEExposure(testPositionId, 100e18, 50e18);
+        harness.setPoolTotalCISEExposure(testPoolId, 200e18, 100e18);
 
         // Protocol has fees accrued
         harness.setProtocolFeeAccrued(testPoolId, 1000e18, 500e18);
@@ -109,40 +109,29 @@ contract VTSFeeLibTest is VTSLibTestBase {
         // Available = 1000e18 - 0 = 1000e18
         // Expected Bonus = 1000e18 * 100e18 / 200e18 = 500e18
 
-        (int256 net0, int256 net1) = harness.getNetSettlementSinceLastMod(testPositionId);
-        assertEq(net0, 100e18, "Net settlement 0 should be set");
-        assertEq(net1, 50e18, "Net settlement 1 should be set");
+        (uint256 exp0, uint256 exp1) = harness.getCISEExposure(testPositionId);
+        assertEq(exp0, 100e18, "CISE exposure 0 should be set");
+        assertEq(exp1, 50e18, "CISE exposure 1 should be set");
 
-        (uint256 poolNet0, uint256 poolNet1) = harness.getPoolNetSinceLastMod(testPoolId);
-        assertEq(poolNet0, 200e18, "Pool net 0 should be set");
-        assertEq(poolNet1, 100e18, "Pool net 1 should be set");
+        (uint256 poolExp0, uint256 poolExp1) = harness.getPoolTotalCISEExposure(testPoolId);
+        assertEq(poolExp0, 200e18, "Pool CISE exposure 0 should be set");
+        assertEq(poolExp1, 100e18, "Pool CISE exposure 1 should be set");
     }
 
-    function test_bonusAllocation_setup_zeroNetSettlement() public {
-        harness.setNetSettlementSinceLastMod(testPositionId, 0, 0);
-        harness.setPoolNetSinceLastMod(testPoolId, 0, 0);
+    function test_bonusAllocation_setup_zeroCISEExposure() public {
+        harness.setCISEExposure(testPositionId, 0, 0);
+        harness.setPoolTotalCISEExposure(testPoolId, 0, 0);
         harness.setProtocolFeeAccrued(testPoolId, 1000e18, 500e18);
 
-        // No bonus should be allocated with zero net
-        (int256 net0, int256 net1) = harness.getNetSettlementSinceLastMod(testPositionId);
-        assertEq(net0, 0, "Net settlement should be zero");
-        assertEq(net1, 0, "Net settlement should be zero");
-    }
-
-    function test_bonusAllocation_setup_negativeNetSettlement() public {
-        harness.setNetSettlementSinceLastMod(testPositionId, -50e18, -25e18);
-        harness.setPoolNetSinceLastMod(testPoolId, 200e18, 100e18);
-        harness.setProtocolFeeAccrued(testPoolId, 1000e18, 500e18);
-
-        // Negative net should not allocate bonus
-        (int256 net0, int256 net1) = harness.getNetSettlementSinceLastMod(testPositionId);
-        assertLt(net0, 0, "Net settlement should be negative");
-        assertLt(net1, 0, "Net settlement should be negative");
+        // No bonus should be allocated with zero exposure
+        (uint256 exp0, uint256 exp1) = harness.getCISEExposure(testPositionId);
+        assertEq(exp0, 0, "CISE exposure should be zero");
+        assertEq(exp1, 0, "CISE exposure should be zero");
     }
 
     function test_bonusAllocation_setup_selfContribExcluded() public {
-        harness.setNetSettlementSinceLastMod(testPositionId, 100e18, 0);
-        harness.setPoolNetSinceLastMod(testPoolId, 200e18, 0);
+        harness.setCISEExposure(testPositionId, 100e18, 0);
+        harness.setPoolTotalCISEExposure(testPoolId, 200e18, 0);
         harness.setProtocolFeeAccrued(testPoolId, 1000e18, 0);
         // Position has already contributed 200e18 to protocol fees
         harness.setFeesShared(testPositionId, 200e18, 0);
@@ -172,27 +161,27 @@ contract VTSFeeLibTest is VTSLibTestBase {
     }
 
     function testFuzz_bonusCalculation_proportional(
-        uint256 netSettlement,
-        uint256 poolNet,
+        uint256 ciseExposure,
+        uint256 poolExposure,
         uint256 protocolFee,
         uint256 selfContrib
     ) public {
         // Bound inputs to valid ranges
-        netSettlement = bound(netSettlement, 1e12, 1e30); // Above dust threshold
-        poolNet = bound(poolNet, netSettlement, type(uint128).max);
+        ciseExposure = bound(ciseExposure, 1e12, 1e30); // Above dust threshold
+        poolExposure = bound(poolExposure, ciseExposure, type(uint128).max);
         selfContrib = bound(selfContrib, 0, type(uint128).max / 2);
         protocolFee = bound(protocolFee, selfContrib, type(uint128).max);
 
         // Setup state
-        harness.setNetSettlementSinceLastMod(testPositionId, int256(netSettlement), 0);
-        harness.setPoolNetSinceLastMod(testPoolId, poolNet, 0);
+        harness.setCISEExposure(testPositionId, ciseExposure, 0);
+        harness.setPoolTotalCISEExposure(testPoolId, poolExposure, 0);
         harness.setProtocolFeeAccrued(testPoolId, protocolFee, 0);
         harness.setFeesShared(testPositionId, selfContrib, 0);
 
         // Calculate expected bonus
         uint256 availablePot = protocolFee > selfContrib ? (protocolFee - selfContrib) : 0;
         uint256 expectedBonus =
-            availablePot > 0 && poolNet > 0 ? FullMath.mulDiv(availablePot, netSettlement, poolNet) : 0;
+            availablePot > 0 && poolExposure > 0 ? FullMath.mulDiv(availablePot, ciseExposure, poolExposure) : 0;
 
         // Cap expected bonus to available pot
         if (expectedBonus > availablePot) {
@@ -200,8 +189,8 @@ contract VTSFeeLibTest is VTSLibTestBase {
         }
 
         // Verify state is properly configured
-        (int256 actualNet,) = harness.getNetSettlementSinceLastMod(testPositionId);
-        assertEq(uint256(actualNet), netSettlement, "Net settlement should be configured correctly");
+        (uint256 actualExp,) = harness.getCISEExposure(testPositionId);
+        assertEq(actualExp, ciseExposure, "CISE exposure should be configured correctly");
     }
 
     function testFuzz_slashedPot_setGet(uint256 pot0, uint256 pot1) public {

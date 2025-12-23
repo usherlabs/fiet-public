@@ -148,11 +148,8 @@ library VTSPositionLib {
     ) private returns (int256 applied) {
         Position memory pos = s.positions[id];
         PoolAccounting storage paPool = s.poolAccounting[pos.poolId];
-        PositionAccounting storage pa = s.positionAccounting[id];
 
         int256 settledDelta = next.toInt256() - cur.toInt256();
-        int256 netSinceLastMod = pa.netSettlementSinceLastMod.get(tokenIndex);
-        uint256 poolNetSinceLastMod = paPool.poolNetSinceLastMod.get(tokenIndex);
 
         // DICE: Track pool-wide deficit principal decrease when deficits are netted
         // deficitCoverage tracks amount of cumulativeDeficit that was netted (excludes commitmentDeficit)
@@ -164,33 +161,23 @@ library VTSPositionLib {
             paPool.totalDeficitPrincipal.set(tokenIndex, newPrincipal);
         }
 
-        // Accrue persistent nets since last fee finalisation (uses settledDelta, not total)
-        // ? On outflow token, this will be decremented by the amount of outflow.
-        // ? On inflow token, this will be incremented by the amount of inflow. Fees accrued on inflow token.
-        int256 newNetSinceLastMod = netSinceLastMod + settledDelta;
-        pa.netSettlementSinceLastMod.set(tokenIndex, newNetSinceLastMod);
-        if (settledDelta >= 0) {
-            paPool.poolNetSinceLastMod.set(tokenIndex, poolNetSinceLastMod + uint256(settledDelta));
-        } else {
-            uint256 dec = uint256(-settledDelta);
-            paPool.poolNetSinceLastMod.set(tokenIndex, dec > poolNetSinceLastMod ? 0 : (poolNetSinceLastMod - dec));
-        }
+        // CISE: Track pool-wide totalSettled aggregate
+        {
+            uint256 currentTotalSettled = paPool.totalSettled.get(tokenIndex);
+            bool wasZero = currentTotalSettled == 0;
 
-        // Update pool-wide product-weight denominator accumulator:
-        // poolNetFeeWeightSinceLastMod[t] = Σ (max(selfNet[t], 0) * feesAccruedSinceLastMod[t])
-        uint256 feeWeight = pa.feesAccruedSinceLastMod.get(tokenIndex);
-        if (feeWeight > 0) {
-            uint256 oldPosNet = netSinceLastMod > 0 ? uint256(netSinceLastMod) : 0;
-            uint256 newPosNet = newNetSinceLastMod > 0 ? uint256(newNetSinceLastMod) : 0;
-            if (oldPosNet != newPosNet) {
-                uint256 curW = paPool.poolNetFeeWeightSinceLastMod.get(tokenIndex);
-                if (newPosNet > oldPosNet) {
-                    curW += (newPosNet - oldPosNet) * feeWeight;
-                } else {
-                    uint256 decW = (oldPosNet - newPosNet) * feeWeight;
-                    curW = decW > curW ? 0 : (curW - decW);
-                }
-                paPool.poolNetFeeWeightSinceLastMod.set(tokenIndex, curW);
+            if (settledDelta >= 0) {
+                paPool.totalSettled.set(tokenIndex, currentTotalSettled + uint256(settledDelta));
+            } else {
+                uint256 decSettled = uint256(-settledDelta);
+                paPool.totalSettled
+                    .set(tokenIndex, decSettled > currentTotalSettled ? 0 : (currentTotalSettled - decSettled));
+            }
+
+            // CISE: Flush residual if totalSettled transitions from 0 to >0
+            uint256 newTotalSettled = paPool.totalSettled.get(tokenIndex);
+            if (wasZero && newTotalSettled > 0) {
+                _flushCISEResidualIfNeeded(s, pos.poolId, tokenIndex);
             }
         }
 
@@ -301,6 +288,29 @@ library VTSPositionLib {
             uint256 currentIndex = paPool.coveragePerDeficitIndexX128.get(tokenIndex);
             paPool.coveragePerDeficitIndexX128.set(tokenIndex, currentIndex + deltaIndex);
             paPool.coverageResidualDICE.set(tokenIndex, 0);
+        }
+    }
+
+    // --------------------------------------------------
+    // CISE (Coverage-Indexed Settled Exposure) Helpers
+    // --------------------------------------------------
+
+    /// @notice Flush any pending CISE residual into the coverage-per-settled index
+    /// @dev Called when totalSettled increases from 0 to >0.
+    ///      Residual is socialised across current settled liquidity holders.
+    /// @param s The central VTS storage
+    /// @param poolId The pool ID
+    /// @param tokenIndex The token index (0 or 1)
+    function _flushCISEResidualIfNeeded(VTSStorage storage s, PoolId poolId, uint8 tokenIndex) internal {
+        PoolAccounting storage paPool = s.poolAccounting[poolId];
+        uint256 residual = paPool.coverageResidualCISE.get(tokenIndex);
+        uint256 totalSettled = paPool.totalSettled.get(tokenIndex);
+
+        if (residual > 0 && totalSettled > 0) {
+            uint256 deltaIndex = FullMath.mulDiv(residual, FixedPoint128.Q128, totalSettled);
+            uint256 currentIndex = paPool.coveragePerSettledIndexX128.get(tokenIndex);
+            paPool.coveragePerSettledIndexX128.set(tokenIndex, currentIndex + deltaIndex);
+            paPool.coverageResidualCISE.set(tokenIndex, 0);
         }
     }
 
@@ -1138,7 +1148,7 @@ library VTSPositionLib {
 
         _updateActiveStatus(s, posStorage, initialLiquidity, liq);
 
-        result.feeAdj = VTSFeeLinkedLib.afterTouchPosition(s, poolId, result.id, p.feesAccrued);
+        result.feeAdj = VTSFeeLinkedLib.afterTouchPosition(s, result.id);
 
         if (hookData.isMMOperation) {
             _processMMOperations(s, ctx, p, result, hookData.commitId, hookData.isSeizing, requiredSettlementDelta);

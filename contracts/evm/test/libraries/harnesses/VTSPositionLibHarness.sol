@@ -132,16 +132,18 @@ contract VTSPositionLibHarness {
         return (s.positionAccounting[id].commitmentDeficit.token0, s.positionAccounting[id].commitmentDeficit.token1);
     }
 
-    function getNetSettlementSinceLastMod(PositionId id) external view returns (int256 net0, int256 net1) {
+    function getCISEExposure(PositionId id) external view returns (uint256 exposure0, uint256 exposure1) {
         return (
-            s.positionAccounting[id].netSettlementSinceLastMod.token0,
-            s.positionAccounting[id].netSettlementSinceLastMod.token1
+            s.positionAccounting[id].ciseExposureSinceLastMod.token0,
+            s.positionAccounting[id].ciseExposureSinceLastMod.token1
         );
     }
 
-    function getPoolNetSinceLastMod(PoolId poolId) external view returns (uint256 net0, uint256 net1) {
-        return
-            (s.poolAccounting[poolId].poolNetSinceLastMod.token0, s.poolAccounting[poolId].poolNetSinceLastMod.token1);
+    function getPoolTotalCISEExposure(PoolId poolId) external view returns (uint256 exposure0, uint256 exposure1) {
+        return (
+            s.poolAccounting[poolId].totalCISEExposureSinceLastMod.token0,
+            s.poolAccounting[poolId].totalCISEExposureSinceLastMod.token1
+        );
     }
 
     // ============ Storage Setters (for test setup) ============
@@ -180,16 +182,16 @@ contract VTSPositionLibHarness {
         s.positionAccounting[id].commitmentDeficit.token1 = cd1;
     }
 
-    /// @notice Sets net settlement since last mod for a position
-    function setNetSettlementSinceLastMod(PositionId id, int256 net0, int256 net1) external {
-        s.positionAccounting[id].netSettlementSinceLastMod.token0 = net0;
-        s.positionAccounting[id].netSettlementSinceLastMod.token1 = net1;
+    /// @notice Sets CISE exposure for a position
+    function setCISEExposure(PositionId id, uint256 exposure0, uint256 exposure1) external {
+        s.positionAccounting[id].ciseExposureSinceLastMod.token0 = exposure0;
+        s.positionAccounting[id].ciseExposureSinceLastMod.token1 = exposure1;
     }
 
-    /// @notice Sets pool net since last mod
-    function setPoolNetSinceLastMod(PoolId poolId, uint256 net0, uint256 net1) external {
-        s.poolAccounting[poolId].poolNetSinceLastMod.token0 = net0;
-        s.poolAccounting[poolId].poolNetSinceLastMod.token1 = net1;
+    /// @notice Sets pool total CISE exposure
+    function setPoolTotalCISEExposure(PoolId poolId, uint256 exposure0, uint256 exposure1) external {
+        s.poolAccounting[poolId].totalCISEExposureSinceLastMod.token0 = exposure0;
+        s.poolAccounting[poolId].totalCISEExposureSinceLastMod.token1 = exposure1;
     }
 
     /// @notice Sets deficit growth global for a pool

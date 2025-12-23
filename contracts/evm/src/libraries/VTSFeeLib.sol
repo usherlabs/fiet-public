@@ -4,6 +4,7 @@ pragma solidity ^0.8.26;
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
+import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint128.sol";
 import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
 
 import {
@@ -30,77 +31,102 @@ library VTSFeeLib {
     // Fee Adjustment Helpers
     // --------------------------------------------------
 
-    /// @dev Queue a bonus for a single token using fee-accrual weighted positive net settlement since last modification.
+    /// @dev Queue a bonus for a single token using CISE (Coverage-Indexed Settled Exposure).
+    /// @notice CISE replaces selfNet as the primary eligibility gate, fixing the commitmentMax clamp bug.
+    ///         Positions accrue exposure when incrementCoverage is called, proportional to their settled liquidity.
+    /// @param pa The position accounting storage reference
+    /// @param paPool The pool accounting storage reference
+    /// @param feeTokenIndex The fee token index (0 or 1) - the pot from which bonus is allocated
+    /// @param coverageTokenIndex The coverage token index (opposite of feeTokenIndex) - the token whose exposure is used
+    /// @param ciseExposure The position's realised CISE exposure since last allocation (from coverageTokenIndex)
     /// @return allocated True iff a non-zero bonus was queued (i.e. pendingFeeAdj was decreased).
     function _queueBonusForToken(
         PositionAccounting storage pa,
         PoolAccounting storage paPool,
-        uint8 tokenIndex,
-        int256 selfNet
+        uint8 feeTokenIndex,
+        uint8 coverageTokenIndex,
+        uint256 ciseExposure
     ) internal returns (bool allocated) {
-        if (selfNet <= 0) return false;
+        // CISE: Use exposure as eligibility gate instead of selfNet
+        if (ciseExposure == 0) return false;
 
-        uint256 pot = paPool.protocolFeeAccrued.get(tokenIndex);
-        uint256 selfContrib = pa.feesShared.get(tokenIndex);
+        uint256 pot = paPool.protocolFeeAccrued.get(feeTokenIndex);
+        uint256 selfContrib = pa.feesShared.get(feeTokenIndex);
         uint256 potAvail = pot > selfContrib ? (pot - selfContrib) : 0;
         if (potAvail == 0) return false;
 
-        // Dust guard
-        if (uint256(selfNet) < 1e12) return false;
+        // Dust guard for exposure
+        if (ciseExposure < 1e12) return false;
 
-        // Fee-accrual weighting (per token)
-        uint256 selfFeeWeight = pa.feesAccruedSinceLastMod.get(tokenIndex);
-        if (selfFeeWeight == 0) return false;
+        // CISE: Use totalCISEExposureSinceLastMod from coverageTokenIndex as denominator
+        uint256 totalExposure = paPool.totalCISEExposureSinceLastMod.get(coverageTokenIndex);
+        if (totalExposure == 0) return false;
 
-        uint256 totalWeightBefore = paPool.poolNetFeeWeightSinceLastMod.get(tokenIndex);
-        if (totalWeightBefore == 0) return false;
-
-        uint256 selfWeight = uint256(selfNet) * selfFeeWeight;
-        if (selfWeight == 0) return false;
-
-        // bonus = potAvail * selfWeight / totalWeightBefore
-        uint256 bonus = FullMath.mulDiv(potAvail, selfWeight, totalWeightBefore);
+        // bonus = potAvail * ciseExposure / totalExposure
+        uint256 bonus = FullMath.mulDiv(potAvail, ciseExposure, totalExposure);
         if (bonus > potAvail) bonus = potAvail;
-        // Banked selfNet/feeWeight: if rounding yields 0, do not clear windows so it can be allocated later.
+        // Banked exposure: if rounding yields 0, do not clear windows so it can be allocated later.
         if (bonus == 0) return false;
 
         // Deduct from pot, keep self-contrib excluded
-        paPool.protocolFeeAccrued.set(tokenIndex, potAvail - bonus + selfContrib);
+        paPool.protocolFeeAccrued.set(feeTokenIndex, potAvail - bonus + selfContrib);
         // Queue negative pending (bonus increases payout at materialisation)
-        int256 currentPending = pa.pendingFeeAdj.get(tokenIndex);
-        pa.pendingFeeAdj.set(tokenIndex, currentPending - bonus.toInt256());
+        int256 currentPending = pa.pendingFeeAdj.get(feeTokenIndex);
+        pa.pendingFeeAdj.set(feeTokenIndex, currentPending - bonus.toInt256());
         return true;
     }
 
-    /// @dev After bonus allocation, clear/decrement per-position and per-pool windows so future allocations don't double-count.
+    /// @dev After bonus allocation, clear/decrement per-position and per-pool CISE windows so future allocations don't double-count.
+    /// @param pa The position accounting storage reference
+    /// @param paPool The pool accounting storage reference
+    /// @param coverageTokenIndex The coverage token index - the token whose exposure was used for allocation
+    /// @param ciseExposure The position's CISE exposure for the coverage token
     function _cleanupAfterAllocationForToken(
         PositionAccounting storage pa,
         PoolAccounting storage paPool,
-        uint8 tokenIndex,
-        int256 selfNet
+        uint8 coverageTokenIndex,
+        uint256 ciseExposure
     ) internal {
-        if (selfNet == 0) return;
+        if (ciseExposure == 0) return;
 
-        uint256 feeW = pa.feesAccruedSinceLastMod.get(tokenIndex);
-        pa.netSettlementSinceLastMod.set(tokenIndex, 0);
+        // CISE: Clear position exposure window and decrement pool total
+        uint256 curExposure = paPool.totalCISEExposureSinceLastMod.get(coverageTokenIndex);
+        paPool.totalCISEExposureSinceLastMod
+            .set(coverageTokenIndex, ciseExposure > curExposure ? 0 : (curExposure - ciseExposure));
+        pa.ciseExposureSinceLastMod.set(coverageTokenIndex, 0);
+    }
 
-        if (selfNet > 0) {
-            uint256 curNet = paPool.poolNetSinceLastMod.get(tokenIndex);
-            uint256 decNet = uint256(selfNet);
-            paPool.poolNetSinceLastMod.set(tokenIndex, decNet > curNet ? 0 : (curNet - decNet));
+    // --------------------------------------------------
+    // CISE (Coverage-Indexed Settled Exposure) Helpers
+    // --------------------------------------------------
+
+    /// @notice Realise and checkpoint CISE exposure for a single token
+    /// @dev Computes exposure = settled * (indexNow - indexLast) / Q128 and accumulates it
+    /// @param pa The position accounting storage reference
+    /// @param paPool The pool accounting storage reference
+    /// @param tokenIndex The token index (0 or 1)
+    function _realiseAndCheckpointCISEExposure(
+        PositionAccounting storage pa,
+        PoolAccounting storage paPool,
+        uint8 tokenIndex
+    ) internal {
+        uint256 indexNow = paPool.coveragePerSettledIndexX128.get(tokenIndex);
+        uint256 indexLast = pa.ciseIndexLastX128.get(tokenIndex);
+
+        // Always checkpoint index (even if no exposure to apply)
+        if (indexNow != indexLast) {
+            pa.ciseIndexLastX128.set(tokenIndex, indexNow);
         }
 
-        // Decrement product-weight accumulator and fee-weight pool totals, then clear position fee weight window.
-        if (feeW > 0) {
-            if (selfNet > 0) {
-                uint256 curW = paPool.poolNetFeeWeightSinceLastMod.get(tokenIndex);
-                uint256 decW = uint256(selfNet) * feeW;
-                paPool.poolNetFeeWeightSinceLastMod.set(tokenIndex, decW > curW ? 0 : (curW - decW));
+        uint256 deltaIndex = indexNow - indexLast;
+        if (deltaIndex > 0) {
+            uint256 settled = pa.settled.get(tokenIndex);
+            uint256 exposure = FullMath.mulDiv(settled, deltaIndex, FixedPoint128.Q128);
+            if (exposure > 0) {
+                pa.ciseExposureSinceLastMod.set(tokenIndex, pa.ciseExposureSinceLastMod.get(tokenIndex) + exposure);
+                paPool.totalCISEExposureSinceLastMod
+                    .set(tokenIndex, paPool.totalCISEExposureSinceLastMod.get(tokenIndex) + exposure);
             }
-
-            uint256 curF = paPool.poolFeesAccruedSinceLastMod.get(tokenIndex);
-            paPool.poolFeesAccruedSinceLastMod.set(tokenIndex, feeW > curF ? 0 : (curF - feeW));
-            pa.feesAccruedSinceLastMod.set(tokenIndex, 0);
         }
     }
 
@@ -215,7 +241,7 @@ library VTSFeeLib {
         adj = LiquidityUtils.safeToBalanceDelta(mat0, mat1);
     }
 
-    /// @notice Consolidated fee processing for a position during modification: applies and zeros nets, queues bonus using net weighting
+    /// @notice Consolidated fee processing for a position during modification: realises CISE exposure and queues bonus
     /// @dev Updates accounting state only. Actual ERC6909 mint/burn is handled by CoreHook.settleHookDeltasToPot
     /// @param s The central VTS storage
     /// @param positionId The position ID
@@ -232,22 +258,29 @@ library VTSFeeLib {
         PositionAccounting storage pa = s.positionAccounting[positionId];
         PoolAccounting storage paPool = s.poolAccounting[poolId];
 
-        // Read per-position nets (already applied to settled via _updateSettlement). Do not mutate yet
-        int256 selfNet0 = pa.netSettlementSinceLastMod.token0;
-        int256 selfNet1 = pa.netSettlementSinceLastMod.token1;
+        // CISE: Realise and checkpoint exposure for both tokens before bonus allocation
+        // This materialises any pending exposure from coverage events since last touch
+        _realiseAndCheckpointCISEExposure(pa, paPool, 0);
+        _realiseAndCheckpointCISEExposure(pa, paPool, 1);
 
-        // Queue bonuses using positive nets since last modification, and distribute proportionally
-        // to native Uniswap fees accrued (modifyLiquidity-time) as a proxy for time/exposure.
-        //
-        // Weight per token: w = selfNet * feeWeight, where feeWeight is feesAccruedSinceLastMod.
-        bool allocated0 = _queueBonusForToken(pa, paPool, 0, selfNet0);
-        bool allocated1 = _queueBonusForToken(pa, paPool, 1, selfNet1);
+        // Read CISE exposure for bonus allocation
+        // Note: Raw exposure values per coverage token
+        uint256 ciseExposure0 = pa.ciseExposureSinceLastMod.token0;
+        uint256 ciseExposure1 = pa.ciseExposureSinceLastMod.token1;
 
-        // Banked selfNet:
+        // Queue bonuses using CISE exposure (coverage-indexed settled exposure)
+        // Token direction mapping: fee pot in token T is funded by deficits in the opposite token.
+        // - token0 pot ← token1 deficit coverage → use token1 exposure for token0 bonus
+        // - token1 pot ← token0 deficit coverage → use token0 exposure for token1 bonus
+        // This fixes the commitmentMax clamp bug where selfNet stays 0 for fully-settled positions
+        bool allocated0 = _queueBonusForToken(pa, paPool, 0, 1, ciseExposure1);
+        bool allocated1 = _queueBonusForToken(pa, paPool, 1, 0, ciseExposure0);
+
+        // Banked exposure:
         // Only clear/decrement the windows if we actually queued a bonus for that token.
         // This ensures contributions remain eligible if potAvail was 0 at touch time.
-        if (allocated0) _cleanupAfterAllocationForToken(pa, paPool, 0, selfNet0);
-        if (allocated1) _cleanupAfterAllocationForToken(pa, paPool, 1, selfNet1);
+        if (allocated0) _cleanupAfterAllocationForToken(pa, paPool, 1, ciseExposure1);
+        if (allocated1) _cleanupAfterAllocationForToken(pa, paPool, 0, ciseExposure0);
 
         return _finaliseFeeAdjustment(s, positionId, poolId);
     }
@@ -255,44 +288,6 @@ library VTSFeeLib {
     /// @dev Check if fee sharing is enabled for a pool
     function _isFeeSharingEnabled(VTSStorage storage s, PoolId p) internal view returns (bool) {
         return s.pools[p].vtsConfig.coverageFeeShare > 0;
-    }
-
-    /// @notice Track native Uniswap fees accrued (modifyLiquidity-time) as a bonus-weight input
-    /// @dev These are used in VTSFeeLib.processPositionFees() to distribute bonuses proportionally to fee accrual.
-    function trackFeesAccruedForBonusWeight(
-        VTSStorage storage s,
-        PoolId poolId,
-        PositionId positionId,
-        BalanceDelta feesAccrued
-    ) internal {
-        PositionAccounting storage pa = s.positionAccounting[positionId];
-        PoolAccounting storage paPool = s.poolAccounting[poolId];
-
-        int128 f0 = feesAccrued.amount0();
-        int128 f1 = feesAccrued.amount1();
-
-        if (f0 > 0) {
-            uint256 df0 = LiquidityUtils.safeInt128ToUint256(f0);
-            pa.feesAccruedSinceLastMod.token0 += df0;
-            paPool.poolFeesAccruedSinceLastMod.token0 += df0;
-
-            // Update product-weight denominator incrementally: +max(selfNet,0) * deltaFeeWeight
-            int256 net0 = pa.netSettlementSinceLastMod.token0;
-            if (net0 > 0) {
-                paPool.poolNetFeeWeightSinceLastMod.token0 += uint256(net0) * df0;
-            }
-        }
-
-        if (f1 > 0) {
-            uint256 df1 = LiquidityUtils.safeInt128ToUint256(f1);
-            pa.feesAccruedSinceLastMod.token1 += df1;
-            paPool.poolFeesAccruedSinceLastMod.token1 += df1;
-
-            int256 net1 = pa.netSettlementSinceLastMod.token1;
-            if (net1 > 0) {
-                paPool.poolNetFeeWeightSinceLastMod.token1 += uint256(net1) * df1;
-            }
-        }
     }
 }
 
@@ -303,15 +298,9 @@ library VTSFeeLinkedLib {
     /// @notice Processes the fees for a position after touch
     /// @dev Updates accounting state only. Actual ERC6909 mint/burn is handled by CoreHook.settleHookDeltasToPot
     /// @param s The VTS storage
-    /// @param poolId The pool ID
     /// @param positionId The position ID
-    /// @param feesAccrued The fees accrued from the touch
     /// @return adj The materialised fee adjustment delta
-    function afterTouchPosition(VTSStorage storage s, PoolId poolId, PositionId positionId, BalanceDelta feesAccrued)
-        external
-        returns (BalanceDelta adj)
-    {
-        VTSFeeLib.trackFeesAccruedForBonusWeight(s, poolId, positionId, feesAccrued);
+    function afterTouchPosition(VTSStorage storage s, PositionId positionId) external returns (BalanceDelta adj) {
         return VTSFeeLib.processPositionFees(s, positionId);
     }
 }

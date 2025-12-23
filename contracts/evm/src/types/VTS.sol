@@ -131,12 +131,12 @@ struct PositionAccounting {
     TokenPairUint feesShared;
     // Pending fee adjustments per token: +slash (reduces payout), -bonus (increases payout)
     TokenPairInt pendingFeeAdj;
-    // Net settlement since last modification per token
-    TokenPairInt netSettlementSinceLastMod;
-    // Native Uniswap fees accrued since last fee processing per token (used for bonus weighting)
-    TokenPairUint feesAccruedSinceLastMod;
     // DICE: Coverage index checkpoint per token (snapshot of pool index at last settlement)
     TokenPairUint coverageIndexLastX128;
+    // CISE: Position checkpoint of pool coverage-per-settled index (Q128)
+    TokenPairUint ciseIndexLastX128;
+    // CISE: Banked realised exposure since last bonus allocation
+    TokenPairUint ciseExposureSinceLastMod;
 }
 
 /// @notice Per-pool accounting data (mirrors VTSManager per-pool mappings)
@@ -152,18 +152,20 @@ struct PoolAccounting {
     TokenPairUint protocolFeeAccrued;
     // Slashed pot balances per token
     TokenPairUint slashedPot;
-    // Pool-wide sum of positive nets since last modification per token
-    TokenPairUint poolNetSinceLastMod;
-    // Pool-wide sum of native Uniswap fees accrued since last fee processing per token
-    TokenPairUint poolFeesAccruedSinceLastMod;
-    // Pool-wide sum of (positive selfNet * feeWeight) since last fee processing per token
-    TokenPairUint poolNetFeeWeightSinceLastMod;
     // DICE: Pool-wide outstanding deficit principal per token
     TokenPairUint totalDeficitPrincipal;
     // DICE: Coverage-per-deficit-unit index (Q128) per token
     TokenPairUint coveragePerDeficitIndexX128;
     // DICE: Deferred coverage residual (socialised when totalDeficitPrincipal = 0 at exercise time)
     TokenPairUint coverageResidualDICE;
+    // CISE: Pool-wide total settled aggregate per token
+    TokenPairUint totalSettled;
+    // CISE: Coverage-per-settled index (Q128) per token
+    TokenPairUint coveragePerSettledIndexX128;
+    // CISE: Deferred residual when totalSettled = 0 at exercise time
+    TokenPairUint coverageResidualCISE;
+    // CISE: Pool-wide sum of realised exposure since last modification (denominator for allocation)
+    TokenPairUint totalCISEExposureSinceLastMod;
 }
 
 /// @notice Simple pair struct for per-tick growth (replaces uint256[2] arrays)

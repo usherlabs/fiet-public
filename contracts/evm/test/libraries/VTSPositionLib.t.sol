@@ -176,7 +176,6 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
         harness.setCommitmentMax(positionId, 1000e18, 0);
         harness.setSettled(positionId, 100e18, 0);
-        harness.setNetSettlementSinceLastMod(positionId, 0, 0);
 
         int256 applied = harness.updateSettlement(positionId, 0, 50e18);
 
@@ -191,8 +190,6 @@ contract VTSPositionLibTest is VTSLibTestBase {
         harness.setCommitmentMax(positionId, 1000e18, 0);
         harness.setCumulativeDeficit(positionId, 100e18, 0);
         harness.setSettled(positionId, 0, 0);
-        harness.setNetSettlementSinceLastMod(positionId, 0, 0);
-        harness.setPoolNetSinceLastMod(testPoolId, 0, 0);
 
         int256 applied = harness.updateSettlement(positionId, 0, 150e18);
 
@@ -210,8 +207,6 @@ contract VTSPositionLibTest is VTSLibTestBase {
         harness.setCumulativeDeficit(positionId, 0, 0);
         harness.setCommitmentDeficit(positionId, 50e18, 0);
         harness.setSettled(positionId, 0, 0);
-        harness.setNetSettlementSinceLastMod(positionId, 0, 0);
-        harness.setPoolNetSinceLastMod(testPoolId, 0, 0);
 
         // Applied is now the total of deficit coverage and settled increase
         int256 applied = harness.updateSettlement(positionId, 0, 100e18);
@@ -231,8 +226,6 @@ contract VTSPositionLibTest is VTSLibTestBase {
         harness.setCumulativeDeficit(positionId, 100e18, 0);
         harness.setCommitmentDeficit(positionId, 50e18, 0);
         harness.setSettled(positionId, 0, 0); // set settled before.
-        harness.setNetSettlementSinceLastMod(positionId, 0, 0);
-        harness.setPoolNetSinceLastMod(testPoolId, 0, 0);
 
         // Applied is now the total of deficit coverage and settled increase
         int256 applied = harness.updateSettlement(positionId, 0, 120e18);
@@ -251,8 +244,6 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
         harness.setCommitmentMax(positionId, 100e18, 0);
         harness.setSettled(positionId, 90e18, 0);
-        harness.setNetSettlementSinceLastMod(positionId, 0, 0);
-        harness.setPoolNetSinceLastMod(testPoolId, 0, 0);
 
         int256 applied = harness.updateSettlement(positionId, 0, 50e18);
 
@@ -266,8 +257,6 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
         harness.setCommitmentMax(positionId, 1000e18, 0);
         harness.setSettled(positionId, 100e18, 0);
-        harness.setNetSettlementSinceLastMod(positionId, 0, 0);
-        harness.setPoolNetSinceLastMod(testPoolId, 0, 0);
 
         int256 applied = harness.updateSettlement(positionId, 0, -30e18);
 
@@ -281,8 +270,6 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
         harness.setCommitmentMax(positionId, 1000e18, 0);
         harness.setSettled(positionId, 50e18, 0);
-        harness.setNetSettlementSinceLastMod(positionId, 0, 0);
-        harness.setPoolNetSinceLastMod(testPoolId, 0, 0);
 
         // Try to withdraw more than settled
         int256 applied = harness.updateSettlement(positionId, 0, -100e18);
@@ -298,8 +285,6 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
         harness.setCommitmentMax(positionId, 1000e18, 0);
         harness.setSettled(positionId, 100e18, 0);
-        harness.setNetSettlementSinceLastMod(positionId, 0, 0);
-        harness.setPoolNetSinceLastMod(testPoolId, 0, 0);
 
         int256 applied = harness.updateSettlement(positionId, 0, 0);
 
@@ -460,8 +445,6 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
         harness.setCommitmentMax(positionId, commitment, 0);
         harness.setSettled(positionId, initialSettled, 0);
-        harness.setNetSettlementSinceLastMod(positionId, 0, 0);
-        harness.setPoolNetSinceLastMod(testPoolId, 0, 0);
 
         harness.updateSettlement(positionId, 0, delta);
 
