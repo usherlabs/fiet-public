@@ -39,9 +39,14 @@ import {CurrencyTransfer} from "../../src/libraries/CurrencyTransfer.sol";
 import {OracleHelper} from "../../src/OracleHelper.sol";
 import {IOracleHelper} from "../../src/interfaces/IOracleHelper.sol";
 import {LiquidityHub} from "../../src/LiquidityHub.sol";
+import {ILiquidityHub} from "../../src/interfaces/ILiquidityHub.sol";
 import {VTSOrchestrator} from "../../src/VTSOrchestrator.sol";
 import {DeployPermit2} from "permit2/test/utils/DeployPermit2.sol";
 import {MarketFactory} from "../../src/MarketFactory.sol";
+import {PositionManager} from "v4-periphery/src/PositionManager.sol";
+import {PositionDescriptor} from "v4-periphery/src/PositionDescriptor.sol";
+import {DirectLPFeeCollector} from "../../src/DirectLPFeeCollector.sol";
+import {IPositionManager} from "v4-periphery/src/interfaces/IPositionManager.sol";
 
 abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
     using PoolIdLibrary for PoolId;
@@ -75,8 +80,12 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
     IVRLSettlementObserver settlementObserver;
     IMarketVault mv;
     IWETH9 public weth9;
+    IAllowanceTransfer public permit2;
     OracleHelper oracleHelper;
     VTSOrchestrator vtsOrchestrator;
+    PositionDescriptor public uniPositionDescriptor;
+    PositionManager public uniPositionManager;
+    DirectLPFeeCollector public directLPFeeCollector;
 
     address lccToken0;
     address lccToken1;
@@ -185,7 +194,12 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
 
         // Deploy Permit2 at the canonical address using vm.etch()
         // This deploys the bytecode at 0x000000000022D473030F116dDEE9F6B43aC78BA3
-        IAllowanceTransfer permit2 = IAllowanceTransfer(deployPermit2());
+        permit2 = IAllowanceTransfer(deployPermit2());
+
+        // Deploy Uniswap v4 PositionManager and descriptor for DirectLP tests (and Notifier subscribers).
+        // This PosM is separate from MMPositionManager.
+        uniPositionDescriptor = new PositionDescriptor(manager, address(weth9), bytes32("ETH"));
+        uniPositionManager = new PositionManager(manager, permit2, 500_000, uniPositionDescriptor, weth9);
 
         // Deploy MMPositionActionsImpl first
         MMPositionActionsImpl actionsImpl =
@@ -204,6 +218,10 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
             )
         );
 
+        // Deploy DirectLP fee collector subscriber (will be protocol-bound after MarketFactory deployment).
+        directLPFeeCollector =
+            new DirectLPFeeCollector(IPositionManager(address(uniPositionManager)), ILiquidityHub(liquidityHub));
+
         // Deploy MarketFactory (after MMPositionManager so it can be included as an initial protocol bound)
         // Mirrors production deployment (see DeployContracts.s.sol): MMPositionManager is protocol-bound.
         address[] memory initialBounds = new address[](1);
@@ -221,6 +239,13 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
 
         // After market factory is deployed, set the factory in the liquidity hub
         LiquidityHub(payable(liquidityHub)).setFactory(marketFactory, true);
+
+        // Add DirectLPFeeCollector to bounds so it can call afterModifyLiquidity during unlock callbacks.
+        {
+            address[] memory boundsToAdd = new address[](1);
+            boundsToAdd[0] = address(directLPFeeCollector);
+            MarketFactory(marketFactory).addBounds(boundsToAdd);
+        }
     }
 
     // Mine the corehook address and Deploy the core hook
@@ -333,6 +358,15 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
         // approve LCCs and underlyings for routers
         approveLCCForMarketUse(lcc0);
         approveLCCForMarketUse(lcc1);
+
+        // Approve Permit2 + set Permit2 allowances for PositionManager to settle LCC deltas.
+        // PositionManager pays via Permit2 when payer is the locker (msgSender).
+        {
+            IERC20Minimal(lccToken0).approve(address(permit2), Constants.MAX_UINT256);
+            IERC20Minimal(lccToken1).approve(address(permit2), Constants.MAX_UINT256);
+            permit2.approve(lccToken0, address(uniPositionManager), type(uint160).max, type(uint48).max);
+            permit2.approve(lccToken1, address(uniPositionManager), type(uint160).max, type(uint48).max);
+        }
 
         // Mock protocol bounds checks for test harness callers.
         // In production deployment (see DeployContracts.s.sol), MMPositionManager is a protocol-bound address.

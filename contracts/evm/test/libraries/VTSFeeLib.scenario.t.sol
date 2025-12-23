@@ -21,6 +21,7 @@ import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {console} from "forge-std/console.sol";
 import {LiquidityUtils} from "../../src/libraries/LiquidityUtils.sol";
+import {Actions} from "v4-periphery/src/libraries/Actions.sol";
 
 /// @title VTSFeeLibScenarioTest
 /// @notice Scenario-driven integration tests for VTS fee-sharing paradigm (slashes, bonuses, materialisation)
@@ -768,7 +769,7 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
 
         // Sanity: slashed pot should still be 0 (slasher not poked -> no _finaliseFeeAdjustment funding)
         uint256 potBefore = _slashedPot1();
-        assertEq(potBefore, 0, "Precondition: slashed pot must be 0 before any slasher poke");
+        assertEq(potBefore, 0, "Precondition: slashed pot must be 0 before any slasher position poke");
 
         // Sanity: protocolFeeAccrued should be >0 after coverage burn
         (, uint256 feeAccruedBefore) = _protocolFeeAccrued(corePoolKey.toId());
@@ -780,9 +781,6 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         assertGt(mm0Pending1Before, 0, "Precondition: slasher must have pendingFeeAdj1 > 0");
         mm0Pending0Before; // silence unused variable
 
-        // Give beneficiary positive selfNet (eligibility gate) via settlement deposit before it processes fees.
-        _mmSettle(tokenId, idx1, _negInt128Capped(2e18), _negInt128Capped(2e18));
-
         // Beneficiary processes fees FIRST (allocates bonus from protocolFeeAccrued, but cannot be paid yet since pot==0)
         _pokeMM(tokenId, idx1, tickLower, tickUpper);
 
@@ -790,24 +788,38 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         uint256 potAfterBeneficiary = _slashedPot1();
         assertEq(potAfterBeneficiary, 0, "Pot must remain 0 until slasher is poked");
 
-        // protocolFeeAccrued should have been reduced by the bonus allocation
+        // protocolFeeAccrued will NOT reduce because bonus > (potAvail = 0), therefore we bank it for when potAvail > 0
         (, uint256 feeAccruedAfterBeneficiary) = _protocolFeeAccrued(corePoolKey.toId());
-        assertLt(
+        assertEq(
             feeAccruedAfterBeneficiary,
             feeAccruedBefore,
-            "Bonus allocation should reduce protocolFeeAccrued even before pot is funded"
+            "Bonus allocation should NOT reduce protocolFeeAccrued because bonus > (potAvail = 0), therefore we bank it for when potAvail > 0"
         );
 
-        // Beneficiary should have queued a negative pending adjustment (bonus)
+        // Beneficiary should not have changed negative pending adjustment (bonus)
         (,, int256 mm1Pending0After, int256 mm1Pending1After) =
             _testableOrchestrator().getPositionFeeAccounting(mm1PosId);
-        assertLt(mm1Pending1After, 0, "Beneficiary should have pendingFeeAdj1 < 0 (queued bonus)");
+        assertEq(mm1Pending1After, 0, "Beneficiary should have unchanged pendingFeeAdj1");
         mm1Pending0After; // silence unused variable
 
         // Now poke slasher: this should fund the pot from its +pendingFeeAdj
         _pokeMM(tokenId, 0, tickLower, tickUpper);
         uint256 potAfterSlasher = _slashedPot1();
         assertGt(potAfterSlasher, 0, "Slasher poke should fund the pot");
+
+        // Give beneficiary positive selfNet (eligibility gate) via settlement deposit before it processes fees.
+        _mmSettle(tokenId, idx1, _negInt128Capped(2e18), _negInt128Capped(2e18));
+
+        // SECOND Beneficiary poke: this should materialise the bonus
+        _pokeMM(tokenId, idx1, tickLower, tickUpper);
+        (, uint256 feeAccruedAfterBeneficiary2) = _protocolFeeAccrued(corePoolKey.toId());
+        assertLt(
+            feeAccruedAfterBeneficiary2, feeAccruedAfterBeneficiary, "Bonus allocation NOW reduces protocolFeeAccrued"
+        );
+        (,, int256 mm1Pending0After2, int256 mm1Pending1After2) =
+            _testableOrchestrator().getPositionFeeAccounting(mm1PosId);
+        assertLt(mm1Pending1After2, mm1Pending1After, "Beneficiary should have negative pendingFeeAdj1 (queued bonus)");
+        mm1Pending0After2; // silence unused variable
 
         // Suppress unused variable warnings
         tokenId;
@@ -829,7 +841,14 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         (uint256 tokenId, PositionId slasherPosId,,) = _createCommittedPosition(mmTickLower, mmTickUpper, 50e10);
 
         // Create deficit + fees (fee token = token1 for one-for-zero swap)
-        _swapCore(false, -int256(50e18));
+        /**
+         *   If swap amount is too large (eg. 50e18),
+         *   The swap will have the pool tick sitting above your DirectLP’s tickUpper = 960 (e.g. it shows tick: 972 then tick: 1010), so the position is out-of-range during the “accrue token1 fees” swap.
+         *   Out-of-range positions don’t accrue swap fees, so the subsequent modifyLiquidity call reports feesAccrued == 0 → feeWeight == 0 → no queued bonus → pendingFeeAdj1 stays 0 and the assertion fails.
+         *   slashedPot only affects materialisation in _finaliseFeeAdjustment (paying down negative pending).
+         *   It does not gate queuing the negative pending in _queueBonusForToken. So slashedPot == 0 would mean “bonus can’t be paid yet”, not “bonus can’t be queued”.
+         */
+        _swapCore(false, -int256(30e18));
 
         // Materialise deficit principal, then exercise coverage and settle again to queue fee burn
         vtsOrchestrator.settlePositionGrowths(slasherPosId);
@@ -853,15 +872,36 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         int24 dlTickUpper = 960;
         uint256 dlLiquidity = 1e18;
 
-        ModifyLiquidityParams memory dlAddParams = ModifyLiquidityParams({
-            tickLower: dlTickLower, tickUpper: dlTickUpper, liquidityDelta: int256(dlLiquidity), salt: 0
+        // Mint a Uniswap v4 PositionManager position and subscribe it to DirectLPFeeCollector.
+        // This ensures CoreHook's hook deltas (feeAdj) are cleared during the same unlock session via MarketFactory.afterModifyLiquidity.
+        uint256 dlTokenId = uniPositionManager.nextTokenId();
+        {
+            bytes memory actions = abi.encodePacked(uint8(Actions.MINT_POSITION), uint8(Actions.SETTLE_PAIR));
+            bytes[] memory params = new bytes[](2);
+            params[0] = abi.encode(
+                corePoolKey,
+                dlTickLower,
+                dlTickUpper,
+                dlLiquidity,
+                type(uint128).max,
+                type(uint128).max,
+                address(this),
+                ZERO_BYTES
+            );
+            params[1] = abi.encode(corePoolKey.currency0, corePoolKey.currency1);
+            uniPositionManager.modifyLiquidities(abi.encode(actions, params), block.timestamp + 3600);
+        }
+        uniPositionManager.subscribe(dlTokenId, address(directLPFeeCollector), "");
+
+        // Compute DirectLP positionId (owner is the caller to PoolManager, i.e. Uniswap PositionManager),
+        // and salt is the tokenId (PositionManager uses tokenId as the position salt).
+        ModifyLiquidityParams memory dlAddParamsForId = ModifyLiquidityParams({
+            tickLower: dlTickLower,
+            tickUpper: dlTickUpper,
+            liquidityDelta: int256(dlLiquidity),
+            salt: bytes32(dlTokenId)
         });
-
-        // Add DirectLP position (should NOT allocate bonus on creation)
-        modifyLiquidityRouter.modifyLiquidity(corePoolKey, dlAddParams, ZERO_BYTES);
-
-        // Compute DirectLP positionId (owner is the caller to PoolManager, i.e. modifyLiquidityRouter)
-        PositionId directPosId = PositionLibrary.generateId(address(modifyLiquidityRouter), dlAddParams);
+        PositionId directPosId = PositionLibrary.generateId(address(uniPositionManager), dlAddParamsForId);
 
         // New DirectLP should not have any queued bonus/slash yet.
         (,, int256 dlPending0AfterAdd, int256 dlPending1AfterAdd) =
@@ -879,10 +919,17 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         // Now that the DirectLP is an *existing* position, a subsequent increase can allocate a bonus
         // (selfNet > 0 from settlement, feeWeight > 0 from accrued fees).
         uint256 dlMoreLiquidity = 5e17;
-        ModifyLiquidityParams memory dlIncreaseParams = ModifyLiquidityParams({
-            tickLower: dlTickLower, tickUpper: dlTickUpper, liquidityDelta: int256(dlMoreLiquidity), salt: 0
-        });
-        modifyLiquidityRouter.modifyLiquidity(corePoolKey, dlIncreaseParams, ZERO_BYTES);
+        {
+            bytes memory actions = abi.encodePacked(uint8(Actions.INCREASE_LIQUIDITY), uint8(Actions.SETTLE_PAIR));
+            bytes[] memory params = new bytes[](2);
+            params[0] = abi.encode(dlTokenId, dlMoreLiquidity, type(uint128).max, type(uint128).max, ZERO_BYTES);
+            params[1] = abi.encode(corePoolKey.currency0, corePoolKey.currency1);
+            uniPositionManager.modifyLiquidities(abi.encode(actions, params), block.timestamp + 3600);
+        }
+
+        // selfNet (pa.netSettlementSinceLastMod) is only updated when _updateSettlement runs
+        // (e.g. via settlePositionGrowths or direct settlement changes), not at swap-time directly.
+        // Bonus allocation requires selfNet > 0 at fee-processing time (during modifyLiquidity touch).
 
         (,, int256 dlPending0AfterIncrease, int256 dlPending1AfterIncrease) =
             vtsOrchestrator.getPositionFeeAccounting(directPosId);
@@ -892,13 +939,14 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         // ------------------------------------------------------------
         // 4) Fully remove DirectLP liquidity => position becomes inactive (0-liquidity)
         // ------------------------------------------------------------
-        ModifyLiquidityParams memory dlRemoveParams = ModifyLiquidityParams({
-            tickLower: dlTickLower,
-            tickUpper: dlTickUpper,
-            liquidityDelta: -int256(dlLiquidity + dlMoreLiquidity),
-            salt: 0
-        });
-        modifyLiquidityRouter.modifyLiquidity(corePoolKey, dlRemoveParams, ZERO_BYTES);
+        {
+            bytes memory actions = abi.encodePacked(uint8(Actions.DECREASE_LIQUIDITY), uint8(Actions.TAKE_PAIR));
+            bytes[] memory params = new bytes[](2);
+            params[0] =
+                abi.encode(dlTokenId, dlLiquidity + dlMoreLiquidity, type(uint128).min, type(uint128).min, ZERO_BYTES);
+            params[1] = abi.encode(corePoolKey.currency0, corePoolKey.currency1, address(this));
+            uniPositionManager.modifyLiquidities(abi.encode(actions, params), block.timestamp + 3600);
+        }
 
         assertEq(vtsOrchestrator.isPositionValid(directPosId, true), false, "DirectLP should now be inactive");
 
@@ -916,13 +964,34 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         assertGt(potFunded, 0, "Pot must be funded after slasher poke");
 
         // ------------------------------------------------------------
-        // 6) Inactive DirectLP pokes (liquidityDelta=0) and should now be able to materialise its queued bonus
+        // 6) Inactive DirectLP re-activates with a small increase, then closes again to collect;
+        //    position must end inactive while materialising its queued bonus.
         // ------------------------------------------------------------
-        ModifyLiquidityParams memory dlPokeParams =
-            ModifyLiquidityParams({tickLower: dlTickLower, tickUpper: dlTickUpper, liquidityDelta: 0, salt: 0});
-
         uint256 potBeforeInactivePoke = potFunded;
-        modifyLiquidityRouter.modifyLiquidity(corePoolKey, dlPokeParams, ZERO_BYTES);
+        uint256 dlReopenLiquidity = 1e12;
+        // {
+        //     bytes memory actions = abi.encodePacked(uint8(Actions.INCREASE_LIQUIDITY), uint8(Actions.SETTLE_PAIR));
+        //     bytes[] memory params = new bytes[](2);
+        //     params[0] = abi.encode(dlTokenId, dlReopenLiquidity, type(uint128).max, type(uint128).max, ZERO_BYTES);
+        //     params[1] = abi.encode(corePoolKey.currency0, corePoolKey.currency1);
+        //     uniPositionManager.modifyLiquidities(abi.encode(actions, params), block.timestamp + 3600);
+        // }
+        {
+            bytes memory actions = abi.encodePacked(
+                uint8(Actions.INCREASE_LIQUIDITY),
+                uint8(Actions.SETTLE_PAIR),
+                uint8(Actions.DECREASE_LIQUIDITY),
+                uint8(Actions.TAKE_PAIR)
+            );
+            bytes[] memory params = new bytes[](4);
+            params[0] = abi.encode(dlTokenId, dlReopenLiquidity, type(uint128).max, type(uint128).max, ZERO_BYTES);
+            params[1] = abi.encode(corePoolKey.currency0, corePoolKey.currency1);
+            params[2] = abi.encode(dlTokenId, dlReopenLiquidity, type(uint128).min, type(uint128).min, ZERO_BYTES);
+            params[3] = abi.encode(corePoolKey.currency0, corePoolKey.currency1, address(this));
+            uniPositionManager.modifyLiquidities(abi.encode(actions, params), block.timestamp + 3600);
+        }
+
+        assertEq(vtsOrchestrator.isPositionValid(directPosId, true), false, "DirectLP should end inactive after claim");
         (, uint256 potAfterInactivePoke) = vtsOrchestrator.getSlashedPot(corePoolKey.toId());
 
         // The pot should have drained (at least partially), and the pending bonus should move towards 0
@@ -933,6 +1002,141 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         (,, int256 dlPending0Final, int256 dlPending1Final) = vtsOrchestrator.getPositionFeeAccounting(directPosId);
         dlPending0Final; // silence
         assertGt(dlPending1Final, dlPending1AfterRemove, "Pending bonus should be reduced after inactive poke");
+    }
+
+    /// @notice Edge Case 6b: An inactive (0-liquidity) MM position can collect dormant fees/bonuses by re-activating,
+    ///         settling, closing again, then taking both LCC deltas.
+    /// @dev This specifically exercises the MMPositionManager/MMPositionActionsImpl pathway:
+    ///      increase (reactivate) -> settle (fund) -> decrease (return to 0-liquidity) -> take(lcc0) -> take(lcc1).
+    function test_inactiveMMPosition_canCollectDormantFees() public {
+        // ------------------------------------------------------------
+        // 1) Create a slasher MM that queues protocolFeeAccrued, but DO NOT fund slashedPot yet
+        // ------------------------------------------------------------
+        int24 mmTickLower = -960;
+        int24 mmTickUpper = 960;
+        (uint256 slasherTokenId, PositionId slasherPosId,,) = _createCommittedPosition(mmTickLower, mmTickUpper, 50e10);
+
+        // Create deficit + fees (fee token = token1 for one-for-zero swap)
+        _swapCore(false, -int256(30e18));
+
+        // Materialise deficit principal, then exercise coverage and settle again to queue fee burn
+        vtsOrchestrator.settlePositionGrowths(slasherPosId);
+        vm.prank(marketFactory);
+        vtsOrchestrator.incrementCoverage(corePoolKey.toId(), 5e18, 0);
+        vtsOrchestrator.settlePositionGrowths(slasherPosId);
+
+        (, uint256 feeAccruedBefore) = _protocolFeeAccrued(corePoolKey.toId());
+        assertGt(feeAccruedBefore, 0, "Precondition: protocolFeeAccrued1 must be > 0 after queued slashes");
+        (, uint256 potBefore) = vtsOrchestrator.getSlashedPot(corePoolKey.toId());
+        assertEq(potBefore, 0, "Precondition: slashedPot1 must be 0 before slasher poke");
+
+        // ------------------------------------------------------------
+        // 2) Create a beneficiary MM position. It should NOT allocate bonuses immediately on creation.
+        // ------------------------------------------------------------
+        uint256 mmLiquidity = 10e10;
+        (uint256 beneficiaryTokenId, PositionId beneficiaryPosId) =
+            _createNewMMCommit(mmTickLower, mmTickUpper, mmLiquidity);
+
+        // Provide positive selfNet via a settlement deposit (eligibility gate) before fee-processing touch.
+        _mmSettle(beneficiaryTokenId, 0, _negInt128Capped(10e18), _negInt128Capped(10e18));
+
+        (,, int256 mmPending0AfterCreate, int256 mmPending1AfterCreate) =
+            vtsOrchestrator.getPositionFeeAccounting(beneficiaryPosId);
+        mmPending0AfterCreate; // silence
+        assertEq(mmPending1AfterCreate, 0, "New MM position must not queue a bonus on creation");
+
+        // ------------------------------------------------------------
+        // 3) Accrue native fees for the MM, create selfNet via settlement, and touch to queue a bonus
+        // ------------------------------------------------------------
+        _swapCore(false, -int256(2e18)); // accrue token1 fees for in-range positions
+
+        // Touch (increase 0) to process fees and queue bonus; take deltas to avoid lingering credits.
+        _pokeMM(beneficiaryTokenId, 0, mmTickLower, mmTickUpper);
+
+        (,, int256 mmPending0AfterTouch, int256 mmPending1AfterTouch) =
+            vtsOrchestrator.getPositionFeeAccounting(beneficiaryPosId);
+        mmPending0AfterTouch; // silence
+        assertLt(mmPending1AfterTouch, 0, "Existing MM should be able to queue a bonus on touch");
+
+        // ------------------------------------------------------------
+        // 4) Fully remove MM liquidity => position becomes inactive (0-liquidity), bonus remains queued (pot still empty)
+        // ------------------------------------------------------------
+        {
+            MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](4);
+            actions[0] = MMA.prepareDecrease(corePoolKey, beneficiaryTokenId, 0, mmLiquidity);
+            actions[1] = MMA.prepareSettle(
+                corePoolKey,
+                beneficiaryTokenId,
+                0,
+                SafeCast.toInt128(mmLiquidity),
+                SafeCast.toInt128(mmLiquidity),
+                false
+            );
+            actions[2] = MMA.prepareTake(lccCurrency0, address(this), 0);
+            actions[3] = MMA.prepareTake(lccCurrency1, address(this), 0);
+            MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+        }
+
+        assertEq(vtsOrchestrator.isPositionValid(beneficiaryPosId, true), false, "MM position should now be inactive");
+        (,, int256 mmPending0AfterClose, int256 mmPending1AfterClose) =
+            vtsOrchestrator.getPositionFeeAccounting(beneficiaryPosId);
+        mmPending0AfterClose; // silence
+        assertLt(mmPending1AfterClose, 0, "Queued bonus must remain for inactive MM position");
+
+        // ------------------------------------------------------------
+        // 5) Fund the slashed pot by poking the slasher MM (materialises its +pendingFeeAdj)
+        // ------------------------------------------------------------
+        _pokeMM(slasherTokenId, 0, mmTickLower, mmTickUpper);
+        (, uint256 potFunded) = vtsOrchestrator.getSlashedPot(corePoolKey.toId());
+        assertGt(potFunded, 0, "Pot must be funded after slasher poke");
+
+        // ------------------------------------------------------------
+        // 6) Inactive MM re-activates with a small increase, settles, closes again, then takes deltas to collect.
+        // ------------------------------------------------------------
+        uint256 potBeforeInactiveClaim = potFunded;
+        uint256 mmReopenLiquidity = 1e6;
+
+        (uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) = _calculateSettlementAmounts(
+            ModifyLiquidityParams({
+                tickLower: mmTickLower,
+                tickUpper: mmTickUpper,
+                liquidityDelta: int256(mmReopenLiquidity),
+                salt: bytes32(0)
+            }),
+            marketVTSConfiguration
+        );
+
+        int128 settle0 = -SafeCast.toInt128(requiredSettlementAmount0);
+        int128 settle1 = -SafeCast.toInt128(requiredSettlementAmount1);
+        _permitSettle(settle0, settle1);
+
+        uint256 bal0Before = _selfLccBalance(lccCurrency0);
+        uint256 bal1Before = _selfLccBalance(lccCurrency1);
+
+        {
+            MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](5);
+            actions[0] =
+                MMA.prepareIncrease(corePoolKey, beneficiaryTokenId, 0, mmTickLower, mmTickUpper, mmReopenLiquidity);
+            actions[1] = MMA.prepareSettle(corePoolKey, beneficiaryTokenId, 0, settle0, settle1, false);
+            actions[2] = MMA.prepareDecrease(corePoolKey, beneficiaryTokenId, 0, mmReopenLiquidity);
+            actions[3] = MMA.prepareTake(lccCurrency0, address(this), 0);
+            actions[4] = MMA.prepareTake(lccCurrency1, address(this), 0);
+            MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+        }
+
+        assertEq(vtsOrchestrator.isPositionValid(beneficiaryPosId, true), false, "MM should end inactive after claim");
+        (, uint256 potAfterInactiveClaim) = vtsOrchestrator.getSlashedPot(corePoolKey.toId());
+        assertLt(potAfterInactiveClaim, potBeforeInactiveClaim, "Inactive MM claim should drain the pot");
+
+        (,, int256 mmPending0Final, int256 mmPending1Final) = vtsOrchestrator.getPositionFeeAccounting(beneficiaryPosId);
+        mmPending0Final; // silence
+        assertGt(mmPending1Final, mmPending1AfterClose, "Pending bonus should be reduced after inactive MM claim");
+
+        uint256 bal0After = _selfLccBalance(lccCurrency0);
+        uint256 bal1After = _selfLccBalance(lccCurrency1);
+        assertTrue(bal0After >= bal0Before, "lcc0 take should not reduce balance");
+        assertTrue(bal1After >= bal1Before, "lcc1 take should not reduce balance");
+        assertTrue(bal0After > bal0Before || bal1After > bal1Before, "Expected at least one LCC take to pay out");
     }
 
     /// @notice Edge Case 7: Banked selfNet/feeWeight across touches when potAvail == 0, then allocate once potAvail > 0.

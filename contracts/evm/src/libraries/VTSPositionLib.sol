@@ -129,6 +129,44 @@ library VTSPositionLib {
     // Settlement Updates
     // --------------------------------------------------
 
+    /// @notice Track native Uniswap fees accrued (modifyLiquidity-time) as a bonus-weight input
+    /// @dev These are used in VTSFeeLib.processPositionFees() to distribute bonuses proportionally to fee accrual.
+    function _trackFeesAccruedForBonusWeight(
+        VTSStorage storage s,
+        PoolId poolId,
+        PositionId positionId,
+        BalanceDelta feesAccrued
+    ) private {
+        PositionAccounting storage pa = s.positionAccounting[positionId];
+        PoolAccounting storage paPool = s.poolAccounting[poolId];
+
+        int128 f0 = feesAccrued.amount0();
+        int128 f1 = feesAccrued.amount1();
+
+        if (f0 > 0) {
+            uint256 df0 = LiquidityUtils.safeInt128ToUint256(f0);
+            pa.feesAccruedSinceLastMod.token0 += df0;
+            paPool.poolFeesAccruedSinceLastMod.token0 += df0;
+
+            // Update product-weight denominator incrementally: +max(selfNet,0) * deltaFeeWeight
+            int256 net0 = pa.netSettlementSinceLastMod.token0;
+            if (net0 > 0) {
+                paPool.poolNetFeeWeightSinceLastMod.token0 += uint256(net0) * df0;
+            }
+        }
+
+        if (f1 > 0) {
+            uint256 df1 = LiquidityUtils.safeInt128ToUint256(f1);
+            pa.feesAccruedSinceLastMod.token1 += df1;
+            paPool.poolFeesAccruedSinceLastMod.token1 += df1;
+
+            int256 net1 = pa.netSettlementSinceLastMod.token1;
+            if (net1 > 0) {
+                paPool.poolNetFeeWeightSinceLastMod.token1 += uint256(net1) * df1;
+            }
+        }
+    }
+
     /// @notice Updates pool accounting for settlement changes
     /// @dev Extracted to reduce stack depth in _updateSettlement
     /// @param s The central VTS storage
@@ -165,6 +203,8 @@ library VTSPositionLib {
         }
 
         // Accrue persistent nets since last fee finalisation (uses settledDelta, not total)
+        // ? On outflow token, this will be decremented by the amount of outflow.
+        // ? On inflow token, this will be incremented by the amount of inflow. Fees accrued on inflow token.
         int256 newNetSinceLastMod = netSinceLastMod + settledDelta;
         pa.netSettlementSinceLastMod.set(tokenIndex, newNetSinceLastMod);
         if (settledDelta >= 0) {
@@ -1094,66 +1134,36 @@ library VTSPositionLib {
             // NEW POSITION
             requiredSettlementDelta =
                 _touchNewPosition(s, ctx.poolManager, poolId, p.owner, p.params, result.id, hookData);
-        } else if (posStorage.isActive) {
-            // EXISTING POSITION
+        } else {
+            // EXISTING POSITION (active or previously inactive)
+
+            // Validate no mismatch if commit ID present.
+            if (hookData.isMMOperation && hookData.commitId != posStorage.commitId) {
+                revert Errors.InvariantViolated("Invalid operation: Commit ID mismatch");
+            }
+
             if (p.params.liquidityDelta < 0) {
+                // Disallow decreases on previously-inactive positions. (If liq == 0, Uniswap will revert anyway.)
+                if (!posStorage.isActive) revert Errors.NotActive(result.id);
                 requiredSettlementDelta = _touchExistingDecrease(s, ctx.poolManager, result.id, p.params, liq, hookData);
             } else if (p.params.liquidityDelta > 0) {
+                // Allow re-activating a previously inactive position by adding liquidity.
+                // Logically required to build on value routing while collecting fees on inactive positions.
                 requiredSettlementDelta = _touchExistingIncrease(s, poolId, result.id, p.params, hookData);
             } else {
+                // Allow a no-op when active (Uniswap v4 disallows this when initial liq == 0).
+                // See https://github.com/Uniswap/v4-core/blob/36d790b1a3af38461453a13a6ff395290fbc11b2/src/libraries/Position.sol#L86
                 requiredSettlementDelta = BalanceDelta.wrap(0);
             }
 
             // Update position liquidity
             int256 newLiquidity = SafeCast.toInt256(uint256(posStorage.liquidity)) + p.params.liquidityDelta;
             posStorage.liquidity = newLiquidity < 0 ? 0 : SafeCast.toUint128(uint256(newLiquidity));
-        } else {
-            // INACTIVE POSITION (liq == 0)
-            //
-            // Allow a "poke" (liquidityDelta == 0) so that queued fee adjustments (e.g. unpaid bonuses)
-            // can be materialised later once the slashed pot is funded.
-            //
-            // Any non-zero liquidity modification on an inactive position remains disallowed.
-            if (p.params.liquidityDelta != 0) {
-                revert Errors.NotActive(result.id);
-            }
-            requiredSettlementDelta = BalanceDelta.wrap(0);
         }
 
         _updateActiveStatus(s, posStorage, initialLiquidity, liq);
 
-        // Track native Uniswap fees accrued (modifyLiquidity-time) as a bonus-weight input.
-        // These are used in VTSFeeLib.processPositionFees() to distribute bonuses proportionally to fee accrual.
-        {
-            PositionAccounting storage pa = s.positionAccounting[result.id];
-            PoolAccounting storage paPool = s.poolAccounting[poolId];
-
-            int128 f0 = p.feesAccrued.amount0();
-            int128 f1 = p.feesAccrued.amount1();
-
-            if (f0 > 0) {
-                uint256 df0 = uint256(uint128(f0));
-                pa.feesAccruedSinceLastMod.token0 += df0;
-                paPool.poolFeesAccruedSinceLastMod.token0 += df0;
-
-                // Update product-weight denominator incrementally: +max(selfNet,0) * deltaFeeWeight
-                int256 net0 = pa.netSettlementSinceLastMod.token0;
-                if (net0 > 0) {
-                    paPool.poolNetFeeWeightSinceLastMod.token0 += uint256(net0) * df0;
-                }
-            }
-
-            if (f1 > 0) {
-                uint256 df1 = uint256(uint128(f1));
-                pa.feesAccruedSinceLastMod.token1 += df1;
-                paPool.poolFeesAccruedSinceLastMod.token1 += df1;
-
-                int256 net1 = pa.netSettlementSinceLastMod.token1;
-                if (net1 > 0) {
-                    paPool.poolNetFeeWeightSinceLastMod.token1 += uint256(net1) * df1;
-                }
-            }
-        }
+        _trackFeesAccruedForBonusWeight(s, poolId, result.id, p.feesAccrued);
 
         result.feeAdj = VTSFeeLinkedLib.processPositionFees(s, result.id);
 
