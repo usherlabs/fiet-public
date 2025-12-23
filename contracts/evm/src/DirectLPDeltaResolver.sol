@@ -12,7 +12,7 @@ import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {ILiquidityHub} from "./interfaces/ILiquidityHub.sol";
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 
-/// @title DirectLPFeeCollector
+/// @title DirectLPDeltaResolver
 /// @notice Uniswap v4 PositionManager subscriber that clears CoreHook deltas after modifyLiquidity.
 /// @dev
 ///      ## Why This Contract Exists
@@ -40,7 +40,7 @@ import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 ///      Critically, these notifications occur *within the same `PoolManager.unlock` session* as the liquidity modification,
 ///      ensuring hook deltas are cleared before `unlock` completes. Direct LPs must subscribe this contract to their positions
 ///      (via `PositionManager.subscribe()`) before modifying liquidity to enable fee collection on inactive positions.
-contract DirectLPFeeCollector is ISubscriber {
+contract DirectLPDeltaResolver is ISubscriber {
     IPositionManager public immutable positionManager;
     ILiquidityHub public immutable liquidityHub;
 
@@ -52,21 +52,24 @@ contract DirectLPFeeCollector is ISubscriber {
         liquidityHub = _liquidityHub;
     }
 
-    function notifySubscribe(uint256, bytes memory) external override {
+    modifier onlyPositionManager() {
         if (msg.sender != address(positionManager)) revert NotPositionManager();
+        _;
     }
 
-    function notifyUnsubscribe(uint256) external override {
-        if (msg.sender != address(positionManager)) revert NotPositionManager();
-    }
+    function notifySubscribe(uint256, bytes memory) external override onlyPositionManager {}
 
-    function notifyBurn(uint256 tokenId, address, PositionInfo, uint256, BalanceDelta) external override {
-        if (msg.sender != address(positionManager)) revert NotPositionManager();
+    function notifyUnsubscribe(uint256) external override onlyPositionManager {}
+
+    function notifyBurn(uint256 tokenId, address, PositionInfo, uint256, BalanceDelta)
+        external
+        override
+        onlyPositionManager
+    {
         _afterModifyLiquidity(tokenId);
     }
 
-    function notifyModifyLiquidity(uint256 tokenId, int256, BalanceDelta) external override {
-        if (msg.sender != address(positionManager)) revert NotPositionManager();
+    function notifyModifyLiquidity(uint256 tokenId, int256, BalanceDelta) external override onlyPositionManager {
         _afterModifyLiquidity(tokenId);
     }
 

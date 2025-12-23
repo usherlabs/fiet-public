@@ -256,18 +256,62 @@ library VTSFeeLib {
     function _isFeeSharingEnabled(VTSStorage storage s, PoolId p) internal view returns (bool) {
         return s.pools[p].vtsConfig.coverageFeeShare > 0;
     }
+
+    /// @notice Track native Uniswap fees accrued (modifyLiquidity-time) as a bonus-weight input
+    /// @dev These are used in VTSFeeLib.processPositionFees() to distribute bonuses proportionally to fee accrual.
+    function trackFeesAccruedForBonusWeight(
+        VTSStorage storage s,
+        PoolId poolId,
+        PositionId positionId,
+        BalanceDelta feesAccrued
+    ) internal {
+        PositionAccounting storage pa = s.positionAccounting[positionId];
+        PoolAccounting storage paPool = s.poolAccounting[poolId];
+
+        int128 f0 = feesAccrued.amount0();
+        int128 f1 = feesAccrued.amount1();
+
+        if (f0 > 0) {
+            uint256 df0 = LiquidityUtils.safeInt128ToUint256(f0);
+            pa.feesAccruedSinceLastMod.token0 += df0;
+            paPool.poolFeesAccruedSinceLastMod.token0 += df0;
+
+            // Update product-weight denominator incrementally: +max(selfNet,0) * deltaFeeWeight
+            int256 net0 = pa.netSettlementSinceLastMod.token0;
+            if (net0 > 0) {
+                paPool.poolNetFeeWeightSinceLastMod.token0 += uint256(net0) * df0;
+            }
+        }
+
+        if (f1 > 0) {
+            uint256 df1 = LiquidityUtils.safeInt128ToUint256(f1);
+            pa.feesAccruedSinceLastMod.token1 += df1;
+            paPool.poolFeesAccruedSinceLastMod.token1 += df1;
+
+            int256 net1 = pa.netSettlementSinceLastMod.token1;
+            if (net1 > 0) {
+                paPool.poolNetFeeWeightSinceLastMod.token1 += uint256(net1) * df1;
+            }
+        }
+    }
 }
 
 /// @title VTSFeeLinkedLib
 /// @notice Library for VTS fee processing
 /// @dev Operates on VTSStorage storage struct via storage pointers
 library VTSFeeLinkedLib {
-    /// @notice Processes the fees for a position
+    /// @notice Processes the fees for a position after touch
     /// @dev Updates accounting state only. Actual ERC6909 mint/burn is handled by CoreHook.settleHookDeltasToPot
     /// @param s The VTS storage
+    /// @param poolId The pool ID
     /// @param positionId The position ID
+    /// @param feesAccrued The fees accrued from the touch
     /// @return adj The materialised fee adjustment delta
-    function processPositionFees(VTSStorage storage s, PositionId positionId) external returns (BalanceDelta adj) {
+    function afterTouchPosition(VTSStorage storage s, PoolId poolId, PositionId positionId, BalanceDelta feesAccrued)
+        external
+        returns (BalanceDelta adj)
+    {
+        VTSFeeLib.trackFeesAccruedForBonusWeight(s, poolId, positionId, feesAccrued);
         return VTSFeeLib.processPositionFees(s, positionId);
     }
 }

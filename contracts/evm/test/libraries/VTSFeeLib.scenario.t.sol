@@ -872,7 +872,7 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         int24 dlTickUpper = 960;
         uint256 dlLiquidity = 1e18;
 
-        // Mint a Uniswap v4 PositionManager position and subscribe it to DirectLPFeeCollector.
+        // Mint a Uniswap v4 PositionManager position and subscribe it to DirectLPDeltaResolver.
         // This ensures CoreHook's hook deltas (feeAdj) are cleared during the same unlock session via MarketFactory.afterModifyLiquidity.
         uint256 dlTokenId = uniPositionManager.nextTokenId();
         {
@@ -891,7 +891,7 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
             params[1] = abi.encode(corePoolKey.currency0, corePoolKey.currency1);
             uniPositionManager.modifyLiquidities(abi.encode(actions, params), block.timestamp + 3600);
         }
-        uniPositionManager.subscribe(dlTokenId, address(directLPFeeCollector), "");
+        uniPositionManager.subscribe(dlTokenId, address(directLPDeltaResolver), "");
 
         // Compute DirectLP positionId (owner is the caller to PoolManager, i.e. Uniswap PositionManager),
         // and salt is the tokenId (PositionManager uses tokenId as the position salt).
@@ -1019,6 +1019,10 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         // Create deficit + fees (fee token = token1 for one-for-zero swap)
         _swapCore(false, -int256(30e18));
 
+        (, int24 tickAfterSwap,,) = StateLibrary.getSlot0(manager, corePoolKey.toId());
+        console.log("====== AFTER SWAP ======");
+        console.log("tickAfterSwap:", tickAfterSwap);
+
         // Materialise deficit principal, then exercise coverage and settle again to queue fee burn
         vtsOrchestrator.settlePositionGrowths(slasherPosId);
         vm.prank(marketFactory);
@@ -1045,10 +1049,36 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         mmPending0AfterCreate; // silence
         assertEq(mmPending1AfterCreate, 0, "New MM position must not queue a bonus on creation");
 
+        (uint256 settlementAmount0, uint256 settlementAmount1) =
+            vtsOrchestrator.getPositionSettledAmounts(beneficiaryPosId);
+        console.log("settlement amount0:", settlementAmount0);
+        console.log("settlement amount1:", settlementAmount1);
+
         // ------------------------------------------------------------
         // 3) Accrue native fees for the MM, create selfNet via settlement, and touch to queue a bonus
         // ------------------------------------------------------------
         _swapCore(false, -int256(2e18)); // accrue token1 fees for in-range positions
+
+        (, int24 tickAfterSwap2,,) = StateLibrary.getSlot0(manager, corePoolKey.toId());
+        console.log("====== AFTER SWAP #2 ======");
+        console.log("tickAfterSwap2:", tickAfterSwap2); // should be 628, meaning positions are still in-range.
+
+        (settlementAmount0, settlementAmount1) = vtsOrchestrator.getPositionSettledAmounts(beneficiaryPosId);
+        console.log("settlement amount0 after swap before settle growths:", settlementAmount0);
+        console.log("settlement amount1 after swap before settle growths:", settlementAmount1);
+
+        vtsOrchestrator.settlePositionGrowths(beneficiaryPosId); // settle growths in advance to inspect the settlement amounts
+
+        (settlementAmount0, settlementAmount1) = vtsOrchestrator.getPositionSettledAmounts(beneficiaryPosId);
+        console.log("settlement amount0 after swap:", settlementAmount0);
+        console.log("settlement amount1 after swap:", settlementAmount1);
+        // TODO: IF this is set to commitmentMax, then there is no net increase that allows the new fee bonus to be allocated
+        // Therefore, it may be best to index coverage to settled units as well as deficit units.
+        // This way we can retroactively bonus based on this accumulator.
+
+        (uint256 commitMax0, uint256 commitMax1) = vtsOrchestrator.getCommitmentMaxima(beneficiaryPosId);
+        console.log("commitment max0:", commitMax0);
+        console.log("commitment max1:", commitMax1);
 
         // Touch (increase 0) to process fees and queue bonus; take deltas to avoid lingering credits.
         _pokeMM(beneficiaryTokenId, 0, mmTickLower, mmTickUpper);

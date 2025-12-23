@@ -45,7 +45,7 @@ import {DeployPermit2} from "permit2/test/utils/DeployPermit2.sol";
 import {MarketFactory} from "../../src/MarketFactory.sol";
 import {PositionManager} from "v4-periphery/src/PositionManager.sol";
 import {PositionDescriptor} from "v4-periphery/src/PositionDescriptor.sol";
-import {DirectLPFeeCollector} from "../../src/DirectLPFeeCollector.sol";
+import {DirectLPDeltaResolver} from "../../src/DirectLPDeltaResolver.sol";
 import {IPositionManager} from "v4-periphery/src/interfaces/IPositionManager.sol";
 
 abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
@@ -85,7 +85,7 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
     VTSOrchestrator vtsOrchestrator;
     PositionDescriptor public uniPositionDescriptor;
     PositionManager public uniPositionManager;
-    DirectLPFeeCollector public directLPFeeCollector;
+    DirectLPDeltaResolver public directLPDeltaResolver;
 
     address lccToken0;
     address lccToken1;
@@ -218,9 +218,9 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
             )
         );
 
-        // Deploy DirectLP fee collector subscriber (will be protocol-bound after MarketFactory deployment).
-        directLPFeeCollector =
-            new DirectLPFeeCollector(IPositionManager(address(uniPositionManager)), ILiquidityHub(liquidityHub));
+        // Deploy DirectLP delta resolver subscriber (will be protocol-bound after MarketFactory deployment).
+        directLPDeltaResolver =
+            new DirectLPDeltaResolver(IPositionManager(address(uniPositionManager)), ILiquidityHub(liquidityHub));
 
         // Deploy MarketFactory (after MMPositionManager so it can be included as an initial protocol bound)
         // Mirrors production deployment (see DeployContracts.s.sol): MMPositionManager is protocol-bound.
@@ -240,10 +240,10 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
         // After market factory is deployed, set the factory in the liquidity hub
         LiquidityHub(payable(liquidityHub)).setFactory(marketFactory, true);
 
-        // Add DirectLPFeeCollector to bounds so it can call afterModifyLiquidity during unlock callbacks.
+        // Add DirectLPDeltaResolver to bounds so it can call afterModifyLiquidity during unlock callbacks.
         {
             address[] memory boundsToAdd = new address[](1);
-            boundsToAdd[0] = address(directLPFeeCollector);
+            boundsToAdd[0] = address(directLPDeltaResolver);
             MarketFactory(marketFactory).addBounds(boundsToAdd);
         }
     }

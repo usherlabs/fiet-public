@@ -24,7 +24,7 @@ import {MMPCommitmentDescriptor} from "../../src/MMPCommitmentDescriptor.sol";
 import {LiquidityHub} from "../../src/LiquidityHub.sol";
 import {GlobalConfig} from "../../src/GlobalConfig.sol";
 import {ECDSASignatureSignalVerifier} from "../../src/verifiers/ECDSASignatureSignalVerifier.sol";
-import {DirectLPFeeCollector} from "../../src/DirectLPFeeCollector.sol";
+import {DirectLPDeltaResolver} from "../../src/DirectLPDeltaResolver.sol";
 
 /**
  * @title DeployContracts
@@ -65,7 +65,7 @@ contract DeployContracts is CREATE3Script, NetworkConfig {
     address public commitmentDescriptor;
     address public vtsOrchestrator;
     address public actionsImpl;
-    address public directLPFeeCollector;
+    address public directLPDeltaResolver;
 
     // Contract names for CREATE3 salt generation
     string constant ORACLE_HELPER = "OracleHelper";
@@ -77,7 +77,7 @@ contract DeployContracts is CREATE3Script, NetworkConfig {
     string constant COMMITMENT_DESCRIPTOR = "MMPCommitmentDescriptor";
     string constant ACTIONS_IMPL = "MMPositionActionsImpl";
     string constant MM_POSITION_MANAGER = "MMPositionManager";
-    string constant DIRECT_LP_FEE_COLLECTOR = "DirectLPFeeCollector";
+    string constant DIRECT_LP_DELTA_RESOLVER = "DirectLPDeltaResolver";
     string constant MARKET_FACTORY = "MarketFactory";
     string constant GLOBAL_CONFIG = "GlobalConfig";
 
@@ -112,7 +112,7 @@ contract DeployContracts is CREATE3Script, NetworkConfig {
         console.log("MMPCommitmentDescriptor:", getCreate3Contract(COMMITMENT_DESCRIPTOR));
         console.log("MMPositionActionsImpl:", getCreate3Contract(ACTIONS_IMPL));
         console.log("MMPositionManager:", getCreate3Contract(MM_POSITION_MANAGER));
-        console.log("DirectLPFeeCollector:", getCreate3Contract(DIRECT_LP_FEE_COLLECTOR));
+        console.log("DirectLPDeltaResolver:", getCreate3Contract(DIRECT_LP_DELTA_RESOLVER));
         console.log("MarketFactory:", getCreate3Contract(MARKET_FACTORY));
         console.log("GlobalConfig:", getCreate3Contract(GLOBAL_CONFIG));
         console.log("\nNote: CoreHook uses CREATE2 (not CREATE3) due to hook flag requirements");
@@ -168,10 +168,10 @@ contract DeployContracts is CREATE3Script, NetworkConfig {
         mmPositionManager = _deployMMPositionManager();
         console.log("MMPositionManager deployed at:", mmPositionManager);
 
-        // Step 7: Deploy DirectLPFeeCollector (must be protocol-bound for afterModifyLiquidity)
-        console.log("\n=== Step 7: Deploying DirectLPFeeCollector ===");
-        directLPFeeCollector = _deployDirectLPFeeCollector();
-        console.log("DirectLPFeeCollector deployed at:", directLPFeeCollector);
+        // Step 7: Deploy DirectLPDeltaResolver (must be protocol-bound for afterModifyLiquidity)
+        console.log("\n=== Step 7: Deploying DirectLPDeltaResolver ===");
+        directLPDeltaResolver = _deployDirectLPDeltaResolver();
+        console.log("DirectLPDeltaResolver deployed at:", directLPDeltaResolver);
 
         // Step 8: Deploy MarketFactory (with GlobalConfig as initialOwner)
         console.log("\n=== Step 8: Deploying MarketFactory ===");
@@ -305,7 +305,7 @@ contract DeployContracts is CREATE3Script, NetworkConfig {
         // Note: LiquidityHub is automatically added to bounds in MarketFactory constructor
         address[] memory initialBounds = new address[](2);
         initialBounds[0] = mmPositionManager;
-        initialBounds[1] = directLPFeeCollector;
+        initialBounds[1] = directLPDeltaResolver;
 
         // Pass globalConfig as initialOwner (required for CREATE3 compatibility)
         bytes memory constructorArgs =
@@ -316,17 +316,17 @@ contract DeployContracts is CREATE3Script, NetworkConfig {
         console.log("MarketFactory deployed at:", deployed);
         console.log("MarketFactory owner:", globalConfig);
         console.log("MMPositionManager added to bounds:", mmPositionManager);
-        console.log("DirectLPFeeCollector added to bounds:", directLPFeeCollector);
+        console.log("DirectLPDeltaResolver added to bounds:", directLPDeltaResolver);
         return deployed;
     }
 
     /**
-     * @dev Deploys DirectLPFeeCollector which clears CoreHook deltas during Uniswap PositionManager notifications.
+     * @dev Deploys DirectLPDeltaResolver which clears CoreHook deltas during Uniswap PositionManager notifications.
      */
-    function _deployDirectLPFeeCollector() internal returns (address) {
+    function _deployDirectLPDeltaResolver() internal returns (address) {
         bytes memory constructorArgs = abi.encode(config.positionManager, liquidityHub);
-        bytes memory creationCode = abi.encodePacked(type(DirectLPFeeCollector).creationCode, constructorArgs);
-        return _deployCreate3(DIRECT_LP_FEE_COLLECTOR, creationCode);
+        bytes memory creationCode = abi.encodePacked(type(DirectLPDeltaResolver).creationCode, constructorArgs);
+        return _deployCreate3(DIRECT_LP_DELTA_RESOLVER, creationCode);
     }
 
     /**
@@ -455,7 +455,7 @@ contract DeployContracts is CREATE3Script, NetworkConfig {
         writeAddress("marketFactory", marketFactory);
         writeAddress("liquidityHub", liquidityHub);
         writeAddress("positionManager", mmPositionManager);
-        writeAddress("directLPFeeCollector", directLPFeeCollector);
+        writeAddress("directLPDeltaResolver", directLPDeltaResolver);
         writeAddress("oracleHelper", oracleHelper);
         writeAddress("globalConfig", globalConfig);
 

@@ -129,44 +129,6 @@ library VTSPositionLib {
     // Settlement Updates
     // --------------------------------------------------
 
-    /// @notice Track native Uniswap fees accrued (modifyLiquidity-time) as a bonus-weight input
-    /// @dev These are used in VTSFeeLib.processPositionFees() to distribute bonuses proportionally to fee accrual.
-    function _trackFeesAccruedForBonusWeight(
-        VTSStorage storage s,
-        PoolId poolId,
-        PositionId positionId,
-        BalanceDelta feesAccrued
-    ) private {
-        PositionAccounting storage pa = s.positionAccounting[positionId];
-        PoolAccounting storage paPool = s.poolAccounting[poolId];
-
-        int128 f0 = feesAccrued.amount0();
-        int128 f1 = feesAccrued.amount1();
-
-        if (f0 > 0) {
-            uint256 df0 = LiquidityUtils.safeInt128ToUint256(f0);
-            pa.feesAccruedSinceLastMod.token0 += df0;
-            paPool.poolFeesAccruedSinceLastMod.token0 += df0;
-
-            // Update product-weight denominator incrementally: +max(selfNet,0) * deltaFeeWeight
-            int256 net0 = pa.netSettlementSinceLastMod.token0;
-            if (net0 > 0) {
-                paPool.poolNetFeeWeightSinceLastMod.token0 += uint256(net0) * df0;
-            }
-        }
-
-        if (f1 > 0) {
-            uint256 df1 = LiquidityUtils.safeInt128ToUint256(f1);
-            pa.feesAccruedSinceLastMod.token1 += df1;
-            paPool.poolFeesAccruedSinceLastMod.token1 += df1;
-
-            int256 net1 = pa.netSettlementSinceLastMod.token1;
-            if (net1 > 0) {
-                paPool.poolNetFeeWeightSinceLastMod.token1 += uint256(net1) * df1;
-            }
-        }
-    }
-
     /// @notice Updates pool accounting for settlement changes
     /// @dev Extracted to reduce stack depth in _updateSettlement
     /// @param s The central VTS storage
@@ -571,6 +533,14 @@ library VTSPositionLib {
             })
         );
 
+        console.log("====== INFLOW GROWTH ======");
+        console.log("tickCurrent:", tickCurrent);
+        console.log("liq:", liq);
+        console.log("global0:", paPool.inflowGrowthGlobal.token0);
+        console.log("global1:", paPool.inflowGrowthGlobal.token1);
+        console.log("add0:", add0);
+        console.log("add1:", add1);
+
         // Token0: net against deficit first
         if (add0 > 0) {
             // Auto-net and apply via centralised updater
@@ -811,6 +781,11 @@ library VTSPositionLib {
     function settlePositionGrowths(VTSStorage storage s, IPoolManager poolManager, PositionId positionId) public {
         _settlePositionDeficitGrowth(s, poolManager, positionId);
         _settlePositionInflowGrowth(s, poolManager, positionId);
+        // Coverage burn must occur in the settle stage (before position modification) to preserve economic integrity:
+        // - burnBase is computed from pre-modification deficit/settled state, preventing users from covering deficits
+        //   first and then avoiding the burn in the same modifyLiquidity call
+        // - This ensures coverage usage is charged against the state that actually incurred the coverage obligation,
+        //   maintaining fairness and preventing gaming of the slash mechanism
         _settleCoverageUsage(s, poolManager, positionId);
     }
 
@@ -1163,9 +1138,7 @@ library VTSPositionLib {
 
         _updateActiveStatus(s, posStorage, initialLiquidity, liq);
 
-        _trackFeesAccruedForBonusWeight(s, poolId, result.id, p.feesAccrued);
-
-        result.feeAdj = VTSFeeLinkedLib.processPositionFees(s, result.id);
+        result.feeAdj = VTSFeeLinkedLib.afterTouchPosition(s, poolId, result.id, p.feesAccrued);
 
         if (hookData.isMMOperation) {
             _processMMOperations(s, ctx, p, result, hookData.commitId, hookData.isSeizing, requiredSettlementDelta);
