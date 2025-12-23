@@ -185,20 +185,20 @@ abstract contract MarketMakerTestBase is Test {
 
     /**
      * @notice Approves tokens for the position manager
-     * @param lcc0 The first LCC token
-     * @param lcc1 The second LCC token
+     * @param token0 The first token
+     * @param token1 The second token
      * @param amount0 The amount of token0 to approve
      * @param amount1 The amount of token1 to approve
      */
-    function _approveForPositionManager(
-        address lcc0,
-        address lcc1,
+    function _approveTokenForPositionManager(
+        address token0,
+        address token1,
         address positionManager,
         uint256 amount0,
         uint256 amount1
     ) internal {
-        IERC20(lcc0).approve(positionManager, amount0);
-        IERC20(lcc1).approve(positionManager, amount1);
+        IERC20(token0).approve(positionManager, amount0);
+        IERC20(token1).approve(positionManager, amount1);
     }
 
     /**
@@ -237,7 +237,7 @@ abstract contract MarketMakerTestBase is Test {
             _calculateSettlementAmounts(liquidityParams, marketVTSConfiguration);
 
         // Approve tokens
-        _approveForPositionManager(
+        _approveTokenForPositionManager(
             ILCC(lcc0).underlying(),
             ILCC(lcc1).underlying(),
             address(positionManager),
