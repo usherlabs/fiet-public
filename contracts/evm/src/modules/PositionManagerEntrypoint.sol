@@ -68,10 +68,6 @@ abstract contract PositionManagerEntrypoint is PositionManagerBase {
     }
 
     // ------------------------------------------------------------------------------------------------
-    // Balance-to-Delta Sync Helpers
-    // ------------------------------------------------------------------------------------------------
-
-    // ------------------------------------------------------------------------------------------------
     // MM Utility Helpers
     // ------------------------------------------------------------------------------------------------
 
@@ -85,7 +81,9 @@ abstract contract PositionManagerEntrypoint is PositionManagerBase {
     /// @param maxAmount The maximum amount to take (0 = take full available credit)
     function _take(Currency currency, address to, uint256 maxAmount) internal {
         address locker = msgSender();
-        uint256 trueMaxAmount = Math.min(maxAmount, currency.balanceOfSelf());
+        uint256 bal = currency.balanceOfSelf();
+        // maxAmount == 0 means "take full available credit", but still cap to the actual ERC20 balance held by MMPM.
+        uint256 trueMaxAmount = (maxAmount == 0) ? bal : Math.min(maxAmount, bal);
         uint256 takeAmount = vtsOrchestrator.take(currency, locker, trueMaxAmount);
 
         if (to != address(this)) {

@@ -315,7 +315,7 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
             params.underlying1.transfer(valueSender, LiquidityUtils.safeInt128ToUint256(delta1));
         }
         if ((delta0 > 0 || delta1 > 0) && params.usePositionManagerBalance) {
-            _syncPairBalanceToDeltas(params.underlying0, params.underlying1);
+            _syncPairBalanceAsCredit(params.underlying0, params.underlying1);
         }
     }
 

@@ -728,16 +728,16 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
 
     /// @notice Edge Case 5: Beneficiary can allocate (queue) a bonus before any slashing is materialised into the pot,
     ///         if it processes fees before the slasher position does.
-    /// @dev Demonstrates the ordering hazard:
+    /// @dev Demonstrates the ordering hazard with CISE:
     ///      - Coverage burn queues +pendingFeeAdj on the slasher and increments protocolFeeAccrued (accounting pot)
     ///      - But slashedPot is only funded when the slasher is later poked (finalised via _finaliseFeeAdjustment)
-    ///      - Meanwhile, a beneficiary poke can reduce protocolFeeAccrued and queue -pendingFeeAdj (bonus),
+    ///      - Meanwhile, a beneficiary poke (via CISE) can realise exposure, reduce protocolFeeAccrued and queue -pendingFeeAdj (bonus),
     ///        despite slashedPot still being 0 (so nothing can be paid yet)
     ///      Setup:
     ///      - Create MM0 (slasher) and MM1 (beneficiary) positions
     ///      - Create deficit + coverage to trigger slash on MM0 (queues +pendingFeeAdj, increments protocolFeeAccrued)
     ///      - Do NOT poke MM0 yet (slashedPot remains 0)
-    ///      - Poke MM1 first (beneficiary processes fees before slasher)
+    ///      - Poke MM1 first (beneficiary processes fees before slasher, realises CISE exposure)
     ///      Expected:
     ///      - slashedPot remains 0 (slasher not poked yet)
     ///      - protocolFeeAccrued is reduced by bonus allocation (bonus queued from accounting pot)
@@ -748,24 +748,27 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         int24 tickUpper = 960;
 
         // Create commit with idx0 (intended slasher)
-        (uint256 tokenId, PositionId mm0PosId,,) = _createCommittedPosition(tickLower, tickUpper, 50e10);
+        (uint256 tokenId, PositionId slasherPosId,,) = _createCommittedPosition(tickLower, tickUpper, initialLiquidity);
 
         // Clear any "net since last mod" from initial settlement so the pool net is clean
         _pokeMM(tokenId, 0, tickLower, tickUpper);
 
         // Add idx1 (beneficiary) and leave it with positive net settlement since last modification
-        (uint256 idx1, PositionId mm1PosId) = _mintAdditionalMM(tokenId, tickLower, tickUpper, 50e10);
+        (uint256 idx1, PositionId beneficiaryPosId) = _mintAdditionalMM(tokenId, tickLower, tickUpper, initialLiquidity);
+        _mmSettle(
+            tokenId, idx1, _negInt128Capped((initialLiquidity / 5) * 4), _negInt128Capped((initialLiquidity / 5) * 4)
+        ); // Settle the position before swap to prevent deficit accrual
 
         // Create deficit + fees (fees accrue on token1 for one-for-zero swap)
-        _swapCore(false, -int256(50e18));
+        _swapCore(false, -int256(initialLiquidity / 5));
 
         // Materialise deficit principal first (required for DICE index to move meaningfully)
-        vtsOrchestrator.settlePositionGrowths(mm0PosId);
+        vtsOrchestrator.settlePositionGrowths(slasherPosId);
 
         // Exercise coverage (token0), then settle again to queue coverage burn (slash) in fee token (token1)
         vm.prank(marketFactory);
-        vtsOrchestrator.incrementCoverage(corePoolKey.toId(), 5e18, 0);
-        vtsOrchestrator.settlePositionGrowths(mm0PosId);
+        vtsOrchestrator.incrementCoverage(corePoolKey.toId(), initialLiquidity / 5, 0); // acquire token0, therefore unwrap token0
+        vtsOrchestrator.settlePositionGrowths(slasherPosId);
 
         // Sanity: slashed pot should still be 0 (slasher not poked -> no _finaliseFeeAdjustment funding)
         uint256 potBefore = _slashedPot1();
@@ -775,51 +778,64 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         (, uint256 feeAccruedBefore) = _protocolFeeAccrued(corePoolKey.toId());
         assertGt(feeAccruedBefore, 0, "Precondition: protocolFeeAccrued1 must be > 0 after coverage burn");
 
-        // Sanity: mm0 has a queued positive slash (pendingFeeAdj1 > 0)
-        (,, int256 mm0Pending0Before, int256 mm0Pending1Before) =
-            _testableOrchestrator().getPositionFeeAccounting(mm0PosId);
-        assertGt(mm0Pending1Before, 0, "Precondition: slasher must have pendingFeeAdj1 > 0");
-        mm0Pending0Before; // silence unused variable
+        // Sanity: slasher has a queued positive slash (pendingFeeAdj1 > 0)
+        (,, int256 slasherPending0Before, int256 slasherPending1Before) =
+            _testableOrchestrator().getPositionFeeAccounting(slasherPosId);
+        assertGt(slasherPending1Before, 0, "Precondition: slasher must have pendingFeeAdj1 > 0");
+        slasherPending0Before; // silence unused variable
 
-        // Beneficiary processes fees FIRST (allocates bonus from protocolFeeAccrued, but cannot be paid yet since pot==0)
+        // ? At this point, the slashed pot is still 0, but protocolFeeAccrued > 0 AND slasher pendingFeeAdj > 0 (queued slash).
+
+        // Beneficiary processes fees FIRST:
+        // Under CISE, this will realise exposure and CAN queue a bonus against protocolFeeAccrued,
+        // even though slashedPot is still 0 (so it can't be materialised/paid yet).
+        console.log("FIRST BENEFICIARY POKE:");
         _pokeMM(tokenId, idx1, tickLower, tickUpper);
+        console.log("END ____ FIRST BENEFICIARY POKE:");
 
         // Pot is still unfunded (slasher still not poked)
         uint256 potAfterBeneficiary = _slashedPot1();
         assertEq(potAfterBeneficiary, 0, "Pot must remain 0 until slasher is poked");
 
-        // protocolFeeAccrued will NOT reduce because bonus > (potAvail = 0), therefore we bank it for when potAvail > 0
+        // protocolFeeAccrued SHOULD NOT be reduced. Since potAvail = 0, CISE exposure is banked until future poke when potAvail > 0.
         (, uint256 feeAccruedAfterBeneficiary) = _protocolFeeAccrued(corePoolKey.toId());
         assertEq(
             feeAccruedAfterBeneficiary,
             feeAccruedBefore,
-            "Bonus allocation should NOT reduce protocolFeeAccrued because bonus > (potAvail = 0), therefore we bank it for when potAvail > 0"
+            "protocolFeeAccrued SHOULD NOT be reduced. Since potAvail = 0, CISE exposure is banked until future poke when potAvail > 0"
         );
 
-        // Beneficiary should not have changed negative pending adjustment (bonus)
+        (, uint256 slasherContrib,,,) = _testableOrchestrator().getPositionFeeAccounting(slasherPosId);
+        assertGt(slasherContrib, 0, "Slasher must have a positive contribution to fees shared");
+
+        // Beneficiary SHOULD have queued a negative pending adjustment (bonus), but it can't be paid yet (slashedPot==0)
         (,, int256 mm1Pending0After, int256 mm1Pending1After) =
-            _testableOrchestrator().getPositionFeeAccounting(mm1PosId);
-        assertEq(mm1Pending1After, 0, "Beneficiary should have unchanged pendingFeeAdj1");
+            _testableOrchestrator().getPositionFeeAccounting(beneficiaryPosId);
         mm1Pending0After; // silence unused variable
+        assertEq(mm1Pending1After, 0, "Beneficiary should have no pendingFeeAdj1 until slasher is poked");
 
         // Now poke slasher: this should fund the pot from its +pendingFeeAdj
         _pokeMM(tokenId, 0, tickLower, tickUpper);
         uint256 potAfterSlasher = _slashedPot1();
         assertGt(potAfterSlasher, 0, "Slasher poke should fund the pot");
 
-        // Give beneficiary positive selfNet (eligibility gate) via settlement deposit before it processes fees.
-        _mmSettle(tokenId, idx1, _negInt128Capped(2e18), _negInt128Capped(2e18));
+        uint256 lcc1BalanceBefore = _selfLccBalance(lccCurrency1);
 
-        // SECOND Beneficiary poke: this should materialise the bonus
+        // SECOND Beneficiary poke: this should materialise (pay) some/all of the queued bonus from slashedPot
         _pokeMM(tokenId, idx1, tickLower, tickUpper);
-        (, uint256 feeAccruedAfterBeneficiary2) = _protocolFeeAccrued(corePoolKey.toId());
-        assertLt(
-            feeAccruedAfterBeneficiary2, feeAccruedAfterBeneficiary, "Bonus allocation NOW reduces protocolFeeAccrued"
+
+        uint256 potAfterBeneficiary2 = _slashedPot1();
+        assertEq(potAfterBeneficiary2, potAfterSlasher, "Pot should not change as Beneficiary is not slashed further");
+
+        uint256 lcc1BalanceAfter = _selfLccBalance(lccCurrency1);
+        assertGt(
+            lcc1BalanceAfter, lcc1BalanceBefore, "Beneficiary poke should increase LCC1 balance because of the bonus"
         );
+
         (,, int256 mm1Pending0After2, int256 mm1Pending1After2) =
-            _testableOrchestrator().getPositionFeeAccounting(mm1PosId);
-        assertLt(mm1Pending1After2, mm1Pending1After, "Beneficiary should have negative pendingFeeAdj1 (queued bonus)");
+            _testableOrchestrator().getPositionFeeAccounting(beneficiaryPosId);
         mm1Pending0After2; // silence unused variable
+        assertEq(mm1Pending1After2, 0, "Beneficiary pendingFeeAdj1 should move back towards 0 after materialisation");
 
         // Suppress unused variable warnings
         tokenId;
@@ -1007,7 +1023,7 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
     ///         settling, closing again, then taking both LCC deltas.
     /// @dev This specifically exercises the MMPositionManager/MMPositionActionsImpl pathway:
     ///      increase (reactivate) -> settle (fund) -> decrease (return to 0-liquidity) -> take(lcc0) -> take(lcc1).
-    function test_inactiveMMPosition_canCollectDormantFees() public {
+    function test_inactivePosition_mmCanCollectDormantFees() public {
         // ------------------------------------------------------------
         // 1) Create a slasher MM that queues protocolFeeAccrued, but DO NOT fund slashedPot yet
         // ------------------------------------------------------------
@@ -1018,14 +1034,10 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         // Create deficit + fees (fee token = token1 for one-for-zero swap)
         _swapCore(false, -int256(30e18));
 
-        (, int24 tickAfterSwap,,) = StateLibrary.getSlot0(manager, corePoolKey.toId());
-        console.log("====== AFTER SWAP ======");
-        console.log("tickAfterSwap:", tickAfterSwap);
-
         // Materialise deficit principal, then exercise coverage and settle again to queue fee burn
         vtsOrchestrator.settlePositionGrowths(slasherPosId);
         vm.prank(marketFactory);
-        vtsOrchestrator.incrementCoverage(corePoolKey.toId(), 5e18, 0);
+        vtsOrchestrator.incrementCoverage(corePoolKey.toId(), 20e18, 0);
         vtsOrchestrator.settlePositionGrowths(slasherPosId);
 
         (, uint256 feeAccruedBefore) = _protocolFeeAccrued(corePoolKey.toId());
@@ -1048,36 +1060,12 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         mmPending0AfterCreate; // silence
         assertEq(mmPending1AfterCreate, 0, "New MM position must not queue a bonus on creation");
 
-        (uint256 settlementAmount0, uint256 settlementAmount1) =
-            vtsOrchestrator.getPositionSettledAmounts(beneficiaryPosId);
-        console.log("settlement amount0:", settlementAmount0);
-        console.log("settlement amount1:", settlementAmount1);
-
         // ------------------------------------------------------------
         // 3) Accrue native fees for the MM, create selfNet via settlement, and touch to queue a bonus
         // ------------------------------------------------------------
         _swapCore(false, -int256(2e18)); // accrue token1 fees for in-range positions
 
         (, int24 tickAfterSwap2,,) = StateLibrary.getSlot0(manager, corePoolKey.toId());
-        console.log("====== AFTER SWAP #2 ======");
-        console.log("tickAfterSwap2:", tickAfterSwap2); // should be 628, meaning positions are still in-range.
-
-        (settlementAmount0, settlementAmount1) = vtsOrchestrator.getPositionSettledAmounts(beneficiaryPosId);
-        console.log("settlement amount0 after swap before settle growths:", settlementAmount0);
-        console.log("settlement amount1 after swap before settle growths:", settlementAmount1);
-
-        vtsOrchestrator.settlePositionGrowths(beneficiaryPosId); // settle growths in advance to inspect the settlement amounts
-
-        (settlementAmount0, settlementAmount1) = vtsOrchestrator.getPositionSettledAmounts(beneficiaryPosId);
-        console.log("settlement amount0 after swap:", settlementAmount0);
-        console.log("settlement amount1 after swap:", settlementAmount1);
-        // TODO: IF this is set to commitmentMax, then there is no net increase that allows the new fee bonus to be allocated
-        // Therefore, it may be best to index coverage to settled units as well as deficit units.
-        // This way we can retroactively bonus based on this accumulator.
-
-        (uint256 commitMax0, uint256 commitMax1) = vtsOrchestrator.getCommitmentMaxima(beneficiaryPosId);
-        console.log("commitment max0:", commitMax0);
-        console.log("commitment max1:", commitMax1);
 
         // Touch (increase 0) to process fees and queue bonus; take deltas to avoid lingering credits.
         _pokeMM(beneficiaryTokenId, 0, mmTickLower, mmTickUpper);
@@ -1172,23 +1160,20 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
     /// @dev Covers both cases:
     ///      - potAvail == 0: no allocation occurs; windows remain banked
     ///      - potAvail > 0: allocation occurs; windows are cleared for the allocated token
-    function test_bankedSelfNet_feeWeight_allocatesOnlyWhenPotAvailPositive() public {
+    function test_allocatesOnlyWhenPotAvailPositive() public {
         // ------------------------------------------------------------
-        // 0) Create an in-range DirectLP position so it can accrue native fees (feeWeight)
+        // 0) Use the initial full-range DirectLP position created in setUp()
+        //    (it dominates totalSettled, so it will actually accrue non-dust CISE exposure)
         // ------------------------------------------------------------
-        int24 dlTickLower = -960;
-        int24 dlTickUpper = 960;
-        uint256 dlLiquidity = 1e18;
-        // Wrap underlying to LCC - this funds hub.reserveOfUnderlying for swap settlement
-        _mintLccTo(address(this), corePoolKey.currency0, 1e18);
-        _mintLccTo(address(this), corePoolKey.currency1, 1e18);
-        ModifyLiquidityParams memory dlAddParams = ModifyLiquidityParams({
-            tickLower: dlTickLower, tickUpper: dlTickUpper, liquidityDelta: int256(dlLiquidity), salt: 0
+        int24 dlTickLower = TickMath.minUsableTick(corePoolKey.tickSpacing);
+        int24 dlTickUpper = TickMath.maxUsableTick(corePoolKey.tickSpacing);
+
+        ModifyLiquidityParams memory dlPokeParams = ModifyLiquidityParams({
+            tickLower: dlTickLower, tickUpper: dlTickUpper, liquidityDelta: 0, salt: bytes32(0)
         });
 
-        modifyLiquidityRouter.modifyLiquidity(corePoolKey, dlAddParams, ZERO_BYTES);
-
-        PositionId directPosId = PositionLibrary.generateId(address(modifyLiquidityRouter), dlAddParams);
+        PositionId directPosId = PositionLibrary.generateId(address(modifyLiquidityRouter), dlPokeParams);
+        assertTrue(vtsOrchestrator.isPositionValid(directPosId, true), "Precondition: initial LP should exist");
 
         // ------------------------------------------------------------
         // 1) potAvail == 0 case: accrue fees, touch, ensure no bonus is allocated and windows remain banked
@@ -1196,21 +1181,22 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         // Accrue some fees on token1 (one-for-zero swap => fee token is token1)
         _swapCore(false, -int256(2e18));
 
-        // Touch DirectLP (poke): potAvail is still 0 (no slashes have occurred)
-        ModifyLiquidityParams memory dlPokeParams =
-            ModifyLiquidityParams({tickLower: dlTickLower, tickUpper: dlTickUpper, liquidityDelta: 0, salt: 0});
-
         // Precondition: no protocolFeeAccrued yet (no slashes have occurred), so potAvail == 0
         (, uint256 feeAccruedBefore1) = _protocolFeeAccrued(corePoolKey.toId());
         assertEq(feeAccruedBefore1, 0, "Precondition: protocolFeeAccrued1 should be 0 before any slashing");
 
+        (,, int256 pending0BeforePoke, int256 pending1BeforePoke) =
+            _testableOrchestrator().getPositionFeeAccounting(directPosId);
+        pending0BeforePoke; // silence
+
+        // Touch DirectLP (poke): potAvail is still 0 (no slashes have occurred)
         modifyLiquidityRouter.modifyLiquidity(corePoolKey, dlPokeParams, ZERO_BYTES);
 
         // No bonus should be queued because potAvail == 0
         (,, int256 pending0AfterPoke, int256 pending1AfterPoke) =
             _testableOrchestrator().getPositionFeeAccounting(directPosId);
         pending0AfterPoke; // silence
-        assertEq(pending1AfterPoke, 0, "potAvail==0: should not queue bonus (pendingFeeAdj1 stays 0)");
+        assertEq(pending1AfterPoke, pending1BeforePoke, "potAvail==0: should not queue bonus");
 
         // CISE exposure is 0 because no coverage has been exercised yet
         (uint256 ciseExp0, uint256 ciseExp1) = _testableOrchestrator().getPositionBonusWeights(directPosId);
@@ -1228,7 +1214,7 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         _swapCore(false, -int256(50e18));
         vtsOrchestrator.settlePositionGrowths(slasherPosId);
         vm.prank(marketFactory);
-        vtsOrchestrator.incrementCoverage(corePoolKey.toId(), 5e18, 0);
+        vtsOrchestrator.incrementCoverage(corePoolKey.toId(), 50e18, 0);
         vtsOrchestrator.settlePositionGrowths(slasherPosId);
 
         (, uint256 feeAccruedAfterSlash1) = _protocolFeeAccrued(corePoolKey.toId());

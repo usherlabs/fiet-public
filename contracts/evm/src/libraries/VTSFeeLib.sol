@@ -17,6 +17,7 @@ import {
 } from "../types/VTS.sol";
 import {PositionId, Position} from "../types/Position.sol";
 import {LiquidityUtils} from "./LiquidityUtils.sol";
+import {console} from "forge-std/console.sol";
 
 /// @title VTSFeeLib
 /// @notice Fee processing, slashed pot management, and coverage burn logic for VTS
@@ -99,36 +100,6 @@ library VTSFeeLib {
     // --------------------------------------------------
     // CISE (Coverage-Indexed Settled Exposure) Helpers
     // --------------------------------------------------
-
-    /// @notice Realise and checkpoint CISE exposure for a single token
-    /// @dev Computes exposure = settled * (indexNow - indexLast) / Q128 and accumulates it
-    /// @param pa The position accounting storage reference
-    /// @param paPool The pool accounting storage reference
-    /// @param tokenIndex The token index (0 or 1)
-    function _realiseAndCheckpointCISEExposure(
-        PositionAccounting storage pa,
-        PoolAccounting storage paPool,
-        uint8 tokenIndex
-    ) internal {
-        uint256 indexNow = paPool.coveragePerSettledIndexX128.get(tokenIndex);
-        uint256 indexLast = pa.ciseIndexLastX128.get(tokenIndex);
-
-        // Always checkpoint index (even if no exposure to apply)
-        if (indexNow != indexLast) {
-            pa.ciseIndexLastX128.set(tokenIndex, indexNow);
-        }
-
-        uint256 deltaIndex = indexNow - indexLast;
-        if (deltaIndex > 0) {
-            uint256 settled = pa.settled.get(tokenIndex);
-            uint256 exposure = FullMath.mulDiv(settled, deltaIndex, FixedPoint128.Q128);
-            if (exposure > 0) {
-                pa.ciseExposureSinceLastMod.set(tokenIndex, pa.ciseExposureSinceLastMod.get(tokenIndex) + exposure);
-                paPool.totalCISEExposureSinceLastMod
-                    .set(tokenIndex, paPool.totalCISEExposureSinceLastMod.get(tokenIndex) + exposure);
-            }
-        }
-    }
 
     /// @notice Peek the current pending fee adjustments for a position without mutating state
     /// @param s The central VTS storage
@@ -258,15 +229,19 @@ library VTSFeeLib {
         PositionAccounting storage pa = s.positionAccounting[positionId];
         PoolAccounting storage paPool = s.poolAccounting[poolId];
 
-        // CISE: Realise and checkpoint exposure for both tokens before bonus allocation
-        // This materialises any pending exposure from coverage events since last touch
-        _realiseAndCheckpointCISEExposure(pa, paPool, 0);
-        _realiseAndCheckpointCISEExposure(pa, paPool, 1);
-
         // Read CISE exposure for bonus allocation
         // Note: Raw exposure values per coverage token
         uint256 ciseExposure0 = pa.ciseExposureSinceLastMod.token0;
         uint256 ciseExposure1 = pa.ciseExposureSinceLastMod.token1;
+
+        console.log("ciseExposure0", ciseExposure0);
+        console.log("ciseExposure1", ciseExposure1);
+        console.log("totalSettled0", paPool.totalSettled.token0);
+        console.log("totalSettled1", paPool.totalSettled.token1);
+        console.log("coveragePerSettledIndexX1280", paPool.coveragePerSettledIndexX128.token0);
+        console.log("coveragePerSettledIndexX1281", paPool.coveragePerSettledIndexX128.token1);
+        console.log("coverageResidualCISE0", paPool.coverageResidualCISE.token0);
+        console.log("coverageResidualCISE1", paPool.coverageResidualCISE.token1);
 
         // Queue bonuses using CISE exposure (coverage-indexed settled exposure)
         // Token direction mapping: fee pot in token T is funded by deficits in the opposite token.

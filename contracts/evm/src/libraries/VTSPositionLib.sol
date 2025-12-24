@@ -13,7 +13,6 @@ import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {RFSCheckpoint} from "../types/Checkpoint.sol";
 import {console} from "forge-std/console.sol";
-
 import {
     VTSStorage,
     PositionAccounting,
@@ -267,7 +266,7 @@ library VTSPositionLib {
     // DICE (Deficit-Indexed Coverage Exercise) Helpers
     // --------------------------------------------------
 
-    /// @notice Flush any pending coverage residual into the DICE index
+    /// @notice Flush any pending deficit-indexed coverage residual into the DICE index
     /// @dev Called when totalDeficitPrincipal increases from 0 to >0.
     ///      Residual is socialised across current deficit holders without epoch gating.
     /// @param s The central VTS storage
@@ -543,14 +542,6 @@ library VTSPositionLib {
             })
         );
 
-        console.log("====== INFLOW GROWTH ======");
-        console.log("tickCurrent:", tickCurrent);
-        console.log("liq:", liq);
-        console.log("global0:", paPool.inflowGrowthGlobal.token0);
-        console.log("global1:", paPool.inflowGrowthGlobal.token1);
-        console.log("add0:", add0);
-        console.log("add1:", add1);
-
         // Token0: net against deficit first
         if (add0 > 0) {
             // Auto-net and apply via centralised updater
@@ -737,7 +728,7 @@ library VTSPositionLib {
     /// @param poolId The pool ID
     /// @param tokenIndex The token index (0 or 1)
     /// @param liq The position liquidity
-    function _settleCoverageForToken(
+    function _settleDICEForToken(
         VTSStorage storage s,
         IPoolManager poolManager,
         PositionId positionId,
@@ -767,6 +758,41 @@ library VTSPositionLib {
         }
     }
 
+    /// @notice Realise and checkpoint CISE exposure for a single token
+    /// @dev Computes exposure = settled * (indexNow - indexLast) / Q128 and accumulates it
+    /// @dev Performed on _settleCoverageUsage to ensure accurate CISE exposure is realised and checkpointed
+    /// @param pa The position accounting storage reference
+    /// @param paPool The pool accounting storage reference
+    /// @param tokenIndex The token index (0 or 1)
+    function _settleCISEForToken(PositionAccounting storage pa, PoolAccounting storage paPool, uint8 tokenIndex)
+        internal
+    {
+        uint256 indexNow = paPool.coveragePerSettledIndexX128.get(tokenIndex);
+        uint256 indexLast = pa.ciseIndexLastX128.get(tokenIndex);
+
+        console.log("indexNow", indexNow);
+        console.log("indexLast", indexLast);
+
+        // Always checkpoint index (even if no exposure to apply)
+        if (indexNow != indexLast) {
+            pa.ciseIndexLastX128.set(tokenIndex, indexNow);
+        }
+
+        uint256 deltaIndex = indexNow - indexLast;
+        if (deltaIndex > 0) {
+            uint256 settled = pa.settled.get(tokenIndex);
+            uint256 exposure = FullMath.mulDiv(settled, deltaIndex, FixedPoint128.Q128);
+            console.log("settled", settled);
+            console.log("deltaIndex", deltaIndex);
+            console.log("exposure", exposure);
+            if (exposure > 0) {
+                pa.ciseExposureSinceLastMod.set(tokenIndex, pa.ciseExposureSinceLastMod.get(tokenIndex) + exposure);
+                paPool.totalCISEExposureSinceLastMod
+                    .set(tokenIndex, paPool.totalCISEExposureSinceLastMod.get(tokenIndex) + exposure);
+            }
+        }
+    }
+
     /// @notice Settle coverage usage using DICE (deficit-indexed) accounting
     /// @dev Coverage is proportional to position's deficit principal, not tick-indexed liquidity.
     ///      This fixes the attribution bug where coverage was charged to whoever was in-range at
@@ -774,14 +800,35 @@ library VTSPositionLib {
     /// @param s The central VTS storage
     /// @param poolManager The pool manager contract
     /// @param positionId The position ID
-    function _settleCoverageUsage(VTSStorage storage s, IPoolManager poolManager, PositionId positionId) internal {
+    function _settleDeficitIndexedCoverageUsage(VTSStorage storage s, IPoolManager poolManager, PositionId positionId)
+        internal
+    {
         Position memory pos = s.positions[positionId];
         PoolId poolId = pos.poolId;
         uint128 liq = StateLibrary.getPositionLiquidity(poolManager, poolId, PositionId.unwrap(positionId));
 
         // DICE: Compute coverage from deficit-indexed growth (not tick-indexed)
-        _settleCoverageForToken(s, poolManager, positionId, poolId, 0, liq);
-        _settleCoverageForToken(s, poolManager, positionId, poolId, 1, liq);
+        _settleDICEForToken(s, poolManager, positionId, poolId, 0, liq);
+        _settleDICEForToken(s, poolManager, positionId, poolId, 1, liq);
+    }
+
+    /// @notice Settle settled-indexed coverage usage
+    /// @dev Coverage is proportional to position's settled principal, not tick-indexed liquidity.
+    ///      This fixes the attribution bug where coverage was charged to whoever was in-range at
+    ///      unwrap time, rather than positions that created the deficit during swaps.
+    /// @dev That settled must be the settled balance that existed during the interval [indexLast, indexNow].
+    ///      If _settleCISEForToken is called after _updateSettlement has changed pa.settled, risks applying historical deltaIndex against the new settled balance.
+    /// @param s The central VTS storage
+    /// @param poolManager The pool manager contract
+    /// @param positionId The position ID
+    function _settleSettledIndexedCoverageUsage(VTSStorage storage s, IPoolManager poolManager, PositionId positionId)
+        internal
+    {
+        Position memory pos = s.positions[positionId];
+        PoolId poolId = pos.poolId;
+
+        _settleCISEForToken(s.positionAccounting[positionId], s.poolAccounting[poolId], 0);
+        _settleCISEForToken(s.positionAccounting[positionId], s.poolAccounting[poolId], 1);
     }
 
     /// @notice Settle both deficit, inflow, and coverage growth for a position
@@ -789,6 +836,11 @@ library VTSPositionLib {
     /// @param poolManager The pool manager contract
     /// @param positionId The position ID
     function settlePositionGrowths(VTSStorage storage s, IPoolManager poolManager, PositionId positionId) public {
+        console.log("====== SETTLE POSITION GROWTHS ======");
+        console.logBytes32(PositionId.unwrap(positionId));
+
+        _settleSettledIndexedCoverageUsage(s, poolManager, positionId);
+
         _settlePositionDeficitGrowth(s, poolManager, positionId);
         _settlePositionInflowGrowth(s, poolManager, positionId);
         // Coverage burn must occur in the settle stage (before position modification) to preserve economic integrity:
@@ -796,7 +848,7 @@ library VTSPositionLib {
         //   first and then avoiding the burn in the same modifyLiquidity call
         // - This ensures coverage usage is charged against the state that actually incurred the coverage obligation,
         //   maintaining fairness and preventing gaming of the slash mechanism
-        _settleCoverageUsage(s, poolManager, positionId);
+        _settleDeficitIndexedCoverageUsage(s, poolManager, positionId);
     }
 
     // --------------------------------------------------
@@ -1059,8 +1111,12 @@ library VTSPositionLib {
         if (hookData.isMMOperation) {
             requiredSettlementDelta = LiquidityUtils.safeToBalanceDelta(excess0, excess1, false, false);
         } else {
-            if (excess0 > 0) _updateSettlement(s, positionId, 0, -SafeCast.toInt256(excess0));
-            if (excess1 > 0) _updateSettlement(s, positionId, 1, -SafeCast.toInt256(excess1));
+            if (excess0 > 0) {
+                _updateSettlement(s, positionId, 0, -SafeCast.toInt256(excess0));
+            }
+            if (excess1 > 0) {
+                _updateSettlement(s, positionId, 1, -SafeCast.toInt256(excess1));
+            }
             requiredSettlementDelta = BalanceDelta.wrap(0);
         }
     }
@@ -1145,6 +1201,8 @@ library VTSPositionLib {
             int256 newLiquidity = SafeCast.toInt256(uint256(posStorage.liquidity)) + p.params.liquidityDelta;
             posStorage.liquidity = newLiquidity < 0 ? 0 : SafeCast.toUint128(uint256(newLiquidity));
         }
+
+        console.log("MM OPERATION:", hookData.isMMOperation);
 
         _updateActiveStatus(s, posStorage, initialLiquidity, liq);
 
