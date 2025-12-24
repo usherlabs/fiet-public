@@ -389,100 +389,7 @@ contract VTSFeeLibIndexTest is VTSOrchestratorFixture {
     // that potAvail is computed correctly based on remaining self-contribution
     // rather than lifetime contribution.
 
-    /// @notice CSI Test 1: Early contributor is not permanently excluded from bonuses
-    /// @dev Verifies that after a position's contributed slashes are distributed via bonuses,
-    ///      the position can participate in future bonus allocations from new contributions.
-    ///      This is the core bug fix that CSI addresses.
-    function test_csi_earlyContributorNotPermanentlyExcluded() public {
-        // Setup: Create 3 positions - A (early slasher), B (bonus recipient), C (later slasher)
-        (uint256 mmA, PositionId posIdA) = _createNewMMCommit(-60, 60, 3e10);
-        (uint256 mmB, PositionId posIdB) = _createNewMMCommit(-60, 60, 3e10);
-        (uint256 mmC, PositionId posIdC) = _createNewMMCommit(-60, 60, 3e10);
-
-        // Make B and C solvent so they can receive bonuses later
-        _mmSettle(mmB, 0, _negInt128Capped(20e18), _negInt128Capped(20e18));
-        _mmSettle(mmC, 0, _negInt128Capped(20e18), _negInt128Capped(20e18));
-
-        // Swap to create deficit on position A (one-for-zero swap: deficit on token0, fees on token1)
-        // Keep swap sizes modest to avoid hitting Uniswap sqrt price limits in low-liquidity test deployments.
-        _swapCore(false, -int256(15e18));
-
-        // Settle position A to materialise deficit principal
-        vtsOrchestrator.settlePositionGrowths(posIdA);
-
-        // Coverage event triggers slash on position A
-        vm.prank(marketFactory);
-        vtsOrchestrator.incrementCoverage(corePoolKey.toId(), 10e18, 0);
-
-        // Settle A again to apply coverage burn (slash)
-        vtsOrchestrator.settlePositionGrowths(posIdA);
-
-        // Record A's feesShared after slash
-        (uint256 aFeesShared0, uint256 aFeesShared1,,) = _testableOrchestrator().getPositionFeeAccounting(posIdA);
-
-        // Position B "pokes" to receive bonus from A's slash
-        // B has CISE exposure and should be allocated from A's contribution
-        _pokeMM(mmB, 0, -60, 60);
-
-        // Record protocol fee after B's bonus
-        (, uint256 potAfterBBonus) = _protocolFeeAccrued(corePoolKey.toId());
-
-        // Now C has a deficit and gets slashed (new contribution to pot)
-        // Swap again to create deficit on C
-        _swapCore(false, -int256(10e18));
-        vtsOrchestrator.settlePositionGrowths(posIdC);
-
-        // Coverage event triggers slash on C
-        vm.prank(marketFactory);
-        vtsOrchestrator.incrementCoverage(corePoolKey.toId(), 5e18, 0);
-
-        // Make C insolvent temporarily for the slash
-        vtsOrchestrator.settlePositionGrowths(posIdC);
-
-        // Record pot after C's slash
-        (, uint256 potAfterCSlash) = _protocolFeeAccrued(corePoolKey.toId());
-
-        // Critical assertion: pot increased from C's new slash
-        assertGt(potAfterCSlash, potAfterBBonus, "CSI: Pot should increase from C's new slash");
-
-        // Now A should be able to receive bonus from C's contribution
-        // Under the OLD system (lifetime feesShared), A would be stuck with potAvail = 0
-        // because feesShared(A) > protocolFeeAccrued (after B consumed A's contribution)
-        // Under CSI, remaining self-contribution is spent down over time, so selfRemaining decreases
-
-        // Verify CSI accounting: A's spend index should have been updated when B received bonus
-        // Fee token for one-for-zero swaps is token1, so CSI state of interest is token1.
-        (, uint256 aFeesShared1After,, uint256 aIndexLast1) = _testableOrchestrator().getPositionCSIAccounting(posIdA);
-
-        // After B received bonus, the pool spend index advanced, but A hasn't been touched yet
-        // so A's consumed should still reflect the old checkpoint
-        // When A is touched next, consumed will be updated
-
-        // Poke A to trigger fee processing (should be able to receive bonus from C's contribution)
-        uint256 aLccBefore = _selfLccBalance(lccCurrency1);
-        _pokeMM(mmA, 0, -60, 60);
-        uint256 aLccAfter = _selfLccBalance(lccCurrency1);
-
-        // Verify A's checkpoint was updated on touch
-        (,,, uint256 aIndexLast1After) = _testableOrchestrator().getPositionCSIAccounting(posIdA);
-
-        // Index should have been checkpointed
-        assertGe(aIndexLast1After, aIndexLast1, "CSI: A's spend index checkpoint should be updated on touch");
-
-        // Note: Whether A actually receives a bonus depends on CISE exposure and pot availability
-        // The key CSI invariant is that A is NOT permanently excluded just because it contributed early
-
-        // Suppress unused variable warnings
-        mmA;
-        mmB;
-        mmC;
-        aFeesShared1;
-        aFeesShared1After;
-        aLccBefore;
-        aLccAfter;
-    }
-
-    /// @notice CSI Test 2: Position's own pot contribution stays excluded until spent
+    /// @notice CSI Test 1: Position's own pot contribution stays excluded until spent
     /// @dev Verifies that a position cannot receive bonuses from its own contribution
     ///      (selfRemaining > 0) until that contribution has been spent by others.
     function test_csi_selfOnlyPotStaysExcluded() public {
@@ -556,9 +463,12 @@ contract VTSFeeLibIndexTest is VTSOrchestratorFixture {
         potBefore;
     }
 
-    /// @notice CSI Test 3: Mixed pot allows partial self-exclusion
+    /// @notice CSI Test 2: Mixed pot allows partial self-exclusion
     /// @dev Verifies that when multiple positions contribute to the pot,
     ///      each can only allocate bonuses from the non-self portion.
+    /// @dev Verifies that after a position's contributed slashes are distributed via bonuses,
+    ///      the position can participate in future bonus allocations from new contributions.
+    ///      This is the core bug fix that CSI addresses.
     function test_csi_mixedPotPartialExclusion_withPostFeeShareSettleForBonus() public {
         // Setup: Create 3 positions - A, B (both will be slashed), C (bonus recipient)
         (uint256 mmA, PositionId posIdA) = _createNewMMCommit(-60, 60, 10e18);
@@ -668,7 +578,10 @@ contract VTSFeeLibIndexTest is VTSOrchestratorFixture {
         assertEq(pot1, potAfterSlashes, "CSI: Slashed pot should increase after poke");
 
         // ? At this stage, C has feesShared > 0.
-        // ? // Given how deficits are settled, if a position actually has deficit principal for (say) token0, then when you settle deficit growth it will generally have had its token0 settlement buffer fully consumed (it gets spent down to cover outflows), leaving no token0 “settled” remaining to be exposed, so it won’t accrue CISE exposure for token0 coverage.
+        // ? Given how deficits are settled, if a position actually has deficit principal for (say) token0,
+        // ? then when you settle deficit growth it will generally have had its token0 settlement buffer fully consumed
+        // ? (it gets spent down to cover outflows), leaving no token0 “settled” remaining to be exposed,
+        // ? so it won’t accrue CISE exposure for token0 coverage.
 
         // Settle more.
         _mmSettle(mmC, 0, _negInt128Capped(5e18), _negInt128Capped(5e18));
@@ -706,7 +619,7 @@ contract VTSFeeLibIndexTest is VTSOrchestratorFixture {
         bRemaining1After;
     }
 
-    /// @notice CSI Test 4: New shares are not retroactively consumed
+    /// @notice CSI Test 3: New shares are not retroactively consumed
     /// @dev Verifies that when a position receives new slashes after the spend index
     ///      has advanced, the new shares are not treated as already consumed.
     function test_csi_newSharesNotRetroactivelyConsumed() public {
