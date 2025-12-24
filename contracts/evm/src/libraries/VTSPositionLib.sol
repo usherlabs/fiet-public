@@ -38,7 +38,7 @@ import {
 import {Pool} from "../types/Pool.sol";
 import {LiquidityUtils} from "./LiquidityUtils.sol";
 import {Errors} from "./Errors.sol";
-import {VTSFeeLinkedLib} from "./VTSFeeLib.sol";
+import {VTSFeeLinkedLib, VTSFeeLib} from "./VTSFeeLib.sol";
 import {DynamicCurrencyDelta} from "./DynamicCurrencyDelta.sol";
 import {VTSCommitLib} from "./VTSCommitLib.sol";
 import {CheckpointLibrary} from "./Checkpoint.sol";
@@ -473,6 +473,11 @@ library VTSPositionLib {
             );
         }
 
+        // console.log("Deficit Growth: add0", add0);
+        // console.log("Deficit Growth: add1", add1);
+        // console.log("Deficit Growth: pa.settled.token0", pa.settled.token0);
+        // console.log("Deficit Growth: pa.settled.token1", pa.settled.token1);
+
         // Process token0 deficit in scoped block
         if (add0 > 0) {
             // Track full attributed outflows for fee sharing normalisation window
@@ -555,46 +560,6 @@ library VTSPositionLib {
         }
     }
 
-    /// @notice Read fees since last snapshot and checkpoint fee growth and outflow snapshots atomically
-    /// @param s The central VTS storage
-    /// @param poolManager The pool manager contract
-    /// @param positionId The position ID
-    /// @param poolId The pool ID
-    /// @param tokenIndex The token index (0 or 1)
-    /// @param positionLiquidity The position liquidity
-    /// @return fees The fees accrued since last snapshot
-    /// @return ofDelta The outflow delta since last fee snapshot
-    function _readFeesAndCheckpoint(
-        VTSStorage storage s,
-        IPoolManager poolManager,
-        PositionId positionId,
-        PoolId poolId,
-        uint8 tokenIndex,
-        uint128 positionLiquidity
-    ) internal returns (uint256 fees, uint256 ofDelta) {
-        Position memory pos = s.positions[positionId];
-        (uint256 fg0, uint256 fg1) = StateLibrary.getFeeGrowthInside(poolManager, poolId, pos.tickLower, pos.tickUpper);
-        uint256 fg = tokenIndex == 0 ? fg0 : fg1;
-
-        PositionAccounting storage pa = s.positionAccounting[positionId];
-        uint256 last = pa.feeGrowthInsideLast.get(tokenIndex);
-
-        if (positionLiquidity > 0 && fg > last) {
-            fees = FullMath.mulDiv(fg - last, uint256(positionLiquidity), FixedPoint128.Q128);
-        } else {
-            fees = 0;
-        }
-
-        // Compute outflow window and checkpoint both snapshots
-        uint256 cf = pa.cumulativeOutflows.get(tokenIndex);
-        uint256 snap = pa.outflowsAtFeeSnap.get(tokenIndex);
-        ofDelta = cf >= snap ? (cf - snap) : 0;
-
-        // Snapshot fees here
-        pa.feeGrowthInsideLast.set(tokenIndex, fg);
-        pa.outflowsAtFeeSnap.set(tokenIndex, cf);
-    }
-
     /// @notice Calculate fees and checkpoint snapshots for coverage burn
     /// @dev Extracted to reduce stack depth in _applyCoverageBurn
     /// @param s The central VTS storage
@@ -620,6 +585,8 @@ library VTSPositionLib {
         PositionAccounting storage pa = s.positionAccounting[id];
         uint256 fees;
         uint256 ofDelta;
+        uint256 cf;
+        uint256 snap;
 
         // Scoped block: Read fee growth and calculate fees
         {
@@ -633,16 +600,23 @@ library VTSPositionLib {
             }
         }
 
-        // Scoped block: Read ofDelta and checkpoint snapshots
+        // Read outflow window (deficit token) since last burn checkpoint.
+        // IMPORTANT:
+        // - `fees` are on `feeTokenIndex` (input/counterparty token)
+        // - `burnBase` and `ofDelta` are on `tokenIndex` (deficit/output token)
+        // We must NOT checkpoint the outflow window to `cf` for partial exercises; otherwise future
+        // coverage exercises against the same historical outflows would see `ofDelta == 0` and burn nothing.
+        //
+        // Instead, we advance `outflowsAtFeeSnap` by the amount of outflows actually "consumed" by this burn
+        // (i.e. exercised deficit, capped by the current `ofDelta`), and only when a non-zero burn occurs.
         {
-            uint256 cf = pa.cumulativeOutflows.get(tokenIndex);
-            uint256 snap = pa.outflowsAtFeeSnap.get(tokenIndex);
-            ofDelta = cf >= snap ? (cf - snap) : 0;
-
-            // Always checkpoint both snapshots to avoid carrying stale windows into future burns
-            pa.feeGrowthInsideLast.set(feeTokenIndex, fg);
-            pa.outflowsAtFeeSnap.set(tokenIndex, cf);
+            cf = pa.cumulativeOutflows.get(tokenIndex);
+            snap = pa.outflowsAtFeeSnap.get(tokenIndex);
+            ofDelta = cf >= snap ? (cf - snap) : 0; // outflows since last burn checkpoint.
         }
+
+        // console.log("fees", fees);
+        // console.log("ofDelta", ofDelta);
 
         if (fees == 0 || ofDelta == 0) {
             return (fg, 0);
@@ -655,10 +629,23 @@ library VTSPositionLib {
                 return (fg, 0);
             }
 
+            // Never allow the exercised share to exceed 100% of the current outflow window.
+            uint256 effBurnBase = burnBase <= ofDelta ? burnBase : ofDelta;
+
             // feesBurn = fees * (burnBase / ofDelta) * bps/10000
-            feesBurn = FullMath.mulDiv(fees, burnBase, ofDelta);
+            feesBurn = FullMath.mulDiv(fees, effBurnBase, ofDelta);
             feesBurn = FullMath.mulDiv(feesBurn, bps, LiquidityUtils.BPS_DENOMINATOR);
             if (feesBurn > fees) feesBurn = fees; // clamp to fees accrued
+
+            // Only advance burn checkpoints if a non-zero burn is actually applied.
+            // - Fee growth baseline is advanced later in `_applyCoverageBurn` via `fg + growthInc`.
+            // - Outflow snapshot is advanced here by the exercised outflow share to support repeated exercises.
+            if (feesBurn > 0) {
+                // This says: “we have just exercised effBurnBase worth of the remaining outflow window, so reduce the remaining window by that amount”.
+                uint256 newSnap = snap + effBurnBase;
+                if (newSnap > cf) newSnap = cf;
+                pa.outflowsAtFeeSnap.set(tokenIndex, newSnap);
+            }
         }
     }
 
@@ -714,8 +701,13 @@ library VTSPositionLib {
         // Update accounting in scoped block (for the fee token)
         {
             PoolAccounting storage paPool = s.poolAccounting[p];
+
+            // CSI: Sync remaining shares BEFORE minting new shares (critical ordering)
+            VTSFeeLib._syncFeesSharedRemainingForToken(pa, paPool, feeTokenIndex);
+
             paPool.protocolFeeAccrued.set(feeTokenIndex, paPool.protocolFeeAccrued.get(feeTokenIndex) + feesBurn);
             pa.feesShared.set(feeTokenIndex, pa.feesShared.get(feeTokenIndex) + feesBurn);
+
             pa.pendingFeeAdj.set(feeTokenIndex, pa.pendingFeeAdj.get(feeTokenIndex) + int256(feesBurn));
         }
     }
@@ -751,6 +743,9 @@ library VTSPositionLib {
         if (deltaIndex > 0) {
             uint256 deficitPrincipal = pa.cumulativeDeficit.get(tokenIndex);
             uint256 cov = FullMath.mulDiv(deficitPrincipal, deltaIndex, FixedPoint128.Q128);
+            // console.log("DICE: deficitPrincipal", deficitPrincipal);
+            // console.log("DICE: deltaIndex", deltaIndex);
+            // console.log("DICE: cov", cov);
 
             if (cov > 0) {
                 _applyCoverageBurn(s, poolManager, positionId, poolId, tokenIndex, cov, liq);
@@ -770,8 +765,8 @@ library VTSPositionLib {
         uint256 indexNow = paPool.coveragePerSettledIndexX128.get(tokenIndex);
         uint256 indexLast = pa.ciseIndexLastX128.get(tokenIndex);
 
-        console.log("indexNow", indexNow);
-        console.log("indexLast", indexLast);
+        // console.log("indexNow", indexNow);
+        // console.log("indexLast", indexLast);
 
         // Always checkpoint index (even if no exposure to apply)
         if (indexNow != indexLast) {
@@ -782,9 +777,9 @@ library VTSPositionLib {
         if (deltaIndex > 0) {
             uint256 settled = pa.settled.get(tokenIndex);
             uint256 exposure = FullMath.mulDiv(settled, deltaIndex, FixedPoint128.Q128);
-            console.log("settled", settled);
-            console.log("deltaIndex", deltaIndex);
-            console.log("exposure", exposure);
+            // console.log("settled", settled);
+            // console.log("deltaIndex", deltaIndex);
+            // console.log("exposure", exposure);
             if (exposure > 0) {
                 pa.ciseExposureSinceLastMod.set(tokenIndex, pa.ciseExposureSinceLastMod.get(tokenIndex) + exposure);
                 paPool.totalCISEExposureSinceLastMod
@@ -836,9 +831,6 @@ library VTSPositionLib {
     /// @param poolManager The pool manager contract
     /// @param positionId The position ID
     function settlePositionGrowths(VTSStorage storage s, IPoolManager poolManager, PositionId positionId) public {
-        console.log("====== SETTLE POSITION GROWTHS ======");
-        console.logBytes32(PositionId.unwrap(positionId));
-
         _settleSettledIndexedCoverageUsage(s, poolManager, positionId);
 
         _settlePositionDeficitGrowth(s, poolManager, positionId);
@@ -1202,7 +1194,7 @@ library VTSPositionLib {
             posStorage.liquidity = newLiquidity < 0 ? 0 : SafeCast.toUint128(uint256(newLiquidity));
         }
 
-        console.log("MM OPERATION:", hookData.isMMOperation);
+        // console.log("MM OPERATION:", hookData.isMMOperation);
 
         _updateActiveStatus(s, posStorage, initialLiquidity, liq);
 

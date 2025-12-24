@@ -187,4 +187,48 @@ contract VTSOrchestratorTestable is VTSOrchestrator {
         PositionAccounting storage pa = s.positionAccounting[positionId];
         return (pa.ciseIndexLastX128.token0, pa.ciseIndexLastX128.token1);
     }
+
+    /// @notice Get pool CSI (Contribution Spend Index) accounting for debugging
+    /// @param poolId The pool identifier
+    /// @return feesSharedSpendIndex0 Spend-per-share index (Q128) for token0
+    /// @return feesSharedSpendIndex1 Spend-per-share index (Q128) for token1
+    function getPoolCSIAccounting(PoolId poolId)
+        external
+        view
+        returns (
+            uint256 feesSharedSpendIndex0,
+            uint256 feesSharedSpendIndex1
+        )
+    {
+        PoolAccounting storage paPool = s.poolAccounting[poolId];
+        return (
+            paPool.feesSharedSpendIndexX128.token0,
+            paPool.feesSharedSpendIndexX128.token1
+        );
+    }
+
+    /// @notice Get position's CSI (Contribution Spend Index) accounting for debugging
+    /// @param positionId The position identifier
+    /// @return feesShared0 Remaining self-contribution shares for token0
+    /// @return feesShared1 Remaining self-contribution shares for token1
+    /// @return feesSharedIndexLast0 Last spend index checkpoint for token0
+    /// @return feesSharedIndexLast1 Last spend index checkpoint for token1
+    function getPositionCSIAccounting(PositionId positionId)
+        external
+        view
+        returns (
+            uint256 feesShared0,
+            uint256 feesShared1,
+            uint256 feesSharedIndexLast0,
+            uint256 feesSharedIndexLast1
+        )
+    {
+        PositionAccounting storage pa = s.positionAccounting[positionId];
+        return (
+            pa.feesShared.token0,
+            pa.feesShared.token1,
+            pa.feesSharedIndexLastX128.token0,
+            pa.feesSharedIndexLastX128.token1
+        );
+    }
 }

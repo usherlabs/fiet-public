@@ -35,6 +35,8 @@ library VTSFeeLib {
     /// @dev Queue a bonus for a single token using CISE (Coverage-Indexed Settled Exposure).
     /// @notice CISE replaces selfNet as the primary eligibility gate, fixing the commitmentMax clamp bug.
     ///         Positions accrue exposure when incrementCoverage is called, proportional to their settled liquidity.
+    ///         CSI (Contribution Spend Index) is used for self-exclusion to ensure positions can receive bonuses
+    ///         even after their contributed slashes have been distributed to others.
     /// @param pa The position accounting storage reference
     /// @param paPool The pool accounting storage reference
     /// @param feeTokenIndex The fee token index (0 or 1) - the pot from which bonus is allocated
@@ -51,9 +53,15 @@ library VTSFeeLib {
         // CISE: Use exposure as eligibility gate instead of selfNet
         if (ciseExposure == 0) return false;
 
+        // CSI: Sync remaining contribution shares before reading selfRemaining
+        _syncFeesSharedRemainingForToken(pa, paPool, feeTokenIndex);
+
         uint256 pot = paPool.protocolFeeAccrued.get(feeTokenIndex);
-        uint256 selfContrib = pa.feesShared.get(feeTokenIndex);
-        uint256 potAvail = pot > selfContrib ? (pot - selfContrib) : 0;
+
+        // CSI: feesShared is stored as remaining self-contribution (not lifetime)
+        uint256 selfRemaining = pa.feesShared.get(feeTokenIndex);
+        uint256 potAvail = pot > selfRemaining ? (pot - selfRemaining) : 0;
+
         if (potAvail == 0) return false;
 
         // Dust guard for exposure
@@ -69,8 +77,18 @@ library VTSFeeLib {
         // Banked exposure: if rounding yields 0, do not clear windows so it can be allocated later.
         if (bonus == 0) return false;
 
-        // Deduct from pot, keep self-contrib excluded
-        paPool.protocolFeeAccrued.set(feeTokenIndex, potAvail - bonus + selfContrib);
+        // CSI: Advance spend index (spend down the pot across all remaining contribution shares).
+        // Note: Under consistent accounting, total remaining shares == current pot (pre-spend).
+        if (pot > 0) {
+            uint256 deltaIndex = FullMath.mulDiv(bonus, FixedPoint128.Q128, pot);
+            uint256 currentIndex = paPool.feesSharedSpendIndexX128.get(feeTokenIndex);
+            // The spend index is a accumulator tracking how much of the pot, comprised of all positions' feesShared, has been spent.
+            paPool.feesSharedSpendIndexX128.set(feeTokenIndex, currentIndex + deltaIndex);
+        }
+
+        // Deduct from pot (accounting)
+        paPool.protocolFeeAccrued.set(feeTokenIndex, pot - bonus);
+
         // Queue negative pending (bonus increases payout at materialisation)
         int256 currentPending = pa.pendingFeeAdj.get(feeTokenIndex);
         pa.pendingFeeAdj.set(feeTokenIndex, currentPending - bonus.toInt256());
@@ -95,6 +113,39 @@ library VTSFeeLib {
         paPool.totalCISEExposureSinceLastMod
             .set(coverageTokenIndex, ciseExposure > curExposure ? 0 : (curExposure - ciseExposure));
         pa.ciseExposureSinceLastMod.set(coverageTokenIndex, 0);
+    }
+
+    // --------------------------------------------------
+    // CSI (Contribution Spend Index) Helpers
+    // --------------------------------------------------
+
+    /// @dev Sync a position's remaining feesShared (self-contribution still embedded in the pot)
+    ///      against the pool spend index.
+    /// @notice Must be called BEFORE incrementing feesShared (slash) or reading selfRemaining (bonus)
+    /// @param pa The position accounting storage reference
+    /// @param paPool The pool accounting storage reference
+    /// @param tokenIndex The token index (0 or 1)
+    function _syncFeesSharedRemainingForToken(
+        PositionAccounting storage pa,
+        PoolAccounting storage paPool,
+        uint8 tokenIndex
+    ) internal {
+        uint256 indexNow = paPool.feesSharedSpendIndexX128.get(tokenIndex);
+        uint256 indexLast = pa.feesSharedIndexLastX128.get(tokenIndex);
+
+        // Always checkpoint index (even if no consumption to apply)
+        if (indexNow != indexLast) {
+            pa.feesSharedIndexLastX128.set(tokenIndex, indexNow);
+        }
+
+        uint256 deltaIndex = indexNow - indexLast;
+        if (deltaIndex > 0) {
+            uint256 sharesRemaining = pa.feesShared.get(tokenIndex);
+            uint256 spent = FullMath.mulDiv(sharesRemaining, deltaIndex, FixedPoint128.Q128);
+            if (spent > 0) {
+                pa.feesShared.set(tokenIndex, spent >= sharesRemaining ? 0 : (sharesRemaining - spent));
+            }
+        }
     }
 
     // --------------------------------------------------
@@ -217,7 +268,7 @@ library VTSFeeLib {
     /// @param s The central VTS storage
     /// @param positionId The position ID
     /// @return adj The materialised fee adjustment delta
-    function processPositionFees(VTSStorage storage s, PositionId positionId) internal returns (BalanceDelta adj) {
+    function _processPositionFees(VTSStorage storage s, PositionId positionId) internal returns (BalanceDelta adj) {
         Position memory pos = s.positions[positionId];
         PoolId poolId = pos.poolId;
 
@@ -276,6 +327,6 @@ library VTSFeeLinkedLib {
     /// @param positionId The position ID
     /// @return adj The materialised fee adjustment delta
     function afterTouchPosition(VTSStorage storage s, PositionId positionId) external returns (BalanceDelta adj) {
-        return VTSFeeLib.processPositionFees(s, positionId);
+        return VTSFeeLib._processPositionFees(s, positionId);
     }
 }

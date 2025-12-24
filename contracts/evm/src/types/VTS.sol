@@ -137,6 +137,8 @@ struct PositionAccounting {
     TokenPairUint ciseIndexLastX128;
     // CISE: Banked realised exposure since last bonus allocation
     TokenPairUint ciseExposureSinceLastMod;
+    // CSI: Position checkpoint of pool spend index (Q128)
+    TokenPairUint feesSharedIndexLastX128;
 }
 
 /// @notice Per-pool accounting data (mirrors VTSManager per-pool mappings)
@@ -146,8 +148,6 @@ struct PoolAccounting {
     TokenPairUint deficitGrowthGlobal;
     // Inflow growth global per token
     TokenPairUint inflowGrowthGlobal;
-    // Protocol coverage per token
-    TokenPairUint protocolCoverage;
     // Protocol/LPs fee pot accrued from fee sharing per token
     TokenPairUint protocolFeeAccrued;
     // Slashed pot balances per token
@@ -166,6 +166,8 @@ struct PoolAccounting {
     TokenPairUint coverageResidualCISE;
     // CISE: Pool-wide sum of realised exposure since last modification (denominator for allocation)
     TokenPairUint totalCISEExposureSinceLastMod;
+    // CSI: Spend-per-share index (Q128), advances when bonuses allocated
+    TokenPairUint feesSharedSpendIndexX128;
 }
 
 /// @notice Simple pair struct for per-tick growth (replaces uint256[2] arrays)
