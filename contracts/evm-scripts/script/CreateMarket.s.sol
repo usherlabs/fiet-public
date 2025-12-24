@@ -271,7 +271,8 @@ contract CreateMarketScript is NetworkConfig {
             tickSpacing,
             initialSqrtPriceX96,
             salt,
-            VTSConfigs.getDefaultConfig()
+            VTSConfigs.getDefaultConfig(),
+            new address[](0) // No additional issuers by default
         );
 
         corePoolId = coreId;

@@ -133,6 +133,9 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
      * @param corePoolFee Fee for the core pool
      * @param tickSpacing Tick spacing for both pools
      * @param initialSqrtPriceX96 Initial sqrt price for core pool
+     * @param salt Salt for the proxy hook
+     * @param vtsConfiguration VTS configuration
+     * @param issuers Additional issuer addresses to add to the LCC tokens (vtsOrchestrator and proxyHook are always included)
      * @return corePoolId The ID of the created core pool
      * @return proxyPoolId The ID of the created proxy pool
      */
@@ -143,7 +146,8 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
         int24 tickSpacing,
         uint160 initialSqrtPriceX96,
         bytes32 salt,
-        MarketVTSConfiguration calldata vtsConfiguration
+        MarketVTSConfiguration calldata vtsConfiguration,
+        address[] calldata issuers
     ) external onlyOwner returns (PoolId corePoolId, PoolId proxyPoolId) {
         // Build context in scoped block to release intermediate variables
         MarketCreationContext memory ctx;
@@ -154,9 +158,15 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
 
             // Create LCC pair with initialIssuers in nested scope
             {
-                address[] memory initialIssuers = new address[](2);
+                // Always include vtsOrchestrator and proxyHookAddress as issuers
+                uint256 totalIssuers = 2 + issuers.length;
+                address[] memory initialIssuers = new address[](totalIssuers);
                 initialIssuers[0] = address(vtsOrchestrator);
                 initialIssuers[1] = ctx.proxyHookAddress;
+                // Copy additional issuers
+                for (uint256 i = 0; i < issuers.length; i++) {
+                    initialIssuers[2 + i] = issuers[i];
+                }
                 (ctx.lccToken0, ctx.lccToken1) = liquidityHub.createLCCPair(
                     ctx.marketRef, underlyingAsset0, underlyingAsset1, MARKET_NAME, initialIssuers
                 );
@@ -200,7 +210,7 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
             [Currency.unwrap(proxyPoolKey.currency0), Currency.unwrap(proxyPoolKey.currency1)];
         _corePoolToCurrencyPair[corePoolId] =
             [Currency.unwrap(corePoolKey.currency0), Currency.unwrap(corePoolKey.currency1)];
-        
+
         // For swap deficits overflow, and LCC transfer to recipient the proxy hook must be within protocol bounds.
         bounds[ctx.proxyHookAddress] = true;
 

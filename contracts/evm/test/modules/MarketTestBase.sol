@@ -290,7 +290,8 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
                 tickSpacing,
                 initialSqrtPriceX96,
                 proxySalt,
-                VTSConfigs.getDefaultConfig()
+                VTSConfigs.getDefaultConfig(),
+                new address[](0) // No additional issuers for tests
             );
 
         // set the deployed proxy hook address

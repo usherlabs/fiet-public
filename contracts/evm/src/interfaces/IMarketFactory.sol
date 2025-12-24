@@ -80,6 +80,7 @@ interface IMarketFactory {
      * @param initialSqrtPriceX96 Initial sqrt price for core pool
      * @param salt Salt for the proxy hook
      * @param vtsConfiguration VTS configuration
+     * @param issuers Additional issuer addresses to add to the LCC tokens (vtsOrchestrator and proxyHook are always included)
      * @return corePoolId The ID of the created core pool
      * @return proxyPoolId The ID of the created proxy pool
      */
@@ -90,7 +91,8 @@ interface IMarketFactory {
         int24 tickSpacing,
         uint160 initialSqrtPriceX96,
         bytes32 salt,
-        MarketVTSConfiguration calldata vtsConfiguration
+        MarketVTSConfiguration calldata vtsConfiguration,
+        address[] calldata issuers
     ) external returns (PoolId corePoolId, PoolId proxyPoolId);
 
     /**

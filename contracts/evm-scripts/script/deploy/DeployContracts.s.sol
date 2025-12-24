@@ -304,8 +304,10 @@ contract DeployContracts is CREATE3Script, NetworkConfig {
         // Initial bounds array includes MMPositionManager (deployed before MarketFactory)
         // Note: LiquidityHub is automatically added to bounds in MarketFactory constructor
         address[] memory initialBounds = new address[](2);
+
+        // for market specific MMPM, we can set as issuer on market creation.
         initialBounds[0] = mmPositionManager;
-        initialBounds[1] = directLPDeltaResolver;
+        // initialBounds[1] = directLPDeltaResolver;
 
         // Pass globalConfig as initialOwner (required for CREATE3 compatibility)
         bytes memory constructorArgs =
@@ -316,7 +318,7 @@ contract DeployContracts is CREATE3Script, NetworkConfig {
         console.log("MarketFactory deployed at:", deployed);
         console.log("MarketFactory owner:", globalConfig);
         console.log("MMPositionManager added to bounds:", mmPositionManager);
-        console.log("DirectLPDeltaResolver added to bounds:", directLPDeltaResolver);
+        // console.log("DirectLPDeltaResolver added to bounds:", directLPDeltaResolver);
         return deployed;
     }
 
