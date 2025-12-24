@@ -155,16 +155,21 @@ contract MarketVaultTest is MarketVaultBase {
         _mockLimitedLiquidity(_currency1, mockAvailableLiquidity);
 
         uint256 swapAmount = 100;
+        LiquidityCommitmentCertificate lccIn = _getLCCOut(_currency0);
         LiquidityCommitmentCertificate lccOut = _getLCCOut(_currency1);
 
         // Calculate expected deficit
-        (, uint256 expectedOutput) = _simulateSwap(corePoolKey, true, -int256(swapAmount));
+        (uint256 expectedInput, uint256 expectedOutput) = _simulateSwap(corePoolKey, true, -int256(swapAmount));
 
         uint256 expectedDeficit = expectedOutput > mockAvailableLiquidity ? expectedOutput - mockAvailableLiquidity : 0;
         uint256 expectedAmountToCancel =
             expectedOutput > mockAvailableLiquidity ? mockAvailableLiquidity : expectedOutput;
 
         if (expectedDeficit > 0) {
+            // Expect Transfer event for mint first (emitted by liquidityHub.issue -> LCC.mint -> ERC20._mint)
+            vm.expectEmit(true, true, false, true, address(lccIn));
+            emit IERC20.Transfer(address(0), address(mv), expectedInput);
+
             // Expect Transfer event for burn first (emitted by liquidityHub.cancel -> _burn)
             // This burns amountToCancel tokens from MarketVault to address(0)
             vm.expectEmit(true, true, false, true, address(lccOut));

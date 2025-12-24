@@ -79,8 +79,7 @@ abstract contract LiquidityHubTestBase is Test {
             lccToken1,
             lccToken2,
             marketId1,
-            abi.encodePacked(address(0x1234)),
-            false // refIsValidIssuer
+            abi.encodePacked(address(0x1234))
         );
 
         vm.stopPrank();
@@ -180,7 +179,7 @@ abstract contract LiquidityHubTestBase is Test {
         );
 
         // Initialize second market
-        liquidityHub.initialize(lccToken3, lccToken4, marketId2, abi.encodePacked(address(0x5678)), false);
+        liquidityHub.initialize(lccToken3, lccToken4, marketId2, abi.encodePacked(address(0x5678)));
         vm.stopPrank();
 
         return (lccToken3, lccToken4);

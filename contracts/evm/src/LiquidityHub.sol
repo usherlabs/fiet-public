@@ -279,16 +279,12 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
      * @param lccToken1 The second LCC token address
      * @param marketId The market ID (corePoolKey -> PoolID -> unwrap() to bytes32)
      * @param marketRef The market reference (bytes from proxyHookAddress)
-     * @param refIsValidIssuer Whether the market ref address is a valid issuer
      */
-    function initialize(
-        address lccToken0,
-        address lccToken1,
-        bytes32 marketId,
-        bytes memory marketRef,
-        bool refIsValidIssuer
-    ) external onlyFactory {
-        LCCFactoryLib.initialize(s, lccToken0, lccToken1, marketId, marketRef, refIsValidIssuer, _msgSender());
+    function initialize(address lccToken0, address lccToken1, bytes32 marketId, bytes memory marketRef)
+        external
+        onlyFactory
+    {
+        LCCFactoryLib.initialize(s, lccToken0, lccToken1, marketId, marketRef, _msgSender());
     }
 
     // ============ INTERNAL HELPERS (delegate to library) ============

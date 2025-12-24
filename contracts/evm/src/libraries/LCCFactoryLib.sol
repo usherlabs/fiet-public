@@ -2,7 +2,6 @@
 pragma solidity ^0.8.26;
 
 import {LiquidityCommitmentCertificate} from "../LCC.sol";
-import {LibBytes} from "solady/utils/LibBytes.sol";
 import {ILCC} from "../interfaces/ILCC.sol";
 import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
 import {Errors} from "./Errors.sol";
@@ -173,7 +172,6 @@ library LCCFactoryLib {
     /// @param lccToken1 The second LCC token address
     /// @param marketId The market ID (corePoolKey -> PoolID -> unwrap() to bytes32)
     /// @param marketRef The market reference (bytes from proxyHookAddress)
-    /// @param refIsValidIssuer Whether the market ref address is a valid issuer
     /// @param factory The factory address
     function initialize(
         LiquidityHubStorage storage s,
@@ -181,12 +179,9 @@ library LCCFactoryLib {
         address lccToken1,
         bytes32 marketId,
         bytes memory marketRef,
-        bool refIsValidIssuer,
         address factory
     ) internal {
-        Market memory market = Market({
-            id: marketId, ref: marketRef, refIsValidIssuer: refIsValidIssuer, factory: factory
-        });
+        Market memory market = Market({id: marketId, ref: marketRef, factory: factory});
         s.lccToMarket[lccToken0] = market;
         s.lccToMarket[lccToken1] = market;
         s.marketUnderlyingToLCC[marketId][s.lccToUnderlying[lccToken0]] = lccToken0;
@@ -214,13 +209,6 @@ library LCCFactoryLib {
         Market memory market = s.lccToMarket[lccToken];
         if (market.id == bytes32(0) && market.ref.length == 0) {
             return false; // Market not initialised
-        }
-
-        // Check if refIsValidIssuer is enabled and caller matches the ref address
-        if (market.refIsValidIssuer && market.ref.length >= 20) {
-            bytes32 word = LibBytes.load(market.ref, 0);
-            address refAddress = LibBytes.msbToAddress(word);
-            return caller == refAddress;
         }
 
         return false;

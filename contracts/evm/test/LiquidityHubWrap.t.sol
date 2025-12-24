@@ -220,7 +220,7 @@ contract LiquidityHubWrapTest is LiquidityHubTestBase {
             "Test Market 3",
             new address[](0)
         );
-        liquidityHub.initialize(lccToken3, lccToken2, bytes32("market3"), abi.encodePacked(address(0x9999)), false);
+        liquidityHub.initialize(lccToken3, lccToken2, bytes32("market3"), abi.encodePacked(address(0x9999)));
         vm.stopPrank();
 
         // Wrap some LCC for user1
