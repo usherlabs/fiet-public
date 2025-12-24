@@ -11,6 +11,8 @@ import {VTSOrchestrator} from "../../src/VTSOrchestrator.sol";
 import {LiquiditySignal} from "../../src/types/Commit.sol";
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
+import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint128.sol";
 import {console} from "forge-std/console.sol";
 
 /// @title VTSFeeLibIndexTest
@@ -557,7 +559,7 @@ contract VTSFeeLibIndexTest is VTSOrchestratorFixture {
     /// @notice CSI Test 3: Mixed pot allows partial self-exclusion
     /// @dev Verifies that when multiple positions contribute to the pot,
     ///      each can only allocate bonuses from the non-self portion.
-    function test_csi_mixedPotPartialExclusion() public {
+    function test_csi_mixedPotPartialExclusion_withPostFeeShareSettleForBonus() public {
         // Setup: Create 3 positions - A, B (both will be slashed), C (bonus recipient)
         (uint256 mmA, PositionId posIdA) = _createNewMMCommit(-60, 60, 10e18);
         (uint256 mmB, PositionId posIdB) = _createNewMMCommit(-60, 60, 10e18);
@@ -715,37 +717,87 @@ contract VTSFeeLibIndexTest is VTSOrchestratorFixture {
         // Make B solvent
         _mmSettle(mmB, 0, _negInt128Capped(30e18), _negInt128Capped(30e18));
 
-        // First round: A gets slashed
-        _swapCore(false, -int256(50e18));
+        // First round: create deficit + fees while positions are still in-range.
+        // NOTE: Large swaps can move tick far outside [-60,60] and prevent any further in-range accruals,
+        // which makes it impossible to test "new shares minted after spend index advances".
+        _swapCore(false, -int256(2e18));
         vtsOrchestrator.settlePositionGrowths(posIdA);
         vm.prank(marketFactory);
-        vtsOrchestrator.incrementCoverage(corePoolKey.toId(), 10e18, 0);
+        vtsOrchestrator.incrementCoverage(corePoolKey.toId(), 2e18, 0);
         vtsOrchestrator.settlePositionGrowths(posIdA);
 
         // Record A's first contribution
         // Fee token for one-for-zero swaps is token1.
-        (, uint256 aFeesShared1First,,) = _testableOrchestrator().getPositionCSIAccounting(posIdA);
+        (, uint256 aFeesShared1First,, uint256 aIndexLast1First) =
+            _testableOrchestrator().getPositionCSIAccounting(posIdA);
+
+        assertGt(aFeesShared1First, 0, "A should have fees shared after first slash");
+
+        uint256 lcc1BalanceBefore = _selfLccBalance(lccCurrency1);
+        (, uint256 pot1BeforeBonus) = _protocolFeeAccrued(corePoolKey.toId());
 
         // B receives bonus from A's first contribution (advances spend index)
         _pokeMM(mmB, 0, -60, 60);
+        uint256 lcc1BalanceAfter = _selfLccBalance(lccCurrency1);
+        assertGt(lcc1BalanceAfter, lcc1BalanceBefore, "LCC balance will be greater after poke B");
 
         // Record spend index after B's bonus
         (, uint256 spendIndex1AfterFirstBonus) = _testableOrchestrator().getPoolCSIAccounting(corePoolKey.toId());
         assertGt(spendIndex1AfterFirstBonus, 0, "CSI: Spend index should advance after bonus allocation");
 
-        // Second round: A gets slashed again
-        _swapCore(false, -int256(30e18));
+        // Bonus allocation should have drained the fee pot (protocolFeeAccrued for fee token1)
+        (, uint256 pot1AfterBonus) = _protocolFeeAccrued(corePoolKey.toId());
+        assertLt(pot1AfterBonus, pot1BeforeBonus, "CSI: Bonus should drain protocol fee pot (token1)");
+
+        (uint256 def0, uint256 def1,,,,) = _testableOrchestrator().getPositionAccounting(posIdA);
+        console.log("POS A: def0", def0);
+        console.log("POS A: def1", def1);
+        assertGt(def0, 0, "A should have a cumulative deficit after first slash");
+        assertEq(def1, 0, "A should have no cumulative deficit after first slash");
+
+        (,, uint256 coveragePerDeficitIndex0Before,,,) =
+            _testableOrchestrator().getPoolDICEAccounting(corePoolKey.toId());
+
+        // Create fresh in-range outflow/fee windows so a second burn mints new shares.
+        _swapCore(false, -int256(3e18));
+        // ? without conducting the second swap, this causes the full deficit to be exercised in coverage.
+        // ? therefore, second swap applies more deficit.
         vtsOrchestrator.settlePositionGrowths(posIdA);
         vm.prank(marketFactory);
-        vtsOrchestrator.incrementCoverage(corePoolKey.toId(), 5e18, 0);
+        vtsOrchestrator.incrementCoverage(corePoolKey.toId(), 3e18, 0);
+
+        (,, uint256 coveragePerDeficitIndex0After,,,) =
+            _testableOrchestrator().getPoolDICEAccounting(corePoolKey.toId());
+        assertGt(
+            coveragePerDeficitIndex0After,
+            coveragePerDeficitIndex0Before,
+            "Coverage per deficit index for token0 should be greater after second slash"
+        );
+
+        // Record pot before second slash is materialised; delta in pot corresponds to newly minted fee shares (feesBurn2)
+        (, uint256 pot1BeforeSecondSlash) = _protocolFeeAccrued(corePoolKey.toId());
+        console.log("-------------------------------- Settling A #2");
         vtsOrchestrator.settlePositionGrowths(posIdA);
+        console.log("-------------------------------- END Settling A");
+        (, uint256 pot1AfterSecondSlash) = _protocolFeeAccrued(corePoolKey.toId());
+        uint256 minted2 = pot1AfterSecondSlash - pot1BeforeSecondSlash;
+        assertGt(minted2, 0, "second slash should mint new fee shares");
 
         // Record A's total contribution after second slash
         (, uint256 aFeesShared1Second,,) = _testableOrchestrator().getPositionCSIAccounting(posIdA);
 
-        // Critical (remaining-shares model): after the second slash, A's remaining shares must
-        // increase (new shares are minted after syncing, so they are not retroactively spent).
-        assertGt(aFeesShared1Second, 0, "CSI: A should have remaining self-contribution shares after second slash");
+        // Critical invariant (remaining-shares model):
+        // When A is slashed again AFTER the spend index advanced, the implementation must:
+        // 1) spend-down A's *existing* remaining shares using (spendIndex - A.indexLast), then
+        // 2) mint new shares for the new slash.
+        // Therefore, the new shares (minted2) must NOT be treated as already spent.
+        //
+        // expected = (aFeesShared1First - spent) + minted2
+        uint256 spent =
+            FullMath.mulDiv(aFeesShared1First, spendIndex1AfterFirstBonus - aIndexLast1First, FixedPoint128.Q128);
+        uint256 remaining = spent >= aFeesShared1First ? 0 : (aFeesShared1First - spent);
+        uint256 expected = remaining + minted2;
+        assertEq(aFeesShared1Second, expected, "CSI: New shares must not be retroactively consumed");
 
         // Suppress unused variable warnings
         mmA;

@@ -690,6 +690,8 @@ library VTSPositionLib {
         bool shouldReturn;
         (fg, feesBurn) =
             _calculateFeesBurn(s, poolManager, id, p, tokenIndex, feeTokenIndex, burnBase, positionLiquidity);
+
+        console.log("feesBurn", feesBurn);
         if (feesBurn == 0) return;
 
         // Advance fee growth baseline by burn amount to effectively "burn" the fees (fee token only)
@@ -743,9 +745,9 @@ library VTSPositionLib {
         if (deltaIndex > 0) {
             uint256 deficitPrincipal = pa.cumulativeDeficit.get(tokenIndex);
             uint256 cov = FullMath.mulDiv(deficitPrincipal, deltaIndex, FixedPoint128.Q128);
-            // console.log("DICE: deficitPrincipal", deficitPrincipal);
-            // console.log("DICE: deltaIndex", deltaIndex);
-            // console.log("DICE: cov", cov);
+            console.log("DICE: deficitPrincipal", deficitPrincipal);
+            console.log("DICE: deltaIndex", deltaIndex);
+            console.log("DICE: cov", cov);
 
             if (cov > 0) {
                 _applyCoverageBurn(s, poolManager, positionId, poolId, tokenIndex, cov, liq);
