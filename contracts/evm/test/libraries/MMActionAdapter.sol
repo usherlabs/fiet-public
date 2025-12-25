@@ -247,11 +247,12 @@ library MMActionAdapter {
         uint256 tokenId,
         uint256 positionIndex,
         int24 tickLower,
-        int24 tickUpper
+        int24 tickUpper,
+        bool payerIsUser
     ) internal pure returns (PreparedAction memory) {
         return PreparedAction({
             action: bytes1(uint8(MMActions.INCREASE_LIQUIDITY_FROM_DELTAS)),
-            params: abi.encode(poolKey, tokenId, positionIndex, tickLower, tickUpper)
+            params: abi.encode(poolKey, tokenId, positionIndex, tickLower, tickUpper, payerIsUser)
         });
     }
 

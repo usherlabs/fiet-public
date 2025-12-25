@@ -87,7 +87,7 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
             _calculateSettlementAmounts(liquidityParams, marketVTSConfiguration);
 
         // Approve underlying tokens since they will be used to settle the position
-        _approveForPositionManager(
+        _approveTokenForPositionManager(
             address(lcc0.underlying()),
             address(lcc1.underlying()),
             address(positionManager),
@@ -103,8 +103,13 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         uint256 settlementAmount1
     ) public {
         // Approve the underlying tokens to be used to settle the position
-        IERC20(lcc0.underlying()).approve(address(positionManager), settlementAmount0);
-        IERC20(lcc1.underlying()).approve(address(positionManager), settlementAmount1);
+        _approveTokenForPositionManager(
+            address(lcc0.underlying()),
+            address(lcc1.underlying()),
+            address(positionManager),
+            settlementAmount0,
+            settlementAmount1
+        );
 
         // Settle the position
         MMA.settle(
@@ -274,6 +279,28 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         assertGt(token1BalanceAfter, token1BalanceBefore);
     }
 
+    function testCannotBurnTokenWithActiveCommits() public {
+        uint256 tokenId = 1;
+
+        // create a new position with the default liquidity params and liquidity signal
+        _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            defaultlLiquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](1);
+        actions[0] = MMA.prepareDecommit(tokenId);
+
+        // Expect revert because the commit still has active positions
+        vm.expectRevert(abi.encodeWithSelector(Errors.CommitNotEmpty.selector, tokenId));
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+    }
+
     function testCanOverSettleAndIncreasePositionLiquidity() public {
         uint256 tokenId = 1;
         uint256 positionIndex = 0;
@@ -441,5 +468,157 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
             assertLt(uint256(posAfter.liquidity), uint256(liquidityBefore));
             assertGt(Currency.wrap(address(lcc0)).balanceOf(address(guarantor)), 0);
         }
+    }
+
+    function testCanDecreaseMintNewPositionFromDeltasAndBurnInitialPosition() public {
+        uint256 positionIndex = 0;
+        uint256 newPositionIndex = 1;
+
+        // create a position
+        ModifyLiquidityParams memory liquidityParams =
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
+        ModifyLiquidityParams memory newLiquidityParams =
+            ModifyLiquidityParams({tickLower: 0, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
+        bytes memory liquiditySignalBytes = abi.encode(liquiditySignal);
+
+        // Setup committed position using helper
+        (uint256 tokenId,,,) = _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            liquiditySignalBytes,
+            liquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+
+        // settle a lot to the position
+        // make settlements for the position
+        uint256 settlementAmount = 1000000e18;
+        // make a settlement for the position over the required settlement amounts, so we can use the excess funds to increase the liquidity
+        approveAndSettleUnderlyingToPosition(tokenId, positionIndex, settlementAmount, settlementAmount);
+
+        uint256 liquidityToDecrease = 1000;
+        uint256 liquidityToIncrease = 1000;
+
+        bool payerIsUser = true;
+
+        // batch action
+        // approve underlying tokens for settlement to a newly minted position
+        _approveTokenForPositionManager(
+            address(lcc0.underlying()),
+            address(lcc1.underlying()),
+            address(positionManager),
+            settlementAmount,
+            settlementAmount
+        );
+
+        // batch actions
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](6);
+        // decrease the liquidity in the initial position with index 0
+        actions[0] = MMA.prepareDecrease(corePoolKey, tokenId, positionIndex, liquidityToDecrease);
+        // use the deltas to mint a new position with index 1
+        actions[1] = MMA.prepareMintFromDeltas(
+            corePoolKey, tokenId, newLiquidityParams.tickLower, newLiquidityParams.tickUpper, payerIsUser
+        );
+        // settle to the new position with index 1
+        actions[2] = MMA.prepareSettle(
+            corePoolKey,
+            tokenId,
+            newPositionIndex,
+            -int128(int256(settlementAmount)),
+            -int128(int256(settlementAmount)),
+            false
+        );
+        // increase the liquidity in the new position with index 1
+        actions[3] = MMA.prepareIncrease(corePoolKey, tokenId, newPositionIndex, 0, 60, liquidityToIncrease);
+        // completely burn the initial position with index 0
+        actions[4] = MMA.prepareBurn(corePoolKey, tokenId, positionIndex);
+        // take all the underlying tokens from the initial position with index 0
+        actions[5] = MMA.prepareSettleFromDeltas(corePoolKey, tokenId, positionIndex, true, true);
+        // execute the batch actions
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+
+        // validate the new position was created with the new ticks provided
+        (Position memory newPosition, PositionId newPositionId) = positionManager.getPosition(tokenId, newPositionIndex);
+        assertEq(newPosition.tickLower, newLiquidityParams.tickLower);
+        assertEq(newPosition.tickUpper, newLiquidityParams.tickUpper);
+
+        // validate the buened position was completely burned
+        (Position memory positionAfterBurn,) = positionManager.getPosition(tokenId, positionIndex);
+        assertEq(uint256(positionAfterBurn.liquidity), 0);
+        assertEq(positionAfterBurn.isActive, false);
+
+        // validate the new position has some settlement
+        (uint256 newPositionSettledAmount0, uint256 newPositionSettledAmount1) =
+            vtsOrchestrator.getPositionSettledAmounts(newPositionId);
+        assertGt(newPositionSettledAmount0, 0);
+        assertGt(newPositionSettledAmount1, 0);
+    }
+
+    function testCanDecreaseAndSettleAnotherPositionFromDeltas() public {
+        uint256 positionIndex = 0;
+        ModifyLiquidityParams memory newLiquidityParams =
+            ModifyLiquidityParams({tickLower: 0, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
+
+        // create a new position with the default liquidity params and liquidity signal
+        (uint256 tokenId,,,) = _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            defaultlLiquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+
+        // make settlements for the position
+        uint256 settlementAmount = 1000000e18;
+        // make a settlement for the position over the required settlement amounts, so we can use the excess funds to increase the liquidity
+        approveAndSettleUnderlyingToPosition(tokenId, positionIndex, settlementAmount, settlementAmount);
+
+        (uint256 newTokenId,,,) = _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(renewSignal),
+            newLiquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+
+        // batch actions;
+        // decrease the liquidity in the initial position with index 0
+        // increase the liquidity in the new position with index 1
+        // take any balance left over from the initial position
+        uint256 decreaseLiquidityDelta = 1000;
+
+        (Position memory position1Before,) = positionManager.getPosition(tokenId, positionIndex);
+        (Position memory position2Before, PositionId position2Id) =
+            positionManager.getPosition(newTokenId, positionIndex);
+        (uint256 position2SettledAmount0, uint256 position2SettledAmount1) =
+            vtsOrchestrator.getPositionSettledAmounts(position2Id);
+
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
+        actions[0] = MMA.prepareDecrease(corePoolKey, tokenId, positionIndex, decreaseLiquidityDelta);
+        actions[1] = MMA.prepareIncreaseFromDeltas(
+            corePoolKey, newTokenId, positionIndex, newLiquidityParams.tickLower, newLiquidityParams.tickUpper, true
+        );
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+
+        // validate the liquidity of the initial position is decreased
+        (Position memory position1After,) = positionManager.getPosition(tokenId, positionIndex);
+        (Position memory position2After,) = positionManager.getPosition(newTokenId, positionIndex);
+
+        assertLt(uint256(position1After.liquidity), uint256(position1Before.liquidity));
+
+        // validate the liquidity of the new position is increased
+        assertGt(uint256(position2After.liquidity), uint256(position2Before.liquidity));
+
+        // validate the new position's settlement has increased
+        (uint256 position2SettledAmount0After, uint256 position2SettledAmount1After) =
+            vtsOrchestrator.getPositionSettledAmounts(position2Id);
+        assertGt(position2SettledAmount0After, position2SettledAmount0);
+        assertGt(position2SettledAmount1After, position2SettledAmount1);
     }
 }
