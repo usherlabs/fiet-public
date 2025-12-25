@@ -205,13 +205,11 @@ library MMCalldataDecoder {
     // Medium Priority Decoders (Delta Operations & Signal Management)
     // ═══════════════════════════════════════════════════════════════════════════════════════════
 
-    /// @dev INCREASE_LIQUIDITY_FROM_DELTAS: (PoolKey, uint256, uint256, int24, int24, bool)
+    /// @dev INCREASE_LIQUIDITY_FROM_DELTAS: (PoolKey, uint256, uint256, bool)
     /// @param params The calldata bytes to decode
     /// @return poolKey The pool key (calldata pointer)
     /// @return tokenId The commitment NFT token ID
     /// @return positionIndex The position index within the commitment
-    /// @return tickLower The lower tick of the position
-    /// @return tickUpper The upper tick of the position
     /// @return payerIsUser If true, user consumes credit protocol owes them (MMPM delta).
     ///         If false, uses locker's direct credit.
     function decodeIncreaseFromDeltasParams(bytes calldata params)
@@ -221,24 +219,20 @@ library MMCalldataDecoder {
             PoolKey calldata poolKey,
             uint256 tokenId,
             uint256 positionIndex,
-            int24 tickLower,
-            int24 tickUpper,
             bool payerIsUser
         )
     {
         assembly ("memory-safe") {
-            // PoolKey: 5 slots (0xa0), then tokenId, positionIndex, tickLower, tickUpper, payerIsUser
-            // Minimum length: 0xa0 + 0x20*5 = 0x140
-            if lt(params.length, 0x140) {
+            // PoolKey: 5 slots (0xa0), then tokenId, positionIndex, payerIsUser
+            // Minimum length: 0xa0 + 0x20*3 = 0x100
+            if lt(params.length, 0x100) {
                 mstore(0, SLICE_ERROR_SELECTOR)
                 revert(0x1c, 4)
             }
             poolKey := params.offset
             tokenId := calldataload(add(params.offset, 0xa0))
             positionIndex := calldataload(add(params.offset, 0xc0))
-            tickLower := calldataload(add(params.offset, 0xe0))
-            tickUpper := calldataload(add(params.offset, 0x100))
-            payerIsUser := calldataload(add(params.offset, 0x120))
+            payerIsUser := calldataload(add(params.offset, 0xe0))
         }
     }
 

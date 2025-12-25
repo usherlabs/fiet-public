@@ -330,13 +330,7 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
 
         // increase the liquidity in the position by a specified amount
         uint256 liquidityToIncrease = 1000;
-        MMA.increase(
-            positionManager,
-            corePoolKey,
-            tokenId,
-            positionIndex,
-            liquidityToIncrease
-        );
+        MMA.increase(positionManager, corePoolKey, tokenId, positionIndex, liquidityToIncrease);
 
         // validate the liquidity in the position is increased
         (Position memory positionAfterIncrease,) = positionManager.getPosition(tokenId, positionIndex);
@@ -531,7 +525,7 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
             false
         );
         // increase the liquidity in the new position with index 1
-        actions[3] = MMA.prepareIncrease(corePoolKey, tokenId, newPositionIndex, 0, 60, liquidityToIncrease);
+        actions[3] = MMA.prepareIncrease(corePoolKey, tokenId, newPositionIndex, liquidityToIncrease);
         // completely burn the initial position with index 0
         actions[4] = MMA.prepareBurn(corePoolKey, tokenId, positionIndex);
         // take all the underlying tokens from the initial position with index 0
@@ -601,9 +595,7 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
 
         MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
         actions[0] = MMA.prepareDecrease(corePoolKey, tokenId, positionIndex, decreaseLiquidityDelta);
-        actions[1] = MMA.prepareIncreaseFromDeltas(
-            corePoolKey, newTokenId, positionIndex, newLiquidityParams.tickLower, newLiquidityParams.tickUpper, true
-        );
+        actions[1] = MMA.prepareIncreaseFromDeltas(corePoolKey, newTokenId, positionIndex, true);
         MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
 
         // validate the liquidity of the initial position is decreased

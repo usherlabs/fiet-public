@@ -227,12 +227,11 @@ library MMActionAdapter {
     /**
      * @notice Prepares an INCREASE_LIQUIDITY action
      */
-    function prepareIncrease(
-        PoolKey memory poolKey,
-        uint256 tokenId,
-        uint256 positionIndex,
-        uint256 liquidity
-    ) internal pure returns (PreparedAction memory) {
+    function prepareIncrease(PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex, uint256 liquidity)
+        internal
+        pure
+        returns (PreparedAction memory)
+    {
         return PreparedAction({
             action: bytes1(uint8(MMActions.INCREASE_LIQUIDITY)),
             params: abi.encode(poolKey, tokenId, positionIndex, liquidity)
@@ -246,13 +245,11 @@ library MMActionAdapter {
         PoolKey memory poolKey,
         uint256 tokenId,
         uint256 positionIndex,
-        int24 tickLower,
-        int24 tickUpper,
         bool payerIsUser
     ) internal pure returns (PreparedAction memory) {
         return PreparedAction({
             action: bytes1(uint8(MMActions.INCREASE_LIQUIDITY_FROM_DELTAS)),
-            params: abi.encode(poolKey, tokenId, positionIndex, tickLower, tickUpper, payerIsUser)
+            params: abi.encode(poolKey, tokenId, positionIndex, payerIsUser)
         });
     }
 
