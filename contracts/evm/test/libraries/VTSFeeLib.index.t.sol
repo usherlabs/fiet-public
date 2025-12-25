@@ -324,7 +324,7 @@ contract VTSFeeLibIndexTest is VTSOrchestratorFixture {
         // Setup: Create a position with no materialised deficit initially.
         // Note: We intentionally do NOT add an oversized settlement buffer here, so a later swap can
         // actually materialise deficit principal and trigger residual flushing.
-        (uint256 tokenId, PositionId positionId) = _createNewMMCommit(-60, 60, 3e10);
+        (, PositionId positionId) = _createNewMMCommit(-60, 60, 3e10);
 
         // Settle to ensure no deficit exists yet
         vtsOrchestrator.settlePositionGrowths(positionId);

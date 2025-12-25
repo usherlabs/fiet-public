@@ -362,6 +362,7 @@ abstract contract VTSOrchestratorFixture is MarketTestBase, MarketMakerTestBase 
         if (execute) {
             MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
         }
+        return actions;
     }
 
     function _pokeMM(uint256 tokenId, uint256 positionIndex) internal {

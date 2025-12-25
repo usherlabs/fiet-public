@@ -673,7 +673,6 @@ library VTSPositionLib {
         uint8 feeTokenIndex = tokenIndex == 0 ? 1 : 0; // Fee token is opposite of deficit token
         uint256 fg;
         uint256 feesBurn;
-        bool shouldReturn;
         (fg, feesBurn) =
             _calculateFeesBurn(s, poolManager, id, p, tokenIndex, feeTokenIndex, burnBase, positionLiquidity);
 
@@ -791,11 +790,8 @@ library VTSPositionLib {
     /// @dev That settled must be the settled balance that existed during the interval [indexLast, indexNow].
     ///      If _settleCISEForToken is called after _updateSettlement has changed pa.settled, risks applying historical deltaIndex against the new settled balance.
     /// @param s The central VTS storage
-    /// @param poolManager The pool manager contract
     /// @param positionId The position ID
-    function _settleSettledIndexedCoverageUsage(VTSStorage storage s, IPoolManager poolManager, PositionId positionId)
-        internal
-    {
+    function _settleSettledIndexedCoverageUsage(VTSStorage storage s, PositionId positionId) internal {
         Position memory pos = s.positions[positionId];
         PoolId poolId = pos.poolId;
 
@@ -808,7 +804,7 @@ library VTSPositionLib {
     /// @param poolManager The pool manager contract
     /// @param positionId The position ID
     function settlePositionGrowths(VTSStorage storage s, IPoolManager poolManager, PositionId positionId) public {
-        _settleSettledIndexedCoverageUsage(s, poolManager, positionId);
+        _settleSettledIndexedCoverageUsage(s, positionId);
 
         _settlePositionDeficitGrowth(s, poolManager, positionId);
         _settlePositionInflowGrowth(s, poolManager, positionId);
@@ -1521,7 +1517,6 @@ library VTSPositionLib {
         returns (SettleResult memory result)
     {
         Position memory pos = s.positions[p.positionId];
-        PoolId poolId = pos.poolId;
 
         // Validate position exists
         address owner = pos.owner;

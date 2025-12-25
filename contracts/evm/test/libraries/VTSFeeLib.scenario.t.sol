@@ -220,7 +220,7 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         int24 tickUpper,
         uint256 liquidity,
         MarketVTSConfiguration memory vtsConfig
-    ) internal view returns (uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) {
+    ) internal pure returns (uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) {
         ModifyLiquidityParams memory p = ModifyLiquidityParams({
             tickLower: tickLower, tickUpper: tickUpper, liquidityDelta: int256(liquidity), salt: bytes32(0)
         });
@@ -402,7 +402,7 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
     ///      - Self-exclusion ensures: potAvail = protocolFeeAccrued - feesShared(position), so MM0's potAvail excludes its own slash
     function test_multiMM_twoDeficits_protocolCovers_bothSlashed_selfExcludedFromOwnPot() public {
         (uint256 tokenId,) = _commitAndMintFirstMM(); // idx0
-        (uint256 idx2,) = _mintAdditionalMM(tokenId, -60, 60, 1e10); // idx1
+        _mintAdditionalMM(tokenId, -60, 60, 1e10); // idx1
         (uint256 idx3,) = _mintAdditionalMM(tokenId, -60, 60, 1e10); // idx2
 
         // Make MM3 solvent (beneficiary)
@@ -1326,7 +1326,7 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
             // Touch DirectLP again: now potAvail > 0, so it should allocate and queue a bonus
             modifyLiquidityRouter.modifyLiquidity(corePoolKey, dlPokeParams, ZERO_BYTES);
 
-            uint256 lcc1BalanceAfter = _selfLccBalance(lccCurrency1);
+            // uint256 lcc1BalanceAfter = _selfLccBalance(lccCurrency1);
 
             (,,, int256 pending1AfterAlloc) = _testableOrchestrator().getPositionFeeAccounting(directPosId);
             assertLt(pending1AfterAlloc, 0, "potAvail>0: should queue a bonus (pendingFeeAdj1 < 0)");

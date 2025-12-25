@@ -92,9 +92,6 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
     function test_revert_renewSignal_whenPoolManagerLocked() public {
         // First create a commit
         bytes memory signalBytes = abi.encode(liquiditySignal);
-        bytes memory unlockData = abi.encode(
-            address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.commitSignal.selector, signalBytes)
-        );
         unlockCaller.run(
             address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.commitSignal.selector, signalBytes)
         );
@@ -189,12 +186,12 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
     // Signal Lifecycle Tests
     // ============================================================
 
-    function test_isSignalValid_zeroCommitId_returnsFalse() public {
+    function test_isSignalValid_zeroCommitId_returnsFalse() public view {
         bool isValid = vtsOrchestrator.isSignalValid(0, true);
         assertFalse(isValid, "Zero commitId should be invalid");
     }
 
-    function test_isSignalValid_unknownCommitId_returnsFalse() public {
+    function test_isSignalValid_unknownCommitId_returnsFalse() public view {
         bool isValid = vtsOrchestrator.isSignalValid(999, true);
         assertFalse(isValid, "Unknown commitId should be invalid");
     }
@@ -286,7 +283,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
     // Position Validity + Lens Tests
     // ============================================================
 
-    function test_isPositionValid_invalidPositionId_returnsFalse() public {
+    function test_isPositionValid_invalidPositionId_returnsFalse() public view {
         PositionId invalidId = PositionId.wrap(bytes32(uint256(999)));
         bool isValid = vtsOrchestrator.isPositionValid(invalidId, false);
         assertFalse(isValid, "Invalid positionId should return false");
@@ -325,7 +322,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
     function test_calcRFS_returnsCorrectValues() public {
         (, PositionId positionId,,) = _createCommittedPosition();
 
-        (bool rfsOpen, BalanceDelta delta) = vtsOrchestrator.calcRFS(positionId, false);
+        vtsOrchestrator.calcRFS(positionId, true);
         // RFS state depends on position state - just verify it doesn't revert
         assertTrue(true, "calcRFS should not revert");
     }
@@ -711,14 +708,14 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
     // Additional Helper Tests
     // ============================================================
 
-    function test_getMarketVTSConfiguration_returnsConfig() public {
+    function test_getMarketVTSConfiguration_returnsConfig() public view {
         MarketVTSConfiguration memory config = vtsOrchestrator.getMarketVTSConfiguration(corePoolKey.toId());
         assertGt(config.token0.baseVTSRate, 0, "BaseVTSRate should be non-zero");
         assertGt(config.token1.baseVTSRate, 0, "BaseVTSRate should be non-zero");
     }
 
-    function test_getPool_returnsPoolInfo() public {
-        (PoolId id, Currency currency0, Currency currency1, MarketVTSConfiguration memory config, bool isPaused) =
+    function test_getPool_returnsPoolInfo() public view {
+        (PoolId id, Currency currency0, Currency currency1,, bool isPaused) =
             vtsOrchestrator.getPool(corePoolKey.toId());
 
         assertEq(PoolId.unwrap(id), PoolId.unwrap(corePoolKey.toId()), "PoolId should match");
