@@ -434,7 +434,7 @@ contract VTSFeeLibIndexTest is VTSOrchestratorFixture {
         // Therefore potAvail for A should be 0
 
         // Poke A to trigger fee processing
-        _pokeMM(mmA, 0, -60, 60);
+        _pokeMM(mmA, 0);
 
         // Record A's pending after poke
         (, uint256 aFeesShared1After, int256 aPending0After, int256 aPending1After) =
@@ -543,7 +543,7 @@ contract VTSFeeLibIndexTest is VTSOrchestratorFixture {
         int256 cPendingBefore;
         (,,, cPendingBefore) = _testableOrchestrator().getPositionFeeAccounting(posIdC);
 
-        _pokeMM(mmC, 0, -60, 60);
+        _pokeMM(mmC, 0);
 
         int256 cPendingAfter;
         (,,, cPendingAfter) = _testableOrchestrator().getPositionFeeAccounting(posIdC);
@@ -560,7 +560,7 @@ contract VTSFeeLibIndexTest is VTSOrchestratorFixture {
         (,, aPendingBefore,) = _testableOrchestrator().getPositionFeeAccounting(posIdA);
 
         console.log("-------------------------------- Poke A");
-        _pokeMM(mmA, 0, -60, 60);
+        _pokeMM(mmA, 0);
         console.log("-------------------------------- END Poke A");
 
         // Record A's CSI state after poke
@@ -569,7 +569,7 @@ contract VTSFeeLibIndexTest is VTSOrchestratorFixture {
 
         // Similarly B pokes
         console.log("-------------------------------- Poke B");
-        _pokeMM(mmB, 0, -60, 60);
+        _pokeMM(mmB, 0);
         console.log("-------------------------------- END Poke B");
 
         (, uint256 bRemaining1After,,) = _testableOrchestrator().getPositionCSIAccounting(posIdB);
@@ -597,7 +597,7 @@ contract VTSFeeLibIndexTest is VTSOrchestratorFixture {
         uint256 lcc1BalanceBefore = _selfLccBalance(lccCurrency1);
 
         console.log("-------------------------------- Poke C");
-        _pokeMM(mmC, 0, -60, 60);
+        _pokeMM(mmC, 0);
         console.log("-------------------------------- END Poke C");
 
         (,,, cPendingAfter) = _testableOrchestrator().getPositionFeeAccounting(posIdC);
@@ -650,7 +650,7 @@ contract VTSFeeLibIndexTest is VTSOrchestratorFixture {
         (, uint256 pot1BeforeBonus) = _protocolFeeAccrued(corePoolKey.toId());
 
         // B receives bonus from A's first contribution (advances spend index)
-        _pokeMM(mmB, 0, -60, 60);
+        _pokeMM(mmB, 0);
         uint256 lcc1BalanceAfter = _selfLccBalance(lccCurrency1);
         assertGt(lcc1BalanceAfter, lcc1BalanceBefore, "LCC balance will be greater after poke B");
 

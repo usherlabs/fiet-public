@@ -351,12 +351,12 @@ abstract contract VTSOrchestratorFixture is MarketTestBase, MarketMakerTestBase 
     }
 
     /// @notice Helper to poke an MM position and take fees (for fee collection tests)
-    function _pokeMM(uint256 tokenId, uint256 positionIndex, int24 tickLower, int24 tickUpper, bool execute)
+    function _pokeMM(uint256 tokenId, uint256 positionIndex, bool execute)
         internal
         returns (MMA.PreparedAction[] memory)
     {
         MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](3);
-        actions[0] = MMA.prepareIncrease(corePoolKey, tokenId, positionIndex, tickLower, tickUpper, 0);
+        actions[0] = MMA.prepareIncrease(corePoolKey, tokenId, positionIndex, 0);
         actions[1] = MMA.prepareTake(lccCurrency0, address(this), 0);
         actions[2] = MMA.prepareTake(lccCurrency1, address(this), 0);
         if (execute) {
@@ -364,8 +364,8 @@ abstract contract VTSOrchestratorFixture is MarketTestBase, MarketMakerTestBase 
         }
     }
 
-    function _pokeMM(uint256 tokenId, uint256 positionIndex, int24 tickLower, int24 tickUpper) internal {
-        _pokeMM(tokenId, positionIndex, tickLower, tickUpper, true);
+    function _pokeMM(uint256 tokenId, uint256 positionIndex) internal {
+        _pokeMM(tokenId, positionIndex, true);
     }
 
     /// @notice Helper to get MMPM's LCC balance

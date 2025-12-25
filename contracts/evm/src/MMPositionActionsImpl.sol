@@ -115,15 +115,9 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
             return;
         }
         if (action == MMActions.INCREASE_LIQUIDITY) {
-            (
-                PoolKey calldata poolKey,
-                uint256 tokenId,
-                uint256 positionIndex,
-                int24 tickLower,
-                int24 tickUpper,
-                uint256 liquidity
-            ) = params.decodeIncreaseLiquidityParams();
-            _increase(poolKey, tokenId, positionIndex, tickLower, tickUpper, liquidity);
+            (PoolKey calldata poolKey, uint256 tokenId, uint256 positionIndex, uint256 liquidity) =
+                params.decodeIncreaseLiquidityParams();
+            _increase(poolKey, tokenId, positionIndex, liquidity);
             return;
         }
         if (action == MMActions.DECREASE_LIQUIDITY) {
@@ -409,22 +403,13 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
     /// @param poolKey The pool key
     /// @param tokenId The commitment NFT token ID
     /// @param positionIndex The position index within the commitment
-    /// @param tickLower The lower tick of the position
-    /// @param tickUpper The upper tick of the position
     /// @param liquidity The amount of liquidity to add
-    function _increase(
-        PoolKey calldata poolKey,
-        uint256 tokenId,
-        uint256 positionIndex,
-        int24 tickLower,
-        int24 tickUpper,
-        uint256 liquidity
-    ) internal {
+    function _increase(PoolKey calldata poolKey, uint256 tokenId, uint256 positionIndex, uint256 liquidity) internal {
         MMHelpers.assertApprovedOrOwner(msgSender(), tokenId);
 
         (Position memory position,) = getPosition(tokenId, positionIndex);
         MMHelpers.assertPositionForPool(poolKey, position);
-        _increaseInternal(poolKey, tokenId, positionIndex, tickLower, tickUpper, liquidity);
+        _increaseInternal(poolKey, tokenId, positionIndex, position.tickLower, position.tickUpper, liquidity);
     }
 
     /// @notice Internal helper to increase liquidity

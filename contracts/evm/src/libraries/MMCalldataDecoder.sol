@@ -60,13 +60,11 @@ library MMCalldataDecoder {
         }
     }
 
-    /// @dev INCREASE_LIQUIDITY: (PoolKey, uint256, uint256, int24, int24, uint256)
+    /// @dev INCREASE_LIQUIDITY: (PoolKey, uint256, uint256, uint256)
     /// @param params The calldata bytes to decode
     /// @return poolKey The pool key (calldata pointer)
     /// @return tokenId The commitment NFT token ID
     /// @return positionIndex The position index within the commitment
-    /// @return tickLower The lower tick of the position
-    /// @return tickUpper The upper tick of the position
     /// @return liquidity The amount of liquidity to add
     function decodeIncreaseLiquidityParams(bytes calldata params)
         internal
@@ -75,24 +73,20 @@ library MMCalldataDecoder {
             PoolKey calldata poolKey,
             uint256 tokenId,
             uint256 positionIndex,
-            int24 tickLower,
-            int24 tickUpper,
             uint256 liquidity
         )
     {
         assembly ("memory-safe") {
-            // PoolKey: 5 slots (0xa0), then tokenId, positionIndex, tickLower, tickUpper, liquidity
-            // Minimum length: 0xa0 + 0x20*5 = 0x140
-            if lt(params.length, 0x140) {
+            // PoolKey: 5 slots (0xa0), then tokenId, positionIndex, liquidity
+            // Minimum length: 0xa0 + 0x20*3 = 0x100
+            if lt(params.length, 0x100) {
                 mstore(0, SLICE_ERROR_SELECTOR)
                 revert(0x1c, 4)
             }
             poolKey := params.offset
             tokenId := calldataload(add(params.offset, 0xa0))
             positionIndex := calldataload(add(params.offset, 0xc0))
-            tickLower := calldataload(add(params.offset, 0xe0))
-            tickUpper := calldataload(add(params.offset, 0x100))
-            liquidity := calldataload(add(params.offset, 0x120))
+            liquidity := calldataload(add(params.offset, 0xe0))
         }
     }
 

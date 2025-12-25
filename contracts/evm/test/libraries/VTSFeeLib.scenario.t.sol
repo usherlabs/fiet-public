@@ -282,11 +282,11 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         console.log("mm3 settled0:", settled03);
         console.log("mm3 settled1:", settled13);
 
-        _pokeMM(mm2, 0, -60, 60);
-        _pokeMM(mm3, 0, -60, 60);
+        _pokeMM(mm2, 0);
+        _pokeMM(mm3, 0);
         uint256 potAfter = _slashedPot1();
 
-        _pokeMM(mm1, 0, -60, 60);
+        _pokeMM(mm1, 0);
 
         uint256 potAfterDeficitMMSPoke = _slashedPot1();
 
@@ -551,7 +551,7 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         vtsOrchestrator.incrementCoverage(corePoolKey.toId(), 5e17, 0);
 
         // Trigger settle + fee processing for the MM position (this is where feeAdj is finalised into the slashed pot).
-        _pokeMM(tokenId, 0, -60, 60);
+        _pokeMM(tokenId, 0);
 
         // Pot0 should remain unchanged (fee token is token1 in this scenario).
         assertEq(_slashedPot0(), pot0Before, "token0 slashed pot should not change for one-for-zero fee token");
@@ -588,7 +588,7 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         _mmSettle(tokenId, 0, int128(0), _negInt128Capped(2e12));
 
         uint256 pot1BeforeBonusAttempt = _slashedPot1();
-        _pokeMM(tokenId, 0, -60, 60);
+        _pokeMM(tokenId, 0);
         uint256 pot1AfterBonusAttempt = _slashedPot1();
 
         // ============================================================================================================
@@ -726,23 +726,15 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         idx3;
     }
 
-    /// @notice Edge Case 5: Beneficiary can allocate (queue) a bonus before any slashing is materialised into the pot,
-    ///         if it processes fees before the slasher position does.
-    /// @dev Demonstrates the ordering hazard with CISE:
-    ///      - Coverage burn queues +pendingFeeAdj on the slasher and increments protocolFeeAccrued (accounting pot)
-    ///      - But slashedPot is only funded when the slasher is later poked (finalised via _finaliseFeeAdjustment)
-    ///      - Meanwhile, a beneficiary poke (via CISE) can realise exposure, reduce protocolFeeAccrued and queue -pendingFeeAdj (bonus),
-    ///        despite slashedPot still being 0 (so nothing can be paid yet)
-    ///      Setup:
-    ///      - Create MM0 (slasher) and MM1 (beneficiary) positions
-    ///      - Create deficit + coverage to trigger slash on MM0 (queues +pendingFeeAdj, increments protocolFeeAccrued)
-    ///      - Do NOT poke MM0 yet (slashedPot remains 0)
-    ///      - Poke MM1 first (beneficiary processes fees before slasher, realises CISE exposure)
-    ///      Expected:
-    ///      - slashedPot remains 0 (slasher not poked yet)
-    ///      - protocolFeeAccrued is reduced by bonus allocation (bonus queued from accounting pot)
-    ///      - MM1 has negative pendingFeeAdj (queued bonus)
-    ///      - After MM0 poke, slashedPot is funded and MM1's bonus can be materialised
+    /// @notice Edge Case 5: A beneficiary can queue a bonus before the slashed pot is funded, then later materialise it.
+    /// @dev Correct sequencing under CSI/CISE/DICE:
+    ///      - DICE: `settlePositionGrowths` after `incrementCoverage` queues a slash (+pendingFeeAdj) on the slasher and
+    ///        increases `protocolFeeAccrued` (accounting pot), but does NOT yet fund `slashedPot`.
+    ///      - CISE exposure accrues ONLY at `incrementCoverage` (not on swaps), so we must ensure a post-existence coverage
+    ///        event creates non-dust exposure for the beneficiary.
+    ///      - CSI: bonus allocation can be QUEUED against `protocolFeeAccrued` (pendingFeeAdj < 0, spend index advances)
+    ///        even while `slashedPot == 0` (materialisation is separate).
+    ///      - Materialisation happens only after the slasher is fee-processed (e.g. `_pokeMM`) which funds `slashedPot`.
     function test_bonusAllocatedBeforeSlashMaterialised_whenBeneficiaryPokesFirst() public {
         int24 tickLower = -960;
         int24 tickUpper = 960;
@@ -751,7 +743,7 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         (uint256 tokenId, PositionId slasherPosId,,) = _createCommittedPosition(tickLower, tickUpper, initialLiquidity);
 
         // Clear any "net since last mod" from initial settlement so the pool net is clean
-        _pokeMM(tokenId, 0, tickLower, tickUpper);
+        _pokeMM(tokenId, 0);
 
         // Add idx1 (beneficiary) and leave it with positive net settlement since last modification
         (uint256 idx1, PositionId beneficiaryPosId) = _mintAdditionalMM(tokenId, tickLower, tickUpper, initialLiquidity);
@@ -766,8 +758,20 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         vtsOrchestrator.settlePositionGrowths(slasherPosId);
 
         // Exercise coverage (token0), then settle again to queue coverage burn (slash) in fee token (token1)
-        vm.prank(marketFactory);
-        vtsOrchestrator.incrementCoverage(corePoolKey.toId(), initialLiquidity / 5, 0); // acquire token0, therefore unwrap token0
+        // IMPORTANT: CISE bonus eligibility is gated by exposure which accrues ONLY at incrementCoverage.
+        // Ensure the beneficiary accrues non-dust CISE exposure (> 1e6) so a bonus can be queued.
+        {
+            (,, uint256 beneficiarySettled0,,,) = _testableOrchestrator().getPositionAccounting(beneficiaryPosId);
+            (uint256 totalSettled0,,,,,,,) = _testableOrchestrator().getPoolCISEAccounting(corePoolKey.toId());
+            assertGt(totalSettled0, 0, "Precondition: totalSettled0 must be > 0 for CISE indexing");
+            assertGt(beneficiarySettled0, 0, "Precondition: beneficiary must have settled0 > 0 for CISE exposure");
+
+            uint256 targetExposure = 1e7; // comfortably above the 1e6 dust guard
+            uint256 coverage0 = (targetExposure * totalSettled0) / beneficiarySettled0 + 1;
+
+            vm.prank(marketFactory);
+            vtsOrchestrator.incrementCoverage(corePoolKey.toId(), coverage0, 0); // acquire token0, therefore unwrap token0
+        }
         vtsOrchestrator.settlePositionGrowths(slasherPosId);
 
         // Sanity: slashed pot should still be 0 (slasher not poked -> no _finaliseFeeAdjustment funding)
@@ -785,24 +789,26 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         slasherPending0Before; // silence unused variable
 
         // ? At this point, the slashed pot is still 0, but protocolFeeAccrued > 0 AND slasher pendingFeeAdj > 0 (queued slash).
+        (, uint256 spendIndex1Before) = _testableOrchestrator().getPoolCSIAccounting(corePoolKey.toId());
 
         // Beneficiary processes fees FIRST:
         // Under CISE, this will realise exposure and CAN queue a bonus against protocolFeeAccrued,
         // even though slashedPot is still 0 (so it can't be materialised/paid yet).
         console.log("FIRST BENEFICIARY POKE:");
-        _pokeMM(tokenId, idx1, tickLower, tickUpper);
+        _pokeMM(tokenId, idx1);
         console.log("END ____ FIRST BENEFICIARY POKE:");
 
         // Pot is still unfunded (slasher still not poked)
         uint256 potAfterBeneficiary = _slashedPot1();
         assertEq(potAfterBeneficiary, 0, "Pot must remain 0 until slasher is poked");
 
-        // protocolFeeAccrued SHOULD NOT be reduced. Since potAvail = 0, CISE exposure is banked until future poke when potAvail > 0.
+        // Under CISE+CSI, beneficiary SHOULD be able to queue a bonus against protocolFeeAccrued
+        // even if slashedPot is still 0 (materialisation is separate).
         (, uint256 feeAccruedAfterBeneficiary) = _protocolFeeAccrued(corePoolKey.toId());
-        assertEq(
+        assertLt(
             feeAccruedAfterBeneficiary,
             feeAccruedBefore,
-            "protocolFeeAccrued SHOULD NOT be reduced. Since potAvail = 0, CISE exposure is banked until future poke when potAvail > 0"
+            "Beneficiary poke should reduce protocolFeeAccrued when potAvail>0 and CISE exposure is non-dust"
         );
 
         (, uint256 slasherContrib,,) = _testableOrchestrator().getPositionFeeAccounting(slasherPosId);
@@ -812,20 +818,26 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         (,, int256 mm1Pending0After, int256 mm1Pending1After) =
             _testableOrchestrator().getPositionFeeAccounting(beneficiaryPosId);
         mm1Pending0After; // silence unused variable
-        assertEq(mm1Pending1After, 0, "Beneficiary should have no pendingFeeAdj1 until slasher is poked");
+        assertLt(
+            mm1Pending1After, 0, "Beneficiary should queue a bonus (pendingFeeAdj1 < 0) even while slashedPot is 0"
+        );
+
+        // CSI spend index should advance when a bonus is allocated (queued)
+        (, uint256 spendIndex1After) = _testableOrchestrator().getPoolCSIAccounting(corePoolKey.toId());
+        assertGt(spendIndex1After, spendIndex1Before, "CSI: spend index must advance when bonus is allocated");
 
         // Now poke slasher: this should fund the pot from its +pendingFeeAdj
-        _pokeMM(tokenId, 0, tickLower, tickUpper);
+        _pokeMM(tokenId, 0);
         uint256 potAfterSlasher = _slashedPot1();
         assertGt(potAfterSlasher, 0, "Slasher poke should fund the pot");
 
         uint256 lcc1BalanceBefore = _selfLccBalance(lccCurrency1);
 
         // SECOND Beneficiary poke: this should materialise (pay) some/all of the queued bonus from slashedPot
-        _pokeMM(tokenId, idx1, tickLower, tickUpper);
+        _pokeMM(tokenId, idx1);
 
         uint256 potAfterBeneficiary2 = _slashedPot1();
-        assertEq(potAfterBeneficiary2, potAfterSlasher, "Pot should not change as Beneficiary is not slashed further");
+        assertLt(potAfterBeneficiary2, potAfterSlasher, "Beneficiary materialisation should drain slashedPot1");
 
         uint256 lcc1BalanceAfter = _selfLccBalance(lccCurrency1);
         assertGt(
@@ -835,19 +847,22 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         (,, int256 mm1Pending0After2, int256 mm1Pending1After2) =
             _testableOrchestrator().getPositionFeeAccounting(beneficiaryPosId);
         mm1Pending0After2; // silence unused variable
-        assertEq(mm1Pending1After2, 0, "Beneficiary pendingFeeAdj1 should move back towards 0 after materialisation");
+        assertGt(mm1Pending1After2, mm1Pending1After, "Pending bonus should move towards 0 after materialisation");
 
         // Suppress unused variable warnings
         tokenId;
         idx1;
     }
 
-    /// @notice Edge Case 6: An inactive (0-liquidity) position can still poke to materialise queued bonuses once the pot is funded.
-    /// @dev Regression for the "dissolved position" case:
-    ///      - A DirectLP position allocates a bonus while the slashed pot is still empty (bonus is queued, not paid)
-    ///      - The DirectLP fully removes liquidity (becomes inactive)
-    ///      - Later, a slashed MM position is poked, funding the pot
-    ///      - The now-inactive DirectLP can still poke (liquidityDelta=0) and receive payout (pending bonus reduces, pot drains)
+    /// @notice Edge Case 6: An inactive (0-liquidity) DirectLP can still materialise a previously queued bonus once the pot is funded.
+    /// @dev Correct sequencing under CSI/CISE/DICE:
+    ///      - Create slashes: `settlePositionGrowths` + `incrementCoverage` + `settlePositionGrowths` (accounts into `protocolFeeAccrued`)
+    ///      - DirectLP creation must NOT allocate a bonus immediately (new position gate).
+    ///      - CISE exposure accrues ONLY at `incrementCoverage`, so call `incrementCoverage` AFTER the DirectLP exists to create exposure.
+    ///      - Touch DirectLP to QUEUE bonus (pendingFeeAdj < 0) even while `slashedPot == 0`.
+    ///      - Remove liquidity fully: position becomes inactive, but queued pending remains.
+    ///      - Fund `slashedPot` by fee-processing the slasher (e.g. `_pokeMM`).
+    ///      - Re-open and close in one batch to materialise: `slashedPot` drains and pending moves towards 0.
     function test_inactivePosition_canPokeToMaterialiseQueuedBonus_afterPotFunded() public {
         // ------------------------------------------------------------
         // 1) Create a slasher MM that queues protocolFeeAccrued + pendingFeeAdj, but DO NOT fund slashedPot yet
@@ -932,6 +947,21 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         // ------------------------------------------------------------
         _swapCore(false, -int256(2e18)); // accrue token1 fees for in-range positions
 
+        // IMPORTANT: CISE exposure accrues ONLY at incrementCoverage (not on swaps).
+        // Ensure this DirectLP accrues non-dust exposure after creation so it can queue a bonus on touch.
+        {
+            (,, uint256 dlSettled0,,,) = _testableOrchestrator().getPositionAccounting(directPosId);
+            (uint256 totalSettled0,,,,,,,) = _testableOrchestrator().getPoolCISEAccounting(corePoolKey.toId());
+            assertGt(totalSettled0, 0, "Precondition: totalSettled0 must be > 0 for CISE indexing");
+            assertGt(dlSettled0, 0, "Precondition: DirectLP must have settled0 > 0 for CISE exposure");
+
+            uint256 targetExposure = 1e7; // comfortably above the 1e6 dust guard
+            uint256 coverage0 = (targetExposure * totalSettled0) / dlSettled0 + 1;
+
+            vm.prank(marketFactory);
+            vtsOrchestrator.incrementCoverage(corePoolKey.toId(), coverage0, 0);
+        }
+
         // Now that the DirectLP is an *existing* position, a subsequent increase can allocate a bonus
         // (selfNet > 0 from settlement, feeWeight > 0 from accrued fees).
         uint256 dlMoreLiquidity = 5e17;
@@ -974,7 +1004,7 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         // ------------------------------------------------------------
         // 5) Fund the slashed pot by poking the slasher MM (materialises its +pendingFeeAdj)
         // ------------------------------------------------------------
-        _pokeMM(tokenId, 0, mmTickLower, mmTickUpper);
+        _pokeMM(tokenId, 0);
         (, uint256 potFunded) = vtsOrchestrator.getSlashedPot(corePoolKey.toId());
         assertGt(potFunded, 0, "Pot must be funded after slasher poke");
 
@@ -1019,10 +1049,12 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         assertGt(dlPending1Final, dlPending1AfterRemove, "Pending bonus should be reduced after inactive poke");
     }
 
-    /// @notice Edge Case 6b: An inactive (0-liquidity) MM position can collect dormant fees/bonuses by re-activating,
-    ///         settling, closing again, then taking both LCC deltas.
-    /// @dev This specifically exercises the MMPositionManager/MMPositionActionsImpl pathway:
-    ///      increase (reactivate) -> settle (fund) -> decrease (return to 0-liquidity) -> take(lcc0) -> take(lcc1).
+    /// @notice Edge Case 6b: An inactive (0-liquidity) MM position can collect dormant fees/bonuses once the pot is funded.
+    /// @dev Correct sequencing under CSI/CISE/DICE (MMPositionManager pathway):
+    ///      - Beneficiary must have non-dust CISE exposure (requires `incrementCoverage` AFTER it exists).
+    ///      - Bonus is QUEUED on touch (pendingFeeAdj < 0), but cannot be paid until `slashedPot` is funded.
+    ///      - After funding the pot (slasher fee-processing), even a 0-liquidity MM can "poke" to materialise pending bonuses,
+    ///        provided the batch fully drains any delta credits (otherwise `CurrencyNotSettled` reverts).
     function test_inactivePosition_mmCanCollectDormantFees() public {
         // ------------------------------------------------------------
         // 1) Create a slasher MM that queues protocolFeeAccrued, but DO NOT fund slashedPot yet
@@ -1066,9 +1098,25 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         _swapCore(false, -int256(2e18)); // accrue token1 fees for in-range positions
 
         (, int24 tickAfterSwap2,,) = StateLibrary.getSlot0(manager, corePoolKey.toId());
+        tickAfterSwap2; // silence
+
+        // IMPORTANT: CISE exposure accrues ONLY at incrementCoverage (not on swaps).
+        // Ensure this MM accrues non-dust exposure after creation so it can queue a bonus on touch.
+        {
+            (,, uint256 mmSettled0,,,) = _testableOrchestrator().getPositionAccounting(beneficiaryPosId);
+            (uint256 totalSettled0,,,,,,,) = _testableOrchestrator().getPoolCISEAccounting(corePoolKey.toId());
+            assertGt(totalSettled0, 0, "Precondition: totalSettled0 must be > 0 for CISE indexing");
+            assertGt(mmSettled0, 0, "Precondition: beneficiary MM must have settled0 > 0 for CISE exposure");
+
+            uint256 targetExposure = 1e7; // comfortably above the 1e6 dust guard
+            uint256 coverage0 = (targetExposure * totalSettled0) / mmSettled0 + 1;
+
+            vm.prank(marketFactory);
+            vtsOrchestrator.incrementCoverage(corePoolKey.toId(), coverage0, 0);
+        }
 
         // Touch (increase 0) to process fees and queue bonus; take deltas to avoid lingering credits.
-        _pokeMM(beneficiaryTokenId, 0, mmTickLower, mmTickUpper);
+        _pokeMM(beneficiaryTokenId, 0);
 
         (,, int256 mmPending0AfterTouch, int256 mmPending1AfterTouch) =
             vtsOrchestrator.getPositionFeeAccounting(beneficiaryPosId);
@@ -1103,15 +1151,22 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         // ------------------------------------------------------------
         // 5) Fund the slashed pot by poking the slasher MM (materialises its +pendingFeeAdj)
         // ------------------------------------------------------------
-        _pokeMM(slasherTokenId, 0, mmTickLower, mmTickUpper);
+        _pokeMM(slasherTokenId, 0);
         (, uint256 potFunded) = vtsOrchestrator.getSlashedPot(corePoolKey.toId());
         assertGt(potFunded, 0, "Pot must be funded after slasher poke");
 
         // ------------------------------------------------------------
-        // 6) Inactive MM re-activates with a small increase, settles, closes again, then takes deltas to collect.
+        // 6) Inactive MM "pokes" (increase liquidity by 1e6) to materialise its queued bonus, then takes both currencies.
+        //    NOTE: This batch must end with zero delta credits, otherwise MMPositionManager reverts with CurrencyNotSettled.
+        //    NOTE: Uniswap will prevent increase by 0 liquidity on inactive position https://github.com/Uniswap/v4-core/blob/36d790b1a3af38461453a13a6ff395290fbc11b2/src/libraries/Position.sol#L86
         // ------------------------------------------------------------
         uint256 potBeforeInactiveClaim = potFunded;
         uint256 mmReopenLiquidity = 1e6;
+
+        // _permitSettle(1e18, 1e18); // ensure can settle
+
+        uint256 bal0Before = _selfLccBalance(lccCurrency0);
+        uint256 bal1Before = _selfLccBalance(lccCurrency1);
 
         (uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) = _calculateSettlementAmounts(
             ModifyLiquidityParams({
@@ -1127,17 +1182,14 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         int128 settle1 = -SafeCast.toInt128(requiredSettlementAmount1);
         _permitSettle(settle0, settle1);
 
-        uint256 bal0Before = _selfLccBalance(lccCurrency0);
-        uint256 bal1Before = _selfLccBalance(lccCurrency1);
-
         {
-            MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](5);
-            actions[0] =
-                MMA.prepareIncrease(corePoolKey, beneficiaryTokenId, 0, mmTickLower, mmTickUpper, mmReopenLiquidity);
+            MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](6);
+            actions[0] = MMA.prepareIncrease(corePoolKey, beneficiaryTokenId, 0, mmReopenLiquidity);
             actions[1] = MMA.prepareSettle(corePoolKey, beneficiaryTokenId, 0, settle0, settle1, false);
-            actions[2] = MMA.prepareDecrease(corePoolKey, beneficiaryTokenId, 0, mmReopenLiquidity);
-            actions[3] = MMA.prepareTake(lccCurrency0, address(this), 0);
-            actions[4] = MMA.prepareTake(lccCurrency1, address(this), 0);
+            actions[2] = MMA.prepareDecrease(corePoolKey, beneficiaryTokenId, 0, mmReopenLiquidity); // decrease should nullify.
+            actions[3] = MMA.prepareSettleFromDeltas(corePoolKey, beneficiaryTokenId, 0, true, true); // take underlying back to user wallet.
+            actions[4] = MMA.prepareTake(lccCurrency0, address(this), 0);
+            actions[5] = MMA.prepareTake(lccCurrency1, address(this), 0);
             MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
         }
 

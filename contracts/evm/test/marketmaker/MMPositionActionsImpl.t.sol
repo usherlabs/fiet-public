@@ -308,8 +308,6 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
             corePoolKey,
             tokenId,
             positionIndex,
-            defaultlLiquidityParams.tickLower,
-            defaultlLiquidityParams.tickUpper,
             liquidityToIncrease
         );
 
