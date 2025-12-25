@@ -149,34 +149,15 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
         MarketVTSConfiguration calldata vtsConfiguration,
         address[] calldata issuers
     ) external onlyOwner returns (PoolId corePoolId, PoolId proxyPoolId) {
-        // Build context in scoped block to release intermediate variables
         MarketCreationContext memory ctx;
-        {
-            // Deploy proxy hook and create LCC pair
-            ctx.proxyHookAddress = MarketVaultDeployer(marketVaultDeployer).deployProxyHook(address(poolManager), salt);
-            ctx.marketRef = abi.encodePacked(ctx.proxyHookAddress);
+        // Build core creation context in helpers to avoid "stack too deep" when not compiling viaIR.
+        (ctx.proxyHookAddress, ctx.marketRef, ctx.lccToken0, ctx.lccToken1) =
+            _deployProxyAndCreateLCCPair(underlyingAsset0, underlyingAsset1, salt, issuers);
 
-            // Create LCC pair with initialIssuers in nested scope
-            {
-                // Always include vtsOrchestrator and proxyHookAddress as issuers
-                uint256 totalIssuers = 2 + issuers.length;
-                address[] memory initialIssuers = new address[](totalIssuers);
-                initialIssuers[0] = address(vtsOrchestrator);
-                initialIssuers[1] = ctx.proxyHookAddress;
-                // Copy additional issuers
-                for (uint256 i = 0; i < issuers.length; i++) {
-                    initialIssuers[2 + i] = issuers[i];
-                }
-                (ctx.lccToken0, ctx.lccToken1) = liquidityHub.createLCCPair(
-                    ctx.marketRef, underlyingAsset0, underlyingAsset1, MARKET_NAME, initialIssuers
-                );
-            }
-
-            // Validate oracles and determine currency ordering
-            oracleHelper.validateMarketOracles(ctx.lccToken0, ctx.lccToken1);
-            (ctx.underlyingCurr0, ctx.underlyingCurr1) = _sortCurrencies(underlyingAsset0, underlyingAsset1);
-            (ctx.lccCurr0, ctx.lccCurr1) = _sortCurrencies(ctx.lccToken0, ctx.lccToken1);
-        }
+        // Validate oracles and determine currency ordering
+        oracleHelper.validateMarketOracles(ctx.lccToken0, ctx.lccToken1);
+        (ctx.underlyingCurr0, ctx.underlyingCurr1) = _sortCurrencies(underlyingAsset0, underlyingAsset1);
+        (ctx.lccCurr0, ctx.lccCurr1) = _sortCurrencies(ctx.lccToken0, ctx.lccToken1);
 
         // Calculate proxy initial price
         uint160 proxyInitialPrice;
@@ -235,6 +216,36 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
             coreHook,
             ctx.proxyHookAddress
         );
+    }
+
+    /// @dev Deploys the proxy hook, constructs the market reference, and creates the LCC pair.
+    ///      Split out of `createMarket` to avoid "stack too deep" when coverage disables viaIR/optimiser.
+    function _deployProxyAndCreateLCCPair(
+        address underlyingAsset0,
+        address underlyingAsset1,
+        bytes32 salt,
+        address[] calldata issuers
+    ) internal returns (address proxyHookAddress, bytes memory marketRef, address lccToken0, address lccToken1) {
+        proxyHookAddress = MarketVaultDeployer(marketVaultDeployer).deployProxyHook(address(poolManager), salt);
+        marketRef = abi.encodePacked(proxyHookAddress);
+        address[] memory initialIssuers = _buildInitialIssuers(proxyHookAddress, issuers);
+        (lccToken0, lccToken1) =
+            liquidityHub.createLCCPair(marketRef, underlyingAsset0, underlyingAsset1, MARKET_NAME, initialIssuers);
+    }
+
+    /// @dev Always includes `vtsOrchestrator` and the proxy hook, then appends any additional issuers.
+    function _buildInitialIssuers(address proxyHookAddress, address[] calldata issuers)
+        internal
+        view
+        returns (address[] memory initialIssuers)
+    {
+        uint256 totalIssuers = 2 + issuers.length;
+        initialIssuers = new address[](totalIssuers);
+        initialIssuers[0] = address(vtsOrchestrator);
+        initialIssuers[1] = proxyHookAddress;
+        for (uint256 i = 0; i < issuers.length; i++) {
+            initialIssuers[2 + i] = issuers[i];
+        }
     }
 
     /**

@@ -17,7 +17,6 @@ import {
 } from "../types/VTS.sol";
 import {PositionId, Position} from "../types/Position.sol";
 import {LiquidityUtils} from "./LiquidityUtils.sol";
-import {console} from "forge-std/console.sol";
 
 /// @title VTSFeeLib
 /// @notice Fee processing, slashed pot management, and coverage burn logic for VTS
@@ -289,15 +288,6 @@ library VTSFeeLib {
         // Note: Raw exposure values per coverage token
         uint256 ciseExposure0 = pa.ciseExposureSinceLastMod.token0;
         uint256 ciseExposure1 = pa.ciseExposureSinceLastMod.token1;
-
-        console.log("ciseExposure0", ciseExposure0);
-        console.log("ciseExposure1", ciseExposure1);
-        console.log("totalSettled0", paPool.totalSettled.token0);
-        console.log("totalSettled1", paPool.totalSettled.token1);
-        console.log("coveragePerSettledIndexX1280", paPool.coveragePerSettledIndexX128.token0);
-        console.log("coveragePerSettledIndexX1281", paPool.coveragePerSettledIndexX128.token1);
-        console.log("coverageResidualCISE0", paPool.coverageResidualCISE.token0);
-        console.log("coverageResidualCISE1", paPool.coverageResidualCISE.token1);
 
         // Queue bonuses using CISE exposure (coverage-indexed settled exposure)
         // Token direction mapping: fee pot in token T is funded by deficits in the opposite token.

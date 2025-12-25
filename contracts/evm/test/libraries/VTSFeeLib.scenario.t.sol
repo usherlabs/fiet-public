@@ -22,6 +22,8 @@ import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {console} from "forge-std/console.sol";
 import {LiquidityUtils} from "../../src/libraries/LiquidityUtils.sol";
 import {Actions} from "v4-periphery/src/libraries/Actions.sol";
+import {MarketVTSConfiguration} from "../../src/types/VTS.sol";
+import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 
 /// @title VTSFeeLibScenarioTest
 /// @notice Scenario-driven integration tests for VTS fee-sharing paradigm (slashes, bonuses, materialisation)
@@ -164,12 +166,8 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
     {
         (,, uint256 countBefore,) = vtsOrchestrator.getCommit(tokenId);
 
-        (uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) = _calculateSettlementAmounts(
-            ModifyLiquidityParams({
-                tickLower: tickLower, tickUpper: tickUpper, liquidityDelta: int256(liquidity), salt: 0
-            }),
-            marketVTSConfiguration
-        );
+        (uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) =
+            _requiredSettlementAmountsForMMModify(tickLower, tickUpper, liquidity, marketVTSConfiguration);
 
         // Mint underlying tokens and approve via Permit2 for settlement
         _mintAndApproveUnderlyingForSettlement(requiredSettlementAmount0, requiredSettlementAmount1);
@@ -214,6 +212,54 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         );
     }
 
+    /// @dev Stack-safe wrapper around `_calculateSettlementAmounts` for MM modify actions.
+    ///      Coverage disables viaIR/optimiser, so large test functions can hit "stack too deep"
+    ///      when constructing `ModifyLiquidityParams` inline.
+    function _requiredSettlementAmountsForMMModify(
+        int24 tickLower,
+        int24 tickUpper,
+        uint256 liquidity,
+        MarketVTSConfiguration memory vtsConfig
+    ) internal view returns (uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) {
+        ModifyLiquidityParams memory p = ModifyLiquidityParams({
+            tickLower: tickLower, tickUpper: tickUpper, liquidityDelta: int256(liquidity), salt: bytes32(0)
+        });
+        return _calculateSettlementAmounts(p, vtsConfig);
+    }
+
+    /// @dev Executes the "inactive MM claim" batch (increase+settle+decrease+take) and returns post-state for assertions.
+    ///      Kept as a helper to avoid "stack too deep" when coverage disables viaIR/optimiser.
+    function _inactiveMmClaimAndTake(
+        uint256 beneficiaryTokenId,
+        PositionId beneficiaryPosId,
+        uint256 mmReopenLiquidity
+    ) internal returns (uint256 potAfterInactiveClaim, int256 pending1After, uint256 bal0After, uint256 bal1After) {
+        (uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) =
+            _requiredSettlementAmountsForMMModify(-960, 960, mmReopenLiquidity, marketVTSConfiguration);
+
+        int128 settle0 = -SafeCast.toInt128(requiredSettlementAmount0);
+        int128 settle1 = -SafeCast.toInt128(requiredSettlementAmount1);
+        _permitSettle(settle0, settle1);
+
+        {
+            MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](6);
+            actions[0] = MMA.prepareIncrease(corePoolKey, beneficiaryTokenId, 0, mmReopenLiquidity);
+            actions[1] = MMA.prepareSettle(corePoolKey, beneficiaryTokenId, 0, settle0, settle1, false);
+            actions[2] = MMA.prepareDecrease(corePoolKey, beneficiaryTokenId, 0, mmReopenLiquidity); // decrease should nullify.
+            actions[3] = MMA.prepareSettleFromDeltas(corePoolKey, beneficiaryTokenId, 0, true, true); // take underlying back to user wallet.
+            actions[4] = MMA.prepareTake(lccCurrency0, address(this), 0);
+            actions[5] = MMA.prepareTake(lccCurrency1, address(this), 0);
+            MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+        }
+
+        assertEq(vtsOrchestrator.isPositionValid(beneficiaryPosId, true), false, "MM should end inactive after claim");
+        (, potAfterInactiveClaim) = vtsOrchestrator.getSlashedPot(corePoolKey.toId());
+        (,,, pending1After) = vtsOrchestrator.getPositionFeeAccounting(beneficiaryPosId);
+
+        bal0After = _selfLccBalance(lccCurrency0);
+        bal1After = _selfLccBalance(lccCurrency1);
+    }
+
     // ============================================================
     // Example Scenarios (from spec discussion)
     // ============================================================
@@ -234,54 +280,84 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
     ///      - Fee pot should increase from swap fees and slash materialisation
     ///      - Assertions verify pot increases after swap + coverage operations
     function test_multiMM_oneDeficit_protocolCovers_slashOnlyDeficitMM() public {
-        // 3 independent MM commits (each with unique signal nonce)
-        (uint256 mm1, PositionId mm1PositionId) = _createNewMMCommit(-60, 60, 3e10);
-        (uint256 mm2, PositionId mm2PositionId) = _createNewMMCommit(-60, 60, 3e10);
-        (uint256 mm3, PositionId mm3PositionId) = _createNewMMCommit(-60, 60, 3e10);
-        assertEq(mm1, 1);
-        assertEq(mm2, 2);
-        assertEq(mm3, 3);
+        // Values needed across scoped blocks (declared at function level)
+        uint256 mm1;
+        uint256 mm2;
+        uint256 mm3;
+        uint256 potBefore;
+        uint256 protocolFeeAccruedBefore0;
+        uint256 protocolFeeAccruedBefore1;
+        uint256 protocolFeeAccruedAfter0;
+        uint256 protocolFeeAccruedAfter1;
 
-        // Make MM2 and MM3 solvent by depositing some settlement
-        // Note: For independent commits, position index is always 0
-        _mmSettle(mm2, 0, _negInt128Capped(5e18), _negInt128Capped(5e18));
-        _mmSettle(mm3, 0, _negInt128Capped(5e18), _negInt128Capped(5e18));
+        // ══════════════════════════════════════════════════════════════════════════
+        // Phase 1: Setup + swap + coverage + settle (scoped to reset stack)
+        // ══════════════════════════════════════════════════════════════════════════
+        {
+            // 3 independent MM commits (each with unique signal nonce)
+            PositionId mm1PositionId;
+            PositionId mm2PositionId;
+            PositionId mm3PositionId;
+            (mm1, mm1PositionId) = _createNewMMCommit(-60, 60, 3e10);
+            (mm2, mm2PositionId) = _createNewMMCommit(-60, 60, 3e10);
+            (mm3, mm3PositionId) = _createNewMMCommit(-60, 60, 3e10);
+            assertEq(mm1, 1);
+            assertEq(mm2, 2);
+            assertEq(mm3, 3);
 
-        uint256 potBefore = _slashedPot1();
-        (uint256 protocolFeeAccruedBefore0, uint256 protocolFeeAccruedBefore1) = _protocolFeeAccrued(corePoolKey.toId());
+            // Make MM2 and MM3 solvent by depositing some settlement
+            // Note: For independent commits, position index is always 0
+            _mmSettle(mm2, 0, _negInt128Capped(5e18), _negInt128Capped(5e18));
+            _mmSettle(mm3, 0, _negInt128Capped(5e18), _negInt128Capped(5e18));
 
-        // Swap to accrue fees + outflow growth (choose direction that accrues token0 outflow)
-        // Fee pot should be affected on swap, not on position modification
-        _swapCore(false, -int256(5e18)); // ? one for zero, therefore protocolFeeAccruedBefore1 should increase
+            potBefore = _slashedPot1();
+            (protocolFeeAccruedBefore0, protocolFeeAccruedBefore1) = _protocolFeeAccrued(corePoolKey.toId());
 
-        vtsOrchestrator.settlePositionGrowths(mm2PositionId);
-        vtsOrchestrator.settlePositionGrowths(mm3PositionId);
-        vtsOrchestrator.settlePositionGrowths(mm1PositionId); // settle position now that deficit has surfaced.
+            // Swap to accrue fees + outflow growth (choose direction that accrues token0 outflow)
+            // Fee pot should be affected on swap, not on position modification
+            _swapCore(false, -int256(5e18)); // ? one for zero, therefore protocolFeeAccruedBefore1 should increase
 
-        // Protocol covers unwraps: increment coverage (token0 only)
-        // NOTE: With DICE (Deficit-Indexed Coverage Exercise), coverage is now indexed to
-        // outstanding deficit principal, not to tick-indexed liquidity. This means coverage
-        // is correctly attributed to positions that created the deficit, regardless of when
-        // the coverage event occurs relative to tick movement.
-        vm.prank(marketFactory);
-        vtsOrchestrator.incrementCoverage(corePoolKey.toId(), 2e18, 0);
+            vtsOrchestrator.settlePositionGrowths(mm2PositionId);
+            vtsOrchestrator.settlePositionGrowths(mm3PositionId);
+            vtsOrchestrator.settlePositionGrowths(mm1PositionId); // settle position now that deficit has surfaced.
 
-        vtsOrchestrator.settlePositionGrowths(mm2PositionId);
-        vtsOrchestrator.settlePositionGrowths(mm3PositionId);
-        vtsOrchestrator.settlePositionGrowths(mm1PositionId);
+            // Protocol covers unwraps: increment coverage (token0 only)
+            // NOTE: With DICE (Deficit-Indexed Coverage Exercise), coverage is now indexed to
+            // outstanding deficit principal, not to tick-indexed liquidity. This means coverage
+            // is correctly attributed to positions that created the deficit, regardless of when
+            // the coverage event occurs relative to tick movement.
+            vm.prank(marketFactory);
+            vtsOrchestrator.incrementCoverage(corePoolKey.toId(), 2e18, 0);
 
-        (uint256 protocolFeeAccruedAfter0, uint256 protocolFeeAccruedAfter1) = _protocolFeeAccrued(corePoolKey.toId());
+            vtsOrchestrator.settlePositionGrowths(mm2PositionId);
+            vtsOrchestrator.settlePositionGrowths(mm3PositionId);
+            vtsOrchestrator.settlePositionGrowths(mm1PositionId);
 
-        (,, uint256 settled0, uint256 settled1,,) = _testableOrchestrator().getPositionAccounting(mm1PositionId);
-        console.log("mm1 settled0:", settled0);
-        console.log("mm1 settled1:", settled1);
-        (,, uint256 settled02, uint256 settled12,,) = _testableOrchestrator().getPositionAccounting(mm2PositionId);
-        console.log("mm2 settled0:", settled02);
-        console.log("mm2 settled1:", settled12);
-        (,, uint256 settled03, uint256 settled13,,) = _testableOrchestrator().getPositionAccounting(mm3PositionId);
-        console.log("mm3 settled0:", settled03);
-        console.log("mm3 settled1:", settled13);
+            (protocolFeeAccruedAfter0, protocolFeeAccruedAfter1) = _protocolFeeAccrued(corePoolKey.toId());
 
+            // Debug logging (scoped so these locals die immediately)
+            {
+                (,, uint256 settled0, uint256 settled1,,) = _testableOrchestrator().getPositionAccounting(mm1PositionId);
+                console.log("mm1 settled0:", settled0);
+                console.log("mm1 settled1:", settled1);
+            }
+            {
+                (,, uint256 settled02, uint256 settled12,,) =
+                    _testableOrchestrator().getPositionAccounting(mm2PositionId);
+                console.log("mm2 settled0:", settled02);
+                console.log("mm2 settled1:", settled12);
+            }
+            {
+                (,, uint256 settled03, uint256 settled13,,) =
+                    _testableOrchestrator().getPositionAccounting(mm3PositionId);
+                console.log("mm3 settled0:", settled03);
+                console.log("mm3 settled1:", settled13);
+            }
+        }
+
+        // ══════════════════════════════════════════════════════════════════════════
+        // Phase 2: Poke all positions + final assertions
+        // ══════════════════════════════════════════════════════════════════════════
         _pokeMM(mm2, 0);
         _pokeMM(mm3, 0);
         uint256 potAfter = _slashedPot1();
@@ -736,118 +812,132 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
     ///        even while `slashedPot == 0` (materialisation is separate).
     ///      - Materialisation happens only after the slasher is fee-processed (e.g. `_pokeMM`) which funds `slashedPot`.
     function test_bonusAllocatedBeforeSlashMaterialised_whenBeneficiaryPokesFirst() public {
-        int24 tickLower = -960;
-        int24 tickUpper = 960;
+        // Values needed across scoped blocks (declared at function level)
+        uint256 tokenId;
+        uint256 idx1;
+        PositionId beneficiaryPosId;
+        uint256 potAfterSlasher;
+        int256 mm1Pending1After;
 
-        // Create commit with idx0 (intended slasher)
-        (uint256 tokenId, PositionId slasherPosId,,) = _createCommittedPosition(tickLower, tickUpper, initialLiquidity);
-
-        // Clear any "net since last mod" from initial settlement so the pool net is clean
-        _pokeMM(tokenId, 0);
-
-        // Add idx1 (beneficiary) and leave it with positive net settlement since last modification
-        (uint256 idx1, PositionId beneficiaryPosId) = _mintAdditionalMM(tokenId, tickLower, tickUpper, initialLiquidity);
-        _mmSettle(
-            tokenId, idx1, _negInt128Capped((initialLiquidity / 5) * 4), _negInt128Capped((initialLiquidity / 5) * 4)
-        ); // Settle the position before swap to prevent deficit accrual
-
-        // Create deficit + fees (fees accrue on token1 for one-for-zero swap)
-        _swapCore(false, -int256(initialLiquidity / 5));
-
-        // Materialise deficit principal first (required for DICE index to move meaningfully)
-        vtsOrchestrator.settlePositionGrowths(slasherPosId);
-
-        // Exercise coverage (token0), then settle again to queue coverage burn (slash) in fee token (token1)
-        // IMPORTANT: CISE bonus eligibility is gated by exposure which accrues ONLY at incrementCoverage.
-        // Ensure the beneficiary accrues non-dust CISE exposure (> 1e6) so a bonus can be queued.
+        // ══════════════════════════════════════════════════════════════════════════
+        // Phase 1: Setup slasher + beneficiary, create deficit, queue slash (scoped to reset stack)
+        // ══════════════════════════════════════════════════════════════════════════
         {
-            (,, uint256 beneficiarySettled0,,,) = _testableOrchestrator().getPositionAccounting(beneficiaryPosId);
-            (uint256 totalSettled0,,,,,,,) = _testableOrchestrator().getPoolCISEAccounting(corePoolKey.toId());
-            assertGt(totalSettled0, 0, "Precondition: totalSettled0 must be > 0 for CISE indexing");
-            assertGt(beneficiarySettled0, 0, "Precondition: beneficiary must have settled0 > 0 for CISE exposure");
+            int24 tickLower = -960;
+            int24 tickUpper = 960;
 
-            uint256 targetExposure = 1e7; // comfortably above the 1e6 dust guard
-            uint256 coverage0 = (targetExposure * totalSettled0) / beneficiarySettled0 + 1;
+            // Create commit with idx0 (intended slasher)
+            PositionId slasherPosId;
+            (tokenId, slasherPosId,,) = _createCommittedPosition(tickLower, tickUpper, initialLiquidity);
 
-            vm.prank(marketFactory);
-            vtsOrchestrator.incrementCoverage(corePoolKey.toId(), coverage0, 0); // acquire token0, therefore unwrap token0
+            // Clear any "net since last mod" from initial settlement so the pool net is clean
+            _pokeMM(tokenId, 0);
+
+            // Add idx1 (beneficiary) and leave it with positive net settlement since last modification
+            (idx1, beneficiaryPosId) = _mintAdditionalMM(tokenId, tickLower, tickUpper, initialLiquidity);
+            _mmSettle(
+                tokenId,
+                idx1,
+                _negInt128Capped((initialLiquidity / 5) * 4),
+                _negInt128Capped((initialLiquidity / 5) * 4)
+            ); // Settle the position before swap to prevent deficit accrual
+
+            // Create deficit + fees (fees accrue on token1 for one-for-zero swap)
+            _swapCore(false, -int256(initialLiquidity / 5));
+
+            // Materialise deficit principal first (required for DICE index to move meaningfully)
+            vtsOrchestrator.settlePositionGrowths(slasherPosId);
+
+            // Exercise coverage (token0), then settle again to queue coverage burn (slash) in fee token (token1)
+            // IMPORTANT: CISE bonus eligibility is gated by exposure which accrues ONLY at incrementCoverage.
+            // Ensure the beneficiary accrues non-dust CISE exposure (> 1e6) so a bonus can be queued.
+            {
+                (,, uint256 beneficiarySettled0,,,) = _testableOrchestrator().getPositionAccounting(beneficiaryPosId);
+                (uint256 totalSettled0,,,,,,,) = _testableOrchestrator().getPoolCISEAccounting(corePoolKey.toId());
+                assertGt(totalSettled0, 0, "Precondition: totalSettled0 must be > 0 for CISE indexing");
+                assertGt(beneficiarySettled0, 0, "Precondition: beneficiary must have settled0 > 0 for CISE exposure");
+
+                uint256 targetExposure = 1e7; // comfortably above the 1e6 dust guard
+                uint256 coverage0 = (targetExposure * totalSettled0) / beneficiarySettled0 + 1;
+
+                vm.prank(marketFactory);
+                vtsOrchestrator.incrementCoverage(corePoolKey.toId(), coverage0, 0); // acquire token0, therefore unwrap token0
+            }
+            vtsOrchestrator.settlePositionGrowths(slasherPosId);
+
+            // Sanity: slashed pot should still be 0 (slasher not poked -> no _finaliseFeeAdjustment funding)
+            assertEq(_slashedPot1(), 0, "Precondition: slashed pot must be 0 before any slasher position poke");
+
+            // Sanity: protocolFeeAccrued should be >0 after coverage burn
+            (, uint256 feeAccruedBefore) = _protocolFeeAccrued(corePoolKey.toId());
+            assertGt(feeAccruedBefore, 0, "Precondition: protocolFeeAccrued1 must be > 0 after coverage burn");
+
+            // Sanity: slasher has a queued positive slash (pendingFeeAdj1 > 0)
+            (,,, int256 slasherPending1Before) = _testableOrchestrator().getPositionFeeAccounting(slasherPosId);
+            assertGt(slasherPending1Before, 0, "Precondition: slasher must have pendingFeeAdj1 > 0");
+
+            // ? At this point, the slashed pot is still 0, but protocolFeeAccrued > 0 AND slasher pendingFeeAdj > 0 (queued slash).
+            (, uint256 spendIndex1Before) = _testableOrchestrator().getPoolCSIAccounting(corePoolKey.toId());
+
+            // Beneficiary processes fees FIRST:
+            // Under CISE, this will realise exposure and CAN queue a bonus against protocolFeeAccrued,
+            // even though slashedPot is still 0 (so it can't be materialised/paid yet).
+            console.log("FIRST BENEFICIARY POKE:");
+            _pokeMM(tokenId, idx1);
+            console.log("END ____ FIRST BENEFICIARY POKE:");
+
+            // Pot is still unfunded (slasher still not poked)
+            assertEq(_slashedPot1(), 0, "Pot must remain 0 until slasher is poked");
+
+            // Under CISE+CSI, beneficiary SHOULD be able to queue a bonus against protocolFeeAccrued
+            // even if slashedPot is still 0 (materialisation is separate).
+            (, uint256 feeAccruedAfterBeneficiary) = _protocolFeeAccrued(corePoolKey.toId());
+            assertLt(
+                feeAccruedAfterBeneficiary,
+                feeAccruedBefore,
+                "Beneficiary poke should reduce protocolFeeAccrued when potAvail>0 and CISE exposure is non-dust"
+            );
+
+            (, uint256 slasherContrib,,) = _testableOrchestrator().getPositionFeeAccounting(slasherPosId);
+            assertGt(slasherContrib, 0, "Slasher must have a positive contribution to fees shared");
+
+            // Beneficiary SHOULD have queued a negative pending adjustment (bonus), but it can't be paid yet (slashedPot==0)
+            (,,, mm1Pending1After) = _testableOrchestrator().getPositionFeeAccounting(beneficiaryPosId);
+            assertLt(
+                mm1Pending1After, 0, "Beneficiary should queue a bonus (pendingFeeAdj1 < 0) even while slashedPot is 0"
+            );
+
+            // CSI spend index should advance when a bonus is allocated (queued)
+            (, uint256 spendIndex1After) = _testableOrchestrator().getPoolCSIAccounting(corePoolKey.toId());
+            assertGt(spendIndex1After, spendIndex1Before, "CSI: spend index must advance when bonus is allocated");
+
+            // Now poke slasher: this should fund the pot from its +pendingFeeAdj
+            _pokeMM(tokenId, 0);
+            potAfterSlasher = _slashedPot1();
+            assertGt(potAfterSlasher, 0, "Slasher poke should fund the pot");
         }
-        vtsOrchestrator.settlePositionGrowths(slasherPosId);
 
-        // Sanity: slashed pot should still be 0 (slasher not poked -> no _finaliseFeeAdjustment funding)
-        uint256 potBefore = _slashedPot1();
-        assertEq(potBefore, 0, "Precondition: slashed pot must be 0 before any slasher position poke");
+        // ══════════════════════════════════════════════════════════════════════════
+        // Phase 2: SECOND Beneficiary poke - materialise (pay) the queued bonus from slashedPot
+        // ══════════════════════════════════════════════════════════════════════════
+        {
+            uint256 lcc1BalanceBefore = _selfLccBalance(lccCurrency1);
 
-        // Sanity: protocolFeeAccrued should be >0 after coverage burn
-        (, uint256 feeAccruedBefore) = _protocolFeeAccrued(corePoolKey.toId());
-        assertGt(feeAccruedBefore, 0, "Precondition: protocolFeeAccrued1 must be > 0 after coverage burn");
+            _pokeMM(tokenId, idx1);
 
-        // Sanity: slasher has a queued positive slash (pendingFeeAdj1 > 0)
-        (,, int256 slasherPending0Before, int256 slasherPending1Before) =
-            _testableOrchestrator().getPositionFeeAccounting(slasherPosId);
-        assertGt(slasherPending1Before, 0, "Precondition: slasher must have pendingFeeAdj1 > 0");
-        slasherPending0Before; // silence unused variable
+            uint256 potAfterBeneficiary2 = _slashedPot1();
+            assertLt(potAfterBeneficiary2, potAfterSlasher, "Beneficiary materialisation should drain slashedPot1");
 
-        // ? At this point, the slashed pot is still 0, but protocolFeeAccrued > 0 AND slasher pendingFeeAdj > 0 (queued slash).
-        (, uint256 spendIndex1Before) = _testableOrchestrator().getPoolCSIAccounting(corePoolKey.toId());
+            uint256 lcc1BalanceAfter = _selfLccBalance(lccCurrency1);
+            assertGt(
+                lcc1BalanceAfter,
+                lcc1BalanceBefore,
+                "Beneficiary poke should increase LCC1 balance because of the bonus"
+            );
 
-        // Beneficiary processes fees FIRST:
-        // Under CISE, this will realise exposure and CAN queue a bonus against protocolFeeAccrued,
-        // even though slashedPot is still 0 (so it can't be materialised/paid yet).
-        console.log("FIRST BENEFICIARY POKE:");
-        _pokeMM(tokenId, idx1);
-        console.log("END ____ FIRST BENEFICIARY POKE:");
-
-        // Pot is still unfunded (slasher still not poked)
-        uint256 potAfterBeneficiary = _slashedPot1();
-        assertEq(potAfterBeneficiary, 0, "Pot must remain 0 until slasher is poked");
-
-        // Under CISE+CSI, beneficiary SHOULD be able to queue a bonus against protocolFeeAccrued
-        // even if slashedPot is still 0 (materialisation is separate).
-        (, uint256 feeAccruedAfterBeneficiary) = _protocolFeeAccrued(corePoolKey.toId());
-        assertLt(
-            feeAccruedAfterBeneficiary,
-            feeAccruedBefore,
-            "Beneficiary poke should reduce protocolFeeAccrued when potAvail>0 and CISE exposure is non-dust"
-        );
-
-        (, uint256 slasherContrib,,) = _testableOrchestrator().getPositionFeeAccounting(slasherPosId);
-        assertGt(slasherContrib, 0, "Slasher must have a positive contribution to fees shared");
-
-        // Beneficiary SHOULD have queued a negative pending adjustment (bonus), but it can't be paid yet (slashedPot==0)
-        (,, int256 mm1Pending0After, int256 mm1Pending1After) =
-            _testableOrchestrator().getPositionFeeAccounting(beneficiaryPosId);
-        mm1Pending0After; // silence unused variable
-        assertLt(
-            mm1Pending1After, 0, "Beneficiary should queue a bonus (pendingFeeAdj1 < 0) even while slashedPot is 0"
-        );
-
-        // CSI spend index should advance when a bonus is allocated (queued)
-        (, uint256 spendIndex1After) = _testableOrchestrator().getPoolCSIAccounting(corePoolKey.toId());
-        assertGt(spendIndex1After, spendIndex1Before, "CSI: spend index must advance when bonus is allocated");
-
-        // Now poke slasher: this should fund the pot from its +pendingFeeAdj
-        _pokeMM(tokenId, 0);
-        uint256 potAfterSlasher = _slashedPot1();
-        assertGt(potAfterSlasher, 0, "Slasher poke should fund the pot");
-
-        uint256 lcc1BalanceBefore = _selfLccBalance(lccCurrency1);
-
-        // SECOND Beneficiary poke: this should materialise (pay) some/all of the queued bonus from slashedPot
-        _pokeMM(tokenId, idx1);
-
-        uint256 potAfterBeneficiary2 = _slashedPot1();
-        assertLt(potAfterBeneficiary2, potAfterSlasher, "Beneficiary materialisation should drain slashedPot1");
-
-        uint256 lcc1BalanceAfter = _selfLccBalance(lccCurrency1);
-        assertGt(
-            lcc1BalanceAfter, lcc1BalanceBefore, "Beneficiary poke should increase LCC1 balance because of the bonus"
-        );
-
-        (,, int256 mm1Pending0After2, int256 mm1Pending1After2) =
-            _testableOrchestrator().getPositionFeeAccounting(beneficiaryPosId);
-        mm1Pending0After2; // silence unused variable
-        assertGt(mm1Pending1After2, mm1Pending1After, "Pending bonus should move towards 0 after materialisation");
+            (,,, int256 mm1Pending1After2) = _testableOrchestrator().getPositionFeeAccounting(beneficiaryPosId);
+            assertGt(mm1Pending1After2, mm1Pending1After, "Pending bonus should move towards 0 after materialisation");
+        }
 
         // Suppress unused variable warnings
         tokenId;
@@ -874,10 +964,8 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         // Create deficit + fees (fee token = token1 for one-for-zero swap)
         /**
          *   If swap amount is too large (eg. 50e18),
-         *   The swap will have the pool tick sitting above your DirectLP’s tickUpper = 960 (e.g. it shows tick: 972 then tick: 1010), so the position is out-of-range during the “accrue token1 fees” swap.
-         *   Out-of-range positions don’t accrue swap fees, so the subsequent modifyLiquidity call reports feesAccrued == 0 → feeWeight == 0 → no queued bonus → pendingFeeAdj1 stays 0 and the assertion fails.
+         *   The swap will have the pool tick sitting above your DirectLP's tickUpper = 960 (e.g. it shows tick: 972 then tick: 1010), so the position is out-of-range during the "accrue token1 fees" swap.
          *   slashedPot only affects materialisation in _finaliseFeeAdjustment (paying down negative pending).
-         *   It does not gate queuing the negative pending in _queueBonusForToken. So slashedPot == 0 would mean “bonus can’t be paid yet”, not “bonus can’t be queued”.
          */
         _swapCore(false, -int256(30e18));
 
@@ -893,113 +981,123 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         (, uint256 potBefore) = vtsOrchestrator.getSlashedPot(corePoolKey.toId());
         assertEq(potBefore, 0, "Precondition: slashedPot1 must be 0 before slasher poke");
 
-        // ------------------------------------------------------------
-        // 2) Create a DirectLP beneficiary.
-        // IMPORTANT: Creating a *new* DirectLP position must NOT allocate bonuses immediately,
-        // even if protocolFeeAccrued is already > 0. Bonus allocation is reserved for existing positions.
-        // ------------------------------------------------------------
-        // Use an in-range DirectLP so it can accrue native fees (feeWeight) from swaps.
-        int24 dlTickLower = -960;
-        int24 dlTickUpper = 960;
+        // Values needed across scoped blocks
+        uint256 dlTokenId;
         uint256 dlLiquidity = 1e18;
-
-        // Mint a Uniswap v4 PositionManager position and subscribe it to DirectLPDeltaResolver.
-        // This ensures CoreHook's hook deltas (feeAdj) are cleared during the same unlock session via MarketFactory.afterModifyLiquidity.
-        uint256 dlTokenId = uniPositionManager.nextTokenId();
-        {
-            bytes memory actions = abi.encodePacked(uint8(Actions.MINT_POSITION), uint8(Actions.SETTLE_PAIR));
-            bytes[] memory params = new bytes[](2);
-            params[0] = abi.encode(
-                corePoolKey,
-                dlTickLower,
-                dlTickUpper,
-                dlLiquidity,
-                type(uint128).max,
-                type(uint128).max,
-                address(this),
-                ZERO_BYTES
-            );
-            params[1] = abi.encode(corePoolKey.currency0, corePoolKey.currency1);
-            uniPositionManager.modifyLiquidities(abi.encode(actions, params), block.timestamp + 3600);
-        }
-        uniPositionManager.subscribe(dlTokenId, address(directLPDeltaResolver), "");
-
-        // Compute DirectLP positionId (owner is the caller to PoolManager, i.e. Uniswap PositionManager),
-        // and salt is the tokenId (PositionManager uses tokenId as the position salt).
-        ModifyLiquidityParams memory dlAddParamsForId = ModifyLiquidityParams({
-            tickLower: dlTickLower,
-            tickUpper: dlTickUpper,
-            liquidityDelta: int256(dlLiquidity),
-            salt: bytes32(dlTokenId)
-        });
-        PositionId directPosId = PositionLibrary.generateId(address(uniPositionManager), dlAddParamsForId);
-
-        // New DirectLP should not have any queued bonus/slash yet.
-        (,, int256 dlPending0AfterAdd, int256 dlPending1AfterAdd) =
-            vtsOrchestrator.getPositionFeeAccounting(directPosId);
-        dlPending0AfterAdd; // silence
-        assertEq(dlPending1AfterAdd, 0, "New DirectLP must not queue a bonus on creation");
-        (, uint256 potAfterAdd) = vtsOrchestrator.getSlashedPot(corePoolKey.toId());
-        assertEq(potAfterAdd, 0, "Precondition: slashedPot1 still 0 (bonus cannot be materialised yet)");
-
-        // ------------------------------------------------------------
-        // 3) Accrue some native fees for DirectLP, then perform an increase (creates selfNet) so it can allocate a bonus.
-        // ------------------------------------------------------------
-        _swapCore(false, -int256(2e18)); // accrue token1 fees for in-range positions
-
-        // IMPORTANT: CISE exposure accrues ONLY at incrementCoverage (not on swaps).
-        // Ensure this DirectLP accrues non-dust exposure after creation so it can queue a bonus on touch.
-        {
-            (,, uint256 dlSettled0,,,) = _testableOrchestrator().getPositionAccounting(directPosId);
-            (uint256 totalSettled0,,,,,,,) = _testableOrchestrator().getPoolCISEAccounting(corePoolKey.toId());
-            assertGt(totalSettled0, 0, "Precondition: totalSettled0 must be > 0 for CISE indexing");
-            assertGt(dlSettled0, 0, "Precondition: DirectLP must have settled0 > 0 for CISE exposure");
-
-            uint256 targetExposure = 1e7; // comfortably above the 1e6 dust guard
-            uint256 coverage0 = (targetExposure * totalSettled0) / dlSettled0 + 1;
-
-            vm.prank(marketFactory);
-            vtsOrchestrator.incrementCoverage(corePoolKey.toId(), coverage0, 0);
-        }
-
-        // Now that the DirectLP is an *existing* position, a subsequent increase can allocate a bonus
-        // (selfNet > 0 from settlement, feeWeight > 0 from accrued fees).
         uint256 dlMoreLiquidity = 5e17;
+        PositionId directPosId;
+        int256 dlPending1AfterRemove;
+
+        // ══════════════════════════════════════════════════════════════════════════
+        // 2-4) Create DirectLP, accrue fees, increase, then remove (scoped to reset stack)
+        // ══════════════════════════════════════════════════════════════════════════
         {
-            bytes memory actions = abi.encodePacked(uint8(Actions.INCREASE_LIQUIDITY), uint8(Actions.SETTLE_PAIR));
-            bytes[] memory params = new bytes[](2);
-            params[0] = abi.encode(dlTokenId, dlMoreLiquidity, type(uint128).max, type(uint128).max, ZERO_BYTES);
-            params[1] = abi.encode(corePoolKey.currency0, corePoolKey.currency1);
-            uniPositionManager.modifyLiquidities(abi.encode(actions, params), block.timestamp + 3600);
+            // ------------------------------------------------------------
+            // 2) Create a DirectLP beneficiary.
+            // IMPORTANT: Creating a *new* DirectLP position must NOT allocate bonuses immediately,
+            // even if protocolFeeAccrued is already > 0. Bonus allocation is reserved for existing positions.
+            // ------------------------------------------------------------
+            // Use an in-range DirectLP so it can accrue native fees (feeWeight) from swaps.
+            int24 dlTickLower = -960;
+            int24 dlTickUpper = 960;
+
+            // Mint a Uniswap v4 PositionManager position and subscribe it to DirectLPDeltaResolver.
+            // This ensures CoreHook's hook deltas (feeAdj) are cleared during the same unlock session via MarketFactory.afterModifyLiquidity.
+            dlTokenId = uniPositionManager.nextTokenId();
+            {
+                bytes memory actions = abi.encodePacked(uint8(Actions.MINT_POSITION), uint8(Actions.SETTLE_PAIR));
+                bytes[] memory params = new bytes[](2);
+                params[0] = abi.encode(
+                    corePoolKey,
+                    dlTickLower,
+                    dlTickUpper,
+                    dlLiquidity,
+                    type(uint128).max,
+                    type(uint128).max,
+                    address(this),
+                    ZERO_BYTES
+                );
+                params[1] = abi.encode(corePoolKey.currency0, corePoolKey.currency1);
+                uniPositionManager.modifyLiquidities(abi.encode(actions, params), block.timestamp + 3600);
+            }
+            // ! subscribe() required; See commnet above.
+            uniPositionManager.subscribe(dlTokenId, address(directLPDeltaResolver), "");
+
+            // Compute DirectLP positionId (owner is the caller to PoolManager, i.e. Uniswap PositionManager),
+            // and salt is the tokenId (PositionManager uses tokenId as the position salt).
+            ModifyLiquidityParams memory dlAddParamsForId = ModifyLiquidityParams({
+                tickLower: dlTickLower,
+                tickUpper: dlTickUpper,
+                liquidityDelta: int256(dlLiquidity),
+                salt: bytes32(dlTokenId)
+            });
+            directPosId = PositionLibrary.generateId(address(uniPositionManager), dlAddParamsForId);
+
+            // New DirectLP should not have any queued bonus/slash yet.
+            (,, int256 dlPending0AfterAdd, int256 dlPending1AfterAdd) =
+                vtsOrchestrator.getPositionFeeAccounting(directPosId);
+            dlPending0AfterAdd; // silence
+            assertEq(dlPending1AfterAdd, 0, "New DirectLP must not queue a bonus on creation");
+            (, uint256 potAfterAdd) = vtsOrchestrator.getSlashedPot(corePoolKey.toId());
+            assertEq(potAfterAdd, 0, "Precondition: slashedPot1 still 0 (bonus cannot be materialised yet)");
+
+            // ------------------------------------------------------------
+            // 3) Accrue some native fees for DirectLP, then perform an increase (creates selfNet) so it can allocate a bonus.
+            // ------------------------------------------------------------
+            _swapCore(false, -int256(2e18)); // accrue token1 fees for in-range positions
+
+            // IMPORTANT: CISE exposure accrues ONLY at incrementCoverage (not on swaps).
+            // Ensure this DirectLP accrues non-dust exposure after creation so it can queue a bonus on touch.
+            {
+                (,, uint256 dlSettled0,,,) = _testableOrchestrator().getPositionAccounting(directPosId);
+                (uint256 totalSettled0,,,,,,,) = _testableOrchestrator().getPoolCISEAccounting(corePoolKey.toId());
+                assertGt(totalSettled0, 0, "Precondition: totalSettled0 must be > 0 for CISE indexing");
+                assertGt(dlSettled0, 0, "Precondition: DirectLP must have settled0 > 0 for CISE exposure");
+
+                uint256 targetExposure = 1e7; // comfortably above the 1e6 dust guard
+                uint256 coverage0 = (targetExposure * totalSettled0) / dlSettled0 + 1;
+
+                vm.prank(marketFactory);
+                vtsOrchestrator.incrementCoverage(corePoolKey.toId(), coverage0, 0);
+            }
+
+            // Now that the DirectLP is an *existing* position, a subsequent increase can allocate a bonus
+            // (selfNet > 0 from settlement, feeWeight > 0 from accrued fees).
+            {
+                bytes memory actions = abi.encodePacked(uint8(Actions.INCREASE_LIQUIDITY), uint8(Actions.SETTLE_PAIR));
+                bytes[] memory params = new bytes[](2);
+                params[0] = abi.encode(dlTokenId, dlMoreLiquidity, type(uint128).max, type(uint128).max, ZERO_BYTES);
+                params[1] = abi.encode(corePoolKey.currency0, corePoolKey.currency1);
+                uniPositionManager.modifyLiquidities(abi.encode(actions, params), block.timestamp + 3600);
+            }
+
+            // CISE exposure is realised when incrementCoverage is called during swaps.
+            // Bonus allocation requires CISE exposure > 0 at fee-processing time (during modifyLiquidity touch).
+
+            (,,, int256 dlPending1AfterIncrease) = vtsOrchestrator.getPositionFeeAccounting(directPosId);
+            assertLt(
+                dlPending1AfterIncrease, 0, "Existing DirectLP should be able to queue a bonus on subsequent touch"
+            );
+
+            // ------------------------------------------------------------
+            // 4) Fully remove DirectLP liquidity => position becomes inactive (0-liquidity)
+            // ------------------------------------------------------------
+            {
+                bytes memory actions = abi.encodePacked(uint8(Actions.DECREASE_LIQUIDITY), uint8(Actions.TAKE_PAIR));
+                bytes[] memory params = new bytes[](2);
+                params[0] = abi.encode(
+                    dlTokenId, dlLiquidity + dlMoreLiquidity, type(uint128).min, type(uint128).min, ZERO_BYTES
+                );
+                params[1] = abi.encode(corePoolKey.currency0, corePoolKey.currency1, address(this));
+                uniPositionManager.modifyLiquidities(abi.encode(actions, params), block.timestamp + 3600);
+            }
+
+            assertEq(vtsOrchestrator.isPositionValid(directPosId, true), false, "DirectLP should now be inactive");
+
+            // Pending bonus should remain queued after removal (pot still empty, so cannot pay)
+            (,,, dlPending1AfterRemove) = vtsOrchestrator.getPositionFeeAccounting(directPosId);
+            assertLt(dlPending1AfterRemove, 0, "Queued bonus must remain for inactive position");
         }
-
-        // CISE exposure is realised when incrementCoverage is called during swaps.
-        // Bonus allocation requires CISE exposure > 0 at fee-processing time (during modifyLiquidity touch).
-
-        (,, int256 dlPending0AfterIncrease, int256 dlPending1AfterIncrease) =
-            vtsOrchestrator.getPositionFeeAccounting(directPosId);
-        dlPending0AfterIncrease; // silence
-        assertLt(dlPending1AfterIncrease, 0, "Existing DirectLP should be able to queue a bonus on subsequent touch");
-
-        // ------------------------------------------------------------
-        // 4) Fully remove DirectLP liquidity => position becomes inactive (0-liquidity)
-        // ------------------------------------------------------------
-        {
-            bytes memory actions = abi.encodePacked(uint8(Actions.DECREASE_LIQUIDITY), uint8(Actions.TAKE_PAIR));
-            bytes[] memory params = new bytes[](2);
-            params[0] =
-                abi.encode(dlTokenId, dlLiquidity + dlMoreLiquidity, type(uint128).min, type(uint128).min, ZERO_BYTES);
-            params[1] = abi.encode(corePoolKey.currency0, corePoolKey.currency1, address(this));
-            uniPositionManager.modifyLiquidities(abi.encode(actions, params), block.timestamp + 3600);
-        }
-
-        assertEq(vtsOrchestrator.isPositionValid(directPosId, true), false, "DirectLP should now be inactive");
-
-        // Pending bonus should remain queued after removal (pot still empty, so cannot pay)
-        (,, int256 dlPending0AfterRemove, int256 dlPending1AfterRemove) =
-            vtsOrchestrator.getPositionFeeAccounting(directPosId);
-        dlPending0AfterRemove; // silence
-        assertLt(dlPending1AfterRemove, 0, "Queued bonus must remain for inactive position");
 
         // ------------------------------------------------------------
         // 5) Fund the slashed pot by poking the slasher MM (materialises its +pendingFeeAdj)
@@ -1056,104 +1154,92 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
     ///      - After funding the pot (slasher fee-processing), even a 0-liquidity MM can "poke" to materialise pending bonuses,
     ///        provided the batch fully drains any delta credits (otherwise `CurrencyNotSettled` reverts).
     function test_inactivePosition_mmCanCollectDormantFees() public {
-        // ------------------------------------------------------------
-        // 1) Create a slasher MM that queues protocolFeeAccrued, but DO NOT fund slashedPot yet
-        // ------------------------------------------------------------
+        // Only keep the minimum set of variables live across phases to avoid "stack too deep" under coverage.
+        uint256 beneficiaryTokenId;
+        PositionId beneficiaryPosId;
+        uint256 slasherTokenId;
+        uint256 potFunded;
+        int256 mmPending1AfterClose;
         int24 mmTickLower = -960;
         int24 mmTickUpper = 960;
-        (uint256 slasherTokenId, PositionId slasherPosId,,) = _createCommittedPosition(mmTickLower, mmTickUpper, 50e10);
-
-        // Create deficit + fees (fee token = token1 for one-for-zero swap)
-        _swapCore(false, -int256(30e18));
-
-        // Materialise deficit principal, then exercise coverage and settle again to queue fee burn
-        vtsOrchestrator.settlePositionGrowths(slasherPosId);
-        vm.prank(marketFactory);
-        vtsOrchestrator.incrementCoverage(corePoolKey.toId(), 20e18, 0);
-        vtsOrchestrator.settlePositionGrowths(slasherPosId);
-
-        (, uint256 feeAccruedBefore) = _protocolFeeAccrued(corePoolKey.toId());
-        assertGt(feeAccruedBefore, 0, "Precondition: protocolFeeAccrued1 must be > 0 after queued slashes");
-        (, uint256 potBefore) = vtsOrchestrator.getSlashedPot(corePoolKey.toId());
-        assertEq(potBefore, 0, "Precondition: slashedPot1 must be 0 before slasher poke");
 
         // ------------------------------------------------------------
-        // 2) Create a beneficiary MM position. It should NOT allocate bonuses immediately on creation.
+        // Phases 1-5 (scoped): setup slasher + beneficiary, queue bonus, close position, then fund pot.
         // ------------------------------------------------------------
-        uint256 mmLiquidity = 10e10;
-        (uint256 beneficiaryTokenId, PositionId beneficiaryPosId) =
-            _createNewMMCommit(mmTickLower, mmTickUpper, mmLiquidity);
-
-        // Provide positive selfNet via a settlement deposit (eligibility gate) before fee-processing touch.
-        _mmSettle(beneficiaryTokenId, 0, _negInt128Capped(10e18), _negInt128Capped(10e18));
-
-        (,, int256 mmPending0AfterCreate, int256 mmPending1AfterCreate) =
-            vtsOrchestrator.getPositionFeeAccounting(beneficiaryPosId);
-        mmPending0AfterCreate; // silence
-        assertEq(mmPending1AfterCreate, 0, "New MM position must not queue a bonus on creation");
-
-        // ------------------------------------------------------------
-        // 3) Accrue native fees for the MM, create selfNet via settlement, and touch to queue a bonus
-        // ------------------------------------------------------------
-        _swapCore(false, -int256(2e18)); // accrue token1 fees for in-range positions
-
-        (, int24 tickAfterSwap2,,) = StateLibrary.getSlot0(manager, corePoolKey.toId());
-        tickAfterSwap2; // silence
-
-        // IMPORTANT: CISE exposure accrues ONLY at incrementCoverage (not on swaps).
-        // Ensure this MM accrues non-dust exposure after creation so it can queue a bonus on touch.
         {
-            (,, uint256 mmSettled0,,,) = _testableOrchestrator().getPositionAccounting(beneficiaryPosId);
-            (uint256 totalSettled0,,,,,,,) = _testableOrchestrator().getPoolCISEAccounting(corePoolKey.toId());
-            assertGt(totalSettled0, 0, "Precondition: totalSettled0 must be > 0 for CISE indexing");
-            assertGt(mmSettled0, 0, "Precondition: beneficiary MM must have settled0 > 0 for CISE exposure");
+            // 1) Create a slasher MM that queues protocolFeeAccrued, but DO NOT fund slashedPot yet
+            PositionId slasherPosId;
+            (slasherTokenId, slasherPosId,,) = _createCommittedPosition(mmTickLower, mmTickUpper, 50e10);
 
-            uint256 targetExposure = 1e7; // comfortably above the 1e6 dust guard
-            uint256 coverage0 = (targetExposure * totalSettled0) / mmSettled0 + 1;
+            // Create deficit + fees (fee token = token1 for one-for-zero swap)
+            _swapCore(false, -int256(30e18));
 
+            // Materialise deficit principal, then exercise coverage and settle again to queue fee burn
+            vtsOrchestrator.settlePositionGrowths(slasherPosId);
             vm.prank(marketFactory);
-            vtsOrchestrator.incrementCoverage(corePoolKey.toId(), coverage0, 0);
-        }
+            vtsOrchestrator.incrementCoverage(corePoolKey.toId(), 20e18, 0);
+            vtsOrchestrator.settlePositionGrowths(slasherPosId);
 
-        // Touch (increase 0) to process fees and queue bonus; take deltas to avoid lingering credits.
-        _pokeMM(beneficiaryTokenId, 0);
+            (, uint256 feeAccruedBefore) = _protocolFeeAccrued(corePoolKey.toId());
+            assertGt(feeAccruedBefore, 0, "Precondition: protocolFeeAccrued1 must be > 0 after queued slashes");
+            (, uint256 potBefore) = vtsOrchestrator.getSlashedPot(corePoolKey.toId());
+            assertEq(potBefore, 0, "Precondition: slashedPot1 must be 0 before slasher poke");
 
-        (,, int256 mmPending0AfterTouch, int256 mmPending1AfterTouch) =
-            vtsOrchestrator.getPositionFeeAccounting(beneficiaryPosId);
-        mmPending0AfterTouch; // silence
-        assertLt(mmPending1AfterTouch, 0, "Existing MM should be able to queue a bonus on touch");
+            // 2) Create a beneficiary MM position. It should NOT allocate bonuses immediately on creation.
+            uint256 mmLiquidity = 10e10;
+            (beneficiaryTokenId, beneficiaryPosId) = _createNewMMCommit(mmTickLower, mmTickUpper, mmLiquidity);
 
-        // ------------------------------------------------------------
-        // 4) Fully remove MM liquidity => position becomes inactive (0-liquidity), bonus remains queued (pot still empty)
-        // ------------------------------------------------------------
-        {
-            MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](4);
-            actions[0] = MMA.prepareDecrease(corePoolKey, beneficiaryTokenId, 0, mmLiquidity);
-            actions[1] = MMA.prepareSettle(
-                corePoolKey,
-                beneficiaryTokenId,
-                0,
-                SafeCast.toInt128(mmLiquidity),
-                SafeCast.toInt128(mmLiquidity),
-                false
+            // Provide positive selfNet via a settlement deposit (eligibility gate) before fee-processing touch.
+            _mmSettle(beneficiaryTokenId, 0, _negInt128Capped(10e18), _negInt128Capped(10e18));
+
+            (,,, int256 mmPending1AfterCreate) = vtsOrchestrator.getPositionFeeAccounting(beneficiaryPosId);
+            assertEq(mmPending1AfterCreate, 0, "New MM position must not queue a bonus on creation");
+
+            // 3) Accrue native fees for the MM, create selfNet via settlement, and touch to queue a bonus
+            _swapCore(false, -int256(2e18)); // accrue token1 fees for in-range positions
+
+            // Ensure non-dust CISE exposure after creation so it can queue a bonus on touch.
+            {
+                (,, uint256 mmSettled0,,,) = _testableOrchestrator().getPositionAccounting(beneficiaryPosId);
+                (uint256 totalSettled0,,,,,,,) = _testableOrchestrator().getPoolCISEAccounting(corePoolKey.toId());
+                assertGt(totalSettled0, 0, "Precondition: totalSettled0 must be > 0 for CISE indexing");
+                assertGt(mmSettled0, 0, "Precondition: beneficiary MM must have settled0 > 0 for CISE exposure");
+
+                uint256 targetExposure = 1e7; // comfortably above the 1e6 dust guard
+                uint256 coverage0 = (targetExposure * totalSettled0) / mmSettled0 + 1;
+
+                vm.prank(marketFactory);
+                vtsOrchestrator.incrementCoverage(corePoolKey.toId(), coverage0, 0);
+            }
+
+            // Touch to process fees and queue bonus; take deltas to avoid lingering credits.
+            _pokeMM(beneficiaryTokenId, 0);
+            (,,, int256 mmPending1AfterTouch) = vtsOrchestrator.getPositionFeeAccounting(beneficiaryPosId);
+            assertLt(
+                mmPending1AfterTouch, 0, "Existing MM should be able to queue a bonus on touch, after slashed pot > 0"
             );
-            actions[2] = MMA.prepareTake(lccCurrency0, address(this), 0);
-            actions[3] = MMA.prepareTake(lccCurrency1, address(this), 0);
-            MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+
+            // 4) Fully remove MM liquidity => position becomes inactive (0-liquidity), bonus remains queued (pot still empty)
+            {
+                MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](4);
+                actions[0] = MMA.prepareDecrease(corePoolKey, beneficiaryTokenId, 0, mmLiquidity);
+                actions[1] = MMA.prepareSettleFromDeltas(corePoolKey, beneficiaryTokenId, 0, true, true);
+                actions[2] = MMA.prepareTake(lccCurrency0, address(this), 0);
+                actions[3] = MMA.prepareTake(lccCurrency1, address(this), 0);
+                MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+            }
+
+            assertEq(
+                vtsOrchestrator.isPositionValid(beneficiaryPosId, true), false, "MM position should now be inactive"
+            );
+            (,,, mmPending1AfterClose) = vtsOrchestrator.getPositionFeeAccounting(beneficiaryPosId);
+            assertLt(mmPending1AfterClose, 0, "Queued bonus must remain for inactive MM position");
+
+            // 5) Fund the slashed pot by poking the slasher MM (materialises its +pendingFeeAdj)
+            _pokeMM(slasherTokenId, 0);
+            (, potFunded) = vtsOrchestrator.getSlashedPot(corePoolKey.toId());
+            assertGt(potFunded, 0, "Pot must be funded after slasher poke");
         }
-
-        assertEq(vtsOrchestrator.isPositionValid(beneficiaryPosId, true), false, "MM position should now be inactive");
-        (,, int256 mmPending0AfterClose, int256 mmPending1AfterClose) =
-            vtsOrchestrator.getPositionFeeAccounting(beneficiaryPosId);
-        mmPending0AfterClose; // silence
-        assertLt(mmPending1AfterClose, 0, "Queued bonus must remain for inactive MM position");
-
-        // ------------------------------------------------------------
-        // 5) Fund the slashed pot by poking the slasher MM (materialises its +pendingFeeAdj)
-        // ------------------------------------------------------------
-        _pokeMM(slasherTokenId, 0);
-        (, uint256 potFunded) = vtsOrchestrator.getSlashedPot(corePoolKey.toId());
-        assertGt(potFunded, 0, "Pot must be funded after slasher poke");
 
         // ------------------------------------------------------------
         // 6) Inactive MM "pokes" (increase liquidity by 1e6) to materialise its queued bonus, then takes both currencies.
@@ -1163,46 +1249,13 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         uint256 potBeforeInactiveClaim = potFunded;
         uint256 mmReopenLiquidity = 1e6;
 
-        // _permitSettle(1e18, 1e18); // ensure can settle
-
         uint256 bal0Before = _selfLccBalance(lccCurrency0);
         uint256 bal1Before = _selfLccBalance(lccCurrency1);
 
-        (uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) = _calculateSettlementAmounts(
-            ModifyLiquidityParams({
-                tickLower: mmTickLower,
-                tickUpper: mmTickUpper,
-                liquidityDelta: int256(mmReopenLiquidity),
-                salt: bytes32(0)
-            }),
-            marketVTSConfiguration
-        );
-
-        int128 settle0 = -SafeCast.toInt128(requiredSettlementAmount0);
-        int128 settle1 = -SafeCast.toInt128(requiredSettlementAmount1);
-        _permitSettle(settle0, settle1);
-
-        {
-            MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](6);
-            actions[0] = MMA.prepareIncrease(corePoolKey, beneficiaryTokenId, 0, mmReopenLiquidity);
-            actions[1] = MMA.prepareSettle(corePoolKey, beneficiaryTokenId, 0, settle0, settle1, false);
-            actions[2] = MMA.prepareDecrease(corePoolKey, beneficiaryTokenId, 0, mmReopenLiquidity); // decrease should nullify.
-            actions[3] = MMA.prepareSettleFromDeltas(corePoolKey, beneficiaryTokenId, 0, true, true); // take underlying back to user wallet.
-            actions[4] = MMA.prepareTake(lccCurrency0, address(this), 0);
-            actions[5] = MMA.prepareTake(lccCurrency1, address(this), 0);
-            MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
-        }
-
-        assertEq(vtsOrchestrator.isPositionValid(beneficiaryPosId, true), false, "MM should end inactive after claim");
-        (, uint256 potAfterInactiveClaim) = vtsOrchestrator.getSlashedPot(corePoolKey.toId());
+        (uint256 potAfterInactiveClaim, int256 mmPending1Final, uint256 bal0After, uint256 bal1After) =
+            _inactiveMmClaimAndTake(beneficiaryTokenId, beneficiaryPosId, mmReopenLiquidity);
         assertLt(potAfterInactiveClaim, potBeforeInactiveClaim, "Inactive MM claim should drain the pot");
-
-        (,, int256 mmPending0Final, int256 mmPending1Final) = vtsOrchestrator.getPositionFeeAccounting(beneficiaryPosId);
-        mmPending0Final; // silence
         assertGt(mmPending1Final, mmPending1AfterClose, "Pending bonus should be reduced after inactive MM claim");
-
-        uint256 bal0After = _selfLccBalance(lccCurrency0);
-        uint256 bal1After = _selfLccBalance(lccCurrency1);
         assertTrue(bal0After >= bal0Before, "lcc0 take should not reduce balance");
         assertTrue(bal1After >= bal1Before, "lcc1 take should not reduce balance");
         assertTrue(bal0After > bal0Before || bal1After > bal1Before, "Expected at least one LCC take to pay out");
@@ -1213,84 +1266,96 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
     ///      - potAvail == 0: no allocation occurs; windows remain banked
     ///      - potAvail > 0: allocation occurs; windows are cleared for the allocated token
     function test_allocatesOnlyWhenPotAvailPositive() public {
-        // ------------------------------------------------------------
-        // 0) Use the initial full-range DirectLP position created in setUp()
-        //    (it dominates totalSettled, so it will actually accrue non-dust CISE exposure)
-        // ------------------------------------------------------------
+        // Values needed across scoped blocks (declared at function level)
         int24 dlTickLower = TickMath.minUsableTick(corePoolKey.tickSpacing);
         int24 dlTickUpper = TickMath.maxUsableTick(corePoolKey.tickSpacing);
-
         ModifyLiquidityParams memory dlPokeParams = ModifyLiquidityParams({
             tickLower: dlTickLower, tickUpper: dlTickUpper, liquidityDelta: 0, salt: bytes32(0)
         });
-
         PositionId directPosId = PositionLibrary.generateId(address(modifyLiquidityRouter), dlPokeParams);
+
+        // ══════════════════════════════════════════════════════════════════════════
+        // 0) Precondition: Use the initial full-range DirectLP position created in setUp()
+        //    (it dominates totalSettled, so it will actually accrue non-dust CISE exposure)
+        // ══════════════════════════════════════════════════════════════════════════
         assertTrue(vtsOrchestrator.isPositionValid(directPosId, true), "Precondition: initial LP should exist");
 
-        // ------------------------------------------------------------
+        // ══════════════════════════════════════════════════════════════════════════
         // 1) potAvail == 0 case: accrue fees, touch, ensure no bonus is allocated and windows remain banked
-        // ------------------------------------------------------------
-        // Accrue some fees on token1 (one-for-zero swap => fee token is token1)
-        _swapCore(false, -int256(2e18));
+        //    (scoped to reset stack before Phase 2)
+        // ══════════════════════════════════════════════════════════════════════════
+        {
+            // Accrue some fees on token1 (one-for-zero swap => fee token is token1)
+            _swapCore(false, -int256(2e18));
 
-        // Precondition: no protocolFeeAccrued yet (no slashes have occurred), so potAvail == 0
-        (, uint256 feeAccruedBefore1) = _protocolFeeAccrued(corePoolKey.toId());
-        assertEq(feeAccruedBefore1, 0, "Precondition: protocolFeeAccrued1 should be 0 before any slashing");
+            // Precondition: no protocolFeeAccrued yet (no slashes have occurred), so potAvail == 0
+            (, uint256 feeAccruedBefore1) = _protocolFeeAccrued(corePoolKey.toId());
+            assertEq(feeAccruedBefore1, 0, "Precondition: protocolFeeAccrued1 should be 0 before any slashing");
 
-        (,, int256 pending0BeforePoke, int256 pending1BeforePoke) =
-            _testableOrchestrator().getPositionFeeAccounting(directPosId);
-        pending0BeforePoke; // silence
+            (,,, int256 pending1BeforePoke) = _testableOrchestrator().getPositionFeeAccounting(directPosId);
 
-        // Touch DirectLP (poke): potAvail is still 0 (no slashes have occurred)
-        modifyLiquidityRouter.modifyLiquidity(corePoolKey, dlPokeParams, ZERO_BYTES);
+            // Touch DirectLP (poke): potAvail is still 0 (no slashes have occurred)
+            modifyLiquidityRouter.modifyLiquidity(corePoolKey, dlPokeParams, ZERO_BYTES);
 
-        // No bonus should be queued because potAvail == 0
-        (,, int256 pending0AfterPoke, int256 pending1AfterPoke) =
-            _testableOrchestrator().getPositionFeeAccounting(directPosId);
-        pending0AfterPoke; // silence
-        assertEq(pending1AfterPoke, pending1BeforePoke, "potAvail==0: should not queue bonus");
+            // No bonus should be queued because potAvail == 0
+            (,,, int256 pending1AfterPoke) = _testableOrchestrator().getPositionFeeAccounting(directPosId);
+            assertEq(pending1AfterPoke, pending1BeforePoke, "potAvail==0: should not queue bonus");
 
-        // CISE exposure is 0 because no coverage has been exercised yet
-        (uint256 ciseExp0, uint256 ciseExp1) = _testableOrchestrator().getPositionBonusWeights(directPosId);
-        assertEq(ciseExp0, 0, "potAvail==0: ciseExposure0 should be 0 (no coverage exercised)");
-        assertEq(ciseExp1, 0, "potAvail==0: ciseExposure1 should be 0 (no coverage exercised)");
+            // CISE exposure is 0 because no coverage has been exercised yet
+            (uint256 ciseExp0, uint256 ciseExp1) = _testableOrchestrator().getPositionBonusWeights(directPosId);
+            assertEq(ciseExp0, 0, "potAvail==0: ciseExposure0 should be 0 (no coverage exercised)");
+            assertEq(ciseExp1, 0, "potAvail==0: ciseExposure1 should be 0 (no coverage exercised)");
+        }
 
-        // ------------------------------------------------------------
+        // ══════════════════════════════════════════════════════════════════════════
         // 2) potAvail > 0 case: create slashes so protocolFeeAccrued > 0, then touch and ensure allocation occurs
-        // ------------------------------------------------------------
-        // Create MM slasher and queue slashes (protocolFeeAccrued increases on settlePositionGrowths)
-        int24 mmTickLower = -960;
-        int24 mmTickUpper = 960;
-        (uint256 tokenId, PositionId slasherPosId,,) = _createCommittedPosition(mmTickLower, mmTickUpper, 50e10);
+        // ══════════════════════════════════════════════════════════════════════════
+        {
+            // Create MM slasher and queue slashes (protocolFeeAccrued increases on settlePositionGrowths)
+            (uint256 tokenId, PositionId slasherPosId,,) = _createCommittedPosition(-960, 960, 50e10);
 
-        _swapCore(false, -int256(50e18));
-        vtsOrchestrator.settlePositionGrowths(slasherPosId);
-        vm.prank(marketFactory);
-        vtsOrchestrator.incrementCoverage(corePoolKey.toId(), 50e18, 0);
-        vtsOrchestrator.settlePositionGrowths(slasherPosId);
+            _swapCore(false, -int256(50e18));
+            vtsOrchestrator.settlePositionGrowths(slasherPosId);
+            vm.prank(marketFactory);
+            vtsOrchestrator.incrementCoverage(corePoolKey.toId(), 50e18, 0);
+            vtsOrchestrator.settlePositionGrowths(slasherPosId);
 
-        (, uint256 feeAccruedAfterSlash1) = _protocolFeeAccrued(corePoolKey.toId());
-        assertGt(feeAccruedAfterSlash1, 0, "Precondition: protocolFeeAccrued1 should be > 0 after slashing queued");
+            (, uint256 feeAccruedAfterSlash1) = _protocolFeeAccrued(corePoolKey.toId());
+            assertGt(feeAccruedAfterSlash1, 0, "Precondition: protocolFeeAccrued1 should be > 0 after slashing queued");
 
-        // Touch DirectLP again: now potAvail > 0, so it should allocate and queue a bonus
-        modifyLiquidityRouter.modifyLiquidity(corePoolKey, dlPokeParams, ZERO_BYTES);
+            // Touch DirectLP again: now potAvail > 0, so it should allocate and queue a bonus
+            modifyLiquidityRouter.modifyLiquidity(corePoolKey, dlPokeParams, ZERO_BYTES);
 
-        (,, int256 pending0AfterAlloc, int256 pending1AfterAlloc) =
-            _testableOrchestrator().getPositionFeeAccounting(directPosId);
-        pending0AfterAlloc; // silence
-        assertLt(pending1AfterAlloc, 0, "potAvail>0: should queue a bonus (pendingFeeAdj1 < 0)");
+            uint256 lcc1BalanceAfter = _selfLccBalance(lccCurrency1);
 
-        // After a successful allocation, CISE exposure windows for the coverage token should be cleared
-        // Note: token1 pot is funded by token0 deficits, so token0 exposure is cleared when token1 bonus is allocated
-        (uint256 ciseExp0After, uint256 ciseExp1After) = _testableOrchestrator().getPositionBonusWeights(directPosId);
-        // token0 exposure should be cleared because it was used for token1 bonus allocation
-        assertEq(
-            ciseExp0After, 0, "potAvail>0: ciseExposure0 should be cleared after allocation (used for token1 bonus)"
-        );
-        ciseExp1After; // silence - token1 exposure wasn't consumed since token0 pot is empty
+            (,,, int256 pending1AfterAlloc) = _testableOrchestrator().getPositionFeeAccounting(directPosId);
+            assertLt(pending1AfterAlloc, 0, "potAvail>0: should queue a bonus (pendingFeeAdj1 < 0)");
+            assertEq(_slashedPot1(), 0, "potAvail>0: slashedPot is 0 because slasher has not poked.");
+            // ? (pendingFeeAdj < 0) bonus will allocate but NOT materialise if slashedPot is 0.
+            // // assertEq(pending1AfterAlloc, 0, "potAvail>0: queued bonus should be 0 after directLP poke.");
 
-        // Suppress unused variable warnings
-        tokenId;
+            // After a successful allocation, CISE exposure windows for the coverage token should be cleared
+            // Note: token1 pot is funded by token0 deficits, so token0 exposure is cleared when token1 bonus is allocated
+            (uint256 ciseExp0After,) = _testableOrchestrator().getPositionBonusWeights(directPosId);
+            // token0 exposure should be cleared because it was used for token1 bonus allocation
+            assertEq(
+                ciseExp0After, 0, "potAvail>0: ciseExposure0 should be cleared after allocation (used for token1 bonus)"
+            );
+
+            // ? Following supressed test requires that we poke the slaher to drive slashedPot1 > 0.
+            // // Assert balance increased by at least 0.3% fee amount (using FullMath for precision)
+            // // 52e18 is total swap of token1 IN + 0.3% in fees from poke.
+            // uint256 minExpected = 52e18 + FullMath.mulDiv(52e18, 3, 1000); // 0.3% = 3/1000
+            // assertApproxEqRel(
+            //     lcc1BalanceAfter,
+            //     minExpected,
+            //     5e10, // within 0.0000005% (1e18 = 100%)
+            //     "DirectLP poke should increase LCC1 balance because of the bonus"
+            // );
+
+            // Suppress unused variable warnings
+            tokenId;
+        }
     }
 }
 

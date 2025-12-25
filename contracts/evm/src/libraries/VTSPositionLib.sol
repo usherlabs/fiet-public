@@ -12,7 +12,6 @@ import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint12
 import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {RFSCheckpoint} from "../types/Checkpoint.sol";
-import {console} from "forge-std/console.sol";
 import {
     VTSStorage,
     PositionAccounting,
@@ -473,11 +472,6 @@ library VTSPositionLib {
             );
         }
 
-        // console.log("Deficit Growth: add0", add0);
-        // console.log("Deficit Growth: add1", add1);
-        // console.log("Deficit Growth: pa.settled.token0", pa.settled.token0);
-        // console.log("Deficit Growth: pa.settled.token1", pa.settled.token1);
-
         // Process token0 deficit in scoped block
         if (add0 > 0) {
             // Track full attributed outflows for fee sharing normalisation window
@@ -584,9 +578,6 @@ library VTSPositionLib {
     ) private returns (uint256 fg, uint256 feesBurn) {
         PositionAccounting storage pa = s.positionAccounting[id];
         uint256 fees;
-        uint256 ofDelta;
-        uint256 cf;
-        uint256 snap;
 
         // Scoped block: Read fee growth and calculate fees
         {
@@ -609,14 +600,9 @@ library VTSPositionLib {
         //
         // Instead, we advance `outflowsAtFeeSnap` by the amount of outflows actually "consumed" by this burn
         // (i.e. exercised deficit, capped by the current `ofDelta`), and only when a non-zero burn occurs.
-        {
-            cf = pa.cumulativeOutflows.get(tokenIndex);
-            snap = pa.outflowsAtFeeSnap.get(tokenIndex);
-            ofDelta = cf >= snap ? (cf - snap) : 0; // outflows since last burn checkpoint.
-        }
-
-        // console.log("fees", fees);
-        // console.log("ofDelta", ofDelta);
+        uint256 cf = pa.cumulativeOutflows.get(tokenIndex);
+        uint256 snap = pa.outflowsAtFeeSnap.get(tokenIndex);
+        uint256 ofDelta = cf >= snap ? (cf - snap) : 0; // outflows since last burn checkpoint.
 
         if (fees == 0 || ofDelta == 0) {
             return (fg, 0);
@@ -691,7 +677,6 @@ library VTSPositionLib {
         (fg, feesBurn) =
             _calculateFeesBurn(s, poolManager, id, p, tokenIndex, feeTokenIndex, burnBase, positionLiquidity);
 
-        console.log("feesBurn", feesBurn);
         if (feesBurn == 0) return;
 
         // Advance fee growth baseline by burn amount to effectively "burn" the fees (fee token only)
@@ -745,10 +730,6 @@ library VTSPositionLib {
         if (deltaIndex > 0) {
             uint256 deficitPrincipal = pa.cumulativeDeficit.get(tokenIndex);
             uint256 cov = FullMath.mulDiv(deficitPrincipal, deltaIndex, FixedPoint128.Q128);
-            console.log("DICE: deficitPrincipal", deficitPrincipal);
-            console.log("DICE: deltaIndex", deltaIndex);
-            console.log("DICE: cov", cov);
-
             if (cov > 0) {
                 _applyCoverageBurn(s, poolManager, positionId, poolId, tokenIndex, cov, liq);
             }
@@ -767,9 +748,6 @@ library VTSPositionLib {
         uint256 indexNow = paPool.coveragePerSettledIndexX128.get(tokenIndex);
         uint256 indexLast = pa.ciseIndexLastX128.get(tokenIndex);
 
-        // console.log("indexNow", indexNow);
-        // console.log("indexLast", indexLast);
-
         // Always checkpoint index (even if no exposure to apply)
         if (indexNow != indexLast) {
             pa.ciseIndexLastX128.set(tokenIndex, indexNow);
@@ -779,9 +757,6 @@ library VTSPositionLib {
         if (deltaIndex > 0) {
             uint256 settled = pa.settled.get(tokenIndex);
             uint256 exposure = FullMath.mulDiv(settled, deltaIndex, FixedPoint128.Q128);
-            // console.log("settled", settled);
-            // console.log("deltaIndex", deltaIndex);
-            // console.log("exposure", exposure);
             if (exposure > 0) {
                 pa.ciseExposureSinceLastMod.set(tokenIndex, pa.ciseExposureSinceLastMod.get(tokenIndex) + exposure);
                 paPool.totalCISEExposureSinceLastMod
@@ -1195,8 +1170,6 @@ library VTSPositionLib {
             int256 newLiquidity = SafeCast.toInt256(uint256(posStorage.liquidity)) + p.params.liquidityDelta;
             posStorage.liquidity = newLiquidity < 0 ? 0 : SafeCast.toUint128(uint256(newLiquidity));
         }
-
-        // console.log("MM OPERATION:", hookData.isMMOperation);
 
         _updateActiveStatus(s, posStorage, initialLiquidity, liq);
 
