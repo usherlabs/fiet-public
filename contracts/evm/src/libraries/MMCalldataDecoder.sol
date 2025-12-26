@@ -69,12 +69,7 @@ library MMCalldataDecoder {
     function decodeIncreaseLiquidityParams(bytes calldata params)
         internal
         pure
-        returns (
-            PoolKey calldata poolKey,
-            uint256 tokenId,
-            uint256 positionIndex,
-            uint256 liquidity
-        )
+        returns (PoolKey calldata poolKey, uint256 tokenId, uint256 positionIndex, uint256 liquidity)
     {
         assembly ("memory-safe") {
             // PoolKey: 5 slots (0xa0), then tokenId, positionIndex, liquidity
@@ -215,12 +210,7 @@ library MMCalldataDecoder {
     function decodeIncreaseFromDeltasParams(bytes calldata params)
         internal
         pure
-        returns (
-            PoolKey calldata poolKey,
-            uint256 tokenId,
-            uint256 positionIndex,
-            bool payerIsUser
-        )
+        returns (PoolKey calldata poolKey, uint256 tokenId, uint256 positionIndex, bool payerIsUser)
     {
         assembly ("memory-safe") {
             // PoolKey: 5 slots (0xa0), then tokenId, positionIndex, payerIsUser

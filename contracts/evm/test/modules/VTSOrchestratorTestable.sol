@@ -195,16 +195,10 @@ contract VTSOrchestratorTestable is VTSOrchestrator {
     function getPoolCSIAccounting(PoolId poolId)
         external
         view
-        returns (
-            uint256 feesSharedSpendIndex0,
-            uint256 feesSharedSpendIndex1
-        )
+        returns (uint256 feesSharedSpendIndex0, uint256 feesSharedSpendIndex1)
     {
         PoolAccounting storage paPool = s.poolAccounting[poolId];
-        return (
-            paPool.feesSharedSpendIndexX128.token0,
-            paPool.feesSharedSpendIndexX128.token1
-        );
+        return (paPool.feesSharedSpendIndexX128.token0, paPool.feesSharedSpendIndexX128.token1);
     }
 
     /// @notice Get position's CSI (Contribution Spend Index) accounting for debugging
@@ -216,12 +210,7 @@ contract VTSOrchestratorTestable is VTSOrchestrator {
     function getPositionCSIAccounting(PositionId positionId)
         external
         view
-        returns (
-            uint256 feesShared0,
-            uint256 feesShared1,
-            uint256 feesSharedIndexLast0,
-            uint256 feesSharedIndexLast1
-        )
+        returns (uint256 feesShared0, uint256 feesShared1, uint256 feesSharedIndexLast0, uint256 feesSharedIndexLast1)
     {
         PositionAccounting storage pa = s.positionAccounting[positionId];
         return (

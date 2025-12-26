@@ -75,12 +75,7 @@ abstract contract LiquidityHubTestBase is Test {
         );
 
         // Initialize market
-        liquidityHub.initialize(
-            lccToken1,
-            lccToken2,
-            marketId1,
-            abi.encodePacked(address(0x1234))
-        );
+        liquidityHub.initialize(lccToken1, lccToken2, marketId1, abi.encodePacked(address(0x1234)));
 
         vm.stopPrank();
 

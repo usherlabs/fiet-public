@@ -53,11 +53,18 @@ contract DirectLPDeltaResolver is ISubscriber {
     }
 
     modifier onlyPositionManager() {
-        if (msg.sender != address(positionManager)) revert NotPositionManager();
+        _onlyPositionManager();
         _;
     }
 
-    function notifySubscribe(uint256, bytes memory) external override onlyPositionManager {}
+    function _onlyPositionManager() internal view {
+        if (msg.sender != address(positionManager)) revert NotPositionManager();
+    }
+
+    function notifySubscribe(uint256 tokenId, bytes memory) external view override onlyPositionManager {
+        (PoolKey memory poolKey,) = positionManager.getPoolAndPositionInfo(tokenId);
+        _getFactory(poolKey);
+    }
 
     function notifyUnsubscribe(uint256) external override onlyPositionManager {}
 
@@ -75,14 +82,17 @@ contract DirectLPDeltaResolver is ISubscriber {
 
     function _afterModifyLiquidity(uint256 tokenId) internal {
         (PoolKey memory poolKey,) = positionManager.getPoolAndPositionInfo(tokenId);
+        IMarketFactory factory = _getFactory(poolKey);
 
+        factory.afterModifyLiquidity(poolKey);
+    }
+
+    function _getFactory(PoolKey memory poolKey) internal view returns (IMarketFactory) {
         address lcc0 = Currency.unwrap(poolKey.currency0);
         address lcc1 = Currency.unwrap(poolKey.currency1);
 
         IMarketFactory factory = liquidityHub.getFactory(lcc0, lcc1);
         if (address(factory) == address(0)) revert FactoryNotFound(lcc0, lcc1);
-
-        factory.afterModifyLiquidity(poolKey);
+        return factory;
     }
 }
-

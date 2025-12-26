@@ -35,12 +35,7 @@ interface ILiquidityHub {
      * @param marketId The market ID (corePoolKey -> PoolID -> unwrap() to bytes32)
      * @param marketRef The market reference (bytes from proxyHookAddress)
      */
-    function initialize(
-        address lccToken0,
-        address lccToken1,
-        bytes32 marketId,
-        bytes memory marketRef
-    ) external;
+    function initialize(address lccToken0, address lccToken1, bytes32 marketId, bytes memory marketRef) external;
 
     /**
      * @notice Issues LCC tokens (mints to specified recipient)
