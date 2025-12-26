@@ -7,7 +7,7 @@ import {OlympixUnitTest} from "./tools/OlympixUnitTest.sol";
 import {LiquidityHub} from "../../src/LiquidityHub.sol";
 import {OracleHelper} from "../../src/OracleHelper.sol";
 
-contract LiquidityHubTest is Test, OlympixUnitTest("LiquidityHub") {
+contract LiquidityHubTest_Autocover is Test, OlympixUnitTest("LiquidityHub") {
     LiquidityHub internal hub;
 
     function setUp() public {

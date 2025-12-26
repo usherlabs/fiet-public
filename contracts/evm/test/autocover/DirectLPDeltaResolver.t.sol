@@ -9,7 +9,7 @@ import {IPositionManager} from "v4-periphery/src/interfaces/IPositionManager.sol
 import {ILiquidityHub} from "../../src/interfaces/ILiquidityHub.sol";
 import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 
-contract DirectLPDeltaResolverTest is Test, OlympixUnitTest("DirectLPDeltaResolver") {
+contract DirectLPDeltaResolverTest_Autocover is Test, OlympixUnitTest("DirectLPDeltaResolver") {
     DirectLPDeltaResolver internal resolver;
 
     function setUp() public {

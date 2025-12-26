@@ -6,7 +6,7 @@ import "forge-std/Test.sol";
 import {OlympixUnitTest} from "./tools/OlympixUnitTest.sol";
 import {OracleHelper} from "../../src/OracleHelper.sol";
 
-contract OracleHelperTest is Test, OlympixUnitTest("OracleHelper") {
+contract OracleHelperTest_Autocover is Test, OlympixUnitTest("OracleHelper") {
     OracleHelper internal helper;
 
     function setUp() public {

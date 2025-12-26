@@ -10,7 +10,7 @@ import {
     PositionModificationHookData
 } from "../../../src/types/Position.sol";
 
-contract PositionTypeTest is Test, OlympixUnitTest("PositionTypeTest") {
+contract PositionTypeTest_Autocover is Test, OlympixUnitTest("PositionTypeTest") {
     function setUp() public {}
 
     function test_hookData_encodeDecode_roundTrip() public pure {

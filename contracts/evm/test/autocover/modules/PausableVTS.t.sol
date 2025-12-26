@@ -23,7 +23,7 @@ contract PausableVTSHarness is PausableVTS {
     }
 }
 
-contract PausableVTSTest is Test, OlympixUnitTest("PausableVTS") {
+contract PausableVTSTest_Autocover is Test, OlympixUnitTest("PausableVTS") {
     PausableVTSHarness internal h;
     PoolId internal pool;
 

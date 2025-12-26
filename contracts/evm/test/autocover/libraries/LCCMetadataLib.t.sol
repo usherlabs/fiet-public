@@ -99,7 +99,7 @@ contract ERC20MetadataMock {
     }
 }
 
-contract LCCMetadataLibTest is Test, OlympixUnitTest("LCCMetadataLibHarness") {
+contract LCCMetadataLibTest_Autocover is Test, OlympixUnitTest("LCCMetadataLibHarness") {
     LCCMetadataLibHarness internal h;
 
     function setUp() public {

@@ -6,7 +6,7 @@ import "forge-std/Test.sol";
 import {OlympixUnitTest} from "./tools/OlympixUnitTest.sol";
 import {MMPositionActionsImpl} from "../../src/MMPositionActionsImpl.sol";
 
-contract MMPositionActionsImplTest is Test, OlympixUnitTest("MMPositionActionsImpl") {
+contract MMPositionActionsImplTest_Autocover is Test, OlympixUnitTest("MMPositionActionsImpl") {
     MMPositionActionsImpl internal impl;
 
     function setUp() public {

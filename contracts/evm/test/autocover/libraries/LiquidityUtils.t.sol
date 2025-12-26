@@ -73,7 +73,7 @@ contract LiquidityUtilsHarness {
     }
 }
 
-contract LiquidityUtilsTest is Test, OlympixUnitTest("LiquidityUtilsHarness") {
+contract LiquidityUtilsTest_Autocover is Test, OlympixUnitTest("LiquidityUtilsHarness") {
     LiquidityUtilsHarness internal h;
 
     function setUp() public {}

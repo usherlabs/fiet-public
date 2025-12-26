@@ -59,7 +59,7 @@ contract CheckpointHarness {
     }
 }
 
-contract CheckpointLibraryTest is Test, OlympixUnitTest("CheckpointHarness") {
+contract CheckpointLibraryTest_Autocover is Test, OlympixUnitTest("CheckpointHarness") {
     CheckpointHarness internal h;
 
     function setUp() public {

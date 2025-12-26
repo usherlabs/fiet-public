@@ -24,7 +24,7 @@ contract MockMarketFactory {
     }
 }
 
-contract MarketVaultDeployerTest is Test, OlympixUnitTest("MarketVaultDeployer") {
+contract MarketVaultDeployerTest_Autocover is Test, OlympixUnitTest("MarketVaultDeployer") {
     MarketVaultDeployer internal deployer;
     MockMarketFactory internal factory;
     address internal poolManager;

@@ -26,7 +26,7 @@ contract SwapSimulatorHarness {
     }
 }
 
-contract SwapSimulatorTest is Test, OlympixUnitTest("SwapSimulatorHarness") {
+contract SwapSimulatorTest_Autocover is Test, OlympixUnitTest("SwapSimulatorHarness") {
     function setUp() public {}
 
     function test_compiles_smoke() public pure {

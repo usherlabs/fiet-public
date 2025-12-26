@@ -63,7 +63,7 @@ contract MarketHandlerLibHarness {
     }
 }
 
-contract MarketHandlerLibTest is Test, OlympixUnitTest("MarketHandlerLibHarness") {
+contract MarketHandlerLibTest_Autocover is Test, OlympixUnitTest("MarketHandlerLibHarness") {
     MarketHandlerLibHarness internal h;
 
     function setUp() public {

@@ -95,7 +95,7 @@ contract LCCFactoryLibHarness {
     }
 }
 
-contract LCCFactoryLibTest is Test, OlympixUnitTest("LCCFactoryLibHarness") {
+contract LCCFactoryLibTest_Autocover is Test, OlympixUnitTest("LCCFactoryLibHarness") {
     LCCFactoryLibHarness internal h;
 
     function setUp() public {

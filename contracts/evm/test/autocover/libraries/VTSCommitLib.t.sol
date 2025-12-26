@@ -51,7 +51,7 @@ contract VTSCommitLibHarness {
     }
 }
 
-contract VTSCommitLibTest is Test, OlympixUnitTest("VTSCommitLibHarness") {
+contract VTSCommitLibTest_Autocover is Test, OlympixUnitTest("VTSCommitLibHarness") {
     VTSCommitLibHarness internal h;
 
     function setUp() public {

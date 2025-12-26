@@ -8,16 +8,9 @@ import {VTSFeeLinkedLib} from "../../../src/libraries/VTSFeeLib.sol";
 import {VTSStorage} from "../../../src/types/VTS.sol";
 import {PositionId} from "../../../src/types/Position.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {VTSFeeLibHarness} from "../../libraries/harnesses/VTSFeeLibHarness.sol";
 
-contract VTSFeeLibHarness {
-    VTSStorage internal s;
-
-    function afterTouchPosition(PositionId positionId) external returns (BalanceDelta adj) {
-        return VTSFeeLinkedLib.afterTouchPosition(s, positionId);
-    }
-}
-
-contract VTSFeeLibTest is Test, OlympixUnitTest("VTSFeeLibHarness") {
+contract VTSFeeLibTest_Autocover is Test, OlympixUnitTest("VTSFeeLibHarness") {
     VTSFeeLibHarness internal h;
 
     function setUp() public {

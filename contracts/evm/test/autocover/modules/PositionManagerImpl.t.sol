@@ -32,7 +32,7 @@ contract PositionManagerImplHarness is PositionManagerImpl {
     }
 }
 
-contract PositionManagerImplTest is Test, OlympixUnitTest("PositionManagerImpl") {
+contract PositionManagerImplTest_Autocover is Test, OlympixUnitTest("PositionManagerImpl") {
     PositionManagerImplHarness internal h;
     address internal poolManager;
     address internal hub;

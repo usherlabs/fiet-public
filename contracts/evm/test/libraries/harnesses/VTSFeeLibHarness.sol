@@ -40,7 +40,7 @@ contract VTSFeeLibHarness {
     }
 
     /// @notice Exposes processPositionFees via the linked library (accounting only, no PoolManager interaction)
-    function processPositionFees(PositionId positionId) external returns (BalanceDelta adj) {
+    function afterTouchPosition(PositionId positionId) external returns (BalanceDelta adj) {
         return VTSFeeLinkedLib.afterTouchPosition(s, positionId);
     }
 

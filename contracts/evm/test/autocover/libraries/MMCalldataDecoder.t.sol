@@ -150,7 +150,7 @@ contract MMCalldataDecoderHarness {
     }
 }
 
-contract MMCalldataDecoderTest is Test, OlympixUnitTest("MMCalldataDecoderHarness") {
+contract MMCalldataDecoderTest_Autocover is Test, OlympixUnitTest("MMCalldataDecoderHarness") {
     MMCalldataDecoderHarness internal h;
 
     function setUp() public {

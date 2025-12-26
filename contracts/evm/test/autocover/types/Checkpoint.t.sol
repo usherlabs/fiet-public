@@ -25,7 +25,7 @@ contract RFSCheckpointHarness {
     }
 }
 
-contract CheckpointTypeTest is Test, OlympixUnitTest("RFSCheckpointHarness") {
+contract CheckpointTypeTest_Autocover is Test, OlympixUnitTest("RFSCheckpointHarness") {
     RFSCheckpointHarness internal h;
 
     function setUp() public {

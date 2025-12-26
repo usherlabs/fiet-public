@@ -8,7 +8,7 @@ import {LiquidityCommitmentCertificate} from "../../src/LCC.sol";
 import {OracleUtils} from "../../src/libraries/OracleUtils.sol";
 import {Errors} from "../../src/libraries/Errors.sol";
 
-contract LiquidityCommitmentCertificateTest is Test, OlympixUnitTest("LiquidityCommitmentCertificate") {
+contract LiquidityCommitmentCertificateTest_Autocover is Test, OlympixUnitTest("LiquidityCommitmentCertificate") {
     LiquidityCommitmentCertificate internal lcc;
 
     address internal hub;

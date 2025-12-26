@@ -26,7 +26,7 @@ contract MMHelpersHarness {
     }
 }
 
-contract MMHelpersTest is Test, OlympixUnitTest("MMHelpersHarness") {
+contract MMHelpersTest_Autocover is Test, OlympixUnitTest("MMHelpersHarness") {
     MMHelpersHarness internal h;
 
     function setUp() public {}
