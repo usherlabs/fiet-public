@@ -10,6 +10,7 @@ import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Ownable} from "openzeppelin-contracts/contracts/access/Ownable.sol";
 
 import {Errors} from "../../../src/libraries/Errors.sol";
+
 contract PausableVTSHarness is PausableVTS {
     VTSStorage internal s;
 

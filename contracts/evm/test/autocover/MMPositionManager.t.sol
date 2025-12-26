@@ -12,6 +12,7 @@ import {Errors} from "../../src/libraries/Errors.sol";
 import {MMActions} from "../../src/libraries/MMActions.sol";
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
+
 contract MMPositionManagerTest_Autocover is Test, OlympixUnitTest("MMPositionManager") {
     MMPositionManager internal mmpm;
 
@@ -43,9 +44,12 @@ contract MMPositionManagerTest_Autocover is Test, OlympixUnitTest("MMPositionMan
         vm.expectRevert(abi.encodeWithSelector(Errors.DeadlinePassed.selector, pastDeadline));
         // To hit the opix-target-branch-97-True: block.timestamp > deadline
         // Call modifyLiquidities, which calls _checkDeadline
-        mmpm.modifyLiquidities(bytes("") /*unlockData*/, pastDeadline);
+        mmpm.modifyLiquidities(
+            bytes(""),
+            /*unlockData*/
+            pastDeadline
+        );
     }
-    
 
     function test_handleUtilityAction_wrapNative_branch_True() public {
         // Prepare minimal params for MMActions.WRAP_NATIVE branch (opix-target-branch-342-True)
@@ -53,13 +57,13 @@ contract MMPositionManagerTest_Autocover is Test, OlympixUnitTest("MMPositionMan
         bytes memory params = abi.encode(uint256(1 ether)); // Wrap 1 ether
         // Build calldata for utility action handler
         uint256 action = MMActions.WRAP_NATIVE;
-    
+
         // The private _handleUtilityAction will wrap if called. To test, we must call via a test public wrapper.
         // We'll do this via foundry cheatcode: as the function is internal, call via delegatecall to a wrapper contract, or (more simply)
         // We can use foundry's access to internal functions, or test through the public batch entry _executeActions.
         // However, since _handleUtilityAction is tested via _handleAction which in turn is triggered by _executeActionsWithoutUnlock, and entry test skeleton has no hooks,
         // the best we can do is test smoke of the path by calling .modifyLiquiditiesWithoutUnlock with the action and params.
-    
+
         // Prepare actions and params for batch
         bytes memory actions = abi.encodePacked(uint8(action)); // Only one action
         bytes[] memory paramsArray = new bytes[](1);
@@ -74,12 +78,11 @@ contract MMPositionManagerTest_Autocover is Test, OlympixUnitTest("MMPositionMan
         vm.expectRevert(); // It will revert when trying to call vtsOrchestrator.take(), as it's not a contract.
         mmpm.modifyLiquiditiesWithoutUnlock(actions, paramsArray);
     }
-    
 
     function test_handleUtilityAction_unwrapNative_branch_true() public {
         // To reach the opix-target-branch-349-True in MMPositionManager._handleUtilityAction,
         // we must call modifyLiquiditiesWithoutUnlock with MMActions.UNWRAP_NATIVE action.
-        
+
         // Build the action and calldata to call UNWRAP_NATIVE
         uint256 action = MMActions.UNWRAP_NATIVE;
         // The params for decodeUint256AndBool: amount (uint256), payerIsUser (bool)
@@ -90,7 +93,7 @@ contract MMPositionManagerTest_Autocover is Test, OlympixUnitTest("MMPositionMan
         bytes memory actions = abi.encodePacked(uint8(action));
         bytes[] memory paramsArray = new bytes[](1);
         paramsArray[0] = param;
-    
+
         // Mock WETH9 token to be at makeAddr("weth9"), as setUp in test skeleton
         // Alice needs to have WETH to send to MMPM, so let's pretend Alice does
         address alice = makeAddr("alice");
@@ -123,16 +126,13 @@ contract MMPositionManagerTest_Autocover is Test, OlympixUnitTest("MMPositionMan
         // settleQueue returns 1
         vm.mockCall(
             liquidityHub,
-            abi.encodeWithSelector(
-                bytes4(keccak256("settleQueue(address,address)")), lcc, address(this)
-            ),
+            abi.encodeWithSelector(bytes4(keccak256("settleQueue(address,address)")), lcc, address(this)),
             abi.encode(uint256(1)) // queued > 0
         );
         // processSettlementFor gets called, but this is a dummy contract, so expect revert at that step.
         vm.expectRevert();
         mmpm.modifyLiquiditiesWithoutUnlock(actions, paramsArray);
     }
-    
 
     function test_handleUtilityAction_else_branch_367_False() public {
         // opix-target-branch-367-YOUR-TEST-SHOULD-ENTER-THIS-ELSE-BRANCH-BY-MAKING-THE-PRECEDING-IFS-CONDITIONS-FALSE
@@ -144,26 +144,26 @@ contract MMPositionManagerTest_Autocover is Test, OlympixUnitTest("MMPositionMan
         bytes memory actions = abi.encodePacked(uint8(unknownAction));
         bytes[] memory paramsArray = new bytes[](1);
         paramsArray[0] = param;
-        
+
         // Expect revert due to Errors.UnsupportedAction(unknownAction) at the end of the function
         vm.expectRevert(abi.encodeWithSelector(Errors.UnsupportedAction.selector, unknownAction));
         mmpm.modifyLiquiditiesWithoutUnlock(actions, paramsArray);
     }
-    
 
     function test_unwrapNative_payerIsUser_amountZero_branch() public {
         // Arrange: Set up a user, a mock WETH9 contract, and a fresh MMPositionManager configured with the mock WETH9
         address user = address(0xA123);
         uint256 wethBalance = 7 ether;
         address weth9 = address(uint160(uint256(keccak256("wethAutocover"))));
-    
+
         // Mock IERC20(weth9).balanceOf(user) returns wethBalance
         bytes memory balanceOfCall = abi.encodeWithSelector(IERC20.balanceOf.selector, user);
         vm.mockCall(weth9, balanceOfCall, abi.encode(wethBalance));
         // Mock IERC20(weth9).transferFrom(user, address(this), wethBalance) returns true
-        bytes memory transferFromCall = abi.encodeWithSelector(IERC20.transferFrom.selector, user, address(mmpm), wethBalance);
+        bytes memory transferFromCall =
+            abi.encodeWithSelector(IERC20.transferFrom.selector, user, address(mmpm), wethBalance);
         vm.mockCall(weth9, transferFromCall, abi.encode(true));
-    
+
         // Re-deploy MMPositionManager with this mocked WETH9 contract
         mmpm = new MMPositionManager(
             makeAddr("poolManager"),
@@ -174,14 +174,14 @@ contract MMPositionManagerTest_Autocover is Test, OlympixUnitTest("MMPositionMan
             IAllowanceTransfer(makeAddr("permit2")),
             makeAddr("actionsImpl")
         );
-    
+
         // Prepare action and params for UNWRAP_NATIVE: amount == 0, payerIsUser == true
         uint256 action = 0x43; // MMActions.UNWRAP_NATIVE == 0x43
         bytes memory param = abi.encode(uint256(0), true);
         bytes memory actions = abi.encodePacked(uint8(action));
         bytes[] memory paramsArray = new bytes[](1);
         paramsArray[0] = param;
-    
+
         // Prank as user
         vm.startPrank(user);
         // Should hit the opix-target-branch-481-True path: amount == 0 & payerIsUser == true
@@ -191,7 +191,6 @@ contract MMPositionManagerTest_Autocover is Test, OlympixUnitTest("MMPositionMan
         mmpm.modifyLiquiditiesWithoutUnlock(actions, paramsArray);
         vm.stopPrank();
     }
-    
 
     function test_unwrapNative_payerIsUser_false_opix_branch_coverage() public {
         // This test will hit the opix-target-branch-488-YOUR-TEST-SHOULD-ENTER-THIS-ELSE-BRANCH (the 'else' branch for `if (payerIsUser)` in _unwrapNative).
@@ -200,14 +199,14 @@ contract MMPositionManagerTest_Autocover is Test, OlympixUnitTest("MMPositionMan
         // - The action used should be MMActions.UNWRAP_NATIVE (0x43, 67), which triggers _unwrapNative()
         // - Pass param: amount (uint256), payerIsUser (bool)
         // - payerIsUser must be false
-    
+
         uint256 amount = 1 ether;
         bool payerIsUser = false;
         bytes memory param = abi.encode(amount, payerIsUser);
         bytes memory actions = abi.encodePacked(uint8(MMActions.UNWRAP_NATIVE));
         bytes[] memory paramsArray = new bytes[](1);
         paramsArray[0] = param;
-    
+
         // Set up mock for vtsOrchestrator.take to return amount
         address vtsOrchestrator = makeAddr("vtsOrchestrator");
         address msgsender = address(this);
@@ -223,7 +222,6 @@ contract MMPositionManagerTest_Autocover is Test, OlympixUnitTest("MMPositionMan
         vm.expectRevert();
         mmpm.modifyLiquiditiesWithoutUnlock(actions, paramsArray);
     }
-    
 
     function test_tokenURI_reverts_when_commitmentDescriptor_not_set() public {
         // Deploy an instance with commitmentDescriptor set to address(0) to trigger the branch
@@ -240,5 +238,4 @@ contract MMPositionManagerTest_Autocover is Test, OlympixUnitTest("MMPositionMan
         vm.expectRevert(Errors.CommitmentDescriptorNotSet.selector);
         brokenMmpm.tokenURI(123);
     }
-    
 }

@@ -12,11 +12,13 @@ import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDe
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+
 contract DirectLPDeltaResolverTest_Autocover is Test, OlympixUnitTest("DirectLPDeltaResolver") {
     DirectLPDeltaResolver internal resolver;
 
     function setUp() public {
-        resolver = new DirectLPDeltaResolver(IPositionManager(makeAddr("positionManager")), ILiquidityHub(makeAddr("hub")));
+        resolver =
+            new DirectLPDeltaResolver(IPositionManager(makeAddr("positionManager")), ILiquidityHub(makeAddr("hub")));
     }
 
     function test_notifyModifyLiquidity_revertsWhenNotPositionManager() public {
@@ -29,13 +31,12 @@ contract DirectLPDeltaResolverTest_Autocover is Test, OlympixUnitTest("DirectLPD
         vm.expectRevert(DirectLPDeltaResolver.NotPositionManager.selector);
         resolver.notifyUnsubscribe(1234);
     }
-    
 
     function test_notifySubscribe_revertsWhenFactoryNotFound() public {
         // Set up mock currency0 and currency1 addresses
         address currency0 = address(0xabc1);
         address currency1 = address(0xabc2);
-    
+
         // Set up a dummy PoolKey (fee, tickSpacing, hooks arbitrary)
         PoolKey memory poolKey = PoolKey({
             currency0: Currency.wrap(currency0),
@@ -44,7 +45,7 @@ contract DirectLPDeltaResolverTest_Autocover is Test, OlympixUnitTest("DirectLPD
             tickSpacing: 1,
             hooks: IHooks(address(0))
         });
-    
+
         // Mock the positionManager.getPoolAndPositionInfo to return our dummy poolKey for a tokenId
         address pm = address(resolver.positionManager());
         uint256 tokenId = 7777;
@@ -53,21 +54,18 @@ contract DirectLPDeltaResolverTest_Autocover is Test, OlympixUnitTest("DirectLPD
             abi.encodeWithSelector(IPositionManager.getPoolAndPositionInfo.selector, tokenId),
             abi.encode(poolKey, bytes32(0))
         );
-    
+
         // Mock the liquidityHub.getFactory(currency0, currency1) to return address(0)
         address hub = address(resolver.liquidityHub());
         vm.mockCall(
-            hub,
-            abi.encodeWithSelector(ILiquidityHub.getFactory.selector, currency0, currency1),
-            abi.encode(address(0))
+            hub, abi.encodeWithSelector(ILiquidityHub.getFactory.selector, currency0, currency1), abi.encode(address(0))
         );
-    
+
         // Expect revert with DirectLPDeltaResolver.FactoryNotFound error
         vm.expectRevert(abi.encodeWithSelector(DirectLPDeltaResolver.FactoryNotFound.selector, currency0, currency1));
-    
+
         // Call notifySubscribe with pm as msg.sender
         vm.prank(pm);
         resolver.notifySubscribe(tokenId, "");
     }
-    
 }

@@ -41,5 +41,4 @@ contract MarketFactoryTest_Autocover is MarketTestBase, OlympixUnitTest("MarketF
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidSender.selector));
         factory.useMarketLiquidity(dummyAsset, dummyMarketId, 1);
     }
-    
 }

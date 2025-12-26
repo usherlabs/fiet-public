@@ -42,11 +42,12 @@ contract LCCMetadataLibHarness {
         return LCCMetadataLib.buildName(assetName, marketName, symbolMarketId);
     }
 
-    function buildNameFromAsset(address asset, string memory nativeName, string memory marketName, string memory symbolMarketId)
-        external
-        view
-        returns (string memory)
-    {
+    function buildNameFromAsset(
+        address asset,
+        string memory nativeName,
+        string memory marketName,
+        string memory symbolMarketId
+    ) external view returns (string memory) {
         return LCCMetadataLib.buildNameFromAsset(asset, nativeName, marketName, symbolMarketId);
     }
 
@@ -54,7 +55,11 @@ contract LCCMetadataLibHarness {
         return LCCMetadataLib.buildSymbol(uaSymbol, symbolMarketId);
     }
 
-    function truncateMarketRef(bytes memory marketRef, uint256 length) external pure returns (bytes memory, string memory) {
+    function truncateMarketRef(bytes memory marketRef, uint256 length)
+        external
+        pure
+        returns (bytes memory, string memory)
+    {
         return LCCMetadataLib.truncateMarketRef(marketRef, length);
     }
 
@@ -118,5 +123,4 @@ contract LCCMetadataLibTest_Autocover is Test, OlympixUnitTest("LCCMetadataLibHa
         assertGt(bytes(hexStr).length, 0);
     }
 }
-
 

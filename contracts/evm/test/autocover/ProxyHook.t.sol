@@ -78,10 +78,10 @@ contract ProxyHookTest_Autocover is Test, OlympixUnitTest("ProxyHook") {
             tickSpacing: 12,
             hooks: IHooks(address(42)) // nonzero address triggers the branch
         });
-        
+
         // Set the proxy's corePoolKey directly for test, simulating already initialized
         vm.store(address(hook), bytes32(uint256(6)), bytes32(uint256(uint160(address(42))))); // storage slot 6: corePoolKey.hooks
-    
+
         // Act/Assert: calling setCorePoolKey again should revert with CorePoolKeyAlreadySet
         vm.prank(marketFactory);
         vm.expectRevert(Errors.CorePoolKeyAlreadySet.selector);

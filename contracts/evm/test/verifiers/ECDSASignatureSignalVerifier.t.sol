@@ -1,0 +1,376 @@
+// SPDX-License-Identifier: BUSL-1.1
+pragma solidity 0.8.26;
+
+import {MarketMaker} from "../../src/libraries/MarketMaker.sol";
+import {ECDSASignatureSignalVerifier} from "../../src/verifiers/ECDSASignatureSignalVerifier.sol";
+import {MarketMakerTestBase} from "../base/MMTestBase.sol";
+import {MerkleProofGenerator} from "../libraries/MerkleProofGenerator.sol";
+import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
+import {EfficientHashLib} from "solady/utils/EfficientHashLib.sol";
+
+contract ECDSASignatureSignalVerifierTest is MarketMakerTestBase {
+    using MarketMaker for MarketMaker.State;
+    using MerkleProofGenerator for bytes32[];
+    using MessageHashUtils for bytes32;
+
+    ECDSASignatureSignalVerifier verifier;
+
+    function setUp() public {
+        // Create and fill in the test state
+        _setUpMM();
+        verifier = new ECDSASignatureSignalVerifier(signatureVerifier);
+    }
+
+    function test_verifyProof_validProofWithSignature() public view {
+        // Verify the signatures and merkle proof
+        bool success = verifier.verifyProof(
+            liquiditySignal.nonce,
+            liquiditySignal.rootHash,
+            liquiditySignal.rootHashSignature,
+            liquiditySignal.mmSignature,
+            liquiditySignal.mmState,
+            liquiditySignal.merkleProof
+        );
+
+        assertTrue(success, "Valid proof should verify successfully");
+    }
+
+    function test_verifyProof_validProofWithoutSignature_CallerIsOwner() public {
+        // Create a new state where caller will be the owner
+        uint256 privateKey = uint256(keccak256(abi.encodePacked("test_owner")));
+        address owner = vm.addr(privateKey);
+
+        MarketMaker.State memory state;
+        state.owner = owner;
+        state.sourceState = "0xf4425b4a018ab1889fdbae14e6fffae817a60341f3df5318e10b2ecaaabe1ecc";
+        state.prover = "0x638a1a9699319025401c605f31464cebc63a03f5";
+        state.nonce = "3df23a496fff6a3d99e1d3a6d788c4ba91d9b70afb7f90906b34fadae951d898";
+        state.advancer = address(0);
+
+        // Add reserves matching the fixture
+        state.reserves = new MarketMaker.Reserve[](2);
+        state.reserves[0] = MarketMaker.Reserve({asset: "USDC", amount: 493600000000000000}); // 0.4936 with 18 decimals
+        state.reserves[1] = MarketMaker.Reserve({asset: "USDT", amount: 0});
+
+        // Create merkle tree with single leaf
+        bytes32[] memory leaves = new bytes32[](1);
+        leaves[0] = state.toLeafHash();
+        bytes32 root = leaves.generateMerkleRoot();
+        bytes32[] memory proof = leaves.generateProof(0);
+
+        // Sign root state hash with signature verifier
+        bytes32 message = EfficientHashLib.hash(abi.encodePacked(uint256(1), root));
+        bytes memory rootHashSignature = _signEthMessage(signatureVerifierPrivateKey, message);
+
+        // Call as owner without mmStateHashSignature
+        vm.prank(owner);
+        bool success = verifier.verifyProof(
+            1,
+            root,
+            rootHashSignature,
+            "", // Empty signature - should check caller
+            state,
+            proof
+        );
+
+        assertTrue(success, "Valid proof without signature should verify when caller is owner");
+    }
+
+    function test_verifyProof_validProofWithFixtureData() public {
+        // Create state matching the provided fixture structure
+        // Use a known private key so we can sign properly
+        uint256 ownerPrivateKey = uint256(keccak256(abi.encodePacked("fixture_owner")));
+        address owner = vm.addr(ownerPrivateKey);
+
+        MarketMaker.State memory state;
+        state.owner = owner;
+        state.sourceState = "0xf4425b4a018ab1889fdbae14e6fffae817a60341f3df5318e10b2ecaaabe1ecc";
+        state.prover = "0x638a1a9699319025401c605f31464cebc63a03f5";
+        state.nonce = "3df23a496fff6a3d99e1d3a6d788c4ba91d9b70afb7f90906b34fadae951d898";
+        state.advancer = address(0);
+
+        // Add reserves matching the fixture (0.4936 USDC, 0.0 USDT)
+        state.reserves = new MarketMaker.Reserve[](2);
+        state.reserves[0] = MarketMaker.Reserve({asset: "USDC", amount: 493600000000000000}); // 0.4936 with 18 decimals
+        state.reserves[1] = MarketMaker.Reserve({asset: "USDT", amount: 0});
+
+        // Create merkle tree with single leaf
+        bytes32[] memory leaves = new bytes32[](1);
+        leaves[0] = state.toLeafHash();
+        bytes32 root = leaves.generateMerkleRoot();
+        bytes32[] memory proof = leaves.generateProof(0);
+
+        // Sign mmState hash
+        bytes32 mmStateHash = state.toLeafHash();
+        bytes memory mmSignature = _signEthMessage(ownerPrivateKey, mmStateHash);
+
+        // Sign root state hash
+        bytes32 message = EfficientHashLib.hash(abi.encodePacked(uint256(1), root));
+        bytes memory rootHashSignature = _signEthMessage(signatureVerifierPrivateKey, message);
+
+        // Verify proof
+        bool success = verifier.verifyProof(1, root, rootHashSignature, mmSignature, state, proof);
+
+        assertTrue(success, "Fixture-based proof should verify successfully");
+    }
+
+    // ============ Invalid Signature Tests ============
+
+    function test_verifyProof_invalidMMStateSignature() public view {
+        // Use wrong signature for mmState - signed by wrong key
+        uint256 wrongPrivateKey = uint256(keccak256(abi.encodePacked("wrong_key")));
+        bytes32 mmStateHash = liquiditySignal.mmState.toLeafHash();
+        bytes memory wrongSignature = _signEthMessage(wrongPrivateKey, mmStateHash);
+
+        bool success = verifier.verifyProof(
+            liquiditySignal.nonce,
+            liquiditySignal.rootHash,
+            liquiditySignal.rootHashSignature,
+            wrongSignature, // Invalid signature (wrong signer)
+            liquiditySignal.mmState,
+            liquiditySignal.merkleProof
+        );
+
+        assertFalse(success, "Proof with invalid mmState signature should fail");
+    }
+
+    function test_verifyProof_invalidRootStateHashSignature() public view {
+        // Use wrong signature for root state hash - signed by wrong key
+        uint256 wrongPrivateKey = uint256(keccak256(abi.encodePacked("wrong_key")));
+        bytes32 message = EfficientHashLib.hash(abi.encodePacked(liquiditySignal.nonce, liquiditySignal.rootHash));
+        bytes memory wrongSignature = _signEthMessage(wrongPrivateKey, message);
+
+        bool success = verifier.verifyProof(
+            liquiditySignal.nonce,
+            liquiditySignal.rootHash,
+            wrongSignature, // Invalid signature (wrong signer)
+            liquiditySignal.mmSignature,
+            liquiditySignal.mmState,
+            liquiditySignal.merkleProof
+        );
+
+        assertFalse(success, "Proof with invalid root state hash signature should fail");
+    }
+
+    function test_verifyProof_invalidCallerWhenNoSignature() public {
+        // Create state
+        uint256 privateKey = uint256(keccak256(abi.encodePacked("test_owner")));
+        address owner = vm.addr(privateKey);
+
+        MarketMaker.State memory state;
+        state.owner = owner;
+        state.sourceState = "0xstate";
+        state.prover = "prover";
+        state.nonce = "nonce";
+        state.advancer = address(0);
+        state.reserves = new MarketMaker.Reserve[](0);
+
+        bytes32[] memory leaves = new bytes32[](1);
+        leaves[0] = state.toLeafHash();
+        bytes32 root = leaves.generateMerkleRoot();
+        bytes32[] memory proof = leaves.generateProof(0);
+
+        bytes32 message = EfficientHashLib.hash(abi.encodePacked(uint256(1), root));
+        bytes memory rootHashSignature = _signEthMessage(signatureVerifierPrivateKey, message);
+
+        // Call from wrong address (not the owner) without signature
+        vm.prank(makeAddr("wrong_caller"));
+        bool success = verifier.verifyProof(
+            1,
+            root,
+            rootHashSignature,
+            "", // Empty signature
+            state,
+            proof
+        );
+
+        assertFalse(success, "Proof should fail when caller is not owner and no signature provided");
+    }
+
+    function test_verifyProof_invalidMerkleProof() public view {
+        // Use wrong merkle proof
+        bytes32[] memory wrongProof = new bytes32[](1);
+        wrongProof[0] = bytes32(uint256(12345));
+
+        bool success = verifier.verifyProof(
+            liquiditySignal.nonce,
+            liquiditySignal.rootHash,
+            liquiditySignal.rootHashSignature,
+            liquiditySignal.mmSignature,
+            liquiditySignal.mmState,
+            wrongProof // Invalid proof
+        );
+
+        assertFalse(success, "Proof with invalid merkle proof should fail");
+    }
+
+    function test_verifyProof_wrongRootHash() public view {
+        // Use wrong root hash
+        bytes32 wrongRoot = bytes32(uint256(99999));
+
+        bool success = verifier.verifyProof(
+            liquiditySignal.nonce,
+            wrongRoot, // Wrong root
+            liquiditySignal.rootHashSignature,
+            liquiditySignal.mmSignature,
+            liquiditySignal.mmState,
+            liquiditySignal.merkleProof
+        );
+
+        assertFalse(success, "Proof with wrong root hash should fail");
+    }
+
+    function test_verifyProof_wrongMMState() public {
+        // Create a different state
+        MarketMaker.State memory wrongState = liquiditySignal.mmState;
+        wrongState.owner = makeAddr("different_owner");
+
+        bool success = verifier.verifyProof(
+            liquiditySignal.nonce,
+            liquiditySignal.rootHash,
+            liquiditySignal.rootHashSignature,
+            liquiditySignal.mmSignature,
+            wrongState, // Wrong state
+            liquiditySignal.merkleProof
+        );
+
+        assertFalse(success, "Proof with wrong mmState should fail");
+    }
+
+    function test_verifyProof_wrongNonce() public view {
+        // Use wrong nonce with signature for original nonce - this should fail
+        uint256 wrongNonce = liquiditySignal.nonce + 1;
+
+        bool success = verifier.verifyProof(
+            wrongNonce,
+            liquiditySignal.rootHash,
+            liquiditySignal.rootHashSignature, // Signature for original nonce, but using wrong nonce
+            liquiditySignal.mmSignature,
+            liquiditySignal.mmState,
+            liquiditySignal.merkleProof
+        );
+
+        assertFalse(success, "Proof with wrong nonce should fail when signature doesn't match");
+    }
+
+    // ============ Edge Cases ============
+
+    function test_verifyProof_emptyMerkleProof_SingleLeaf() public {
+        // Test with single leaf (empty proof)
+        uint256 privateKey = uint256(keccak256(abi.encodePacked("single_leaf")));
+        address owner = vm.addr(privateKey);
+
+        MarketMaker.State memory state;
+        state.owner = owner;
+        state.sourceState = "0xstate";
+        state.prover = "prover";
+        state.nonce = "nonce";
+        state.advancer = address(0);
+        state.reserves = new MarketMaker.Reserve[](0);
+
+        bytes32[] memory leaves = new bytes32[](1);
+        leaves[0] = state.toLeafHash();
+        bytes32 root = leaves.generateMerkleRoot();
+        bytes32[] memory proof = leaves.generateProof(0); // Should be empty for single leaf
+
+        bytes32 mmStateHash = state.toLeafHash();
+        bytes memory mmSignature = _signEthMessage(privateKey, mmStateHash);
+
+        bytes32 message = EfficientHashLib.hash(abi.encodePacked(uint256(1), root));
+        bytes memory rootHashSignature = _signEthMessage(signatureVerifierPrivateKey, message);
+
+        bool success = verifier.verifyProof(1, root, rootHashSignature, mmSignature, state, proof);
+
+        assertTrue(success, "Single leaf proof should verify successfully");
+    }
+
+    function test_verifyProof_multipleMarketMakers() public {
+        // Test with multiple market makers in the tree
+        uint256 numMMs = 3;
+        StatePayload[] memory states = new StatePayload[](numMMs);
+        bytes32[] memory leaves = new bytes32[](numMMs);
+
+        for (uint256 i = 0; i < numMMs; i++) {
+            uint256 privateKey = uint256(keccak256(abi.encodePacked(i)));
+            states[i] = _createMarketMakerState(privateKey);
+            leaves[i] = states[i].state.toLeafHash();
+        }
+
+        bytes32 root = leaves.generateMerkleRoot();
+
+        // Test verification for each market maker
+        for (uint256 i = 0; i < numMMs; i++) {
+            bytes32[] memory proof = leaves.generateProof(i);
+            bytes32 mmStateHash = states[i].state.toLeafHash();
+            bytes memory mmSignature = _signEthMessage(states[i].privateKey, mmStateHash);
+
+            bytes32 message = EfficientHashLib.hash(abi.encodePacked(uint256(1), root));
+            bytes memory rootHashSignature = _signEthMessage(signatureVerifierPrivateKey, message);
+
+            bool success = verifier.verifyProof(1, root, rootHashSignature, mmSignature, states[i].state, proof);
+
+            assertTrue(success, "Multi-MM proof should verify successfully");
+        }
+    }
+
+    function test_verifyProof_emptyReserves() public {
+        // Test with empty reserves
+        uint256 privateKey = uint256(keccak256(abi.encodePacked("empty_reserves")));
+        address owner = vm.addr(privateKey);
+
+        MarketMaker.State memory state;
+        state.owner = owner;
+        state.sourceState = "0xstate";
+        state.prover = "prover";
+        state.nonce = "nonce";
+        state.advancer = address(0);
+        state.reserves = new MarketMaker.Reserve[](0); // Empty reserves
+
+        bytes32[] memory leaves = new bytes32[](1);
+        leaves[0] = state.toLeafHash();
+        bytes32 root = leaves.generateMerkleRoot();
+        bytes32[] memory proof = leaves.generateProof(0);
+
+        bytes32 mmStateHash = state.toLeafHash();
+        bytes memory mmSignature = _signEthMessage(privateKey, mmStateHash);
+
+        bytes32 message = EfficientHashLib.hash(abi.encodePacked(uint256(1), root));
+        bytes memory rootHashSignature = _signEthMessage(signatureVerifierPrivateKey, message);
+
+        bool success = verifier.verifyProof(1, root, rootHashSignature, mmSignature, state, proof);
+
+        assertTrue(success, "State with empty reserves should verify successfully");
+    }
+
+    function test_verifyProof_zeroAddressOwner() public {
+        // Test with zero address owner (edge case)
+        MarketMaker.State memory state;
+        state.owner = address(0);
+        state.sourceState = "0xstate";
+        state.prover = "prover";
+        state.nonce = "nonce";
+        state.advancer = address(0);
+        state.reserves = new MarketMaker.Reserve[](0);
+
+        bytes32[] memory leaves = new bytes32[](1);
+        leaves[0] = state.toLeafHash();
+        bytes32 root = leaves.generateMerkleRoot();
+        bytes32[] memory proof = leaves.generateProof(0);
+
+        // Can't sign with zero address, so we'll test without signature and call as zero address
+        bytes32 message = EfficientHashLib.hash(abi.encodePacked(uint256(1), root));
+        bytes memory rootHashSignature = _signEthMessage(signatureVerifierPrivateKey, message);
+
+        vm.prank(address(0));
+        bool success = verifier.verifyProof(
+            1,
+            root,
+            rootHashSignature,
+            "", // No signature
+            state,
+            proof
+        );
+
+        assertTrue(success, "Zero address owner should verify when called from zero address");
+    }
+}

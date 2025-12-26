@@ -37,10 +37,14 @@ contract LCCFactoryLibHarness {
         string memory marketName,
         address[] memory initialIssuers
     ) external returns (address) {
-        return LCCFactoryLib.createLCC(s, marketFactoryAddress, marketRef, underlyingPair, index, marketName, initialIssuers);
+        return LCCFactoryLib.createLCC(
+            s, marketFactoryAddress, marketRef, underlyingPair, index, marketName, initialIssuers
+        );
     }
 
-    function initialize(address lcc0, address lcc1, bytes32 marketId, bytes memory marketRef, address factory) external {
+    function initialize(address lcc0, address lcc1, bytes32 marketId, bytes memory marketRef, address factory)
+        external
+    {
         LCCFactoryLib.initialize(s, lcc0, lcc1, marketId, marketRef, factory);
     }
 
@@ -109,5 +113,4 @@ contract LCCFactoryLibTest_Autocover is Test, OlympixUnitTest("LCCFactoryLibHarn
         assertEq(h.nativeDecimals(), 18);
     }
 }
-
 

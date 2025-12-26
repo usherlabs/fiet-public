@@ -52,10 +52,7 @@ contract SwapSimulatorIntegrationTest is Test, Deployers {
 
         // Act (real swap)
         BalanceDelta realDelta = swapRouter.swap(
-            key,
-            params,
-            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}),
-            ZERO_BYTES
+            key, params, PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}), ZERO_BYTES
         );
 
         // Assert (core delta equivalence)
@@ -82,10 +79,7 @@ contract SwapSimulatorIntegrationTest is Test, Deployers {
             SwapSimulator.simulateSwap(manager, key, params);
 
         BalanceDelta realDelta = swapRouter.swap(
-            key,
-            params,
-            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}),
-            ZERO_BYTES
+            key, params, PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}), ZERO_BYTES
         );
 
         assertEq(realDelta.amount0(), simDelta.amount0(), "amount0 delta mismatch");
@@ -106,14 +100,11 @@ contract SwapSimulatorIntegrationTest is Test, Deployers {
         SwapParams memory params =
             SwapParams({zeroForOne: true, amountSpecified: int256(100), sqrtPriceLimitX96: MIN_PRICE_LIMIT});
 
-        (BalanceDelta simDelta,, , SwapSimulator.SwapResult memory simResult) =
+        (BalanceDelta simDelta,,, SwapSimulator.SwapResult memory simResult) =
             SwapSimulator.simulateSwap(manager, key, params);
 
         BalanceDelta realDelta = swapRouter.swap(
-            key,
-            params,
-            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}),
-            ZERO_BYTES
+            key, params, PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}), ZERO_BYTES
         );
 
         assertEq(realDelta.amount0(), simDelta.amount0(), "amount0 delta mismatch");
@@ -127,5 +118,4 @@ contract SwapSimulatorIntegrationTest is Test, Deployers {
         assertEq(liqAfter, simResult.liquidity, "liquidity mismatch");
     }
 }
-
 

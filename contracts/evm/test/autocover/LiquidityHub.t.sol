@@ -18,4 +18,3 @@ contract LiquidityHubTest_Autocover is LiquidityHubTestBase, OlympixUnitTest("Li
     }
 }
 
-

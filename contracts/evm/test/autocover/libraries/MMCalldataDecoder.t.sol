@@ -43,14 +43,24 @@ contract MMCalldataDecoderHarness {
         (, tokenId, positionIndex, amountToDecrease) = MMCalldataDecoder.decodeDecreaseLiquidityParams(params);
     }
 
-    function decodeBurnPositionParams(bytes calldata params) external pure returns (uint256 tokenId, uint256 positionIndex) {
+    function decodeBurnPositionParams(bytes calldata params)
+        external
+        pure
+        returns (uint256 tokenId, uint256 positionIndex)
+    {
         (, tokenId, positionIndex) = MMCalldataDecoder.decodeBurnPositionParams(params);
     }
 
     function decodeSeizePositionParams(bytes calldata params)
         external
         pure
-        returns (uint256 tokenId, uint256 positionIndex, uint256 amount0, uint256 amount1, bool usePositionManagerBalance)
+        returns (
+            uint256 tokenId,
+            uint256 positionIndex,
+            uint256 amount0,
+            uint256 amount1,
+            bool usePositionManagerBalance
+        )
     {
         (, tokenId, positionIndex, amount0, amount1, usePositionManagerBalance) =
             MMCalldataDecoder.decodeSeizePositionParams(params);
@@ -87,7 +97,13 @@ contract MMCalldataDecoderHarness {
     function decodeExtendGracePeriodParams(bytes calldata params)
         external
         pure
-        returns (uint256 tokenId, uint256 positionIndex, uint8 settlementTokenIndex, uint32 verifierIndex, bytes memory settlementProof)
+        returns (
+            uint256 tokenId,
+            uint256 positionIndex,
+            uint8 settlementTokenIndex,
+            uint32 verifierIndex,
+            bytes memory settlementProof
+        )
     {
         bytes calldata proof;
         (, tokenId, positionIndex, settlementTokenIndex, verifierIndex, proof) =
@@ -95,7 +111,11 @@ contract MMCalldataDecoderHarness {
         settlementProof = proof;
     }
 
-    function decodeCommitSignalParams(bytes calldata params) external pure returns (bytes memory liquiditySignal, address owner) {
+    function decodeCommitSignalParams(bytes calldata params)
+        external
+        pure
+        returns (bytes memory liquiditySignal, address owner)
+    {
         bytes calldata sig;
         (sig, owner) = MMCalldataDecoder.decodeCommitSignalParams(params);
         liquiditySignal = sig;
@@ -137,7 +157,11 @@ contract MMCalldataDecoderHarness {
         (amount, payerIsUser) = MMCalldataDecoder.decodeUint256AndBool(params);
     }
 
-    function decodeTakeParams(bytes calldata params) external pure returns (Currency currency, address recipient, uint256 maxAmount) {
+    function decodeTakeParams(bytes calldata params)
+        external
+        pure
+        returns (Currency currency, address recipient, uint256 maxAmount)
+    {
         (currency, recipient, maxAmount) = MMCalldataDecoder.decodeTakeParams(params);
     }
 
@@ -162,5 +186,4 @@ contract MMCalldataDecoderTest_Autocover is Test, OlympixUnitTest("MMCalldataDec
         h.decodeSettlePositionParams(hex"");
     }
 }
-
 

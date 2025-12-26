@@ -26,7 +26,9 @@ contract VTSCommitLibHarness {
         VTSCommitLib.LiquidityDeltaParams memory params,
         bool revertIfInsufficientBacking
     ) external view returns (bool, uint256, uint256, uint256) {
-        return VTSCommitLib.validateLiquidityDelta(s, oracleHelper, commitId, positionId, params, revertIfInsufficientBacking);
+        return VTSCommitLib.validateLiquidityDelta(
+            s, oracleHelper, commitId, positionId, params, revertIfInsufficientBacking
+        );
     }
 
     function incrementCoverage(PoolId poolId, uint8 tokenIndex, uint256 coveredAmount) external {
@@ -50,7 +52,9 @@ contract VTSCommitLibHarness {
         PositionId positionId,
         bytes memory liquiditySignal
     ) external {
-        VTSCommitLib.checkpoint(s, poolManager, signalManager, oracleHelper, sender, commitId, positionId, liquiditySignal);
+        VTSCommitLib.checkpoint(
+            s, poolManager, signalManager, oracleHelper, sender, commitId, positionId, liquiditySignal
+        );
     }
 
     // ============ Storage Setters (for test setup) ============
@@ -77,10 +81,7 @@ contract VTSCommitLibHarness {
             isActive: true,
             salt: bytes32(0),
             checkpoint: RFSCheckpoint({
-                timeOfLastTransition: block.timestamp,
-                isOpen: false,
-                gracePeriodExtension0: 0,
-                gracePeriodExtension1: 0
+                timeOfLastTransition: block.timestamp, isOpen: false, gracePeriodExtension0: 0, gracePeriodExtension1: 0
             })
         });
     }
@@ -124,19 +125,27 @@ contract VTSCommitLibHarness {
     }
 
     function getCoveragePerDeficitIndexX128(PoolId poolId, uint8 tokenIndex) external view returns (uint256) {
-        return tokenIndex == 0 ? s.poolAccounting[poolId].coveragePerDeficitIndexX128.token0 : s.poolAccounting[poolId].coveragePerDeficitIndexX128.token1;
+        return tokenIndex == 0
+            ? s.poolAccounting[poolId].coveragePerDeficitIndexX128.token0
+            : s.poolAccounting[poolId].coveragePerDeficitIndexX128.token1;
     }
 
     function getCoverageResidualDICE(PoolId poolId, uint8 tokenIndex) external view returns (uint256) {
-        return tokenIndex == 0 ? s.poolAccounting[poolId].coverageResidualDICE.token0 : s.poolAccounting[poolId].coverageResidualDICE.token1;
+        return tokenIndex == 0
+            ? s.poolAccounting[poolId].coverageResidualDICE.token0
+            : s.poolAccounting[poolId].coverageResidualDICE.token1;
     }
 
     function getCoveragePerSettledIndexX128(PoolId poolId, uint8 tokenIndex) external view returns (uint256) {
-        return tokenIndex == 0 ? s.poolAccounting[poolId].coveragePerSettledIndexX128.token0 : s.poolAccounting[poolId].coveragePerSettledIndexX128.token1;
+        return tokenIndex == 0
+            ? s.poolAccounting[poolId].coveragePerSettledIndexX128.token0
+            : s.poolAccounting[poolId].coveragePerSettledIndexX128.token1;
     }
 
     function getCoverageResidualCISE(PoolId poolId, uint8 tokenIndex) external view returns (uint256) {
-        return tokenIndex == 0 ? s.poolAccounting[poolId].coverageResidualCISE.token0 : s.poolAccounting[poolId].coverageResidualCISE.token1;
+        return tokenIndex == 0
+            ? s.poolAccounting[poolId].coverageResidualCISE.token0
+            : s.poolAccounting[poolId].coverageResidualCISE.token1;
     }
 
     function getPositionCommitmentDeficit(PositionId id) external view returns (uint256 deficit0, uint256 deficit1) {
@@ -147,9 +156,9 @@ contract VTSCommitLibHarness {
 
     function _emptyConfig() internal pure returns (MarketVTSConfiguration memory cfg) {
         // Keep the harness independent from MarketTestBase defaults; commit lib doesn't read config.
-        TokenConfiguration memory tc = TokenConfiguration({gracePeriodTime: 0, seizureUnlockTime: 0, baseVTSRate: 0, maxGracePeriodTime: 0});
+        TokenConfiguration memory tc =
+            TokenConfiguration({gracePeriodTime: 0, seizureUnlockTime: 0, baseVTSRate: 0, maxGracePeriodTime: 0});
         cfg = MarketVTSConfiguration({token0: tc, token1: tc, coverageFeeShare: 0, minResidualUnits: 0});
     }
 }
-
 

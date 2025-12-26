@@ -22,4 +22,3 @@ contract MMPositionActionsImplTest_Autocover is MarketTestBase, OlympixUnitTest(
     }
 }
 
-

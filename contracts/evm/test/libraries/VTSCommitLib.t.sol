@@ -304,7 +304,9 @@ contract VTSCommitLibTest is VTSLibTestBase {
     function test_checkpoint_revertsOnInvalidSender() public {
         // sender mismatch (sender != advancer on signal)
         vm.expectRevert(Errors.InvalidSender.selector);
-        harness.checkpoint(manager, sigMgr, oracle, makeAddr("notAdvancer"), commitId, positionId, _makeSignal(mmOwner, advancer));
+        harness.checkpoint(
+            manager, sigMgr, oracle, makeAddr("notAdvancer"), commitId, positionId, _makeSignal(mmOwner, advancer)
+        );
     }
 
     function test_checkpoint_zeroIssuedValue_zerosDeficitAndReturns() public {
@@ -381,12 +383,7 @@ contract VTSCommitLibTest is VTSLibTestBase {
     function _makeSignal(address owner, address adv) internal pure returns (bytes memory) {
         MarketMaker.Reserve[] memory reserves = new MarketMaker.Reserve[](0);
         MarketMaker.State memory mmState = MarketMaker.State({
-            owner: owner,
-            reserves: reserves,
-            sourceState: "",
-            prover: "",
-            nonce: "",
-            advancer: adv
+            owner: owner, reserves: reserves, sourceState: "", prover: "", nonce: "", advancer: adv
         });
 
         LiquiditySignal memory sig = LiquiditySignal({
@@ -417,5 +414,4 @@ contract VTSCommitLibTest is VTSLibTestBase {
         (, issuedUsd,,) = harness.validateLiquidityDelta(oracle, commitId, positionId, p, false);
     }
 }
-
 
