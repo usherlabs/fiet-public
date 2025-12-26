@@ -10,7 +10,7 @@ import {
     PositionModificationHookData
 } from "../../../src/types/Position.sol";
 
-contract PositionTypeTest is Test, OlympixUnitTest("types/Position") {
+contract PositionTypeTest is Test, OlympixUnitTest("PositionTypeTest") {
     function setUp() public {}
 
     function test_hookData_encodeDecode_roundTrip() public pure {
@@ -27,5 +27,4 @@ contract PositionTypeTest is Test, OlympixUnitTest("types/Position") {
         assert(s1 == s2);
     }
 }
-
 

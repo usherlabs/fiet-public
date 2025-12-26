@@ -61,7 +61,7 @@ contract OracleUtilsHarness {
     }
 }
 
-contract OracleUtilsTest is Test, OlympixUnitTest("OracleUtils") {
+contract OracleUtilsTest is Test, OlympixUnitTest("OracleUtilsHarness") {
     OracleUtilsHarness internal h;
     OracleHelperMock internal oracleHelper;
 

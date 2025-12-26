@@ -7,18 +7,17 @@ import {OlympixUnitTest} from "../tools/OlympixUnitTest.sol";
 import {VTSFeeLinkedLib} from "../../../src/libraries/VTSFeeLib.sol";
 import {VTSStorage} from "../../../src/types/VTS.sol";
 import {PositionId} from "../../../src/types/Position.sol";
+import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 
 contract VTSFeeLibHarness {
     VTSStorage internal s;
 
-    function afterTouch(PositionId pid) external returns (bytes4) {
-        // We don't assert on return here; in real tests you'll build full VTS state.
-        VTSFeeLinkedLib.afterTouchPosition(s, pid);
-        return bytes4(0);
+    function afterTouchPosition(PositionId positionId) external returns (BalanceDelta adj) {
+        return VTSFeeLinkedLib.afterTouchPosition(s, positionId);
     }
 }
 
-contract VTSFeeLibTest is Test, OlympixUnitTest("VTSFeeLib") {
+contract VTSFeeLibTest is Test, OlympixUnitTest("VTSFeeLibHarness") {
     VTSFeeLibHarness internal h;
 
     function setUp() public {
@@ -27,7 +26,7 @@ contract VTSFeeLibTest is Test, OlympixUnitTest("VTSFeeLib") {
 
     function test_afterTouchPosition_emptyState_noop() public {
         // Empty VTSStorage implies fee sharing disabled (coverageFeeShare == 0), so this is a no-op.
-        h.afterTouch(PositionId.wrap(bytes32(uint256(1))));
+        h.afterTouchPosition(PositionId.wrap(bytes32(uint256(1))));
     }
 }
 

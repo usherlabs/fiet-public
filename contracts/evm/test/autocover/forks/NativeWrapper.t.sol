@@ -57,7 +57,7 @@ contract NativeWrapperHarness is NativeWrapper {
     }
 }
 
-contract NativeWrapperForkTest is Test, OlympixUnitTest("forks/NativeWrapper") {
+contract NativeWrapperForkTest is Test, OlympixUnitTest("NativeWrapperHarness") {
     NativeWrapperHarness internal wrapper;
     WETH9Mock internal weth;
 
@@ -72,5 +72,4 @@ contract NativeWrapperForkTest is Test, OlympixUnitTest("forks/NativeWrapper") {
         ok; // silence unused warning
     }
 }
-
 

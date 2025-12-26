@@ -13,12 +13,20 @@ import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 
 contract MMHelpersHarness {
+    function isApprovedOrOwner(address caller, uint256 tokenId) external view returns (bool) {
+        return MMHelpers.isApprovedOrOwner(caller, tokenId);
+    }
+
+    function assertApprovedOrOwner(address caller, uint256 tokenId) external view {
+        MMHelpers.assertApprovedOrOwner(caller, tokenId);
+    }
+
     function assertPositionForPool(PoolKey calldata poolKey, Position memory position) external pure {
         MMHelpers.assertPositionForPool(poolKey, position);
     }
 }
 
-contract MMHelpersTest is Test, OlympixUnitTest("MMHelpers") {
+contract MMHelpersTest is Test, OlympixUnitTest("MMHelpersHarness") {
     MMHelpersHarness internal h;
 
     function setUp() public {}

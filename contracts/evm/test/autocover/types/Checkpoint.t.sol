@@ -25,7 +25,7 @@ contract RFSCheckpointHarness {
     }
 }
 
-contract CheckpointTypeTest is Test, OlympixUnitTest("types/Checkpoint") {
+contract CheckpointTypeTest is Test, OlympixUnitTest("RFSCheckpointHarness") {
     RFSCheckpointHarness internal h;
 
     function setUp() public {
@@ -40,5 +40,4 @@ contract CheckpointTypeTest is Test, OlympixUnitTest("types/Checkpoint") {
         assertEq(cp.gracePeriodExtension1, 0);
     }
 }
-
 
