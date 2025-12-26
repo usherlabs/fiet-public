@@ -76,16 +76,18 @@ contract LiquidityUtilsHarness {
 contract LiquidityUtilsTest_Autocover is Test, OlympixUnitTest("LiquidityUtilsHarness") {
     LiquidityUtilsHarness internal h;
 
-    function setUp() public {}
-
-    function test_safeInt128ToUint256_handlesNegative() public pure {
-        uint256 u = LiquidityUtils.safeInt128ToUint256(-int128(5));
-        assert(u == 5);
+    function setUp() public {
+        h = new LiquidityUtilsHarness();
     }
 
-    function test_safeInt128ToUint128_handlesPositive() public pure {
-        uint128 u = LiquidityUtils.safeInt128ToUint128(int128(7));
-        assert(u == 7);
+    function test_safeInt128ToUint256_handlesNegative() public view {
+        uint256 u = h.safeInt128ToUint256(-int128(5));
+        assertEq(u, 5);
+    }
+
+    function test_safeInt128ToUint128_handlesPositive() public view {
+        uint128 u = h.safeInt128ToUint128(int128(7));
+        assertEq(u, 7);
     }
 }
 

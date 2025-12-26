@@ -9,6 +9,7 @@ import {VTSStorage} from "../../../src/types/VTS.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Ownable} from "openzeppelin-contracts/contracts/access/Ownable.sol";
 
+import {Errors} from "../../../src/libraries/Errors.sol";
 contract PausableVTSHarness is PausableVTS {
     VTSStorage internal s;
 
@@ -37,6 +38,11 @@ contract PausableVTSTest_Autocover is Test, OlympixUnitTest("PausableVTS") {
         vm.expectRevert();
         h.guarded(pool);
     }
+
+    function test_guarded_reverts_when_globalPaused() public {
+        // Set global pause to true in storage
+        h.setGlobalPause(true);
+        vm.expectRevert(Errors.EnforcedPause.selector);
+        h.guarded(pool);
+    }
 }
-
-

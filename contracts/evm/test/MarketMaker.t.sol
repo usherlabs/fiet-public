@@ -3,7 +3,7 @@ pragma solidity ^0.8.26;
 
 import {MarketMaker} from "../src/libraries/MarketMaker.sol";
 import {ECDSASignatureSignalVerifier} from "../src/verifiers/ECDSASignatureSignalVerifier.sol";
-import {MarketMakerTestBase} from "./modules/MMTestBase.sol";
+import {MarketMakerTestBase} from "./base/MMTestBase.sol";
 
 contract MarketMakerTest is MarketMakerTestBase {
     using MarketMaker for MarketMaker.State;

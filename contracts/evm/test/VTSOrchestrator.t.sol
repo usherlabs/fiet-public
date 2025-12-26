@@ -2,8 +2,8 @@
 pragma solidity ^0.8.26;
 
 import "forge-std/Test.sol";
-import {VTSOrchestratorFixture} from "./modules/VTSOrchestratorFixture.sol";
-import {VTSOrchestratorTestable} from "./modules/VTSOrchestratorTestable.sol";
+import {VTSOrchestratorFixture} from "./base/VTSOrchestratorFixture.sol";
+import {VTSOrchestratorTestable} from "./base/VTSOrchestratorTestable.sol";
 import {VTSOrchestrator} from "../src/VTSOrchestrator.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency, CurrencyLibrary} from "@uniswap/v4-core/src/types/Currency.sol";

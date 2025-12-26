@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity ^0.8.26;
 
-import {VTSOrchestratorFixture} from "../modules/VTSOrchestratorFixture.sol";
+import {VTSOrchestratorFixture} from "../base/VTSOrchestratorFixture.sol";
 
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
-import {VTSOrchestratorTestable} from "../modules/VTSOrchestratorTestable.sol";
+import {VTSOrchestratorTestable} from "../base/VTSOrchestratorTestable.sol";
 import {Currency, CurrencyLibrary} from "@uniswap/v4-core/src/types/Currency.sol";
 import {PositionId} from "../../src/types/Position.sol";
 import {VTSOrchestrator} from "../../src/VTSOrchestrator.sol";

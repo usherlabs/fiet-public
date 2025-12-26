@@ -17,10 +17,10 @@ import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
 import {LiquidityUtils} from "../src/libraries/LiquidityUtils.sol";
 import {console} from "forge-std/console.sol";
 // inherit from the MarketVaultBase contract which provides shared helper functions
-import {MarketVaultBase} from "./modules/MarketVaultBase.sol";
+import {MarketVaultBase} from "./base/MarketVaultBase.sol";
 import {Errors} from "../src/libraries/Errors.sol";
 import {LiquidityHub} from "../src/LiquidityHub.sol";
-import {MarketTestBase} from "./modules/MarketTestBase.sol";
+import {MarketTestBase} from "./base/MarketTestBase.sol";
 import {MockERC20} from "@uniswap/v4-core/test/utils/Deployers.sol";
 
 /**

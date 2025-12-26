@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity ^0.8.26;
 
-import {LiquidityHubTestBase} from "./LiquidityHubTestBase.sol";
+import {LiquidityHubTestBase} from "./base/LiquidityHubTestBase.sol";
 import {ILCC} from "../src/interfaces/ILCC.sol";
 import {Errors} from "../src/libraries/Errors.sol";
 

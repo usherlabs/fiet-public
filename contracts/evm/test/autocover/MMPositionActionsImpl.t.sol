@@ -5,13 +5,14 @@ import "forge-std/Test.sol";
 
 import {OlympixUnitTest} from "./tools/OlympixUnitTest.sol";
 import {MMPositionActionsImpl} from "../../src/MMPositionActionsImpl.sol";
+import {MarketTestBase} from "../base/MarketTestBase.sol";
 
-contract MMPositionActionsImplTest_Autocover is Test, OlympixUnitTest("MMPositionActionsImpl") {
+contract MMPositionActionsImplTest_Autocover is MarketTestBase, OlympixUnitTest("MMPositionActionsImpl") {
     MMPositionActionsImpl internal impl;
 
     function setUp() public {
-        // Constructor is light; this keeps the skeleton compilable without full Uniswap wiring.
-        impl = new MMPositionActionsImpl(makeAddr("poolManager"), makeAddr("liquidityHub"), makeAddr("vtsOrchestrator"));
+        _setupMarket();
+        impl = new MMPositionActionsImpl(address(manager), address(liquidityHub), address(vtsOrchestrator));
     }
 
     function test_handleAction_revertsWhenNotDelegatecall() public {

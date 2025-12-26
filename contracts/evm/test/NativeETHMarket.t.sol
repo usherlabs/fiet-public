@@ -4,9 +4,9 @@ pragma solidity ^0.8.26;
 import "forge-std/Test.sol";
 
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
-import {MarketTestBase} from "./modules/MarketTestBase.sol";
+import {MarketTestBase} from "./base/MarketTestBase.sol";
 import {ILCC} from "../src/interfaces/ILCC.sol";
-import {MarketMakerTestBase} from "./modules/MMTestBase.sol";
+import {MarketMakerTestBase} from "./base/MMTestBase.sol";
 
 import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";

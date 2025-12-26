@@ -3,17 +3,16 @@ pragma solidity ^0.8.26;
 
 import "forge-std/Test.sol";
 
-import {OlympixUnitTest} from "../tools/OlympixUnitTest.sol";
 import {
     PositionLibrary,
     PositionModificationHookDataLib,
     PositionModificationHookData
-} from "../../../src/types/Position.sol";
+} from "../../src/types/Position.sol";
 import {ModifyLiquidityParams} from "v4-periphery/lib/v4-core/src/types/PoolOperation.sol";
-import {PositionId} from "../../../src/types/Position.sol";
-import {PositionLibHarness} from "../../libraries/harnesses/PositionLibHarness.sol";
+import {PositionId} from "../../src/types/Position.sol";
+import {PositionLibHarness} from "../libraries/harnesses/PositionLibHarness.sol";
 
-contract PositionTypeTest_Autocover is Test, OlympixUnitTest("PositionLibHarness") {
+contract PositionTypeTest_Autocover is Test {
     PositionLibHarness internal h;
 
     function setUp() public {

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity ^0.8.26;
 
-import {VTSLibTestBase} from "../modules/VTSLibTestBase.sol";
+import {VTSLibTestBase} from "../base/VTSLibTestBase.sol";
 import {VTSFeeLibHarness} from "./harnesses/VTSFeeLibHarness.sol";
 import {VTSFeeLib} from "../../src/libraries/VTSFeeLib.sol";
 import {PositionId, PositionLibrary} from "../../src/types/Position.sol";
