@@ -173,9 +173,6 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
         {
             corePoolKey =
                 _createCorePool(ctx.lccToken0, ctx.lccToken1, corePoolFee, tickSpacing, initialSqrtPriceX96, coreHook);
-            if (PoolId.unwrap(coreToProxy[corePoolKey.toId()]) != bytes32(0)) {
-                revert Errors.ProxyPoolAlreadyExists();
-            }
             proxyPoolKey = _createProxyPool(
                 underlyingAsset0, underlyingAsset1, tickSpacing, ctx.proxyHookAddress, proxyInitialPrice
             );

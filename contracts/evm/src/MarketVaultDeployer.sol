@@ -13,12 +13,8 @@ contract MarketVaultDeployer is ImmutableMarketState {
 
     function deployProxyHook(address _poolManager, bytes32 _salt) external onlyFactory returns (address) {
         ProxyHook proxyHook = new ProxyHook{salt: _salt}(address(_poolManager), address(marketFactory));
-
-        // Validate the address has correct hook flags (same check as PoolManager)
-        uint160 addressFlags = uint160(address(proxyHook)) & 0x3FFF; // Bottom 14 bits
-        if (addressFlags != HookFlags.PROXY_HOOK_FLAGS) {
-            revert Errors.InvalidProxyHookFlags();
-        }
+        // ProxyHook (via BaseHook) already validates its deployed address has the correct hook flags.
+        // Reference: src/utils/BaseHook.sol
 
         return address(proxyHook);
     }

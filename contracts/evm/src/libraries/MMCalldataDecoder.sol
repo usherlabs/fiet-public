@@ -392,7 +392,9 @@ library MMCalldataDecoder {
         assembly ("memory-safe") {
             tokenId := calldataload(params.offset)
             positionIndex := calldataload(add(params.offset, 0x20))
-            withCommitment := calldataload(add(params.offset, 0x40))
+            // ABI encoding: (uint256 tokenId, uint256 positionIndex, bytes data, bool withCommitment)
+            // Head layout: tokenId @ 0x00, positionIndex @ 0x20, dataOffset @ 0x40, withCommitment @ 0x60
+            withCommitment := calldataload(add(params.offset, 0x60))
         }
         // Use CalldataDecoder.toBytes for dynamic bytes (index 2 = 3rd argument)
         data = params.toBytes(2);

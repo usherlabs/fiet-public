@@ -5,6 +5,7 @@ import "forge-std/Test.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {MockERC20} from "./_mocks/MockERC20.sol";
 
 import {MarketFactory} from "../src/MarketFactory.sol";
@@ -28,6 +29,11 @@ import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {VTSOrchestrator} from "../src/VTSOrchestrator.sol";
 import {VRLSettlementObserver} from "../src/VRLSettlementObserver.sol";
 import {IVRLSettlementObserver} from "../src/interfaces/IVRLSettlementObserver.sol";
+import {Errors} from "../src/libraries/Errors.sol";
+import {MarketVTSConfiguration} from "../src/types/VTS.sol";
+import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {ICoreHook} from "../src/interfaces/ICoreHook.sol";
+import {Lock} from "@uniswap/v4-core/src/libraries/Lock.sol";
 
 contract MarketFactoryTest is Test, Deployers {
     using PoolIdLibrary for PoolKey;
@@ -277,5 +283,383 @@ contract MarketFactoryTest is Test, Deployers {
         console.log("ProxyHook salt:", vm.toString(salt));
 
         return (_salt, address(_hookAddress));
+    }
+}
+
+// ============================================================
+// Unit tests (mocked dependencies) for branch/edge coverage
+// ============================================================
+
+contract MockPoolManager_MarketFactory {
+    struct InitCall {
+        PoolKey key;
+        uint160 sqrtPriceX96;
+    }
+
+    InitCall[] internal _initCalls;
+    mapping(bytes32 => bytes32) internal _exttload;
+
+    function setExttload(bytes32 slot, bytes32 value) external {
+        _exttload[slot] = value;
+    }
+
+    function exttload(bytes32 slot) external view returns (bytes32 value) {
+        return _exttload[slot];
+    }
+
+    function exttload(bytes32[] calldata slots) external view returns (bytes32[] memory values) {
+        values = new bytes32[](slots.length);
+        for (uint256 i = 0; i < slots.length; i++) {
+            values[i] = _exttload[slots[i]];
+        }
+    }
+
+    function initialize(PoolKey memory key, uint160 sqrtPriceX96) external returns (int24 tick) {
+        _initCalls.push(InitCall({key: key, sqrtPriceX96: sqrtPriceX96}));
+        return 0;
+    }
+
+    function initCallsLength() external view returns (uint256) {
+        return _initCalls.length;
+    }
+
+    function initCall(uint256 i) external view returns (PoolKey memory key, uint160 sqrtPriceX96) {
+        InitCall storage c = _initCalls[i];
+        return (c.key, c.sqrtPriceX96);
+    }
+}
+
+contract MockOracleHelper_MarketFactory {
+    function validateMarketOracles(address, address) external pure {}
+}
+
+contract MockVTSOrchestrator_MarketFactory {
+    function initPool(PoolKey memory, MarketVTSConfiguration memory) external pure {}
+    function incrementCoverage(PoolId, uint256, uint256) external pure {}
+}
+
+contract MockLiquidityHub_MarketFactory {
+    address internal _lcc0;
+    address internal _lcc1;
+
+    bytes internal _lastMarketRef;
+    address internal _lastUnderlying0;
+    address internal _lastUnderlying1;
+
+    function setLccPair(address lcc0_, address lcc1_) external {
+        _lcc0 = lcc0_;
+        _lcc1 = lcc1_;
+    }
+
+    function createLCCPair(bytes memory marketRef, address ua0, address ua1, string memory, address[] memory)
+        external
+        returns (address lcc0, address lcc1)
+    {
+        _lastMarketRef = marketRef;
+        _lastUnderlying0 = ua0;
+        _lastUnderlying1 = ua1;
+        return (_lcc0, _lcc1);
+    }
+
+    function initialize(address, address, bytes32, bytes memory) external pure {}
+
+    function lastMarketRef() external view returns (bytes memory) {
+        return _lastMarketRef;
+    }
+
+    function lastUnderlyings() external view returns (address ua0, address ua1) {
+        return (_lastUnderlying0, _lastUnderlying1);
+    }
+}
+
+contract MockProxyHookVault_MarketFactory {
+    bool internal _activated;
+    PoolKey internal _coreKey;
+
+    mapping(Currency => uint256) internal _balances;
+    BalanceDelta internal _available;
+
+    function setCorePoolKey(PoolKey memory key) external {
+        _coreKey = key;
+    }
+
+    function activate() external {
+        _activated = true;
+    }
+
+    function activated() external view returns (bool) {
+        return _activated;
+    }
+
+    function setInMarketBalance(Currency c, uint256 bal) external {
+        _balances[c] = bal;
+    }
+
+    function setAvailableLiquidity(int128 amount0, int128 amount1) external {
+        _available = toBalanceDelta(amount0, amount1);
+    }
+
+    // IMarketVault surface
+    function lccs() external pure returns (address lccToken0, address lccToken1) {
+        return (address(0), address(0));
+    }
+
+    function inMarketBalanceOf(Currency currency) external view returns (uint256) {
+        return _balances[currency];
+    }
+
+    function modifyLiquidities(BalanceDelta) external pure {}
+
+    function tryModifyLiquidities(BalanceDelta requested) external view returns (BalanceDelta) {
+        // Return min of requested and available for each token (and permit "unbounded" if available is zeroed).
+        int128 a0 = _available.amount0() == 0 || requested.amount0() < _available.amount0()
+            ? requested.amount0()
+            : _available.amount0();
+        int128 a1 = _available.amount1() == 0 || requested.amount1() < _available.amount1()
+            ? requested.amount1()
+            : _available.amount1();
+        return toBalanceDelta(a0, a1);
+    }
+
+    function dryModifyLiquidities(BalanceDelta requested) external view returns (BalanceDelta) {
+        return this.tryModifyLiquidities(requested);
+    }
+}
+
+contract MockCoreHook_MarketFactory is ICoreHook {
+    bool internal _called;
+
+    function settleHookDeltasToPot(PoolKey calldata) external {
+        _called = true;
+    }
+
+    function called() external view returns (bool) {
+        return _called;
+    }
+}
+
+contract MarketFactoryUnitTest is Test {
+    using PoolIdLibrary for PoolKey;
+
+    address internal owner = makeAddr("owner");
+
+    MockPoolManager_MarketFactory internal poolManager;
+    MockLiquidityHub_MarketFactory internal liquidityHub;
+    MockOracleHelper_MarketFactory internal oracleHelper;
+    MockVTSOrchestrator_MarketFactory internal vts;
+
+    MockProxyHookVault_MarketFactory internal proxyHook;
+    MockCoreHook_MarketFactory internal coreHook;
+
+    MarketFactory internal factory;
+
+    function setUp() public {
+        poolManager = new MockPoolManager_MarketFactory();
+        liquidityHub = new MockLiquidityHub_MarketFactory();
+        oracleHelper = new MockOracleHelper_MarketFactory();
+        vts = new MockVTSOrchestrator_MarketFactory();
+
+        proxyHook = new MockProxyHookVault_MarketFactory();
+        coreHook = new MockCoreHook_MarketFactory();
+
+        liquidityHub.setLccPair(address(0x3000), address(0x4000)); // stable deterministic ordering
+
+        address[] memory bounds = new address[](0);
+        vm.prank(owner);
+        factory = new MarketFactory(address(poolManager), address(liquidityHub), address(oracleHelper), address(vts), bounds, owner);
+
+        vm.prank(owner);
+        factory.setHooks(address(coreHook));
+
+        // Mock deployProxyHook -> return our in-process proxyHook address.
+        address deployer = factory.marketVaultDeployer();
+        vm.mockCall(
+            deployer,
+            abi.encodeWithSelector(bytes4(keccak256("deployProxyHook(address,bytes32)"))),
+            abi.encode(address(proxyHook))
+        );
+    }
+
+    function _createMarket(address ua0, address ua1, uint160 initialSqrtPriceX96)
+        internal
+        returns (PoolId coreId, PoolId proxyId)
+    {
+        vm.prank(owner);
+        (coreId, proxyId) = factory.createMarket(
+            ua0,
+            ua1,
+            3000,
+            60,
+            initialSqrtPriceX96,
+            keccak256("salt"),
+            VTSConfigs.getDefaultConfig(),
+            new address[](0)
+        );
+    }
+
+    function test_setHooks_revertsOnZeroAddressWhenUnset() public {
+        address[] memory bounds = new address[](0);
+        vm.prank(owner);
+        MarketFactory f = new MarketFactory(address(poolManager), address(liquidityHub), address(oracleHelper), address(vts), bounds, owner);
+
+        vm.prank(owner);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
+        f.setHooks(address(0));
+    }
+
+    function test_setHooks_setsOnce_andIgnoresSubsequentCalls() public {
+        address[] memory bounds = new address[](0);
+        vm.prank(owner);
+        MarketFactory f = new MarketFactory(address(poolManager), address(liquidityHub), address(oracleHelper), address(vts), bounds, owner);
+
+        vm.prank(owner);
+        f.setHooks(address(0x1111));
+        assertEq(f.coreHook(), address(0x1111));
+
+        vm.prank(owner);
+        f.setHooks(address(0x2222));
+        assertEq(f.coreHook(), address(0x1111));
+    }
+
+    function test_createMarket_revertsForNonOwner() public {
+        vm.expectRevert();
+        factory.createMarket(
+            address(0x100),
+            address(0x200),
+            3000,
+            60,
+            79228162514264337593543950336,
+            keccak256("salt"),
+            VTSConfigs.getDefaultConfig(),
+            new address[](0)
+        );
+    }
+
+    function test_createMarket_ordersMatch_true_usesInitialSqrtPriceForProxy() public {
+        uint160 initial = 79228162514264337593543950336;
+        _createMarket(address(0x100), address(0x200), initial);
+
+        assertEq(poolManager.initCallsLength(), 2);
+        (, uint160 price0) = poolManager.initCall(0);
+        (, uint160 price1) = poolManager.initCall(1);
+        assertEq(price0, initial);
+        assertEq(price1, initial);
+        assertTrue(proxyHook.activated());
+    }
+
+    function test_createMarket_ordersMatch_false_usesInversePriceForProxy() public {
+        uint160 initial = 79228162514264337593543950336; // 2^96
+        _createMarket(address(0x200), address(0x100), initial);
+
+        assertEq(poolManager.initCallsLength(), 2);
+        (, uint160 corePrice) = poolManager.initCall(0);
+        (, uint160 proxyPrice) = poolManager.initCall(1);
+        assertEq(corePrice, initial);
+
+        uint160 expectedInverse = uint160((uint256(1) << 192) / uint256(initial));
+        assertEq(proxyPrice, expectedInverse);
+    }
+
+    function test_createMarket_revertsWhenCorePoolAlreadyExists() public {
+        uint160 initial = 79228162514264337593543950336;
+        _createMarket(address(0x100), address(0x200), initial);
+
+        vm.prank(owner);
+        vm.expectRevert(Errors.CorePoolAlreadyExists.selector);
+        factory.createMarket(
+            address(0x100),
+            address(0x200),
+            3000,
+            60,
+            initial,
+            keccak256("salt2"),
+            VTSConfigs.getDefaultConfig(),
+            new address[](0)
+        );
+    }
+
+    function test_useMarketLiquidity_revertsWhenCallerNotLiquidityHub() public {
+        vm.expectRevert(Errors.InvalidSender.selector);
+        factory.useMarketLiquidity(address(0x100), bytes32(uint256(1)), 1);
+    }
+
+    function test_useMarketLiquidity_withCurrency0AndCurrency1_andInvalidToken() public {
+        uint160 initial = 79228162514264337593543950336;
+        (PoolId coreId,) = _createMarket(address(0x100), address(0x200), initial);
+
+        // currency0 is the numerically smaller address
+        address currency0 = address(0x100);
+        address currency1 = address(0x200);
+
+        proxyHook.setAvailableLiquidity(int128(1000), int128(1000));
+
+        vm.prank(address(liquidityHub));
+        uint256 used0 = factory.useMarketLiquidity(currency0, PoolId.unwrap(coreId), 10);
+        assertEq(used0, 10);
+
+        vm.prank(address(liquidityHub));
+        uint256 used1 = factory.useMarketLiquidity(currency1, PoolId.unwrap(coreId), 7);
+        assertEq(used1, 7);
+
+        vm.prank(address(liquidityHub));
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0xDEAD)));
+        factory.useMarketLiquidity(address(0xDEAD), PoolId.unwrap(coreId), 1);
+    }
+
+    function test_marketLiquidity_readsVaultBalance() public {
+        uint160 initial = 79228162514264337593543950336;
+        (PoolId coreId,) = _createMarket(address(0x100), address(0x200), initial);
+
+        proxyHook.setInMarketBalance(Currency.wrap(address(0x100)), 123);
+        uint256 got = factory.marketLiquidity(address(0x100), PoolId.unwrap(coreId));
+        assertEq(got, 123);
+    }
+
+    function test_afterModifyLiquidity_revertsWhenPoolManagerLocked() public {
+        poolManager.setExttload(Lock.IS_UNLOCKED_SLOT, bytes32(0));
+
+        PoolKey memory key = PoolKey({
+            currency0: Currency.wrap(address(0x100)),
+            currency1: Currency.wrap(address(0x200)),
+            fee: 3000,
+            tickSpacing: 60,
+            hooks: IHooks(address(coreHook))
+        });
+
+        vm.prank(address(poolManager));
+        vm.expectRevert(Errors.PoolManagerMustBeUnlocked.selector);
+        factory.afterModifyLiquidity(key);
+    }
+
+    function test_afterModifyLiquidity_revertsWhenSenderNotBound() public {
+        poolManager.setExttload(Lock.IS_UNLOCKED_SLOT, bytes32(uint256(1)));
+
+        PoolKey memory key = PoolKey({
+            currency0: Currency.wrap(address(0x100)),
+            currency1: Currency.wrap(address(0x200)),
+            fee: 3000,
+            tickSpacing: 60,
+            hooks: IHooks(address(coreHook))
+        });
+
+        vm.prank(address(0xBADD));
+        vm.expectRevert(Errors.InvalidSender.selector);
+        factory.afterModifyLiquidity(key);
+    }
+
+    function test_afterModifyLiquidity_succeedsWhenUnlockedAndSenderBound() public {
+        poolManager.setExttload(Lock.IS_UNLOCKED_SLOT, bytes32(uint256(1)));
+
+        PoolKey memory key = PoolKey({
+            currency0: Currency.wrap(address(0x100)),
+            currency1: Currency.wrap(address(0x200)),
+            fee: 3000,
+            tickSpacing: 60,
+            hooks: IHooks(address(coreHook))
+        });
+
+        vm.prank(address(poolManager));
+        factory.afterModifyLiquidity(key);
+        assertTrue(coreHook.called());
     }
 }
