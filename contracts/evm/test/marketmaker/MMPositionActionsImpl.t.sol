@@ -36,6 +36,8 @@ import {LiquiditySignal} from "../../src/types/Commit.sol";
 import {IVTSOrchestrator} from "../../src/interfaces/IVTSOrchestrator.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {PoolSwapTest} from "@uniswap/v4-core/src/test/PoolSwapTest.sol";
+import {MMPositionActionsImpl} from "../../src/MMPositionActionsImpl.sol";
+import {MMActions} from "../../src/libraries/MMActions.sol";
 
 contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
     using SafeCast for *;
@@ -753,5 +755,35 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
                 "Position2 settled amount1 should increase after increaseFromDeltas"
             );
         }
+    }
+
+    function test_actionsImpl_handleAction_revertsWhenNotDelegatecall() public {
+        // MMPositionActionsImpl is meant to be invoked via delegatecall from MMPositionManager.
+        MMPositionActionsImpl impl = new MMPositionActionsImpl(address(manager), address(liquidityHub), address(vtsOrchestrator));
+        vm.expectRevert();
+        impl.handleAction(MMActions.SETTLE_POSITION, hex"");
+    }
+
+    function test_settle_revertsOnZeroDelta() public {
+        // _settle checks amount0==0 && amount1==0 before reading position state.
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](1);
+        actions[0] = MMA.prepareSettle(corePoolKey, 1, 0, 0, 0, false);
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidDelta.selector, 0, 0));
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+    }
+
+    function test_mintPosition_revertsWhenLiquidityGtUint128Max() public {
+        // Mint action rejects liquidity > uint128 max, but only after passing the ERC721 owner/approval gate.
+        // So we commit first (mints the tokenId), then attempt to mint a position with too-large liquidity.
+        uint256 tokenId = positionManager.nextTokenId();
+        uint256 tooLarge = uint256(type(uint128).max) + 1;
+
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
+        actions[0] = MMA.prepareCommit(abi.encode(liquiditySignal));
+        actions[1] = MMA.prepareMint(corePoolKey, tokenId, -60, 60, tooLarge);
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAmount.selector, tooLarge, type(uint128).max));
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
     }
 }

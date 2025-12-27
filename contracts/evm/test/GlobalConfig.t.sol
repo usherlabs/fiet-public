@@ -32,4 +32,10 @@ contract GlobalConfigTest is Test {
         uint256 number = abi.decode(result, (uint256));
         assertEq(number, initialNumber + 2);
     }
+
+    function test_proxyCall_revertsOnInvalidTarget() public {
+        bytes memory data = abi.encodeWithSelector(MockContract.addTwoToNumber.selector, 123);
+        vm.expectRevert(bytes("INVALID_TARGET"));
+        globalConfig.proxyCall(address(0), data);
+    }
 }

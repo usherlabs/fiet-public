@@ -40,6 +40,23 @@ contract VTSPositionLibTest is VTSLibTestBase {
         positionId = PositionLibrary.generateId(owner, params);
     }
 
+    /// @notice Helper to register a position for an arbitrary poolId (useful when calling calcRFS which settles growths via PoolManager)
+    function _registerHarnessPositionInPool(
+        PoolId poolId,
+        address owner,
+        int24 tickLower,
+        int24 tickUpper,
+        uint128 liquidity,
+        bytes32 salt
+    ) internal returns (PositionId positionId) {
+        ModifyLiquidityParams memory params = ModifyLiquidityParams({
+            tickLower: tickLower, tickUpper: tickUpper, liquidityDelta: int256(uint256(liquidity)), salt: salt
+        });
+
+        harness.registerPosition(owner, poolId, params);
+        positionId = PositionLibrary.generateId(owner, params);
+    }
+
     /// @notice Helper to register default position
     function _registerDefaultPosition() internal returns (PositionId) {
         return _registerHarnessPosition(
@@ -348,6 +365,45 @@ contract VTSPositionLibTest is VTSLibTestBase {
         assertTrue(delta.amount0() > 0, "Should require more settlement for token0");
     }
 
+    function test_getRFS_saturatesPositiveDeltaToInt128Max_whenNeedExceedsInt128() public {
+        PositionId positionId = _registerDefaultPosition();
+
+        // Match VTSPositionLib's internal INT128_MAX_U definition.
+        uint256 int128MaxU = uint256(type(uint128).max) >> 1;
+
+        // Base requirement is commitmentMax * 5% (500 bps) => commitmentMax / 20.
+        // Choose commitmentMax so base requirement > int128MaxU.
+        uint256 commitmentMax = (int128MaxU + 2) * 20;
+        harness.setCommitmentMax(positionId, commitmentMax, commitmentMax);
+        harness.setSettled(positionId, 0, 0);
+        harness.setCumulativeDeficit(positionId, 0, 0);
+        harness.setCommitmentDeficit(positionId, 0, 0);
+
+        (bool rfsOpen, BalanceDelta delta) = harness.getRFS(positionId);
+        assertTrue(rfsOpen, "RFS should be open when base requirement is huge and settled is 0");
+        assertEq(delta.amount0(), type(int128).max, "token0 RFS delta should saturate to int128.max");
+        assertEq(delta.amount1(), type(int128).max, "token1 RFS delta should saturate to int128.max");
+    }
+
+    function test_getRFS_saturatesNegativeDeltaToInt128Min_whenExcessExceedsInt128() public {
+        PositionId positionId = _registerDefaultPosition();
+
+        // Match VTSPositionLib's internal INT128_MAX_U definition.
+        uint256 int128MaxU = uint256(type(uint128).max) >> 1;
+
+        // Commitment is huge; set settled to commitmentMax so excess (settled - need) is enormous.
+        uint256 commitmentMax = (int128MaxU + 2) * 20;
+        harness.setCommitmentMax(positionId, commitmentMax, commitmentMax);
+        harness.setSettled(positionId, commitmentMax, commitmentMax);
+        harness.setCumulativeDeficit(positionId, 0, 0);
+        harness.setCommitmentDeficit(positionId, 0, 0);
+
+        (bool rfsOpen, BalanceDelta delta) = harness.getRFS(positionId);
+        assertFalse(rfsOpen, "RFS should be closed when massively over-settled");
+        assertEq(delta.amount0(), type(int128).min, "token0 RFS delta should saturate to int128.min");
+        assertEq(delta.amount1(), type(int128).min, "token1 RFS delta should saturate to int128.min");
+    }
+
     // ============================================================
     // _registerPosition Tests
     // ============================================================
@@ -390,6 +446,60 @@ contract VTSPositionLibTest is VTSLibTestBase {
             abi.encodeWithSelector(Errors.AlreadyRegistered.selector, PositionLibrary.generateId(owner, params))
         );
         harness.registerPosition(owner, testPoolId, params);
+    }
+
+    function test_linkPositionToCommit_expiredCommit_revertsInvalidSignal() public {
+        PositionId positionId = _registerDefaultPosition();
+        uint256 commitId = 1;
+
+        // Default commit state has expiresAt = 0, which is always < block.timestamp in tests.
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidSignal.selector, commitId));
+        harness.linkPositionToCommit(positionId, commitId);
+    }
+
+    function test_updateSettlement_totalSettledTransitionFromZero_flushesCISEResidual() public {
+        // This targets the branch in _updatePoolAccounting that flushes coverageResidualCISE when totalSettled
+        // transitions from 0 -> >0.
+        PositionId positionId = _registerDefaultPosition();
+
+        // Seed residual and assert indices start at 0.
+        harness.setPoolCoverageResidualCISE(testPoolId, 100e18, 0);
+        (uint256 idx0Before, uint256 idx1Before) = harness.getPoolCoveragePerSettledIndexX128(testPoolId);
+        assertEq(idx0Before, 0);
+        assertEq(idx1Before, 0);
+
+        // Ensure pool totalSettled starts at 0 so this is the first transition.
+        harness.setPoolTotalSettled(testPoolId, 0, 0);
+
+        // Set a non-zero settlement delta so totalSettled becomes > 0.
+        harness.setCommitmentMax(positionId, 1000e18, 1000e18);
+        harness.setSettled(positionId, 0, 0);
+        harness.updateSettlement(positionId, 0, 10e18);
+
+        // Residual should be flushed into the index and cleared.
+        (uint256 idx0After,) = harness.getPoolCoveragePerSettledIndexX128(testPoolId);
+        (uint256 residual0After,) = harness.getPoolCoverageResidualCISE(testPoolId);
+        assertGt(idx0After, idx0Before, "coveragePerSettledIndexX128 should increase after flush");
+        assertEq(residual0After, 0, "coverageResidualCISE should be cleared after flush");
+    }
+
+    function test_calcRFS_requireClosedRfS_revertsWhenOpen() public {
+        // This specifically hits: if (requireClosedRfS && rfsOpen) revert Errors.RFSOpenForPosition(id)
+        // calcRFS settles growths first, so we register into an actual PoolManager pool (core pool) to avoid slot0 reverts.
+        PoolId corePoolId = _getDefaultPoolId();
+        harness.setupPool(corePoolId, _createDefaultVTSConfig());
+
+        // Use a tight range consistent with core pool tick spacing.
+        PositionId positionId = _registerHarnessPositionInPool(corePoolId, DEFAULT_OWNER, -60, 60, 1, DEFAULT_SALT);
+
+        // Under-settle so RFS is open (base requirement is > 0 by default config).
+        harness.setCommitmentMax(positionId, 1000e18, 1000e18);
+        harness.setSettled(positionId, 0, 0);
+        harness.setCumulativeDeficit(positionId, 0, 0);
+        harness.setCommitmentDeficit(positionId, 0, 0);
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.RFSOpenForPosition.selector, positionId));
+        harness.calcRFS(manager, positionId, true);
     }
 
     // ============================================================

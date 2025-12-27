@@ -291,8 +291,13 @@ library MMActionAdapter {
     /**
      * @notice Prepares an UNWRAP_NATIVE action
      */
+    function prepareUnwrapNative(uint256 amount, bool payerIsUser) internal pure returns (PreparedAction memory) {
+        return PreparedAction({action: bytes1(uint8(MMActions.UNWRAP_NATIVE)), params: abi.encode(amount, payerIsUser)});
+    }
+
+    /// @dev Backwards-compatible wrapper: defaults to payerIsUser = true.
     function prepareUnwrapNative(uint256 amount) internal pure returns (PreparedAction memory) {
-        return PreparedAction({action: bytes1(uint8(MMActions.UNWRAP_NATIVE)), params: abi.encode(amount)});
+        return prepareUnwrapNative(amount, true);
     }
 
     /**
@@ -421,7 +426,14 @@ library MMActionAdapter {
      */
     function unwrapNative(MMPositionManager mmpm, uint256 amount) internal {
         PreparedAction[] memory prepared = new PreparedAction[](1);
-        prepared[0] = prepareUnwrapNative(amount);
+        prepared[0] = prepareUnwrapNative(amount, true);
+        execute(mmpm, prepared);
+    }
+
+    /// @notice Unwraps WETH to native ETH using delta credit (payerIsUser = false)
+    function unwrapNativeFromDeltas(MMPositionManager mmpm, uint256 amount) internal {
+        PreparedAction[] memory prepared = new PreparedAction[](1);
+        prepared[0] = prepareUnwrapNative(amount, false);
         execute(mmpm, prepared);
     }
 

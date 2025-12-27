@@ -146,6 +146,22 @@ contract VTSPositionLibHarness {
         );
     }
 
+    function getPoolTotalSettled(PoolId poolId) external view returns (uint256 total0, uint256 total1) {
+        return (s.poolAccounting[poolId].totalSettled.token0, s.poolAccounting[poolId].totalSettled.token1);
+    }
+
+    function getPoolCoverageResidualCISE(PoolId poolId) external view returns (uint256 residual0, uint256 residual1) {
+        return (s.poolAccounting[poolId].coverageResidualCISE.token0, s.poolAccounting[poolId].coverageResidualCISE.token1);
+    }
+
+    function getPoolCoveragePerSettledIndexX128(PoolId poolId) external view returns (uint256 idx0, uint256 idx1) {
+        return (s.poolAccounting[poolId].coveragePerSettledIndexX128.token0, s.poolAccounting[poolId].coveragePerSettledIndexX128.token1);
+    }
+
+    function getCommitExpiresAt(uint256 commitId) external view returns (uint256 expiresAt) {
+        return s.commits[commitId].expiresAt;
+    }
+
     // ============ Storage Setters (for test setup) ============
 
     /// @notice Sets up a pool with VTS configuration
@@ -192,6 +208,20 @@ contract VTSPositionLibHarness {
     function setPoolTotalCISEExposure(PoolId poolId, uint256 exposure0, uint256 exposure1) external {
         s.poolAccounting[poolId].totalCISEExposureSinceLastMod.token0 = exposure0;
         s.poolAccounting[poolId].totalCISEExposureSinceLastMod.token1 = exposure1;
+    }
+
+    function setPoolTotalSettled(PoolId poolId, uint256 total0, uint256 total1) external {
+        s.poolAccounting[poolId].totalSettled.token0 = total0;
+        s.poolAccounting[poolId].totalSettled.token1 = total1;
+    }
+
+    function setPoolCoverageResidualCISE(PoolId poolId, uint256 residual0, uint256 residual1) external {
+        s.poolAccounting[poolId].coverageResidualCISE.token0 = residual0;
+        s.poolAccounting[poolId].coverageResidualCISE.token1 = residual1;
+    }
+
+    function setCommitExpiresAt(uint256 commitId, uint256 expiresAt) external {
+        s.commits[commitId].expiresAt = expiresAt;
     }
 
     /// @notice Sets deficit growth global for a pool

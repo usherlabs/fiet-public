@@ -209,6 +209,15 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         assertEq(finalDelta1, -10e18, "currencyDelta1 should be cleared (-10)");
     }
 
+    function test_onMMSettle_revertsOnInvalidPosition() public {
+        // Unregistered position should revert.
+        PositionId invalid = PositionId.wrap(bytes32(uint256(0xBADD)));
+        BalanceDelta delta = toBalanceDelta(-1e18, -1e18);
+
+        vm.expectRevert("VTSPositionLib: Invalid position");
+        harness.onMMSettle(manager, mockVault, invalid, lccCurrency0, lccCurrency1, delta, false);
+    }
+
     // ============================================================
     // Scenario 2: Settle with two positive amounts (withdrawals)
     // Should clamp by RfS (negative RfS = withdrawable amount)
@@ -273,6 +282,73 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
 
         vm.expectRevert("VTSPositionLib: RFS open");
         harness.onMMSettle(manager, mockVault, positionId, lccCurrency0, lccCurrency1, delta, false);
+    }
+
+    function test_onMMSettle_withdrawals_phase2ShortfallToken1_addsBackSettlement() public {
+        PositionId positionId = _registerActivePosition();
+
+        // Fully-settled enough so RFS is closed and withdrawals are allowed.
+        harness.setCommitmentMax(positionId, 1000e18, 1000e18);
+        harness.setSettled(positionId, 200e18, 200e18);
+        harness.setPositionActive(positionId, true);
+
+        // Request withdrawal, but vault can't satisfy full token1 amount.
+        mockVault.setAvailableLiquidity(100e18, 60e18);
+        BalanceDelta delta = toBalanceDelta(100e18, 100e18);
+
+        (BalanceDelta settlementDelta, bool rfsOpen,) =
+            harness.onMMSettle(manager, mockVault, positionId, lccCurrency0, lccCurrency1, delta, false);
+
+        assertFalse(rfsOpen, "RFS should be closed for withdrawals");
+        assertEq(settlementDelta.amount0(), 100e18, "token0 should be fully available");
+        assertEq(settlementDelta.amount1(), 60e18, "token1 should be clamped by vault availability");
+
+        // Settlement accounting should reflect only the actually-available withdrawal after Phase 2 add-back.
+        (,, uint256 settled0, uint256 settled1,,) = harness.getPositionAccounting(positionId);
+        assertEq(settled0, 100e18, "settled0 should decrease by the actual withdrawal");
+        assertEq(settled1, 140e18, "settled1 should decrease by the actual withdrawal (after add-back)");
+    }
+
+    function test_onMMSettle_active_invalidCommitmentMax_reverts() public {
+        PositionId positionId = _registerActivePosition();
+
+        // Active position with a zero commitment max is invalid in _settleActive.
+        harness.setCommitmentMax(positionId, 0, 1000e18);
+        harness.setSettled(positionId, 0, 0);
+        harness.setPositionActive(positionId, true);
+
+        vm.expectRevert("VTSPositionLib: Invalid position");
+        harness.onMMSettle(manager, mockVault, positionId, lccCurrency0, lccCurrency1, toBalanceDelta(-1e18, 0), false);
+    }
+
+    function test_onMMSettle_withdrawals_positiveCurrencyDelta_isReducedByClearance() public {
+        PositionId positionId = _registerActivePosition();
+        address owner = DEFAULT_OWNER;
+
+        // Ensure withdrawals are allowed.
+        harness.setCommitmentMax(positionId, 1000e18, 1000e18);
+        harness.setSettled(positionId, 200e18, 200e18);
+        harness.setPositionActive(positionId, true);
+
+        // Protocol owes the owner (positive delta).
+        harness.setUnderlyingDelta(underlyingCurrency0, owner, 50e18);
+        assertEq(harness.getUnderlyingDelta(underlyingCurrency0, owner), 50e18, "precondition: positive delta");
+
+        // Withdraw part of it; clearance should reduce the positive delta by min(delta, amount).
+        mockVault.setAvailableLiquidity(type(int128).max, type(int128).max);
+        BalanceDelta delta = toBalanceDelta(20e18, 0);
+
+        (BalanceDelta settlementDelta, bool rfsOpen,) =
+            harness.onMMSettle(manager, mockVault, positionId, lccCurrency0, lccCurrency1, delta, false);
+
+        assertFalse(rfsOpen, "RFS should be closed");
+        assertEq(settlementDelta.amount0(), 20e18, "withdrawal should succeed");
+
+        assertEq(
+            harness.getUnderlyingDelta(underlyingCurrency0, owner),
+            30e18,
+            "positive delta should be reduced by clearance"
+        );
     }
 
     // ============================================================

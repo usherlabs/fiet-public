@@ -623,8 +623,11 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
 
         uint256 cancelAmount = principalAmount - queueAmount;
 
-        // Burn the full a portion of the principal amount from the sender (issuer burn path, skip bucket accounting)
-        _burn(lcc, from, 0, cancelAmount, true);
+        // Burn the cancellable portion of the principal amount from the sender (issuer burn path, skip bucket accounting)
+        // Note: allow cancelAmount == 0 (principal fully queued) without reverting.
+        if (cancelAmount > 0) {
+            _burn(lcc, from, 0, cancelAmount, true);
+        }
 
         // Queue a portion for settlement to the specified recipient
         if (queueAmount > 0) {

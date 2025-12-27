@@ -30,6 +30,8 @@ import {RFSCheckpoint} from "../src/types/Checkpoint.sol";
 import {ILCC} from "../src/interfaces/ILCC.sol";
 import {LiquiditySignal} from "../src/types/Commit.sol";
 import {ILiquidityHub} from "../src/interfaces/ILiquidityHub.sol";
+import {Errors} from "../src/libraries/Errors.sol";
+import {ActionConstants} from "v4-periphery/src/libraries/ActionConstants.sol";
 
 contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
     using SafeCast for *;
@@ -306,5 +308,222 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         // get liquidity in position 0
         (Position memory positionAfterCheckpoint,) = vtsOrchestrator.getPosition(tokenId, positionIndex);
         console.log("positionLiquidityAfterCheckpoint", uint256(positionAfterCheckpoint.liquidity));
+    }
+
+    function test_modifyLiquidities_revertsWhenDeadlinePassed() public {
+        uint256 pastDeadline = block.timestamp - 1;
+        vm.expectRevert(abi.encodeWithSelector(Errors.DeadlinePassed.selector, pastDeadline));
+        positionManager.modifyLiquidities(hex"", pastDeadline);
+    }
+
+    function test_modifyLiquiditiesWithoutUnlock_revertsOnUnsupportedUtilityAction() public {
+        uint256 unknownAction = 0xFE;
+        bytes memory actions = abi.encodePacked(uint8(unknownAction));
+        bytes[] memory params = new bytes[](1);
+        params[0] = hex"";
+        vm.expectRevert(abi.encodeWithSelector(Errors.UnsupportedAction.selector, unknownAction));
+        positionManager.modifyLiquiditiesWithoutUnlock(actions, params);
+    }
+
+    function test_tokenURI_revertsWhenCommitmentDescriptorNotSet() public {
+        MMPositionManager broken = new MMPositionManager(
+            address(manager),
+            address(liquidityHub),
+            address(vtsOrchestrator),
+            address(0),
+            weth9,
+            permit2,
+            address(0xBEEF) // unused for this test
+        );
+        vm.expectRevert(Errors.CommitmentDescriptorNotSet.selector);
+        broken.tokenURI(1);
+    }
+
+    function test_wrapNative_amountGtAvailableCredit_revertsInsufficientBalance() public {
+        // Create less native credit than requested by sending smaller msg.value.
+        MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](1);
+        prepared[0] = MMA.prepareWrapNative(1 ether);
+
+        (bytes memory actionsBytes, bytes[] memory params) = MMA.concatPrepared(prepared);
+        // value sent = 0.5 ether, but amount requested = 1 ether.
+        vm.expectRevert(abi.encodeWithSelector(Errors.InsufficientBalance.selector, 0.5 ether, 1 ether));
+        positionManager.modifyLiquiditiesWithoutUnlock{value: 0.5 ether}(actionsBytes, params);
+    }
+
+    function test_wrapNative_amountZero_wrapsAllValue_andIsTakeableAsWeth() public {
+        address recipient = makeAddr("recipient");
+
+        MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](2);
+        prepared[0] = MMA.prepareWrapNative(0); // wrap max available credit
+        prepared[1] = MMA.prepareTake(Currency.wrap(address(weth9)), recipient, 0); // take all WETH
+
+        // Send 1 ether to create native credit for the batch.
+        MMA.execute(positionManager, prepared, 1 ether);
+
+        assertEq(weth9.balanceOf(recipient), 1 ether);
+    }
+
+    function test_unwrapNative_payerIsUser_amountZero_unwrapsAllUserWeth_andIsTakeableAsEth() public {
+        address user = makeAddr("user");
+
+        // Give user WETH and approve MMPM via standard allowance.
+        vm.deal(user, 2 ether);
+        vm.prank(user);
+        weth9.deposit{value: 1 ether}();
+        vm.prank(user);
+        weth9.approve(address(positionManager), type(uint256).max);
+
+        uint256 ethBefore = user.balance;
+
+        MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](2);
+        prepared[0] = MMA.prepareUnwrapNative(0, true); // amount=0 => unwrap all payer WETH
+        prepared[1] = MMA.prepareTake(CurrencyLibrary.ADDRESS_ZERO, user, 0); // withdraw all credited ETH
+
+        vm.prank(user);
+        MMA.execute(positionManager, prepared);
+
+        assertEq(user.balance, ethBefore + 1 ether);
+    }
+
+    function test_unwrapNative_fromDeltas_amountZero_unwrapsAllDeltaWeth_andIsTakeableAsEth() public {
+        address user = makeAddr("user");
+
+        // First, create WETH delta credit for the locker by wrapping native in-batch.
+        MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](3);
+        prepared[0] = MMA.prepareWrapNative(1 ether);
+        prepared[1] = MMA.prepareUnwrapNative(0, false); // amount=0 => unwrap max from delta
+        prepared[2] = MMA.prepareTake(CurrencyLibrary.ADDRESS_ZERO, user, 0);
+
+        uint256 ethBefore = user.balance;
+        MMA.execute(positionManager, prepared, 1 ether);
+        assertEq(user.balance, ethBefore + 1 ether);
+    }
+
+    function test_unwrapLcc_payerIsUser_requestedLessThanBalance_clampsToRequested() public {
+        address user = makeAddr("user");
+
+        // Ensure user is treated as non-protocol.
+        vm.mockCall(marketFactory, abi.encodeWithSelector(IMarketFactory.bounds.selector, user), abi.encode(false));
+
+        MockERC20 underlyingAsset = MockERC20(lcc0.underlying());
+        underlyingAsset.mint(user, 1000);
+
+        vm.startPrank(user);
+        underlyingAsset.approve(address(liquidityHub), 1000);
+        ILiquidityHub(liquidityHub).wrap(address(lcc0), 1000);
+        lcc0.approve(address(positionManager), type(uint256).max);
+        vm.stopPrank();
+
+        uint256 requested = 400;
+        uint256 underlyingBefore = underlyingAsset.balanceOf(user);
+
+        vm.prank(user);
+        MMA.unwrapLcc(positionManager, address(lcc0), requested, user, true);
+
+        assertEq(lcc0.balanceOf(user), 600);
+        assertEq(underlyingAsset.balanceOf(user), underlyingBefore + requested);
+    }
+
+    function test_unwrapLcc_fromDeltas_toThis_syncsUnderlying_andIsTakeable() public {
+        // Put LCC balance onto MMPM, sync it as credit to the locker, then unwrap from deltas to address(this).
+        address lccAddr = address(lcc0);
+        Currency lccCurrency = Currency.wrap(lccAddr);
+        MockERC20 underlying = MockERC20(lcc0.underlying());
+        Currency underlyingCurrency = Currency.wrap(address(underlying));
+
+        // Mint LCC to this test contract via hub wrap.
+        underlying.mint(address(this), 500);
+        underlying.approve(address(liquidityHub), 500);
+        ILiquidityHub(liquidityHub).wrap(lccAddr, 500);
+
+        // Transfer LCC to MMPM and sync it as credit.
+        lcc0.transfer(address(positionManager), 500);
+
+        address recipient = makeAddr("recipient");
+
+        MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](3);
+        prepared[0] = MMA.prepareSync(lccCurrency);
+        // Use ActionConstants.ADDRESS_THIS so BaseActionsRouter maps it to the MMPM address.
+        prepared[1] = MMA.prepareUnwrapLcc(lccAddr, 0, ActionConstants.ADDRESS_THIS, false);
+        prepared[2] = MMA.prepareTake(underlyingCurrency, recipient, 0); // consume underlying credit and move tokens out
+
+        MMA.execute(positionManager, prepared);
+
+        assertEq(underlying.balanceOf(recipient), 500);
+    }
+
+    function test_checkpointAndTransferFrom_revertWhilePoolManagerUnlocked() public {
+        // Set up a committed position to mint a tokenId.
+        (uint256 tokenId,,,) = _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)}),
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+
+        // While PoolManager is unlocked, both checkpoint() and transferFrom() must revert.
+        UnlockCaller caller = new UnlockCaller();
+
+        vm.expectRevert(Errors.PoolManagerMustBeLocked.selector);
+        caller.checkpointWhileUnlocked(manager, positionManager, tokenId, 0);
+
+        vm.expectRevert(Errors.PoolManagerMustBeLocked.selector);
+        caller.transferFromWhileUnlocked(manager, positionManager, address(this), makeAddr("to"), tokenId);
+    }
+}
+
+/// @dev Helper to call MMPM functions while PoolManager is in an unlocked state.
+contract UnlockCaller {
+    MMPositionManager internal targetMmpm;
+    uint256 internal tokenId;
+    uint256 internal positionIndex;
+
+    address internal transferFromFrom;
+    address internal transferFromTo;
+
+    bool internal doCheckpoint;
+    bool internal doTransferFrom;
+
+    function checkpointWhileUnlocked(
+        IPoolManager poolManager,
+        MMPositionManager mmpm,
+        uint256 _tokenId,
+        uint256 _positionIndex
+    ) external {
+        targetMmpm = mmpm;
+        tokenId = _tokenId;
+        positionIndex = _positionIndex;
+        doCheckpoint = true;
+        doTransferFrom = false;
+        poolManager.unlock(hex"");
+    }
+
+    function transferFromWhileUnlocked(
+        IPoolManager poolManager,
+        MMPositionManager mmpm,
+        address from,
+        address to,
+        uint256 _tokenId
+    ) external {
+        targetMmpm = mmpm;
+        transferFromFrom = from;
+        transferFromTo = to;
+        tokenId = _tokenId;
+        doCheckpoint = false;
+        doTransferFrom = true;
+        poolManager.unlock(hex"");
+    }
+
+    function unlockCallback(bytes calldata) external returns (bytes memory) {
+        if (doCheckpoint) {
+            targetMmpm.checkpoint(tokenId, positionIndex);
+        }
+        if (doTransferFrom) {
+            targetMmpm.transferFrom(transferFromFrom, transferFromTo, tokenId);
+        }
+        return "";
     }
 }
