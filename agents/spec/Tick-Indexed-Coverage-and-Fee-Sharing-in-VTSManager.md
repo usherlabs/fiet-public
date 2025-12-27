@@ -72,3 +72,12 @@ Settlements via onMMSettle handle growth and incremental slash funding, while li
 - Clamping and dust guards: e.g., bonus calculations include dust guards (selfNet < 1e12 skipped) and pot clamping to avoid underflow.
 - Seizure mechanics: Not covered in prior sections but implemented in MMPositionManager with grace periods and proportional liquidity seizure.
 - Overflows and precision: FullMath and SafeCast prevent issues in growth calculations and type conversions.
+
+## UPDATE: Next Resarch Specs
+
+1. Deficit-Indexed-Coverage-Exercise.md
+2. Fee-Accrual-Weighted-Bonus-Allocation-Upgrade.md (Partially Deprecated)
+   Superseded in:
+3. Coverage-Indexed-Bonus-Allocation-Upgrade.md
+4. FeeAdj-Flow-Pot-Accrual-And-Delta-Settlement.md
+5. Self-Excluding-Bonus-Attribution-via-Contribution-Spend-Index (Aiming for perfection)

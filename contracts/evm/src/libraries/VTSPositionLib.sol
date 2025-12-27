@@ -283,7 +283,7 @@ library VTSPositionLib {
         uint256 residual = paPool.coverageResidualDICE.get(tokenIndex);
         uint256 principal = paPool.totalDeficitPrincipal.get(tokenIndex);
 
-        // Is there a first-movers disadvantage?
+        // ? Is there a first-movers disadvantage?
         // With checkpoints incentivised via seizure, this should clear, but if NOT, then onMMSettle dis-incentivise the first-movers.
         // However, this also incentivises MMs to checkpoint other MMs positions...
         // This uses competition to close the economic lag between tick-index and position growth accounting.
