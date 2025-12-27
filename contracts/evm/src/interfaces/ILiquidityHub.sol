@@ -34,15 +34,8 @@ interface ILiquidityHub {
      * @param lccToken1 The second LCC token address
      * @param marketId The market ID (corePoolKey -> PoolID -> unwrap() to bytes32)
      * @param marketRef The market reference (bytes from proxyHookAddress)
-     * @param refIsValidIssuer Whether the market ref address is a valid issuer
      */
-    function initialize(
-        address lccToken0,
-        address lccToken1,
-        bytes32 marketId,
-        bytes memory marketRef,
-        bool refIsValidIssuer
-    ) external;
+    function initialize(address lccToken0, address lccToken1, bytes32 marketId, bytes memory marketRef) external;
 
     /**
      * @notice Issues LCC tokens (mints to specified recipient)

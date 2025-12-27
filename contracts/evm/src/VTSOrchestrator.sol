@@ -378,6 +378,22 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
         return (paPool.protocolFeeAccrued.token0, paPool.protocolFeeAccrued.token1);
     }
 
+    /// @inheritdoc IVTSOrchestrator
+    function getSlashedPot(PoolId poolId) external view returns (uint256 pot0, uint256 pot1) {
+        PoolAccounting storage paPool = s.poolAccounting[poolId];
+        return (paPool.slashedPot.token0, paPool.slashedPot.token1);
+    }
+
+    /// @inheritdoc IVTSOrchestrator
+    function getPositionFeeAccounting(PositionId positionId)
+        external
+        view
+        returns (uint256 feesShared0, uint256 feesShared1, int256 pendingFeeAdj0, int256 pendingFeeAdj1)
+    {
+        PositionAccounting storage pa = s.positionAccounting[positionId];
+        return (pa.feesShared.token0, pa.feesShared.token1, pa.pendingFeeAdj.token0, pa.pendingFeeAdj.token1);
+    }
+
     /// @notice Get the checkpoint for a given position
     /// @param positionId The position identifier
     /// @return checkpoint The RFS checkpoint for the position
@@ -409,10 +425,10 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
     /// @param amount1 Amount to increment for token1
     function incrementCoverage(PoolId poolId, uint256 amount0, uint256 amount1) external onlyFactory {
         if (amount0 > 0) {
-            VTSCommitLib.incrementCoverage(s, poolManager, poolId, 0, amount0);
+            VTSCommitLib.incrementCoverage(s, poolId, 0, amount0);
         }
         if (amount1 > 0) {
-            VTSCommitLib.incrementCoverage(s, poolManager, poolId, 1, amount1);
+            VTSCommitLib.incrementCoverage(s, poolId, 1, amount1);
         }
     }
 

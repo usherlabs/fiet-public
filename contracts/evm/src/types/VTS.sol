@@ -115,8 +115,6 @@ struct PositionAccounting {
     TokenPairUint settled;
     // Cumulative deficit per token (raw units)
     TokenPairUint cumulativeDeficit;
-    // Coverage usage growth snapshots per token
-    TokenPairUint coverageUseGrowthInsideLast;
     // Deficit growth snapshots per token
     TokenPairUint deficitGrowthInsideLast;
     // Inflow growth snapshots per token
@@ -133,10 +131,14 @@ struct PositionAccounting {
     TokenPairUint feesShared;
     // Pending fee adjustments per token: +slash (reduces payout), -bonus (increases payout)
     TokenPairInt pendingFeeAdj;
-    // Net settlement since last modification per token
-    TokenPairInt netSettlementSinceLastMod;
-    // Last funded pending adjustment per token
-    TokenPairInt lastFundedPendingAdj;
+    // DICE: Coverage index checkpoint per token (snapshot of pool index at last settlement)
+    TokenPairUint coverageIndexLastX128;
+    // CISE: Position checkpoint of pool coverage-per-settled index (Q128)
+    TokenPairUint ciseIndexLastX128;
+    // CISE: Banked realised exposure since last bonus allocation
+    TokenPairUint ciseExposureSinceLastMod;
+    // CSI: Position checkpoint of pool spend index (Q128)
+    TokenPairUint feesSharedIndexLastX128;
 }
 
 /// @notice Per-pool accounting data (mirrors VTSManager per-pool mappings)
@@ -146,18 +148,26 @@ struct PoolAccounting {
     TokenPairUint deficitGrowthGlobal;
     // Inflow growth global per token
     TokenPairUint inflowGrowthGlobal;
-    // Protocol coverage per token
-    TokenPairUint protocolCoverage;
-    // Coverage usage growth global per token
-    TokenPairUint coverageUseGrowthGlobal;
-    // Residual coverage per token (when no in-range liquidity)
-    TokenPairUint coverageResidual;
     // Protocol/LPs fee pot accrued from fee sharing per token
     TokenPairUint protocolFeeAccrued;
     // Slashed pot balances per token
     TokenPairUint slashedPot;
-    // Pool-wide sum of positive nets since last modification per token
-    TokenPairUint poolNetSinceLastMod;
+    // DICE: Pool-wide outstanding deficit principal per token
+    TokenPairUint totalDeficitPrincipal;
+    // DICE: Coverage-per-deficit-unit index (Q128) per token
+    TokenPairUint coveragePerDeficitIndexX128;
+    // DICE: Deferred coverage residual (socialised when totalDeficitPrincipal = 0 at exercise time)
+    TokenPairUint coverageResidualDICE;
+    // CISE: Pool-wide total settled aggregate per token
+    TokenPairUint totalSettled;
+    // CISE: Coverage-per-settled index (Q128) per token
+    TokenPairUint coveragePerSettledIndexX128;
+    // CISE: Deferred residual when totalSettled = 0 at exercise time
+    TokenPairUint coverageResidualCISE;
+    // CISE: Pool-wide sum of realised exposure since last modification (denominator for allocation)
+    TokenPairUint totalCISEExposureSinceLastMod;
+    // CSI: Spend-per-share index (Q128), advances when bonuses allocated
+    TokenPairUint feesSharedSpendIndexX128;
 }
 
 /// @notice Simple pair struct for per-tick growth (replaces uint256[2] arrays)
@@ -244,8 +254,6 @@ struct VTSStorage {
     mapping(PoolId => mapping(int24 => GrowthPair)) deficitGrowthOutside;
     /// Per-pool per-tick inflow growth outside
     mapping(PoolId => mapping(int24 => GrowthPair)) inflowGrowthOutside;
-    /// Per-pool per-tick coverage usage growth outside
-    mapping(PoolId => mapping(int24 => GrowthPair)) coverageUseGrowthOutside;
     /// Next commit ID for commit NFTs (starts at 1)
     uint256 nextCommitId;
     /// Global pause flag

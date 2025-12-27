@@ -17,6 +17,7 @@ import {ImmutableState} from "v4-periphery/src/base/ImmutableState.sol";
 import {PositionManagerBase} from "./PositionManagerBase.sol";
 import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
+import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
 
 /**
  * @title PositionManagerImpl
@@ -119,32 +120,10 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
     ///      Checks MMPM's balance (address(this)) and credits locker's delta (msgSender).
     /// @param currency0 The first currency to sync
     /// @param currency1 The second currency to sync
-    function _syncPairBalanceToDeltas(Currency currency0, Currency currency1) internal {
+    function _syncPairBalanceAsCredit(Currency currency0, Currency currency1) internal {
         // owner = address(this) = MMPM (balance holder)
         // target = msgSender() = locker (delta recipient)
         vtsOrchestrator.syncPair(currency0, currency1, address(this), msgSender());
-    }
-
-    // ------------------------------------------------------------------------------------------------
-    // Currency Withdrawal Helpers
-    // ------------------------------------------------------------------------------------------------
-
-    /// @notice Takes currency from delta and transfers to recipient
-    /// @dev Unified flow for both LCC and underlying currencies:
-    ///      - Balance held as ERC20 by MMPM
-    ///      - Delta on locker (LCC fees synced via _syncBalanceAsCredit after position modification)
-    ///      - Flow: debit locker delta -> direct ERC20 transfer
-    /// @param currency The currency to take
-    /// @param to The recipient address
-    /// @param maxAmount The maximum amount to take (0 = take full available credit)
-    function _take(Currency currency, address to, uint256 maxAmount) internal {
-        address locker = msgSender();
-        uint256 trueMaxAmount = Math.min(maxAmount, currency.balanceOfSelf());
-        uint256 takeAmount = vtsOrchestrator.take(currency, locker, trueMaxAmount);
-
-        if (to != address(this)) {
-            currency.transfer(to, takeAmount);
-        }
     }
 
     // ------------------------------------------------------------------------------------------------
@@ -221,6 +200,12 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
         if (delta1 > 0 && _isLCC(key.currency1)) {
             _syncBalanceAsCredit(key.currency1);
         }
+
+        // Settle CoreHook's PoolManager deltas (hook delta applied after hook returned)
+        // This ensures feeAdj-based claims are minted/burned to/from the fee pot held by CoreHook
+        // Must be called within PoolManager.unlockCallback, but outside of modifyLiquidity hook
+        IMarketFactory factory = liquidityHub.getFactory(Currency.unwrap(key.currency0), Currency.unwrap(key.currency1));
+        factory.afterModifyLiquidity(key);
     }
 }
 

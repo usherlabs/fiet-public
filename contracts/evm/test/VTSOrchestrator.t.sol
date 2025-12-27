@@ -3,6 +3,7 @@ pragma solidity ^0.8.26;
 
 import "forge-std/Test.sol";
 import {VTSOrchestratorFixture} from "./modules/VTSOrchestratorFixture.sol";
+import {VTSOrchestratorTestable} from "./modules/VTSOrchestratorTestable.sol";
 import {VTSOrchestrator} from "../src/VTSOrchestrator.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency, CurrencyLibrary} from "@uniswap/v4-core/src/types/Currency.sol";
@@ -28,38 +29,38 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
     using StateLibrary for IPoolManager;
 
     // ============================================================
-    // Storage inspection helpers (direct VTSStorage reads)
+    // Deploy VTSOrchestratorTestable for storage inspection
     // ============================================================
-    // Verified via `forge inspect VTSOrchestrator storage-layout`:
-    // - `_owner` is slot 0
-    // - `s` (VTSStorage) is slot 1
-    //
-    // In `VTSStorage` (types/VTS.sol) the 5th member is:
-    // mapping(PositionId => PositionAccounting) positionAccounting;
-    // which lives at slotOffset=4 within the struct.
-    uint256 internal constant _VTS_STORAGE_SLOT = 1;
-    uint256 internal constant _POSITION_ACCOUNTING_MAPPING_SLOT = _VTS_STORAGE_SLOT + 4; // == 5
-    // PositionAccounting layout (types/VTS.sol):
-    // commitmentMax(2), settled(2), cumulativeDeficit(2), coverageUse(2), deficitGrowth(2), inflowGrowth(2),
-    // feeGrowth(2), cumulativeOutflows(2), outflowsAtFeeSnap(2), commitmentDeficit(2), ...
-    uint256 internal constant _PA_CUMULATIVE_DEFICIT_TOKEN0_OFFSET = 4;
-    uint256 internal constant _PA_CUMULATIVE_DEFICIT_TOKEN1_OFFSET = 5;
-    uint256 internal constant _PA_COMMITMENT_DEFICIT_TOKEN0_OFFSET = 18;
-    uint256 internal constant _PA_COMMITMENT_DEFICIT_TOKEN1_OFFSET = 19;
 
-    function _paUint(PositionId positionId, uint256 slotOffset) internal view returns (uint256) {
-        bytes32 base = keccak256(abi.encode(PositionId.unwrap(positionId), uint256(_POSITION_ACCOUNTING_MAPPING_SLOT)));
-        return uint256(vm.load(address(vtsOrchestrator), bytes32(uint256(base) + slotOffset)));
+    /// @notice Override to deploy VTSOrchestratorTestable with debug view functions
+    function _deployVTSOrchestrator(
+        address _poolManager,
+        address _signalManager,
+        address _oracleHelper,
+        address _liquidityHub,
+        address _settlementObserver,
+        address _owner
+    ) internal override returns (VTSOrchestrator) {
+        return new VTSOrchestratorTestable(
+            _poolManager, _signalManager, _oracleHelper, _liquidityHub, _settlementObserver, _owner
+        );
     }
 
+    /// @notice Helper to access testable VTSOrchestrator with debug functions
+    function _testableOrchestrator() internal view returns (VTSOrchestratorTestable) {
+        return VTSOrchestratorTestable(address(vtsOrchestrator));
+    }
+
+    // ============================================================
+    // Storage inspection helpers (via VTSOrchestratorTestable)
+    // ============================================================
+
     function _commitmentDeficit(PositionId positionId) internal view returns (uint256 def0, uint256 def1) {
-        def0 = _paUint(positionId, _PA_COMMITMENT_DEFICIT_TOKEN0_OFFSET);
-        def1 = _paUint(positionId, _PA_COMMITMENT_DEFICIT_TOKEN1_OFFSET);
+        (def0, def1) = _testableOrchestrator().getCommitmentDeficit(positionId);
     }
 
     function _cumulativeDeficit(PositionId positionId) internal view returns (uint256 def0, uint256 def1) {
-        def0 = _paUint(positionId, _PA_CUMULATIVE_DEFICIT_TOKEN0_OFFSET);
-        def1 = _paUint(positionId, _PA_CUMULATIVE_DEFICIT_TOKEN1_OFFSET);
+        (def0, def1,,,,) = _testableOrchestrator().getPositionAccounting(positionId);
     }
 
     function _mockSignalUsd(uint256 signalUsd) internal {
@@ -91,9 +92,6 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
     function test_revert_renewSignal_whenPoolManagerLocked() public {
         // First create a commit
         bytes memory signalBytes = abi.encode(liquiditySignal);
-        bytes memory unlockData = abi.encode(
-            address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.commitSignal.selector, signalBytes)
-        );
         unlockCaller.run(
             address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.commitSignal.selector, signalBytes)
         );
@@ -188,12 +186,12 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
     // Signal Lifecycle Tests
     // ============================================================
 
-    function test_isSignalValid_zeroCommitId_returnsFalse() public {
+    function test_isSignalValid_zeroCommitId_returnsFalse() public view {
         bool isValid = vtsOrchestrator.isSignalValid(0, true);
         assertFalse(isValid, "Zero commitId should be invalid");
     }
 
-    function test_isSignalValid_unknownCommitId_returnsFalse() public {
+    function test_isSignalValid_unknownCommitId_returnsFalse() public view {
         bool isValid = vtsOrchestrator.isSignalValid(999, true);
         assertFalse(isValid, "Unknown commitId should be invalid");
     }
@@ -285,7 +283,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
     // Position Validity + Lens Tests
     // ============================================================
 
-    function test_isPositionValid_invalidPositionId_returnsFalse() public {
+    function test_isPositionValid_invalidPositionId_returnsFalse() public view {
         PositionId invalidId = PositionId.wrap(bytes32(uint256(999)));
         bool isValid = vtsOrchestrator.isPositionValid(invalidId, false);
         assertFalse(isValid, "Invalid positionId should return false");
@@ -324,7 +322,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
     function test_calcRFS_returnsCorrectValues() public {
         (, PositionId positionId,,) = _createCommittedPosition();
 
-        (bool rfsOpen, BalanceDelta delta) = vtsOrchestrator.calcRFS(positionId, false);
+        vtsOrchestrator.calcRFS(positionId, true);
         // RFS state depends on position state - just verify it doesn't revert
         assertTrue(true, "calcRFS should not revert");
     }
@@ -408,7 +406,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         // Step 5: Poke the position to collect fees (modifyLiquidity with liquidityDelta=0)
         // This triggers VTSPositionLib.touchPosition which processes fees
         // Then _take() transfers the fees from MMPM to test contract
-        _pokeMMAndTakeFees(tokenId, 0, -60, 60);
+        _pokeMM(tokenId, 0);
 
         // Step 6: Record final balances AFTER poke/take
         uint256 lcc0Final = _selfLccBalance(lccCurrency0);
@@ -710,14 +708,14 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
     // Additional Helper Tests
     // ============================================================
 
-    function test_getMarketVTSConfiguration_returnsConfig() public {
+    function test_getMarketVTSConfiguration_returnsConfig() public view {
         MarketVTSConfiguration memory config = vtsOrchestrator.getMarketVTSConfiguration(corePoolKey.toId());
         assertGt(config.token0.baseVTSRate, 0, "BaseVTSRate should be non-zero");
         assertGt(config.token1.baseVTSRate, 0, "BaseVTSRate should be non-zero");
     }
 
-    function test_getPool_returnsPoolInfo() public {
-        (PoolId id, Currency currency0, Currency currency1, MarketVTSConfiguration memory config, bool isPaused) =
+    function test_getPool_returnsPoolInfo() public view {
+        (PoolId id, Currency currency0, Currency currency1,, bool isPaused) =
             vtsOrchestrator.getPool(corePoolKey.toId());
 
         assertEq(PoolId.unwrap(id), PoolId.unwrap(corePoolKey.toId()), "PoolId should match");

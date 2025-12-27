@@ -227,17 +227,14 @@ library MMActionAdapter {
     /**
      * @notice Prepares an INCREASE_LIQUIDITY action
      */
-    function prepareIncrease(
-        PoolKey memory poolKey,
-        uint256 tokenId,
-        uint256 positionIndex,
-        int24 tickLower,
-        int24 tickUpper,
-        uint256 liquidity
-    ) internal pure returns (PreparedAction memory) {
+    function prepareIncrease(PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex, uint256 liquidity)
+        internal
+        pure
+        returns (PreparedAction memory)
+    {
         return PreparedAction({
             action: bytes1(uint8(MMActions.INCREASE_LIQUIDITY)),
-            params: abi.encode(poolKey, tokenId, positionIndex, tickLower, tickUpper, liquidity)
+            params: abi.encode(poolKey, tokenId, positionIndex, liquidity)
         });
     }
 
@@ -248,13 +245,11 @@ library MMActionAdapter {
         PoolKey memory poolKey,
         uint256 tokenId,
         uint256 positionIndex,
-        int24 tickLower,
-        int24 tickUpper,
         bool payerIsUser
     ) internal pure returns (PreparedAction memory) {
         return PreparedAction({
             action: bytes1(uint8(MMActions.INCREASE_LIQUIDITY_FROM_DELTAS)),
-            params: abi.encode(poolKey, tokenId, positionIndex, tickLower, tickUpper, payerIsUser)
+            params: abi.encode(poolKey, tokenId, positionIndex, payerIsUser)
         });
     }
 
@@ -382,12 +377,10 @@ library MMActionAdapter {
         PoolKey memory poolKey,
         uint256 tokenId,
         uint256 positionIndex,
-        int24 tickLower,
-        int24 tickUpper,
         uint256 liquidity
     ) internal {
         PreparedAction[] memory prepared = new PreparedAction[](1);
-        prepared[0] = prepareIncrease(poolKey, tokenId, positionIndex, tickLower, tickUpper, liquidity);
+        prepared[0] = prepareIncrease(poolKey, tokenId, positionIndex, liquidity);
         executeWithUnlock(mmpm, prepared, block.timestamp + 3600);
     }
 

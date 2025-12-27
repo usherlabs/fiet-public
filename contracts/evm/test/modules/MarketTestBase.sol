@@ -39,9 +39,14 @@ import {CurrencyTransfer} from "../../src/libraries/CurrencyTransfer.sol";
 import {OracleHelper} from "../../src/OracleHelper.sol";
 import {IOracleHelper} from "../../src/interfaces/IOracleHelper.sol";
 import {LiquidityHub} from "../../src/LiquidityHub.sol";
+import {ILiquidityHub} from "../../src/interfaces/ILiquidityHub.sol";
 import {VTSOrchestrator} from "../../src/VTSOrchestrator.sol";
 import {DeployPermit2} from "permit2/test/utils/DeployPermit2.sol";
 import {MarketFactory} from "../../src/MarketFactory.sol";
+import {PositionManager} from "v4-periphery/src/PositionManager.sol";
+import {PositionDescriptor} from "v4-periphery/src/PositionDescriptor.sol";
+import {DirectLPDeltaResolver} from "../../src/DirectLPDeltaResolver.sol";
+import {IPositionManager} from "v4-periphery/src/interfaces/IPositionManager.sol";
 
 abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
     using PoolIdLibrary for PoolId;
@@ -75,8 +80,12 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
     IVRLSettlementObserver settlementObserver;
     IMarketVault mv;
     IWETH9 public weth9;
+    IAllowanceTransfer public permit2;
     OracleHelper oracleHelper;
     VTSOrchestrator vtsOrchestrator;
+    PositionDescriptor public uniPositionDescriptor;
+    PositionManager public uniPositionManager;
+    DirectLPDeltaResolver public directLPDeltaResolver;
 
     address lccToken0;
     address lccToken1;
@@ -155,14 +164,6 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
         address testOwner = address(this); // Use test contract as owner for test scenarios
         oracleHelper = new OracleHelper(resilientOracle, testOwner);
 
-        // Mock oracleHelper() call needed for LCC creation in the market factory
-        // this is used in the MarketFactory.createMarket() function to get the oracleHelper address
-        vm.mockCall(
-            marketFactory,
-            abi.encodeWithSelector(IMarketFactory.oracleHelper.selector),
-            abi.encode(address(oracleHelper))
-        );
-
         // Deploy WETH9 contract
         weth9 = IWETH9(address(new WETH()));
 
@@ -181,8 +182,8 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
         // Deploy LiquidityHub BEFORE VTSOrchestrator (VTSOrchestrator needs liquidityHub address)
         liquidityHub = payable(address(new LiquidityHub(address(oracleHelper), "Ether", "ETH", 18, testOwner)));
 
-        // Deploy VTSOrchestrator
-        vtsOrchestrator = new VTSOrchestrator(
+        // Deploy VTSOrchestrator (virtual to allow test overrides)
+        vtsOrchestrator = _deployVTSOrchestrator(
             address(manager),
             address(signalManager),
             address(oracleHelper),
@@ -193,21 +194,12 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
 
         // Deploy Permit2 at the canonical address using vm.etch()
         // This deploys the bytecode at 0x000000000022D473030F116dDEE9F6B43aC78BA3
-        IAllowanceTransfer permit2 = IAllowanceTransfer(deployPermit2());
-        // Deploy MarketFactory
-        marketFactory = address(
-            new MarketFactory(
-                address(manager),
-                address(liquidityHub),
-                address(oracleHelper),
-                address(vtsOrchestrator),
-                new address[](0),
-                testOwner
-            )
-        );
+        permit2 = IAllowanceTransfer(deployPermit2());
 
-        // After market factory is deployed, sett the factory in the liquidity hub
-        LiquidityHub(payable(liquidityHub)).setFactory(marketFactory, true);
+        // Deploy Uniswap v4 PositionManager and descriptor for DirectLP tests (and Notifier subscribers).
+        // This PosM is separate from MMPositionManager.
+        uniPositionDescriptor = new PositionDescriptor(manager, address(weth9), bytes32("ETH"));
+        uniPositionManager = new PositionManager(manager, permit2, 500_000, uniPositionDescriptor, weth9);
 
         // Deploy MMPositionActionsImpl first
         MMPositionActionsImpl actionsImpl =
@@ -225,6 +217,35 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
                 address(actionsImpl)
             )
         );
+
+        // Deploy DirectLP delta resolver subscriber (will be protocol-bound after MarketFactory deployment).
+        directLPDeltaResolver =
+            new DirectLPDeltaResolver(IPositionManager(address(uniPositionManager)), ILiquidityHub(liquidityHub));
+
+        // Deploy MarketFactory (after MMPositionManager so it can be included as an initial protocol bound)
+        // Mirrors production deployment (see DeployContracts.s.sol): MMPositionManager is protocol-bound.
+        address[] memory initialBounds = new address[](1);
+        initialBounds[0] = mmPositionManager;
+        marketFactory = address(
+            new MarketFactory(
+                address(manager),
+                address(liquidityHub),
+                address(oracleHelper),
+                address(vtsOrchestrator),
+                initialBounds,
+                testOwner
+            )
+        );
+
+        // After market factory is deployed, set the factory in the liquidity hub
+        LiquidityHub(payable(liquidityHub)).setFactory(marketFactory, true);
+
+        // Add DirectLPDeltaResolver to bounds so it can call afterModifyLiquidity during unlock callbacks.
+        {
+            address[] memory boundsToAdd = new address[](1);
+            boundsToAdd[0] = address(directLPDeltaResolver);
+            MarketFactory(marketFactory).addBounds(boundsToAdd);
+        }
     }
 
     // Mine the corehook address and Deploy the core hook
@@ -269,7 +290,8 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
                 tickSpacing,
                 initialSqrtPriceX96,
                 proxySalt,
-                VTSConfigs.getDefaultConfig()
+                VTSConfigs.getDefaultConfig(),
+                new address[](0) // No additional issuers for tests
             );
 
         // set the deployed proxy hook address
@@ -338,21 +360,48 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
         approveLCCForMarketUse(lcc0);
         approveLCCForMarketUse(lcc1);
 
-        // mock the calls that would be made to the factory when we interact with the market
-        // this essentially marks an address as a protocol bound address, unless that address is specifically whitelisted via mocking
-        vm.mockCall(marketFactory, abi.encodeWithSelector(IMarketFactory.bounds.selector), abi.encode(true));
+        // Approve Permit2 + set Permit2 allowances for PositionManager to settle LCC deltas.
+        // PositionManager pays via Permit2 when payer is the locker (msgSender).
+        {
+            IERC20Minimal(lccToken0).approve(address(permit2), Constants.MAX_UINT256);
+            IERC20Minimal(lccToken1).approve(address(permit2), Constants.MAX_UINT256);
+            permit2.approve(lccToken0, address(uniPositionManager), type(uint160).max, type(uint48).max);
+            permit2.approve(lccToken1, address(uniPositionManager), type(uint160).max, type(uint48).max);
+        }
+
+        // Mock protocol bounds checks for test harness callers.
+        // In production deployment (see DeployContracts.s.sol), MMPositionManager is a protocol-bound address.
+        vm.mockCall(
+            marketFactory, abi.encodeWithSelector(IMarketFactory.bounds.selector, mmPositionManager), abi.encode(true)
+        );
 
         _addInitialLiquidityToPool();
     }
 
     function _addInitialLiquidityToPool() internal virtual {
         // add some liquidity to the pool
+        // As this is a new position, settleCoverageUsage is intentionally skipped for initial liquidity adds.
         modifyLiquidityRouter.modifyLiquidity(
             corePoolKey,
             ModifyLiquidityParams({
                 tickLower: -60, tickUpper: 60, liquidityDelta: int256(initialLiquidity), salt: bytes32(0)
             }),
             ZERO_BYTES
+        );
+    }
+
+    /// @notice Deploy VTSOrchestrator - virtual to allow test overrides for testable versions
+    /// @dev Override this in test contracts to deploy a VTSOrchestratorTestable with debug view functions
+    function _deployVTSOrchestrator(
+        address _poolManager,
+        address _signalManager,
+        address _oracleHelper,
+        address _liquidityHub,
+        address _settlementObserver,
+        address _owner
+    ) internal virtual returns (VTSOrchestrator) {
+        return new VTSOrchestrator(
+            _poolManager, _signalManager, _oracleHelper, _liquidityHub, _settlementObserver, _owner
         );
     }
 }

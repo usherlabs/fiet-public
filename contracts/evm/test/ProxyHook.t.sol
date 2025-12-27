@@ -650,7 +650,7 @@ contract ProxyHookTest is MarketVaultBase {
         _mockLimitedLiquidity(_currency1, mockAvailableLiquidity);
 
         uint256 swapAmount = 100;
-        LiquidityCommitmentCertificate lccOut = _getLCCOut(_currency1);
+        _getLCCOut(_currency1);
 
         // Calculate expected deficit
         (, uint256 expectedOutput) = _simulateSwap(corePoolKey, true, -int256(swapAmount));

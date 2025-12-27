@@ -160,7 +160,8 @@ contract MarketFactoryTest is Test, Deployers {
             60,
             79228162514264337593543950336, // 1:1 price
             salt,
-            VTSConfigs.getDefaultConfig()
+            VTSConfigs.getDefaultConfig(),
+            new address[](0) // No additional issuers
         );
 
         assertTrue(PoolId.unwrap(coreId) != bytes32(0));
@@ -190,7 +191,8 @@ contract MarketFactoryTest is Test, Deployers {
             60,
             79228162514264337593543950336, // 1:1 price
             salt,
-            VTSConfigs.getDefaultConfig()
+            VTSConfigs.getDefaultConfig(),
+            new address[](0) // No additional issuers
         );
 
         // get proxy hook address
@@ -211,7 +213,8 @@ contract MarketFactoryTest is Test, Deployers {
             60,
             79228162514264337593543950336,
             salt,
-            VTSConfigs.getDefaultConfig()
+            VTSConfigs.getDefaultConfig(),
+            new address[](0) // No additional issuers
         );
 
         address[] memory newBounds = new address[](1);
@@ -239,7 +242,8 @@ contract MarketFactoryTest is Test, Deployers {
             60,
             79228162514264337593543950336,
             salt,
-            VTSConfigs.getDefaultConfig()
+            VTSConfigs.getDefaultConfig(),
+            new address[](0) // No additional issuers
         );
 
         address boundAddr = makeAddr("bound");

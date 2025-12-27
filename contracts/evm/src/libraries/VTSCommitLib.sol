@@ -137,30 +137,35 @@ library VTSCommitLib {
     /// @notice LCC Unwrap -> Protocol Coverage Function
     /// @notice Increment protocol or proactive excess liquidity coverage on LCC unwrap, consuming proactive pool first
     /// @param s The central VTS storage
-    /// @param poolManager The pool manager contract
     /// @param poolId The pool ID
     /// @param tokenIndex The token index (0 or 1)
     /// @param coveredAmount The amount covered
-    function incrementCoverage(
-        VTSStorage storage s,
-        IPoolManager poolManager,
-        PoolId poolId,
-        uint8 tokenIndex,
-        uint256 coveredAmount
-    ) external {
+    function incrementCoverage(VTSStorage storage s, PoolId poolId, uint8 tokenIndex, uint256 coveredAmount) external {
         if (tokenIndex > 1 || coveredAmount == 0) return;
-        uint128 liq = poolManager.getLiquidity(poolId);
         PoolAccounting storage paPool = s.poolAccounting[poolId];
 
-        if (liq > 0) {
-            // Accrue coverage usage growth per-liquidity (outflow weight basis at current tick)
-            uint256 deltaG = FullMath.mulDiv(coveredAmount, FixedPoint128.Q128, uint256(liq));
-            uint256 currentGrowth = paPool.coverageUseGrowthGlobal.get(tokenIndex);
-            paPool.coverageUseGrowthGlobal.set(tokenIndex, currentGrowth + deltaG);
+        // DICE: Increment coverage-per-deficit index (for slash attribution)
+        uint256 totalPrincipal = paPool.totalDeficitPrincipal.get(tokenIndex);
+        if (totalPrincipal > 0) {
+            uint256 deltaIndex = FullMath.mulDiv(coveredAmount, FixedPoint128.Q128, totalPrincipal);
+            uint256 currentIndex = paPool.coveragePerDeficitIndexX128.get(tokenIndex);
+            paPool.coveragePerDeficitIndexX128.set(tokenIndex, currentIndex + deltaIndex);
         } else {
-            // No in-range liquidity; defer to residual
-            uint256 currentResidual = paPool.coverageResidual.get(tokenIndex);
-            paPool.coverageResidual.set(tokenIndex, currentResidual + coveredAmount);
+            // No materialised deficit principal: defer to residual (socialised)
+            uint256 currentResidual = paPool.coverageResidualDICE.get(tokenIndex);
+            paPool.coverageResidualDICE.set(tokenIndex, currentResidual + coveredAmount);
+        }
+
+        // CISE: Increment coverage-per-settled index (for bonus allocation)
+        uint256 totalSettled = paPool.totalSettled.get(tokenIndex);
+        if (totalSettled > 0) {
+            uint256 deltaIndexCISE = FullMath.mulDiv(coveredAmount, FixedPoint128.Q128, totalSettled);
+            uint256 currentIndexCISE = paPool.coveragePerSettledIndexX128.get(tokenIndex);
+            paPool.coveragePerSettledIndexX128.set(tokenIndex, currentIndexCISE + deltaIndexCISE);
+        } else {
+            // No settled liquidity: defer to CISE residual (socialised when settled becomes non-zero)
+            uint256 currentResidualCISE = paPool.coverageResidualCISE.get(tokenIndex);
+            paPool.coverageResidualCISE.set(tokenIndex, currentResidualCISE + coveredAmount);
         }
     }
 

@@ -24,16 +24,19 @@ import {ProxySwapFlag} from "./libraries/ProxySwapFlag.sol";
 import {ImmutableMarketState} from "./modules/ImmutableMarketState.sol";
 import {ImmutableVTSState} from "./modules/ImmutableVTSState.sol";
 import {MarketHandlerLib} from "./libraries/MarketHandlerLib.sol";
+import {TransientStateLibrary} from "@uniswap/v4-core/src/libraries/TransientStateLibrary.sol";
+import {ICoreHook} from "./interfaces/ICoreHook.sol";
 
 /**
  * Core Pool should be aware of Positions.
  * This way it can calculate and manage Liquidity Commitments (C_A(r)) for each Position.
  * Furthermore, we need to know when Direct LP occurs, as this determines whether the underlying native tokens are settled to the Pool Manager.
  */
-contract CoreHook is BaseHook, Exttload, ImmutableMarketState, ImmutableVTSState {
+contract CoreHook is BaseHook, Exttload, ImmutableMarketState, ImmutableVTSState, ICoreHook {
     using TransientSlot for *;
     using CurrencySettler for Currency;
     using SafeCast for int256;
+    using TransientStateLibrary for IPoolManager;
 
     // Owner will be set to MarketFactory
     constructor(address _poolManager, address _marketFactory, address _vtsOrchestrator)
@@ -206,5 +209,38 @@ contract CoreHook is BaseHook, Exttload, ImmutableMarketState, ImmutableVTSState
     // Helper function to get the proxy hook address from the core pool key
     function _getProxyHook(PoolKey calldata corePoolKey) internal view returns (address) {
         return MarketHandlerLib.getProxyHook(marketFactory, corePoolKey);
+    }
+
+    /// @notice Settle hook deltas to fee pot by minting/burning ERC6909 claims
+    /// @dev Called after modifyLiquidity returns to clear PoolManager deltas.
+    ///      PoolManager credits/debits hook deltas after the hook returns, so this must be
+    ///      called from outside the hook callback (e.g. from PositionManagerImpl).
+    ///      - If delta > 0 (credit): mint ERC6909 claims (consumes positive delta)
+    ///      - If delta < 0 (debt): burn ERC6909 claims to clear negative delta
+    /// @param key The pool key for the currencies to settle
+    function settleHookDeltasToPot(PoolKey calldata key) external onlyFactory {
+        // Settle CoreHook's deltas (from hook return value adjustments)
+        address target = address(this);
+        // Read target's deltas from PoolManager's transient storage
+        int256 delta0 = poolManager.currencyDelta(target, key.currency0);
+        int256 delta1 = poolManager.currencyDelta(target, key.currency1);
+
+        // Settle currency0 delta
+        if (delta0 > 0) {
+            // Credit: mint ERC6909 claims to target (consumes positive delta)
+            key.currency0.take(poolManager, target, uint256(delta0), true);
+        } else if (delta0 < 0) {
+            // Debt: burn ERC6909 claims from target to clear negative delta
+            key.currency0.settle(poolManager, target, uint256(-delta0), true);
+        }
+
+        // Settle currency1 delta
+        if (delta1 > 0) {
+            // Credit: mint ERC6909 claims to target (consumes positive delta)
+            key.currency1.take(poolManager, target, uint256(delta1), true);
+        } else if (delta1 < 0) {
+            // Debt: burn ERC6909 claims from target to clear negative delta
+            key.currency1.settle(poolManager, target, uint256(-delta1), true);
+        }
     }
 }

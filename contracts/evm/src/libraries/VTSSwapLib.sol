@@ -86,8 +86,18 @@ library VTSSwapLib {
                 poolManager, st.poolId, st.stepTick, st.tickSpacing, st.zeroForOne
             );
 
-            // Compute target sqrt for this segment (either next tick or final price)
-            uint160 sqrtTarget = _calcSqrtTarget(next, st.sqrtPAfter, st.zeroForOne);
+            // Compute target sqrt for this segment (either next tick or final price).
+            // IMPORTANT: we must ensure forward progress in the tick scan.
+            // Uniswap's swap loop updates `state.tick` to `tickNext - 1` when moving left (zeroForOne),
+            // otherwise `nextInitializedTickWithinOneWord()` can repeatedly return the same `tickNext`
+            // when `bitPos == 0` and the bitmap word contains no initialised ticks.
+            int24 boundedNext = next;
+            if (boundedNext <= TickMath.MIN_TICK) boundedNext = TickMath.MIN_TICK;
+            if (boundedNext >= TickMath.MAX_TICK) boundedNext = TickMath.MAX_TICK;
+            uint160 sqrtNext = TickMath.getSqrtPriceAtTick(boundedNext);
+            uint160 sqrtTarget = st.zeroForOne
+                ? (st.sqrtPAfter > sqrtNext ? st.sqrtPAfter : sqrtNext)
+                : (st.sqrtPAfter < sqrtNext ? st.sqrtPAfter : sqrtNext);
 
             if (st.segmentLiquidity > 0 && sqrtTarget != st.sqrtCurrent) {
                 // Accrue growth for this segment
@@ -100,28 +110,22 @@ library VTSSwapLib {
 
             // Otherwise, we crossed an initialised tick; flip outside and update liquidity
             if (initialized) {
-                _onTickCross(s, poolManager, st.poolId, next, 0);
-                _onTickCross(s, poolManager, st.poolId, next, 1);
+                _onTickCross(s, st.poolId, boundedNext, 0);
+                _onTickCross(s, st.poolId, boundedNext, 1);
                 // Apply liquidity net change for subsequent segments (direction-aware)
                 st.segmentLiquidity =
-                    _applyLiquidityNet(poolManager, st.poolId, next, st.segmentLiquidity, st.zeroForOne);
+                    _applyLiquidityNet(poolManager, st.poolId, boundedNext, st.segmentLiquidity, st.zeroForOne);
             }
-            st.stepTick = next;
-        }
-    }
 
-    /// @dev Calculate bounded sqrtTarget for a swap step
-    /// @notice Computes target sqrt for this segment (either next tick or final price)
-    /// @dev Ensure we don't go beyond valid tick bounds
-    function _calcSqrtTarget(int24 next, uint160 sqrtPAfter, bool zeroForOne) private pure returns (uint160) {
-        int24 boundedNext = next;
-        if (boundedNext <= TickMath.MIN_TICK) boundedNext = TickMath.MIN_TICK;
-        if (boundedNext >= TickMath.MAX_TICK) boundedNext = TickMath.MAX_TICK;
-        uint160 sqrtNext = TickMath.getSqrtPriceAtTick(boundedNext);
-        return
-            zeroForOne
-                ? (sqrtPAfter < sqrtNext ? sqrtPAfter : sqrtNext)
-                : (sqrtPAfter > sqrtNext ? sqrtPAfter : sqrtNext);
+            // Ensure tick scan progresses (Uniswap-style).
+            // - For zeroForOne (moving left), resume search from `tickNext - 1`
+            // - For !zeroForOne (moving right), resume from `tickNext`
+            if (st.zeroForOne) {
+                st.stepTick = boundedNext > TickMath.MIN_TICK ? (boundedNext - 1) : TickMath.MIN_TICK;
+            } else {
+                st.stepTick = boundedNext;
+            }
+        }
     }
 
     /// @dev Accrue deficit and inflow growth for a segment
@@ -192,32 +196,18 @@ library VTSSwapLib {
 
     /// @notice Called on tick cross to flip outside growth for a tick
     /// @param s The central VTS storage
-    /// @param poolManager The pool manager contract
     /// @param poolId The pool ID
     /// @param tick The tick that was crossed
     /// @param token The token index (0 or 1)
-    function _onTickCross(VTSStorage storage s, IPoolManager poolManager, PoolId poolId, int24 tick, uint8 token)
-        internal
-    {
+    function _onTickCross(VTSStorage storage s, PoolId poolId, int24 tick, uint8 token) internal {
         // Flip deficit growth outside
         _flipOutside(s, poolId, tick, token, 0);
         // Flip inflow growth outside
         _flipOutside(s, poolId, tick, token, 1);
-        // Flip coverage usage growth outside
-        _flipOutside(s, poolId, tick, token, 2);
-
-        // Apply residual if any when liquidity becomes active
-        PoolAccounting storage paPool = s.poolAccounting[poolId];
-        uint256 residual = paPool.coverageResidual.get(token);
-        if (residual > 0) {
-            uint128 liq = StateLibrary.getLiquidity(poolManager, poolId);
-            if (liq > 0) {
-                uint256 deltaG = FullMath.mulDiv(residual, FixedPoint128.Q128, uint256(liq));
-                uint256 currentGrowth = paPool.coverageUseGrowthGlobal.get(token);
-                paPool.coverageUseGrowthGlobal.set(token, currentGrowth + deltaG);
-                paPool.coverageResidual.set(token, 0);
-            }
-        }
+        // NOTE: Coverage usage growth flip REMOVED - DICE uses deficit-indexed coverage,
+        // not tick-indexed. Coverage is now attributed based on deficit principal,
+        // not which positions are in-range at the time of coverage exercise.
+        // Old tick-indexed residual logic also removed; DICE uses coverageResidualDICE.
     }
 
     /// @notice Flip outside growth for a tick
@@ -225,7 +215,8 @@ library VTSSwapLib {
     /// @param poolId The pool ID
     /// @param tick The tick
     /// @param token The token index (0 or 1)
-    /// @param growthType The growth type (0 = deficit, 1 = inflow, 2 = coverage usage)
+    /// @param growthType The growth type (0 = deficit, 1 = inflow)
+    /// @dev Coverage usage growth (growthType == 2) removed - DICE uses deficit-indexed coverage
     function _flipOutside(VTSStorage storage s, PoolId poolId, int24 tick, uint8 token, uint8 growthType) internal {
         if (token > 1) return;
         PoolAccounting storage paPool = s.poolAccounting[poolId];
@@ -240,12 +231,9 @@ library VTSSwapLib {
             // Inflow growth
             g = paPool.inflowGrowthGlobal.get(token);
             outsidePair = s.inflowGrowthOutside[poolId][tick];
-        } else if (growthType == 2) {
-            // Coverage usage growth
-            g = paPool.coverageUseGrowthGlobal.get(token);
-            outsidePair = s.coverageUseGrowthOutside[poolId][tick];
         } else {
-            return;
+            // Invalid growthType (coverage usage growthType == 2 removed with DICE)
+            revert("VTSSwapLib: Invalid growthType");
         }
 
         uint256 o = token == 0 ? outsidePair.token0 : outsidePair.token1;

@@ -20,6 +20,8 @@ import {LiquidityUtils} from "./libraries/LiquidityUtils.sol";
 import {Errors} from "./libraries/Errors.sol";
 import {ImmutableState} from "v4-periphery/src/base/ImmutableState.sol";
 import {ImmutableVTSState} from "./modules/ImmutableVTSState.sol";
+import {ICoreHook} from "./interfaces/ICoreHook.sol";
+import {TransientStateLibrary} from "@uniswap/v4-core/src/libraries/TransientStateLibrary.sol";
 
 /**
  * @title MarketFactory
@@ -28,6 +30,7 @@ import {ImmutableVTSState} from "./modules/ImmutableVTSState.sol";
  */
 contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSState {
     using PoolIdLibrary for PoolKey;
+    using TransientStateLibrary for IPoolManager;
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Internal Structs
@@ -102,6 +105,16 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
         }
     }
 
+    /// @notice Requires PoolManager to be unlocked (within an active batch)
+    modifier onlyIfPoolManagerUnlocked() {
+        _onlyIfPoolManagerUnlocked();
+        _;
+    }
+
+    function _onlyIfPoolManagerUnlocked() internal view {
+        if (!poolManager.isUnlocked()) revert Errors.PoolManagerMustBeUnlocked();
+    }
+
     function setHooks(address _coreHook) external onlyOwner {
         // These variables are immutable. Can only be set once
         // Tie this factory to these hooks as LCCs/markets/hooks are tied to the factory.
@@ -120,6 +133,9 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
      * @param corePoolFee Fee for the core pool
      * @param tickSpacing Tick spacing for both pools
      * @param initialSqrtPriceX96 Initial sqrt price for core pool
+     * @param salt Salt for the proxy hook
+     * @param vtsConfiguration VTS configuration
+     * @param issuers Additional issuer addresses to add to the LCC tokens (vtsOrchestrator and proxyHook are always included)
      * @return corePoolId The ID of the created core pool
      * @return proxyPoolId The ID of the created proxy pool
      */
@@ -130,29 +146,18 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
         int24 tickSpacing,
         uint160 initialSqrtPriceX96,
         bytes32 salt,
-        MarketVTSConfiguration calldata vtsConfiguration
+        MarketVTSConfiguration calldata vtsConfiguration,
+        address[] calldata issuers
     ) external onlyOwner returns (PoolId corePoolId, PoolId proxyPoolId) {
-        // Build context in scoped block to release intermediate variables
         MarketCreationContext memory ctx;
-        {
-            // Deploy proxy hook and create LCC pair
-            ctx.proxyHookAddress = MarketVaultDeployer(marketVaultDeployer).deployProxyHook(address(poolManager), salt);
-            ctx.marketRef = abi.encodePacked(ctx.proxyHookAddress);
+        // Build core creation context in helpers to avoid "stack too deep" when not compiling viaIR.
+        (ctx.proxyHookAddress, ctx.marketRef, ctx.lccToken0, ctx.lccToken1) =
+            _deployProxyAndCreateLCCPair(underlyingAsset0, underlyingAsset1, salt, issuers);
 
-            // Create LCC pair with initialIssuers in nested scope
-            {
-                address[] memory initialIssuers = new address[](1);
-                initialIssuers[0] = address(vtsOrchestrator);
-                (ctx.lccToken0, ctx.lccToken1) = liquidityHub.createLCCPair(
-                    ctx.marketRef, underlyingAsset0, underlyingAsset1, MARKET_NAME, initialIssuers
-                );
-            }
-
-            // Validate oracles and determine currency ordering
-            oracleHelper.validateMarketOracles(ctx.lccToken0, ctx.lccToken1);
-            (ctx.underlyingCurr0, ctx.underlyingCurr1) = _sortCurrencies(underlyingAsset0, underlyingAsset1);
-            (ctx.lccCurr0, ctx.lccCurr1) = _sortCurrencies(ctx.lccToken0, ctx.lccToken1);
-        }
+        // Validate oracles and determine currency ordering
+        oracleHelper.validateMarketOracles(ctx.lccToken0, ctx.lccToken1);
+        (ctx.underlyingCurr0, ctx.underlyingCurr1) = _sortCurrencies(underlyingAsset0, underlyingAsset1);
+        (ctx.lccCurr0, ctx.lccCurr1) = _sortCurrencies(ctx.lccToken0, ctx.lccToken1);
 
         // Calculate proxy initial price
         uint160 proxyInitialPrice;
@@ -187,6 +192,9 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
         _corePoolToCurrencyPair[corePoolId] =
             [Currency.unwrap(corePoolKey.currency0), Currency.unwrap(corePoolKey.currency1)];
 
+        // For swap deficits overflow, and LCC transfer to recipient the proxy hook must be within protocol bounds.
+        bounds[ctx.proxyHookAddress] = true;
+
         // Activate proxy hook and initialize
         {
             ProxyHook proxyHookInstance = ProxyHook(payable(ctx.proxyHookAddress));
@@ -195,7 +203,7 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
         }
 
         // Initialize liquidity hub and VTS
-        liquidityHub.initialize(ctx.lccToken0, ctx.lccToken1, PoolId.unwrap(corePoolId), ctx.marketRef, true);
+        liquidityHub.initialize(ctx.lccToken0, ctx.lccToken1, PoolId.unwrap(corePoolId), ctx.marketRef);
         vtsOrchestrator.initPool(corePoolKey, vtsConfiguration);
 
         emit MarketCreated(
@@ -208,6 +216,36 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
             coreHook,
             ctx.proxyHookAddress
         );
+    }
+
+    /// @dev Deploys the proxy hook, constructs the market reference, and creates the LCC pair.
+    ///      Split out of `createMarket` to avoid "stack too deep" when coverage disables viaIR/optimiser.
+    function _deployProxyAndCreateLCCPair(
+        address underlyingAsset0,
+        address underlyingAsset1,
+        bytes32 salt,
+        address[] calldata issuers
+    ) internal returns (address proxyHookAddress, bytes memory marketRef, address lccToken0, address lccToken1) {
+        proxyHookAddress = MarketVaultDeployer(marketVaultDeployer).deployProxyHook(address(poolManager), salt);
+        marketRef = abi.encodePacked(proxyHookAddress);
+        address[] memory initialIssuers = _buildInitialIssuers(proxyHookAddress, issuers);
+        (lccToken0, lccToken1) =
+            liquidityHub.createLCCPair(marketRef, underlyingAsset0, underlyingAsset1, MARKET_NAME, initialIssuers);
+    }
+
+    /// @dev Always includes `vtsOrchestrator` and the proxy hook, then appends any additional issuers.
+    function _buildInitialIssuers(address proxyHookAddress, address[] calldata issuers)
+        internal
+        view
+        returns (address[] memory initialIssuers)
+    {
+        uint256 totalIssuers = 2 + issuers.length;
+        initialIssuers = new address[](totalIssuers);
+        initialIssuers[0] = address(vtsOrchestrator);
+        initialIssuers[1] = proxyHookAddress;
+        for (uint256 i = 0; i < issuers.length; i++) {
+            initialIssuers[2 + i] = issuers[i];
+        }
     }
 
     /**
@@ -353,6 +391,17 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
             LiquidityUtils.safeInt128ToUint256(usedDelta.amount1())
         );
         used = LiquidityUtils.safeInt128ToUint256(usedDelta.amount0() + usedDelta.amount1());
+    }
+
+    /// @notice Called after modifyLiquidity to settle CoreHook's PoolManager deltas
+    /// @dev Triggers CoreHook to mint/burn ERC6909 claims to clear its hook deltas.
+    ///      Must be called after poolManager.modifyLiquidity() returns (when hook deltas are applied).
+    /// @param key The pool key for the currencies to settle
+    function afterModifyLiquidity(PoolKey calldata key) external onlyIfPoolManagerUnlocked {
+        if (!bounds[msg.sender]) {
+            revert Errors.InvalidSender();
+        }
+        ICoreHook(coreHook).settleHookDeltasToPot(key);
     }
 
     // ============ VIEW FUNCTIONS ============
