@@ -114,6 +114,78 @@ contract ECDSASignatureSignalVerifierTest is MarketMakerTestBase {
         assertTrue(success, "Fixture-based proof should verify successfully");
     }
 
+    function test_validProofWithFixtureData() public {
+        // Testing with fixture from FIET-prover
+        //         {
+        // "current_root": [
+        //     86,
+        //     36,
+        //     19,
+        //     151,
+        //     153,
+        //     216,
+        //     146,
+        //     186,
+        //     117,
+        //     180,
+        //     254,
+        //     78,
+        //     188,
+        //     137,
+        //     5,
+        //     12,
+        //     76,
+        //     108,
+        //     97,
+        //     113,
+        //     119,
+        //     140,
+        //     38,
+        //     214,
+        //     0,
+        //     206,
+        //     54,
+        //     219,
+        //     241,
+        //     136,
+        //     203,
+        //     143
+        // ],
+        // "market_makers": [
+        //     {
+        //     "nonce": "bd53ddf168f0944d06131160629ed560a9d69d253597e2fac47c5e479092162f",
+        //     "owner": "0xb757d76289e61a616245faadcdbf3cf0a612bfd0",
+        //     "prover": "0x899d216de273591276a0c2716946be87f990bed1",
+        //     "reserves": {
+        //         "USDC": 0.4936,
+        //         "USDT": 0.0
+        //     },
+        //     "source_state": "0x06a2847653dce7af4ba9d3cf19d93b0e1556eeb7f2528e7d9159ad24053049a5"
+        //     }
+        // ]
+        // }
+        address fiet_owner = 0xB757D76289E61a616245fAadCdBf3CF0A612BFd0;
+
+        MarketMaker.State memory state;
+        state.owner = fiet_owner;
+        state.sourceState = "0x06a2847653dce7af4ba9d3cf19d93b0e1556eeb7f2528e7d9159ad24053049a5";
+        state.prover = "0x899d216de273591276a0c2716946be87f990bed1";
+        state.nonce = "bd53ddf168f0944d06131160629ed560a9d69d253597e2fac47c5e479092162f";
+        state.advancer = address(0);
+
+        // Add reserves matching the fixture (0.4936 USDC, 0.0 USDT)
+        state.reserves = new MarketMaker.Reserve[](2);
+        state.reserves[0] = MarketMaker.Reserve({asset: "USDC", amount: 493600000000000000}); // 0.4936 with 18 decimals
+        state.reserves[1] = MarketMaker.Reserve({asset: "USDT", amount: 0});
+
+        // Create merkle tree with single leaf
+        bytes32[] memory leaves = new bytes32[](1);
+        leaves[0] = state.toLeafHash();
+        bytes32 root = leaves.generateMerkleRoot();
+        bytes32 current_root = bytes32(0x5624139799d892ba75b4fe4ebc89050c4c6c6171778c26d600ce36dbf188cb8f); // current root from proof
+
+        assertEq(root, current_root, "Fixture-based proof should verify successfully");
+    }
     // ============ Invalid Signature Tests ============
 
     function test_verifyProof_invalidMMStateSignature() public view {
