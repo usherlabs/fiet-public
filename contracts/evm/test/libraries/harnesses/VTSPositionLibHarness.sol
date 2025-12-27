@@ -162,11 +162,15 @@ contract VTSPositionLibHarness {
     }
 
     function getPoolCoverageResidualCISE(PoolId poolId) external view returns (uint256 residual0, uint256 residual1) {
-        return (s.poolAccounting[poolId].coverageResidualCISE.token0, s.poolAccounting[poolId].coverageResidualCISE.token1);
+        return
+            (s.poolAccounting[poolId].coverageResidualCISE.token0, s.poolAccounting[poolId].coverageResidualCISE.token1);
     }
 
     function getPoolCoveragePerSettledIndexX128(PoolId poolId) external view returns (uint256 idx0, uint256 idx1) {
-        return (s.poolAccounting[poolId].coveragePerSettledIndexX128.token0, s.poolAccounting[poolId].coveragePerSettledIndexX128.token1);
+        return (
+            s.poolAccounting[poolId].coveragePerSettledIndexX128.token0,
+            s.poolAccounting[poolId].coveragePerSettledIndexX128.token1
+        );
     }
 
     function getCommitExpiresAt(uint256 commitId) external view returns (uint256 expiresAt) {

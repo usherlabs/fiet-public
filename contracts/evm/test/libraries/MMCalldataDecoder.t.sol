@@ -14,16 +14,19 @@ contract MMCalldataDecoderHarness {
     function decodeSettlePositionParams(bytes calldata params)
         external
         pure
-        returns (PoolKey memory poolKey, uint256 tokenId, uint256 positionIndex, int128 amount0, int128 amount1, bool usePMBalance)
+        returns (
+            PoolKey memory poolKey,
+            uint256 tokenId,
+            uint256 positionIndex,
+            int128 amount0,
+            int128 amount1,
+            bool usePMBalance
+        )
     {
         PoolKey calldata pk;
         (pk, tokenId, positionIndex, amount0, amount1, usePMBalance) = params.decodeSettlePositionParams();
         poolKey = PoolKey({
-            currency0: pk.currency0,
-            currency1: pk.currency1,
-            fee: pk.fee,
-            tickSpacing: pk.tickSpacing,
-            hooks: pk.hooks
+            currency0: pk.currency0, currency1: pk.currency1, fee: pk.fee, tickSpacing: pk.tickSpacing, hooks: pk.hooks
         });
     }
 
@@ -35,11 +38,7 @@ contract MMCalldataDecoderHarness {
         PoolKey calldata pk;
         (pk, tokenId, positionIndex, liquidity) = params.decodeIncreaseLiquidityParams();
         poolKey = PoolKey({
-            currency0: pk.currency0,
-            currency1: pk.currency1,
-            fee: pk.fee,
-            tickSpacing: pk.tickSpacing,
-            hooks: pk.hooks
+            currency0: pk.currency0, currency1: pk.currency1, fee: pk.fee, tickSpacing: pk.tickSpacing, hooks: pk.hooks
         });
     }
 
@@ -51,11 +50,7 @@ contract MMCalldataDecoderHarness {
         PoolKey calldata pk;
         (pk, tokenId, tickLower, tickUpper, liquidity) = params.decodeMintPositionParams();
         poolKey = PoolKey({
-            currency0: pk.currency0,
-            currency1: pk.currency1,
-            fee: pk.fee,
-            tickSpacing: pk.tickSpacing,
-            hooks: pk.hooks
+            currency0: pk.currency0, currency1: pk.currency1, fee: pk.fee, tickSpacing: pk.tickSpacing, hooks: pk.hooks
         });
     }
 
@@ -67,11 +62,7 @@ contract MMCalldataDecoderHarness {
         PoolKey calldata pk;
         (pk, tokenId, positionIndex, amountToDecrease) = params.decodeDecreaseLiquidityParams();
         poolKey = PoolKey({
-            currency0: pk.currency0,
-            currency1: pk.currency1,
-            fee: pk.fee,
-            tickSpacing: pk.tickSpacing,
-            hooks: pk.hooks
+            currency0: pk.currency0, currency1: pk.currency1, fee: pk.fee, tickSpacing: pk.tickSpacing, hooks: pk.hooks
         });
     }
 
@@ -83,11 +74,7 @@ contract MMCalldataDecoderHarness {
         PoolKey calldata pk;
         (pk, tokenId, positionIndex) = params.decodeBurnPositionParams();
         poolKey = PoolKey({
-            currency0: pk.currency0,
-            currency1: pk.currency1,
-            fee: pk.fee,
-            tickSpacing: pk.tickSpacing,
-            hooks: pk.hooks
+            currency0: pk.currency0, currency1: pk.currency1, fee: pk.fee, tickSpacing: pk.tickSpacing, hooks: pk.hooks
         });
     }
 
@@ -106,11 +93,7 @@ contract MMCalldataDecoderHarness {
         PoolKey calldata pk;
         (pk, tokenId, positionIndex, amount0, amount1, usePMBalance) = params.decodeSeizePositionParams();
         poolKey = PoolKey({
-            currency0: pk.currency0,
-            currency1: pk.currency1,
-            fee: pk.fee,
-            tickSpacing: pk.tickSpacing,
-            hooks: pk.hooks
+            currency0: pk.currency0, currency1: pk.currency1, fee: pk.fee, tickSpacing: pk.tickSpacing, hooks: pk.hooks
         });
     }
 
@@ -122,11 +105,7 @@ contract MMCalldataDecoderHarness {
         PoolKey calldata pk;
         (pk, tokenId, positionIndex, payerIsUser) = params.decodeIncreaseFromDeltasParams();
         poolKey = PoolKey({
-            currency0: pk.currency0,
-            currency1: pk.currency1,
-            fee: pk.fee,
-            tickSpacing: pk.tickSpacing,
-            hooks: pk.hooks
+            currency0: pk.currency0, currency1: pk.currency1, fee: pk.fee, tickSpacing: pk.tickSpacing, hooks: pk.hooks
         });
     }
 
@@ -138,11 +117,7 @@ contract MMCalldataDecoderHarness {
         PoolKey calldata pk;
         (pk, tokenId, tickLower, tickUpper, payerIsUser) = params.decodeMintFromDeltasParams();
         poolKey = PoolKey({
-            currency0: pk.currency0,
-            currency1: pk.currency1,
-            fee: pk.fee,
-            tickSpacing: pk.tickSpacing,
-            hooks: pk.hooks
+            currency0: pk.currency0, currency1: pk.currency1, fee: pk.fee, tickSpacing: pk.tickSpacing, hooks: pk.hooks
         });
     }
 
@@ -154,11 +129,7 @@ contract MMCalldataDecoderHarness {
         PoolKey calldata pk;
         (pk, tokenId, positionIndex, payerIsUser, shouldTake) = params.decodeSettleFromDeltasParams();
         poolKey = PoolKey({
-            currency0: pk.currency0,
-            currency1: pk.currency1,
-            fee: pk.fee,
-            tickSpacing: pk.tickSpacing,
-            hooks: pk.hooks
+            currency0: pk.currency0, currency1: pk.currency1, fee: pk.fee, tickSpacing: pk.tickSpacing, hooks: pk.hooks
         });
     }
 
@@ -180,18 +151,19 @@ contract MMCalldataDecoderHarness {
     {
         PoolKey calldata pk;
         bytes calldata proof;
-        (pk, tokenId, positionIndex, settlementTokenIndex, verifierIndex, proof) = params.decodeExtendGracePeriodParams();
+        (pk, tokenId, positionIndex, settlementTokenIndex, verifierIndex, proof) =
+            params.decodeExtendGracePeriodParams();
         poolKey = PoolKey({
-            currency0: pk.currency0,
-            currency1: pk.currency1,
-            fee: pk.fee,
-            tickSpacing: pk.tickSpacing,
-            hooks: pk.hooks
+            currency0: pk.currency0, currency1: pk.currency1, fee: pk.fee, tickSpacing: pk.tickSpacing, hooks: pk.hooks
         });
         settlementProof = proof;
     }
 
-    function decodeCommitSignalParams(bytes calldata params) external pure returns (bytes memory liquiditySignal, address owner) {
+    function decodeCommitSignalParams(bytes calldata params)
+        external
+        pure
+        returns (bytes memory liquiditySignal, address owner)
+    {
         bytes calldata sig;
         (sig, owner) = params.decodeCommitSignalParams();
         liquiditySignal = sig;
@@ -233,7 +205,11 @@ contract MMCalldataDecoderHarness {
         (amount, payerIsUser) = params.decodeUint256AndBool();
     }
 
-    function decodeTakeParams(bytes calldata params) external pure returns (Currency currency, address recipient, uint256 maxAmount) {
+    function decodeTakeParams(bytes calldata params)
+        external
+        pure
+        returns (Currency currency, address recipient, uint256 maxAmount)
+    {
         (currency, recipient, maxAmount) = params.decodeTakeParams();
     }
 
@@ -286,7 +262,8 @@ contract MMCalldataDecoderTest is Test {
     function test_decodeIncreaseLiquidityParams_ok() public view {
         PoolKey memory key = _poolKey();
         bytes memory params = abi.encode(key, uint256(10), uint256(2), uint256(123));
-        (PoolKey memory k, uint256 tokenId, uint256 positionIndex, uint256 liq) = h.decodeIncreaseLiquidityParams(params);
+        (PoolKey memory k, uint256 tokenId, uint256 positionIndex, uint256 liq) =
+            h.decodeIncreaseLiquidityParams(params);
         assertEq(k.fee, key.fee);
         assertEq(tokenId, 10);
         assertEq(positionIndex, 2);
@@ -355,7 +332,8 @@ contract MMCalldataDecoderTest is Test {
     function test_decodeSettleFromDeltasParams_ok() public view {
         PoolKey memory key = _poolKey();
         bytes memory params = abi.encode(key, uint256(10), uint256(2), true, false);
-        (, uint256 tokenId, uint256 positionIndex, bool payerIsUser, bool shouldTake) = h.decodeSettleFromDeltasParams(params);
+        (, uint256 tokenId, uint256 positionIndex, bool payerIsUser, bool shouldTake) =
+            h.decodeSettleFromDeltasParams(params);
         assertEq(tokenId, 10);
         assertEq(positionIndex, 2);
         assertTrue(payerIsUser);
@@ -408,7 +386,8 @@ contract MMCalldataDecoderTest is Test {
     function test_decodeCheckpointParams_ok() public view {
         bytes memory sig = hex"010203";
         bytes memory params = abi.encode(uint256(55), uint256(2), sig, false);
-        (uint256 tokenId, uint256 positionIndex, bytes memory out, bool withCommitment) = h.decodeCheckpointParams(params);
+        (uint256 tokenId, uint256 positionIndex, bytes memory out, bool withCommitment) =
+            h.decodeCheckpointParams(params);
         assertEq(tokenId, 55);
         assertEq(positionIndex, 2);
         assertEq(keccak256(out), keccak256(sig));
@@ -546,5 +525,4 @@ contract MMCalldataDecoderTest is Test {
         h.decodeSyncParams(hex"");
     }
 }
-
 
