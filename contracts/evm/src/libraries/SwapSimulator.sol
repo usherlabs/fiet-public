@@ -15,6 +15,7 @@ import {LiquidityMath} from "@uniswap/v4-core/src/libraries/LiquidityMath.sol";
 import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
 import {TickUtils} from "./TickUtils.sol";
 import {Errors} from "./Errors.sol";
+import {SafeCast as OZSafeCast} from "openzeppelin-contracts/contracts/utils/math/SafeCast.sol";
 
 /**
  * @title SwapSimulator
@@ -165,7 +166,7 @@ library SwapSimulator {
         // Initialize result with starting pool state
         result.sqrtPriceX96 = _sqrtPriceX96; // Starting price
         result.tick = _tick; // Starting tick
-        result.liquidity = uint128(poolLiquidity); // Starting liquidity
+        result.liquidity = poolLiquidity.toUint128(); // Starting liquidity
 
         // Initialize tracking variables for the simulation
         state.zeroForOne = params.zeroForOne; // Extract swap direction
@@ -177,7 +178,8 @@ library SwapSimulator {
         // ============ FEE CALCULATION ============
 
         // Calculate total swap fee (LP fee + protocol fee if enabled)
-        swapFee = _protocolFee == 0 ? _lpFee : ProtocolFeeLibrary.calculateSwapFee(uint16(_protocolFee), _lpFee);
+        uint16 protocolFee16 = OZSafeCast.toUint16(uint256(_protocolFee));
+        swapFee = _protocolFee == 0 ? _lpFee : ProtocolFeeLibrary.calculateSwapFee(protocolFee16, _lpFee);
 
         // Validate that fees aren't too high for exact output swaps
         if (swapFee >= SwapMath.MAX_SWAP_FEE) {
@@ -321,9 +323,10 @@ library SwapSimulator {
             }
 
             // Update tick position
-            unchecked {
-                result.tick = state.zeroForOne ? step.tickNext - 1 : step.tickNext;
-            }
+            // Mirror Uniswap's "tick = tickNext - 1" convention for zeroForOne swaps, but avoid underflow at MIN_TICK.
+            result.tick = state.zeroForOne
+                ? (step.tickNext == TickMath.MIN_TICK ? TickMath.MIN_TICK : (step.tickNext - 1))
+                : step.tickNext;
         } else if (result.sqrtPriceX96 != step.sqrtPriceStartX96) {
             // Price changed but didn't hit tick boundary, recalculate tick
             result.tick = TickMath.getTickAtSqrtPrice(result.sqrtPriceX96);

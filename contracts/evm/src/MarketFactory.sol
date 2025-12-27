@@ -80,6 +80,11 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
         address[] memory _bounds,
         address _initialOwner
     ) Ownable(_initialOwner) ImmutableState(IPoolManager(_poolManager)) ImmutableVTSState(_vtsOrchestrator) {
+        if (_poolManager == address(0)) revert Errors.InvalidAddress(_poolManager);
+        if (_liquidityHub == address(0)) revert Errors.InvalidAddress(_liquidityHub);
+        if (_oracleHelper == address(0)) revert Errors.InvalidAddress(_oracleHelper);
+        if (_vtsOrchestrator == address(0)) revert Errors.InvalidAddress(_vtsOrchestrator);
+
         liquidityHub = ILiquidityHub(_liquidityHub);
         oracleHelper = IOracleHelper(_oracleHelper);
 
@@ -88,6 +93,7 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
         bounds[_poolManager] = true; // All uniswap liquidity goes to/from the poolManager.
         bounds[_liquidityHub] = true; // All LCCs are created and managed by the liquidityHub.
         for (uint256 i = 0; i < _bounds.length; i++) {
+            if (_bounds[i] == address(0)) revert Errors.InvalidAddress(_bounds[i]);
             bounds[_bounds[i]] = true;
         }
         // Deploy MarketVaultDeployer which would be used to deploy proxy hooks on behalf of the factory
@@ -149,6 +155,9 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
         MarketVTSConfiguration calldata vtsConfiguration,
         address[] calldata issuers
     ) external onlyOwner returns (PoolId corePoolId, PoolId proxyPoolId) {
+        if (coreHook == address(0)) revert Errors.InvalidAddress(coreHook);
+        if (initialSqrtPriceX96 == 0) revert Errors.InvalidAmount(uint256(initialSqrtPriceX96), 0);
+
         MarketCreationContext memory ctx;
         // Build core creation context in helpers to avoid "stack too deep" when not compiling viaIR.
         (ctx.proxyHookAddress, ctx.marketRef, ctx.lccToken0, ctx.lccToken1) =

@@ -355,6 +355,11 @@ contract MMPositionManager is
 
         if (toUnwrap > 0) {
             if (from != address(this)) {
+                // Defensive invariant: only allow pulling from the locker (msgSender) when payerIsUser=true.
+                // This blocks any attempt to make the PositionManager pull from an arbitrary third party.
+                if (from != msgSender()) {
+                    revert Errors.InvalidSender();
+                }
                 // Use CurrencyTransfer with Permit2 fallback for user transfers
                 lccCurrency.transferFrom(from, address(this), toUnwrap);
             }

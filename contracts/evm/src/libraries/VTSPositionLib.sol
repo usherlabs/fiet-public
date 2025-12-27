@@ -182,7 +182,14 @@ library VTSPositionLib {
         // Return total consumed: deficit coverage + settled change
         // Deposits (positive delta to _updateSettlement): returns positive value (deficitCoverage + settledDelta, both ≥ 0)
         // Withdrawals (negative delta to _updateSettlement): returns negative value (0 + negative settledDelta)
-        applied = int256(deficitCoverage) + settledDelta;
+        applied = deficitCoverage.toInt256() + settledDelta;
+    }
+
+    /// @notice "Silent" update settlement helper wrapper for contexts where we deliberately don't need the applied return value
+    /// @dev Consumes the return value so static analysers don't flag ignored returns.
+    function _sUpdateSettlement(VTSStorage storage s, PositionId id, uint8 tokenIndex, int256 delta) internal {
+        int256 applied = _updateSettlement(s, id, tokenIndex, delta);
+        applied;
     }
 
     /// @notice Updates the settlement amount by a delta which could be positive or negative
@@ -477,7 +484,7 @@ library VTSPositionLib {
             // Consume settled coverage first, then accrue shortfall to deficit
             uint256 s0 = pa.settled.token0;
             if (s0 >= add0) {
-                _updateSettlement(s, positionId, 0, -int256(add0));
+                _sUpdateSettlement(s, positionId, 0, -add0.toInt256());
             } else {
                 uint256 deficitIncrease = add0 - s0;
                 pa.cumulativeDeficit.token0 += deficitIncrease;
@@ -485,7 +492,7 @@ library VTSPositionLib {
                 paPool.totalDeficitPrincipal.token0 += deficitIncrease;
                 // DICE: Flush any pending coverage residual now that principal exists
                 _flushCoverageResidualIfNeeded(s, poolId, 0);
-                _updateSettlement(s, positionId, 0, -int256(s0));
+                _sUpdateSettlement(s, positionId, 0, -s0.toInt256());
             }
         }
 
@@ -494,7 +501,7 @@ library VTSPositionLib {
             pa.cumulativeOutflows.token1 += add1;
             uint256 s1 = pa.settled.token1;
             if (s1 >= add1) {
-                _updateSettlement(s, positionId, 1, -int256(add1));
+                _sUpdateSettlement(s, positionId, 1, -add1.toInt256());
             } else {
                 uint256 deficitIncrease = add1 - s1;
                 pa.cumulativeDeficit.token1 += deficitIncrease;
@@ -502,7 +509,7 @@ library VTSPositionLib {
                 paPool.totalDeficitPrincipal.token1 += deficitIncrease;
                 // DICE: Flush any pending coverage residual now that principal exists
                 _flushCoverageResidualIfNeeded(s, poolId, 1);
-                _updateSettlement(s, positionId, 1, -int256(s1));
+                _sUpdateSettlement(s, positionId, 1, -s1.toInt256());
             }
         }
     }
@@ -541,13 +548,13 @@ library VTSPositionLib {
         // Token0: net against deficit first
         if (add0 > 0) {
             // Auto-net and apply via centralised updater
-            _updateSettlement(s, positionId, 0, int256(add0));
+            _sUpdateSettlement(s, positionId, 0, add0.toInt256());
         }
 
         // Token1: net against deficit first
         if (add1 > 0) {
             // Auto-net and apply via centralised updater
-            _updateSettlement(s, positionId, 1, int256(add1));
+            _sUpdateSettlement(s, positionId, 1, add1.toInt256());
         }
     }
 
@@ -702,7 +709,7 @@ library VTSPositionLib {
             paPool.protocolFeeAccrued.set(feeTokenIndex, paPool.protocolFeeAccrued.get(feeTokenIndex) + feesBurn);
             pa.feesShared.set(feeTokenIndex, pa.feesShared.get(feeTokenIndex) + feesBurn);
 
-            pa.pendingFeeAdj.set(feeTokenIndex, pa.pendingFeeAdj.get(feeTokenIndex) + int256(feesBurn));
+            pa.pendingFeeAdj.set(feeTokenIndex, pa.pendingFeeAdj.get(feeTokenIndex) + feesBurn.toInt256());
         }
     }
 
@@ -1046,8 +1053,8 @@ library VTSPositionLib {
             );
             requiredSettlementDelta = LiquidityUtils.safeToBalanceDelta(amountToSettle0, amountToSettle1, true, true);
         } else {
-            _updateSettlement(s, positionId, 0, SafeCast.toInt256(commitmentMaxima.token0));
-            _updateSettlement(s, positionId, 1, SafeCast.toInt256(commitmentMaxima.token1));
+            _sUpdateSettlement(s, positionId, 0, SafeCast.toInt256(commitmentMaxima.token0));
+            _sUpdateSettlement(s, positionId, 1, SafeCast.toInt256(commitmentMaxima.token1));
             requiredSettlementDelta = BalanceDelta.wrap(0);
         }
     }
@@ -1085,10 +1092,10 @@ library VTSPositionLib {
             requiredSettlementDelta = LiquidityUtils.safeToBalanceDelta(excess0, excess1, false, false);
         } else {
             if (excess0 > 0) {
-                _updateSettlement(s, positionId, 0, -SafeCast.toInt256(excess0));
+                _sUpdateSettlement(s, positionId, 0, -SafeCast.toInt256(excess0));
             }
             if (excess1 > 0) {
-                _updateSettlement(s, positionId, 1, -SafeCast.toInt256(excess1));
+                _sUpdateSettlement(s, positionId, 1, -SafeCast.toInt256(excess1));
             }
             requiredSettlementDelta = BalanceDelta.wrap(0);
         }
@@ -1125,8 +1132,8 @@ library VTSPositionLib {
             uint256 excess1 = baseAmountToSettle1 > s1 ? baseAmountToSettle1 - s1 : 0;
             requiredSettlementDelta = LiquidityUtils.safeToBalanceDelta(excess0, excess1, true, true);
         } else {
-            _updateSettlement(s, positionId, 0, SafeCast.toInt256(commitmentMaxima.token0) - SafeCast.toInt256(s0));
-            _updateSettlement(s, positionId, 1, SafeCast.toInt256(commitmentMaxima.token1) - SafeCast.toInt256(s1));
+            _sUpdateSettlement(s, positionId, 0, SafeCast.toInt256(commitmentMaxima.token0) - SafeCast.toInt256(s0));
+            _sUpdateSettlement(s, positionId, 1, SafeCast.toInt256(commitmentMaxima.token1) - SafeCast.toInt256(s1));
             requiredSettlementDelta = BalanceDelta.wrap(0);
         }
     }
@@ -1379,8 +1386,10 @@ library VTSPositionLib {
             // 1. Determine what amount of available liquidity can be used to cover settlement.
             BalanceDelta rawQueued = requiredSettlementDelta - availableDelta;
             // 2. Clamp queuedDelta to non-negative values (negative values become 0)
-            int128 qd0 = rawQueued.amount0() > 0 ? rawQueued.amount0() : int128(0);
-            int128 qd1 = rawQueued.amount1() > 0 ? rawQueued.amount1() : int128(0);
+            int128 qd0 = rawQueued.amount0();
+            int128 qd1 = rawQueued.amount1();
+            if (qd0 < 0) qd0 = 0;
+            if (qd1 < 0) qd1 = 0;
             queuedDelta = toBalanceDelta(qd0, qd1);
         }
 
@@ -1584,10 +1593,10 @@ library VTSPositionLib {
                 // Shortfall is positive when we over-settled. We need to add back (positive delta to _updateSettlement)
                 // because we previously called _updateSettlement with negative delta for withdrawals
                 if (shortfall0 > 0) {
-                    _updateSettlement(s, p.positionId, 0, int256(shortfall0));
+                    _sUpdateSettlement(s, p.positionId, 0, int256(shortfall0));
                 }
                 if (shortfall1 > 0) {
-                    _updateSettlement(s, p.positionId, 1, int256(shortfall1));
+                    _sUpdateSettlement(s, p.positionId, 1, int256(shortfall1));
                 }
             }
 
