@@ -10,7 +10,7 @@ import {LiquidityHubStorage, Market} from "./types/Liquidity.sol";
 import {CurrencyTransfer} from "./libraries/CurrencyTransfer.sol";
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
-import {ReentrancyGuardTransient} from "openzeppelin-contracts/contracts/utils/ReentrancyGuardTransient.sol";
+import {ReentrancyGuard} from "openzeppelin-contracts/contracts/utils/ReentrancyGuard.sol";
 import {Errors} from "./libraries/Errors.sol";
 import {IMarketVault} from "./interfaces/IMarketVault.sol";
 import {TransientSlots} from "./libraries/TransientSlots.sol";
@@ -21,7 +21,7 @@ import {ILiquidityHub} from "./interfaces/ILiquidityHub.sol";
  * @notice Factory contract for creating Fiet protocol markets with LCC tokens and pool management
  * @dev Manages LCC token creation, pool deployment, and protocol bounds administration
  */
-contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
+contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuard {
     using CurrencyTransfer for Currency;
 
     // ============ UNIFIED STATE ============
@@ -374,7 +374,8 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
      * @param to The address receiving the LCC tokens
      * @param amount The amount of underlying assets to wrap
      */
-    function _wrap(address lcc, address from, address to, uint256 amount) internal onlyValidLcc(lcc) {
+    function _wrap(address lcc, address to, uint256 amount) internal onlyValidLcc(lcc) {
+        address from = _msgSender();
         address underlying = s.lccToUnderlying[lcc];
         bool isNativeAsset = underlying == address(0);
         // throw error if the native ETH is insufficient and it is a native ETH backed LCC
@@ -397,7 +398,7 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
     }
 
     function wrapTo(address lcc, address to, uint256 amount) external payable nonReentrant {
-        _wrap(lcc, _msgSender(), to, amount);
+        _wrap(lcc, to, amount);
     }
 
     /**
@@ -408,7 +409,7 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
      * @param amount The amount of underlying assets to wrap
      */
     function wrapTo(address underlying, bytes32 marketId, address to, uint256 amount) external payable nonReentrant {
-        _wrap(s.marketUnderlyingToLCC[marketId][underlying], _msgSender(), to, amount);
+        _wrap(s.marketUnderlyingToLCC[marketId][underlying], to, amount);
     }
 
     /**
@@ -417,7 +418,7 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
      * @param amount The amount of underlying assets to wrap
      */
     function wrap(address lcc, uint256 amount) external payable nonReentrant {
-        _wrap(lcc, _msgSender(), _msgSender(), amount);
+        _wrap(lcc, _msgSender(), amount);
     }
 
     /**
@@ -427,7 +428,7 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
      * @param amount The amount of underlying assets to wrap
      */
     function wrap(address underlying, bytes32 marketId, uint256 amount) external payable nonReentrant {
-        _wrap(s.marketUnderlyingToLCC[marketId][underlying], _msgSender(), _msgSender(), amount);
+        _wrap(s.marketUnderlyingToLCC[marketId][underlying], _msgSender(), amount);
     }
 
     /**
@@ -439,10 +440,8 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
      * @param to The address receiving the target LCC
      * @param amount The amount to wrap
      */
-    function _wrapWith(address lcc, address withLCC, address from, address to, uint256 amount)
-        internal
-        onlyValidLcc(lcc)
-    {
+    function _wrapWith(address lcc, address withLCC, address to, uint256 amount) internal onlyValidLcc(lcc) {
+        address from = _msgSender();
         LiquidityHubLib.wrapWithLogic(s, lcc, withLCC, from, to, amount);
         emit LccWrappedWith(lcc, withLCC, from, to, amount);
     }
@@ -454,7 +453,7 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
      * @param amount The amount to wrap
      */
     function wrapWith(address lcc, address withLCC, uint256 amount) external nonReentrant {
-        _wrapWith(lcc, withLCC, _msgSender(), _msgSender(), amount);
+        _wrapWith(lcc, withLCC, _msgSender(), amount);
     }
 
     /**
@@ -465,7 +464,7 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
      * @param amount The amount to wrap
      */
     function wrapWithTo(address lcc, address withLCC, address to, uint256 amount) external nonReentrant {
-        _wrapWith(lcc, withLCC, _msgSender(), to, amount);
+        _wrapWith(lcc, withLCC, to, amount);
     }
 
     /**
@@ -854,17 +853,19 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
     function _assertValidEthSender() internal view {
         address sender = _msgSender();
         // otherwise check if the caller is a valid MarketVault with native ETH support
-        IMarketVault marketVault = IMarketVault(sender);
-
-        // Check if lccs() function exists by attempting to call it
-        (bool success, bytes memory returnData) =
-            address(marketVault).staticcall(abi.encodeWithSelector(IMarketVault.lccs.selector));
-
-        if (!success) {
+        if (sender.code.length == 0) {
             revert Errors.InvalidEthSender();
         }
 
-        (address l0, address l1) = abi.decode(returnData, (address, address));
+        address l0;
+        address l1;
+        // Prefer a typed call + try/catch over low-level staticcall probing.
+        try IMarketVault(sender).lccs() returns (address _l0, address _l1) {
+            l0 = _l0;
+            l1 = _l1;
+        } catch {
+            revert Errors.InvalidEthSender();
+        }
 
         bool valid0 = LCCFactoryLib.isValidLcc(s, l0);
         bool valid1 = LCCFactoryLib.isValidLcc(s, l1);

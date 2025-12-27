@@ -57,12 +57,13 @@ import {LiquidityUtils} from "./libraries/LiquidityUtils.sol";
 import {toBalanceDelta} from "v4-periphery/lib/v4-core/src/types/BalanceDelta.sol";
 import {TransientSlots} from "./libraries/TransientSlots.sol";
 import {PoolAccounting} from "./types/VTS.sol";
+import {ReentrancyGuard} from "openzeppelin-contracts/contracts/utils/ReentrancyGuard.sol";
 
 /// @title VTSOrchestrator
 /// @notice Central state management layer and orchestrator for VTS logic
 /// @dev Adopts Bunni-style pattern: state managed in VTSStorage struct, complex logic delegated to linked libraries
 /// @author Fiet Protocol
-contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSOrchestrator {
+contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSOrchestrator, ReentrancyGuard {
     using StateLibrary for IPoolManager;
     using TransientStateLibrary for IPoolManager;
     using SafeCast for uint256;
@@ -552,7 +553,12 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
     /// @dev Verifies the signal via SignalManager and stores it in the VTS state
     /// @param liquiditySignal The liquidity signal to commit
     /// @return commitId The commit identifier for the committed signal
-    function commitSignal(bytes memory liquiditySignal) external onlyIfPoolManagerUnlocked returns (uint256 commitId) {
+    function commitSignal(bytes memory liquiditySignal)
+        external
+        onlyIfPoolManagerUnlocked
+        nonReentrant
+        returns (uint256 commitId)
+    {
         // Verify and commit the signal to state
         commitId = VTSCommitLib.commitSignal(s, signalManager, liquiditySignal);
     }
@@ -678,7 +684,11 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
     /// @dev Updates the signal for a commit and validates it via SignalManager and OracleHelper
     /// @param commitId The commit identifier to renew
     /// @param liquiditySignal The new liquidity signal
-    function renewSignal(uint256 commitId, bytes memory liquiditySignal) external onlyIfPoolManagerUnlocked {
+    function renewSignal(uint256 commitId, bytes memory liquiditySignal)
+        external
+        onlyIfPoolManagerUnlocked
+        nonReentrant
+    {
         // Validate commit exists (but don't require live signal - expired signals can be seized)
         _assertSignalValid(commitId, false);
         VTSCommitLib.renewSignal(s, signalManager, commitId, liquiditySignal);
@@ -698,7 +708,7 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
         uint256 positionIndex,
         bytes memory liquiditySignal,
         bool withCommitment
-    ) external {
+    ) external nonReentrant {
         // Validate commit exists (but don't require live signal - expired signals can be seized)
         _assertSignalValid(commitId, false);
 

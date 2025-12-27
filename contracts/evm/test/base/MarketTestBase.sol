@@ -44,9 +44,10 @@ import {VTSOrchestrator} from "../../src/VTSOrchestrator.sol";
 import {DeployPermit2} from "permit2/test/utils/DeployPermit2.sol";
 import {MarketFactory} from "../../src/MarketFactory.sol";
 import {PositionManager} from "v4-periphery/src/PositionManager.sol";
-import {PositionDescriptor} from "v4-periphery/src/PositionDescriptor.sol";
+import {IPositionDescriptor} from "v4-periphery/src/interfaces/IPositionDescriptor.sol";
 import {DirectLPDeltaResolver} from "../../src/DirectLPDeltaResolver.sol";
 import {IPositionManager} from "v4-periphery/src/interfaces/IPositionManager.sol";
+import {MockPositionDescriptor} from "../_mocks/MockPositionDescriptor.sol";
 
 abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
     using PoolIdLibrary for PoolId;
@@ -83,7 +84,7 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
     IAllowanceTransfer public permit2;
     OracleHelper oracleHelper;
     VTSOrchestrator vtsOrchestrator;
-    PositionDescriptor public uniPositionDescriptor;
+    IPositionDescriptor public uniPositionDescriptor;
     PositionManager public uniPositionManager;
     DirectLPDeltaResolver public directLPDeltaResolver;
 
@@ -197,8 +198,8 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
         permit2 = IAllowanceTransfer(deployPermit2());
 
         // Deploy Uniswap v4 PositionManager and descriptor for DirectLP tests (and Notifier subscribers).
-        // This PosM is separate from MMPositionManager.
-        uniPositionDescriptor = new PositionDescriptor(manager, address(weth9), bytes32("ETH"));
+        //  This PosM is separate from MMPositionManager.
+        uniPositionDescriptor = new MockPositionDescriptor(manager, address(weth9), bytes32("ETH"));
         uniPositionManager = new PositionManager(manager, permit2, 500_000, uniPositionDescriptor, weth9);
 
         // Deploy MMPositionActionsImpl first

@@ -48,7 +48,7 @@ jobs:
         id: fmt
 
       - name: Run Forge build
-        run: forge build --sizes # fails if sizes are above limit
+        run: forge build --sizes --skip test --skip script # size-check deployable contracts only
         working-directory: contracts/evm
         id: build
 

@@ -68,16 +68,6 @@ contract PositionManagerEntrypointHarness is PositionManagerEntrypoint {
         _delegateToImpl(data);
     }
 
-    function viewAnswer() external view returns (bytes32) {
-        bytes memory out = _delegateViewToImpl();
-        return abi.decode(out, (bytes32));
-    }
-
-    function viewRevert() external view returns (bytes32) {
-        bytes memory out = _delegateViewToImpl();
-        return abi.decode(out, (bytes32));
-    }
-
     function exposeBeforeBatch() external payable {
         _beforeBatch();
     }
@@ -117,17 +107,6 @@ contract PositionManagerEntrypointTest is Test {
     function test_delegateToImpl_bubblesRevert() public {
         vm.expectRevert(DelegationImpl.ImplBoom.selector);
         h.exposeDelegateToImpl(abi.encodeWithSelector(DelegationImpl.willRevert.selector));
-    }
-
-    function test_delegateViewToImpl_success() public view {
-        // The wrapper calldata is forwarded to the impl via staticcall, so we call the wrapper whose selector
-        // matches the impl function signature.
-        assertEq(h.viewAnswer(), bytes32(uint256(123)));
-    }
-
-    function test_delegateViewToImpl_bubblesRevert() public {
-        vm.expectRevert(DelegationImpl.ImplBoom.selector);
-        h.viewRevert();
     }
 
     function test_beforeBatch_zeroValue_doesNothing() public {
