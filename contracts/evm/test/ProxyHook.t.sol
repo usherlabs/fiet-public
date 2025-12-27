@@ -7,6 +7,7 @@ import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {CurrencyLibrary, Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {PoolSwapTest} from "@uniswap/v4-core/src/test/PoolSwapTest.sol";
@@ -22,6 +23,10 @@ import {Errors} from "../src/libraries/Errors.sol";
 import {LiquidityHub} from "../src/LiquidityHub.sol";
 import {MarketTestBase} from "./base/MarketTestBase.sol";
 import {MockERC20} from "@uniswap/v4-core/test/utils/Deployers.sol";
+import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
+import {ProxyHook} from "../src/ProxyHook.sol";
+import {ProxySwapFlag} from "../src/libraries/ProxySwapFlag.sol";
+import {BaseHook} from "v4-periphery/src/utils/BaseHook.sol";
 
 /**
  * 22nd October 2025 - ProxyHookTest.sol
@@ -32,6 +37,30 @@ import {MockERC20} from "@uniswap/v4-core/test/utils/Deployers.sol";
 contract ProxyHookTest is MarketVaultBase {
     using PoolIdLibrary for PoolId;
     using CurrencyLibrary for Currency;
+
+    function _isProxyKeyAlignedWithCoreLCCUnderlying() internal view returns (bool) {
+        LiquidityCommitmentCertificate lccA =
+            LiquidityCommitmentCertificate(payable(Currency.unwrap(corePoolKey.currency0)));
+        LiquidityCommitmentCertificate lccB =
+            LiquidityCommitmentCertificate(payable(Currency.unwrap(corePoolKey.currency1)));
+        return (Currency.unwrap(proxyPoolKey.currency0) == lccA.underlying()
+                && Currency.unwrap(proxyPoolKey.currency1) == lccB.underlying());
+    }
+
+    /// @dev Rebuild the market a few times until we hit a "flipped" proxy/core alignment.
+    ///      This is needed to cover ProxyHook's price-limit flip/inversion branches deterministically.
+    function _setupMarketUntilFlipped(uint256 maxAttempts) internal returns (bool foundFlipped) {
+        for (uint256 i = 0; i < maxAttempts; i++) {
+            _setupMarket();
+            lcc0 = LiquidityCommitmentCertificate(payable(Currency.unwrap(_currency2)));
+            lcc1 = LiquidityCommitmentCertificate(payable(Currency.unwrap(_currency3)));
+
+            if (!_isProxyKeyAlignedWithCoreLCCUnderlying()) {
+                return true;
+            }
+        }
+        return false;
+    }
 
     function test_cannotModifyLiquidityOfProxyHook() public {
         vm.prank(address(manager));
@@ -324,6 +353,31 @@ contract ProxyHookTest is MarketVaultBase {
             "No deficit should be created without recipient"
         );
         assertEq(lccOut.balanceOf(address(1)), 0, "Locker should not receive LCC");
+
+        vm.clearMockedCalls();
+    }
+
+    function test_swap_exactInput_onProxy_adjustPath_butNoAdjustmentWhenAvailableIsBetweenUpperBoundAndSimulated()
+        public
+    {
+        // Goal: make _buildCoreSwapParams call _adjustSwapParamsForAvailableLiquidity(), but take the
+        // "expectedOutput <= maxOutputAvailable" branch inside _adjust... (no scaling).
+        //
+        // We do this by setting available liquidity slightly above the simulated expected output, which should still be
+        // below the fast-path upper bound at current price for a non-infinitesimal trade.
+
+        uint256 swapAmount = 250e18;
+        (uint256 expectedInput, uint256 expectedOutput) = _simulateSwap(corePoolKey, true, -int256(swapAmount));
+
+        // Set available just above the expected output; if the upper bound is looser than the simulated outcome, this
+        // should still trigger the adjustment function but result in no change.
+        _mockLimitedLiquidity(_currency1, expectedOutput + 1);
+
+        BalanceDelta swapDelta = _executeSwap(proxyPoolKey, true, -int256(swapAmount), ZERO_BYTES);
+        (uint256 actualInput, uint256 actualOutput) = _getSwapDeltas(swapDelta, true);
+
+        assertEq(actualInput, expectedInput, "Input should not be reduced when available covers simulated output");
+        assertEq(actualOutput, expectedOutput, "Output should match simulation when no adjustment applies");
 
         vm.clearMockedCalls();
     }
@@ -712,7 +766,163 @@ contract ProxyHookTest is MarketVaultBase {
         vm.clearMockedCalls();
     }
 
+    function test_directLP_removeLiquidity_triggersProxyHook_removePath() public {
+        // Exercise CoreHook -> ProxyHook.onDirectLP(remove) path.
+        // We don't assert a specific settlement outcome here; the aim is to cover the remove-liquidity branch safely.
+        modifyLiquidityRouter.modifyLiquidity(
+            corePoolKey,
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: -int256(1e18), salt: bytes32(0)}),
+            ZERO_BYTES
+        );
+    }
+
+    function test_activate_setsCoreHook_onFreshProxyHook() public {
+        // Deploy a fresh proxy hook instance (not created via MarketFactory) so coreHook starts unset.
+        // Use harness (no hook-address validation) so we can deploy at an arbitrary address in tests.
+        ProxyHookHarness fresh = new ProxyHookHarness(address(manager), address(marketFactory));
+        assertEq(fresh.coreHook(), address(0), "fresh coreHook should be unset");
+
+        vm.prank(marketFactory);
+        fresh.activate();
+
+        assertEq(fresh.coreHook(), coreHookAddress, "activate should wire coreHook from factory");
+
+        // Idempotent: calling again should not revert and should not change the value.
+        vm.prank(marketFactory);
+        fresh.activate();
+        assertEq(fresh.coreHook(), coreHookAddress, "activate should remain stable");
+    }
+
+    function test_setCorePoolKey_revertsIfAlreadySet_onFreshProxyHook() public {
+        // Use harness (no hook-address validation) so we can deploy at an arbitrary address in tests.
+        ProxyHookHarness fresh = new ProxyHookHarness(address(manager), address(marketFactory));
+
+        // First set should succeed.
+        vm.prank(marketFactory);
+        fresh.setCorePoolKey(corePoolKey);
+
+        // Second set should revert.
+        vm.prank(marketFactory);
+        vm.expectRevert(Errors.CorePoolKeyAlreadySet.selector);
+        fresh.setCorePoolKey(corePoolKey);
+    }
+
+    function test_getCorePoolId_matchesCorePoolKey() public view {
+        // Simple view-path coverage.
+        assertEq(PoolId.unwrap(proxyHook.getCorePoolId()), PoolId.unwrap(corePoolKey.toId()));
+    }
+
+    function test_onCorePoolDirectSwap_earlyReturns_whenProxySwapFlagIsSet() public {
+        // Use a harness to set ProxySwapFlag in transient storage, then call onCorePoolDirectSwap as CoreHook.
+        ProxyHookHarness harness = new ProxyHookHarness(address(manager), address(marketFactory));
+        harness.exposed_setProxySwapFlag(true);
+
+        vm.prank(coreHookAddress);
+        harness.onCorePoolDirectSwap(toBalanceDelta(int128(-1), int128(1)));
+    }
+
+    function test_proxySwap_priceLimit_zero_executesCalc_thenRevertsLater() public {
+        // PoolManager calls beforeSwap before Pool.swap validates sqrtPriceLimitX96 bounds, so this still exercises
+        // ProxyHook's _calcCoreSqrtPriceLimit(0, flipped) branch even though the swap ultimately reverts.
+        PoolSwapTest.TestSettings memory settings = _getSwapSettings();
+
+        vm.expectRevert(); // PriceLimitOutOfBounds from v4-core Pool.swap (selector varies by import path)
+        swapRouter.swap(
+            proxyPoolKey,
+            SwapParams({zeroForOne: true, amountSpecified: -int256(1e18), sqrtPriceLimitX96: 0}),
+            settings,
+            ZERO_BYTES
+        );
+    }
+
+    function test_proxySwap_priceLimit_flipBranches_minMaxAndInvert_whenFlippedMarketExists() public {
+        bool found = _setupMarketUntilFlipped(6);
+        assertTrue(found, "could not find flipped market within attempts");
+
+        PoolSwapTest.TestSettings memory settings = _getSwapSettings();
+
+        // MIN+1 branch when flipped (zeroForOne swap uses MIN+1 as limit).
+        swapRouter.swap(
+            proxyPoolKey,
+            SwapParams({
+                zeroForOne: true, amountSpecified: -int256(1e18), sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
+            }),
+            settings,
+            ZERO_BYTES
+        );
+
+        // MAX-1 branch when flipped (oneForZero swap uses MAX-1 as limit).
+        swapRouter.swap(
+            proxyPoolKey,
+            SwapParams({
+                zeroForOne: false, amountSpecified: -int256(1e18), sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
+            }),
+            settings,
+            ZERO_BYTES
+        );
+
+        // Inversion branch when flipped (non-extreme limit).
+        // Use a direction-valid limit just above current price for oneForZero.
+        // Note: depending on post-swap price movements in the core pool, this can revert with PriceLimitAlreadyExceeded.
+        // We still want to execute ProxyHook's inversion logic, so we accept the revert.
+        uint160 customLimit = SQRT_PRICE_1_1 + 1;
+        vm.expectRevert();
+        swapRouter.swap(
+            proxyPoolKey,
+            SwapParams({zeroForOne: false, amountSpecified: -int256(1e18), sqrtPriceLimitX96: customLimit}),
+            settings,
+            ZERO_BYTES
+        );
+    }
+
+    function test_harness_adjustSwapParams_exactInput_expectedOutputWithinAvailable_returnsOriginalParams() public {
+        ProxyHookHarness harness = new ProxyHookHarness(address(manager), address(marketFactory));
+
+        // For a small exact-input swap, set outputAvailable absurdly high so expectedOutput <= maxOutputAvailable
+        // and the function returns the original params (covers the 'else adjustedParams = params' branch).
+        SwapParams memory p =
+            SwapParams({zeroForOne: true, amountSpecified: -int256(1e12), sqrtPriceLimitX96: ZERO_FOR_ONE_LIMIT});
+        SwapParams memory adjusted =
+            harness.exposed_adjustSwapParamsForAvailableLiquidity(p, corePoolKey, type(uint256).max);
+
+        assertEq(adjusted.zeroForOne, p.zeroForOne);
+        assertEq(adjusted.amountSpecified, p.amountSpecified);
+        assertEq(adjusted.sqrtPriceLimitX96, p.sqrtPriceLimitX96);
+    }
+
+    function test_harness_adjustSwapParams_exactInput_zeroAvailable_producesZeroScaledIn() public {
+        ProxyHookHarness harness = new ProxyHookHarness(address(manager), address(marketFactory));
+
+        // With outputAvailable=0, scaling hits scaledIn==0 and skips the haircut branch.
+        SwapParams memory p =
+            SwapParams({zeroForOne: true, amountSpecified: -int256(1e12), sqrtPriceLimitX96: ZERO_FOR_ONE_LIMIT});
+        SwapParams memory adjusted = harness.exposed_adjustSwapParamsForAvailableLiquidity(p, corePoolKey, 0);
+
+        assertEq(adjusted.zeroForOne, p.zeroForOne);
+        assertEq(adjusted.amountSpecified, 0, "scaled input should be 0 when no output is available");
+    }
+
     // More tests can be added for onDirectLP, unlockCallback, etc.
+}
+
+contract ProxyHookHarness is ProxyHook {
+    constructor(address _poolManager, address _marketFactory) ProxyHook(_poolManager, _marketFactory) {}
+
+    /// @dev Disable hook-address flag validation for harness deployments in unit tests.
+    function validateHookAddress(BaseHook) internal pure override {}
+
+    function exposed_adjustSwapParamsForAvailableLiquidity(
+        SwapParams memory params,
+        PoolKey memory poolKey,
+        uint256 outputAvailable
+    ) external view returns (SwapParams memory adjusted) {
+        adjusted = _adjustSwapParamsForAvailableLiquidity(params, poolKey, outputAvailable);
+    }
+
+    function exposed_setProxySwapFlag(bool on) external {
+        if (on) ProxySwapFlag.setProxySwapFlag();
+        else ProxySwapFlag.clearProxySwapFlag();
+    }
 }
 
 contract DifferentTokenDecimalsProxyHookTest is MarketTestBase {

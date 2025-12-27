@@ -32,6 +32,25 @@ contract MockMarketVaultForEthReceive {
     receive() external payable {}
 }
 
+contract MockMarketVaultWithInvalidLccs {
+    function lccs() external pure returns (address, address) {
+        // Not valid LCC addresses.
+        return (address(0xBADD), address(0xF00D));
+    }
+
+    function sendEth(address payable to, uint256 amount) external {
+        (bool ok, bytes memory data) = to.call{value: amount}("");
+        if (!ok) {
+            // Bubble revert data so tests can assert on the underlying custom error.
+            assembly {
+                revert(add(data, 0x20), mload(data))
+            }
+        }
+    }
+
+    receive() external payable {}
+}
+
 contract MockSenderWithoutLccsSelector {
     function sendEth(address payable to, uint256 amount) external {
         (bool ok, bytes memory data) = to.call{value: amount}("");
@@ -201,6 +220,14 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         sender.sendEth(payable(address(liquidityHub)), 1);
     }
 
+    function test_receive_revertsWhenMarketVaultReturnsInvalidLccs() public {
+        MockMarketVaultWithInvalidLccs vault = new MockMarketVaultWithInvalidLccs();
+        vm.deal(address(vault), 1 ether);
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidEthSender.selector));
+        vault.sendEth(payable(address(liquidityHub)), 1);
+    }
+
     function test_receive_acceptsFromMarketVaultWithNativeLcc() public {
         // Create a market where one LCC is native-asset-backed.
         address lccNative;
@@ -359,6 +386,26 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         // If this emitted, the test would fail; keep it silent.
         vm.prank(factory);
         liquidityHub.confirmTake(lccToken1, hubQueue, true);
+    }
+
+    function test_confirmTake_processesHubQueueWhenPresent() public {
+        uint256 queued = 7;
+        uint256 incoming = 10;
+
+        // Create a queue entry for the Hub itself; Hub should also hold the LCC that will be burned on settle.
+        _createSettlementQueueEntry(lccToken1, address(liquidityHub), queued);
+        assertEq(liquidityHub.settleQueue(lccToken1, address(liquidityHub)), queued);
+
+        uint256 hubLccBefore = ILCC(lccToken1).balanceOf(address(liquidityHub));
+        assertEq(hubLccBefore, queued, "Hub should hold queued LCC for hub-settlement path");
+
+        // confirmTake should increase reserves and then best-effort settle the Hub's own queue.
+        vm.prank(factory);
+        liquidityHub.confirmTake(lccToken1, incoming, false);
+
+        assertEq(liquidityHub.settleQueue(lccToken1, address(liquidityHub)), 0, "Hub queue should be cleared");
+        assertEq(liquidityHub.totalQueued(lccToken1), 0, "totalQueued should be decremented");
+        assertEq(ILCC(lccToken1).balanceOf(address(liquidityHub)), hubLccBefore - queued, "Hub-held LCC burned");
     }
 }
 

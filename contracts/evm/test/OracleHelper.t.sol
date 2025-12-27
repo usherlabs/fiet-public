@@ -55,6 +55,11 @@ contract OracleHelperTest is Test {
         vm.mockCall(address(LCC1), abi.encodeWithSelector(ILCC.underlying.selector), abi.encode(ASSET));
     }
 
+    function test_constructor_zeroOracle_reverts() public {
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
+        new OracleHelper(address(0), address(this));
+    }
+
     function test_canRegisterTicker() public {
         oracleHelper.registerTicker(TICKER, ASSET);
         assertEq(oracleHelper.getAssetByTicker(TICKER), ASSET);
