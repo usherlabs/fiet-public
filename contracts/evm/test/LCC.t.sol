@@ -51,9 +51,7 @@ contract LiquidityCommitmentCertificateTest is Test {
         marketFactory.setBounds(protocol, true);
 
         // Deploy with hub == address(this) so we can observe callbacks.
-        lcc = new LiquidityCommitmentCertificate(
-            address(marketFactory), address(0xBEEF), "LCC", "LCC", 18, oracle
-        );
+        lcc = new LiquidityCommitmentCertificate(address(marketFactory), address(0xBEEF), "LCC", "LCC", 18, oracle);
         lccNative = new LiquidityCommitmentCertificate(address(marketFactory), address(0), "LCCN", "LCCN", 18, oracle);
     }
 
@@ -174,7 +172,9 @@ contract LiquidityCommitmentCertificateTest is Test {
         assertEq(lastCancelRecipient, alice);
     }
 
-    function test_transfer_nonProtocolToProtocolAnnulsSettlementAndConsumesMarketFirstThenWrapped_andExecutesPlannedCancel() public {
+    function test_transfer_nonProtocolToProtocolAnnulsSettlementAndConsumesMarketFirstThenWrapped_andExecutesPlannedCancel()
+        public
+    {
         // Target is protocol-bound.
         marketFactory.setBounds(address(this), true);
 
@@ -203,5 +203,4 @@ contract LiquidityCommitmentCertificateTest is Test {
         assertEq(lastCancelRecipient, address(this));
     }
 }
-
 

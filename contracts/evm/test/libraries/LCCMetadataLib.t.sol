@@ -48,7 +48,8 @@ contract LCCMetadataLibHarness {
 
     function _lookupAlwaysDifferent(bytes memory) internal pure returns (address[2] memory) {
         // Always returns a non-zero pair that is extremely likely to differ from the caller's sortedPair
-        return [address(0x1111111111111111111111111111111111111111), address(0x2222222222222222222222222222222222222222)];
+        return
+            [address(0x1111111111111111111111111111111111111111), address(0x2222222222222222222222222222222222222222)];
     }
 
     function sortTokens(address a, address b) external pure returns (address, address) {
@@ -112,11 +113,11 @@ contract LCCMetadataLibHarness {
         return LCCMetadataLib.findUniqueSymbol(uaSymbol, marketRef, underlyingPair, _lookup);
     }
 
-    function findUniqueSymbolAlwaysDifferent(string memory uaSymbol, bytes memory marketRef, address[2] memory underlyingPair)
-        external
-        view
-        returns (string memory, string memory, bytes memory, bool)
-    {
+    function findUniqueSymbolAlwaysDifferent(
+        string memory uaSymbol,
+        bytes memory marketRef,
+        address[2] memory underlyingPair
+    ) external view returns (string memory, string memory, bytes memory, bool) {
         return LCCMetadataLib.findUniqueSymbol(uaSymbol, marketRef, underlyingPair, _lookupAlwaysDifferent);
     }
 }
@@ -214,7 +215,9 @@ contract LCCMetadataLibTest is Test {
 
         // Pre-fill the 4-byte truncation with a DIFFERENT pair -> collision at length 4
         bytes memory trunc4 = new bytes(4);
-        for (uint256 i = 0; i < 4; i++) trunc4[i] = ref[i];
+        for (uint256 i = 0; i < 4; i++) {
+            trunc4[i] = ref[i];
+        }
         h.setExistingPair(trunc4, [address(9), address(10)]);
 
         (string memory symbol, string memory truncStr, bytes memory truncBytes, bool isNewMapping) =
@@ -233,7 +236,9 @@ contract LCCMetadataLibTest is Test {
         address[2] memory pair = [address(2), address(1)];
 
         bytes memory trunc4 = new bytes(4);
-        for (uint256 i = 0; i < 4; i++) trunc4[i] = ref[i];
+        for (uint256 i = 0; i < 4; i++) {
+            trunc4[i] = ref[i];
+        }
         h.setExistingPair(trunc4, [address(1), address(2)]);
 
         (string memory symbol, string memory truncStr, bytes memory truncBytes, bool isNewMapping) =
@@ -260,5 +265,4 @@ contract LCCMetadataLibTest is Test {
         h.findUniqueSymbolAlwaysDifferent("ETH", ref, pair);
     }
 }
-
 
