@@ -2,7 +2,7 @@
 pragma solidity ^0.8.26;
 
 import "forge-std/Test.sol";
-import {MerkleProofGenerator} from "./libraries/MerkleProofGenerator.sol";
+import {MerkleProofGenerator} from "./utils/MerkleProofGenerator.sol";
 import {MerkleProofLib} from "solady/utils/MerkleProofLib.sol";
 
 contract MerkleTreeTest is Test {

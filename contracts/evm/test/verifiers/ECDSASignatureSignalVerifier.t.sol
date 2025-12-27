@@ -4,14 +4,12 @@ pragma solidity 0.8.26;
 import {MarketMaker} from "../../src/libraries/MarketMaker.sol";
 import {ECDSASignatureSignalVerifier} from "../../src/verifiers/ECDSASignatureSignalVerifier.sol";
 import {MarketMakerTestBase} from "../base/MMTestBase.sol";
-import {MerkleProofGenerator} from "../libraries/MerkleProofGenerator.sol";
-import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
+import {MerkleProofGenerator} from "../utils/MerkleProofGenerator.sol";
 import {EfficientHashLib} from "solady/utils/EfficientHashLib.sol";
 
 contract ECDSASignatureSignalVerifierTest is MarketMakerTestBase {
     using MarketMaker for MarketMaker.State;
     using MerkleProofGenerator for bytes32[];
-    using MessageHashUtils for bytes32;
 
     ECDSASignatureSignalVerifier verifier;
 
@@ -76,7 +74,7 @@ contract ECDSASignatureSignalVerifierTest is MarketMakerTestBase {
         assertTrue(success, "Valid proof without signature should verify when caller is owner");
     }
 
-    function test_verifyProof_validProofWithFixtureData() public {
+    function test_verifyProof_validProofWithFixtureData() public view {
         // Create state matching the provided fixture structure
         // Use a known private key so we can sign properly
         uint256 ownerPrivateKey = uint256(keccak256(abi.encodePacked("fixture_owner")));
@@ -114,7 +112,7 @@ contract ECDSASignatureSignalVerifierTest is MarketMakerTestBase {
         assertTrue(success, "Fixture-based proof should verify successfully");
     }
 
-    function test_validProofWithFixtureData() public {
+    function test_validProofWithFixtureData() public pure {
         // Testing with fixture from FIET-prover
         //         {
         // "current_root": [
@@ -327,7 +325,7 @@ contract ECDSASignatureSignalVerifierTest is MarketMakerTestBase {
 
     // ============ Edge Cases ============
 
-    function test_verifyProof_emptyMerkleProof_SingleLeaf() public {
+    function test_verifyProof_emptyMerkleProof_SingleLeaf() public view {
         // Test with single leaf (empty proof)
         uint256 privateKey = uint256(keccak256(abi.encodePacked("single_leaf")));
         address owner = vm.addr(privateKey);
@@ -385,7 +383,7 @@ contract ECDSASignatureSignalVerifierTest is MarketMakerTestBase {
         }
     }
 
-    function test_verifyProof_emptyReserves() public {
+    function test_verifyProof_emptyReserves() public view {
         // Test with empty reserves
         uint256 privateKey = uint256(keccak256(abi.encodePacked("empty_reserves")));
         address owner = vm.addr(privateKey);

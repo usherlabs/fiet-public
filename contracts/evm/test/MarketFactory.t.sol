@@ -24,7 +24,7 @@ import {IAllowanceTransfer} from "permit2/src/interfaces/IAllowanceTransfer.sol"
 import {MMPCommitmentDescriptor} from "../src/MMPCommitmentDescriptor.sol";
 import {LiquidityHub} from "../src/LiquidityHub.sol";
 import {OracleHelper} from "../src/OracleHelper.sol";
-import {CurrencySortHelper} from "./libraries/CurrencySortHelper.sol";
+import {CurrencySortHelper} from "./utils/CurrencySortHelper.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {VTSOrchestrator} from "../src/VTSOrchestrator.sol";
 import {VRLSettlementObserver} from "../src/VRLSettlementObserver.sol";
@@ -466,7 +466,9 @@ contract MarketFactoryUnitTest is Test {
 
         address[] memory bounds = new address[](0);
         vm.prank(owner);
-        factory = new MarketFactory(address(poolManager), address(liquidityHub), address(oracleHelper), address(vts), bounds, owner);
+        factory = new MarketFactory(
+            address(poolManager), address(liquidityHub), address(oracleHelper), address(vts), bounds, owner
+        );
 
         vm.prank(owner);
         factory.setHooks(address(coreHook));
@@ -486,21 +488,16 @@ contract MarketFactoryUnitTest is Test {
     {
         vm.prank(owner);
         (coreId, proxyId) = factory.createMarket(
-            ua0,
-            ua1,
-            3000,
-            60,
-            initialSqrtPriceX96,
-            keccak256("salt"),
-            VTSConfigs.getDefaultConfig(),
-            new address[](0)
+            ua0, ua1, 3000, 60, initialSqrtPriceX96, keccak256("salt"), VTSConfigs.getDefaultConfig(), new address[](0)
         );
     }
 
     function test_setHooks_revertsOnZeroAddressWhenUnset() public {
         address[] memory bounds = new address[](0);
         vm.prank(owner);
-        MarketFactory f = new MarketFactory(address(poolManager), address(liquidityHub), address(oracleHelper), address(vts), bounds, owner);
+        MarketFactory f = new MarketFactory(
+            address(poolManager), address(liquidityHub), address(oracleHelper), address(vts), bounds, owner
+        );
 
         vm.prank(owner);
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
@@ -510,7 +507,9 @@ contract MarketFactoryUnitTest is Test {
     function test_setHooks_setsOnce_andIgnoresSubsequentCalls() public {
         address[] memory bounds = new address[](0);
         vm.prank(owner);
-        MarketFactory f = new MarketFactory(address(poolManager), address(liquidityHub), address(oracleHelper), address(vts), bounds, owner);
+        MarketFactory f = new MarketFactory(
+            address(poolManager), address(liquidityHub), address(oracleHelper), address(vts), bounds, owner
+        );
 
         vm.prank(owner);
         f.setHooks(address(0x1111));

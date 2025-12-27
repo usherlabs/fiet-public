@@ -14,7 +14,7 @@ import {LiquidityUtils} from "../../src/libraries/LiquidityUtils.sol";
 import {console} from "forge-std/console.sol";
 import {MarketTestBase} from "../base/MarketTestBase.sol";
 import {MMPositionManager} from "../../src/MMPositionManager.sol";
-import {MMActionAdapter as MMA} from "../libraries/MMActionAdapter.sol";
+import {MMActionAdapter as MMA} from "../utils/MMActionAdapter.sol";
 import {MarketMakerTestBase} from "../base/MMTestBase.sol";
 import {MarketMaker} from "../../src/libraries/MarketMaker.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -759,7 +759,8 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
 
     function test_actionsImpl_handleAction_revertsWhenNotDelegatecall() public {
         // MMPositionActionsImpl is meant to be invoked via delegatecall from MMPositionManager.
-        MMPositionActionsImpl impl = new MMPositionActionsImpl(address(manager), address(liquidityHub), address(vtsOrchestrator));
+        MMPositionActionsImpl impl =
+            new MMPositionActionsImpl(address(manager), address(liquidityHub), address(vtsOrchestrator));
         vm.expectRevert();
         impl.handleAction(MMActions.SETTLE_POSITION, hex"");
     }

@@ -13,7 +13,7 @@ import {Constants} from "@uniswap/v4-core/test/utils/Constants.sol";
 import {IERC20Minimal} from "@uniswap/v4-core/src/interfaces/external/IERC20Minimal.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 
-import {CurrencySortHelper} from "../libraries/CurrencySortHelper.sol";
+import {CurrencySortHelper} from "../utils/CurrencySortHelper.sol";
 import {CoreHook} from "../../src/CoreHook.sol";
 import {ProxyHook} from "../../src/ProxyHook.sol";
 import {LiquidityCommitmentCertificate} from "../../src/LCC.sol";

@@ -23,7 +23,7 @@ import {IMarketFactory} from "../../src/interfaces/IMarketFactory.sol";
 import {IOracleHelper} from "../../src/interfaces/IOracleHelper.sol";
 import {ImmutableState} from "v4-periphery/src/base/ImmutableState.sol";
 import {MockERC20} from "../_mocks/MockERC20.sol";
-import {MMActionAdapter as MMA} from "../libraries/MMActionAdapter.sol";
+import {MMActionAdapter as MMA} from "../utils/MMActionAdapter.sol";
 import {PoolSwapTest} from "@uniswap/v4-core/src/test/PoolSwapTest.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";

@@ -9,7 +9,7 @@ import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.so
 import {MarketTestBase} from "../base/MarketTestBase.sol";
 import {MarketMakerTestBase} from "../base/MMTestBase.sol";
 import {MMPositionManager} from "../../src/MMPositionManager.sol";
-import {MMActionAdapter as MMA} from "../libraries/MMActionAdapter.sol";
+import {MMActionAdapter as MMA} from "../utils/MMActionAdapter.sol";
 import {LiquidityCommitmentCertificate} from "../../src/LCC.sol";
 import {MarketVTSConfiguration} from "../../src/types/VTS.sol";
 import {ILiquidityHub} from "../../src/interfaces/ILiquidityHub.sol";

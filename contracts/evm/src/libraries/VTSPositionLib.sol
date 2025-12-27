@@ -75,7 +75,7 @@ library VTSPositionLib {
         uint128 liquidity;
         uint256 global0;
         uint256 global1;
-        uint8 growthType;
+        bool isInflow;
     }
 
     // Maximum positive magnitude representable in int128
@@ -408,19 +408,16 @@ library VTSPositionLib {
         // Read last snapshots based on field identifier
         uint256 lastSnap0;
         uint256 lastSnap1;
-        if (p.growthType == 0) {
+        if (!p.isInflow) {
             lastSnap0 = pa.deficitGrowthInsideLast.token0;
             lastSnap1 = pa.deficitGrowthInsideLast.token1;
             pa.deficitGrowthInsideLast.token0 = inside0;
             pa.deficitGrowthInsideLast.token1 = inside1;
-        } else if (p.growthType == 1) {
+        } else {
             lastSnap0 = pa.inflowGrowthInsideLast.token0;
             lastSnap1 = pa.inflowGrowthInsideLast.token1;
             pa.inflowGrowthInsideLast.token0 = inside0;
             pa.inflowGrowthInsideLast.token1 = inside1;
-        } else {
-            // Coverage usage growth (growthType == 2) removed - DICE uses deficit-indexed coverage
-            revert("VTSPositionLib: Invalid growthType");
         }
 
         unchecked {
@@ -467,7 +464,7 @@ library VTSPositionLib {
                     liquidity: liq,
                     global0: paPool.deficitGrowthGlobal.token0,
                     global1: paPool.deficitGrowthGlobal.token1,
-                    growthType: 0
+                    isInflow: false
                 })
             );
         }
@@ -537,7 +534,7 @@ library VTSPositionLib {
                 liquidity: liq,
                 global0: paPool.inflowGrowthGlobal.token0,
                 global1: paPool.inflowGrowthGlobal.token1,
-                growthType: 1
+                isInflow: true
             })
         );
 
@@ -614,6 +611,10 @@ library VTSPositionLib {
             if (bps == 0) {
                 return (fg, 0);
             }
+            // Clamp to 100% to make behaviour explicit and avoid redundant runtime clamps later.
+            if (bps > LiquidityUtils.BPS_DENOMINATOR) {
+                bps = LiquidityUtils.BPS_DENOMINATOR;
+            }
 
             // Never allow the exercised share to exceed 100% of the current outflow window.
             uint256 effBurnBase = burnBase <= ofDelta ? burnBase : ofDelta;
@@ -621,7 +622,6 @@ library VTSPositionLib {
             // feesBurn = fees * (burnBase / ofDelta) * bps/10000
             feesBurn = FullMath.mulDiv(fees, effBurnBase, ofDelta);
             feesBurn = FullMath.mulDiv(feesBurn, bps, LiquidityUtils.BPS_DENOMINATOR);
-            if (feesBurn > fees) feesBurn = fees; // clamp to fees accrued
 
             // Only advance burn checkpoints if a non-zero burn is actually applied.
             // - Fee growth baseline is advanced later in `_applyCoverageBurn` via `fg + growthInc`.
@@ -629,7 +629,6 @@ library VTSPositionLib {
             if (feesBurn > 0) {
                 // This says: “we have just exercised effBurnBase worth of the remaining outflow window, so reduce the remaining window by that amount”.
                 uint256 newSnap = snap + effBurnBase;
-                if (newSnap > cf) newSnap = cf;
                 pa.outflowsAtFeeSnap.set(tokenIndex, newSnap);
             }
         }
@@ -661,12 +660,21 @@ library VTSPositionLib {
         {
             uint256 d = pa.cumulativeDeficit.get(tokenIndex);
             uint256 settled = pa.settled.get(tokenIndex);
-            if (cov == 0 || (d == 0 && settled == 0)) return;
+            if (d == 0 && settled == 0) return;
 
             // Enforce invariant: cov <= d + settled, then burn only deficit portion
+            // clamp the requested coverage to what could possibly be owed: cEff = min(cov, d + settled)
             uint256 cEff = cov <= (d + settled) ? cov : (d + settled);
-            if (cEff == 0 || d == 0) return;
+            if (d == 0) return;
             burnBase = cEff < d ? cEff : d; // min(coverage, deficit)
+
+            /**
+             * guards that include cov == 0 and cEff == 0 have become redundant correctness-wise:
+             * cov == 0: if cov is zero, then cEff = min(cov, d + settled) is zero, so burnBase = min(cEff, d) is also zero. That then deterministically produces feesBurn == 0, and _applyCoverageBurn returns without writing state (it has if (feesBurn == 0) return;). So the explicit cov == 0 guard is just an optimisation branch now, not a safety requirement.
+             * cEff == 0: same story—cEff == 0 implies burnBase == 0, which implies feesBurn == 0, which implies the function returns before any state updates.
+             */
+            // An early return.
+            if (burnBase == 0) return;
         }
 
         // Calculate feesBurn via helper function to reduce stack depth

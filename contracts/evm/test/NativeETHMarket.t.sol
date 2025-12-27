@@ -25,7 +25,7 @@ import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {CurrencyTransfer} from "../src/libraries/CurrencyTransfer.sol";
 import {Position} from "../src/types/Position.sol";
-import {MMActionAdapter as MMA} from "./libraries/MMActionAdapter.sol";
+import {MMActionAdapter as MMA} from "./utils/MMActionAdapter.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {

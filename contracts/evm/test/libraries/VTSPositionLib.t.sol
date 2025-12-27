@@ -11,9 +11,49 @@ import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.so
 import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {Errors} from "../../src/libraries/Errors.sol";
 import {MarketVTSConfiguration} from "../../src/types/VTS.sol";
+import {PositionContext, TouchPositionParams} from "../../src/types/VTS.sol";
+import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {PositionModificationHookData, PositionModificationHookDataLib} from "../../src/types/Position.sol";
+import {ILiquidityHub} from "../../src/interfaces/ILiquidityHub.sol";
+import {IOracleHelper} from "../../src/interfaces/IOracleHelper.sol";
+import {IMarketVault} from "../../src/interfaces/IMarketVault.sol";
+import {CurrencyDelta} from "v4-periphery/lib/v4-core/src/libraries/CurrencyDelta.sol";
+
+contract VTSPositionLibTest_MockLCC {
+    address internal u;
+
+    constructor(address underlying_) {
+        u = underlying_;
+    }
+
+    function underlying() external view returns (address) {
+        return u;
+    }
+}
+
+contract VTSPositionLibTest_VaultNoop is IMarketVault {
+    function lccs() external pure returns (address, address) {
+        return (address(0), address(0));
+    }
+
+    function inMarketBalanceOf(Currency) external pure returns (uint256) {
+        return 0;
+    }
+    function modifyLiquidities(BalanceDelta) external pure {}
+
+    function tryModifyLiquidities(BalanceDelta d) external pure returns (BalanceDelta) {
+        return d;
+    }
+
+    function dryModifyLiquidities(BalanceDelta d) external pure returns (BalanceDelta) {
+        return d;
+    }
+}
 
 contract VTSPositionLibTest is VTSLibTestBase {
     VTSPositionLibHarness harness;
+    using CurrencyDelta for Currency;
 
     // Test pool ID for harness (different from corePoolKey to keep isolated)
     PoolId testPoolId;
@@ -267,6 +307,209 @@ contract VTSPositionLibTest is VTSLibTestBase {
         (,, uint256 settled0,,,) = harness.getPositionAccounting(positionId);
         assertEq(settled0, 100e18, "settled should clamp to commitmentMax");
         assertEq(applied, 10e18, "applied should be clamped amount");
+    }
+
+    // ============================================================
+    // touchPosition (branch coverage / revert paths)
+    // ============================================================
+
+    function _mkCtx() internal view returns (PositionContext memory ctx) {
+        // These tests target early reverts before external deps are used.
+        ctx.poolManager = manager;
+        ctx.liquidityHub = ILiquidityHub(address(0));
+        ctx.oracleHelper = IOracleHelper(address(0));
+        ctx.marketVault = IMarketVault(address(0));
+    }
+
+    function _mkPoolKey() internal view returns (PoolKey memory) {
+        return corePoolKey;
+    }
+
+    function _mkHookData(bool isMMOperation, bool isSeizing, uint256 commitId) internal pure returns (bytes memory) {
+        if (!isMMOperation) return "";
+        // MM-ness is encoded via commitId > 0.
+        if (isSeizing) {
+            return PositionModificationHookDataLib.encodeSeizure(commitId, 0, address(0), 0, 0);
+        }
+        return PositionModificationHookDataLib.encode(commitId, 0, address(0));
+    }
+
+    function test_touchPosition_existingPosition_commitIdMismatch_reverts() public {
+        // Register a position in harness storage (existing position path)
+        PositionId positionId =
+            _registerHarnessPosition(DEFAULT_OWNER, DEFAULT_TICK_LOWER, DEFAULT_TICK_UPPER, 1000, DEFAULT_SALT);
+
+        // Set a commitId on the position, but pass a different one in hookData.
+        harness.setPositionCommitId(positionId, 1);
+
+        ModifyLiquidityParams memory params = ModifyLiquidityParams({
+            tickLower: DEFAULT_TICK_LOWER,
+            tickUpper: DEFAULT_TICK_UPPER,
+            liquidityDelta: int256(uint256(1)), // increase to route through existing+increase
+            salt: DEFAULT_SALT
+        });
+
+        TouchPositionParams memory tp = TouchPositionParams({
+            owner: DEFAULT_OWNER,
+            poolKey: _mkPoolKey(),
+            params: params,
+            callerDelta: toBalanceDelta(0, 0),
+            feesAccrued: toBalanceDelta(0, 0),
+            hookData: _mkHookData(true, false, 2) // mismatch
+        });
+
+        vm.expectRevert(
+            abi.encodeWithSelector(Errors.InvariantViolated.selector, "Invalid operation: Commit ID mismatch")
+        );
+        harness.touchPosition(_mkCtx(), tp);
+    }
+
+    function test_touchPosition_decreaseOnInactive_revertsNotActive() public {
+        PositionId positionId =
+            _registerHarnessPosition(DEFAULT_OWNER, DEFAULT_TICK_LOWER, DEFAULT_TICK_UPPER, 1000, DEFAULT_SALT);
+        harness.setPositionActive(positionId, false);
+
+        ModifyLiquidityParams memory params = ModifyLiquidityParams({
+            tickLower: DEFAULT_TICK_LOWER,
+            tickUpper: DEFAULT_TICK_UPPER,
+            liquidityDelta: -int256(uint256(1)),
+            salt: DEFAULT_SALT
+        });
+
+        TouchPositionParams memory tp = TouchPositionParams({
+            owner: DEFAULT_OWNER,
+            poolKey: _mkPoolKey(),
+            params: params,
+            callerDelta: toBalanceDelta(0, 0),
+            feesAccrued: toBalanceDelta(0, 0),
+            hookData: _mkHookData(false, false, 0)
+        });
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.NotActive.selector, positionId));
+        harness.touchPosition(_mkCtx(), tp);
+    }
+
+    function test_touchPosition_increaseWhileSeizing_reverts() public {
+        PositionId positionId =
+            _registerHarnessPosition(DEFAULT_OWNER, DEFAULT_TICK_LOWER, DEFAULT_TICK_UPPER, 1000, DEFAULT_SALT);
+        harness.setPositionCommitId(positionId, 7);
+
+        ModifyLiquidityParams memory params = ModifyLiquidityParams({
+            tickLower: DEFAULT_TICK_LOWER,
+            tickUpper: DEFAULT_TICK_UPPER,
+            liquidityDelta: int256(uint256(1)),
+            salt: DEFAULT_SALT
+        });
+
+        TouchPositionParams memory tp = TouchPositionParams({
+            owner: DEFAULT_OWNER,
+            poolKey: _mkPoolKey(),
+            params: params,
+            callerDelta: toBalanceDelta(0, 0),
+            feesAccrued: toBalanceDelta(0, 0),
+            hookData: _mkHookData(true, true, 7) // seizing + MM op
+        });
+
+        vm.expectRevert(
+            abi.encodeWithSelector(Errors.InvariantViolated.selector, "Invalid operation: Seizures cannot issue LCCs")
+        );
+        harness.touchPosition(_mkCtx(), tp);
+    }
+
+    // ============================================================
+    // onMMSettle (_calcDeltaClearance + _calcSeizure cap branches)
+    // ============================================================
+
+    function test_onMMSettle_clearsPositiveUnderlyingDelta_onWithdrawal() public {
+        // Use an inactive position so withdrawals are not gated by RFS open.
+        PositionId positionId =
+            _registerHarnessPosition(DEFAULT_OWNER, DEFAULT_TICK_LOWER, DEFAULT_TICK_UPPER, 1000, DEFAULT_SALT);
+        harness.setPositionActive(positionId, false);
+
+        // Setup pool config (any) and accounting so withdrawal is possible (settled > 0).
+        harness.setCommitmentMax(positionId, 100, 0);
+        harness.setSettled(positionId, 50, 0);
+
+        // Underlying currency deltas are keyed off the *underlying* currencies of the provided LCC currencies.
+        address underlying0 = address(0x1111);
+        VTSPositionLibTest_MockLCC lcc0 = new VTSPositionLibTest_MockLCC(underlying0);
+        VTSPositionLibTest_MockLCC lcc1 = new VTSPositionLibTest_MockLCC(address(0x2222));
+        Currency lccCurrency0 = Currency.wrap(address(lcc0));
+        Currency lccCurrency1 = Currency.wrap(address(lcc1));
+
+        // Give DEFAULT_OWNER a positive underlying delta so _calcDeltaClearance hits (delta > 0 && amount > 0).
+        harness.setUnderlyingDelta(Currency.wrap(underlying0), DEFAULT_OWNER, int128(int256(20)));
+
+        VTSPositionLibTest_VaultNoop vault = new VTSPositionLibTest_VaultNoop();
+        BalanceDelta delta = toBalanceDelta(int128(10), int128(0)); // withdrawal of 10
+
+        (BalanceDelta settlementDelta,,) =
+            harness.onMMSettle(manager, vault, positionId, lccCurrency0, lccCurrency1, delta, false);
+        assertEq(settlementDelta.amount0(), int128(10), "withdrawal should be applied");
+
+        // Underlying delta should be reduced by min(20, 10) => 10 remaining.
+        int256 remaining = harness.getDelta(Currency.wrap(underlying0), DEFAULT_OWNER);
+        assertEq(remaining, 10, "underlying positive delta should be partially cleared");
+    }
+
+    function test_onMMSettle_seizure_capsTotalAboveLiquidity() public {
+        // Create active position with liquidity units in storage (via registerPosition liquidityDelta).
+        PositionId positionId =
+            _registerHarnessPosition(DEFAULT_OWNER, DEFAULT_TICK_LOWER, DEFAULT_TICK_UPPER, 1000, DEFAULT_SALT);
+        harness.setPositionActive(positionId, true);
+
+        // Configure pool to force base requirement == commitment for both tokens.
+        MarketVTSConfiguration memory cfg = _createDefaultVTSConfig();
+        cfg.token0.baseVTSRate = 10_000;
+        cfg.token1.baseVTSRate = 10_000;
+        cfg.minResidualUnits = 1;
+        harness.setupPool(testPoolId, cfg);
+
+        // Commitment and settled -> RFS == commitment.
+        harness.setCommitmentMax(positionId, 100, 100);
+        harness.setSettled(positionId, 0, 0);
+
+        VTSPositionLibTest_VaultNoop vault = new VTSPositionLibTest_VaultNoop();
+        VTSPositionLibTest_MockLCC lcc0 = new VTSPositionLibTest_MockLCC(address(0x3333));
+        VTSPositionLibTest_MockLCC lcc1 = new VTSPositionLibTest_MockLCC(address(0x4444));
+
+        // Deposit almost all RFS on both tokens (leave RFS open) so each contributes full liquidity units;
+        // sum would exceed liq without the cap.
+        BalanceDelta delta = toBalanceDelta(int128(-99), int128(-99));
+        (,, uint256 seized) = harness.onMMSettle(
+            manager, vault, positionId, Currency.wrap(address(lcc0)), Currency.wrap(address(lcc1)), delta, true
+        );
+
+        assertEq(seized, 1000, "seizure should cap at full position liquidity");
+    }
+
+    function test_onMMSettle_seizure_capsWhenResidualBelowMinResidual() public {
+        PositionId positionId =
+            _registerHarnessPosition(DEFAULT_OWNER, DEFAULT_TICK_LOWER, DEFAULT_TICK_UPPER, 1000, DEFAULT_SALT);
+        harness.setPositionActive(positionId, true);
+
+        MarketVTSConfiguration memory cfg = _createDefaultVTSConfig();
+        cfg.token0.baseVTSRate = 10_000;
+        // Keep token1 aligned; commitmentMax1 is 0 so it will not contribute to RFS/seizure anyway.
+        cfg.token1.baseVTSRate = 10_000;
+        cfg.minResidualUnits = 400;
+        harness.setupPool(testPoolId, cfg);
+
+        harness.setCommitmentMax(positionId, 100, 0);
+        harness.setSettled(positionId, 0, 0);
+
+        VTSPositionLibTest_VaultNoop vault = new VTSPositionLibTest_VaultNoop();
+        VTSPositionLibTest_MockLCC lcc0 = new VTSPositionLibTest_MockLCC(address(0x5555));
+        VTSPositionLibTest_MockLCC lcc1 = new VTSPositionLibTest_MockLCC(address(0x6666));
+
+        // Deposit <50% of RFS on token0 so RFS stays open, but remaining liquidity is below minResidual.
+        // With baseVTSRate floored to 100%, exposure is maxed, so seizure is driven mainly by phi.
+        BalanceDelta delta = toBalanceDelta(int128(-40), int128(0));
+        (,, uint256 seized) = harness.onMMSettle(
+            manager, vault, positionId, Currency.wrap(address(lcc0)), Currency.wrap(address(lcc1)), delta, true
+        );
+
+        assertEq(seized, 1000, "residual threshold should fully close the position");
     }
 
     function test_updateSettlement_negativeWithdrawal_decreasesSettled() public {

@@ -20,7 +20,7 @@ import {IMarketVault} from "../src/interfaces/IMarketVault.sol";
 import {IOracleHelper} from "../src/interfaces/IOracleHelper.sol";
 import {IVRLSettlementObserver} from "../src/interfaces/IVRLSettlementObserver.sol";
 import {PoolSwapTest} from "@uniswap/v4-core/src/test/PoolSwapTest.sol";
-import {MMActionAdapter as MMA} from "./libraries/MMActionAdapter.sol";
+import {MMActionAdapter as MMA} from "./utils/MMActionAdapter.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 contract VTSOrchestratorTest is VTSOrchestratorFixture {

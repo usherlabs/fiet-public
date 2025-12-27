@@ -5,6 +5,9 @@ import {
     VTSStorage,
     MarketVTSConfiguration,
     TokenConfiguration,
+    PositionContext,
+    TouchPositionParams,
+    TouchPositionResult,
     SettleParams,
     SettleResult
 } from "../../../src/types/VTS.sol";
@@ -73,6 +76,14 @@ contract VTSPositionLibHarness {
     /// @notice Exposes getRFS (view)
     function getRFS(PositionId positionId) external view returns (bool rfsOpen, BalanceDelta delta) {
         return VTSPositionLib.getRFS(s, positionId);
+    }
+
+    /// @notice Exposes touchPosition for targeted branch tests
+    function touchPosition(PositionContext memory ctx, TouchPositionParams calldata p)
+        external
+        returns (TouchPositionResult memory result)
+    {
+        return VTSPositionLib.touchPosition(s, ctx, p);
     }
 
     /// @notice Exposes onMMSettle for testing
@@ -253,10 +264,19 @@ contract VTSPositionLibHarness {
         s.positions[id].isActive = active;
     }
 
+    function setPositionCommitId(PositionId id, uint256 commitId) external {
+        s.positions[id].commitId = commitId;
+    }
+
     /// @notice Sets underlying currency delta using DynamicCurrencyDelta.accountDelta
     /// @dev Uses DynamicCurrencyDelta to match the actual implementation
     function setUnderlyingDelta(Currency currency, address target, int128 delta) external {
         DynamicCurrencyDelta.accountDelta(currency, delta, target);
+    }
+
+    /// @notice Reads the current currency delta for a target in this harness' transient storage context
+    function getDelta(Currency currency, address target) external view returns (int256) {
+        return currency.getDelta(target);
     }
 
     /// @notice Gets RFS checkpoint for a position

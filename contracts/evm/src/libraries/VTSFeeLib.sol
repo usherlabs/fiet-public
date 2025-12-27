@@ -242,22 +242,11 @@ library VTSFeeLib {
             }
         }
 
-        // Clamp materialised values to current pending to avoid over-finalisation
-        // For positive pending, materialised must be in [0, p]; for negative pending, in [p, 0]
-        if (pend0 >= 0) {
-            if (mat0 < 0) mat0 = 0;
-            if (mat0 > pend0) mat0 = pend0;
-        } else {
-            if (mat0 > 0) mat0 = 0;
-            if (mat0 < pend0) mat0 = pend0;
-        }
-        if (pend1 >= 0) {
-            if (mat1 < 0) mat1 = 0;
-            if (mat1 > pend1) mat1 = pend1;
-        } else {
-            if (mat1 > 0) mat1 = 0;
-            if (mat1 < pend1) mat1 = pend1;
-        }
+        // Note on clamping:
+        // Under the current construction:
+        // - pend > 0  => mat == pend
+        // - pend < 0  => mat == -min(pot, -pend) which is always in [pend, 0]
+        // Therefore, mat cannot over-finalise pending, and sign-mismatch clamps are unreachable.
 
         // Subtract the materialised portion from pending (note: signed arithmetic)
         PositionAccounting storage pa = s.positionAccounting[positionId];

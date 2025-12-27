@@ -14,7 +14,7 @@ import {PositionId, PositionLibrary} from "../../src/types/Position.sol";
 import {IMarketVault} from "../../src/interfaces/IMarketVault.sol";
 import {VTSOrchestrator} from "../../src/VTSOrchestrator.sol";
 import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
-import {MMActionAdapter as MMA} from "../libraries/MMActionAdapter.sol";
+import {MMActionAdapter as MMA} from "../utils/MMActionAdapter.sol";
 import {LiquiditySignal} from "../../src/types/Commit.sol";
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
