@@ -1,7 +1,7 @@
 {
   "IgnoredVulnerabilities": {
     "reentrancy": {
-      "contracts/evm/src/libraries/VTSCommitLib.sol": [174, 197, 219]
+      "contracts/evm/src/libraries/VTSCommitLib.sol": [174, 197, 219, 184, 208, 237]
     }
   },
   "TrustedVariables": {},

@@ -441,13 +441,9 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuard {
     function _wrapWith(address lcc, address withLCC, address to, uint256 amount) internal onlyValidLcc(lcc) {
         address from = _msgSender();
         // Pull backing LCC from caller into the Hub first.
-        Currency.wrap(withLCC).transferFrom(from, address(this), amount);
+        // Currency.wrap(withLCC).transferFrom(from, address(this), amount);
 
-        (,, uint256 shortfallToQueue) = LiquidityHubLib.wrapWithLogic(s, lcc, withLCC, from, to, amount);
-        if (shortfallToQueue > 0) {
-            // Hub queues its own shortfall without emitting SettlementQueued (internal netting path).
-            LiquidityHubLib.queueSettlement(s, withLCC, address(this), shortfallToQueue);
-        }
+        LiquidityHubLib.wrapWithLogic(s, lcc, withLCC, from, to, amount);
         emit LccWrappedWith(lcc, withLCC, from, to, amount);
     }
 
@@ -488,12 +484,8 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuard {
             revert Errors.InvalidAmount(amount, fromBalance);
         }
 
-        (uint256 directUnwrapped, uint256 marketUnwrapped, uint256 shortfallToQueue) =
+        (uint256 directUnwrapped, uint256 marketUnwrapped) =
             LiquidityHubLib.unwrapInternalLogic(s, lcc, to, amount, wrappedBalance, marketDerivedBalance);
-
-        if (shortfallToQueue > 0) {
-            _queueSettlement(lcc, to, shortfallToQueue);
-        }
 
         // Burn the amount that was unwrapped
         // and transfer the underlying assets to the account

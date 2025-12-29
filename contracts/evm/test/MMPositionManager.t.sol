@@ -326,6 +326,8 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
     }
 
     function test_tokenURI_revertsWhenCommitmentDescriptorNotSet() public {
+        // Reuse the real actions impl from the already-deployed PositionManager so the constructor succeeds.
+        // This test is about `commitmentDescriptor`, not delegation.
         MMPositionManager broken = new MMPositionManager(
             address(manager),
             address(liquidityHub),
@@ -333,7 +335,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             address(0),
             weth9,
             permit2,
-            address(0xBEEF) // unused for this test
+            positionManager.actionsImpl()
         );
         vm.expectRevert(Errors.CommitmentDescriptorNotSet.selector);
         broken.tokenURI(1);
