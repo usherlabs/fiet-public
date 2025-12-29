@@ -440,10 +440,24 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuard {
      */
     function _wrapWith(address lcc, address withLCC, address to, uint256 amount) internal onlyValidLcc(lcc) {
         address from = _msgSender();
-        // Pull backing LCC from caller into the Hub first.
-        // Currency.wrap(withLCC).transferFrom(from, address(this), amount);
 
-        LiquidityHubLib.wrapWithLogic(s, lcc, withLCC, from, to, amount);
+        // Performs all necessary validation and preparation
+        LiquidityHubLib.WrapWithContext memory ctx = LiquidityHubLib.wrapWithPrepare(s, lcc, withLCC, from, amount);
+        // Pull backing LCC from caller into the Hub first.
+        Currency.wrap(withLCC).transferFrom(from, address(this), ctx.originalAmount);
+        // Executes the full wrap-with operation using the provided context
+        LiquidityHubLib.wrapWithContext(s, lcc, withLCC, ctx);
+        // Extract return values and apply defensive clamp (safety check)
+        uint256 directToMint = ctx.directToMint;
+        uint256 marketToMint = ctx.marketToMint;
+        if (directToMint + marketToMint > ctx.originalAmount) {
+            uint256 excess = (directToMint + marketToMint) - ctx.originalAmount;
+            marketToMint = marketToMint > excess ? (marketToMint - excess) : 0;
+        }
+
+        // Final mint: mint target LCC with appropriate direct/market-derived split
+        LCCFactoryLib.mint(lcc, to, directToMint, marketToMint, false);
+
         emit LccWrappedWith(lcc, withLCC, from, to, amount);
     }
 

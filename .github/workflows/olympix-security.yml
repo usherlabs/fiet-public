@@ -24,7 +24,7 @@ jobs:
         env:
           OLYMPIX_API_TOKEN: ${{ secrets.OLYMPIX_API_TOKEN }}
         with:
-          args: -w ${{ github.workspace }} -p contracts/evm/src -f sarif -o ${{ github.workspace }}
+          args: -w ${{ github.workspace }}/contracts/evm -f sarif -o ${{ github.workspace }}
 
       - name: Upload result to GitHub Code Scanning
         uses: github/codeql-action/upload-sarif@v3

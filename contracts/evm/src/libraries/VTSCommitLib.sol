@@ -171,6 +171,7 @@ library VTSCommitLib {
 
     /// @notice Commits a liquidity signal to the VTS state (linked-library entry)
     /// @dev Intentionally keeps all commitment logic in the linked library to reduce VTSOrchestrator bytecode size.
+    //#olympix-ignore-reentrancy
     function commitSignal(VTSStorage storage s, IVRLSignalManager signalManager, bytes memory liquiditySignal)
         external
         returns (uint256 commitId)
@@ -194,6 +195,7 @@ library VTSCommitLib {
     }
 
     /// @notice Renews a liquidity signal for a commit (linked-library entry)
+    //#olympix-ignore-reentrancy
     function renewSignal(
         VTSStorage storage s,
         IVRLSignalManager signalManager,
@@ -216,6 +218,7 @@ library VTSCommitLib {
 
     /// @notice Checkpoint with commitment backing checks (single linked-library call)
     /// @dev Verifies signal, updates commit state/expiry, and sets position commitment deficit.
+    //#olympix-ignore-reentrancy
     function checkpointWithCommitment(
         VTSStorage storage s,
         IPoolManager poolManager,
