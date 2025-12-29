@@ -559,7 +559,6 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
         nonReentrant
         returns (uint256 commitId)
     {
-        // Verify and commit the signal to state
         commitId = VTSCommitLib.commitSignal(s, signalManager, liquiditySignal);
     }
 
@@ -578,7 +577,7 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
         uint8 settlementTokenIndex,
         uint32 verifierIndex,
         bytes memory settlementProof
-    ) external onlyIfPoolManagerUnlocked {
+    ) external onlyIfPoolManagerUnlocked nonReentrant {
         _assertSignalValid(commitId, true);
         // Validate position exists
         PositionId positionId = getPositionId(commitId, positionIndex);
@@ -624,6 +623,7 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
     )
         external
         onlyIfPoolManagerUnlocked
+        nonReentrant
         returns (BalanceDelta settlementDelta, bool rfsOpen, uint256 seizedLiquidityUnits)
     {
         _assertSignalValid(commitId, !isSeizing);
@@ -667,7 +667,7 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
     /// @dev Called by MMPositionManager before seizing a position. Reverts if grace period has not elapsed.
     /// @param commitId The commit identifier
     /// @param positionIndex The position index within the commit
-    function onSeize(uint256 commitId, uint256 positionIndex) external view onlyIfPoolManagerUnlocked {
+    function onSeize(uint256 commitId, uint256 positionIndex) external onlyIfPoolManagerUnlocked nonReentrant {
         // Validate commit exists (but don't require live signal - expired signals can be seized)
         _assertSignalValid(commitId, false);
 
@@ -723,8 +723,7 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
         if (!withCommitment) {
             return;
         }
-
-        VTSCommitLib.checkpoint(
+        VTSCommitLib.checkpointWithCommitment(
             s, poolManager, signalManager, oracleHelper, sender, commitId, positionId, liquiditySignal
         );
     }

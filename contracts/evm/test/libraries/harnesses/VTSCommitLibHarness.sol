@@ -11,10 +11,13 @@ import {RFSCheckpoint} from "../../../src/types/Checkpoint.sol";
 import {IVRLSignalManager} from "../../../src/interfaces/IVRLSignalManager.sol";
 import {IOracleHelper} from "../../../src/interfaces/IOracleHelper.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
+import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
 
 /// @title VTSCommitLibHarness
 /// @notice Exposes VTSCommitLib functions for unit testing with an isolated VTSStorage
 contract VTSCommitLibHarness {
+    using StateLibrary for IPoolManager;
+
     VTSStorage internal s;
 
     // ============ Library Function Exposers ============
@@ -52,7 +55,7 @@ contract VTSCommitLibHarness {
         PositionId positionId,
         bytes memory liquiditySignal
     ) external {
-        VTSCommitLib.checkpoint(
+        VTSCommitLib.checkpointWithCommitment(
             s, poolManager, signalManager, oracleHelper, sender, commitId, positionId, liquiditySignal
         );
     }

@@ -37,6 +37,8 @@ library LiquidityHubLib {
         uint256 backingToBurn;
         /// Remaining amount to process after netting
         uint256 remainingAmount;
+        /// Amount to queue for settlement after consuming all available market liquidity
+        uint256 shortfallToQueue;
     }
 
     // ============ ADAPTER FUNCTIONS ============
@@ -261,7 +263,7 @@ library LiquidityHubLib {
         }
 
         // Unwrap: consumes directSupply first, then market liquidity, queues shortfall if any
-        (uint256 directUnwrapped, uint256 marketUnwrapped) = unwrapInternalLogic(
+        (uint256 directUnwrapped, uint256 marketUnwrapped, uint256 shortfallToQueue) = unwrapInternalLogic(
             s, withLCC, address(this), remainingAfterNet, residualWrappedForUnwrap, ctx.fromMarketDerivedAmount
         );
 
@@ -270,14 +272,15 @@ library LiquidityHubLib {
         ctx.directToMint += directUnwrapped;
         // Market-derived mint = remaining after direct unwrap (market liquidity was consumed)
         ctx.marketToMint += (remainingAfterNet - directUnwrapped);
+        ctx.shortfallToQueue += shortfallToQueue;
 
         return ctx;
     }
 
     /// @notice Finalise burns and invariant checks for wrap-with operation
-    /// @dev Clamps burns to current balances and ensures lazy-claimed never exceeds queue.
-    ///      This is a safety check: if queue was processed between netting and finalisation,
-    ///      we ensure lazy-claimed doesn't exceed the new (smaller) queue size.
+    /// @dev Clamps burns to current balances.
+    ///      NOTE: We intentionally avoid writing to hub storage in this function so that
+    ///      wrapWithLogic does not perform storage writes after external calls (e.g. market factory).
     /// @param s The liquidity hub storage
     /// @param lcc The target LCC token address
     /// @param withLCC The backing LCC token address
@@ -295,13 +298,6 @@ library LiquidityHubLib {
         }
         if (backingToBurn > 0) {
             burn(withLCC, address(this), 0, backingToBurn, true);
-        }
-
-        // Ensure lazy-claimed never exceeds current queue (invariant check)
-        // This can happen if queue was processed between netting and finalisation
-        uint256 currentQueueWith = s.settleQueue[withLCC][address(this)];
-        if (s.nettedLCCsAsUnderlying[withLCC] > currentQueueWith) {
-            s.nettedLCCsAsUnderlying[withLCC] = currentQueueWith;
         }
     }
 
@@ -334,7 +330,7 @@ library LiquidityHubLib {
         address from,
         address to,
         uint256 amount
-    ) internal returns (uint256 directToMint, uint256 marketToMint) {
+    ) internal returns (uint256 directToMint, uint256 marketToMint, uint256 shortfallToQueue) {
         if (amount == 0) revert Errors.InvalidAmount(0, 0);
 
         // Validation: ensure withLCC is valid, not same as target, and shares underlying
@@ -357,9 +353,6 @@ library LiquidityHubLib {
             ctx.fromWrappedAmount = amount - ctx.fromMarketDerivedAmount;
         }
 
-        // Transfer backing LCC from user to Hub
-        Currency.wrap(withLCC).transferFrom(from, address(this), amount);
-
         // Execute steps via helper functions (each keeps stack depth minimal)
         ctx = _netAgainstTargetQueue(s, lcc, ctx); // Step 0: Net against target queue
         ctx = _optimiseDirectConversion(s, lcc, withLCC, ctx); // Step 1: Direct conversion
@@ -372,6 +365,7 @@ library LiquidityHubLib {
         // Extract return values and apply defensive clamp (safety check)
         directToMint = ctx.directToMint;
         marketToMint = ctx.marketToMint;
+        shortfallToQueue = ctx.shortfallToQueue;
         if (directToMint + marketToMint > ctx.originalAmount) {
             uint256 excess = (directToMint + marketToMint) - ctx.originalAmount;
             marketToMint = marketToMint > excess ? (marketToMint - excess) : 0;
@@ -402,7 +396,7 @@ library LiquidityHubLib {
         uint256 amount,
         uint256 wrappedBalance,
         uint256 marketDerivedBalance
-    ) internal returns (uint256 directUnwrapped, uint256 marketUnwrapped) {
+    ) internal returns (uint256 directUnwrapped, uint256 marketUnwrapped, uint256 shortfallToQueue) {
         // 1) Consume directSupply[lcc] if available
         if (wrappedBalance > 0) {
             uint256 directAvail = s.directSupply[lcc];
@@ -425,10 +419,9 @@ library LiquidityHubLib {
             remainingToUnwrap -= marketUnwrapped;
         }
 
-        // 3) Queue any shortfall to Hub itself for later processing
-        if (remainingToUnwrap > 0) {
-            queueSettlement(s, lcc, to, remainingToUnwrap);
-        }
+        // 3) Return any shortfall to be queued by the caller (keeps this function free of state writes
+        // after external calls for static analysis tooling).
+        shortfallToQueue = remainingToUnwrap;
     }
 
     /**

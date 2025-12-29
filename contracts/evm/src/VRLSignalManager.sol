@@ -75,8 +75,8 @@ contract VRLSignalManager is Ownable, IVRLSignalManager {
      * @param signal The liquidity signal to verify
      * @return isProofValid Whether the proof is valid
      */
-    function verifyLiquiditySignal(LiquiditySignal memory signal)
-        public
+    function _verifyLiquiditySignalInternal(LiquiditySignal memory signal)
+        internal
         returns (bool isProofValid, uint256 _signalExpiryInSeconds)
     {
         // derive the liquidity signal
@@ -105,13 +105,20 @@ contract VRLSignalManager is Ownable, IVRLSignalManager {
         _signalExpiryInSeconds = signalExpiryInSeconds;
     }
 
+    function verifyLiquiditySignal(LiquiditySignal memory signal)
+        public
+        returns (bool isProofValid, uint256 _signalExpiryInSeconds)
+    {
+        return _verifyLiquiditySignalInternal(signal);
+    }
+
     // bytes overload to match interface (non-reverting version)
     function verifyLiquiditySignal(bytes memory liquiditySignal)
         external
         returns (bool ok, uint256 _signalExpiryInSeconds)
     {
         LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
-        (ok, _signalExpiryInSeconds) = verifyLiquiditySignal(signal);
+        (ok, _signalExpiryInSeconds) = _verifyLiquiditySignalInternal(signal);
     }
 
     // removed: checkSignalBacking (documentation cleaned up)
@@ -121,7 +128,7 @@ contract VRLSignalManager is Ownable, IVRLSignalManager {
         returns (bool ok, uint256 _signalExpiryInSeconds)
     {
         LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
-        (ok, _signalExpiryInSeconds) = verifyLiquiditySignal(signal);
+        (ok, _signalExpiryInSeconds) = _verifyLiquiditySignalInternal(signal);
         if (revertOnInvalid && !ok) revert Errors.InvalidProof();
     }
 }

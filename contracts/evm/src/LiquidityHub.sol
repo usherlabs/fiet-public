@@ -370,7 +370,6 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuard {
     /**
      * @dev Internal function to wrap underlying assets into LCC tokens
      * @param lcc The LCC token address to wrap into
-     * @param from The address providing the underlying assets
      * @param to The address receiving the LCC tokens
      * @param amount The amount of underlying assets to wrap
      */
@@ -436,13 +435,19 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuard {
      * @dev Delegates to LiquidityHubLib.wrapWithLogic - heavy logic moved to library
      * @param lcc The target LCC token address
      * @param withLCC The backing LCC token address
-     * @param from The address providing the backing LCC
      * @param to The address receiving the target LCC
      * @param amount The amount to wrap
      */
     function _wrapWith(address lcc, address withLCC, address to, uint256 amount) internal onlyValidLcc(lcc) {
         address from = _msgSender();
-        LiquidityHubLib.wrapWithLogic(s, lcc, withLCC, from, to, amount);
+        // Pull backing LCC from caller into the Hub first.
+        Currency.wrap(withLCC).transferFrom(from, address(this), amount);
+
+        (,, uint256 shortfallToQueue) = LiquidityHubLib.wrapWithLogic(s, lcc, withLCC, from, to, amount);
+        if (shortfallToQueue > 0) {
+            // Hub queues its own shortfall without emitting SettlementQueued (internal netting path).
+            LiquidityHubLib.queueSettlement(s, withLCC, address(this), shortfallToQueue);
+        }
         emit LccWrappedWith(lcc, withLCC, from, to, amount);
     }
 
@@ -483,8 +488,12 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuard {
             revert Errors.InvalidAmount(amount, fromBalance);
         }
 
-        (uint256 directUnwrapped, uint256 marketUnwrapped) =
+        (uint256 directUnwrapped, uint256 marketUnwrapped, uint256 shortfallToQueue) =
             LiquidityHubLib.unwrapInternalLogic(s, lcc, to, amount, wrappedBalance, marketDerivedBalance);
+
+        if (shortfallToQueue > 0) {
+            _queueSettlement(lcc, to, shortfallToQueue);
+        }
 
         // Burn the amount that was unwrapped
         // and transfer the underlying assets to the account

@@ -275,35 +275,50 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
         int128 delta1 = settlementDelta.amount1();
 
         address sender = msgSender();
-        address valueSender = params.usePositionManagerBalance ? address(this) : sender;
 
         // Process negative deltas (inflows to vault)
         if (delta0 < 0) {
-            params.underlying0
-                .transferFrom(valueSender, address(params.vault), LiquidityUtils.safeInt128ToUint256(delta0));
+            uint256 amt0 = LiquidityUtils.safeInt128ToUint256(delta0);
             if (params.usePositionManagerBalance) {
-                vtsOrchestrator.take(params.underlying0, sender, LiquidityUtils.safeInt128ToUint256(delta0));
+                // When flowing via the PositionManager balance, transfer directly (no allowance required).
+                params.underlying0.transfer(address(params.vault), amt0);
+            } else {
+                // Otherwise, pull only from the locker (msgSender()).
+                params.underlying0.transferFrom(sender, address(params.vault), amt0);
+            }
+            if (params.usePositionManagerBalance) {
+                // take from the MMPM-held balance (locker delta) for settle to the vault.
+                vtsOrchestrator.take(params.underlying0, sender, amt0);
             }
         }
         if (delta1 < 0) {
-            params.underlying1
-                .transferFrom(valueSender, address(params.vault), LiquidityUtils.safeInt128ToUint256(delta1));
+            uint256 amt1 = LiquidityUtils.safeInt128ToUint256(delta1);
             if (params.usePositionManagerBalance) {
-                vtsOrchestrator.take(params.underlying1, sender, LiquidityUtils.safeInt128ToUint256(delta1));
+                params.underlying1.transfer(address(params.vault), amt1);
+            } else {
+                params.underlying1.transferFrom(sender, address(params.vault), amt1);
+            }
+            if (params.usePositionManagerBalance) {
+                vtsOrchestrator.take(params.underlying1, sender, amt1);
             }
         }
 
         params.vault.modifyLiquidities(settlementDelta);
 
         // Process positive deltas (outflows from vault)
-        if (delta0 > 0) {
-            params.underlying0.transfer(valueSender, LiquidityUtils.safeInt128ToUint256(delta0));
-        }
-        if (delta1 > 0) {
-            params.underlying1.transfer(valueSender, LiquidityUtils.safeInt128ToUint256(delta1));
-        }
-        if ((delta0 > 0 || delta1 > 0) && params.usePositionManagerBalance) {
-            _syncPairBalanceAsCredit(params.underlying0, params.underlying1);
+        if (params.usePositionManagerBalance) {
+            // Either sync received amounts
+            if (delta0 > 0 || delta1 > 0) {
+                _syncPairBalanceAsCredit(params.underlying0, params.underlying1);
+            }
+        } else {
+            // or forward to the locker.
+            if (delta0 > 0) {
+                params.underlying0.transfer(sender, LiquidityUtils.safeInt128ToUint256(delta0));
+            }
+            if (delta1 > 0) {
+                params.underlying1.transfer(sender, LiquidityUtils.safeInt128ToUint256(delta1));
+            }
         }
     }
 
