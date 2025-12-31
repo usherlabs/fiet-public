@@ -62,6 +62,8 @@ contract MockLiquidityHub {
 contract MockPoolManager {
     // Mirrors the extsload read surface used by Uniswap v4 StateLibrary.
     mapping(bytes32 => bytes32) public slots;
+    // Mirrors the exttload read surface used by Uniswap v4 TransientStateLibrary.
+    mapping(bytes32 => bytes32) public tslots;
 
     // Counters for settlement flow assertions.
     uint256 public syncCount;
@@ -88,6 +90,21 @@ contract MockPoolManager {
         data = new bytes32[](n);
         for (uint256 i = 0; i < n; i++) {
             data[i] = slots[bytes32(uint256(slot) + i)];
+        }
+    }
+
+    function setTSlot(bytes32 slot, bytes32 value) external {
+        tslots[slot] = value;
+    }
+
+    function exttload(bytes32 slot) external view returns (bytes32 value) {
+        return tslots[slot];
+    }
+
+    function exttload(bytes32[] calldata exttloadSlots) external view returns (bytes32[] memory values) {
+        values = new bytes32[](exttloadSlots.length);
+        for (uint256 i = 0; i < exttloadSlots.length; i++) {
+            values[i] = tslots[exttloadSlots[i]];
         }
     }
 

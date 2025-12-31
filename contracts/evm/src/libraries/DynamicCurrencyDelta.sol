@@ -9,7 +9,8 @@ import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {ILCC} from "../interfaces/ILCC.sol";
 import {Errors} from "./Errors.sol";
-import {console} from "forge-std/console.sol";
+
+// import {console} from "forge-std/console.sol";
 
 /// @title DynamicCurrencyDelta
 /// @notice Library for managing currency deltas and underlying settlement in VTS
@@ -38,13 +39,13 @@ library DynamicCurrencyDelta {
             NonzeroDeltaCount.increment();
         }
 
-        console.log("--------------------------------");
-        console.log("accountDelta: currency", Currency.unwrap(currency));
-        console.log("accountDelta: delta", delta);
-        console.log("accountDelta: target", target);
-        console.log("accountDelta: previous", previous);
-        console.log("accountDelta: next", next);
-        console.log("--------------------------------");
+        // console.log("--------------------------------");
+        // console.log("accountDelta: currency", Currency.unwrap(currency));
+        // console.log("accountDelta: delta", delta);
+        // console.log("accountDelta: target", target);
+        // console.log("accountDelta: previous", previous);
+        // console.log("accountDelta: next", next);
+        // console.log("--------------------------------");
     }
 
     /// @notice Gets the full positive delta (credit) for a currency and target

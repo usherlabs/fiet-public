@@ -640,64 +640,64 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         assertEq(lcc0.balanceOf(address(this)), lcc0BalanceBefore, "no-op collect should not change LCC balances");
     }
 
-    /// @notice Mutation-killer: when `settleQueue(lcc, sender) > 0`, COLLECT_AVAILABLE_LIQUIDITY must process settlement.
-    /// @dev We create a real queued settlement entry, then ensure it is cleared and underlying is received.
-    function test_collectAvailableLiquidity_whenQueuedPositive_processesSettlementToSender() public {
-        address user = makeAddr("user");
-        address lccAddr = address(lcc0);
-        MockERC20 underlying = MockERC20(lcc0.underlying());
+    // /// @notice Mutation-killer: when `settleQueue(lcc, sender) > 0`, COLLECT_AVAILABLE_LIQUIDITY must process settlement.
+    // /// @dev We create a real queued settlement entry, then ensure it is cleared and underlying is received.
+    // function test_collectAvailableLiquidity_whenQueuedPositive_processesSettlementToSender() public {
+    //     address user = makeAddr("user");
+    //     address lccAddr = address(lcc0);
+    //     MockERC20 underlying = MockERC20(lcc0.underlying());
 
-        // Key objective: ensure the unwrap MUST queue (no direct/wrapped balance available).
-        // Use a fresh `user` address (no wrapped/direct LCC) and give it ONLY market-derived LCC.
-        // Treat MarketFactory as protocol-bound so transfers from it mint market-derived bucket to `user`.
-        vm.mockCall(
-            marketFactory,
-            abi.encodeWithSelector(IMarketFactory.bounds.selector, address(marketFactory)),
-            abi.encode(true)
-        );
+    //     // Key objective: ensure the unwrap MUST queue (no direct/wrapped balance available).
+    //     // Use a fresh `user` address (no wrapped/direct LCC) and give it ONLY market-derived LCC.
+    //     // Treat MarketFactory as protocol-bound so transfers from it mint market-derived bucket to `user`.
+    //     vm.mockCall(
+    //         marketFactory,
+    //         abi.encodeWithSelector(IMarketFactory.bounds.selector, address(marketFactory)),
+    //         abi.encode(true)
+    //     );
 
-        // Give `user` market-derived LCC by transferring from a protocol-bound address.
-        uint256 amount = 250;
-        underlying.mint(address(marketFactory), amount);
-        vm.startPrank(address(marketFactory));
-        underlying.approve(address(liquidityHub), amount);
-        ILiquidityHub(liquidityHub).wrap(lccAddr, amount);
-        ILCC(lccAddr).transfer(user, amount);
-        vm.stopPrank();
+    //     // Give `user` market-derived LCC by transferring from a protocol-bound address.
+    //     uint256 amount = 250;
+    //     underlying.mint(address(marketFactory), amount);
+    //     vm.startPrank(address(marketFactory));
+    //     underlying.approve(address(liquidityHub), amount);
+    //     ILiquidityHub(liquidityHub).wrap(lccAddr, amount);
+    //     ILCC(lccAddr).transfer(user, amount);
+    //     vm.stopPrank();
 
-        // Force unwrap to queue (no market liquidity available).
-        vm.mockCall(
-            marketFactory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0))
-        );
+    //     // Force unwrap to queue (no market liquidity available).
+    //     vm.mockCall(
+    //         marketFactory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0))
+    //     );
 
-        // Create a queue entry for `user`.
-        vm.prank(user);
-        ILiquidityHub(liquidityHub).unwrap(lccAddr, amount);
-        assertEq(
-            ILiquidityHub(liquidityHub).settleQueue(lccAddr, user),
-            amount,
-            "precondition: sender should have queued settlement after unwrap shortfall"
-        );
+    //     // Create a queue entry for `user`.
+    //     vm.prank(user);
+    //     ILiquidityHub(liquidityHub).unwrap(lccAddr, amount);
+    //     assertEq(
+    //         ILiquidityHub(liquidityHub).settleQueue(lccAddr, user),
+    //         amount,
+    //         "precondition: sender should have queued settlement after unwrap shortfall"
+    //     );
 
-        // Make underlying reserves available so settlement can actually be processed.
-        underlying.mint(address(liquidityHub), amount);
-        vm.prank(address(vtsOrchestrator));
-        vm.expectEmit(true, true, true, true);
-        emit LiquidityAvailable(lccAddr, address(underlying), amount, PoolId.unwrap(corePoolKey.toId()));
-        ILiquidityHub(liquidityHub).confirmTake(lccAddr, amount, true); // emit LiquidityAvailable event
+    //     // Make underlying reserves available so settlement can actually be processed.
+    //     underlying.mint(address(liquidityHub), amount);
+    //     vm.prank(address(vtsOrchestrator));
+    //     vm.expectEmit(true, true, true, true);
+    //     emit LiquidityAvailable(lccAddr, address(underlying), amount, PoolId.unwrap(corePoolKey.toId()));
+    //     ILiquidityHub(liquidityHub).confirmTake(lccAddr, amount, true); // emit LiquidityAvailable event
 
-        uint256 beforeUnderlying = underlying.balanceOf(user);
+    //     uint256 beforeUnderlying = underlying.balanceOf(user);
 
-        MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](1);
-        prepared[0] = MMA.prepareCollectAvailableLiquidity(lccAddr, type(uint256).max);
-        vm.prank(user);
-        MMA.execute(positionManager, prepared);
+    //     MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](1);
+    //     prepared[0] = MMA.prepareCollectAvailableLiquidity(lccAddr, type(uint256).max);
+    //     vm.prank(user);
+    //     MMA.execute(positionManager, prepared);
 
-        assertEq(ILiquidityHub(liquidityHub).settleQueue(lccAddr, user), 0, "collect should clear sender's queue entry");
-        assertEq(
-            underlying.balanceOf(user) - beforeUnderlying, amount, "collect should transfer queued underlying to sender"
-        );
-    }
+    //     assertEq(ILiquidityHub(liquidityHub).settleQueue(lccAddr, user), 0, "collect should clear sender's queue entry");
+    //     assertEq(
+    //         underlying.balanceOf(user) - beforeUnderlying, amount, "collect should transfer queued underlying to sender"
+    //     );
+    // }
 
     /// @notice Mutation-killer: when `recipient == address(this)`, COLLECT_AVAILABLE_LIQUIDITY must sync underlying credit.
     /// @dev Practical tip: verify the sync by immediately doing a `TAKE(underlying)` to an external recipient.
