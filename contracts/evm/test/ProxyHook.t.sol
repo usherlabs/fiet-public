@@ -26,7 +26,11 @@ import {MockERC20} from "@uniswap/v4-core/test/utils/Deployers.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {ProxyHook} from "../src/ProxyHook.sol";
 import {ProxySwapFlag} from "../src/libraries/ProxySwapFlag.sol";
+import {SwapSimulator} from "../src/libraries/SwapSimulator.sol";
 import {BaseHook} from "v4-periphery/src/utils/BaseHook.sol";
+import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
+import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 
 /**
  * 22nd October 2025 - ProxyHookTest.sol
@@ -37,6 +41,34 @@ import {BaseHook} from "v4-periphery/src/utils/BaseHook.sol";
 contract ProxyHookTest is MarketVaultBase {
     using PoolIdLibrary for PoolId;
     using CurrencyLibrary for Currency;
+
+    function test_activate_revertsIfNotFactory_onFreshProxyHook() public {
+        ProxyHookHarness fresh = new ProxyHookHarness(address(manager), address(marketFactory));
+
+        vm.expectRevert(Errors.InvalidSender.selector);
+        fresh.activate();
+    }
+
+    function test_setCorePoolKey_revertsIfNotFactory_onFreshProxyHook() public {
+        ProxyHookHarness fresh = new ProxyHookHarness(address(manager), address(marketFactory));
+
+        vm.expectRevert(Errors.InvalidSender.selector);
+        fresh.setCorePoolKey(corePoolKey);
+    }
+
+    function test_onDirectLP_revertsIfNotCoreHook() public {
+        ProxyHookHarness fresh = new ProxyHookHarness(address(manager), address(marketFactory));
+
+        vm.expectRevert(Errors.InvalidSender.selector);
+        fresh.onDirectLP(toBalanceDelta(int128(1), int128(0)), LiquidityUtils.ActionType.DirectLPAddLiquidity);
+    }
+
+    function test_onCorePoolDirectSwap_revertsIfNotCoreHook() public {
+        ProxyHookHarness fresh = new ProxyHookHarness(address(manager), address(marketFactory));
+
+        vm.expectRevert(Errors.InvalidSender.selector);
+        fresh.onCorePoolDirectSwap(toBalanceDelta(int128(-1), int128(1)));
+    }
 
     function _isProxyKeyAlignedWithCoreLCCUnderlying() internal view returns (bool) {
         LiquidityCommitmentCertificate lccA =
@@ -776,6 +808,68 @@ contract ProxyHookTest is MarketVaultBase {
         );
     }
 
+    function test_onDirectLP_removeLiquidity_callsConfirmTake_forToken0_whenAmount0NonZero() public {
+        uint256 amount = 123;
+
+        // Make MarketVault believe it has sufficient claim-token balance…
+        Currency ua0 = Currency.wrap(lcc0.underlying());
+        _mockLimitedLiquidity(ua0, amount);
+
+        // …and bypass PoolManager ERC-6909 burn / underlying take mechanics (this test cares about confirmTake).
+        vm.mockCall(
+            address(manager),
+            abi.encodeWithSelector(IPoolManager.burn.selector, address(proxyHook), ua0.toId(), amount),
+            abi.encode()
+        );
+        vm.mockCall(
+            address(manager),
+            abi.encodeWithSelector(IPoolManager.take.selector, ua0, address(liquidityHub), amount),
+            abi.encode()
+        );
+
+        vm.expectCall(
+            address(liquidityHub),
+            abi.encodeWithSignature("confirmTake(address,uint256,bool)", address(lcc0), amount, false)
+        );
+
+        vm.prank(coreHookAddress);
+        proxyHook.onDirectLP(
+            toBalanceDelta(int128(int256(amount)), int128(0)), LiquidityUtils.ActionType.DirectLPRemoveLiquidity
+        );
+
+        vm.clearMockedCalls();
+    }
+
+    function test_onDirectLP_removeLiquidity_callsConfirmTake_forToken1_whenAmount1NonZero() public {
+        uint256 amount = 234;
+
+        Currency ua1 = Currency.wrap(lcc1.underlying());
+        _mockLimitedLiquidity(ua1, amount);
+
+        vm.mockCall(
+            address(manager),
+            abi.encodeWithSelector(IPoolManager.burn.selector, address(proxyHook), ua1.toId(), amount),
+            abi.encode()
+        );
+        vm.mockCall(
+            address(manager),
+            abi.encodeWithSelector(IPoolManager.take.selector, ua1, address(liquidityHub), amount),
+            abi.encode()
+        );
+
+        vm.expectCall(
+            address(liquidityHub),
+            abi.encodeWithSignature("confirmTake(address,uint256,bool)", address(lcc1), amount, false)
+        );
+
+        vm.prank(coreHookAddress);
+        proxyHook.onDirectLP(
+            toBalanceDelta(int128(0), int128(int256(amount))), LiquidityUtils.ActionType.DirectLPRemoveLiquidity
+        );
+
+        vm.clearMockedCalls();
+    }
+
     function test_activate_setsCoreHook_onFreshProxyHook() public {
         // Deploy a fresh proxy hook instance (not created via MarketFactory) so coreHook starts unset.
         // Use harness (no hook-address validation) so we can deploy at an arbitrary address in tests.
@@ -841,24 +935,56 @@ contract ProxyHookTest is MarketVaultBase {
 
         PoolSwapTest.TestSettings memory settings = _getSwapSettings();
 
+        // Ensure we take the "hasExcessRecipient" path so coreSwapParams are not adjusted.
+        address recipient = makeAddr("recipient_for_expectCall");
+        _setupRecipient(recipient);
+
         // MIN+1 branch when flipped (zeroForOne swap uses MIN+1 as limit).
+        vm.expectCall(
+            address(manager),
+            abi.encodeCall(
+                IPoolManager.swap,
+                (
+                    corePoolKey,
+                    SwapParams({
+                        zeroForOne: false,
+                        amountSpecified: -int256(1e18),
+                        sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
+                    }),
+                    bytes("")
+                )
+            )
+        );
         swapRouter.swap(
             proxyPoolKey,
             SwapParams({
                 zeroForOne: true, amountSpecified: -int256(1e18), sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
             }),
             settings,
-            ZERO_BYTES
+            abi.encode(recipient)
         );
 
         // MAX-1 branch when flipped (oneForZero swap uses MAX-1 as limit).
+        vm.expectCall(
+            address(manager),
+            abi.encodeCall(
+                IPoolManager.swap,
+                (
+                    corePoolKey,
+                    SwapParams({
+                        zeroForOne: true, amountSpecified: -int256(1e18), sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
+                    }),
+                    bytes("")
+                )
+            )
+        );
         swapRouter.swap(
             proxyPoolKey,
             SwapParams({
                 zeroForOne: false, amountSpecified: -int256(1e18), sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
             }),
             settings,
-            ZERO_BYTES
+            abi.encode(recipient)
         );
 
         // Inversion branch when flipped (non-extreme limit).
@@ -866,12 +992,25 @@ contract ProxyHookTest is MarketVaultBase {
         // Note: depending on post-swap price movements in the core pool, this can revert with PriceLimitAlreadyExceeded.
         // We still want to execute ProxyHook's inversion logic, so we accept the revert.
         uint160 customLimit = SQRT_PRICE_1_1 + 1;
+        uint160 expectedInverted = uint160((uint256(1) << 192) / uint256(customLimit));
+
+        vm.expectCall(
+            address(manager),
+            abi.encodeCall(
+                IPoolManager.swap,
+                (
+                    corePoolKey,
+                    SwapParams({zeroForOne: true, amountSpecified: -int256(1e18), sqrtPriceLimitX96: expectedInverted}),
+                    bytes("")
+                )
+            )
+        );
         vm.expectRevert();
         swapRouter.swap(
             proxyPoolKey,
             SwapParams({zeroForOne: false, amountSpecified: -int256(1e18), sqrtPriceLimitX96: customLimit}),
             settings,
-            ZERO_BYTES
+            abi.encode(recipient)
         );
     }
 
@@ -902,6 +1041,153 @@ contract ProxyHookTest is MarketVaultBase {
         assertEq(adjusted.amountSpecified, 0, "scaled input should be 0 when no output is available");
     }
 
+    function test_harness_adjustSwapParams_exactInput_appliesHaircut_whenScalingDown() public {
+        ProxyHookHarness harness = new ProxyHookHarness(address(manager), address(marketFactory));
+
+        int256 amountSpecified = -int256(5e18);
+        SwapParams memory p =
+            SwapParams({zeroForOne: true, amountSpecified: amountSpecified, sqrtPriceLimitX96: ZERO_FOR_ONE_LIMIT});
+
+        // Simulate to get expected output for the full swap.
+        (BalanceDelta swapDelta,,,) = SwapSimulator.simulateSwap(manager, corePoolKey, p);
+        uint256 expectedOutput = LiquidityUtils.safeInt128ToUint256(swapDelta.amount1());
+        assertGt(expectedOutput, 1, "precondition: expected output should be non-zero");
+
+        // Force scaling (available smaller than expected output) and ensure scaledIn > 0.
+        uint256 outputAvailable = expectedOutput / 2;
+        SwapParams memory adjusted =
+            harness.exposed_adjustSwapParamsForAvailableLiquidity(p, corePoolKey, outputAvailable);
+
+        uint256 originalAmount = uint256(-amountSpecified);
+        uint256 scaledIn = Math.mulDiv(originalAmount, outputAvailable, expectedOutput);
+        uint256 haircutted = (scaledIn * 999_000) / 1_000_000;
+
+        assertEq(adjusted.amountSpecified, -int256(haircutted), "expected haircut to apply to scaled input");
+    }
+
+    function test_harness_upperBoundOutAtCurrentPrice_exactOutput_returnsAmountSpecified() public {
+        ProxyHookHarness harness = new ProxyHookHarness(address(manager), address(marketFactory));
+        uint256 wantOut = 12345;
+
+        uint256 outUpper = harness.exposed_upperBoundOutAtCurrentPrice(corePoolKey, int256(wantOut), true);
+        assertEq(outUpper, wantOut);
+    }
+
+    function test_harness_upperBoundOutAtCurrentPrice_respectsDirectionalProtocolFee_andFeeMath() public {
+        ProxyHookHarness harness = new ProxyHookHarness(address(manager), address(marketFactory));
+
+        // Make protocol fee asymmetric so direction matters: zf1=500, ofz=0 (both within MAX_PROTOCOL_FEE).
+        uint24 zf1 = 500;
+        uint24 ofz = 0;
+        uint24 packed = uint24(zf1 | (ofz << 12));
+
+        manager.setProtocolFeeController(address(this));
+        manager.setProtocolFee(corePoolKey, packed);
+
+        int256 amountSpecified = -int256(1e18);
+
+        // Read slot0 so we can compute the expected value exactly.
+        (uint160 sqrtP,, uint24 protocolFee, uint24 lpFee) = StateLibrary.getSlot0(manager, corePoolKey.toId());
+
+        // --- zeroForOne expected ---
+        {
+            uint16 protocolFeeDir = uint16(protocolFee & 0xfff);
+            uint24 swapFee = protocolFeeDir == 0
+                ? lpFee
+                : uint24(
+                    uint256(protocolFeeDir) + uint256(lpFee) - (uint256(protocolFeeDir) * uint256(lpFee)) / 1_000_000
+                );
+            uint256 oneMinusFee = 1_000_000 - swapFee;
+            uint256 absIn = uint256(-amountSpecified);
+            uint256 adjIn = Math.mulDiv(absIn, oneMinusFee, 1_000_000);
+            uint256 Q96 = uint256(1) << 96;
+            uint256 expected = Math.mulDiv(Math.mulDiv(adjIn, uint256(sqrtP), Q96), uint256(sqrtP), Q96);
+
+            uint256 got = harness.exposed_upperBoundOutAtCurrentPrice(corePoolKey, amountSpecified, true);
+            assertEq(got, expected, "zeroForOne upper bound mismatch");
+        }
+
+        // --- oneForZero expected ---
+        {
+            uint16 protocolFeeDir = uint16(protocolFee >> 12);
+            uint24 swapFee = protocolFeeDir == 0
+                ? lpFee
+                : uint24(
+                    uint256(protocolFeeDir) + uint256(lpFee) - (uint256(protocolFeeDir) * uint256(lpFee)) / 1_000_000
+                );
+            uint256 oneMinusFee = 1_000_000 - swapFee;
+            uint256 absIn = uint256(-amountSpecified);
+            uint256 adjIn = Math.mulDiv(absIn, oneMinusFee, 1_000_000);
+            uint256 Q96 = uint256(1) << 96;
+            uint256 expected = Math.mulDiv(Math.mulDiv(adjIn, Q96, uint256(sqrtP)), Q96, uint256(sqrtP));
+
+            uint256 got = harness.exposed_upperBoundOutAtCurrentPrice(corePoolKey, amountSpecified, false);
+            assertEq(got, expected, "oneForZero upper bound mismatch");
+        }
+    }
+
+    function test_harness_getExpectedOutputFromDelta_selectsCorrectLeg() public {
+        ProxyHookHarness harness = new ProxyHookHarness(address(manager), address(marketFactory));
+        BalanceDelta d = toBalanceDelta(int128(111), int128(222));
+
+        assertEq(harness.exposed_getExpectedOutputFromDelta(d, true), 222, "zeroForOne should use amount1");
+        assertEq(harness.exposed_getExpectedOutputFromDelta(d, false), 111, "oneForZero should use amount0");
+    }
+
+    function test_harness_calculateInputForExactOutput_matchesSimulation_bothDirections() public {
+        ProxyHookHarness harness = new ProxyHookHarness(address(manager), address(marketFactory));
+
+        uint256 desiredOutput = 1e15;
+
+        // zeroForOne: output is token1, input is token0 (negative amount0 in delta)
+        {
+            SwapParams memory outputParams = SwapParams({
+                zeroForOne: true,
+                amountSpecified: int256(desiredOutput),
+                sqrtPriceLimitX96: LiquidityUtils.ZERO_FOR_ONE_LIMIT
+            });
+            (BalanceDelta swapDelta,,,) = SwapSimulator.simulateSwap(manager, corePoolKey, outputParams);
+            uint256 expectedInput = LiquidityUtils.safeInt128ToUint256(-swapDelta.amount0());
+
+            uint256 got = harness.exposed_calculateInputForExactOutput(manager, corePoolKey, desiredOutput, true);
+            assertEq(got, expectedInput, "zeroForOne inputNeeded mismatch");
+        }
+
+        // oneForZero: output is token0, input is token1 (negative amount1 in delta)
+        {
+            SwapParams memory outputParams = SwapParams({
+                zeroForOne: false,
+                amountSpecified: int256(desiredOutput),
+                sqrtPriceLimitX96: LiquidityUtils.ONE_FOR_ZERO_LIMIT
+            });
+            (BalanceDelta swapDelta,,,) = SwapSimulator.simulateSwap(manager, corePoolKey, outputParams);
+            uint256 expectedInput = LiquidityUtils.safeInt128ToUint256(-swapDelta.amount1());
+
+            uint256 got = harness.exposed_calculateInputForExactOutput(manager, corePoolKey, desiredOutput, false);
+            assertEq(got, expectedInput, "oneForZero inputNeeded mismatch");
+        }
+    }
+
+    function test_proxySwap_capsUsingOutputCurrencyLiquidity_zeroForOne() public {
+        // If the cap uses the wrong currency, this swap will not be restricted and output will exceed smallAvailable.
+        uint256 swapAmount = 250e18;
+        (, uint256 expectedOutput) = _simulateSwap(corePoolKey, true, -int256(swapAmount));
+        uint256 smallAvailable = expectedOutput / 4;
+        assertGt(expectedOutput, smallAvailable, "precondition: expected output must exceed available");
+
+        // output currency is token1 for zeroForOne swaps
+        _mockLimitedLiquidity(proxyPoolKey.currency1, smallAvailable);
+        // set the other currency balance high to catch incorrect selection
+        _mockLimitedLiquidity(proxyPoolKey.currency0, type(uint256).max);
+
+        BalanceDelta swapDelta = _executeSwap(proxyPoolKey, true, -int256(swapAmount), ZERO_BYTES);
+        (, uint256 actualOutput) = _getSwapDeltas(swapDelta, true);
+
+        assertLe(actualOutput, smallAvailable, "output should be capped using currency1 liquidity");
+
+        vm.clearMockedCalls();
+    }
+
     // More tests can be added for onDirectLP, unlockCallback, etc.
 }
 
@@ -922,6 +1208,31 @@ contract ProxyHookHarness is ProxyHook {
     function exposed_setProxySwapFlag(bool on) external {
         if (on) ProxySwapFlag.setProxySwapFlag();
         else ProxySwapFlag.clearProxySwapFlag();
+    }
+
+    function exposed_upperBoundOutAtCurrentPrice(PoolKey memory coreKey, int256 amountSpecified, bool zeroForOne)
+        external
+        view
+        returns (uint256 outUpper)
+    {
+        outUpper = _upperBoundOutAtCurrentPrice(coreKey, amountSpecified, zeroForOne);
+    }
+
+    function exposed_getExpectedOutputFromDelta(BalanceDelta swapDelta, bool zeroForOne)
+        external
+        pure
+        returns (uint256 expectedOutput)
+    {
+        expectedOutput = _getExpectedOutputFromDelta(swapDelta, zeroForOne);
+    }
+
+    function exposed_calculateInputForExactOutput(
+        IPoolManager pm,
+        PoolKey memory poolKey,
+        uint256 desiredOutput,
+        bool zeroForOne
+    ) external view returns (uint256 inputNeeded) {
+        inputNeeded = _calculateInputForExactOutput(pm, poolKey, desiredOutput, zeroForOne);
     }
 }
 

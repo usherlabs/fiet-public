@@ -4,6 +4,7 @@ pragma solidity ^0.8.26;
 import {Test} from "forge-std/Test.sol";
 import {MockContract} from "./_mocks/MockContract.t.sol";
 import {GlobalConfig} from "../src/GlobalConfig.sol";
+import {Ownable} from "openzeppelin-contracts/contracts/access/Ownable.sol";
 
 contract GlobalConfigTest is Test {
     GlobalConfig public globalConfig;
@@ -37,5 +38,14 @@ contract GlobalConfigTest is Test {
         bytes memory data = abi.encodeWithSelector(MockContract.addTwoToNumber.selector, 123);
         vm.expectRevert(bytes("INVALID_TARGET"));
         globalConfig.proxyCall(address(0), data);
+    }
+
+    function test_proxyCall_revertsWhenNotOwner() public {
+        address notOwner = makeAddr("notOwner");
+        bytes memory data = abi.encodeWithSelector(MockContract.addTwoToNumber.selector, 123);
+
+        vm.prank(notOwner);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, notOwner));
+        globalConfig.proxyCall(address(mockContract), data);
     }
 }

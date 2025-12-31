@@ -383,7 +383,7 @@ library LiquidityHubLib {
      *      that is handled by the calling contract.
      * @param s The liquidity hub storage
      * @param lcc The LCC token address
-     * @param to The recipient of the underlying asset (used for queueing shortfall)
+     * @param queueTo The recipient of the underlying asset (used for queueing shortfall)
      * @param amount The amount to unwrap
      * @param wrappedBalance The wrapped balance of the account
      * @param marketDerivedBalance The market-derived balance of the account
@@ -394,7 +394,7 @@ library LiquidityHubLib {
     function unwrapInternalLogic(
         LiquidityHubStorage storage s,
         address lcc,
-        address to,
+        address queueTo,
         uint256 amount,
         uint256 wrappedBalance,
         uint256 marketDerivedBalance
@@ -421,9 +421,9 @@ library LiquidityHubLib {
             remainingToUnwrap -= marketUnwrapped;
         }
 
-        // 3) Queue any shortfall to Hub itself for later processing
+        // 3) Queue any shortfall for later processing
         if (remainingToUnwrap > 0) {
-            queueSettlement(s, lcc, to, remainingToUnwrap);
+            queueSettlement(s, lcc, queueTo, remainingToUnwrap);
         }
     }
 

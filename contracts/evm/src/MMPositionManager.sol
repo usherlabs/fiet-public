@@ -25,6 +25,7 @@ import {MMActions} from "./libraries/MMActions.sol";
 import {MMCalldataDecoder} from "./libraries/MMCalldataDecoder.sol";
 import {MMHelpers} from "./libraries/MMHelpers.sol";
 import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
+import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
 import {TransientStateLibrary} from "v4-periphery/lib/v4-core/src/libraries/TransientStateLibrary.sol";
 import {CurrencyTransfer} from "./libraries/CurrencyTransfer.sol";
@@ -319,8 +320,8 @@ contract MMPositionManager is
             return;
         }
         if (action == MMActions.COLLECT_AVAILABLE_LIQUIDITY) {
-            (address lcc, address recipient, uint256 maxAmount) = params.decodeCollectLiquidityParams();
-            _collectAvailableLiquidity(lcc, recipient, maxAmount);
+            (address lcc, uint256 maxAmount) = params.decodeCollectLiquidityParams();
+            _collectAvailableLiquidity(lcc, maxAmount);
             return;
         }
         if (action == MMActions.SYNC) {
@@ -341,7 +342,8 @@ contract MMPositionManager is
         uint256 toUnwrap = vtsOrchestrator.take(lccCurrency, msgSender(), requested);
 
         if (toUnwrap > 0) {
-            liquidityHub.unwrapTo(lccAddr, to, toUnwrap);
+            address queueTo = msgSender();
+            liquidityHub.unwrapTo(lccAddr, to, queueTo, toUnwrap);
         }
 
         unwrapped = IERC20(underlying).balanceOf(to) - beforeBal;
@@ -359,15 +361,15 @@ contract MMPositionManager is
 
         address payer = msgSender();
         uint256 toUnwrap = lcc.balanceOf(payer);
-        if (requested > 0 && toUnwrap > requested) {
-            toUnwrap = requested;
+        if (requested > 0) {
+            toUnwrap = Math.min(toUnwrap, requested);
         }
 
         uint256 beforeBal = IERC20(underlying).balanceOf(to);
         if (toUnwrap > 0) {
             // Pull only from the locker/user (never arbitrary third parties).
             lccCurrency.transferFrom(payer, address(this), toUnwrap);
-            liquidityHub.unwrapTo(lccAddr, to, toUnwrap);
+            liquidityHub.unwrapTo(lccAddr, to, payer, toUnwrap);
         }
 
         unwrapped = IERC20(underlying).balanceOf(to) - beforeBal;
@@ -378,17 +380,18 @@ contract MMPositionManager is
 
     /// @notice Collects available liquidity from settlement queue
     /// @param lcc The LCC token address
-    /// @param recipient The recipient address for the liquidity
     /// @param maxAmount The maximum amount to collect
-    function _collectAvailableLiquidity(address lcc, address recipient, uint256 maxAmount) internal {
+    function _collectAvailableLiquidity(address lcc, uint256 maxAmount) internal {
         address sender = msgSender();
         uint256 queued = liquidityHub.settleQueue(lcc, sender);
 
         if (queued > 0) {
-            liquidityHub.processSettlementFor(lcc, recipient, maxAmount);
-
-            if (recipient == address(this)) {
-                _syncBalanceAsCredit(_lccToUnderlyingCurrency(Currency.wrap(lcc)));
+            Currency lccCurrency = Currency.wrap(lcc);
+            uint256 available = liquidityHub.reserveOfUnderlying(lcc);
+            uint256 toSettle = Math.min(queued, Math.min(maxAmount, available));
+            if (toSettle > 0) {
+                lccCurrency.transfer(sender, toSettle); // transfer LCC to sender for burn/pay
+                liquidityHub.processSettlementFor(lcc, sender, toSettle);
             }
         }
     }

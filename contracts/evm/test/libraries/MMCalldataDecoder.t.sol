@@ -196,9 +196,9 @@ contract MMCalldataDecoderHarness {
     function decodeCollectLiquidityParams(bytes calldata params)
         external
         pure
-        returns (address lcc, address recipient, uint256 maxAmount)
+        returns (address lcc, uint256 maxAmount)
     {
-        (lcc, recipient, maxAmount) = params.decodeCollectLiquidityParams();
+        (lcc, maxAmount) = params.decodeCollectLiquidityParams();
     }
 
     function decodeUint256AndBool(bytes calldata params) external pure returns (uint256 amount, bool payerIsUser) {
@@ -404,10 +404,9 @@ contract MMCalldataDecoderTest is Test {
     }
 
     function test_decodeCollectLiquidityParams_ok() public view {
-        bytes memory params = abi.encode(address(0x1111), address(0x2222), uint256(9));
-        (address lcc, address recipient, uint256 maxAmount) = h.decodeCollectLiquidityParams(params);
+        bytes memory params = abi.encode(address(0x1111), uint256(9));
+        (address lcc, uint256 maxAmount) = h.decodeCollectLiquidityParams(params);
         assertEq(lcc, address(0x1111));
-        assertEq(recipient, address(0x2222));
         assertEq(maxAmount, 9);
     }
 

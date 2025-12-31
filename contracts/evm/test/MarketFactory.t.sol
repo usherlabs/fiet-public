@@ -345,19 +345,26 @@ contract MockLiquidityHub_MarketFactory {
     bytes internal _lastMarketRef;
     address internal _lastUnderlying0;
     address internal _lastUnderlying1;
+    string internal _lastName;
+    address[] internal _lastIssuers;
 
     function setLccPair(address lcc0_, address lcc1_) external {
         _lcc0 = lcc0_;
         _lcc1 = lcc1_;
     }
 
-    function createLCCPair(bytes memory marketRef, address ua0, address ua1, string memory, address[] memory)
-        external
-        returns (address lcc0, address lcc1)
-    {
+    function createLCCPair(
+        bytes memory marketRef,
+        address ua0,
+        address ua1,
+        string memory name,
+        address[] memory initialIssuers
+    ) external returns (address lcc0, address lcc1) {
         _lastMarketRef = marketRef;
         _lastUnderlying0 = ua0;
         _lastUnderlying1 = ua1;
+        _lastName = name;
+        _lastIssuers = initialIssuers;
         return (_lcc0, _lcc1);
     }
 
@@ -370,6 +377,14 @@ contract MockLiquidityHub_MarketFactory {
     function lastUnderlyings() external view returns (address ua0, address ua1) {
         return (_lastUnderlying0, _lastUnderlying1);
     }
+
+    function lastName() external view returns (string memory) {
+        return _lastName;
+    }
+
+    function lastIssuers() external view returns (address[] memory) {
+        return _lastIssuers;
+    }
 }
 
 contract MockProxyHookVault_MarketFactory {
@@ -378,6 +393,8 @@ contract MockProxyHookVault_MarketFactory {
 
     mapping(Currency => uint256) internal _balances;
     BalanceDelta internal _available;
+    bool internal _forceReturn;
+    BalanceDelta internal _forcedDelta;
 
     function setCorePoolKey(PoolKey memory key) external {
         _coreKey = key;
@@ -399,6 +416,16 @@ contract MockProxyHookVault_MarketFactory {
         _available = toBalanceDelta(amount0, amount1);
     }
 
+    /// @dev Allows a unit test to force a specific delta return (to make used = amount0+amount1 observable).
+    function setForcedDelta(int128 amount0, int128 amount1) external {
+        _forceReturn = true;
+        _forcedDelta = toBalanceDelta(amount0, amount1);
+    }
+
+    function clearForcedDelta() external {
+        _forceReturn = false;
+    }
+
     // IMarketVault surface
     function lccs() external pure returns (address lccToken0, address lccToken1) {
         return (address(0), address(0));
@@ -411,6 +438,7 @@ contract MockProxyHookVault_MarketFactory {
     function modifyLiquidities(BalanceDelta) external pure {}
 
     function tryModifyLiquidities(BalanceDelta requested) external view returns (BalanceDelta) {
+        if (_forceReturn) return _forcedDelta;
         // Return min of requested and available for each token (and permit "unbounded" if available is zeroed).
         int128 a0 = _available.amount0() == 0 || requested.amount0() < _available.amount0()
             ? requested.amount0()
@@ -442,6 +470,7 @@ contract MarketFactoryUnitTest is Test {
     using PoolIdLibrary for PoolKey;
 
     address internal owner = makeAddr("owner");
+    address internal nonOwner = makeAddr("nonOwner");
 
     MockPoolManager_MarketFactory internal poolManager;
     MockLiquidityHub_MarketFactory internal liquidityHub;
@@ -452,6 +481,15 @@ contract MarketFactoryUnitTest is Test {
     MockCoreHook_MarketFactory internal coreHook;
 
     MarketFactory internal factory;
+
+    function _expectOwnableUnauthorised(address caller) internal {
+        vm.expectRevert(abi.encodeWithSelector(bytes4(keccak256("OwnableUnauthorizedAccount(address)")), caller));
+    }
+
+    function _sortAddrs(address a, address b) internal pure returns (address a0, address a1) {
+        if (a < b) return (a, b);
+        return (b, a);
+    }
 
     function setUp() public {
         poolManager = new MockPoolManager_MarketFactory();
@@ -492,6 +530,49 @@ contract MarketFactoryUnitTest is Test {
         );
     }
 
+    function _createMarketWithIssuers(address ua0, address ua1, uint160 initialSqrtPriceX96, address[] memory issuers)
+        internal
+        returns (PoolId coreId, PoolId proxyId)
+    {
+        vm.prank(owner);
+        (coreId, proxyId) = factory.createMarket(
+            ua0, ua1, 3000, 60, initialSqrtPriceX96, keccak256("salt"), VTSConfigs.getDefaultConfig(), issuers
+        );
+    }
+
+    function test_constructor_revertsWhenPoolManagerZero() public {
+        address[] memory bounds = new address[](0);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
+        new MarketFactory(address(0), address(liquidityHub), address(oracleHelper), address(vts), bounds, owner);
+    }
+
+    function test_constructor_revertsWhenLiquidityHubZero() public {
+        address[] memory bounds = new address[](0);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
+        new MarketFactory(address(poolManager), address(0), address(oracleHelper), address(vts), bounds, owner);
+    }
+
+    function test_constructor_revertsWhenOracleHelperZero() public {
+        address[] memory bounds = new address[](0);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
+        new MarketFactory(address(poolManager), address(liquidityHub), address(0), address(vts), bounds, owner);
+    }
+
+    function test_constructor_revertsWhenVtsOrchestratorZero() public {
+        address[] memory bounds = new address[](0);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidSender.selector));
+        new MarketFactory(address(poolManager), address(liquidityHub), address(oracleHelper), address(0), bounds, owner);
+    }
+
+    function test_constructor_revertsWhenBoundsContainsZeroAddress() public {
+        address[] memory bounds = new address[](1);
+        bounds[0] = address(0);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
+        new MarketFactory(
+            address(poolManager), address(liquidityHub), address(oracleHelper), address(vts), bounds, owner
+        );
+    }
+
     function test_setHooks_revertsOnZeroAddressWhenUnset() public {
         address[] memory bounds = new address[](0);
         vm.prank(owner);
@@ -502,6 +583,18 @@ contract MarketFactoryUnitTest is Test {
         vm.prank(owner);
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
         f.setHooks(address(0));
+    }
+
+    function test_setHooks_revertsForNonOwner() public {
+        address[] memory bounds = new address[](0);
+        vm.prank(owner);
+        MarketFactory f = new MarketFactory(
+            address(poolManager), address(liquidityHub), address(oracleHelper), address(vts), bounds, owner
+        );
+
+        vm.prank(nonOwner);
+        _expectOwnableUnauthorised(nonOwner);
+        f.setHooks(address(0x1111));
     }
 
     function test_setHooks_setsOnce_andIgnoresSubsequentCalls() public {
@@ -521,7 +614,8 @@ contract MarketFactoryUnitTest is Test {
     }
 
     function test_createMarket_revertsForNonOwner() public {
-        vm.expectRevert();
+        vm.prank(nonOwner);
+        _expectOwnableUnauthorised(nonOwner);
         factory.createMarket(
             address(0x100),
             address(0x200),
@@ -559,6 +653,42 @@ contract MarketFactoryUnitTest is Test {
         assertEq(proxyPrice, expectedInverse);
     }
 
+    function test_createMarket_emitsMarketCreated() public {
+        uint160 initial = 79228162514264337593543950336;
+
+        // Underlyings are sorted in the emitted event.
+        (address ua0, address ua1) = _sortAddrs(address(0x100), address(0x200));
+
+        // LCC pair is deterministically (0x3000, 0x4000) and already sorted.
+        address lcc0 = address(0x3000);
+        address lcc1 = address(0x4000);
+
+        PoolKey memory coreKey = PoolKey({
+            currency0: Currency.wrap(lcc0),
+            currency1: Currency.wrap(lcc1),
+            fee: 3000,
+            tickSpacing: 60,
+            hooks: IHooks(address(coreHook))
+        });
+        PoolKey memory proxyKey = PoolKey({
+            currency0: Currency.wrap(ua0),
+            currency1: Currency.wrap(ua1),
+            fee: 0,
+            tickSpacing: 60,
+            hooks: IHooks(address(proxyHook))
+        });
+
+        PoolId expectedCoreId = coreKey.toId();
+        PoolId expectedProxyId = proxyKey.toId();
+
+        vm.expectEmit(true, true, true, true, address(factory));
+        emit IMarketFactory.MarketCreated(
+            expectedCoreId, expectedProxyId, ua0, ua1, lcc0, lcc1, address(coreHook), address(proxyHook)
+        );
+
+        _createMarket(address(0x100), address(0x200), initial);
+    }
+
     function test_createMarket_revertsWhenCorePoolAlreadyExists() public {
         uint160 initial = 79228162514264337593543950336;
         _createMarket(address(0x100), address(0x200), initial);
@@ -577,9 +707,93 @@ contract MarketFactoryUnitTest is Test {
         );
     }
 
+    function test_addBounds_revertsForNonOwner() public {
+        address[] memory b = new address[](1);
+        b[0] = makeAddr("b");
+
+        vm.prank(nonOwner);
+        _expectOwnableUnauthorised(nonOwner);
+        factory.addBounds(b);
+    }
+
+    function test_removeBounds_revertsForNonOwner() public {
+        address[] memory b = new address[](1);
+        b[0] = makeAddr("b");
+
+        vm.prank(nonOwner);
+        _expectOwnableUnauthorised(nonOwner);
+        factory.removeBounds(b);
+    }
+
+    function test_addBounds_emitsBoundsUpdated() public {
+        address[] memory b = new address[](2);
+        b[0] = makeAddr("b0");
+        b[1] = makeAddr("b1");
+
+        vm.expectEmit(true, true, true, true, address(factory));
+        emit IMarketFactory.BoundsUpdated(b, true);
+
+        vm.prank(owner);
+        factory.addBounds(b);
+    }
+
+    function test_removeBounds_emitsBoundsUpdated() public {
+        address[] memory b = new address[](2);
+        b[0] = makeAddr("b0");
+        b[1] = makeAddr("b1");
+
+        vm.prank(owner);
+        factory.addBounds(b);
+
+        vm.expectEmit(true, true, true, true, address(factory));
+        emit IMarketFactory.BoundsUpdated(b, false);
+
+        vm.prank(owner);
+        factory.removeBounds(b);
+    }
+
+    function test_marketName_isUv4_andPassedToLiquidityHub() public {
+        assertEq(factory.MARKET_NAME(), "Uv4");
+
+        uint160 initial = 79228162514264337593543950336;
+        _createMarket(address(0x100), address(0x200), initial);
+        assertEq(liquidityHub.lastName(), "Uv4");
+    }
+
+    function test_createMarket_buildsInitialIssuers_correctLengthAndOrder() public {
+        uint160 initial = 79228162514264337593543950336;
+
+        address[] memory extra = new address[](3);
+        extra[0] = makeAddr("issuer0");
+        extra[1] = makeAddr("issuer1");
+        extra[2] = makeAddr("issuer2");
+
+        _createMarketWithIssuers(address(0x100), address(0x200), initial, extra);
+
+        address[] memory got = liquidityHub.lastIssuers();
+        assertEq(got.length, 2 + extra.length);
+        assertEq(got[0], address(vts));
+        assertEq(got[1], address(proxyHook));
+        assertEq(got[2], extra[0]);
+        assertEq(got[3], extra[1]);
+        assertEq(got[4], extra[2]);
+    }
+
     function test_useMarketLiquidity_revertsWhenCallerNotLiquidityHub() public {
         vm.expectRevert(Errors.InvalidSender.selector);
         factory.useMarketLiquidity(address(0x100), bytes32(uint256(1)), 1);
+    }
+
+    function test_useMarketLiquidity_usedIsSumOfDeltaAmounts() public {
+        uint160 initial = 79228162514264337593543950336;
+        (PoolId coreId,) = _createMarket(address(0x100), address(0x200), initial);
+
+        // Force a delta with BOTH legs positive so (+) vs (-) mutations are observable.
+        proxyHook.setForcedDelta(int128(10), int128(7));
+
+        vm.prank(address(liquidityHub));
+        uint256 used = factory.useMarketLiquidity(address(0x100), PoolId.unwrap(coreId), 10);
+        assertEq(used, 17);
     }
 
     function test_useMarketLiquidity_withCurrency0AndCurrency1_andInvalidToken() public {

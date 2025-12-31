@@ -17,6 +17,8 @@ contract OracleHelperTest is Test {
     OracleHelper public oracleHelper;
     IResilientOracle public resilientOracle;
 
+    event TickerUpdated(string indexed ticker, bytes32 indexed tickerHash, address indexed newAsset);
+
     string public constant TICKER = "ETH";
     // ResilientOracle returns prices in 18 decimals (e.g., $3,200.00 USD = 3200e18)
     uint256 public constant MOCK_ETH_PRICE = 3200e18;
@@ -60,9 +62,41 @@ contract OracleHelperTest is Test {
         new OracleHelper(address(0), address(this));
     }
 
+    function test_constructor_nonZeroOracle_setsOracleAndOwner() public {
+        address oracle = makeAddr("oracle.nonzero");
+        address owner = makeAddr("owner.nonzero");
+
+        OracleHelper helper = new OracleHelper(oracle, owner);
+
+        assertEq(address(helper.oracle()), oracle);
+        assertEq(helper.owner(), owner);
+    }
+
     function test_canRegisterTicker() public {
         oracleHelper.registerTicker(TICKER, ASSET);
         assertEq(oracleHelper.getAssetByTicker(TICKER), ASSET);
+    }
+
+    function test_registerTicker_emitsTickerUpdated() public {
+        bytes32 tickerHash = keccak256(bytes(TICKER));
+
+        vm.expectEmit(true, true, true, false);
+        emit TickerUpdated(TICKER, tickerHash, ASSET);
+
+        oracleHelper.registerTicker(TICKER, ASSET);
+    }
+
+    function test_registerTicker_update_emitsAndOverwritesMapping() public {
+        address asset2 = makeAddr("Asset2");
+        bytes32 tickerHash = keccak256(bytes(TICKER));
+
+        oracleHelper.registerTicker(TICKER, ASSET);
+
+        vm.expectEmit(true, true, true, false);
+        emit TickerUpdated(TICKER, tickerHash, asset2);
+
+        oracleHelper.registerTicker(TICKER, asset2);
+        assertEq(oracleHelper.tickerHashToAsset(tickerHash), asset2);
     }
 
     function test_canGetPriceByTicker() public {

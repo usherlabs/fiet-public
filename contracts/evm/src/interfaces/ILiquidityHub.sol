@@ -104,7 +104,9 @@ interface ILiquidityHub {
     function unwrap(address lcc, uint256 amount) external;
     function unwrap(address underlying, bytes32 marketId, uint256 amount) external;
     function unwrapTo(address lcc, address to, uint256 amount) external;
+    function unwrapTo(address lcc, address to, address queueTo, uint256 amount) external;
     function unwrapTo(address underlying, bytes32 marketId, address to, uint256 amount) external;
+    function unwrapTo(address underlying, bytes32 marketId, address to, address queueTo, uint256 amount) external;
 
     /**
      * @notice Gets the LCC token for a given underlying asset in a specific market

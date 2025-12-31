@@ -83,7 +83,6 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
         if (_poolManager == address(0)) revert Errors.InvalidAddress(_poolManager);
         if (_liquidityHub == address(0)) revert Errors.InvalidAddress(_liquidityHub);
         if (_oracleHelper == address(0)) revert Errors.InvalidAddress(_oracleHelper);
-        if (_vtsOrchestrator == address(0)) revert Errors.InvalidAddress(_vtsOrchestrator);
 
         liquidityHub = ILiquidityHub(_liquidityHub);
         oracleHelper = IOracleHelper(_oracleHelper);

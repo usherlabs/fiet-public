@@ -1265,6 +1265,9 @@ library VTSPositionLib {
                 queueRecipient = PositionModificationHookDataLib.getLocker(mmData, p.owner);
             }
 
+            // Only the immediately-settleable portion should be accounted as an underlying settlement delta.
+            // Any unavailable remainder is persisted via the LiquidityHub queue mechanics.
+            BalanceDelta settleableDelta;
             if (isSeizing) {
                 // @note: For Seizures,
                 // - LCCs are received directly by locker simiarly to fees.
@@ -1272,7 +1275,7 @@ library VTSPositionLib {
                 // - For any excess, this can also be settled immediately via MM operations.
 
                 // Only cancel excess settled received.
-                _handleLiquidityDecrease(
+                settleableDelta = _handleLiquidityDecrease(
                     ctx, p.owner, p.poolKey, requiredSettlementDelta, requiredSettlementDelta, queueRecipient
                 );
             } else {
@@ -1281,10 +1284,13 @@ library VTSPositionLib {
                 // @note We cannot cancel directly at this point in the flow,
                 // The LCC's are not yet deposited into the MMPM by the poolManager - as we're during modification of liquidity.
                 // Therefore, we plan to cancel the LCC's and queue the settlement once this settlement occurs.
-                _handleLiquidityDecrease(
+                settleableDelta = _handleLiquidityDecrease(
                     ctx, p.owner, p.poolKey, principalDelta, requiredSettlementDelta, queueRecipient
                 );
             }
+            // @note: We use the settleableDelta here because it is the immediately available liquidity that can be used to cover settlement.
+            // Anything queued is not accounted for in DynamicCurrencyDelta
+            requiredSettlementDelta = settleableDelta;
         }
 
         if (!LiquidityUtils.isZeroDelta(requiredSettlementDelta)) {
@@ -1376,8 +1382,10 @@ library VTSPositionLib {
         BalanceDelta principalDelta,
         BalanceDelta requiredSettlementDelta,
         address queueRecipient
-    ) internal {
-        if (LiquidityUtils.isZeroDelta(principalDelta)) return;
+    ) internal returns (BalanceDelta settleableDelta) {
+        if (LiquidityUtils.isZeroDelta(principalDelta)) {
+            return BalanceDelta.wrap(0);
+        }
 
         // Calculate queued delta in scoped block
         BalanceDelta queuedDelta;
@@ -1392,6 +1400,8 @@ library VTSPositionLib {
             if (qd1 < 0) qd1 = 0;
             queuedDelta = toBalanceDelta(qd0, qd1);
         }
+        // The settleable portion is what is immediately available; the rest is queued.
+        settleableDelta = requiredSettlementDelta - queuedDelta;
 
         // 3. Queue settlements via cancelWithQueue
         // Burns LCCs from MMPM (ctx.mmpmAddress) and queues shortfall for queueRecipient (locker or MMPM)

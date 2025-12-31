@@ -67,23 +67,9 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
             return true;
         }
 
-        // Allow transfers between protocol bounds
-        if (fromProtocol && toProtocol) {
-            return true;
-        }
-
-        // Allow protocol -> non-protocol transfers
-        if (fromProtocol && !toProtocol) {
-            return true;
-        }
-
-        // Allow non-protocol -> protocol transfers
-        if (!fromProtocol && toProtocol) {
-            return true;
-        }
-
-        // Block non-protocol -> non-protocol transfers
-        return false;
+        // Any transfer with at least one protocol-bound endpoint is allowed.
+        // Non-protocol -> non-protocol transfers are blocked.
+        return fromProtocol || toProtocol;
     }
 
     /**
@@ -146,7 +132,7 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
             revert Errors.InvalidAmount(0, 0);
         }
         _mint(to, amount);
-        if (issued) {
+        if (issued || marketFactory.bounds(to)) {
             return;
         }
         if (marketAmount > 0) {

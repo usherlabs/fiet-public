@@ -156,7 +156,7 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
             poolManager.getPositionInfo(key.toId(), self, params.tickLower, params.tickUpper, params.salt);
 
         // PoolManager returns two deltas:
-        // - callerDelta: principal liquidity change plus any immediate fee/hook deltas applied to the caller
+        // - callerDelta: token0/token1 change plus any immediate fee/hook deltas applied to the caller - ie. if _increase with liq=0, then delta > 0 where fees > 0
         // - feesAccrued: informational delta of fee growth in the modified range for this call
         // This call triggers CoreHook -> VTSOrchestrator.processPosition which handles all delta management
         (callerDelta, feesAccrued) = poolManager.modifyLiquidity(key, params, hookData);
@@ -184,21 +184,53 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
             key.currency1.settle(poolManager, self, LiquidityUtils.safeInt128ToUint256(delta1), false);
         }
 
-        // Take positive deltas: receive tokens owed from PoolManager (LP is withdrawing)
-        if (delta0 > 0) {
-            key.currency0.take(poolManager, self, LiquidityUtils.safeInt128ToUint256(delta0), false);
-        }
-        if (delta1 > 0) {
-            key.currency1.take(poolManager, self, LiquidityUtils.safeInt128ToUint256(delta1), false);
-        }
+        if (delta0 > 0 || delta1 > 0) {
+            address locker = msgSender();
+            uint256 balance0Before = key.currency0.balanceOfSelf();
+            uint256 balance1Before = key.currency1.balanceOfSelf();
 
-        // Sync LCC fee balance increases as credit to locker
-        // After taking from PoolManager, MMPM now holds LCC as ERC20 - sync as takeable credit to locker
-        if (delta0 > 0 && _isLCC(key.currency0)) {
-            _syncBalanceAsCredit(key.currency0);
-        }
-        if (delta1 > 0 && _isLCC(key.currency1)) {
-            _syncBalanceAsCredit(key.currency1);
+            // Take positive deltas: receive tokens owed from PoolManager (LP is withdrawing)
+            // Anything planned for cancel via VTSPositionLib will cancel here (on PM -> MMPM transfer)
+            if (delta0 > 0) {
+                key.currency0.take(poolManager, self, LiquidityUtils.safeInt128ToUint256(delta0), false);
+            }
+            if (delta1 > 0) {
+                key.currency1.take(poolManager, self, LiquidityUtils.safeInt128ToUint256(delta1), false);
+            }
+
+            uint256 balance0After = key.currency0.balanceOfSelf();
+            uint256 balance1After = key.currency1.balanceOfSelf();
+
+            // Sync LCC fee balance ONLY increases as credit to locker
+            // After taking from PoolManager, MMPM now holds LCC as ERC20 - sync as takeable credit to locker
+            // However, MMPM can hold LCCs queued after _decrease, therefore we extract feesAccrued from the balance change
+            if (delta0 > 0 && _isLCC(key.currency0)) {
+                _syncBalanceAsCredit(key.currency0);
+                {
+                    // IMPORTANT: PoolManager returns `callerDelta` already net of the hook delta.
+                    // For our CoreHook, that hook delta is `feeAdj`, and the raw pool fee delta returned as `feesAccrued`
+                    // must be netted by `feeAdj` to get the caller's *actual* fee take for this call.
+                    //
+                    // So: netFee = max(feesAccrued0 - feeAdj0, 0)
+                    uint256 inc0 = balance0After - balance0Before;
+                    int256 hookDelta0 = poolManager.currencyDelta(address(key.hooks), key.currency0);
+                    int256 netFee0i = int256(feesAccrued.amount0()) - hookDelta0;
+                    uint256 fee0 = netFee0i > 0 ? uint256(netFee0i) : 0;
+                    uint256 nonFee0 = inc0 > fee0 ? (inc0 - fee0) : 0;
+                    if (nonFee0 > 0) vtsOrchestrator.take(key.currency0, locker, nonFee0);
+                }
+            }
+            if (delta1 > 0 && _isLCC(key.currency1)) {
+                _syncBalanceAsCredit(key.currency1);
+                {
+                    uint256 inc1 = balance1After - balance1Before;
+                    int256 hookDelta1 = poolManager.currencyDelta(address(key.hooks), key.currency1);
+                    int256 netFee1i = int256(feesAccrued.amount1()) - hookDelta1;
+                    uint256 fee1 = netFee1i > 0 ? uint256(netFee1i) : 0;
+                    uint256 nonFee1 = inc1 > fee1 ? (inc1 - fee1) : 0;
+                    if (nonFee1 > 0) vtsOrchestrator.take(key.currency1, locker, nonFee1);
+                }
+            }
         }
 
         // Settle CoreHook's PoolManager deltas (hook delta applied after hook returned)

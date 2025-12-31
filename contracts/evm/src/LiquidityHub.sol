@@ -486,11 +486,12 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuard {
      * @dev Unwraps LCC from the account's wallet and transfers underlying assets to recipient
      * @dev Accounts should only be able to unwrap if they have LCC in their wallet
      * @param lcc The LCC token address to unwrap
-     * @param from The account to unwrap from
      * @param to The recipient of the underlying asset
+     * @param queueTo The address to queue shortfall to
      * @param amount The amount to unwrap
      */
-    function _unwrap(address lcc, address from, address to, uint256 amount) internal onlyValidLcc(lcc) {
+    function _unwrap(address lcc, address to, address queueTo, uint256 amount) internal onlyValidLcc(lcc) {
+        address from = _msgSender();
         (uint256 wrappedBalance, uint256 marketDerivedBalance) = _balancesOf(lcc, from);
         uint256 fromBalance = wrappedBalance + marketDerivedBalance;
 
@@ -499,7 +500,7 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuard {
         }
 
         (uint256 directUnwrapped, uint256 marketUnwrapped) =
-            LiquidityHubLib.unwrapInternalLogic(s, lcc, to, amount, wrappedBalance, marketDerivedBalance);
+            LiquidityHubLib.unwrapInternalLogic(s, lcc, queueTo, amount, wrappedBalance, marketDerivedBalance);
 
         // Burn the amount that was unwrapped
         // and transfer the underlying assets to the account
@@ -536,7 +537,22 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuard {
      * @param amount The amount of LCC tokens to unwrap
      */
     function unwrapTo(address lcc, address to, uint256 amount) external nonReentrant {
-        _unwrap(lcc, _msgSender(), to, amount);
+        // Backwards-compatible: queue shortfalls to the same address receiving the underlying.
+        _unwrap(lcc, to, to, amount);
+    }
+
+    /**
+     * @notice Unwraps LCC tokens back to underlying assets and sends them to a specified recipient, while queueing any
+     *         unfulfilled portion to a separate queue owner.
+     * @dev This exists for protocol flows (e.g. MMPM) where "who receives underlying now" differs from "who owns the
+     *      settlement queue claim".
+     * @param lcc The LCC token address to unwrap
+     * @param to The recipient address for underlying
+     * @param queueTo The address to attribute any queued settlement to
+     * @param amount The amount of LCC tokens to unwrap
+     */
+    function unwrapTo(address lcc, address to, address queueTo, uint256 amount) external nonReentrant {
+        _unwrap(lcc, to, queueTo, amount);
     }
 
     /**
@@ -547,7 +563,23 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuard {
      * @param amount The amount of LCC tokens to unwrap
      */
     function unwrapTo(address underlying, bytes32 marketId, address to, uint256 amount) external nonReentrant {
-        _unwrap(s.marketUnderlyingToLCC[marketId][underlying], _msgSender(), to, amount);
+        _unwrap(s.marketUnderlyingToLCC[marketId][underlying], to, to, amount);
+    }
+
+    /**
+     * @notice Unwraps LCC tokens (resolved by underlying+marketId) to underlying assets, while queueing any unfulfilled
+     *         portion to a separate queue owner.
+     * @param underlying The underlying asset address
+     * @param marketId The market ID
+     * @param to The recipient address for underlying
+     * @param queueTo The address to attribute any queued settlement to
+     * @param amount The amount of LCC tokens to unwrap
+     */
+    function unwrapTo(address underlying, bytes32 marketId, address to, address queueTo, uint256 amount)
+        external
+        nonReentrant
+    {
+        _unwrap(s.marketUnderlyingToLCC[marketId][underlying], to, queueTo, amount);
     }
 
     // ============ LIQUIDITY FUNCTIONS ============
@@ -773,7 +805,7 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuard {
      * @param maxAmount The maximum amount to settle
      */
     function _processSettlementFor(address lcc, address recipient, uint256 maxAmount) internal {
-        LiquidityHubLib.processSettlementLogic(s, lcc, recipient, maxAmount, msg.sender);
+        LiquidityHubLib.processSettlementLogic(s, lcc, recipient, maxAmount, _msgSender());
     }
 
     // -----------------------------------

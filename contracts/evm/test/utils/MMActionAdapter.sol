@@ -316,16 +316,15 @@ library MMActionAdapter {
     /**
      * @notice Prepares a COLLECT_AVAILABLE_LIQUIDITY action to collect queued settlement
      * @param lcc The LCC token address
-     * @param recipient The recipient address for the underlying
      * @param maxAmount The maximum amount to collect (0 for max)
      */
-    function prepareCollectAvailableLiquidity(address lcc, address recipient, uint256 maxAmount)
+    function prepareCollectAvailableLiquidity(address lcc, uint256 maxAmount)
         internal
         pure
         returns (PreparedAction memory)
     {
         return PreparedAction({
-            action: bytes1(uint8(MMActions.COLLECT_AVAILABLE_LIQUIDITY)), params: abi.encode(lcc, recipient, maxAmount)
+            action: bytes1(uint8(MMActions.COLLECT_AVAILABLE_LIQUIDITY)), params: abi.encode(lcc, maxAmount)
         });
     }
 

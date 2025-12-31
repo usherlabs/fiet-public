@@ -10,15 +10,24 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {Errors} from "../src/libraries/Errors.sol";
+import {ISettlementVerifier} from "../src/interfaces/ISettlementVerifier.sol";
+
+contract FalseSettlementVerifier is ISettlementVerifier {
+    function verifySettlementProof(bytes memory, bytes memory) external pure returns (bool) {
+        return false;
+    }
+}
 
 contract VRLSettlementObserverTest is Test {
     VRLSettlementObserver public observer;
     StubSettlementVerifier public stubVerifier;
+    FalseSettlementVerifier public falseVerifier;
 
     address public owner = makeAddr("owner");
     address public nonOwner = makeAddr("nonOwner");
     address public verifier1;
     address public verifier2;
+    address public verifierFalse;
 
     function setUp() public {
         // Deploy as owner so owner is set correctly
@@ -29,6 +38,8 @@ contract VRLSettlementObserverTest is Test {
         stubVerifier = new StubSettlementVerifier();
         verifier1 = address(stubVerifier);
         verifier2 = address(new StubSettlementVerifier());
+        falseVerifier = new FalseSettlementVerifier();
+        verifierFalse = address(falseVerifier);
 
         // Add initial verifier
         vm.prank(owner);
@@ -278,6 +289,52 @@ contract VRLSettlementObserverTest is Test {
         // Should revert with InvalidVerifier, not InvalidProof
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidVerifier.selector));
         observer.verifySettlementProof(poolKey, 0, 999, settlementProof, true);
+    }
+
+    function test_VerifySettlementProof_ReturnsFalse_WhenInvalidAndRevertOnInvalidFalse() public {
+        // Add a verifier that returns false and allow it for the token, then ensure we get `false` back.
+        address token = makeAddr("token");
+        address[] memory tokens = new address[](1);
+        tokens[0] = token;
+
+        vm.startPrank(owner);
+        uint32 idx = observer.addVerifier(verifierFalse);
+        observer.allowVerifierForTokens(idx, tokens);
+        vm.stopPrank();
+
+        PoolKey memory poolKey = PoolKey({
+            currency0: Currency.wrap(token),
+            currency1: Currency.wrap(makeAddr("token1")),
+            fee: 3000,
+            tickSpacing: 60,
+            hooks: IHooks(address(0))
+        });
+
+        bool isValid = observer.verifySettlementProof(poolKey, 0, idx, "proof", false);
+        assertEq(isValid, false);
+    }
+
+    function test_VerifySettlementProof_Reverts_WhenInvalidAndRevertOnInvalidTrue() public {
+        // Same setup as above, but with revertOnInvalid=true we must revert InvalidProof.
+        address token = makeAddr("token");
+        address[] memory tokens = new address[](1);
+        tokens[0] = token;
+
+        vm.startPrank(owner);
+        uint32 idx = observer.addVerifier(verifierFalse);
+        observer.allowVerifierForTokens(idx, tokens);
+        vm.stopPrank();
+
+        PoolKey memory poolKey = PoolKey({
+            currency0: Currency.wrap(token),
+            currency1: Currency.wrap(makeAddr("token1")),
+            fee: 3000,
+            tickSpacing: 60,
+            hooks: IHooks(address(0))
+        });
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidProof.selector));
+        observer.verifySettlementProof(poolKey, 0, idx, "proof", true);
     }
 
     function test_OnlyOwnerCanAddVerifier() public {

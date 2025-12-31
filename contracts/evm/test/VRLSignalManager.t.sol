@@ -6,8 +6,36 @@ import {ECDSASignatureSignalVerifier} from "../src/verifiers/ECDSASignatureSigna
 import {MarketMakerTestBase} from "./base/MMTestBase.sol";
 import {VRLSignalManager} from "../src/VRLSignalManager.sol";
 import {IVRLSignalManager} from "../src/interfaces/IVRLSignalManager.sol";
+import {ISignalVerifier} from "../src/interfaces/ISignalVerifier.sol";
 import {LiquiditySignal} from "../src/types/Commit.sol";
 import {Errors} from "../src/libraries/Errors.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+
+contract AlwaysTrueSignalVerifier is ISignalVerifier {
+    function verifyProof(
+        uint256,
+        bytes32,
+        bytes calldata,
+        bytes calldata,
+        MarketMaker.State calldata,
+        bytes32[] calldata
+    ) external pure returns (bool) {
+        return true;
+    }
+}
+
+contract AlwaysFalseSignalVerifier is ISignalVerifier {
+    function verifyProof(
+        uint256,
+        bytes32,
+        bytes calldata,
+        bytes calldata,
+        MarketMaker.State calldata,
+        bytes32[] calldata
+    ) external pure returns (bool) {
+        return false;
+    }
+}
 
 contract VRLSignalManagerTest is MarketMakerTestBase {
     using MarketMaker for MarketMaker.State;
@@ -34,6 +62,15 @@ contract VRLSignalManagerTest is MarketMakerTestBase {
         assertEq(signalManager.getVerifier(), newVerifier);
     }
 
+    function test_onlyOwner_setVerifier_revertsForNonOwner() public {
+        address attacker = makeAddr("attacker");
+        address newVerifier = address(new ECDSASignatureSignalVerifier(signatureVerifier));
+
+        vm.prank(attacker);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, attacker));
+        signalManager.setVerifier(newVerifier);
+    }
+
     function test_canSetAndGetSignalExpiry() public {
         uint256 newExpiry = 7200; // 2 hours
 
@@ -47,11 +84,60 @@ contract VRLSignalManagerTest is MarketMakerTestBase {
         assertEq(signalManager.signalExpiryInSeconds(), newExpiry);
     }
 
+    function test_onlyOwner_setSignalExpiryInSeconds_revertsForNonOwner() public {
+        address attacker = makeAddr("attacker");
+
+        vm.prank(attacker);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, attacker));
+        signalManager.setSignalExpiryInSeconds(7200);
+    }
+
     function test_canVerifyLiquiditySignal() public {
         // Verify the liquidity signal
         (bool success, uint256 expiry) = signalManager.verifyLiquiditySignal(liquiditySignal);
         assertEq(success, true);
         assertEq(expiry, signalManager.signalExpiryInSeconds());
+    }
+
+    function test_verifyLiquiditySignal_whenVerifierReturnsFalse_returnsFalseAndDoesNotUpdateNonce() public {
+        signalManager.setVerifier(address(new AlwaysFalseSignalVerifier()));
+
+        LiquiditySignal memory signal = liquiditySignal;
+        signal.nonce = 1;
+
+        uint256 beforeNonce = signalManager.mmNonce(signal.mmState.owner);
+        (bool ok,) = signalManager.verifyLiquiditySignal(signal);
+        uint256 afterNonce = signalManager.mmNonce(signal.mmState.owner);
+
+        assertEq(ok, false);
+        assertEq(afterNonce, beforeNonce);
+    }
+
+    function test_verifyLiquiditySignal_whenVerifierReturnsTrue_returnsTrueAndUpdatesNonce() public {
+        signalManager.setVerifier(address(new AlwaysTrueSignalVerifier()));
+
+        LiquiditySignal memory signal = liquiditySignal;
+        signal.nonce = 1;
+
+        (bool ok,) = signalManager.verifyLiquiditySignal(signal);
+        uint256 storedNonce = signalManager.mmNonce(signal.mmState.owner);
+
+        assertEq(ok, true);
+        assertEq(storedNonce, signal.nonce);
+    }
+
+    function test_verifyLiquiditySignal_emitsLiquiditySignalVerified_onValidProof() public {
+        signalManager.setVerifier(address(new AlwaysTrueSignalVerifier()));
+
+        LiquiditySignal memory signal = liquiditySignal;
+        signal.nonce = 1;
+
+        // No indexed params on this event, so only check data.
+        vm.expectEmit(false, false, false, true);
+        emit IVRLSignalManager.LiquiditySignalVerified(signal);
+
+        (bool ok,) = signalManager.verifyLiquiditySignal(signal);
+        assertEq(ok, true);
     }
 
     function test_canVerifyLiquiditySignalWithBytes() public {

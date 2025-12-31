@@ -427,24 +427,22 @@ library MMCalldataDecoder {
         }
     }
 
-    /// @dev COLLECT_AVAILABLE_LIQUIDITY: (address, address, uint256)
+    /// @dev COLLECT_AVAILABLE_LIQUIDITY: (address, uint256)
     /// @param params The calldata bytes to decode
     /// @return lcc The LCC token address
-    /// @return recipient The recipient address
     /// @return maxAmount The maximum amount to collect
     function decodeCollectLiquidityParams(bytes calldata params)
         internal
         pure
-        returns (address lcc, address recipient, uint256 maxAmount)
+        returns (address lcc, uint256 maxAmount)
     {
         assembly ("memory-safe") {
-            if lt(params.length, 0x60) {
+            if lt(params.length, 0x40) {
                 mstore(0, SLICE_ERROR_SELECTOR)
                 revert(0x1c, 4)
             }
             lcc := calldataload(params.offset)
-            recipient := calldataload(add(params.offset, 0x20))
-            maxAmount := calldataload(add(params.offset, 0x40))
+            maxAmount := calldataload(add(params.offset, 0x20))
         }
     }
 

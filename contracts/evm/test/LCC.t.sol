@@ -15,6 +15,29 @@ contract MockMarketFactoryBounds {
     }
 }
 
+contract LiquidityCommitmentCertificateExposed is LiquidityCommitmentCertificate {
+    constructor(
+        address _marketFactory,
+        address _underlyingAsset,
+        string memory name,
+        string memory symbol,
+        uint8 __decimals,
+        address _resilientOracleAddress
+    )
+        LiquidityCommitmentCertificate(
+            _marketFactory, _underlyingAsset, name, symbol, __decimals, _resilientOracleAddress
+        )
+    {}
+
+    function exposed_isProtocolTransfer(address from, address to, bool fromProtocol, bool toProtocol)
+        external
+        pure
+        returns (bool)
+    {
+        return _isProtocolTransfer(from, to, fromProtocol, toProtocol);
+    }
+}
+
 /**
  * @title LiquidityCommitmentCertificateTest
  * @notice Unit tests for `src/LCC.sol` (LiquidityCommitmentCertificate).
@@ -24,6 +47,7 @@ contract LiquidityCommitmentCertificateTest is Test {
 
     LiquidityCommitmentCertificate internal lcc;
     LiquidityCommitmentCertificate internal lccNative;
+    LiquidityCommitmentCertificateExposed internal lccExposed;
 
     address internal alice = makeAddr("alice");
     address internal bob = makeAddr("bob");
@@ -53,6 +77,9 @@ contract LiquidityCommitmentCertificateTest is Test {
         // Deploy with hub == address(this) so we can observe callbacks.
         lcc = new LiquidityCommitmentCertificate(address(marketFactory), address(0xBEEF), "LCC", "LCC", 18, oracle);
         lccNative = new LiquidityCommitmentCertificate(address(marketFactory), address(0), "LCCN", "LCCN", 18, oracle);
+        lccExposed = new LiquidityCommitmentCertificateExposed(
+            address(marketFactory), address(0xBEEF), "LCCX", "LCCX", 18, oracle
+        );
     }
 
     // -------------------------
@@ -132,6 +159,29 @@ contract LiquidityCommitmentCertificateTest is Test {
         lcc.burn(alice, 0, 0, false);
     }
 
+    function test_burn_revertsWhenNotHub() public {
+        // Seed a burnable balance (hub mints).
+        lcc.mint(alice, 5, 0, false);
+
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidSender.selector));
+        lcc.burn(alice, 1, 0, false);
+    }
+
+    function test_burn_nonProtocol_decrementsMarketDerivedBucket() public {
+        lcc.mint(alice, 0, 10, false);
+        (uint256 wrappedBalBefore, uint256 marketBalBefore) = lcc.balancesOf(alice);
+        assertEq(wrappedBalBefore, 0);
+        assertEq(marketBalBefore, 10);
+
+        lcc.burn(alice, 0, 4, false);
+
+        (uint256 wrappedBalAfter, uint256 marketBalAfter) = lcc.balancesOf(alice);
+        assertEq(lcc.balanceOf(alice), 6);
+        assertEq(wrappedBalAfter, 0);
+        assertEq(marketBalAfter, 6);
+    }
+
     function test_burn_protocolBoundSkipsBucketAccounting() public {
         // Give protocol address tokens without populating buckets (issued path).
         lcc.mint(protocol, 0, 10, true);
@@ -154,6 +204,11 @@ contract LiquidityCommitmentCertificateTest is Test {
         vm.prank(alice);
         vm.expectRevert(abi.encodeWithSelector(Errors.TransferNotAllowed.selector));
         lcc.transfer(bob, 1);
+    }
+
+    function test_isProtocolTransfer_allowsWhenEitherAddressIsZero() public view {
+        assertTrue(lccExposed.exposed_isProtocolTransfer(address(0), alice, false, false));
+        assertTrue(lccExposed.exposed_isProtocolTransfer(alice, address(0), false, false));
     }
 
     function test_transfer_protocolToNonProtocolAccruesMarketDerivedOnRecipient_andExecutesPlannedCancelHook() public {
@@ -201,6 +256,18 @@ contract LiquidityCommitmentCertificateTest is Test {
         assertEq(plannedCancelCalls, 1);
         assertEq(lastCancelSender, alice);
         assertEq(lastCancelRecipient, address(this));
+    }
+
+    function test_transfer_nonProtocolToProtocol_consumesMarketThenWrapped_partial() public {
+        lcc.mint(alice, 4, 6, false);
+
+        // Transfer 8 to protocol (consumes 6 market + 2 wrapped).
+        vm.prank(alice);
+        lcc.transfer(protocol, 8);
+
+        (uint256 wrappedBalAfter, uint256 marketBalAfter) = lcc.balancesOf(alice);
+        assertEq(wrappedBalAfter, 2);
+        assertEq(marketBalAfter, 0);
     }
 }
 
