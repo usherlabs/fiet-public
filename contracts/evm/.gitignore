@@ -192,3 +192,7 @@ identity.txt
 deployments/oracle_deployments/development/
 
 ./solx
+
+# Gambit & Mutations
+gambit_out/
+.mutation-worktree/
