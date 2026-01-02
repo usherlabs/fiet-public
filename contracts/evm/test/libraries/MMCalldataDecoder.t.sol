@@ -525,8 +525,9 @@ contract MMCalldataDecoderTest is Test {
     }
 
     function test_decodeCommitSignalParams_revertsOnTruncatedHead() public {
-        // Prior to the fix, a 32-byte payload could silently set `owner = address(0)` while `toBytes(0)` succeeded.
-        bytes memory truncated = new bytes(0x20);
+        // Prior to the fix, a truncated head/tail could silently default `owner = address(0)` and decode an empty bytes.
+        // The minimum valid length (even for empty bytes) is 0x60.
+        bytes memory truncated = new bytes(0x40);
         vm.expectRevert(MMCalldataDecoder.SliceOutOfBounds.selector);
         h.decodeCommitSignalParams(truncated);
     }
