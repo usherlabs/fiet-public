@@ -711,10 +711,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         address lcc1Addr = address(lcc1);
         MockERC20 underlying0 = MockERC20(lcc0.underlying());
         MockERC20 underlying1 = MockERC20(lcc1.underlying());
-        Currency underlyingCurrency0 = Currency.wrap(address(underlying0));
-        Currency underlyingCurrency1 = Currency.wrap(address(underlying1));
 
-        Currency lcc0Currency = Currency.wrap(lcc0Addr);
         Currency lcc1Currency = Currency.wrap(lcc1Addr);
 
         // Ensure MMPM is treated as protocol-bound (mirrors production deployment via MarketFactory initial bounds).
@@ -829,8 +826,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         address lcc1Addr = address(lcc1);
         MockERC20 underlying0 = MockERC20(lcc0.underlying());
         MockERC20 underlying1 = MockERC20(lcc1.underlying());
-        Currency underlyingCurrency0 = Currency.wrap(address(underlying0));
-        Currency underlyingCurrency1 = Currency.wrap(address(underlying1));
 
         Currency lcc0Currency = Currency.wrap(lcc0Addr);
         Currency lcc1Currency = Currency.wrap(lcc1Addr);
