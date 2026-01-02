@@ -22,11 +22,29 @@ import {IVRLSettlementObserver} from "../src/interfaces/IVRLSettlementObserver.s
 import {PoolSwapTest} from "@uniswap/v4-core/src/test/PoolSwapTest.sol";
 import {MMActionAdapter as MMA} from "./utils/MMActionAdapter.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
 contract VTSOrchestratorTest is VTSOrchestratorFixture {
     using PoolIdLibrary for PoolId;
     using CurrencyLibrary for Currency;
     using StateLibrary for IPoolManager;
+
+    // ============================================================
+    // Events (redeclared for vm.expectEmit)
+    // ============================================================
+
+    event Checkpointed(uint256 commitId, uint256 positionIndex, RFSCheckpoint checkpoint, bool withCommitment);
+    event GracePeriodExtended(uint256 commitId, uint256 positionIndex, uint8 tokenIndex, RFSCheckpoint checkpoint);
+    event PositionSettled(
+        uint256 indexed commitId,
+        uint256 indexed positionIndex,
+        int128 settlementDelta0,
+        int128 settlementDelta1,
+        uint256 settledToken0,
+        uint256 settledToken1,
+        bool isSeizing,
+        bool rfsOpen
+    );
 
     // ============================================================
     // Deploy VTSOrchestratorTestable for storage inspection
@@ -160,6 +178,63 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         // Should not revert
     }
 
+    function test_incrementCoverage_amount1_incrementsToken1CoverageAccounting() public {
+        PoolId poolId = corePoolKey.toId();
+
+        (, uint256 totalDeficitPrincipal1Before,, uint256 diceIndex1Before,, uint256 diceResidual1Before) =
+            _testableOrchestrator().getPoolDICEAccounting(poolId);
+
+        (
+            uint256 totalSettled0Before,
+            uint256 totalSettled1Before,
+            uint256 ciseIndex0Before,
+            uint256 ciseIndex1Before,
+            uint256 ciseResidual0Before,
+            uint256 ciseResidual1Before,
+            uint256 totalCISEExposure0Before,
+            uint256 totalCISEExposure1Before
+        ) = _testableOrchestrator().getPoolCISEAccounting(poolId);
+
+        uint256 amount1 = 123;
+        vm.prank(marketFactory);
+        vtsOrchestrator.incrementCoverage(poolId, 0, amount1);
+
+        (, uint256 totalDeficitPrincipal1After,, uint256 diceIndex1After,, uint256 diceResidual1After) =
+            _testableOrchestrator().getPoolDICEAccounting(poolId);
+        (
+            uint256 totalSettled0After,
+            uint256 totalSettled1After,
+            uint256 ciseIndex0After,
+            uint256 ciseIndex1After,
+            uint256 ciseResidual0After,
+            uint256 ciseResidual1After,
+            uint256 totalCISEExposure0After,
+            uint256 totalCISEExposure1After
+        ) = _testableOrchestrator().getPoolCISEAccounting(poolId);
+
+        // Totals should not change due to incrementCoverage.
+        assertEq(totalDeficitPrincipal1After, totalDeficitPrincipal1Before, "totalDeficitPrincipal1 should not change");
+        assertEq(totalSettled0After, totalSettled0Before, "totalSettled0 should not change");
+        assertEq(totalSettled1After, totalSettled1Before, "totalSettled1 should not change");
+        assertEq(ciseIndex0After, ciseIndex0Before, "ciseIndex0 should not change");
+        assertEq(ciseResidual0After, ciseResidual0Before, "ciseResidual0 should not change");
+        assertEq(totalCISEExposure0After, totalCISEExposure0Before, "totalCISEExposure0 should not change");
+        assertEq(totalCISEExposure1After, totalCISEExposure1Before, "totalCISEExposure1 should not change");
+
+        // Coverage must land either in the index (if totals > 0) or in residuals (if totals == 0).
+        if (totalDeficitPrincipal1Before > 0) {
+            assertGt(diceIndex1After, diceIndex1Before, "DICE index1 should increase when deficits exist");
+        } else {
+            assertGt(diceResidual1After, diceResidual1Before, "DICE residual1 should increase when no deficits exist");
+        }
+
+        if (totalSettled1Before > 0) {
+            assertGt(ciseIndex1After, ciseIndex1Before, "CISE index1 should increase when settled > 0");
+        } else {
+            assertGt(ciseResidual1After, ciseResidual1Before, "CISE residual1 should increase when no settled exists");
+        }
+    }
+
     // ============================================================
     // Guard Tests - onlyCoreHook
     // ============================================================
@@ -179,6 +254,35 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         BalanceDelta delta = toBalanceDelta(-100, 100);
 
         vm.expectRevert();
+        vtsOrchestrator.afterCoreSwap(corePoolKey, swapParams, delta, 0, 0);
+    }
+
+    // ============================================================
+    // Guard Tests - notPoolPaused
+    // ============================================================
+
+    function test_revert_processPosition_whenPoolPaused() public {
+        vtsOrchestrator.pausePool(corePoolKey.toId());
+
+        ModifyLiquidityParams memory params =
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e18, salt: bytes32(0)});
+        BalanceDelta callerDelta = toBalanceDelta(0, 0);
+        BalanceDelta feesAccrued = toBalanceDelta(0, 0);
+
+        // Call from the core hook so onlyCoreHook passes and the pause guard is the failure reason.
+        vm.prank(address(proxyHook));
+        vm.expectRevert(Errors.EnforcedPause.selector);
+        vtsOrchestrator.processPosition(address(this), corePoolKey, params, callerDelta, feesAccrued, "");
+    }
+
+    function test_revert_afterCoreSwap_whenPoolPaused() public {
+        vtsOrchestrator.pausePool(corePoolKey.toId());
+
+        SwapParams memory swapParams = SwapParams({zeroForOne: true, amountSpecified: -100, sqrtPriceLimitX96: 0});
+        BalanceDelta delta = toBalanceDelta(-100, 100);
+
+        vm.prank(address(proxyHook));
+        vm.expectRevert(Errors.EnforcedPause.selector);
         vtsOrchestrator.afterCoreSwap(corePoolKey, swapParams, delta, 0, 0);
     }
 
@@ -296,6 +400,14 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         assertTrue(isValid, "Valid position should return true");
     }
 
+    function test_isPositionValid_outOfRangePosition_missingOneMax_returnsFalse() public {
+        // If the position is entirely in one token at the current price, one side's effective amount can be zero.
+        // Validity requires BOTH commitment maxima to be non-zero when requireActive=true.
+        (, PositionId positionId,,) = _createCommittedPosition(120, 180, 1e10);
+        bool isValid = vtsOrchestrator.isPositionValid(positionId, true);
+        assertFalse(isValid, "Position with a zero commitment max should be invalid when requireActive=true");
+    }
+
     function test_getPosition_returnsCorrectPosition() public {
         (uint256 tokenId, PositionId positionId,,) = _createCommittedPosition();
 
@@ -327,12 +439,24 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         assertTrue(true, "calcRFS should not revert");
     }
 
+    function test_revert_calcRFS_whenInvalidPosition() public {
+        PositionId invalidId = PositionId.wrap(bytes32(uint256(999)));
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidPosition.selector, 0, 0, invalidId));
+        vtsOrchestrator.calcRFS(invalidId, true);
+    }
+
     function test_getCommitmentMaxima_returnsNonZero() public {
         (, PositionId positionId,,) = _createCommittedPosition();
 
         (uint256 commitment0, uint256 commitment1) = vtsOrchestrator.getCommitmentMaxima(positionId);
         assertGt(commitment0, 0, "Commitment 0 should be non-zero");
         assertGt(commitment1, 0, "Commitment 1 should be non-zero");
+    }
+
+    function test_revert_getCommitmentMaxima_whenInvalidPosition() public {
+        PositionId invalidId = PositionId.wrap(bytes32(uint256(999)));
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidPosition.selector, 0, 0, invalidId));
+        vtsOrchestrator.getCommitmentMaxima(invalidId);
     }
 
     function test_getPositionSettledAmounts() public {
@@ -445,6 +569,10 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
             abi.encode(true)
         );
 
+        // Event must be emitted; we don't assert the struct payload here (data unchecked).
+        vm.expectEmit(false, false, false, false, address(vtsOrchestrator));
+        emit GracePeriodExtended(tokenId, 0, 0, RFSCheckpoint(0, false, 0, 0));
+
         unlockCaller.run(
             address(vtsOrchestrator),
             abi.encodeWithSelector(
@@ -479,6 +607,10 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         // Set the block timestamp
         vm.warp(block.timestamp + 10000000);
         bytes memory emptySignal;
+
+        vm.expectEmit(false, false, false, false, address(vtsOrchestrator));
+        emit Checkpointed(tokenId, 0, RFSCheckpoint(0, false, 0, 0), false);
+
         unlockCaller.run(
             address(vtsOrchestrator),
             abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, address(this), tokenId, 0, emptySignal, false)
@@ -593,6 +725,11 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
 
         // Deposit enough to cover the commitment deficit (deposit is negative in caller-context delta)
         BalanceDelta depositDelta = toBalanceDelta(_negInt128Capped(cd0Before), _negInt128Capped(cd1Before));
+
+        // Event must be emitted; only indexed fields are asserted (data unchecked).
+        vm.expectEmit(true, true, false, false, address(vtsOrchestrator));
+        emit PositionSettled(tokenId, 0, 0, 0, 0, 0, false, false);
+
         unlockCaller.run(
             address(vtsOrchestrator),
             abi.encodeWithSelector(
@@ -712,6 +849,29 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         MarketVTSConfiguration memory config = vtsOrchestrator.getMarketVTSConfiguration(corePoolKey.toId());
         assertGt(config.token0.baseVTSRate, 0, "BaseVTSRate should be non-zero");
         assertGt(config.token1.baseVTSRate, 0, "BaseVTSRate should be non-zero");
+    }
+
+    function test_revert_setMarketVTSConfiguration_whenNotOwner() public {
+        address nonOwner = makeAddr("nonOwner");
+        MarketVTSConfiguration memory config = vtsOrchestrator.getMarketVTSConfiguration(corePoolKey.toId());
+        config.token0.baseVTSRate = config.token0.baseVTSRate + 1;
+
+        vm.prank(nonOwner);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, nonOwner));
+        vtsOrchestrator.setMarketVTSConfiguration(corePoolKey.toId(), config);
+    }
+
+    function test_setMarketVTSConfiguration_whenOwner_updatesConfig() public {
+        MarketVTSConfiguration memory configBefore = vtsOrchestrator.getMarketVTSConfiguration(corePoolKey.toId());
+        MarketVTSConfiguration memory newConfig = configBefore;
+        newConfig.token0.baseVTSRate = newConfig.token0.baseVTSRate + 1;
+
+        vtsOrchestrator.setMarketVTSConfiguration(corePoolKey.toId(), newConfig);
+
+        MarketVTSConfiguration memory configAfter = vtsOrchestrator.getMarketVTSConfiguration(corePoolKey.toId());
+        assertEq(
+            configAfter.token0.baseVTSRate, configBefore.token0.baseVTSRate + 1, "token0.baseVTSRate should update"
+        );
     }
 
     function test_getPool_returnsPoolInfo() public view {

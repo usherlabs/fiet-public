@@ -35,6 +35,21 @@ contract PausableVTSTest is Test {
         );
     }
 
+    function test_constructor_revert_whenPoolManagerIsZeroAddress() public {
+        vm.prank(owner);
+        IVRLSettlementObserver settlementObserver = new VRLSettlementObserver(owner);
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
+        new VTSOrchestrator(
+            address(0),
+            makeAddr("signalManager"),
+            makeAddr("oracleHelper"),
+            makeAddr("liquidityHub"),
+            address(settlementObserver),
+            owner
+        );
+    }
+
     // ═══════════════════════════════════════════════════════════════════════════
     // POOL-SPECIFIC PAUSE TESTS
     // ═══════════════════════════════════════════════════════════════════════════

@@ -11,6 +11,7 @@ import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {Errors} from "../src/libraries/Errors.sol";
 import {ISettlementVerifier} from "../src/interfaces/ISettlementVerifier.sol";
+import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 
 contract FalseSettlementVerifier is ISettlementVerifier {
     function verifySettlementProof(bytes memory, bytes memory) external pure returns (bool) {
@@ -18,16 +19,36 @@ contract FalseSettlementVerifier is ISettlementVerifier {
     }
 }
 
+/// @dev A verifier that expects the settlementProof to *carry* the expected context.
+///      This lets us validate `poolIdAndTokenIndex` strictly while keeping the verifier `pure`.
+contract ContextCheckingSettlementVerifier is ISettlementVerifier {
+    function verifySettlementProof(bytes memory settlementProof, bytes memory poolIdAndTokenIndex)
+        external
+        pure
+        returns (bool)
+    {
+        (bytes32 expectedPoolId, uint8 expectedTokenIndex, bytes memory expectedTag) =
+            abi.decode(settlementProof, (bytes32, uint8, bytes));
+        (bytes32 actualPoolId, uint8 actualTokenIndex) = abi.decode(poolIdAndTokenIndex, (bytes32, uint8));
+
+        // Tag is just an extra sanity check that we're decoding the intended format.
+        if (keccak256(expectedTag) != keccak256(bytes("VRL"))) return false;
+        return expectedPoolId == actualPoolId && expectedTokenIndex == actualTokenIndex;
+    }
+}
+
 contract VRLSettlementObserverTest is Test {
     VRLSettlementObserver public observer;
     StubSettlementVerifier public stubVerifier;
     FalseSettlementVerifier public falseVerifier;
+    ContextCheckingSettlementVerifier public contextVerifier;
 
     address public owner = makeAddr("owner");
     address public nonOwner = makeAddr("nonOwner");
     address public verifier1;
     address public verifier2;
     address public verifierFalse;
+    address public verifierContext;
 
     function setUp() public {
         // Deploy as owner so owner is set correctly
@@ -40,6 +61,8 @@ contract VRLSettlementObserverTest is Test {
         verifier2 = address(new StubSettlementVerifier());
         falseVerifier = new FalseSettlementVerifier();
         verifierFalse = address(falseVerifier);
+        contextVerifier = new ContextCheckingSettlementVerifier();
+        verifierContext = address(contextVerifier);
 
         // Add initial verifier
         vm.prank(owner);
@@ -205,6 +228,28 @@ contract VRLSettlementObserverTest is Test {
         assertTrue(isValid);
     }
 
+    function test_VerifySettlementProof_ValidProof_DoesNotRevert_WhenRevertOnInvalidTrue() public {
+        // This specifically targets the `revertOnInvalid && !isProofValid` gate: valid proofs must not revert,
+        // even when revertOnInvalid=true.
+        address token = makeAddr("token");
+        address[] memory tokens = new address[](1);
+        tokens[0] = token;
+
+        vm.prank(owner);
+        observer.allowVerifierForTokens(0, tokens);
+
+        PoolKey memory poolKey = PoolKey({
+            currency0: Currency.wrap(token),
+            currency1: Currency.wrap(makeAddr("token1")),
+            fee: 3000,
+            tickSpacing: 60,
+            hooks: IHooks(address(0))
+        });
+
+        bool isValid = observer.verifySettlementProof(poolKey, 0, 0, "proof", true);
+        assertTrue(isValid);
+    }
+
     function test_VerifySettlementProof_EmptyProof() public {
         address token = makeAddr("token");
         address[] memory tokens = new address[](1);
@@ -335,6 +380,97 @@ contract VRLSettlementObserverTest is Test {
 
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidProof.selector));
         observer.verifySettlementProof(poolKey, 0, idx, "proof", true);
+    }
+
+    function test_VerifySettlementProof_TokenIndex1_UsesCurrency1_ForVerifierAllowlist() public {
+        // Ensures tokenIndex=1 correctly maps to poolKey.currency1 for allow-list checks (kills swap-style mutants).
+        address token0 = makeAddr("token0");
+        address token1 = makeAddr("token1");
+
+        // Add a dedicated verifier index for this test (avoid reliance on default index 0).
+        vm.startPrank(owner);
+        uint32 idx = observer.addVerifier(verifier1);
+        address[] memory tokens = new address[](1);
+        tokens[0] = token1;
+        observer.allowVerifierForTokens(idx, tokens);
+        vm.stopPrank();
+
+        PoolKey memory poolKey = PoolKey({
+            currency0: Currency.wrap(token0),
+            currency1: Currency.wrap(token1),
+            fee: 3000,
+            tickSpacing: 60,
+            hooks: IHooks(address(0))
+        });
+
+        bool isValid = observer.verifySettlementProof(poolKey, 1, idx, "proof", false);
+        assertTrue(isValid);
+    }
+
+    function test_VerifySettlementProof_PassesCorrectContext_ToVerifier_ForToken0And1() public {
+        // Hardens the API boundary: verifier must receive abi.encode(poolId, tokenIndex) exactly.
+        address token0 = makeAddr("token0");
+        address token1 = makeAddr("token1");
+
+        vm.startPrank(owner);
+        uint32 idx = observer.addVerifier(verifierContext);
+        address[] memory tokens = new address[](2);
+        tokens[0] = token0;
+        tokens[1] = token1;
+        observer.allowVerifierForTokens(idx, tokens);
+        vm.stopPrank();
+
+        PoolKey memory poolKey = PoolKey({
+            currency0: Currency.wrap(token0),
+            currency1: Currency.wrap(token1),
+            fee: 3000,
+            tickSpacing: 60,
+            hooks: IHooks(address(0))
+        });
+
+        bytes32 poolId = PoolId.unwrap(PoolIdLibrary.toId(poolKey));
+
+        // tokenIndex=0
+        bytes memory proof0 = abi.encode(poolId, uint8(0), bytes("VRL"));
+        assertTrue(observer.verifySettlementProof(poolKey, 0, idx, proof0, true));
+
+        // tokenIndex=1
+        bytes memory proof1 = abi.encode(poolId, uint8(1), bytes("VRL"));
+        assertTrue(observer.verifySettlementProof(poolKey, 1, idx, proof1, true));
+    }
+
+    function test_VerifySettlementProof_ContextMismatch_ReturnsFalseOrReverts_DependingOnFlag() public {
+        // If the verifier returns false (eg due to a context mismatch), `revertOnInvalid` should control behaviour.
+        address token0 = makeAddr("token0");
+        address token1 = makeAddr("token1");
+
+        vm.startPrank(owner);
+        uint32 idx = observer.addVerifier(verifierContext);
+        address[] memory tokens = new address[](2);
+        tokens[0] = token0;
+        tokens[1] = token1;
+        observer.allowVerifierForTokens(idx, tokens);
+        vm.stopPrank();
+
+        PoolKey memory poolKey = PoolKey({
+            currency0: Currency.wrap(token0),
+            currency1: Currency.wrap(token1),
+            fee: 3000,
+            tickSpacing: 60,
+            hooks: IHooks(address(0))
+        });
+
+        bytes32 poolId = PoolId.unwrap(PoolIdLibrary.toId(poolKey));
+
+        // Supply a proof that claims the wrong tokenIndex for this call (mismatch => verifier returns false).
+        bytes memory mismatchedProof = abi.encode(poolId, uint8(1), bytes("VRL"));
+
+        // revertOnInvalid=false => returns false (no revert)
+        assertEq(observer.verifySettlementProof(poolKey, 0, idx, mismatchedProof, false), false);
+
+        // revertOnInvalid=true => reverts InvalidProof
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidProof.selector));
+        observer.verifySettlementProof(poolKey, 0, idx, mismatchedProof, true);
     }
 
     function test_OnlyOwnerCanAddVerifier() public {

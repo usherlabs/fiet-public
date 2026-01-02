@@ -284,7 +284,7 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
     }
 
     /// @dev Calculates the adjusted sqrt price limit for the core pool when direction is flipped
-    function _calcCoreSqrtPriceLimit(uint160 sqrtPriceLimitX96, bool flipped) private pure returns (uint160) {
+    function _calcCoreSqrtPriceLimit(uint160 sqrtPriceLimitX96, bool flipped) internal pure returns (uint160) {
         if (!flipped) return sqrtPriceLimitX96;
 
         if (sqrtPriceLimitX96 == TickMath.MIN_SQRT_PRICE + 1) {
