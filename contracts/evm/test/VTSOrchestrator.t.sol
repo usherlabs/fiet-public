@@ -270,7 +270,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         BalanceDelta feesAccrued = toBalanceDelta(0, 0);
 
         // Call from the core hook so onlyCoreHook passes and the pause guard is the failure reason.
-        vm.prank(address(proxyHook));
+        vm.prank(coreHookAddress);
         vm.expectRevert(Errors.EnforcedPause.selector);
         vtsOrchestrator.processPosition(address(this), corePoolKey, params, callerDelta, feesAccrued, "");
     }
@@ -281,7 +281,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         SwapParams memory swapParams = SwapParams({zeroForOne: true, amountSpecified: -100, sqrtPriceLimitX96: 0});
         BalanceDelta delta = toBalanceDelta(-100, 100);
 
-        vm.prank(address(proxyHook));
+        vm.prank(coreHookAddress);
         vm.expectRevert(Errors.EnforcedPause.selector);
         vtsOrchestrator.afterCoreSwap(corePoolKey, swapParams, delta, 0, 0);
     }
@@ -400,12 +400,15 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         assertTrue(isValid, "Valid position should return true");
     }
 
-    function test_isPositionValid_outOfRangePosition_missingOneMax_returnsFalse() public {
-        // If the position is entirely in one token at the current price, one side's effective amount can be zero.
-        // Validity requires BOTH commitment maxima to be non-zero when requireActive=true.
-        (, PositionId positionId,,) = _createCommittedPosition(120, 180, 1e10);
+    function test_isPositionValid_missingOneCommitmentMax_returnsFalse() public {
+        // commitmentMax is tracked mechanically; to hit the edge-case behind the `||` check we force it via test harness.
+        (, PositionId positionId,,) = _createCommittedPosition();
+
+        // Force only one side to be zero.
+        _testableOrchestrator()._setCommitmentMax(positionId, 0, 1);
+
         bool isValid = vtsOrchestrator.isPositionValid(positionId, true);
-        assertFalse(isValid, "Position with a zero commitment max should be invalid when requireActive=true");
+        assertFalse(isValid, "Position should be invalid when exactly one commitment max is zero");
     }
 
     function test_getPosition_returnsCorrectPosition() public {
@@ -862,16 +865,20 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
     }
 
     function test_setMarketVTSConfiguration_whenOwner_updatesConfig() public {
-        MarketVTSConfiguration memory configBefore = vtsOrchestrator.getMarketVTSConfiguration(corePoolKey.toId());
+        PoolId pid = corePoolKey.toId();
+        MarketVTSConfiguration memory configBefore = vtsOrchestrator.getMarketVTSConfiguration(pid);
+        uint256 baseRateBefore = configBefore.token0.baseVTSRate;
         MarketVTSConfiguration memory newConfig = configBefore;
         newConfig.token0.baseVTSRate = newConfig.token0.baseVTSRate + 1;
 
-        vtsOrchestrator.setMarketVTSConfiguration(corePoolKey.toId(), newConfig);
+        // Be explicit about owner to avoid fixture surprises.
+        vm.prank(vtsOrchestrator.owner());
+        vtsOrchestrator.setMarketVTSConfiguration(pid, newConfig);
 
-        MarketVTSConfiguration memory configAfter = vtsOrchestrator.getMarketVTSConfiguration(corePoolKey.toId());
-        assertEq(
-            configAfter.token0.baseVTSRate, configBefore.token0.baseVTSRate + 1, "token0.baseVTSRate should update"
-        );
+        MarketVTSConfiguration memory configAfter = vtsOrchestrator.getMarketVTSConfiguration(pid);
+        uint256 baseRateAfter = configAfter.token0.baseVTSRate;
+
+        assertEq(baseRateAfter, baseRateBefore + 1, "token0.baseVTSRate should update");
     }
 
     function test_getPool_returnsPoolInfo() public view {
