@@ -168,6 +168,21 @@ contract LiquidityCommitmentCertificateTest is Test {
         lcc.burn(alice, 1, 0, false);
     }
 
+    /// @dev Mutation-hardening: pairs a successful hub burn with an unauthorised burn attempt so
+    ///      mutation runners attribute the access-control kill to burn() even under test selection.
+    function test_burn_onlyHub_enforced() public {
+        lcc.mint(alice, 5, 0, false);
+
+        // Happy path: hub burns successfully.
+        lcc.burn(alice, 1, 0, false);
+        assertEq(lcc.balanceOf(alice), 4);
+
+        // Unauthorised path: alice cannot burn.
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidSender.selector));
+        lcc.burn(alice, 1, 0, false);
+    }
+
     function test_burn_nonProtocol_decrementsMarketDerivedBucket() public {
         lcc.mint(alice, 0, 10, false);
         (uint256 wrappedBalBefore, uint256 marketBalBefore) = lcc.balancesOf(alice);

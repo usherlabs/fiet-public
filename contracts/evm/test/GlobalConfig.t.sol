@@ -48,4 +48,19 @@ contract GlobalConfigTest is Test {
         vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, notOwner));
         globalConfig.proxyCall(address(mockContract), data);
     }
+
+    /// @dev Mutation-hardening: ensures the unauthorised-path is attributed to proxyCall() itself
+    ///      even under coverage-based test selection by pairing a successful call with the revert.
+    function test_proxyCall_onlyOwner_enforced() public {
+        // Happy path as owner (this contract).
+        bytes memory okData = abi.encodeWithSelector(MockContract.addTwoToNumber.selector, 7);
+        bytes memory okResult = globalConfig.proxyCall(address(mockContract), okData);
+        assertEq(abi.decode(okResult, (uint256)), 9);
+
+        // Unauthorised path.
+        address notOwner = makeAddr("notOwner");
+        vm.prank(notOwner);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, notOwner));
+        globalConfig.proxyCall(address(mockContract), okData);
+    }
 }

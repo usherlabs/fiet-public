@@ -46,6 +46,23 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         bool rfsOpen
     );
 
+    struct DICEAccounting {
+        uint256 totalDeficitPrincipal1;
+        uint256 diceIndex1;
+        uint256 diceResidual1;
+    }
+
+    struct CISEAccounting {
+        uint256 totalSettled0;
+        uint256 totalSettled1;
+        uint256 ciseIndex0;
+        uint256 ciseIndex1;
+        uint256 ciseResidual0;
+        uint256 ciseResidual1;
+        uint256 totalCISEExposure0;
+        uint256 totalCISEExposure1;
+    }
+
     // ============================================================
     // Deploy VTSOrchestratorTestable for storage inspection
     // ============================================================
@@ -181,58 +198,67 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
     function test_incrementCoverage_amount1_incrementsToken1CoverageAccounting() public {
         PoolId poolId = corePoolKey.toId();
 
-        (, uint256 totalDeficitPrincipal1Before,, uint256 diceIndex1Before,, uint256 diceResidual1Before) =
-            _testableOrchestrator().getPoolDICEAccounting(poolId);
-
-        (
-            uint256 totalSettled0Before,
-            uint256 totalSettled1Before,
-            uint256 ciseIndex0Before,
-            uint256 ciseIndex1Before,
-            uint256 ciseResidual0Before,
-            uint256 ciseResidual1Before,
-            uint256 totalCISEExposure0Before,
-            uint256 totalCISEExposure1Before
-        ) = _testableOrchestrator().getPoolCISEAccounting(poolId);
+        DICEAccounting memory diceBefore = _getPoolDICEAccounting(poolId);
+        CISEAccounting memory ciseBefore = _getPoolCISEAccounting(poolId);
 
         uint256 amount1 = 123;
         vm.prank(marketFactory);
         vtsOrchestrator.incrementCoverage(poolId, 0, amount1);
 
-        (, uint256 totalDeficitPrincipal1After,, uint256 diceIndex1After,, uint256 diceResidual1After) =
-            _testableOrchestrator().getPoolDICEAccounting(poolId);
-        (
-            uint256 totalSettled0After,
-            uint256 totalSettled1After,
-            uint256 ciseIndex0After,
-            uint256 ciseIndex1After,
-            uint256 ciseResidual0After,
-            uint256 ciseResidual1After,
-            uint256 totalCISEExposure0After,
-            uint256 totalCISEExposure1After
-        ) = _testableOrchestrator().getPoolCISEAccounting(poolId);
+        DICEAccounting memory diceAfter = _getPoolDICEAccounting(poolId);
+        CISEAccounting memory ciseAfter = _getPoolCISEAccounting(poolId);
 
         // Totals should not change due to incrementCoverage.
-        assertEq(totalDeficitPrincipal1After, totalDeficitPrincipal1Before, "totalDeficitPrincipal1 should not change");
-        assertEq(totalSettled0After, totalSettled0Before, "totalSettled0 should not change");
-        assertEq(totalSettled1After, totalSettled1Before, "totalSettled1 should not change");
-        assertEq(ciseIndex0After, ciseIndex0Before, "ciseIndex0 should not change");
-        assertEq(ciseResidual0After, ciseResidual0Before, "ciseResidual0 should not change");
-        assertEq(totalCISEExposure0After, totalCISEExposure0Before, "totalCISEExposure0 should not change");
-        assertEq(totalCISEExposure1After, totalCISEExposure1Before, "totalCISEExposure1 should not change");
+        assertEq(
+            diceAfter.totalDeficitPrincipal1,
+            diceBefore.totalDeficitPrincipal1,
+            "totalDeficitPrincipal1 should not change"
+        );
+        assertEq(ciseAfter.totalSettled0, ciseBefore.totalSettled0, "totalSettled0 should not change");
+        assertEq(ciseAfter.totalSettled1, ciseBefore.totalSettled1, "totalSettled1 should not change");
+        assertEq(ciseAfter.ciseIndex0, ciseBefore.ciseIndex0, "ciseIndex0 should not change");
+        assertEq(ciseAfter.ciseResidual0, ciseBefore.ciseResidual0, "ciseResidual0 should not change");
+        assertEq(ciseAfter.totalCISEExposure0, ciseBefore.totalCISEExposure0, "totalCISEExposure0 should not change");
+        assertEq(ciseAfter.totalCISEExposure1, ciseBefore.totalCISEExposure1, "totalCISEExposure1 should not change");
 
         // Coverage must land either in the index (if totals > 0) or in residuals (if totals == 0).
-        if (totalDeficitPrincipal1Before > 0) {
-            assertGt(diceIndex1After, diceIndex1Before, "DICE index1 should increase when deficits exist");
+        if (diceBefore.totalDeficitPrincipal1 > 0) {
+            assertGt(diceAfter.diceIndex1, diceBefore.diceIndex1, "DICE index1 should increase when deficits exist");
         } else {
-            assertGt(diceResidual1After, diceResidual1Before, "DICE residual1 should increase when no deficits exist");
+            assertGt(
+                diceAfter.diceResidual1,
+                diceBefore.diceResidual1,
+                "DICE residual1 should increase when no deficits exist"
+            );
         }
 
-        if (totalSettled1Before > 0) {
-            assertGt(ciseIndex1After, ciseIndex1Before, "CISE index1 should increase when settled > 0");
+        if (ciseBefore.totalSettled1 > 0) {
+            assertGt(ciseAfter.ciseIndex1, ciseBefore.ciseIndex1, "CISE index1 should increase when settled > 0");
         } else {
-            assertGt(ciseResidual1After, ciseResidual1Before, "CISE residual1 should increase when no settled exists");
+            assertGt(
+                ciseAfter.ciseResidual1,
+                ciseBefore.ciseResidual1,
+                "CISE residual1 should increase when no settled exists"
+            );
         }
+    }
+
+    function _getPoolDICEAccounting(PoolId poolId) internal view returns (DICEAccounting memory a) {
+        (, a.totalDeficitPrincipal1,, a.diceIndex1,, a.diceResidual1) =
+            _testableOrchestrator().getPoolDICEAccounting(poolId);
+    }
+
+    function _getPoolCISEAccounting(PoolId poolId) internal view returns (CISEAccounting memory a) {
+        (
+            a.totalSettled0,
+            a.totalSettled1,
+            a.ciseIndex0,
+            a.ciseIndex1,
+            a.ciseResidual0,
+            a.ciseResidual1,
+            a.totalCISEExposure0,
+            a.totalCISEExposure1
+        ) = _testableOrchestrator().getPoolCISEAccounting(poolId);
     }
 
     // ============================================================
