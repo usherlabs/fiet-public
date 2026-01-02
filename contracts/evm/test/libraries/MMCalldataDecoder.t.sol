@@ -523,5 +523,12 @@ contract MMCalldataDecoderTest is Test {
         vm.expectRevert(MMCalldataDecoder.SliceOutOfBounds.selector);
         h.decodeSyncParams(hex"");
     }
+
+    function test_decodeCommitSignalParams_revertsOnTruncatedHead() public {
+        // Prior to the fix, a 32-byte payload could silently set `owner = address(0)` while `toBytes(0)` succeeded.
+        bytes memory truncated = new bytes(0x20);
+        vm.expectRevert(MMCalldataDecoder.SliceOutOfBounds.selector);
+        h.decodeCommitSignalParams(truncated);
+    }
 }
 

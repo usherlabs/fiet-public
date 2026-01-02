@@ -254,6 +254,60 @@ forge test --match-contract MarketFactory
 forge test -vvv
 ```
 
+### Mutation Testing (Gambit)
+
+This repo includes a lightweight mutation testing runner: `mutation_tests.sh`.
+
+At a high level it:
+
+- Generates Solidity mutants using **Gambit**
+- Creates an isolated **git worktree** at `./.mutation-worktree/`
+- Overlays each mutant into the worktree and runs `forge test`
+- Records whether each mutant is **killed** (tests fail) or **survived** (tests pass)
+
+#### **Prerequisites**
+
+- `gambit` on your `PATH` (built from `Certora/Gambit`)
+- `solc` on your `PATH` (matching the project/compiler constraints)
+- `forge` on your `PATH`
+- `git` available (for worktrees)
+
+#### **Basic usage**
+
+```bash
+# Run against the default core target set
+./mutation_tests.sh
+
+# Target a specific contract file
+./mutation_tests.sh src/LiquidityHub.sol
+
+# Downsample mutants (useful to start with)
+NUM_MUTANTS=25 ./mutation_tests.sh src/LiquidityHub.sol
+
+# Skip Gambit's solc validation step (faster, but may generate uncompilable mutants)
+SKIP_VALIDATE=1 NUM_MUTANTS=25 ./mutation_tests.sh src/LiquidityHub.sol
+```
+
+#### **Clean vs resume runs**
+
+```bash
+# Guaranteed clean run (removes ./gambit_out and ./.mutation-worktree first)
+CLEAN_BEFORE=1 ./mutation_tests.sh
+
+# Resume a prior run (reuse existing mutants and skip already-recorded mutant IDs)
+REUSE_OUTDIR=1 RESUME=1 ./mutation_tests.sh
+
+# Keep going even if a mutant run errors (records 'errored' and continues)
+FAIL_FAST=0 ./mutation_tests.sh
+```
+
+#### **Outputs**
+
+- `./gambit_out/`: mutants, logs, and `mutation_results.csv`
+- `./.mutation-worktree/`: the worktree checkout used to run tests (local artefact)
+
+You should generally **not commit** these artefacts; add them to `.gitignore` if needed.
+
 ### Test Coverage
 
 ```bash
@@ -263,6 +317,14 @@ forge coverage
 # Generate coverage report with lcov
 forge coverage --report lcov
 ```
+
+Use the **provided wrapper** to generate a summary plus `lcov` output:
+
+```bash
+./coverage.sh
+```
+
+This writes `./lcov.info` and prints a coverage summary to stdout.
 
 ## Troubleshooting
 

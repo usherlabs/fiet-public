@@ -360,6 +360,10 @@ library MMCalldataDecoder {
         returns (bytes calldata liquiditySignal, address owner)
     {
         assembly ("memory-safe") {
+            if lt(params.length, 0x40) {
+                mstore(0, SLICE_ERROR_SELECTOR)
+                revert(0x1c, 4)
+            }
             owner := calldataload(add(params.offset, 0x20))
         }
         // Use CalldataDecoder.toBytes for dynamic bytes (index 0 = 1st argument)

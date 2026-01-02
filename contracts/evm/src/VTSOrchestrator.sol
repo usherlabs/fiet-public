@@ -102,6 +102,18 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
         if (_poolManager == address(0)) {
             revert Errors.InvalidAddress(_poolManager);
         }
+        if (_signalManager == address(0)) {
+            revert Errors.InvalidAddress(_signalManager);
+        }
+        if (_oracleHelper == address(0)) {
+            revert Errors.InvalidAddress(_oracleHelper);
+        }
+        if (_liquidityHub == address(0)) {
+            revert Errors.InvalidAddress(_liquidityHub);
+        }
+        if (_settlementObserver == address(0)) {
+            revert Errors.InvalidAddress(_settlementObserver);
+        }
         oracleHelper = IOracleHelper(_oracleHelper);
         signalManager = IVRLSignalManager(_signalManager);
         liquidityHub = ILiquidityHub(_liquidityHub);
@@ -444,6 +456,7 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
     function settlePositionGrowths(PositionId positionId) public {
         // Only check for active valid position - as new positions are not yet registered in VTS when this method is called.
         if (isPositionValid(positionId, true)) {
+            _notPoolPaused(s.positions[positionId].poolId);
             VTSPositionLib.settlePositionGrowths(s, poolManager, positionId);
         }
     }

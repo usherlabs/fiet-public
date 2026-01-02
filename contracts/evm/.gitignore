@@ -196,3 +196,5 @@ deployments/oracle_deployments/development/
 # Gambit & Mutations
 gambit_out/
 .mutation-worktree/
+.gambit_conf.*
+.tmp*

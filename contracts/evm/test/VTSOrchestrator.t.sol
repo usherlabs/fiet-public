@@ -312,6 +312,14 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         vtsOrchestrator.afterCoreSwap(corePoolKey, swapParams, delta, 0, 0);
     }
 
+    function test_revert_settlePositionGrowths_whenPoolPaused() public {
+        (, PositionId positionId,,) = _createCommittedPosition();
+        vtsOrchestrator.pausePool(corePoolKey.toId());
+
+        vm.expectRevert(Errors.EnforcedPause.selector);
+        vtsOrchestrator.settlePositionGrowths(positionId);
+    }
+
     // ============================================================
     // Signal Lifecycle Tests
     // ============================================================
