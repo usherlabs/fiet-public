@@ -60,4 +60,3 @@ contract MockPositionDescriptor is IPositionDescriptor {
     }
 }
 
-
