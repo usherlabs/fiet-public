@@ -9,11 +9,11 @@ import {Errors} from "../../src/libraries/Errors.sol";
 contract ImmutableMarketStateHarness is ImmutableMarketState {
     constructor(address mf) ImmutableMarketState(mf) {}
 
-    function onlyFactoryFn() external onlyFactory returns (bool) {
+    function onlyFactoryFn() external view onlyFactory returns (bool) {
         return true;
     }
 
-    function onlyFactoryWithSenderFn(address sender) external onlyFactoryWithSender(sender) returns (bool) {
+    function onlyFactoryWithSenderFn(address sender) external view onlyFactoryWithSender(sender) returns (bool) {
         return true;
     }
 

@@ -262,7 +262,7 @@ contract MockVTSOrchestrator {
         BalanceDelta,
         BalanceDelta,
         bytes calldata
-    ) external returns (Position memory pos, PositionId id, BalanceDelta feeAdj, bool isMMPosition) {
+    ) external view returns (Position memory /* pos */, PositionId id, BalanceDelta feeAdj, bool isMMPosition) {
         id = PositionId.wrap(bytes32(0));
         feeAdj = _feeAdj;
         isMMPosition = _isMM;

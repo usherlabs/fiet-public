@@ -164,7 +164,7 @@ contract LCCMetadataLibTest is Test {
         assertEq(LCCMetadataLib.buildSymbol("ETH", "a1b2c3d4"), "lcc-ETH-a1b2c3d4");
     }
 
-    function test_truncateMarketRef_exactBytesAndHex() public {
+    function test_truncateMarketRef_exactBytesAndHex() public view {
         bytes memory ref = hex"010203040506";
         (bytes memory truncated, string memory hexStr) = h.truncateMarketRef(ref, 4);
 
