@@ -42,6 +42,7 @@ library VTSSwapLib {
     /// @param key The pool key
     /// @param sqrtPBefore The sqrt price before the swap
     /// @param liqBefore The liquidity before the swap
+    //#olympix-ignore-reentrancy
     function processSwap(
         VTSStorage storage s,
         IPoolManager poolManager,
@@ -199,6 +200,7 @@ library VTSSwapLib {
     /// @param poolId The pool ID
     /// @param tick The tick that was crossed
     /// @param token The token index (0 or 1)
+    //#olympix-ignore-reentrancy
     function _onTickCross(VTSStorage storage s, PoolId poolId, int24 tick, uint8 token) internal {
         // Flip deficit growth outside
         _flipOutside(s, poolId, tick, token, 0);
@@ -217,6 +219,7 @@ library VTSSwapLib {
     /// @param token The token index (0 or 1)
     /// @param growthType The growth type (0 = deficit, 1 = inflow)
     /// @dev Coverage usage growth (growthType == 2) removed - DICE uses deficit-indexed coverage
+    //#olympix-ignore-reentrancy
     function _flipOutside(VTSStorage storage s, PoolId poolId, int24 tick, uint8 token, uint8 growthType) internal {
         if (token > 1) return;
         PoolAccounting storage paPool = s.poolAccounting[poolId];

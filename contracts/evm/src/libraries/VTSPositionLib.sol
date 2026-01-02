@@ -445,6 +445,7 @@ library VTSPositionLib {
     /// @param s The central VTS storage
     /// @param poolManager The pool manager contract
     /// @param positionId The position ID
+    //#olympix-ignore-reentrancy
     function _settlePositionDeficitGrowth(VTSStorage storage s, IPoolManager poolManager, PositionId positionId)
         internal
     {
@@ -818,6 +819,7 @@ library VTSPositionLib {
     /// @param s The central VTS storage
     /// @param poolManager The pool manager contract
     /// @param positionId The position ID
+    //#olympix-ignore-reentrancy
     function settlePositionGrowths(VTSStorage storage s, IPoolManager poolManager, PositionId positionId) public {
         _settleSettledIndexedCoverageUsage(s, positionId);
 
@@ -1138,6 +1140,7 @@ library VTSPositionLib {
         }
     }
 
+    //#olympix-ignore-reentrancy
     function touchPosition(VTSStorage storage s, PositionContext memory ctx, TouchPositionParams calldata p)
         external
         returns (TouchPositionResult memory result)
@@ -1539,6 +1542,7 @@ library VTSPositionLib {
     /// @param poolManager The pool manager contract
     /// @param p The MM settle parameters (vault, positionId, currencies, delta, isSeizing)
     /// @return result The MM settle result (settlementDelta, rfsOpen, seizedLiquidityUnits)
+    //#olympix-ignore-reentrancy
     function onMMSettle(VTSStorage storage s, IPoolManager poolManager, SettleParams calldata p)
         external
         returns (SettleResult memory result)

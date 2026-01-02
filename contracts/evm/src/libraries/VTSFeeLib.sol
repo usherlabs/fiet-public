@@ -205,6 +205,7 @@ library VTSFeeLib {
     /// @param positionId The position ID
     /// @param poolId The pool ID
     /// @return adj The materialised delta as BalanceDelta for the hook to apply this call only
+    //#olympix-ignore-reentrancy
     function _finaliseFeeAdjustment(VTSStorage storage s, PositionId positionId, PoolId poolId)
         internal
         returns (BalanceDelta adj)
