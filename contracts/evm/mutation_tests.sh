@@ -299,6 +299,145 @@ run_forge_tests_for_mutant() {
   fi
 }
 
+write_detailed_report() {
+  # Enrich the minimal `mutation_results.csv` with Gambit metadata so survivors can be reviewed.
+  #
+  # Inputs (under $OUTDIR):
+  # - mutation_results.csv: mid,status
+  # - mutants.log: mid,mutation_type,file,line:col,original_expr,mutant_expr
+  # - gambit_results.json: includes per-mutant diff + description
+  #
+  # Outputs (under $OUTDIR):
+  # - mutation_results_detailed.csv: one row per mutant with original/mutant + diff
+  # - mutation_survivors_detailed.csv: filtered to status==survived
+  OUTDIR="$OUTDIR" python3 - <<'PY'
+import csv
+import json
+import os
+import sys
+
+outdir = os.environ["OUTDIR"]
+
+results_csv = os.path.join(outdir, "mutation_results.csv")
+mutants_log = os.path.join(outdir, "mutants.log")
+gambit_results = os.path.join(outdir, "gambit_results.json")
+
+def warn(msg: str) -> None:
+    print(f"[mutation_tests] {msg}", file=sys.stderr)
+
+if not os.path.exists(results_csv):
+    warn(f"Skipping detailed report: missing {results_csv}")
+    sys.exit(0)
+
+statuses: dict[str, str] = {}
+with open(results_csv, newline="", encoding="utf-8") as f:
+    r = csv.DictReader(f)
+    if not r.fieldnames or "mid" not in r.fieldnames or "status" not in r.fieldnames:
+        warn(f"Skipping detailed report: unexpected CSV header in {results_csv}: {r.fieldnames}")
+        sys.exit(0)
+    for row in r:
+        mid = (row.get("mid") or "").strip()
+        status = (row.get("status") or "").strip()
+        if mid:
+            statuses[mid] = status
+
+meta: dict[str, dict[str, str]] = {}
+if os.path.exists(mutants_log):
+    with open(mutants_log, newline="", encoding="utf-8") as f:
+        r = csv.reader(f)
+        for row in r:
+            if not row:
+                continue
+            # Expected: mid, mutation_type, file, line:col, original_expr, mutant_expr
+            # Be tolerant if extra commas appear in expr columns (csv handles quotes).
+            if len(row) < 6:
+                continue
+            mid, mut_type, path, linecol, orig_expr, mut_expr = row[:6]
+            line, col = "", ""
+            if ":" in linecol:
+                line, col = (linecol.split(":", 1) + [""])[:2]
+            else:
+                line = linecol
+            meta[mid] = {
+                "mutation_type": mut_type,
+                "file": path,
+                "line": line,
+                "col": col,
+                "original_expr": orig_expr,
+                "mutant_expr": mut_expr,
+            }
+else:
+    warn(f"Missing {mutants_log}; detailed report will omit original/mutant expressions.")
+
+diffs: dict[str, dict[str, str]] = {}
+if os.path.exists(gambit_results):
+    with open(gambit_results, encoding="utf-8") as f:
+        arr = json.load(f)
+    if isinstance(arr, list):
+        for item in arr:
+            if not isinstance(item, dict):
+                continue
+            mid = str(item.get("id", "")).strip()
+            if not mid:
+                continue
+            diffs[mid] = {
+                "description": str(item.get("description", "") or ""),
+                "diff": str(item.get("diff", "") or ""),
+            }
+else:
+    warn(f"Missing {gambit_results}; detailed report will omit diffs.")
+
+def mid_sort_key(m: str):
+    try:
+        return int(m)
+    except Exception:
+        return m
+
+cols = [
+    "mid", "status",
+    "mutation_type", "description",
+    "file", "line", "col",
+    "original_expr", "mutant_expr",
+    "diff",
+]
+
+detailed_path = os.path.join(outdir, "mutation_results_detailed.csv")
+survivors_path = os.path.join(outdir, "mutation_survivors_detailed.csv")
+
+rows: list[list[str]] = []
+for mid in sorted(statuses.keys(), key=mid_sort_key):
+    m = meta.get(mid, {})
+    d = diffs.get(mid, {})
+    rows.append([
+        mid,
+        statuses.get(mid, ""),
+        m.get("mutation_type", ""),
+        d.get("description", ""),
+        m.get("file", ""),
+        m.get("line", ""),
+        m.get("col", ""),
+        m.get("original_expr", ""),
+        m.get("mutant_expr", ""),
+        d.get("diff", ""),
+    ])
+
+with open(detailed_path, "w", newline="", encoding="utf-8") as f:
+    w = csv.writer(f)
+    w.writerow(cols)
+    w.writerows(rows)
+
+with open(survivors_path, "w", newline="", encoding="utf-8") as f:
+    w = csv.writer(f)
+    w.writerow(cols)
+    for r in rows:
+        if r[1] == "survived":
+            w.writerow(r)
+
+warn(f"Wrote detailed report: {detailed_path}")
+warn(f"Wrote survivors report: {survivors_path}")
+PY
+}
+
 main() {
   log "Targets:"
   for t in "${TARGETS[@]}"; do log "  - $t"; done
@@ -384,6 +523,8 @@ main() {
       killed=$((killed + 1))
     fi
   done
+
+  write_detailed_report
 
   log ""
   log "Done."
