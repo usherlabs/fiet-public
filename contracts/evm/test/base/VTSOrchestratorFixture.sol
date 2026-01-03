@@ -45,7 +45,12 @@ contract UnlockCaller is IUnlockCallback, ImmutableState {
         }
         (address _target, bytes memory _callData) = abi.decode(data, (address, bytes));
         (bool success, bytes memory result) = _target.call(_callData);
-        require(success, "Call failed");
+        if (!success) {
+            // Bubble the original revert reason/data so tests can assert on selectors/args.
+            assembly ("memory-safe") {
+                revert(add(result, 0x20), mload(result))
+            }
+        }
         return result;
     }
 

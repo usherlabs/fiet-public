@@ -124,6 +124,12 @@ contract LiquidityCommitmentCertificateTest is Test {
         assertEq(lccNative.underlying(), OracleUtils.RESILIENT_ORACLE_NATIVE_TOKEN_ADDR);
     }
 
+    function test_decimals_returnsConstructorValue() public {
+        LiquidityCommitmentCertificate lcc6 =
+            new LiquidityCommitmentCertificate(address(marketFactory), address(0xBEEF), "LCC6", "LCC6", 6, oracle);
+        assertEq(lcc6.decimals(), 6);
+    }
+
     function test_mint_revertsWhenNotHub() public {
         vm.prank(alice);
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidSender.selector));
@@ -237,9 +243,53 @@ contract LiquidityCommitmentCertificateTest is Test {
         assertEq(wrappedBal, 0);
         assertEq(marketBal, 3);
 
+        // Annulment only occurs on non-protocol -> protocol transfers.
+        assertEq(annulCalls, 0);
+
         assertEq(plannedCancelCalls, 1);
         assertEq(lastCancelSender, protocol);
         assertEq(lastCancelRecipient, alice);
+    }
+
+    function test_transfer_protocolToProtocol_doesNotAnnul_andBucketsRemainUntracked() public {
+        address protocol2 = makeAddr("protocol2");
+        marketFactory.setBounds(protocol2, true);
+
+        // Give protocol address tokens without populating buckets (issued path).
+        lcc.mint(protocol, 0, 9, true);
+
+        vm.prank(protocol);
+        lcc.transfer(protocol2, 4);
+
+        // No annulment for protocol -> protocol.
+        assertEq(annulCalls, 0);
+
+        // Protocol recipients don't accumulate bucket maps; balancesOf reports ERC20 balance as wrapped via fallback.
+        (uint256 wrappedBal, uint256 marketBal) = lcc.balancesOf(protocol2);
+        assertEq(lcc.balanceOf(protocol2), 4);
+        assertEq(wrappedBal, 4);
+        assertEq(marketBal, 0);
+
+        assertEq(plannedCancelCalls, 1);
+        assertEq(lastCancelSender, protocol);
+        assertEq(lastCancelRecipient, protocol2);
+    }
+
+    function test_transfer_nonProtocolToProtocol_revertsInsufficientBalance_whenBucketsZeroButERC20BalanceNonZero()
+        public
+    {
+        // Make sure recipient is protocol-bound; sender is not.
+        assertTrue(marketFactory.bounds(protocol));
+        assertFalse(marketFactory.bounds(alice));
+
+        // Mint ERC20 balance to alice while skipping bucket bookkeeping.
+        lcc.mint(alice, 7, 0, true);
+        assertEq(lcc.balanceOf(alice), 7);
+
+        // Attempt a non-protocol -> protocol transfer; bucket sums are 0, so LCC's internal check must revert.
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InsufficientBalance.selector, uint256(0), uint256(1)));
+        lcc.transfer(protocol, 1);
     }
 
     function test_transfer_nonProtocolToProtocolAnnulsSettlementAndConsumesMarketFirstThenWrapped_andExecutesPlannedCancel()
@@ -283,6 +333,33 @@ contract LiquidityCommitmentCertificateTest is Test {
         (uint256 wrappedBalAfter, uint256 marketBalAfter) = lcc.balancesOf(alice);
         assertEq(wrappedBalAfter, 2);
         assertEq(marketBalAfter, 0);
+    }
+
+    function test_transfer_nonProtocolToProtocol_whenMarketCoversAmount_doesNotConsumeWrapped() public {
+        // Alice has both buckets, but market-derived fully covers the transfer amount.
+        lcc.mint(alice, 5, 10, false);
+        (uint256 wrappedBalBefore, uint256 marketBalBefore) = lcc.balancesOf(alice);
+        assertEq(wrappedBalBefore, 5);
+        assertEq(marketBalBefore, 10);
+
+        vm.prank(alice);
+        lcc.transfer(protocol, 8);
+
+        // Market-derived decreases by exactly amount; wrapped must remain unchanged (remaining == 0 path).
+        (uint256 wrappedBalAfter, uint256 marketBalAfter) = lcc.balancesOf(alice);
+        assertEq(wrappedBalAfter, 5);
+        assertEq(marketBalAfter, 2);
+
+        // Annulment should have been called with pre-transfer bucket values and the transfer amount.
+        assertEq(annulCalls, 1);
+        assertEq(lastAnnulFrom, alice);
+        assertEq(lastAnnulWrapped, 5);
+        assertEq(lastAnnulMarket, 10);
+        assertEq(lastAnnulAmount, 8);
+
+        assertEq(plannedCancelCalls, 1);
+        assertEq(lastCancelSender, alice);
+        assertEq(lastCancelRecipient, protocol);
     }
 }
 

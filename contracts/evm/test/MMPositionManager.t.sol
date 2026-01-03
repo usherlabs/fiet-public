@@ -34,6 +34,7 @@ import {ILiquidityHub} from "../src/interfaces/ILiquidityHub.sol";
 import {IMarketVault} from "../src/interfaces/IMarketVault.sol";
 import {Errors} from "../src/libraries/Errors.sol";
 import {ActionConstants} from "v4-periphery/src/libraries/ActionConstants.sol";
+import {MockCommitmentDescriptor} from "./_mocks/MockCommitmentDescriptor.sol";
 
 contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
     using SafeCast for *;
@@ -130,6 +131,27 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         // Token is burned; ownerOf should revert.
         vm.expectRevert();
         positionManager.ownerOf(tokenId);
+    }
+
+    function test_decommitSignal_revertsForNonOwnerNonApproved() public {
+        address alice = makeAddr("alice");
+        address bob = makeAddr("bob");
+
+        bytes memory liquiditySignalBytes = abi.encode(liquiditySignal);
+        uint256 tokenId = positionManager.nextTokenId();
+
+        // Mint the commitment NFT to Alice.
+        MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](1);
+        prepared[0] = MMA.prepareCommitWithOwner(liquiditySignalBytes, alice);
+        MMA.executeWithUnlock(positionManager, prepared, block.timestamp + 3600);
+        assertEq(positionManager.ownerOf(tokenId), alice);
+
+        // Bob is not approved/owner.
+        prepared = new MMA.PreparedAction[](1);
+        prepared[0] = MMA.prepareDecommit(tokenId);
+        vm.prank(bob);
+        vm.expectRevert(abi.encodeWithSelector(Errors.NotApproved.selector, bob));
+        MMA.executeWithUnlock(positionManager, prepared, block.timestamp + 3600);
     }
 
     /// @notice Proves RENEW_SIGNAL updates the commitment without creating a new NFT.
@@ -259,6 +281,38 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         console.log("gracePeriodExtension1After", checkpointAfter.gracePeriodExtension1);
         assertGt(checkpointAfter.gracePeriodExtension0, checkpointBefore.gracePeriodExtension0);
         assertGt(checkpointAfter.gracePeriodExtension1, checkpointBefore.gracePeriodExtension1);
+    }
+
+    function test_extendGracePeriod_revertsForNonOwnerNonApproved() public {
+        address alice = makeAddr("alice");
+        address bob = makeAddr("bob");
+
+        // Create the commitment under the test contract (which is fully funded/approved in setUp),
+        // then transfer the NFT to Alice so Bob is a clean non-owner / non-approved caller.
+        (uint256 tokenId,,,) = _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)}),
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+        positionManager.transferFrom(address(this), alice, tokenId);
+
+        // Make proof verification succeed (but it should not be reached for Bob).
+        vm.mockCall(
+            address(settlementObserver),
+            abi.encodeWithSelector(settlementObserver.verifySettlementProof.selector),
+            abi.encode(true)
+        );
+
+        MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](1);
+        prepared[0] = MMA.prepareExtendGracePeriod(corePoolKey, tokenId, 0, 0, 0, abi.encode(1));
+
+        vm.prank(bob);
+        vm.expectRevert(abi.encodeWithSelector(Errors.NotApproved.selector, bob));
+        MMA.executeWithUnlock(positionManager, prepared, block.timestamp + 3600);
     }
 
     function testCanUnwrapLcc() public {
@@ -485,6 +539,43 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         positionManager.modifyLiquiditiesWithoutUnlock(actions, params);
     }
 
+    /// @notice Mutation-killer: CHECKPOINT action must route to VTSOrchestrator.checkpoint (not revert UnsupportedAction).
+    function test_actionCheckpoint_withoutCommitment_callsVtsOrchestrator() public {
+        // Set up a committed position to ensure tokenId/positionIndex exist.
+        (uint256 tokenId,,,) = _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)}),
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+
+        MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](1);
+        prepared[0] = MMA.prepareCheckpoint(tokenId, 0, bytes(""));
+
+        // For modifyLiquiditiesWithoutUnlock, the locker is the direct caller (this test contract).
+        vm.expectCall(
+            address(vtsOrchestrator),
+            abi.encodeWithSignature(
+                "checkpoint(address,uint256,uint256,bytes,bool)", address(this), tokenId, 0, bytes(""), false
+            )
+        );
+        MMA.execute(positionManager, prepared);
+    }
+
+    /// @notice Mutation-killer: unsupported commitment-range actions must revert UnsupportedAction (not try to decode EXTEND_GRACE_PERIOD params).
+    function test_modifyLiquiditiesWithoutUnlock_unsupportedCommitmentAction_revertsUnsupportedAction() public {
+        uint256 unknownCommitmentAction = 0x25; // in [0x20, 0x40) but not implemented
+        bytes memory actions = abi.encodePacked(uint8(unknownCommitmentAction));
+        bytes[] memory params = new bytes[](1);
+        params[0] = hex"";
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.UnsupportedAction.selector, unknownCommitmentAction));
+        positionManager.modifyLiquiditiesWithoutUnlock(actions, params);
+    }
+
     function test_tokenURI_revertsWhenCommitmentDescriptorNotSet() public {
         // Reuse the real actions impl from the already-deployed PositionManager so the constructor succeeds.
         // This test is about `commitmentDescriptor`, not delegation.
@@ -499,6 +590,52 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         );
         vm.expectRevert(Errors.CommitmentDescriptorNotSet.selector);
         broken.tokenURI(1);
+    }
+
+    function test_constructor_setsCommitmentDescriptor() public {
+        MockCommitmentDescriptor desc = new MockCommitmentDescriptor("ipfs://mock/");
+
+        MMPositionManager fresh = new MMPositionManager(
+            address(manager),
+            address(liquidityHub),
+            address(vtsOrchestrator),
+            address(desc),
+            weth9,
+            permit2,
+            positionManager.actionsImpl()
+        );
+
+        assertEq(fresh.commitmentDescriptor(), address(desc), "constructor should set commitmentDescriptor");
+    }
+
+    function test_tokenURI_returnsDescriptorValue_whenDescriptorSet() public {
+        MockCommitmentDescriptor desc = new MockCommitmentDescriptor("ipfs://mock/");
+
+        MMPositionManager fresh = new MMPositionManager(
+            address(manager),
+            address(liquidityHub),
+            address(vtsOrchestrator),
+            address(desc),
+            weth9,
+            permit2,
+            positionManager.actionsImpl()
+        );
+
+        assertEq(fresh.tokenURI(123), "ipfs://mock/123", "tokenURI should delegate to descriptor when set");
+    }
+
+    /// @notice Mutation-killer: when SYNC creates delta credit and we do not TAKE it, _afterBatch must revert CurrencyNotSettled.
+    /// @dev This kills the mutant that deletes `_afterBatch()` in modifyLiquiditiesWithoutUnlock.
+    function test_modifyLiquiditiesWithoutUnlock_revertsIfDeltasRemain_afterSync() public {
+        // Pre-fund MMPM with some ERC20 balance so SYNC will establish delta credit.
+        MockERC20 underlying = MockERC20(lcc0.underlying());
+        underlying.mint(address(positionManager), 123);
+
+        MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](1);
+        prepared[0] = MMA.prepareSync(Currency.wrap(address(underlying)));
+
+        vm.expectRevert(Errors.CurrencyNotSettled.selector);
+        MMA.execute(positionManager, prepared);
     }
 
     function test_wrapNative_amountGtAvailableCredit_revertsInsufficientBalance() public {
@@ -605,6 +742,64 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         assertEq(lcc0.balanceOf(user), 600);
         assertEq(underlyingAsset.balanceOf(user), underlyingBefore + requested);
+    }
+
+    /// @notice Mutation-killer: requested == 0 must unwrap the payer's full LCC balance (not clamp to 0).
+    function test_unwrapLcc_payerIsUser_requestedZero_unwrapsAllBalance() public {
+        address user = makeAddr("user");
+
+        vm.mockCall(marketFactory, abi.encodeWithSelector(IMarketFactory.bounds.selector, user), abi.encode(false));
+
+        MockERC20 underlyingAsset = MockERC20(lcc0.underlying());
+        uint256 balance = 777;
+        underlyingAsset.mint(user, balance);
+
+        vm.startPrank(user);
+        underlyingAsset.approve(address(liquidityHub), balance);
+        ILiquidityHub(liquidityHub).wrap(address(lcc0), balance);
+        lcc0.approve(address(positionManager), type(uint256).max);
+        vm.stopPrank();
+
+        uint256 underlyingBefore = underlyingAsset.balanceOf(user);
+
+        vm.prank(user);
+        MMA.unwrapLcc(positionManager, address(lcc0), 0, user, true);
+
+        assertEq(lcc0.balanceOf(user), 0, "requested==0 should unwrap full payer LCC balance");
+        assertEq(
+            underlyingAsset.balanceOf(user), underlyingBefore + balance, "underlying should increase by full balance"
+        );
+    }
+
+    /// @notice Mutation-killer: when payerIsUser=false and there is no LCC delta credit, unwrap must not sync existing underlying balance.
+    /// @dev Targets deltas-unwrap mutants that accidentally sync credit even when `unwrapped == 0`.
+    function test_unwrapLcc_fromDeltas_toThis_whenTakeReturnsZero_doesNotSyncUnderlyingCredit() public {
+        address user = makeAddr("user");
+        MockERC20 underlying = MockERC20(lcc0.underlying());
+        Currency underlyingCurrency = Currency.wrap(address(underlying));
+
+        // Seed MMPM with underlying, but do not sync it as credit.
+        uint256 seeded = 555;
+        underlying.mint(address(positionManager), seeded);
+
+        MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](2);
+        // No SYNC for LCC currency => vtsOrchestrator.take(lccCurrency, ...) should return 0.
+        prepared[0] = MMA.prepareUnwrapLcc(address(lcc0), 1, ActionConstants.ADDRESS_THIS, false);
+        // If the unwrap path incorrectly syncs underlying, this TAKE would leak the seeded underlying.
+        prepared[1] = MMA.prepareTake(underlyingCurrency, user, 0);
+
+        uint256 userBefore = underlying.balanceOf(user);
+        uint256 pmBefore = underlying.balanceOf(address(positionManager));
+
+        vm.prank(user);
+        MMA.execute(positionManager, prepared);
+
+        assertEq(underlying.balanceOf(user), userBefore, "no unwrap => no underlying credit should be created");
+        assertEq(
+            underlying.balanceOf(address(positionManager)),
+            pmBefore,
+            "no unwrap => MMPM underlying should remain unchanged"
+        );
     }
 
     function test_unwrapLcc_fromDeltas_toThis_syncsUnderlying_andIsTakeable() public {
@@ -988,6 +1183,21 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         vm.expectRevert(Errors.PoolManagerMustBeLocked.selector);
         caller.transferFromWhileUnlocked(manager, positionManager, address(this), makeAddr("to"), tokenId);
+    }
+
+    function test_transferFrom_whenPoolManagerLocked_transfersOwnership() public {
+        bytes memory liquiditySignalBytes = abi.encode(liquiditySignal);
+        uint256 tokenId = positionManager.nextTokenId();
+
+        MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](1);
+        prepared[0] = MMA.prepareCommit(liquiditySignalBytes);
+        MMA.executeWithUnlock(positionManager, prepared, block.timestamp + 3600);
+
+        address to = makeAddr("to");
+        positionManager.transferFrom(address(this), to, tokenId);
+        assertEq(
+            positionManager.ownerOf(tokenId), to, "transferFrom should transfer ownership when PoolManager is locked"
+        );
     }
 
     /*** INTERNAL FUNCTIONS FOR test_collectAvailableLiquidity_afterSwap ***/

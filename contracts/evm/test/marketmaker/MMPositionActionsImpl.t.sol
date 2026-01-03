@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
+pragma solidity ^0.8.26;
 
 import "forge-std/Test.sol";
 // solhint-disable max-line-length
 
 import {BalanceDelta, toBalanceDelta, add} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {CurrencyLibrary, Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {LiquidityCommitmentCertificate} from "../../src/LCC.sol";
@@ -1004,5 +1005,279 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
 
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAmount.selector, tooLarge, type(uint128).max));
         MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+    }
+
+    // ============================================================
+    // Mutation-score focused negative tests
+    // ============================================================
+
+    function _wrongCorePoolKey() internal view returns (PoolKey memory bad) {
+        bad = corePoolKey;
+        // Swap currencies to produce a distinct PoolId (guaranteed InvalidMarket vs the stored position.poolId).
+        (bad.currency0, bad.currency1) = (bad.currency1, bad.currency0);
+    }
+
+    function test_settle_revertsInvalidMarket_whenPoolKeyMismatch() public {
+        uint256 tokenId = 1;
+        uint256 positionIndex = 0;
+
+        _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            defaultlLiquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+
+        PoolKey memory bad = _wrongCorePoolKey();
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](1);
+        actions[0] = MMA.prepareSettle(bad, tokenId, positionIndex, -int128(1), 0, false);
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidMarket.selector, bad));
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+    }
+
+    function test_burn_revertsInvalidMarket_whenPoolKeyMismatch() public {
+        uint256 tokenId = 1;
+        uint256 positionIndex = 0;
+
+        _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            defaultlLiquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+
+        PoolKey memory bad = _wrongCorePoolKey();
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](1);
+        actions[0] = MMA.prepareBurn(bad, tokenId, positionIndex);
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidMarket.selector, bad));
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+    }
+
+    function test_increase_revertsInvalidMarket_whenPoolKeyMismatch() public {
+        uint256 tokenId = 1;
+        uint256 positionIndex = 0;
+
+        _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            defaultlLiquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+
+        PoolKey memory bad = _wrongCorePoolKey();
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](1);
+        actions[0] = MMA.prepareIncrease(bad, tokenId, positionIndex, 1);
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidMarket.selector, bad));
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+    }
+
+    function test_decrease_revertsInvalidMarket_whenPoolKeyMismatch() public {
+        uint256 tokenId = 1;
+        uint256 positionIndex = 0;
+
+        _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            defaultlLiquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+
+        PoolKey memory bad = _wrongCorePoolKey();
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](1);
+        actions[0] = MMA.prepareDecrease(bad, tokenId, positionIndex, 1);
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidMarket.selector, bad));
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+    }
+
+    function test_seize_revertsInvalidMarket_whenPoolKeyMismatch() public {
+        uint256 tokenId = 1;
+        uint256 positionIndex = 0;
+
+        _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            defaultlLiquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+
+        PoolKey memory bad = _wrongCorePoolKey();
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](1);
+        actions[0] = MMA.prepareSeize(bad, tokenId, positionIndex, 1, 1, false);
+
+        vm.prank(guarantor);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidMarket.selector, bad));
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+    }
+
+    function test_increaseFromDeltas_revertsInvalidMarket_whenPoolKeyMismatch() public {
+        uint256 tokenId = 1;
+        uint256 positionIndex = 0;
+
+        _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            defaultlLiquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+
+        PoolKey memory bad = _wrongCorePoolKey();
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](1);
+        actions[0] = MMA.prepareIncreaseFromDeltas(bad, tokenId, positionIndex, true);
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidMarket.selector, bad));
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+    }
+
+    function test_unauthorised_revertsNotApproved_forBurnIncreaseDecreaseAndDeltasActions() public {
+        uint256 tokenId = 1;
+        uint256 positionIndex = 0;
+
+        _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            defaultlLiquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+
+        address attacker = makeAddr("attacker2");
+
+        // Burn
+        {
+            MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](1);
+            actions[0] = MMA.prepareBurn(corePoolKey, tokenId, positionIndex);
+            vm.startPrank(attacker);
+            vm.expectRevert(abi.encodeWithSelector(Errors.NotApproved.selector, attacker));
+            MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+            vm.stopPrank();
+        }
+
+        // Increase
+        {
+            MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](1);
+            actions[0] = MMA.prepareIncrease(corePoolKey, tokenId, positionIndex, 1);
+            vm.startPrank(attacker);
+            vm.expectRevert(abi.encodeWithSelector(Errors.NotApproved.selector, attacker));
+            MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+            vm.stopPrank();
+        }
+
+        // Decrease
+        {
+            MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](1);
+            actions[0] = MMA.prepareDecrease(corePoolKey, tokenId, positionIndex, 1);
+            vm.startPrank(attacker);
+            vm.expectRevert(abi.encodeWithSelector(Errors.NotApproved.selector, attacker));
+            MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+            vm.stopPrank();
+        }
+
+        // increaseFromDeltas
+        {
+            MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](1);
+            actions[0] = MMA.prepareIncreaseFromDeltas(corePoolKey, tokenId, positionIndex, true);
+            vm.startPrank(attacker);
+            vm.expectRevert(abi.encodeWithSelector(Errors.NotApproved.selector, attacker));
+            MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+            vm.stopPrank();
+        }
+
+        // mintFromDeltas (approval gate should trip before any delta maths)
+        {
+            MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](1);
+            actions[0] = MMA.prepareMintFromDeltas(corePoolKey, tokenId, 0, 60, true);
+            vm.startPrank(attacker);
+            vm.expectRevert(abi.encodeWithSelector(Errors.NotApproved.selector, attacker));
+            MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+            vm.stopPrank();
+        }
+    }
+
+    function test_seize_callsOnSeize_and_onMMSettle_withNegativeRequestedDelta() public {
+        // Kills mutants that delete onSeize() and mutate -amount -> ~amount in seizure settlement.
+        uint256 tokenId = 1;
+        uint256 positionIndex = 0;
+
+        _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            defaultlLiquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+
+        // Create deficit so RFS opens.
+        swapRouter.swap(
+            proxyPoolKey,
+            SwapParams({zeroForOne: true, amountSpecified: -1e18, sqrtPriceLimitX96: ZERO_FOR_ONE_LIMIT}),
+            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}),
+            ZERO_BYTES
+        );
+
+        vm.warp(block.timestamp + 300000 + 1);
+
+        uint256 settleAmount0 = 5_999_709_018_652_707;
+        uint256 settleAmount1 = 5_999_709_018_652_707;
+
+        IERC20(lcc0.underlying()).transfer(guarantor, settleAmount0);
+        IERC20(lcc1.underlying()).transfer(guarantor, settleAmount1);
+
+        // Expect the orchestrator to validate seizure and receive the negative requested delta.
+        vm.expectCall(
+            address(vtsOrchestrator), abi.encodeWithSelector(IVTSOrchestrator.onSeize.selector, tokenId, positionIndex)
+        );
+
+        BalanceDelta expectedDelta = toBalanceDelta(-int128(int256(settleAmount0)), -int128(int256(settleAmount1)));
+        vm.expectCall(
+            address(vtsOrchestrator),
+            abi.encodeWithSelector(
+                IVTSOrchestrator.onMMSettle.selector,
+                mv,
+                tokenId,
+                positionIndex,
+                corePoolKey.currency0,
+                corePoolKey.currency1,
+                expectedDelta,
+                true
+            )
+        );
+
+        vm.startPrank(guarantor);
+        IERC20(lcc0.underlying()).approve(address(positionManager), settleAmount0);
+        IERC20(lcc1.underlying()).approve(address(positionManager), settleAmount1);
+
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](4);
+        actions[0] = MMA.prepareSeize(corePoolKey, tokenId, positionIndex, settleAmount0, settleAmount1, false);
+        actions[1] = MMA.prepareSettleFromDeltas(corePoolKey, tokenId, positionIndex, true, true);
+        actions[2] = MMA.prepareTake(Currency.wrap(address(lcc0)), guarantor, 0);
+        actions[3] = MMA.prepareTake(Currency.wrap(address(lcc1)), guarantor, 0);
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+        vm.stopPrank();
     }
 }

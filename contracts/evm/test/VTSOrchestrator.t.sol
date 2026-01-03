@@ -9,6 +9,7 @@ import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency, CurrencyLibrary} from "@uniswap/v4-core/src/types/Currency.sol";
 import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {PositionId, Position} from "../src/types/Position.sol";
+import {PositionModificationHookDataLib, PositionLibrary} from "../src/types/Position.sol";
 import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {MarketVTSConfiguration} from "../src/types/VTS.sol";
 import {VTSConfigs} from "../src/libraries/VTSConfigs.sol";
@@ -84,6 +85,58 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
     /// @notice Helper to access testable VTSOrchestrator with debug functions
     function _testableOrchestrator() internal view returns (VTSOrchestratorTestable) {
         return VTSOrchestratorTestable(address(vtsOrchestrator));
+    }
+
+    // ============================================================
+    // Constructor Guard Tests
+    // ============================================================
+
+    function test_constructor_revert_whenSignalManagerZero() public {
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
+        new VTSOrchestratorTestable(
+            address(manager),
+            address(0),
+            address(oracleHelper),
+            address(liquidityHub),
+            address(settlementObserver),
+            address(this)
+        );
+    }
+
+    function test_constructor_revert_whenOracleHelperZero() public {
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
+        new VTSOrchestratorTestable(
+            address(manager),
+            address(signalManager),
+            address(0),
+            address(liquidityHub),
+            address(settlementObserver),
+            address(this)
+        );
+    }
+
+    function test_constructor_revert_whenLiquidityHubZero() public {
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
+        new VTSOrchestratorTestable(
+            address(manager),
+            address(signalManager),
+            address(oracleHelper),
+            address(0),
+            address(settlementObserver),
+            address(this)
+        );
+    }
+
+    function test_constructor_revert_whenSettlementObserverZero() public {
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
+        new VTSOrchestratorTestable(
+            address(manager),
+            address(signalManager),
+            address(oracleHelper),
+            address(liquidityHub),
+            address(0),
+            address(this)
+        );
     }
 
     // ============================================================
@@ -382,6 +435,14 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         );
     }
 
+    function test_revert_renewSignal_whenCommitInvalid_insideUnlock() public {
+        bytes memory signalBytes = abi.encode(liquiditySignal);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidSignal.selector, uint256(0)));
+        unlockCaller.run(
+            address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.renewSignal.selector, 0, signalBytes)
+        );
+    }
+
     function test_renewSignal_extendsExpiry() public {
         bytes memory signalBytes = abi.encode(liquiditySignal);
 
@@ -468,6 +529,17 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         vtsOrchestrator.getPosition(999, 0);
     }
 
+    function test_revert_calcRFS_byCommitIdAndIndex_whenInvalidPositionIndex_insideUnlock() public {
+        (uint256 tokenId,,,) = _createCommittedPosition();
+        uint256 badIndex = 12345;
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidPosition.selector, 0, 0, PositionId.wrap(bytes32(0))));
+        unlockCaller.run(
+            address(vtsOrchestrator),
+            // Disambiguate overloaded selector: calcRFS(uint256,uint256,bool)
+            abi.encodeWithSelector(bytes4(keccak256("calcRFS(uint256,uint256,bool)")), tokenId, badIndex, false)
+        );
+    }
+
     function test_calcRFS_returnsCorrectValues() public {
         (, PositionId positionId,,) = _createCommittedPosition();
 
@@ -480,6 +552,23 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         PositionId invalidId = PositionId.wrap(bytes32(uint256(999)));
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidPosition.selector, 0, 0, invalidId));
         vtsOrchestrator.calcRFS(invalidId, true);
+    }
+
+    function test_settlePositionGrowths_invalidPositionId_isNoop() public {
+        // We can't directly "expect no calls to VTSPositionLib" (it's an internal library call).
+        // But we *can* assert the observable effect: no external pool-state reads should occur,
+        // because VTSPositionLib.settlePositionGrowths would read PoolManager via `extsload`.
+        bytes4 extsload1 = bytes4(keccak256("extsload(bytes32)"));
+        bytes4 extsload2 = bytes4(keccak256("extsload(bytes32,uint256)"));
+        bytes4 extsload3 = bytes4(keccak256("extsload(bytes32[])"));
+
+        vm.expectCall(address(manager), abi.encodeWithSelector(extsload1), 0);
+        vm.expectCall(address(manager), abi.encodeWithSelector(extsload2), 0);
+        vm.expectCall(address(manager), abi.encodeWithSelector(extsload3), 0);
+
+        // Should not revert: the orchestrator guards on isPositionValid(positionId, true).
+        PositionId invalidId = PositionId.wrap(bytes32(uint256(999)));
+        vtsOrchestrator.settlePositionGrowths(invalidId);
     }
 
     function test_getCommitmentMaxima_returnsNonZero() public {
@@ -593,6 +682,41 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
     // Checkpoint / Grace Period / Seizure Tests
     // ============================================================
 
+    function test_revert_extendGracePeriod_whenCommitInvalid_insideUnlock() public {
+        bytes memory settlementProof = abi.encode(1);
+        vm.mockCall(
+            address(settlementObserver),
+            abi.encodeWithSelector(IVRLSettlementObserver.verifySettlementProof.selector),
+            abi.encode(true)
+        );
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidSignal.selector, uint256(0)));
+        unlockCaller.run(
+            address(vtsOrchestrator),
+            abi.encodeWithSelector(VTSOrchestrator.extendGracePeriod.selector, corePoolKey, 0, 0, 0, 0, settlementProof)
+        );
+    }
+
+    function test_revert_extendGracePeriod_whenPositionIndexInvalid_insideUnlock() public {
+        (uint256 tokenId,,,) = _createCommittedPosition();
+        uint256 badIndex = 12345;
+
+        bytes memory settlementProof = abi.encode(1);
+        vm.mockCall(
+            address(settlementObserver),
+            abi.encodeWithSelector(IVRLSettlementObserver.verifySettlementProof.selector),
+            abi.encode(true)
+        );
+
+        // Unset mapping index yields PositionId(0), which must fail position validity.
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidPosition.selector, 0, 0, PositionId.wrap(bytes32(0))));
+        unlockCaller.run(
+            address(vtsOrchestrator),
+            abi.encodeWithSelector(
+                VTSOrchestrator.extendGracePeriod.selector, corePoolKey, tokenId, badIndex, 0, 0, settlementProof
+            )
+        );
+    }
+
     function test_extendGracePeriod_updatesCheckpoint() public {
         (uint256 tokenId,,,) = _createCommittedPosition();
         PositionId positionId = vtsOrchestrator.getPositionId(tokenId, 0);
@@ -625,6 +749,11 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         );
     }
 
+    function test_revert_onSeize_whenCommitInvalid_insideUnlock() public {
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidSignal.selector, uint256(0)));
+        unlockCaller.run(address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.onSeize.selector, 0, 0));
+    }
+
     function test_onSeize_validatesGracePeriod() public {
         (uint256 tokenId,,,) = _createCommittedPosition();
 
@@ -633,6 +762,15 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
 
         // Should not revert (grace period elapsed)
         unlockCaller.run(address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.onSeize.selector, tokenId, 0));
+    }
+
+    function test_revert_checkpoint_whenCommitInvalid_insideUnlock() public {
+        bytes memory emptySignal;
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidSignal.selector, uint256(0)));
+        unlockCaller.run(
+            address(vtsOrchestrator),
+            abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, address(this), 0, 0, emptySignal, false)
+        );
     }
 
     function test_checkpoint_marksCheckpoint() public {
@@ -660,6 +798,122 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
             checkpointBefore.timeOfLastTransition,
             "Checkpoint transition time should be updated"
         );
+    }
+
+    // ============================================================
+    // MM hook-data validation + return-value tests
+    // ============================================================
+
+    function test_revert_processPosition_mmOperation_whenCommitInvalid() public {
+        // MM operation is defined as hookData.commitId > 0, so use a non-existent commitId.
+        bytes memory hookData = PositionModificationHookDataLib.encode(999, 0, address(this));
+
+        ModifyLiquidityParams memory params =
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 0, salt: bytes32(0)});
+
+        vm.prank(coreHookAddress);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidSignal.selector, uint256(999)));
+        vtsOrchestrator.processPosition(
+            address(positionManager), corePoolKey, params, toBalanceDelta(0, 0), toBalanceDelta(0, 0), hookData
+        );
+    }
+
+    function test_processPosition_returnsNonZeroPositionId_onPoke() public {
+        (uint256 tokenId, PositionId existingPositionId,,) = _createCommittedPosition();
+
+        // Simulate a "poke" by calling processPosition with liquidityDelta=0 and matching MM salt.
+        ModifyLiquidityParams memory params = ModifyLiquidityParams({
+            tickLower: -60, tickUpper: 60, liquidityDelta: 0, salt: PositionLibrary.generateSalt(tokenId, 0)
+        });
+
+        bytes memory hookData = PositionModificationHookDataLib.encode(tokenId, 0, address(this));
+
+        vm.prank(coreHookAddress);
+        BalanceDelta callerDelta = toBalanceDelta(0, 0);
+        BalanceDelta feesAccrued = toBalanceDelta(0, 0);
+
+        (Position memory pos, PositionId id, BalanceDelta feeAdj, bool isMMPosition) = vtsOrchestrator.processPosition(
+            address(positionManager), corePoolKey, params, callerDelta, feesAccrued, hookData
+        );
+
+        assertTrue(isMMPosition, "Expected MM operation");
+        assertEq(PositionId.unwrap(id), PositionId.unwrap(existingPositionId), "Returned positionId should match");
+        assertEq(pos.commitId, tokenId, "Returned position should reference commitId");
+        assertEq(pos.owner, address(positionManager), "Returned position owner should be positionManager");
+
+        // Include explicit assertions for the CoreHook inputs and expected fee adjustment in this scenario.
+        // With no swaps/fees in this test path, we pass zero deltas and expect no fee adjustment to be applied.
+        assertEq(callerDelta.amount0(), 0, "callerDelta0 should be 0 for poke");
+        assertEq(callerDelta.amount1(), 0, "callerDelta1 should be 0 for poke");
+        assertEq(feesAccrued.amount0(), 0, "feesAccrued0 should be 0 for poke");
+        assertEq(feesAccrued.amount1(), 0, "feesAccrued1 should be 0 for poke");
+        assertEq(feeAdj.amount0(), 0, "feeAdj0 should be 0 when feesAccrued is 0");
+        assertEq(feeAdj.amount1(), 0, "feeAdj1 should be 0 when feesAccrued is 0");
+    }
+
+    function test_revert_onMMSettle_whenCommitInvalid_insideUnlock() public {
+        BalanceDelta amountDelta = toBalanceDelta(-1, -1);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidSignal.selector, uint256(0)));
+        unlockCaller.run(
+            address(vtsOrchestrator),
+            abi.encodeWithSelector(
+                VTSOrchestrator.onMMSettle.selector,
+                IMarketVault(address(proxyHook)),
+                0,
+                0,
+                corePoolKey.currency0,
+                corePoolKey.currency1,
+                amountDelta,
+                false
+            )
+        );
+    }
+
+    function test_onMMSettle_returnsSeizedLiquidityUnitsZero_whenNotSeizing_andRfsOpenMatchesCalcRFS() public {
+        (uint256 tokenId, PositionId positionId,,) = _createCommittedPosition();
+        address advancer = liquiditySignal.mmState.advancer;
+
+        // Create a backing deficit via withCommitment checkpoint so RFS is meaningfully open.
+        bytes memory signalBytes = abi.encode(liquiditySignal);
+        vm.mockCall(
+            address(signalManager),
+            abi.encodeWithSelector(bytes4(keccak256("verifyLiquiditySignal(bytes,bool)")), signalBytes, true),
+            abi.encode(true, 10)
+        );
+        _mockLccPrices(1e18, 1e18);
+        _mockSignalUsd(0);
+
+        vm.prank(advancer);
+        unlockCaller.run(
+            address(vtsOrchestrator),
+            abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, advancer, tokenId, 0, signalBytes, true)
+        );
+
+        // Partial settlement to keep the RFS likely open.
+        (uint256 cd0, uint256 cd1) = _commitmentDeficit(positionId);
+        int128 pay0 = _negInt128Capped(cd0 / 2);
+        int128 pay1 = _negInt128Capped(cd1 / 2);
+        BalanceDelta depositDelta = toBalanceDelta(pay0, pay1);
+
+        bytes memory out = unlockCaller.run(
+            address(vtsOrchestrator),
+            abi.encodeWithSelector(
+                VTSOrchestrator.onMMSettle.selector,
+                IMarketVault(address(proxyHook)),
+                tokenId,
+                0,
+                corePoolKey.currency0,
+                corePoolKey.currency1,
+                depositDelta,
+                false
+            )
+        );
+
+        (, bool rfsOpen, uint256 seizedLiquidityUnits) = abi.decode(out, (BalanceDelta, bool, uint256));
+        assertEq(seizedLiquidityUnits, 0, "seizedLiquidityUnits must be zero when not seizing");
+
+        (bool rfsOpenExpected,) = vtsOrchestrator.calcRFS(positionId, false);
+        assertEq(rfsOpen, rfsOpenExpected, "rfsOpen should match calcRFS result");
     }
 
     function test_checkpoint_withCommitment_validatesBacking() public {
