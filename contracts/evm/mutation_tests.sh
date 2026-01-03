@@ -31,7 +31,10 @@ FOUNDRY_ROOT="$(find_foundry_root)"
 # The actual Git repo root may be above the Foundry project root (e.g. monorepos).
 GIT_ROOT="$(git -C "$FOUNDRY_ROOT" rev-parse --show-toplevel 2>/dev/null || echo "$FOUNDRY_ROOT")"
 
-OUTDIR="${OUTDIR:-"$FOUNDRY_ROOT/gambit_out"}"
+# In multi-target runs we will write into per-target subdirectories under OUTDIR_BASE
+# to avoid Gambit outputs clobbering each other.
+OUTDIR_BASE="${OUTDIR:-"$FOUNDRY_ROOT/gambit_out"}"
+OUTDIR="$OUTDIR_BASE"
 WORKTREE_DIR="${WORKTREE_DIR:-"$FOUNDRY_ROOT/.mutation-worktree"}"
 SOLC_BIN="${SOLC:-solc}"
 EVM_VERSION="${EVM_VERSION:-cancun}"
@@ -82,6 +85,28 @@ SKIP_VALIDATE="${SKIP_VALIDATE:-0}"    # 1 to skip Gambit solc validation step
 MIDS="${MIDS:-""}"                    # e.g. "1 2 3" to only run some mutant IDs
 
 log() { printf '%s\n' "$*" >&2; }
+
+target_slug() {
+  # Turn a target path like "src/LiquidityHub.sol" into a stable, filesystem-safe slug.
+  # We include the full path (not just basename) to avoid collisions.
+  local t="$1"
+  t="${t#./}"
+  t="${t//\//__}"
+  t="${t//[^A-Za-z0-9_.-]/_}"
+  echo "$t"
+}
+
+mutation_score_pct() {
+  # killed / (killed + survived) * 100, as a string with 2 dp.
+  # Excludes "errored" from the denominator since those are neither killed nor survived.
+  local killed="$1"
+  local survived="$2"
+  awk -v k="$killed" -v s="$survived" 'BEGIN {
+    t = k + s;
+    if (t <= 0) { printf "0.00"; exit 0; }
+    printf "%.2f", (100.0 * k / t);
+  }'
+}
 
 cleanup() {
   if [[ "$CLEAN_AFTER" == "1" ]]; then
@@ -444,94 +469,154 @@ main() {
 
   if [[ "$CLEAN_BEFORE" == "1" ]]; then
     log "Cleaning before run (CLEAN_BEFORE=1)"
-    rm -rf "$OUTDIR" "$WORKTREE_DIR"
+    rm -rf "$OUTDIR_BASE" "$WORKTREE_DIR"
     git -C "$GIT_ROOT" worktree prune >/dev/null 2>&1 || true
-  fi
-
-  generate_mutants
-
-  # If Gambit failed to compile the target(s), it may produce no mutants directory.
-  if [[ ! -d "$OUTDIR/mutants" ]]; then
-    log "ERROR: Gambit produced no mutants at: $OUTDIR/mutants"
-    log "This usually means solc failed to compile the target with the provided remappings."
-    log "Tip: ensure your remappings are correct and that 'solc --ast-compact-json <file>' succeeds."
-    exit 1
-  fi
-
-  # If the directory exists but is empty, stop early.
-  if [[ -z "$(find "$OUTDIR/mutants" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -n 1)" ]]; then
-    log "ERROR: Gambit mutants directory is empty: $OUTDIR/mutants"
-    exit 1
   fi
 
   ensure_worktree
 
-  local results_csv="$OUTDIR/mutation_results.csv"
-  if [[ "$RESUME" == "1" && -f "$results_csv" ]]; then
-    log "Resuming from existing results CSV (RESUME=1): $results_csv"
-  else
-    echo "mid,status" > "$results_csv"
-  fi
+  local overall_killed=0 overall_survived=0 overall_errored=0
 
-  local mids_to_run=()
-  if [[ -n "${MIDS:-}" ]]; then
-    # shellcheck disable=SC2206
-    mids_to_run=($MIDS)
-  else
-    while IFS= read -r d; do
-      mids_to_run+=("$(basename "$d")")
-    done < <(find "$OUTDIR/mutants" -mindepth 1 -maxdepth 1 -type d | sort -V)
-  fi
-
-  local killed=0 survived=0 errored=0
-
-  for mid in "${mids_to_run[@]}"; do
+  local targets_to_run=("${TARGETS[@]}")
+  local multi_target="0"
+  if [[ ${#targets_to_run[@]} -gt 1 ]]; then
+    multi_target="1"
     log ""
-    log "== Mutant $mid =="
+    log "Multi-target mode: writing per-target outputs under: $OUTDIR_BASE"
+  fi
 
-    if [[ "$RESUME" == "1" && -f "$results_csv" ]] && grep -qE "^${mid}," "$results_csv"; then
-      log "Skipping mutant $mid (already recorded)"
-      continue
-    fi
-
-    if ! clean_worktree; then
-      log "ERROR: failed to clean worktree"
-      echo "$mid,errored" >> "$results_csv"
-      errored=$((errored + 1))
-      [[ "$FAIL_FAST" == "1" ]] && exit 1 || continue
-    fi
-
-    if ! overlay_mutant_into_worktree "$mid"; then
-      log "ERROR: failed to overlay mutant $mid"
-      echo "$mid,errored" >> "$results_csv"
-      errored=$((errored + 1))
-      [[ "$FAIL_FAST" == "1" ]] && exit 1 || continue
-    fi
-
-    set +e
-    (cd "$WORKTREE_FOUNDRY_ROOT" && run_forge_tests_for_mutant "$mid")
-    local rc=$?
-    set -e
-
-    if [[ $rc -eq 0 ]]; then
-      log "SURVIVED (tests passed)"
-      echo "$mid,survived" >> "$results_csv"
-      survived=$((survived + 1))
+  for target in "${targets_to_run[@]}"; do
+    if [[ "$multi_target" == "1" ]]; then
+      OUTDIR="$OUTDIR_BASE/$(target_slug "$target")"
     else
-      log "KILLED (tests failed) [exit=$rc]"
-      echo "$mid,killed" >> "$results_csv"
-      killed=$((killed + 1))
+      OUTDIR="$OUTDIR_BASE"
     fi
-  done
 
-  write_detailed_report
+    log ""
+    log "=== Target: $target ==="
+    log "Outdir: $OUTDIR"
+
+    # Generate mutants for this target only (Gambit outdir is per-target in multi-target mode).
+    TARGETS=("$target")
+    generate_mutants
+
+    # If Gambit failed to compile the target, it may produce no mutants directory.
+    if [[ ! -d "$OUTDIR/mutants" ]]; then
+      log "ERROR: Gambit produced no mutants at: $OUTDIR/mutants"
+      log "This usually means solc failed to compile the target with the provided remappings."
+      log "Tip: ensure your remappings are correct and that 'solc --ast-compact-json <file>' succeeds."
+      exit 1
+    fi
+
+    # If the directory exists but is empty, stop early.
+    if [[ -z "$(find "$OUTDIR/mutants" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -n 1)" ]]; then
+      log "ERROR: Gambit mutants directory is empty: $OUTDIR/mutants"
+      exit 1
+    fi
+
+    local results_csv="$OUTDIR/mutation_results.csv"
+    if [[ "$RESUME" == "1" && -f "$results_csv" ]]; then
+      log "Resuming from existing results CSV (RESUME=1): $results_csv"
+    else
+      mkdir -p "$OUTDIR"
+      echo "mid,status" > "$results_csv"
+    fi
+
+    local mids_to_run=()
+    if [[ -n "${MIDS:-}" ]]; then
+      # shellcheck disable=SC2206
+      mids_to_run=($MIDS)
+    else
+      while IFS= read -r d; do
+        mids_to_run+=("$(basename "$d")")
+      done < <(find "$OUTDIR/mutants" -mindepth 1 -maxdepth 1 -type d | sort -V)
+    fi
+
+    local killed=0 survived=0 errored=0
+
+    for mid in "${mids_to_run[@]}"; do
+      log ""
+      log "== Mutant $mid =="
+
+      if [[ "$RESUME" == "1" && -f "$results_csv" ]] && grep -qE "^${mid}," "$results_csv"; then
+        log "Skipping mutant $mid (already recorded)"
+        continue
+      fi
+
+      if ! clean_worktree; then
+        log "ERROR: failed to clean worktree"
+        echo "$mid,errored" >> "$results_csv"
+        errored=$((errored + 1))
+        [[ "$FAIL_FAST" == "1" ]] && exit 1 || continue
+      fi
+
+      if ! overlay_mutant_into_worktree "$mid"; then
+        log "ERROR: failed to overlay mutant $mid"
+        echo "$mid,errored" >> "$results_csv"
+        errored=$((errored + 1))
+        [[ "$FAIL_FAST" == "1" ]] && exit 1 || continue
+      fi
+
+      set +e
+      (cd "$WORKTREE_FOUNDRY_ROOT" && run_forge_tests_for_mutant "$mid")
+      local rc=$?
+      set -e
+
+      if [[ $rc -eq 0 ]]; then
+        log "SURVIVED (tests passed)"
+        echo "$mid,survived" >> "$results_csv"
+        survived=$((survived + 1))
+      else
+        log "KILLED (tests failed) [exit=$rc]"
+        echo "$mid,killed" >> "$results_csv"
+        killed=$((killed + 1))
+      fi
+    done
+
+    write_detailed_report
+
+    log ""
+    log "Target done."
+    log "Killed:   $killed"
+    log "Survived: $survived"
+    log "Errored:  $errored"
+    local target_total=$((killed + survived))
+    local target_pct
+    target_pct="$(mutation_score_pct "$killed" "$survived")"
+    log "Score:    $killed/$target_total killed (${target_pct}%)"
+    log "Results:  $results_csv"
+
+    {
+      echo "killed=$killed"
+      echo "survived=$survived"
+      echo "errored=$errored"
+      echo "total=$target_total"
+      echo "score_pct=$target_pct"
+    } > "$OUTDIR/mutation_score.txt"
+
+    overall_killed=$((overall_killed + killed))
+    overall_survived=$((overall_survived + survived))
+    overall_errored=$((overall_errored + errored))
+  done
 
   log ""
   log "Done."
-  log "Killed:   $killed"
-  log "Survived: $survived"
-  log "Errored:  $errored"
-  log "Results:  $results_csv"
+  log "Killed:   $overall_killed"
+  log "Survived: $overall_survived"
+  log "Errored:  $overall_errored"
+  local overall_total=$((overall_killed + overall_survived))
+  local overall_pct
+  overall_pct="$(mutation_score_pct "$overall_killed" "$overall_survived")"
+  log "Score:    $overall_killed/$overall_total killed (${overall_pct}%)"
+  log "Outdir:   $OUTDIR_BASE"
+
+  {
+    echo "killed=$overall_killed"
+    echo "survived=$overall_survived"
+    echo "errored=$overall_errored"
+    echo "total=$overall_total"
+    echo "score_pct=$overall_pct"
+  } > "$OUTDIR_BASE/mutation_score.txt"
 }
 
 main
