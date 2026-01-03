@@ -5,6 +5,7 @@ import {LiquidityHubTestBase} from "./base/LiquidityHubTestBase.sol";
 import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
 import {ILCC} from "../src/interfaces/ILCC.sol";
 import {Errors} from "../src/libraries/Errors.sol";
+import {Vm} from "forge-std/Vm.sol";
 
 contract MockMarketVaultForEthReceive {
     address internal _lcc0;
@@ -71,6 +72,7 @@ contract MockSenderWithoutLccsSelector {
 contract LiquidityHubTest is LiquidityHubTestBase {
     event FactorySet(address indexed factory, bool enabled);
     event LiquidityAvailable(address indexed lcc, address underlyingAsset, uint256 amount, bytes32 marketId);
+    event SettlementQueued(address indexed lcc, address indexed recipient, uint256 amount);
 
     function test_setFactory_revertsWhenNotOwner() public {
         vm.prank(makeAddr("notOwner"));
@@ -86,6 +88,15 @@ contract LiquidityHubTest is LiquidityHubTestBase {
 
         liquidityHub.setFactory(f, true);
         assertTrue(liquidityHub.isFactory(f));
+    }
+
+    function test_setFactory_canDisableFactory() public {
+        address f = makeAddr("factoryDisable");
+        liquidityHub.setFactory(f, true);
+        assertTrue(liquidityHub.isFactory(f));
+
+        liquidityHub.setFactory(f, false);
+        assertFalse(liquidityHub.isFactory(f));
     }
 
     function test_createLCCPair_revertsWhenNotFactory() public {
@@ -310,6 +321,22 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         assertEq(ILCC(lccToken1).balanceOf(user1), 0);
     }
 
+    function test_unwrapTo_overloadByUnderlyingMarketId_withQueueTo_attributesQueueCorrectly() public {
+        uint256 amount = 25;
+
+        // user1 has only market-derived balance.
+        _wrapMarketDerivedLCC(user1, lccToken1, amount);
+
+        // Force market liquidity to 0 so it queues.
+        vm.mockCall(factory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0)));
+
+        vm.prank(user1);
+        liquidityHub.unwrapTo(address(underlyingAsset1), marketId1, user2, user3, amount);
+
+        assertEq(liquidityHub.settleQueue(lccToken1, user3), amount, "queue should be attributed to queueTo");
+        assertEq(liquidityHub.settleQueue(lccToken1, user2), 0, "to should not own the queued settlement");
+    }
+
     function test_issue_cancel_and_cancelWithQueue_coverIssuerPaths() public {
         uint256 amount = 100;
 
@@ -339,6 +366,35 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         assertEq(liquidityHub.totalQueued(lccToken1), 50);
     }
 
+    function test_cancelWithQueue_revertsWhenPrincipalIsZero() public {
+        vm.prank(factory);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAmount.selector, uint256(0), uint256(0)));
+        liquidityHub.cancelWithQueue(lccToken1, user1, 0, 0, user2);
+    }
+
+    function test_cancelWithQueue_revertsWhenQueueExceedsPrincipal() public {
+        vm.prank(factory);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAmount.selector, uint256(2), uint256(1)));
+        liquidityHub.cancelWithQueue(lccToken1, user1, 1, 2, user2);
+    }
+
+    function test_cancelWithQueue_doesNotEmitSettlementQueuedWhenQueueAmountIsZero() public {
+        // Give user1 some market-derived balance so cancelWithQueue can burn.
+        _wrapMarketDerivedLCC(user1, lccToken1, 10);
+
+        vm.recordLogs();
+        vm.prank(factory);
+        liquidityHub.cancelWithQueue(lccToken1, user1, 5, 0, user2);
+
+        Vm.Log[] memory entries = vm.getRecordedLogs();
+        bytes32 topic0 = keccak256("SettlementQueued(address,address,uint256)");
+        for (uint256 i = 0; i < entries.length; i++) {
+            if (entries[i].topics.length > 0) {
+                require(entries[i].topics[0] != topic0, "unexpected SettlementQueued");
+            }
+        }
+    }
+
     function test_annulSettlementBeforeTransfer_noOpBranchesAndBleedLogic() public {
         // Create a queue entry for user1.
         uint256 q = 40;
@@ -364,6 +420,23 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         assertEq(liquidityHub.totalQueued(lccToken1), q - 15);
     }
 
+    function test_annulSettlementBeforeTransfer_bleedUsesTransferableWithoutQueue_whenLiquidBalanceExceedsQueued()
+        public
+    {
+        // queued is large; make bleed smaller than queued so toAnnul == bleed (sensitive to arithmetic mutants).
+        uint256 q = 80;
+        _createSettlementQueueEntry(lccToken1, user1, q);
+        assertEq(liquidityHub.settleQueue(lccToken1, user1), q);
+
+        // liquidBalance = 100, queued = 80 => transferableWithoutQueue = 20.
+        // amountToTransfer = 30 => bleedIntoQueue = 10, toAnnul = 10.
+        vm.prank(lccToken1);
+        liquidityHub.annulSettlementBeforeTransfer(user1, 55, 45, 30);
+
+        assertEq(liquidityHub.settleQueue(lccToken1, user1), q - 10);
+        assertEq(liquidityHub.totalQueued(lccToken1), q - 10);
+    }
+
     function test_confirmTake_emitsLiquidityAvailableWhenShouldEmitAndNotFullyConsumedByHubQueue() public {
         uint256 hubQueue = 5;
         uint256 amount = 10;
@@ -376,6 +449,22 @@ contract LiquidityHubTest is LiquidityHubTestBase {
 
         vm.prank(factory);
         liquidityHub.confirmTake(lccToken1, amount, true);
+    }
+
+    function test_confirmTake_doesNotEmitWhenShouldEmitFalse() public {
+        uint256 amount = 10;
+
+        vm.recordLogs();
+        vm.prank(factory);
+        liquidityHub.confirmTake(lccToken1, amount, false);
+
+        Vm.Log[] memory entries = vm.getRecordedLogs();
+        bytes32 topic0 = keccak256("LiquidityAvailable(address,address,uint256,bytes32)");
+        for (uint256 i = 0; i < entries.length; i++) {
+            if (entries[i].topics.length > 0) {
+                require(entries[i].topics[0] != topic0, "unexpected LiquidityAvailable");
+            }
+        }
     }
 
     function test_confirmTake_doesNotEmitWhenShouldEmitButFullyConsumedByHubQueue() public {

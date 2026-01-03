@@ -157,7 +157,6 @@ library LiquidityHubLib {
         ctx.targetToBurn = netTarget;
         ctx.backingToBurn += netTarget;
         ctx.marketToMint += netTarget;
-        ctx.remainingAmount = ctx.originalAmount - netTarget;
 
         return ctx;
     }
@@ -206,9 +205,12 @@ library LiquidityHubLib {
         private
         returns (WrapWithContext memory)
     {
-        // Calculate remainder: if remainingAmount was set by Step 0, use it; otherwise use original minus direct
-        uint256 remainderAmount =
-            ctx.remainingAmount > 0 ? ctx.remainingAmount - ctx.directToMint : ctx.originalAmount - ctx.directToMint;
+        // Calculate remainder after Step 0 (target queue netting) and Step 1 (direct conversion).
+        // IMPORTANT: remainingAmount may legitimately be 0 after Step 0; using `> 0` as a sentinel causes
+        // double-counting and can lead to over-minting.
+        uint256 remainderAmount = ctx.originalAmount;
+        remainderAmount = remainderAmount > ctx.targetToBurn ? (remainderAmount - ctx.targetToBurn) : 0;
+        remainderAmount = remainderAmount > ctx.directToMint ? (remainderAmount - ctx.directToMint) : 0;
 
         if (remainderAmount == 0) return ctx;
 

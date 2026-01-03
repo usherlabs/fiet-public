@@ -185,6 +185,28 @@ contract LiquidityHubWrapTest is LiquidityHubTestBase {
         assertGt(liquidityHub.totalQueued(lccToken1), 0, "totalQueued should reflect Hub queue");
     }
 
+    function test_unwrap_marketDerivedOnly_paysUnderlyingFromMarketPath() public {
+        // Arrange: user1 has only market-derived balance.
+        uint256 amount = 50;
+        _wrapMarketDerivedLCC(user1, lccToken1, amount);
+
+        // Provide underlying reserve so pay() can transfer out immediately.
+        underlyingAsset1.mint(address(liquidityHub), amount);
+        vm.prank(factory);
+        liquidityHub.confirmTake(lccToken1, amount, false);
+
+        // Make the market liquidity call succeed fully so marketUnwrapped > 0 and directUnwrapped == 0.
+        vm.mockCall(factory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(amount));
+
+        uint256 userUnderlyingBefore = underlyingAsset1.balanceOf(user1);
+
+        vm.prank(user1);
+        liquidityHub.unwrap(lccToken1, amount);
+
+        assertEq(underlyingAsset1.balanceOf(user1), userUnderlyingBefore + amount, "underlying should be paid");
+        assertEq(ILCC(lccToken1).balanceOf(user1), 0, "LCC should be burned");
+    }
+
     // ============ WRAP WITH LCC : REVERT TESTS ============
 
     /// @notice Tests wrapWith reverts with zero amount

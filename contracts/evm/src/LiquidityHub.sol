@@ -77,20 +77,6 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuard {
     }
 
     /**
-     * @notice Modifier to restrict access to registered factory contracts or the owner
-     */
-    modifier onlyFactoryOrOwner() {
-        _onlyFactoryOrOwner();
-        _;
-    }
-
-    function _onlyFactoryOrOwner() internal view {
-        if (!isFactory[_msgSender()] && _msgSender() != owner()) {
-            revert Errors.InvalidSender();
-        }
-    }
-
-    /**
      * @notice Modifier to ensure the provided LCC address is valid
      * @param lcc The LCC token address to validate
      */
@@ -308,14 +294,6 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuard {
     }
 
     /**
-     * @notice Asserts that an address is a valid LCC token, reverting if not
-     * @param lcc The LCC token address to validate
-     */
-    function _assertValidLcc(address lcc) internal view {
-        LiquidityHubLib.assertValidLcc(s, lcc);
-    }
-
-    /**
      * @notice Mints LCC tokens to an address
      * @param lccToken The LCC token address
      * @param to The address to mint tokens to
@@ -447,13 +425,10 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuard {
         Currency.wrap(withLCC).transferFrom(from, address(this), ctx.originalAmount);
         // Executes the full wrap-with operation using the provided context
         LiquidityHubLib.wrapWithContext(s, lcc, withLCC, ctx);
-        // Extract return values and apply defensive clamp (safety check)
+        // Extract return values.
+        // Note: wrapWithContext is designed to conserve amounts. Any mismatch is a logic bug in the library.
         uint256 directToMint = ctx.directToMint;
         uint256 marketToMint = ctx.marketToMint;
-        if (directToMint + marketToMint > ctx.originalAmount) {
-            uint256 excess = (directToMint + marketToMint) - ctx.originalAmount;
-            marketToMint = marketToMint > excess ? (marketToMint - excess) : 0;
-        }
 
         // Final mint: mint target LCC with appropriate direct/market-derived split
         LCCFactoryLib.mint(lcc, to, directToMint, marketToMint, false);
@@ -605,10 +580,7 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuard {
      * @param amount The amount to issue
      */
     function issue(address lcc, address to, uint256 amount) external onlyIssuer(lcc) onlyValidLcc(lcc) nonReentrant {
-        if (amount == 0) {
-            revert Errors.InvalidAmount(0, 0);
-        }
-
+        // Note: LCC mint path reverts on zero (direct+market) amount.
         _mint(lcc, to, 0, amount, true);
     }
 
@@ -619,10 +591,7 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuard {
      * @param amount The amount to cancel
      */
     function cancel(address lcc, address from, uint256 amount) external onlyIssuer(lcc) onlyValidLcc(lcc) nonReentrant {
-        if (amount == 0) {
-            revert Errors.InvalidAmount(0, 0);
-        }
-
+        // Note: LCC burn path reverts on zero (direct+market) amount.
         _burn(lcc, from, 0, amount, true);
     }
 
@@ -642,6 +611,12 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuard {
         uint256 queueAmount,
         address recipient
     ) public onlyIssuer(lcc) onlyValidLcc(lcc) nonReentrant {
+        if (principalAmount == 0) {
+            revert Errors.InvalidAmount(0, 0);
+        }
+        if (queueAmount > principalAmount) {
+            revert Errors.InvalidAmount(queueAmount, principalAmount);
+        }
         _cancelWithQueue(lcc, from, principalAmount, queueAmount, recipient);
     }
 
@@ -660,13 +635,6 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuard {
         uint256 queueAmount,
         address recipient
     ) internal {
-        if (principalAmount == 0) {
-            revert Errors.InvalidAmount(0, 0);
-        }
-        if (queueAmount > principalAmount) {
-            revert Errors.InvalidAmount(queueAmount, principalAmount);
-        }
-
         uint256 cancelAmount = principalAmount - queueAmount;
 
         // Burn the cancellable portion of the principal amount from the sender (issuer burn path, skip bucket accounting)
@@ -675,10 +643,8 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuard {
             _burn(lcc, from, 0, cancelAmount, true);
         }
 
-        // Queue a portion for settlement to the specified recipient
-        if (queueAmount > 0) {
-            _queueSettlement(lcc, recipient, queueAmount);
-        }
+        // Queue a portion for settlement to the specified recipient (no-op for queueAmount == 0)
+        _queueSettlement(lcc, recipient, queueAmount);
     }
 
     /**
@@ -821,12 +787,9 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuard {
             TransientSlots.consumePlanCancelWithQueue(lcc, sender, cancelFromRecipient);
 
         if (principalAmount > 0) {
-            if (principalAmount > queueAmount) {
-                // Use internal function to bypass onlyIssuer check (LCC is the caller, not an issuer)
-                _cancelWithQueue(lcc, cancelFromRecipient, principalAmount, queueAmount, queueRecipient);
-            } else if (principalAmount == queueAmount) {
-                _queueSettlement(lcc, queueRecipient, queueAmount);
-            }
+            // _cancelWithQueue handles principal == queue (burn 0, queue all) and principal > queue.
+            // Use internal function to bypass onlyIssuer check (LCC is the caller, not an issuer).
+            _cancelWithQueue(lcc, cancelFromRecipient, principalAmount, queueAmount, queueRecipient);
             return;
         }
 
@@ -847,9 +810,8 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuard {
         address lcc = _msgSender();
 
         uint256 queued = s.settleQueue[lcc][from];
-        if (queued == 0 || amountToTransfer == 0) {
-            return;
-        }
+        // Even if queued == 0 or amountToTransfer == 0, the logic below is a no-op.
+        // We intentionally avoid an early return here to keep the control flow simpler and more auditable.
 
         uint256 liquidBalance = wrappedBalance + marketDerivedBalance;
 
@@ -859,10 +821,9 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuard {
         if (amountToTransfer > transferableWithoutQueue) {
             uint256 bleedIntoQueue = amountToTransfer - transferableWithoutQueue;
             uint256 toAnnul = Math.min(bleedIntoQueue, queued);
-            if (toAnnul > 0) {
-                s.settleQueue[lcc][from] -= toAnnul;
-                s.totalQueued[lcc] -= toAnnul;
-            }
+            // Safe: toAnnul <= queued and subtracting 0 is a no-op.
+            s.settleQueue[lcc][from] -= toAnnul;
+            s.totalQueued[lcc] -= toAnnul;
         }
     }
 
@@ -887,6 +848,7 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuard {
      * @param amount The amount to eventually settle
      */
     function _queueSettlement(address lcc, address recipient, uint256 amount) internal {
+        if (amount == 0) return;
         LiquidityHubLib.queueSettlement(s, lcc, recipient, amount);
         emit SettlementQueued(lcc, recipient, amount);
     }
@@ -899,10 +861,6 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuard {
      */
     function _assertValidEthSender() internal view {
         address sender = _msgSender();
-        // otherwise check if the caller is a valid MarketVault with native ETH support
-        if (sender.code.length == 0) {
-            revert Errors.InvalidEthSender();
-        }
 
         address l0;
         address l1;

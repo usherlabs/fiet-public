@@ -10,6 +10,10 @@ import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
  * @dev Intended to cheaply increase line + branch coverage without bloating behavioural suites.
  */
 contract LiquidityHubAccessorTest is LiquidityHubTestBase {
+    function test_constructor_setsOracleHelper() public view {
+        assertEq(address(liquidityHub.oracleHelper()), address(oracleHelper));
+    }
+
     function test_accessors_returnExpectedValues() public view {
         // marketUnderlyingToLCC
         assertEq(liquidityHub.marketUnderlyingToLCC(marketId1, address(underlyingAsset1)), lccToken1);

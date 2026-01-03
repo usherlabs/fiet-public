@@ -38,6 +38,7 @@ OUTDIR="$OUTDIR_BASE"
 WORKTREE_DIR="${WORKTREE_DIR:-"$FOUNDRY_ROOT/.mutation-worktree"}"
 SOLC_BIN="${SOLC:-solc}"
 EVM_VERSION="${EVM_VERSION:-cancun}"
+FLAT_OUTDIR="${FLAT_OUTDIR:-0}" # 1 to write into OUTDIR_BASE directly (legacy behaviour)
 
 # In monorepos, the git worktree is checked out at repo root, so the Foundry project
 # lives at a subdirectory inside the worktree.
@@ -478,18 +479,17 @@ main() {
   local overall_killed=0 overall_survived=0 overall_errored=0
 
   local targets_to_run=("${TARGETS[@]}")
-  local multi_target="0"
-  if [[ ${#targets_to_run[@]} -gt 1 ]]; then
-    multi_target="1"
+  if [[ "$FLAT_OUTDIR" != "1" ]]; then
     log ""
-    log "Multi-target mode: writing per-target outputs under: $OUTDIR_BASE"
+    log "Per-target outdir mode: writing outputs under: $OUTDIR_BASE/<target>"
+    log "Tip: set FLAT_OUTDIR=1 to write directly into: $OUTDIR_BASE (legacy)"
   fi
 
   for target in "${targets_to_run[@]}"; do
-    if [[ "$multi_target" == "1" ]]; then
-      OUTDIR="$OUTDIR_BASE/$(target_slug "$target")"
-    else
+    if [[ "$FLAT_OUTDIR" == "1" ]]; then
       OUTDIR="$OUTDIR_BASE"
+    else
+      OUTDIR="$OUTDIR_BASE/$(target_slug "$target")"
     fi
 
     log ""
@@ -593,6 +593,11 @@ main() {
       echo "total=$target_total"
       echo "score_pct=$target_pct"
     } > "$OUTDIR/mutation_score.txt"
+
+    # Convenience pointer to the most recently-written per-target directory.
+    if [[ "$FLAT_OUTDIR" != "1" ]]; then
+      ln -sfn "$OUTDIR" "$OUTDIR_BASE/_latest" >/dev/null 2>&1 || true
+    fi
 
     overall_killed=$((overall_killed + killed))
     overall_survived=$((overall_survived + survived))
