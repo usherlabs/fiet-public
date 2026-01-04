@@ -14,6 +14,7 @@ import {
 import {PositionId, Position} from "../../../src/types/Position.sol";
 import {Pool} from "../../../src/types/Pool.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
@@ -111,6 +112,33 @@ contract VTSPositionLibHarness {
         return (result.settlementDelta, result.rfsOpen, result.seizedLiquidityUnits);
     }
 
+    /// @notice Exposes internal coverage burn for direct unit testing
+    /// @dev Useful to kill mutants around `_calculateFeesBurn` / `_applyCoverageBurn` and outflow-window checkpointing.
+    function applyCoverageBurn(
+        IPoolManager poolManager,
+        PositionId positionId,
+        PoolId poolId,
+        uint8 tokenIndex,
+        uint256 cov,
+        uint128 positionLiquidity
+    ) external {
+        VTSPositionLib._applyCoverageBurn(s, poolManager, positionId, poolId, tokenIndex, cov, positionLiquidity);
+    }
+
+    /// @notice Exposes internal liquidity decrease helper for unit tests (queue clamping, settleableDelta)
+    function handleLiquidityDecrease(
+        PositionContext memory ctx,
+        address owner,
+        PoolKey calldata poolKey,
+        BalanceDelta principalDelta,
+        BalanceDelta requiredSettlementDelta,
+        address queueRecipient
+    ) external returns (BalanceDelta settleableDelta) {
+        return VTSPositionLib._handleLiquidityDecrease(
+            ctx, owner, poolKey, principalDelta, requiredSettlementDelta, queueRecipient
+        );
+    }
+
     // ============ Storage Getters (for assertions) ============
 
     function getPositionAccounting(PositionId id)
@@ -161,9 +189,24 @@ contract VTSPositionLibHarness {
         return (s.poolAccounting[poolId].totalSettled.token0, s.poolAccounting[poolId].totalSettled.token1);
     }
 
+    function getPoolTotalDeficitPrincipal(PoolId poolId)
+        external
+        view
+        returns (uint256 principal0, uint256 principal1)
+    {
+        return (
+            s.poolAccounting[poolId].totalDeficitPrincipal.token0, s.poolAccounting[poolId].totalDeficitPrincipal.token1
+        );
+    }
+
     function getPoolCoverageResidualCISE(PoolId poolId) external view returns (uint256 residual0, uint256 residual1) {
         return
             (s.poolAccounting[poolId].coverageResidualCISE.token0, s.poolAccounting[poolId].coverageResidualCISE.token1);
+    }
+
+    function getPoolCoverageResidualDICE(PoolId poolId) external view returns (uint256 residual0, uint256 residual1) {
+        return
+            (s.poolAccounting[poolId].coverageResidualDICE.token0, s.poolAccounting[poolId].coverageResidualDICE.token1);
     }
 
     function getPoolCoveragePerSettledIndexX128(PoolId poolId) external view returns (uint256 idx0, uint256 idx1) {
@@ -171,6 +214,43 @@ contract VTSPositionLibHarness {
             s.poolAccounting[poolId].coveragePerSettledIndexX128.token0,
             s.poolAccounting[poolId].coveragePerSettledIndexX128.token1
         );
+    }
+
+    function setPoolCoveragePerSettledIndexX128(PoolId poolId, uint256 idx0, uint256 idx1) external {
+        s.poolAccounting[poolId].coveragePerSettledIndexX128.token0 = idx0;
+        s.poolAccounting[poolId].coveragePerSettledIndexX128.token1 = idx1;
+    }
+
+    function getPoolCoveragePerDeficitIndexX128(PoolId poolId) external view returns (uint256 idx0, uint256 idx1) {
+        return (
+            s.poolAccounting[poolId].coveragePerDeficitIndexX128.token0,
+            s.poolAccounting[poolId].coveragePerDeficitIndexX128.token1
+        );
+    }
+
+    function getCoverageIndexLastX128(PositionId id) external view returns (uint256 idx0, uint256 idx1) {
+        return
+            (
+                s.positionAccounting[id].coverageIndexLastX128.token0,
+                s.positionAccounting[id].coverageIndexLastX128.token1
+            );
+    }
+
+    function getCISEIndexLastX128(PositionId id) external view returns (uint256 idx0, uint256 idx1) {
+        return (s.positionAccounting[id].ciseIndexLastX128.token0, s.positionAccounting[id].ciseIndexLastX128.token1);
+    }
+
+    function getCumulativeOutflows(PositionId id) external view returns (uint256 out0, uint256 out1) {
+        return (s.positionAccounting[id].cumulativeOutflows.token0, s.positionAccounting[id].cumulativeOutflows.token1);
+    }
+
+    function getOutflowsAtFeeSnap(PositionId id) external view returns (uint256 snap0, uint256 snap1) {
+        return (s.positionAccounting[id].outflowsAtFeeSnap.token0, s.positionAccounting[id].outflowsAtFeeSnap.token1);
+    }
+
+    function getFeeGrowthInsideLast(PositionId id) external view returns (uint256 fg0, uint256 fg1) {
+        return
+            (s.positionAccounting[id].feeGrowthInsideLast.token0, s.positionAccounting[id].feeGrowthInsideLast.token1);
     }
 
     function getCommitExpiresAt(uint256 commitId) external view returns (uint256 expiresAt) {
@@ -230,9 +310,49 @@ contract VTSPositionLibHarness {
         s.poolAccounting[poolId].totalSettled.token1 = total1;
     }
 
+    function setPoolTotalDeficitPrincipal(PoolId poolId, uint256 principal0, uint256 principal1) external {
+        s.poolAccounting[poolId].totalDeficitPrincipal.token0 = principal0;
+        s.poolAccounting[poolId].totalDeficitPrincipal.token1 = principal1;
+    }
+
     function setPoolCoverageResidualCISE(PoolId poolId, uint256 residual0, uint256 residual1) external {
         s.poolAccounting[poolId].coverageResidualCISE.token0 = residual0;
         s.poolAccounting[poolId].coverageResidualCISE.token1 = residual1;
+    }
+
+    function setPoolCoverageResidualDICE(PoolId poolId, uint256 residual0, uint256 residual1) external {
+        s.poolAccounting[poolId].coverageResidualDICE.token0 = residual0;
+        s.poolAccounting[poolId].coverageResidualDICE.token1 = residual1;
+    }
+
+    function setPoolCoveragePerDeficitIndexX128(PoolId poolId, uint256 idx0, uint256 idx1) external {
+        s.poolAccounting[poolId].coveragePerDeficitIndexX128.token0 = idx0;
+        s.poolAccounting[poolId].coveragePerDeficitIndexX128.token1 = idx1;
+    }
+
+    function setCoverageIndexLastX128(PositionId id, uint256 idx0, uint256 idx1) external {
+        s.positionAccounting[id].coverageIndexLastX128.token0 = idx0;
+        s.positionAccounting[id].coverageIndexLastX128.token1 = idx1;
+    }
+
+    function setCISEIndexLastX128(PositionId id, uint256 idx0, uint256 idx1) external {
+        s.positionAccounting[id].ciseIndexLastX128.token0 = idx0;
+        s.positionAccounting[id].ciseIndexLastX128.token1 = idx1;
+    }
+
+    function setCumulativeOutflows(PositionId id, uint256 out0, uint256 out1) external {
+        s.positionAccounting[id].cumulativeOutflows.token0 = out0;
+        s.positionAccounting[id].cumulativeOutflows.token1 = out1;
+    }
+
+    function setOutflowsAtFeeSnap(PositionId id, uint256 snap0, uint256 snap1) external {
+        s.positionAccounting[id].outflowsAtFeeSnap.token0 = snap0;
+        s.positionAccounting[id].outflowsAtFeeSnap.token1 = snap1;
+    }
+
+    function setFeeGrowthInsideLast(PositionId id, uint256 fg0, uint256 fg1) external {
+        s.positionAccounting[id].feeGrowthInsideLast.token0 = fg0;
+        s.positionAccounting[id].feeGrowthInsideLast.token1 = fg1;
     }
 
     function setCommitExpiresAt(uint256 commitId, uint256 expiresAt) external {

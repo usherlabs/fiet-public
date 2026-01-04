@@ -154,6 +154,46 @@ contract CoreHookTest is Test {
         assertFalse(pm.burnCalled(), "burn should not be used for positive delta0");
     }
 
+    function test_settleHookDeltasToPot_doesNothingWhenDelta0AndDelta1AreZero() public {
+        pm.setCurrencyDelta(address(hook), key.currency0, 0);
+        pm.setCurrencyDelta(address(hook), key.currency1, 0);
+
+        vm.prank(address(mf));
+        hook.settleHookDeltasToPot(key);
+
+        assertFalse(pm.mintCalled(), "mint should not be called for zero deltas");
+        assertFalse(pm.burnCalled(), "burn should not be called for zero deltas");
+    }
+
+    function test_settleHookDeltasToPot_burnsClaimsWhenDelta0Negative() public {
+        int256 delta0 = -123;
+        pm.setCurrencyDelta(address(hook), key.currency0, delta0);
+        pm.setCurrencyDelta(address(hook), key.currency1, 0);
+
+        vm.prank(address(mf));
+        hook.settleHookDeltasToPot(key);
+
+        assertFalse(pm.mintCalled(), "mint must not be used for negative delta0");
+        assertTrue(pm.burnCalled(), "burn must be used for negative delta0");
+        assertEq(pm.lastBurnFrom(), address(hook));
+        assertEq(pm.lastBurnId(), key.currency0.toId());
+        assertEq(pm.lastBurnAmount(), uint256(-delta0), "burn amount must be abs(delta0)");
+    }
+
+    // ------------------------------------------------------------
+    // Mutant: ProxySwapFlag.isDirectSwap(proxyHook) forced true in CoreHook._afterSwap
+    // ------------------------------------------------------------
+
+    function test_afterSwap_doesNotNotifyProxyHook_whenProxySwapFlagIsSet() public {
+        // Simulate proxy swap in progress: direct-swap detection must be false, so no notification.
+        spy.setProxySwapFlag(true);
+
+        SwapParams memory sp = SwapParams({zeroForOne: true, amountSpecified: int256(1), sqrtPriceLimitX96: 0});
+        hook.exposed_afterSwap(address(this), key, sp, toBalanceDelta(int128(-1), int128(1)), bytes(""));
+
+        assertEq(spy.swapCalls(), 0, "should not notify proxy hook during proxy-initiated swaps");
+    }
+
     // ------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------
@@ -201,6 +241,16 @@ contract CoreHookHarness is CoreHook {
     ) external returns (bytes4, BalanceDelta) {
         return _afterRemoveLiquidity(sender, k, params, delta, feesAccrued, hookData);
     }
+
+    function exposed_afterSwap(
+        address sender,
+        PoolKey calldata k,
+        SwapParams calldata params,
+        BalanceDelta delta,
+        bytes calldata hookData
+    ) external returns (bytes4, int128) {
+        return _afterSwap(sender, k, params, delta, hookData);
+    }
 }
 
 contract MockMarketFactory {
@@ -233,6 +283,27 @@ contract ProxyHookSpy {
         _lastActionType = actionType;
     }
 
+    // ---- direct swap spy + exttload hook for ProxySwapFlag.isDirectSwap(proxyHook) ----
+
+    uint256 internal _swapCalls;
+    BalanceDelta internal _lastSwapDelta;
+    bytes32 internal _proxySwapFlag;
+
+    function setProxySwapFlag(bool on) external {
+        _proxySwapFlag = on ? bytes32(uint256(1)) : bytes32(0);
+    }
+
+    function exttload(bytes32) external view returns (bytes32) {
+        // CoreHook checks direct swaps via ProxySwapFlag.isDirectSwap(proxyHook),
+        // which reads PROXY_SWAP_FLAG_SLOT from the proxy hook via IExttload.exttload.
+        return _proxySwapFlag;
+    }
+
+    function onCorePoolDirectSwap(BalanceDelta delta) external {
+        _swapCalls++;
+        _lastSwapDelta = delta;
+    }
+
     function calls() external view returns (uint256) {
         return _calls;
     }
@@ -243,6 +314,14 @@ contract ProxyHookSpy {
 
     function lastActionType() external view returns (LiquidityUtils.ActionType) {
         return _lastActionType;
+    }
+
+    function swapCalls() external view returns (uint256) {
+        return _swapCalls;
+    }
+
+    function lastSwapDelta() external view returns (BalanceDelta) {
+        return _lastSwapDelta;
     }
 }
 
@@ -262,11 +341,13 @@ contract MockVTSOrchestrator {
         BalanceDelta,
         BalanceDelta,
         bytes calldata
-    ) external view returns (Position memory /* pos */, PositionId id, BalanceDelta feeAdj, bool isMMPosition) {
+    ) external view returns (Position memory, /* pos */ PositionId id, BalanceDelta feeAdj, bool isMMPosition) {
         id = PositionId.wrap(bytes32(0));
         feeAdj = _feeAdj;
         isMMPosition = _isMM;
     }
+
+    function afterCoreSwap(PoolKey calldata, SwapParams calldata, BalanceDelta, uint160, uint128) external {}
 }
 
 contract MockPoolManager {
@@ -334,6 +415,18 @@ contract MockPoolManager {
 
     function lastMintAmount() external view returns (uint256) {
         return _lastMintAmount;
+    }
+
+    function lastBurnFrom() external view returns (address) {
+        return _lastBurnFrom;
+    }
+
+    function lastBurnId() external view returns (uint256) {
+        return _lastBurnId;
+    }
+
+    function lastBurnAmount() external view returns (uint256) {
+        return _lastBurnAmount;
     }
 
     // NOTE: This mock intentionally does not implement the full IPoolManager surface.

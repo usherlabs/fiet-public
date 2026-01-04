@@ -5,6 +5,8 @@ import "forge-std/Test.sol";
 
 import {Errors} from "../../src/libraries/Errors.sol";
 import {LCCFactoryLib} from "../../src/libraries/LCCFactoryLib.sol";
+import {LCCMetadataLib} from "../../src/libraries/LCCMetadataLib.sol";
+import {OracleUtils} from "../../src/libraries/OracleUtils.sol";
 import {LiquidityHubStorage, Market} from "../../src/types/Liquidity.sol";
 import {IOracleHelper} from "../../src/interfaces/IOracleHelper.sol";
 
@@ -12,6 +14,10 @@ interface IERC20MetadataLike {
     function name() external view returns (string memory);
     function symbol() external view returns (string memory);
     function decimals() external view returns (uint8);
+}
+
+interface ILCCUnderlyingLike {
+    function underlying() external view returns (address);
 }
 
 contract ERC20MetadataMock {
@@ -224,6 +230,22 @@ contract LCCFactoryLibTest is Test {
         }
     }
 
+    function _containsSlot(bytes32[] memory slots, bytes32 needle) internal pure returns (bool) {
+        for (uint256 i = 0; i < slots.length; i++) {
+            if (slots[i] == needle) return true;
+        }
+        return false;
+    }
+
+    function _truncMappingSlots(bytes memory truncated) internal pure returns (bytes32 slot0, bytes32 slot1) {
+        // LiquidityHubStorage is the first state var in the harness (slot 0).
+        // `truncatedMarketRefToUnderlyingPair` is the 3rd field in the struct, so mapping slot = 2.
+        bytes32 keyHash = keccak256(truncated);
+        bytes32 base = keccak256(abi.encode(keyHash, uint256(2)));
+        slot0 = base;
+        slot1 = bytes32(uint256(base) + 1);
+    }
+
     function test_initNativeAsset_setsFields() public view {
         assertEq(h.nativeName(), "Ether");
         assertEq(h.nativeSymbol(), "ETH");
@@ -255,6 +277,80 @@ contract LCCFactoryLibTest is Test {
         address[2] memory stored = h.getTruncPair(trunc4);
         assertEq(stored[0], address(0));
         assertEq(stored[1], address(t));
+    }
+
+    function test_createLCC_setsERC20Metadata_forERC20Underlying() public {
+        ERC20MetadataMock t = new ERC20MetadataMock("Token", "TKN", 6);
+        address[2] memory pair = [address(t), address(0)];
+        bytes memory marketRef = hex"01020304"; // min length => should succeed at 4
+
+        address lcc = h.createLCC(address(mf), marketRef, pair, 0, "My Market", new address[](0));
+
+        // Expected metadata: symbol is built from underlying symbol + truncated marketRef string
+        (, string memory truncStr) = LCCMetadataLib.truncateMarketRef(marketRef, 4);
+        string memory expectedSymbol =
+            LCCMetadataLib.buildSymbol(LCCMetadataLib.getAssetSymbol(address(t), "ETH"), truncStr);
+        string memory expectedName = LCCMetadataLib.buildNameFromAsset(address(t), "Ether", "My Market", truncStr);
+
+        assertEq(IERC20MetadataLike(lcc).symbol(), expectedSymbol);
+        assertEq(IERC20MetadataLike(lcc).name(), expectedName);
+        assertEq(IERC20MetadataLike(lcc).decimals(), 6);
+    }
+
+    function test_createLCC_collisionAt4_thenUsesLength5_symbolReflectsLength5() public {
+        ERC20MetadataMock t = new ERC20MetadataMock("Token", "TKN", 6);
+        address[2] memory pair = [address(t), address(0)]; // sorted => [0, t]
+
+        bytes memory marketRef = hex"0102030405";
+        bytes memory trunc4 = _bytesPrefix(marketRef, 4);
+
+        // Force a collision at length 4 with an unrelated pair so we must go to length 5
+        h.setTruncPair(trunc4, [address(0x1111), address(0x2222)]);
+
+        address lcc = h.createLCC(address(mf), marketRef, pair, 0, "My Market", new address[](0));
+
+        (, string memory truncStr5) = LCCMetadataLib.truncateMarketRef(marketRef, 5);
+        string memory expectedSymbol5 =
+            LCCMetadataLib.buildSymbol(LCCMetadataLib.getAssetSymbol(address(t), "ETH"), truncStr5);
+
+        assertEq(IERC20MetadataLike(lcc).symbol(), expectedSymbol5);
+    }
+
+    function test_createLCC_nativeUnderlying_oracleCallerSeesUnifiedNativeAddress() public {
+        // Use native underlying (address(0)) so the oracle-only branch in LCC.underlying() is observable.
+        ERC20MetadataMock t = new ERC20MetadataMock("Token", "TKN", 6);
+        address[2] memory pair = [address(0), address(t)];
+        bytes memory marketRef = hex"01020304";
+
+        // Create LCC for index 0 => underlying = address(0)
+        address lcc = h.createLCC(address(mf), marketRef, pair, 0, "Market", new address[](0));
+
+        // Oracle address is configured to 0xB0B in setUp() via OracleHelperMock.
+        vm.prank(address(0xB0B));
+        assertEq(ILCCUnderlyingLike(lcc).underlying(), OracleUtils.RESILIENT_ORACLE_NATIVE_TOKEN_ADDR);
+
+        vm.prank(address(0xCAFE));
+        assertEq(ILCCUnderlyingLike(lcc).underlying(), address(0));
+    }
+
+    function test_createLCC_whenTruncMappingAlreadySet_doesNotWriteMappingSlots() public {
+        ERC20MetadataMock t = new ERC20MetadataMock("Token", "TKN", 6);
+        address[2] memory pair = [address(t), address(0)];
+        bytes memory marketRef = hex"01020304";
+
+        // First createLCC establishes the trunc(4) mapping.
+        h.createLCC(address(mf), marketRef, pair, 0, "Market", new address[](0));
+
+        bytes memory trunc4 = _bytesPrefix(marketRef, 4);
+        (bytes32 slot0, bytes32 slot1) = _truncMappingSlots(trunc4);
+
+        // Second createLCC with same marketRef + same pair should NOT write those mapping value slots again.
+        vm.record();
+        h.createLCC(address(mf), marketRef, pair, 0, "Market", new address[](0));
+        (, bytes32[] memory writes) = vm.accesses(address(h));
+
+        assertFalse(_containsSlot(writes, slot0));
+        assertFalse(_containsSlot(writes, slot1));
     }
 
     function test_createLCC_collisionAt4_thenSucceedsAt5_andStoresMappingFor5() public {

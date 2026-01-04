@@ -16,11 +16,15 @@ import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {PositionId} from "../../src/types/Position.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint128.sol";
+import {LiquidityUtils} from "../../src/libraries/LiquidityUtils.sol";
 
 contract MockOracleHelper is IOracleHelper {
     uint256 internal _price0 = 1e18;
     uint256 internal _price1 = 1e18;
     uint256 internal _totalValue;
+    address internal _expectedLcc0;
+    address internal _expectedLcc1;
+    bool internal _enforcePair;
 
     function setPrices(uint256 p0, uint256 p1) external {
         _price0 = p0;
@@ -29,6 +33,12 @@ contract MockOracleHelper is IOracleHelper {
 
     function setTotalValue(uint256 v) external {
         _totalValue = v;
+    }
+
+    function setExpectedLccPair(address lcc0, address lcc1, bool enforce) external {
+        _expectedLcc0 = lcc0;
+        _expectedLcc1 = lcc1;
+        _enforcePair = enforce;
     }
 
     // ===== IOracleHelper =====
@@ -67,7 +77,12 @@ contract MockOracleHelper is IOracleHelper {
         return _price0;
     }
 
-    function getPricesForLccPair(address, address) external view returns (uint256 price0, uint256 price1) {
+    function getPricesForLccPair(address lcc0, address lcc1) external view returns (uint256 price0, uint256 price1) {
+        if (_enforcePair) {
+            // Fail fast if library passes unexpected currencies (kills mutants that skip/garble currency assignment).
+            // Note: ordering matters because OracleUtils.lccPairValue passes (lcc0, lcc1) consistently.
+            require(lcc0 == _expectedLcc0 && lcc1 == _expectedLcc1, "MockOracleHelper: unexpected pair");
+        }
         return (_price0, _price1);
     }
 }
@@ -147,6 +162,9 @@ contract VTSCommitLibTest is VTSLibTestBase {
 
         positionId = _generatePositionId(DEFAULT_OWNER, TL, TU, DEFAULT_SALT);
         harness.setupPosition(positionId, poolId, commitId, TL, TU, LIQ);
+
+        // Enforce currency arguments for lccPairValue() calls to make currency-assignment mutants observable.
+        oracle.setExpectedLccPair(Currency.unwrap(corePoolKey.currency0), Currency.unwrap(corePoolKey.currency1), true);
     }
 
     // ============================================================
@@ -221,6 +239,43 @@ contract VTSCommitLibTest is VTSLibTestBase {
         assertEq(signal, 1_000_000e18, "signal should match mock");
     }
 
+    function test_validateLiquidityDelta_success_whenBackedBySettledOnly() public {
+        (uint160 sqrtPriceX96, int24 tick,,) = _getSlot0(poolId);
+
+        VTSCommitLib.LiquidityDeltaParams memory p = VTSCommitLib.LiquidityDeltaParams({
+            currency0: corePoolKey.currency0,
+            currency1: corePoolKey.currency1,
+            sqrtPriceX96: sqrtPriceX96,
+            currentTick: tick,
+            tickLower: TL,
+            tickUpper: TU,
+            liquidityDelta: int256(uint256(LIQ))
+        });
+
+        // Signal provides zero backing; settled must carry the validation.
+        oracle.setTotalValue(0);
+
+        // Compute issued USD first (settled initially 0).
+        harness.setPositionSettled(positionId, 0, 0);
+        (, uint256 issuedBefore,, uint256 signalBefore) =
+            harness.validateLiquidityDelta(oracle, commitId, positionId, p, false);
+        assertEq(signalBefore, 0, "signal should be zero");
+        assertGt(issuedBefore, 0, "issued should be non-zero");
+
+        // With prices at 1e18, USD value equals token amounts; settle enough to cover issued.
+        uint256 settled0 = issuedBefore + 1;
+        uint256 settled1 = 0;
+        harness.setPositionSettled(positionId, settled0, settled1);
+
+        (bool ok, uint256 issued, uint256 settled, uint256 signal) =
+            harness.validateLiquidityDelta(oracle, commitId, positionId, p, false);
+
+        assertTrue(ok, "should be backed by settled alone");
+        assertEq(signal, 0, "signal should remain zero");
+        assertEq(issued, issuedBefore, "issued should be stable");
+        assertEq(settled, settled0 + settled1, "settled USD should equal token amounts at p=1");
+    }
+
     function test_validateLiquidityDelta_reverts_whenInsufficientBacking_andFlagTrue() public {
         (uint160 sqrtPriceX96, int24 tick,,) = _getSlot0(poolId);
 
@@ -259,6 +314,35 @@ contract VTSCommitLibTest is VTSLibTestBase {
         harness.incrementCoverage(poolId, 0, 0);
         assertEq(harness.getCoverageResidualDICE(poolId, 0), 0, "no-op");
         assertEq(harness.getCoverageResidualCISE(poolId, 0), 0, "no-op");
+    }
+
+    /// @notice What it’s checking: Calling incrementCoverage(poolId, 2, 123e18) (i.e., an invalid tokenIndex > 1) must be a complete no-op: it should not change either token0 or token1 coverage accounting (indices or residuals).
+    function test_incrementCoverage_invalidTokenIndex_doesNotMutateToken0OrToken1Accounting() public {
+        // Seed both token0 and token1 totals so a removed early-return would mutate token1 via TokenPairLib branching.
+        harness.setPoolTotalDeficitPrincipal(poolId, 0, 200e18);
+        harness.setPoolTotalSettled(poolId, 0, 500e18);
+        harness.setPoolTotalDeficitPrincipal(poolId, 1, 300e18);
+        harness.setPoolTotalSettled(poolId, 1, 700e18);
+
+        uint256 dice0Before = harness.getCoveragePerDeficitIndexX128(poolId, 0);
+        uint256 dice1Before = harness.getCoveragePerDeficitIndexX128(poolId, 1);
+        uint256 cise0Before = harness.getCoveragePerSettledIndexX128(poolId, 0);
+        uint256 cise1Before = harness.getCoveragePerSettledIndexX128(poolId, 1);
+        uint256 rd0Before = harness.getCoverageResidualDICE(poolId, 0);
+        uint256 rd1Before = harness.getCoverageResidualDICE(poolId, 1);
+        uint256 rc0Before = harness.getCoverageResidualCISE(poolId, 0);
+        uint256 rc1Before = harness.getCoverageResidualCISE(poolId, 1);
+
+        harness.incrementCoverage(poolId, 2, 123e18);
+
+        assertEq(harness.getCoveragePerDeficitIndexX128(poolId, 0), dice0Before, "token0 DICE unchanged");
+        assertEq(harness.getCoveragePerDeficitIndexX128(poolId, 1), dice1Before, "token1 DICE unchanged");
+        assertEq(harness.getCoveragePerSettledIndexX128(poolId, 0), cise0Before, "token0 CISE unchanged");
+        assertEq(harness.getCoveragePerSettledIndexX128(poolId, 1), cise1Before, "token1 CISE unchanged");
+        assertEq(harness.getCoverageResidualDICE(poolId, 0), rd0Before, "token0 DICE residual unchanged");
+        assertEq(harness.getCoverageResidualDICE(poolId, 1), rd1Before, "token1 DICE residual unchanged");
+        assertEq(harness.getCoverageResidualCISE(poolId, 0), rc0Before, "token0 CISE residual unchanged");
+        assertEq(harness.getCoverageResidualCISE(poolId, 1), rc1Before, "token1 CISE residual unchanged");
     }
 
     function test_incrementCoverage_updatesIndexes_whenTotalsNonZero() public {
@@ -353,15 +437,17 @@ contract VTSCommitLibTest is VTSLibTestBase {
         uint256 issuedUsd = _computeIssuedUsd();
 
         // Surplus smaller than deficitUsd (20e18) -> pro-rata reduction path.
-        oracle.setTotalValue(issuedUsd + 5e18);
+        uint256 surplusUsd = 5e18;
+        oracle.setTotalValue(issuedUsd + surplusUsd);
 
         harness.checkpoint(manager, sigMgr, oracle, advancer, commitId, positionId, _makeSignal(mmOwner, advancer));
 
         (uint256 d0, uint256 d1) = harness.getPositionCommitmentDeficit(positionId);
-        assertLt(d0, deficit0, "deficit0 should reduce");
-        assertLt(d1, deficit1, "deficit1 should reduce");
-        assertGt(d0, 0, "deficit0 should remain");
-        assertGt(d1, 0, "deficit1 should remain");
+        uint256 currentDeficitUsd = deficit0 + deficit1; // prices are 1e18 in mock
+        uint256 reduce0 = FullMath.mulDiv(deficit0, surplusUsd, currentDeficitUsd);
+        uint256 reduce1 = FullMath.mulDiv(deficit1, surplusUsd, currentDeficitUsd);
+        assertEq(d0, deficit0 - reduce0, "deficit0 should reduce pro-rata");
+        assertEq(d1, deficit1 - reduce1, "deficit1 should reduce pro-rata");
     }
 
     function test_checkpoint_insufficientBacking_setsDeficitFromBps() public {
@@ -373,7 +459,47 @@ contract VTSCommitLibTest is VTSLibTestBase {
         harness.checkpoint(manager, sigMgr, oracle, advancer, commitId, positionId, _makeSignal(mmOwner, advancer));
 
         (uint256 d0, uint256 d1) = harness.getPositionCommitmentDeficit(positionId);
-        assertTrue(d0 > 0 || d1 > 0, "deficit should be set");
+        (uint160 sqrtPriceX96, int24 currentTick,,) = _getSlot0(poolId);
+        (uint256 eff0, uint256 eff1) =
+            LiquidityUtils.calculateEffectiveTokenAmounts(sqrtPriceX96, currentTick, TL, TU, int256(uint256(LIQ)));
+        assertEq(d0, eff0, "deficit0 should equal effective token0 when backing=0");
+        assertEq(d1, eff1, "deficit1 should equal effective token1 when backing=0");
+    }
+
+    function test_checkpoint_updatesCommitStateAndExpiry() public {
+        address adv2 = makeAddr("adv2");
+        sigMgr.setExpirySeconds(777);
+        oracle.setTotalValue(1_000_000e18); // ensure we don't take the insufficient-backing path
+
+        uint256 ts = block.timestamp;
+        harness.checkpoint(manager, sigMgr, oracle, adv2, commitId, positionId, _makeSignal(mmOwner, adv2));
+
+        assertEq(harness.getCommitAdvancer(commitId), adv2, "commit advancer should be updated");
+        assertEq(harness.getCommitExpiresAt(commitId), ts + 777, "commit expiry should be updated");
+    }
+
+    /**
+     *   @dev
+     *  In VTSCommitLib.checkpointWithCommitment, there’s a branch that says: if backing is sufficient (via signalUsd > 0)
+     *  and the USD value of the existing stored deficit is zero, then the library should force-clear the
+     *  stored commitmentDeficit.token0/token1 to 0.
+     */
+    function test_checkpoint_clearsDeficit_whenDeficitUsdIsZeroButUnitsNonZero() public {
+        // Make token0 have zero USD price; deficit in token0 then has zero USD value.
+        oracle.setPrices(0, 1e18);
+
+        // Existing deficit expressed only in token0 units (but worth 0 USD now).
+        harness.setPositionCommitmentDeficit(positionId, 123e18, 0);
+        harness.setPositionSettled(positionId, 0, 0);
+
+        // Ensure issuedUsd > 0 and backing is sufficient.
+        oracle.setTotalValue(1_000_000e18);
+
+        harness.checkpoint(manager, sigMgr, oracle, advancer, commitId, positionId, _makeSignal(mmOwner, advancer));
+
+        (uint256 d0, uint256 d1) = harness.getPositionCommitmentDeficit(positionId);
+        assertEq(d0, 0, "deficit0 should be cleared when its USD value is zero");
+        assertEq(d1, 0, "deficit1 should be cleared");
     }
 
     // ============================================================
