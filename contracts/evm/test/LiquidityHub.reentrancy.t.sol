@@ -74,6 +74,50 @@ contract ReentrantERC20 is MockERC20 {
     }
 }
 
+/**
+ * @dev Malicious "factory" used to trigger a re-entrant call from inside `useMarketLiquidity`, which is the only
+ *      practical hook point to test `nonReentrant` on wrapWith/wrapWithTo (since those don't call underlying ERC20s).
+ */
+contract ReentrantMarketFactory {
+    address public immutable hub;
+    address public immutable oracleHelper;
+
+    mapping(address => bool) public bounds;
+
+    bool internal armed;
+    address internal lccToReenter;
+
+    constructor(address hub_, address oracleHelper_) {
+        hub = hub_;
+        oracleHelper = oracleHelper_;
+    }
+
+    function setBound(address who, bool isBound) external {
+        bounds[who] = isBound;
+    }
+
+    function armReenterOnUseMarketLiquidity(address lcc_) external {
+        armed = true;
+        lccToReenter = lcc_;
+    }
+
+    // -------- Functions called by LiquidityHub / LCC --------
+
+    function marketLiquidity(address, bytes32) external pure returns (uint256) {
+        return 0;
+    }
+
+    function useMarketLiquidity(address, bytes32, uint256) external returns (uint256) {
+        if (armed) {
+            armed = false;
+            // Re-enter a `nonReentrant` function without needing any token balances/approvals.
+            // If `nonReentrant` is removed from the outer call, this will succeed and the test will fail.
+            LiquidityHub(payable(hub)).confirmTake(lccToReenter, 1, false);
+        }
+        return 0;
+    }
+}
+
 contract LiquidityHubReentrancyTest is LiquidityHubTestBase {
     function _assertWrappedError(bytes memory revertData) internal pure {
         require(revertData.length >= 4, "missing revert selector");
@@ -98,6 +142,14 @@ contract LiquidityHubReentrancyTest is LiquidityHubTestBase {
 
     function _unwrapToByUnderlyingSelector() internal pure returns (bytes4) {
         return bytes4(keccak256("unwrapTo(address,bytes32,address,uint256)"));
+    }
+
+    function _unwrapToWithQueueSelector() internal pure returns (bytes4) {
+        return bytes4(keccak256("unwrapTo(address,address,address,uint256)"));
+    }
+
+    function _unwrapToWithQueueByUnderlyingSelector() internal pure returns (bytes4) {
+        return bytes4(keccak256("unwrapTo(address,bytes32,address,address,uint256)"));
     }
 
     function test_wrapTo_revertsOnReentrancyAttempt() public {
@@ -325,6 +377,151 @@ contract LiquidityHubReentrancyTest is LiquidityHubTestBase {
             .call(abi.encodeWithSelector(_unwrapToByUnderlyingSelector(), address(evil), marketId, user2, amount));
         assertFalse(ok);
         _assertWrappedError(data);
+    }
+
+    function test_unwrapTo_withQueueTo_revertsOnReentrancyAttempt() public {
+        ReentrantERC20 evil = new ReentrantERC20("Evil", "EVL", 18);
+
+        vm.startPrank(factory);
+        address[] memory issuers = new address[](1);
+        issuers[0] = factory;
+        (address evilLcc, address otherLcc) = liquidityHub.createLCCPair(
+            abi.encodePacked(address(0xE21)), address(evil), address(underlyingAsset2), "EvilM11", issuers
+        );
+        liquidityHub.initialize(evilLcc, otherLcc, bytes32("evilMarket11"), abi.encodePacked(address(0xE21)));
+        vm.stopPrank();
+
+        evil.configure(address(liquidityHub), evilLcc);
+
+        uint256 amount = 5;
+        evil.mint(user1, amount);
+        vm.startPrank(user1);
+        evil.approve(address(liquidityHub), amount);
+        liquidityHub.wrap(evilLcc, amount);
+        vm.stopPrank();
+
+        evil.armTransferReentry(1);
+
+        vm.prank(user1);
+        (bool ok, bytes memory data) = address(liquidityHub)
+            .call(abi.encodeWithSelector(_unwrapToWithQueueSelector(), evilLcc, user2, user3, amount));
+        assertFalse(ok);
+        _assertWrappedError(data);
+    }
+
+    function test_unwrapTo_withQueueTo_overloadByUnderlyingMarketId_revertsOnReentrancyAttempt() public {
+        ReentrantERC20 evil = new ReentrantERC20("Evil", "EVL", 18);
+        bytes32 marketId = bytes32("evilMarket12");
+
+        vm.startPrank(factory);
+        address[] memory issuers = new address[](1);
+        issuers[0] = factory;
+        (address evilLcc, address otherLcc) = liquidityHub.createLCCPair(
+            abi.encodePacked(address(0xE22)), address(evil), address(underlyingAsset2), "EvilM12", issuers
+        );
+        liquidityHub.initialize(evilLcc, otherLcc, marketId, abi.encodePacked(address(0xE22)));
+        vm.stopPrank();
+
+        evil.configure(address(liquidityHub), evilLcc);
+
+        uint256 amount = 5;
+        evil.mint(user1, amount);
+        vm.startPrank(user1);
+        evil.approve(address(liquidityHub), amount);
+        liquidityHub.wrap(address(evil), marketId, amount);
+        vm.stopPrank();
+
+        evil.armTransferReentry(1);
+
+        vm.prank(user1);
+        (bool ok, bytes memory data) = address(liquidityHub)
+            .call(
+                abi.encodeWithSelector(
+                    _unwrapToWithQueueByUnderlyingSelector(), address(evil), marketId, user2, user3, amount
+                )
+            );
+        assertFalse(ok);
+        _assertWrappedError(data);
+    }
+
+    function test_wrapWith_revertsOnReentrancyAttempt_viaMarketFactory() public {
+        // Create markets under a malicious factory and ensure wrapWith hits `useMarketLiquidity`,
+        // which re-enters into the hub during the outer nonReentrant call.
+        ReentrantMarketFactory mf = new ReentrantMarketFactory(address(liquidityHub), address(oracleHelper));
+        liquidityHub.setFactory(address(mf), true);
+        mf.setBound(address(mf), true); // protocol-bound sender so transfers to users create market-derived balance
+        mf.setBound(address(liquidityHub), true); // allow user -> hub transferFrom of LCC during wrapWith
+
+        address[] memory issuers = new address[](1);
+        issuers[0] = address(mf);
+
+        // Market A
+        vm.startPrank(address(mf));
+        (address lccA0, address lccA1) = liquidityHub.createLCCPair(
+            abi.encodePacked(address(0xE30)), address(underlyingAsset1), address(underlyingAsset2), "MF-A", issuers
+        );
+        liquidityHub.initialize(lccA0, lccA1, bytes32("mfA"), abi.encodePacked(address(0xE30)));
+        vm.stopPrank();
+
+        // Market B (same underlying assets so wrapWith is allowed)
+        vm.startPrank(address(mf));
+        (address lccB0, address lccB1) = liquidityHub.createLCCPair(
+            abi.encodePacked(address(0xE31)), address(underlyingAsset1), address(underlyingAsset2), "MF-B", issuers
+        );
+        liquidityHub.initialize(lccB0, lccB1, bytes32("mfB"), abi.encodePacked(address(0xE31)));
+        vm.stopPrank();
+
+        // Give user1 market-derived balance in withLCC = lccB0 by transferring from protocol-bound factory.
+        uint256 amount = 5;
+        _wrapDirectLCC(address(mf), lccB0, amount);
+        vm.prank(address(mf));
+        ILCC(lccB0).transfer(user1, amount);
+
+        // Arm re-entry when wrapWith tries to use market liquidity (it will request it for market-derived portion).
+        mf.armReenterOnUseMarketLiquidity(lccB0);
+
+        vm.startPrank(user1);
+        ILCC(lccB0).approve(address(liquidityHub), amount);
+        vm.expectRevert(abi.encodeWithSignature("ReentrancyGuardReentrantCall()"));
+        liquidityHub.wrapWith(lccA0, lccB0, amount);
+        vm.stopPrank();
+    }
+
+    function test_wrapWithTo_revertsOnReentrancyAttempt_viaMarketFactory() public {
+        ReentrantMarketFactory mf = new ReentrantMarketFactory(address(liquidityHub), address(oracleHelper));
+        liquidityHub.setFactory(address(mf), true);
+        mf.setBound(address(mf), true);
+        mf.setBound(address(liquidityHub), true);
+
+        address[] memory issuers = new address[](1);
+        issuers[0] = address(mf);
+
+        vm.startPrank(address(mf));
+        (address lccA0, address lccA1) = liquidityHub.createLCCPair(
+            abi.encodePacked(address(0xE32)), address(underlyingAsset1), address(underlyingAsset2), "MF-A2", issuers
+        );
+        liquidityHub.initialize(lccA0, lccA1, bytes32("mfA2"), abi.encodePacked(address(0xE32)));
+        vm.stopPrank();
+
+        vm.startPrank(address(mf));
+        (address lccB0, address lccB1) = liquidityHub.createLCCPair(
+            abi.encodePacked(address(0xE33)), address(underlyingAsset1), address(underlyingAsset2), "MF-B2", issuers
+        );
+        liquidityHub.initialize(lccB0, lccB1, bytes32("mfB2"), abi.encodePacked(address(0xE33)));
+        vm.stopPrank();
+
+        uint256 amount = 5;
+        _wrapDirectLCC(address(mf), lccB0, amount);
+        vm.prank(address(mf));
+        ILCC(lccB0).transfer(user1, amount);
+
+        mf.armReenterOnUseMarketLiquidity(lccB0);
+
+        vm.startPrank(user1);
+        ILCC(lccB0).approve(address(liquidityHub), amount);
+        vm.expectRevert(abi.encodeWithSignature("ReentrancyGuardReentrantCall()"));
+        liquidityHub.wrapWithTo(lccA0, lccB0, user2, amount);
+        vm.stopPrank();
     }
 
     function test_prepareSettle_revertsOnReentrancyAttempt() public {

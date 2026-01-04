@@ -378,17 +378,19 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
         returns (uint256 used)
     {
         PoolId pId = PoolId.wrap(marketId);
-        address[2] memory currencies = _proxyHookToCurrencyPair[_proxyToHook[coreToProxy[pId]]];
+        address proxyHook = _proxyToHook[coreToProxy[pId]];
+        address currency0 = _proxyHookToCurrencyPair[proxyHook][0];
+        address currency1 = _proxyHookToCurrencyPair[proxyHook][1];
         uint256 amount0 = 0;
         uint256 amount1 = 0;
-        if (currencies[0] == underlyingAsset) {
+        if (currency0 == underlyingAsset) {
             amount0 = amount;
-        } else if (currencies[1] == underlyingAsset) {
+        } else if (currency1 == underlyingAsset) {
             amount1 = amount;
         } else {
             revert Errors.InvalidAddress(underlyingAsset);
         }
-        BalanceDelta usedDelta = IMarketVault(_proxyToHook[coreToProxy[pId]])
+        BalanceDelta usedDelta = IMarketVault(proxyHook)
             .tryModifyLiquidities(LiquidityUtils.safeToBalanceDelta(amount0, amount1, false, false)); // positive delta indicating withdrawal from market
         vtsOrchestrator.incrementCoverage(
             pId,

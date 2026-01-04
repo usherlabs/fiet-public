@@ -6,6 +6,7 @@ import {ILCC} from "../src/interfaces/ILCC.sol";
 import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
 import {Errors} from "../src/libraries/Errors.sol";
 import {Vm} from "forge-std/Vm.sol";
+import {StdStorage, stdStorage} from "forge-std/StdStorage.sol";
 
 import {IERC20Metadata} from "openzeppelin-contracts/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {MockERC20} from "./_mocks/MockERC20.sol";
@@ -15,6 +16,10 @@ import {MockERC20} from "./_mocks/MockERC20.sol";
  * @dev Focused assertions to kill surviving mutants without pulling in full integration harnesses.
  */
 contract LiquidityHubMutationHardeningTest is LiquidityHubTestBase {
+    using stdStorage for StdStorage;
+
+    StdStorage internal _store;
+
     function test_constructor_setsOracleHelper() public view {
         assertEq(address(liquidityHub.oracleHelper()), address(oracleHelper));
     }
@@ -255,6 +260,65 @@ contract LiquidityHubMutationHardeningTest is LiquidityHubTestBase {
         }
 
         assertTrue(found, "missing SettlementQueued");
+    }
+
+    function test_issue_revertsForInvalidLcc_evenIfCallerIsIssuer() public {
+        address invalid = makeAddr("invalidLcc");
+
+        // Force onlyIssuer(invalid) to pass by setting issuers[invalid][factory] = true directly in hub storage.
+        _store.target(address(liquidityHub)).sig("issuers(address,address)").with_key(invalid).with_key(factory)
+            .checked_write(true);
+        assertTrue(liquidityHub.issuers(invalid, factory), "issuer flag should be forced on");
+
+        // Now onlyValidLcc(invalid) should be the gate that reverts.
+        vm.prank(factory);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidLcc.selector, invalid));
+        liquidityHub.issue(invalid, user1, 1);
+    }
+
+    function test_cancelWithQueue_revertsForInvalidLcc_evenIfCallerIsIssuer() public {
+        address invalid = makeAddr("invalidLcc");
+
+        _store.target(address(liquidityHub)).sig("issuers(address,address)").with_key(invalid).with_key(factory)
+            .checked_write(true);
+
+        vm.prank(factory);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidLcc.selector, invalid));
+        liquidityHub.cancelWithQueue(invalid, user1, 1, 1, user2);
+    }
+
+    function test_cancel_revertsForInvalidLcc_evenIfCallerIsIssuer() public {
+        address invalid = makeAddr("invalidLcc_cancel");
+
+        // Force onlyIssuer(invalid) to pass so onlyValidLcc becomes observable.
+        _store.target(address(liquidityHub)).sig("issuers(address,address)").with_key(invalid).with_key(factory)
+            .checked_write(true);
+
+        vm.prank(factory);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidLcc.selector, invalid));
+        liquidityHub.cancel(invalid, user1, 1);
+    }
+
+    function test_planCancelWithQueue_revertsForInvalidLcc_evenIfCallerIsIssuer() public {
+        address invalid = makeAddr("invalidLcc");
+
+        _store.target(address(liquidityHub)).sig("issuers(address,address)").with_key(invalid).with_key(factory)
+            .checked_write(true);
+
+        vm.prank(factory);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidLcc.selector, invalid));
+        liquidityHub.planCancelWithQueue(invalid, factory, user1, 1, 1, user2);
+    }
+
+    function test_planCancel_revertsForInvalidLcc_evenIfCallerIsIssuer() public {
+        address invalid = makeAddr("invalidLcc_planCancel");
+
+        _store.target(address(liquidityHub)).sig("issuers(address,address)").with_key(invalid).with_key(factory)
+            .checked_write(true);
+
+        vm.prank(factory);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidLcc.selector, invalid));
+        liquidityHub.planCancel(invalid, factory, user1, 1);
     }
 
     function test_unwrap_marketDerivedOnly_triggersPayPath() public {

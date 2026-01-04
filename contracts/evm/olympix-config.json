@@ -3,8 +3,7 @@
   "TrustedVariables": {},
   "TrustedContracts": {},
   "IgnoredPaths": [
-    "src/forks/**",
-    "test/**"
+    "src/forks/**"
   ],
   "TrustedPaths": [
     "src/libraries/TickUtils.sol"

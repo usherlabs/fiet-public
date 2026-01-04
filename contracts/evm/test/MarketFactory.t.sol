@@ -629,7 +629,8 @@ contract MarketFactoryUnitTest is Test {
     }
 
     function test_createMarket_ordersMatch_true_usesInitialSqrtPriceForProxy() public {
-        uint160 initial = 79228162514264337593543950336;
+        // Use a non-self-inverse price so swapping the ordersMatch ternary branches is detectable by mutation tests.
+        uint160 initial = uint160(1) << 97;
         _createMarket(address(0x100), address(0x200), initial);
 
         assertEq(poolManager.initCallsLength(), 2);
@@ -641,7 +642,8 @@ contract MarketFactoryUnitTest is Test {
     }
 
     function test_createMarket_ordersMatch_false_usesInversePriceForProxy() public {
-        uint160 initial = 79228162514264337593543950336; // 2^96
+        // Use a non-self-inverse price so expectedInverse != initial.
+        uint160 initial = uint160(1) << 97;
         _createMarket(address(0x200), address(0x100), initial);
 
         assertEq(poolManager.initCallsLength(), 2);

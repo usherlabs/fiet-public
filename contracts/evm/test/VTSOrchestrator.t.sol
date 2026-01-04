@@ -332,8 +332,21 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         SwapParams memory swapParams = SwapParams({zeroForOne: true, amountSpecified: -100, sqrtPriceLimitX96: 0});
         BalanceDelta delta = toBalanceDelta(-100, 100);
 
-        vm.expectRevert();
+        // Be specific: this must fail due to CoreHook access-control, not due to later swap accounting.
+        vm.expectRevert(Errors.InvalidSender.selector);
         vtsOrchestrator.afterCoreSwap(corePoolKey, swapParams, delta, 0, 0);
+    }
+
+    function test_constructor_revert_whenPoolManagerZero() public {
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
+        new VTSOrchestratorTestable(
+            address(0),
+            address(signalManager),
+            address(oracleHelper),
+            address(liquidityHub),
+            address(settlementObserver),
+            address(this)
+        );
     }
 
     // ============================================================
