@@ -51,12 +51,12 @@ remappings = ["@openzeppelin/=lib/openzeppelin-contracts/"]
 # TODO: MarketTestBase.sol import list includes both src/MMPositionManager.sol (30000 runs) and src/MMPCommitmentDescriptor.sol (1 run) (and MMPositionActionsImpl.sol at 30000), so Forge can’t compile that test in a single job
 # We must split this up. MarketFactory overhaul should resolve this.
 
-[lint]
-exclude_lints = [
-  "screaming-snake-case-immutable",
-  "mixed-case-variable",
-  "mixed-case-function",
-]
+# [lint]
+# exclude_lints = [
+#   "screaming-snake-case-immutable",
+#   "mixed-case-variable",
+#   "mixed-case-function",
+# ]
 
 # Foundry automatically instruments linked-libraries if library public/external functions are called.
 # Defaulting to predicted addresses via CREATE3Factory.
