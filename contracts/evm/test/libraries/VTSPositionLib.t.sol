@@ -22,6 +22,7 @@ import {IMarketVault} from "../../src/interfaces/IMarketVault.sol";
 import {CurrencyDelta} from "v4-periphery/lib/v4-core/src/libraries/CurrencyDelta.sol";
 import {PoolSwapTest} from "@uniswap/v4-core/src/test/PoolSwapTest.sol";
 import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint128.sol";
+import {RFSCheckpoint} from "../../src/types/Checkpoint.sol";
 
 contract VTSPositionLibTest_MockLCC {
     address internal u;
@@ -567,6 +568,161 @@ contract VTSPositionLibTest is VTSLibTestBase {
             abi.encodeWithSelector(Errors.InvariantViolated.selector, "Invalid operation: Seizures cannot issue LCCs")
         );
         harness.touchPosition(_mkCtx(), tp);
+    }
+
+    function test_touchPosition_existingDecrease_nonSeizing_requiresClosedRFS_revertsWhenOpen() public {
+        // This targets the call-site in _touchExistingDecrease:
+        //   if (!hookData.isSeizing) { calcRFS(..., true); }
+        // If that call is deleted, this test would stop reverting and should kill the mutant.
+
+        PoolId corePoolId = _getDefaultPoolId();
+        harness.setupPool(corePoolId, _createDefaultVTSConfig());
+
+        // Register an existing position in harness storage, keyed to the real core pool id (slot0 reads succeed).
+        bytes32 salt = bytes32(uint256(101));
+        PositionId positionId = _registerHarnessPositionInPool(corePoolId, DEFAULT_OWNER, -60, 60, 1, salt);
+        harness.setPositionActive(positionId, true);
+
+        // Ensure RFS is open: base requirement > settled.
+        harness.setCommitmentMax(positionId, 1000e18, 0);
+        harness.setSettled(positionId, 0, 0);
+        harness.setCumulativeDeficit(positionId, 0, 0);
+        harness.setCommitmentDeficit(positionId, 0, 0);
+
+        ModifyLiquidityParams memory params = ModifyLiquidityParams({
+            tickLower: -60,
+            tickUpper: 60,
+            liquidityDelta: -int256(uint256(1)), // decrease
+            salt: salt
+        });
+
+        TouchPositionParams memory tp = TouchPositionParams({
+            owner: DEFAULT_OWNER,
+            poolKey: _mkPoolKey(),
+            params: params,
+            callerDelta: toBalanceDelta(0, 0),
+            feesAccrued: toBalanceDelta(0, 0),
+            hookData: _mkHookData(false, false, 0) // non-MM, non-seizing
+        });
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.RFSOpenForPosition.selector, positionId));
+        harness.touchPosition(_mkCtx(), tp);
+    }
+
+    function test_touchPosition_existingDecrease_nonMM_refundsExcessSettledAboveNewCommitment() public {
+        // Targets the excess refund logic in _touchExistingDecrease (non-MM path):
+        //   if (excess0 > 0) _sUpdateSettlement(..., -excess0);
+        // Requires currentLiq > 0 (otherwise excess==s0 and the test is not about commitment deltas).
+
+        PoolId corePoolId = _getDefaultPoolId();
+        harness.setupPool(corePoolId, _createDefaultVTSConfig());
+
+        // Create real PoolManager liquidity so currentLiq != 0. Owner is the router (manager keys positions by msg.sender).
+        address owner = address(modifyLiquidityRouter);
+        bytes32 salt = bytes32(uint256(202));
+
+        ModifyLiquidityParams memory addParams =
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: int256(uint256(1e18)), salt: salt});
+        modifyLiquidityRouter.modifyLiquidity(corePoolKey, addParams, ZERO_BYTES);
+
+        // Mirror the position in harness storage.
+        harness.registerPosition(owner, corePoolId, addParams);
+        PositionId positionId = PositionLibrary.generateId(owner, addParams);
+        harness.setPositionActive(positionId, true);
+
+        // Compute how much commitment will be subtracted by this decrease.
+        uint128 liqToRemove = 1e18;
+        (uint256 subC0,) = LiquidityUtils.calculateCommitmentMaxima(-60, 60, liqToRemove);
+
+        // Set commitmentMax such that after removal newCommitmentMax0 == 50e18.
+        uint256 newC0 = 50e18;
+        uint256 curC0 = subC0 + newC0;
+        harness.setCommitmentMax(positionId, curC0, 0);
+
+        // Ensure RFS is closed pre-decrease so we don't revert before refund logic.
+        harness.setSettled(positionId, 200e18, 0);
+        harness.setCumulativeDeficit(positionId, 0, 0);
+        harness.setCommitmentDeficit(positionId, 0, 0);
+
+        // Decrease (same ticks/salt), which will reduce commitmentMax and then refund excess settled to the new commitment.
+        ModifyLiquidityParams memory decParams = ModifyLiquidityParams({
+            tickLower: -60, tickUpper: 60, liquidityDelta: -int256(uint256(liqToRemove)), salt: salt
+        });
+
+        TouchPositionParams memory tp = TouchPositionParams({
+            owner: owner,
+            poolKey: _mkPoolKey(),
+            params: decParams,
+            callerDelta: toBalanceDelta(0, 0),
+            feesAccrued: toBalanceDelta(0, 0),
+            hookData: _mkHookData(false, false, 0) // non-MM, non-seizing
+        });
+
+        harness.touchPosition(_mkCtx(), tp);
+
+        (,, uint256 settled0After,,,) = harness.getPositionAccounting(positionId);
+        assertEq(settled0After, newC0, "settled0 should be refunded down to new commitmentMax0");
+    }
+
+    function test_touchPosition_mmNoOp_marksCheckpointWhenRFSOpens() public {
+        // Targets the MM checkpoint marking path:
+        //   CheckpointLibrary.markCheckpoint(s, result.id, rfsOpen);
+        // mark() only updates when state changes, so we force RFS to be open while checkpoint is initially closed.
+
+        PoolId corePoolId = _getDefaultPoolId();
+        harness.setupPool(corePoolId, _createDefaultVTSConfig());
+
+        // Create real PoolManager liquidity so active status doesn't flip due to liq==0.
+        address owner = address(modifyLiquidityRouter);
+        bytes32 salt = bytes32(uint256(303));
+
+        ModifyLiquidityParams memory addParams =
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: int256(uint256(1e18)), salt: salt});
+        modifyLiquidityRouter.modifyLiquidity(corePoolKey, addParams, ZERO_BYTES);
+
+        harness.registerPosition(owner, corePoolId, addParams);
+        PositionId positionId = PositionLibrary.generateId(owner, addParams);
+        harness.setPositionActive(positionId, true);
+
+        // MM requires commitId match.
+        uint256 commitId = 77;
+        harness.setPositionCommitId(positionId, commitId);
+
+        // Force RFS open (base requirement > settled).
+        harness.setCommitmentMax(positionId, 1000e18, 0);
+        harness.setSettled(positionId, 0, 0);
+        harness.setCumulativeDeficit(positionId, 0, 0);
+        harness.setCommitmentDeficit(positionId, 0, 0);
+
+        // Ensure checkpoint starts closed and at a different timestamp.
+        // Foundry starts at timestamp=1, so we must warp before subtracting.
+        vm.warp(200);
+        RFSCheckpoint memory cp = harness.getRFSCheckpoint(positionId);
+        cp.isOpen = false;
+        cp.timeOfLastTransition = block.timestamp - 100;
+        harness.setRFSCheckpoint(positionId, cp);
+        vm.warp(block.timestamp + 1);
+
+        // MM no-op: liquidityDelta==0 avoids LCC issuance/cancellation and external deps, but still marks checkpoint.
+        ModifyLiquidityParams memory pokeParams =
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 0, salt: salt});
+
+        TouchPositionParams memory tp = TouchPositionParams({
+            owner: owner,
+            poolKey: _mkPoolKey(),
+            params: pokeParams,
+            callerDelta: toBalanceDelta(0, 0),
+            feesAccrued: toBalanceDelta(0, 0),
+            hookData: _mkHookData(true, false, commitId) // MM, not seizing
+        });
+
+        harness.touchPosition(_mkCtx(), tp);
+
+        RFSCheckpoint memory afterCp = harness.getRFSCheckpoint(positionId);
+        assertTrue(afterCp.isOpen, "checkpoint should be marked open when RFS is open");
+        assertEq(afterCp.timeOfLastTransition, block.timestamp, "checkpoint transition timestamp should update");
+        assertEq(afterCp.gracePeriodExtension0, 0, "grace extensions should reset on transition");
+        assertEq(afterCp.gracePeriodExtension1, 0, "grace extensions should reset on transition");
     }
 
     // ============================================================
