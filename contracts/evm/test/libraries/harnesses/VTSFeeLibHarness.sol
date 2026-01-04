@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.26;
 
 import {VTSStorage, MarketVTSConfiguration} from "../../../src/types/VTS.sol";

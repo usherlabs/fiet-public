@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.26;
 
 import "forge-std/Test.sol";
@@ -18,7 +18,9 @@ contract MMHelpersHarness {
 
     // --- minimal ERC721Permit_v4 surface used by MMHelpers (selectors must match) ---
     function ownerOf(uint256 tokenId) external view returns (address) {
-        return _ownerOf[tokenId];
+        address owner = _ownerOf[tokenId];
+        require(owner != address(0), "NOT_MINTED");
+        return owner;
     }
 
     function getApproved(uint256 tokenId) external view returns (address) {
@@ -117,6 +119,59 @@ contract MMHelpersTest is Test {
         h.setApproved(tokenId, caller);
 
         h.assertApprovedOrOwner(caller, tokenId);
+    }
+
+    function test_isApprovedOrOwner_revertsWhenTokenNotMinted_uninitialisedOwner() public {
+        uint256 tokenId = 999;
+        vm.expectRevert("NOT_MINTED");
+        h.isApprovedOrOwner(address(0xBEEF), tokenId);
+    }
+
+    function test_assertApprovedOrOwner_revertsWhenTokenNotMinted_uninitialisedOwner() public {
+        uint256 tokenId = 999;
+        vm.expectRevert("NOT_MINTED");
+        h.assertApprovedOrOwner(address(0xBEEF), tokenId);
+    }
+
+    function test_isApprovedOrOwner_zeroCaller_returnsFalse_evenWhenDefaultApprovedIsZero() public {
+        uint256 tokenId = 7;
+        address owner = address(0xBEEF);
+        h.setOwner(tokenId, owner);
+
+        // `getApproved[tokenId]` is the zero address by default; caller == address(0) must not be authorised.
+        assertFalse(h.isApprovedOrOwner(address(0), tokenId));
+    }
+
+    function test_assertApprovedOrOwner_zeroCaller_revertsNotApproved_evenWhenDefaultApprovedIsZero() public {
+        uint256 tokenId = 7;
+        address owner = address(0xBEEF);
+        h.setOwner(tokenId, owner);
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.NotApproved.selector, address(0)));
+        h.assertApprovedOrOwner(address(0), tokenId);
+    }
+
+    function test_isApprovedOrOwner_tokenIdZero_behavesNormally() public {
+        uint256 tokenId = 0;
+        address owner = address(0xCAFE);
+        address approved = address(0xD00D);
+        h.setOwner(tokenId, owner);
+
+        assertTrue(h.isApprovedOrOwner(owner, tokenId));
+        assertFalse(h.isApprovedOrOwner(approved, tokenId));
+
+        h.setApproved(tokenId, approved);
+        assertTrue(h.isApprovedOrOwner(approved, tokenId));
+    }
+
+    function test_isApprovedOrOwner_zeroCaller_notAuthorisedEvenIfApprovedForAllIsSet() public {
+        uint256 tokenId = 8;
+        address owner = address(0x1234);
+        h.setOwner(tokenId, owner);
+        // Even if the mapping claims approval for all, we still explicitly reject a zero caller.
+        h.setApprovedForAll(owner, address(0), true);
+
+        assertFalse(h.isApprovedOrOwner(address(0), tokenId));
     }
 
     function test_assertPositionForPool_revertsOnMismatch() public {

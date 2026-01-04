@@ -12,6 +12,10 @@ import {Position} from "../types/Position.sol";
 /// @dev Used by both MMPositionManager and MMPositionActionsImpl
 library MMHelpers {
     function isApprovedOrOwner(address caller, uint256 tokenId) internal view returns (bool) {
+        // Defensive guard: `caller` should never be the zero address in real flows (it's typically msg.sender),
+        // but explicitly rejecting it avoids accidental authorisation via default-zero approvals.
+        if (caller == address(0)) return false;
+
         address owner = ERC721Permit_v4(address(this)).ownerOf(tokenId);
         if (caller == owner) return true;
         if (ERC721Permit_v4(address(this)).getApproved(tokenId) == caller) return true;

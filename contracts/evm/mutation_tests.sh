@@ -87,6 +87,48 @@ MIDS="${MIDS:-""}"                    # e.g. "1 2 3" to only run some mutant IDs
 
 log() { printf '%s\n' "$*" >&2; }
 
+safe_rm_rf() {
+  # Safety guard for destructive deletes.
+  #
+  # Usage:
+  #   safe_rm_rf "<path>" "<must_be_under_prefix>"
+  #
+  # Refuses to delete if:
+  # - path is empty / unset
+  # - path resolves to "/" (or ".")
+  # - path is not under the provided prefix (when non-empty)
+  #
+  # NOTE: This is a best-effort guard; still be careful when calling rm -rf.
+  local target="${1:-}"
+  local prefix="${2:-}"
+
+  if [[ -z "$target" ]]; then
+    log "ERROR: refusing to rm -rf an empty path"
+    return 2
+  fi
+
+  # Normalise a few obviously-dangerous cases.
+  if [[ "$target" == "/" || "$target" == "." ]]; then
+    log "ERROR: refusing to rm -rf dangerous path: '$target'"
+    return 2
+  fi
+
+  if [[ -n "$prefix" ]]; then
+    # Ensure prefix itself is sane.
+    if [[ "$prefix" == "/" || "$prefix" == "." ]]; then
+      log "ERROR: refusing to use dangerous prefix for safe_rm_rf: '$prefix'"
+      return 2
+    fi
+    # Require target to be under prefix (prefix itself or prefix/<something>).
+    if [[ "$target" != "$prefix" && "$target" != "$prefix/"* ]]; then
+      log "ERROR: refusing to rm -rf '$target' (not under expected prefix '$prefix')"
+      return 2
+    fi
+  fi
+
+  rm -rf -- "$target"
+}
+
 target_slug() {
   # Turn a target path like "src/LiquidityHub.sol" into a stable, filesystem-safe slug.
   # We include the full path (not just basename) to avoid collisions.
@@ -112,7 +154,7 @@ mutation_score_pct() {
 cleanup() {
   if [[ "$CLEAN_AFTER" == "1" ]]; then
     log "Cleaning worktree dir: $WORKTREE_DIR"
-    rm -rf "$WORKTREE_DIR" || true
+    safe_rm_rf "$WORKTREE_DIR" "$FOUNDRY_ROOT" || true
     # Best-effort: unregister the worktree if possible.
     git -C "$GIT_ROOT" worktree prune >/dev/null 2>&1 || true
   fi
@@ -172,7 +214,7 @@ ensure_lib_in_worktree() {
     # This is usually fast and offline if your main checkout already has submodule objects.
     if [[ -f "$GIT_ROOT/.gitmodules" ]]; then
       if [[ -L "$WORKTREE_FOUNDRY_ROOT/lib" ]]; then
-        rm -f "$WORKTREE_FOUNDRY_ROOT/lib"
+        safe_rm_rf "$WORKTREE_FOUNDRY_ROOT/lib" "$WORKTREE_DIR"
       fi
 
       set +e
@@ -193,7 +235,7 @@ ensure_lib_in_worktree() {
   if [[ "$needs_link" == "1" ]]; then
     log "Linking lib/ directory into worktree Foundry project"
     # Remove existing lib if it exists but is broken/empty
-    rm -rf "$WORKTREE_FOUNDRY_ROOT/lib"
+    safe_rm_rf "$WORKTREE_FOUNDRY_ROOT/lib" "$WORKTREE_DIR"
     # Use absolute path for symlink target
     ln -sf "$lib_target" "$WORKTREE_FOUNDRY_ROOT/lib"
   fi
@@ -270,7 +312,7 @@ generate_mutants() {
   fi
 
   log "Generating mutants into: $OUTDIR"
-  rm -rf "$OUTDIR"
+  safe_rm_rf "$OUTDIR" "$OUTDIR_BASE"
   mkdir -p "$OUTDIR"
 
   local tmp_conf
@@ -470,7 +512,8 @@ main() {
 
   if [[ "$CLEAN_BEFORE" == "1" ]]; then
     log "Cleaning before run (CLEAN_BEFORE=1)"
-    rm -rf "$OUTDIR_BASE" "$WORKTREE_DIR"
+    safe_rm_rf "$OUTDIR_BASE" "$FOUNDRY_ROOT"
+    safe_rm_rf "$WORKTREE_DIR" "$FOUNDRY_ROOT"
     git -C "$GIT_ROOT" worktree prune >/dev/null 2>&1 || true
   fi
 

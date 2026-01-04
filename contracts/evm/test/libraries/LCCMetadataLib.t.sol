@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.26;
 
 import "forge-std/Test.sol";
@@ -155,7 +155,7 @@ contract LCCMetadataLibTest is Test {
     function test_buildName_and_buildNameFromAsset() public {
         ERC20MetadataMock t = new ERC20MetadataMock("Dollar", "USD", 6);
 
-        string memory expected = "Fiet Liquidity Commitment Certificate forDollar in My Market (abcd1234)";
+        string memory expected = "Fiet Liquidity Commitment Certificate for Dollar in My Market (abcd1234)";
         assertEq(h.buildName("Dollar", "My Market", "abcd1234"), expected);
         assertEq(h.buildNameFromAsset(address(t), "ignored", "My Market", "abcd1234"), expected);
     }

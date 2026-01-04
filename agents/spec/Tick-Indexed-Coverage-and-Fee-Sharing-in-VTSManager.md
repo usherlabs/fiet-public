@@ -73,7 +73,7 @@ Settlements via onMMSettle handle growth and incremental slash funding, while li
 - Seizure mechanics: Not covered in prior sections but implemented in MMPositionManager with grace periods and proportional liquidity seizure.
 - Overflows and precision: FullMath and SafeCast prevent issues in growth calculations and type conversions.
 
-## UPDATE: Next Resarch Specs
+## UPDATE: Next Research Specs
 
 1. Deficit-Indexed-Coverage-Exercise.md
 2. Fee-Accrual-Weighted-Bonus-Allocation-Upgrade.md (Partially Deprecated)

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.26;
 
 import "forge-std/Test.sol";
@@ -143,7 +143,7 @@ contract MarketHandlerLibTest is Test {
         factory = new MockMarketFactory_MarketHandlerLib();
     }
 
-    function test_currenciesInMarket_returnsCurrencyPair_nonView() public {
+    function test_currenciesInMarket_returnsCurrencyPair() public {
         PoolId poolId = PoolId.wrap(bytes32(uint256(1)));
         address c0 = address(0xA0);
         address c1 = address(0xA1);
@@ -226,7 +226,7 @@ contract MarketHandlerLibTest is Test {
         assertFalse(got2);
     }
 
-    function test_validateToken_returnsIndex0And1() public view {
+    function test_validateToken_returnsIndex0And1() public {
         address[2] memory currencies = [address(1), address(2)];
         uint8 idx0 = h.validateToken(address(1), currencies);
         uint8 idx1 = h.validateToken(address(2), currencies);

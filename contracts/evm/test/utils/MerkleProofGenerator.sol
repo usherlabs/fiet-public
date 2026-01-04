@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: UNLICENSED
 
 import {MerkleTreeLib} from "solady/utils/MerkleTreeLib.sol";
 

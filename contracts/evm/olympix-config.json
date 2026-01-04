@@ -3,12 +3,10 @@
   "TrustedVariables": {},
   "TrustedContracts": {},
   "IgnoredPaths": [
-    "src/forks/NativeWrapper.sol",
     "src/forks/**",
     "test/**"
   ],
   "TrustedPaths": [
-    "src/forks/**",
     "src/libraries/TickUtils.sol"
   ]
 }
