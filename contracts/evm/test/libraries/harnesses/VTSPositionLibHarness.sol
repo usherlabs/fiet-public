@@ -5,6 +5,7 @@ import {
     VTSStorage,
     MarketVTSConfiguration,
     TokenConfiguration,
+    GrowthPair,
     PositionContext,
     TouchPositionParams,
     TouchPositionResult,
@@ -253,6 +254,20 @@ contract VTSPositionLibHarness {
             (s.positionAccounting[id].feeGrowthInsideLast.token0, s.positionAccounting[id].feeGrowthInsideLast.token1);
     }
 
+    function getDeficitGrowthInsideLast(PositionId id) external view returns (uint256 dg0, uint256 dg1) {
+        return (
+            s.positionAccounting[id].deficitGrowthInsideLast.token0,
+            s.positionAccounting[id].deficitGrowthInsideLast.token1
+        );
+    }
+
+    function getInflowGrowthInsideLast(PositionId id) external view returns (uint256 ig0, uint256 ig1) {
+        return (
+            s.positionAccounting[id].inflowGrowthInsideLast.token0,
+            s.positionAccounting[id].inflowGrowthInsideLast.token1
+        );
+    }
+
     function getCommitExpiresAt(uint256 commitId) external view returns (uint256 expiresAt) {
         return s.commits[commitId].expiresAt;
     }
@@ -359,6 +374,10 @@ contract VTSPositionLibHarness {
         s.commits[commitId].expiresAt = expiresAt;
     }
 
+    function setCommitActivePositionCount(uint256 commitId, uint256 activeCount) external {
+        s.commits[commitId].activePositionCount = activeCount;
+    }
+
     /// @notice Sets deficit growth global for a pool
     function setDeficitGrowthGlobal(PoolId poolId, uint256 g0, uint256 g1) external {
         s.poolAccounting[poolId].deficitGrowthGlobal.token0 = g0;
@@ -381,6 +400,16 @@ contract VTSPositionLibHarness {
     function setInflowGrowthInsideLast(PositionId id, uint256 ig0, uint256 ig1) external {
         s.positionAccounting[id].inflowGrowthInsideLast.token0 = ig0;
         s.positionAccounting[id].inflowGrowthInsideLast.token1 = ig1;
+    }
+
+    /// @notice Sets per-tick deficit growth outside values (Uniswap-style outside accumulators)
+    function setDeficitGrowthOutside(PoolId poolId, int24 tick, uint256 outside0, uint256 outside1) external {
+        s.deficitGrowthOutside[poolId][tick] = GrowthPair({token0: outside0, token1: outside1});
+    }
+
+    /// @notice Sets per-tick inflow growth outside values (Uniswap-style outside accumulators)
+    function setInflowGrowthOutside(PoolId poolId, int24 tick, uint256 outside0, uint256 outside1) external {
+        s.inflowGrowthOutside[poolId][tick] = GrowthPair({token0: outside0, token1: outside1});
     }
 
     /// @notice Sets position isActive state

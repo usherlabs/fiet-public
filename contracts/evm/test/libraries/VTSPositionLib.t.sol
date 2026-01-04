@@ -22,6 +22,7 @@ import {IMarketVault} from "../../src/interfaces/IMarketVault.sol";
 import {CurrencyDelta} from "v4-periphery/lib/v4-core/src/libraries/CurrencyDelta.sol";
 import {PoolSwapTest} from "@uniswap/v4-core/src/test/PoolSwapTest.sol";
 import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint128.sol";
+import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
 import {RFSCheckpoint} from "../../src/types/Checkpoint.sol";
 
 contract VTSPositionLibTest_MockLCC {
@@ -113,11 +114,39 @@ contract VTSPositionLibTest_VaultOverAvailable is IMarketVault {
         return d;
     }
 
-    function dryModifyLiquidities(BalanceDelta d) external view returns (BalanceDelta) {
+    function dryModifyLiquidities(BalanceDelta d) external view virtual returns (BalanceDelta) {
         // Return strictly more available than requested (for positive deltas).
         int128 a0 = d.amount0();
         int128 a1 = d.amount1();
         if (a0 > 0) a0 += extra0;
+        if (a1 > 0) a1 += extra1;
+        return toBalanceDelta(a0, a1);
+    }
+}
+
+/// @dev Vault that returns more-than-requested availability for token0 only (used to test one-sided queue clamping).
+contract VTSPositionLibTest_VaultOverAvailable0 is VTSPositionLibTest_VaultOverAvailable {
+    constructor(int128 extra0_) VTSPositionLibTest_VaultOverAvailable(extra0_, 0) {}
+
+    function dryModifyLiquidities(BalanceDelta d) external view override returns (BalanceDelta) {
+        int128 a0 = d.amount0();
+        int128 a1 = d.amount1();
+        if (a0 > 0) a0 += extra0;
+        // Force zero availability on token1 for positive deltas to create a queued remainder on token1.
+        if (a1 > 0) a1 = 0;
+        return toBalanceDelta(a0, a1);
+    }
+}
+
+/// @dev Vault that returns more-than-requested availability for token1 only (used to test one-sided queue clamping).
+contract VTSPositionLibTest_VaultOverAvailable1 is VTSPositionLibTest_VaultOverAvailable {
+    constructor(int128 extra1_) VTSPositionLibTest_VaultOverAvailable(0, extra1_) {}
+
+    function dryModifyLiquidities(BalanceDelta d) external view override returns (BalanceDelta) {
+        int128 a0 = d.amount0();
+        int128 a1 = d.amount1();
+        // Force zero availability on token0 for positive deltas to create a queued remainder on token0.
+        if (a0 > 0) a0 = 0;
         if (a1 > 0) a1 += extra1;
         return toBalanceDelta(a0, a1);
     }
@@ -151,6 +180,54 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
     // Test pool ID for harness (different from corePoolKey to keep isolated)
     PoolId testPoolId;
+
+    struct PositionSettleState {
+        uint256 settled0;
+        uint256 settled1;
+        uint256 deficit0;
+        uint256 deficit1;
+    }
+
+    struct PoolSettleState {
+        uint256 deficitPrincipal0;
+        uint256 deficitPrincipal1;
+        uint256 totalSettled0;
+        uint256 totalSettled1;
+    }
+
+    function _positionSettleState(PositionId positionId) internal view returns (PositionSettleState memory st) {
+        (,, st.settled0, st.settled1, st.deficit0, st.deficit1) = harness.getPositionAccounting(positionId);
+    }
+
+    function _poolSettleState(PoolId poolId) internal view returns (PoolSettleState memory st) {
+        (st.deficitPrincipal0, st.deficitPrincipal1) = harness.getPoolTotalDeficitPrincipal(poolId);
+        (st.totalSettled0, st.totalSettled1) = harness.getPoolTotalSettled(poolId);
+    }
+
+    function _assertPoolSettleState(
+        PoolId poolId,
+        uint256 expDeficitPrincipal0,
+        uint256 expDeficitPrincipal1,
+        uint256 expTotalSettled0,
+        uint256 expTotalSettled1
+    ) internal view {
+        PoolSettleState memory st = _poolSettleState(poolId);
+        assertEq(st.deficitPrincipal0, expDeficitPrincipal0);
+        assertEq(st.deficitPrincipal1, expDeficitPrincipal1);
+        assertEq(st.totalSettled0, expTotalSettled0);
+        assertEq(st.totalSettled1, expTotalSettled1);
+    }
+
+    function _assertPositionSettleStateUnchanged(PositionId positionId, PositionSettleState memory beforeState)
+        internal
+        view
+    {
+        PositionSettleState memory afterState = _positionSettleState(positionId);
+        assertEq(afterState.settled0, beforeState.settled0);
+        assertEq(afterState.settled1, beforeState.settled1);
+        assertEq(afterState.deficit0, beforeState.deficit0);
+        assertEq(afterState.deficit1, beforeState.deficit1);
+    }
 
     function setUp() public override {
         super.setUp();
@@ -347,11 +424,15 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
         harness.setCommitmentMax(positionId, 1000e18, 0);
         harness.setSettled(positionId, 100e18, 0);
+        // Keep pool aggregate consistent with position settled for mutation determinism.
+        harness.setPoolTotalSettled(testPoolId, 100e18, 0);
 
         int256 applied = harness.updateSettlement(positionId, 0, 50e18);
 
         (,, uint256 settled0,,,) = harness.getPositionAccounting(positionId);
         assertEq(settled0, 150e18, "settled0 should increase by delta");
+        (uint256 poolTotal0,) = harness.getPoolTotalSettled(testPoolId);
+        assertEq(poolTotal0, 150e18, "pool totalSettled0 should track settled delta");
         assertEq(applied, 50e18, "applied should equal positive delta");
     }
 
@@ -361,6 +442,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
         harness.setCommitmentMax(positionId, 1000e18, 0);
         harness.setCumulativeDeficit(positionId, 100e18, 0);
         harness.setSettled(positionId, 0, 0);
+        harness.setPoolTotalSettled(testPoolId, 0, 0);
 
         int256 applied = harness.updateSettlement(positionId, 0, 150e18);
 
@@ -368,6 +450,8 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
         assertEq(deficit0, 0, "deficit should be netted to zero");
         assertEq(settled0, 50e18, "remaining should be credited to settled");
+        (uint256 poolTotal0,) = harness.getPoolTotalSettled(testPoolId);
+        assertEq(poolTotal0, 50e18, "pool totalSettled0 should reflect settled increase only");
         assertEq(applied, 150e18, "applied should be the sum of deficit coverage and settled increase");
     }
 
@@ -399,6 +483,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
         harness.setCumulativeDeficit(positionId, 100e18, 0);
         harness.setCommitmentDeficit(positionId, 0, 0);
         harness.setPoolTotalDeficitPrincipal(testPoolId, 100e18, 0);
+        harness.setPoolTotalSettled(testPoolId, 0, 0);
 
         // Deposit covers part of the deficit, remainder increases settled.
         int256 applied = harness.updateSettlement(positionId, 0, 60e18);
@@ -410,6 +495,8 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
         (uint256 principal0,) = harness.getPoolTotalDeficitPrincipal(testPoolId);
         assertEq(principal0, 40e18, "pool totalDeficitPrincipal should decrement by deficitCoverage");
+        (uint256 poolTotal0,) = harness.getPoolTotalSettled(testPoolId);
+        assertEq(poolTotal0, 0, "pool totalSettled0 should not change when delta is fully consumed by deficit coverage");
     }
 
     function test_updateSettlement_deficitCoverage_principalClampToZero() public {
@@ -664,6 +751,100 @@ contract VTSPositionLibTest is VTSLibTestBase {
         assertEq(settled0After, newC0, "settled0 should be refunded down to new commitmentMax0");
     }
 
+    function test_touchPosition_existingDecrease_currentLiqZero_nonMM_refundsAllSettled() public {
+        // Exercises the `currentLiq == 0` branch in _touchExistingDecrease and verifies refund behaviour.
+        PoolId corePoolId = _getDefaultPoolId();
+        harness.setupPool(corePoolId, _createDefaultVTSConfig());
+
+        // Register an existing position in harness storage keyed to the real pool id (slot0 reads succeed).
+        bytes32 salt = bytes32(uint256(404));
+        PositionId positionId = _registerHarnessPositionInPool(corePoolId, DEFAULT_OWNER, -60, 60, 1, salt);
+        harness.setPositionActive(positionId, true);
+
+        // Ensure RFS is closed so calcRFS(requireClosed=true) does not revert.
+        harness.setCommitmentMax(positionId, 0, 0);
+        harness.setSettled(positionId, 100e18, 0);
+        harness.setCumulativeDeficit(positionId, 0, 0);
+        harness.setCommitmentDeficit(positionId, 0, 0);
+        harness.setPoolTotalSettled(corePoolId, 100e18, 0);
+
+        // Decrease: PoolManager liquidity for this position is 0 (not created in PoolManager),
+        // so `currentLiq == 0` and `excess0 = s0` which should be fully refunded for non-MM.
+        ModifyLiquidityParams memory decParams =
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: -int256(uint256(1)), salt: salt});
+        TouchPositionParams memory tp = TouchPositionParams({
+            owner: DEFAULT_OWNER,
+            poolKey: _mkPoolKey(),
+            params: decParams,
+            callerDelta: toBalanceDelta(0, 0),
+            feesAccrued: toBalanceDelta(0, 0),
+            hookData: _mkHookData(false, false, 0) // non-MM, non-seizing
+        });
+
+        harness.touchPosition(_mkCtx(), tp);
+
+        (,, uint256 settled0After,,,) = harness.getPositionAccounting(positionId);
+        assertEq(settled0After, 0, "non-MM decrease should refund all settled when currentLiq == 0");
+    }
+
+    function test_touchPosition_existingDecrease_currentLiqZero_MM_doesNotRefundSettled_andPlansCancel() public {
+        // Exercises the MM branch in _touchExistingDecrease with `currentLiq == 0` and ensures:
+        // - requiredSettlementDelta is handled via _handleLiquidityDecrease (planCancelWithQueue),
+        // - settled is NOT refunded via _sUpdateSettlement in _touchExistingDecrease.
+        PoolId corePoolId = _getDefaultPoolId();
+        harness.setupPool(corePoolId, _createDefaultVTSConfig());
+
+        // Position exists only in harness (PoolManager liquidity is 0), but must be MM-linked.
+        bytes32 salt = bytes32(uint256(405));
+        PositionId positionId = _registerHarnessPositionInPool(corePoolId, DEFAULT_OWNER, -60, 60, 1, salt);
+        harness.setPositionActive(positionId, true);
+
+        uint256 commitId = 123;
+        harness.setPositionCommitId(positionId, commitId);
+        // Prevent activePositionCount underflow when _updateActiveStatus sees liq==0.
+        harness.setCommitActivePositionCount(commitId, 1);
+
+        // Seed settled so excess is non-zero and observable.
+        harness.setCommitmentMax(positionId, 0, 0);
+        harness.setSettled(positionId, 100e18, 0);
+        harness.setCumulativeDeficit(positionId, 0, 0);
+        harness.setCommitmentDeficit(positionId, 0, 0);
+        harness.setPoolTotalSettled(corePoolId, 100e18, 0);
+
+        // MM decrease: provide non-zero principalDelta via callerDelta so cancel is planned.
+        VTSPositionLibTest_LiquidityHubCapture hub = new VTSPositionLibTest_LiquidityHubCapture();
+        IMarketVault vault = new VTSPositionLibTest_VaultNoop();
+        PositionContext memory ctx = PositionContext({
+            poolManager: manager,
+            liquidityHub: ILiquidityHub(address(hub)),
+            oracleHelper: IOracleHelper(address(0)),
+            marketVault: vault
+        });
+
+        ModifyLiquidityParams memory decParams =
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: -int256(uint256(1)), salt: salt});
+        TouchPositionParams memory tp = TouchPositionParams({
+            owner: DEFAULT_OWNER,
+            poolKey: _mkPoolKey(),
+            params: decParams,
+            callerDelta: toBalanceDelta(int128(int256(100)), 0), // non-zero principalDelta0
+            feesAccrued: toBalanceDelta(0, 0),
+            hookData: _mkHookData(true, false, commitId) // MM, not seizing
+        });
+
+        harness.touchPosition(ctx, tp);
+
+        // Settled should be unchanged (MM uses requiredSettlementDelta, does not refund via _sUpdateSettlement here).
+        (,, uint256 settled0After,,,) = harness.getPositionAccounting(positionId);
+        assertEq(settled0After, 100e18, "MM decrease should not refund settled in _touchExistingDecrease");
+
+        // And a cancel plan should have been created (queued should be 0 under VaultNoop availability).
+        assertEq(
+            hub.planCancelCalls(), 1, "LiquidityHub should be called exactly once for token0 principal cancellation"
+        );
+        assertEq(hub.lastQueued0(), 0, "queued0 should be 0 when vault reports full availability");
+    }
+
     function test_touchPosition_mmNoOp_marksCheckpointWhenRFSOpens() public {
         // Targets the MM checkpoint marking path:
         //   CheckpointLibrary.markCheckpoint(s, result.id, rfsOpen);
@@ -761,6 +942,60 @@ contract VTSPositionLibTest is VTSLibTestBase {
         assertEq(remaining, 10, "underlying positive delta should be partially cleared");
     }
 
+    function test_onMMSettle_clearsPositiveUnderlyingDelta_token1_onWithdrawal() public {
+        // Mirror of token0 test to kill token1 delta-clearance mutants.
+        PositionId positionId =
+            _registerHarnessPosition(DEFAULT_OWNER, DEFAULT_TICK_LOWER, DEFAULT_TICK_UPPER, 1000, DEFAULT_SALT);
+        harness.setPositionActive(positionId, false);
+
+        harness.setCommitmentMax(positionId, 0, 100);
+        harness.setSettled(positionId, 0, 50);
+
+        address underlying0 = address(0xAAA0);
+        address underlying1 = address(0xAAA1);
+        VTSPositionLibTest_MockLCC lcc0 = new VTSPositionLibTest_MockLCC(underlying0);
+        VTSPositionLibTest_MockLCC lcc1 = new VTSPositionLibTest_MockLCC(underlying1);
+
+        // Positive underlying delta on token1 should be cleared by withdrawal on token1.
+        harness.setUnderlyingDelta(Currency.wrap(underlying1), DEFAULT_OWNER, int128(int256(20)));
+
+        VTSPositionLibTest_VaultNoop vault = new VTSPositionLibTest_VaultNoop();
+        BalanceDelta delta = toBalanceDelta(int128(0), int128(10)); // withdrawal of 10 on token1
+
+        (BalanceDelta settlementDelta,, uint256 seized) = harness.onMMSettle(
+            manager, vault, positionId, Currency.wrap(address(lcc0)), Currency.wrap(address(lcc1)), delta, false
+        );
+        assertEq(settlementDelta.amount1(), int128(10), "withdrawal on token1 should be applied");
+        assertEq(seized, 0, "seizedLiquidityUnits should be zero when not seizing");
+
+        int256 remaining = harness.getDelta(Currency.wrap(underlying1), DEFAULT_OWNER);
+        assertEq(remaining, 10, "underlying positive delta (token1) should be partially cleared");
+    }
+
+    function test_onMMSettle_notSeizing_setsSeizedLiquidityUnitsZero() public {
+        PositionId positionId =
+            _registerHarnessPosition(DEFAULT_OWNER, DEFAULT_TICK_LOWER, DEFAULT_TICK_UPPER, 1000, DEFAULT_SALT);
+        harness.setPositionActive(positionId, false);
+
+        harness.setCommitmentMax(positionId, 100, 100);
+        harness.setSettled(positionId, 50, 50);
+
+        VTSPositionLibTest_MockLCC lcc0 = new VTSPositionLibTest_MockLCC(address(0xB00));
+        VTSPositionLibTest_MockLCC lcc1 = new VTSPositionLibTest_MockLCC(address(0xB01));
+        VTSPositionLibTest_VaultNoop vault = new VTSPositionLibTest_VaultNoop();
+
+        (,, uint256 seized) = harness.onMMSettle(
+            manager,
+            vault,
+            positionId,
+            Currency.wrap(address(lcc0)),
+            Currency.wrap(address(lcc1)),
+            toBalanceDelta(int128(int256(1)), int128(int256(0))),
+            false
+        );
+        assertEq(seized, 0, "seizedLiquidityUnits must be 0 when isSeizing is false");
+    }
+
     function test_onMMSettle_seizure_capsTotalAboveLiquidity() public {
         // Create active position with liquidity units in storage (via registerPosition liquidityDelta).
         PositionId positionId =
@@ -826,11 +1061,14 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
         harness.setCommitmentMax(positionId, 1000e18, 0);
         harness.setSettled(positionId, 100e18, 0);
+        harness.setPoolTotalSettled(testPoolId, 100e18, 0);
 
         int256 applied = harness.updateSettlement(positionId, 0, -30e18);
 
         (,, uint256 settled0,,,) = harness.getPositionAccounting(positionId);
         assertEq(settled0, 70e18, "settled0 should decrease by withdrawal");
+        (uint256 poolTotal0,) = harness.getPoolTotalSettled(testPoolId);
+        assertEq(poolTotal0, 70e18, "pool totalSettled0 should decrease with withdrawal");
         assertEq(applied, -30e18, "applied should be negative");
     }
 
@@ -839,6 +1077,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
         harness.setCommitmentMax(positionId, 1000e18, 0);
         harness.setSettled(positionId, 50e18, 0);
+        harness.setPoolTotalSettled(testPoolId, 50e18, 0);
 
         // Try to withdraw more than settled
         int256 applied = harness.updateSettlement(positionId, 0, -100e18);
@@ -847,6 +1086,28 @@ contract VTSPositionLibTest is VTSLibTestBase {
         assertEq(settled0, 0, "settled should go to zero, not negative");
         assertEq(deficit0, 0, "no deficit should be created from withdrawal");
         assertEq(applied, -50e18, "applied should be clamped to available settled");
+        (uint256 poolTotal0,) = harness.getPoolTotalSettled(testPoolId);
+        assertEq(poolTotal0, 0, "pool totalSettled0 should clamp to zero on over-withdrawal");
+    }
+
+    function test_updateSettlement_totalSettledAlreadyNonZero_doesNotFlushCISEResidual() public {
+        // Kills mutants that flush residual when wasZero is false.
+        PositionId positionId = _registerDefaultPosition();
+
+        // Seed a residual and a non-zero totalSettled so there should be no flush.
+        harness.setPoolCoverageResidualCISE(testPoolId, 123e18, 0);
+        harness.setPoolCoveragePerSettledIndexX128(testPoolId, 0, 0);
+        harness.setPoolTotalSettled(testPoolId, 1, 0);
+
+        harness.setCommitmentMax(positionId, 1000e18, 0);
+        harness.setSettled(positionId, 1, 0);
+
+        harness.updateSettlement(positionId, 0, 10e18);
+
+        (uint256 idx0After,) = harness.getPoolCoveragePerSettledIndexX128(testPoolId);
+        (uint256 residual0After,) = harness.getPoolCoverageResidualCISE(testPoolId);
+        assertEq(idx0After, 0, "coveragePerSettledIndexX128 should not change when totalSettled was already non-zero");
+        assertEq(residual0After, 123e18, "coverageResidualCISE should not flush when totalSettled was already non-zero");
     }
 
     function test_updateSettlement_zeroDelta_noOp() public {
@@ -1133,6 +1394,111 @@ contract VTSPositionLibTest is VTSLibTestBase {
         assertEq(settled0, 70e18, "settled should only decrease by the available (clamped) withdrawal amount");
     }
 
+    function test_onMMSettle_withdrawalClampedByVault_token1_addsBackShortfall() public {
+        PositionId positionId = _registerDefaultPosition();
+
+        harness.setPositionActive(positionId, false);
+        harness.setCommitmentMax(positionId, 1000e18, 1000e18);
+        harness.setSettled(positionId, 0, 100e18);
+
+        // Request withdrawal of 80 on token1, but vault only has 30 available on token1.
+        IMarketVault vault = new VTSPositionLibTest_VaultClamp(0, int128(int256(30e18)));
+        VTSPositionLibTest_MockLCC lcc0 = new VTSPositionLibTest_MockLCC(address(0xC0));
+        VTSPositionLibTest_MockLCC lcc1 = new VTSPositionLibTest_MockLCC(address(0xC1));
+
+        (BalanceDelta settlementDelta,,) = harness.onMMSettle(
+            manager,
+            vault,
+            positionId,
+            Currency.wrap(address(lcc0)),
+            Currency.wrap(address(lcc1)),
+            toBalanceDelta(int128(int256(0)), int128(int256(80e18))),
+            false
+        );
+
+        assertEq(
+            settlementDelta.amount1(),
+            int128(int256(30e18)),
+            "returned settlementDelta1 should equal vault availability"
+        );
+        (,,, uint256 settled1,,) = harness.getPositionAccounting(positionId);
+        assertEq(settled1, 70e18, "settled1 should only decrease by the available (clamped) withdrawal amount");
+    }
+
+    function test_onMMSettle_seizing_withdrawalClampedByPosRequiredSettlement() public {
+        // Seizing withdrawals clamp to positionRequiredSettlementDelta (from DynamicCurrencyDelta).
+        PoolId corePoolId = _getDefaultPoolId();
+        harness.setupPool(corePoolId, _createDefaultVTSConfig());
+
+        bytes32 salt = bytes32(uint256(606));
+        PositionId positionId = _registerHarnessPositionInPool(corePoolId, DEFAULT_OWNER, -60, 60, 1, salt);
+        harness.setPositionActive(positionId, true);
+
+        harness.setCommitmentMax(positionId, 1000e18, 1000e18);
+        harness.setSettled(positionId, 100e18, 0);
+        harness.setPoolTotalSettled(corePoolId, 100e18, 0);
+
+        address underlying0 = address(0xD0);
+        VTSPositionLibTest_MockLCC lcc0 = new VTSPositionLibTest_MockLCC(underlying0);
+        VTSPositionLibTest_MockLCC lcc1 = new VTSPositionLibTest_MockLCC(address(0xD1));
+
+        // Only 10 is "required"/owed per DynamicCurrencyDelta, so seizing withdrawal must clamp to 10.
+        harness.setUnderlyingDelta(Currency.wrap(underlying0), DEFAULT_OWNER, int128(int256(10e18)));
+
+        VTSPositionLibTest_VaultNoop vault = new VTSPositionLibTest_VaultNoop();
+        (BalanceDelta settlementDelta,,) = harness.onMMSettle(
+            manager,
+            vault,
+            positionId,
+            Currency.wrap(address(lcc0)),
+            Currency.wrap(address(lcc1)),
+            toBalanceDelta(int128(int256(50e18)), 0),
+            true
+        );
+
+        assertEq(
+            settlementDelta.amount0(),
+            int128(int256(10e18)),
+            "seizing withdrawal should clamp to posRequiredSettlement0"
+        );
+        (,, uint256 settled0After,,,) = harness.getPositionAccounting(positionId);
+        assertEq(settled0After, 90e18, "settled0 should decrease only by the clamped withdrawal amount");
+    }
+
+    function test_onMMSettle_seizing_depositClampedByPositiveRFS() public {
+        // Seizing deposits clamp to RFS requirement when rfsDelta > 0.
+        PoolId corePoolId = _getDefaultPoolId();
+        harness.setupPool(corePoolId, _createDefaultVTSConfig());
+
+        bytes32 salt = bytes32(uint256(607));
+        PositionId positionId = _registerHarnessPositionInPool(corePoolId, DEFAULT_OWNER, -60, 60, 1, salt);
+        harness.setPositionActive(positionId, true);
+
+        // Default base VTS rate is 5%, so with commitmentMax=1000e18 and settled=0, rfs0 is +50e18.
+        harness.setCommitmentMax(positionId, 1000e18, 1000e18);
+        harness.setSettled(positionId, 0, 0);
+        harness.setPoolTotalSettled(corePoolId, 0, 0);
+
+        VTSPositionLibTest_MockLCC lcc0 = new VTSPositionLibTest_MockLCC(address(0xE0));
+        VTSPositionLibTest_MockLCC lcc1 = new VTSPositionLibTest_MockLCC(address(0xE1));
+        VTSPositionLibTest_VaultNoop vault = new VTSPositionLibTest_VaultNoop();
+
+        // Attempt to deposit 100e18 (negative), but should clamp to 50e18 based on RFS.
+        (BalanceDelta settlementDelta,,) = harness.onMMSettle(
+            manager,
+            vault,
+            positionId,
+            Currency.wrap(address(lcc0)),
+            Currency.wrap(address(lcc1)),
+            toBalanceDelta(int128(int256(-100e18)), 0),
+            true
+        );
+        assertEq(settlementDelta.amount0(), int128(int256(-50e18)), "seizing deposit should clamp to -rfs0");
+
+        (,, uint256 settled0After,,,) = harness.getPositionAccounting(positionId);
+        assertEq(settled0After, 50e18, "settled0 should increase by the clamped deposit amount");
+    }
+
     function test_handleLiquidityDecrease_clampsNegativeQueuedDeltaToZero() public {
         // Setup minimal context.
         VTSPositionLibTest_LiquidityHubCapture hub = new VTSPositionLibTest_LiquidityHubCapture();
@@ -1168,6 +1534,93 @@ contract VTSPositionLibTest is VTSLibTestBase {
         );
         assertEq(hub.lastQueued0(), 0, "queued0 passed to LiquidityHub should be clamped to 0");
         assertEq(hub.lastQueued1(), 0, "queued1 passed to LiquidityHub should be clamped to 0");
+    }
+
+    function test_handleLiquidityDecrease_principalDeltaZero_returnsZero_andDoesNotPlanCancel() public {
+        VTSPositionLibTest_LiquidityHubCapture hub = new VTSPositionLibTest_LiquidityHubCapture();
+        IMarketVault vault = new VTSPositionLibTest_VaultNoop();
+
+        PositionContext memory ctx = PositionContext({
+            poolManager: manager,
+            liquidityHub: ILiquidityHub(address(hub)),
+            oracleHelper: IOracleHelper(address(0)),
+            marketVault: vault
+        });
+
+        PoolKey memory pk = corePoolKey;
+
+        BalanceDelta principalDelta = toBalanceDelta(int128(0), int128(0));
+        BalanceDelta requiredSettlementDelta = toBalanceDelta(int128(int256(5)), int128(int256(7)));
+
+        BalanceDelta settleable = harness.handleLiquidityDecrease(
+            ctx, DEFAULT_OWNER, pk, principalDelta, requiredSettlementDelta, DEFAULT_OWNER
+        );
+
+        assertEq(settleable.amount0(), 0, "should early-return a zero delta when principalDelta is zero");
+        assertEq(settleable.amount1(), 0, "should early-return a zero delta when principalDelta is zero");
+        assertEq(hub.planCancelCalls(), 0, "should not call LiquidityHub when early-returning");
+    }
+
+    function test_handleLiquidityDecrease_oneSidedClamp_token0Only() public {
+        VTSPositionLibTest_LiquidityHubCapture hub = new VTSPositionLibTest_LiquidityHubCapture();
+        // Token0 availability > required => rawQueued0 negative; token1 availability == 0 => rawQueued1 positive.
+        IMarketVault vault = new VTSPositionLibTest_VaultOverAvailable0(int128(int256(10)));
+
+        PositionContext memory ctx = PositionContext({
+            poolManager: manager,
+            liquidityHub: ILiquidityHub(address(hub)),
+            oracleHelper: IOracleHelper(address(0)),
+            marketVault: vault
+        });
+
+        PoolKey memory pk = corePoolKey;
+
+        BalanceDelta principalDelta = toBalanceDelta(int128(int256(100)), int128(int256(200)));
+        BalanceDelta requiredSettlementDelta = toBalanceDelta(int128(int256(5)), int128(int256(7)));
+
+        BalanceDelta settleable = harness.handleLiquidityDecrease(
+            ctx, DEFAULT_OWNER, pk, principalDelta, requiredSettlementDelta, DEFAULT_OWNER
+        );
+
+        assertEq(
+            settleable.amount0(), int128(int256(5)), "token0 should remain fully settleable when queue clamps to 0"
+        );
+        assertEq(
+            settleable.amount1(), int128(int256(0)), "token1 should be fully queued when vault returns no availability"
+        );
+        assertEq(hub.lastQueued0(), 0, "queued0 passed to LiquidityHub should clamp to 0 on negative rawQueued0");
+        assertEq(hub.lastQueued1(), 7, "queued1 should equal requiredSettlementDelta1 when availability is 0");
+    }
+
+    function test_handleLiquidityDecrease_oneSidedClamp_token1Only() public {
+        VTSPositionLibTest_LiquidityHubCapture hub = new VTSPositionLibTest_LiquidityHubCapture();
+        // Token1 availability > required => rawQueued1 negative; token0 availability == 0 => rawQueued0 positive.
+        IMarketVault vault = new VTSPositionLibTest_VaultOverAvailable1(int128(int256(10)));
+
+        PositionContext memory ctx = PositionContext({
+            poolManager: manager,
+            liquidityHub: ILiquidityHub(address(hub)),
+            oracleHelper: IOracleHelper(address(0)),
+            marketVault: vault
+        });
+
+        PoolKey memory pk = corePoolKey;
+
+        BalanceDelta principalDelta = toBalanceDelta(int128(int256(100)), int128(int256(200)));
+        BalanceDelta requiredSettlementDelta = toBalanceDelta(int128(int256(5)), int128(int256(7)));
+
+        BalanceDelta settleable = harness.handleLiquidityDecrease(
+            ctx, DEFAULT_OWNER, pk, principalDelta, requiredSettlementDelta, DEFAULT_OWNER
+        );
+
+        assertEq(
+            settleable.amount0(), int128(int256(0)), "token0 should be fully queued when vault returns no availability"
+        );
+        assertEq(
+            settleable.amount1(), int128(int256(7)), "token1 should remain fully settleable when queue clamps to 0"
+        );
+        assertEq(hub.lastQueued0(), 5, "queued0 should equal requiredSettlementDelta0 when availability is 0");
+        assertEq(hub.lastQueued1(), 0, "queued1 passed to LiquidityHub should clamp to 0 on negative rawQueued1");
     }
 
     // ============================================================
@@ -1235,6 +1688,146 @@ contract VTSPositionLibTest is VTSLibTestBase {
         (uint256 idx0After, uint256 idx1After) = harness.getCoverageIndexLastX128(positionId);
         assertEq(idx0After, 0, "token0 coverage index should remain unchanged");
         assertEq(idx1After, FixedPoint128.Q128, "token1 coverage indexLast should checkpoint to pool index");
+    }
+
+    // ============================================================
+    // Growth settlement (deficit/inflow) + snapshot checkpoint tests (mutation killers)
+    // ============================================================
+
+    function test_settlePositionGrowths_deficitGrowth_consumesSettled_andCheckpointsSnapshots() public {
+        PoolId corePoolId = _getDefaultPoolId();
+        harness.setupPool(corePoolId, _createDefaultVTSConfig());
+
+        // Read current tick so we remain robust if initial tick is not 0.
+        (, int24 tickCurrent,,) = StateLibrary.getSlot0(manager, corePoolId);
+        int24 tickLower = tickCurrent - 60;
+        int24 tickUpper = tickCurrent + 60;
+
+        // Create real PoolManager liquidity so StateLibrary.getPositionLiquidity returns >0.
+        address owner = address(modifyLiquidityRouter);
+        bytes32 salt = bytes32(uint256(9001));
+        uint128 liq = 1e18;
+        ModifyLiquidityParams memory addParams = ModifyLiquidityParams({
+            tickLower: tickLower, tickUpper: tickUpper, liquidityDelta: int256(uint256(liq)), salt: salt
+        });
+        modifyLiquidityRouter.modifyLiquidity(corePoolKey, addParams, ZERO_BYTES);
+
+        // Mirror the position in harness storage.
+        harness.registerPosition(owner, corePoolId, addParams);
+        PositionId positionId = PositionLibrary.generateId(owner, addParams);
+
+        // Ensure DICE/CISE are inert for this test (no index deltas).
+        harness.setPoolCoveragePerDeficitIndexX128(corePoolId, 0, 0);
+        harness.setPoolCoveragePerSettledIndexX128(corePoolId, 0, 0);
+        harness.setCoverageIndexLastX128(positionId, 0, 0);
+        harness.setCISEIndexLastX128(positionId, 0, 0);
+
+        // Seed settled on token0 so deficit growth will be consumed by settled (s0 >= add0 path).
+        uint256 s0 = 2e18;
+        harness.setSettled(positionId, s0, 0);
+        harness.setPoolTotalSettled(corePoolId, s0, 0);
+
+        // Configure deficit growth so inside0 - lastSnap0 == Q128.
+        harness.setDeficitGrowthGlobal(corePoolId, FixedPoint128.Q128, 0);
+        harness.setDeficitGrowthOutside(corePoolId, tickLower, 0, 0);
+        harness.setDeficitGrowthOutside(corePoolId, tickUpper, 0, 0);
+        harness.setDeficitGrowthInsideLast(positionId, 0, 0);
+
+        // No inflow growth for this test.
+        harness.setInflowGrowthGlobal(corePoolId, 0, 0);
+        harness.setInflowGrowthOutside(corePoolId, tickLower, 0, 0);
+        harness.setInflowGrowthOutside(corePoolId, tickUpper, 0, 0);
+        harness.setInflowGrowthInsideLast(positionId, 0, 0);
+
+        // First settle: add0 = liq, so settled0 should decrease by liq and outflows0 should increase by liq.
+        harness.settlePositionGrowths(manager, positionId);
+        (uint256 out0After1,) = harness.getCumulativeOutflows(positionId);
+        (,, uint256 settled0After1,, uint256 def0After1,) = harness.getPositionAccounting(positionId);
+        (uint256 poolTotal0After1,) = harness.getPoolTotalSettled(corePoolId);
+
+        assertEq(out0After1, liq, "cumulativeOutflows0 should equal realised deficit growth amount");
+        assertEq(def0After1, 0, "no deficit should be created when settled covers deficit growth");
+        assertEq(settled0After1, s0 - liq, "settled0 should decrease by deficit growth amount");
+        assertEq(poolTotal0After1, s0 - liq, "pool totalSettled0 should track settled decrease");
+
+        // Snapshot must checkpoint: a second settle without changing globals should be a no-op.
+        harness.settlePositionGrowths(manager, positionId);
+        (uint256 out0After2,) = harness.getCumulativeOutflows(positionId);
+        (,, uint256 settled0After2,,,) = harness.getPositionAccounting(positionId);
+        assertEq(out0After2, out0After1, "cumulativeOutflows0 should not increase twice without new growth");
+        assertEq(settled0After2, settled0After1, "settled0 should not change twice without new growth");
+    }
+
+    function test_settlePositionGrowths_inflowGrowth_netsCumulativeDeficit_thenCreditsSettled_andUpdatesPoolPrincipal()
+        public
+    {
+        PoolId corePoolId = _getDefaultPoolId();
+        harness.setupPool(corePoolId, _createDefaultVTSConfig());
+
+        uint128 liq = 1e18;
+        uint256 def1 = 0.5e18;
+        PositionId positionId;
+
+        {
+            (, int24 tickCurrent,,) = StateLibrary.getSlot0(manager, corePoolId);
+            int24 tickLower = tickCurrent - 60;
+            int24 tickUpper = tickCurrent + 60;
+
+            address owner = address(modifyLiquidityRouter);
+            bytes32 salt = bytes32(uint256(9002));
+            ModifyLiquidityParams memory addParams = ModifyLiquidityParams({
+                tickLower: tickLower, tickUpper: tickUpper, liquidityDelta: int256(uint256(liq)), salt: salt
+            });
+            modifyLiquidityRouter.modifyLiquidity(corePoolKey, addParams, ZERO_BYTES);
+
+            harness.registerPosition(owner, corePoolId, addParams);
+            positionId = PositionLibrary.generateId(owner, addParams);
+
+            // Keep DICE/CISE inert.
+            harness.setPoolCoveragePerDeficitIndexX128(corePoolId, 0, 0);
+            harness.setPoolCoveragePerSettledIndexX128(corePoolId, 0, 0);
+            harness.setCoverageIndexLastX128(positionId, 0, 0);
+            harness.setCISEIndexLastX128(positionId, 0, 0);
+
+            // Allow inflow to credit settled by giving token1 a commitment cap > 0.
+            harness.setCommitmentMax(positionId, 0, 100e18);
+
+            // Seed a cumulative deficit on token1 and matching pool principal.
+            harness.setCumulativeDeficit(positionId, 0, def1);
+            harness.setPoolTotalDeficitPrincipal(corePoolId, 0, def1);
+
+            // No settled initially on token1.
+            harness.setSettled(positionId, 0, 0);
+            harness.setPoolTotalSettled(corePoolId, 0, 0);
+
+            // No deficit growth for this test.
+            harness.setDeficitGrowthGlobal(corePoolId, 0, 0);
+            harness.setDeficitGrowthOutside(corePoolId, tickLower, 0, 0);
+            harness.setDeficitGrowthOutside(corePoolId, tickUpper, 0, 0);
+            harness.setDeficitGrowthInsideLast(positionId, 0, 0);
+
+            // Configure inflow growth on token1: add1 = liq.
+            harness.setInflowGrowthGlobal(corePoolId, 0, FixedPoint128.Q128);
+            harness.setInflowGrowthOutside(corePoolId, tickLower, 0, 0);
+            harness.setInflowGrowthOutside(corePoolId, tickUpper, 0, 0);
+            harness.setInflowGrowthInsideLast(positionId, 0, 0);
+        }
+
+        harness.settlePositionGrowths(manager, positionId);
+
+        // Inflow add1 is first applied to deficit, remainder credited to settled.
+        uint256 expectedSettled1 = uint256(liq) - def1;
+        PositionSettleState memory after1 = _positionSettleState(positionId);
+
+        assertEq(after1.settled0, 0);
+        assertEq(after1.deficit0, 0);
+        assertEq(after1.deficit1, 0, "cumulativeDeficit1 should be netted to zero by inflow");
+        assertEq(after1.settled1, expectedSettled1, "remaining inflow should be credited to settled1");
+        _assertPoolSettleState(corePoolId, 0, 0, 0, expectedSettled1);
+
+        // Snapshot must checkpoint (no double-credit without new growth).
+        harness.settlePositionGrowths(manager, positionId);
+        _assertPositionSettleStateUnchanged(positionId, after1);
     }
 
     // ============================================================

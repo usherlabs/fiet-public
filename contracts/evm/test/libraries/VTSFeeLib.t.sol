@@ -22,6 +22,60 @@ contract VTSFeeLibTest is VTSLibTestBase {
     // Test position ID
     PositionId testPositionId;
 
+    struct AfterTouchPositionState {
+        int256 pend0;
+        int256 pend1;
+        uint256 fee0;
+        uint256 fee1;
+        uint256 pot0;
+        uint256 pot1;
+        uint256 exp0;
+        uint256 exp1;
+        uint256 poolExp0;
+        uint256 poolExp1;
+        uint256 spendIdx0;
+        uint256 spendIdx1;
+        uint256 idxLast0;
+        uint256 idxLast1;
+    }
+
+    function _snapshotAfterTouchPositionState(PositionId positionId, PoolId poolId)
+        internal
+        view
+        returns (AfterTouchPositionState memory s)
+    {
+        (s.pend0, s.pend1) = harness.getPendingFeeAdj(positionId);
+        (s.fee0, s.fee1) = harness.getProtocolFeeAccrued(poolId);
+        (s.pot0, s.pot1) = harness.getSlashedPot(poolId);
+        (s.exp0, s.exp1) = harness.getCISEExposure(positionId);
+        (s.poolExp0, s.poolExp1) = harness.getPoolTotalCISEExposure(poolId);
+        (s.spendIdx0, s.spendIdx1) = harness.getPoolFeesSharedSpendIndexX128(poolId);
+        (s.idxLast0, s.idxLast1) = harness.getPositionFeesSharedIndexLastX128(positionId);
+    }
+
+    function _assertAfterTouchPositionStateUnchanged(
+        AfterTouchPositionState memory beforeState,
+        PositionId positionId,
+        PoolId poolId
+    ) internal view {
+        AfterTouchPositionState memory afterState = _snapshotAfterTouchPositionState(positionId, poolId);
+
+        assertEq(afterState.pend0, beforeState.pend0, "pending token0 must not change when fee sharing disabled");
+        assertEq(afterState.pend1, beforeState.pend1, "pending token1 must not change when fee sharing disabled");
+        assertEq(afterState.fee0, beforeState.fee0, "protocolFeeAccrued0 must not change when fee sharing disabled");
+        assertEq(afterState.fee1, beforeState.fee1, "protocolFeeAccrued1 must not change when fee sharing disabled");
+        assertEq(afterState.pot0, beforeState.pot0, "slashedPot0 must not change when fee sharing disabled");
+        assertEq(afterState.pot1, beforeState.pot1, "slashedPot1 must not change when fee sharing disabled");
+        assertEq(afterState.exp0, beforeState.exp0, "position exposure0 must not change when fee sharing disabled");
+        assertEq(afterState.exp1, beforeState.exp1, "position exposure1 must not change when fee sharing disabled");
+        assertEq(afterState.poolExp0, beforeState.poolExp0, "pool exposure0 must not change when fee sharing disabled");
+        assertEq(afterState.poolExp1, beforeState.poolExp1, "pool exposure1 must not change when fee sharing disabled");
+        assertEq(afterState.spendIdx0, beforeState.spendIdx0, "spend index0 must not change when fee sharing disabled");
+        assertEq(afterState.spendIdx1, beforeState.spendIdx1, "spend index1 must not change when fee sharing disabled");
+        assertEq(afterState.idxLast0, beforeState.idxLast0, "indexLast0 must not change when fee sharing disabled");
+        assertEq(afterState.idxLast1, beforeState.idxLast1, "indexLast1 must not change when fee sharing disabled");
+    }
+
     function setUp() public override {
         super.setUp();
         harness = new VTSFeeLibHarness();
@@ -488,13 +542,7 @@ contract VTSFeeLibTest is VTSLibTestBase {
         harness.setPositionFeesSharedIndexLastX128(testPositionId, FixedPoint128.Q128 / 4, FixedPoint128.Q128 / 5);
 
         // Snapshot state.
-        (int256 pend0Before, int256 pend1Before) = harness.getPendingFeeAdj(testPositionId);
-        (uint256 fee0Before, uint256 fee1Before) = harness.getProtocolFeeAccrued(testPoolId);
-        (uint256 pot0Before, uint256 pot1Before) = harness.getSlashedPot(testPoolId);
-        (uint256 exp0Before, uint256 exp1Before) = harness.getCISEExposure(testPositionId);
-        (uint256 poolExp0Before, uint256 poolExp1Before) = harness.getPoolTotalCISEExposure(testPoolId);
-        (uint256 spendIdx0Before, uint256 spendIdx1Before) = harness.getPoolFeesSharedSpendIndexX128(testPoolId);
-        (uint256 idxLast0Before, uint256 idxLast1Before) = harness.getPositionFeesSharedIndexLastX128(testPositionId);
+        AfterTouchPositionState memory beforeState = _snapshotAfterTouchPositionState(testPositionId, testPoolId);
 
         // Act
         BalanceDelta adj = harness.afterTouchPosition(testPositionId);
@@ -502,29 +550,7 @@ contract VTSFeeLibTest is VTSLibTestBase {
         // Assert: no delta and no mutations.
         assertEq(adj.amount0(), int128(0));
         assertEq(adj.amount1(), int128(0));
-
-        (int256 pend0After, int256 pend1After) = harness.getPendingFeeAdj(testPositionId);
-        (uint256 fee0After, uint256 fee1After) = harness.getProtocolFeeAccrued(testPoolId);
-        (uint256 pot0After, uint256 pot1After) = harness.getSlashedPot(testPoolId);
-        (uint256 exp0After, uint256 exp1After) = harness.getCISEExposure(testPositionId);
-        (uint256 poolExp0After, uint256 poolExp1After) = harness.getPoolTotalCISEExposure(testPoolId);
-        (uint256 spendIdx0After, uint256 spendIdx1After) = harness.getPoolFeesSharedSpendIndexX128(testPoolId);
-        (uint256 idxLast0After, uint256 idxLast1After) = harness.getPositionFeesSharedIndexLastX128(testPositionId);
-
-        assertEq(pend0After, pend0Before, "pending token0 must not change when fee sharing disabled");
-        assertEq(pend1After, pend1Before, "pending token1 must not change when fee sharing disabled");
-        assertEq(fee0After, fee0Before, "protocolFeeAccrued0 must not change when fee sharing disabled");
-        assertEq(fee1After, fee1Before, "protocolFeeAccrued1 must not change when fee sharing disabled");
-        assertEq(pot0After, pot0Before, "slashedPot0 must not change when fee sharing disabled");
-        assertEq(pot1After, pot1Before, "slashedPot1 must not change when fee sharing disabled");
-        assertEq(exp0After, exp0Before, "position exposure0 must not change when fee sharing disabled");
-        assertEq(exp1After, exp1Before, "position exposure1 must not change when fee sharing disabled");
-        assertEq(poolExp0After, poolExp0Before, "pool exposure0 must not change when fee sharing disabled");
-        assertEq(poolExp1After, poolExp1Before, "pool exposure1 must not change when fee sharing disabled");
-        assertEq(spendIdx0After, spendIdx0Before, "spend index0 must not change when fee sharing disabled");
-        assertEq(spendIdx1After, spendIdx1Before, "spend index1 must not change when fee sharing disabled");
-        assertEq(idxLast0After, idxLast0Before, "indexLast0 must not change when fee sharing disabled");
-        assertEq(idxLast1After, idxLast1Before, "indexLast1 must not change when fee sharing disabled");
+        _assertAfterTouchPositionStateUnchanged(beforeState, testPositionId, testPoolId);
     }
 
     function test_afterTouchPosition_feeSharingEnabled_allocates_cleansWindows_andMaterialisesIfPotFunded() public {

@@ -45,6 +45,67 @@ contract VTSSwapLibTest is VTSLibTestBase {
         uint256 inflow1;
     }
 
+    function _globalGrowth(PoolId poolId) internal view returns (ExpectedGrowth memory g) {
+        g.deficit0 = s.poolAccounting[poolId].deficitGrowthGlobal.token0;
+        g.deficit1 = s.poolAccounting[poolId].deficitGrowthGlobal.token1;
+        g.inflow0 = s.poolAccounting[poolId].inflowGrowthGlobal.token0;
+        g.inflow1 = s.poolAccounting[poolId].inflowGrowthGlobal.token1;
+    }
+
+    // TODO: May we wiser to try use native Uniswap v4 libs where this logic derives to harness... as this is a reimplementation of core/source logic.
+
+    struct SimState {
+        uint160 sqrtCurrent;
+        uint128 segmentLiquidity;
+        int24 stepTick;
+    }
+
+    struct SimIter {
+        int24 boundedNext;
+        bool initialized;
+        uint160 sqrtTarget;
+    }
+
+    function _boundTick(int24 tick) internal pure returns (int24 bounded) {
+        bounded = tick;
+        if (bounded <= TickMath.MIN_TICK) return TickMath.MIN_TICK;
+        if (bounded >= TickMath.MAX_TICK) return TickMath.MAX_TICK;
+    }
+
+    function _nextIter(PoolId poolId, int24 stepTick, int24 tickSpacing, bool zeroForOne, uint160 sqrtPAfter)
+        internal
+        view
+        returns (SimIter memory it)
+    {
+        (int24 next, bool initialized) =
+            TickUtils.nextInitializedTickWithinOneWord(manager, poolId, stepTick, tickSpacing, zeroForOne);
+        it.initialized = initialized;
+        it.boundedNext = _boundTick(next);
+
+        uint160 sqrtNext = TickMath.getSqrtPriceAtTick(it.boundedNext);
+        it.sqrtTarget = zeroForOne
+            ? (sqrtPAfter > sqrtNext ? sqrtPAfter : sqrtNext)  // max(sqrtPAfter, sqrtNext)
+            : (sqrtPAfter < sqrtNext ? sqrtPAfter : sqrtNext); // min(sqrtPAfter, sqrtNext)
+    }
+
+    function _applyLiquidityNet(PoolId poolId, uint128 segmentLiquidity, int24 boundedNext, bool zeroForOne)
+        internal
+        view
+        returns (uint128 nextLiquidity)
+    {
+        (, int128 liquidityNet) = StateLibrary.getTickLiquidity(manager, poolId, boundedNext);
+        if (zeroForOne) liquidityNet = -liquidityNet;
+
+        nextLiquidity = segmentLiquidity;
+        unchecked {
+            if (liquidityNet < 0) {
+                nextLiquidity = uint128(uint256(nextLiquidity) - uint256(uint128(-liquidityNet)));
+            } else if (liquidityNet > 0) {
+                nextLiquidity = uint128(uint256(nextLiquidity) + uint256(uint128(liquidityNet)));
+            }
+        }
+    }
+
     function setUp() public override {
         // Use smaller liquidity to make tick-crossing swaps reliable and cheap in unit tests.
         initialLiquidity = 10e18;
@@ -198,52 +259,31 @@ contract VTSSwapLibTest is VTSLibTestBase {
             return (eg, multiTick, zeroForOne, tickBefore, tickAfter);
         }
 
-        uint160 sqrtCurrent = sqrtPBefore;
-        uint128 segmentLiquidity = liqBefore;
-        int24 stepTick = tickBefore;
+        SimState memory st = SimState({sqrtCurrent: sqrtPBefore, segmentLiquidity: liqBefore, stepTick: tickBefore});
 
         while (true) {
-            (int24 next, bool initialized) =
-                TickUtils.nextInitializedTickWithinOneWord(manager, poolId, stepTick, tickSpacing, zeroForOne);
+            SimIter memory it = _nextIter(poolId, st.stepTick, tickSpacing, zeroForOne, sqrtPAfter);
 
-            int24 boundedNext = next;
-            if (boundedNext <= TickMath.MIN_TICK) boundedNext = TickMath.MIN_TICK;
-            if (boundedNext >= TickMath.MAX_TICK) boundedNext = TickMath.MAX_TICK;
-
-            uint160 sqrtNext = TickMath.getSqrtPriceAtTick(boundedNext);
-            uint160 sqrtTarget = zeroForOne
-                ? (sqrtPAfter > sqrtNext ? sqrtPAfter : sqrtNext)  // max(sqrtPAfter, sqrtNext)
-                : (sqrtPAfter < sqrtNext ? sqrtPAfter : sqrtNext); // min(sqrtPAfter, sqrtNext)
-
-            if (segmentLiquidity > 0 && sqrtTarget != sqrtCurrent) {
+            if (st.segmentLiquidity > 0 && it.sqrtTarget != st.sqrtCurrent) {
                 ExpectedGrowth memory seg =
-                    _expectedSegmentGrowth(zeroForOne, sqrtCurrent, sqrtTarget, segmentLiquidity);
+                    _expectedSegmentGrowth(zeroForOne, st.sqrtCurrent, it.sqrtTarget, st.segmentLiquidity);
                 eg.deficit0 += seg.deficit0;
                 eg.deficit1 += seg.deficit1;
                 eg.inflow0 += seg.inflow0;
                 eg.inflow1 += seg.inflow1;
-                sqrtCurrent = sqrtTarget;
+                st.sqrtCurrent = it.sqrtTarget;
             }
 
-            if (sqrtTarget == sqrtPAfter) break;
+            if (it.sqrtTarget == sqrtPAfter) break;
 
-            if (initialized) {
-                (, int128 liquidityNet) = StateLibrary.getTickLiquidity(manager, poolId, boundedNext);
-                if (zeroForOne) liquidityNet = -liquidityNet;
-
-                unchecked {
-                    if (liquidityNet < 0) {
-                        segmentLiquidity = uint128(uint256(segmentLiquidity) - uint256(uint128(-liquidityNet)));
-                    } else if (liquidityNet > 0) {
-                        segmentLiquidity = uint128(uint256(segmentLiquidity) + uint256(uint128(liquidityNet)));
-                    }
-                }
+            if (it.initialized) {
+                st.segmentLiquidity = _applyLiquidityNet(poolId, st.segmentLiquidity, it.boundedNext, zeroForOne);
             }
 
             if (zeroForOne) {
-                stepTick = boundedNext > TickMath.MIN_TICK ? (boundedNext - 1) : TickMath.MIN_TICK;
+                st.stepTick = it.boundedNext > TickMath.MIN_TICK ? (it.boundedNext - 1) : TickMath.MIN_TICK;
             } else {
-                stepTick = boundedNext;
+                st.stepTick = it.boundedNext;
             }
         }
 
@@ -253,62 +293,70 @@ contract VTSSwapLibTest is VTSLibTestBase {
     function test_processSwap_intraTick_accrues_growth_and_direction_is_correct() public {
         PoolId poolId = corePoolKey.toId();
 
-        // Snapshot before-swap state.
-        // IMPORTANT: if we start exactly on a tick boundary (e.g. sqrt == sqrtAtTick(0)), then *any* move
-        // in the zeroForOne direction will immediately move to tick-1 (Uniswap tick rounding at boundaries).
-        // To guarantee an intra-tick move, first "nudge" the price into the interior of the current tick.
-        (uint160 sqrtPBefore,,,) = manager.getSlot0(poolId);
-        int24 tickBefore = TickMath.getTickAtSqrtPrice(sqrtPBefore);
-        uint160 sqrtLowerBound = TickMath.getSqrtPriceAtTick(tickBefore);
-        if (sqrtPBefore == sqrtLowerBound) {
-            // Nudge price up a hair (oneForZero) but keep it within the same tick.
-            // Choose a limit just below the next tick's boundary so we can't cross it.
-            uint160 sqrtUpperBound = TickMath.getSqrtPriceAtTick(tickBefore + 1);
-            uint160 nudgeLimit = sqrtUpperBound - 1;
-            SwapParams memory nudge =
-                SwapParams({zeroForOne: false, amountSpecified: -1e6, sqrtPriceLimitX96: nudgeLimit});
-            swapRouter.swap(
-                corePoolKey, nudge, PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}), ZERO_BYTES
-            );
+        uint160 sqrtPBefore;
+        uint128 liqBefore;
+        SwapParams memory params;
+        BalanceDelta delta;
+
+        {
+            // Snapshot before-swap state.
+            // IMPORTANT: if we start exactly on a tick boundary (e.g. sqrt == sqrtAtTick(0)), then *any* move
+            // in the zeroForOne direction will immediately move to tick-1 (Uniswap tick rounding at boundaries).
+            // To guarantee an intra-tick move, first "nudge" the price into the interior of the current tick.
             (sqrtPBefore,,,) = manager.getSlot0(poolId);
-            tickBefore = TickMath.getTickAtSqrtPrice(sqrtPBefore);
-            sqrtLowerBound = TickMath.getSqrtPriceAtTick(tickBefore);
-            assertTrue(sqrtPBefore > sqrtLowerBound, "nudge must move price into tick interior");
+            int24 tickBefore = TickMath.getTickAtSqrtPrice(sqrtPBefore);
+            uint160 sqrtLowerBound = TickMath.getSqrtPriceAtTick(tickBefore);
+            if (sqrtPBefore == sqrtLowerBound) {
+                // Nudge price up a hair (oneForZero) but keep it within the same tick.
+                // Choose a limit just below the next tick's boundary so we can't cross it.
+                uint160 sqrtUpperBound = TickMath.getSqrtPriceAtTick(tickBefore + 1);
+                uint160 nudgeLimit = sqrtUpperBound - 1;
+                SwapParams memory nudge =
+                    SwapParams({zeroForOne: false, amountSpecified: -1e6, sqrtPriceLimitX96: nudgeLimit});
+                swapRouter.swap(
+                    corePoolKey,
+                    nudge,
+                    PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}),
+                    ZERO_BYTES
+                );
+                (sqrtPBefore,,,) = manager.getSlot0(poolId);
+                tickBefore = TickMath.getTickAtSqrtPrice(sqrtPBefore);
+                sqrtLowerBound = TickMath.getSqrtPriceAtTick(tickBefore);
+                assertTrue(sqrtPBefore > sqrtLowerBound, "nudge must move price into tick interior");
+            }
+
+            liqBefore = manager.getLiquidity(poolId);
+
+            // Pick a sqrtPriceLimit strictly within the current tick, so tick stays constant but sqrt moves.
+            // For zeroForOne, price decreases (sqrt decreases), so set limit just above the tick's lower boundary.
+            uint160 sqrtLimit = sqrtLowerBound + 1;
+            require(sqrtLimit < sqrtPBefore, "invariant: must have room to move left without crossing tick");
+
+            // Large exact input to drive price to the limit within the same tick.
+            params = SwapParams({zeroForOne: true, amountSpecified: -1e18, sqrtPriceLimitX96: sqrtLimit});
+            delta = swapRouter.swap(
+                corePoolKey, params, PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}), ZERO_BYTES
+            );
+
+            // Confirm the swap stayed intra-tick but moved price.
+            (uint160 sqrtPAfter,,,) = manager.getSlot0(poolId);
+            int24 tickAfter = TickMath.getTickAtSqrtPrice(sqrtPAfter);
+            assertEq(tickAfter, tickBefore, "must remain intra-tick");
+            assertTrue(sqrtPAfter != sqrtPBefore, "must move sqrt price to test intra-tick accrual");
         }
 
-        uint128 liqBefore = manager.getLiquidity(poolId);
-
-        // Pick a sqrtPriceLimit strictly within the current tick, so tick stays constant but sqrt moves.
-        // For zeroForOne, price decreases (sqrt decreases), so set limit just above the tick's lower boundary.
-        uint160 sqrtLimit = sqrtLowerBound + 1;
-        require(sqrtLimit < sqrtPBefore, "invariant: must have room to move left without crossing tick");
-
-        // Large exact input to drive price to the limit within the same tick.
-        SwapParams memory params = SwapParams({zeroForOne: true, amountSpecified: -1e18, sqrtPriceLimitX96: sqrtLimit});
-        BalanceDelta delta = swapRouter.swap(
-            corePoolKey, params, PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}), ZERO_BYTES
-        );
-
-        // Confirm the swap stayed intra-tick but moved price.
-        (uint160 sqrtPAfter,,,) = manager.getSlot0(poolId);
-        int24 tickAfter = TickMath.getTickAtSqrtPrice(sqrtPAfter);
-        assertEq(tickAfter, tickBefore, "must remain intra-tick");
-        assertTrue(sqrtPAfter != sqrtPBefore, "must move sqrt price to test intra-tick accrual");
-
-        uint256 dg0Before = s.poolAccounting[poolId].deficitGrowthGlobal.token0;
-        uint256 dg1Before = s.poolAccounting[poolId].deficitGrowthGlobal.token1;
-        uint256 ig0Before = s.poolAccounting[poolId].inflowGrowthGlobal.token0;
-        uint256 ig1Before = s.poolAccounting[poolId].inflowGrowthGlobal.token1;
+        ExpectedGrowth memory beforeGrowth = _globalGrowth(poolId);
 
         VTSSwapLib.processSwap(s, manager, corePoolKey, params, delta, sqrtPBefore, liqBefore);
 
         // For zeroForOne:
         // - output token is token1 => deficit accrues to token1
         // - input token is token0 (net of fees) => inflow accrues to token0
-        assertEq(s.poolAccounting[poolId].deficitGrowthGlobal.token0, dg0Before, "deficit token0 unchanged");
-        assertGt(s.poolAccounting[poolId].deficitGrowthGlobal.token1, dg1Before, "deficit token1 should accrue");
-        assertGt(s.poolAccounting[poolId].inflowGrowthGlobal.token0, ig0Before, "inflow token0 should accrue");
-        assertEq(s.poolAccounting[poolId].inflowGrowthGlobal.token1, ig1Before, "inflow token1 unchanged");
+        ExpectedGrowth memory afterGrowth = _globalGrowth(poolId);
+        assertEq(afterGrowth.deficit0, beforeGrowth.deficit0, "deficit token0 unchanged");
+        assertGt(afterGrowth.deficit1, beforeGrowth.deficit1, "deficit token1 should accrue");
+        assertGt(afterGrowth.inflow0, beforeGrowth.inflow0, "inflow token0 should accrue");
+        assertEq(afterGrowth.inflow1, beforeGrowth.inflow1, "inflow token1 unchanged");
     }
 
     function test_processSwap_multiTick_crosses_and_accrues_growth() public {
@@ -319,17 +367,23 @@ contract VTSSwapLibTest is VTSLibTestBase {
         // - tick 120 with zero liquidityNet (netting upper of one range with lower of the next),
         // - tick 180 with negative liquidityNet (upper tick of final range).
         // This improves branch coverage for VTSSwapLib's internal liquidity-net application.
-        int256 L = int256(initialLiquidity);
-        modifyLiquidityRouter.modifyLiquidity(
-            corePoolKey,
-            ModifyLiquidityParams({tickLower: 60, tickUpper: 120, liquidityDelta: 2 * L, salt: bytes32(uint256(1))}),
-            ZERO_BYTES
-        );
-        modifyLiquidityRouter.modifyLiquidity(
-            corePoolKey,
-            ModifyLiquidityParams({tickLower: 120, tickUpper: 180, liquidityDelta: 2 * L, salt: bytes32(uint256(2))}),
-            ZERO_BYTES
-        );
+        {
+            int256 L = int256(initialLiquidity);
+            modifyLiquidityRouter.modifyLiquidity(
+                corePoolKey,
+                ModifyLiquidityParams({
+                    tickLower: 60, tickUpper: 120, liquidityDelta: 2 * L, salt: bytes32(uint256(1))
+                }),
+                ZERO_BYTES
+            );
+            modifyLiquidityRouter.modifyLiquidity(
+                corePoolKey,
+                ModifyLiquidityParams({
+                    tickLower: 120, tickUpper: 180, liquidityDelta: 2 * L, salt: bytes32(uint256(2))
+                }),
+                ZERO_BYTES
+            );
+        }
 
         // Capture before-swap state
         (uint160 sqrtPBefore,,,) = manager.getSlot0(poolId);
@@ -343,25 +397,28 @@ contract VTSSwapLibTest is VTSLibTestBase {
         );
 
         (uint160 sqrtPAfter,,,) = manager.getSlot0(poolId);
-        (ExpectedGrowth memory eg, bool multiTick, bool zf1, int24 tickBefore, int24 tickAfter) =
-            _simulateExpectedGrowthFromSwap(poolId, sqrtPBefore, sqrtPAfter, liqBefore, corePoolKey.tickSpacing);
-        assertTrue(multiTick, "expected multi-tick swap");
-        assertTrue(!zf1, "expected oneForZero (moving right)");
-        assertTrue(tickAfter > tickBefore, "expected tick to move right");
-
-        uint256 dg0Before = s.poolAccounting[poolId].deficitGrowthGlobal.token0;
-        uint256 dg1Before = s.poolAccounting[poolId].deficitGrowthGlobal.token1;
-        uint256 ig0Before = s.poolAccounting[poolId].inflowGrowthGlobal.token0;
-        uint256 ig1Before = s.poolAccounting[poolId].inflowGrowthGlobal.token1;
+        ExpectedGrowth memory expected;
+        int24 tickAfter;
+        {
+            (ExpectedGrowth memory eg, bool multiTick, bool zf1, int24 tickBefore, int24 _tickAfter) =
+                _simulateExpectedGrowthFromSwap(poolId, sqrtPBefore, sqrtPAfter, liqBefore, corePoolKey.tickSpacing);
+            assertTrue(multiTick, "expected multi-tick swap");
+            assertTrue(!zf1, "expected oneForZero (moving right)");
+            assertTrue(_tickAfter > tickBefore, "expected tick to move right");
+            expected = eg;
+            tickAfter = _tickAfter;
+        }
 
         // Emulate CoreHook.afterSwap calling VTSSwapLib with the before-swap snapshot.
+        ExpectedGrowth memory beforeGrowth = _globalGrowth(poolId);
         VTSSwapLib.processSwap(s, manager, corePoolKey, params, delta, sqrtPBefore, liqBefore);
 
         // Exact expected global growth deltas (Q128 per liquidity) to kill arithmetic / liquidityNet mutants.
-        assertEq(s.poolAccounting[poolId].deficitGrowthGlobal.token0, dg0Before + eg.deficit0, "deficit0 exact");
-        assertEq(s.poolAccounting[poolId].deficitGrowthGlobal.token1, dg1Before + eg.deficit1, "deficit1 exact");
-        assertEq(s.poolAccounting[poolId].inflowGrowthGlobal.token0, ig0Before + eg.inflow0, "inflow0 exact");
-        assertEq(s.poolAccounting[poolId].inflowGrowthGlobal.token1, ig1Before + eg.inflow1, "inflow1 exact");
+        ExpectedGrowth memory afterGrowth = _globalGrowth(poolId);
+        assertEq(afterGrowth.deficit0, beforeGrowth.deficit0 + expected.deficit0, "deficit0 exact");
+        assertEq(afterGrowth.deficit1, beforeGrowth.deficit1 + expected.deficit1, "deficit1 exact");
+        assertEq(afterGrowth.inflow0, beforeGrowth.inflow0 + expected.inflow0, "inflow0 exact");
+        assertEq(afterGrowth.inflow1, beforeGrowth.inflow1 + expected.inflow1, "inflow1 exact");
 
         // Also assert tick-cross outside flips are exercised for token=1 (kills missing _onTickCross(..., token=1)).
         // This test's liquidity configuration should cross tick 60 when moving right.
@@ -382,37 +439,41 @@ contract VTSSwapLibTest is VTSLibTestBase {
             SwapParams({zeroForOne: true, amountSpecified: 1, sqrtPriceLimitX96: ZERO_FOR_ONE_LIMIT});
         BalanceDelta delta = BalanceDelta.wrap(0);
 
-        uint256 dg0Before = s.poolAccounting[poolId].deficitGrowthGlobal.token0;
-        uint256 dg1Before = s.poolAccounting[poolId].deficitGrowthGlobal.token1;
-        uint256 ig0Before = s.poolAccounting[poolId].inflowGrowthGlobal.token0;
-        uint256 ig1Before = s.poolAccounting[poolId].inflowGrowthGlobal.token1;
+        ExpectedGrowth memory beforeGrowth = _globalGrowth(poolId);
 
         // tickBefore == tickAfter and sqrtPBefore == sqrtPAfter, so intra-tick branch is taken and it exits early.
         VTSSwapLib.processSwap(s, manager, corePoolKey, params, delta, sqrtPNow, liq);
 
         // With sqrtPAfter == sqrtPNow and sqrtPBefore == sqrtPAtTick (close), growth may or may not accrue,
         // but we at least ensure the call succeeds and the branch is executed without reverting.
-        assertEq(s.poolAccounting[poolId].deficitGrowthGlobal.token0, dg0Before, "no unexpected deficit token0 change");
-        assertEq(s.poolAccounting[poolId].deficitGrowthGlobal.token1, dg1Before, "no unexpected deficit token1 change");
-        assertEq(s.poolAccounting[poolId].inflowGrowthGlobal.token0, ig0Before, "no unexpected inflow token0 change");
-        assertEq(s.poolAccounting[poolId].inflowGrowthGlobal.token1, ig1Before, "no unexpected inflow token1 change");
+        ExpectedGrowth memory afterGrowth = _globalGrowth(poolId);
+        assertEq(afterGrowth.deficit0, beforeGrowth.deficit0, "no unexpected deficit token0 change");
+        assertEq(afterGrowth.deficit1, beforeGrowth.deficit1, "no unexpected deficit token1 change");
+        assertEq(afterGrowth.inflow0, beforeGrowth.inflow0, "no unexpected inflow token0 change");
+        assertEq(afterGrowth.inflow1, beforeGrowth.inflow1, "no unexpected inflow token1 change");
     }
 
     function test_processSwap_multiTick_zeroForOne_exactGrowth() public {
         PoolId poolId = corePoolKey.toId();
 
         // Add symmetric ranges on the left so we can cross negative ticks moving left (zeroForOne=true).
-        int256 L = int256(initialLiquidity);
-        modifyLiquidityRouter.modifyLiquidity(
-            corePoolKey,
-            ModifyLiquidityParams({tickLower: -180, tickUpper: -120, liquidityDelta: 2 * L, salt: bytes32(uint256(3))}),
-            ZERO_BYTES
-        );
-        modifyLiquidityRouter.modifyLiquidity(
-            corePoolKey,
-            ModifyLiquidityParams({tickLower: -120, tickUpper: -60, liquidityDelta: 2 * L, salt: bytes32(uint256(4))}),
-            ZERO_BYTES
-        );
+        {
+            int256 L = int256(initialLiquidity);
+            modifyLiquidityRouter.modifyLiquidity(
+                corePoolKey,
+                ModifyLiquidityParams({
+                    tickLower: -180, tickUpper: -120, liquidityDelta: 2 * L, salt: bytes32(uint256(3))
+                }),
+                ZERO_BYTES
+            );
+            modifyLiquidityRouter.modifyLiquidity(
+                corePoolKey,
+                ModifyLiquidityParams({
+                    tickLower: -120, tickUpper: -60, liquidityDelta: 2 * L, salt: bytes32(uint256(4))
+                }),
+                ZERO_BYTES
+            );
+        }
 
         (uint160 sqrtPBefore,,,) = manager.getSlot0(poolId);
         uint128 liqBefore = manager.getLiquidity(poolId);
@@ -424,22 +485,23 @@ contract VTSSwapLibTest is VTSLibTestBase {
         );
 
         (uint160 sqrtPAfter,,,) = manager.getSlot0(poolId);
-        (ExpectedGrowth memory eg, bool multiTick, bool zf1,,) =
-            _simulateExpectedGrowthFromSwap(poolId, sqrtPBefore, sqrtPAfter, liqBefore, corePoolKey.tickSpacing);
-        assertTrue(multiTick, "expected multi-tick swap");
-        assertTrue(zf1, "expected zeroForOne (moving left)");
+        ExpectedGrowth memory expected;
+        {
+            (ExpectedGrowth memory eg, bool multiTick, bool zf1,,) =
+                _simulateExpectedGrowthFromSwap(poolId, sqrtPBefore, sqrtPAfter, liqBefore, corePoolKey.tickSpacing);
+            assertTrue(multiTick, "expected multi-tick swap");
+            assertTrue(zf1, "expected zeroForOne (moving left)");
+            expected = eg;
+        }
 
-        uint256 dg0Before = s.poolAccounting[poolId].deficitGrowthGlobal.token0;
-        uint256 dg1Before = s.poolAccounting[poolId].deficitGrowthGlobal.token1;
-        uint256 ig0Before = s.poolAccounting[poolId].inflowGrowthGlobal.token0;
-        uint256 ig1Before = s.poolAccounting[poolId].inflowGrowthGlobal.token1;
-
+        ExpectedGrowth memory beforeGrowth = _globalGrowth(poolId);
         VTSSwapLib.processSwap(s, manager, corePoolKey, params, delta, sqrtPBefore, liqBefore);
 
-        assertEq(s.poolAccounting[poolId].deficitGrowthGlobal.token0, dg0Before + eg.deficit0, "deficit0 exact");
-        assertEq(s.poolAccounting[poolId].deficitGrowthGlobal.token1, dg1Before + eg.deficit1, "deficit1 exact");
-        assertEq(s.poolAccounting[poolId].inflowGrowthGlobal.token0, ig0Before + eg.inflow0, "inflow0 exact");
-        assertEq(s.poolAccounting[poolId].inflowGrowthGlobal.token1, ig1Before + eg.inflow1, "inflow1 exact");
+        ExpectedGrowth memory afterGrowth = _globalGrowth(poolId);
+        assertEq(afterGrowth.deficit0, beforeGrowth.deficit0 + expected.deficit0, "deficit0 exact");
+        assertEq(afterGrowth.deficit1, beforeGrowth.deficit1 + expected.deficit1, "deficit1 exact");
+        assertEq(afterGrowth.inflow0, beforeGrowth.inflow0 + expected.inflow0, "inflow0 exact");
+        assertEq(afterGrowth.inflow1, beforeGrowth.inflow1 + expected.inflow1, "inflow1 exact");
     }
 
     function test_onTickCross_flips_deficit_and_inflow_outside_for_both_tokens() public {
