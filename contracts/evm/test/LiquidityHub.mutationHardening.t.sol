@@ -93,6 +93,29 @@ contract LiquidityHubMutationHardeningTest is LiquidityHubTestBase {
         liquidityHub.prepareSettle(lccToken1, 1);
     }
 
+    function test_confirmTake_revertsForInvalidLcc_evenIfCallerIsIssuer() public {
+        address invalid = makeAddr("invalidLcc_confirmTake");
+
+        // Force onlyIssuer(invalid) to pass by setting issuers[invalid][factory] = true directly in hub storage.
+        _store.target(address(liquidityHub)).sig("issuers(address,address)").with_key(invalid).with_key(factory)
+            .checked_write(true);
+
+        vm.prank(factory);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidLcc.selector, invalid));
+        liquidityHub.confirmTake(invalid, 1, false);
+    }
+
+    function test_prepareSettle_revertsForInvalidLcc_evenIfCallerIsIssuer() public {
+        address invalid = makeAddr("invalidLcc_prepareSettle");
+
+        _store.target(address(liquidityHub)).sig("issuers(address,address)").with_key(invalid).with_key(factory)
+            .checked_write(true);
+
+        vm.prank(factory);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidLcc.selector, invalid));
+        liquidityHub.prepareSettle(invalid, 1);
+    }
+
     function test_processSettlementFor_revertsForInvalidLcc() public {
         address invalid = address(0xDEAD);
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidLcc.selector, invalid));

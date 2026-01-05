@@ -156,6 +156,10 @@ contract LCCFactoryLibHarness {
         LCCFactoryLib.initialize(s, lcc0, lcc1, marketId, marketRef, factory);
     }
 
+    function setMarket(address lcc, bytes32 marketId, bytes memory marketRef, address factory) external {
+        s.lccToMarket[lcc] = Market({id: marketId, ref: marketRef, factory: factory});
+    }
+
     // ---- issuer checks / validation ----
 
     function isCallerIssuer(address lccToken, address caller) external view returns (bool) {
@@ -419,6 +423,28 @@ contract LCCFactoryLibTest is Test {
         h.assertValidLcc(lcc1);
     }
 
+    function test_isCallerIssuer_matchesIssuerMapping_regardlessOfMarketState() public {
+        ERC20MetadataMock t0 = new ERC20MetadataMock("Token0", "TK0", 6);
+        ERC20MetadataMock t1 = new ERC20MetadataMock("Token1", "TK1", 18);
+        address[2] memory pair = [address(t0), address(t1)];
+        bytes memory marketRef = hex"01020304";
+
+        address[] memory issuers = new address[](1);
+        issuers[0] = address(0xCAFE);
+
+        address lcc0 = h.createLCC(address(mf), marketRef, pair, 0, "Market", issuers);
+        address lcc1 = h.createLCC(address(mf), marketRef, pair, 1, "Market", new address[](0));
+
+        // Pre-init: issuer semantics are mapping-only.
+        assertEq(h.isCallerIssuer(lcc0, address(0xCAFE)), h.issuerFlag(lcc0, address(0xCAFE)));
+        assertEq(h.isCallerIssuer(lcc0, address(0xBEEF)), h.issuerFlag(lcc0, address(0xBEEF)));
+
+        // Post-init: market state must not affect issuer semantics.
+        h.initialize(lcc0, lcc1, keccak256("id"), hex"aa", address(0xFACADE));
+        assertEq(h.isCallerIssuer(lcc0, address(0xCAFE)), h.issuerFlag(lcc0, address(0xCAFE)));
+        assertEq(h.isCallerIssuer(lcc0, address(0xBEEF)), h.issuerFlag(lcc0, address(0xBEEF)));
+    }
+
     function test_assertValidLcc_reverts_whenNotInitialised() public {
         ERC20MetadataMock t = new ERC20MetadataMock("Token", "TKN", 6);
         address[2] memory pair = [address(t), address(0)];
@@ -431,21 +457,74 @@ contract LCCFactoryLibTest is Test {
         h.assertValidLcc(lcc);
     }
 
+    function test_isValidLcc_false_whenMarketIdZero_evenIfRefAndFactoryPresent() public {
+        address lcc = makeAddr("lcc");
+        h.setMarket(lcc, bytes32(0), hex"aa", address(0xFACADE));
+
+        assertFalse(h.isValidLcc(lcc));
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidLcc.selector, lcc));
+        h.assertValidLcc(lcc);
+    }
+
+    function test_isValidLcc_false_whenRefEmpty_evenIfIdAndFactoryPresent() public {
+        address lcc = makeAddr("lcc");
+        h.setMarket(lcc, keccak256("id"), hex"", address(0xFACADE));
+
+        assertFalse(h.isValidLcc(lcc));
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidLcc.selector, lcc));
+        h.assertValidLcc(lcc);
+    }
+
+    function test_isValidLcc_false_whenFactoryZero_evenIfIdAndRefPresent() public {
+        address lcc = makeAddr("lcc");
+        h.setMarket(lcc, keccak256("id"), hex"aa", address(0));
+
+        assertFalse(h.isValidLcc(lcc));
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidLcc.selector, lcc));
+        h.assertValidLcc(lcc);
+    }
+
     function test_isCallerIssuer_falseForNonIssuer_beforeAndAfterMarketInitialised() public {
         ERC20MetadataMock t = new ERC20MetadataMock("Token", "TKN", 6);
-        address[2] memory pair = [address(t), address(0)];
+        ERC20MetadataMock t1 = new ERC20MetadataMock("Token1", "TK1", 18);
+        address[2] memory pair = [address(t), address(t1)];
         bytes memory marketRef = hex"01020304";
 
         address[] memory issuers = new address[](1);
         issuers[0] = address(0xCAFE);
-        address lcc = h.createLCC(address(mf), marketRef, pair, 0, "Market", issuers);
+        address lcc0 = h.createLCC(address(mf), marketRef, pair, 0, "Market", issuers);
+        address lcc1 = h.createLCC(address(mf), marketRef, pair, 1, "Market", new address[](0));
 
-        // Non-issuer before market init -> hits "market not initialised" branch
-        assertFalse(h.isCallerIssuer(lcc, address(0xBEEF)));
+        // Non-issuer before market init
+        assertFalse(h.isCallerIssuer(lcc0, address(0xBEEF)));
 
-        // Initialise market, then non-issuer -> hits "market initialised" branch (still false)
-        h.initialize(lcc, address(0), keccak256("id"), hex"aa", address(0xFACADE));
-        assertFalse(h.isCallerIssuer(lcc, address(0xBEEF)));
+        // Initialise market, then non-issuer (still false)
+        h.initialize(lcc0, lcc1, keccak256("id"), hex"aa", address(0xFACADE));
+        assertFalse(h.isCallerIssuer(lcc0, address(0xBEEF)));
+    }
+
+    function test_createLCC_whenTruncMappingMatchesSortedPair_doesNotWriteMappingSlots() public {
+        ERC20MetadataMock t = new ERC20MetadataMock("Token", "TKN", 6);
+        ERC20MetadataMock t1 = new ERC20MetadataMock("Token1", "TK1", 18);
+        address[2] memory pair = [address(t), address(t1)];
+        bytes memory marketRef = hex"01020304";
+
+        // Pre-seed the trunc(4) mapping with the correct sorted pair.
+        // sortTokens(address(t), address(t1)) should be (min, max) => deterministic.
+        (address token0Sorted, address token1Sorted) = LCCMetadataLib.sortTokens(address(t), address(t1));
+        address[2] memory sortedPair = [token0Sorted, token1Sorted];
+        bytes memory trunc4 = _bytesPrefix(marketRef, 4);
+        h.setTruncPair(trunc4, sortedPair);
+
+        (bytes32 slot0, bytes32 slot1) = _truncMappingSlots(trunc4);
+
+        // createLCC should succeed at length 4 but must not rewrite mapping slots (isNew=false).
+        vm.record();
+        h.createLCC(address(mf), marketRef, pair, 0, "Market", new address[](0));
+        (, bytes32[] memory writes) = vm.accesses(address(h));
+
+        assertFalse(_containsSlot(writes, slot0));
+        assertFalse(_containsSlot(writes, slot1));
     }
 
     function test_setIssuer_togglesIssuerMapping() public {

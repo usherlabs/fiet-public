@@ -95,6 +95,8 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
     }
 
     function _onlyIssuer(address lcc) internal view {
+        // Strict invariant: issuer-gated paths must never operate on invalid/uninitialised LCCs.
+        LiquidityHubLib.assertValidLcc(s, lcc);
         if (!LCCFactoryLib.isCallerIssuer(s, lcc, msg.sender)) {
             revert Errors.NotApproved(msg.sender);
         }
@@ -579,7 +581,7 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
      * @param lcc The LCC token address to issue for
      * @param amount The amount to issue
      */
-    function issue(address lcc, address to, uint256 amount) external onlyIssuer(lcc) onlyValidLcc(lcc) nonReentrant {
+    function issue(address lcc, address to, uint256 amount) external onlyIssuer(lcc) nonReentrant {
         // Note: LCC mint path reverts on zero (direct+market) amount.
         _mint(lcc, to, 0, amount, true);
     }
@@ -590,7 +592,7 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
      * @param from The address to cancel tokens from
      * @param amount The amount to cancel
      */
-    function cancel(address lcc, address from, uint256 amount) external onlyIssuer(lcc) onlyValidLcc(lcc) nonReentrant {
+    function cancel(address lcc, address from, uint256 amount) external onlyIssuer(lcc) nonReentrant {
         // Note: LCC burn path reverts on zero (direct+market) amount.
         _burn(lcc, from, 0, amount, true);
     }
@@ -610,7 +612,7 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
         uint256 principalAmount,
         uint256 queueAmount,
         address recipient
-    ) public onlyIssuer(lcc) onlyValidLcc(lcc) nonReentrant {
+    ) public onlyIssuer(lcc) nonReentrant {
         if (principalAmount == 0) {
             revert Errors.InvalidAmount(0, 0);
         }
@@ -658,7 +660,6 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
     function planCancel(address lcc, address sender, address cancelFromRecipient, uint256 amount)
         external
         onlyIssuer(lcc)
-        onlyValidLcc(lcc)
         nonReentrant
     {
         if (amount == 0) {
@@ -686,7 +687,7 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
         uint256 principalAmount,
         uint256 queueAmount,
         address recipient
-    ) external onlyIssuer(lcc) onlyValidLcc(lcc) nonReentrant {
+    ) external onlyIssuer(lcc) nonReentrant {
         if (principalAmount == 0) {
             revert Errors.InvalidAmount(0, 0);
         }

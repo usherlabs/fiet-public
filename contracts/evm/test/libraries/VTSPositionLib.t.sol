@@ -23,6 +23,7 @@ import {CurrencyDelta} from "v4-periphery/lib/v4-core/src/libraries/CurrencyDelt
 import {PoolSwapTest} from "@uniswap/v4-core/src/test/PoolSwapTest.sol";
 import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint128.sol";
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
+import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {RFSCheckpoint} from "../../src/types/Checkpoint.sol";
 
 contract VTSPositionLibTest_MockLCC {
@@ -181,6 +182,8 @@ contract VTSPositionLibTest is VTSLibTestBase {
     // Test pool ID for harness (different from corePoolKey to keep isolated)
     PoolId testPoolId;
 
+    bool internal marketInitialised;
+
     struct PositionSettleState {
         uint256 settled0;
         uint256 settled1;
@@ -230,7 +233,6 @@ contract VTSPositionLibTest is VTSLibTestBase {
     }
 
     function setUp() public override {
-        super.setUp();
         harness = new VTSPositionLibHarness();
         testPoolId = PoolId.wrap(bytes32(uint256(0xDEAD)));
 
@@ -238,11 +240,19 @@ contract VTSPositionLibTest is VTSLibTestBase {
         harness.setupPool(testPoolId, _createDefaultVTSConfig());
     }
 
+    function _initMarket() internal {
+        // Heavy market setup is done per-test to avoid fixture panics masking mutation kills.
+        if (marketInitialised) return;
+        marketInitialised = true;
+        _setupMarket();
+    }
+
     // ============================================================
     // Fee-growth helper (for coverage burn tests)
     // ============================================================
 
     function _accrueFeeGrowthInCoreRange(bool accrueFeesOnToken1) internal {
+        _initMarket();
         // Fees accrue on the INPUT token.
         // For a token0 deficit burn, VTSPositionLib burns fees on token1, so we must create feeGrowth on token1
         // (i.e. swap token1 -> token0, zeroForOne=false).
@@ -554,15 +564,18 @@ contract VTSPositionLibTest is VTSLibTestBase {
     // touchPosition (branch coverage / revert paths)
     // ============================================================
 
-    function _mkCtx() internal view returns (PositionContext memory ctx) {
-        // These tests target early reverts before external deps are used.
+    function _mkCtx() internal returns (PositionContext memory ctx) {
+        // These tests may still call into PoolManager (eg getPositionLiquidity) before reverting,
+        // so we initialise market dependencies lazily rather than relying on setUp().
+        _initMarket();
         ctx.poolManager = manager;
         ctx.liquidityHub = ILiquidityHub(address(0));
         ctx.oracleHelper = IOracleHelper(address(0));
         ctx.marketVault = IMarketVault(address(0));
     }
 
-    function _mkPoolKey() internal view returns (PoolKey memory) {
+    function _mkPoolKey() internal returns (PoolKey memory) {
+        _initMarket();
         return corePoolKey;
     }
 
@@ -701,6 +714,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
         //   if (excess0 > 0) _sUpdateSettlement(..., -excess0);
         // Requires currentLiq > 0 (otherwise excess==s0 and the test is not about commitment deltas).
 
+        _initMarket();
         PoolId corePoolId = _getDefaultPoolId();
         harness.setupPool(corePoolId, _createDefaultVTSConfig());
 
@@ -753,6 +767,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
     function test_touchPosition_existingDecrease_currentLiqZero_nonMM_refundsAllSettled() public {
         // Exercises the `currentLiq == 0` branch in _touchExistingDecrease and verifies refund behaviour.
+        _initMarket();
         PoolId corePoolId = _getDefaultPoolId();
         harness.setupPool(corePoolId, _createDefaultVTSConfig());
 
@@ -791,6 +806,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
         // Exercises the MM branch in _touchExistingDecrease with `currentLiq == 0` and ensures:
         // - requiredSettlementDelta is handled via _handleLiquidityDecrease (planCancelWithQueue),
         // - settled is NOT refunded via _sUpdateSettlement in _touchExistingDecrease.
+        _initMarket();
         PoolId corePoolId = _getDefaultPoolId();
         harness.setupPool(corePoolId, _createDefaultVTSConfig());
 
@@ -850,6 +866,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
         //   CheckpointLibrary.markCheckpoint(s, result.id, rfsOpen);
         // mark() only updates when state changes, so we force RFS to be open while checkpoint is initially closed.
 
+        _initMarket();
         PoolId corePoolId = _getDefaultPoolId();
         harness.setupPool(corePoolId, _createDefaultVTSConfig());
 
@@ -911,6 +928,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
     // ============================================================
 
     function test_onMMSettle_clearsPositiveUnderlyingDelta_onWithdrawal() public {
+        _initMarket();
         // Use an inactive position so withdrawals are not gated by RFS open.
         PositionId positionId =
             _registerHarnessPosition(DEFAULT_OWNER, DEFAULT_TICK_LOWER, DEFAULT_TICK_UPPER, 1000, DEFAULT_SALT);
@@ -943,6 +961,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
     }
 
     function test_onMMSettle_clearsPositiveUnderlyingDelta_token1_onWithdrawal() public {
+        _initMarket();
         // Mirror of token0 test to kill token1 delta-clearance mutants.
         PositionId positionId =
             _registerHarnessPosition(DEFAULT_OWNER, DEFAULT_TICK_LOWER, DEFAULT_TICK_UPPER, 1000, DEFAULT_SALT);
@@ -973,6 +992,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
     }
 
     function test_onMMSettle_notSeizing_setsSeizedLiquidityUnitsZero() public {
+        _initMarket();
         PositionId positionId =
             _registerHarnessPosition(DEFAULT_OWNER, DEFAULT_TICK_LOWER, DEFAULT_TICK_UPPER, 1000, DEFAULT_SALT);
         harness.setPositionActive(positionId, false);
@@ -997,6 +1017,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
     }
 
     function test_onMMSettle_seizure_capsTotalAboveLiquidity() public {
+        _initMarket();
         // Create active position with liquidity units in storage (via registerPosition liquidityDelta).
         PositionId positionId =
             _registerHarnessPosition(DEFAULT_OWNER, DEFAULT_TICK_LOWER, DEFAULT_TICK_UPPER, 1000, DEFAULT_SALT);
@@ -1028,6 +1049,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
     }
 
     function test_onMMSettle_seizure_capsWhenResidualBelowMinResidual() public {
+        _initMarket();
         PositionId positionId =
             _registerHarnessPosition(DEFAULT_OWNER, DEFAULT_TICK_LOWER, DEFAULT_TICK_UPPER, 1000, DEFAULT_SALT);
         harness.setPositionActive(positionId, true);
@@ -1299,6 +1321,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
     function test_calcRFS_requireClosedRfS_revertsWhenOpen() public {
         // This specifically hits: if (requireClosedRfS && rfsOpen) revert Errors.RFSOpenForPosition(id)
         // calcRFS settles growths first, so we register into an actual PoolManager pool (core pool) to avoid slot0 reverts.
+        _initMarket();
         PoolId corePoolId = _getDefaultPoolId();
         harness.setupPool(corePoolId, _createDefaultVTSConfig());
 
@@ -1340,6 +1363,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
     function test_initPositionSnapshots_setsCoverageIndexLastToPoolIndex() public {
         // Register into the real pool so slot0 reads succeed.
+        _initMarket();
         PoolId corePoolId = _getDefaultPoolId();
         harness.setupPool(corePoolId, _createDefaultVTSConfig());
 
@@ -1360,6 +1384,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
     }
 
     function test_onMMSettle_withdrawalClampedByVault_addsBackShortfall() public {
+        _initMarket();
         PositionId positionId = _registerDefaultPosition();
 
         // Make position inactive to avoid RFS gating (inactive settlements are unrestricted).
@@ -1395,6 +1420,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
     }
 
     function test_onMMSettle_withdrawalClampedByVault_token1_addsBackShortfall() public {
+        _initMarket();
         PositionId positionId = _registerDefaultPosition();
 
         harness.setPositionActive(positionId, false);
@@ -1427,6 +1453,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
     function test_onMMSettle_seizing_withdrawalClampedByPosRequiredSettlement() public {
         // Seizing withdrawals clamp to positionRequiredSettlementDelta (from DynamicCurrencyDelta).
+        _initMarket();
         PoolId corePoolId = _getDefaultPoolId();
         harness.setupPool(corePoolId, _createDefaultVTSConfig());
 
@@ -1467,6 +1494,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
 
     function test_onMMSettle_seizing_depositClampedByPositiveRFS() public {
         // Seizing deposits clamp to RFS requirement when rfsDelta > 0.
+        _initMarket();
         PoolId corePoolId = _getDefaultPoolId();
         harness.setupPool(corePoolId, _createDefaultVTSConfig());
 
@@ -1628,6 +1656,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
     // ============================================================
 
     function test_settlePositionGrowths_CISE_token1Only_realisesExposure_andCheckpointsIndex() public {
+        _initMarket();
         PoolId corePoolId = _getDefaultPoolId();
         harness.setupPool(corePoolId, _createDefaultVTSConfig());
 
@@ -1665,6 +1694,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
     }
 
     function test_settlePositionGrowths_DICE_token1Only_checkpointsCoverageIndexLast() public {
+        _initMarket();
         PoolId corePoolId = _getDefaultPoolId();
         harness.setupPool(corePoolId, _createDefaultVTSConfig());
 
@@ -1695,6 +1725,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
     // ============================================================
 
     function test_settlePositionGrowths_deficitGrowth_consumesSettled_andCheckpointsSnapshots() public {
+        _initMarket();
         PoolId corePoolId = _getDefaultPoolId();
         harness.setupPool(corePoolId, _createDefaultVTSConfig());
 
@@ -1758,9 +1789,172 @@ contract VTSPositionLibTest is VTSLibTestBase {
         assertEq(settled0After2, settled0After1, "settled0 should not change twice without new growth");
     }
 
+    function test_settlePositionGrowths_deficitGrowth_outOfRangeBelow_usesOutsideLowerMinusUpper() public {
+        _initMarket();
+        PoolId corePoolId = _getDefaultPoolId();
+        harness.setupPool(corePoolId, _createDefaultVTSConfig());
+
+        (, int24 tickCurrent,,) = StateLibrary.getSlot0(manager, corePoolId);
+
+        // tickCurrent < tickLower => inside = outsideLower - outsideUpper
+        int24 tickLower = tickCurrent + 120;
+        int24 tickUpper = tickCurrent + 180;
+
+        address owner = address(modifyLiquidityRouter);
+        bytes32 salt = bytes32(uint256(9101));
+        uint128 liq = 1e18;
+
+        ModifyLiquidityParams memory addParams = ModifyLiquidityParams({
+            tickLower: tickLower, tickUpper: tickUpper, liquidityDelta: int256(uint256(liq)), salt: salt
+        });
+        modifyLiquidityRouter.modifyLiquidity(corePoolKey, addParams, ZERO_BYTES);
+
+        harness.registerPosition(owner, corePoolId, addParams);
+        PositionId positionId = PositionLibrary.generateId(owner, addParams);
+
+        // Keep DICE/CISE inert.
+        harness.setPoolCoveragePerDeficitIndexX128(corePoolId, 0, 0);
+        harness.setPoolCoveragePerSettledIndexX128(corePoolId, 0, 0);
+        harness.setCoverageIndexLastX128(positionId, 0, 0);
+        harness.setCISEIndexLastX128(positionId, 0, 0);
+
+        // Seed settled so deficit growth is consumed by settled (s0 >= add0 path).
+        uint256 s0 = 2e18;
+        harness.setSettled(positionId, s0, 0);
+        harness.setPoolTotalSettled(corePoolId, s0, 0);
+
+        // Force inside delta to exactly Q128 via outsideLower - outsideUpper.
+        harness.setDeficitGrowthGlobal(corePoolId, 0, 0);
+        harness.setDeficitGrowthOutside(corePoolId, tickLower, FixedPoint128.Q128, 0);
+        harness.setDeficitGrowthOutside(corePoolId, tickUpper, 0, 0);
+        harness.setDeficitGrowthInsideLast(positionId, 0, 0);
+
+        // No inflow growth.
+        harness.setInflowGrowthGlobal(corePoolId, 0, 0);
+        harness.setInflowGrowthOutside(corePoolId, tickLower, 0, 0);
+        harness.setInflowGrowthOutside(corePoolId, tickUpper, 0, 0);
+        harness.setInflowGrowthInsideLast(positionId, 0, 0);
+
+        harness.settlePositionGrowths(manager, positionId);
+
+        (uint256 out0,) = harness.getCumulativeOutflows(positionId);
+        (,, uint256 settled0After,,,) = harness.getPositionAccounting(positionId);
+
+        assertEq(out0, liq, "outflows should equal liq when inside delta is Q128");
+        assertEq(settled0After, s0 - liq, "settled should decrease by liq");
+    }
+
+    function test_settlePositionGrowths_deficitGrowth_outOfRangeAbove_usesOutsideUpperMinusLower() public {
+        _initMarket();
+        PoolId corePoolId = _getDefaultPoolId();
+        harness.setupPool(corePoolId, _createDefaultVTSConfig());
+
+        (, int24 tickCurrent,,) = StateLibrary.getSlot0(manager, corePoolId);
+
+        // tickCurrent >= tickUpper => inside = outsideUpper - outsideLower
+        int24 tickLower = tickCurrent - 180;
+        int24 tickUpper = tickCurrent - 120;
+
+        address owner = address(modifyLiquidityRouter);
+        bytes32 salt = bytes32(uint256(9102));
+        uint128 liq = 1e18;
+
+        ModifyLiquidityParams memory addParams = ModifyLiquidityParams({
+            tickLower: tickLower, tickUpper: tickUpper, liquidityDelta: int256(uint256(liq)), salt: salt
+        });
+        modifyLiquidityRouter.modifyLiquidity(corePoolKey, addParams, ZERO_BYTES);
+
+        harness.registerPosition(owner, corePoolId, addParams);
+        PositionId positionId = PositionLibrary.generateId(owner, addParams);
+
+        // Keep DICE/CISE inert.
+        harness.setPoolCoveragePerDeficitIndexX128(corePoolId, 0, 0);
+        harness.setPoolCoveragePerSettledIndexX128(corePoolId, 0, 0);
+        harness.setCoverageIndexLastX128(positionId, 0, 0);
+        harness.setCISEIndexLastX128(positionId, 0, 0);
+
+        uint256 s0 = 2e18;
+        harness.setSettled(positionId, s0, 0);
+        harness.setPoolTotalSettled(corePoolId, s0, 0);
+
+        // Force inside delta to exactly Q128 via outsideUpper - outsideLower.
+        harness.setDeficitGrowthGlobal(corePoolId, 0, 0);
+        harness.setDeficitGrowthOutside(corePoolId, tickLower, 0, 0);
+        harness.setDeficitGrowthOutside(corePoolId, tickUpper, FixedPoint128.Q128, 0);
+        harness.setDeficitGrowthInsideLast(positionId, 0, 0);
+
+        harness.setInflowGrowthGlobal(corePoolId, 0, 0);
+        harness.setInflowGrowthOutside(corePoolId, tickLower, 0, 0);
+        harness.setInflowGrowthOutside(corePoolId, tickUpper, 0, 0);
+        harness.setInflowGrowthInsideLast(positionId, 0, 0);
+
+        harness.settlePositionGrowths(manager, positionId);
+
+        (uint256 out0,) = harness.getCumulativeOutflows(positionId);
+        (,, uint256 settled0After,,,) = harness.getPositionAccounting(positionId);
+
+        assertEq(out0, liq, "outflows should equal liq when inside delta is Q128");
+        assertEq(settled0After, s0 - liq, "settled should decrease by liq");
+    }
+
+    function test_settlePositionGrowths_deficitGrowth_inRange_usesGlobalMinusBothOutsides() public {
+        _initMarket();
+        PoolId corePoolId = _getDefaultPoolId();
+        harness.setupPool(corePoolId, _createDefaultVTSConfig());
+
+        (, int24 tickCurrent,,) = StateLibrary.getSlot0(manager, corePoolId);
+
+        // tickLower <= tickCurrent < tickUpper => inside = global - outsideLower - outsideUpper
+        int24 tickLower = tickCurrent - 60;
+        int24 tickUpper = tickCurrent + 60;
+
+        address owner = address(modifyLiquidityRouter);
+        bytes32 salt = bytes32(uint256(9103));
+        uint128 liq = 1e18;
+
+        ModifyLiquidityParams memory addParams = ModifyLiquidityParams({
+            tickLower: tickLower, tickUpper: tickUpper, liquidityDelta: int256(uint256(liq)), salt: salt
+        });
+        modifyLiquidityRouter.modifyLiquidity(corePoolKey, addParams, ZERO_BYTES);
+
+        harness.registerPosition(owner, corePoolId, addParams);
+        PositionId positionId = PositionLibrary.generateId(owner, addParams);
+
+        // Keep DICE/CISE inert.
+        harness.setPoolCoveragePerDeficitIndexX128(corePoolId, 0, 0);
+        harness.setPoolCoveragePerSettledIndexX128(corePoolId, 0, 0);
+        harness.setCoverageIndexLastX128(positionId, 0, 0);
+        harness.setCISEIndexLastX128(positionId, 0, 0);
+
+        uint256 s0 = 2e18;
+        harness.setSettled(positionId, s0, 0);
+        harness.setPoolTotalSettled(corePoolId, s0, 0);
+
+        // Set non-zero outside accumulators and global so inside == Q128:
+        // 3Q128 - Q128 - Q128 = Q128.
+        harness.setDeficitGrowthGlobal(corePoolId, FixedPoint128.Q128 * 3, 0);
+        harness.setDeficitGrowthOutside(corePoolId, tickLower, FixedPoint128.Q128, 0);
+        harness.setDeficitGrowthOutside(corePoolId, tickUpper, FixedPoint128.Q128, 0);
+        harness.setDeficitGrowthInsideLast(positionId, 0, 0);
+
+        harness.setInflowGrowthGlobal(corePoolId, 0, 0);
+        harness.setInflowGrowthOutside(corePoolId, tickLower, 0, 0);
+        harness.setInflowGrowthOutside(corePoolId, tickUpper, 0, 0);
+        harness.setInflowGrowthInsideLast(positionId, 0, 0);
+
+        harness.settlePositionGrowths(manager, positionId);
+
+        (uint256 out0,) = harness.getCumulativeOutflows(positionId);
+        (,, uint256 settled0After,,,) = harness.getPositionAccounting(positionId);
+
+        assertEq(out0, liq, "outflows should equal liq when inside delta is Q128");
+        assertEq(settled0After, s0 - liq, "settled should decrease by liq");
+    }
+
     function test_settlePositionGrowths_inflowGrowth_netsCumulativeDeficit_thenCreditsSettled_andUpdatesPoolPrincipal()
         public
     {
+        _initMarket();
         PoolId corePoolId = _getDefaultPoolId();
         harness.setupPool(corePoolId, _createDefaultVTSConfig());
 
@@ -1835,6 +2029,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
     // ============================================================
 
     function test_applyCoverageBurn_bpsZero_doesNotAdvanceSnapshotsOrOutflowSnap() public {
+        _initMarket();
         PoolId corePoolId = _getDefaultPoolId();
 
         // ? coverageFeeShare = 0 to force early return at the bps gate (requires fees>0 and ofDelta>0).
@@ -1870,6 +2065,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
     }
 
     function test_applyCoverageBurn_bpsClampsToDenominator_andBurnEffectsMatch() public {
+        _initMarket();
         PoolId corePoolId = _getDefaultPoolId();
 
         // Accrue real fee growth on token1 (fee token for a token0 deficit burn).
@@ -1928,6 +2124,7 @@ contract VTSPositionLibTest is VTSLibTestBase {
     }
 
     function test_applyCoverageBurn_partialExercise_advancesOutflowSnap_incrementally() public {
+        _initMarket();
         PoolId corePoolId = _getDefaultPoolId();
         harness.setupPool(corePoolId, _createDefaultVTSConfig());
 
@@ -1956,6 +2153,138 @@ contract VTSPositionLibTest is VTSLibTestBase {
         harness.applyCoverageBurn(manager, positionId, corePoolId, 0, 40e18, uint128(1e18));
         (uint256 snapAfter2,) = harness.getOutflowsAtFeeSnap(positionId);
         assertEq(snapAfter2, 80e18, "outflowsAtFeeSnap should advance cumulatively across repeated exercises");
+    }
+
+    function test_applyCoverageBurn_feesPositive_ofDeltaZero_isNoop_andDoesNotRevert() public {
+        // Purpose: harden the `fees == 0 || ofDelta == 0` guard.
+        // If mutated to `&&`, this becomes reachable with fees>0 and ofDelta==0 and will divide by zero.
+        _initMarket();
+        PoolId corePoolId = _getDefaultPoolId();
+        harness.setupPool(corePoolId, _createDefaultVTSConfig());
+
+        // Create real fee growth on the fee token (token1 for a token0 deficit burn).
+        _accrueFeeGrowthInCoreRange(true);
+
+        PositionId positionId =
+            _registerHarnessPositionInPool(corePoolId, DEFAULT_OWNER, -60, 60, 1, bytes32(uint256(7)));
+
+        // Ensure deficit exists so burnBase > 0.
+        harness.setCumulativeDeficit(positionId, 10e18, 0);
+
+        // Make outflow window zero: cf == snap => ofDelta == 0.
+        harness.setCumulativeOutflows(positionId, 100e18, 0);
+        harness.setOutflowsAtFeeSnap(positionId, 100e18, 0);
+
+        // Ensure fees > 0 by setting lastFeeGrowth baseline to 0.
+        harness.setFeeGrowthInsideLast(positionId, 0, 0);
+
+        (uint256 snap0Before,) = harness.getOutflowsAtFeeSnap(positionId);
+        (uint256 pf0Before, uint256 pf1Before) = harness.getPoolProtocolFeeAccrued(corePoolId);
+        (uint256 fs0Before, uint256 fs1Before) = harness.getFeesShared(positionId);
+
+        // Should not revert, and should not advance any state (feesBurn must be 0 due to ofDelta==0 early return).
+        harness.applyCoverageBurn(manager, positionId, corePoolId, 0, 10e18, uint128(1e18));
+
+        (uint256 snap0After,) = harness.getOutflowsAtFeeSnap(positionId);
+        (uint256 pf0After, uint256 pf1After) = harness.getPoolProtocolFeeAccrued(corePoolId);
+        (uint256 fs0After, uint256 fs1After) = harness.getFeesShared(positionId);
+
+        assertEq(snap0After, snap0Before, "outflowsAtFeeSnap should not advance when ofDelta is zero");
+        assertEq(pf0After, pf0Before, "protocolFeeAccrued0 should not change");
+        assertEq(pf1After, pf1Before, "protocolFeeAccrued1 should not change");
+        assertEq(fs0After, fs0Before, "feesShared0 should not change");
+        assertEq(fs1After, fs1Before, "feesShared1 should not change");
+    }
+
+    function test_applyCoverageBurn_dMinusSettledUnderflow_mutantWouldRevert() public {
+        // Purpose: kill the `d + settled` -> `d - settled` mutant by making settled > d.
+        // We keep positionLiquidity=0 so fees==0 and the burn returns cleanly without requiring fee accounting.
+        // @note: In practice, this mutant is not reachable because when s > 0, d = 0 and vice versa, d > 0, s = 0.
+        _initMarket();
+        PoolId corePoolId = _getDefaultPoolId();
+        harness.setupPool(corePoolId, _createDefaultVTSConfig());
+
+        PositionId positionId =
+            _registerHarnessPositionInPool(corePoolId, DEFAULT_OWNER, -60, 60, 1, bytes32(uint256(8)));
+
+        harness.setCumulativeDeficit(positionId, 1, 0);
+        harness.setSettled(positionId, 2, 0);
+
+        // Safety assertion: baseline path should be a no-op (no state writes) because positionLiquidity == 0 => fees == 0.
+        (uint256 snap0Before,) = harness.getOutflowsAtFeeSnap(positionId);
+        (uint256 pf0Before, uint256 pf1Before) = harness.getPoolProtocolFeeAccrued(corePoolId);
+        (uint256 fs0Before, uint256 fs1Before) = harness.getFeesShared(positionId);
+        (, uint256 fg1Before) = harness.getFeeGrowthInsideLast(positionId);
+
+        // Any positive coverage triggers the `cEff = min(cov, d + settled)` computation.
+        // With the mutant, this becomes `d - settled` and should underflow.
+        harness.applyCoverageBurn(manager, positionId, corePoolId, 0, 3, uint128(0));
+
+        (uint256 snap0After,) = harness.getOutflowsAtFeeSnap(positionId);
+        (uint256 pf0After, uint256 pf1After) = harness.getPoolProtocolFeeAccrued(corePoolId);
+        (uint256 fs0After, uint256 fs1After) = harness.getFeesShared(positionId);
+        (, uint256 fg1After) = harness.getFeeGrowthInsideLast(positionId);
+
+        assertEq(snap0After, snap0Before, "outflowsAtFeeSnap should not change on baseline no-op");
+        assertEq(pf0After, pf0Before, "protocolFeeAccrued0 should not change on baseline no-op");
+        assertEq(pf1After, pf1Before, "protocolFeeAccrued1 should not change on baseline no-op");
+        assertEq(fs0After, fs0Before, "feesShared0 should not change on baseline no-op");
+        assertEq(fs1After, fs1Before, "feesShared1 should not change on baseline no-op");
+        assertEq(fg1After, fg1Before, "feeGrowthInsideLast(token1) should not change on baseline no-op");
+    }
+
+    function test_applyCoverageBurn_exactFeesBurn_updatesAccrued_andFeesShared() public {
+        // Purpose: make fee burn numerically checkable to kill arithmetic mutants:
+        // - `fg - lastFeeGrowth` -> `fg + lastFeeGrowth`
+        // - `cf - snap` -> `cf + snap`
+        _initMarket();
+        PoolId corePoolId = _getDefaultPoolId();
+
+        // Force 100% fee share for simpler maths.
+        MarketVTSConfiguration memory cfg = _createDefaultVTSConfig();
+        cfg.coverageFeeShare = uint16(LiquidityUtils.BPS_DENOMINATOR);
+        harness.setupPool(corePoolId, cfg);
+
+        // Create real fee growth on token1 (fee token for a token0 deficit burn).
+        _accrueFeeGrowthInCoreRange(true);
+
+        PositionId positionId =
+            _registerHarnessPositionInPool(corePoolId, DEFAULT_OWNER, -60, 60, 1, bytes32(uint256(9)));
+
+        // burnBase = cov (deficit >= cov)
+        uint256 cov = 10e18;
+        harness.setCumulativeDeficit(positionId, cov, 0);
+
+        // outflow window ofDelta = cf - snap = 100e18
+        uint256 cf = 100e18;
+        uint256 snap = 0;
+        harness.setCumulativeOutflows(positionId, cf, 0);
+        harness.setOutflowsAtFeeSnap(positionId, snap, 0);
+
+        // Baseline feeGrowthInsideLast is 0 for fee token.
+        harness.setFeeGrowthInsideLast(positionId, 0, 0);
+
+        uint128 positionLiquidity = 1e18;
+        uint256 expectedFeesBurn;
+        {
+            // Read feeGrowthInside for token1 in the [ -60, 60 ) range.
+            (, uint256 fg1) = StateLibrary.getFeeGrowthInside(manager, corePoolId, -60, 60);
+
+            // fees = (fg1 - last) * liq / Q128 ; last == 0 in this test.
+            uint256 fees = FullMath.mulDiv(fg1, uint256(positionLiquidity), FixedPoint128.Q128);
+
+            // feesBurn = fees * (burnBase / ofDelta) * bps/10000 ; bps==100%, burnBase==cov.
+            expectedFeesBurn = FullMath.mulDiv(fees, cov, cf - snap);
+        }
+
+        harness.applyCoverageBurn(manager, positionId, corePoolId, 0, cov, positionLiquidity);
+
+        // Fee token is token1 for token0 deficit burns.
+        (, uint256 pf1After) = harness.getPoolProtocolFeeAccrued(corePoolId);
+        (, uint256 fs1After) = harness.getFeesShared(positionId);
+
+        assertEq(pf1After, expectedFeesBurn, "protocolFeeAccrued1 should equal expected feesBurn");
+        assertEq(fs1After, expectedFeesBurn, "feesShared1 should equal expected feesBurn");
     }
 
     // ============================================================

@@ -11,6 +11,7 @@ import {IOracleHelper} from "../src/interfaces/IOracleHelper.sol";
 import {IVRLSettlementObserver} from "../src/interfaces/IVRLSettlementObserver.sol";
 import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 
 /**
  * @dev Malicious signal-manager implementation used via `vm.etch` onto the deployed `signalManager` address.
@@ -31,7 +32,7 @@ contract ReentrantSignalManager {
 
     address internal immutable target;
 
-    // 0 = none, 1 = commitSignal, 2 = extendGracePeriod, 3 = onMMSettle, 4 = onSeize
+    // 0 = none, 1 = commitSignal, 2 = extendGracePeriod, 3 = onMMSettle, 4 = onSeize, 5 = renewSignal, 6 = checkpoint
     uint8 internal kind;
 
     uint256 internal commitId;
@@ -44,6 +45,8 @@ contract ReentrantSignalManager {
 
     // onMMSettle params
     address internal marketVault;
+    Currency internal lccCurrency0;
+    Currency internal lccCurrency1;
 
     constructor(address target_) {
         target = target_;
@@ -80,6 +83,34 @@ contract ReentrantSignalManager {
         kind = 4;
         commitId = _commitId;
         positionIndex = _positionIndex;
+    }
+
+    function armRenewSignal(uint256 _commitId) external {
+        kind = 5;
+        commitId = _commitId;
+    }
+
+    function armCheckpoint(uint256 _commitId, uint256 _positionIndex) external {
+        kind = 6;
+        commitId = _commitId;
+        positionIndex = _positionIndex;
+    }
+
+    function armOnMMSettleWithLccCurrencies(
+        PoolKey calldata key,
+        address vault,
+        uint256 _commitId,
+        uint256 _positionIndex,
+        Currency _lccCurrency0,
+        Currency _lccCurrency1
+    ) external {
+        kind = 3;
+        poolKey = key;
+        marketVault = vault;
+        commitId = _commitId;
+        positionIndex = _positionIndex;
+        lccCurrency0 = _lccCurrency0;
+        lccCurrency1 = _lccCurrency1;
     }
 
     // bytes overload (reverting version) used by VTSCommitLib
@@ -124,8 +155,8 @@ contract ReentrantSignalManager {
                     IMarketVault(marketVault),
                     commitId,
                     positionIndex,
-                    poolKey.currency0,
-                    poolKey.currency1,
+                    lccCurrency0,
+                    lccCurrency1,
                     amountDelta,
                     false
                 )
@@ -133,6 +164,18 @@ contract ReentrantSignalManager {
         }
         if (k == 4) {
             return target.call(abi.encodeWithSelector(VTSOrchestrator.onSeize.selector, commitId, positionIndex));
+        }
+        if (k == 5) {
+            return target.call(abi.encodeWithSelector(VTSOrchestrator.renewSignal.selector, commitId, liquiditySignal));
+        }
+        if (k == 6) {
+            // Re-enter checkpoint in "no commitment checks" mode to avoid requiring any additional proof validation.
+            // Note: checkpoint's `sender` argument is not coupled to msg.sender, and is unused when withCommitment=false.
+            return target.call(
+                abi.encodeWithSelector(
+                    VTSOrchestrator.checkpoint.selector, address(0xBEEF), commitId, positionIndex, bytes(""), false
+                )
+            );
         }
         return (false, bytes(""));
     }
@@ -200,7 +243,9 @@ contract VTSOrchestratorReentrancyTest is VTSOrchestratorFixture {
         );
         assertEq(commitId, 1, "expected first commitId");
 
-        _s().armCommitSignal();
+        // Target the `renewSignal` entrypoint itself: if its `nonReentrant` is removed, the re-entry succeeds and
+        // the signal manager reverts with `Reentered()` to kill the mutant.
+        _s().armRenewSignal(commitId);
 
         // Renew should succeed under correct nonReentrant behaviour.
         unlockCaller.run(
@@ -219,7 +264,9 @@ contract VTSOrchestratorReentrancyTest is VTSOrchestratorFixture {
         address advancer = liquiditySignal.mmState.advancer;
         bytes memory signalBytes = abi.encode(liquiditySignal);
 
-        _s().armCommitSignal();
+        // Re-enter `checkpoint` itself in the simplest mode (withCommitment=false) to deterministically kill
+        // the `checkpoint` nonReentrant removal mutant without relying on any other entrypoint behaviour.
+        _s().armCheckpoint(commitId, 0);
 
         vm.prank(advancer);
         unlockCaller.run(
@@ -256,7 +303,9 @@ contract VTSOrchestratorReentrancyTest is VTSOrchestratorFixture {
 
         (uint256 commitId,,,) = _createCommittedPosition();
 
-        _s().armOnMMSettle(corePoolKey, address(proxyHook), commitId, 0);
+        // IMPORTANT: onMMSettle expects LCC currencies (not underlying pool currencies).
+        // If we pass underlying currencies here, the re-entrant call can fail for unrelated reasons and the mutant survives.
+        _s().armOnMMSettleWithLccCurrencies(corePoolKey, address(proxyHook), commitId, 0, lccCurrency0, lccCurrency1);
 
         bytes memory signalBytes = abi.encode(liquiditySignal);
         unlockCaller.run(

@@ -357,13 +357,18 @@ run_forge_tests_for_mutant() {
   #
   # Fallback:
   # - use env overrides (works on many Foundry versions/setups).
+  local offline_flag=()
+  if [[ "${FORGE_OFFLINE:-0}" == "1" ]]; then
+    offline_flag=(--offline)
+  fi
+
   if [[ -f "$FOUNDRY_ROOT/foundry.toml" ]] && grep -qE '^\[profile\.mutation\]' "$FOUNDRY_ROOT/foundry.toml"; then
-    FOUNDRY_PROFILE=mutation forge test -q
+    FOUNDRY_PROFILE=mutation forge test -q "${offline_flag[@]}"
   else
     FOUNDRY_VIA_IR=false \
     FOUNDRY_OPTIMIZER=false \
     FOUNDRY_OPTIMIZER_RUNS=0 \
-    forge test -q
+    forge test -q "${offline_flag[@]}"
   fi
 }
 

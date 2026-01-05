@@ -25,13 +25,17 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
     Currency underlyingCurrency1;
 
     function setUp() public override {
-        super.setUp();
         harness = new VTSPositionLibHarness();
         mockVault = new MockMarketVault();
         testPoolId = PoolId.wrap(bytes32(uint256(0xDEAD)));
 
         harness.setupPool(testPoolId, _createDefaultVTSConfig());
         mockVault.setAvailableLiquidity(type(int128).max, type(int128).max);
+    }
+
+    function _initMarket() internal {
+        // Heavy market setup is done per-test to avoid fixture panics masking mutation kills.
+        _setupMarket();
 
         // Setup LCC currencies from market (_currency2 and _currency3 are LCCs)
         lccCurrency0 = _currency2;
@@ -48,6 +52,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
     // ============================================================
 
     function test_onMMSettle_deposits_clampsToCommitmentMaxima() public {
+        _initMarket();
         PositionId positionId = _registerActivePosition();
 
         // Setup: commitmentMax = 100, settled = 80
@@ -72,6 +77,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
     }
 
     function test_onMMSettle_deposits_clearsCurrencyDelta() public {
+        _initMarket();
         PositionId positionId = _registerActivePosition();
         address owner = DEFAULT_OWNER;
 
@@ -114,6 +120,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
     }
 
     function test_onMMSettle_deposits_greaterThanCurrencyDelta_clearsCurrencyDelta() public {
+        _initMarket();
         PositionId positionId = _registerActivePosition();
         address owner = DEFAULT_OWNER;
 
@@ -162,6 +169,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
     }
 
     function test_onMMSettle_deposits_lessThanCurrencyDelta_partiallyClearsCurrencyDelta() public {
+        _initMarket();
         PositionId positionId = _registerActivePosition();
         address owner = DEFAULT_OWNER;
 
@@ -210,6 +218,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
     }
 
     function test_onMMSettle_revertsOnInvalidPosition() public {
+        _initMarket();
         // Unregistered position should revert.
         PositionId invalid = PositionId.wrap(bytes32(uint256(0xBADD)));
         BalanceDelta delta = toBalanceDelta(-1e18, -1e18);
@@ -224,6 +233,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
     // ============================================================
 
     function test_onMMSettle_withdrawals_clampsByRfS() public {
+        _initMarket();
         PositionId positionId = _registerActivePosition();
 
         // Setup: fully settled position with excess (RfS closed, negative delta)
@@ -245,6 +255,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
     }
 
     function test_onMMSettle_withdrawals_clampsToAvailableSettled() public {
+        _initMarket();
         PositionId positionId = _registerActivePosition();
 
         // Setup: settled = 100, base requirement = 50, so withdrawable = 50
@@ -269,6 +280,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
     // ============================================================
 
     function test_onMMSettle_withdrawals_revertsWhenRfSOpen() public {
+        _initMarket();
         PositionId positionId = _registerActivePosition();
 
         // Setup: under-settled position (RfS open)
@@ -285,6 +297,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
     }
 
     function test_onMMSettle_withdrawals_phase2ShortfallToken1_addsBackSettlement() public {
+        _initMarket();
         PositionId positionId = _registerActivePosition();
 
         // Fully-settled enough so RFS is closed and withdrawals are allowed.
@@ -310,6 +323,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
     }
 
     function test_onMMSettle_active_invalidCommitmentMax_reverts() public {
+        _initMarket();
         PositionId positionId = _registerActivePosition();
 
         // Active position with a zero commitment max is invalid in _settleActive.
@@ -322,6 +336,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
     }
 
     function test_onMMSettle_withdrawals_positiveCurrencyDelta_isReducedByClearance() public {
+        _initMarket();
         PositionId positionId = _registerActivePosition();
         address owner = DEFAULT_OWNER;
 
@@ -357,6 +372,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
     // ============================================================
 
     function test_onMMSettle_seizing_withdrawals_clampsByCurrencyDelta() public {
+        _initMarket();
         PositionId positionId = _registerActivePosition();
         address owner = DEFAULT_OWNER;
 
@@ -390,6 +406,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
     }
 
     function test_onMMSettle_seizing_withdrawals_zeroCurrencyDelta_clampsToZero() public {
+        _initMarket();
         PositionId positionId = _registerActivePosition();
         address owner = DEFAULT_OWNER;
 
@@ -419,6 +436,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
     // ============================================================
 
     function test_onMMSettle_seizing_deposits_clampsByOpenRfS() public {
+        _initMarket();
         PositionId positionId = _registerActivePosition();
 
         // Setup: under-settled position with RfS open
@@ -448,6 +466,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
     }
 
     function test_onMMSettle_seizing_deposits_noRfSRequirement_clampsToZero() public {
+        _initMarket();
         PositionId positionId = _registerActivePosition();
 
         // Setup: fully settled position (RfS closed)
@@ -472,6 +491,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
     // ============================================================
 
     function test_onMMSettle_deposits_withDeficit_returnsTotal() public {
+        _initMarket();
         PositionId positionId = _registerActivePosition();
 
         // Setup: position with cumulative deficit
@@ -499,6 +519,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
     }
 
     function test_onMMSettle_deposits_withDeficitAndCommitmentMax_clampsCorrectly() public {
+        _initMarket();
         PositionId positionId = _registerActivePosition();
 
         // Setup: deficit + commitment max clamp

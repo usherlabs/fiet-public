@@ -129,9 +129,9 @@ library LCCFactoryLib {
     ) private view returns (SymbolAttempt memory attempt) {
         (attempt.truncatedBytes, attempt.truncatedMarketRefStr) = LCCMetadataLib.truncateMarketRef(marketRef, length);
         attempt.symbol = LCCMetadataLib.buildSymbol(uaSymbol, attempt.truncatedMarketRefStr);
-
-        address[2] memory existingPair = s.truncatedMarketRefToUnderlyingPair[attempt.truncatedBytes];
-        (attempt.success, attempt.isNew) = LCCMetadataLib.checkTruncationCollision(existingPair, sortedPair);
+        (attempt.success, attempt.isNew) = LCCMetadataLib.checkTruncationCollision(
+            s.truncatedMarketRefToUnderlyingPair[attempt.truncatedBytes], sortedPair
+        );
     }
 
     /// @dev Gets a unique symbol for an LCC token using truncated marketRef with collision handling
@@ -200,18 +200,8 @@ library LCCFactoryLib {
         view
         returns (bool)
     {
-        // Check if caller is in the issuers mapping
-        if (s.issuers[lccToken][caller]) {
-            return true;
-        }
-
-        // Get the market for this LCC token
-        Market memory market = s.lccToMarket[lccToken];
-        if (market.id == bytes32(0) && market.ref.length == 0) {
-            return false; // Market not initialised
-        }
-
-        return false;
+        // Mapping-only semantics: issuerhood is not derived from market state.
+        return s.issuers[lccToken][caller];
     }
 
     /// @notice Sets an issuer for a specific LCC token

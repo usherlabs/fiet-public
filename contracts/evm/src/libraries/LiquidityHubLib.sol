@@ -299,6 +299,7 @@ library LiquidityHubLib {
 
         // Ensure lazy-claimed never exceeds current queue (invariant check)
         // This can happen if queue was processed between netting and finalisation
+        // @note: Based on the logical call flow, this should never happen.
         uint256 currentQueueWith = s.settleQueue[withLCC][address(this)];
         if (s.nettedLCCsAsUnderlying[withLCC] > currentQueueWith) {
             s.nettedLCCsAsUnderlying[withLCC] = currentQueueWith;
@@ -520,8 +521,19 @@ library LiquidityHubLib {
         s.totalQueued[lcc] -= toSettle;
 
         if (isForHub) {
-            // Reconcile lazy netted claims first, then burn only unclaimed portion
-            // This reconciles the lazy-claimed mapping from wrapWithLogic Step 2
+            // Reconcile lazy netting from wrapWith Step 2.
+            //
+            // `nettedLCCsAsUnderlying[lcc]` tracks how much of the Hub's own queued settlement for `lcc` was
+            // already "netted" earlier during wrapWith (market-derived netting) WITHOUT reducing `settleQueue`
+            // at that time. In other words: the queue still exists on-chain, but some of it has already been
+            // economically satisfied via netting. (ie. transferred to a recipient, so we don't need to burn Hub-held LCC for that same portion)
+            //
+            // When we later process the Hub's queue, we still decrement `settleQueue`/`totalQueued` by `toSettle`,
+            // but we must avoid double-accounting by NOT burning Hub-held LCC for the already-netted portion.
+            // So we consume `claimed` first, and only burn the remaining `effectiveToBurn`.
+            //
+            // (The external-recipient path below uses `pay(...)`, which burns the user's LCC and transfers
+            // underlying, decrementing reserves.)
             uint256 claimed = s.nettedLCCsAsUnderlying[lcc];
             uint256 decrement = Math.min(claimed, toSettle);
             if (decrement > 0) {
