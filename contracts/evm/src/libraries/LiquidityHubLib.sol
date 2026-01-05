@@ -20,7 +20,7 @@ library LiquidityHubLib {
 
     /// @dev Internal struct to reduce stack depth in wrapWithLogic
     /// @notice Groups intermediate state for the wrap-with operation to avoid stack-too-deep errors
-    struct WrapContext {
+    struct WrapWithContext {
         /// The original amount requested to wrap
         uint256 originalAmount;
         /// Remaining amount from user's wrapped (direct) balance
@@ -115,8 +115,6 @@ library LiquidityHubLib {
         LCCFactoryLib.burn(lccToken, from, directAmount, marketAmount, issued);
     }
 
-    // ============ CORE LOGIC FUNCTIONS ============
-
     // ============ WRAP-WITH HELPER FUNCTIONS (Stack Depth Optimisation) ============
 
     /// @notice Step 0: Net against target LCC Hub queue
@@ -130,9 +128,9 @@ library LiquidityHubLib {
     /// @param lcc The target LCC token address
     /// @param ctx The wrap context (modified in place via return)
     /// @return Updated wrap context
-    function _netAgainstTargetQueue(LiquidityHubStorage storage s, address lcc, WrapContext memory ctx)
+    function _netAgainstTargetQueue(LiquidityHubStorage storage s, address lcc, WrapWithContext memory ctx)
         private
-        returns (WrapContext memory)
+        returns (WrapWithContext memory)
     {
         uint256 targetQueue = s.settleQueue[lcc][address(this)];
         if (targetQueue == 0) return ctx;
@@ -159,7 +157,6 @@ library LiquidityHubLib {
         ctx.targetToBurn = netTarget;
         ctx.backingToBurn += netTarget;
         ctx.marketToMint += netTarget;
-        ctx.remainingAmount = ctx.originalAmount - netTarget;
 
         return ctx;
     }
@@ -178,8 +175,8 @@ library LiquidityHubLib {
         LiquidityHubStorage storage s,
         address lcc,
         address withLCC,
-        WrapContext memory ctx
-    ) private returns (WrapContext memory) {
+        WrapWithContext memory ctx
+    ) private returns (WrapWithContext memory) {
         if (ctx.fromWrappedAmount == 0) return ctx;
 
         uint256 directAvail = s.directSupply[withLCC];
@@ -204,13 +201,16 @@ library LiquidityHubLib {
     /// @param withLCC The backing LCC token address
     /// @param ctx The wrap context (modified in place via return)
     /// @return Updated wrap context
-    function _netMarketDerived(LiquidityHubStorage storage s, address withLCC, WrapContext memory ctx)
+    function _netMarketDerived(LiquidityHubStorage storage s, address withLCC, WrapWithContext memory ctx)
         private
-        returns (WrapContext memory)
+        returns (WrapWithContext memory)
     {
-        // Calculate remainder: if remainingAmount was set by Step 0, use it; otherwise use original minus direct
-        uint256 remainderAmount =
-            ctx.remainingAmount > 0 ? ctx.remainingAmount - ctx.directToMint : ctx.originalAmount - ctx.directToMint;
+        // Calculate remainder after Step 0 (target queue netting) and Step 1 (direct conversion).
+        // IMPORTANT: remainingAmount may legitimately be 0 after Step 0; using `> 0` as a sentinel causes
+        // double-counting and can lead to over-minting.
+        uint256 remainderAmount = ctx.originalAmount;
+        remainderAmount = remainderAmount > ctx.targetToBurn ? (remainderAmount - ctx.targetToBurn) : 0;
+        remainderAmount = remainderAmount > ctx.directToMint ? (remainderAmount - ctx.directToMint) : 0;
 
         if (remainderAmount == 0) return ctx;
 
@@ -242,9 +242,9 @@ library LiquidityHubLib {
     /// @param withLCC The backing LCC token address
     /// @param ctx The wrap context (modified in place via return)
     /// @return Updated wrap context
-    function _unwrapResidual(LiquidityHubStorage storage s, address withLCC, WrapContext memory ctx)
+    function _unwrapResidual(LiquidityHubStorage storage s, address withLCC, WrapWithContext memory ctx)
         private
-        returns (WrapContext memory)
+        returns (WrapWithContext memory)
     {
         // Calculate remaining after netting (marketToMint includes Step 0 + Step 2, minus Step 0's targetToBurn)
         uint256 marketFromNetting = ctx.marketToMint - ctx.targetToBurn;
@@ -282,7 +282,7 @@ library LiquidityHubLib {
     /// @param lcc The target LCC token address
     /// @param withLCC The backing LCC token address
     /// @param ctx The wrap context
-    function _finaliseBurns(LiquidityHubStorage storage s, address lcc, address withLCC, WrapContext memory ctx)
+    function _finaliseBurns(LiquidityHubStorage storage s, address lcc, address withLCC, WrapWithContext memory ctx)
         private
     {
         // Clamp burns to current Hub-held balances (defensive check)
@@ -299,6 +299,7 @@ library LiquidityHubLib {
 
         // Ensure lazy-claimed never exceeds current queue (invariant check)
         // This can happen if queue was processed between netting and finalisation
+        // @note: Based on the logical call flow, this should never happen.
         uint256 currentQueueWith = s.settleQueue[withLCC][address(this)];
         if (s.nettedLCCsAsUnderlying[withLCC] > currentQueueWith) {
             s.nettedLCCsAsUnderlying[withLCC] = currentQueueWith;
@@ -323,18 +324,13 @@ library LiquidityHubLib {
     /// @param lcc The target LCC token address
     /// @param withLCC The backing LCC token address
     /// @param from The address providing the backing LCC
-    /// @param to The address receiving the target LCC
     /// @param amount The amount to wrap
-    /// @return directToMint The amount to mint as direct supply
-    /// @return marketToMint The amount to mint as market-derived supply
-    function wrapWithLogic(
-        LiquidityHubStorage storage s,
-        address lcc,
-        address withLCC,
-        address from,
-        address to,
-        uint256 amount
-    ) internal returns (uint256 directToMint, uint256 marketToMint) {
+    //#olympix-ignore-reentrancy
+    function wrapWithPrepare(LiquidityHubStorage storage s, address lcc, address withLCC, address from, uint256 amount)
+        internal
+        view
+        returns (WrapWithContext memory)
+    {
         if (amount == 0) revert Errors.InvalidAmount(0, 0);
 
         // Validation: ensure withLCC is valid, not same as target, and shares underlying
@@ -345,7 +341,7 @@ library LiquidityHubLib {
         }
 
         // Initialise context with balance checks in scoped block
-        WrapContext memory ctx;
+        WrapWithContext memory ctx;
         ctx.originalAmount = amount;
         {
             (uint256 wrapped, uint256 marketDerived) = balancesOf(withLCC, from);
@@ -357,9 +353,20 @@ library LiquidityHubLib {
             ctx.fromWrappedAmount = amount - ctx.fromMarketDerivedAmount;
         }
 
-        // Transfer backing LCC from user to Hub
-        Currency.wrap(withLCC).transferFrom(from, address(this), amount);
+        // Expects caller to securely transfer funds from (the caller) to (this) Hub
+        return ctx;
+    }
 
+    /// @notice Wrap LCC using another LCC as backing, with O(1) flattening and netting
+    /// @dev Executes the wrap-with operation using the provided context
+    /// @param s The liquidity hub state
+    /// @param lcc The target LCC token address
+    /// @param withLCC The backing LCC token address
+    /// @param ctx The wrap context
+    //#olympix-ignore-reentrancy
+    function wrapWithContext(LiquidityHubStorage storage s, address lcc, address withLCC, WrapWithContext memory ctx)
+        internal
+    {
         // Execute steps via helper functions (each keeps stack depth minimal)
         ctx = _netAgainstTargetQueue(s, lcc, ctx); // Step 0: Net against target queue
         ctx = _optimiseDirectConversion(s, lcc, withLCC, ctx); // Step 1: Direct conversion
@@ -368,18 +375,9 @@ library LiquidityHubLib {
 
         // Finalise burns and invariant checks
         _finaliseBurns(s, lcc, withLCC, ctx);
-
-        // Extract return values and apply defensive clamp (safety check)
-        directToMint = ctx.directToMint;
-        marketToMint = ctx.marketToMint;
-        if (directToMint + marketToMint > ctx.originalAmount) {
-            uint256 excess = (directToMint + marketToMint) - ctx.originalAmount;
-            marketToMint = marketToMint > excess ? (marketToMint - excess) : 0;
-        }
-
-        // Final mint: mint target LCC with appropriate direct/market-derived split
-        mint(lcc, to, directToMint, marketToMint, false);
     }
+
+    // ============ CORE LOGIC FUNCTIONS ============
 
     /**
      * @notice Core unwrap logic without external transfer
@@ -388,17 +386,18 @@ library LiquidityHubLib {
      *      that is handled by the calling contract.
      * @param s The liquidity hub storage
      * @param lcc The LCC token address
-     * @param to The recipient of the underlying asset (used for queueing shortfall)
+     * @param queueTo The recipient of the underlying asset (used for queueing shortfall)
      * @param amount The amount to unwrap
      * @param wrappedBalance The wrapped balance of the account
      * @param marketDerivedBalance The market-derived balance of the account
      * @return directUnwrapped The amount unwrapped from direct supply
      * @return marketUnwrapped The amount unwrapped from market liquidity
      */
+    //#olympix-ignore-reentrancy
     function unwrapInternalLogic(
         LiquidityHubStorage storage s,
         address lcc,
-        address to,
+        address queueTo,
         uint256 amount,
         uint256 wrappedBalance,
         uint256 marketDerivedBalance
@@ -425,9 +424,9 @@ library LiquidityHubLib {
             remainingToUnwrap -= marketUnwrapped;
         }
 
-        // 3) Queue any shortfall to Hub itself for later processing
+        // 3) Queue any shortfall for later processing
         if (remainingToUnwrap > 0) {
-            queueSettlement(s, lcc, to, remainingToUnwrap);
+            queueSettlement(s, lcc, queueTo, remainingToUnwrap);
         }
     }
 
@@ -522,8 +521,19 @@ library LiquidityHubLib {
         s.totalQueued[lcc] -= toSettle;
 
         if (isForHub) {
-            // Reconcile lazy netted claims first, then burn only unclaimed portion
-            // This reconciles the lazy-claimed mapping from wrapWithLogic Step 2
+            // Reconcile lazy netting from wrapWith Step 2.
+            //
+            // `nettedLCCsAsUnderlying[lcc]` tracks how much of the Hub's own queued settlement for `lcc` was
+            // already "netted" earlier during wrapWith (market-derived netting) WITHOUT reducing `settleQueue`
+            // at that time. In other words: the queue still exists on-chain, but some of it has already been
+            // economically satisfied via netting. (ie. transferred to a recipient, so we don't need to burn Hub-held LCC for that same portion)
+            //
+            // When we later process the Hub's queue, we still decrement `settleQueue`/`totalQueued` by `toSettle`,
+            // but we must avoid double-accounting by NOT burning Hub-held LCC for the already-netted portion.
+            // So we consume `claimed` first, and only burn the remaining `effectiveToBurn`.
+            //
+            // (The external-recipient path below uses `pay(...)`, which burns the user's LCC and transfers
+            // underlying, decrementing reserves.)
             uint256 claimed = s.nettedLCCsAsUnderlying[lcc];
             uint256 decrement = Math.min(claimed, toSettle);
             if (decrement > 0) {

@@ -1,21 +1,22 @@
-// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.0;
+// SPDX-License-Identifier: UNLICENSED
+pragma solidity ^0.8.26;
 
 import "forge-std/Test.sol";
 // solhint-disable max-line-length
 
 import {BalanceDelta, toBalanceDelta, add} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {CurrencyLibrary, Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {LiquidityCommitmentCertificate} from "../../src/LCC.sol";
 import {IMarketFactory} from "../../src/interfaces/IMarketFactory.sol";
 import {LiquidityUtils} from "../../src/libraries/LiquidityUtils.sol";
 import {console} from "forge-std/console.sol";
-import {MarketTestBase} from "../modules/MarketTestBase.sol";
+import {MarketTestBase} from "../base/MarketTestBase.sol";
 import {MMPositionManager} from "../../src/MMPositionManager.sol";
-import {MMActionAdapter as MMA} from "../libraries/MMActionAdapter.sol";
-import {MarketMakerTestBase} from "../modules/MMTestBase.sol";
+import {MMActionAdapter as MMA} from "../utils/MMActionAdapter.sol";
+import {MarketMakerTestBase} from "../base/MMTestBase.sol";
 import {MarketMaker} from "../../src/libraries/MarketMaker.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {PositionId} from "../../src/types/Position.sol";
@@ -36,6 +37,9 @@ import {LiquiditySignal} from "../../src/types/Commit.sol";
 import {IVTSOrchestrator} from "../../src/interfaces/IVTSOrchestrator.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {PoolSwapTest} from "@uniswap/v4-core/src/test/PoolSwapTest.sol";
+import {MMPositionActionsImpl} from "../../src/MMPositionActionsImpl.sol";
+import {MMActions} from "../../src/libraries/MMActions.sol";
+import {DelegateCallGuard} from "../../src/modules/DelegateCallGuard.sol";
 
 contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
     using SafeCast for *;
@@ -753,5 +757,527 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
                 "Position2 settled amount1 should increase after increaseFromDeltas"
             );
         }
+    }
+
+    function test_actionsImpl_handleAction_revertsWhenNotDelegatecall() public {
+        // MMPositionActionsImpl is meant to be invoked via delegatecall from MMPositionManager.
+        MMPositionActionsImpl impl =
+            new MMPositionActionsImpl(address(manager), address(liquidityHub), address(vtsOrchestrator));
+        // Provide well-formed params so that (if the guard were removed) we don't accidentally revert on ABI decoding.
+        bytes memory params = abi.encode(corePoolKey, uint256(1), uint256(0), int128(1), int128(0), false);
+        vm.expectRevert(DelegateCallGuard.OnlyDelegateCall.selector);
+        impl.handleAction(MMActions.SETTLE_POSITION, params);
+    }
+
+    function test_settle_usePositionManagerBalance_syncsCredit_whenOnlyToken0Outflow() public {
+        // Kills mutants around:
+        // - (delta0 > 0 || delta1 > 0) -> (delta0 > 0 && delta1 > 0)
+        // - delta0 > 0 -> delta0 < 0
+        //
+        // We create a one-sided (token0-only) position and withdraw only token0 with usePositionManagerBalance=true.
+        // Then TAKE must transfer token0 to the caller; otherwise credit sync didn't happen.
+        uint256 tokenId = 1;
+        uint256 positionIndex = 0;
+
+        address underlying0 = lcc0.underlying();
+        address underlying1 = lcc1.underlying();
+
+        ModifyLiquidityParams memory oneSided =
+            ModifyLiquidityParams({tickLower: 60, tickUpper: 120, liquidityDelta: 1e18, salt: bytes32(0)});
+        createPosition(oneSided, abi.encode(liquiditySignal), tokenId, positionIndex);
+
+        (uint256 commitment0, uint256 commitment1) = LiquidityUtils.calculateCommitmentMaxima(
+            oneSided.tickLower, oneSided.tickUpper, uint128(uint256(oneSided.liquidityDelta))
+        );
+        // Approve underlying tokens since they will be used to settle the position
+        _approveTokenForPositionManager(underlying0, underlying1, address(positionManager), commitment0, commitment1);
+        MMA.PreparedAction[] memory preActions = new MMA.PreparedAction[](1);
+        preActions[0] = MMA.prepareSettle(
+            corePoolKey, tokenId, positionIndex, -int128(int256(commitment0)), -int128(int256(commitment1)), false
+        );
+        MMA.executeWithUnlock(positionManager, preActions, block.timestamp + 3600);
+
+        uint256 withdraw0 = Math.max(uint256(1), commitment0 / 2);
+
+        uint256 bal0Before = IERC20(underlying0).balanceOf(address(this));
+        uint256 bal1Before = IERC20(underlying1).balanceOf(address(this));
+
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](3);
+        actions[0] = MMA.prepareSettle(corePoolKey, tokenId, positionIndex, int128(int256(withdraw0)), 0, true);
+        actions[1] = MMA.prepareTake(Currency.wrap(underlying0), address(this), 0);
+        actions[2] = MMA.prepareTake(Currency.wrap(underlying1), address(this), 0);
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+
+        uint256 bal0After = IERC20(underlying0).balanceOf(address(this));
+        uint256 bal1After = IERC20(underlying1).balanceOf(address(this));
+
+        assertGt(bal0After, bal0Before, "expected token0 TAKE after synced credit");
+        assertEq(bal1After, bal1Before, "expected no token1 transfer in token0-only outflow");
+    }
+
+    function test_settle_usePositionManagerBalance_syncsCredit_whenOnlyToken1Outflow() public {
+        // Kills mutants around delta1 > 0 gate by creating a one-sided (token1-only) outflow.
+        uint256 tokenId = 1;
+        uint256 positionIndex = 0;
+
+        address underlying0 = lcc0.underlying();
+        address underlying1 = lcc1.underlying();
+
+        ModifyLiquidityParams memory oneSided =
+            ModifyLiquidityParams({tickLower: -120, tickUpper: -60, liquidityDelta: 1e18, salt: bytes32(0)});
+        createPosition(oneSided, abi.encode(liquiditySignal), tokenId, positionIndex);
+
+        // Additional settle to ensure there's sufficient settled liquidity to withdraw.
+        (uint256 commitment0, uint256 commitment1) = LiquidityUtils.calculateCommitmentMaxima(
+            oneSided.tickLower, oneSided.tickUpper, uint128(uint256(oneSided.liquidityDelta))
+        );
+        _approveTokenForPositionManager(underlying0, underlying1, address(positionManager), commitment0, commitment1);
+        MMA.PreparedAction[] memory preActions = new MMA.PreparedAction[](1);
+        preActions[0] = MMA.prepareSettle(
+            corePoolKey, tokenId, positionIndex, -int128(int256(commitment0)), -int128(int256(commitment1)), false
+        );
+        MMA.executeWithUnlock(positionManager, preActions, block.timestamp + 3600);
+
+        uint256 withdraw1 = Math.max(uint256(1), commitment1 / 2);
+
+        uint256 bal0Before = IERC20(underlying0).balanceOf(address(this));
+        uint256 bal1Before = IERC20(underlying1).balanceOf(address(this));
+
+        // Negative test: attempting to settle/withdraw without TAKE to drain deltas will leave unsetted deltas
+        // and revert with CurrencyNotSettled at the end of the batch.
+        MMA.PreparedAction[] memory actions0 = new MMA.PreparedAction[](1);
+        actions0[0] = MMA.prepareSettle(corePoolKey, tokenId, positionIndex, 0, int128(int256(withdraw1)), true);
+        vm.expectRevert(Errors.CurrencyNotSettled.selector);
+        MMA.executeWithUnlock(positionManager, actions0, block.timestamp + 3600);
+
+        // Positive test: proper flow with TAKE to drain any credits/deltas
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](3);
+        actions[0] = MMA.prepareSettle(corePoolKey, tokenId, positionIndex, 0, int128(int256(withdraw1)), true);
+        actions[1] = MMA.prepareTake(Currency.wrap(underlying0), address(this), 0);
+        actions[2] = MMA.prepareTake(Currency.wrap(underlying1), address(this), 0);
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+
+        uint256 bal0After = IERC20(underlying0).balanceOf(address(this));
+        uint256 bal1After = IERC20(underlying1).balanceOf(address(this));
+
+        assertEq(bal0After, bal0Before, "expected no token0 transfer in token1-only outflow");
+        assertGt(bal1After, bal1Before, "expected token1 TAKE after synced credit");
+    }
+
+    function test_settleFromDeltas_withOneSidedProtocolCredit_token0Only() public {
+        // Kills mutants around:
+        // - (credit0 > 0 || credit1 > 0) -> (credit0 > 0 && credit1 > 0)
+        // - credit0 > 0 -> credit0 < 0
+        //
+        // Create a token0-only position, burn it to create protocol (MMPM) underlying credit,
+        // then withdraw via settleFromDeltas. Must pay out token0 even if token1 credit is zero.
+        uint256 tokenId = 1;
+        uint256 positionIndex = 0;
+
+        ModifyLiquidityParams memory oneSided =
+            ModifyLiquidityParams({tickLower: 1080, tickUpper: 1140, liquidityDelta: 1e18, salt: bytes32(0)});
+        createPosition(oneSided, abi.encode(liquiditySignal), tokenId, positionIndex);
+
+        address underlying0 = lcc0.underlying();
+        address underlying1 = lcc1.underlying();
+
+        (uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) =
+            _calculateSettlementAmounts(oneSided, marketVTSConfiguration);
+
+        // Additional settle to ensure the burn+withdraw path has sufficient settled amounts.
+        // IMPORTANT: commitmentMaxima is an upper bound for *either* side, so even “effectively one-sided” ranges
+        // can still be settled on both tokens. For a true one-sided credit test, we must settle only one token.
+        (uint256 commitment0,) = LiquidityUtils.calculateCommitmentMaxima(
+            oneSided.tickLower, oneSided.tickUpper, uint128(uint256(oneSided.liquidityDelta))
+        );
+        // Settle ONLY token0 (not token1) so burn produces one-sided requiredSettlementDelta/credits.
+        _approveTokenForPositionManager(underlying0, underlying1, address(positionManager), commitment0, 0);
+        MMA.PreparedAction[] memory preActions = new MMA.PreparedAction[](1);
+        preActions[0] = MMA.prepareSettle(corePoolKey, tokenId, positionIndex, -int128(int256(commitment0)), 0, false);
+        MMA.executeWithUnlock(positionManager, preActions, block.timestamp + 3600);
+
+        uint256 bal0Before = IERC20(underlying0).balanceOf(address(this));
+        uint256 bal1Before = IERC20(underlying1).balanceOf(address(this));
+
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](4);
+        actions[0] = MMA.prepareBurn(corePoolKey, tokenId, positionIndex);
+        actions[1] = MMA.prepareSettleFromDeltas(corePoolKey, tokenId, positionIndex, true, true);
+        // Drain any incidental credits to satisfy _afterBatch().
+        actions[2] = MMA.prepareTake(Currency.wrap(underlying0), address(this), 0);
+        actions[3] = MMA.prepareTake(Currency.wrap(underlying1), address(this), 0);
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+
+        uint256 bal0After = IERC20(underlying0).balanceOf(address(this));
+        uint256 bal1After = IERC20(underlying1).balanceOf(address(this));
+
+        assertGt(
+            bal0After, bal0Before + requiredSettlementAmount0, "expected token0 payout from one-sided protocol credit"
+        );
+        assertEq(bal1After, bal1Before + requiredSettlementAmount1, "expected no token1 payout from token0-only credit");
+    }
+
+    function test_settleFromDeltas_withOneSidedProtocolCredit_token1Only() public {
+        // Mirrors the token0-only test to kill the symmetric credit1 mutants.
+        uint256 tokenId = 1;
+        uint256 positionIndex = 0;
+
+        ModifyLiquidityParams memory oneSided =
+            ModifyLiquidityParams({tickLower: -1140, tickUpper: -1080, liquidityDelta: 1e18, salt: bytes32(0)});
+        createPosition(oneSided, abi.encode(liquiditySignal), tokenId, positionIndex);
+
+        address underlying0 = lcc0.underlying();
+        address underlying1 = lcc1.underlying();
+
+        (uint256 requiredSettlementAmount0, uint256 requiredSettlementAmount1) =
+            _calculateSettlementAmounts(oneSided, marketVTSConfiguration);
+
+        // Additional settle to ensure the burn+withdraw path has sufficient settled amounts.
+        // IMPORTANT: commitmentMaxima is an upper bound for *either* side, so even “effectively one-sided” ranges
+        // can still be settled on both tokens. For a true one-sided credit test, we must settle only one token.
+        (, uint256 commitment1) = LiquidityUtils.calculateCommitmentMaxima(
+            oneSided.tickLower, oneSided.tickUpper, uint128(uint256(oneSided.liquidityDelta))
+        );
+        // Settle ONLY token1 (not token0) so burn produces one-sided requiredSettlementDelta/credits.
+        _approveTokenForPositionManager(underlying0, underlying1, address(positionManager), 0, commitment1);
+        MMA.PreparedAction[] memory preActions = new MMA.PreparedAction[](1);
+        preActions[0] = MMA.prepareSettle(corePoolKey, tokenId, positionIndex, 0, -int128(int256(commitment1)), false);
+        MMA.executeWithUnlock(positionManager, preActions, block.timestamp + 3600);
+
+        uint256 bal0Before = IERC20(underlying0).balanceOf(address(this));
+        uint256 bal1Before = IERC20(underlying1).balanceOf(address(this));
+
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](4);
+        actions[0] = MMA.prepareBurn(corePoolKey, tokenId, positionIndex);
+        actions[1] = MMA.prepareSettleFromDeltas(corePoolKey, tokenId, positionIndex, true, true);
+        actions[2] = MMA.prepareTake(Currency.wrap(underlying0), address(this), 0);
+        actions[3] = MMA.prepareTake(Currency.wrap(underlying1), address(this), 0);
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+
+        uint256 bal0After = IERC20(underlying0).balanceOf(address(this));
+        uint256 bal1After = IERC20(underlying1).balanceOf(address(this));
+
+        assertEq(bal0After, bal0Before + requiredSettlementAmount0, "expected no token0 payout from token1-only credit");
+        assertGt(
+            bal1After, bal1Before + requiredSettlementAmount1, "expected token1 payout from one-sided protocol credit"
+        );
+    }
+
+    function test_settleFromDeltas_deposit_revertsForNotApprovedCaller_whenNotSeizing() public {
+        // As deltas are per-unlock, it's not possible for an attacker to "reuse" protocol credits created
+        // in a prior unlock. The simplest invariant we want is that an attacker cannot call `_settle` (negative delta)
+        // on someone else's position.
+        uint256 tokenId = 1;
+        uint256 positionIndex = 0;
+
+        ModifyLiquidityParams memory params =
+            ModifyLiquidityParams({tickLower: 60, tickUpper: 120, liquidityDelta: 1e18, salt: bytes32(0)});
+        createPosition(params, abi.encode(liquiditySignal), tokenId, positionIndex);
+
+        address attacker = makeAddr("attacker");
+        MMA.PreparedAction[] memory attackerActions = new MMA.PreparedAction[](1);
+        // Attempt to deposit (negative delta) as an unapproved caller.
+        attackerActions[0] = MMA.prepareSettle(corePoolKey, tokenId, positionIndex, -int128(1), 0, false);
+
+        vm.startPrank(attacker);
+        vm.expectRevert(abi.encodeWithSelector(Errors.NotApproved.selector, attacker));
+        MMA.executeWithUnlock(positionManager, attackerActions, block.timestamp + 3600);
+        vm.stopPrank();
+    }
+
+    function test_settle_revertsOnZeroDelta() public {
+        // _settle checks amount0==0 && amount1==0 before reading position state.
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](1);
+        actions[0] = MMA.prepareSettle(corePoolKey, 1, 0, 0, 0, false);
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidDelta.selector, 0, 0));
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+    }
+
+    function test_mintPosition_revertsWhenLiquidityGtUint128Max() public {
+        // Mint action rejects liquidity > uint128 max, but only after passing the ERC721 owner/approval gate.
+        // So we commit first (mints the tokenId), then attempt to mint a position with too-large liquidity.
+        uint256 tokenId = positionManager.nextTokenId();
+        uint256 tooLarge = uint256(type(uint128).max) + 1;
+
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](2);
+        actions[0] = MMA.prepareCommit(abi.encode(liquiditySignal));
+        actions[1] = MMA.prepareMint(corePoolKey, tokenId, -60, 60, tooLarge);
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAmount.selector, tooLarge, type(uint128).max));
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+    }
+
+    // ============================================================
+    // Mutation-score focused negative tests
+    // ============================================================
+
+    function _wrongCorePoolKey() internal view returns (PoolKey memory bad) {
+        bad = corePoolKey;
+        // Swap currencies to produce a distinct PoolId (guaranteed InvalidMarket vs the stored position.poolId).
+        (bad.currency0, bad.currency1) = (bad.currency1, bad.currency0);
+    }
+
+    function test_settle_revertsInvalidMarket_whenPoolKeyMismatch() public {
+        uint256 tokenId = 1;
+        uint256 positionIndex = 0;
+
+        _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            defaultlLiquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+
+        PoolKey memory bad = _wrongCorePoolKey();
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](1);
+        actions[0] = MMA.prepareSettle(bad, tokenId, positionIndex, -int128(1), 0, false);
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidMarket.selector, bad));
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+    }
+
+    function test_burn_revertsInvalidMarket_whenPoolKeyMismatch() public {
+        uint256 tokenId = 1;
+        uint256 positionIndex = 0;
+
+        _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            defaultlLiquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+
+        PoolKey memory bad = _wrongCorePoolKey();
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](1);
+        actions[0] = MMA.prepareBurn(bad, tokenId, positionIndex);
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidMarket.selector, bad));
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+    }
+
+    function test_increase_revertsInvalidMarket_whenPoolKeyMismatch() public {
+        uint256 tokenId = 1;
+        uint256 positionIndex = 0;
+
+        _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            defaultlLiquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+
+        PoolKey memory bad = _wrongCorePoolKey();
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](1);
+        actions[0] = MMA.prepareIncrease(bad, tokenId, positionIndex, 1);
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidMarket.selector, bad));
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+    }
+
+    function test_decrease_revertsInvalidMarket_whenPoolKeyMismatch() public {
+        uint256 tokenId = 1;
+        uint256 positionIndex = 0;
+
+        _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            defaultlLiquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+
+        PoolKey memory bad = _wrongCorePoolKey();
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](1);
+        actions[0] = MMA.prepareDecrease(bad, tokenId, positionIndex, 1);
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidMarket.selector, bad));
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+    }
+
+    function test_seize_revertsInvalidMarket_whenPoolKeyMismatch() public {
+        uint256 tokenId = 1;
+        uint256 positionIndex = 0;
+
+        _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            defaultlLiquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+
+        PoolKey memory bad = _wrongCorePoolKey();
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](1);
+        actions[0] = MMA.prepareSeize(bad, tokenId, positionIndex, 1, 1, false);
+
+        vm.prank(guarantor);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidMarket.selector, bad));
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+    }
+
+    function test_increaseFromDeltas_revertsInvalidMarket_whenPoolKeyMismatch() public {
+        uint256 tokenId = 1;
+        uint256 positionIndex = 0;
+
+        _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            defaultlLiquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+
+        PoolKey memory bad = _wrongCorePoolKey();
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](1);
+        actions[0] = MMA.prepareIncreaseFromDeltas(bad, tokenId, positionIndex, true);
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidMarket.selector, bad));
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+    }
+
+    function test_unauthorised_revertsNotApproved_forBurnIncreaseDecreaseAndDeltasActions() public {
+        uint256 tokenId = 1;
+        uint256 positionIndex = 0;
+
+        _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            defaultlLiquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+
+        address attacker = makeAddr("attacker2");
+
+        // Burn
+        {
+            MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](1);
+            actions[0] = MMA.prepareBurn(corePoolKey, tokenId, positionIndex);
+            vm.startPrank(attacker);
+            vm.expectRevert(abi.encodeWithSelector(Errors.NotApproved.selector, attacker));
+            MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+            vm.stopPrank();
+        }
+
+        // Increase
+        {
+            MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](1);
+            actions[0] = MMA.prepareIncrease(corePoolKey, tokenId, positionIndex, 1);
+            vm.startPrank(attacker);
+            vm.expectRevert(abi.encodeWithSelector(Errors.NotApproved.selector, attacker));
+            MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+            vm.stopPrank();
+        }
+
+        // Decrease
+        {
+            MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](1);
+            actions[0] = MMA.prepareDecrease(corePoolKey, tokenId, positionIndex, 1);
+            vm.startPrank(attacker);
+            vm.expectRevert(abi.encodeWithSelector(Errors.NotApproved.selector, attacker));
+            MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+            vm.stopPrank();
+        }
+
+        // increaseFromDeltas
+        {
+            MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](1);
+            actions[0] = MMA.prepareIncreaseFromDeltas(corePoolKey, tokenId, positionIndex, true);
+            vm.startPrank(attacker);
+            vm.expectRevert(abi.encodeWithSelector(Errors.NotApproved.selector, attacker));
+            MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+            vm.stopPrank();
+        }
+
+        // mintFromDeltas (approval gate should trip before any delta maths)
+        {
+            MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](1);
+            actions[0] = MMA.prepareMintFromDeltas(corePoolKey, tokenId, 0, 60, true);
+            vm.startPrank(attacker);
+            vm.expectRevert(abi.encodeWithSelector(Errors.NotApproved.selector, attacker));
+            MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+            vm.stopPrank();
+        }
+    }
+
+    function test_seize_callsOnSeize_and_onMMSettle_withNegativeRequestedDelta() public {
+        // Kills mutants that delete onSeize() and mutate -amount -> ~amount in seizure settlement.
+        uint256 tokenId = 1;
+        uint256 positionIndex = 0;
+
+        _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            defaultlLiquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+
+        // Create deficit so RFS opens.
+        swapRouter.swap(
+            proxyPoolKey,
+            SwapParams({zeroForOne: true, amountSpecified: -1e18, sqrtPriceLimitX96: ZERO_FOR_ONE_LIMIT}),
+            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}),
+            ZERO_BYTES
+        );
+
+        vm.warp(block.timestamp + 300000 + 1);
+
+        uint256 settleAmount0 = 5_999_709_018_652_707;
+        uint256 settleAmount1 = 5_999_709_018_652_707;
+
+        IERC20(lcc0.underlying()).transfer(guarantor, settleAmount0);
+        IERC20(lcc1.underlying()).transfer(guarantor, settleAmount1);
+
+        // Expect the orchestrator to validate seizure and receive the negative requested delta.
+        vm.expectCall(
+            address(vtsOrchestrator), abi.encodeWithSelector(IVTSOrchestrator.onSeize.selector, tokenId, positionIndex)
+        );
+
+        BalanceDelta expectedDelta = toBalanceDelta(-int128(int256(settleAmount0)), -int128(int256(settleAmount1)));
+        vm.expectCall(
+            address(vtsOrchestrator),
+            abi.encodeWithSelector(
+                IVTSOrchestrator.onMMSettle.selector,
+                mv,
+                tokenId,
+                positionIndex,
+                corePoolKey.currency0,
+                corePoolKey.currency1,
+                expectedDelta,
+                true
+            )
+        );
+
+        vm.startPrank(guarantor);
+        IERC20(lcc0.underlying()).approve(address(positionManager), settleAmount0);
+        IERC20(lcc1.underlying()).approve(address(positionManager), settleAmount1);
+
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](4);
+        actions[0] = MMA.prepareSeize(corePoolKey, tokenId, positionIndex, settleAmount0, settleAmount1, false);
+        actions[1] = MMA.prepareSettleFromDeltas(corePoolKey, tokenId, positionIndex, true, true);
+        actions[2] = MMA.prepareTake(Currency.wrap(address(lcc0)), guarantor, 0);
+        actions[3] = MMA.prepareTake(Currency.wrap(address(lcc1)), guarantor, 0);
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+        vm.stopPrank();
     }
 }

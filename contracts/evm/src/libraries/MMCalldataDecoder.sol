@@ -360,6 +360,15 @@ library MMCalldataDecoder {
         returns (bytes calldata liquiditySignal, address owner)
     {
         assembly ("memory-safe") {
+            // ABI encoding: (bytes liquiditySignal, address owner)
+            // Minimum length for empty bytes is:
+            // - head (2 words): offset, owner  => 0x40
+            // - tail (length word)            => 0x20
+            // total                           => 0x60
+            if lt(params.length, 0x60) {
+                mstore(0, SLICE_ERROR_SELECTOR)
+                revert(0x1c, 4)
+            }
             owner := calldataload(add(params.offset, 0x20))
         }
         // Use CalldataDecoder.toBytes for dynamic bytes (index 0 = 1st argument)
@@ -372,6 +381,12 @@ library MMCalldataDecoder {
     /// @return data The liquidity signal bytes
     function decodeTokenIdAndBytes(bytes calldata params) internal pure returns (uint256 tokenId, bytes calldata data) {
         assembly ("memory-safe") {
+            // ABI encoding: (uint256 tokenId, bytes data)
+            // Minimum length for empty bytes is head (0x40) + tail length word (0x20) = 0x60
+            if lt(params.length, 0x60) {
+                mstore(0, SLICE_ERROR_SELECTOR)
+                revert(0x1c, 4)
+            }
             tokenId := calldataload(params.offset)
         }
         // Use CalldataDecoder.toBytes for dynamic bytes (index 1 = 2nd argument)
@@ -390,9 +405,17 @@ library MMCalldataDecoder {
         returns (uint256 tokenId, uint256 positionIndex, bytes calldata data, bool withCommitment)
     {
         assembly ("memory-safe") {
+            // ABI encoding: (uint256 tokenId, uint256 positionIndex, bytes data, bool withCommitment)
+            // Minimum length for empty bytes is head (4 words = 0x80) + tail length word (0x20) = 0xa0
+            if lt(params.length, 0xa0) {
+                mstore(0, SLICE_ERROR_SELECTOR)
+                revert(0x1c, 4)
+            }
             tokenId := calldataload(params.offset)
             positionIndex := calldataload(add(params.offset, 0x20))
-            withCommitment := calldataload(add(params.offset, 0x40))
+            // ABI encoding: (uint256 tokenId, uint256 positionIndex, bytes data, bool withCommitment)
+            // Head layout: tokenId @ 0x00, positionIndex @ 0x20, dataOffset @ 0x40, withCommitment @ 0x60
+            withCommitment := calldataload(add(params.offset, 0x60))
         }
         // Use CalldataDecoder.toBytes for dynamic bytes (index 2 = 3rd argument)
         data = params.toBytes(2);
@@ -425,24 +448,22 @@ library MMCalldataDecoder {
         }
     }
 
-    /// @dev COLLECT_AVAILABLE_LIQUIDITY: (address, address, uint256)
+    /// @dev COLLECT_AVAILABLE_LIQUIDITY: (address, uint256)
     /// @param params The calldata bytes to decode
     /// @return lcc The LCC token address
-    /// @return recipient The recipient address
     /// @return maxAmount The maximum amount to collect
     function decodeCollectLiquidityParams(bytes calldata params)
         internal
         pure
-        returns (address lcc, address recipient, uint256 maxAmount)
+        returns (address lcc, uint256 maxAmount)
     {
         assembly ("memory-safe") {
-            if lt(params.length, 0x60) {
+            if lt(params.length, 0x40) {
                 mstore(0, SLICE_ERROR_SELECTOR)
                 revert(0x1c, 4)
             }
             lcc := calldataload(params.offset)
-            recipient := calldataload(add(params.offset, 0x20))
-            maxAmount := calldataload(add(params.offset, 0x40))
+            maxAmount := calldataload(add(params.offset, 0x20))
         }
     }
 

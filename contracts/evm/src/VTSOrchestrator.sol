@@ -57,12 +57,13 @@ import {LiquidityUtils} from "./libraries/LiquidityUtils.sol";
 import {toBalanceDelta} from "v4-periphery/lib/v4-core/src/types/BalanceDelta.sol";
 import {TransientSlots} from "./libraries/TransientSlots.sol";
 import {PoolAccounting} from "./types/VTS.sol";
+import {ReentrancyGuardTransient} from "openzeppelin-contracts/contracts/utils/ReentrancyGuardTransient.sol";
 
 /// @title VTSOrchestrator
 /// @notice Central state management layer and orchestrator for VTS logic
 /// @dev Adopts Bunni-style pattern: state managed in VTSStorage struct, complex logic delegated to linked libraries
 /// @author Fiet Protocol
-contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSOrchestrator {
+contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSOrchestrator, ReentrancyGuardTransient {
     using StateLibrary for IPoolManager;
     using TransientStateLibrary for IPoolManager;
     using SafeCast for uint256;
@@ -100,6 +101,18 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
     ) Ownable(_initialOwner) ImmutableState(IPoolManager(_poolManager)) {
         if (_poolManager == address(0)) {
             revert Errors.InvalidAddress(_poolManager);
+        }
+        if (_signalManager == address(0)) {
+            revert Errors.InvalidAddress(_signalManager);
+        }
+        if (_oracleHelper == address(0)) {
+            revert Errors.InvalidAddress(_oracleHelper);
+        }
+        if (_liquidityHub == address(0)) {
+            revert Errors.InvalidAddress(_liquidityHub);
+        }
+        if (_settlementObserver == address(0)) {
+            revert Errors.InvalidAddress(_settlementObserver);
         }
         oracleHelper = IOracleHelper(_oracleHelper);
         signalManager = IVRLSignalManager(_signalManager);
@@ -443,6 +456,7 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
     function settlePositionGrowths(PositionId positionId) public {
         // Only check for active valid position - as new positions are not yet registered in VTS when this method is called.
         if (isPositionValid(positionId, true)) {
+            _notPoolPaused(s.positions[positionId].poolId);
             VTSPositionLib.settlePositionGrowths(s, poolManager, positionId);
         }
     }
@@ -552,8 +566,12 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
     /// @dev Verifies the signal via SignalManager and stores it in the VTS state
     /// @param liquiditySignal The liquidity signal to commit
     /// @return commitId The commit identifier for the committed signal
-    function commitSignal(bytes memory liquiditySignal) external onlyIfPoolManagerUnlocked returns (uint256 commitId) {
-        // Verify and commit the signal to state
+    function commitSignal(bytes memory liquiditySignal)
+        external
+        onlyIfPoolManagerUnlocked
+        nonReentrant
+        returns (uint256 commitId)
+    {
         commitId = VTSCommitLib.commitSignal(s, signalManager, liquiditySignal);
     }
 
@@ -572,7 +590,7 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
         uint8 settlementTokenIndex,
         uint32 verifierIndex,
         bytes memory settlementProof
-    ) external onlyIfPoolManagerUnlocked {
+    ) external onlyIfPoolManagerUnlocked nonReentrant {
         _assertSignalValid(commitId, true);
         // Validate position exists
         PositionId positionId = getPositionId(commitId, positionIndex);
@@ -618,6 +636,7 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
     )
         external
         onlyIfPoolManagerUnlocked
+        nonReentrant
         returns (BalanceDelta settlementDelta, bool rfsOpen, uint256 seizedLiquidityUnits)
     {
         _assertSignalValid(commitId, !isSeizing);
@@ -661,7 +680,7 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
     /// @dev Called by MMPositionManager before seizing a position. Reverts if grace period has not elapsed.
     /// @param commitId The commit identifier
     /// @param positionIndex The position index within the commit
-    function onSeize(uint256 commitId, uint256 positionIndex) external view onlyIfPoolManagerUnlocked {
+    function onSeize(uint256 commitId, uint256 positionIndex) external onlyIfPoolManagerUnlocked nonReentrant {
         // Validate commit exists (but don't require live signal - expired signals can be seized)
         _assertSignalValid(commitId, false);
 
@@ -678,7 +697,11 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
     /// @dev Updates the signal for a commit and validates it via SignalManager and OracleHelper
     /// @param commitId The commit identifier to renew
     /// @param liquiditySignal The new liquidity signal
-    function renewSignal(uint256 commitId, bytes memory liquiditySignal) external onlyIfPoolManagerUnlocked {
+    function renewSignal(uint256 commitId, bytes memory liquiditySignal)
+        external
+        onlyIfPoolManagerUnlocked
+        nonReentrant
+    {
         // Validate commit exists (but don't require live signal - expired signals can be seized)
         _assertSignalValid(commitId, false);
         VTSCommitLib.renewSignal(s, signalManager, commitId, liquiditySignal);
@@ -698,7 +721,7 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
         uint256 positionIndex,
         bytes memory liquiditySignal,
         bool withCommitment
-    ) external {
+    ) external nonReentrant {
         // Validate commit exists (but don't require live signal - expired signals can be seized)
         _assertSignalValid(commitId, false);
 
@@ -713,8 +736,7 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
         if (!withCommitment) {
             return;
         }
-
-        VTSCommitLib.checkpoint(
+        VTSCommitLib.checkpointWithCommitment(
             s, poolManager, signalManager, oracleHelper, sender, commitId, positionId, liquiditySignal
         );
     }

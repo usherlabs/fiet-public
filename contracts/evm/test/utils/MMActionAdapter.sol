@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.26;
 
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
@@ -291,8 +291,13 @@ library MMActionAdapter {
     /**
      * @notice Prepares an UNWRAP_NATIVE action
      */
+    function prepareUnwrapNative(uint256 amount, bool payerIsUser) internal pure returns (PreparedAction memory) {
+        return PreparedAction({action: bytes1(uint8(MMActions.UNWRAP_NATIVE)), params: abi.encode(amount, payerIsUser)});
+    }
+
+    /// @dev Backwards-compatible wrapper: defaults to payerIsUser = true.
     function prepareUnwrapNative(uint256 amount) internal pure returns (PreparedAction memory) {
-        return PreparedAction({action: bytes1(uint8(MMActions.UNWRAP_NATIVE)), params: abi.encode(amount)});
+        return prepareUnwrapNative(amount, true);
     }
 
     /**
@@ -311,16 +316,15 @@ library MMActionAdapter {
     /**
      * @notice Prepares a COLLECT_AVAILABLE_LIQUIDITY action to collect queued settlement
      * @param lcc The LCC token address
-     * @param recipient The recipient address for the underlying
      * @param maxAmount The maximum amount to collect (0 for max)
      */
-    function prepareCollectAvailableLiquidity(address lcc, address recipient, uint256 maxAmount)
+    function prepareCollectAvailableLiquidity(address lcc, uint256 maxAmount)
         internal
         pure
         returns (PreparedAction memory)
     {
         return PreparedAction({
-            action: bytes1(uint8(MMActions.COLLECT_AVAILABLE_LIQUIDITY)), params: abi.encode(lcc, recipient, maxAmount)
+            action: bytes1(uint8(MMActions.COLLECT_AVAILABLE_LIQUIDITY)), params: abi.encode(lcc, maxAmount)
         });
     }
 
@@ -421,7 +425,14 @@ library MMActionAdapter {
      */
     function unwrapNative(MMPositionManager mmpm, uint256 amount) internal {
         PreparedAction[] memory prepared = new PreparedAction[](1);
-        prepared[0] = prepareUnwrapNative(amount);
+        prepared[0] = prepareUnwrapNative(amount, true);
+        execute(mmpm, prepared);
+    }
+
+    /// @notice Unwraps WETH to native ETH using delta credit (payerIsUser = false)
+    function unwrapNativeFromDeltas(MMPositionManager mmpm, uint256 amount) internal {
+        PreparedAction[] memory prepared = new PreparedAction[](1);
+        prepared[0] = prepareUnwrapNative(amount, false);
         execute(mmpm, prepared);
     }
 

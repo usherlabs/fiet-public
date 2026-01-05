@@ -130,6 +130,84 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
     // Liquidity Flow/Modification Handlers
     // ------------------------------------------------------------------------------------------------
 
+    function _settleNegativeDeltas(PoolKey memory key, address self, int128 delta0, int128 delta1) internal {
+        // Settle negative deltas: pay tokens owed to PoolManager (LP is depositing)
+        if (delta0 < 0) {
+            key.currency0.settle(poolManager, self, LiquidityUtils.safeInt128ToUint256(delta0), false);
+        }
+        if (delta1 < 0) {
+            key.currency1.settle(poolManager, self, LiquidityUtils.safeInt128ToUint256(delta1), false);
+        }
+    }
+
+    function _handleLccBalanceIncrease(
+        PoolKey memory key,
+        Currency currency,
+        uint256 balanceBefore,
+        uint256 balanceAfter,
+        int128 feesAccruedAmount,
+        address locker
+    ) internal {
+        // Sync LCC fee balance ONLY increases as credit to locker
+        // After taking from PoolManager, MMPM now holds LCC as ERC20 - sync as takeable credit to locker
+        // However, MMPM can hold LCCs queued after _decrease, therefore we extract feesAccrued from the balance change
+        _syncBalanceAsCredit(currency);
+
+        // IMPORTANT: PoolManager returns `callerDelta` already net of the hook delta.
+        // For our CoreHook, that hook delta is `feeAdj`, and the raw pool fee delta returned as `feesAccrued`
+        // must be netted by `feeAdj` to get the caller's *actual* fee take for this call.
+        //
+        // So: netFee = max(feesAccrued - feeAdj, 0)
+        uint256 inc = balanceAfter - balanceBefore;
+        int256 hookDelta = poolManager.currencyDelta(address(key.hooks), currency);
+        int256 netFeei = int256(feesAccruedAmount) - hookDelta;
+        uint256 fee = netFeei > 0 ? uint256(netFeei) : 0;
+        uint256 nonFee = inc > fee ? (inc - fee) : 0;
+        if (nonFee > 0) vtsOrchestrator.take(currency, locker, nonFee);
+    }
+
+    function _takePositiveDeltasAndHandleLcc(
+        PoolKey memory key,
+        address self,
+        int128 delta0,
+        int128 delta1,
+        BalanceDelta feesAccrued,
+        address locker
+    ) internal {
+        // Take positive deltas: receive tokens owed from PoolManager (LP is withdrawing)
+        // Anything planned for cancel via VTSPositionLib will cancel here (on PM -> MMPM transfer)
+        if (delta0 > 0) {
+            uint256 balance0Before = key.currency0.balanceOfSelf();
+            key.currency0.take(poolManager, self, LiquidityUtils.safeInt128ToUint256(delta0), false);
+            uint256 balance0After = key.currency0.balanceOfSelf();
+
+            if (_isLCC(key.currency0)) {
+                _handleLccBalanceIncrease(
+                    key, key.currency0, balance0Before, balance0After, feesAccrued.amount0(), locker
+                );
+            }
+        }
+        if (delta1 > 0) {
+            uint256 balance1Before = key.currency1.balanceOfSelf();
+            key.currency1.take(poolManager, self, LiquidityUtils.safeInt128ToUint256(delta1), false);
+            uint256 balance1After = key.currency1.balanceOfSelf();
+
+            if (_isLCC(key.currency1)) {
+                _handleLccBalanceIncrease(
+                    key, key.currency1, balance1Before, balance1After, feesAccrued.amount1(), locker
+                );
+            }
+        }
+    }
+
+    function _afterModifyLiquidity(PoolKey memory key) internal {
+        // Settle CoreHook's PoolManager deltas (hook delta applied after hook returned)
+        // This ensures feeAdj-based claims are minted/burned to/from the fee pot held by CoreHook
+        // Must be called within PoolManager.unlockCallback, but outside of modifyLiquidity hook
+        IMarketFactory factory = liquidityHub.getFactory(Currency.unwrap(key.currency0), Currency.unwrap(key.currency1));
+        factory.afterModifyLiquidity(key);
+    }
+
     /// @notice Modifies liquidity in a Uniswap V4 pool and immediately settles the deltas
     /// @dev This function:
     ///      1. Reads liquidity state before modification
@@ -156,7 +234,7 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
             poolManager.getPositionInfo(key.toId(), self, params.tickLower, params.tickUpper, params.salt);
 
         // PoolManager returns two deltas:
-        // - callerDelta: principal liquidity change plus any immediate fee/hook deltas applied to the caller
+        // - callerDelta: token0/token1 change plus any immediate fee/hook deltas applied to the caller - ie. if _increase with liq=0, then delta > 0 where fees > 0
         // - feesAccrued: informational delta of fee growth in the modified range for this call
         // This call triggers CoreHook -> VTSOrchestrator.processPosition which handles all delta management
         (callerDelta, feesAccrued) = poolManager.modifyLiquidity(key, params, hookData);
@@ -176,36 +254,13 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
         int128 delta0 = callerDelta.amount0();
         int128 delta1 = callerDelta.amount1();
 
-        // Settle negative deltas: pay tokens owed to PoolManager (LP is depositing)
-        if (delta0 < 0) {
-            key.currency0.settle(poolManager, self, LiquidityUtils.safeInt128ToUint256(delta0), false);
-        }
-        if (delta1 < 0) {
-            key.currency1.settle(poolManager, self, LiquidityUtils.safeInt128ToUint256(delta1), false);
+        _settleNegativeDeltas(key, self, delta0, delta1);
+
+        if (delta0 > 0 || delta1 > 0) {
+            _takePositiveDeltasAndHandleLcc(key, self, delta0, delta1, feesAccrued, msgSender());
         }
 
-        // Take positive deltas: receive tokens owed from PoolManager (LP is withdrawing)
-        if (delta0 > 0) {
-            key.currency0.take(poolManager, self, LiquidityUtils.safeInt128ToUint256(delta0), false);
-        }
-        if (delta1 > 0) {
-            key.currency1.take(poolManager, self, LiquidityUtils.safeInt128ToUint256(delta1), false);
-        }
-
-        // Sync LCC fee balance increases as credit to locker
-        // After taking from PoolManager, MMPM now holds LCC as ERC20 - sync as takeable credit to locker
-        if (delta0 > 0 && _isLCC(key.currency0)) {
-            _syncBalanceAsCredit(key.currency0);
-        }
-        if (delta1 > 0 && _isLCC(key.currency1)) {
-            _syncBalanceAsCredit(key.currency1);
-        }
-
-        // Settle CoreHook's PoolManager deltas (hook delta applied after hook returned)
-        // This ensures feeAdj-based claims are minted/burned to/from the fee pot held by CoreHook
-        // Must be called within PoolManager.unlockCallback, but outside of modifyLiquidity hook
-        IMarketFactory factory = liquidityHub.getFactory(Currency.unwrap(key.currency0), Currency.unwrap(key.currency1));
-        factory.afterModifyLiquidity(key);
+        _afterModifyLiquidity(key);
     }
 }
 

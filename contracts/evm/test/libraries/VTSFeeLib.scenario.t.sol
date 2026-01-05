@@ -1,10 +1,10 @@
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.26;
 
-import {VTSOrchestratorFixture} from "../modules/VTSOrchestratorFixture.sol";
+import {VTSOrchestratorFixture} from "../base/VTSOrchestratorFixture.sol";
 
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
-import {VTSOrchestratorTestable} from "../modules/VTSOrchestratorTestable.sol";
+import {VTSOrchestratorTestable} from "../base/VTSOrchestratorTestable.sol";
 import {Currency, CurrencyLibrary} from "@uniswap/v4-core/src/types/Currency.sol";
 import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
@@ -14,7 +14,7 @@ import {PositionId, PositionLibrary} from "../../src/types/Position.sol";
 import {IMarketVault} from "../../src/interfaces/IMarketVault.sol";
 import {VTSOrchestrator} from "../../src/VTSOrchestrator.sol";
 import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
-import {MMActionAdapter as MMA} from "../libraries/MMActionAdapter.sol";
+import {MMActionAdapter as MMA} from "../utils/MMActionAdapter.sol";
 import {LiquiditySignal} from "../../src/types/Commit.sol";
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";

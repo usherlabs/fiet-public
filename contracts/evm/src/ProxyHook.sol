@@ -284,7 +284,7 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
     }
 
     /// @dev Calculates the adjusted sqrt price limit for the core pool when direction is flipped
-    function _calcCoreSqrtPriceLimit(uint160 sqrtPriceLimitX96, bool flipped) private pure returns (uint160) {
+    function _calcCoreSqrtPriceLimit(uint160 sqrtPriceLimitX96, bool flipped) internal pure returns (uint160) {
         if (!flipped) return sqrtPriceLimitX96;
 
         if (sqrtPriceLimitX96 == TickMath.MIN_SQRT_PRICE + 1) {
@@ -492,7 +492,14 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         }
 
         (uint160 sqrtP,, uint24 protocolFee, uint24 lpFee) = StateLibrary.getSlot0(poolManager, coreKey.toId());
-        uint24 swapFee = protocolFee == 0 ? lpFee : ProtocolFeeLibrary.calculateSwapFee(uint16(protocolFee), lpFee);
+
+        // `protocolFee` is a packed uint24 containing direction-specific 12-bit fees.
+        // We must use the correct direction when computing swapFee.
+        uint16 protocolFeeDir = zeroForOne
+            ? ProtocolFeeLibrary.getZeroForOneFee(protocolFee)
+            : ProtocolFeeLibrary.getOneForZeroFee(protocolFee);
+
+        uint24 swapFee = protocolFeeDir == 0 ? lpFee : ProtocolFeeLibrary.calculateSwapFee(protocolFeeDir, lpFee);
         uint256 feeDenom = ProtocolFeeLibrary.PIPS_DENOMINATOR;
         uint256 oneMinusFee = feeDenom - swapFee;
         uint256 absIn = uint256(-amountSpecified);

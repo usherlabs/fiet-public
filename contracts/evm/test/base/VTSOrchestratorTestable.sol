@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.26;
 
 import {VTSOrchestrator} from "../../src/VTSOrchestrator.sol";
@@ -52,6 +52,14 @@ contract VTSOrchestratorTestable is VTSOrchestrator {
             pa.commitmentMax.token0,
             pa.commitmentMax.token1
         );
+    }
+
+    /// @notice TEST-ONLY: override commitment maxima to force edge-cases in isPositionValid
+    /// @dev This is intentionally unsafe and should only be used in tests.
+    function _setCommitmentMax(PositionId positionId, uint256 commitmentMax0, uint256 commitmentMax1) external {
+        PositionAccounting storage pa = s.positionAccounting[positionId];
+        pa.commitmentMax.token0 = commitmentMax0;
+        pa.commitmentMax.token1 = commitmentMax1;
     }
 
     /// @notice Get pool DICE (Deficit-Indexed Coverage Exercise) accounting for debugging

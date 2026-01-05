@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.26;
 
 import {MarketTestBase} from "./MarketTestBase.sol";
@@ -23,7 +23,7 @@ import {IMarketFactory} from "../../src/interfaces/IMarketFactory.sol";
 import {IOracleHelper} from "../../src/interfaces/IOracleHelper.sol";
 import {ImmutableState} from "v4-periphery/src/base/ImmutableState.sol";
 import {MockERC20} from "../_mocks/MockERC20.sol";
-import {MMActionAdapter as MMA} from "../libraries/MMActionAdapter.sol";
+import {MMActionAdapter as MMA} from "../utils/MMActionAdapter.sol";
 import {PoolSwapTest} from "@uniswap/v4-core/src/test/PoolSwapTest.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
@@ -45,7 +45,12 @@ contract UnlockCaller is IUnlockCallback, ImmutableState {
         }
         (address _target, bytes memory _callData) = abi.decode(data, (address, bytes));
         (bool success, bytes memory result) = _target.call(_callData);
-        require(success, "Call failed");
+        if (!success) {
+            // Bubble the original revert reason/data so tests can assert on selectors/args.
+            assembly ("memory-safe") {
+                revert(add(result, 0x20), mload(result))
+            }
+        }
         return result;
     }
 

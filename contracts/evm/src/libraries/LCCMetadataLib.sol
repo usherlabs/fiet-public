@@ -70,7 +70,7 @@ library LCCMetadataLib {
         returns (string memory)
     {
         return string.concat(
-            "Fiet Liquidity Commitment Certificate for", assetName, " in ", marketName, " (", symbolMarketId, ")"
+            "Fiet Liquidity Commitment Certificate for ", assetName, " in ", marketName, " (", symbolMarketId, ")"
         );
     }
 

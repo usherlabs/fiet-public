@@ -8,7 +8,6 @@ import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint12
 import {PoolAccounting} from "../types/VTS.sol";
 import {LiquidityUtils} from "./LiquidityUtils.sol";
 import {Errors} from "../libraries/Errors.sol";
-import {IVRLSignalManager} from "../interfaces/IVRLSignalManager.sol";
 import {LiquiditySignal} from "../types/Commit.sol";
 import {IOracleHelper} from "../interfaces/IOracleHelper.sol";
 import {OracleUtils} from "./OracleUtils.sol";
@@ -20,6 +19,7 @@ import {PoolId} from "../types/VTS.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
 import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
+import {IVRLSignalManager} from "../interfaces/IVRLSignalManager.sol";
 
 /// @title VTSCommitLib
 /// @notice Commit and commitment deficit management helpers for VTS, operating on VTSStorage
@@ -169,16 +169,10 @@ library VTSCommitLib {
         }
     }
 
-    /// @notice Commits a liquidity signal to the VTS state
-    /// @param s The central VTS storage
-    /// @param signalManager The signal manager address
-    /// @param liquiditySignal The liquidity signal to commit
-    /// @return commitId The commit id of the committed signal
-    function commitSignal(
-        VTSStorage storage s,
-        IVRLSignalManager signalManager, // Pass as parameter
-        bytes memory liquiditySignal
-    )
+    /// @notice Commits a liquidity signal to the VTS state (linked-library entry)
+    /// @dev Intentionally keeps all commitment logic in the linked library to reduce VTSOrchestrator bytecode size.
+    //#olympix-ignore-reentrancy
+    function commitSignal(VTSStorage storage s, IVRLSignalManager signalManager, bytes memory liquiditySignal)
         external
         returns (uint256 commitId)
     {
@@ -200,12 +194,8 @@ library VTSCommitLib {
         s.commits[commitId].expiresAt = block.timestamp + expirySeconds;
     }
 
-    /// @notice Renews a liquidity signal for a commit
-    /// @dev Uses O(1) operations - no position iteration required
-    /// @param s The central VTS storage
-    /// @param signalManager The signal manager for verification
-    /// @param commitId The commit ID
-    /// @param liquiditySignal The new liquidity signal
+    /// @notice Renews a liquidity signal for a commit (linked-library entry)
+    //#olympix-ignore-reentrancy
     function renewSignal(
         VTSStorage storage s,
         IVRLSignalManager signalManager,
@@ -226,48 +216,10 @@ library VTSCommitLib {
         commit.expiresAt = block.timestamp + expirySeconds;
     }
 
-    /// @notice Calculates the USD value of the MarketMaker signal reserves for a commit
-    /// @param s The central VTS storage
-    /// @param oracleHelper The oracle helper for USD price calculations
-    /// @param commitId The commit NFT id
-    /// @return totalUsdValue Total USD value of signal reserves
-    function _signalValueForCommit(VTSStorage storage s, IOracleHelper oracleHelper, uint256 commitId)
-        internal
-        view
-        returns (uint256 totalUsdValue)
-    {
-        Commit storage commit = s.commits[commitId];
-        MarketMaker.State memory mmState = commit.mmState;
-
-        // Get reserves from MarketMaker.State
-        return _signalValue(mmState, oracleHelper);
-    }
-
-    /// @notice Calculates the USD value of the MarketMaker signal reserves
-    /// @param mmState The MarketMaker state
-    /// @param oracleHelper The oracle helper for USD price calculations
-    /// @return totalValue Total USD value of signal reserves
-    function _signalValue(MarketMaker.State memory mmState, IOracleHelper oracleHelper)
-        internal
-        view
-        returns (uint256 totalValue)
-    {
-        (string[] memory tickers, uint256[] memory amounts) = MarketMaker.getReserves(mmState);
-        // Despite getTotalValue iterating over tickers, Fiet Provers are responsible for filtering out unsupported tickers/currencies and dust amounts.
-        // Therefore, the signal should always include valid tickers, with max 50 - 100 iterations.
-        totalValue = oracleHelper.getTotalValue(tickers, amounts);
-    }
-
-    /// @notice Checkpoint a position and update position-level deficits based on backing
-    /// @param s The central VTS storage
-    /// @param poolManager The pool manager (for price/slot0)
-    /// @param signalManager The signal manager for verification
-    /// @param oracleHelper The oracle helper for USD calculations
-    /// @param sender The sender (must match advancer on the liquidity signal when withCommitment is true)
-    /// @param commitId The commit ID
-    /// @param positionId The position ID
-    /// @param liquiditySignal The liquidity signal proving the current MarketMaker state
-    function checkpoint(
+    /// @notice Checkpoint with commitment backing checks (single linked-library call)
+    /// @dev Verifies signal, updates commit state/expiry, and sets position commitment deficit.
+    //#olympix-ignore-reentrancy
+    function checkpointWithCommitment(
         VTSStorage storage s,
         IPoolManager poolManager,
         IVRLSignalManager signalManager,
@@ -385,5 +337,37 @@ library VTSCommitLib {
             pa.commitmentDeficit.token0 = FullMath.mulDiv(ctx.eff0, deficitBps, LiquidityUtils.BPS_DENOMINATOR);
             pa.commitmentDeficit.token1 = FullMath.mulDiv(ctx.eff1, deficitBps, LiquidityUtils.BPS_DENOMINATOR);
         }
+    }
+
+    /// @notice Calculates the USD value of the MarketMaker signal reserves for a commit
+    /// @param s The central VTS storage
+    /// @param oracleHelper The oracle helper for USD price calculations
+    /// @param commitId The commit NFT id
+    /// @return totalUsdValue Total USD value of signal reserves
+    function _signalValueForCommit(VTSStorage storage s, IOracleHelper oracleHelper, uint256 commitId)
+        internal
+        view
+        returns (uint256 totalUsdValue)
+    {
+        Commit storage commit = s.commits[commitId];
+        MarketMaker.State memory mmState = commit.mmState;
+
+        // Get reserves from MarketMaker.State
+        return _signalValue(mmState, oracleHelper);
+    }
+
+    /// @notice Calculates the USD value of the MarketMaker signal reserves
+    /// @param mmState The MarketMaker state
+    /// @param oracleHelper The oracle helper for USD price calculations
+    /// @return totalValue Total USD value of signal reserves
+    function _signalValue(MarketMaker.State memory mmState, IOracleHelper oracleHelper)
+        internal
+        view
+        returns (uint256 totalValue)
+    {
+        (string[] memory tickers, uint256[] memory amounts) = MarketMaker.getReserves(mmState);
+        // Despite getTotalValue iterating over tickers, Fiet Provers are responsible for filtering out unsupported tickers/currencies and dust amounts.
+        // Therefore, the signal should always include valid tickers, with max 50 - 100 iterations.
+        totalValue = oracleHelper.getTotalValue(tickers, amounts);
     }
 }

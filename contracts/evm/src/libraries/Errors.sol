@@ -54,9 +54,6 @@ library Errors {
     /// @notice Thrown when an invalid delta is provided
     error InvalidDelta(int128 amount0, int128 amount1);
 
-    /// @notice Thrown when an invalid proxy hook flags configuration is provided
-    error InvalidProxyHookFlags();
-
     /// @notice Thrown when an invalid liquidity signal is provided
     /// @param issuedValue Total issued LCC value
     /// @param signalValue Signal value from MarketMaker reserves

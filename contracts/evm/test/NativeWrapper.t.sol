@@ -1,9 +1,9 @@
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.26;
 
 import "forge-std/Test.sol";
 
-import {NativeWrapper} from "../src/modules/NativeWrapper.sol";
+import {FietNativeWrapper} from "../src/modules/NativeWrapper.sol";
 import {NativeWrapper as ForksNativeWrapper} from "../src/forks/NativeWrapper.sol";
 import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
@@ -101,8 +101,8 @@ contract ForksNativeWrapperHarness is ForksNativeWrapper {
 
 /// @notice Test harness to expose internal functions from modules/NativeWrapper.sol
 /// @dev This harness tests the EXTENDED NativeWrapper from modules/ directory
-contract ModulesNativeWrapperHarness is NativeWrapper {
-    constructor(IWETH9 _weth9, IPoolManager _poolManager) NativeWrapper(_weth9) ImmutableState(_poolManager) {}
+contract ModulesNativeWrapperHarness is FietNativeWrapper {
+    constructor(IWETH9 _weth9, IPoolManager _poolManager) FietNativeWrapper(_weth9) ImmutableState(_poolManager) {}
 
     /// @notice Expose internal _wrap function for testing
     function wrap(uint256 amount) external {

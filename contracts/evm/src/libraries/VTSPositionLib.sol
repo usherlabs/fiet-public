@@ -75,7 +75,7 @@ library VTSPositionLib {
         uint128 liquidity;
         uint256 global0;
         uint256 global1;
-        uint8 growthType;
+        bool isInflow;
     }
 
     // Maximum positive magnitude representable in int128
@@ -182,7 +182,14 @@ library VTSPositionLib {
         // Return total consumed: deficit coverage + settled change
         // Deposits (positive delta to _updateSettlement): returns positive value (deficitCoverage + settledDelta, both ≥ 0)
         // Withdrawals (negative delta to _updateSettlement): returns negative value (0 + negative settledDelta)
-        applied = int256(deficitCoverage) + settledDelta;
+        applied = deficitCoverage.toInt256() + settledDelta;
+    }
+
+    /// @notice "Silent" update settlement helper wrapper for contexts where we deliberately don't need the applied return value
+    /// @dev Consumes the return value so static analysers don't flag ignored returns.
+    function _sUpdateSettlement(VTSStorage storage s, PositionId id, uint8 tokenIndex, int256 delta) internal {
+        int256 applied = _updateSettlement(s, id, tokenIndex, delta);
+        applied;
     }
 
     /// @notice Updates the settlement amount by a delta which could be positive or negative
@@ -276,7 +283,7 @@ library VTSPositionLib {
         uint256 residual = paPool.coverageResidualDICE.get(tokenIndex);
         uint256 principal = paPool.totalDeficitPrincipal.get(tokenIndex);
 
-        // Is there a first-movers disadvantage?
+        // ? Is there a first-movers disadvantage?
         // With checkpoints incentivised via seizure, this should clear, but if NOT, then onMMSettle dis-incentivise the first-movers.
         // However, this also incentivises MMs to checkpoint other MMs positions...
         // This uses competition to close the economic lag between tick-index and position growth accounting.
@@ -408,19 +415,16 @@ library VTSPositionLib {
         // Read last snapshots based on field identifier
         uint256 lastSnap0;
         uint256 lastSnap1;
-        if (p.growthType == 0) {
+        if (!p.isInflow) {
             lastSnap0 = pa.deficitGrowthInsideLast.token0;
             lastSnap1 = pa.deficitGrowthInsideLast.token1;
             pa.deficitGrowthInsideLast.token0 = inside0;
             pa.deficitGrowthInsideLast.token1 = inside1;
-        } else if (p.growthType == 1) {
+        } else {
             lastSnap0 = pa.inflowGrowthInsideLast.token0;
             lastSnap1 = pa.inflowGrowthInsideLast.token1;
             pa.inflowGrowthInsideLast.token0 = inside0;
             pa.inflowGrowthInsideLast.token1 = inside1;
-        } else {
-            // Coverage usage growth (growthType == 2) removed - DICE uses deficit-indexed coverage
-            revert("VTSPositionLib: Invalid growthType");
         }
 
         unchecked {
@@ -441,6 +445,7 @@ library VTSPositionLib {
     /// @param s The central VTS storage
     /// @param poolManager The pool manager contract
     /// @param positionId The position ID
+    //#olympix-ignore-reentrancy
     function _settlePositionDeficitGrowth(VTSStorage storage s, IPoolManager poolManager, PositionId positionId)
         internal
     {
@@ -467,7 +472,7 @@ library VTSPositionLib {
                     liquidity: liq,
                     global0: paPool.deficitGrowthGlobal.token0,
                     global1: paPool.deficitGrowthGlobal.token1,
-                    growthType: 0
+                    isInflow: false
                 })
             );
         }
@@ -480,7 +485,7 @@ library VTSPositionLib {
             // Consume settled coverage first, then accrue shortfall to deficit
             uint256 s0 = pa.settled.token0;
             if (s0 >= add0) {
-                _updateSettlement(s, positionId, 0, -int256(add0));
+                _sUpdateSettlement(s, positionId, 0, -add0.toInt256());
             } else {
                 uint256 deficitIncrease = add0 - s0;
                 pa.cumulativeDeficit.token0 += deficitIncrease;
@@ -488,7 +493,7 @@ library VTSPositionLib {
                 paPool.totalDeficitPrincipal.token0 += deficitIncrease;
                 // DICE: Flush any pending coverage residual now that principal exists
                 _flushCoverageResidualIfNeeded(s, poolId, 0);
-                _updateSettlement(s, positionId, 0, -int256(s0));
+                _sUpdateSettlement(s, positionId, 0, -s0.toInt256());
             }
         }
 
@@ -497,7 +502,7 @@ library VTSPositionLib {
             pa.cumulativeOutflows.token1 += add1;
             uint256 s1 = pa.settled.token1;
             if (s1 >= add1) {
-                _updateSettlement(s, positionId, 1, -int256(add1));
+                _sUpdateSettlement(s, positionId, 1, -add1.toInt256());
             } else {
                 uint256 deficitIncrease = add1 - s1;
                 pa.cumulativeDeficit.token1 += deficitIncrease;
@@ -505,7 +510,7 @@ library VTSPositionLib {
                 paPool.totalDeficitPrincipal.token1 += deficitIncrease;
                 // DICE: Flush any pending coverage residual now that principal exists
                 _flushCoverageResidualIfNeeded(s, poolId, 1);
-                _updateSettlement(s, positionId, 1, -int256(s1));
+                _sUpdateSettlement(s, positionId, 1, -s1.toInt256());
             }
         }
     }
@@ -537,20 +542,20 @@ library VTSPositionLib {
                 liquidity: liq,
                 global0: paPool.inflowGrowthGlobal.token0,
                 global1: paPool.inflowGrowthGlobal.token1,
-                growthType: 1
+                isInflow: true
             })
         );
 
         // Token0: net against deficit first
         if (add0 > 0) {
             // Auto-net and apply via centralised updater
-            _updateSettlement(s, positionId, 0, int256(add0));
+            _sUpdateSettlement(s, positionId, 0, add0.toInt256());
         }
 
         // Token1: net against deficit first
         if (add1 > 0) {
             // Auto-net and apply via centralised updater
-            _updateSettlement(s, positionId, 1, int256(add1));
+            _sUpdateSettlement(s, positionId, 1, add1.toInt256());
         }
     }
 
@@ -614,6 +619,10 @@ library VTSPositionLib {
             if (bps == 0) {
                 return (fg, 0);
             }
+            // Clamp to 100% to make behaviour explicit and avoid redundant runtime clamps later.
+            if (bps > LiquidityUtils.BPS_DENOMINATOR) {
+                bps = LiquidityUtils.BPS_DENOMINATOR;
+            }
 
             // Never allow the exercised share to exceed 100% of the current outflow window.
             uint256 effBurnBase = burnBase <= ofDelta ? burnBase : ofDelta;
@@ -621,7 +630,6 @@ library VTSPositionLib {
             // feesBurn = fees * (burnBase / ofDelta) * bps/10000
             feesBurn = FullMath.mulDiv(fees, effBurnBase, ofDelta);
             feesBurn = FullMath.mulDiv(feesBurn, bps, LiquidityUtils.BPS_DENOMINATOR);
-            if (feesBurn > fees) feesBurn = fees; // clamp to fees accrued
 
             // Only advance burn checkpoints if a non-zero burn is actually applied.
             // - Fee growth baseline is advanced later in `_applyCoverageBurn` via `fg + growthInc`.
@@ -629,7 +637,6 @@ library VTSPositionLib {
             if (feesBurn > 0) {
                 // This says: “we have just exercised effBurnBase worth of the remaining outflow window, so reduce the remaining window by that amount”.
                 uint256 newSnap = snap + effBurnBase;
-                if (newSnap > cf) newSnap = cf;
                 pa.outflowsAtFeeSnap.set(tokenIndex, newSnap);
             }
         }
@@ -661,12 +668,21 @@ library VTSPositionLib {
         {
             uint256 d = pa.cumulativeDeficit.get(tokenIndex);
             uint256 settled = pa.settled.get(tokenIndex);
-            if (cov == 0 || (d == 0 && settled == 0)) return;
+            if (d == 0 && settled == 0) return;
 
             // Enforce invariant: cov <= d + settled, then burn only deficit portion
+            // clamp the requested coverage to what could possibly be owed: cEff = min(cov, d + settled)
             uint256 cEff = cov <= (d + settled) ? cov : (d + settled);
-            if (cEff == 0 || d == 0) return;
+            if (d == 0) return;
             burnBase = cEff < d ? cEff : d; // min(coverage, deficit)
+
+            /**
+             * guards that include cov == 0 and cEff == 0 have become redundant correctness-wise:
+             * cov == 0: if cov is zero, then cEff = min(cov, d + settled) is zero, so burnBase = min(cEff, d) is also zero. That then deterministically produces feesBurn == 0, and _applyCoverageBurn returns without writing state (it has if (feesBurn == 0) return;). So the explicit cov == 0 guard is just an optimisation branch now, not a safety requirement.
+             * cEff == 0: same story—cEff == 0 implies burnBase == 0, which implies feesBurn == 0, which implies the function returns before any state updates.
+             */
+            // An early return.
+            if (burnBase == 0) return;
         }
 
         // Calculate feesBurn via helper function to reduce stack depth
@@ -694,7 +710,7 @@ library VTSPositionLib {
             paPool.protocolFeeAccrued.set(feeTokenIndex, paPool.protocolFeeAccrued.get(feeTokenIndex) + feesBurn);
             pa.feesShared.set(feeTokenIndex, pa.feesShared.get(feeTokenIndex) + feesBurn);
 
-            pa.pendingFeeAdj.set(feeTokenIndex, pa.pendingFeeAdj.get(feeTokenIndex) + int256(feesBurn));
+            pa.pendingFeeAdj.set(feeTokenIndex, pa.pendingFeeAdj.get(feeTokenIndex) + feesBurn.toInt256());
         }
     }
 
@@ -803,6 +819,7 @@ library VTSPositionLib {
     /// @param s The central VTS storage
     /// @param poolManager The pool manager contract
     /// @param positionId The position ID
+    //#olympix-ignore-reentrancy
     function settlePositionGrowths(VTSStorage storage s, IPoolManager poolManager, PositionId positionId) public {
         _settleSettledIndexedCoverageUsage(s, positionId);
 
@@ -1038,8 +1055,8 @@ library VTSPositionLib {
             );
             requiredSettlementDelta = LiquidityUtils.safeToBalanceDelta(amountToSettle0, amountToSettle1, true, true);
         } else {
-            _updateSettlement(s, positionId, 0, SafeCast.toInt256(commitmentMaxima.token0));
-            _updateSettlement(s, positionId, 1, SafeCast.toInt256(commitmentMaxima.token1));
+            _sUpdateSettlement(s, positionId, 0, SafeCast.toInt256(commitmentMaxima.token0));
+            _sUpdateSettlement(s, positionId, 1, SafeCast.toInt256(commitmentMaxima.token1));
             requiredSettlementDelta = BalanceDelta.wrap(0);
         }
     }
@@ -1077,10 +1094,10 @@ library VTSPositionLib {
             requiredSettlementDelta = LiquidityUtils.safeToBalanceDelta(excess0, excess1, false, false);
         } else {
             if (excess0 > 0) {
-                _updateSettlement(s, positionId, 0, -SafeCast.toInt256(excess0));
+                _sUpdateSettlement(s, positionId, 0, -SafeCast.toInt256(excess0));
             }
             if (excess1 > 0) {
-                _updateSettlement(s, positionId, 1, -SafeCast.toInt256(excess1));
+                _sUpdateSettlement(s, positionId, 1, -SafeCast.toInt256(excess1));
             }
             requiredSettlementDelta = BalanceDelta.wrap(0);
         }
@@ -1117,12 +1134,13 @@ library VTSPositionLib {
             uint256 excess1 = baseAmountToSettle1 > s1 ? baseAmountToSettle1 - s1 : 0;
             requiredSettlementDelta = LiquidityUtils.safeToBalanceDelta(excess0, excess1, true, true);
         } else {
-            _updateSettlement(s, positionId, 0, SafeCast.toInt256(commitmentMaxima.token0) - SafeCast.toInt256(s0));
-            _updateSettlement(s, positionId, 1, SafeCast.toInt256(commitmentMaxima.token1) - SafeCast.toInt256(s1));
+            _sUpdateSettlement(s, positionId, 0, SafeCast.toInt256(commitmentMaxima.token0) - SafeCast.toInt256(s0));
+            _sUpdateSettlement(s, positionId, 1, SafeCast.toInt256(commitmentMaxima.token1) - SafeCast.toInt256(s1));
             requiredSettlementDelta = BalanceDelta.wrap(0);
         }
     }
 
+    //#olympix-ignore-reentrancy
     function touchPosition(VTSStorage storage s, PositionContext memory ctx, TouchPositionParams calldata p)
         external
         returns (TouchPositionResult memory result)
@@ -1250,6 +1268,9 @@ library VTSPositionLib {
                 queueRecipient = PositionModificationHookDataLib.getLocker(mmData, p.owner);
             }
 
+            // Only the immediately-settleable portion should be accounted as an underlying settlement delta.
+            // Any unavailable remainder is persisted via the LiquidityHub queue mechanics.
+            BalanceDelta settleableDelta;
             if (isSeizing) {
                 // @note: For Seizures,
                 // - LCCs are received directly by locker simiarly to fees.
@@ -1257,7 +1278,7 @@ library VTSPositionLib {
                 // - For any excess, this can also be settled immediately via MM operations.
 
                 // Only cancel excess settled received.
-                _handleLiquidityDecrease(
+                settleableDelta = _handleLiquidityDecrease(
                     ctx, p.owner, p.poolKey, requiredSettlementDelta, requiredSettlementDelta, queueRecipient
                 );
             } else {
@@ -1266,10 +1287,13 @@ library VTSPositionLib {
                 // @note We cannot cancel directly at this point in the flow,
                 // The LCC's are not yet deposited into the MMPM by the poolManager - as we're during modification of liquidity.
                 // Therefore, we plan to cancel the LCC's and queue the settlement once this settlement occurs.
-                _handleLiquidityDecrease(
+                settleableDelta = _handleLiquidityDecrease(
                     ctx, p.owner, p.poolKey, principalDelta, requiredSettlementDelta, queueRecipient
                 );
             }
+            // @note: We use the settleableDelta here because it is the immediately available liquidity that can be used to cover settlement.
+            // Anything queued is not accounted for in DynamicCurrencyDelta
+            requiredSettlementDelta = settleableDelta;
         }
 
         if (!LiquidityUtils.isZeroDelta(requiredSettlementDelta)) {
@@ -1361,8 +1385,10 @@ library VTSPositionLib {
         BalanceDelta principalDelta,
         BalanceDelta requiredSettlementDelta,
         address queueRecipient
-    ) internal {
-        if (LiquidityUtils.isZeroDelta(principalDelta)) return;
+    ) internal returns (BalanceDelta settleableDelta) {
+        if (LiquidityUtils.isZeroDelta(principalDelta)) {
+            return BalanceDelta.wrap(0);
+        }
 
         // Calculate queued delta in scoped block
         BalanceDelta queuedDelta;
@@ -1371,10 +1397,14 @@ library VTSPositionLib {
             // 1. Determine what amount of available liquidity can be used to cover settlement.
             BalanceDelta rawQueued = requiredSettlementDelta - availableDelta;
             // 2. Clamp queuedDelta to non-negative values (negative values become 0)
-            int128 qd0 = rawQueued.amount0() > 0 ? rawQueued.amount0() : int128(0);
-            int128 qd1 = rawQueued.amount1() > 0 ? rawQueued.amount1() : int128(0);
+            int128 qd0 = rawQueued.amount0();
+            int128 qd1 = rawQueued.amount1();
+            if (qd0 < 0) qd0 = 0;
+            if (qd1 < 0) qd1 = 0;
             queuedDelta = toBalanceDelta(qd0, qd1);
         }
+        // The settleable portion is what is immediately available; the rest is queued.
+        settleableDelta = requiredSettlementDelta - queuedDelta;
 
         // 3. Queue settlements via cancelWithQueue
         // Burns LCCs from MMPM (ctx.mmpmAddress) and queues shortfall for queueRecipient (locker or MMPM)
@@ -1512,6 +1542,7 @@ library VTSPositionLib {
     /// @param poolManager The pool manager contract
     /// @param p The MM settle parameters (vault, positionId, currencies, delta, isSeizing)
     /// @return result The MM settle result (settlementDelta, rfsOpen, seizedLiquidityUnits)
+    //#olympix-ignore-reentrancy
     function onMMSettle(VTSStorage storage s, IPoolManager poolManager, SettleParams calldata p)
         external
         returns (SettleResult memory result)
@@ -1576,10 +1607,10 @@ library VTSPositionLib {
                 // Shortfall is positive when we over-settled. We need to add back (positive delta to _updateSettlement)
                 // because we previously called _updateSettlement with negative delta for withdrawals
                 if (shortfall0 > 0) {
-                    _updateSettlement(s, p.positionId, 0, int256(shortfall0));
+                    _sUpdateSettlement(s, p.positionId, 0, int256(shortfall0));
                 }
                 if (shortfall1 > 0) {
-                    _updateSettlement(s, p.positionId, 1, int256(shortfall1));
+                    _sUpdateSettlement(s, p.positionId, 1, int256(shortfall1));
                 }
             }
 

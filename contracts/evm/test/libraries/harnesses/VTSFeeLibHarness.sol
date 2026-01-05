@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.26;
 
 import {VTSStorage, MarketVTSConfiguration} from "../../../src/types/VTS.sol";
@@ -40,8 +40,42 @@ contract VTSFeeLibHarness {
     }
 
     /// @notice Exposes processPositionFees via the linked library (accounting only, no PoolManager interaction)
-    function processPositionFees(PositionId positionId) external returns (BalanceDelta adj) {
+    function afterTouchPosition(PositionId positionId) external returns (BalanceDelta adj) {
         return VTSFeeLinkedLib.afterTouchPosition(s, positionId);
+    }
+
+    // ============ Internal Helper Exposers (for branch coverage) ============
+
+    /// @notice Exposes VTSFeeLib._syncFeesSharedRemainingForToken
+    function syncFeesSharedRemainingForToken(PositionId positionId, PoolId poolId, uint8 tokenIndex) external {
+        VTSFeeLib._syncFeesSharedRemainingForToken(
+            s.positionAccounting[positionId], s.poolAccounting[poolId], tokenIndex
+        );
+    }
+
+    /// @notice Exposes VTSFeeLib._queueBonusForToken
+    function queueBonusForToken(
+        PositionId positionId,
+        PoolId poolId,
+        uint8 feeTokenIndex,
+        uint8 coverageTokenIndex,
+        uint256 ciseExposure
+    ) external returns (bool allocated) {
+        return VTSFeeLib._queueBonusForToken(
+            s.positionAccounting[positionId], s.poolAccounting[poolId], feeTokenIndex, coverageTokenIndex, ciseExposure
+        );
+    }
+
+    /// @notice Exposes VTSFeeLib._cleanupAfterAllocationForToken
+    function cleanupAfterAllocationForToken(
+        PositionId positionId,
+        PoolId poolId,
+        uint8 coverageTokenIndex,
+        uint256 ciseExposure
+    ) external {
+        VTSFeeLib._cleanupAfterAllocationForToken(
+            s.positionAccounting[positionId], s.poolAccounting[poolId], coverageTokenIndex, ciseExposure
+        );
     }
 
     // ============ Storage Getters (for assertions) ============
@@ -73,6 +107,20 @@ contract VTSFeeLibHarness {
         return (
             s.poolAccounting[poolId].totalCISEExposureSinceLastMod.token0,
             s.poolAccounting[poolId].totalCISEExposureSinceLastMod.token1
+        );
+    }
+
+    function getPoolFeesSharedSpendIndexX128(PoolId poolId) external view returns (uint256 index0, uint256 index1) {
+        return (
+            s.poolAccounting[poolId].feesSharedSpendIndexX128.token0,
+            s.poolAccounting[poolId].feesSharedSpendIndexX128.token1
+        );
+    }
+
+    function getPositionFeesSharedIndexLastX128(PositionId id) external view returns (uint256 index0, uint256 index1) {
+        return (
+            s.positionAccounting[id].feesSharedIndexLastX128.token0,
+            s.positionAccounting[id].feesSharedIndexLastX128.token1
         );
     }
 
@@ -139,5 +187,15 @@ contract VTSFeeLibHarness {
     function setPoolTotalCISEExposure(PoolId poolId, uint256 exposure0, uint256 exposure1) external {
         s.poolAccounting[poolId].totalCISEExposureSinceLastMod.token0 = exposure0;
         s.poolAccounting[poolId].totalCISEExposureSinceLastMod.token1 = exposure1;
+    }
+
+    function setPoolFeesSharedSpendIndexX128(PoolId poolId, uint256 index0, uint256 index1) external {
+        s.poolAccounting[poolId].feesSharedSpendIndexX128.token0 = index0;
+        s.poolAccounting[poolId].feesSharedSpendIndexX128.token1 = index1;
+    }
+
+    function setPositionFeesSharedIndexLastX128(PositionId id, uint256 index0, uint256 index1) external {
+        s.positionAccounting[id].feesSharedIndexLastX128.token0 = index0;
+        s.positionAccounting[id].feesSharedIndexLastX128.token1 = index1;
     }
 }
