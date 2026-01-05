@@ -6,30 +6,80 @@ import "forge-std/Test.sol";
 import {VTSOrchestratorFixture} from "./base/VTSOrchestratorFixture.sol";
 import {VTSOrchestrator} from "../src/VTSOrchestrator.sol";
 import {LiquiditySignal} from "../src/types/Commit.sol";
+import {IMarketVault} from "../src/interfaces/IMarketVault.sol";
+import {IOracleHelper} from "../src/interfaces/IOracleHelper.sol";
+import {IVRLSettlementObserver} from "../src/interfaces/IVRLSettlementObserver.sol";
+import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 
 /**
  * @dev Malicious signal-manager implementation used via `vm.etch` onto the deployed `signalManager` address.
  *
- * Reentrancy premise:
- * - `VTSCommitLib.commitSignal` and `VTSCommitLib.renewSignal` both make an external call to:
- *     `signalManager.verifyLiquiditySignal(bytes,bool)`
- * - `VTSCommitLib.checkpointWithCommitment` also makes that external call.
+ * Critical constraint: storing the *entire* reentry calldata blob in storage is extremely gas heavy, since the
+ * liquidity signal bytes are large. Instead we store a small "mode" + a few scalar params and reconstruct the
+ * reentrant call inside `verifyLiquiditySignal(...)`.
  *
- * We attempt to re-enter `VTSOrchestrator.commitSignal` during that external call. If the outer entrypoint’s
- * `nonReentrant` is removed by mutation, the re-entry succeeds and we revert with `Reentered()` to kill the mutant.
+ * Reentrancy premise:
+ * - `VTSCommitLib.commitSignal` / `renewSignal` / `checkpointWithCommitment` all call
+ *     `signalManager.verifyLiquiditySignal(bytes,bool)`
+ * - We re-enter various `VTSOrchestrator` entrypoints during that external call.
+ * - If the target entrypoint’s `nonReentrant` is removed by mutation, the re-entry succeeds and we revert with
+ *   `Reentered()` to kill the mutant deterministically.
  */
 contract ReentrantSignalManager {
     error Reentered();
 
     address internal immutable target;
-    bool internal armed;
+
+    // 0 = none, 1 = commitSignal, 2 = extendGracePeriod, 3 = onMMSettle, 4 = onSeize
+    uint8 internal kind;
+
+    uint256 internal commitId;
+    uint256 internal positionIndex;
+
+    // extendGracePeriod params
+    PoolKey internal poolKey;
+    uint8 internal settlementTokenIndex;
+    uint32 internal verifierIndex;
+
+    // onMMSettle params
+    address internal marketVault;
 
     constructor(address target_) {
         target = target_;
     }
 
-    function arm() external {
-        armed = true;
+    function armCommitSignal() external {
+        kind = 1;
+    }
+
+    function armExtendGracePeriod(
+        PoolKey calldata key,
+        uint256 _commitId,
+        uint256 _positionIndex,
+        uint8 _settlementTokenIndex,
+        uint32 _verifierIndex
+    ) external {
+        kind = 2;
+        poolKey = key;
+        commitId = _commitId;
+        positionIndex = _positionIndex;
+        settlementTokenIndex = _settlementTokenIndex;
+        verifierIndex = _verifierIndex;
+    }
+
+    function armOnMMSettle(PoolKey calldata key, address vault, uint256 _commitId, uint256 _positionIndex) external {
+        kind = 3;
+        poolKey = key;
+        marketVault = vault;
+        commitId = _commitId;
+        positionIndex = _positionIndex;
+    }
+
+    function armOnSeize(uint256 _commitId, uint256 _positionIndex) external {
+        kind = 4;
+        commitId = _commitId;
+        positionIndex = _positionIndex;
     }
 
     // bytes overload (reverting version) used by VTSCommitLib
@@ -40,12 +90,51 @@ contract ReentrantSignalManager {
         external
         returns (bool, uint256)
     {
-        if (armed) {
-            armed = false;
-            (bool ok,) = target.call(abi.encodeWithSelector(VTSOrchestrator.commitSignal.selector, liquiditySignal));
+        uint8 k = kind;
+        if (k != 0) {
+            kind = 0;
+            (bool ok,) = _reenter(k, liquiditySignal);
             if (ok) revert Reentered();
         }
         return (true, 3600);
+    }
+
+    function _reenter(uint8 k, bytes memory liquiditySignal) internal returns (bool ok, bytes memory data) {
+        if (k == 1) {
+            return target.call(abi.encodeWithSelector(VTSOrchestrator.commitSignal.selector, liquiditySignal));
+        }
+        if (k == 2) {
+            return target.call(
+                abi.encodeWithSelector(
+                    VTSOrchestrator.extendGracePeriod.selector,
+                    poolKey,
+                    commitId,
+                    positionIndex,
+                    settlementTokenIndex,
+                    verifierIndex,
+                    bytes("")
+                )
+            );
+        }
+        if (k == 3) {
+            BalanceDelta amountDelta = toBalanceDelta(0, 0);
+            return target.call(
+                abi.encodeWithSelector(
+                    VTSOrchestrator.onMMSettle.selector,
+                    IMarketVault(marketVault),
+                    commitId,
+                    positionIndex,
+                    poolKey.currency0,
+                    poolKey.currency1,
+                    amountDelta,
+                    false
+                )
+            );
+        }
+        if (k == 4) {
+            return target.call(abi.encodeWithSelector(VTSOrchestrator.onSeize.selector, commitId, positionIndex));
+        }
+        return (false, bytes(""));
     }
 
     // --- Unused IVRLSignalManager surface (stubs; never invoked by these tests) ---
@@ -79,14 +168,13 @@ contract VTSOrchestratorReentrancyTest is VTSOrchestratorFixture {
         vm.etch(address(signalManager), address(impl).code);
     }
 
-    function _armEtchedSignalManager() internal {
-        (bool ok,) = address(signalManager).call(abi.encodeWithSignature("arm()"));
-        require(ok, "arm() failed");
+    function _s() internal view returns (ReentrantSignalManager) {
+        return ReentrantSignalManager(address(signalManager));
     }
 
     function test_commitSignal_revertsIfNonReentrantRemoved_viaSignalManagerReentry() public {
         _etchReentrantSignalManager();
-        _armEtchedSignalManager();
+        _s().armCommitSignal();
 
         bytes memory signalBytes = abi.encode(liquiditySignal);
 
@@ -112,7 +200,7 @@ contract VTSOrchestratorReentrancyTest is VTSOrchestratorFixture {
         );
         assertEq(commitId, 1, "expected first commitId");
 
-        _armEtchedSignalManager();
+        _s().armCommitSignal();
 
         // Renew should succeed under correct nonReentrant behaviour.
         unlockCaller.run(
@@ -127,16 +215,84 @@ contract VTSOrchestratorReentrancyTest is VTSOrchestratorFixture {
         // Create a committed position (commitId + position 0) without arming re-entry.
         (uint256 commitId,,,) = _createCommittedPosition();
 
-        _armEtchedSignalManager();
-
         // withCommitment=true triggers signal verification (external call) inside checkpointWithCommitment.
         address advancer = liquiditySignal.mmState.advancer;
         bytes memory signalBytes = abi.encode(liquiditySignal);
+
+        _s().armCommitSignal();
 
         vm.prank(advancer);
         unlockCaller.run(
             address(vtsOrchestrator),
             abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, advancer, commitId, 0, signalBytes, true)
+        );
+    }
+
+    function test_extendGracePeriod_revertsIfNonReentrantRemoved_viaSignalManagerReentry() public {
+        _etchReentrantSignalManager();
+
+        (uint256 commitId,,,) = _createCommittedPosition();
+
+        // Settlement proof verification is view; just force it to succeed.
+        vm.mockCall(
+            address(settlementObserver),
+            abi.encodeWithSelector(
+                IVRLSettlementObserver.verifySettlementProof.selector, corePoolKey, uint8(0), uint32(0), bytes(""), true
+            ),
+            abi.encode(true)
+        );
+
+        _s().armExtendGracePeriod(corePoolKey, commitId, 0, 0, 0);
+
+        bytes memory signalBytes = abi.encode(liquiditySignal);
+        unlockCaller.run(
+            address(vtsOrchestrator),
+            abi.encodeWithSelector(VTSOrchestrator.renewSignal.selector, commitId, signalBytes)
+        );
+    }
+
+    function test_onMMSettle_revertsIfNonReentrantRemoved_viaSignalManagerReentry() public {
+        _etchReentrantSignalManager();
+
+        (uint256 commitId,,,) = _createCommittedPosition();
+
+        _s().armOnMMSettle(corePoolKey, address(proxyHook), commitId, 0);
+
+        bytes memory signalBytes = abi.encode(liquiditySignal);
+        unlockCaller.run(
+            address(vtsOrchestrator),
+            abi.encodeWithSelector(VTSOrchestrator.renewSignal.selector, commitId, signalBytes)
+        );
+    }
+
+    function test_onSeize_revertsIfNonReentrantRemoved_viaSignalManagerReentry() public {
+        _etchReentrantSignalManager();
+
+        (uint256 commitId,,,) = _createCommittedPosition();
+
+        // Make the position immediately seizable by creating a commitment deficit.
+        bytes memory signalBytes = abi.encode(liquiditySignal);
+        vm.mockCall(
+            address(oracleHelper),
+            abi.encodeWithSelector(IOracleHelper.getPricesForLccPair.selector),
+            abi.encode(uint256(1e18), uint256(1e18))
+        );
+        vm.mockCall(
+            address(oracleHelper), abi.encodeWithSelector(IOracleHelper.getTotalValue.selector), abi.encode(uint256(0))
+        );
+
+        address advancer = liquiditySignal.mmState.advancer;
+        vm.prank(advancer);
+        unlockCaller.run(
+            address(vtsOrchestrator),
+            abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, advancer, commitId, 0, signalBytes, true)
+        );
+
+        _s().armOnSeize(commitId, 0);
+
+        unlockCaller.run(
+            address(vtsOrchestrator),
+            abi.encodeWithSelector(VTSOrchestrator.renewSignal.selector, commitId, signalBytes)
         );
     }
 }
