@@ -10,10 +10,13 @@ import {LiquiditySignal} from "../src/types/Commit.sol";
 /**
  * @dev Malicious signal-manager implementation used via `vm.etch` onto the deployed `signalManager` address.
  *
- * It attempts to re-enter the orchestrator during `verifyLiquiditySignal(bytes,bool)` by calling `commitSignal`
- * with the same signal bytes. Under normal behaviour this *must* be blocked by `nonReentrant` on the outer
- * orchestrator entrypoint. If the outer `nonReentrant` is removed by mutation, the re-entry succeeds and we
- * intentionally revert to kill the mutant deterministically.
+ * Reentrancy premise:
+ * - `VTSCommitLib.commitSignal` and `VTSCommitLib.renewSignal` both make an external call to:
+ *     `signalManager.verifyLiquiditySignal(bytes,bool)`
+ * - `VTSCommitLib.checkpointWithCommitment` also makes that external call.
+ *
+ * We attempt to re-enter `VTSOrchestrator.commitSignal` during that external call. If the outer entrypoint’s
+ * `nonReentrant` is removed by mutation, the re-entry succeeds and we revert with `Reentered()` to kill the mutant.
  */
 contract ReentrantSignalManager {
     error Reentered();
@@ -45,29 +48,26 @@ contract ReentrantSignalManager {
         return (true, 3600);
     }
 
-    // --- Unused IVRLSignalManager surface (stubs) ---
-    function getVerifier() external view returns (address) {
+    // --- Unused IVRLSignalManager surface (stubs; never invoked by these tests) ---
+    function getVerifier() external pure returns (address) {
         return address(0);
     }
 
-    function signalExpiryInSeconds() external view returns (uint256) {
+    function signalExpiryInSeconds() external pure returns (uint256) {
         return 3600;
     }
 
-    function mmNonce(address) external view returns (uint256) {
+    function mmNonce(address) external pure returns (uint256) {
         return 0;
     }
 
     function setVerifier(address) external {}
     function setSignalExpiryInSeconds(uint256) external {}
 
-    function verifyLiquiditySignal(bytes memory liquiditySignal) external returns (bool, uint256) {
-        // Keep as a simple stub (avoid internal dispatch to an `external` overload).
-        (liquiditySignal);
+    function verifyLiquiditySignal(bytes memory) external pure returns (bool, uint256) {
         return (true, 3600);
     }
 
-    // LiquiditySignal-typed overload (never called in our unit tests, but required for interface compatibility)
     function verifyLiquiditySignal(LiquiditySignal memory) external pure returns (bool, uint256) {
         return (true, 3600);
     }
