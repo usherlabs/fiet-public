@@ -6,11 +6,11 @@ import {CREATE3Script, ICREATE3Factory} from "../base/CREATE3Script.sol";
 import {NetworkConfig} from "../base/NetworkConfig.sol";
 
 // Libraries to deploy
-import {VTSPositionLib} from "../../src/libraries/VTSPositionLib.sol";
-import {VTSSwapLib} from "../../src/libraries/VTSSwapLib.sol";
-import {VTSCommitLib} from "../../src/libraries/VTSCommitLib.sol";
-import {LCCFactoryLinkedLib} from "../../src/libraries/LCCFactoryLib.sol";
-import {VTSFeeLinkedLib} from "../../src/libraries/VTSFeeLib.sol";
+import {VTSPositionLib} from "src/libraries/VTSPositionLib.sol";
+import {VTSSwapLib} from "src/libraries/VTSSwapLib.sol";
+import {VTSCommitLib} from "src/libraries/VTSCommitLib.sol";
+import {LCCFactoryLinkedLib} from "src/libraries/LCCFactoryLib.sol";
+import {VTSFeeLinkedLib} from "src/libraries/VTSFeeLib.sol";
 
 /**
  * @title DeployLibraries
