@@ -5,6 +5,8 @@ import "forge-std/Test.sol";
 
 import {Currency, CurrencyLibrary} from "@uniswap/v4-core/src/types/Currency.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
+import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
+import {TransientStateLibrary} from "v4-periphery/lib/v4-core/src/libraries/TransientStateLibrary.sol";
 
 import {MarketTestBase} from "../base/MarketTestBase.sol";
 import {MarketMakerTestBase} from "../base/MMTestBase.sol";
@@ -25,6 +27,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 ///      which action combinations are valid under the delta + unlock model.
 contract MMPositionManagerActionFuzzTest is MarketTestBase, MarketMakerTestBase {
     using CurrencyLibrary for Currency;
+    using TransientStateLibrary for IPoolManager;
 
     MMPositionManager internal mmpm;
     LiquidityCommitmentCertificate internal lcc0;
@@ -82,7 +85,7 @@ contract MMPositionManagerActionFuzzTest is MarketTestBase, MarketMakerTestBase 
     // ============================================================
 
     /// @dev Runs a small pseudo-random action batch. Many sequences are expected to revert; that’s fine.
-    ///      If it succeeds, it must satisfy MMPM’s own invariant (no stuck deltas) and basic balance sanity.
+    ///      If it succeeds, it must satisfy MMPM’s own invariant (no stuck obligations) and basic balance sanity.
     function testFuzz_actionBatch_smoke(uint256 seed) public {
         uint8 steps = uint8(_bounded(_rand(seed, "steps"), 1, 8));
 
@@ -209,10 +212,19 @@ contract MMPositionManagerActionFuzzTest is MarketTestBase, MarketMakerTestBase 
             MMA.PreparedAction[] memory batch = _shrink(prepared, count);
             bool success = _tryExecute(batch, value);
 
-            // Strong post-success invariants:
-            // - No stuck deltas (MMPM asserts this internally; we re-assert here for clarity).
+            // Strong post-success invariants (persisted state only):
+            // - PoolManager must be re-locked (unlock context ended).
+            // - Basic balance sanity (no obvious “minting out of thin air”).
+            //
+            // NOTE: We intentionally do NOT assert on currency deltas here. Deltas are transient and exist only
+            //       within an unlock context; MMPM enforces “all deltas settled” internally via _afterBatch().
             if (success) {
-                vtsOrchestrator.assertNonZeroDeltas();
+                assertFalse(manager.isUnlocked(), "poolManager should be locked after batch");
+                // Sanity: MMPM shouldn't accumulate an absurd amount of native/WETH in this fixture.
+                assertLe(address(mmpm).balance, 100 ether, "sanity: unexpected MMPM ETH balance explosion");
+                assertLe(weth9.balanceOf(address(mmpm)), 100 ether, "sanity: unexpected MMPM WETH balance explosion");
+                // We only ever bootstrap up to two commits in this fuzz test (signals are nonce-limited).
+                assertLe(mmpm.balanceOf(address(this)), 2, "sanity: unexpected commit NFT balance");
             }
 
             // If the batch succeeded and it included a wrap-native with take, ensure we didn't mint ETH out of thin air.
