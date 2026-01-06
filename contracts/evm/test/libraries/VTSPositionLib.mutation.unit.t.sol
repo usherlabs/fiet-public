@@ -26,6 +26,11 @@ import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {RFSCheckpoint} from "../../src/types/Checkpoint.sol";
 import {IMarketVault} from "../../src/interfaces/IMarketVault.sol";
+import {ILiquidityHub} from "../../src/interfaces/ILiquidityHub.sol";
+import {IOracleHelper} from "../../src/interfaces/IOracleHelper.sol";
+import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
+import {PositionContext, TouchPositionParams} from "../../src/types/VTS.sol";
+import {PositionModificationHookDataLib} from "../../src/types/Position.sol";
 
 /// @notice Mutation-focused unit tests for VTSPositionLib that do NOT depend on MarketTestBase/_setupMarket.
 /// @dev Purpose: avoid fixture panics masking kills. These tests aim to kill meaningful mutants via direct harness state.
@@ -568,6 +573,124 @@ contract VTSPositionLibMutationUnitTest is Test {
         }
     }
 
+    // ============================================================
+    // touchPosition MM decrease: kill feeAdj accounting mutant (1240)
+    // ============================================================
+    function test_touchPosition_mmDecrease_principalDelta_includesFeeAdj_asFeeComponent() public {
+        // We want a deterministic, non-zero feeAdj during touchPosition.
+        // Easiest way: use `_applyCoverageBurn` to create a positive pendingFeeAdj on token0,
+        // then let `afterTouchPosition()` materialise it into `result.feeAdj`.
+        //
+        // With feeAdj > 0 (slash), the correct principal delta is:
+        //   accruedFeesAfterAdj = feesAccrued - feeAdj
+        //   principalDelta      = callerDelta - accruedFeesAfterAdj
+        //                     = callerDelta - feesAccrued + feeAdj
+        //
+        // The mutant flips to `feesAccrued + feeAdj`, which would *reduce* principalDelta by `2*feeAdj`.
+
+        // 1) Create a poolKey and use its derived PoolId everywhere.
+        // IMPORTANT: `touchPosition` uses `p.poolKey.toId()` for PoolManager reads, so the PoolId used for
+        // registration MUST match the PoolId derived from poolKey (otherwise PoolManager reads hit the wrong pool
+        // and can trigger arithmetic panics in active-status commit accounting).
+        MockLCC lcc0 = new MockLCC(address(0xA0));
+        MockLCC lcc1 = new MockLCC(address(0xA1));
+        PoolKey memory key = PoolKey({
+            currency0: Currency.wrap(address(lcc0)),
+            currency1: Currency.wrap(address(lcc1)),
+            fee: 0,
+            tickSpacing: 60,
+            // NOTE: In these unit tests we do not exercise Uniswap hook callbacks.
+            // `hooks` only affects the derived PoolId via `poolKey.toId()`, so `address(0)` is fine
+            // provided we use the same derived PoolId consistently for:
+            // - position registration / harness pool setup, and
+            // - mock PoolManager slot data keyed by PoolId.
+            hooks: IHooks(address(0))
+        });
+        PoolId pId = key.toId();
+        harness.setupPool(pId, _defaultCfg());
+
+        // Register a position on the same PoolId and make sure RFS is closed before decrease
+        // (calcRFS(requireClosedRfS=true) must not revert).
+        ModifyLiquidityParams memory reg = ModifyLiquidityParams({
+            tickLower: TICK_LOWER,
+            tickUpper: TICK_UPPER,
+            liquidityDelta: int256(uint256(1000)),
+            salt: bytes32(uint256(20))
+        });
+        harness.registerPosition(owner, pId, reg);
+        PositionId id = PositionLibrary.generateId(owner, reg);
+        harness.setCommitmentMax(id, 1e18, 1e18);
+        harness.setSettled(id, 1e18, 1e18);
+        harness.setCumulativeDeficit(id, 0, 0);
+        harness.setCommitmentDeficit(id, 0, 0);
+
+        // 2) Make it an MM position (touchPosition validates commitId matches stored commitId).
+        uint256 commitId = 1;
+        harness.setPositionCommitId(id, commitId);
+
+        // Ensure the pool manager reports non-zero current liquidity for this position, otherwise the
+        // decrease path treats the position as fully inactive and can produce huge "excess" values.
+        _pmSetPositionLiquidity(pId, PositionId.unwrap(id), 1000);
+
+        // 3) Ensure poolManager reads are deterministic:
+        // - tickCurrent in-range
+        // - feeGrowthInside0X128 == 1*Q128
+        _pmSetSlot0Tick(pId, 0);
+        _pmSetFeeGrowthGlobals(pId, FixedPoint128.Q128, 0);
+        _pmSetTickFeeGrowthOutside(pId, TICK_LOWER, 0, 0);
+        _pmSetTickFeeGrowthOutside(pId, TICK_UPPER, 0, 0);
+
+        // 4) Create a small coverage burn on token1 deficit so fee token is token0, producing pendingFeeAdj.token0 > 0.
+        // Choose parameters so feesBurn == 1000 (fits in int128 comfortably).
+        // - liquidity = 10_000
+        // - feeGrowthDelta0X128 = 1*Q128
+        // - burnBase/ofDelta = 1
+        // - bps = 1000 => burn = 10% of fees
+        harness.setFeeGrowthInsideLast(id, 0, 0);
+        harness.setCumulativeDeficit(id, 0, 10);
+        harness.setCumulativeOutflows(id, 0, 10);
+        harness.setOutflowsAtFeeSnap(id, 0, 0);
+        harness.applyCoverageBurn(IPoolManager(address(pm)), id, pId, 1, 10, 10_000);
+
+        (int256 pend0,) = harness.getPendingFeeAdj(id);
+        assertGt(pend0, 0, "precondition: pendingFeeAdj(token0) should be > 0 to materialise a slash feeAdj");
+
+        // 5) Build a minimal PositionContext with recorders/mocks so we can observe principalDelta effects.
+        MockLiquidityHubRecorder hub = new MockLiquidityHubRecorder(address(lcc0), address(lcc1));
+        MockMarketVaultPassthrough vault = new MockMarketVaultPassthrough();
+
+        PositionContext memory ctx = PositionContext({
+            poolManager: IPoolManager(address(pm)),
+            liquidityHub: ILiquidityHub(address(hub)),
+            // Not used on the decrease path in these tests.
+            oracleHelper: IOracleHelper(address(0)),
+            marketVault: IMarketVault(address(vault))
+        });
+
+        // 6) Perform an MM decrease touchPosition (non-seizing) so _processMMOperations uses `principalDelta`.
+        // Keep requiredSettlementDelta trivial by leaving no excess settled after commitment update.
+        TouchPositionParams memory tp = TouchPositionParams({
+            owner: owner,
+            poolKey: key,
+            params: ModifyLiquidityParams({
+                tickLower: reg.tickLower,
+                tickUpper: reg.tickUpper,
+                liquidityDelta: -100, // decrease
+                salt: reg.salt
+            }),
+            callerDelta: toBalanceDelta(int128(int256(5000)), 0),
+            feesAccrued: toBalanceDelta(int128(int256(2000)), 0),
+            hookData: PositionModificationHookDataLib.encode(commitId, 0, owner)
+        });
+
+        harness.touchPosition(ctx, tp);
+
+        // Assert we planned a cancellation on token0 with principalAmount0 == callerDelta - feesAccrued + feeAdj (slash).
+        // feeAdj0 should equal the materialised pending adjustment (pend0) under current VTSFeeLib construction.
+        uint256 expectedPrincipal0 = uint256(int256(5000 - 2000 + pend0));
+        assertEq(hub.lastPrincipalAmount0(), expectedPrincipal0, "principalAmount0 should include +feeAdj for slash");
+    }
+
     // ------------------------------------------------------------
     // Helpers for MockExtsloadPoolManager slot calculations
     // ------------------------------------------------------------
@@ -781,6 +904,33 @@ contract MockExtsloadPoolManager {
             data[i] = slots[bytes32(uint256(slot) + i)];
         }
     }
+
+    // Minimal PoolManager-style getters used by `touchPosition` / `VTSPositionLib`.
+    // These mirror Uniswap v4 storage layout (same as StateLibrary) but are served from our `slots` mapping.
+    bytes32 internal constant POOLS_SLOT_LOCAL = bytes32(uint256(6));
+    uint256 internal constant POSITIONS_OFFSET_LOCAL = 6;
+
+    function getPositionLiquidity(PoolId poolId, bytes32 positionId) external view returns (uint128 liquidity) {
+        bytes32 stateSlot = keccak256(abi.encodePacked(PoolId.unwrap(poolId), POOLS_SLOT_LOCAL));
+        bytes32 positionMapping = bytes32(uint256(stateSlot) + POSITIONS_OFFSET_LOCAL);
+        bytes32 slot = keccak256(abi.encodePacked(positionId, positionMapping));
+        return uint128(uint256(slots[slot]));
+    }
+
+    function getSlot0(PoolId poolId)
+        external
+        view
+        returns (uint160 sqrtPriceX96, int24 tick, uint24 protocolFee, uint24 lpFee)
+    {
+        bytes32 stateSlot = keccak256(abi.encodePacked(PoolId.unwrap(poolId), POOLS_SLOT_LOCAL));
+        bytes32 data = slots[stateSlot];
+        assembly ("memory-safe") {
+            sqrtPriceX96 := and(data, 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF)
+            tick := signextend(2, shr(160, data))
+            protocolFee := and(shr(184, data), 0xFFFFFF)
+            lpFee := and(shr(208, data), 0xFFFFFF)
+        }
+    }
 }
 
 /// @notice Minimal LCC mock for DynamicCurrencyDelta (needs underlying()).
@@ -813,6 +963,50 @@ contract MockMarketVaultNoop {
 
     function dryModifyLiquidities(BalanceDelta d) external pure returns (BalanceDelta) {
         return d;
+    }
+}
+
+/// @notice Passthrough market vault: returns the requested delta as "available" so no queuing occurs.
+contract MockMarketVaultPassthrough is IMarketVault {
+    function lccs() external pure returns (address, address) {
+        return (address(0), address(0));
+    }
+
+    function inMarketBalanceOf(Currency) external pure returns (uint256) {
+        return 0;
+    }
+    function modifyLiquidities(BalanceDelta) external pure {}
+
+    function tryModifyLiquidities(BalanceDelta d) external pure returns (BalanceDelta) {
+        return d;
+    }
+
+    function dryModifyLiquidities(BalanceDelta d) external pure returns (BalanceDelta) {
+        return d;
+    }
+}
+
+/// @notice LiquidityHub recorder for mutation tests: captures planCancelWithQueue amounts.
+/// @dev Intentionally does NOT implement the full ILiquidityHub interface; we only need selectors that
+///      VTSPositionLib calls in the specific test paths (issue + planCancelWithQueue).
+contract MockLiquidityHubRecorder {
+    address public token0;
+    address public token1;
+    uint256 public lastPrincipalAmount0;
+    uint256 public lastPrincipalAmount1;
+
+    constructor(address token0_, address token1_) {
+        token0 = token0_;
+        token1 = token1_;
+    }
+
+    function issue(address, address, uint256) external {}
+
+    function planCancelWithQueue(address currency, address, address, uint256 principalAmount, uint256, address)
+        external
+    {
+        if (currency == token0) lastPrincipalAmount0 = principalAmount;
+        if (currency == token1) lastPrincipalAmount1 = principalAmount;
     }
 }
 

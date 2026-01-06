@@ -287,6 +287,87 @@ contract LiquidityHubLibTest is LiquidityHubTestBase {
         );
     }
 
+    function test_wrapWith_step0_consumesMarketDerived_andQueuesOnlyWrappedResidual() public {
+        // This test is engineered to kill Step 0 accounting mutants in LiquidityHubLib:
+        // - ctx.fromMarketDerivedAmount -= consumeMarket   (mutant: +=)
+        // - remaining = netTarget - consumeMarket          (mutant: +)
+        // - remainderAmount = remainderAmount - targetToBurn (mutant: +)
+        //
+        // Setup:
+        // - Target LCC has a Hub queue and Hub-held balance, but queue < amount, so Step 0 nets PARTIALLY.
+        // - User has mixed backing balance: marketDerived == netTarget, wrapped == remainder.
+        // - There is ALSO a Hub queue for withLCC so Step 2 would net if marketDerived were incorrectly left > 0.
+        // - We block market liquidity calls; if Step 0 fails to consume market-derived, Step 3 would try to use it.
+
+        (address targetLcc,) = _createSecondLCCPair();
+        address withLcc = lccToken1;
+
+        uint256 netTarget = 10;
+        uint256 wrappedRemainder = 20;
+        uint256 amount = netTarget + wrappedRemainder;
+
+        // Create a Hub queue for the TARGET LCC so Step 0 can net against it.
+        _createSettlementQueueEntry(targetLcc, address(liquidityHub), netTarget);
+        uint256 targetQueueBefore = liquidityHub.settleQueue(targetLcc, address(liquidityHub));
+        uint256 targetTotalQueuedBefore = liquidityHub.totalQueued(targetLcc);
+        assertEq(targetQueueBefore, netTarget, "precondition: target queue should be netTarget");
+        assertEq(targetTotalQueuedBefore, netTarget, "precondition: target totalQueued should be netTarget");
+
+        // Create a Hub queue for withLCC so Step 2 has effectiveQueue > 0 (but should net 0 if Step 0 consumed market).
+        _createSettlementQueueEntry(withLcc, address(liquidityHub), 100);
+        uint256 withQueueBefore = liquidityHub.settleQueue(withLcc, address(liquidityHub));
+        uint256 withTotalQueuedBefore = liquidityHub.totalQueued(withLcc);
+
+        // User holds EXACTLY netTarget as market-derived, plus wrapped remainder.
+        _wrapMarketDerivedLCC(user1, withLcc, netTarget);
+        _wrapDirectLCC(user1, withLcc, wrappedRemainder);
+
+        // Prevent Step 1 direct conversion AND prevent Step 3 direct unwrapping, so residual must queue.
+        _setDirectSupply(withLcc, 0);
+
+        // If any market liquidity is used, the test should fail (Step 0 should consume all market-derived netTarget).
+        vm.mockCallRevert(
+            factory,
+            abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector),
+            abi.encodeWithSignature("Error(string)", "useMarketLiquidity called")
+        );
+
+        _mockAddressAsProtocolBound(address(liquidityHub), true);
+        assertEq(_getNetted(withLcc), 0, "precondition: netted starts at 0");
+
+        vm.startPrank(user1);
+        ILCC(withLcc).approve(address(liquidityHub), amount);
+        liquidityHub.wrapWith(targetLcc, withLcc, amount);
+        vm.stopPrank();
+
+        // Step 0 should have reduced the TARGET queue/totalQueued by netTarget.
+        assertEq(
+            liquidityHub.settleQueue(targetLcc, address(liquidityHub)),
+            targetQueueBefore - netTarget,
+            "target queue should decrease by netTarget"
+        );
+        assertEq(
+            liquidityHub.totalQueued(targetLcc),
+            targetTotalQueuedBefore - netTarget,
+            "target totalQueued should decrease by netTarget"
+        );
+
+        // Step 2 should NOT have netted anything (market-derived was fully consumed by Step 0).
+        assertEq(_getNetted(withLcc), 0, "netted should remain 0 when Step 0 consumes market-derived");
+
+        // Only the WRAPPED remainder should be queued to the Hub (since no liquidity is used).
+        assertEq(
+            liquidityHub.settleQueue(withLcc, address(liquidityHub)),
+            withQueueBefore + wrappedRemainder,
+            "withLCC queue should increase only by wrapped remainder"
+        );
+        assertEq(
+            liquidityHub.totalQueued(withLcc),
+            withTotalQueuedBefore + wrappedRemainder,
+            "withLCC totalQueued should increase only by wrapped remainder"
+        );
+    }
+
     function test_processSettlementFor_external_revertsLiquidityError_whenMaxAmountZero() public {
         uint256 queued = 10;
         _createSettlementQueueEntry(lccToken1, user1, queued);
