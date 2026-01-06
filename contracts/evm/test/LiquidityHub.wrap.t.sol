@@ -95,6 +95,7 @@ contract LiquidityHubWrapTest is LiquidityHubTestBase {
             "lcc1 queue should be equal to the queue amount"
         );
         assertEq(lcc1.balanceOf(address(liquidityHub)), queueAmount, "Hub should hold amount of lcc1 that is queued up");
+        assertEq(liquidityHub.totalQueued(address(lcc1)), queueAmount, "totalQueued should match queueAmount pre-net");
 
         // Before the second wrapWith, check user1's balance
         uint256 user1BalanceBefore = lcc1.balanceOf(user1);
@@ -105,8 +106,10 @@ contract LiquidityHubWrapTest is LiquidityHubTestBase {
 
         uint256 queueBefore = liquidityHub.settleQueue(address(lcc1), address(liquidityHub));
         uint256 hubBalanceBefore = lcc1.balanceOf(address(liquidityHub));
+        uint256 totalQueuedBefore = liquidityHub.totalQueued(address(lcc1));
         assertEq(hubBalanceBefore, queueAmount, "Hub should hold amount of lcc1 that is queued up");
         assertEq(queueBefore, queueAmount, "Queue should be equal to the queue amount");
+        assertEq(totalQueuedBefore, queueAmount, "totalQueued should equal queue amount before netting");
 
         _mockAddressAsProtocolBound(address(liquidityHub), true);
         vm.startPrank(user1);
@@ -120,6 +123,11 @@ contract LiquidityHubWrapTest is LiquidityHubTestBase {
             liquidityHub.settleQueue(address(lcc1), address(liquidityHub)),
             queueBefore - wrapAmount2,
             "Queue should be reduced by netted amount"
+        );
+        assertEq(
+            liquidityHub.totalQueued(address(lcc1)),
+            totalQueuedBefore - wrapAmount2,
+            "totalQueued should be reduced by netted amount"
         );
 
         // 2. Hub-held lccToken1 should be burned
@@ -155,6 +163,28 @@ contract LiquidityHubWrapTest is LiquidityHubTestBase {
         vm.startPrank(user1);
         wrapWithLCC.approve(address(liquidityHub), claimAmount);
         liquidityHub.wrapWith(address(lcc2), address(wrapWithLCC), claimAmount);
+        vm.stopPrank();
+    }
+
+    function test_onlyValidLcc_revertsForCreatedButUninitialisedLcc() public {
+        // Create an LCC pair but do NOT call initialize() for it.
+        // This should fail `assertValidLcc` because market id is unset (bytes32(0)),
+        // even though other fields are populated.
+        vm.startPrank(factory);
+        (address uninitLcc0,) = liquidityHub.createLCCPair(
+            abi.encodePacked(address(0xBEEF)),
+            address(underlyingAsset1),
+            address(underlyingAsset2),
+            "Uninitialised Market",
+            new address[](0)
+        );
+        vm.stopPrank();
+
+        underlyingAsset1.mint(user1, 1);
+        vm.startPrank(user1);
+        underlyingAsset1.approve(address(liquidityHub), 1);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidLcc.selector, uninitLcc0));
+        liquidityHub.wrap(uninitLcc0, 1);
         vm.stopPrank();
     }
 

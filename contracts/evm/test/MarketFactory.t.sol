@@ -628,6 +628,43 @@ contract MarketFactoryUnitTest is Test {
         );
     }
 
+    function test_createMarket_revertsWhenCoreHookZero() public {
+        address[] memory bounds = new address[](0);
+        vm.prank(owner);
+        MarketFactory f = new MarketFactory(
+            address(poolManager), address(liquidityHub), address(oracleHelper), address(vts), bounds, owner
+        );
+        // Don't call setHooks, so coreHook remains zero.
+
+        vm.prank(owner);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
+        f.createMarket(
+            address(0x100),
+            address(0x200),
+            3000,
+            60,
+            79228162514264337593543950336,
+            keccak256("salt"),
+            VTSConfigs.getDefaultConfig(),
+            new address[](0)
+        );
+    }
+
+    function test_createMarket_revertsWhenInitialSqrtPriceX96Zero() public {
+        vm.prank(owner);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAmount.selector, uint256(0), 0));
+        factory.createMarket(
+            address(0x100),
+            address(0x200),
+            3000,
+            60,
+            0, // zero initialSqrtPriceX96
+            keccak256("salt"),
+            VTSConfigs.getDefaultConfig(),
+            new address[](0)
+        );
+    }
+
     function test_createMarket_ordersMatch_true_usesInitialSqrtPriceForProxy() public {
         // Use a non-self-inverse price so swapping the ordersMatch ternary branches is detectable by mutation tests.
         uint160 initial = uint160(1) << 97;
