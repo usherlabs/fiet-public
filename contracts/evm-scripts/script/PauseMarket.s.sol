@@ -3,7 +3,7 @@ pragma solidity ^0.8.26;
 
 import {console} from "forge-std/Script.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
-import {VTSOrchestrator} from "../src/VTSOrchestrator.sol";
+import {VTSOrchestrator} from "src/VTSOrchestrator.sol";
 import {FileHelper} from "./base/FileHelper.sol";
 
 contract PauseMarketScript is FileHelper {

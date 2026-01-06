@@ -169,6 +169,23 @@ deploy-libraries:
         {{ broadcast_flag }} -vvv
 
 deploy-contracts:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Reload dotenv at runtime (important when `deploy-oracle` just generated/updated `.env` earlier in the same `just deploy` run).
+    if [ -f ".env" ]; then
+        set -a
+        # shellcheck disable=SC1091
+        source ".env"
+        set +a
+    fi
+
+    # validate resilient oracle address is set
+    if [ -z "${RESILIENT_ORACLE_ADDRESS:-}" ]; then
+        echo "Missing RESILIENT_ORACLE_ADDRESS. Run \`just deploy-oracle\` first (it writes .env) or export RESILIENT_ORACLE_ADDRESS manually."
+        exit 1
+    fi
+
+    # deploy contracts
     forge script {{ script_dir }}/deploy/DeployContracts.s.sol:DeployContracts \
         --rpc-url {{ rpc_url }} \
         {{ broadcast_flag }} -vvv
@@ -177,6 +194,7 @@ deploy-contracts:
 deploy-oracle:
     #!/usr/bin/env bash
     set -euo pipefail
+    ROOT_DIR="$(pwd)"
     if [ "{{ mode }}" = "LOCAL" ]; then
         ORACLE_NETWORK_ARG="development"
     elif [ "{{ network }}" = "ethsepolia" ]; then
@@ -188,9 +206,43 @@ deploy-oracle:
     else
         ORACLE_NETWORK_ARG="{{ network }}"
     fi
+
     echo "Deploying oracle to network: $ORACLE_NETWORK_ARG"
-    cp ./oracle/hardhat.custom.config.ts ./lib/oracle/hardhat.fiet.config.ts
-    cd lib/oracle && npx hardhat --config ./hardhat.fiet.config.ts deploy --network "$ORACLE_NETWORK_ARG" --tags deploy --reset
+    cp ../evm/oracle/hardhat.custom.config.ts ../evm/lib/oracle/hardhat.fiet.config.ts
+    cd ../evm/lib/oracle && npx --yes hardhat --config ./hardhat.fiet.config.ts deploy --network "$ORACLE_NETWORK_ARG" --tags deploy --reset
+
+    # read from stored file and persist RESILIENT_ORACLE_ADDRESS for subsequent Foundry scripts.
+    # Hardhat writes deployments to `../evm/deployments/oracle_deployments` (see `contracts/evm/oracle/hardhat.custom.config.ts`).
+    ORACLE_JSON="${ROOT_DIR}/../evm/deployments/oracle_deployments/${ORACLE_NETWORK_ARG}/ResilientOracle_Proxy.json"
+    if [ ! -f "$ORACLE_JSON" ]; then
+        echo "Expected oracle deployment file not found: $ORACLE_JSON"
+        exit 1
+    fi
+
+    RESILIENT_ORACLE_ADDRESS="$(jq -r '.address' "$ORACLE_JSON")"
+    if [ -z "$RESILIENT_ORACLE_ADDRESS" ] || [ "$RESILIENT_ORACLE_ADDRESS" = "null" ]; then
+        echo "Failed to read .address from $ORACLE_JSON"
+        exit 1
+    fi
+
+    ENV_FILE="${ROOT_DIR}/.env"
+    KEY="RESILIENT_ORACLE_ADDRESS"
+    if [ -f "$ENV_FILE" ] && grep -q "^${KEY}=" "$ENV_FILE"; then
+        perl -pi -e "s/^${KEY}=.*/${KEY}=${RESILIENT_ORACLE_ADDRESS}/" "$ENV_FILE"
+    else
+        echo "${KEY}=${RESILIENT_ORACLE_ADDRESS}" >> "$ENV_FILE"
+    fi
+    echo "Wrote ${KEY}=${RESILIENT_ORACLE_ADDRESS} to ${ENV_FILE}"
+
+    # Keep a local copy under `./deployments/` for convenience/debugging (overwrites any stale file).
+    mkdir -p "${ROOT_DIR}/deployments/oracle_deployments/${ORACLE_NETWORK_ARG}"
+    cp "$ORACLE_JSON" "${ROOT_DIR}/deployments/oracle_deployments/${ORACLE_NETWORK_ARG}/ResilientOracle_Proxy.json"
+
+# Configure the local resilient oracle (enables MAIN oracle + sets mock prices for default CreateMarket pair)
+configure-oracle:
+    forge script {{ script_dir }}/setup/ConfigureOracle.s.sol:ConfigureOracleScript \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
 
 # Read deployment information
 read-deployment:

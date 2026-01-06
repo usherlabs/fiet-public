@@ -17,8 +17,8 @@ import {IHooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 
 import {NetworkConfig} from "./base/NetworkConfig.sol";
 import {CurrencySortHelper} from "./libraries/CurrencySortHelper.sol";
-import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
-import {ILiquidityHub} from "../src/interfaces/ILiquidityHub.sol";
+import {IMarketFactory} from "src/interfaces/IMarketFactory.sol";
+import {ILiquidityHub} from "src/interfaces/ILiquidityHub.sol";
 
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 
