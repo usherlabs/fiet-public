@@ -11,12 +11,12 @@ import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {Actions} from "v4-periphery/src/libraries/Actions.sol";
 
-import {LiquidityCommitmentCertificate} from "../src/LCC.sol";
+import {LiquidityCommitmentCertificate} from "src/LCC.sol";
 import {NetworkConfig} from "./base/NetworkConfig.sol";
-import {ProxyHook} from "../src/ProxyHook.sol";
+import {ProxyHook} from "src/ProxyHook.sol";
 import {CurrencySortHelper} from "./libraries/CurrencySortHelper.sol";
-import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
-import {ILiquidityHub} from "../src/interfaces/ILiquidityHub.sol";
+import {IMarketFactory} from "src/interfaces/IMarketFactory.sol";
+import {ILiquidityHub} from "src/interfaces/ILiquidityHub.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 contract RemoveLiquidityScript is NetworkConfig {

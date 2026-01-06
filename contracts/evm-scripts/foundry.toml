@@ -4,6 +4,7 @@ src = "../evm/src"
 script = "script"
 out = "out"
 libs = ["../evm/lib"]
+allow_paths = ["../evm/src"]
 
 ignored_error_codes = [
   2394,
@@ -23,17 +24,27 @@ bytecode_hash = "none"
 
 fs_permissions = [
   { access = "read-write", path = "../evm/deployments" },
+  { access = "read-write", path = "./deployments" },
   { access = "read-write", path = ".forge-snapshots/" },
   { access = "read", path = "out/" },
   { access = "read", path = "../evm/out/" },
 ]
 
 remappings = [
+  "src/=../evm/src/",
   "@openzeppelin/=../evm/lib/openzeppelin-contracts/",
+  "openzeppelin-contracts/=../evm/lib/openzeppelin-contracts/",
   "v4-periphery/=../evm/lib/v4-periphery/",
   "@uniswap/v4-core/=../evm/lib/v4-periphery/lib/v4-core/",
+  "v4-core/=../evm/lib/v4-periphery/lib/v4-core/src/",
   "permit2/=../evm/lib/permit2/",
-  "solady/=../evm/lib/solady/",
+  "solady/=../evm/lib/solady/src/",
+  "oracle/=../evm/lib/oracle/contracts/",
+  "solmate/=../evm/lib/permit2/lib/solmate/",
+  "ds-test/=../evm/lib/permit2/lib/forge-std/lib/ds-test/src/",
+  "forge-gas-snapshot/=../evm/lib/permit2/lib/forge-gas-snapshot/src/",
+  "erc4626-tests/=../evm/lib/openzeppelin-contracts/lib/erc4626-tests/",
+  "halmos-cheatcodes/=../evm/lib/openzeppelin-contracts/lib/halmos-cheatcodes/src/",
   "forge-std/=../evm/lib/forge-std/src/",
 ]
 

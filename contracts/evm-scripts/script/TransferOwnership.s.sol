@@ -2,7 +2,7 @@
 pragma solidity ^0.8.26;
 
 import "forge-std/Script.sol";
-import {MarketFactory} from "../src/MarketFactory.sol";
+import {MarketFactory} from "src/MarketFactory.sol";
 import {FileHelper} from "./base/FileHelper.sol";
 
 // Transfer ownership of MarketFactory to a new address

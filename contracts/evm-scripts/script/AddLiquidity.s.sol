@@ -18,12 +18,12 @@ import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IER
 import {IPermit2} from "permit2/src/interfaces/IPermit2.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 
-import {LiquidityCommitmentCertificate} from "../src/LCC.sol";
+import {LiquidityCommitmentCertificate} from "src/LCC.sol";
 import {NetworkConfig} from "./base/NetworkConfig.sol";
-import {ProxyHook} from "../src/ProxyHook.sol";
+import {ProxyHook} from "src/ProxyHook.sol";
 import {CurrencySortHelper} from "./libraries/CurrencySortHelper.sol";
-import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
-import {ILiquidityHub} from "../src/interfaces/ILiquidityHub.sol";
+import {IMarketFactory} from "src/interfaces/IMarketFactory.sol";
+import {ILiquidityHub} from "src/interfaces/ILiquidityHub.sol";
 
 contract AddLiquidityScript is NetworkConfig {
     using StateLibrary for IPoolManager;
