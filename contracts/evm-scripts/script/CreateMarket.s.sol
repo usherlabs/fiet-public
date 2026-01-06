@@ -246,6 +246,7 @@ contract CreateMarketScript is NetworkConfig {
      */
     function _validateParameters() internal view {
         require(marketFactory != address(0), "MarketFactory address is zero");
+        require(globalConfig != address(0), "GlobalConfig address is zero");
         require(underlyingAsset0 != address(0), "Underlying asset 0 is zero");
         require(underlyingAsset1 != address(0), "Underlying asset 1 is zero");
         require(underlyingAsset0 != underlyingAsset1, "Assets must be different");

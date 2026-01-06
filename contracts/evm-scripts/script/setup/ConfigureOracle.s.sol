@@ -64,7 +64,10 @@ contract ConfigureOracleScript is NetworkConfig {
         if (hasMainOracleEnv) {
             mainOracle = vm.envAddress("MAIN_ORACLE_ADDRESS");
         } else {
-            // Default: local hardhat oracle deploy output path
+            // Default is only safe for LOCAL/dev. For non-LOCAL deployments, require explicit wiring.
+            if (keccak256(bytes(mode)) != keccak256(bytes("LOCAL"))) {
+                revert("ConfigureOracle: set MAIN_ORACLE_ADDRESS for non-LOCAL mode");
+            }
             string memory chainlinkJson = "../evm/deployments/oracle_deployments/development/ChainlinkOracle_Proxy.json";
             mainOracle = vm.parseJsonAddress(vm.readFile(chainlinkJson), ".address");
         }
