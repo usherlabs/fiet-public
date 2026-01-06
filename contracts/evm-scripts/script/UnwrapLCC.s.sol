@@ -2,8 +2,8 @@
 pragma solidity ^0.8.26;
 
 import "forge-std/Script.sol";
-import {LiquidityCommitmentCertificate} from "../src/LCC.sol";
-import {ILiquidityHub} from "../src/interfaces/ILiquidityHub.sol";
+import {LiquidityCommitmentCertificate} from "src/LCC.sol";
+import {ILiquidityHub} from "src/interfaces/ILiquidityHub.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {FileHelper} from "./base/FileHelper.sol";
 

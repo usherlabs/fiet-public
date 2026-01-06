@@ -2,9 +2,7 @@
   "IgnoredVulnerabilities": {},
   "TrustedVariables": {},
   "TrustedContracts": {},
-  "IgnoredPaths": [
-    "src/forks/**"
-  ],
+  "IgnoredPaths": [],
   "TrustedPaths": [
     "src/libraries/TickUtils.sol"
   ]

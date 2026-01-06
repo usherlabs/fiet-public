@@ -2,7 +2,7 @@
 pragma solidity ^0.8.26;
 
 import "forge-std/Script.sol";
-import {MarketFactory} from "../src/MarketFactory.sol";
+import {MarketFactory} from "src/MarketFactory.sol";
 import {NetworkConfig} from "./base/NetworkConfig.sol";
 import {EthSepoliaConstants} from "./constants/EthSepolia.sol";
 import {PositionManager} from "v4-periphery/src/PositionManager.sol";
@@ -16,10 +16,10 @@ import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {BitMath} from "@uniswap/v4-core/src/libraries/BitMath.sol";
 import {HookMiner} from "v4-periphery/src/utils/HookMiner.sol";
-import {ProxyHook} from "../src/ProxyHook.sol";
-import {VTSConfigs} from "../src/libraries/VTSConfigs.sol";
-import {HookFlags} from "../src/libraries/HookFlags.sol";
-import {ILiquidityHub} from "../src/interfaces/ILiquidityHub.sol";
+import {ProxyHook} from "src/ProxyHook.sol";
+import {VTSConfigs} from "src/libraries/VTSConfigs.sol";
+import {HookFlags} from "src/libraries/HookFlags.sol";
+import {ILiquidityHub} from "src/interfaces/ILiquidityHub.sol";
 
 /**
  * @title CreateMarketScript

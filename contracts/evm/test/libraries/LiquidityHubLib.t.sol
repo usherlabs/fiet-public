@@ -31,6 +31,9 @@ contract LiquidityHubLibTest is LiquidityHubTestBase {
     // - nettedLCCsAsUnderlying offset = 11
     uint256 internal constant _OFFSET_LCC_TO_UNDERLYING = 1;
     uint256 internal constant _OFFSET_NETTED = 11;
+    uint256 internal constant _OFFSET_DIRECT_SUPPLY = 8;
+    uint256 internal constant _OFFSET_TOTAL_QUEUED = 10;
+    uint256 internal constant _OFFSET_RESERVE_OF_UNDERLYING = 12;
 
     function _deriveSBaseSlot() internal returns (uint256 base) {
         // Find the *actual* slot used for lccToUnderlying[lccToken1] in LiquidityHub storage.
@@ -58,6 +61,36 @@ contract LiquidityHubLibTest is LiquidityHubTestBase {
         vm.store(address(liquidityHub), _slotNetted(lcc), bytes32(value));
     }
 
+    function _slotDirectSupply(address lcc) internal returns (bytes32) {
+        uint256 base = _deriveSBaseSlot();
+        uint256 root = base + _OFFSET_DIRECT_SUPPLY;
+        return keccak256(abi.encode(lcc, root));
+    }
+
+    function _setDirectSupply(address lcc, uint256 value) internal {
+        vm.store(address(liquidityHub), _slotDirectSupply(lcc), bytes32(value));
+    }
+
+    function _slotTotalQueued(address lcc) internal returns (bytes32) {
+        uint256 base = _deriveSBaseSlot();
+        uint256 root = base + _OFFSET_TOTAL_QUEUED;
+        return keccak256(abi.encode(lcc, root));
+    }
+
+    function _setTotalQueued(address lcc, uint256 value) internal {
+        vm.store(address(liquidityHub), _slotTotalQueued(lcc), bytes32(value));
+    }
+
+    function _slotReserveOfUnderlying(address underlying) internal returns (bytes32) {
+        uint256 base = _deriveSBaseSlot();
+        uint256 root = base + _OFFSET_RESERVE_OF_UNDERLYING;
+        return keccak256(abi.encode(underlying, root));
+    }
+
+    function _setReserveOfUnderlying(address underlying, uint256 value) internal {
+        vm.store(address(liquidityHub), _slotReserveOfUnderlying(underlying), bytes32(value));
+    }
+
     /// @notice Reads `LiquidityHubStorage.nettedLCCsAsUnderlying[lcc]` from the Hub.
     /// @dev This value is the Hub’s **lazy-claimed netting counter** for a given LCC, used by `LiquidityHubLib`.
     ///
@@ -72,6 +105,267 @@ contract LiquidityHubLibTest is LiquidityHubTestBase {
     /// should be burned during Hub settlement until this counter is reduced back toward zero.
     function _getNetted(address lcc) internal returns (uint256) {
         return uint256(vm.load(address(liquidityHub), _slotNetted(lcc)));
+    }
+
+    function test_unwrap_wrappedOnly_decrementsDirectSupplyAndReserve() public {
+        uint256 amount = 10;
+        _wrapDirectLCC(user1, lccToken1, amount);
+
+        uint256 directSupplyBefore = liquidityHub.directSupply(lccToken1);
+        uint256 reserveBefore = liquidityHub.reserveOfUnderlying(lccToken1);
+        assertEq(directSupplyBefore, amount, "precondition: directSupply should equal wrapped amount");
+        assertEq(reserveBefore, amount, "precondition: reserve should equal wrapped amount");
+
+        vm.prank(user1);
+        liquidityHub.unwrap(lccToken1, 7);
+
+        assertEq(liquidityHub.directSupply(lccToken1), directSupplyBefore - 7, "directSupply should decrement");
+        assertEq(liquidityHub.reserveOfUnderlying(lccToken1), reserveBefore - 7, "reserve should decrement");
+    }
+
+    function test_unwrap_revertsInvalidAmount_whenReserveInsufficientEvenIfDirectSupplyPresent() public {
+        uint256 amount = 5;
+        _wrapDirectLCC(user1, lccToken1, amount);
+
+        // Break the (normally true) invariant: directSupply > 0 but reserve == 0.
+        // This forces `transferUnderlying` to hit the InvalidAmount revert (mutation target).
+        _setReserveOfUnderlying(address(underlyingAsset1), 0);
+
+        vm.prank(user1);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAmount.selector, amount, uint256(0)));
+        liquidityHub.unwrap(lccToken1, amount);
+    }
+
+    function test_unwrap_whenNoMarketBalance_doesNotCallUseMarketLiquidity_andQueuesAll() public {
+        // User has wrapped balance, but we set directSupply to 0 so direct-unwrapping is impossible.
+        // With marketDerivedBalance == 0, unwrapInternalLogic must NOT call useMarketLiquidity at all.
+        uint256 amount = 1;
+        _wrapDirectLCC(user1, lccToken1, amount);
+        _setDirectSupply(lccToken1, 0);
+
+        // If useMarketLiquidity is called (it should not be), revert.
+        vm.mockCallRevert(
+            factory,
+            abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector),
+            abi.encodeWithSignature("Error(string)", "useMarketLiquidity called")
+        );
+
+        vm.prank(user1);
+        liquidityHub.unwrap(lccToken1, amount);
+
+        assertEq(liquidityHub.settleQueue(lccToken1, user1), amount, "should queue full amount");
+        assertEq(liquidityHub.totalQueued(lccToken1), amount, "totalQueued should equal queued amount");
+    }
+
+    function test_processSettlementFor_hub_doesNotDecrementReserveOrTransferUnderlying() public {
+        uint256 queued = 10;
+        // Create queue for the Hub itself.
+        _createSettlementQueueEntry(lccToken1, address(liquidityHub), queued);
+
+        // Ensure reserve is non-zero WITHOUT calling confirmTake (which would greedily process the Hub queue).
+        // We deliberately set the reserve mapping directly to keep the queue intact.
+        _setReserveOfUnderlying(address(underlyingAsset1), queued);
+
+        uint256 reserveBefore = liquidityHub.reserveOfUnderlying(lccToken1);
+        uint256 hubUnderlyingBefore = underlyingAsset1.balanceOf(address(liquidityHub));
+
+        // Process Hub settlement.
+        liquidityHub.processSettlementFor(lccToken1, address(liquidityHub), queued);
+
+        // Hub settlement burns Hub-held LCC but must NOT transfer underlying nor decrement reserve.
+        assertEq(
+            liquidityHub.reserveOfUnderlying(lccToken1), reserveBefore, "reserve must not change for hub settlement"
+        );
+        assertEq(
+            underlyingAsset1.balanceOf(address(liquidityHub)),
+            hubUnderlyingBefore,
+            "hub underlying balance must not change for hub settlement"
+        );
+    }
+
+    function test_processSettlementFor_hub_revertsAfterHubTake() public {
+        uint256 queued = 10;
+        // Create queue for the Hub itself.
+        _createSettlementQueueEntry(lccToken1, address(liquidityHub), queued);
+
+        // Fund reserve AFTER queue creation (confirmTake will greedily process Hub queue if it exists).
+        underlyingAsset1.mint(address(liquidityHub), queued);
+        vm.prank(factory);
+        liquidityHub.confirmTake(lccToken1, queued, false);
+
+        // Process Hub settlement.
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAmount.selector, 0, 0));
+        liquidityHub.processSettlementFor(lccToken1, address(liquidityHub), queued);
+    }
+
+    function test_wrapWith_step2_lazyClaim_increasesNetted_andDoesNotQueueResidual() public {
+        (address lccToken3,) = _createSecondLCCPair();
+
+        uint256 hubQueue = 50;
+        _createSettlementQueueEntry(lccToken1, address(liquidityHub), hubQueue);
+
+        uint256 amount = 30;
+        _wrapMarketDerivedLCC(user1, lccToken1, amount);
+
+        // Ensure Hub can pull LCC from user.
+        _mockAddressAsProtocolBound(address(liquidityHub), true);
+
+        uint256 nettedBefore = _getNetted(lccToken1);
+        assertEq(nettedBefore, 0, "precondition: netted should start at 0");
+
+        uint256 queueBefore = liquidityHub.settleQueue(lccToken1, address(liquidityHub));
+        uint256 totalQueuedBefore = liquidityHub.totalQueued(lccToken1);
+        assertEq(queueBefore, hubQueue, "precondition: hub queue should exist");
+        assertEq(totalQueuedBefore, hubQueue, "precondition: totalQueued should match hub queue");
+
+        vm.startPrank(user1);
+        ILCC(lccToken1).approve(address(liquidityHub), amount);
+        liquidityHub.wrapWith(lccToken3, lccToken1, amount);
+        vm.stopPrank();
+
+        // Step 2 should lazy-claim (increase netted) but must NOT mutate the queue itself.
+        assertEq(_getNetted(lccToken1), nettedBefore + amount, "netted should increase by nettable");
+        assertEq(
+            liquidityHub.settleQueue(lccToken1, address(liquidityHub)),
+            queueBefore,
+            "hub queue should not change due to lazy-claim"
+        );
+        assertEq(
+            liquidityHub.totalQueued(lccToken1), totalQueuedBefore, "totalQueued should not change due to lazy-claim"
+        );
+    }
+
+    function test_wrapWith_step2_netting_consumesMarketDerived_soResidualDoesNotUseMarketLiquidity() public {
+        (address lccToken3,) = _createSecondLCCPair();
+
+        // Create a hub queue for withLCC so Step 2 can net against it.
+        uint256 hubQueue = 10;
+        _createSettlementQueueEntry(lccToken1, address(liquidityHub), hubQueue);
+
+        // User amount includes both market-derived and wrapped components.
+        // - market-derived = 10 (fully nettable)
+        // - wrapped = 40
+        // Total amount = 50.
+        uint256 marketAmount = 10;
+        uint256 wrappedAmount = 40;
+        uint256 amount = marketAmount + wrappedAmount;
+
+        _wrapMarketDerivedLCC(user1, lccToken1, marketAmount);
+        _wrapDirectLCC(user1, lccToken1, wrappedAmount);
+
+        // Prevent Step 1 direct conversion; we want Step 3 to queue the wrapped residual to the Hub.
+        _setDirectSupply(lccToken1, 0);
+
+        // If Step 3 tries to use market liquidity (it shouldn't after Step 2 consumes market-derived),
+        // revert hard to kill the mutation.
+        vm.mockCallRevert(
+            factory,
+            abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector),
+            abi.encodeWithSignature("Error(string)", "useMarketLiquidity called")
+        );
+
+        _mockAddressAsProtocolBound(address(liquidityHub), true);
+
+        uint256 queueBefore = liquidityHub.settleQueue(lccToken1, address(liquidityHub));
+        uint256 totalQueuedBefore = liquidityHub.totalQueued(lccToken1);
+
+        vm.startPrank(user1);
+        ILCC(lccToken1).approve(address(liquidityHub), amount);
+        liquidityHub.wrapWith(lccToken3, lccToken1, amount);
+        vm.stopPrank();
+
+        // The wrapped residual should be queued to the Hub exactly.
+        assertEq(
+            liquidityHub.settleQueue(lccToken1, address(liquidityHub)),
+            queueBefore + wrappedAmount,
+            "hub queue should increase only by wrapped residual"
+        );
+        assertEq(
+            liquidityHub.totalQueued(lccToken1),
+            totalQueuedBefore + wrappedAmount,
+            "totalQueued should increase only by wrapped residual"
+        );
+    }
+
+    function test_wrapWith_step0_consumesMarketDerived_andQueuesOnlyWrappedResidual() public {
+        // This test is engineered to kill Step 0 accounting mutants in LiquidityHubLib:
+        // - ctx.fromMarketDerivedAmount -= consumeMarket   (mutant: +=)
+        // - remaining = netTarget - consumeMarket          (mutant: +)
+        // - remainderAmount = remainderAmount - targetToBurn (mutant: +)
+        //
+        // Setup:
+        // - Target LCC has a Hub queue and Hub-held balance, but queue < amount, so Step 0 nets PARTIALLY.
+        // - User has mixed backing balance: marketDerived == netTarget, wrapped == remainder.
+        // - There is ALSO a Hub queue for withLCC so Step 2 would net if marketDerived were incorrectly left > 0.
+        // - We block market liquidity calls; if Step 0 fails to consume market-derived, Step 3 would try to use it.
+
+        (address targetLcc,) = _createSecondLCCPair();
+        address withLcc = lccToken1;
+
+        uint256 netTarget = 10;
+        uint256 wrappedRemainder = 20;
+        uint256 amount = netTarget + wrappedRemainder;
+
+        // Create a Hub queue for the TARGET LCC so Step 0 can net against it.
+        _createSettlementQueueEntry(targetLcc, address(liquidityHub), netTarget);
+        uint256 targetQueueBefore = liquidityHub.settleQueue(targetLcc, address(liquidityHub));
+        uint256 targetTotalQueuedBefore = liquidityHub.totalQueued(targetLcc);
+        assertEq(targetQueueBefore, netTarget, "precondition: target queue should be netTarget");
+        assertEq(targetTotalQueuedBefore, netTarget, "precondition: target totalQueued should be netTarget");
+
+        // Create a Hub queue for withLCC so Step 2 has effectiveQueue > 0 (but should net 0 if Step 0 consumed market).
+        _createSettlementQueueEntry(withLcc, address(liquidityHub), 100);
+        uint256 withQueueBefore = liquidityHub.settleQueue(withLcc, address(liquidityHub));
+        uint256 withTotalQueuedBefore = liquidityHub.totalQueued(withLcc);
+
+        // User holds EXACTLY netTarget as market-derived, plus wrapped remainder.
+        _wrapMarketDerivedLCC(user1, withLcc, netTarget);
+        _wrapDirectLCC(user1, withLcc, wrappedRemainder);
+
+        // Prevent Step 1 direct conversion AND prevent Step 3 direct unwrapping, so residual must queue.
+        _setDirectSupply(withLcc, 0);
+
+        // If any market liquidity is used, the test should fail (Step 0 should consume all market-derived netTarget).
+        vm.mockCallRevert(
+            factory,
+            abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector),
+            abi.encodeWithSignature("Error(string)", "useMarketLiquidity called")
+        );
+
+        _mockAddressAsProtocolBound(address(liquidityHub), true);
+        assertEq(_getNetted(withLcc), 0, "precondition: netted starts at 0");
+
+        vm.startPrank(user1);
+        ILCC(withLcc).approve(address(liquidityHub), amount);
+        liquidityHub.wrapWith(targetLcc, withLcc, amount);
+        vm.stopPrank();
+
+        // Step 0 should have reduced the TARGET queue/totalQueued by netTarget.
+        assertEq(
+            liquidityHub.settleQueue(targetLcc, address(liquidityHub)),
+            targetQueueBefore - netTarget,
+            "target queue should decrease by netTarget"
+        );
+        assertEq(
+            liquidityHub.totalQueued(targetLcc),
+            targetTotalQueuedBefore - netTarget,
+            "target totalQueued should decrease by netTarget"
+        );
+
+        // Step 2 should NOT have netted anything (market-derived was fully consumed by Step 0).
+        assertEq(_getNetted(withLcc), 0, "netted should remain 0 when Step 0 consumes market-derived");
+
+        // Only the WRAPPED remainder should be queued to the Hub (since no liquidity is used).
+        assertEq(
+            liquidityHub.settleQueue(withLcc, address(liquidityHub)),
+            withQueueBefore + wrappedRemainder,
+            "withLCC queue should increase only by wrapped remainder"
+        );
+        assertEq(
+            liquidityHub.totalQueued(withLcc),
+            withTotalQueuedBefore + wrappedRemainder,
+            "withLCC totalQueued should increase only by wrapped remainder"
+        );
     }
 
     function test_processSettlementFor_external_revertsLiquidityError_whenMaxAmountZero() public {

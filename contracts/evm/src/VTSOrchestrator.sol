@@ -84,6 +84,18 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
     /// @notice VRL Signal Manager for liquidity signal validation
     IVRLSignalManager public immutable signalManager;
 
+    // --------------------------------------------------
+    // Mutation testing note
+    // --------------------------------------------------
+    // Olympix/Gambit will sometimes generate equivalent mutants by flipping data locations
+    // (`storage` <-> `memory`) for local variables that are only read.
+    //
+    // These are often unkillable without adding artificial, compile-time-only scaffolding
+    // (or refactoring into less readable code / more repetitive mapping reads), and there
+    // is no protocol-safety upside: the behaviour is unchanged.
+    //
+    // We therefore accept/ignore those survivors in mutation reports for this contract.
+
     /// @notice Constructor
     /// @param _poolManager The Uniswap V4 PoolManager address
     /// @param _signalManager The VRL Signal Manager address

@@ -29,14 +29,29 @@ export PRIVATE_KEY=your_private_key_here
 
 2. Ensure you have sufficient funds in your wallet for deployment
 
+3. To run a local fork, start an Anvil fork:
+   - `just fork` (requires the `just` CLI), or
+   - run `anvil --fork-url <RPC_URL> --port 8545` directly
+
+### CREATE3 Factory Requirement
+These scripts depend on the **CREATE3 factory** being deployed at the canonical address used by `CREATE3Script`:
+
+- `contracts/evm-scripts/script/base/CREATE3Script.sol` (lines 51–52) hardcodes:
+  - `CREATE3Factory(0x9fBB3DF7C40Da2e5A0dE984fFE2CCB7C47cd0ABf)`
+
+If you run against an RPC/network where there is **no contract code at that address**, scripts will fail with an error like **“call to non-contract address 0x9fBB…”**.
+
+- **Remote networks**: use an RPC for a network where that CREATE3 factory is already deployed at `0x9fBB...`.
+- **Local Anvil fork**: run `just setup-create3` (or the equivalent `anvil_setCode` flow) to install the factory bytecode at `0x9fBB...` before running deploy scripts.
+
 ### Running the Deployment
 
-#### Test the deployment logic first:
+#### Deploy the linked libraries:
 ```bash
-forge script script/TestDeploy.s.sol:TestDeployScript --rpc-url <your_rpc_url>
+forge script script/deploy/DeployLibraries.s.sol:DeployLibraries --rpc-url <your_rpc_url> --broadcast
 ```
 
-#### Run the complete deployment:
+#### Deploy the contracts:
 ```bash
 forge script script/deploy/DeployContracts.s.sol:DeployContracts --rpc-url <your_rpc_url> --broadcast
 ```
