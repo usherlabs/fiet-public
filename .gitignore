@@ -9,3 +9,6 @@ forge.lock
 !contracts/evm/foundry.lock
 !contracts/evm-scripts/foundry.lock
 reports
+contracts/evm-scripts/cache/
+contracts/evm-scripts/out/
+.env
