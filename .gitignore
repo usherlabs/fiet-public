@@ -11,4 +11,6 @@ forge.lock
 reports
 contracts/evm-scripts/cache/
 contracts/evm-scripts/out/
+contracts/evm-scripts/deployments/
+contracts/evm-scripts/broadcast/
 .env
