@@ -20,6 +20,7 @@ import {ProxyHook} from "src/ProxyHook.sol";
 import {VTSConfigs} from "src/libraries/VTSConfigs.sol";
 import {HookFlags} from "src/libraries/HookFlags.sol";
 import {ILiquidityHub} from "src/interfaces/ILiquidityHub.sol";
+import {GlobalConfig} from "src/GlobalConfig.sol";
 
 /**
  * @title CreateMarketScript
@@ -47,6 +48,7 @@ contract CreateMarketScript is NetworkConfig {
 
     // Deployed contract addresses
     address public marketFactory;
+    address public globalConfig;
 
     // Created market details
     PoolId public corePoolId;
@@ -63,18 +65,19 @@ contract CreateMarketScript is NetworkConfig {
         // Load deployment addresses
         _loadDeploymentAddresses();
 
+        vm.startBroadcast(deployerPrivateKey);
+
+        // Set market parameters
+        _setMarketParameters();
+
         console.log("\n=== Market Creation Parameters ===");
+        console.log("GlobalConfig:", globalConfig);
         console.log("Market Factory:", marketFactory);
         console.log("Underlying Asset 0:", underlyingAsset0);
         console.log("Underlying Asset 1:", underlyingAsset1);
         console.log("Core Pool Fee:", corePoolFee);
         console.log("Tick Spacing:", tickSpacing);
         console.log("Initial Sqrt Price X96:", initialSqrtPriceX96);
-
-        vm.startBroadcast(deployerPrivateKey);
-
-        // Set market parameters
-        _setMarketParameters();
 
         // Validate parameters
         _validateParameters();
@@ -99,6 +102,7 @@ contract CreateMarketScript is NetworkConfig {
      */
     function _loadDeploymentAddresses() internal {
         marketFactory = readAddress("marketFactory");
+        globalConfig = readAddress("globalConfig");
         console.log("MarketFactory address loaded:", marketFactory);
         console.log("PoolManager address loaded:", config.poolManager);
     }
@@ -242,6 +246,7 @@ contract CreateMarketScript is NetworkConfig {
      */
     function _validateParameters() internal view {
         require(marketFactory != address(0), "MarketFactory address is zero");
+        require(globalConfig != address(0), "GlobalConfig address is zero");
         require(underlyingAsset0 != address(0), "Underlying asset 0 is zero");
         require(underlyingAsset1 != address(0), "Underlying asset 1 is zero");
         require(underlyingAsset0 != underlyingAsset1, "Assets must be different");
@@ -263,20 +268,29 @@ contract CreateMarketScript is NetworkConfig {
 
         (bytes32 salt,) = _generateProxyHookAddress(deployer, constructorArgs);
 
-        // Call createMarket function
-        (PoolId coreId, PoolId proxyId) = factory.createMarket(
-            underlyingAsset0,
-            underlyingAsset1,
-            corePoolFee,
-            tickSpacing,
-            initialSqrtPriceX96,
-            salt,
-            VTSConfigs.getDefaultConfig(),
-            new address[](0) // No additional issuers by default
-        );
+        // MarketFactory.createMarket is `onlyOwner` and MarketFactory owner is GlobalConfig (set during deployment),
+        // so call it via GlobalConfig.proxyCall (where msg.sender == GlobalConfig).
+        bytes memory result = GlobalConfig(globalConfig)
+            .proxyCall(
+                marketFactory,
+                abi.encodeCall(
+                    MarketFactory.createMarket,
+                    (
+                        underlyingAsset0,
+                        underlyingAsset1,
+                        corePoolFee,
+                        tickSpacing,
+                        initialSqrtPriceX96,
+                        salt,
+                        VTSConfigs.getDefaultConfig(),
+                        new address[](0) // No additional issuers by default
+                    )
+                )
+            );
 
-        corePoolId = coreId;
-        proxyPoolId = proxyId;
+        (bytes32 coreIdRaw, bytes32 proxyIdRaw) = abi.decode(result, (bytes32, bytes32));
+        corePoolId = PoolId.wrap(coreIdRaw);
+        proxyPoolId = PoolId.wrap(proxyIdRaw);
 
         console.log("Market created successfully");
     }

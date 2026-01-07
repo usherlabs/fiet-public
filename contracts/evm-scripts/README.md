@@ -33,6 +33,10 @@ export PRIVATE_KEY=your_private_key_here
    - `just fork` (requires the `just` CLI), or
    - run `anvil --fork-url <RPC_URL> --port 8545` directly
 
+4. Ensure dependencies (including the oracle submodule) are installed
+   - From `contracts/evm/`, run `forge install` to initialize/update submodules
+   - Then run `yarn install` from `contracts/evm/` (this installs Node deps including `lib/oracle`)
+
 ### CREATE3 Factory Requirement
 These scripts depend on the **CREATE3 factory** being deployed at the canonical address used by `CREATE3Script`:
 
@@ -46,14 +50,50 @@ If you run against an RPC/network where there is **no contract code at that addr
 
 ### Running the Deployment
 
+#### Deploy the oracle:
+```bash
+BROADCAST=true just deploy-oracle 
+```
+
 #### Deploy the linked libraries:
 ```bash
-forge script script/deploy/DeployLibraries.s.sol:DeployLibraries --rpc-url <your_rpc_url> --broadcast
+BROADCAST=true just deploy-libraries
 ```
 
 #### Deploy the contracts:
 ```bash
-forge script script/deploy/DeployContracts.s.sol:DeployContracts --rpc-url <your_rpc_url> --broadcast
+BROADCAST=true just deploy-contracts
+```
+
+#### Full deployment of core contract
+```bash
+BROADCAST=true just deploy
+```
+
+### Deploying a market
+#### Configuring the oracle
+
+Before creating a market, the oracle must be configured for the **two underlying assets** (otherwise `create-market` will revert with `MarketOraclesNotConfigured()`).
+
+Run:
+
+```bash
+BROADCAST=true just configure-oracle
+```
+
+Required env vars (recommended to put these in `contracts/evm-scripts/.env`):
+- **`RESILIENT_ORACLE_ADDRESS`**: Deployed ResilientOracle proxy address (written by `just deploy-oracle`).
+- **`UNDERLYING_ASSET_0`**: First underlying token address. If none exists, you can deploy one using `just deploy-tokenA`.
+- **`UNDERLYING_ASSET_1`**: Second underlying token address. If none exists, you can deploy one using `just deploy-tokenB`.
+
+Optional env vars (`*`):
+- **`MAIN_ORACLE_ADDRESS`***: MAIN oracle address used by ResilientOracle (LOCAL/dev: typically `ChainlinkOracle_Proxy`). Defaults to latest deployment.
+
+
+#### Deploying the market
+
+```bash
+BROADCAST=true just create-market
 ```
 
 ### Verification
