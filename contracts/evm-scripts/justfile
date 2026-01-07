@@ -56,6 +56,7 @@ help:
     @echo "🚀 Deployment Commands:"
     @echo "  just deploy-tokenA          - Deploy USDT mock token"
     @echo "  just deploy-tokenB          - Deploy USDC mock token"
+    @echo "  just mint-mock              - Mint/transfer UNDERLYING_ASSET_0/1 to LP (helper for local dev)"
     @echo "  just deploy                 - Deploy all core contracts"
     @echo "  just read-deployment        - Read deployment information"
     @echo ""
@@ -160,11 +161,17 @@ deploy-tokenB:
         --rpc-url {{ rpc_url }} \
         {{ broadcast_flag }} {{ verify_flags }} -vvv
 
+# Mint/transfer mock tokens to the LP
+mint-mock-tokens:
+    forge script {{ script_dir }}/setup/MintMockERC20.s.sol:MintMockERC20Script \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} {{ verify_flags }} -vvv
+
 # Deploy all core contracts
 deploy: deploy-oracle deploy-libraries deploy-contracts
 
 deploy-libraries:
-    forge script {{ script_dir }}/deploy/DeployLibraries.s.sol:DeployLibraries \
+    FOUNDRY_PROFILE=deploy forge script {{ script_dir }}/deploy/DeployLibraries.s.sol:DeployLibraries \
         --rpc-url {{ rpc_url }} \
         {{ broadcast_flag }} -vvv
 
@@ -186,7 +193,7 @@ deploy-contracts:
     fi
 
     # deploy contracts
-    forge script {{ script_dir }}/deploy/DeployContracts.s.sol:DeployContracts \
+    FOUNDRY_PROFILE=deploy forge script {{ script_dir }}/deploy/DeployContracts.s.sol:DeployContracts \
         --rpc-url {{ rpc_url }} \
         {{ broadcast_flag }} -vvv
 

@@ -104,6 +104,10 @@ contract AddLiquidityScript is NetworkConfig {
             }
         }
 
+        console.log("Underlying token0:", token0);
+        console.log("Underlying token1:", token1);
+        require(token0 != token1, "UNDERLYING_ASSET_0 and UNDERLYING_ASSET_1 must be different");
+
         address coreHookAddr = factory.coreHook();
 
         // Note: LCC tokens are market-specific, so we need to get them from a market
@@ -117,15 +121,32 @@ contract AddLiquidityScript is NetworkConfig {
         uint24 coreFee = uint24(vm.envOr("CORE_POOL_FEE", uint256(0)));
         int24 tickSpacingVal = int24(uint24(vm.envOr("TICK_SPACING", uint256(60))));
 
-        setupPoolKeys(factory, coreHookAddr, coreFee, tickSpacingVal);
+        // Market-specific: you must provide the core pool id (bytes32) for the market you want to add liquidity to.
+        // This is printed by `create-market` as `Core Pool ID: 0x...`.
+        bytes32 corePoolIdRaw;
+        try vm.envBytes32("CORE_POOL_ID") returns (bytes32 v) {
+            corePoolIdRaw = v;
+        } catch {
+            revert("Please specify CORE_POOL_ID (bytes32) via environment variable (from create-market output)");
+        }
+        PoolId corePoolId = PoolId.wrap(corePoolIdRaw);
+        console.log("Core PoolId (env):");
+        console.logBytes32(PoolId.unwrap(corePoolId));
 
-        // Get LCC tokens from the market
-        PoolId corePoolId = corePoolKey.toId();
+        // Get LCC tokens for that market
         address[2] memory lccPair = factory.corePoolToCurrencyPair(corePoolId);
         address lcc0Addr = lccPair[0];
         address lcc1Addr = lccPair[1];
+        require(lcc0Addr != address(0) && lcc1Addr != address(0), "No LCC pair found for CORE_POOL_ID");
         lcc0 = LiquidityCommitmentCertificate(lcc0Addr);
         lcc1 = LiquidityCommitmentCertificate(lcc1Addr);
+
+        console.log("LCC0 address:", address(lcc0));
+        console.log("LCC1 address:", address(lcc1));
+
+        setupPoolKeys(factory, coreHookAddr, coreFee, tickSpacingVal, corePoolId);
+
+        require(lcc0Addr != lcc1Addr, "LCC0 and LCC1 must be different");
 
         setupAmounts();
 
@@ -152,9 +173,13 @@ contract AddLiquidityScript is NetworkConfig {
         vm.stopBroadcast();
     }
 
-    function setupPoolKeys(IMarketFactory factory, address coreHookAddr, uint24 coreFee, int24 tickSpacingVal)
-        internal
-    {
+    function setupPoolKeys(
+        IMarketFactory factory,
+        address coreHookAddr,
+        uint24 coreFee,
+        int24 tickSpacingVal,
+        PoolId corePoolId
+    ) internal {
         // Core pool: wrapped tokens, no hooks (this gets liquidity)
         (Currency currency0Core, Currency currency1Core) =
             CurrencySortHelper.sortAddresses(address(lcc0), address(lcc1));
@@ -173,7 +198,11 @@ contract AddLiquidityScript is NetworkConfig {
 
         console.log("Core PoolKey toId: ");
         console.logBytes32(PoolId.unwrap(corePoolKey.toId()));
-        PoolId proxyPoolId = factory.coreToProxy(corePoolKey.toId());
+        require(
+            PoolId.unwrap(corePoolKey.toId()) == PoolId.unwrap(corePoolId), "CORE_POOL_ID mismatch (fee/tickSpacing?)"
+        );
+
+        PoolId proxyPoolId = factory.coreToProxy(corePoolId);
         console.log("Proxy PoolId");
         console.logBytes32(PoolId.unwrap(proxyPoolId));
         address proxyHookAddr = factory.proxyToHook(proxyPoolId);
@@ -395,10 +424,20 @@ contract AddLiquidityScript is NetworkConfig {
         address underlyingToken0 = lccToken0.underlying();
         address underlyingToken1 = lccToken1.underlying();
 
+        // Core pool mint uses LCC tokens; Uniswap v4 generally pulls via Permit2.
         checkAndApproveErc20(user, address(permit2), IERC20(lccTokenAddr0), amount0Desired);
         checkAndApproveErc20(user, address(permit2), IERC20(lccTokenAddr1), amount1Desired);
-        checkAndApproveErc20(user, address(lccTokenAddr0), IERC20(underlyingToken0), amount0Desired);
-        checkAndApproveErc20(user, address(lccTokenAddr1), IERC20(underlyingToken1), amount1Desired);
+
+        // Wrapping uses LiquidityHub, which pulls UNDERLYING into the Hub (CurrencyTransfer w/ Permit2 fallback).
+        // Approve the UNDERLYING tokens to LiquidityHub (primary path) and Permit2 (fallback path).
+        if (underlyingToken0 != address(0)) {
+            checkAndApproveErc20(user, address(liquidityHub), IERC20(underlyingToken0), amount0Desired);
+            checkAndApproveErc20(user, address(permit2), IERC20(underlyingToken0), amount0Desired);
+        }
+        if (underlyingToken1 != address(0)) {
+            checkAndApproveErc20(user, address(liquidityHub), IERC20(underlyingToken1), amount1Desired);
+            checkAndApproveErc20(user, address(permit2), IERC20(underlyingToken1), amount1Desired);
+        }
         // checkAndApproveErc20(
         //     user,
         //     address(proxyHook),

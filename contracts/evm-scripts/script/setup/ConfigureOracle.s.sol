@@ -38,15 +38,34 @@ interface IResilientOracleAdmin {
     function setTokenConfig(TokenConfig calldata tokenConfig) external;
 }
 
+/// @dev Local/dev `MockChainlinkOracle`-style price setter.
+interface IOracleMockPrice {
+    function setPrice(address asset, uint256 price) external;
+}
+
 /**
  * @title ConfigureOracleScript
  * @notice Configures the locally deployed Venus ResilientOracle so `MarketFactory.createMarket()` can pass oracle validation.
  *
- * What it does (LOCAL mode):
- * - Reads `RESILIENT_ORACLE_ADDRESS` from env (written by `just deploy-oracle`)
- * - Loads the local Hardhat deployment address of `ChainlinkOracle_Proxy` (which is a proxy to `MockChainlinkOracle` in dev)
- * - Sets mock prices for the default CreateMarket pair (USDC/WETH) on the mock chainlink oracle
- * - Sets `ResilientOracle.TokenConfig` for each asset, enabling MAIN oracle
+ * How oracle configuration works in this repo:
+ *
+ * - If `MODE=LOCAL`:
+ *   - `just deploy-oracle` deploys the Venus oracle stack using Hardhat `--network development`, which sets `live=false`.
+ *   - As a result, `ChainlinkOracle_Proxy` is a proxy to the dev `MockChainlinkOracle` implementation.
+ *   - We can configure prices directly on that MAIN oracle via `setPrice(asset, price)` (this script sets `1e18`).
+ *
+ * - If `MODE!=LOCAL` (i.e. non-dev / live-like environments):
+ *   - The MAIN oracle is expected to be a real feed-backed oracle (e.g. Venus `ChainlinkOracle` /
+ *     `SequencerChainlinkOracle`), so you must configure the feed mapping first via `ChainlinkOracle.setTokenConfig(...)`
+ *     for each underlying, before (or alongside) enabling MAIN in `ResilientOracle`.
+ *   - `ChainlinkOracle.TokenConfig` is:
+ *     struct TokenConfig {
+ *         address asset;
+ *         address feed;
+ *         uint256 maxStalePeriod;
+ *     }
+ *
+ * In all modes, this script configures `ResilientOracle.TokenConfig` to enable MAIN for each underlying asset.
  */
 contract ConfigureOracleScript is NetworkConfig {
     function run() external {
@@ -96,6 +115,24 @@ contract ConfigureOracleScript is NetworkConfig {
         // IMPORTANT: these admin calls must be sent from the deployer EOA that has ACM permissions,
         // not from the script contract address.
         vm.startBroadcast(deployerPrivateKey);
+
+        // In LOCAL mode, set deterministic "1" prices for the underlying assets (so oracle checks can pass).
+        // We assume MAIN oracle is the dev `MockChainlinkOracle` proxy, which exposes `setPrice(address,uint256)`.
+        if (keccak256(bytes(mode)) == keccak256(bytes("LOCAL"))) {
+            uint256 price = 1e18;
+            console.log("Setting mock prices for underlying assets in LOCAL mode");
+            console.log("price:", price);
+            IOracleMockPrice(mainOracle).setPrice(asset0, price);
+            IOracleMockPrice(mainOracle).setPrice(asset1, price);
+        }
+
+        // if not in dev mode we would need to call ChainlinkOracle.setTokenConfig(...) for each underlying, before (or alongside) enabling MAIN in ResilientOracle.
+        // ChainlinkOracle.TokenConfig is:
+        // struct TokenConfig {
+        //     address asset;
+        //     address feed;
+        //     uint256 maxStalePeriod;
+        // }
 
         // Enable MAIN oracle for each asset in the resilient oracle.
         IResilientOracleAdmin.TokenConfig memory cfg;

@@ -9,6 +9,11 @@ contract Token is ERC20 {
     constructor(string memory name, string memory symbol, uint256 initialSupply) ERC20(name, symbol) {
         _mint(msg.sender, initialSupply);
     }
+
+    /// @dev Test-only mint helper (intentionally permissionless).
+    function mint(address to, uint256 amount) external {
+        _mint(to, amount);
+    }
 }
 
 /// Deploying mock USDT / USDC token
