@@ -36,6 +36,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
 
     event Checkpointed(uint256 commitId, uint256 positionIndex, RFSCheckpoint checkpoint, bool withCommitment);
     event GracePeriodExtended(uint256 commitId, uint256 positionIndex, uint8 tokenIndex, RFSCheckpoint checkpoint);
+    event VTSConfigSet(bytes32 indexed marketId, MarketVTSConfiguration newConfig);
     event PositionSettled(
         uint256 indexed commitId,
         uint256 indexed positionIndex,
@@ -1171,6 +1172,9 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         uint256 baseRateBefore = configBefore.token0.baseVTSRate;
         MarketVTSConfiguration memory newConfig = configBefore;
         newConfig.token0.baseVTSRate = newConfig.token0.baseVTSRate + 1;
+
+        vm.expectEmit(true, false, false, true, address(vtsOrchestrator));
+        emit VTSConfigSet(PoolId.unwrap(pid), newConfig);
 
         // Be explicit about owner to avoid fixture surprises.
         vm.prank(vtsOrchestrator.owner());

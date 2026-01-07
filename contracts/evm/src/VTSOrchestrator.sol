@@ -271,6 +271,7 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
         onlyOwner
     {
         s.pools[corePoolId].vtsConfig = vtsConfiguration;
+        emit VTSConfigSet(PoolId.unwrap(corePoolId), vtsConfiguration);
     }
 
     // --------------------------------------------------

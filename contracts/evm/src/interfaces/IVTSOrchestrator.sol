@@ -18,6 +18,7 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta {
     // Events
     event Checkpointed(uint256 commitId, uint256 positionIndex, RFSCheckpoint checkpoint, bool withCommitment);
     event GracePeriodExtended(uint256 commitId, uint256 positionIndex, uint8 tokenIndex, RFSCheckpoint checkpoint);
+    event VTSConfigSet(bytes32 indexed marketId, MarketVTSConfiguration newConfig);
     event PositionSettled(
         uint256 indexed commitId,
         uint256 indexed positionIndex,
