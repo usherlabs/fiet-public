@@ -15,6 +15,11 @@ extern crate alloc;
 
 pub mod kernel;
 mod intent_validator;
+pub mod types;
+pub mod decoder;
+pub mod evaluator;
+pub mod errors;
+pub mod facts;
 
 pub use intent_validator::IntentValidator;
 
