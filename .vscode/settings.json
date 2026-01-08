@@ -63,5 +63,13 @@
     "security.olympix.detectors.msgValueReuse": true,
     "security.olympix.detectors.abiEncoderArray": true,
     "security.olympix.detectors.blockRandomness": true,
-    "security.olympix.project.includePath": "/contracts"
-} 
+    "security.olympix.project.includePath": "/contracts",
+    "rust-analyzer.showUnlinkedFileNotification": false,
+    "rust-analyzer.linkedProjects": [
+        "contracts/stylus/Cargo.toml"
+    ],
+    "rust-analyzer.check.command": "clippy",
+    "rust-analyzer.check.extraArgs": [
+        "--target-dir=target/analyzer"
+    ]
+}
