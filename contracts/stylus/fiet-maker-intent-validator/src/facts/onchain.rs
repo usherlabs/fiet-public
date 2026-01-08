@@ -38,6 +38,23 @@ impl OnchainFactsProvider {
             sources.vts_orchestrator,
             selector("positionToCheckpoint(bytes32)"),
         ));
+        // VTSOrchestrator.getPositionSettledAmounts(bytes32)
+        allowlist.insert((
+            sources.vts_orchestrator,
+            selector("getPositionSettledAmounts(bytes32)"),
+        ));
+        // VTSOrchestrator.getCommitmentMaxima(bytes32)
+        allowlist.insert((
+            sources.vts_orchestrator,
+            selector("getCommitmentMaxima(bytes32)"),
+        ));
+        // VTSOrchestrator.getPosition(bytes32)
+        allowlist.insert((
+            sources.vts_orchestrator,
+            selector("getPosition(bytes32)"),
+        ));
+        // VTSOrchestrator.getPool(bytes32)  (PoolId is bytes32)
+        allowlist.insert((sources.vts_orchestrator, selector("getPool(bytes32)")));
 
         // LiquidityHub.reserveOfUnderlying(address)
         allowlist.insert((
@@ -155,6 +172,117 @@ impl FactsProvider for OnchainFactsProvider {
             return Err(FactsError::MalformedReturn);
         }
         Ok(U256::from_be_slice(&out[0..32]))
+    }
+
+    fn get_settled_amounts(&self, position_id: FixedBytes<32>) -> Result<(U256, U256), FactsError> {
+        // getPositionSettledAmounts(bytes32) returns (uint256 amount0, uint256 amount1)
+        let out = self.staticcall(
+            self.sources.vts_orchestrator,
+            selector("getPositionSettledAmounts(bytes32)"),
+            position_id.as_slice(),
+        )?;
+        if out.len() < 32 * 2 {
+            return Err(FactsError::MalformedReturn);
+        }
+        let amount0 = U256::from_be_slice(&out[0..32]);
+        let amount1 = U256::from_be_slice(&out[32..64]);
+        Ok((amount0, amount1))
+    }
+
+    fn get_commitment_maxima(&self, position_id: FixedBytes<32>) -> Result<(U256, U256), FactsError> {
+        // getCommitmentMaxima(bytes32) returns (uint256 commitment0, uint256 commitment1)
+        let out = self.staticcall(
+            self.sources.vts_orchestrator,
+            selector("getCommitmentMaxima(bytes32)"),
+            position_id.as_slice(),
+        )?;
+        if out.len() < 32 * 2 {
+            return Err(FactsError::MalformedReturn);
+        }
+        let commitment0 = U256::from_be_slice(&out[0..32]);
+        let commitment1 = U256::from_be_slice(&out[32..64]);
+        Ok((commitment0, commitment1))
+    }
+
+    fn grace_period_remaining(&self, position_id: FixedBytes<32>) -> Result<u64, FactsError> {
+        // positionToCheckpoint(bytes32) returns RFSCheckpoint:
+        // (uint256 timeOfLastTransition, bool isOpen, uint256 gracePeriodExtension0, uint256 gracePeriodExtension1)
+        let out = self.staticcall(
+            self.sources.vts_orchestrator,
+            selector("positionToCheckpoint(bytes32)"),
+            position_id.as_slice(),
+        )?;
+        if out.len() < 32 * 4 {
+            return Err(FactsError::MalformedReturn);
+        }
+        let time_of_last_transition = U256::from_be_slice(&out[0..32]);
+        let is_open_word = &out[32..64];
+        let is_open = U256::from_be_slice(is_open_word) != U256::ZERO;
+        let grace_extension0 = U256::from_be_slice(&out[64..96]);
+        let grace_extension1 = U256::from_be_slice(&out[96..128]);
+        
+        // If RFS is not open, grace period doesn't apply (treat as infinite remaining).
+        if !is_open {
+            return Ok(u64::MAX);
+        }
+        
+        // Fetch position to get poolId (Position struct: owner, poolId, ...)
+        let pos_out = self.staticcall(
+            self.sources.vts_orchestrator,
+            selector("getPosition(bytes32)"),
+            position_id.as_slice(),
+        )?;
+        if pos_out.len() < 64 {
+            return Err(FactsError::MalformedReturn);
+        }
+        let mut pool_id_buf = [0u8; 32];
+        pool_id_buf.copy_from_slice(&pos_out[32..64]);
+        let pool_id = FixedBytes(pool_id_buf);
+
+        // Fetch pool to get MarketVTSConfiguration.token{0,1}.gracePeriodTime
+        // ABI layout (words):
+        // w0 id, w1 currency0, w2 currency1,
+        // w3 token0.gracePeriodTime, w4 token0.seizureUnlockTime, w5 token0.baseVTSRate, w6 token0.maxGracePeriodTime,
+        // w7 token1.gracePeriodTime, w8 token1.seizureUnlockTime, w9 token1.baseVTSRate, w10 token1.maxGracePeriodTime,
+        // w11 coverageFeeShare, w12 minResidualUnits, w13 isPaused
+        let pool_out = self.staticcall(
+            self.sources.vts_orchestrator,
+            selector("getPool(bytes32)"),
+            pool_id.as_slice(),
+        )?;
+        if pool_out.len() < 32 * 14 {
+            return Err(FactsError::MalformedReturn);
+        }
+        let grace0 = U256::from_be_slice(&pool_out[32 * 3..32 * 4]);
+        let grace1 = U256::from_be_slice(&pool_out[32 * 7..32 * 8]);
+
+        // Compute elapsed = now - timeOfLastTransition (clamp negative to 0).
+        let now_u = U256::from(self.now);
+        let elapsed = if now_u > time_of_last_transition {
+            now_u - time_of_last_transition
+        } else {
+            U256::ZERO
+        };
+
+        // Total grace thresholds per token.
+        let total0 = grace0 + grace_extension0;
+        let total1 = grace1 + grace_extension1;
+        let earliest = if total0 < total1 { total0 } else { total1 };
+
+        // Remaining until seizable (earliest threshold).
+        let remaining = if earliest > elapsed {
+            earliest - elapsed
+        } else {
+            U256::ZERO
+        };
+
+        // Clamp to u64.
+        let max_u64 = U256::from(u64::MAX);
+        if remaining > max_u64 {
+            Ok(u64::MAX)
+        } else {
+            Ok(remaining.to::<u64>())
+        }
     }
 
     fn staticcall_u256(

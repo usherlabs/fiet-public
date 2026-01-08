@@ -18,6 +18,7 @@ abigen!(
         function onUninstall(bytes data) external payable
         function isModuleType(uint256 moduleTypeId) external view returns (bool)
         function isInitialized(address smartAccount) external view returns (bool)
+        function isValidSignatureWithSender(address sender, bytes32 hash, bytes data) external view returns (bytes4)
     ]"#
 );
 
@@ -59,6 +60,18 @@ struct Cli {
     /// If omitted, uses the signer address.
     #[arg(long)]
     authorised_signer: Option<String>,
+
+    /// Canonical StateView (v4-periphery lens) address for facts.
+    #[arg(long, env = "STATE_VIEW")]
+    state_view: String,
+
+    /// Canonical VTSOrchestrator address for facts.
+    #[arg(long, env = "VTS_ORCHESTRATOR")]
+    vts_orchestrator: String,
+
+    /// Canonical LiquidityHub address for facts.
+    #[arg(long, env = "LIQUIDITY_HUB")]
+    liquidity_hub: String,
 }
 
 #[tokio::main]
@@ -84,6 +97,12 @@ async fn main() -> Result<()> {
         None => signer_addr,
     };
 
+    let state_view = Address::from_str(cli.state_view.as_str()).context("invalid --state-view address")?;
+    let vts_orchestrator =
+        Address::from_str(cli.vts_orchestrator.as_str()).context("invalid --vts-orchestrator address")?;
+    let liquidity_hub =
+        Address::from_str(cli.liquidity_hub.as_str()).context("invalid --liquidity-hub address")?;
+
     let client = Arc::new(SignerMiddleware::new(provider, wallet));
     let contract = IntentValidator::new(contract_address, client.clone());
 
@@ -92,7 +111,7 @@ async fn main() -> Result<()> {
     let is_hook = contract.is_module_type(U256::from(2u64)).call().await?;
     let is_other = contract.is_module_type(U256::from(3u64)).call().await?;
 
-    if !is_validator || !is_hook || is_other {
+    if !is_validator || is_hook || is_other {
         return Err(anyhow!(
             "unexpected module-type detection: validator={}, hook={}, other={}",
             is_validator,
@@ -107,7 +126,14 @@ async fn main() -> Result<()> {
 
     // Install + check.
     if !before {
-        let install_data = authorised_signer.as_bytes().to_vec();
+        // onInstall expects:
+        // uint8 version=1 || bytes20 signer || bytes20 stateView || bytes20 vtsOrchestrator || bytes20 liquidityHub
+        let mut install_data = Vec::with_capacity(81);
+        install_data.push(1u8);
+        install_data.extend_from_slice(authorised_signer.as_bytes());
+        install_data.extend_from_slice(state_view.as_bytes());
+        install_data.extend_from_slice(vts_orchestrator.as_bytes());
+        install_data.extend_from_slice(liquidity_hub.as_bytes());
         let call = contract.on_install(install_data.into()).value(0u64);
         let pending = call.send().await?;
         let receipt = pending.await?.ok_or_else(|| anyhow!("onInstall tx dropped"))?;

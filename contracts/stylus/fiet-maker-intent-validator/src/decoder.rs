@@ -77,6 +77,23 @@ pub fn decode_program_with_limit(bytes: &[u8], max_checks: usize) -> Result<Vec<
                 let min = read_u256(bytes, &mut i)?;
                 Check::ReserveGte { lcc, min }
             },
+            Opcode::CheckSettledGte => {
+                let position_id = read_b32(bytes, &mut i)?;
+                let min_amount0 = read_u256(bytes, &mut i)?;
+                let min_amount1 = read_u256(bytes, &mut i)?;
+                Check::SettledGte { position_id, min_amount0, min_amount1 }
+            },
+            Opcode::CheckCommitmentDeficitLte => {
+                let position_id = read_b32(bytes, &mut i)?;
+                let max_deficit0 = read_u256(bytes, &mut i)?;
+                let max_deficit1 = read_u256(bytes, &mut i)?;
+                Check::CommitmentDeficitLte { position_id, max_deficit0, max_deficit1 }
+            },
+            Opcode::CheckGracePeriodGte => {
+                let position_id = read_b32(bytes, &mut i)?;
+                let min_seconds = read_u64(bytes, &mut i)?;
+                Check::GracePeriodGte { position_id, min_seconds }
+            },
             Opcode::CheckStaticCallU256 => {
                 let target = read_address(bytes, &mut i)?;
                 let selector = read_selector(bytes, &mut i)?;

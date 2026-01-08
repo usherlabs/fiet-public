@@ -23,6 +23,16 @@ pub trait FactsProvider {
 
     fn reserve_of(&self, lcc: Address) -> Result<U256, FactsError>;
 
+    /// Get settled amounts for a position (amount0, amount1).
+    fn get_settled_amounts(&self, position_id: FixedBytes<32>) -> Result<(U256, U256), FactsError>;
+
+    /// Get commitment maxima for a position (commitment0, commitment1).
+    fn get_commitment_maxima(&self, position_id: FixedBytes<32>) -> Result<(U256, U256), FactsError>;
+
+    /// Get grace period remaining in seconds for a position.
+    /// Returns the time remaining until the grace period expires, or 0 if expired.
+    fn grace_period_remaining(&self, position_id: FixedBytes<32>) -> Result<u64, FactsError>;
+
     fn staticcall_u256(
         &self,
         target: Address,

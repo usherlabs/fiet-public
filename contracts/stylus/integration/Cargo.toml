@@ -12,3 +12,4 @@ hex        = { workspace = true }
 serde      = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tokio      = { workspace = true, features = ["full"] }
+fiet-maker-intent-validator-encoder = { path = "../off-chain/fiet-maker-intent-validator-encoder" }

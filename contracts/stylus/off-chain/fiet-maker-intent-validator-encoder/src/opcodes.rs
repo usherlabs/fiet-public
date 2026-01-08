@@ -1,5 +1,4 @@
-use alloc::vec::Vec;
-use stylus_sdk::alloy_primitives::{Address, FixedBytes, U256};
+use alloy_primitives::{Address, FixedBytes, U256};
 
 /// Comparison operators for numeric checks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -65,32 +64,5 @@ pub enum Check {
         op: CompOp,
         rhs: U256,
     },
-}
-
-impl TryFrom<u8> for Opcode {
-    type Error = ();
-
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
-        use Opcode::*;
-        let op = match value {
-            0x01 => CheckDeadline,
-            0x02 => CheckNonce,
-            0x03 => CheckCallBundleHash,
-            0x11 => CheckTokenAmountLte,
-            0x12 => CheckNativeValueLte,
-            0x13 => CheckLiquidityDeltaLte,
-            0x20 => CheckSlot0TickBounds,
-            0x21 => CheckSlot0SqrtPriceBounds,
-            0x30 => CheckRfsClosed,
-            0x31 => CheckQueueLte,
-            0x32 => CheckReserveGte,
-            0x33 => CheckSettledGte,
-            0x34 => CheckCommitmentDeficitLte,
-            0x35 => CheckGracePeriodGte,
-            0xF0 => CheckStaticCallU256,
-            _ => return Err(()),
-        };
-        Ok(op)
-    }
 }
 

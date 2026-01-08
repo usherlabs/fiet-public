@@ -380,19 +380,59 @@ fn intent_digest(
     call_bundle_hash: FixedBytes<32>,
     program_bytes: &[u8],
 ) -> FixedBytes<32> {
-    // Minimal deterministic domain separation for v1 (not full EIP-712 yet):
-    // keccak256("FIET_INTENT_V1" || chainId || validator || smartAccount || nonce || deadline || callBundleHash || keccak(program))
+    // EIP-712: keccak256("\x19\x01" || domainSeparator || hashStruct(message))
     let program_hash: FixedBytes<32> = keccak256(program_bytes);
-    let mut buf = Vec::with_capacity(12 + 8 + 20 + 20 + 32 + 8 + 32 + 32);
-    buf.extend_from_slice(b"FIET_INTENT_V1");
-    buf.extend_from_slice(&chain_id.to_be_bytes());
-    buf.extend_from_slice(validator.as_slice());
-    buf.extend_from_slice(smart_account.as_slice());
-    buf.extend_from_slice(&nonce.to_be_bytes::<32>());
-    buf.extend_from_slice(&deadline.to_be_bytes());
-    buf.extend_from_slice(call_bundle_hash.as_slice());
-    buf.extend_from_slice(program_hash.as_slice());
-    keccak256(buf)
+
+    // Domain type hash: keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)")
+    let domain_type_hash = keccak256(
+        b"EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)",
+    );
+
+    // Domain name and version hashes
+    let domain_name_hash = keccak256(b"Fiet Intent Validator");
+    let domain_version_hash = keccak256(b"1");
+
+    // Domain separator struct encoding
+    let mut domain_buf = Vec::with_capacity(32 * 5);
+    domain_buf.extend_from_slice(domain_type_hash.as_slice());
+    domain_buf.extend_from_slice(domain_name_hash.as_slice());
+    domain_buf.extend_from_slice(domain_version_hash.as_slice());
+    domain_buf.extend_from_slice(&U256::from(chain_id).to_be_bytes::<32>());
+    // Address padded to 32 bytes (left-padded)
+    let mut validator_padded = [0u8; 32];
+    validator_padded[12..32].copy_from_slice(validator.as_slice());
+    domain_buf.extend_from_slice(&validator_padded);
+
+    let domain_separator = keccak256(domain_buf);
+
+    // IntentEnvelope type hash:
+    // keccak256("IntentEnvelope(address smartAccount,uint256 nonce,uint64 deadline,bytes32 callBundleHash,bytes32 programHash)")
+    let intent_type_hash = keccak256(
+        b"IntentEnvelope(address smartAccount,uint256 nonce,uint64 deadline,bytes32 callBundleHash,bytes32 programHash)",
+    );
+
+    // IntentEnvelope struct hash
+    let mut struct_buf = Vec::with_capacity(32 * 6);
+    struct_buf.extend_from_slice(intent_type_hash.as_slice());
+    // smartAccount as address, padded to 32 bytes (left-padded)
+    let mut smart_account_padded = [0u8; 32];
+    smart_account_padded[12..32].copy_from_slice(smart_account.as_slice());
+    struct_buf.extend_from_slice(&smart_account_padded);
+    struct_buf.extend_from_slice(&nonce.to_be_bytes::<32>());
+    // deadline as uint64, padded to 32 bytes (left-padded)
+    let mut deadline_padded = [0u8; 32];
+    deadline_padded[24..32].copy_from_slice(&deadline.to_be_bytes());
+    struct_buf.extend_from_slice(&deadline_padded);
+    struct_buf.extend_from_slice(call_bundle_hash.as_slice());
+    struct_buf.extend_from_slice(program_hash.as_slice());
+    let struct_hash = keccak256(struct_buf);
+
+    // Final EIP-712 digest: keccak256("\x19\x01" || domainSeparator || structHash)
+    let mut final_buf = Vec::with_capacity(2 + 32 + 32);
+    final_buf.extend_from_slice(b"\x19\x01");
+    final_buf.extend_from_slice(domain_separator.as_slice());
+    final_buf.extend_from_slice(struct_hash.as_slice());
+    keccak256(final_buf)
 }
 
 fn ecrecover_address(msg_hash: FixedBytes<32>, sig: &[u8; 65]) -> Result<Address, ()> {
@@ -403,27 +443,29 @@ fn ecrecover_address(msg_hash: FixedBytes<32>, sig: &[u8; 65]) -> Result<Address
 
     let r = &sig[0..32];
     let s = &sig[32..64];
-    let mut v = sig[64];
-    if v == 0 || v == 1 {
-        v += 27;
-    }
-    if v != 27 && v != 28 {
-        return Err(());
+
+    // Try both recovery IDs (v=27 and v=28). This avoids requiring the off-chain
+    // encoder to compute the exact recovery ID.
+    for v in [27u8, 28u8] {
+        let mut input = [0u8; 128];
+        input[0..32].copy_from_slice(msg_hash.as_slice());
+        // v as 32-byte big-endian
+        input[63] = v;
+        input[64..96].copy_from_slice(r);
+        input[96..128].copy_from_slice(s);
+
+        let out = unsafe { RawCall::new_static().gas(50_000).call(to, &input) }.map_err(|_| ())?;
+        if out.len() < 32 {
+            continue;
+        }
+        // precompile returns 32-byte word with address in the low 20 bytes.
+        let recovered = Address::from_slice(&out[12..32]);
+        if recovered != Address::ZERO {
+            return Ok(recovered);
+        }
     }
 
-    let mut input = [0u8; 128];
-    input[0..32].copy_from_slice(msg_hash.as_slice());
-    // v as 32-byte big-endian
-    input[63] = v;
-    input[64..96].copy_from_slice(r);
-    input[96..128].copy_from_slice(s);
-
-    let out = unsafe { RawCall::new_static().gas(50_000).call(to, &input) }.map_err(|_| ())?;
-    if out.len() < 32 {
-        return Err(());
-    }
-    // precompile returns 32-byte word with address in the low 20 bytes.
-    Ok(Address::from_slice(&out[12..32]))
+    Err(())
 }
 
 fn read_vec(bytes: &[u8], i: &mut usize, len: usize) -> Result<Vec<u8>, ()> {

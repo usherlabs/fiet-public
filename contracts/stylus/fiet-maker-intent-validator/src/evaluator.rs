@@ -6,6 +6,8 @@ use crate::{
     },
 };
 
+use stylus_sdk::alloy_primitives::U256;
+
 /// Evaluate checks against provided facts provider.
 pub fn evaluate_program<F: FactsProvider>(
     checks: &[Check],
@@ -76,6 +78,58 @@ pub fn evaluate_program<F: FactsProvider>(
                     .map_err(|_| ValidationError::ReserveTooLow)?;
                 if reserve < *min {
                     return Err(ValidationError::ReserveTooLow);
+                }
+            }
+            Check::SettledGte {
+                position_id,
+                min_amount0,
+                min_amount1,
+            } => {
+                let (amount0, amount1) = facts
+                    .get_settled_amounts(*position_id)
+                    .map_err(|_| ValidationError::StaticCallFailed)?;
+                if amount0 < *min_amount0 || amount1 < *min_amount1 {
+                    return Err(ValidationError::StaticCallFailed);
+                }
+            }
+            Check::CommitmentDeficitLte {
+                position_id,
+                max_deficit0,
+                max_deficit1,
+            } => {
+                let (commitment0, commitment1) = facts
+                    .get_commitment_maxima(*position_id)
+                    .map_err(|_| ValidationError::StaticCallFailed)?;
+                let (settled0, settled1) = facts
+                    .get_settled_amounts(*position_id)
+                    .map_err(|_| ValidationError::StaticCallFailed)?;
+                // Deficit = commitment - settled (saturating subtraction)
+                let deficit0 = if commitment0 > settled0 {
+                    commitment0 - settled0
+                } else {
+                    U256::ZERO
+                };
+                let deficit1 = if commitment1 > settled1 {
+                    commitment1 - settled1
+                } else {
+                    U256::ZERO
+                };
+                if deficit0 > *max_deficit0 || deficit1 > *max_deficit1 {
+                    return Err(ValidationError::StaticCallFailed);
+                }
+            }
+            Check::GracePeriodGte {
+                position_id,
+                min_seconds,
+            } => {
+                // grace_period_remaining returns seconds remaining until the position becomes
+                // seizable under the "normal RFS path" (earliest of the per-token grace thresholds),
+                // or u64::MAX when RFS is closed.
+                let remaining = facts
+                    .grace_period_remaining(*position_id)
+                    .map_err(|_| ValidationError::StaticCallFailed)?;
+                if remaining != u64::MAX && remaining < *min_seconds {
+                    return Err(ValidationError::StaticCallFailed);
                 }
             }
             Check::StaticCallU256 {
