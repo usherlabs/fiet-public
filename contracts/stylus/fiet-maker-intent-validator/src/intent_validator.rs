@@ -19,8 +19,8 @@ use stylus_sdk::{
 };
 
 use crate::kernel::constants::{
-    ERC1271_INVALID, ERC1271_MAGICVALUE, MODULE_TYPE_HOOK, MODULE_TYPE_VALIDATOR,
-    SIG_VALIDATION_FAILED_UINT, SIG_VALIDATION_SUCCESS_UINT,
+    ERC1271_INVALID, ERC1271_MAGICVALUE, MODULE_TYPE_VALIDATOR, SIG_VALIDATION_FAILED_UINT,
+    SIG_VALIDATION_SUCCESS_UINT,
 };
 
 use crate::{
@@ -32,6 +32,20 @@ use crate::{
 use crate::kernel::types::PackedUserOperation;
 
 use alloy_sol_types::SolType;
+use stylus_sdk::stylus_proc::SolidityError;
+
+use alloy_sol_types::sol;
+
+sol! {
+    error AlreadyInitialized(address smartAccount);
+    error NotInitialized(address smartAccount);
+}
+
+#[derive(SolidityError)]
+pub enum ModuleError {
+    AlreadyInitialized(AlreadyInitialized),
+    NotInitialized(NotInitialized),
+}
 
 sol_storage! {
     /// Kernel-compatible validator storage.
@@ -49,9 +63,6 @@ sol_storage! {
         mapping(address => address) state_view_of;
         mapping(address => address) vts_orchestrator_of;
         mapping(address => address) liquidity_hub_of;
-
-        /// Per smart account token allowlist. // TODO: Remove this.
-        mapping(address => mapping(address => bool)) token_allowed;
     }
 }
 
@@ -59,61 +70,64 @@ sol_storage! {
 impl IntentValidator {
     /// Kernel module install hook.
     ///
-    /// Expected `_data` layout (v0 scaffold):
-    /// - `bytes20 signer` (first 20 bytes)
-    /// - `bytes20 stateView` (next 20 bytes)
-    /// - `bytes20 vtsOrchestrator` (next 20 bytes)
-    /// - `bytes20 liquidityHub` (next 20 bytes)
-    /// - `uint8 tokenCount` (optional)
-    /// - `tokenCount * bytes20` tokens (optional)
+    /// Expected `_data` layout:
+    /// - `uint8 version = 1`
+    /// - `bytes20 signer`
+    /// - `bytes20 stateView`
+    /// - `bytes20 vtsOrchestrator`
+    /// - `bytes20 liquidityHub`
     ///
-    /// TODO: Version and support more structured init data (e.g., initial nonce, allowlists).
     #[payable]
-    pub fn on_install(&mut self, data: Vec<u8>) {
+    pub fn on_install(&mut self, data: Vec<u8>) -> Result<(), ModuleError> {
         let smart_account = self.vm().msg_sender();
         if self._is_initialized(smart_account) {
-            // TODO: Revert with Kernel's `AlreadyInitialized(address)` custom error.
-            panic!("Already initialised");
+            return Err(ModuleError::AlreadyInitialized(AlreadyInitialized {
+                smartAccount: smart_account,
+            }));
         }
-        if data.len() < 80 {
-            // TODO: Replace with a custom error.
+
+        if data.len() < 1 + 20 + 20 + 20 + 20 {
             panic!("Invalid init data");
         }
-        let signer = Address::from_slice(&data[0..20]);
-        let state_view = Address::from_slice(&data[20..40]);
-        let vts_orchestrator = Address::from_slice(&data[40..60]);
-        let liquidity_hub = Address::from_slice(&data[60..80]);
+        let version = data[0];
+        if version != 1 {
+            panic!("Unsupported init version");
+        }
+        let signer = Address::from_slice(&data[1..21]);
+        let state_view = Address::from_slice(&data[21..41]);
+        let vts_orchestrator = Address::from_slice(&data[41..61]);
+        let liquidity_hub = Address::from_slice(&data[61..81]);
+
+        if signer == Address::ZERO {
+            panic!("Invalid signer");
+        }
+        if state_view == Address::ZERO
+            || vts_orchestrator == Address::ZERO
+            || liquidity_hub == Address::ZERO
+        {
+            panic!("Invalid fact sources");
+        }
+        if data.len() != 81 {
+            panic!("Invalid init data length");
+        }
 
         self.signer_of.insert(smart_account, signer);
         self.nonce_of.insert(smart_account, U256::ZERO);
-
         self.state_view_of.insert(smart_account, state_view);
         self.vts_orchestrator_of
             .insert(smart_account, vts_orchestrator);
         self.liquidity_hub_of.insert(smart_account, liquidity_hub);
-
-        // Optional token allowlist.
-        if data.len() > 80 {
-            let token_count = data[80] as usize;
-            let mut off = 81usize;
-            for _ in 0..token_count {
-                if data.len() < off + 20 {
-                    panic!("Invalid token list");
-                }
-                let token = Address::from_slice(&data[off..off + 20]);
-                off += 20;
-                self.token_allowed.setter(smart_account).insert(token, true);
-            }
-        }
+        Ok(())
     }
 
     /// Kernel module uninstall hook.
     #[payable]
-    pub fn on_uninstall(&mut self, _data: Vec<u8>) {
+    pub fn on_uninstall(&mut self, _data: Vec<u8>) -> Result<(), ModuleError> {
         let smart_account = self.vm().msg_sender();
         if !self._is_initialized(smart_account) {
-            // TODO: Revert with Kernel's `NotInitialized(address)` custom error.
-            panic!("Not initialised");
+            return Err(ModuleError::NotInitialized(NotInitialized {
+                smartAccount: smart_account,
+            }));
         }
         self.signer_of.insert(smart_account, Address::ZERO);
         self.nonce_of.insert(smart_account, U256::ZERO);
@@ -121,11 +135,12 @@ impl IntentValidator {
         self.vts_orchestrator_of
             .insert(smart_account, Address::ZERO);
         self.liquidity_hub_of.insert(smart_account, Address::ZERO);
+        Ok(())
     }
 
     /// ERC-7579 module-type detection.
     pub fn is_module_type(&self, module_type_id: U256) -> bool {
-        module_type_id == MODULE_TYPE_VALIDATOR || module_type_id == MODULE_TYPE_HOOK
+        module_type_id == MODULE_TYPE_VALIDATOR
     }
 
     /// ERC-7579 initialisation check.
@@ -219,10 +234,8 @@ impl IntentValidator {
             return SIG_VALIDATION_FAILED_UINT;
         }
 
-        let facts = OnchainFactsProvider::new(sources, 200_000);
-        let ok = evaluate_program(&checks, &facts, |token| {
-            self.token_allowed.get(smart_account).get(token)
-        });
+        let facts = OnchainFactsProvider::new(sources, 200_000, self.vm().block_timestamp());
+        let ok = evaluate_program(&checks, &facts);
         if ok.is_err() {
             return SIG_VALIDATION_FAILED_UINT;
         }
@@ -239,16 +252,12 @@ impl IntentValidator {
     /// Kernel `IValidator.isValidSignatureWithSender` (ERC-1271).
     pub fn is_valid_signature_with_sender(
         &self,
-        sender: Address,
+        _sender: Address,
         hash: FixedBytes<32>,
         data: Vec<u8>,
     ) -> FixedBytes<4> {
         let smart_account = self.vm().msg_sender();
         if !self._is_initialized(smart_account) {
-            return ERC1271_INVALID;
-        }
-        // Enforce the sender matches the Kernel account invoking this validator.
-        if sender != smart_account {
             return ERC1271_INVALID;
         }
 

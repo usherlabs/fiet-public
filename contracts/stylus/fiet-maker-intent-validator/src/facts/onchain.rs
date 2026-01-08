@@ -22,32 +22,48 @@ pub struct FactSources {
 pub struct OnchainFactsProvider {
     pub sources: FactSources,
     pub gas_cap: u64,
+    pub now: u64,
     pub allowlist: BTreeSet<(Address, [u8; 4])>,
 }
 
 impl OnchainFactsProvider {
-    pub fn new(sources: FactSources, gas_cap: u64) -> Self {
+    pub fn new(sources: FactSources, gas_cap: u64, now: u64) -> Self {
         let mut allowlist = BTreeSet::new();
 
         // StateView.getSlot0(bytes32)
         allowlist.insert((sources.state_view, selector("getSlot0(bytes32)")));
 
         // VTSOrchestrator.positionToCheckpoint(bytes32)
-        allowlist.insert((sources.vts_orchestrator, selector("positionToCheckpoint(bytes32)")));
+        allowlist.insert((
+            sources.vts_orchestrator,
+            selector("positionToCheckpoint(bytes32)"),
+        ));
 
         // LiquidityHub.reserveOfUnderlying(address)
-        allowlist.insert((sources.liquidity_hub, selector("reserveOfUnderlying(address)")));
+        allowlist.insert((
+            sources.liquidity_hub,
+            selector("reserveOfUnderlying(address)"),
+        ));
         // LiquidityHub.settleQueue(address,address)
-        allowlist.insert((sources.liquidity_hub, selector("settleQueue(address,address)")));
+        allowlist.insert((
+            sources.liquidity_hub,
+            selector("settleQueue(address,address)"),
+        ));
 
         Self {
             sources,
             gas_cap,
+            now,
             allowlist,
         }
     }
 
-    fn staticcall(&self, target: Address, selector: [u8; 4], args: &[u8]) -> Result<Vec<u8>, FactsError> {
+    fn staticcall(
+        &self,
+        target: Address,
+        selector: [u8; 4],
+        args: &[u8],
+    ) -> Result<Vec<u8>, FactsError> {
         if !self.allowlist.contains(&(target, selector)) {
             return Err(FactsError::ForbiddenCall { target, selector });
         }
@@ -64,11 +80,15 @@ impl OnchainFactsProvider {
 
 impl FactsProvider for OnchainFactsProvider {
     fn block_timestamp(&self) -> u64 {
-        stylus_sdk::block::timestamp()
+        self.now
     }
 
     fn get_slot0(&self, pool_id: FixedBytes<32>) -> Result<Slot0, FactsError> {
-        let out = self.staticcall(self.sources.state_view, selector("getSlot0(bytes32)"), pool_id.as_slice())?;
+        let out = self.staticcall(
+            self.sources.state_view,
+            selector("getSlot0(bytes32)"),
+            pool_id.as_slice(),
+        )?;
         // (uint160, int24, uint24, uint24) => 4 * 32 bytes
         if out.len() < 32 * 4 {
             return Err(FactsError::MalformedReturn);
@@ -112,7 +132,11 @@ impl FactsProvider for OnchainFactsProvider {
         args[12..32].copy_from_slice(lcc.as_slice());
         args[44..64].copy_from_slice(owner.as_slice());
 
-        let out = self.staticcall(self.sources.liquidity_hub, selector("settleQueue(address,address)"), &args)?;
+        let out = self.staticcall(
+            self.sources.liquidity_hub,
+            selector("settleQueue(address,address)"),
+            &args,
+        )?;
         if out.len() < 32 {
             return Err(FactsError::MalformedReturn);
         }
@@ -122,14 +146,23 @@ impl FactsProvider for OnchainFactsProvider {
     fn reserve_of(&self, lcc: Address) -> Result<U256, FactsError> {
         let mut args = [0u8; 32];
         args[12..32].copy_from_slice(lcc.as_slice());
-        let out = self.staticcall(self.sources.liquidity_hub, selector("reserveOfUnderlying(address)"), &args)?;
+        let out = self.staticcall(
+            self.sources.liquidity_hub,
+            selector("reserveOfUnderlying(address)"),
+            &args,
+        )?;
         if out.len() < 32 {
             return Err(FactsError::MalformedReturn);
         }
         Ok(U256::from_be_slice(&out[0..32]))
     }
 
-    fn staticcall_u256(&self, target: Address, selector: [u8; 4], args: &[u8]) -> Result<U256, FactsError> {
+    fn staticcall_u256(
+        &self,
+        target: Address,
+        selector: [u8; 4],
+        args: &[u8],
+    ) -> Result<U256, FactsError> {
         let out = self.staticcall(target, selector, args)?;
         if out.len() < 32 {
             return Err(FactsError::MalformedReturn);
@@ -157,5 +190,3 @@ fn decode_i24(word: &[u8]) -> i32 {
     }
     v
 }
-
-

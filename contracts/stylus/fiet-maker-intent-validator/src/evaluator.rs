@@ -10,7 +10,6 @@ use crate::{
 pub fn evaluate_program<F: FactsProvider>(
     checks: &[Check],
     facts: &F,
-    mut is_token_allowed: impl FnMut(stylus_sdk::alloy_primitives::Address) -> bool,
 ) -> Result<(), ValidationError> {
     for check in checks {
         match check {
@@ -25,16 +24,9 @@ pub fn evaluate_program<F: FactsProvider>(
             Check::CallBundleHash { .. } => {
                 // Call bundle hash binding is enforced by caller.
             }
-            Check::TokenAllowed { token } => {
-                if !is_token_allowed(*token) {
-                    return Err(ValidationError::TokenNotAllowed);
-                }
-            }
             Check::TokenAmountLte { token, max } => {
-                if !is_token_allowed(*token) {
-                    return Err(ValidationError::TokenNotAllowed);
-                }
                 // NOTE: requires execution-context parsing (call bundle -> token+amount). Fail closed for now.
+                let _ = token;
                 let _ = max;
                 return Err(ValidationError::UnsupportedCheck);
             }

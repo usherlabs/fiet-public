@@ -20,7 +20,6 @@ pub enum Opcode {
     CheckNonce = 0x02,
     CheckCallBundleHash = 0x03,
 
-    CheckTokenAllowed = 0x10,
     CheckTokenAmountLte = 0x11,
     CheckNativeValueLte = 0x12,
     CheckLiquidityDeltaLte = 0x13,
@@ -42,7 +41,6 @@ pub enum Check {
     Nonce { expected: U256 },
     CallBundleHash { hash: FixedBytes<32> },
 
-    TokenAllowed { token: Address },
     TokenAmountLte { token: Address, max: U256 },
     NativeValueLte { max: U256 },
     LiquidityDeltaLte { max: u128 },
@@ -72,7 +70,6 @@ impl TryFrom<u8> for Opcode {
             0x01 => CheckDeadline,
             0x02 => CheckNonce,
             0x03 => CheckCallBundleHash,
-            0x10 => CheckTokenAllowed,
             0x11 => CheckTokenAmountLte,
             0x12 => CheckNativeValueLte,
             0x13 => CheckLiquidityDeltaLte,

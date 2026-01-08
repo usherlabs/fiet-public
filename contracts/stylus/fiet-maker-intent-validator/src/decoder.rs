@@ -37,10 +37,6 @@ pub fn decode_program_with_limit(bytes: &[u8], max_checks: usize) -> Result<Vec<
                 let hash = read_b32(bytes, &mut i)?;
                 Check::CallBundleHash { hash }
             },
-            Opcode::CheckTokenAllowed => {
-                let token = read_address(bytes, &mut i)?;
-                Check::TokenAllowed { token }
-            },
             Opcode::CheckTokenAmountLte => {
                 let token = read_address(bytes, &mut i)?;
                 let max = read_u256(bytes, &mut i)?;
