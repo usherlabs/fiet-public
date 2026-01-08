@@ -1,0 +1,45 @@
+[package]
+name = "fiet-maker-intent-validator"
+version = "0.0.1"
+edition = "2021"
+license = "BUSL-1.1"
+homepage = "https://github.com/usherlabs/fiet-protocol"
+repository = "https://github.com/usherlabs/fiet-protocol"
+keywords = [
+  "arbitrum",
+  "ethereum",
+  "stylus",
+  "alloy",
+  "fiet",
+  "kernel",
+  "7702",
+  "intent",
+]
+description = "Fiet Maker Atomic Revalidation intent validator (Kernel-compatible) for Arbitrum Stylus"
+
+[dependencies]
+alloy-primitives = { workspace = true }
+alloy-sol-types = { workspace = true }
+stylus-sdk = { workspace = true }
+hex = { workspace = true, default-features = false }
+
+[dev-dependencies]
+alloy-primitives = { workspace = true, features = ["sha3-keccak"] }
+tokio = { workspace = true, features = ["full"] }
+ethers = { workspace = true }
+eyre = { workspace = true }
+stylus-sdk = { workspace = true, features = ["stylus-test"] }
+dotenv = { workspace = true }
+
+[features]
+default = ["mini-alloc"]
+export-abi = ["stylus-sdk/export-abi"]
+debug = ["stylus-sdk/debug"]
+mini-alloc = ["stylus-sdk/mini-alloc"]
+
+[[bin]]
+name = "intent-validator-abi"
+path = "src/main.rs"
+
+[lib]
+crate-type = ["lib", "cdylib"]

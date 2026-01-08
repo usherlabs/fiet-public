@@ -1,0 +1,4 @@
+/target
+.env
+deployments.*.json
+**/target/
