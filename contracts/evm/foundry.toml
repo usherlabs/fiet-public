@@ -31,6 +31,17 @@ fs_permissions = [
 
 remappings = ["@openzeppelin/=lib/openzeppelin-contracts/"]
 
+# Foundry automatically instruments linked-libraries if library public/external functions are called.
+# Defaulting to predicted addresses via CREATE3Factory.
+# TODO: Hard-linked libraries are causing tests to fail.
+# libraries = [
+#   "src/libraries/VTSPositionLib.sol:VTSPositionLib:0x2C95130C4DE0504c82f4688C657c9A4CC01761EF",
+#   "src/libraries/VTSSwapLib.sol:VTSSwapLib:0x8AF1433f3d2b0547A63f7004B9dA9C5953fD522D",
+#   "src/libraries/VTSCommitLib.sol:VTSCommitLib:0x6EBB20A904a9CA505e7d4A253c7FbF72DF5a777b",
+#   "src/libraries/LCCFactoryLib.sol:LCCFactoryLinkedLib:0x3209860215dB283218CBc8f0D5acf57Ae8874C85",
+#   "src/libraries/VTSFeeLib.sol:VTSFeeLinkedLib:0x0000000000000000000000000000000000000000",
+# ]
+
 
 # additional_compiler_profiles = [
 #   { name = "market", via_ir = true, optimizer_runs = 30000 },
@@ -51,29 +62,38 @@ remappings = ["@openzeppelin/=lib/openzeppelin-contracts/"]
 # TODO: MarketTestBase.sol import list includes both src/MMPositionManager.sol (30000 runs) and src/MMPCommitmentDescriptor.sol (1 run) (and MMPositionActionsImpl.sol at 30000), so Forge can’t compile that test in a single job
 # We must split this up. MarketFactory overhaul should resolve this.
 
-[lint]
-exclude_lints = [
-  "screaming-snake-case-immutable",
-  "mixed-case-variable",
-  "mixed-case-function",
-]
-
-# Foundry automatically instruments linked-libraries if library public/external functions are called.
-# Defaulting to predicted addresses via CREATE3Factory.
-libraries = [
-  "src/libraries/VTSPositionLib.sol:VTSPositionLib:0x2C95130C4DE0504c82f4688C657c9A4CC01761EF",
-  "src/libraries/VTSSwapLib.sol:VTSSwapLib:0x8AF1433f3d2b0547A63f7004B9dA9C5953fD522D",
-  "src/libraries/VTSCommitLib.sol:VTSCommitLib:0x6EBB20A904a9CA505e7d4A253c7FbF72DF5a777b",
-  "src/libraries/LCCFactoryLib.sol:LCCFactoryLinkedLib:0x3209860215dB283218CBc8f0D5acf57Ae8874C85",
-]
+# [lint]
+# exclude_lints = [
+#   "screaming-snake-case-immutable",
+#   "mixed-case-variable",
+#   "mixed-case-function",
+# ]
 
 [profile.debug]
 via_ir = false
 optimizer_runs = 200
 fuzz.runs = 100
 
-# [profile.ci]
-# fuzz_runs = 100_000
+[profile.solx]
+solc_version = '../../.solx/solx'
+auto_detect_solc = false
+via_ir = false
+
+[profile.ci]
+# Disable via_ir to reduce memory usage in CI environments
+# This is sufficient for testing - production builds should use default profile
+via_ir = false
+optimizer_runs = 200
+fuzz.runs = 1000
+
+[profile.mutation]
+via_ir = false
+optimizer = false
+optimizer_runs = 0
+# Mutation builds often change inlining behaviour; if we keep hard-linked library addresses here,
+# calls can surface to addresses that have no code in the test VM (e.g. "delegatecall to non-contract").
+# For mutation runs, prefer Foundry's auto-deploy/auto-link behaviour.
+libraries = []
 
 [rpc_endpoints]
 local = "${ANVIL_FORK_URL}"
