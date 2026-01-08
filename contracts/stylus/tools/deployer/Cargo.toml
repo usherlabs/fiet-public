@@ -1,13 +1,13 @@
 [package]
-name = "stylus-deployer"
+name    = "stylus-deployer"
 version = "0.1.0"
 edition = "2021"
 license = "BUSL-1.1"
 
 [dependencies]
-anyhow = { workspace = true }
-clap = { workspace = true, features = ["derive", "env"] }
-regex = { workspace = true }
-serde = { workspace = true, features = ["derive"] }
+anyhow     = { workspace = true }
+clap       = { workspace = true, features = ["derive", "env"] }
+regex      = { workspace = true }
+serde      = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-time = { workspace = true, features = ["formatting"] }
+time       = { workspace = true, features = ["formatting"] }
