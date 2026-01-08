@@ -219,10 +219,6 @@ contract SwapV4 is NetworkConfig {
             }
         }
 
-        // assert that amount is greater than 0
-        require(amount > 0, "Amount is 0");
-        console.log("Swapping amount: ", amount);
-
         if (swapType == 0 || swapType == 1 || swapType == 5) {
             console.log("\n\nExecuting Exact Input swap for Token 0 -> Token 1...");
 

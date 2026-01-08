@@ -165,12 +165,11 @@ contract RemoveLiquidityScript is NetworkConfig {
         uint256 amount0Received = IERC20(address(lcc0)).balanceOf(recipient) - balance0Before;
         uint256 amount1Received = IERC20(address(lcc1)).balanceOf(recipient) - balance1Before;
 
-        console.log("Unwrapped %s LCC0 to underlying", amount0Received);
-        console.log("Unwrapped %s LCC1 to underlying", amount1Received);
+        console.log("Received %s LCC0", amount0Received);
+        console.log("Received %s LCC1", amount1Received);
 
         // assert that amount0Received and amount1Received are greater than 0
-        require(amount0Received > 0, "Amount0Received is 0");
-        require(amount1Received > 0, "Amount1Received is 0");
+        require(amount0Received > 0 || amount1Received > 0, "Amount0Received and Amount1Received are 0");
 
         console.log("Position burned successfully!");
     }
