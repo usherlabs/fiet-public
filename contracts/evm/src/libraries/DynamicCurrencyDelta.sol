@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.26;
+pragma solidity ^0.8.26;
 
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {BalanceDelta, toBalanceDelta} from "v4-periphery/lib/v4-core/src/types/BalanceDelta.sol";
@@ -9,6 +9,8 @@ import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {ILCC} from "../interfaces/ILCC.sol";
 import {Errors} from "./Errors.sol";
+
+// import {console} from "forge-std/console.sol";
 
 /// @title DynamicCurrencyDelta
 /// @notice Library for managing currency deltas and underlying settlement in VTS
@@ -36,6 +38,14 @@ library DynamicCurrencyDelta {
         } else if (previous == 0) {
             NonzeroDeltaCount.increment();
         }
+
+        // console.log("--------------------------------");
+        // console.log("accountDelta: currency", Currency.unwrap(currency));
+        // console.log("accountDelta: delta", delta);
+        // console.log("accountDelta: target", target);
+        // console.log("accountDelta: previous", previous);
+        // console.log("accountDelta: next", next);
+        // console.log("--------------------------------");
     }
 
     /// @notice Gets the full positive delta (credit) for a currency and target

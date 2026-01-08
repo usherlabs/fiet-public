@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.26;
+pragma solidity ^0.8.26;
 
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {MarketVTSConfiguration} from "../types/VTS.sol";
 import {IOracleHelper} from "./IOracleHelper.sol";
 import {ILiquidityHub} from "./ILiquidityHub.sol";
@@ -79,6 +80,7 @@ interface IMarketFactory {
      * @param initialSqrtPriceX96 Initial sqrt price for core pool
      * @param salt Salt for the proxy hook
      * @param vtsConfiguration VTS configuration
+     * @param issuers Additional issuer addresses to add to the LCC tokens (vtsOrchestrator and proxyHook are always included)
      * @return corePoolId The ID of the created core pool
      * @return proxyPoolId The ID of the created proxy pool
      */
@@ -89,7 +91,8 @@ interface IMarketFactory {
         int24 tickSpacing,
         uint160 initialSqrtPriceX96,
         bytes32 salt,
-        MarketVTSConfiguration calldata vtsConfiguration
+        MarketVTSConfiguration calldata vtsConfiguration,
+        address[] calldata issuers
     ) external returns (PoolId corePoolId, PoolId proxyPoolId);
 
     /**
@@ -146,4 +149,11 @@ interface IMarketFactory {
      * @param amount The amount to use
      */
     function useMarketLiquidity(address underlyingAsset, bytes32 marketId, uint256 amount) external returns (uint256);
+
+    /**
+     * @notice Called after modifyLiquidity to settle CoreHook's PoolManager deltas
+     * @dev Triggers CoreHook to mint/burn ERC6909 claims to clear its hook deltas.
+     * @param key The pool key for the currencies to settle
+     */
+    function afterModifyLiquidity(PoolKey calldata key) external;
 }

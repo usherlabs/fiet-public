@@ -1,5 +1,5 @@
-// SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.26;
+// SPDX-License-Identifier: UNLICENSED
+pragma solidity ^0.8.26;
 
 import "forge-std/Test.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
@@ -27,6 +27,21 @@ contract PausableVTSTest is Test {
         vm.prank(owner);
         vtsOrchestrator = new VTSOrchestrator(
             address(poolManager),
+            makeAddr("signalManager"),
+            makeAddr("oracleHelper"),
+            makeAddr("liquidityHub"),
+            address(settlementObserver),
+            owner
+        );
+    }
+
+    function test_constructor_revert_whenPoolManagerIsZeroAddress() public {
+        vm.prank(owner);
+        IVRLSettlementObserver settlementObserver = new VRLSettlementObserver(owner);
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
+        new VTSOrchestrator(
+            address(0),
             makeAddr("signalManager"),
             makeAddr("oracleHelper"),
             makeAddr("liquidityHub"),

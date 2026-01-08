@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.26;
+pragma solidity ^0.8.26;
 
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
@@ -15,6 +15,8 @@ import {LiquidityMath} from "@uniswap/v4-core/src/libraries/LiquidityMath.sol";
 import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
 import {TickUtils} from "./TickUtils.sol";
 import {Errors} from "./Errors.sol";
+import {SafeCast as OZSafeCast} from "openzeppelin-contracts/contracts/utils/math/SafeCast.sol";
+
 /**
  * @title SwapSimulator
  * @notice Simulates Uniswap V4 swaps without executing them to predict outcomes
@@ -27,7 +29,6 @@ import {Errors} from "./Errors.sol";
  * - Tracks price movements and liquidity changes
  * - Supports price limits and slippage protection
  */
-
 library SwapSimulator {
     using SafeCast for uint256;
     using SafeCast for int256;
@@ -66,6 +67,22 @@ library SwapSimulator {
         uint256 feeGrowthGlobalX128;
     }
 
+    /**
+     * @notice Internal state for swap simulation to reduce stack depth
+     * @param amountSpecifiedRemaining How much input/output remains to be swapped
+     * @param amountCalculated How much has been processed (input for exact output, output for exact input)
+     * @param protocolFee The protocol fee rate extracted from pool state
+     * @param amountToProtocol Accumulated protocol fees during simulation
+     * @param zeroForOne Whether the swap is Token0 -> Token1 (true) or Token1 -> Token0 (false)
+     */
+    struct SimulationState {
+        int256 amountSpecifiedRemaining;
+        int256 amountCalculated;
+        uint256 protocolFee;
+        uint256 amountToProtocol;
+        bool zeroForOne;
+    }
+
     // ============ ERRORS ============
 
     // ============ CORE FUNCTIONS ============
@@ -90,35 +107,10 @@ library SwapSimulator {
     {
         // ============ INITIALIZATION ============
 
-        // Get current pool state from storage
-        (uint160 _sqrtPriceX96, int24 _tick, uint24 _protocolFee, uint24 _lpFee) =
-            StateLibrary.getSlot0(poolManager, corePoolKey.toId());
+        SimulationState memory state;
 
-        // Get current pool liquidity
-        uint256 poolLiquidity = StateLibrary.getLiquidity(poolManager, corePoolKey.toId());
-
-        // Extract swap direction and protocol fee
-        bool zeroForOne = params.zeroForOne;
-        uint256 protocolFee = _protocolFee;
-
-        // Initialize tracking variables for the simulation
-        int256 amountSpecifiedRemaining = params.amountSpecified; // How much input/output remains
-        int256 amountCalculated = 0; // How much has been processed
-        result.sqrtPriceX96 = _sqrtPriceX96; // Starting price
-        result.tick = _tick; // Starting tick
-        result.liquidity = uint128(poolLiquidity); // Starting liquidity
-
-        // ============ FEE CALCULATION ============
-
-        // Calculate total swap fee (LP fee + protocol fee if enabled)
-        swapFee = protocolFee == 0 ? _lpFee : ProtocolFeeLibrary.calculateSwapFee(uint16(protocolFee), _lpFee);
-
-        // Validate that fees aren't too high for exact output swaps
-        if (swapFee >= SwapMath.MAX_SWAP_FEE) {
-            if (params.amountSpecified > 0) {
-                revert Errors.InvalidFeeForExactOut();
-            }
-        }
+        // Initialize result and state from pool storage
+        (result, swapFee, state) = _initializeSimulation(poolManager, corePoolKey, params);
 
         // Early return for zero amount swaps
         if (params.amountSpecified == 0) {
@@ -128,7 +120,7 @@ library SwapSimulator {
         // ============ PRICE LIMIT VALIDATION ============
 
         // Ensure price limits are valid and achievable
-        _validatePriceLimits(zeroForOne, _sqrtPriceX96, params.sqrtPriceLimitX96);
+        _validatePriceLimits(state.zeroForOne, result.sqrtPriceX96, params.sqrtPriceLimitX96);
 
         // ============ FEE GROWTH INITIALIZATION ============
 
@@ -139,125 +131,229 @@ library SwapSimulator {
         // ============ SWAP EXECUTION LOOP ============
 
         // Continue swapping until we've used all input/output or hit price limits
-        while (!(amountSpecifiedRemaining == 0 || result.sqrtPriceX96 == params.sqrtPriceLimitX96)) {
-            // ============ STEP INITIALIZATION ============
-
-            StepComputations memory step;
-            step.sqrtPriceStartX96 = result.sqrtPriceX96;
-
-            // Find the next initialized tick in the swap direction
-            (step.tickNext, step.initialized) = TickUtils.nextInitializedTickWithinOneWord(
-                poolManager, corePoolKey.toId(), result.tick, corePoolKey.tickSpacing, zeroForOne
-            );
-
-            // Ensure we don't go beyond valid tick bounds
-            if (step.tickNext <= TickMath.MIN_TICK) {
-                step.tickNext = TickMath.MIN_TICK;
-            }
-            if (step.tickNext >= TickMath.MAX_TICK) {
-                step.tickNext = TickMath.MAX_TICK;
-            }
-
-            // Calculate the price at the next tick
-            step.sqrtPriceNextX96 = TickMath.getSqrtPriceAtTick(step.tickNext);
-
-            // ============ SWAP STEP COMPUTATION ============
-
-            // Compute how much we can swap in this step
-            // This determines the price movement and amounts for this step
-            // i.e extract as much liquidity as you can between this tick and the next tick
-            (result.sqrtPriceX96, step.amountIn, step.amountOut, step.feeAmount) = SwapMath.computeSwapStep(
-                // Current price
-                result.sqrtPriceX96,
-                // Target price
-                SwapMath.getSqrtPriceTarget(zeroForOne, step.sqrtPriceNextX96, params.sqrtPriceLimitX96),
-                // Available liquidity
-                result.liquidity,
-                // Remaining amount to swap
-                amountSpecifiedRemaining,
-                // Total fee rate
-                swapFee
-            );
-
-            // ============ AMOUNT TRACKING ============
-
-            // Update remaining amounts based on swap type
-            if (params.amountSpecified > 0) {
-                // Exact output swap: reduce remaining output, track calculated input
-                unchecked {
-                    amountSpecifiedRemaining -= step.amountOut.toInt256();
-                    amountCalculated -= (step.amountIn + step.feeAmount).toInt256();
-                }
-            } else {
-                // Exact input swap: reduce remaining input, track calculated output
-                unchecked {
-                    amountSpecifiedRemaining += (step.amountIn + step.feeAmount).toInt256();
-                    amountCalculated += step.amountOut.toInt256();
-                }
-            }
-
-            // ============ PROTOCOL FEE HANDLING ============
-
-            // If protocol fees are enabled, calculate and track them
-            if (protocolFee > 0) {
-                uint256 delta = (swapFee == protocolFee)  // Entire fee goes to protocol if LP fee is 0
-                    ? step.feeAmount
-                    : ((step.amountIn + step.feeAmount) * protocolFee) / ProtocolFeeLibrary.PIPS_DENOMINATOR;
-
-                // Reduce LP fee by protocol portion
-                step.feeAmount -= delta;
-                // Track protocol fee
-                amountToProtocol += delta;
-            }
-
-            // ============ FEE GROWTH UPDATES ============
-
-            // Update global fee growth tracker for this step
-            if (result.liquidity > 0) {
-                step.feeGrowthGlobalX128 += UnsafeMath.simpleMulDiv(
-                    step.feeAmount, FixedPoint128.Q128, result.liquidity
-                );
-            }
-
-            // ============ TICK TRANSITION HANDLING ============
-
-            // Check if we've reached the next tick boundary
-            if (result.sqrtPriceX96 == step.sqrtPriceNextX96) {
-                // We've hit a tick boundary, handle liquidity changes
-                if (step.initialized) {
-                    // Get liquidity change at this tick
-                    (, int128 liquidityNet) =
-                        StateLibrary.getTickLiquidity(poolManager, corePoolKey.toId(), step.tickNext);
-
-                    // For leftward movement (zeroForOne), flip the sign of liquidity change
-                    if (zeroForOne) liquidityNet = -liquidityNet;
-
-                    // Apply liquidity change
-                    result.liquidity = LiquidityMath.addDelta(result.liquidity, liquidityNet);
-                }
-
-                // Update tick position
-                unchecked {
-                    result.tick = zeroForOne ? step.tickNext - 1 : step.tickNext;
-                }
-            } else if (result.sqrtPriceX96 != step.sqrtPriceStartX96) {
-                // Price changed but didn't hit tick boundary, recalculate tick
-                result.tick = TickMath.getTickAtSqrtPrice(result.sqrtPriceX96);
-            }
-        }
+        _executeSwapLoop(poolManager, corePoolKey, params, swapFee, result, state);
 
         // ============ FINAL DELTA CALCULATION ============
 
         // Calculate the final balance delta based on swap direction and type
-        if (zeroForOne != (params.amountSpecified < 0)) {
+        swapDelta = _calculateFinalDelta(params, state);
+        amountToProtocol = state.amountToProtocol;
+    }
+
+    // ============ PRIVATE HELPER FUNCTIONS ============
+
+    /**
+     * @notice Initializes simulation state from pool storage
+     * @param poolManager The Uniswap V4 PoolManager contract
+     * @param corePoolKey The key of the pool to simulate the swap in
+     * @param params The swap parameters
+     * @return result The initial swap result state (price, tick, liquidity)
+     * @return swapFee The calculated total swap fee (LP + protocol)
+     * @return state The initialized simulation state
+     */
+    function _initializeSimulation(IPoolManager poolManager, PoolKey memory corePoolKey, SwapParams memory params)
+        private
+        view
+        returns (SwapResult memory result, uint24 swapFee, SimulationState memory state)
+    {
+        // Get current pool state from storage
+        (uint160 _sqrtPriceX96, int24 _tick, uint24 _protocolFee, uint24 _lpFee) =
+            StateLibrary.getSlot0(poolManager, corePoolKey.toId());
+
+        // Get current pool liquidity
+        uint256 poolLiquidity = StateLibrary.getLiquidity(poolManager, corePoolKey.toId());
+
+        // Initialize result with starting pool state
+        result.sqrtPriceX96 = _sqrtPriceX96; // Starting price
+        result.tick = _tick; // Starting tick
+        result.liquidity = poolLiquidity.toUint128(); // Starting liquidity
+
+        // Initialize tracking variables for the simulation
+        state.zeroForOne = params.zeroForOne; // Extract swap direction
+        state.protocolFee = _protocolFee; // Extract protocol fee
+        state.amountSpecifiedRemaining = params.amountSpecified; // How much input/output remains
+        state.amountCalculated = 0; // How much has been processed
+        state.amountToProtocol = 0; // Protocol fee accumulator
+
+        // ============ FEE CALCULATION ============
+
+        // Calculate total swap fee (LP fee + protocol fee if enabled)
+        uint16 protocolFee16 = OZSafeCast.toUint16(uint256(_protocolFee));
+        swapFee = _protocolFee == 0 ? _lpFee : ProtocolFeeLibrary.calculateSwapFee(protocolFee16, _lpFee);
+
+        // Validate that fees aren't too high for exact output swaps
+        if (swapFee >= SwapMath.MAX_SWAP_FEE) {
+            if (params.amountSpecified > 0) {
+                revert Errors.InvalidFeeForExactOut();
+            }
+        }
+    }
+
+    /**
+     * @notice Executes the main swap loop until completion or price limit reached
+     * @param poolManager The Uniswap V4 PoolManager contract
+     * @param corePoolKey The key of the pool to simulate the swap in
+     * @param params The swap parameters
+     * @param swapFee The total swap fee rate
+     * @param result The swap result state (modified in place)
+     * @param state The simulation state (modified in place)
+     */
+    function _executeSwapLoop(
+        IPoolManager poolManager,
+        PoolKey memory corePoolKey,
+        SwapParams memory params,
+        uint24 swapFee,
+        SwapResult memory result,
+        SimulationState memory state
+    ) private view {
+        // Continue swapping until we've used all input/output or hit price limits
+        while (!(state.amountSpecifiedRemaining == 0 || result.sqrtPriceX96 == params.sqrtPriceLimitX96)) {
+            _executeSwapStep(poolManager, corePoolKey, params, swapFee, result, state);
+        }
+    }
+
+    /**
+     * @notice Executes a single swap step within the swap loop
+     * @param poolManager The Uniswap V4 PoolManager contract
+     * @param corePoolKey The key of the pool to simulate the swap in
+     * @param params The swap parameters
+     * @param swapFee The total swap fee rate
+     * @param result The swap result state (modified in place)
+     * @param state The simulation state (modified in place)
+     */
+    function _executeSwapStep(
+        IPoolManager poolManager,
+        PoolKey memory corePoolKey,
+        SwapParams memory params,
+        uint24 swapFee,
+        SwapResult memory result,
+        SimulationState memory state
+    ) private view {
+        // ============ STEP INITIALIZATION ============
+
+        StepComputations memory step;
+        step.sqrtPriceStartX96 = result.sqrtPriceX96;
+
+        // Find the next initialized tick in the swap direction
+        (step.tickNext, step.initialized) = TickUtils.nextInitializedTickWithinOneWord(
+            poolManager, corePoolKey.toId(), result.tick, corePoolKey.tickSpacing, state.zeroForOne
+        );
+
+        // Ensure we don't go beyond valid tick bounds
+        if (step.tickNext <= TickMath.MIN_TICK) {
+            step.tickNext = TickMath.MIN_TICK;
+        }
+        if (step.tickNext >= TickMath.MAX_TICK) {
+            step.tickNext = TickMath.MAX_TICK;
+        }
+
+        // Calculate the price at the next tick
+        step.sqrtPriceNextX96 = TickMath.getSqrtPriceAtTick(step.tickNext);
+
+        // ============ SWAP STEP COMPUTATION ============
+
+        // Compute how much we can swap in this step
+        // This determines the price movement and amounts for this step
+        // i.e extract as much liquidity as you can between this tick and the next tick
+        (result.sqrtPriceX96, step.amountIn, step.amountOut, step.feeAmount) = SwapMath.computeSwapStep(
+            // Current price
+            result.sqrtPriceX96,
+            // Target price
+            SwapMath.getSqrtPriceTarget(state.zeroForOne, step.sqrtPriceNextX96, params.sqrtPriceLimitX96),
+            // Available liquidity
+            result.liquidity,
+            // Remaining amount to swap
+            state.amountSpecifiedRemaining,
+            // Total fee rate
+            swapFee
+        );
+
+        // ============ AMOUNT TRACKING ============
+
+        // Update remaining amounts based on swap type
+        if (params.amountSpecified > 0) {
+            // Exact output swap: reduce remaining output, track calculated input
+            unchecked {
+                state.amountSpecifiedRemaining -= step.amountOut.toInt256();
+                state.amountCalculated -= (step.amountIn + step.feeAmount).toInt256();
+            }
+        } else {
+            // Exact input swap: reduce remaining input, track calculated output
+            unchecked {
+                state.amountSpecifiedRemaining += (step.amountIn + step.feeAmount).toInt256();
+                state.amountCalculated += step.amountOut.toInt256();
+            }
+        }
+
+        // ============ PROTOCOL FEE HANDLING ============
+
+        // If protocol fees are enabled, calculate and track them
+        if (state.protocolFee > 0) {
+            uint256 delta = (swapFee == state.protocolFee)  // Entire fee goes to protocol if LP fee is 0
+                ? step.feeAmount
+                : ((step.amountIn + step.feeAmount) * state.protocolFee) / ProtocolFeeLibrary.PIPS_DENOMINATOR;
+
+            // Reduce LP fee by protocol portion
+            step.feeAmount -= delta;
+            // Track protocol fee
+            state.amountToProtocol += delta;
+        }
+
+        // ============ FEE GROWTH UPDATES ============
+
+        // Update global fee growth tracker for this step
+        if (result.liquidity > 0) {
+            step.feeGrowthGlobalX128 += UnsafeMath.simpleMulDiv(step.feeAmount, FixedPoint128.Q128, result.liquidity);
+        }
+
+        // ============ TICK TRANSITION HANDLING ============
+
+        // Check if we've reached the next tick boundary
+        if (result.sqrtPriceX96 == step.sqrtPriceNextX96) {
+            // We've hit a tick boundary, handle liquidity changes
+            if (step.initialized) {
+                // Get liquidity change at this tick
+                (, int128 liquidityNet) = StateLibrary.getTickLiquidity(poolManager, corePoolKey.toId(), step.tickNext);
+
+                // For leftward movement (zeroForOne), flip the sign of liquidity change
+                if (state.zeroForOne) liquidityNet = -liquidityNet;
+
+                // Apply liquidity change
+                result.liquidity = LiquidityMath.addDelta(result.liquidity, liquidityNet);
+            }
+
+            // Update tick position
+            // Mirror Uniswap's "tick = tickNext - 1" convention for zeroForOne swaps, but avoid underflow at MIN_TICK.
+            result.tick = state.zeroForOne
+                ? (step.tickNext == TickMath.MIN_TICK ? TickMath.MIN_TICK : (step.tickNext - 1))
+                : step.tickNext;
+        } else if (result.sqrtPriceX96 != step.sqrtPriceStartX96) {
+            // Price changed but didn't hit tick boundary, recalculate tick
+            result.tick = TickMath.getTickAtSqrtPrice(result.sqrtPriceX96);
+        }
+    }
+
+    /**
+     * @notice Calculates the final balance delta based on swap direction and type
+     * @param params The swap parameters
+     * @param state The simulation state after swap execution
+     * @return The final balance delta for the swap
+     */
+    function _calculateFinalDelta(SwapParams memory params, SimulationState memory state)
+        private
+        pure
+        returns (BalanceDelta)
+    {
+        // Calculate the final balance delta based on swap direction and type
+        if (state.zeroForOne != (params.amountSpecified < 0)) {
             // For exact input swaps: positive input, negative output
-            swapDelta = toBalanceDelta(
-                amountCalculated.toInt128(), (params.amountSpecified - amountSpecifiedRemaining).toInt128()
+            return toBalanceDelta(
+                state.amountCalculated.toInt128(), (params.amountSpecified - state.amountSpecifiedRemaining).toInt128()
             );
         } else {
             // For exact output swaps: negative input, positive output
-            swapDelta = toBalanceDelta(
-                (params.amountSpecified - amountSpecifiedRemaining).toInt128(), amountCalculated.toInt128()
+            return toBalanceDelta(
+                (params.amountSpecified - state.amountSpecifiedRemaining).toInt128(), state.amountCalculated.toInt128()
             );
         }
     }

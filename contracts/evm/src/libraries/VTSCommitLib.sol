@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.26;
+pragma solidity ^0.8.26;
 
 import {VTSStorage, PositionAccounting, TokenPairUint, TokenPairLib} from "../types/VTS.sol";
 import {PositionId, Position} from "../types/Position.sol";
@@ -8,7 +8,6 @@ import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint12
 import {PoolAccounting} from "../types/VTS.sol";
 import {LiquidityUtils} from "./LiquidityUtils.sol";
 import {Errors} from "../libraries/Errors.sol";
-import {IVRLSignalManager} from "../interfaces/IVRLSignalManager.sol";
 import {LiquiditySignal} from "../types/Commit.sol";
 import {IOracleHelper} from "../interfaces/IOracleHelper.sol";
 import {OracleUtils} from "./OracleUtils.sol";
@@ -20,6 +19,7 @@ import {PoolId} from "../types/VTS.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
 import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
+import {IVRLSignalManager} from "../interfaces/IVRLSignalManager.sol";
 
 /// @title VTSCommitLib
 /// @notice Commit and commitment deficit management helpers for VTS, operating on VTSStorage
@@ -29,6 +29,30 @@ import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
 library VTSCommitLib {
     using TokenPairLib for TokenPairUint;
     using StateLibrary for IPoolManager;
+
+    // ============ INTERNAL STRUCTS (Stack Depth Optimisation) ============
+
+    /// @dev Internal struct to reduce stack depth in checkpoint
+    struct CheckpointContext {
+        uint256 issuedUsd;
+        uint256 settledUsd;
+        uint256 signalUsd;
+        uint256 eff0;
+        uint256 eff1;
+        Currency currency0;
+        Currency currency1;
+    }
+
+    /// @dev Internal struct to reduce stack depth in validateLiquidityDelta
+    struct LiquidityDeltaParams {
+        Currency currency0;
+        Currency currency1;
+        uint160 sqrtPriceX96;
+        int24 currentTick;
+        int24 tickLower;
+        int24 tickUpper;
+        int256 liquidityDelta;
+    }
 
     /// @notice Calculates the USD value of the position's issued commitment
     /// @param oracleHelper The oracle helper for USD price calculations
@@ -80,30 +104,29 @@ library VTSCommitLib {
     /// @param s The central VTS storage
     /// @param oracleHelper The oracle helper for USD price calculations
     /// @param commitId The commit NFT id
-    /// @param currency0 The currency 0
-    /// @param currency1 The currency 1
-    /// @param sqrtPriceX96 The sqrt price x96 of the pool
-    /// @param tickLower The lower tick of the position
-    /// @param tickUpper The upper tick of the position
+    /// @param positionId The position ID
+    /// @param params Liquidity delta parameters bundled in a struct
+    /// @param revertIfInsufficientBacking Whether to revert if backing is insufficient
     function validateLiquidityDelta(
         VTSStorage storage s,
         IOracleHelper oracleHelper,
         uint256 commitId,
         PositionId positionId,
-        Currency currency0,
-        Currency currency1,
-        uint160 sqrtPriceX96,
-        int24 currentTick,
-        int24 tickLower,
-        int24 tickUpper,
-        int256 liquidityDelta,
+        LiquidityDeltaParams memory params,
         bool revertIfInsufficientBacking
     ) external view returns (bool success, uint256 issuedValue, uint256 settledValue, uint256 signalValue) {
         issuedValue = _issuedValueForLiquidity(
-            oracleHelper, currency0, currency1, sqrtPriceX96, currentTick, tickLower, tickUpper, liquidityDelta
-        ); // value of total effective issued LCCs in position.
-        settledValue = _settledValueForPosition(s, oracleHelper, currency0, currency1, positionId); // what is in-market.
-        signalValue = _signalValueForCommit(s, oracleHelper, commitId); // what is off-chain / out of market.
+            oracleHelper,
+            params.currency0,
+            params.currency1,
+            params.sqrtPriceX96,
+            params.currentTick,
+            params.tickLower,
+            params.tickUpper,
+            params.liquidityDelta
+        );
+        settledValue = _settledValueForPosition(s, oracleHelper, params.currency0, params.currency1, positionId);
+        signalValue = _signalValueForCommit(s, oracleHelper, commitId);
         success = issuedValue <= signalValue + settledValue;
 
         if (revertIfInsufficientBacking && !success) {
@@ -114,43 +137,42 @@ library VTSCommitLib {
     /// @notice LCC Unwrap -> Protocol Coverage Function
     /// @notice Increment protocol or proactive excess liquidity coverage on LCC unwrap, consuming proactive pool first
     /// @param s The central VTS storage
-    /// @param poolManager The pool manager contract
     /// @param poolId The pool ID
     /// @param tokenIndex The token index (0 or 1)
     /// @param coveredAmount The amount covered
-    function incrementCoverage(
-        VTSStorage storage s,
-        IPoolManager poolManager,
-        PoolId poolId,
-        uint8 tokenIndex,
-        uint256 coveredAmount
-    ) external {
+    function incrementCoverage(VTSStorage storage s, PoolId poolId, uint8 tokenIndex, uint256 coveredAmount) external {
         if (tokenIndex > 1 || coveredAmount == 0) return;
-        uint128 liq = poolManager.getLiquidity(poolId);
         PoolAccounting storage paPool = s.poolAccounting[poolId];
 
-        if (liq > 0) {
-            // Accrue coverage usage growth per-liquidity (outflow weight basis at current tick)
-            uint256 deltaG = FullMath.mulDiv(coveredAmount, FixedPoint128.Q128, uint256(liq));
-            uint256 currentGrowth = paPool.coverageUseGrowthGlobal.get(tokenIndex);
-            paPool.coverageUseGrowthGlobal.set(tokenIndex, currentGrowth + deltaG);
+        // DICE: Increment coverage-per-deficit index (for slash attribution)
+        uint256 totalPrincipal = paPool.totalDeficitPrincipal.get(tokenIndex);
+        if (totalPrincipal > 0) {
+            uint256 deltaIndex = FullMath.mulDiv(coveredAmount, FixedPoint128.Q128, totalPrincipal);
+            uint256 currentIndex = paPool.coveragePerDeficitIndexX128.get(tokenIndex);
+            paPool.coveragePerDeficitIndexX128.set(tokenIndex, currentIndex + deltaIndex);
         } else {
-            // No in-range liquidity; defer to residual
-            uint256 currentResidual = paPool.coverageResidual.get(tokenIndex);
-            paPool.coverageResidual.set(tokenIndex, currentResidual + coveredAmount);
+            // No materialised deficit principal: defer to residual (socialised)
+            uint256 currentResidual = paPool.coverageResidualDICE.get(tokenIndex);
+            paPool.coverageResidualDICE.set(tokenIndex, currentResidual + coveredAmount);
+        }
+
+        // CISE: Increment coverage-per-settled index (for bonus allocation)
+        uint256 totalSettled = paPool.totalSettled.get(tokenIndex);
+        if (totalSettled > 0) {
+            uint256 deltaIndexCISE = FullMath.mulDiv(coveredAmount, FixedPoint128.Q128, totalSettled);
+            uint256 currentIndexCISE = paPool.coveragePerSettledIndexX128.get(tokenIndex);
+            paPool.coveragePerSettledIndexX128.set(tokenIndex, currentIndexCISE + deltaIndexCISE);
+        } else {
+            // No settled liquidity: defer to CISE residual (socialised when settled becomes non-zero)
+            uint256 currentResidualCISE = paPool.coverageResidualCISE.get(tokenIndex);
+            paPool.coverageResidualCISE.set(tokenIndex, currentResidualCISE + coveredAmount);
         }
     }
 
-    /// @notice Commits a liquidity signal to the VTS state
-    /// @param s The central VTS storage
-    /// @param signalManager The signal manager address
-    /// @param liquiditySignal The liquidity signal to commit
-    /// @return commitId The commit id of the committed signal
-    function commitSignal(
-        VTSStorage storage s,
-        IVRLSignalManager signalManager, // Pass as parameter
-        bytes memory liquiditySignal
-    )
+    /// @notice Commits a liquidity signal to the VTS state (linked-library entry)
+    /// @dev Intentionally keeps all commitment logic in the linked library to reduce VTSOrchestrator bytecode size.
+    //#olympix-ignore-reentrancy
+    function commitSignal(VTSStorage storage s, IVRLSignalManager signalManager, bytes memory liquiditySignal)
         external
         returns (uint256 commitId)
     {
@@ -168,16 +190,12 @@ library VTSCommitLib {
         commitId = ++s.nextCommitId;
 
         // store the signal state (only state and expiresAt are relevant) and bind commit to pool
-        s.commits[commitId].mmState = signal.mmState;
+        MarketMaker.save(s.commits[commitId].mmState, signal.mmState);
         s.commits[commitId].expiresAt = block.timestamp + expirySeconds;
     }
 
-    /// @notice Renews a liquidity signal for a commit
-    /// @dev Uses O(1) operations - no position iteration required
-    /// @param s The central VTS storage
-    /// @param signalManager The signal manager for verification
-    /// @param commitId The commit ID
-    /// @param liquiditySignal The new liquidity signal
+    /// @notice Renews a liquidity signal for a commit (linked-library entry)
+    //#olympix-ignore-reentrancy
     function renewSignal(
         VTSStorage storage s,
         IVRLSignalManager signalManager,
@@ -194,8 +212,131 @@ library VTSCommitLib {
 
         // Persist signal state (only state and expiresAt)
         Commit storage commit = s.commits[commitId];
-        commit.mmState = signal.mmState;
+        MarketMaker.save(commit.mmState, signal.mmState);
         commit.expiresAt = block.timestamp + expirySeconds;
+    }
+
+    /// @notice Checkpoint with commitment backing checks (single linked-library call)
+    /// @dev Verifies signal, updates commit state/expiry, and sets position commitment deficit.
+    //#olympix-ignore-reentrancy
+    function checkpointWithCommitment(
+        VTSStorage storage s,
+        IPoolManager poolManager,
+        IVRLSignalManager signalManager,
+        IOracleHelper oracleHelper,
+        address sender,
+        uint256 commitId,
+        PositionId positionId,
+        bytes memory liquiditySignal
+    ) external {
+        if (liquiditySignal.length == 0) {
+            revert Errors.InvalidLiquiditySignal(0, 0, 0);
+        }
+
+        // Verify signal and update commit in scoped block
+        uint256 expirySeconds;
+        LiquiditySignal memory newSignal;
+        {
+            (, expirySeconds) = signalManager.verifyLiquiditySignal(liquiditySignal, true);
+            newSignal = abi.decode(liquiditySignal, (LiquiditySignal));
+
+            Commit storage commit = s.commits[commitId];
+            MarketMaker.State memory oldMmState = commit.mmState;
+
+            if (
+                newSignal.mmState.owner != oldMmState.owner || sender != newSignal.mmState.advancer
+                    || newSignal.mmState.advancer == newSignal.mmState.owner
+            ) {
+                revert Errors.InvalidSender();
+            }
+
+            // Update commit state/expiry using verified signal
+            MarketMaker.save(commit.mmState, newSignal.mmState);
+            commit.expiresAt = block.timestamp + expirySeconds;
+        }
+
+        // Build checkpoint context in scoped block
+        CheckpointContext memory ctx;
+        Position memory pos = s.positions[positionId];
+        PositionAccounting storage pa = s.positionAccounting[positionId];
+        {
+            Pool storage pool = s.pools[pos.poolId];
+            ctx.currency0 = pool.currency0;
+            ctx.currency1 = pool.currency1;
+        }
+        {
+            // Compute effective issued amounts at current price
+            (uint160 sqrtPriceX96, int24 currentTick,,) = poolManager.getSlot0(pos.poolId);
+            (ctx.eff0, ctx.eff1) = LiquidityUtils.calculateEffectiveTokenAmounts(
+                sqrtPriceX96, currentTick, pos.tickLower, pos.tickUpper, SafeCast.toInt256(uint128(pos.liquidity))
+            );
+        }
+        {
+            ctx.issuedUsd = OracleUtils.lccPairValue(
+                oracleHelper, Currency.unwrap(ctx.currency0), ctx.eff0, Currency.unwrap(ctx.currency1), ctx.eff1
+            );
+            ctx.settledUsd = OracleUtils.lccPairValue(
+                oracleHelper,
+                Currency.unwrap(ctx.currency0),
+                pa.settled.token0,
+                Currency.unwrap(ctx.currency1),
+                pa.settled.token1
+            );
+            ctx.signalUsd = _signalValue(newSignal.mmState, oracleHelper);
+        }
+
+        if (ctx.issuedUsd == 0) {
+            pa.commitmentDeficit.token0 = 0;
+            pa.commitmentDeficit.token1 = 0;
+            return;
+        }
+
+        uint256 backingUsd = ctx.signalUsd + ctx.settledUsd;
+
+        if (ctx.issuedUsd <= backingUsd) {
+            // Backing is sufficient; reduce any existing position-level deficit proportionally
+            uint256 currentDeficitUsd = OracleUtils.lccPairValue(
+                oracleHelper,
+                Currency.unwrap(ctx.currency0),
+                pa.commitmentDeficit.token0,
+                Currency.unwrap(ctx.currency1),
+                pa.commitmentDeficit.token1
+            );
+
+            if (currentDeficitUsd > 0) {
+                // Settling native tokens in NOT increase backing. However, it does decrease/net against the deficit.
+                uint256 surplusUsd = backingUsd - ctx.issuedUsd;
+                if (surplusUsd >= currentDeficitUsd) {
+                    // Is the difference in value backing vs issued sufficient to cover the deficit?
+                    pa.commitmentDeficit.token0 = 0;
+                    pa.commitmentDeficit.token1 = 0;
+                } else {
+                    // Reduce the deficit proportionally to the surplus.
+                    uint256 reduce0 = FullMath.mulDiv(pa.commitmentDeficit.token0, surplusUsd, currentDeficitUsd);
+                    uint256 reduce1 = FullMath.mulDiv(pa.commitmentDeficit.token1, surplusUsd, currentDeficitUsd);
+
+                    if (reduce0 > pa.commitmentDeficit.token0) reduce0 = pa.commitmentDeficit.token0;
+                    if (reduce1 > pa.commitmentDeficit.token1) reduce1 = pa.commitmentDeficit.token1;
+
+                    pa.commitmentDeficit.token0 -= reduce0;
+                    pa.commitmentDeficit.token1 -= reduce1;
+                }
+            } else {
+                // Zero out deficit if no value.
+                pa.commitmentDeficit.token0 = 0;
+                pa.commitmentDeficit.token1 = 0;
+            }
+
+            return;
+        }
+
+        // Insufficient backing: derive position-level deficit in token units using deficit BPS
+        {
+            uint256 deficitUsd = ctx.issuedUsd - backingUsd;
+            uint256 deficitBps = FullMath.mulDiv(deficitUsd, LiquidityUtils.BPS_DENOMINATOR, ctx.issuedUsd);
+            pa.commitmentDeficit.token0 = FullMath.mulDiv(ctx.eff0, deficitBps, LiquidityUtils.BPS_DENOMINATOR);
+            pa.commitmentDeficit.token1 = FullMath.mulDiv(ctx.eff1, deficitBps, LiquidityUtils.BPS_DENOMINATOR);
+        }
     }
 
     /// @notice Calculates the USD value of the MarketMaker signal reserves for a commit
@@ -228,126 +369,5 @@ library VTSCommitLib {
         // Despite getTotalValue iterating over tickers, Fiet Provers are responsible for filtering out unsupported tickers/currencies and dust amounts.
         // Therefore, the signal should always include valid tickers, with max 50 - 100 iterations.
         totalValue = oracleHelper.getTotalValue(tickers, amounts);
-    }
-
-    /// @notice Checkpoint a position and update position-level deficits based on backing
-    /// @param s The central VTS storage
-    /// @param poolManager The pool manager (for price/slot0)
-    /// @param signalManager The signal manager for verification
-    /// @param oracleHelper The oracle helper for USD calculations
-    /// @param sender The sender (must match advancer on the liquidity signal when withCommitment is true)
-    /// @param commitId The commit ID
-    /// @param positionId The position ID
-    /// @param liquiditySignal The liquidity signal proving the current MarketMaker state
-    function checkpoint(
-        VTSStorage storage s,
-        IPoolManager poolManager,
-        IVRLSignalManager signalManager,
-        IOracleHelper oracleHelper,
-        address sender,
-        uint256 commitId,
-        PositionId positionId,
-        bytes memory liquiditySignal
-    ) external {
-        if (liquiditySignal.length == 0) {
-            revert Errors.InvalidLiquiditySignal(0, 0, 0);
-        }
-
-        (, uint256 expirySeconds) = signalManager.verifyLiquiditySignal(liquiditySignal, true);
-        LiquiditySignal memory newSignal = abi.decode(liquiditySignal, (LiquiditySignal));
-
-        Commit storage commit = s.commits[commitId];
-        MarketMaker.State memory oldMmState = commit.mmState;
-
-        if (
-            newSignal.mmState.owner != oldMmState.owner || sender != newSignal.mmState.advancer
-                || newSignal.mmState.advancer == newSignal.mmState.owner
-        ) {
-            revert Errors.InvalidSender();
-        }
-
-        Position memory pos = s.positions[positionId];
-        Pool storage pool = s.pools[pos.poolId];
-        PositionAccounting storage pa = s.positionAccounting[positionId];
-
-        // Compute effective issued amounts for this position at current price
-        (uint160 sqrtPriceX96, int24 currentTick,,) = poolManager.getSlot0(pos.poolId);
-        (uint256 eff0, uint256 eff1) = LiquidityUtils.calculateEffectiveTokenAmounts(
-            sqrtPriceX96, currentTick, pos.tickLower, pos.tickUpper, SafeCast.toInt256(uint128(pos.liquidity))
-        );
-        uint256 issuedUsd = OracleUtils.lccPairValue(
-            oracleHelper, Currency.unwrap(pool.currency0), eff0, Currency.unwrap(pool.currency1), eff1
-        );
-
-        // Settled USD for this position
-        uint256 settledUsd = OracleUtils.lccPairValue(
-            oracleHelper,
-            Currency.unwrap(pool.currency0),
-            pa.settled.token0,
-            Currency.unwrap(pool.currency1),
-            pa.settled.token1
-        );
-
-        // Signal USD value from new state
-        uint256 signalUsd = _signalValue(newSignal.mmState, oracleHelper);
-
-        // Update commit state/expiry using verified signal
-        commit.mmState = newSignal.mmState;
-        commit.expiresAt = block.timestamp + expirySeconds;
-
-        if (issuedUsd == 0) {
-            pa.commitmentDeficit.token0 = 0;
-            pa.commitmentDeficit.token1 = 0;
-            return;
-        }
-
-        uint256 backingUsd = signalUsd + settledUsd;
-
-        if (issuedUsd <= backingUsd) {
-            // Backing is sufficient; reduce any existing position-level deficit proportionally
-            uint256 currentDeficitUsd = OracleUtils.lccPairValue(
-                oracleHelper,
-                Currency.unwrap(pool.currency0),
-                pa.commitmentDeficit.token0,
-                Currency.unwrap(pool.currency1),
-                pa.commitmentDeficit.token1
-            );
-
-            if (currentDeficitUsd > 0) {
-                // Settling native tokens in NOT increase backing. However, it does decrease/net against the deficit.
-                uint256 surplusUsd = backingUsd - issuedUsd;
-                if (surplusUsd >= currentDeficitUsd) {
-                    // Is the difference in value backing vs issued sufficient to cover the deficit?
-                    pa.commitmentDeficit.token0 = 0;
-                    pa.commitmentDeficit.token1 = 0;
-                } else {
-                    // Reduce the deficit proportionally to the surplus.
-                    uint256 reduce0 = FullMath.mulDiv(pa.commitmentDeficit.token0, surplusUsd, currentDeficitUsd);
-                    uint256 reduce1 = FullMath.mulDiv(pa.commitmentDeficit.token1, surplusUsd, currentDeficitUsd);
-
-                    if (reduce0 > pa.commitmentDeficit.token0) reduce0 = pa.commitmentDeficit.token0;
-                    if (reduce1 > pa.commitmentDeficit.token1) reduce1 = pa.commitmentDeficit.token1;
-
-                    pa.commitmentDeficit.token0 -= reduce0;
-                    pa.commitmentDeficit.token1 -= reduce1;
-                }
-            } else {
-                // Zero out deficit if no value.
-                pa.commitmentDeficit.token0 = 0;
-                pa.commitmentDeficit.token1 = 0;
-            }
-
-            return;
-        }
-
-        // Insufficient backing: derive position-level deficit in token units using deficit BPS
-        uint256 deficitUsd = issuedUsd - backingUsd;
-        uint256 deficitBps = FullMath.mulDiv(deficitUsd, LiquidityUtils.BPS_DENOMINATOR, issuedUsd);
-
-        uint256 def0 = FullMath.mulDiv(eff0, deficitBps, LiquidityUtils.BPS_DENOMINATOR);
-        uint256 def1 = FullMath.mulDiv(eff1, deficitBps, LiquidityUtils.BPS_DENOMINATOR);
-
-        pa.commitmentDeficit.token0 = def0;
-        pa.commitmentDeficit.token1 = def1;
     }
 }

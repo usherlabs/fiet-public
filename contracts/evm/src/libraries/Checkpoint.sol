@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.26;
+pragma solidity ^0.8.26;
 
 import {RFSCheckpoint} from "../types/Checkpoint.sol";
 import {VTSStorage, PositionAccounting} from "../types/VTS.sol";
@@ -98,7 +98,9 @@ library CheckpointLibrary {
         uint32 verifierIndex,
         bytes memory settlementProof
     ) internal {
-        require(settlementTokenIndex == 0 || settlementTokenIndex == 1, Errors.InvalidTokenIndex(settlementTokenIndex));
+        if (settlementTokenIndex != 0 && settlementTokenIndex != 1) {
+            revert Errors.InvalidTokenIndex(settlementTokenIndex);
+        }
         MarketVTSConfiguration memory vtsConfiguration = s.pools[poolKey.toId()].vtsConfig;
 
         PositionId positionId = s.commits[commitId].positions[positionIndex];

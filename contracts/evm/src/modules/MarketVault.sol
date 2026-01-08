@@ -16,7 +16,7 @@
  *         - "Obligations": Pending settlement deficits that occur when users try to unwrap LCC tokens
  *                          but insufficient liquidity is available
  */
-pragma solidity 0.8.26;
+pragma solidity ^0.8.26;
 
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {CurrencySettler} from "@uniswap/v4-core/test/utils/CurrencySettler.sol";

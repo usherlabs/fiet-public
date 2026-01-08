@@ -94,14 +94,18 @@ const config: HardhatUserConfig = {
       live: false,
     },
     sepolia: {
-      url: process.env.ARCHIVE_NODE_sepolia || "https://ethereum-sepolia.blockpi.network/v1/rpc/public",
+      url:
+        process.env.ARCHIVE_NODE_sepolia ||
+        "https://ethereum-sepolia.blockpi.network/v1/rpc/public",
       chainId: 11155111,
       live: true,
       tags: ["testnet"],
       accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
     },
     arbitrumsepolia: {
-      url: process.env.ARB_SEPOLIA_RPC_URL || "https://sepolia-rollup.arbitrum.io/rpc",
+      url:
+        process.env.ARB_SEPOLIA_RPC_URL ||
+        "https://sepolia-rollup.arbitrum.io/rpc",
       chainId: 421614,
       live: true,
       tags: ["testnet"],
@@ -112,7 +116,7 @@ const config: HardhatUserConfig = {
       chainId: 42161,
       live: true,
       accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
-    }
+    },
   },
   etherscan: {
     apiKey: {
@@ -154,6 +158,9 @@ const config: HardhatUserConfig = {
   dependencyCompiler: {
     paths: [
       "@venusprotocol/governance-contracts/contracts/Governance/AccessControlledV8.sol",
+      // Needed for local `development` deployments (hardhat-deploy looks up these artifacts by name).
+      "@venusprotocol/governance-contracts/contracts/Governance/AccessControlManager.sol",
+      "@venusprotocol/venus-protocol/contracts/Tokens/VAI/VAI.sol",
       "hardhat-deploy/solc_0.8/proxy/OptimizedTransparentUpgradeableProxy.sol",
       "hardhat-deploy/solc_0.8/openzeppelin/proxy/transparent/ProxyAdmin.sol",
       "hardhat-deploy/solc_0.8/openzeppelin/proxy/transparent/ProxyAdmin.sol:ProxyAdmin",
@@ -175,7 +182,8 @@ const config: HardhatUserConfig = {
         artifacts: "../../node_modules/@venusprotocol/venus-protocol/artifacts",
       },
       {
-        artifacts: "../../node_modules/@venusprotocol/governance-contracts/artifacts",
+        artifacts:
+          "../../node_modules/@venusprotocol/governance-contracts/artifacts",
       },
     ],
   },

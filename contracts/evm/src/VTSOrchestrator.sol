@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 // This contract is the central state management layer and orchestrator for VTS logic
 // Adopts Bunni-style pattern: state in storage struct, logic delegated to linked libraries
-pragma solidity 0.8.26;
+pragma solidity ^0.8.26;
 
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {PausableVTS} from "./modules/PausableVTS.sol";
@@ -15,7 +15,15 @@ import {
 } from "./types/Position.sol";
 import {Commit} from "./types/Commit.sol";
 import {Pool} from "./types/Pool.sol";
-import {MarketVTSConfiguration, PositionAccounting, PositionContext} from "./types/VTS.sol";
+import {
+    MarketVTSConfiguration,
+    PositionAccounting,
+    PositionContext,
+    TouchPositionParams,
+    TouchPositionResult,
+    SettleParams,
+    SettleResult
+} from "./types/VTS.sol";
 import {MarketMaker} from "./libraries/MarketMaker.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {VTSStorage} from "./types/VTS.sol";
@@ -49,12 +57,13 @@ import {LiquidityUtils} from "./libraries/LiquidityUtils.sol";
 import {toBalanceDelta} from "v4-periphery/lib/v4-core/src/types/BalanceDelta.sol";
 import {TransientSlots} from "./libraries/TransientSlots.sol";
 import {PoolAccounting} from "./types/VTS.sol";
+import {ReentrancyGuardTransient} from "openzeppelin-contracts/contracts/utils/ReentrancyGuardTransient.sol";
 
 /// @title VTSOrchestrator
 /// @notice Central state management layer and orchestrator for VTS logic
 /// @dev Adopts Bunni-style pattern: state managed in VTSStorage struct, complex logic delegated to linked libraries
 /// @author Fiet Protocol
-contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSOrchestrator {
+contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSOrchestrator, ReentrancyGuardTransient {
     using StateLibrary for IPoolManager;
     using TransientStateLibrary for IPoolManager;
     using SafeCast for uint256;
@@ -75,6 +84,18 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
     /// @notice VRL Signal Manager for liquidity signal validation
     IVRLSignalManager public immutable signalManager;
 
+    // --------------------------------------------------
+    // Mutation testing note
+    // --------------------------------------------------
+    // Olympix/Gambit will sometimes generate equivalent mutants by flipping data locations
+    // (`storage` <-> `memory`) for local variables that are only read.
+    //
+    // These are often unkillable without adding artificial, compile-time-only scaffolding
+    // (or refactoring into less readable code / more repetitive mapping reads), and there
+    // is no protocol-safety upside: the behaviour is unchanged.
+    //
+    // We therefore accept/ignore those survivors in mutation reports for this contract.
+
     /// @notice Constructor
     /// @param _poolManager The Uniswap V4 PoolManager address
     /// @param _signalManager The VRL Signal Manager address
@@ -92,6 +113,18 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
     ) Ownable(_initialOwner) ImmutableState(IPoolManager(_poolManager)) {
         if (_poolManager == address(0)) {
             revert Errors.InvalidAddress(_poolManager);
+        }
+        if (_signalManager == address(0)) {
+            revert Errors.InvalidAddress(_signalManager);
+        }
+        if (_oracleHelper == address(0)) {
+            revert Errors.InvalidAddress(_oracleHelper);
+        }
+        if (_liquidityHub == address(0)) {
+            revert Errors.InvalidAddress(_liquidityHub);
+        }
+        if (_settlementObserver == address(0)) {
+            revert Errors.InvalidAddress(_settlementObserver);
         }
         oracleHelper = IOracleHelper(_oracleHelper);
         signalManager = IVRLSignalManager(_signalManager);
@@ -219,6 +252,13 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
         }
     }
 
+    /// @dev Resolve market vault for a pool key (reduces stack depth in callers)
+    function _resolveVault(PoolKey calldata poolKey) internal view returns (IMarketVault) {
+        IMarketFactory factory =
+            liquidityHub.getFactory(Currency.unwrap(poolKey.currency0), Currency.unwrap(poolKey.currency1));
+        return MarketHandlerLib.getVault(factory, poolKey.toId());
+    }
+
     // --------------------------------------------------
     // Admin Helpers
     // --------------------------------------------------
@@ -231,6 +271,7 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
         onlyOwner
     {
         s.pools[corePoolId].vtsConfig = vtsConfiguration;
+        emit VTSConfigSet(PoolId.unwrap(corePoolId), vtsConfiguration);
     }
 
     // --------------------------------------------------
@@ -363,6 +404,22 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
         return (paPool.protocolFeeAccrued.token0, paPool.protocolFeeAccrued.token1);
     }
 
+    /// @inheritdoc IVTSOrchestrator
+    function getSlashedPot(PoolId poolId) external view returns (uint256 pot0, uint256 pot1) {
+        PoolAccounting storage paPool = s.poolAccounting[poolId];
+        return (paPool.slashedPot.token0, paPool.slashedPot.token1);
+    }
+
+    /// @inheritdoc IVTSOrchestrator
+    function getPositionFeeAccounting(PositionId positionId)
+        external
+        view
+        returns (uint256 feesShared0, uint256 feesShared1, int256 pendingFeeAdj0, int256 pendingFeeAdj1)
+    {
+        PositionAccounting storage pa = s.positionAccounting[positionId];
+        return (pa.feesShared.token0, pa.feesShared.token1, pa.pendingFeeAdj.token0, pa.pendingFeeAdj.token1);
+    }
+
     /// @notice Get the checkpoint for a given position
     /// @param positionId The position identifier
     /// @return checkpoint The RFS checkpoint for the position
@@ -394,10 +451,10 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
     /// @param amount1 Amount to increment for token1
     function incrementCoverage(PoolId poolId, uint256 amount0, uint256 amount1) external onlyFactory {
         if (amount0 > 0) {
-            VTSCommitLib.incrementCoverage(s, poolManager, poolId, 0, amount0);
+            VTSCommitLib.incrementCoverage(s, poolId, 0, amount0);
         }
         if (amount1 > 0) {
-            VTSCommitLib.incrementCoverage(s, poolManager, poolId, 1, amount1);
+            VTSCommitLib.incrementCoverage(s, poolId, 1, amount1);
         }
     }
 
@@ -412,6 +469,7 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
     function settlePositionGrowths(PositionId positionId) public {
         // Only check for active valid position - as new positions are not yet registered in VTS when this method is called.
         if (isPositionValid(positionId, true)) {
+            _notPoolPaused(s.positions[positionId].poolId);
             VTSPositionLib.settlePositionGrowths(s, poolManager, positionId);
         }
     }
@@ -443,30 +501,58 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
         notPoolPaused(poolKey.toId())
         returns (Position memory pos, PositionId id, BalanceDelta feeAdj, bool isMMPosition)
     {
-        // Decode hookData to check if this is an MM operation
-        PositionModificationHookData memory mmData = PositionModificationHookDataLib.decodeCalldata(hookData);
+        isMMPosition = _validateMMOperation(hookData);
+        (pos, id, feeAdj) = _executeProcessPosition(owner, poolKey, params, callerDelta, feesAccrued, hookData);
+    }
 
-        isMMPosition = false;
-        // Determine if this is a valid MM position (MM operation with valid signal)
+    /// @dev Validate MM operation from hook data (helper to reduce stack depth)
+    function _validateMMOperation(bytes calldata hookData) private view returns (bool isMMPosition) {
+        PositionModificationHookData memory mmData = PositionModificationHookDataLib.decodeCalldata(hookData);
         if (PositionModificationHookDataLib.isMMOperation(mmData)) {
-            // Validate signal for MM positions (skip expiry check for seizure)
             _assertSignalValid(mmData.commitId, !mmData.seizure.isSeizing);
-            isMMPosition = true;
+            return true;
+        }
+        return false;
+    }
+
+    /// @dev Execute process position logic (helper to reduce stack depth)
+    function _executeProcessPosition(
+        address owner,
+        PoolKey calldata poolKey,
+        ModifyLiquidityParams calldata params,
+        BalanceDelta callerDelta,
+        BalanceDelta feesAccrued,
+        bytes calldata hookData
+    ) private returns (Position memory pos, PositionId id, BalanceDelta feeAdj) {
+        // Build context in scoped block
+        PositionContext memory ctx;
+        {
+            ctx = PositionContext({
+                poolManager: poolManager,
+                liquidityHub: liquidityHub,
+                oracleHelper: oracleHelper,
+                marketVault: _resolveVault(poolKey)
+            });
         }
 
-        // Build position context with dependency references
-        IMarketFactory factory =
-            liquidityHub.getFactory(Currency.unwrap(poolKey.currency0), Currency.unwrap(poolKey.currency1));
-        IMarketVault vault = MarketHandlerLib.getVault(factory, poolKey.toId());
-        PositionContext memory ctx = PositionContext({
-            poolManager: poolManager, liquidityHub: liquidityHub, oracleHelper: oracleHelper, marketVault: vault
-        });
+        // Build params in scoped block
+        TouchPositionParams memory tpParams;
+        {
+            tpParams = TouchPositionParams({
+                owner: owner,
+                poolKey: poolKey,
+                params: params,
+                callerDelta: callerDelta,
+                feesAccrued: feesAccrued,
+                hookData: hookData
+            });
+        }
 
-        // Delegate all position processing to VTSPositionLib
-        // This handles registration, linking, fee processing, delta accounting,
-        // LCC issuance/cancellation, and checkpoint marking
-        (pos, id, feeAdj) =
-            VTSPositionLib.touchPosition(s, ctx, owner, poolKey, params, callerDelta, feesAccrued, hookData);
+        // Execute
+        TouchPositionResult memory result = VTSPositionLib.touchPosition(s, ctx, tpParams);
+        pos = result.pos;
+        id = result.id;
+        feeAdj = result.feeAdj;
     }
 
     /// @notice Called by CoreHook after a swap to process swap-related accounting
@@ -493,8 +579,12 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
     /// @dev Verifies the signal via SignalManager and stores it in the VTS state
     /// @param liquiditySignal The liquidity signal to commit
     /// @return commitId The commit identifier for the committed signal
-    function commitSignal(bytes memory liquiditySignal) external onlyIfPoolManagerUnlocked returns (uint256 commitId) {
-        // Verify and commit the signal to state
+    function commitSignal(bytes memory liquiditySignal)
+        external
+        onlyIfPoolManagerUnlocked
+        nonReentrant
+        returns (uint256 commitId)
+    {
         commitId = VTSCommitLib.commitSignal(s, signalManager, liquiditySignal);
     }
 
@@ -513,7 +603,7 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
         uint8 settlementTokenIndex,
         uint32 verifierIndex,
         bytes memory settlementProof
-    ) external onlyIfPoolManagerUnlocked {
+    ) external onlyIfPoolManagerUnlocked nonReentrant {
         _assertSignalValid(commitId, true);
         // Validate position exists
         PositionId positionId = getPositionId(commitId, positionIndex);
@@ -559,36 +649,51 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
     )
         external
         onlyIfPoolManagerUnlocked
+        nonReentrant
         returns (BalanceDelta settlementDelta, bool rfsOpen, uint256 seizedLiquidityUnits)
     {
-        // Validate signal only for normal settlement, not seizure
-        _assertSignalValid(commitId, !isSeizing); // Skip expiry check for seizure
+        _assertSignalValid(commitId, !isSeizing);
 
-        PositionId positionId = getPositionId(commitId, positionIndex);
+        // Build params in scoped block to free stack
+        SettleParams memory params;
+        {
+            params = SettleParams({
+                vault: marketVault,
+                positionId: getPositionId(commitId, positionIndex),
+                lccCurrency0: currency0,
+                lccCurrency1: currency1,
+                delta: amountDelta,
+                isSeizing: isSeizing
+            });
+        }
 
-        // position validation is performed inside of VTSPositionLib.onMMSettle
-        (settlementDelta, rfsOpen, seizedLiquidityUnits) = VTSPositionLib.onMMSettle(
-            s, poolManager, marketVault, positionId, currency0, currency1, amountDelta, isSeizing
-        );
+        // Execute settlement
+        SettleResult memory result = VTSPositionLib.onMMSettle(s, poolManager, params);
+        settlementDelta = result.settlementDelta;
+        rfsOpen = result.rfsOpen;
+        seizedLiquidityUnits = result.seizedLiquidityUnits;
 
-        PositionAccounting storage pa = s.positionAccounting[positionId];
-        emit PositionSettled(
-            commitId,
-            positionIndex,
-            settlementDelta.amount0(),
-            settlementDelta.amount1(),
-            pa.settled.token0,
-            pa.settled.token1,
-            isSeizing,
-            rfsOpen
-        );
+        // Emit event
+        {
+            PositionAccounting storage pa = s.positionAccounting[params.positionId];
+            emit PositionSettled(
+                commitId,
+                positionIndex,
+                settlementDelta.amount0(),
+                settlementDelta.amount1(),
+                pa.settled.token0,
+                pa.settled.token1,
+                isSeizing,
+                rfsOpen
+            );
+        }
     }
 
     /// @notice Validate that the grace period has elapsed for a position (required before seizure)
     /// @dev Called by MMPositionManager before seizing a position. Reverts if grace period has not elapsed.
     /// @param commitId The commit identifier
     /// @param positionIndex The position index within the commit
-    function onSeize(uint256 commitId, uint256 positionIndex) external view onlyIfPoolManagerUnlocked {
+    function onSeize(uint256 commitId, uint256 positionIndex) external onlyIfPoolManagerUnlocked nonReentrant {
         // Validate commit exists (but don't require live signal - expired signals can be seized)
         _assertSignalValid(commitId, false);
 
@@ -605,7 +710,11 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
     /// @dev Updates the signal for a commit and validates it via SignalManager and OracleHelper
     /// @param commitId The commit identifier to renew
     /// @param liquiditySignal The new liquidity signal
-    function renewSignal(uint256 commitId, bytes memory liquiditySignal) external onlyIfPoolManagerUnlocked {
+    function renewSignal(uint256 commitId, bytes memory liquiditySignal)
+        external
+        onlyIfPoolManagerUnlocked
+        nonReentrant
+    {
         // Validate commit exists (but don't require live signal - expired signals can be seized)
         _assertSignalValid(commitId, false);
         VTSCommitLib.renewSignal(s, signalManager, commitId, liquiditySignal);
@@ -625,7 +734,7 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
         uint256 positionIndex,
         bytes memory liquiditySignal,
         bool withCommitment
-    ) external {
+    ) external nonReentrant {
         // Validate commit exists (but don't require live signal - expired signals can be seized)
         _assertSignalValid(commitId, false);
 
@@ -640,8 +749,7 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
         if (!withCommitment) {
             return;
         }
-
-        VTSCommitLib.checkpoint(
+        VTSCommitLib.checkpointWithCommitment(
             s, poolManager, signalManager, oracleHelper, sender, commitId, positionId, liquiditySignal
         );
     }

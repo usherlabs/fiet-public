@@ -1,0 +1,365 @@
+// SPDX-License-Identifier: UNLICENSED
+pragma solidity ^0.8.26;
+
+import "forge-std/Test.sol";
+
+import {LiquidityCommitmentCertificate} from "../src/LCC.sol";
+import {Errors} from "../src/libraries/Errors.sol";
+import {OracleUtils} from "../src/libraries/OracleUtils.sol";
+
+contract MockMarketFactoryBounds {
+    mapping(address => bool) public bounds;
+
+    function setBounds(address who, bool isBound) external {
+        bounds[who] = isBound;
+    }
+}
+
+contract LiquidityCommitmentCertificateExposed is LiquidityCommitmentCertificate {
+    constructor(
+        address _marketFactory,
+        address _underlyingAsset,
+        string memory name,
+        string memory symbol,
+        uint8 __decimals,
+        address _resilientOracleAddress
+    )
+        LiquidityCommitmentCertificate(
+            _marketFactory, _underlyingAsset, name, symbol, __decimals, _resilientOracleAddress
+        )
+    {}
+
+    function exposed_isProtocolTransfer(address from, address to, bool fromProtocol, bool toProtocol)
+        external
+        pure
+        returns (bool)
+    {
+        return _isProtocolTransfer(from, to, fromProtocol, toProtocol);
+    }
+}
+
+/**
+ * @title LiquidityCommitmentCertificateTest
+ * @notice Unit tests for `src/LCC.sol` (LiquidityCommitmentCertificate).
+ */
+contract LiquidityCommitmentCertificateTest is Test {
+    MockMarketFactoryBounds internal marketFactory;
+
+    LiquidityCommitmentCertificate internal lcc;
+    LiquidityCommitmentCertificate internal lccNative;
+    LiquidityCommitmentCertificateExposed internal lccExposed;
+
+    address internal alice = makeAddr("alice");
+    address internal bob = makeAddr("bob");
+    address internal protocol = makeAddr("protocol");
+    address internal oracle = makeAddr("ResilientOracle");
+
+    // Records for hub callbacks
+    uint256 internal plannedCancelCalls;
+    address internal lastCancelSender;
+    address internal lastCancelRecipient;
+
+    uint256 internal annulCalls;
+    address internal lastAnnulFrom;
+    uint256 internal lastAnnulWrapped;
+    uint256 internal lastAnnulMarket;
+    uint256 internal lastAnnulAmount;
+
+    bytes32 internal marketIdForThis = bytes32("market-id");
+    address internal factoryForThis = makeAddr("factory");
+
+    function setUp() public {
+        marketFactory = new MockMarketFactoryBounds();
+
+        // Mark a protocol-bound address for transfer tests.
+        marketFactory.setBounds(protocol, true);
+
+        // Deploy with hub == address(this) so we can observe callbacks.
+        lcc = new LiquidityCommitmentCertificate(address(marketFactory), address(0xBEEF), "LCC", "LCC", 18, oracle);
+        lccNative = new LiquidityCommitmentCertificate(address(marketFactory), address(0), "LCCN", "LCCN", 18, oracle);
+        lccExposed = new LiquidityCommitmentCertificateExposed(
+            address(marketFactory), address(0xBEEF), "LCCX", "LCCX", 18, oracle
+        );
+    }
+
+    // -------------------------
+    // Minimal hub surface for LCC callbacks
+    // -------------------------
+
+    function lccToMarket(address) external view returns (bytes32, address) {
+        return (marketIdForThis, factoryForThis);
+    }
+
+    function executePlannedCancel(address sender, address cancelFromRecipient) external {
+        plannedCancelCalls++;
+        lastCancelSender = sender;
+        lastCancelRecipient = cancelFromRecipient;
+    }
+
+    function annulSettlementBeforeTransfer(
+        address from,
+        uint256 wrappedBalance,
+        uint256 marketDerivedBalance,
+        uint256 amountToTransfer
+    ) external {
+        annulCalls++;
+        lastAnnulFrom = from;
+        lastAnnulWrapped = wrappedBalance;
+        lastAnnulMarket = marketDerivedBalance;
+        lastAnnulAmount = amountToTransfer;
+    }
+
+    // -------------------------
+    // Tests
+    // -------------------------
+
+    function test_marketId_readsFromHub() public view {
+        assertEq(lcc.marketId(), marketIdForThis);
+    }
+
+    function test_underlying_returnsNativeOracleAddrWhenCallerIsOracleAndUnderlyingIsZero() public {
+        assertEq(lccNative.underlying(), address(0));
+
+        vm.prank(oracle);
+        assertEq(lccNative.underlying(), OracleUtils.RESILIENT_ORACLE_NATIVE_TOKEN_ADDR);
+    }
+
+    function test_decimals_returnsConstructorValue() public {
+        LiquidityCommitmentCertificate lcc6 =
+            new LiquidityCommitmentCertificate(address(marketFactory), address(0xBEEF), "LCC6", "LCC6", 6, oracle);
+        assertEq(lcc6.decimals(), 6);
+    }
+
+    function test_mint_revertsWhenNotHub() public {
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidSender.selector));
+        lcc.mint(alice, 1, 0, false);
+    }
+
+    function test_mint_revertsWhenAmountIsZero() public {
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAmount.selector, uint256(0), uint256(0)));
+        lcc.mint(alice, 0, 0, false);
+    }
+
+    function test_mint_updatesBucketsWhenNotIssued() public {
+        lcc.mint(alice, 3, 5, false);
+
+        (uint256 wrappedBal, uint256 marketBal) = lcc.balancesOf(alice);
+        assertEq(lcc.balanceOf(alice), 8);
+        assertEq(wrappedBal, 3);
+        assertEq(marketBal, 5);
+    }
+
+    function test_mint_issuedTreatsAllAsWrappedViaBalancesOfFallback() public {
+        lcc.mint(alice, 0, 7, true);
+
+        // issued=true skips bucket updates; balancesOf should treat ERC20 balance as wrapped.
+        (uint256 wrappedBal, uint256 marketBal) = lcc.balancesOf(alice);
+        assertEq(lcc.balanceOf(alice), 7);
+        assertEq(wrappedBal, 7);
+        assertEq(marketBal, 0);
+    }
+
+    function test_burn_revertsWhenAmountIsZero() public {
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAmount.selector, uint256(0), uint256(0)));
+        lcc.burn(alice, 0, 0, false);
+    }
+
+    function test_burn_revertsWhenNotHub() public {
+        // Seed a burnable balance (hub mints).
+        lcc.mint(alice, 5, 0, false);
+
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidSender.selector));
+        lcc.burn(alice, 1, 0, false);
+    }
+
+    /// @dev Mutation-hardening: pairs a successful hub burn with an unauthorised burn attempt so
+    ///      mutation runners attribute the access-control kill to burn() even under test selection.
+    function test_burn_onlyHub_enforced() public {
+        lcc.mint(alice, 5, 0, false);
+
+        // Happy path: hub burns successfully.
+        lcc.burn(alice, 1, 0, false);
+        assertEq(lcc.balanceOf(alice), 4);
+
+        // Unauthorised path: alice cannot burn.
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidSender.selector));
+        lcc.burn(alice, 1, 0, false);
+    }
+
+    function test_burn_nonProtocol_decrementsMarketDerivedBucket() public {
+        lcc.mint(alice, 0, 10, false);
+        (uint256 wrappedBalBefore, uint256 marketBalBefore) = lcc.balancesOf(alice);
+        assertEq(wrappedBalBefore, 0);
+        assertEq(marketBalBefore, 10);
+
+        lcc.burn(alice, 0, 4, false);
+
+        (uint256 wrappedBalAfter, uint256 marketBalAfter) = lcc.balancesOf(alice);
+        assertEq(lcc.balanceOf(alice), 6);
+        assertEq(wrappedBalAfter, 0);
+        assertEq(marketBalAfter, 6);
+    }
+
+    function test_burn_protocolBoundSkipsBucketAccounting() public {
+        // Give protocol address tokens without populating buckets (issued path).
+        lcc.mint(protocol, 0, 10, true);
+
+        (uint256 wrappedBal, uint256 marketBal) = lcc.balancesOf(protocol);
+        assertEq(wrappedBal, 10);
+        assertEq(marketBal, 0);
+
+        // Non-issued burn should still skip buckets because marketFactory.bounds(protocol) == true.
+        lcc.burn(protocol, 0, 4, false);
+        (wrappedBal, marketBal) = lcc.balancesOf(protocol);
+        assertEq(lcc.balanceOf(protocol), 6);
+        assertEq(wrappedBal, 6);
+        assertEq(marketBal, 0);
+    }
+
+    function test_transfer_revertsForNonProtocolToNonProtocol() public {
+        lcc.mint(alice, 5, 0, false);
+
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(Errors.TransferNotAllowed.selector));
+        lcc.transfer(bob, 1);
+    }
+
+    function test_isProtocolTransfer_allowsWhenEitherAddressIsZero() public view {
+        assertTrue(lccExposed.exposed_isProtocolTransfer(address(0), alice, false, false));
+        assertTrue(lccExposed.exposed_isProtocolTransfer(alice, address(0), false, false));
+    }
+
+    function test_transfer_protocolToNonProtocolAccruesMarketDerivedOnRecipient_andExecutesPlannedCancelHook() public {
+        // Protocol-bound sender can transfer to non-protocol receiver.
+        lcc.mint(protocol, 0, 5, true);
+
+        vm.prank(protocol);
+        lcc.transfer(alice, 3);
+
+        (uint256 wrappedBal, uint256 marketBal) = lcc.balancesOf(alice);
+        assertEq(wrappedBal, 0);
+        assertEq(marketBal, 3);
+
+        // Annulment only occurs on non-protocol -> protocol transfers.
+        assertEq(annulCalls, 0);
+
+        assertEq(plannedCancelCalls, 1);
+        assertEq(lastCancelSender, protocol);
+        assertEq(lastCancelRecipient, alice);
+    }
+
+    function test_transfer_protocolToProtocol_doesNotAnnul_andBucketsRemainUntracked() public {
+        address protocol2 = makeAddr("protocol2");
+        marketFactory.setBounds(protocol2, true);
+
+        // Give protocol address tokens without populating buckets (issued path).
+        lcc.mint(protocol, 0, 9, true);
+
+        vm.prank(protocol);
+        lcc.transfer(protocol2, 4);
+
+        // No annulment for protocol -> protocol.
+        assertEq(annulCalls, 0);
+
+        // Protocol recipients don't accumulate bucket maps; balancesOf reports ERC20 balance as wrapped via fallback.
+        (uint256 wrappedBal, uint256 marketBal) = lcc.balancesOf(protocol2);
+        assertEq(lcc.balanceOf(protocol2), 4);
+        assertEq(wrappedBal, 4);
+        assertEq(marketBal, 0);
+
+        assertEq(plannedCancelCalls, 1);
+        assertEq(lastCancelSender, protocol);
+        assertEq(lastCancelRecipient, protocol2);
+    }
+
+    function test_transfer_nonProtocolToProtocol_revertsInsufficientBalance_whenBucketsZeroButERC20BalanceNonZero()
+        public
+    {
+        // Make sure recipient is protocol-bound; sender is not.
+        assertTrue(marketFactory.bounds(protocol));
+        assertFalse(marketFactory.bounds(alice));
+
+        // Mint ERC20 balance to alice while skipping bucket bookkeeping.
+        lcc.mint(alice, 7, 0, true);
+        assertEq(lcc.balanceOf(alice), 7);
+
+        // Attempt a non-protocol -> protocol transfer; bucket sums are 0, so LCC's internal check must revert.
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InsufficientBalance.selector, uint256(0), uint256(1)));
+        lcc.transfer(protocol, 1);
+    }
+
+    function test_transfer_nonProtocolToProtocolAnnulsSettlementAndConsumesMarketFirstThenWrapped_andExecutesPlannedCancel()
+        public
+    {
+        // Target is protocol-bound.
+        marketFactory.setBounds(address(this), true);
+
+        // Alice has mixed buckets.
+        lcc.mint(alice, 4, 6, false);
+        (uint256 wrappedBalBefore, uint256 marketBalBefore) = lcc.balancesOf(alice);
+        assertEq(wrappedBalBefore, 4);
+        assertEq(marketBalBefore, 6);
+
+        // Transfer 8 to protocol (consumes 6 market + 2 wrapped).
+        vm.prank(alice);
+        lcc.transfer(address(this), 8);
+
+        (uint256 wrappedBalAfter, uint256 marketBalAfter) = lcc.balancesOf(alice);
+        assertEq(wrappedBalAfter, 2);
+        assertEq(marketBalAfter, 0);
+
+        assertEq(annulCalls, 1);
+        assertEq(lastAnnulFrom, alice);
+        assertEq(lastAnnulWrapped, 4);
+        assertEq(lastAnnulMarket, 6);
+        assertEq(lastAnnulAmount, 8);
+
+        assertEq(plannedCancelCalls, 1);
+        assertEq(lastCancelSender, alice);
+        assertEq(lastCancelRecipient, address(this));
+    }
+
+    function test_transfer_nonProtocolToProtocol_consumesMarketThenWrapped_partial() public {
+        lcc.mint(alice, 4, 6, false);
+
+        // Transfer 8 to protocol (consumes 6 market + 2 wrapped).
+        vm.prank(alice);
+        lcc.transfer(protocol, 8);
+
+        (uint256 wrappedBalAfter, uint256 marketBalAfter) = lcc.balancesOf(alice);
+        assertEq(wrappedBalAfter, 2);
+        assertEq(marketBalAfter, 0);
+    }
+
+    function test_transfer_nonProtocolToProtocol_whenMarketCoversAmount_doesNotConsumeWrapped() public {
+        // Alice has both buckets, but market-derived fully covers the transfer amount.
+        lcc.mint(alice, 5, 10, false);
+        (uint256 wrappedBalBefore, uint256 marketBalBefore) = lcc.balancesOf(alice);
+        assertEq(wrappedBalBefore, 5);
+        assertEq(marketBalBefore, 10);
+
+        vm.prank(alice);
+        lcc.transfer(protocol, 8);
+
+        // Market-derived decreases by exactly amount; wrapped must remain unchanged (remaining == 0 path).
+        (uint256 wrappedBalAfter, uint256 marketBalAfter) = lcc.balancesOf(alice);
+        assertEq(wrappedBalAfter, 5);
+        assertEq(marketBalAfter, 2);
+
+        // Annulment should have been called with pre-transfer bucket values and the transfer amount.
+        assertEq(annulCalls, 1);
+        assertEq(lastAnnulFrom, alice);
+        assertEq(lastAnnulWrapped, 5);
+        assertEq(lastAnnulMarket, 10);
+        assertEq(lastAnnulAmount, 8);
+
+        assertEq(plannedCancelCalls, 1);
+        assertEq(lastCancelSender, alice);
+        assertEq(lastCancelRecipient, protocol);
+    }
+}
+

@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.26;
+pragma solidity ^0.8.26;
 
 import {LiquidityCommitmentCertificate} from "../LCC.sol";
-import {LibBytes} from "solady/utils/LibBytes.sol";
 import {ILCC} from "../interfaces/ILCC.sol";
 import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
 import {Errors} from "./Errors.sol";
@@ -20,6 +19,14 @@ interface ILCCAdmin {
 /// @notice Library for LCC token creation and management
 /// @dev Operates on LiquidityHubStorage storage struct via storage pointers
 library LCCFactoryLib {
+    /// @dev Parameters for LCC creation to reduce stack depth
+    struct LCCParams {
+        string name;
+        string symbol;
+        uint8 decimals;
+        address oracle;
+    }
+
     // ============ INITIALISATION ============
 
     /// @notice Initialise the native asset configuration
@@ -39,6 +46,22 @@ library LCCFactoryLib {
     }
 
     // ============ LCC CREATION ============
+
+    /// @dev Builds LCC parameters to reduce stack depth in createLCC
+    function _buildLCCParams(
+        LiquidityHubStorage storage s,
+        address marketFactoryAddress,
+        address underlying,
+        string memory marketName,
+        string memory symbol,
+        string memory truncatedMarketRefStr
+    ) private view returns (LCCParams memory params) {
+        params.symbol = symbol;
+        params.name =
+            LCCMetadataLib.buildNameFromAsset(underlying, s.nativeAssetName, marketName, truncatedMarketRefStr);
+        params.decimals = LCCMetadataLib.getAssetDecimals(underlying, s.nativeAssetDecimals);
+        params.oracle = address(IMarketFactory(marketFactoryAddress).oracleHelper().oracle());
+    }
 
     /// @notice Creates an LCC token for the given underlying asset
     /// @param s The LCC factory state or LiquidityHubStorage
@@ -64,22 +87,14 @@ library LCCFactoryLib {
         (string memory symbol, string memory truncatedMarketRefStr) =
             _getSymbol(s, underlying, marketRef, underlyingPair);
 
-        // Get name using truncated marketRef
-        string memory name =
-            LCCMetadataLib.buildNameFromAsset(underlying, s.nativeAssetName, marketName, truncatedMarketRefStr);
-
-        // Get decimals
-        uint8 decimals = LCCMetadataLib.getAssetDecimals(underlying, s.nativeAssetDecimals);
+        // Build params in helper to reduce stack depth
+        LCCParams memory params =
+            _buildLCCParams(s, marketFactoryAddress, underlying, marketName, symbol, truncatedMarketRefStr);
 
         // Create LCC token
         lccToken = address(
             new LiquidityCommitmentCertificate(
-                marketFactoryAddress,
-                underlying,
-                name,
-                symbol,
-                decimals,
-                address(IMarketFactory(marketFactoryAddress).oracleHelper().oracle())
+                marketFactoryAddress, underlying, params.name, params.symbol, params.decimals, params.oracle
             )
         );
 
@@ -95,6 +110,30 @@ library LCCFactoryLib {
 
     // ============ SYMBOL GENERATION ============
 
+    /// @dev Result of trying a symbol truncation length
+    struct SymbolAttempt {
+        bool success;
+        bool isNew;
+        string symbol;
+        string truncatedMarketRefStr;
+        bytes truncatedBytes;
+    }
+
+    /// @dev Tries a single truncation length and returns the result
+    function _trySymbolLength(
+        LiquidityHubStorage storage s,
+        string memory uaSymbol,
+        bytes memory marketRef,
+        address[2] memory sortedPair,
+        uint256 length
+    ) private view returns (SymbolAttempt memory attempt) {
+        (attempt.truncatedBytes, attempt.truncatedMarketRefStr) = LCCMetadataLib.truncateMarketRef(marketRef, length);
+        attempt.symbol = LCCMetadataLib.buildSymbol(uaSymbol, attempt.truncatedMarketRefStr);
+        (attempt.success, attempt.isNew) = LCCMetadataLib.checkTruncationCollision(
+            s.truncatedMarketRefToUnderlyingPair[attempt.truncatedBytes], sortedPair
+        );
+    }
+
     /// @dev Gets a unique symbol for an LCC token using truncated marketRef with collision handling
     /// @notice Inlines the collision loop for direct storage access
     function _getSymbol(
@@ -109,34 +148,19 @@ library LCCFactoryLib {
         (address token0Sorted, address token1Sorted) = LCCMetadataLib.sortTokens(underlyingPair[0], underlyingPair[1]);
         address[2] memory sortedPair = [token0Sorted, token1Sorted];
 
-        uint256 length = 4; // Start with minimum truncation (4 bytes = 8 hex chars)
         uint256 maxLength = marketRef.length;
 
-        while (length <= maxLength) {
-            bytes memory truncatedBytes;
-            (truncatedBytes, truncatedMarketRefStr) = LCCMetadataLib.truncateMarketRef(marketRef, length);
-            symbol = LCCMetadataLib.buildSymbol(uaSymbol, truncatedMarketRefStr);
+        for (uint256 length = 4; length <= maxLength; length++) {
+            SymbolAttempt memory attempt = _trySymbolLength(s, uaSymbol, marketRef, sortedPair, length);
 
-            // Check truncated marketRef mapping for underlying pair collision
-            address[2] memory existingPair = s.truncatedMarketRefToUnderlyingPair[truncatedBytes];
-
-            // Check if truncation can be used
-            (bool canUse, bool isNew) = LCCMetadataLib.checkTruncationCollision(existingPair, sortedPair);
-
-            if (canUse) {
-                // Store truncated marketRef -> underlying pair mapping if new
-                if (isNew) {
-                    s.truncatedMarketRefToUnderlyingPair[truncatedBytes] = sortedPair;
+            if (attempt.success) {
+                if (attempt.isNew) {
+                    s.truncatedMarketRefToUnderlyingPair[attempt.truncatedBytes] = sortedPair;
                 }
-                return (symbol, truncatedMarketRefStr);
+                return (attempt.symbol, attempt.truncatedMarketRefStr);
             }
-
-            // Collision: truncated marketRef maps to different underlying pair
-            // Increase length and retry
-            length++;
         }
 
-        // This should never happen in practice, but revert if we can't find a unique symbol
         revert Errors.UnableToGenerateUniqueSymbol();
     }
 
@@ -148,7 +172,6 @@ library LCCFactoryLib {
     /// @param lccToken1 The second LCC token address
     /// @param marketId The market ID (corePoolKey -> PoolID -> unwrap() to bytes32)
     /// @param marketRef The market reference (bytes from proxyHookAddress)
-    /// @param refIsValidIssuer Whether the market ref address is a valid issuer
     /// @param factory The factory address
     function initialize(
         LiquidityHubStorage storage s,
@@ -156,12 +179,9 @@ library LCCFactoryLib {
         address lccToken1,
         bytes32 marketId,
         bytes memory marketRef,
-        bool refIsValidIssuer,
         address factory
     ) internal {
-        Market memory market = Market({
-            id: marketId, ref: marketRef, refIsValidIssuer: refIsValidIssuer, factory: factory
-        });
+        Market memory market = Market({id: marketId, ref: marketRef, factory: factory});
         s.lccToMarket[lccToken0] = market;
         s.lccToMarket[lccToken1] = market;
         s.marketUnderlyingToLCC[marketId][s.lccToUnderlying[lccToken0]] = lccToken0;
@@ -180,25 +200,8 @@ library LCCFactoryLib {
         view
         returns (bool)
     {
-        // Check if caller is in the issuers mapping
-        if (s.issuers[lccToken][caller]) {
-            return true;
-        }
-
-        // Get the market for this LCC token
-        Market memory market = s.lccToMarket[lccToken];
-        if (market.id == bytes32(0) && market.ref.length == 0) {
-            return false; // Market not initialised
-        }
-
-        // Check if refIsValidIssuer is enabled and caller matches the ref address
-        if (market.refIsValidIssuer && market.ref.length >= 20) {
-            bytes32 word = LibBytes.load(market.ref, 0);
-            address refAddress = LibBytes.msbToAddress(word);
-            return caller == refAddress;
-        }
-
-        return false;
+        // Mapping-only semantics: issuerhood is not derived from market state.
+        return s.issuers[lccToken][caller];
     }
 
     /// @notice Sets an issuer for a specific LCC token

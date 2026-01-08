@@ -18,6 +18,7 @@ pids
 # Coverage directory used by tools like istanbul
 coverage/
 *.lcov
+lcov.info
 
 # nyc test coverage
 .nyc_output
@@ -189,3 +190,11 @@ identity.txt
 
 # Oracle local deployments
 deployments/oracle_deployments/development/
+
+./solx
+
+# Gambit & Mutations
+gambit_out/
+.mutation-worktree/
+.gambit_conf.*
+.tmp*

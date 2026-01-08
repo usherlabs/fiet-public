@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.26;
+pragma solidity ^0.8.26;
 
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Commit} from "./Commit.sol";
@@ -9,6 +9,10 @@ import {ILiquidityHub} from "../interfaces/ILiquidityHub.sol";
 import {IOracleHelper} from "../interfaces/IOracleHelper.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {IMarketVault} from "../interfaces/IMarketVault.sol";
+import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
+import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 
 struct TokenConfiguration {
     // Grace period time
@@ -46,6 +50,62 @@ struct PositionContext {
     IMarketVault marketVault;
 }
 
+/// @notice Parameters for touchPosition to reduce stack pressure
+/// @dev Bundles external call parameters into single struct
+struct TouchPositionParams {
+    // The owner of the position
+    address owner;
+    // The pool key (needed for LCC operations and currency access)
+    PoolKey poolKey;
+    // The modify liquidity params
+    ModifyLiquidityParams params;
+    // The caller delta from poolManager.modifyLiquidity
+    BalanceDelta callerDelta;
+    // The fees accrued from poolManager.modifyLiquidity
+    BalanceDelta feesAccrued;
+    // The hook data containing PositionModificationHookData
+    bytes hookData;
+}
+
+/// @notice Result of touchPosition to reduce stack pressure
+/// @dev Bundles return values into single struct
+struct TouchPositionResult {
+    // The position struct
+    Position pos;
+    // The position id
+    PositionId id;
+    // The fee adjustment delta
+    BalanceDelta feeAdj;
+}
+
+/// @notice Parameters for onMMSettle to reduce stack pressure
+/// @dev Bundles settlement parameters into single struct
+struct SettleParams {
+    // The market vault interface for liquidity availability checks
+    IMarketVault vault;
+    // The position id
+    PositionId positionId;
+    // The pool currency of the LCC token for token0
+    Currency lccCurrency0;
+    // The pool currency of the LCC token for token1
+    Currency lccCurrency1;
+    // The balance delta of the settlement
+    BalanceDelta delta;
+    // Whether the position is being seized
+    bool isSeizing;
+}
+
+/// @notice Result of onMMSettle to reduce stack pressure
+/// @dev Bundles return values into single struct
+struct SettleResult {
+    // The delta actually applied to underlying
+    BalanceDelta settlementDelta;
+    // Whether the RFS is open for the position
+    bool rfsOpen;
+    // The amount of liquidity units seized (non-zero only when seizing)
+    uint256 seizedLiquidityUnits;
+}
+
 /// @notice Per-position accounting data (mirrors VTSManager per-position mappings)
 /// @dev Split out of VTSManager to follow the Bunni-style storage pattern
 struct PositionAccounting {
@@ -55,8 +115,6 @@ struct PositionAccounting {
     TokenPairUint settled;
     // Cumulative deficit per token (raw units)
     TokenPairUint cumulativeDeficit;
-    // Coverage usage growth snapshots per token
-    TokenPairUint coverageUseGrowthInsideLast;
     // Deficit growth snapshots per token
     TokenPairUint deficitGrowthInsideLast;
     // Inflow growth snapshots per token
@@ -73,10 +131,14 @@ struct PositionAccounting {
     TokenPairUint feesShared;
     // Pending fee adjustments per token: +slash (reduces payout), -bonus (increases payout)
     TokenPairInt pendingFeeAdj;
-    // Net settlement since last modification per token
-    TokenPairInt netSettlementSinceLastMod;
-    // Last funded pending adjustment per token
-    TokenPairInt lastFundedPendingAdj;
+    // DICE: Coverage index checkpoint per token (snapshot of pool index at last settlement)
+    TokenPairUint coverageIndexLastX128;
+    // CISE: Position checkpoint of pool coverage-per-settled index (Q128)
+    TokenPairUint ciseIndexLastX128;
+    // CISE: Banked realised exposure since last bonus allocation
+    TokenPairUint ciseExposureSinceLastMod;
+    // CSI: Position checkpoint of pool spend index (Q128)
+    TokenPairUint feesSharedIndexLastX128;
 }
 
 /// @notice Per-pool accounting data (mirrors VTSManager per-pool mappings)
@@ -86,18 +148,26 @@ struct PoolAccounting {
     TokenPairUint deficitGrowthGlobal;
     // Inflow growth global per token
     TokenPairUint inflowGrowthGlobal;
-    // Protocol coverage per token
-    TokenPairUint protocolCoverage;
-    // Coverage usage growth global per token
-    TokenPairUint coverageUseGrowthGlobal;
-    // Residual coverage per token (when no in-range liquidity)
-    TokenPairUint coverageResidual;
     // Protocol/LPs fee pot accrued from fee sharing per token
     TokenPairUint protocolFeeAccrued;
     // Slashed pot balances per token
     TokenPairUint slashedPot;
-    // Pool-wide sum of positive nets since last modification per token
-    TokenPairUint poolNetSinceLastMod;
+    // DICE: Pool-wide outstanding deficit principal per token
+    TokenPairUint totalDeficitPrincipal;
+    // DICE: Coverage-per-deficit-unit index (Q128) per token
+    TokenPairUint coveragePerDeficitIndexX128;
+    // DICE: Deferred coverage residual (socialised when totalDeficitPrincipal = 0 at exercise time)
+    TokenPairUint coverageResidualDICE;
+    // CISE: Pool-wide total settled aggregate per token
+    TokenPairUint totalSettled;
+    // CISE: Coverage-per-settled index (Q128) per token
+    TokenPairUint coveragePerSettledIndexX128;
+    // CISE: Deferred residual when totalSettled = 0 at exercise time
+    TokenPairUint coverageResidualCISE;
+    // CISE: Pool-wide sum of realised exposure since last modification (denominator for allocation)
+    TokenPairUint totalCISEExposureSinceLastMod;
+    // CSI: Spend-per-share index (Q128), advances when bonuses allocated
+    TokenPairUint feesSharedSpendIndexX128;
 }
 
 /// @notice Simple pair struct for per-tick growth (replaces uint256[2] arrays)
@@ -184,8 +254,6 @@ struct VTSStorage {
     mapping(PoolId => mapping(int24 => GrowthPair)) deficitGrowthOutside;
     /// Per-pool per-tick inflow growth outside
     mapping(PoolId => mapping(int24 => GrowthPair)) inflowGrowthOutside;
-    /// Per-pool per-tick coverage usage growth outside
-    mapping(PoolId => mapping(int24 => GrowthPair)) coverageUseGrowthOutside;
     /// Next commit ID for commit NFTs (starts at 1)
     uint256 nextCommitId;
     /// Global pause flag

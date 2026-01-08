@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.26;
+pragma solidity ^0.8.26;
 
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
@@ -60,39 +60,28 @@ library MMCalldataDecoder {
         }
     }
 
-    /// @dev INCREASE_LIQUIDITY: (PoolKey, uint256, uint256, int24, int24, uint256)
+    /// @dev INCREASE_LIQUIDITY: (PoolKey, uint256, uint256, uint256)
     /// @param params The calldata bytes to decode
     /// @return poolKey The pool key (calldata pointer)
     /// @return tokenId The commitment NFT token ID
     /// @return positionIndex The position index within the commitment
-    /// @return tickLower The lower tick of the position
-    /// @return tickUpper The upper tick of the position
     /// @return liquidity The amount of liquidity to add
     function decodeIncreaseLiquidityParams(bytes calldata params)
         internal
         pure
-        returns (
-            PoolKey calldata poolKey,
-            uint256 tokenId,
-            uint256 positionIndex,
-            int24 tickLower,
-            int24 tickUpper,
-            uint256 liquidity
-        )
+        returns (PoolKey calldata poolKey, uint256 tokenId, uint256 positionIndex, uint256 liquidity)
     {
         assembly ("memory-safe") {
-            // PoolKey: 5 slots (0xa0), then tokenId, positionIndex, tickLower, tickUpper, liquidity
-            // Minimum length: 0xa0 + 0x20*5 = 0x140
-            if lt(params.length, 0x140) {
+            // PoolKey: 5 slots (0xa0), then tokenId, positionIndex, liquidity
+            // Minimum length: 0xa0 + 0x20*3 = 0x100
+            if lt(params.length, 0x100) {
                 mstore(0, SLICE_ERROR_SELECTOR)
                 revert(0x1c, 4)
             }
             poolKey := params.offset
             tokenId := calldataload(add(params.offset, 0xa0))
             positionIndex := calldataload(add(params.offset, 0xc0))
-            tickLower := calldataload(add(params.offset, 0xe0))
-            tickUpper := calldataload(add(params.offset, 0x100))
-            liquidity := calldataload(add(params.offset, 0x120))
+            liquidity := calldataload(add(params.offset, 0xe0))
         }
     }
 
@@ -211,40 +200,29 @@ library MMCalldataDecoder {
     // Medium Priority Decoders (Delta Operations & Signal Management)
     // ═══════════════════════════════════════════════════════════════════════════════════════════
 
-    /// @dev INCREASE_LIQUIDITY_FROM_DELTAS: (PoolKey, uint256, uint256, int24, int24, bool)
+    /// @dev INCREASE_LIQUIDITY_FROM_DELTAS: (PoolKey, uint256, uint256, bool)
     /// @param params The calldata bytes to decode
     /// @return poolKey The pool key (calldata pointer)
     /// @return tokenId The commitment NFT token ID
     /// @return positionIndex The position index within the commitment
-    /// @return tickLower The lower tick of the position
-    /// @return tickUpper The upper tick of the position
     /// @return payerIsUser If true, user consumes credit protocol owes them (MMPM delta).
     ///         If false, uses locker's direct credit.
     function decodeIncreaseFromDeltasParams(bytes calldata params)
         internal
         pure
-        returns (
-            PoolKey calldata poolKey,
-            uint256 tokenId,
-            uint256 positionIndex,
-            int24 tickLower,
-            int24 tickUpper,
-            bool payerIsUser
-        )
+        returns (PoolKey calldata poolKey, uint256 tokenId, uint256 positionIndex, bool payerIsUser)
     {
         assembly ("memory-safe") {
-            // PoolKey: 5 slots (0xa0), then tokenId, positionIndex, tickLower, tickUpper, payerIsUser
-            // Minimum length: 0xa0 + 0x20*5 = 0x140
-            if lt(params.length, 0x140) {
+            // PoolKey: 5 slots (0xa0), then tokenId, positionIndex, payerIsUser
+            // Minimum length: 0xa0 + 0x20*3 = 0x100
+            if lt(params.length, 0x100) {
                 mstore(0, SLICE_ERROR_SELECTOR)
                 revert(0x1c, 4)
             }
             poolKey := params.offset
             tokenId := calldataload(add(params.offset, 0xa0))
             positionIndex := calldataload(add(params.offset, 0xc0))
-            tickLower := calldataload(add(params.offset, 0xe0))
-            tickUpper := calldataload(add(params.offset, 0x100))
-            payerIsUser := calldataload(add(params.offset, 0x120))
+            payerIsUser := calldataload(add(params.offset, 0xe0))
         }
     }
 
@@ -338,16 +316,38 @@ library MMCalldataDecoder {
             bytes calldata settlementProof
         )
     {
-        // No length check here as toBytes will do it
         assembly ("memory-safe") {
+            // PoolKey: 5 slots (0xa0), then tokenId (0x20), positionIndex (0x20), settlementTokenIndex (0x20), verifierIndex (0x20)
+            // settlementProof offset pointer is at 0x120 (after all fixed-size params)
+            // Minimum length: 0x120 + 0x20 (offset pointer) + 0x20 (length) = 0x160
+            if lt(params.length, 0x160) {
+                mstore(0, SLICE_ERROR_SELECTOR)
+                revert(0x1c, 4)
+            }
             poolKey := params.offset
             tokenId := calldataload(add(params.offset, 0xa0))
             positionIndex := calldataload(add(params.offset, 0xc0))
             settlementTokenIndex := calldataload(add(params.offset, 0xe0))
             verifierIndex := calldataload(add(params.offset, 0x100))
+
+            // Read the offset pointer for settlementProof (dynamic bytes, index 5)
+            // The offset pointer is stored at params.offset + 0x120 (after all fixed-size params)
+            let proofOffsetPtr := add(params.offset, 0x120)
+            let proofDataOffset := add(params.offset, and(calldataload(proofOffsetPtr), OFFSET_OR_LENGTH_MASK))
+
+            // Read the length of the bytes
+            let proofLength := and(calldataload(proofDataOffset), OFFSET_OR_LENGTH_MASK)
+
+            // Set settlementProof calldata slice
+            settlementProof.offset := add(proofDataOffset, 0x20)
+            settlementProof.length := proofLength
+
+            // Verify the bytes string fits within params
+            if lt(add(params.length, params.offset), add(settlementProof.length, settlementProof.offset)) {
+                mstore(0, SLICE_ERROR_SELECTOR)
+                revert(0x1c, 4)
+            }
         }
-        // Use CalldataDecoder.toBytes for dynamic bytes (index 5 = 6th argument)
-        settlementProof = params.toBytes(5);
     }
 
     /// @dev COMMIT_SIGNAL: (bytes, address)
@@ -360,6 +360,15 @@ library MMCalldataDecoder {
         returns (bytes calldata liquiditySignal, address owner)
     {
         assembly ("memory-safe") {
+            // ABI encoding: (bytes liquiditySignal, address owner)
+            // Minimum length for empty bytes is:
+            // - head (2 words): offset, owner  => 0x40
+            // - tail (length word)            => 0x20
+            // total                           => 0x60
+            if lt(params.length, 0x60) {
+                mstore(0, SLICE_ERROR_SELECTOR)
+                revert(0x1c, 4)
+            }
             owner := calldataload(add(params.offset, 0x20))
         }
         // Use CalldataDecoder.toBytes for dynamic bytes (index 0 = 1st argument)
@@ -372,6 +381,12 @@ library MMCalldataDecoder {
     /// @return data The liquidity signal bytes
     function decodeTokenIdAndBytes(bytes calldata params) internal pure returns (uint256 tokenId, bytes calldata data) {
         assembly ("memory-safe") {
+            // ABI encoding: (uint256 tokenId, bytes data)
+            // Minimum length for empty bytes is head (0x40) + tail length word (0x20) = 0x60
+            if lt(params.length, 0x60) {
+                mstore(0, SLICE_ERROR_SELECTOR)
+                revert(0x1c, 4)
+            }
             tokenId := calldataload(params.offset)
         }
         // Use CalldataDecoder.toBytes for dynamic bytes (index 1 = 2nd argument)
@@ -390,9 +405,17 @@ library MMCalldataDecoder {
         returns (uint256 tokenId, uint256 positionIndex, bytes calldata data, bool withCommitment)
     {
         assembly ("memory-safe") {
+            // ABI encoding: (uint256 tokenId, uint256 positionIndex, bytes data, bool withCommitment)
+            // Minimum length for empty bytes is head (4 words = 0x80) + tail length word (0x20) = 0xa0
+            if lt(params.length, 0xa0) {
+                mstore(0, SLICE_ERROR_SELECTOR)
+                revert(0x1c, 4)
+            }
             tokenId := calldataload(params.offset)
             positionIndex := calldataload(add(params.offset, 0x20))
-            withCommitment := calldataload(add(params.offset, 0x40))
+            // ABI encoding: (uint256 tokenId, uint256 positionIndex, bytes data, bool withCommitment)
+            // Head layout: tokenId @ 0x00, positionIndex @ 0x20, dataOffset @ 0x40, withCommitment @ 0x60
+            withCommitment := calldataload(add(params.offset, 0x60))
         }
         // Use CalldataDecoder.toBytes for dynamic bytes (index 2 = 3rd argument)
         data = params.toBytes(2);
@@ -425,24 +448,22 @@ library MMCalldataDecoder {
         }
     }
 
-    /// @dev COLLECT_AVAILABLE_LIQUIDITY: (address, address, uint256)
+    /// @dev COLLECT_AVAILABLE_LIQUIDITY: (address, uint256)
     /// @param params The calldata bytes to decode
     /// @return lcc The LCC token address
-    /// @return recipient The recipient address
     /// @return maxAmount The maximum amount to collect
     function decodeCollectLiquidityParams(bytes calldata params)
         internal
         pure
-        returns (address lcc, address recipient, uint256 maxAmount)
+        returns (address lcc, uint256 maxAmount)
     {
         assembly ("memory-safe") {
-            if lt(params.length, 0x60) {
+            if lt(params.length, 0x40) {
                 mstore(0, SLICE_ERROR_SELECTOR)
                 revert(0x1c, 4)
             }
             lcc := calldataload(params.offset)
-            recipient := calldataload(add(params.offset, 0x20))
-            maxAmount := calldataload(add(params.offset, 0x40))
+            maxAmount := calldataload(add(params.offset, 0x20))
         }
     }
 

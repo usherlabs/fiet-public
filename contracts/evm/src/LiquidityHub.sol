@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.26;
+pragma solidity ^0.8.26;
 
 import {Ownable} from "openzeppelin-contracts/contracts/access/Ownable.sol";
 import {IOracleHelper} from "./interfaces/IOracleHelper.sol";
@@ -77,20 +77,6 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
     }
 
     /**
-     * @notice Modifier to restrict access to registered factory contracts or the owner
-     */
-    modifier onlyFactoryOrOwner() {
-        _onlyFactoryOrOwner();
-        _;
-    }
-
-    function _onlyFactoryOrOwner() internal view {
-        if (!isFactory[_msgSender()] && _msgSender() != owner()) {
-            revert Errors.InvalidSender();
-        }
-    }
-
-    /**
      * @notice Modifier to ensure the provided LCC address is valid
      * @param lcc The LCC token address to validate
      */
@@ -109,6 +95,8 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
     }
 
     function _onlyIssuer(address lcc) internal view {
+        // Strict invariant: issuer-gated paths must never operate on invalid/uninitialised LCCs.
+        LiquidityHubLib.assertValidLcc(s, lcc);
         if (!LCCFactoryLib.isCallerIssuer(s, lcc, msg.sender)) {
             revert Errors.NotApproved(msg.sender);
         }
@@ -279,16 +267,12 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
      * @param lccToken1 The second LCC token address
      * @param marketId The market ID (corePoolKey -> PoolID -> unwrap() to bytes32)
      * @param marketRef The market reference (bytes from proxyHookAddress)
-     * @param refIsValidIssuer Whether the market ref address is a valid issuer
      */
-    function initialize(
-        address lccToken0,
-        address lccToken1,
-        bytes32 marketId,
-        bytes memory marketRef,
-        bool refIsValidIssuer
-    ) external onlyFactory {
-        LCCFactoryLib.initialize(s, lccToken0, lccToken1, marketId, marketRef, refIsValidIssuer, _msgSender());
+    function initialize(address lccToken0, address lccToken1, bytes32 marketId, bytes memory marketRef)
+        external
+        onlyFactory
+    {
+        LCCFactoryLib.initialize(s, lccToken0, lccToken1, marketId, marketRef, _msgSender());
     }
 
     // ============ INTERNAL HELPERS (delegate to library) ============
@@ -309,14 +293,6 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
      */
     function _isValidLcc(address lcc) internal view returns (bool) {
         return LCCFactoryLib.isValidLcc(s, lcc);
-    }
-
-    /**
-     * @notice Asserts that an address is a valid LCC token, reverting if not
-     * @param lcc The LCC token address to validate
-     */
-    function _assertValidLcc(address lcc) internal view {
-        LiquidityHubLib.assertValidLcc(s, lcc);
     }
 
     /**
@@ -374,11 +350,11 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
     /**
      * @dev Internal function to wrap underlying assets into LCC tokens
      * @param lcc The LCC token address to wrap into
-     * @param from The address providing the underlying assets
      * @param to The address receiving the LCC tokens
      * @param amount The amount of underlying assets to wrap
      */
-    function _wrap(address lcc, address from, address to, uint256 amount) internal onlyValidLcc(lcc) {
+    function _wrap(address lcc, address to, uint256 amount) internal onlyValidLcc(lcc) {
+        address from = _msgSender();
         address underlying = s.lccToUnderlying[lcc];
         bool isNativeAsset = underlying == address(0);
         // throw error if the native ETH is insufficient and it is a native ETH backed LCC
@@ -401,7 +377,7 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
     }
 
     function wrapTo(address lcc, address to, uint256 amount) external payable nonReentrant {
-        _wrap(lcc, _msgSender(), to, amount);
+        _wrap(lcc, to, amount);
     }
 
     /**
@@ -412,7 +388,7 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
      * @param amount The amount of underlying assets to wrap
      */
     function wrapTo(address underlying, bytes32 marketId, address to, uint256 amount) external payable nonReentrant {
-        _wrap(s.marketUnderlyingToLCC[marketId][underlying], _msgSender(), to, amount);
+        _wrap(s.marketUnderlyingToLCC[marketId][underlying], to, amount);
     }
 
     /**
@@ -421,7 +397,7 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
      * @param amount The amount of underlying assets to wrap
      */
     function wrap(address lcc, uint256 amount) external payable nonReentrant {
-        _wrap(lcc, _msgSender(), _msgSender(), amount);
+        _wrap(lcc, _msgSender(), amount);
     }
 
     /**
@@ -431,7 +407,7 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
      * @param amount The amount of underlying assets to wrap
      */
     function wrap(address underlying, bytes32 marketId, uint256 amount) external payable nonReentrant {
-        _wrap(s.marketUnderlyingToLCC[marketId][underlying], _msgSender(), _msgSender(), amount);
+        _wrap(s.marketUnderlyingToLCC[marketId][underlying], _msgSender(), amount);
     }
 
     /**
@@ -439,15 +415,26 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
      * @dev Delegates to LiquidityHubLib.wrapWithLogic - heavy logic moved to library
      * @param lcc The target LCC token address
      * @param withLCC The backing LCC token address
-     * @param from The address providing the backing LCC
      * @param to The address receiving the target LCC
      * @param amount The amount to wrap
      */
-    function _wrapWith(address lcc, address withLCC, address from, address to, uint256 amount)
-        internal
-        onlyValidLcc(lcc)
-    {
-        LiquidityHubLib.wrapWithLogic(s, lcc, withLCC, from, to, amount);
+    function _wrapWith(address lcc, address withLCC, address to, uint256 amount) internal onlyValidLcc(lcc) {
+        address from = _msgSender();
+
+        // Performs all necessary validation and preparation
+        LiquidityHubLib.WrapWithContext memory ctx = LiquidityHubLib.wrapWithPrepare(s, lcc, withLCC, from, amount);
+        // Pull backing LCC from caller into the Hub first.
+        Currency.wrap(withLCC).transferFrom(from, address(this), ctx.originalAmount);
+        // Executes the full wrap-with operation using the provided context
+        LiquidityHubLib.wrapWithContext(s, lcc, withLCC, ctx);
+        // Extract return values.
+        // Note: wrapWithContext is designed to conserve amounts. Any mismatch is a logic bug in the library.
+        uint256 directToMint = ctx.directToMint;
+        uint256 marketToMint = ctx.marketToMint;
+
+        // Final mint: mint target LCC with appropriate direct/market-derived split
+        LCCFactoryLib.mint(lcc, to, directToMint, marketToMint, false);
+
         emit LccWrappedWith(lcc, withLCC, from, to, amount);
     }
 
@@ -458,7 +445,7 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
      * @param amount The amount to wrap
      */
     function wrapWith(address lcc, address withLCC, uint256 amount) external nonReentrant {
-        _wrapWith(lcc, withLCC, _msgSender(), _msgSender(), amount);
+        _wrapWith(lcc, withLCC, _msgSender(), amount);
     }
 
     /**
@@ -469,18 +456,19 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
      * @param amount The amount to wrap
      */
     function wrapWithTo(address lcc, address withLCC, address to, uint256 amount) external nonReentrant {
-        _wrapWith(lcc, withLCC, _msgSender(), to, amount);
+        _wrapWith(lcc, withLCC, to, amount);
     }
 
     /**
      * @dev Unwraps LCC from the account's wallet and transfers underlying assets to recipient
      * @dev Accounts should only be able to unwrap if they have LCC in their wallet
      * @param lcc The LCC token address to unwrap
-     * @param from The account to unwrap from
      * @param to The recipient of the underlying asset
+     * @param queueTo The address to queue shortfall to
      * @param amount The amount to unwrap
      */
-    function _unwrap(address lcc, address from, address to, uint256 amount) internal onlyValidLcc(lcc) {
+    function _unwrap(address lcc, address to, address queueTo, uint256 amount) internal onlyValidLcc(lcc) {
+        address from = _msgSender();
         (uint256 wrappedBalance, uint256 marketDerivedBalance) = _balancesOf(lcc, from);
         uint256 fromBalance = wrappedBalance + marketDerivedBalance;
 
@@ -489,7 +477,7 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
         }
 
         (uint256 directUnwrapped, uint256 marketUnwrapped) =
-            LiquidityHubLib.unwrapInternalLogic(s, lcc, to, amount, wrappedBalance, marketDerivedBalance);
+            LiquidityHubLib.unwrapInternalLogic(s, lcc, queueTo, amount, wrappedBalance, marketDerivedBalance);
 
         // Burn the amount that was unwrapped
         // and transfer the underlying assets to the account
@@ -526,7 +514,22 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
      * @param amount The amount of LCC tokens to unwrap
      */
     function unwrapTo(address lcc, address to, uint256 amount) external nonReentrant {
-        _unwrap(lcc, _msgSender(), to, amount);
+        // Backwards-compatible: queue shortfalls to the same address receiving the underlying.
+        _unwrap(lcc, to, to, amount);
+    }
+
+    /**
+     * @notice Unwraps LCC tokens back to underlying assets and sends them to a specified recipient, while queueing any
+     *         unfulfilled portion to a separate queue owner.
+     * @dev This exists for protocol flows (e.g. MMPM) where "who receives underlying now" differs from "who owns the
+     *      settlement queue claim".
+     * @param lcc The LCC token address to unwrap
+     * @param to The recipient address for underlying
+     * @param queueTo The address to attribute any queued settlement to
+     * @param amount The amount of LCC tokens to unwrap
+     */
+    function unwrapTo(address lcc, address to, address queueTo, uint256 amount) external nonReentrant {
+        _unwrap(lcc, to, queueTo, amount);
     }
 
     /**
@@ -537,7 +540,23 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
      * @param amount The amount of LCC tokens to unwrap
      */
     function unwrapTo(address underlying, bytes32 marketId, address to, uint256 amount) external nonReentrant {
-        _unwrap(s.marketUnderlyingToLCC[marketId][underlying], _msgSender(), to, amount);
+        _unwrap(s.marketUnderlyingToLCC[marketId][underlying], to, to, amount);
+    }
+
+    /**
+     * @notice Unwraps LCC tokens (resolved by underlying+marketId) to underlying assets, while queueing any unfulfilled
+     *         portion to a separate queue owner.
+     * @param underlying The underlying asset address
+     * @param marketId The market ID
+     * @param to The recipient address for underlying
+     * @param queueTo The address to attribute any queued settlement to
+     * @param amount The amount of LCC tokens to unwrap
+     */
+    function unwrapTo(address underlying, bytes32 marketId, address to, address queueTo, uint256 amount)
+        external
+        nonReentrant
+    {
+        _unwrap(s.marketUnderlyingToLCC[marketId][underlying], to, queueTo, amount);
     }
 
     // ============ LIQUIDITY FUNCTIONS ============
@@ -562,11 +581,8 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
      * @param lcc The LCC token address to issue for
      * @param amount The amount to issue
      */
-    function issue(address lcc, address to, uint256 amount) external onlyIssuer(lcc) onlyValidLcc(lcc) nonReentrant {
-        if (amount == 0) {
-            revert Errors.InvalidAmount(0, 0);
-        }
-
+    function issue(address lcc, address to, uint256 amount) external onlyIssuer(lcc) nonReentrant {
+        // Note: LCC mint path reverts on zero (direct+market) amount.
         _mint(lcc, to, 0, amount, true);
     }
 
@@ -576,11 +592,8 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
      * @param from The address to cancel tokens from
      * @param amount The amount to cancel
      */
-    function cancel(address lcc, address from, uint256 amount) external onlyIssuer(lcc) onlyValidLcc(lcc) nonReentrant {
-        if (amount == 0) {
-            revert Errors.InvalidAmount(0, 0);
-        }
-
+    function cancel(address lcc, address from, uint256 amount) external onlyIssuer(lcc) nonReentrant {
+        // Note: LCC burn path reverts on zero (direct+market) amount.
         _burn(lcc, from, 0, amount, true);
     }
 
@@ -599,7 +612,13 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
         uint256 principalAmount,
         uint256 queueAmount,
         address recipient
-    ) public onlyIssuer(lcc) onlyValidLcc(lcc) nonReentrant {
+    ) public onlyIssuer(lcc) nonReentrant {
+        if (principalAmount == 0) {
+            revert Errors.InvalidAmount(0, 0);
+        }
+        if (queueAmount > principalAmount) {
+            revert Errors.InvalidAmount(queueAmount, principalAmount);
+        }
         _cancelWithQueue(lcc, from, principalAmount, queueAmount, recipient);
     }
 
@@ -618,22 +637,16 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
         uint256 queueAmount,
         address recipient
     ) internal {
-        if (principalAmount == 0) {
-            revert Errors.InvalidAmount(0, 0);
-        }
-        if (queueAmount > principalAmount) {
-            revert Errors.InvalidAmount(queueAmount, principalAmount);
-        }
-
         uint256 cancelAmount = principalAmount - queueAmount;
 
-        // Burn the full a portion of the principal amount from the sender (issuer burn path, skip bucket accounting)
-        _burn(lcc, from, 0, cancelAmount, true);
-
-        // Queue a portion for settlement to the specified recipient
-        if (queueAmount > 0) {
-            _queueSettlement(lcc, recipient, queueAmount);
+        // Burn the cancellable portion of the principal amount from the sender (issuer burn path, skip bucket accounting)
+        // Note: allow cancelAmount == 0 (principal fully queued) without reverting.
+        if (cancelAmount > 0) {
+            _burn(lcc, from, 0, cancelAmount, true);
         }
+
+        // Queue a portion for settlement to the specified recipient (no-op for queueAmount == 0)
+        _queueSettlement(lcc, recipient, queueAmount);
     }
 
     /**
@@ -647,7 +660,6 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
     function planCancel(address lcc, address sender, address cancelFromRecipient, uint256 amount)
         external
         onlyIssuer(lcc)
-        onlyValidLcc(lcc)
         nonReentrant
     {
         if (amount == 0) {
@@ -675,7 +687,7 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
         uint256 principalAmount,
         uint256 queueAmount,
         address recipient
-    ) external onlyIssuer(lcc) onlyValidLcc(lcc) nonReentrant {
+    ) external onlyIssuer(lcc) nonReentrant {
         if (principalAmount == 0) {
             revert Errors.InvalidAmount(0, 0);
         }
@@ -760,7 +772,7 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
      * @param maxAmount The maximum amount to settle
      */
     function _processSettlementFor(address lcc, address recipient, uint256 maxAmount) internal {
-        LiquidityHubLib.processSettlementLogic(s, lcc, recipient, maxAmount, msg.sender);
+        LiquidityHubLib.processSettlementLogic(s, lcc, recipient, maxAmount, _msgSender());
     }
 
     // -----------------------------------
@@ -776,7 +788,8 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
             TransientSlots.consumePlanCancelWithQueue(lcc, sender, cancelFromRecipient);
 
         if (principalAmount > 0) {
-            // Use internal function to bypass onlyIssuer check (LCC is the caller, not an issuer)
+            // _cancelWithQueue handles principal == queue (burn 0, queue all) and principal > queue.
+            // Use internal function to bypass onlyIssuer check (LCC is the caller, not an issuer).
             _cancelWithQueue(lcc, cancelFromRecipient, principalAmount, queueAmount, queueRecipient);
             return;
         }
@@ -798,9 +811,8 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
         address lcc = _msgSender();
 
         uint256 queued = s.settleQueue[lcc][from];
-        if (queued == 0 || amountToTransfer == 0) {
-            return;
-        }
+        // Even if queued == 0 or amountToTransfer == 0, the logic below is a no-op.
+        // We intentionally avoid an early return here to keep the control flow simpler and more auditable.
 
         uint256 liquidBalance = wrappedBalance + marketDerivedBalance;
 
@@ -810,10 +822,9 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
         if (amountToTransfer > transferableWithoutQueue) {
             uint256 bleedIntoQueue = amountToTransfer - transferableWithoutQueue;
             uint256 toAnnul = Math.min(bleedIntoQueue, queued);
-            if (toAnnul > 0) {
-                s.settleQueue[lcc][from] -= toAnnul;
-                s.totalQueued[lcc] -= toAnnul;
-            }
+            // Safe: toAnnul <= queued and subtracting 0 is a no-op.
+            s.settleQueue[lcc][from] -= toAnnul;
+            s.totalQueued[lcc] -= toAnnul;
         }
     }
 
@@ -838,6 +849,7 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
      * @param amount The amount to eventually settle
      */
     function _queueSettlement(address lcc, address recipient, uint256 amount) internal {
+        if (amount == 0) return;
         LiquidityHubLib.queueSettlement(s, lcc, recipient, amount);
         emit SettlementQueued(lcc, recipient, amount);
     }
@@ -850,18 +862,16 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
      */
     function _assertValidEthSender() internal view {
         address sender = _msgSender();
-        // otherwise check if the caller is a valid MarketVault with native ETH support
-        IMarketVault marketVault = IMarketVault(sender);
 
-        // Check if lccs() function exists by attempting to call it
-        (bool success, bytes memory returnData) =
-            address(marketVault).staticcall(abi.encodeWithSelector(IMarketVault.lccs.selector));
-
-        if (!success) {
+        address l0;
+        address l1;
+        // Prefer a typed call + try/catch over low-level staticcall probing.
+        try IMarketVault(sender).lccs() returns (address _l0, address _l1) {
+            l0 = _l0;
+            l1 = _l1;
+        } catch {
             revert Errors.InvalidEthSender();
         }
-
-        (address l0, address l1) = abi.decode(returnData, (address, address));
 
         bool valid0 = LCCFactoryLib.isValidLcc(s, l0);
         bool valid1 = LCCFactoryLib.isValidLcc(s, l1);

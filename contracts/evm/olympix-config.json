@@ -1,0 +1,9 @@
+{
+  "IgnoredVulnerabilities": {},
+  "TrustedVariables": {},
+  "TrustedContracts": {},
+  "IgnoredPaths": [],
+  "TrustedPaths": [
+    "src/libraries/TickUtils.sol"
+  ]
+}

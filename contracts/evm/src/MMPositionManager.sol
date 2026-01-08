@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.26;
+pragma solidity ^0.8.26;
 
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
@@ -8,7 +8,7 @@ import {ERC721Permit_v4} from "v4-periphery/src/base/ERC721Permit_v4.sol";
 import {ReentrancyLock} from "v4-periphery/src/base/ReentrancyLock.sol";
 import {Multicall_v4} from "v4-periphery/src/base/Multicall_v4.sol";
 import {BaseActionsRouter} from "v4-periphery/src/base/BaseActionsRouter.sol";
-import {NativeWrapper} from "./modules/NativeWrapper.sol";
+import {FietNativeWrapper} from "./modules/NativeWrapper.sol";
 import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
 import {PositionId, Position} from "./types/Position.sol";
 import {MarketMaker} from "./libraries/MarketMaker.sol";
@@ -25,6 +25,7 @@ import {MMActions} from "./libraries/MMActions.sol";
 import {MMCalldataDecoder} from "./libraries/MMCalldataDecoder.sol";
 import {MMHelpers} from "./libraries/MMHelpers.sol";
 import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
+import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
 import {TransientStateLibrary} from "v4-periphery/lib/v4-core/src/libraries/TransientStateLibrary.sol";
 import {CurrencyTransfer} from "./libraries/CurrencyTransfer.sol";
@@ -40,7 +41,7 @@ contract MMPositionManager is
     Multicall_v4,
     Permit2Forwarder,
     BaseActionsRouter,
-    NativeWrapper,
+    FietNativeWrapper,
     PositionManagerEntrypoint
 {
     using MMCalldataDecoder for bytes;
@@ -78,7 +79,7 @@ contract MMPositionManager is
         ERC721Permit_v4("Fiet VRL Commitment Positions Manager", "FIET-VRL-MMP")
         BaseActionsRouter(IPoolManager(_manager))
         Permit2Forwarder(_permit2)
-        NativeWrapper(_weth9)
+        FietNativeWrapper(_weth9)
         PositionManagerEntrypoint(_liquidityHub, _vtsOrchestrator, _actionsImpl)
     {
         commitmentDescriptor = _descriptor;
@@ -301,7 +302,11 @@ contract MMPositionManager is
         }
         if (action == MMActions.UNWRAP_LCC) {
             (address lccAddr, uint256 amount, address recipient, bool payerIsUser) = params.decodeUnwrapLccParams();
-            _unwrapLcc(lccAddr, _mapPayer(payerIsUser), _mapRecipient(recipient), amount);
+            if (payerIsUser) {
+                _unwrapLccFromUser(lccAddr, _mapRecipient(recipient), amount);
+            } else {
+                _unwrapLccFromDeltas(lccAddr, _mapRecipient(recipient), amount);
+            }
             return;
         }
         if (action == MMActions.WRAP_NATIVE) {
@@ -315,8 +320,8 @@ contract MMPositionManager is
             return;
         }
         if (action == MMActions.COLLECT_AVAILABLE_LIQUIDITY) {
-            (address lcc, address recipient, uint256 maxAmount) = params.decodeCollectLiquidityParams();
-            _collectAvailableLiquidity(lcc, recipient, maxAmount);
+            (address lcc, uint256 maxAmount) = params.decodeCollectLiquidityParams();
+            _collectAvailableLiquidity(lcc, maxAmount);
             return;
         }
         if (action == MMActions.SYNC) {
@@ -327,38 +332,18 @@ contract MMPositionManager is
         revert Errors.UnsupportedAction(action);
     }
 
-    /// @notice Unwraps LCC tokens to underlying asset
-    /// @param lccAddr The LCC token address
-    /// @param from The address to take LCC from (address(this) for deltas, or user address)
-    /// @param to The recipient address for the underlying asset
-    /// @param requested The amount to unwrap (0 for max)
-    /// @return unwrapped The amount of underlying asset unwrapped
-    function _unwrapLcc(address lccAddr, address from, address to, uint256 requested)
-        internal
-        returns (uint256 unwrapped)
-    {
+    /// @notice Unwraps LCC tokens to underlying asset using deltas (locker credit)
+    function _unwrapLccFromDeltas(address lccAddr, address to, uint256 requested) internal returns (uint256 unwrapped) {
         ILCC lcc = ILCC(lccAddr);
         Currency lccCurrency = Currency.wrap(lccAddr);
         address underlying = lcc.underlying();
 
         uint256 beforeBal = IERC20(underlying).balanceOf(to);
-        uint256 toUnwrap;
-
-        if (from == address(this)) {
-            toUnwrap = vtsOrchestrator.take(lccCurrency, msgSender(), requested);
-        } else {
-            toUnwrap = lcc.balanceOf(from);
-            if (requested > 0 && toUnwrap > requested) {
-                toUnwrap = requested;
-            }
-        }
+        uint256 toUnwrap = vtsOrchestrator.take(lccCurrency, msgSender(), requested);
 
         if (toUnwrap > 0) {
-            if (from != address(this)) {
-                // Use CurrencyTransfer with Permit2 fallback for user transfers
-                lccCurrency.transferFrom(from, address(this), toUnwrap);
-            }
-            liquidityHub.unwrapTo(lccAddr, to, toUnwrap);
+            address queueTo = msgSender();
+            liquidityHub.unwrapTo(lccAddr, to, queueTo, toUnwrap);
         }
 
         unwrapped = IERC20(underlying).balanceOf(to) - beforeBal;
@@ -368,19 +353,45 @@ contract MMPositionManager is
         }
     }
 
+    /// @notice Unwraps LCC tokens to underlying asset by pulling from the locker/user
+    function _unwrapLccFromUser(address lccAddr, address to, uint256 requested) internal returns (uint256 unwrapped) {
+        ILCC lcc = ILCC(lccAddr);
+        Currency lccCurrency = Currency.wrap(lccAddr);
+        address underlying = lcc.underlying();
+
+        address payer = msgSender();
+        uint256 toUnwrap = lcc.balanceOf(payer);
+        if (requested > 0) {
+            toUnwrap = Math.min(toUnwrap, requested);
+        }
+
+        uint256 beforeBal = IERC20(underlying).balanceOf(to);
+        if (toUnwrap > 0) {
+            // Pull only from the locker/user (never arbitrary third parties).
+            lccCurrency.transferFrom(payer, address(this), toUnwrap);
+            liquidityHub.unwrapTo(lccAddr, to, payer, toUnwrap);
+        }
+
+        unwrapped = IERC20(underlying).balanceOf(to) - beforeBal;
+        if (to == address(this) && unwrapped > 0) {
+            _syncBalanceAsCredit(Currency.wrap(underlying));
+        }
+    }
+
     /// @notice Collects available liquidity from settlement queue
     /// @param lcc The LCC token address
-    /// @param recipient The recipient address for the liquidity
     /// @param maxAmount The maximum amount to collect
-    function _collectAvailableLiquidity(address lcc, address recipient, uint256 maxAmount) internal {
+    function _collectAvailableLiquidity(address lcc, uint256 maxAmount) internal {
         address sender = msgSender();
         uint256 queued = liquidityHub.settleQueue(lcc, sender);
 
         if (queued > 0) {
-            liquidityHub.processSettlementFor(lcc, recipient, maxAmount);
-
-            if (recipient == address(this)) {
-                _syncBalanceAsCredit(_lccToUnderlyingCurrency(Currency.wrap(lcc)));
+            Currency lccCurrency = Currency.wrap(lcc);
+            uint256 available = liquidityHub.reserveOfUnderlying(lcc);
+            uint256 toSettle = Math.min(queued, Math.min(maxAmount, available));
+            if (toSettle > 0) {
+                lccCurrency.transfer(sender, toSettle); // transfer LCC to sender for burn/pay
+                liquidityHub.processSettlementFor(lcc, sender, toSettle);
             }
         }
     }
@@ -461,11 +472,7 @@ contract MMPositionManager is
 
     /// @inheritdoc IMMPositionManager
     /// @dev Delegates to impl via staticcall to satisfy interface requirements
-    function getPosition(
-        uint256,
-        /* tokenId */
-        uint256 /* positionIndex */
-    )
+    function getPosition(uint256 tokenId, uint256 positionIndex)
         external
         view
         returns (
@@ -473,21 +480,13 @@ contract MMPositionManager is
             PositionId /* positionId */
         )
     {
-        _delegateViewToImpl();
+        return vtsOrchestrator.getPosition(tokenId, positionIndex);
     }
 
     /// @inheritdoc IMMPositionManager
     /// @dev Delegates to impl via staticcall to satisfy interface requirements
-    function getPositionId(
-        uint256,
-        /* tokenId */
-        uint256 /* positionIndex */
-    )
-        external
-        view
-        returns (PositionId)
-    {
-        _delegateViewToImpl();
+    function getPositionId(uint256 tokenId, uint256 positionIndex) external view returns (PositionId) {
+        return vtsOrchestrator.getPositionId(tokenId, positionIndex);
     }
 
     /// @inheritdoc IMMPositionManager

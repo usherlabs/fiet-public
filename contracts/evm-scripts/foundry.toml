@@ -1,0 +1,75 @@
+[profile.default]
+# Scripts project - references main evm project for sources
+src = "../evm/src"
+script = "script"
+out = "out"
+libs = ["../evm/lib"]
+allow_paths = ["../evm/src"]
+
+ignored_error_codes = [
+  2394,
+  5574,
+  3860,
+] # Silence transient storage composability warning
+
+solc_version = '0.8.26'
+evm_version = "cancun"
+gas_limit = "3000000000"
+optimizer_runs = 20000
+optimizer = true
+via_ir = true
+ffi = true
+
+bytecode_hash = "none"
+
+fs_permissions = [
+  { access = "read-write", path = "../evm/deployments" },
+  { access = "read-write", path = "./deployments" },
+  { access = "read-write", path = ".forge-snapshots/" },
+  { access = "read", path = "out/" },
+  { access = "read", path = "../evm/out/" },
+]
+
+remappings = [
+  "src/=../evm/src/",
+  "@openzeppelin/=../evm/lib/openzeppelin-contracts/",
+  "openzeppelin-contracts/=../evm/lib/openzeppelin-contracts/",
+  "v4-periphery/=../evm/lib/v4-periphery/",
+  "@uniswap/v4-core/=../evm/lib/v4-periphery/lib/v4-core/",
+  "v4-core/=../evm/lib/v4-periphery/lib/v4-core/src/",
+  "permit2/=../evm/lib/permit2/",
+  "solady/=../evm/lib/solady/src/",
+  "oracle/=../evm/lib/oracle/contracts/",
+  "solmate/=../evm/lib/permit2/lib/solmate/",
+  "ds-test/=../evm/lib/permit2/lib/forge-std/lib/ds-test/src/",
+  "forge-gas-snapshot/=../evm/lib/permit2/lib/forge-gas-snapshot/src/",
+  "erc4626-tests/=../evm/lib/openzeppelin-contracts/lib/erc4626-tests/",
+  "halmos-cheatcodes/=../evm/lib/openzeppelin-contracts/lib/halmos-cheatcodes/src/",
+  "forge-std/=../evm/lib/forge-std/src/",
+]
+
+#
+# NOTE: Keep `profile.default` unlinked. Hard-linking here can make local script dry-runs
+# call addresses that have no code in the local EVM.
+#
+# For deploy flows, use `FOUNDRY_PROFILE=deploy` (see `[profile.deploy]` below).
+
+[profile.deploy]
+# Libraries from main project (deterministic CREATE3 addresses)
+libraries = [
+  "src/libraries/VTSPositionLib.sol:VTSPositionLib:0x2C95130C4DE0504c82f4688C657c9A4CC01761EF",
+  "src/libraries/VTSSwapLib.sol:VTSSwapLib:0x8AF1433f3d2b0547A63f7004B9dA9C5953fD522D",
+  "src/libraries/VTSCommitLib.sol:VTSCommitLib:0x6EBB20A904a9CA505e7d4A253c7FbF72DF5a777b",
+  "src/libraries/VTSFeeLib.sol:VTSFeeLinkedLib:0xF99a25421b798087e7eE2E3fD78268CC961dEbf6",
+  "src/libraries/LCCFactoryLib.sol:LCCFactoryLinkedLib:0x3209860215dB283218CBc8f0D5acf57Ae8874C85",
+]
+
+[rpc_endpoints]
+local = "${ANVIL_FORK_URL}"
+sepolia = "${ARB_SEPOLIA_RPC_URL}"
+arbitrum = "${ARB_MAINNET_RPC_URL}"
+ethsepolia = "${ETH_SEPOLIA_RPC_URL}"
+
+[etherscan]
+sepolia = { key = "${ETHERSCAN_API_KEY}" }
+arbitrum = { key = "${ETHERSCAN_API_KEY}" }

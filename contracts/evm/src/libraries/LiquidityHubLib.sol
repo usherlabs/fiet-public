@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.26;
+pragma solidity ^0.8.26;
 
 import {LiquidityHubStorage, Market} from "../types/Liquidity.sol";
 import {LCCFactoryLib} from "./LCCFactoryLib.sol";
@@ -15,6 +15,29 @@ import {CurrencyTransfer} from "./CurrencyTransfer.sol";
 ///      Uses adapter pattern to bridge LiquidityHubStorage to LCCFactoryLib functions
 library LiquidityHubLib {
     using CurrencyTransfer for Currency;
+
+    // ============ INTERNAL STRUCTS ============
+
+    /// @dev Internal struct to reduce stack depth in wrapWithLogic
+    /// @notice Groups intermediate state for the wrap-with operation to avoid stack-too-deep errors
+    struct WrapWithContext {
+        /// The original amount requested to wrap
+        uint256 originalAmount;
+        /// Remaining amount from user's wrapped (direct) balance
+        uint256 fromWrappedAmount;
+        /// Remaining amount from user's market-derived balance
+        uint256 fromMarketDerivedAmount;
+        /// Accumulated amount to mint as direct supply
+        uint256 directToMint;
+        /// Accumulated amount to mint as market-derived supply
+        uint256 marketToMint;
+        /// Amount of target LCC to burn from Hub
+        uint256 targetToBurn;
+        /// Amount of backing LCC to burn from Hub
+        uint256 backingToBurn;
+        /// Remaining amount to process after netting
+        uint256 remainingAmount;
+    }
 
     // ============ ADAPTER FUNCTIONS ============
 
@@ -92,156 +115,181 @@ library LiquidityHubLib {
         LCCFactoryLib.burn(lccToken, from, directAmount, marketAmount, issued);
     }
 
-    // ============ CORE LOGIC FUNCTIONS ============
+    // ============ WRAP-WITH HELPER FUNCTIONS (Stack Depth Optimisation) ============
 
-    /// @notice Wrap LCC using another LCC as backing, with O(1) flattening and netting
-    /// @dev Strategy:
-    ///      - Optimise direct: transfer directSupply from withLCC to target lcc (no unwrap)
-    ///      - Net market-derived against Hub queue for withLCC using a lazy-claimed mapping to prevent over-netting
-    ///      - For residual, unwrap withLCC (consuming directSupply then market liquidity), queue shortfall if any
-    ///      - Mint target lcc reflecting direct vs market-derived components
-    /// @param s The liquidity hub state
+    /// @notice Step 0: Net against target LCC Hub queue
+    /// @dev Reduces amount to process by netting against existing Hub queue for target LCC.
+    ///      If Hub has a queue for the target LCC and holds target LCC tokens, we can net them:
+    ///      - Burn target LCC from Hub's queue (satisfies Hub's obligation)
+    ///      - Burn backing LCC that would have been used to create target LCC
+    ///      - Mint target LCC as market-derived (since it came from backing LCC)
+    ///      This avoids unnecessary unwrapping and reduces gas costs.
+    /// @param s The liquidity hub storage
+    /// @param lcc The target LCC token address
+    /// @param ctx The wrap context (modified in place via return)
+    /// @return Updated wrap context
+    function _netAgainstTargetQueue(LiquidityHubStorage storage s, address lcc, WrapWithContext memory ctx)
+        private
+        returns (WrapWithContext memory)
+    {
+        uint256 targetQueue = s.settleQueue[lcc][address(this)];
+        if (targetQueue == 0) return ctx;
+
+        uint256 hubHeldTarget = balanceOf(lcc, address(this));
+        uint256 netTarget = Math.min(ctx.originalAmount, Math.min(targetQueue, hubHeldTarget));
+        if (netTarget == 0) return ctx;
+
+        // Consume from market-derived first, then wrapped (priority-based consumption)
+        {
+            uint256 consumeMarket = Math.min(ctx.fromMarketDerivedAmount, netTarget);
+            ctx.fromMarketDerivedAmount -= consumeMarket;
+            uint256 remaining = netTarget - consumeMarket;
+            if (remaining > 0) {
+                uint256 consumeWrapped = Math.min(ctx.fromWrappedAmount, remaining);
+                ctx.fromWrappedAmount -= consumeWrapped;
+            }
+        }
+
+        // Update storage and context
+        // Netting: burn target LCC from queue, burn backing LCC, mint target LCC as market-derived
+        s.settleQueue[lcc][address(this)] = targetQueue - netTarget;
+        s.totalQueued[lcc] -= netTarget;
+        ctx.targetToBurn = netTarget;
+        ctx.backingToBurn += netTarget;
+        ctx.marketToMint += netTarget;
+
+        return ctx;
+    }
+
+    /// @notice Step 1: Optimise direct conversion by transferring directSupply between LCCs
+    /// @dev Transfers directSupply from withLCC to target lcc without unwrapping.
+    ///      This is the most gas-efficient path: we simply move directSupply between LCCs
+    ///      since they share the same underlying asset. No unwrapping/underlying transfer needed.
+    ///      The backing LCC's directSupply becomes the target LCC's directSupply.
+    /// @param s The liquidity hub storage
     /// @param lcc The target LCC token address
     /// @param withLCC The backing LCC token address
-    /// @param from The address providing the backing LCC
-    /// @param to The address receiving the target LCC
-    /// @param amount The amount to wrap
-    /// @return directToMint The amount to mint as direct supply
-    /// @return marketToMint The amount to mint as market-derived supply
-    function wrapWithLogic(
+    /// @param ctx The wrap context (modified in place via return)
+    /// @return Updated wrap context
+    function _optimiseDirectConversion(
         LiquidityHubStorage storage s,
         address lcc,
         address withLCC,
-        address from,
-        address to,
-        uint256 amount
-    ) internal returns (uint256 directToMint, uint256 marketToMint) {
-        uint256 originalRequestedAmount = amount;
-        if (amount == 0) {
-            revert Errors.InvalidAmount(0, 0);
+        WrapWithContext memory ctx
+    ) private returns (WrapWithContext memory) {
+        if (ctx.fromWrappedAmount == 0) return ctx;
+
+        uint256 directAvail = s.directSupply[withLCC];
+        uint256 directConverted = Math.min(ctx.fromWrappedAmount, directAvail);
+        if (directConverted > 0) {
+            // Transfer directSupply: withLCC -> lcc (no unwrap needed, same underlying)
+            s.directSupply[withLCC] = directAvail - directConverted;
+            s.directSupply[lcc] += directConverted;
+            ctx.backingToBurn += directConverted;
+            ctx.directToMint += directConverted;
+        }
+        return ctx;
+    }
+
+    /// @notice Step 2: Net market-derived portion against Hub queue using lazy claimed mapping
+    /// @dev Uses lazy-claimed mapping (`nettedLCCsAsUnderlying`) to prevent over-netting.
+    ///      The lazy-claimed mapping tracks how much of the Hub's queue for withLCC has already
+    ///      been netted in previous wrap-with operations. This prevents double-counting when
+    ///      multiple wrap-with operations occur before settlement processing.
+    ///      Effective queue = total queue - already netted (lazy-claimed)
+    /// @param s The liquidity hub storage
+    /// @param withLCC The backing LCC token address
+    /// @param ctx The wrap context (modified in place via return)
+    /// @return Updated wrap context
+    function _netMarketDerived(LiquidityHubStorage storage s, address withLCC, WrapWithContext memory ctx)
+        private
+        returns (WrapWithContext memory)
+    {
+        // Calculate remainder after Step 0 (target queue netting) and Step 1 (direct conversion).
+        // IMPORTANT: remainingAmount may legitimately be 0 after Step 0; using `> 0` as a sentinel causes
+        // double-counting and can lead to over-minting.
+        uint256 remainderAmount = ctx.originalAmount;
+        remainderAmount = remainderAmount > ctx.targetToBurn ? (remainderAmount - ctx.targetToBurn) : 0;
+        remainderAmount = remainderAmount > ctx.directToMint ? (remainderAmount - ctx.directToMint) : 0;
+
+        if (remainderAmount == 0) return ctx;
+
+        uint256 hubQueueForWith = s.settleQueue[withLCC][address(this)];
+        uint256 claimed = s.nettedLCCsAsUnderlying[withLCC];
+        // Effective queue = total queue minus what's already been lazy-claimed in previous operations
+        uint256 effectiveQueue = hubQueueForWith > claimed ? (hubQueueForWith - claimed) : 0;
+        uint256 nettable = Math.min(remainderAmount, Math.min(ctx.fromMarketDerivedAmount, effectiveQueue));
+
+        if (nettable > 0) {
+            // Lazy claim: mark this portion as netted (will be reconciled during settlement processing)
+            s.nettedLCCsAsUnderlying[withLCC] = claimed + nettable;
+            ctx.backingToBurn += nettable;
+            ctx.marketToMint += nettable;
+            ctx.fromMarketDerivedAmount -= nettable;
         }
 
-        // Validation using adapter - no callback needed!
-        assertValidLcc(s, withLCC);
-        if (lcc == withLCC) {
-            revert Errors.InvalidAddress(withLCC);
-        }
-        // Enforce same underlying asset for both LCCs
-        if (s.lccToUnderlying[lcc] != s.lccToUnderlying[withLCC]) {
-            revert Errors.UnderlyingAssetMismatch(s.lccToUnderlying[lcc], s.lccToUnderlying[withLCC]);
-        }
+        // Store remainder for Step 3 (unwrapping residual)
+        ctx.remainingAmount = remainderAmount;
+        return ctx;
+    }
 
-        // Get bucketed balances using adapter - no callback needed!
-        (uint256 fromWrappedBalance, uint256 fromMarketDerivedBalance) = balancesOf(withLCC, from);
-        uint256 fromBalance = fromWrappedBalance + fromMarketDerivedBalance;
-        if (amount > fromBalance) {
-            revert Errors.InvalidAmount(amount, fromBalance);
-        }
+    /// @notice Step 3: Unwrap residual using withLCC balances
+    /// @dev Unwraps remaining amount using directSupply then market liquidity.
+    ///      After Steps 0-2 have netted what they can, any remaining amount must be unwrapped
+    ///      from the backing LCC. This consumes directSupply first (most efficient), then pulls
+    ///      from market liquidity. Any shortfall is queued for settlement.
+    /// @param s The liquidity hub storage
+    /// @param withLCC The backing LCC token address
+    /// @param ctx The wrap context (modified in place via return)
+    /// @return Updated wrap context
+    function _unwrapResidual(LiquidityHubStorage storage s, address withLCC, WrapWithContext memory ctx)
+        private
+        returns (WrapWithContext memory)
+    {
+        // Calculate remaining after netting (marketToMint includes Step 0 + Step 2, minus Step 0's targetToBurn)
+        uint256 marketFromNetting = ctx.marketToMint - ctx.targetToBurn;
+        uint256 remainingAfterNet =
+            ctx.remainingAmount > marketFromNetting ? ctx.remainingAmount - marketFromNetting : 0;
 
-        // Priority-based: use market-derived balance first, then direct (wrapped) as remainder
-        uint256 fromMarketDerivedAmount = Math.min(amount, fromMarketDerivedBalance);
-        uint256 fromWrappedAmount = amount - fromMarketDerivedAmount;
+        if (remainingAfterNet == 0) return ctx;
 
-        // Pull backing LCC from user to Hub with Permit2 fallback
-        Currency.wrap(withLCC).transferFrom(from, address(this), amount);
-
-        uint256 targetToBurn = 0;
-        uint256 backingToBurn = 0;
-
-        // Step 0: Net against target LCC Hub queue
-        uint256 targetQueue = s.settleQueue[lcc][address(this)];
-        if (targetQueue > 0) {
-            // Use adapter - no callback needed!
-            uint256 hubHeldTarget = balanceOf(lcc, address(this));
-            uint256 netTarget = Math.min(amount, Math.min(targetQueue, hubHeldTarget));
-            if (netTarget > 0) {
-                // Consume the user's provided withLCC across buckets to reflect origin
-                uint256 consumeMarket = Math.min(fromMarketDerivedAmount, netTarget);
-                fromMarketDerivedAmount -= consumeMarket;
-                uint256 remainingTarget = netTarget - consumeMarket;
-                if (remainingTarget > 0) {
-                    uint256 consumeWrapped = Math.min(fromWrappedAmount, remainingTarget);
-                    fromWrappedAmount -= consumeWrapped;
-                }
-
-                // Annul the target queue and track burn for target LCC
-                s.settleQueue[lcc][address(this)] = targetQueue - netTarget;
-                s.totalQueued[lcc] -= netTarget;
-                targetToBurn = netTarget;
-
-                // Track burn for withLCC (market-derived)
-                backingToBurn += netTarget;
-
-                // Mint target to recipient as market-derived to reflect queue origin
-                marketToMint += netTarget;
-
-                // Reduce remaining amount to process downstream
-                amount -= netTarget;
-            }
+        // Calculate residual wrapped for unwrap (wrapped minus what was used for direct conversion in Step 1)
+        uint256 residualWrappedForUnwrap = ctx.fromWrappedAmount;
+        if (ctx.directToMint > 0) {
+            residualWrappedForUnwrap =
+                residualWrappedForUnwrap > ctx.directToMint ? (residualWrappedForUnwrap - ctx.directToMint) : 0;
         }
 
-        // Step 1: Optimise direct conversion by transferring directSupply between LCCs (no unwrap)
-        if (fromWrappedAmount > 0) {
-            uint256 directAvail = s.directSupply[withLCC];
-            uint256 directConverted = Math.min(fromWrappedAmount, directAvail);
-            if (directConverted > 0) {
-                s.directSupply[withLCC] = directAvail - directConverted;
-                s.directSupply[lcc] += directConverted;
-                // Track burn for withLCC (direct)
-                backingToBurn += directConverted;
-                directToMint += directConverted;
-            }
-        }
+        // Unwrap: consumes directSupply first, then market liquidity, queues shortfall if any
+        (uint256 directUnwrapped, uint256 marketUnwrapped) = unwrapInternalLogic(
+            s, withLCC, address(this), remainingAfterNet, residualWrappedForUnwrap, ctx.fromMarketDerivedAmount
+        );
 
-        // Step 2: Net market-derived portion against Hub queue using lazy claimed mapping
-        uint256 remainderAmount = amount - directToMint;
-        if (remainderAmount > 0) {
-            uint256 hubQueueForWith = s.settleQueue[withLCC][address(this)];
-            uint256 claimed = s.nettedLCCsAsUnderlying[withLCC];
-            uint256 effectiveQueue = hubQueueForWith > claimed ? (hubQueueForWith - claimed) : 0;
-            uint256 nettable = Math.min(remainderAmount, Math.min(fromMarketDerivedAmount, effectiveQueue));
-            if (nettable > 0) {
-                s.nettedLCCsAsUnderlying[withLCC] = claimed + nettable; // lazy claim
-                // Track burn for withLCC (market-derived)
-                backingToBurn += nettable;
-                marketToMint += nettable;
-                fromMarketDerivedAmount -= nettable;
-            }
+        // Track burns and mints
+        ctx.backingToBurn += directUnwrapped + marketUnwrapped;
+        ctx.directToMint += directUnwrapped;
+        // Market-derived mint = remaining after direct unwrap (market liquidity was consumed)
+        ctx.marketToMint += (remainingAfterNet - directUnwrapped);
 
-            // Step 3: Unwrap residual using withLCC balances (directSupply then market liquidity)
-            uint256 remainingAfterNet = remainderAmount - marketToMint;
-            if (remainingAfterNet > 0) {
-                // fromWrappedAmount may still include amounts not converted via direct transfer
-                uint256 residualWrappedForUnwrap = fromWrappedAmount;
-                if (directToMint > 0) {
-                    // directToMint consumed from wrapped-origin
-                    residualWrappedForUnwrap =
-                        residualWrappedForUnwrap > directToMint ? (residualWrappedForUnwrap - directToMint) : 0;
-                }
-                (uint256 directUnwrapped, uint256 marketUnwrapped) = unwrapInternalLogic(
-                    s, withLCC, address(this), remainingAfterNet, residualWrappedForUnwrap, fromMarketDerivedAmount
-                );
-                // Track burns for withLCC
-                backingToBurn += directUnwrapped;
-                backingToBurn += marketUnwrapped;
-                // direct portion minted as direct; market and shortfall minted as market-derived
-                directToMint += directUnwrapped;
-                marketToMint += (remainingAfterNet - directUnwrapped);
-            }
-        }
+        return ctx;
+    }
 
-        // Clamp final burns to current Hub-held balances to avoid over-burns due to external effects
-        uint256 targetHeld = balanceOf(lcc, address(this));
-        if (targetToBurn > targetHeld) {
-            targetToBurn = targetHeld;
-        }
-        uint256 backingHeld = balanceOf(withLCC, address(this));
-        if (backingToBurn > backingHeld) {
-            backingToBurn = backingHeld;
-        }
+    /// @notice Finalise burns and invariant checks for wrap-with operation
+    /// @dev Clamps burns to current balances and ensures lazy-claimed never exceeds queue.
+    ///      This is a safety check: if queue was processed between netting and finalisation,
+    ///      we ensure lazy-claimed doesn't exceed the new (smaller) queue size.
+    /// @param s The liquidity hub storage
+    /// @param lcc The target LCC token address
+    /// @param withLCC The backing LCC token address
+    /// @param ctx The wrap context
+    function _finaliseBurns(LiquidityHubStorage storage s, address lcc, address withLCC, WrapWithContext memory ctx)
+        private
+    {
+        // Clamp burns to current Hub-held balances (defensive check)
+        uint256 targetToBurn = Math.min(ctx.targetToBurn, balanceOf(lcc, address(this)));
+        uint256 backingToBurn = Math.min(ctx.backingToBurn, balanceOf(withLCC, address(this)));
 
-        // Consolidate burns: single burn call per LCC
-        // Use adapter - no callback needed!
+        // Execute burns (protocol-bound burns, skip bucket maps)
         if (targetToBurn > 0) {
             burn(lcc, address(this), 0, targetToBurn, true);
         }
@@ -249,25 +297,87 @@ library LiquidityHubLib {
             burn(withLCC, address(this), 0, backingToBurn, true);
         }
 
-        // Defensive invariant clamps
-        // Ensure we never mint more than originally requested
-        if (directToMint + marketToMint > originalRequestedAmount) {
-            // Clamp marketToMint to ensure total does not exceed request
-            uint256 excess = (directToMint + marketToMint) - originalRequestedAmount;
-            marketToMint = marketToMint > excess ? (marketToMint - excess) : 0;
+        // Ensure lazy-claimed never exceeds current queue (invariant check)
+        // This can happen if queue was processed between netting and finalisation
+        // @note: Based on the logical call flow, this should never happen.
+        uint256 currentQueueWith = s.settleQueue[withLCC][address(this)];
+        if (s.nettedLCCsAsUnderlying[withLCC] > currentQueueWith) {
+            s.nettedLCCsAsUnderlying[withLCC] = currentQueueWith;
         }
-        // Ensure lazy-claimed never exceeds current queue
-        {
-            uint256 currentQueueWith = s.settleQueue[withLCC][address(this)];
-            uint256 claimedWith = s.nettedLCCsAsUnderlying[withLCC];
-            if (claimedWith > currentQueueWith) {
-                s.nettedLCCsAsUnderlying[withLCC] = currentQueueWith;
-            }
+    }
+
+    // ============ MAIN WRAP-WITH FUNCTION ============
+
+    /// @notice Wrap LCC using another LCC as backing, with O(1) flattening and netting
+    /// @dev Multi-step strategy to efficiently convert one LCC to another sharing the same underlying:
+    ///      Step 0: Net against target LCC Hub queue (if Hub has queue for target, net backing LCC against it)
+    ///      Step 1: Optimise direct conversion (transfer directSupply from withLCC to target, no unwrap needed)
+    ///      Step 2: Net market-derived against Hub queue for withLCC (using lazy-claimed mapping to prevent over-netting)
+    ///      Step 3: Unwrap residual (consume directSupply then market liquidity, queue shortfall if any)
+    ///      Final: Mint target LCC reflecting direct vs market-derived components
+    ///
+    ///      Priority-based balance consumption: market-derived balance is consumed first, then wrapped (direct).
+    ///      This optimises gas by preferring market-derived (no directSupply manipulation) over wrapped.
+    ///
+    ///      Refactored into helper functions to avoid stack-too-deep in legacy pipeline (via_ir = false).
+    /// @param s The liquidity hub state
+    /// @param lcc The target LCC token address
+    /// @param withLCC The backing LCC token address
+    /// @param from The address providing the backing LCC
+    /// @param amount The amount to wrap
+    //#olympix-ignore-reentrancy
+    function wrapWithPrepare(LiquidityHubStorage storage s, address lcc, address withLCC, address from, uint256 amount)
+        internal
+        view
+        returns (WrapWithContext memory)
+    {
+        if (amount == 0) revert Errors.InvalidAmount(0, 0);
+
+        // Validation: ensure withLCC is valid, not same as target, and shares underlying
+        assertValidLcc(s, withLCC);
+        if (lcc == withLCC) revert Errors.InvalidAddress(withLCC);
+        if (s.lccToUnderlying[lcc] != s.lccToUnderlying[withLCC]) {
+            revert Errors.UnderlyingAssetMismatch(s.lccToUnderlying[lcc], s.lccToUnderlying[withLCC]);
         }
 
-        // Use adapter - no callback needed!
-        mint(lcc, to, directToMint, marketToMint, false);
+        // Initialise context with balance checks in scoped block
+        WrapWithContext memory ctx;
+        ctx.originalAmount = amount;
+        {
+            (uint256 wrapped, uint256 marketDerived) = balancesOf(withLCC, from);
+            uint256 total = wrapped + marketDerived;
+            if (amount > total) revert Errors.InvalidAmount(amount, total);
+            // Priority-based: use market-derived balance first, then direct (wrapped) as remainder
+            // This optimises gas by preferring market-derived (no directSupply manipulation)
+            ctx.fromMarketDerivedAmount = Math.min(amount, marketDerived);
+            ctx.fromWrappedAmount = amount - ctx.fromMarketDerivedAmount;
+        }
+
+        // Expects caller to securely transfer funds from (the caller) to (this) Hub
+        return ctx;
     }
+
+    /// @notice Wrap LCC using another LCC as backing, with O(1) flattening and netting
+    /// @dev Executes the wrap-with operation using the provided context
+    /// @param s The liquidity hub state
+    /// @param lcc The target LCC token address
+    /// @param withLCC The backing LCC token address
+    /// @param ctx The wrap context
+    //#olympix-ignore-reentrancy
+    function wrapWithContext(LiquidityHubStorage storage s, address lcc, address withLCC, WrapWithContext memory ctx)
+        internal
+    {
+        // Execute steps via helper functions (each keeps stack depth minimal)
+        ctx = _netAgainstTargetQueue(s, lcc, ctx); // Step 0: Net against target queue
+        ctx = _optimiseDirectConversion(s, lcc, withLCC, ctx); // Step 1: Direct conversion
+        ctx = _netMarketDerived(s, withLCC, ctx); // Step 2: Net market-derived
+        ctx = _unwrapResidual(s, withLCC, ctx); // Step 3: Unwrap residual
+
+        // Finalise burns and invariant checks
+        _finaliseBurns(s, lcc, withLCC, ctx);
+    }
+
+    // ============ CORE LOGIC FUNCTIONS ============
 
     /**
      * @notice Core unwrap logic without external transfer
@@ -276,17 +386,18 @@ library LiquidityHubLib {
      *      that is handled by the calling contract.
      * @param s The liquidity hub storage
      * @param lcc The LCC token address
-     * @param to The recipient of the underlying asset (used for queueing shortfall)
+     * @param queueTo The recipient of the underlying asset (used for queueing shortfall)
      * @param amount The amount to unwrap
      * @param wrappedBalance The wrapped balance of the account
      * @param marketDerivedBalance The market-derived balance of the account
      * @return directUnwrapped The amount unwrapped from direct supply
      * @return marketUnwrapped The amount unwrapped from market liquidity
      */
+    //#olympix-ignore-reentrancy
     function unwrapInternalLogic(
         LiquidityHubStorage storage s,
         address lcc,
-        address to,
+        address queueTo,
         uint256 amount,
         uint256 wrappedBalance,
         uint256 marketDerivedBalance
@@ -313,9 +424,9 @@ library LiquidityHubLib {
             remainingToUnwrap -= marketUnwrapped;
         }
 
-        // 3) Queue any shortfall to Hub itself for later processing
+        // 3) Queue any shortfall for later processing
         if (remainingToUnwrap > 0) {
-            queueSettlement(s, lcc, to, remainingToUnwrap);
+            queueSettlement(s, lcc, queueTo, remainingToUnwrap);
         }
     }
 
@@ -352,8 +463,19 @@ library LiquidityHubLib {
     /// @notice Process settlement for a specific recipient using reserveOfUnderlying
     /// @dev Permissionless function that allows anyone to process settlements when liquidity is available.
     ///      Unified interface: branches behaviour based on whether recipient is address(this) (Hub) or external address.
-    ///      For Hub: burns Hub-held LCC without transferring underlying or decrementing reserves.
-    ///      For external: checks holder balance, burns user tokens, transfers underlying, and decrements reserves.
+    ///
+    ///      Hub path (recipient == address(this)):
+    ///      - Used when LCCs back LCCs (via wrapWithLogic)
+    ///      - Burns Hub-held LCC without transferring underlying or decrementing reserves
+    ///      - Reconciles lazy-claimed netting from wrapWithLogic operations
+    ///      - Underlying stays in shared pool (no transfer needed)
+    ///
+    ///      External path (standard users):
+    ///      - Checks market-derived holder balance
+    ///      - Burns user's LCC tokens (market-derived supply)
+    ///      - Transfers underlying assets to recipient
+    ///      - Decrements reserveOfUnderlying
+    ///
     /// @param s The liquidity hub storage
     /// @param lcc The LCC token address
     /// @param recipient The recipient address to settle for (address(this) for Hub's own queue)
@@ -377,14 +499,15 @@ library LiquidityHubLib {
         if (isForHub) {
             // Hub-specific path: burn Hub-held LCC against available reserves
             // Does NOT transfer underlying or decrement reserveOfUnderlying (underlying stays in shared pool)
-            // Note: This path should only really occur when LCCs back LCCs (via _wrapWith).
+            // Note: This path should only really occur when LCCs back LCCs (via wrapWithLogic)
             holderBal = balanceOf(lcc, recipient);
         } else {
             // Standard path for external recipients
-            // market-derived holder balance
+            // Only check market-derived balance (wrapped balance doesn't need settlement)
             (, holderBal) = balancesOf(lcc, recipient);
         }
 
+        // Calculate settlement amount: min of queued, available reserves, maxAmount, and holder balance
         uint256 toSettle = Math.min(Math.min(queued, available), Math.min(maxAmount, holderBal));
         if (toSettle == 0) {
             if (!isForHub) {
@@ -393,17 +516,30 @@ library LiquidityHubLib {
             return;
         }
 
+        // Update queue
         s.settleQueue[lcc][recipient] -= toSettle;
         s.totalQueued[lcc] -= toSettle;
 
         if (isForHub) {
-            // Reconcile lazy netted claims first, then burn only unclaimed portion
+            // Reconcile lazy netting from wrapWith Step 2.
+            //
+            // `nettedLCCsAsUnderlying[lcc]` tracks how much of the Hub's own queued settlement for `lcc` was
+            // already "netted" earlier during wrapWith (market-derived netting) WITHOUT reducing `settleQueue`
+            // at that time. In other words: the queue still exists on-chain, but some of it has already been
+            // economically satisfied via netting. (ie. transferred to a recipient, so we don't need to burn Hub-held LCC for that same portion)
+            //
+            // When we later process the Hub's queue, we still decrement `settleQueue`/`totalQueued` by `toSettle`,
+            // but we must avoid double-accounting by NOT burning Hub-held LCC for the already-netted portion.
+            // So we consume `claimed` first, and only burn the remaining `effectiveToBurn`.
+            //
+            // (The external-recipient path below uses `pay(...)`, which burns the user's LCC and transfers
+            // underlying, decrementing reserves.)
             uint256 claimed = s.nettedLCCsAsUnderlying[lcc];
             uint256 decrement = Math.min(claimed, toSettle);
             if (decrement > 0) {
                 s.nettedLCCsAsUnderlying[lcc] = claimed - decrement;
             }
-            // Burn the remaining amount after _wrapWith lazy netting (burning) has been accounted for.
+            // Burn the remaining amount after wrapWithLogic lazy netting has been accounted for
             uint256 effectiveToBurn = toSettle - decrement;
 
             if (effectiveToBurn > 0) {
@@ -411,6 +547,7 @@ library LiquidityHubLib {
                 burn(lcc, recipient, 0, effectiveToBurn, true);
             }
         } else {
+            // Standard path: burn user's LCC and transfer underlying
             pay(s, lcc, recipient, recipient, 0, toSettle, caller);
         }
     }

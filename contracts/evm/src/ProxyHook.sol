@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.26;
+pragma solidity ^0.8.26;
 
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
@@ -35,6 +35,16 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         Currency currency1;
         address poolManager;
         LiquidityUtils.ActionType actionType;
+    }
+
+    /// @dev Context for proxy swap operations to reduce stack depth
+    struct ProxySwapContext {
+        bool coreZeroForOne;
+        ILCC lccTokenForCurrency0;
+        ILCC lccTokenForCurrency1;
+        Currency lccCurrencyForCurrency0;
+        Currency lccCurrencyForCurrency1;
+        uint160 sqrtPriceLimitX96Core;
     }
 
     address public coreHook; // specific to proxy hook.
@@ -249,6 +259,132 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         _settleObligationsForLCC(lccTokenIn);
     }
 
+    /// @dev Builds the proxy swap context (LCC mappings and direction)
+    function _buildSwapContext(PoolKey calldata key, bool paramsZeroForOne)
+        private
+        view
+        returns (ProxySwapContext memory ctx)
+    {
+        PoolKey memory coreKey = corePoolKey;
+        ILCC coreLccToken0 = ILCC(Currency.unwrap(coreKey.currency0));
+        ILCC coreLccToken1 = ILCC(Currency.unwrap(coreKey.currency1));
+
+        // Determine if proxy direction matches core direction
+        ctx.coreZeroForOne = (Currency.unwrap(key.currency0) == coreLccToken0.underlying()
+                    && Currency.unwrap(key.currency1) == coreLccToken1.underlying())
+            ? paramsZeroForOne
+            : !paramsZeroForOne;
+
+        // Map LCC tokens based on direction alignment
+        bool aligned = paramsZeroForOne == ctx.coreZeroForOne;
+        ctx.lccTokenForCurrency0 = aligned ? coreLccToken0 : coreLccToken1;
+        ctx.lccTokenForCurrency1 = aligned ? coreLccToken1 : coreLccToken0;
+        ctx.lccCurrencyForCurrency0 = Currency.wrap(address(ctx.lccTokenForCurrency0));
+        ctx.lccCurrencyForCurrency1 = Currency.wrap(address(ctx.lccTokenForCurrency1));
+    }
+
+    /// @dev Calculates the adjusted sqrt price limit for the core pool when direction is flipped
+    function _calcCoreSqrtPriceLimit(uint160 sqrtPriceLimitX96, bool flipped) internal pure returns (uint160) {
+        if (!flipped) return sqrtPriceLimitX96;
+
+        if (sqrtPriceLimitX96 == TickMath.MIN_SQRT_PRICE + 1) {
+            return TickMath.MAX_SQRT_PRICE - 1;
+        } else if (sqrtPriceLimitX96 == TickMath.MAX_SQRT_PRICE - 1) {
+            return TickMath.MIN_SQRT_PRICE + 1;
+        } else if (sqrtPriceLimitX96 != 0) {
+            return uint160((uint256(1) << 192) / sqrtPriceLimitX96);
+        } else {
+            return TickMath.MAX_SQRT_PRICE - 1;
+        }
+    }
+
+    /// @dev Builds core swap params, adjusting for available liquidity if needed
+    function _buildCoreSwapParams(
+        bool coreZeroForOne,
+        int256 amountSpecified,
+        uint160 sqrtPriceLimitX96Core,
+        uint256 maxOutputAvailable,
+        bool hasExcessRecipient
+    ) private view returns (SwapParams memory) {
+        if (hasExcessRecipient) {
+            return SwapParams({
+                zeroForOne: coreZeroForOne, amountSpecified: amountSpecified, sqrtPriceLimitX96: sqrtPriceLimitX96Core
+            });
+        }
+
+        // Check if swap is within bounds without simulation
+        uint256 outUpper = _upperBoundOutAtCurrentPrice(corePoolKey, amountSpecified, coreZeroForOne);
+        if (outUpper <= maxOutputAvailable) {
+            return SwapParams({
+                zeroForOne: coreZeroForOne, amountSpecified: amountSpecified, sqrtPriceLimitX96: sqrtPriceLimitX96Core
+            });
+        }
+
+        return _adjustSwapParamsForAvailableLiquidity(
+            SwapParams({
+                zeroForOne: coreZeroForOne, amountSpecified: amountSpecified, sqrtPriceLimitX96: sqrtPriceLimitX96Core
+            }),
+            corePoolKey,
+            maxOutputAvailable
+        );
+    }
+
+    /// @dev Handles LCC settlement for zeroForOne swap direction
+    function _settleZeroForOne(
+        PoolKey calldata key,
+        ProxySwapContext memory ctx,
+        uint256 amountIn,
+        uint256 amountOut,
+        address excessRecipient
+    ) private returns (uint256 amountToSettle) {
+        // Take underlying tokens from PoolManager as Claim Tokens
+        key.currency0.take(poolManager, address(this), amountIn, true);
+
+        // Mint and settle LCC tokens for input
+        liquidityHub.issue(address(ctx.lccTokenForCurrency0), address(this), amountIn);
+        ctx.lccCurrencyForCurrency0.settle(poolManager, address(this), amountIn, false);
+
+        // Take LCC tokens for output
+        ctx.lccCurrencyForCurrency1.take(poolManager, address(this), amountOut, false);
+
+        // Cancel LCC with deficit handling
+        amountToSettle = _cancelLCCWithDeficit(key.toId(), ctx.lccTokenForCurrency1, amountOut, excessRecipient);
+
+        // Settle output token
+        key.currency1.settle(poolManager, address(this), amountToSettle, true);
+
+        // Settle obligations
+        _settleObligationsForLCC(ctx.lccTokenForCurrency0);
+    }
+
+    /// @dev Handles LCC settlement for oneForZero swap direction
+    function _settleOneForZero(
+        PoolKey calldata key,
+        ProxySwapContext memory ctx,
+        uint256 amountIn,
+        uint256 amountOut,
+        address excessRecipient
+    ) private returns (uint256 amountToSettle) {
+        // Take underlying tokens from PoolManager
+        key.currency1.take(poolManager, address(this), amountIn, true);
+
+        // Mint and settle LCC tokens for input
+        liquidityHub.issue(address(ctx.lccTokenForCurrency1), address(this), amountIn);
+        ctx.lccCurrencyForCurrency1.settle(poolManager, address(this), amountIn, false);
+
+        // Take LCC tokens for output
+        ctx.lccCurrencyForCurrency0.take(poolManager, address(this), amountOut, false);
+
+        // Cancel LCC with deficit handling
+        amountToSettle = _cancelLCCWithDeficit(key.toId(), ctx.lccTokenForCurrency0, amountOut, excessRecipient);
+
+        // Settle output token
+        key.currency0.settle(poolManager, address(this), amountToSettle, true);
+
+        // Settle obligations
+        _settleObligationsForLCC(ctx.lccTokenForCurrency1);
+    }
+
     // Before swap we make sure to provide enough delta
     // to ensure that the user gets a debit of amount specified
     // and we disable the core swap mechanism
@@ -260,190 +396,41 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         returns (bytes4, BeforeSwapDelta, uint24)
     {
         address excessRecipient = _determineExcessRecipient(hookData);
-        bool isHookExcessRecipientSpecified = excessRecipient != address(0);
 
-        uint256 maxOutputTokenAvailable = inMarketBalanceOf(params.zeroForOne ? key.currency1 : key.currency0);
+        // Build swap context with LCC mappings
+        ProxySwapContext memory ctx = _buildSwapContext(key, params.zeroForOne);
 
-        bool coreZeroForOne;
-        PoolKey memory coreKey = corePoolKey;
+        // Calculate adjusted sqrt price limit
+        ctx.sqrtPriceLimitX96Core =
+            _calcCoreSqrtPriceLimit(params.sqrtPriceLimitX96, params.zeroForOne != ctx.coreZeroForOne);
 
-        ILCC coreLccToken0 = ILCC(Currency.unwrap(coreKey.currency0));
-        ILCC coreLccToken1 = ILCC(Currency.unwrap(coreKey.currency1));
+        // Build core swap params
+        SwapParams memory coreSwapParams = _buildCoreSwapParams(
+            ctx.coreZeroForOne,
+            params.amountSpecified,
+            ctx.sqrtPriceLimitX96Core,
+            inMarketBalanceOf(params.zeroForOne ? key.currency1 : key.currency0),
+            excessRecipient != address(0)
+        );
 
-        if (
-            Currency.unwrap(key.currency0) == coreLccToken0.underlying()
-                && Currency.unwrap(key.currency1) == coreLccToken1.underlying()
-        ) {
-            // If tokens match order, then Proxy matches Core
-            coreZeroForOne = params.zeroForOne;
-        } else {
-            // If tokens do not match order, then Proxy inverts Core
-            coreZeroForOne = !params.zeroForOne;
-        }
+        // Execute swap on core pool
+        BalanceDelta delta = poolManager.swap(corePoolKey, coreSwapParams, bytes(""));
 
-        // If zeroForOne match, then lccTokenForCurrency0 is lccToken0 and lccTokenForCurrency1 is lccToken1
-        // If zeroForOne does not match, then lccTokenForCurrency0 is lccToken1 and lccTokenForCurrency1 is lccToken0
-        ILCC lccTokenForCurrency0 = params.zeroForOne == coreZeroForOne ? coreLccToken0 : coreLccToken1;
-        ILCC lccTokenForCurrency1 = params.zeroForOne == coreZeroForOne ? coreLccToken1 : coreLccToken0;
-        Currency lccCurrencyForCurrency0 = Currency.wrap(address(lccTokenForCurrency0));
-        Currency lccCurrencyForCurrency1 = Currency.wrap(address(lccTokenForCurrency1));
+        // Extract amounts from delta
+        uint256 amountIn = LiquidityUtils.safeInt128ToUint256(ctx.coreZeroForOne ? delta.amount0() : delta.amount1());
+        uint256 amountOut = LiquidityUtils.safeInt128ToUint256(ctx.coreZeroForOne ? delta.amount1() : delta.amount0());
 
-        // Calculate the correct sqrtPriceLimitX96 for the core pool
-        uint160 sqrtPriceLimitX96_core = params.sqrtPriceLimitX96;
-        bool flipped = params.zeroForOne != coreZeroForOne;
-        if (flipped) {
-            if (sqrtPriceLimitX96_core == TickMath.MIN_SQRT_PRICE + 1) {
-                sqrtPriceLimitX96_core = TickMath.MAX_SQRT_PRICE - 1;
-            } else if (sqrtPriceLimitX96_core == TickMath.MAX_SQRT_PRICE - 1) {
-                sqrtPriceLimitX96_core = TickMath.MIN_SQRT_PRICE + 1;
-            } else if (sqrtPriceLimitX96_core != 0) {
-                sqrtPriceLimitX96_core = uint160((uint256(1) << 192) / sqrtPriceLimitX96_core);
-            } else {
-                // If somehow 0 (though router overrides), set unbounded for flipped
-                sqrtPriceLimitX96_core = TickMath.MAX_SQRT_PRICE - 1;
-            }
-        }
+        // Handle LCC settlement based on direction
+        uint256 amountToSettle = params.zeroForOne
+            ? _settleZeroForOne(key, ctx, amountIn, amountOut, excessRecipient)
+            : _settleOneForZero(key, ctx, amountIn, amountOut, excessRecipient);
 
-        // Conduct the swap inside the Pool Manager
+        // Build return delta
+        BeforeSwapDelta newDelta = (params.amountSpecified < 0)
+            ? toBeforeSwapDelta(SafeCast.toInt128(amountIn), -SafeCast.toInt128(amountToSettle))
+            : toBeforeSwapDelta(-SafeCast.toInt128(amountToSettle), SafeCast.toInt128(amountIn));
 
-        // ? The wisest approach is to only swap what is settled by default.
-        // ? If hookData exists, then we can swap the full amount specified.
-        // As per V4Router.sol - if we settle excess LCC from this hook, there's no guarantee it'll be taken by the msgSender()/Locker
-        // Further, once the lock settles, then the deltas renew an the PoolManager will have excess LCC that has not been settled.
-
-        // We could technically attempt to send the excess LCC to the msgSender()/Locker... but this will not work if Action.TAKE uses a custom recipient.
-        // However, if recipient is passed inside of the hookData, then we send the excess there?
-        // Problem here is that if hookData is not passed, then the Router will receive the excess LCC.
-        // Therefore by default we just refund unless the hookData recipient exists...
-        // https://github.com/Uniswap/v4-periphery/blob/444c526b77d804590f0d7bc5a481af5a3277c952/src/V4Router.sol#L71
-        // Any caller that is aware of LCCs will execute a swap directly on the core pool...
-
-        // That will affect the return delta of the core pool, and therefore the values downstream.
-        // ? This problem could be solved through transient storage.
-
-        SwapParams memory coreSwapParams;
-        if (isHookExcessRecipientSpecified) {
-            coreSwapParams = SwapParams({
-                zeroForOne: coreZeroForOne,
-                amountSpecified: params.amountSpecified,
-                sqrtPriceLimitX96: sqrtPriceLimitX96_core
-            });
-        } else {
-            // * If not excess recipient, then perform restricted swap on native (underlying asset) liquidity
-            // Fast-path bound check at current price to avoid simulation when clearly safe
-            uint256 outUpper = _upperBoundOutAtCurrentPrice(coreKey, params.amountSpecified, coreZeroForOne);
-            if (outUpper <= maxOutputTokenAvailable) {
-                coreSwapParams = SwapParams({
-                    zeroForOne: coreZeroForOne,
-                    amountSpecified: params.amountSpecified,
-                    sqrtPriceLimitX96: sqrtPriceLimitX96_core
-                });
-            } else {
-                coreSwapParams = _adjustSwapParamsForAvailableLiquidity(
-                    SwapParams({
-                        zeroForOne: coreZeroForOne,
-                        amountSpecified: params.amountSpecified,
-                        sqrtPriceLimitX96: sqrtPriceLimitX96_core
-                    }),
-                    corePoolKey,
-                    maxOutputTokenAvailable
-                );
-            }
-        }
-
-        BalanceDelta delta = poolManager.swap(coreKey, coreSwapParams, bytes(""));
-
-        /// The desired input amount and output amount
-        // the deltas should be the source of truth since input and output amounts are potentially modified if no hook data is provided
-        uint256 amountIn = LiquidityUtils.safeInt128ToUint256(coreZeroForOne ? delta.amount0() : delta.amount1());
-        uint256 amountOut = LiquidityUtils.safeInt128ToUint256(coreZeroForOne ? delta.amount1() : delta.amount0());
-        bool isExactInput = params.amountSpecified < 0;
-
-        uint256 amountToSettle;
-
-        if (params.zeroForOne) {
-            // If user is selling Token 0 and buying Token 1
-
-            // Take the underlying tokens from PoolManager as Claim Tokens... the underlying liquidity remains in the Pool Manager...
-            key.currency0.take(poolManager, address(this), amountIn, true);
-
-            // Mint LCC tokens for the input amount to this contract
-            // These LCC tokens are collateralised by liquidity that remains in the Pool Manager.
-            liquidityHub.issue(address(lccTokenForCurrency0), address(this), amountIn);
-
-            // Settle minted LCC tokens to the PoolManager
-            // Accounts for LCC of 0 IN for the Core Pool Swap
-            lccCurrencyForCurrency0.settle(poolManager, address(this), amountIn, false);
-
-            // if amount out greateer
-            // Take LCC tokens of Token 1 from PoolManager
-            // Accounts for LCC of 1 OUT for the Core Pool Swap
-            lccCurrencyForCurrency1.take(poolManager, address(this), amountOut, false);
-
-            // Unwrap and Burn the LCC of Token 1 after taking from PM
-
-            // * With excess LCC: Trader always deposits correct amount of params.amountSpecified. However, the counterparty side could have insufficent liquidity.
-            // * In this case, the deficit is the amount of LCC that the counterparty side does not have.
-            // * This deficit is then distributed to the excessRecipient.
-            // * The excessRecipient is either specified, the Locker or the msg.sender.
-            // This excess functionality is Proxy Pool specific.
-            amountToSettle = _cancelLCCWithDeficit(key.toId(), lccTokenForCurrency1, amountOut, excessRecipient);
-
-            // Settle the output token to the PoolManager
-            // Burn claim tokens to release output token to the Trader from the PoolManager.
-            // ? amountOut can be greater than total amount of underlying asset in PoolManager.
-            // ? In this case, there is insufficient liquidity to settle amountOut of output token.
-            key.currency1.settle(poolManager, address(this), amountToSettle, true);
-
-            // Once LCC tokens settlements conducted for the Core Pool, utilise deposited underlying assets to settle obligations.
-            // Involves moving underlying assets from the ProxyHook/MarketVault to the LCC token.
-            _settleObligationsForLCC(lccTokenForCurrency0);
-        } else {
-            key.currency1.take(poolManager, address(this), amountIn, true);
-
-            // If user is selling Token 1 (IN) and buying Token 0 (OUT)
-            // First mint LCC tokens for the input amount to this contract
-            liquidityHub.issue(address(lccTokenForCurrency1), address(this), amountIn);
-
-            // Settle LCC tokens to the PoolManager
-            lccCurrencyForCurrency1.settle(poolManager, address(this), amountIn, false);
-
-            // Take LCC tokens of Token 0 from PoolManager
-            // Accounts for LCC of 0 OUT for the Core Pool Swap
-            lccCurrencyForCurrency0.take(poolManager, address(this), amountOut, false);
-
-            // Cancel (Unwrap/Burn) the LCC of Token 0 after taking from PM
-            amountToSettle = _cancelLCCWithDeficit(key.toId(), lccTokenForCurrency0, amountOut, excessRecipient);
-
-            // Settle the output token to the PoolManager
-            // Burn claim tokens to release output token to the Trader from the PoolManager.
-            key.currency0.settle(poolManager, address(this), amountToSettle, true);
-
-            // Once LCC tokens settlements conducted for the Core Pool, settle underlying asset obligations relative to the amountIn LCC token
-            _settleObligationsForLCC(lccTokenForCurrency1);
-        }
-
-        // BalanceDelta is a packed value of (currency0Amount, currency1Amount)
-
-        // BeforeSwapDelta varies such that it is not sorted by token0 and token1
-        // Instead, it is sorted by "specifiedCurrency" and "unspecifiedCurrency"
-
-        // Specified Currency => The currency in which the user is specifying the amount they're swapping for
-        // Unspecified Currency => The other currency
-
-        BeforeSwapDelta newDelta;
-
-        if (isExactInput) {
-            newDelta = toBeforeSwapDelta(
-                // exactIn = positive, exactOut = negative - as hook takes input, and releases output.
-                SafeCast.toInt128(amountIn),
-                -SafeCast.toInt128(amountToSettle)
-            );
-        } else {
-            newDelta = toBeforeSwapDelta(-SafeCast.toInt128(amountToSettle), SafeCast.toInt128(amountIn));
-        }
-
-        return (this.beforeSwap.selector, newDelta, 0); // last param is lpFeeOverride
+        return (this.beforeSwap.selector, newDelta, 0);
     }
 
     // Adjust the swap params to execute the swap to fully execute with the available liquidity
@@ -505,7 +492,14 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         }
 
         (uint160 sqrtP,, uint24 protocolFee, uint24 lpFee) = StateLibrary.getSlot0(poolManager, coreKey.toId());
-        uint24 swapFee = protocolFee == 0 ? lpFee : ProtocolFeeLibrary.calculateSwapFee(uint16(protocolFee), lpFee);
+
+        // `protocolFee` is a packed uint24 containing direction-specific 12-bit fees.
+        // We must use the correct direction when computing swapFee.
+        uint16 protocolFeeDir = zeroForOne
+            ? ProtocolFeeLibrary.getZeroForOneFee(protocolFee)
+            : ProtocolFeeLibrary.getOneForZeroFee(protocolFee);
+
+        uint24 swapFee = protocolFeeDir == 0 ? lpFee : ProtocolFeeLibrary.calculateSwapFee(protocolFeeDir, lpFee);
         uint256 feeDenom = ProtocolFeeLibrary.PIPS_DENOMINATOR;
         uint256 oneMinusFee = feeDenom - swapFee;
         uint256 absIn = uint256(-amountSpecified);

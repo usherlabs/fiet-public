@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.26;
+pragma solidity ^0.8.26;
 
 import {Currency, CurrencyLibrary} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
+import {Address} from "openzeppelin-contracts/contracts/utils/Address.sol";
 import {TransientSlots} from "../libraries/TransientSlots.sol";
 import {PositionManagerBase} from "./PositionManagerBase.sol";
+import {Errors} from "../libraries/Errors.sol";
 
 /**
  * @title PositionManagerEntrypoint
@@ -17,6 +19,9 @@ abstract contract PositionManagerEntrypoint is PositionManagerBase {
     constructor(address _liquidityHub, address _vtsOrchestrator, address _actionsImpl)
         PositionManagerBase(_liquidityHub, _vtsOrchestrator)
     {
+        if (_actionsImpl == address(0) || _actionsImpl.code.length == 0) {
+            revert Errors.InvalidAddress(_actionsImpl);
+        }
         actionsImpl = _actionsImpl;
     }
 
@@ -26,25 +31,8 @@ abstract contract PositionManagerEntrypoint is PositionManagerBase {
 
     /// @dev Delegates a call to the implementation contract
     function _delegateToImpl(bytes memory data) internal {
-        (bool success, bytes memory result) = actionsImpl.delegatecall(data);
-        if (!success) {
-            assembly {
-                revert(add(result, 32), mload(result))
-            }
-        }
-    }
-
-    /// @dev Delegates a view call to the implementation contract
-    function _delegateViewToImpl() internal view returns (bytes memory) {
-        address impl = actionsImpl;
-        assembly {
-            calldatacopy(0, 0, calldatasize())
-            let result := staticcall(gas(), impl, 0, calldatasize(), 0, 0)
-            returndatacopy(0, 0, returndatasize())
-            switch result
-            case 0 { revert(0, returndatasize()) }
-            default { return(0, returndatasize()) }
-        }
+        // OZ Address helper verifies target is a contract and bubbles revert reasons.
+        Address.functionDelegateCall(actionsImpl, data);
     }
 
     // ------------------------------------------------------------------------------------------------
@@ -68,10 +56,6 @@ abstract contract PositionManagerEntrypoint is PositionManagerBase {
     }
 
     // ------------------------------------------------------------------------------------------------
-    // Balance-to-Delta Sync Helpers
-    // ------------------------------------------------------------------------------------------------
-
-    // ------------------------------------------------------------------------------------------------
     // MM Utility Helpers
     // ------------------------------------------------------------------------------------------------
 
@@ -85,7 +69,9 @@ abstract contract PositionManagerEntrypoint is PositionManagerBase {
     /// @param maxAmount The maximum amount to take (0 = take full available credit)
     function _take(Currency currency, address to, uint256 maxAmount) internal {
         address locker = msgSender();
-        uint256 trueMaxAmount = Math.min(maxAmount, currency.balanceOfSelf());
+        uint256 bal = currency.balanceOfSelf();
+        // maxAmount == 0 means "take full available credit", but still cap to the actual ERC20 balance held by MMPM.
+        uint256 trueMaxAmount = (maxAmount == 0) ? bal : Math.min(maxAmount, bal);
         uint256 takeAmount = vtsOrchestrator.take(currency, locker, trueMaxAmount);
 
         if (to != address(this)) {

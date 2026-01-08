@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.26;
+pragma solidity ^0.8.26;
 
 /// @notice Market struct containing ID and Ref
 struct Market {
     address factory; // the factory that created this market
     bytes32 id; // core pool id as market
     bytes ref; // proxy
-    bool refIsValidIssuer; // whether the market ref address is a valid issuer
 }
 
 /// @title LiquidityHubStorage

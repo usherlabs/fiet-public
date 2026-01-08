@@ -1,15 +1,14 @@
-// SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.26;
+// SPDX-License-Identifier: UNLICENSED
+pragma solidity ^0.8.26;
 
 import {VTSStorage, MarketVTSConfiguration} from "../../../src/types/VTS.sol";
 import {PositionId, Position} from "../../../src/types/Position.sol";
 import {Pool} from "../../../src/types/Pool.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
-import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
-import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
-import {VTSFeeLib} from "../../../src/libraries/VTSFeeLib.sol";
+import {VTSFeeLib, VTSFeeLinkedLib} from "../../../src/libraries/VTSFeeLib.sol";
 import {RFSCheckpoint} from "../../../src/types/Checkpoint.sol";
+import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 
 /// @title VTSFeeLibHarness
 /// @notice Exposes internal VTSFeeLib functions for unit testing
@@ -25,69 +24,64 @@ contract VTSFeeLibHarness {
         return VTSFeeLib._peekFeeAdjustment(s, positionId);
     }
 
-    /// @notice Exposes _fundFeePot (requires actual poolManager)
-    function fundFeePot(
-        IPoolManager poolManager,
-        PoolId poolId,
-        Currency lccCurrency,
-        uint8 tokenIndex,
-        uint256 amount
-    ) external {
-        VTSFeeLib._fundFeePot(s, poolManager, poolId, lccCurrency, tokenIndex, amount);
+    /// @notice Exposes _fundFeePot (accounting only, no PoolManager interaction)
+    function fundFeePot(PoolId poolId, uint8 tokenIndex, uint256 amount) external {
+        VTSFeeLib._fundFeePot(s, poolId, tokenIndex, amount);
     }
 
-    /// @notice Exposes _drainFeePot (requires actual poolManager)
-    function drainFeePot(
-        IPoolManager poolManager,
-        PoolId poolId,
-        Currency lccCurrency,
-        uint8 tokenIndex,
-        uint256 amount
-    ) external {
-        VTSFeeLib._drainFeePot(s, poolManager, poolId, lccCurrency, tokenIndex, amount);
+    /// @notice Exposes _drainFeePot (accounting only, no PoolManager interaction)
+    function drainFeePot(PoolId poolId, uint8 tokenIndex, uint256 amount) external {
+        VTSFeeLib._drainFeePot(s, poolId, tokenIndex, amount);
     }
 
-    /// @notice Exposes _finaliseFeeAdjustment (requires actual poolManager)
-    function finaliseFeeAdjustment(
-        IPoolManager poolManager,
+    /// @notice Exposes _finaliseFeeAdjustment (accounting only, no PoolManager interaction)
+    function finaliseFeeAdjustment(PositionId positionId, PoolId poolId) external returns (BalanceDelta adj) {
+        return VTSFeeLib._finaliseFeeAdjustment(s, positionId, poolId);
+    }
+
+    /// @notice Exposes processPositionFees via the linked library (accounting only, no PoolManager interaction)
+    function afterTouchPosition(PositionId positionId) external returns (BalanceDelta adj) {
+        return VTSFeeLinkedLib.afterTouchPosition(s, positionId);
+    }
+
+    // ============ Internal Helper Exposers (for branch coverage) ============
+
+    /// @notice Exposes VTSFeeLib._syncFeesSharedRemainingForToken
+    function syncFeesSharedRemainingForToken(PositionId positionId, PoolId poolId, uint8 tokenIndex) external {
+        VTSFeeLib._syncFeesSharedRemainingForToken(
+            s.positionAccounting[positionId], s.poolAccounting[poolId], tokenIndex
+        );
+    }
+
+    /// @notice Exposes VTSFeeLib._queueBonusForToken
+    function queueBonusForToken(
         PositionId positionId,
         PoolId poolId,
-        Currency currency0,
-        Currency currency1
-    ) external returns (BalanceDelta adj) {
-        return VTSFeeLib._finaliseFeeAdjustment(s, poolManager, positionId, poolId, currency0, currency1);
+        uint8 feeTokenIndex,
+        uint8 coverageTokenIndex,
+        uint256 ciseExposure
+    ) external returns (bool allocated) {
+        return VTSFeeLib._queueBonusForToken(
+            s.positionAccounting[positionId], s.poolAccounting[poolId], feeTokenIndex, coverageTokenIndex, ciseExposure
+        );
     }
 
-    /// @notice Exposes processPositionFees (requires actual poolManager)
-    function processPositionFees(
-        IPoolManager poolManager,
+    /// @notice Exposes VTSFeeLib._cleanupAfterAllocationForToken
+    function cleanupAfterAllocationForToken(
         PositionId positionId,
-        Currency currency0,
-        Currency currency1
-    ) external returns (BalanceDelta adj) {
-        return VTSFeeLib.processPositionFees(s, poolManager, positionId, currency0, currency1);
-    }
-
-    /// @notice Exposes proactiveFunding (requires actual poolManager)
-    function proactiveFunding(
-        IPoolManager poolManager,
         PoolId poolId,
-        PositionId positionId,
-        Currency lccCurrency0,
-        Currency lccCurrency1
+        uint8 coverageTokenIndex,
+        uint256 ciseExposure
     ) external {
-        VTSFeeLib.proactiveFunding(s, poolManager, poolId, positionId, lccCurrency0, lccCurrency1);
+        VTSFeeLib._cleanupAfterAllocationForToken(
+            s.positionAccounting[positionId], s.poolAccounting[poolId], coverageTokenIndex, ciseExposure
+        );
     }
 
     // ============ Storage Getters (for assertions) ============
 
     function getPendingFeeAdj(PositionId id) external view returns (int256 adj0, int256 adj1) {
         return (s.positionAccounting[id].pendingFeeAdj.token0, s.positionAccounting[id].pendingFeeAdj.token1);
-    }
-
-    function getLastFundedPendingAdj(PositionId id) external view returns (int256 adj0, int256 adj1) {
-        return
-            (s.positionAccounting[id].lastFundedPendingAdj.token0, s.positionAccounting[id].lastFundedPendingAdj.token1);
     }
 
     function getSlashedPot(PoolId poolId) external view returns (uint256 pot0, uint256 pot1) {
@@ -102,16 +96,32 @@ contract VTSFeeLibHarness {
         return (s.positionAccounting[id].feesShared.token0, s.positionAccounting[id].feesShared.token1);
     }
 
-    function getNetSettlementSinceLastMod(PositionId id) external view returns (int256 net0, int256 net1) {
+    function getCISEExposure(PositionId id) external view returns (uint256 exposure0, uint256 exposure1) {
         return (
-            s.positionAccounting[id].netSettlementSinceLastMod.token0,
-            s.positionAccounting[id].netSettlementSinceLastMod.token1
+            s.positionAccounting[id].ciseExposureSinceLastMod.token0,
+            s.positionAccounting[id].ciseExposureSinceLastMod.token1
         );
     }
 
-    function getPoolNetSinceLastMod(PoolId poolId) external view returns (uint256 net0, uint256 net1) {
-        return
-            (s.poolAccounting[poolId].poolNetSinceLastMod.token0, s.poolAccounting[poolId].poolNetSinceLastMod.token1);
+    function getPoolTotalCISEExposure(PoolId poolId) external view returns (uint256 exposure0, uint256 exposure1) {
+        return (
+            s.poolAccounting[poolId].totalCISEExposureSinceLastMod.token0,
+            s.poolAccounting[poolId].totalCISEExposureSinceLastMod.token1
+        );
+    }
+
+    function getPoolFeesSharedSpendIndexX128(PoolId poolId) external view returns (uint256 index0, uint256 index1) {
+        return (
+            s.poolAccounting[poolId].feesSharedSpendIndexX128.token0,
+            s.poolAccounting[poolId].feesSharedSpendIndexX128.token1
+        );
+    }
+
+    function getPositionFeesSharedIndexLastX128(PositionId id) external view returns (uint256 index0, uint256 index1) {
+        return (
+            s.positionAccounting[id].feesSharedIndexLastX128.token0,
+            s.positionAccounting[id].feesSharedIndexLastX128.token1
+        );
     }
 
     // ============ Storage Setters (for test setup) ============
@@ -149,12 +159,6 @@ contract VTSFeeLibHarness {
         s.positionAccounting[id].pendingFeeAdj.token1 = adj1;
     }
 
-    /// @notice Sets last funded pending adjustment for a position
-    function setLastFundedPendingAdj(PositionId id, int256 adj0, int256 adj1) external {
-        s.positionAccounting[id].lastFundedPendingAdj.token0 = adj0;
-        s.positionAccounting[id].lastFundedPendingAdj.token1 = adj1;
-    }
-
     /// @notice Sets slashed pot for a pool
     function setSlashedPot(PoolId poolId, uint256 pot0, uint256 pot1) external {
         s.poolAccounting[poolId].slashedPot.token0 = pot0;
@@ -173,15 +177,25 @@ contract VTSFeeLibHarness {
         s.positionAccounting[id].feesShared.token1 = fee1;
     }
 
-    /// @notice Sets net settlement since last mod for a position
-    function setNetSettlementSinceLastMod(PositionId id, int256 net0, int256 net1) external {
-        s.positionAccounting[id].netSettlementSinceLastMod.token0 = net0;
-        s.positionAccounting[id].netSettlementSinceLastMod.token1 = net1;
+    /// @notice Sets CISE exposure for a position
+    function setCISEExposure(PositionId id, uint256 exposure0, uint256 exposure1) external {
+        s.positionAccounting[id].ciseExposureSinceLastMod.token0 = exposure0;
+        s.positionAccounting[id].ciseExposureSinceLastMod.token1 = exposure1;
     }
 
-    /// @notice Sets pool net since last mod
-    function setPoolNetSinceLastMod(PoolId poolId, uint256 net0, uint256 net1) external {
-        s.poolAccounting[poolId].poolNetSinceLastMod.token0 = net0;
-        s.poolAccounting[poolId].poolNetSinceLastMod.token1 = net1;
+    /// @notice Sets pool total CISE exposure
+    function setPoolTotalCISEExposure(PoolId poolId, uint256 exposure0, uint256 exposure1) external {
+        s.poolAccounting[poolId].totalCISEExposureSinceLastMod.token0 = exposure0;
+        s.poolAccounting[poolId].totalCISEExposureSinceLastMod.token1 = exposure1;
+    }
+
+    function setPoolFeesSharedSpendIndexX128(PoolId poolId, uint256 index0, uint256 index1) external {
+        s.poolAccounting[poolId].feesSharedSpendIndexX128.token0 = index0;
+        s.poolAccounting[poolId].feesSharedSpendIndexX128.token1 = index1;
+    }
+
+    function setPositionFeesSharedIndexLastX128(PositionId id, uint256 index0, uint256 index1) external {
+        s.positionAccounting[id].feesSharedIndexLastX128.token0 = index0;
+        s.positionAccounting[id].feesSharedIndexLastX128.token1 = index1;
     }
 }

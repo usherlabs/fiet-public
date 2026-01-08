@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.26;
+pragma solidity ^0.8.26;
 
 import {TransientSlot} from "openzeppelin-contracts/contracts/utils/TransientSlot.sol";
 import {PositionId} from "../types/Position.sol";
+import {EfficientHashLib} from "solady/utils/EfficientHashLib.sol";
 
 library TransientSlots {
     using TransientSlot for *;
@@ -52,7 +53,7 @@ library TransientSlots {
         pure
         returns (bytes32 hashSlot)
     {
-        hashSlot = keccak256(abi.encodePacked(namespaceSlot, lcc, from, to));
+        hashSlot = EfficientHashLib.hash(abi.encodePacked(namespaceSlot, lcc, from, to));
     }
 
     /// @dev Stores a planned cancel (simple version - just amount)

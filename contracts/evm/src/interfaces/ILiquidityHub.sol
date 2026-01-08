@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.26;
+pragma solidity ^0.8.26;
 
 import {IMarketFactory} from "./IMarketFactory.sol";
 
@@ -34,15 +34,8 @@ interface ILiquidityHub {
      * @param lccToken1 The second LCC token address
      * @param marketId The market ID (corePoolKey -> PoolID -> unwrap() to bytes32)
      * @param marketRef The market reference (bytes from proxyHookAddress)
-     * @param refIsValidIssuer Whether the market ref address is a valid issuer
      */
-    function initialize(
-        address lccToken0,
-        address lccToken1,
-        bytes32 marketId,
-        bytes memory marketRef,
-        bool refIsValidIssuer
-    ) external;
+    function initialize(address lccToken0, address lccToken1, bytes32 marketId, bytes memory marketRef) external;
 
     /**
      * @notice Issues LCC tokens (mints to specified recipient)
@@ -111,7 +104,44 @@ interface ILiquidityHub {
     function unwrap(address lcc, uint256 amount) external;
     function unwrap(address underlying, bytes32 marketId, uint256 amount) external;
     function unwrapTo(address lcc, address to, uint256 amount) external;
+
+    /**
+     * @notice Unwraps LCC tokens back to underlying assets and transfers any immediately-available underlying to `to`,
+     *         while queueing any unfulfilled portion to a separate settlement queue owner.
+     * @dev If available liquidity is insufficient to fulfil `amount`, the shortfall is queued under `queueTo` and can be
+     *      permissionlessly processed later via `processSettlementFor(lcc, queueTo, maxAmount)` when reserves become available.
+     *
+     *      This overload exists for protocol flows where "who receives underlying now" differs from "who owns the
+     *      settlement claim".
+     * @param lcc The LCC token address to unwrap
+     * @param to The recipient address for any underlying paid out immediately
+     * @param queueTo The address credited for any queued settlement shortfall (the eventual recipient on settlement)
+     * @param amount The amount of LCC tokens to unwrap
+     *
+     * @custom:constraints `queueTo` MUST NOT be `address(0)`; queueing to the zero address will strand the settlement.
+     * @custom:constraints `queueTo` MAY equal `to` to match the behaviour of `unwrapTo(lcc, to, amount)`.
+     */
+    function unwrapTo(address lcc, address to, address queueTo, uint256 amount) external;
     function unwrapTo(address underlying, bytes32 marketId, address to, uint256 amount) external;
+
+    /**
+     * @notice Unwraps LCC tokens (resolved by `underlying` + `marketId`) back to underlying assets and transfers any
+     *         immediately-available underlying to `to`, while queueing any unfulfilled portion to `queueTo`.
+     * @dev If available liquidity is insufficient to fulfil `amount`, the shortfall is queued under `queueTo` and can be
+     *      permissionlessly processed later via `processSettlementFor(lcc, queueTo, maxAmount)`.
+     *
+     *      This overload exists for protocol flows where the settlement queue owner must differ from the immediate
+     *      payout recipient.
+     * @param underlying The underlying asset address
+     * @param marketId The market ID (corePoolKey -> PoolID -> unwrap() to bytes32)
+     * @param to The recipient address for any underlying paid out immediately
+     * @param queueTo The address credited for any queued settlement shortfall (the eventual recipient on settlement)
+     * @param amount The amount of LCC tokens to unwrap
+     *
+     * @custom:constraints `queueTo` MUST NOT be `address(0)`; queueing to the zero address will strand the settlement.
+     * @custom:constraints `queueTo` MAY equal `to` to match the behaviour of `unwrapTo(underlying, marketId, to, amount)`.
+     */
+    function unwrapTo(address underlying, bytes32 marketId, address to, address queueTo, uint256 amount) external;
 
     /**
      * @notice Gets the LCC token for a given underlying asset in a specific market

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.26;
+pragma solidity ^0.8.26;
 
 import {EfficientHashLib} from "solady/utils/EfficientHashLib.sol";
 
@@ -52,5 +52,26 @@ library MarketMaker {
      */
     function toLeafHash(State memory state) internal pure returns (bytes32) {
         return EfficientHashLib.hash(abi.encode(state));
+    }
+
+    /**
+     * @dev Copies a State from memory to storage (legacy pipeline compatible)
+     * @notice Direct struct assignment of State (memory → storage) requires via_ir.
+     *         This helper avoids that by copying fields individually and using push() for the array.
+     * @param dest The destination storage pointer
+     * @param src The source memory State
+     */
+    function save(State storage dest, State memory src) internal {
+        dest.owner = src.owner;
+        dest.sourceState = src.sourceState;
+        dest.prover = src.prover;
+        dest.nonce = src.nonce;
+        dest.advancer = src.advancer;
+
+        // Clear existing reserves and copy new ones element by element
+        delete dest.reserves;
+        for (uint256 i = 0; i < src.reserves.length; i++) {
+            dest.reserves.push(src.reserves[i]);
+        }
     }
 }

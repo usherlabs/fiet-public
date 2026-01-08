@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.26;
+pragma solidity ^0.8.26;
 
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
@@ -67,23 +67,9 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
             return true;
         }
 
-        // Allow transfers between protocol bounds
-        if (fromProtocol && toProtocol) {
-            return true;
-        }
-
-        // Allow protocol -> non-protocol transfers
-        if (fromProtocol && !toProtocol) {
-            return true;
-        }
-
-        // Allow non-protocol -> protocol transfers
-        if (!fromProtocol && toProtocol) {
-            return true;
-        }
-
-        // Block non-protocol -> non-protocol transfers
-        return false;
+        // Any transfer with at least one protocol-bound endpoint is allowed.
+        // Non-protocol -> non-protocol transfers are blocked.
+        return fromProtocol || toProtocol;
     }
 
     /**
@@ -146,7 +132,7 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
             revert Errors.InvalidAmount(0, 0);
         }
         _mint(to, amount);
-        if (issued) {
+        if (issued || marketFactory.bounds(to)) {
             return;
         }
         if (marketAmount > 0) {
@@ -172,7 +158,7 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
         _burn(from, amount);
         // If burning from a protocol-bound address, bucket accounting is skipped.
         // Protocol addresses are intentionally not tracked in bucket maps.
-        if (issued) {
+        if (issued || marketFactory.bounds(from)) {
             return;
         }
         if (marketAmount > 0) {

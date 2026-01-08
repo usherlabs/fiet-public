@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.26;
+pragma solidity ^0.8.26;
 
 import {IERC20Metadata} from "openzeppelin-contracts/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {LibBytes} from "solady/utils/LibBytes.sol";
@@ -70,7 +70,7 @@ library LCCMetadataLib {
         returns (string memory)
     {
         return string.concat(
-            "Fiet Liquidity Commitment Certificate for", assetName, " in ", marketName, " (", symbolMarketId, ")"
+            "Fiet Liquidity Commitment Certificate for ", assetName, " in ", marketName, " (", symbolMarketId, ")"
         );
     }
 
@@ -92,14 +92,10 @@ library LCCMetadataLib {
 
     /// @notice Build the LCC token symbol from components
     /// @param uaSymbol The underlying asset symbol
-    /// @param truncatedMarketRefStr The truncated market reference hex string
+    /// @param symbolMarketId The truncated market reference hex string
     /// @return The full LCC symbol (e.g., "lcc-ETH-a1b2c3d4")
-    function buildSymbol(string memory uaSymbol, string memory truncatedMarketRefStr)
-        internal
-        pure
-        returns (string memory)
-    {
-        return string.concat("lcc-", uaSymbol, "-", truncatedMarketRefStr);
+    function buildSymbol(string memory uaSymbol, string memory symbolMarketId) internal pure returns (string memory) {
+        return string.concat("lcc-", uaSymbol, "-", symbolMarketId);
     }
 
     /// @notice Truncate marketRef to specified length and convert to hex string

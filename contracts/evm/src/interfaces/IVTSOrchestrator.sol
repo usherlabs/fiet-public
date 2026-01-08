@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity 0.8.26;
+pragma solidity ^0.8.26;
 
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
@@ -18,6 +18,7 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta {
     // Events
     event Checkpointed(uint256 commitId, uint256 positionIndex, RFSCheckpoint checkpoint, bool withCommitment);
     event GracePeriodExtended(uint256 commitId, uint256 positionIndex, uint8 tokenIndex, RFSCheckpoint checkpoint);
+    event VTSConfigSet(bytes32 indexed marketId, MarketVTSConfiguration newConfig);
     event PositionSettled(
         uint256 indexed commitId,
         uint256 indexed positionIndex,
@@ -108,6 +109,24 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta {
     /// @return fee0 The accrued fee for token0
     /// @return fee1 The accrued fee for token1
     function getProtocolFeeAccrued(PoolId poolId) external view returns (uint256 fee0, uint256 fee1);
+
+    /// @notice Get the materialised slashed pot (claimables available for bonus payouts) for a pool
+    /// @param poolId The pool identifier
+    /// @return pot0 Slashed pot balance for token0
+    /// @return pot1 Slashed pot balance for token1
+    function getSlashedPot(PoolId poolId) external view returns (uint256 pot0, uint256 pot1);
+
+    /// @notice Get fee-sharing accounting for a position
+    /// @dev `pendingFeeAdj` is signed: +slash (funds pot), -bonus (drains pot when materialised)
+    /// @param positionId The position identifier
+    /// @return feesShared0 Total fees attributed to this position for token0
+    /// @return feesShared1 Total fees attributed to this position for token1
+    /// @return pendingFeeAdj0 Pending fee adjustment for token0 (+slash, -bonus)
+    /// @return pendingFeeAdj1 Pending fee adjustment for token1 (+slash, -bonus)
+    function getPositionFeeAccounting(PositionId positionId)
+        external
+        view
+        returns (uint256 feesShared0, uint256 feesShared1, int256 pendingFeeAdj0, int256 pendingFeeAdj1);
 
     /// @notice Initialize a market's configuration in the VTS state
     /// @dev Called by MarketFactory contract during market creation

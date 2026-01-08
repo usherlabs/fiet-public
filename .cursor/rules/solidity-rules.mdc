@@ -16,6 +16,7 @@ globs:
 
 - Use Foundry Forge to Build (e.g., `forge build`).
 - Use Foundry Forge to Test (e.g., `forge test`).
+- For consistent unit-test behaviour inside Cursor, prefer running Foundry via `./contracts/evm/forge-debug ...` (defaults `FOUNDRY_PROFILE=debug`).
 - Utilize Foundry's cast for command-line interaction with contracts.
 - Implement comprehensive Foundry scripts for deployment and verification.
 - Use Foundry's script capabilities for complex deployment sequences.
