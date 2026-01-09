@@ -297,6 +297,23 @@ contract SwapV4 is NetworkConfig {
         vm.stopBroadcast();
         uint256 balanceAfterCurrency1 = IERC20(Currency.unwrap(poolKey.currency1)).balanceOf(userAddress);
         uint256 balanceAfterCurrency0 = IERC20(Currency.unwrap(poolKey.currency0)).balanceOf(userAddress);
+
+        // Net balance changes (raw units). This is the most reliable way to see what actually moved.
+        uint256 spent0 =
+            balanceBeforeCurrency0 > balanceAfterCurrency0 ? (balanceBeforeCurrency0 - balanceAfterCurrency0) : 0;
+        uint256 received0 =
+            balanceAfterCurrency0 > balanceBeforeCurrency0 ? (balanceAfterCurrency0 - balanceBeforeCurrency0) : 0;
+        uint256 spent1 =
+            balanceBeforeCurrency1 > balanceAfterCurrency1 ? (balanceBeforeCurrency1 - balanceAfterCurrency1) : 0;
+        uint256 received1 =
+            balanceAfterCurrency1 > balanceBeforeCurrency1 ? (balanceAfterCurrency1 - balanceBeforeCurrency1) : 0;
+
+        console.log("Net balance changes (raw units):");
+        console.log("Token0 spent:", spent0);
+        console.log("Token0 received:", received0);
+        console.log("Token1 spent:", spent1);
+        console.log("Token1 received:", received1);
+
         console.log(
             "user: Currency 0 balance Before: ",
             balanceBeforeCurrency0 / 1e18,
@@ -328,6 +345,7 @@ contract SwapV4 is NetworkConfig {
         console.log("Core Pool - liquidity: %s", liquidityBefore);
         console.log("LCC - uaSupply0: %s", uaSupply0Before);
         console.log("LCC - uaSupply1: %s", uaSupply1Before);
+        console.log("Amount: %s", params.amountIn);
 
         bytes memory commands = abi.encodePacked(uint8(Commands.V4_SWAP));
 

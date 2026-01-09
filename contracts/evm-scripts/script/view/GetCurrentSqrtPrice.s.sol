@@ -23,8 +23,9 @@ contract GetCurrentSqrtPrice is NetworkConfig {
 
         IPoolManager manager = IPoolManager(config.poolManager);
 
-        string memory poolIdStr = vm.envString("POOL_ID");
-        require(bytes(poolIdStr).length > 0, "POOL_ID must be provided");
+        // Standardised across scripts: use CORE_POOL_ID.
+        string memory poolIdStr = vm.envString("CORE_POOL_ID");
+        require(bytes(poolIdStr).length > 0, "CORE_POOL_ID must be provided");
 
         bytes32 poolIdBytes = vm.parseBytes32(poolIdStr);
         PoolId poolId = PoolId.wrap(poolIdBytes);
