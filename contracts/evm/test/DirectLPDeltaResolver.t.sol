@@ -6,6 +6,7 @@ import "forge-std/Test.sol";
 import {DirectLPDeltaResolver} from "../src/DirectLPDeltaResolver.sol";
 import {IPositionManager} from "v4-periphery/src/interfaces/IPositionManager.sol";
 import {PositionInfo} from "v4-periphery/src/libraries/PositionInfoLibrary.sol";
+import {PositionInfoLibrary} from "v4-periphery/src/libraries/PositionInfoLibrary.sol";
 import {ILiquidityHub} from "../src/interfaces/ILiquidityHub.sol";
 import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
 import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
@@ -195,11 +196,9 @@ contract DirectLPDeltaResolverTest is Test {
 
         address pm = address(resolver.positionManager());
         uint256 tokenId = 7777;
-        vm.mockCall(
-            pm,
-            abi.encodeWithSelector(IPositionManager.getPoolAndPositionInfo.selector, tokenId),
-            abi.encode(poolKey, bytes32(0))
-        );
+        PositionInfo info = PositionInfoLibrary.initialize(poolKey, int24(-1), int24(1));
+        // `notifyBurn` uses `poolKeys(info.poolId())` (PositionManager clears positionInfo[tokenId] before notifyBurn).
+        vm.mockCall(pm, abi.encodeWithSignature("poolKeys(bytes25)", info.poolId()), abi.encode(poolKey));
 
         address hub = address(resolver.liquidityHub());
         vm.mockCall(
@@ -208,7 +207,7 @@ contract DirectLPDeltaResolverTest is Test {
 
         vm.expectRevert(abi.encodeWithSelector(DirectLPDeltaResolver.FactoryNotFound.selector, currency0, currency1));
         vm.prank(pm);
-        resolver.notifyBurn(tokenId, address(0), PositionInfo.wrap(0), 0, toBalanceDelta(0, 0));
+        resolver.notifyBurn(tokenId, address(0), info, 0, toBalanceDelta(0, 0));
     }
 
     function test_notifyBurn_callsAfterModifyLiquidityWhenFactoryExists() public {
@@ -224,11 +223,9 @@ contract DirectLPDeltaResolverTest is Test {
 
         address pm = address(resolver.positionManager());
         uint256 tokenId = 7777;
-        vm.mockCall(
-            pm,
-            abi.encodeWithSelector(IPositionManager.getPoolAndPositionInfo.selector, tokenId),
-            abi.encode(poolKey, bytes32(0))
-        );
+        PositionInfo info = PositionInfoLibrary.initialize(poolKey, int24(-1), int24(1));
+        // `notifyBurn` uses `poolKeys(info.poolId())` (PositionManager clears positionInfo[tokenId] before notifyBurn).
+        vm.mockCall(pm, abi.encodeWithSignature("poolKeys(bytes25)", info.poolId()), abi.encode(poolKey));
 
         address hub = address(resolver.liquidityHub());
         address factory = makeAddr("factory");
@@ -240,6 +237,6 @@ contract DirectLPDeltaResolverTest is Test {
         vm.mockCall(factory, abi.encodeWithSelector(IMarketFactory.afterModifyLiquidity.selector, poolKey), "");
 
         vm.prank(pm);
-        resolver.notifyBurn(tokenId, address(0), PositionInfo.wrap(0), 0, toBalanceDelta(0, 0));
+        resolver.notifyBurn(tokenId, address(0), info, 0, toBalanceDelta(0, 0));
     }
 }
