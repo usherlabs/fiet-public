@@ -211,6 +211,12 @@ e2e-normal-lp:
         --rpc-url {{ rpc_url }} \
         {{ broadcast_flag }} -vvv
 
+# E2E: Exact-output swap flow (quotes expected input and asserts exact output received).
+e2e-swap:
+    FOUNDRY_PROFILE=deploy forge script {{ script_dir }}/e2e/Swap.s.sol:SwapE2E \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
 # Deploy oracle contracts via Hardhat
 deploy-oracle:
     #!/usr/bin/env bash
