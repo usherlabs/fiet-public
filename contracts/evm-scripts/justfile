@@ -197,6 +197,20 @@ deploy-contracts:
         --rpc-url {{ rpc_url }} \
         {{ broadcast_flag }} -vvv
 
+# === E2E ===
+
+# E2E: Deploy full stack only (standalone) and print MarketFactory.
+e2e-deploy:
+    FOUNDRY_PROFILE=deploy forge script {{ script_dir }}/e2e/Deploy.s.sol:DeployE2E \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+# E2E: Normal LP flow (LiquidityProvision scenario).
+e2e-normal-lp:
+    FOUNDRY_PROFILE=deploy forge script {{ script_dir }}/e2e/LiquidityProvision.s.sol:LiquidityProvisionE2E \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
 # Deploy oracle contracts via Hardhat
 deploy-oracle:
     #!/usr/bin/env bash
