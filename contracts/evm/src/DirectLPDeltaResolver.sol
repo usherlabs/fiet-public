@@ -12,6 +12,12 @@ import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {ILiquidityHub} from "./interfaces/ILiquidityHub.sol";
 import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 
+/// @dev PositionManager has a public getter for `poolKeys(bytes25)`. We use it during `notifyBurn`,
+/// because `getPoolAndPositionInfo(tokenId)` can return zeros after PositionManager clears `positionInfo[tokenId]`.
+interface IPositionManagerPoolKeys {
+    function poolKeys(bytes25 poolId) external view returns (PoolKey memory);
+}
+
 /// @title DirectLPDeltaResolver
 /// @notice Uniswap v4 PositionManager subscriber that clears CoreHook deltas after modifyLiquidity.
 /// @dev
@@ -68,12 +74,17 @@ contract DirectLPDeltaResolver is ISubscriber {
 
     function notifyUnsubscribe(uint256) external override onlyPositionManager {}
 
-    function notifyBurn(uint256 tokenId, address, PositionInfo, uint256, BalanceDelta)
+    function notifyBurn(uint256, address, PositionInfo info, uint256, BalanceDelta)
         external
         override
         onlyPositionManager
     {
-        _afterModifyLiquidity(tokenId);
+        // NOTE: During PositionManager._burn, `positionInfo[tokenId]` is cleared *before* notifyBurn is called.
+        // So re-querying `getPoolAndPositionInfo(tokenId)` here can return a zero PoolKey.
+        // `info` is the pre-clear PositionInfo, so we recover the PoolKey via `poolKeys(info.poolId())`.
+        PoolKey memory poolKey = IPositionManagerPoolKeys(address(positionManager)).poolKeys(info.poolId());
+        IMarketFactory factory = _getFactory(poolKey);
+        factory.afterModifyLiquidity(poolKey);
     }
 
     function notifyModifyLiquidity(uint256 tokenId, int256, BalanceDelta) external override onlyPositionManager {
