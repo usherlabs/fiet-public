@@ -64,4 +64,3 @@ contract MockResilientOracle is IResilientOracle {
     }
 }
 
-
