@@ -1,6 +1,6 @@
 //! Solidity ABI interface scaffolding for Kernel modules.
 //!
-//! Note: You do not *need* these interfaces to implement a validator, but having them around
+//! Note: You do not *need* these interfaces to implement a policy, but having them around
 //! makes ABI expectations explicit and enables cross-contract calls if desired.
 
 use stylus_sdk::alloy_sol_types::sol;
@@ -26,25 +26,12 @@ sol! {
         function isInitialized(address smartAccount) external view returns (bool);
     }
 
-    interface IValidator is IModule {
-        function validateUserOp(PackedUserOperation userOp, bytes32 userOpHash)
-            external
-            payable
-            returns (uint256);
-
-        function isValidSignatureWithSender(address sender, bytes32 hash, bytes data)
+    interface IPolicy is IModule {
+        function checkUserOpPolicy(bytes32 id, PackedUserOperation userOp) external payable returns (uint256);
+        function checkSignaturePolicy(bytes32 id, address sender, bytes32 hash, bytes sig)
             external
             view
-            returns (bytes4);
-    }
-
-    interface IHook is IModule {
-        function preCheck(address msgSender, uint256 msgValue, bytes msgData)
-            external
-            payable
-            returns (bytes hookData);
-
-        function postCheck(bytes hookData) external payable;
+            returns (uint256);
     }
 }
 

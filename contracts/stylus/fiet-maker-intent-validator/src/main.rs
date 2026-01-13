@@ -9,10 +9,10 @@ pub extern "C" fn main() {}
 fn main() {
     use stylus_sdk::abi::export::print_abi;
 
-    // The ABI surface is derived from the `#[public]` impls on `IntentValidator`.
-    use fiet_maker_intent_validator::IntentValidator;
+    // The ABI surface is derived from the `#[public]` impls on `IntentPolicy`.
+    use fiet_maker_intent_validator::IntentPolicy;
 
-    print_abi::<IntentValidator>("BUSL-1.1", "pragma solidity ^0.8.23;");
+    print_abi::<IntentPolicy>("BUSL-1.1", "pragma solidity ^0.8.23;");
 }
 
 

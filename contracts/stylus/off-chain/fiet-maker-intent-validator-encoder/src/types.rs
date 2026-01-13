@@ -1,6 +1,6 @@
-use alloy_primitives::{Address, FixedBytes, U256};
+use alloy_primitives::{FixedBytes, U256};
 
-/// Intent envelope that is signed off-chain and interpreted on-chain.
+/// Intent policy envelope that is interpreted on-chain (policy-local signature slice).
 #[derive(Clone, Debug)]
 pub struct IntentEnvelope {
     /// Protocol version for forwards compatibility.
@@ -13,10 +13,5 @@ pub struct IntentEnvelope {
     pub call_bundle_hash: FixedBytes<32>,
     /// Encoded check program (opcode + operands).
     pub program_bytes: Vec<u8>,
-    /// Signature over the envelope (EIP-712 / typed data).
-    pub signature: Vec<u8>,
-    /// Signer domain separation parameters.
-    pub domain_chain_id: u64,
-    pub domain_verifying_contract: Address,
 }
 

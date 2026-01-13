@@ -1,8 +1,8 @@
 //!
-//! Stylus intent validator (Option B scaffold).
+//! Stylus intent policy (Kernel permissions).
 //!
-//! This crate hosts the on-chain “Atomic Revalidation” intent validator described in
-//! `PROPOSAL.md`, exposed as a Kernel-compatible `IValidator`/`IHook` module.
+//! This crate hosts the on-chain “Atomic Revalidation” intent **policy**, exposed as a
+//! Kernel-compatible `IPolicy` module (ERC-7579 module type 5).
 //!
 //! The program is ABI-equivalent with Solidity; run `cargo stylus export-abi` to generate an ABI.
 //!
@@ -14,13 +14,13 @@
 extern crate alloc;
 
 pub mod kernel;
-mod intent_validator;
+mod intent_policy;
 pub mod types;
 pub mod decoder;
 pub mod evaluator;
 pub mod errors;
 pub mod facts;
 
-pub use intent_validator::IntentValidator;
+pub use intent_policy::IntentPolicy;
 
 
