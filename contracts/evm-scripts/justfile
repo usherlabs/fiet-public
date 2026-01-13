@@ -217,6 +217,12 @@ e2e-swap:
         --rpc-url {{ rpc_url }} \
         {{ broadcast_flag }} -vvv
 
+# E2E: Full MMPositionManager journey (commit+mint+settle, tick move via swaps, reposition, checkpoint+take fees).
+e2e-mm-journey:
+    FOUNDRY_PROFILE=deploy forge script {{ script_dir }}/e2e/MMJourney.s.sol:MMJourneyE2E \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
 # Deploy oracle contracts via Hardhat
 deploy-oracle:
     #!/usr/bin/env bash

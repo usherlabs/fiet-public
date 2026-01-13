@@ -31,6 +31,7 @@ import {Actions} from "v4-periphery/src/libraries/Actions.sol";
 import {IPermit2} from "permit2/src/interfaces/IPermit2.sol";
 
 import {IV4Quoter} from "v4-periphery/src/interfaces/IV4Quoter.sol";
+import {V4Quoter} from "v4-periphery/src/lens/V4Quoter.sol";
 
 import {IUniversalRouter} from "../../external/IUniversalRouter.sol";
 import {Commands} from "../../external/Commands.sol";
@@ -38,8 +39,13 @@ import {IV4Router} from "v4-periphery/src/interfaces/IV4Router.sol";
 
 import {CurrencySortHelper} from "../../libraries/CurrencySortHelper.sol";
 
+import {LiquiditySignal} from "src/types/Commit.sol";
+import {MarketMaker} from "src/libraries/MarketMaker.sol";
+import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
+
 abstract contract E2EBase is DeployFullStackBase {
     using StateLibrary for IPoolManager;
+    using MarketMaker for MarketMaker.State;
 
     struct CoreDeployment {
         FullStack stack;
@@ -102,6 +108,20 @@ abstract contract E2EBase is DeployFullStackBase {
         // Configure mock oracle so MarketFactory.createMarket passes validateMarketOracles().
         _configureMockOracle(m.stack.contracts.resilientOracle, m.stack.contracts.mainOracle, m.underlying0);
         _configureMockOracle(m.stack.contracts.resilientOracle, m.stack.contracts.mainOracle, m.underlying1);
+
+        // Register tickers used by E2E liquidity signals so commitment backing checks can price reserves.
+        // NOTE: In production these tickers come from the offchain prover pipeline and must correspond to
+        // assets with configured oracles. For E2E we map them to the two mock underlyings (both priced at 1e18).
+        GlobalConfig(m.stack.contracts.globalConfig)
+            .proxyCall(
+                m.stack.contracts.oracleHelper,
+                abi.encodeWithSignature("registerTicker(string,address)", "BTC", m.underlying0)
+            );
+        GlobalConfig(m.stack.contracts.globalConfig)
+            .proxyCall(
+                m.stack.contracts.oracleHelper,
+                abi.encodeWithSignature("registerTicker(string,address)", "USDT", m.underlying1)
+            );
 
         MarketVTSConfiguration memory cfg = VTSConfigs.getDefaultConfig();
         // IMPORTANT: ProxyHook is deployed via CREATE2 from `MarketVaultDeployer`.
@@ -311,6 +331,147 @@ abstract contract E2EBase is DeployFullStackBase {
 
         spent = inBefore - inAfter;
         received = outAfter - outBefore;
+    }
+
+    /// @dev Executes an exact-input single-hop swap on the core pool via UniversalRouter V4_SWAP.
+    /// Returns the input/output token addresses and the deltas observed on the trader.
+    function _swapExactInputSingle(
+        StandaloneMarket memory m,
+        uint256 traderPk,
+        bool zeroForOne,
+        uint128 amountIn,
+        uint128 amountOutMinimum
+    ) internal returns (address tokenIn, address tokenOut, uint256 spent, uint256 received) {
+        address trader = vm.addr(traderPk);
+        PoolKey memory key = _corePoolKey(m);
+
+        IUniversalRouter router = IUniversalRouter(payable(config.universalRouter));
+        IPermit2 permit2 = IPermit2(config.permit2);
+
+        tokenIn = zeroForOne ? Currency.unwrap(key.currency0) : Currency.unwrap(key.currency1);
+        tokenOut = zeroForOne ? Currency.unwrap(key.currency1) : Currency.unwrap(key.currency0);
+
+        uint256 inBefore = IERC20(tokenIn).balanceOf(trader);
+        uint256 outBefore = IERC20(tokenOut).balanceOf(trader);
+
+        vm.startBroadcast(traderPk);
+
+        // Approve Permit2 + Permit2->UniversalRouter for the input token.
+        IERC20(tokenIn).approve(address(permit2), type(uint256).max);
+        uint48 deadline = uint48(block.timestamp + 1 days);
+        permit2.approve(tokenIn, address(router), type(uint160).max, deadline);
+
+        IV4Router.ExactInputSingleParams memory swapParams = IV4Router.ExactInputSingleParams({
+            poolKey: key, zeroForOne: zeroForOne, amountIn: amountIn, amountOutMinimum: amountOutMinimum, hookData: ""
+        });
+
+        bytes memory commands = abi.encodePacked(uint8(Commands.V4_SWAP));
+        bytes memory actions =
+            abi.encodePacked(uint8(Actions.SWAP_EXACT_IN_SINGLE), uint8(Actions.SETTLE_ALL), uint8(Actions.TAKE_ALL));
+
+        bytes[] memory rParams = new bytes[](3);
+        rParams[0] = abi.encode(swapParams);
+        if (zeroForOne) {
+            // token0 in, token1 out
+            rParams[1] = abi.encode(key.currency0, amountIn);
+            rParams[2] = abi.encode(key.currency1, amountOutMinimum);
+        } else {
+            // token1 in, token0 out
+            rParams[1] = abi.encode(key.currency1, amountIn);
+            rParams[2] = abi.encode(key.currency0, amountOutMinimum);
+        }
+
+        bytes[] memory inputs = new bytes[](1);
+        inputs[0] = abi.encode(actions, rParams);
+
+        router.execute(commands, inputs, block.timestamp + 300);
+
+        vm.stopBroadcast();
+
+        uint256 inAfter = IERC20(tokenIn).balanceOf(trader);
+        uint256 outAfter = IERC20(tokenOut).balanceOf(trader);
+
+        spent = inBefore - inAfter;
+        received = outAfter - outBefore;
+    }
+
+    // ============================================================
+    // Generic utilities (used across E2E scripts)
+    // ============================================================
+
+    function _packSig(uint8 v, bytes32 r, bytes32 s) internal pure returns (bytes memory) {
+        return abi.encodePacked(r, s, v);
+    }
+
+    function _signEthMessage(uint256 pk, bytes32 messageHash) internal returns (bytes memory sig) {
+        bytes32 ethSigned = MessageHashUtils.toEthSignedMessageHash(messageHash);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(pk, ethSigned);
+        sig = _packSig(v, r, s);
+    }
+
+    /// @dev Rounds down to nearest multiple of `tickSpacing` (handles negative ticks).
+    function _floorTick(int24 tick, int24 tickSpacing) internal pure returns (int24 rounded) {
+        int24 compressed = tick / tickSpacing;
+        if (tick < 0 && (tick % tickSpacing) != 0) compressed -= 1;
+        rounded = compressed * tickSpacing;
+    }
+
+    /// @dev Builds a single-leaf LiquiditySignal:
+    ///      - rootHash == leafHash
+    ///      - merkleProof == []
+    ///      - mmSignature signed by the MM (required because verifier sees msg.sender = VRLSignalManager)
+    ///      - rootHashSignature signed by deployer (the E2E verifier's `publicKeyAddress`)
+    function _buildSingleLeafLiquiditySignal(uint256 mmPk, uint256 nonce) internal returns (bytes memory signalBytes) {
+        address mm = vm.addr(mmPk);
+
+        MarketMaker.State memory st;
+        st.owner = mm;
+        st.sourceState = "e2e.sourceState";
+        st.prover = "e2e.prover";
+        st.nonce = "e2e.nonce";
+        st.advancer = address(0);
+        st.reserves = new MarketMaker.Reserve[](2);
+        st.reserves[0] = MarketMaker.Reserve({asset: "BTC", amount: 1e20});
+        st.reserves[1] = MarketMaker.Reserve({asset: "USDT", amount: 5e18});
+
+        bytes32 leafHash = st.toLeafHash();
+        bytes32 rootHash = leafHash;
+
+        // MM authorizes the signal by signing the leafHash (verifier checks recovered == mmState.owner).
+        bytes memory mmSig = _signEthMessage(mmPk, leafHash);
+
+        // Canister (in E2E: deployer EOA) signs (nonce, rootHash).
+        bytes32 rootMsg = keccak256(abi.encodePacked(nonce, rootHash));
+        bytes memory rootSig = _signEthMessage(_getDeployerPrivateKey(), rootMsg);
+
+        bytes32[] memory proof = new bytes32[](0);
+        LiquiditySignal memory sig = LiquiditySignal({
+            nonce: nonce,
+            rootHash: rootHash,
+            rootHashSignature: rootSig,
+            merkleProof: proof,
+            mmState: st,
+            mmSignature: mmSig
+        });
+
+        signalBytes = abi.encode(sig);
+    }
+
+    function _deployQuoter() internal returns (IV4Quoter quoter) {
+        vm.startBroadcast(_getDeployerPrivateKey());
+        quoter = IV4Quoter(address(new V4Quoter(IPoolManager(config.poolManager))));
+        vm.stopBroadcast();
+    }
+
+    function _quoteExactOutputSingle(IV4Quoter quoter, PoolKey memory key, bool zeroForOne, uint128 amountOut)
+        internal
+        returns (uint256 expectedAmountIn)
+    {
+        (expectedAmountIn,) = quoter.quoteExactOutputSingle(
+            IV4Quoter.QuoteExactSingleParams({
+                poolKey: key, zeroForOne: zeroForOne, exactAmount: amountOut, hookData: ""
+            })
+        );
     }
 }
 
