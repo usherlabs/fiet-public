@@ -1,0 +1,27 @@
+{
+  "name": "fiet-intent-validator-e2e",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "bunx vitest",
+    "test:watch": "bunx vitest --watch",
+    "lint": "bunx tsc --noEmit"
+  },
+  "engines": {
+    "bun": ">=1.0.0"
+  },
+  "dependencies": {
+    "@zerodev/sdk": "^5.3.0",
+    "@zerodev/permissions": "^1.0.0",
+    "@zerodev/ecdsa-validator": "^5.3.0",
+    "viem": "^2.9.0",
+    "dotenv": "^16.3.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "vitest": "^1.2.0",
+    "@types/node": "^20.11.0"
+  }
+}
+
