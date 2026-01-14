@@ -754,11 +754,10 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
     /// @notice Checkpoint a position and optionally run commitment backing checks
     /// @dev Marks an RFS checkpoint for the position. If withCommitment is true, also validates
     ///      commitment backing and updates position deficits.
-    /// @param sender The caller address (locker / effective sender)
     /// @param commitId The commit identifier
     /// @param positionIndex The position index within the commit
     /// @param withCommitment Whether to run commitment backing checks and update position deficits
-    function checkpoint(address sender, uint256 commitId, uint256 positionIndex, bool withCommitment)
+    function checkpoint(uint256 commitId, uint256 positionIndex, bool withCommitment)
         external
         nonReentrant
     {

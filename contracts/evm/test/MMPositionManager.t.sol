@@ -564,7 +564,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         // For modifyLiquiditiesWithoutUnlock, the locker is the direct caller (this test contract).
         vm.expectCall(
             address(vtsOrchestrator),
-            abi.encodeWithSignature("checkpoint(address,uint256,uint256,bool)", address(this), tokenId, 0, false)
+            abi.encodeWithSignature("checkpoint(uint256,uint256,bool)", tokenId, 0, false)
         );
         MMA.execute(positionManager, prepared);
     }

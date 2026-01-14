@@ -203,7 +203,7 @@ contract MMPositionManager is
         }
         if (action == MMActions.CHECKPOINT) {
             (uint256 tokenId, uint256 positionIndex, bool withCommitment) = params.decodeCheckpointParams();
-            _checkpoint(msgSender(), tokenId, positionIndex, withCommitment);
+            _checkpoint(tokenId, positionIndex, withCommitment);
             return;
         }
         if (action == MMActions.EXTEND_GRACE_PERIOD) {
@@ -257,8 +257,8 @@ contract MMPositionManager is
     /// @param tokenId The commitment NFT token ID
     /// @param positionIndex The position index within the commitment
     /// @param withCommitment Whether to run commitment backing checks and update deficits
-    function _checkpoint(address sender, uint256 tokenId, uint256 positionIndex, bool withCommitment) internal {
-        vtsOrchestrator.checkpoint(sender, tokenId, positionIndex, withCommitment);
+    function _checkpoint(uint256 tokenId, uint256 positionIndex, bool withCommitment) internal {
+        vtsOrchestrator.checkpoint(tokenId, positionIndex, withCommitment);
     }
 
     /// @notice Extends grace period for a commitment via proof
@@ -499,6 +499,6 @@ contract MMPositionManager is
     /// @param positionIndex The index of the position within the commitment
     /// @param withCommitment Whether to run commitment backing checks and update deficits
     function checkpoint(uint256 tokenId, uint256 positionIndex, bool withCommitment) external onlyIfPoolManagerLocked {
-        _checkpoint(msg.sender, tokenId, positionIndex, withCommitment);
+        _checkpoint(tokenId, positionIndex, withCommitment);
     }
 }
