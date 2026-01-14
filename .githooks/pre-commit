@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+
+# Pre-commit hook: format Solidity files with forge fmt inside contracts/evm
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+# Collect staged Solidity files under contracts/evm
+staged_sol=()
+while IFS= read -r file; do
+  staged_sol+=("$file")
+done < <(git diff --cached --name-only --diff-filter=ACM | grep '^contracts/evm/.*\.sol$' || true)
+
+# No Solidity changes staged; skip formatting
+if [ ${#staged_sol[@]} -eq 0 ]; then
+  exit 0
+fi
+
+if ! command -v forge >/dev/null 2>&1; then
+  echo "forge is not installed or not on PATH. Install Foundry (see contracts/evm/README.md)." >&2
+  exit 1
+fi
+
+cd "$repo_root/contracts/evm"
+
+# Convert paths to be relative to contracts/evm for forge fmt
+relative_paths=()
+for path in "${staged_sol[@]}"; do
+  relative_paths+=("${path#contracts/evm/}")
+done
+
+forge fmt --files "${relative_paths[@]}"
+
+# Re-stage formatted files to include formatting changes
+cd "$repo_root"
+git add -- "${staged_sol[@]}"
