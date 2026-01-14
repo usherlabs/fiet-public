@@ -20,7 +20,7 @@ cd "$repo_root/contracts/evm"
 
 relative_paths="$(printf '%s\n' "$staged_sol" | sed 's#^contracts/evm/##')"
 # Note: paths are split on whitespace; Solidity file paths in this repo are expected to not contain spaces.
-forge fmt --files $relative_paths
+forge fmt $relative_paths
 
 cd "$repo_root"
 git add -- $staged_sol
