@@ -835,8 +835,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
     function test_revert_checkpoint_whenCommitInvalid_insideUnlock() public {
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidSignal.selector, uint256(0)));
         unlockCaller.run(
-            address(vtsOrchestrator),
-            abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, 0, 0, false)
+            address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, 0, 0, false)
         );
     }
 
@@ -865,8 +864,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         emit Checkpointed(tokenId, 0, RFSCheckpoint(0, false, 0, 0), false);
 
         unlockCaller.run(
-            address(vtsOrchestrator),
-            abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, tokenId, 0, false)
+            address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, tokenId, 0, false)
         );
 
         RFSCheckpoint memory checkpointAfter = vtsOrchestrator.positionToCheckpoint(positionId);
@@ -963,8 +961,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
 
         vm.prank(advancer);
         unlockCaller.run(
-            address(vtsOrchestrator),
-            abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, tokenId, 0, true)
+            address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, tokenId, 0, true)
         );
 
         // Partial settlement to keep the RFS likely open.
@@ -1015,8 +1012,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
 
         vm.prank(advancer);
         unlockCaller.run(
-            address(vtsOrchestrator),
-            abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, tokenId, 0, true)
+            address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, tokenId, 0, true)
         );
 
         // Should not revert
@@ -1047,8 +1043,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
 
         vm.prank(advancer);
         unlockCaller.run(
-            address(vtsOrchestrator),
-            abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, tokenId, 0, true)
+            address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, tokenId, 0, true)
         );
 
         (uint256 cd0, uint256 cd1) = _commitmentDeficit(positionId);
@@ -1082,8 +1077,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         _mockSignalUsd(0);
         vm.prank(advancer);
         unlockCaller.run(
-            address(vtsOrchestrator),
-            abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, tokenId, 0, true)
+            address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, tokenId, 0, true)
         );
 
         (uint256 cd0Before, uint256 cd1Before) = _commitmentDeficit(positionId);
@@ -1138,8 +1132,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         _mockSignalUsd(0);
         vm.prank(advancer);
         unlockCaller.run(
-            address(vtsOrchestrator),
-            abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, tokenId, 0, true)
+            address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, tokenId, 0, true)
         );
 
         (uint256 cd0Before, uint256 cd1Before) = _commitmentDeficit(positionId);
@@ -1150,8 +1143,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         _mockSignalUsd(1e30);
         vm.prank(advancer);
         unlockCaller.run(
-            address(vtsOrchestrator),
-            abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, tokenId, 0, true)
+            address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, tokenId, 0, true)
         );
 
         (uint256 cd0After, uint256 cd1After) = _commitmentDeficit(positionId);
@@ -1180,8 +1172,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         _mockSignalUsd(0);
         vm.prank(advancer);
         unlockCaller.run(
-            address(vtsOrchestrator),
-            abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, tokenId, 0, true)
+            address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, tokenId, 0, true)
         );
 
         (uint256 cd0Before, uint256 cd1Before) = _commitmentDeficit(positionId);

@@ -283,8 +283,7 @@ contract VTSOrchestratorReentrancyTest is VTSOrchestratorFixture {
 
         vm.prank(advancer);
         unlockCaller.run(
-            address(vtsOrchestrator),
-            abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, commitId, 0, true)
+            address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, commitId, 0, true)
         );
     }
 
@@ -356,8 +355,7 @@ contract VTSOrchestratorReentrancyTest is VTSOrchestratorFixture {
         address advancer = liquiditySignal.mmState.advancer;
         vm.prank(advancer);
         unlockCaller.run(
-            address(vtsOrchestrator),
-            abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, commitId, 0, true)
+            address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, commitId, 0, true)
         );
 
         _s().armOnSeize(commitId, 0);
