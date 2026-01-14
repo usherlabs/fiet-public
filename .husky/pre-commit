@@ -1,17 +1,13 @@
-#!/usr/bin/env bash
+#!/bin/sh
 
 # Run Foundry formatting for staged Solidity changes under contracts/evm.
-set -euo pipefail
+set -eu
 
 repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 
-staged_sol=()
-while IFS= read -r file; do
-  staged_sol+=("$file")
-done < <(git diff --cached --name-only --diff-filter=ACM | grep '^contracts/evm/.*\.sol$' || true)
-
-if [ ${#staged_sol[@]} -eq 0 ]; then
+staged_sol="$(git diff --cached --name-only --diff-filter=ACM | grep '^contracts/evm/.*\.sol$' || true)"
+if [ -z "$staged_sol" ]; then
   exit 0
 fi
 
@@ -22,12 +18,9 @@ fi
 
 cd "$repo_root/contracts/evm"
 
-relative_paths=()
-for path in "${staged_sol[@]}"; do
-  relative_paths+=("${path#contracts/evm/}")
-done
-
-forge fmt --files "${relative_paths[@]}"
+relative_paths="$(printf '%s\n' "$staged_sol" | sed 's#^contracts/evm/##')"
+# Note: paths are split on whitespace; Solidity file paths in this repo are expected to not contain spaces.
+forge fmt --files $relative_paths
 
 cd "$repo_root"
-git add -- "${staged_sol[@]}"
+git add -- $staged_sol
