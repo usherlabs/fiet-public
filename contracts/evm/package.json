@@ -12,11 +12,13 @@
     "lint:fix": "solhint 'src/**/*.sol' --fix",
     "format": "forge fmt",
     "format:check": "forge fmt --check",
+    "prepare": "cd ../.. && ./contracts/evm/node_modules/.bin/husky",
     "slither": "slither .",
     "mythril": "myth analyze src/",
     "security": "yarn run slither && yarn run mythril"
   },
   "devDependencies": {
+    "husky": "^9.1.7",
     "solhint": "^4.0.0"
   }
 }
