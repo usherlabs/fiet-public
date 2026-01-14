@@ -7,6 +7,7 @@ import {LiquidityHub} from "../src/LiquidityHub.sol";
 import {ILCC} from "../src/interfaces/ILCC.sol";
 import {MockERC20} from "./_mocks/MockERC20.sol";
 import {CustomRevert} from "v4-periphery/lib/v4-core/src/libraries/CustomRevert.sol";
+import {StdStorage, stdStorage} from "forge-std/StdStorage.sol";
 
 /**
  * @dev Minimal malicious ERC20 that attempts to re-enter into the hub during:
@@ -75,6 +76,72 @@ contract ReentrantERC20 is MockERC20 {
 }
 
 /**
+ * @dev Minimal malicious LCC admin that attempts to re-enter issuer-only functions during mint/burn.
+ */
+contract ReentrantLccAdmin {
+    enum ReentryKind {
+        None,
+        Issue,
+        Cancel,
+        CancelWithQueue,
+        PlanCancel,
+        PlanCancelWithQueue
+    }
+
+    address public hub;
+    address public lcc;
+    ReentryKind internal reentry;
+
+    function configure(address hub_, address lcc_) external {
+        hub = hub_;
+        lcc = lcc_;
+    }
+
+    function armIssueReentry() external {
+        reentry = ReentryKind.Issue;
+    }
+
+    function armCancelReentry() external {
+        reentry = ReentryKind.Cancel;
+    }
+
+    function armCancelWithQueueReentry() external {
+        reentry = ReentryKind.CancelWithQueue;
+    }
+
+    function armPlanCancelReentry() external {
+        reentry = ReentryKind.PlanCancel;
+    }
+
+    function armPlanCancelWithQueueReentry() external {
+        reentry = ReentryKind.PlanCancelWithQueue;
+    }
+
+    function mint(address, uint256, uint256, bool) external {
+        if (reentry == ReentryKind.Issue) {
+            reentry = ReentryKind.None;
+            LiquidityHub(payable(hub)).issue(lcc, address(this), 1);
+        } else if (reentry == ReentryKind.PlanCancel) {
+            reentry = ReentryKind.None;
+            LiquidityHub(payable(hub)).planCancel(lcc, address(this), address(this), 1);
+        } else if (reentry == ReentryKind.PlanCancelWithQueue) {
+            reentry = ReentryKind.None;
+            LiquidityHub(payable(hub)).planCancelWithQueue(lcc, address(this), address(this), 1, 1, address(this));
+        }
+    }
+
+    function burn(address, uint256, uint256, bool) external {
+        if (reentry == ReentryKind.Cancel) {
+            reentry = ReentryKind.None;
+            LiquidityHub(payable(hub)).cancel(lcc, address(this), 1);
+        } else if (reentry == ReentryKind.CancelWithQueue) {
+            reentry = ReentryKind.None;
+            LiquidityHub(payable(hub)).cancelWithQueue(lcc, address(this), 1, 1, address(this));
+        }
+    }
+}
+
+/**
  * @dev Malicious "factory" used to trigger a re-entrant call from inside `useMarketLiquidity`, which is the only
  *      practical hook point to test `nonReentrant` on wrapWith/wrapWithTo (since those don't call underlying ERC20s).
  */
@@ -119,6 +186,19 @@ contract ReentrantMarketFactory {
 }
 
 contract LiquidityHubReentrancyTest is LiquidityHubTestBase {
+    using stdStorage for StdStorage;
+
+    StdStorage internal _store;
+
+    function _configureReentrantLcc(address lcc) internal returns (ReentrantLccAdmin evil) {
+        ReentrantLccAdmin impl = new ReentrantLccAdmin();
+        vm.etch(lcc, address(impl).code);
+        evil = ReentrantLccAdmin(lcc);
+        evil.configure(address(liquidityHub), lcc);
+        _store.target(address(liquidityHub)).sig("issuers(address,address)").with_key(lcc).with_key(lcc)
+            .checked_write(true);
+    }
+
     function _assertWrappedError(bytes memory revertData) internal pure {
         require(revertData.length >= 4, "missing revert selector");
         bytes4 sel;
@@ -582,6 +662,56 @@ contract LiquidityHubReentrancyTest is LiquidityHubTestBase {
             .call(abi.encodeWithSelector(liquidityHub.processSettlementFor.selector, evilLcc, user1, queued));
         assertFalse(ok);
         _assertWrappedError(data);
+    }
+
+    function test_issue_revertsOnReentrancyAttempt_viaLccMint() public {
+        address lcc = lccToken1;
+        ReentrantLccAdmin evil = _configureReentrantLcc(lcc);
+        evil.armIssueReentry();
+
+        vm.prank(factory);
+        vm.expectRevert(abi.encodeWithSignature("ReentrancyGuardReentrantCall()"));
+        liquidityHub.issue(lcc, user1, 1);
+    }
+
+    function test_cancel_revertsOnReentrancyAttempt_viaLccBurn() public {
+        address lcc = lccToken1;
+        ReentrantLccAdmin evil = _configureReentrantLcc(lcc);
+        evil.armCancelReentry();
+
+        vm.prank(factory);
+        vm.expectRevert(abi.encodeWithSignature("ReentrancyGuardReentrantCall()"));
+        liquidityHub.cancel(lcc, user1, 1);
+    }
+
+    function test_cancelWithQueue_revertsOnReentrancyAttempt_viaLccBurn() public {
+        address lcc = lccToken1;
+        ReentrantLccAdmin evil = _configureReentrantLcc(lcc);
+        evil.armCancelWithQueueReentry();
+
+        vm.prank(factory);
+        vm.expectRevert(abi.encodeWithSignature("ReentrancyGuardReentrantCall()"));
+        liquidityHub.cancelWithQueue(lcc, user1, 2, 1, user2);
+    }
+
+    function test_planCancel_revertsOnReentrancyAttempt_viaLccMint() public {
+        address lcc = lccToken1;
+        ReentrantLccAdmin evil = _configureReentrantLcc(lcc);
+        evil.armPlanCancelReentry();
+
+        vm.prank(factory);
+        vm.expectRevert(abi.encodeWithSignature("ReentrancyGuardReentrantCall()"));
+        liquidityHub.issue(lcc, user1, 1);
+    }
+
+    function test_planCancelWithQueue_revertsOnReentrancyAttempt_viaLccMint() public {
+        address lcc = lccToken1;
+        ReentrantLccAdmin evil = _configureReentrantLcc(lcc);
+        evil.armPlanCancelWithQueueReentry();
+
+        vm.prank(factory);
+        vm.expectRevert(abi.encodeWithSignature("ReentrancyGuardReentrantCall()"));
+        liquidityHub.issue(lcc, user1, 1);
     }
 }
 

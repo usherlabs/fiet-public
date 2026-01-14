@@ -30,6 +30,7 @@ contract LiquidityHubLibTest is LiquidityHubTestBase {
     // - lccToUnderlying offset = 1
     // - nettedLCCsAsUnderlying offset = 11
     uint256 internal constant _OFFSET_LCC_TO_UNDERLYING = 1;
+    uint256 internal constant _OFFSET_LCC_TO_MARKET = 3;
     uint256 internal constant _OFFSET_NETTED = 11;
     uint256 internal constant _OFFSET_DIRECT_SUPPLY = 8;
     uint256 internal constant _OFFSET_TOTAL_QUEUED = 10;
@@ -55,6 +56,26 @@ contract LiquidityHubLibTest is LiquidityHubTestBase {
         uint256 base = _deriveSBaseSlot();
         uint256 root = base + _OFFSET_NETTED;
         return keccak256(abi.encode(lcc, root));
+    }
+
+    function _slotLccToMarket(address lcc) internal returns (bytes32) {
+        uint256 base = _deriveSBaseSlot();
+        uint256 root = base + _OFFSET_LCC_TO_MARKET;
+        return keccak256(abi.encode(lcc, root));
+    }
+
+    function _setLccToMarketFactory(address lcc, address factoryAddr) internal {
+        vm.store(address(liquidityHub), _slotLccToMarket(lcc), bytes32(uint256(uint160(factoryAddr))));
+    }
+
+    function _setLccToMarketId(address lcc, bytes32 id) internal {
+        bytes32 slot = _slotLccToMarket(lcc);
+        vm.store(address(liquidityHub), bytes32(uint256(slot) + 1), id);
+    }
+
+    function _setLccToMarketRefLength(address lcc, uint256 length) internal {
+        bytes32 slot = _slotLccToMarket(lcc);
+        vm.store(address(liquidityHub), bytes32(uint256(slot) + 2), bytes32(length));
     }
 
     function _setNetted(address lcc, uint256 value) internal {
@@ -105,6 +126,27 @@ contract LiquidityHubLibTest is LiquidityHubTestBase {
     /// should be burned during Hub settlement until this counter is reduced back toward zero.
     function _getNetted(address lcc) internal returns (uint256) {
         return uint256(vm.load(address(liquidityHub), _slotNetted(lcc)));
+    }
+
+    function test_assertValidLcc_revertsWhenMarketIdMissing_only() public {
+        _setLccToMarketId(lccToken1, bytes32(0));
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidLcc.selector, lccToken1));
+        liquidityHub.processSettlementFor(lccToken1, user1, 1);
+    }
+
+    function test_assertValidLcc_revertsWhenRefMissing_only() public {
+        _setLccToMarketRefLength(lccToken1, 0);
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidLcc.selector, lccToken1));
+        liquidityHub.processSettlementFor(lccToken1, user1, 1);
+    }
+
+    function test_assertValidLcc_revertsWhenFactoryMissing_only() public {
+        _setLccToMarketFactory(lccToken1, address(0));
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidLcc.selector, lccToken1));
+        liquidityHub.processSettlementFor(lccToken1, user1, 1);
     }
 
     function test_unwrap_wrappedOnly_decrementsDirectSupplyAndReserve() public {
@@ -365,6 +407,59 @@ contract LiquidityHubLibTest is LiquidityHubTestBase {
             liquidityHub.totalQueued(withLcc),
             withTotalQueuedBefore + wrappedRemainder,
             "withLCC totalQueued should increase only by wrapped remainder"
+        );
+    }
+
+    function test_wrapWith_step3_excludesDirectToMint_fromResidualWrapped_andQueuesFullRemainder() public {
+        (address targetLcc,) = _createSecondLCCPair();
+        address withLcc = lccToken1;
+
+        uint256 wrappedAmount = 4;
+        uint256 marketAmount = 6;
+        uint256 amount = wrappedAmount + marketAmount;
+
+        _wrapDirectLCC(user1, withLcc, wrappedAmount);
+        _wrapDirectLCC(factory, withLcc, marketAmount);
+        vm.prank(factory);
+        ILCC(withLcc).transfer(user1, marketAmount);
+
+        (uint256 wrappedBal, uint256 marketBal) = ILCC(withLcc).balancesOf(user1);
+        assertEq(wrappedBal, wrappedAmount, "precondition: wrapped balance should match");
+        assertEq(marketBal, marketAmount, "precondition: market balance should match");
+
+        // Ensure directSupply is larger than wrapped amount to make residualWrappedForUnwrap observable.
+        _setDirectSupply(withLcc, wrappedAmount + 6);
+
+        // No market liquidity; all remaining amount should queue.
+        vm.mockCall(factory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0)));
+
+        _mockAddressAsProtocolBound(address(liquidityHub), true);
+
+        uint256 queueBefore = liquidityHub.settleQueue(withLcc, address(liquidityHub));
+        uint256 totalQueuedBefore = liquidityHub.totalQueued(withLcc);
+
+        vm.startPrank(user1);
+        ILCC(withLcc).approve(address(liquidityHub), amount);
+        liquidityHub.wrapWith(targetLcc, withLcc, amount);
+        vm.stopPrank();
+
+        // Step 3 should not consume directSupply again; full marketAmount should be queued.
+        assertEq(
+            liquidityHub.settleQueue(withLcc, address(liquidityHub)),
+            queueBefore + marketAmount,
+            "queue should increase by the full market-derived remainder"
+        );
+        assertEq(
+            liquidityHub.totalQueued(withLcc),
+            totalQueuedBefore + marketAmount,
+            "totalQueued should increase by the full market-derived remainder"
+        );
+
+        uint256 expectedDirectSupply = (wrappedAmount + 6) - wrappedAmount;
+        assertEq(
+            liquidityHub.directSupply(withLcc),
+            expectedDirectSupply,
+            "directSupply should only decrease by the Step 1 direct conversion"
         );
     }
 

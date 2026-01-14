@@ -476,6 +476,38 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         );
     }
 
+    /// @notice Mutation-killer: if `unwrapped > 0` and recipient is `address(this)`, MMPM must sync credit.
+    /// @dev Validates that a follow-up TAKE transfers the unwrapped amount to the caller.
+    function test_unwrapLcc_payerIsUser_toThis_unwrappedPositive_syncsUnderlying_andIsTakeable() public {
+        address user = makeAddr("user");
+
+        vm.mockCall(marketFactory, abi.encodeWithSelector(IMarketFactory.bounds.selector, user), abi.encode(false));
+
+        MockERC20 underlying = MockERC20(lcc0.underlying());
+        Currency underlyingCurrency = Currency.wrap(address(underlying));
+        uint256 amount = 500;
+
+        underlying.mint(user, amount);
+        vm.startPrank(user);
+        underlying.approve(address(liquidityHub), amount);
+        ILiquidityHub(liquidityHub).wrap(address(lcc0), amount);
+        lcc0.approve(address(positionManager), type(uint256).max);
+        vm.stopPrank();
+
+        uint256 userBefore = underlying.balanceOf(user);
+
+        MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](2);
+        prepared[0] = MMA.prepareUnwrapLcc(address(lcc0), amount, ActionConstants.ADDRESS_THIS, true);
+        prepared[1] = MMA.prepareTake(underlyingCurrency, user, 0);
+
+        vm.prank(user);
+        MMA.execute(positionManager, prepared);
+
+        assertEq(
+            underlying.balanceOf(user), userBefore + amount, "unwrapped > 0 should sync underlying credit for TAKE"
+        );
+    }
+
     function testCanCheckpointWithCommitment() public {
         // get the default market configuration so we can tweak it
         LiquiditySignal memory renewSignal = liquiditySignal;
@@ -720,6 +752,15 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         uint256 ethBefore = user.balance;
         MMA.execute(positionManager, prepared, 1 ether);
         assertEq(user.balance, ethBefore + 1 ether);
+    }
+
+    function test_unwrapNative_fromDeltas_amountGtAvailableCredit_revertsInsufficientBalance() public {
+        MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](2);
+        prepared[0] = MMA.prepareWrapNative(0.5 ether);
+        prepared[1] = MMA.prepareUnwrapNative(1 ether, false);
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.InsufficientBalance.selector, 0.5 ether, 1 ether));
+        MMA.execute(positionManager, prepared, 0.5 ether);
     }
 
     function test_unwrapLcc_payerIsUser_requestedLessThanBalance_clampsToRequested() public {

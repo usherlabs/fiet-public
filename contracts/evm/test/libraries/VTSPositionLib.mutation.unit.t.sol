@@ -300,6 +300,55 @@ contract VTSPositionLibMutationUnitTest is Test {
         assertEq(poolPrincipal1, expDeficitIncrease, "pool token1 deficit principal should track deficit increase");
     }
 
+    function test_settlePositionDeficitGrowth_aboveRange_accumulatesToken0Deficit_usingOutsideUpperMinusLower() public {
+        // Register a position with non-zero salt so PositionId matches Uniswap position keying.
+        (PositionId id, ModifyLiquidityParams memory p) = _register(bytes32(uint256(12)), 1);
+
+        // Keep coverage/fee logic inert for this test.
+        harness.setCoverageIndexLastX128(id, 0, 0);
+        harness.setCISEIndexLastX128(id, 0, 0);
+        harness.setPoolCoveragePerDeficitIndexX128(poolId, 0, 0);
+        harness.setPoolCoveragePerSettledIndexX128(poolId, 0, 0);
+        harness.setDeficitGrowthGlobal(poolId, 0, 0);
+        harness.setInflowGrowthGlobal(poolId, 0, 0);
+        harness.setDeficitGrowthInsideLast(id, 0, 0);
+        harness.setInflowGrowthInsideLast(id, 0, 0);
+
+        // Choose values so inside0 = outsideUpper0 - outsideLower0 is positive.
+        uint128 liq = 1000;
+        uint256 outsideLower0 = 2 * FixedPoint128.Q128;
+        uint256 outsideUpper0 = 9 * FixedPoint128.Q128;
+
+        // Set outside growth at the ticks used by the position.
+        harness.setDeficitGrowthOutside(poolId, p.tickLower, outsideLower0, 0);
+        harness.setDeficitGrowthOutside(poolId, p.tickUpper, outsideUpper0, 0);
+
+        // Set tickCurrent above tickUpper so `_growthInsideSingle` uses:
+        // inside = outsideUpper - outsideLower (the mutation flips - to +).
+        _pmSetSlot0Tick(poolId, int24(p.tickUpper + 100));
+
+        // Provide pool manager's position liquidity for StateLibrary.getPositionLiquidity()
+        _pmSetPositionLiquidity(poolId, PositionId.unwrap(id), liq);
+
+        // Seed settled token0 to zero so deficit increase is fully attributable.
+        harness.setSettled(id, 0, 0);
+
+        harness.settlePositionGrowths(IPoolManager(address(pm)), id);
+
+        // inside0 = outsideUpper0 - outsideLower0 (because tickCurrent >= tickUpper)
+        // = (9*Q128 - 2*Q128) = 7*Q128.
+        // owed/add0 = (insideDelta * liq) / Q128 = 7 * liq.
+        uint256 expAdd0 = 7 * uint256(liq);
+
+        (uint256 settled0,, uint256 d0, uint256 d1) = _getPositionStateLite(id);
+        assertEq(d0, expAdd0, "token0 deficit should increase by add0");
+        assertEq(d1, 0, "token1 deficit should remain unchanged");
+        assertEq(settled0, 0, "token0 settled should remain zero");
+
+        (uint256 poolPrincipal0,) = harness.getPoolTotalDeficitPrincipal(poolId);
+        assertEq(poolPrincipal0, expAdd0, "pool token0 deficit principal should track deficit increase");
+    }
+
     // ============================================================
     // Coverage burn: kill `fg - lastFeeGrowth` mutant (595)
     // ============================================================
@@ -421,6 +470,185 @@ contract VTSPositionLibMutationUnitTest is Test {
         (uint256 poolExposure0,) = ex.getPoolTotalCISEExposure(p);
         assertEq(exposure0, expExposure0, "CISE exposure0 should realise settled * deltaIndex / Q128");
         assertEq(poolExposure0, expExposure0, "pool total CISE exposure0 should track position exposure");
+    }
+
+    function test_settlePositionInflowGrowth_positiveAdd0_increasesSettledAndPoolTotalSettled() public {
+        (PositionId id, ModifyLiquidityParams memory p) = _register(bytes32(uint256(13)), 1);
+
+        // Keep coverage/deficit logic inert for this test.
+        harness.setCoverageIndexLastX128(id, 0, 0);
+        harness.setCISEIndexLastX128(id, 0, 0);
+        harness.setPoolCoveragePerDeficitIndexX128(poolId, 0, 0);
+        harness.setPoolCoveragePerSettledIndexX128(poolId, 0, 0);
+        harness.setDeficitGrowthGlobal(poolId, 0, 0);
+        harness.setDeficitGrowthInsideLast(id, 0, 0);
+
+        // Configure inflow growth so inside0 = global0 and is positive.
+        uint128 liq = 1000;
+        uint256 inflowGlobal0 = 5 * FixedPoint128.Q128;
+        harness.setInflowGrowthGlobal(poolId, inflowGlobal0, 0);
+        harness.setInflowGrowthInsideLast(id, 0, 0);
+        harness.setInflowGrowthOutside(poolId, p.tickLower, 0, 0);
+        harness.setInflowGrowthOutside(poolId, p.tickUpper, 0, 0);
+
+        _pmSetSlot0Tick(poolId, 0); // in-range
+        _pmSetPositionLiquidity(poolId, PositionId.unwrap(id), liq);
+
+        // Ensure settlement can increase without clamping.
+        harness.setCommitmentMax(id, type(uint256).max, type(uint256).max);
+        harness.setSettled(id, 0, 0);
+        harness.setPoolTotalSettled(poolId, 0, 0);
+
+        harness.settlePositionGrowths(IPoolManager(address(pm)), id);
+
+        uint256 expAdd0 = 5 * uint256(liq);
+        (uint256 settled0,, uint256 d0, uint256 d1) = _getPositionStateLite(id);
+        assertEq(settled0, expAdd0, "token0 settled should increase by inflow add0");
+        assertEq(d0, 0, "token0 deficit should remain unchanged");
+        assertEq(d1, 0, "token1 deficit should remain unchanged");
+
+        (uint256 poolTotal0,) = harness.getPoolTotalSettled(poolId);
+        assertEq(poolTotal0, expAdd0, "pool totalSettled token0 should increase by add0");
+    }
+
+    function test_touchPosition_nonMMDecrease_reducesSettledDownToNewCommitmentMax_token1() public {
+        MockLCC lcc0 = new MockLCC(address(0xB0));
+        MockLCC lcc1 = new MockLCC(address(0xB1));
+        PoolKey memory key = PoolKey({
+            currency0: Currency.wrap(address(lcc0)),
+            currency1: Currency.wrap(address(lcc1)),
+            fee: 0,
+            tickSpacing: 60,
+            hooks: IHooks(address(0))
+        });
+        PoolId pId = key.toId();
+        harness.setupPool(pId, _defaultCfg());
+
+        // Register a position and seed commitment/settlement.
+        ModifyLiquidityParams memory reg = ModifyLiquidityParams({
+            tickLower: TICK_LOWER,
+            tickUpper: TICK_UPPER,
+            liquidityDelta: int256(uint256(1000)),
+            salt: bytes32(uint256(30))
+        });
+        harness.registerPosition(owner, pId, reg);
+        PositionId id = PositionLibrary.generateId(owner, reg);
+
+        // Prepare commitment max so the decrease step produces known new maxima.
+        uint128 liqRemoved = 500;
+        (uint256 subC0, uint256 subC1) = LiquidityUtils.calculateCommitmentMaxima(TICK_LOWER, TICK_UPPER, liqRemoved);
+        uint256 newC0 = 10e18;
+        uint256 newC1 = 20e18;
+        harness.setCommitmentMax(id, newC0 + subC0, newC1 + subC1);
+
+        // Settled above the post-decrease maxima so excess is positive.
+        harness.setSettled(id, newC0, newC1 + 7e18);
+        harness.setPoolTotalSettled(pId, newC0, newC1 + 7e18);
+        harness.setCumulativeDeficit(id, 0, 0);
+        harness.setCommitmentDeficit(id, 0, 0);
+
+        _pmSetSlot0Tick(pId, 0);
+        _pmSetPositionLiquidity(pId, PositionId.unwrap(id), 1000);
+
+        TouchPositionParams memory tp = TouchPositionParams({
+            owner: owner,
+            poolKey: key,
+            params: ModifyLiquidityParams({
+                tickLower: reg.tickLower,
+                tickUpper: reg.tickUpper,
+                liquidityDelta: -int256(uint256(liqRemoved)),
+                salt: reg.salt
+            }),
+            callerDelta: toBalanceDelta(0, 0),
+            feesAccrued: toBalanceDelta(0, 0),
+            hookData: ""
+        });
+
+        PositionContext memory ctx = PositionContext({
+            poolManager: IPoolManager(address(pm)),
+            liquidityHub: ILiquidityHub(address(0)),
+            oracleHelper: IOracleHelper(address(0)),
+            marketVault: IMarketVault(address(0))
+        });
+
+        harness.touchPosition(ctx, tp);
+
+        (uint256 settled0, uint256 settled1, uint256 d0, uint256 d1) = _getPositionStateLite(id);
+        assertEq(settled0, newC0, "token0 settled should remain at new commitment max");
+        assertEq(settled1, newC1, "token1 settled should be clamped to new commitment max");
+        assertEq(d0, 0, "token0 deficit should remain unchanged");
+        assertEq(d1, 0, "token1 deficit should remain unchanged");
+
+        _assertPoolTotalSettled(pId, newC0, newC1);
+    }
+
+    function test_touchPosition_nonMMIncrease_setsSettledUpToNewCommitmentMax() public {
+        MockLCC lcc0 = new MockLCC(address(0xC0));
+        MockLCC lcc1 = new MockLCC(address(0xC1));
+        PoolKey memory key = PoolKey({
+            currency0: Currency.wrap(address(lcc0)),
+            currency1: Currency.wrap(address(lcc1)),
+            fee: 0,
+            tickSpacing: 60,
+            hooks: IHooks(address(0))
+        });
+        PoolId pId = key.toId();
+        harness.setupPool(pId, _defaultCfg());
+
+        ModifyLiquidityParams memory reg = ModifyLiquidityParams({
+            tickLower: TICK_LOWER,
+            tickUpper: TICK_UPPER,
+            liquidityDelta: int256(uint256(1000)),
+            salt: bytes32(uint256(31))
+        });
+        harness.registerPosition(owner, pId, reg);
+        PositionId id = PositionLibrary.generateId(owner, reg);
+
+        // Seed a baseline commitment max and a lower settled amount.
+        harness.setCommitmentMax(id, 10e18, 20e18);
+        harness.setSettled(id, 3e18, 4e18);
+        harness.setPoolTotalSettled(pId, 3e18, 4e18);
+        harness.setCumulativeDeficit(id, 0, 0);
+        harness.setCommitmentDeficit(id, 0, 0);
+
+        _pmSetSlot0Tick(pId, 0);
+        _pmSetPositionLiquidity(pId, PositionId.unwrap(id), 1000);
+
+        uint128 liqAdded = 200;
+        (uint256 addC0, uint256 addC1) = LiquidityUtils.calculateCommitmentMaxima(TICK_LOWER, TICK_UPPER, liqAdded);
+        uint256 expC0 = 10e18 + addC0;
+        uint256 expC1 = 20e18 + addC1;
+
+        TouchPositionParams memory tp = TouchPositionParams({
+            owner: owner,
+            poolKey: key,
+            params: ModifyLiquidityParams({
+                tickLower: reg.tickLower,
+                tickUpper: reg.tickUpper,
+                liquidityDelta: int256(uint256(liqAdded)),
+                salt: reg.salt
+            }),
+            callerDelta: toBalanceDelta(0, 0),
+            feesAccrued: toBalanceDelta(0, 0),
+            hookData: ""
+        });
+
+        PositionContext memory ctx = PositionContext({
+            poolManager: IPoolManager(address(pm)),
+            liquidityHub: ILiquidityHub(address(0)),
+            oracleHelper: IOracleHelper(address(0)),
+            marketVault: IMarketVault(address(0))
+        });
+
+        harness.touchPosition(ctx, tp);
+
+        (uint256 settled0, uint256 settled1, uint256 d0, uint256 d1) = _getPositionStateLite(id);
+        assertEq(settled0, expC0, "token0 settled should reach new commitment max");
+        assertEq(settled1, expC1, "token1 settled should reach new commitment max");
+        assertEq(d0, 0, "token0 deficit should remain unchanged");
+        assertEq(d1, 0, "token1 deficit should remain unchanged");
+
+        _assertPoolTotalSettled(pId, expC0, expC1);
     }
 
     // ============================================================
@@ -728,6 +956,20 @@ contract VTSPositionLibMutationUnitTest is Test {
         // getTickFeeGrowthOutside reads from tickInfoSlot+1 (outside0) and +2 (outside1)
         pm.setSlot(bytes32(uint256(tickInfoSlot) + 1), bytes32(outside0));
         pm.setSlot(bytes32(uint256(tickInfoSlot) + 2), bytes32(outside1));
+    }
+
+    function _getPositionStateLite(PositionId id)
+        internal
+        view
+        returns (uint256 settled0, uint256 settled1, uint256 deficit0, uint256 deficit1)
+    {
+        (,, settled0, settled1, deficit0, deficit1) = harness.getPositionAccounting(id);
+    }
+
+    function _assertPoolTotalSettled(PoolId pId, uint256 exp0, uint256 exp1) internal view {
+        (uint256 poolTotal0, uint256 poolTotal1) = harness.getPoolTotalSettled(pId);
+        assertEq(poolTotal0, exp0, "pool totalSettled token0 should match commitment max");
+        assertEq(poolTotal1, exp1, "pool totalSettled token1 should match commitment max");
     }
 
     // ============================================================
