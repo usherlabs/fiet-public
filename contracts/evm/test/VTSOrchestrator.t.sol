@@ -6,6 +6,7 @@ import {VTSOrchestratorFixture} from "./base/VTSOrchestratorFixture.sol";
 import {VTSOrchestratorTestable} from "./base/VTSOrchestratorTestable.sol";
 import {VTSOrchestrator} from "../src/VTSOrchestrator.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency, CurrencyLibrary} from "@uniswap/v4-core/src/types/Currency.sol";
 import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {PositionId, Position} from "../src/types/Position.sol";
@@ -25,6 +26,7 @@ import {PoolSwapTest} from "@uniswap/v4-core/src/test/PoolSwapTest.sol";
 import {MMActionAdapter as MMA} from "./utils/MMActionAdapter.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 
 contract VTSOrchestratorTest is VTSOrchestratorFixture {
     using PoolIdLibrary for PoolId;
@@ -197,6 +199,44 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
 
         vm.expectRevert(Errors.PoolManagerMustBeUnlocked.selector);
         vtsOrchestrator.extendGracePeriod(corePoolKey, tokenId, 0, 0, 0, settlementProof);
+    }
+
+    function test_extendGracePeriod_revertsWhenPoolKeyDoesNotMatchPositionPool() public {
+        // Create a committed position in the fixture's core pool (pool B).
+        (uint256 tokenId, PositionId positionId,,) = _createCommittedPosition();
+
+        // Create a distinct pool key (pool A) and initialise config for it.
+        PoolKey memory poolKeyA = PoolKey({
+            currency0: Currency.wrap(address(0x11111111)),
+            currency1: Currency.wrap(address(0x22222222)),
+            fee: corePoolKey.fee,
+            tickSpacing: corePoolKey.tickSpacing,
+            hooks: IHooks(address(0))
+        });
+
+        // Ensure VTS has configuration for poolKeyA so the call is well-formed, even though it should revert earlier.
+        MarketVTSConfiguration memory cfg = VTSConfigs.getDefaultConfig();
+        vm.prank(marketFactory);
+        vtsOrchestrator.initPool(poolKeyA, cfg);
+
+        bytes memory settlementProof = abi.encode(1);
+
+        // Must revert before proof verification because the position belongs to pool B, not pool A.
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidPosition.selector, 0, 0, positionId));
+        unlockCaller.run(
+            address(vtsOrchestrator),
+            abi.encodeWithSelector(VTSOrchestrator.extendGracePeriod.selector, poolKeyA, tokenId, 0, 0, 0, settlementProof)
+        );
+    }
+
+    function test_checkpoint_revertsWhenPositionIndexOutOfBounds() public {
+        // Create a committed position with a single position at index 0.
+        (uint256 tokenId,,,) = _createCommittedPosition();
+
+        // Index 1 is out-of-bounds; getPositionId will return PositionId(0), which must be rejected.
+        PositionId zeroId = PositionId.wrap(bytes32(0));
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidPosition.selector, 0, 0, zeroId));
+        vtsOrchestrator.checkpoint(address(this), tokenId, 1, false);
     }
 
     function test_revert_onMMSettle_whenPoolManagerLocked() public {
