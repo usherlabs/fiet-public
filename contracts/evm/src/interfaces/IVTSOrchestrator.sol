@@ -283,12 +283,7 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta {
     /// @param commitId The commit identifier
     /// @param positionIndex The position index within the commit
     /// @param withCommitment Whether to run commitment backing checks and update position deficits
-    function checkpoint(
-        address sender,
-        uint256 commitId,
-        uint256 positionIndex,
-        bool withCommitment
-    ) external;
+    function checkpoint(address sender, uint256 commitId, uint256 positionIndex, bool withCommitment) external;
 
     // Checkpoints
     /// @notice Get the checkpoint for a given position

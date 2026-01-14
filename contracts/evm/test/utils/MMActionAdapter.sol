@@ -292,8 +292,7 @@ library MMActionAdapter {
         returns (PreparedAction memory)
     {
         return PreparedAction({
-            action: bytes1(uint8(MMActions.CHECKPOINT)),
-            params: abi.encode(tokenId, positionIndex, withCommitment)
+            action: bytes1(uint8(MMActions.CHECKPOINT)), params: abi.encode(tokenId, positionIndex, withCommitment)
         });
     }
 

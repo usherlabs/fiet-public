@@ -502,7 +502,9 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         bytes memory unbackedLiquiditySignal = abi.encode(renewSignal);
         vm.mockCall(
             address(signalManager),
-            abi.encodeWithSelector(bytes4(keccak256("verifyLiquiditySignal(bytes,bool)")), unbackedLiquiditySignal, true),
+            abi.encodeWithSelector(
+                bytes4(keccak256("verifyLiquiditySignal(bytes,bool)")), unbackedLiquiditySignal, true
+            ),
             abi.encode(true, 10)
         );
         vm.prank(advancer);
@@ -562,9 +564,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         // For modifyLiquiditiesWithoutUnlock, the locker is the direct caller (this test contract).
         vm.expectCall(
             address(vtsOrchestrator),
-            abi.encodeWithSignature(
-                "checkpoint(address,uint256,uint256,bool)", address(this), tokenId, 0, false
-            )
+            abi.encodeWithSignature("checkpoint(address,uint256,uint256,bool)", address(this), tokenId, 0, false)
         );
         MMA.execute(positionManager, prepared);
     }
