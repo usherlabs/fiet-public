@@ -42,8 +42,7 @@ brew install just
 forge install
 
 # 2. Install Node.js dependencies (includes lib/oracle)
-yarn install --mode=skip-build
-yarn workspace @venusprotocol/oracle patch-package
+node ./patch-oracle.cjs && yarn install
 ```
 
 ### 3. Deploy `ResilientOracle`

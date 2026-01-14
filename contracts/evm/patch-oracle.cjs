@@ -16,7 +16,7 @@ const path = require("path");
 
 const oraclePkgPath = path.join(process.cwd(), "lib", "oracle", "package.json");
 
-function main() {
+function patchPostinstall() {
   if (!fs.existsSync(oraclePkgPath)) {
     // Likely `forge install` hasn't been run yet; nothing to do.
     return;
@@ -34,12 +34,19 @@ function main() {
   const current = scripts && typeof scripts.postinstall === "string" ? scripts.postinstall : null;
 
   // Only touch the exact problematic value (avoid clobbering upstream changes).
-  if (current !== "yarn patch-package") return;
+  if (current !== "yarn patch-package") {
+    console.log(`[patch-oracle] Already patched for lib/oracle postinstall`);
+    return;
+  }
 
   pkg.scripts.postinstall = "patch-package";
   fs.writeFileSync(oraclePkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
 
-  console.log(`[preinstall] Patched lib/oracle postinstall: "yarn patch-package" -> "patch-package"`);
+  console.log(`[patch-oracle] Patched lib/oracle postinstall: "yarn patch-package" -> "patch-package"`);
+}
+
+function main() {
+  patchPostinstall();
 }
 
 main();

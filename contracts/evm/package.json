@@ -7,13 +7,7 @@
   "workspaces": [
     "lib/oracle"
   ],
-  "dependenciesMeta": {
-    "@venusprotocol/oracle": {
-      "built": false
-    }
-  },
   "scripts": {
-    "preinstall": "node ./fix-oracle-postinstall.cjs",
     "lint": "solhint 'src/**/*.sol'",
     "lint:fix": "solhint 'src/**/*.sol' --fix",
     "format": "forge fmt",
