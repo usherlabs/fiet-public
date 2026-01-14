@@ -35,11 +35,9 @@ contract MMCalldataDecoderLengthsHarness {
     function decodeCheckpointParams(bytes calldata params)
         external
         pure
-        returns (uint256 tokenId, uint256 positionIndex, bytes memory data, bool withCommitment)
+        returns (uint256 tokenId, uint256 positionIndex, bool withCommitment)
     {
-        bytes calldata cd;
-        (tokenId, positionIndex, cd, withCommitment) = params.decodeCheckpointParams();
-        data = cd;
+        (tokenId, positionIndex, withCommitment) = params.decodeCheckpointParams();
     }
 }
 
@@ -72,8 +70,8 @@ contract MMCalldataDecoderLengthsTest is Test {
     }
 
     function test_decodeCheckpointParams_revertsOnTruncatedTailLengthWord() public {
-        // ABI: (uint256,uint256,bytes,bool). Minimum valid length (even for empty bytes) is 0xa0.
-        bytes memory headOnly = new bytes(0x80);
+        // ABI: (uint256,uint256,bool). Minimum valid length is 0x60.
+        bytes memory headOnly = new bytes(0x40);
         vm.expectRevert(MMCalldataDecoder.SliceOutOfBounds.selector);
         h.decodeCheckpointParams(headOnly);
     }

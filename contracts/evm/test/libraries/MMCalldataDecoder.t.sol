@@ -178,11 +178,9 @@ contract MMCalldataDecoderHarness {
     function decodeCheckpointParams(bytes calldata params)
         external
         pure
-        returns (uint256 tokenId, uint256 positionIndex, bytes memory data, bool withCommitment)
+        returns (uint256 tokenId, uint256 positionIndex, bool withCommitment)
     {
-        bytes calldata cd;
-        (tokenId, positionIndex, cd, withCommitment) = params.decodeCheckpointParams();
-        data = cd;
+        (tokenId, positionIndex, withCommitment) = params.decodeCheckpointParams();
     }
 
     function decodeUnwrapLccParams(bytes calldata params)
@@ -384,13 +382,10 @@ contract MMCalldataDecoderTest is Test {
     }
 
     function test_decodeCheckpointParams_ok() public view {
-        bytes memory sig = hex"010203";
-        bytes memory params = abi.encode(uint256(55), uint256(2), sig, false);
-        (uint256 tokenId, uint256 positionIndex, bytes memory out, bool withCommitment) =
-            h.decodeCheckpointParams(params);
+        bytes memory params = abi.encode(uint256(55), uint256(2), false);
+        (uint256 tokenId, uint256 positionIndex, bool withCommitment) = h.decodeCheckpointParams(params);
         assertEq(tokenId, 55);
         assertEq(positionIndex, 2);
-        assertEq(keccak256(out), keccak256(sig));
         assertFalse(withCommitment);
     }
 

@@ -202,9 +202,8 @@ contract MMPositionManager is
             return;
         }
         if (action == MMActions.CHECKPOINT) {
-            (uint256 tokenId, uint256 positionIndex, bytes calldata liquiditySignal, bool withCommitment) =
-                params.decodeCheckpointParams();
-            _checkpoint(msgSender(), tokenId, positionIndex, liquiditySignal, withCommitment);
+            (uint256 tokenId, uint256 positionIndex, bool withCommitment) = params.decodeCheckpointParams();
+            _checkpoint(tokenId, positionIndex, withCommitment);
             return;
         }
         if (action == MMActions.EXTEND_GRACE_PERIOD) {
@@ -236,7 +235,7 @@ contract MMPositionManager is
     /// @param tokenId The commitment NFT token ID
     /// @param liquiditySignal The new liquidity signal
     function _renewSignal(uint256 tokenId, bytes calldata liquiditySignal) internal {
-        vtsOrchestrator.renewSignal(tokenId, liquiditySignal);
+        vtsOrchestrator.renewSignal(msgSender(), tokenId, liquiditySignal);
     }
 
     /// @notice Decommits a signal and burns the commitment NFT
@@ -257,16 +256,9 @@ contract MMPositionManager is
     /// @notice Marks a checkpoint for a position, optionally running commitment backing checks
     /// @param tokenId The commitment NFT token ID
     /// @param positionIndex The position index within the commitment
-    /// @param liquiditySignal The liquidity signal (required if withCommitment = true)
     /// @param withCommitment Whether to run commitment backing checks and update deficits
-    function _checkpoint(
-        address sender,
-        uint256 tokenId,
-        uint256 positionIndex,
-        bytes memory liquiditySignal,
-        bool withCommitment
-    ) internal {
-        vtsOrchestrator.checkpoint(sender, tokenId, positionIndex, liquiditySignal, withCommitment);
+    function _checkpoint(uint256 tokenId, uint256 positionIndex, bool withCommitment) internal {
+        vtsOrchestrator.checkpoint(tokenId, positionIndex, withCommitment);
     }
 
     /// @notice Extends grace period for a commitment via proof
@@ -502,22 +494,11 @@ contract MMPositionManager is
     // No-Locking Checkpoint Functions
     // ═══════════════════════════════════════════════════════════════════════════
 
-    /// @notice Marks a checkpoint for a single position within a commitment
+    /// @notice Marks a checkpoint for a single position, optionally running backing checks
     /// @param tokenId The ERC721 token id (commitment NFT id)
     /// @param positionIndex The index of the position within the commitment
-    function checkpoint(uint256 tokenId, uint256 positionIndex) external onlyIfPoolManagerLocked {
-        bytes memory emptySignal;
-        _checkpoint(msg.sender, tokenId, positionIndex, emptySignal, false);
-    }
-
-    /// @notice Marks a checkpoint for a single position with commitment backing check
-    /// @param tokenId The ERC721 token id (commitment NFT id)
-    /// @param positionIndex The index of the position within the commitment
-    /// @param liquiditySignal The liquidity signal to verify backing
-    function checkpoint(uint256 tokenId, uint256 positionIndex, bytes calldata liquiditySignal)
-        external
-        onlyIfPoolManagerLocked
-    {
-        _checkpoint(msg.sender, tokenId, positionIndex, bytes(liquiditySignal), true);
+    /// @param withCommitment Whether to run commitment backing checks and update deficits
+    function checkpoint(uint256 tokenId, uint256 positionIndex, bool withCommitment) external onlyIfPoolManagerLocked {
+        _checkpoint(tokenId, positionIndex, withCommitment);
     }
 }

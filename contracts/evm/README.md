@@ -11,6 +11,8 @@ The Solidity contracts provide the automated market maker (AMM) functionality fo
 - **MarketFactory**: Coordinates between hooks and manages market creation
 - **LiquidityCommitmentCertificate (LCC)**: Wrapped tokens representing liquidity commitments
 
+Deployment and operational scripts (including the `justfile`) live in [`../evm-scripts/`](../evm-scripts/README.md).
+
 ## Prerequisites
 
 ### 1. Install Foundry
@@ -21,7 +23,7 @@ The Solidity contracts provide the automated market maker (AMM) functionality fo
 # Install Foundry
 curl -L https://foundry.paradigm.xyz | bash
 
-# Initialize Foundry
+# Initialise Foundry
 foundryup -i 1.4.2
 
 # Verify installation
@@ -33,14 +35,14 @@ forge --version
 After cloning the repository, install dependencies and initialise git submodules:
 
 ```bash
-# 0. Install Just - See https://github.com/casey/just
+# 0. Install Just (used for deployment scripts in ../evm-scripts)
 brew install just
 
-# 1. Install Forge dependencies
+# 1. Install Forge dependencies (git submodules)
 forge install
 
 # 2. Install Node.js dependencies (includes lib/oracle)
-yarn install
+node ./patch-oracle.cjs && yarn install
 ```
 
 ### 3. Deploy `ResilientOracle`
@@ -50,20 +52,21 @@ The protocol depends on an external deployment of the **ResilientOracle** from V
 **Important**: The oracle is deployed separately using custom deployment scripts. See the [`oracle/README.md`](oracle/README.md) for detailed deployment instructions.
 
 ```bash
-# Deploy oracle to your target network
-make deploy-oracle <chain>  # e.g., sepolia, arbitrumsepolia, arbitrumone - defaults to 
+# From contracts/evm-scripts/: deploy oracle to your target network
+MODE=LIVE NETWORK=sepolia BROADCAST=true just deploy-oracle
 ```
 
 The deployed oracle address must be available as `RESILIENT_ORACLE_ADDRESS` in your environment variables when deploying the main protocol contracts.
 
 ## Environment Setup
 
-Create a `.env` file in the solidity directory with the following variables:
+Create a `.env` file in `contracts/evm-scripts/` with the following variables:
 
 ```bash
 # RPC URLs
 ARB_SEPOLIA_RPC_URL="https://sepolia-rollup.arbitrum.io/rpc"
 ARB_MAINNET_RPC_URL="https://arb1.arbitrum.io/rpc"
+ETH_SEPOLIA_RPC_URL="https://sepolia.infura.io/v3/<key>"  # or any ETH Sepolia RPC
 
 # Deployment
 PRIVATE_KEY="your_private_key_here"
@@ -82,7 +85,7 @@ UNDERLYING_ASSET_1="0x..."  # USDT address
 ### 1. Build Contracts
 
 ```bash
-make build
+forge build
 ```
 
 ### 2. Run Tests
@@ -98,14 +101,14 @@ forge test --match-contract MarketFactory
 ### 3. Local Development
 
 ```bash
-# Start local fork
-make fork
+# From contracts/evm-scripts/: start local fork
+NETWORK=sepolia just fork
 
-# Deploy contracts locally
-make dev MODE=LOCAL
+# From contracts/evm-scripts/: deploy contracts locally
+MODE=LOCAL NETWORK=sepolia BROADCAST=true just dev
 
-# Deploy contracts, add liquidity and perform a swap
-make e2e MODE=LOCAL
+# From contracts/evm-scripts/: deploy contracts, add liquidity, and perform a swap
+MODE=LOCAL NETWORK=sepolia BROADCAST=true just e2e
 ```
 
 ## Deployment
@@ -122,14 +125,14 @@ The deployment scripts support multiple networks:
 **Prerequisite**: Ensure the ResilientOracle has been deployed and `RESILIENT_ORACLE_ADDRESS` is set in your `.env` file. See [Deploy ResilientOracle](#3-deploy-resilientoracle) above.
 
 ```bash
-# Deploy to Sepolia
-NETWORK=sepolia make deploy
+# From contracts/evm-scripts/: deploy to Arbitrum Sepolia
+MODE=LIVE NETWORK=sepolia BROADCAST=true just deploy
 
-# Deploy to Arbitrum  
-NETWORK=arbitrum make deploy
+# From contracts/evm-scripts/: deploy to Arbitrum mainnet
+MODE=LIVE NETWORK=arbitrum BROADCAST=true just deploy
 
-# Deploy locally (forked from mainnet)
-NETWORK=arbitrum make dev MODE=LOCAL
+# From contracts/evm-scripts/: deploy locally (forked from mainnet)
+MODE=LOCAL NETWORK=arbitrum BROADCAST=true just dev
 ```
 
 ### Deployment Order
@@ -143,10 +146,10 @@ NETWORK=arbitrum make dev MODE=LOCAL
 ### Read Deployment Addresses
 
 ```bash
-# Read addresses for current network
-make read-deployment
+# From contracts/evm-scripts/: read addresses for current network
+MODE=LIVE NETWORK=sepolia just read-deployment
 
-# Or run directly
+# Or run directly (from contracts/evm-scripts/)
 forge script script/ReadDeployment.s.sol --rpc-url <rpc_url>
 ```
 
@@ -155,22 +158,22 @@ forge script script/ReadDeployment.s.sol --rpc-url <rpc_url>
 ### Add Liquidity
 
 ```bash
-# Add liquidity to core pool
-forge script script/AddLiquidity.s.sol --rpc-url <rpc_url> --broadcast
+# From contracts/evm-scripts/: add liquidity to market
+MODE=LIVE NETWORK=sepolia BROADCAST=true just add-liquidity
 ```
 
 ### Remove Liquidity
 
 ```bash
-# Remove liquidity (requires TOKEN_ID)
-TOKEN_ID=47 forge script script/RemoveLiquidity.s.sol --rpc-url <rpc_url> --broadcast
+# From contracts/evm-scripts/: remove liquidity (requires TOKEN_ID)
+MODE=LIVE NETWORK=sepolia BROADCAST=true TOKEN_ID=47 just remove-liquidity
 ```
 
 ### Create Market
 
 ```bash
-# Create new market
-forge script script/CreateMarket.s.sol --rpc-url <rpc_url> --broadcast
+# From contracts/evm-scripts/: create new market
+MODE=LIVE NETWORK=sepolia BROADCAST=true just create-market
 ```
 
 ## Contract Architecture
@@ -218,25 +221,25 @@ forge clean          # Clean build artifacts
 ### Deployment Commands
 
 ```bash
-make deploy         # Deploy all contracts
-make create-market  # Create market
+just deploy         # Deploy all contracts (from contracts/evm-scripts/)
+just create-market  # Create market (from contracts/evm-scripts/)
 ```
 
 ### Development Commands
 
 ```bash
-make fork               # Start local fork
-make dev MODE=LOCAL     # Full development setup
-make read-deployment    # Read deployment addresses
+just fork               # Start local fork (from contracts/evm-scripts/)
+MODE=LOCAL BROADCAST=true just dev     # Full development setup (from contracts/evm-scripts/)
+just read-deployment    # Read deployment addresses (from contracts/evm-scripts/)
 ```
 
 ### Quality Commands
 
 ```bash
-make format         # Format code
-make lint           # Lint code
-make security       # Security analysis
-make quality        # Run all quality checks
+yarn run format     # Format code (from contracts/evm/)
+yarn run lint       # Lint code (from contracts/evm/)
+yarn run security   # Security analysis (from contracts/evm/)
+yarn run format:check && yarn run lint && yarn run security  # Run all quality checks (from contracts/evm/)
 ```
 
 ## Testing
@@ -369,7 +372,7 @@ forge script script/deploy/DeployContracts.s.sol:DeployContracts --sig "verifyDe
 2. Create a feature branch
 3. Make your changes
 4. Run tests: `forge test`
-5. Run quality checks: `make quality`
+5. Run quality checks: `yarn run format:check && yarn run lint && yarn run security`
 6. Submit a pull request
 
 # README UPDATES

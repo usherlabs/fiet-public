@@ -84,16 +84,15 @@ library CheckpointLibrary {
      * @dev This function allows market makers to extend their grace period by providing
      *      a valid settlement proof that gets verified against a Settlement Observer's verifier.
      * @dev "I have a token coming, it's just pending a bank transfer to the stablecoin issuer."
-     * @param commitId The token id of the position
-     * @param positionIndex The position index
+     * @dev IMPORTANT: Callers MUST validate that `positionId` belongs to `poolKey.toId()`.
+     * @param positionId The position ID
      * @param settlementProof The settlement signal containing the proof
      */
     function extendGracePeriod(
         VTSStorage storage s,
         IVRLSettlementObserver settlementObserver,
         PoolKey memory poolKey,
-        uint256 commitId,
-        uint256 positionIndex,
+        PositionId positionId,
         uint8 settlementTokenIndex,
         uint32 verifierIndex,
         bytes memory settlementProof
@@ -102,8 +101,6 @@ library CheckpointLibrary {
             revert Errors.InvalidTokenIndex(settlementTokenIndex);
         }
         MarketVTSConfiguration memory vtsConfiguration = s.pools[poolKey.toId()].vtsConfig;
-
-        PositionId positionId = s.commits[commitId].positions[positionIndex];
 
         // verify the settlement proof and get the grace period extension
         settlementObserver.verifySettlementProof(poolKey, settlementTokenIndex, verifierIndex, settlementProof, true);

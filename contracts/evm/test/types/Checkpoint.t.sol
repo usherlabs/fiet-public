@@ -154,5 +154,16 @@ contract CheckpointTypeTest is Test {
         h.extend(cfg, 0);
         assertEq(h.get().gracePeriodExtension0, 0);
     }
+
+    function test_extendGracePeriod_doesNotRevertWhenMaxLessThanGrace_andCapsToZero() public {
+        // Previously this would underflow and revert in Solidity 0.8.x.
+        TokenConfiguration memory cfg = _cfg(10, 9); // invalid: max < grace => extension should be disabled
+
+        h.extend(cfg, 0);
+        assertEq(h.get().gracePeriodExtension0, 0);
+
+        h.extend(cfg, 1);
+        assertEq(h.get().gracePeriodExtension1, 0);
+    }
 }
 

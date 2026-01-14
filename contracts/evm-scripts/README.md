@@ -30,11 +30,11 @@ export PRIVATE_KEY=your_private_key_here
 2. Ensure you have sufficient funds in your wallet for deployment
 
 3. To run a local fork, start an Anvil fork:
-   - `just fork` (requires the `just` CLI), or
+   - From `contracts/evm-scripts/`: `NETWORK=sepolia just fork` (requires the `just` CLI), or
    - run `anvil --fork-url <RPC_URL> --port 8545` directly
 
-4. Ensure dependencies (including the oracle submodule) are installed
-   - From `contracts/evm/`, run `forge install` to initialize/update submodules
+4. Ensure the main EVM project dependencies (including the oracle submodule) are installed
+   - From `contracts/evm/`, run `forge install` to initialise/update submodules
    - Then run `yarn install` from `contracts/evm/` (this installs Node deps including `lib/oracle`)
 
 ### CREATE3 Factory Requirement
@@ -46,28 +46,32 @@ These scripts depend on the **CREATE3 factory** being deployed at the canonical 
 If you run against an RPC/network where there is **no contract code at that address**, scripts will fail with an error like **“call to non-contract address 0x9fBB…”**.
 
 - **Remote networks**: use an RPC for a network where that CREATE3 factory is already deployed at `0x9fBB...`.
-- **Local Anvil fork**: run `just setup-create3` (or the equivalent `anvil_setCode` flow) to install the factory bytecode at `0x9fBB...` before running deploy scripts.
+- **Local Anvil fork**: from `contracts/evm-scripts/`, run `MODE=LOCAL just setup-create3` (or the equivalent `anvil_setCode` flow) to install the factory bytecode at `0x9fBB...` before running deploy scripts.
 
 ### Running the Deployment
 
 #### Deploy the oracle:
 ```bash
-BROADCAST=true just deploy-oracle 
+# From contracts/evm-scripts/
+MODE=LIVE NETWORK=sepolia BROADCAST=true just deploy-oracle
 ```
 
 #### Deploy the linked libraries:
 ```bash
-BROADCAST=true just deploy-libraries
+# From contracts/evm-scripts/
+MODE=LIVE NETWORK=sepolia BROADCAST=true just deploy-libraries
 ```
 
 #### Deploy the contracts:
 ```bash
-BROADCAST=true just deploy-contracts
+# From contracts/evm-scripts/
+MODE=LIVE NETWORK=sepolia BROADCAST=true just deploy-contracts
 ```
 
 #### Full deployment of core contract
 ```bash
-BROADCAST=true just deploy
+# From contracts/evm-scripts/
+MODE=LIVE NETWORK=sepolia BROADCAST=true just deploy
 ```
 
 ### Deploying a market
@@ -78,7 +82,8 @@ Before creating a market, the oracle must be configured for the **two underlying
 Run:
 
 ```bash
-BROADCAST=true just configure-oracle
+# From contracts/evm-scripts/
+MODE=LIVE NETWORK=sepolia BROADCAST=true just configure-oracle
 ```
 
 Required env vars (recommended to put these in `contracts/evm-scripts/.env`):
@@ -93,7 +98,8 @@ Optional env vars (`*`):
 #### Deploying the market
 
 ```bash
-BROADCAST=true just create-market
+# From contracts/evm-scripts/
+MODE=LIVE NETWORK=sepolia BROADCAST=true just create-market
 ```
 
 ### Verification

@@ -202,11 +202,29 @@ contract VTSCommitLibTest is VTSLibTestBase {
         address adv2 = makeAddr("adv2");
         sigMgr.setExpirySeconds(777);
 
+        vm.prank(adv2);
         harness.renewSignal(sigMgr, commitId, _makeSignal(owner2, adv2));
 
-        assertEq(harness.getCommitOwner(commitId), owner2, "owner should update");
+        assertEq(harness.getCommitOwner(commitId), owner2, "owner should remain immutable");
         assertEq(harness.getCommitAdvancer(commitId), adv2, "advancer should update");
         assertEq(harness.getCommitExpiresAt(commitId), block.timestamp + 777, "expiry should update");
+    }
+
+    function test_renewSignal_revertsWhenOwnerChanges() public {
+        address newOwner = makeAddr("newOwner");
+        address adv = address(this);
+        sigMgr.setExpirySeconds(1);
+
+        vm.expectRevert(Errors.InvalidSender.selector);
+        harness.renewSignal(sigMgr, commitId, _makeSignal(newOwner, adv));
+    }
+
+    function test_renewSignal_revertsWhenCallerNotAdvancer() public {
+        address adv = makeAddr("adv");
+        sigMgr.setExpirySeconds(1);
+
+        vm.expectRevert(Errors.InvalidSender.selector);
+        harness.renewSignal(sigMgr, commitId, _makeSignal(mmOwner, adv));
     }
 
     // ============================================================
@@ -380,19 +398,6 @@ contract VTSCommitLibTest is VTSLibTestBase {
     // checkpoint
     // ============================================================
 
-    function test_checkpoint_revertsOnEmptySignal() public {
-        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidLiquiditySignal.selector, 0, 0, 0));
-        harness.checkpoint(manager, sigMgr, oracle, advancer, commitId, positionId, "");
-    }
-
-    function test_checkpoint_revertsOnInvalidSender() public {
-        // sender mismatch (sender != advancer on signal)
-        vm.expectRevert(Errors.InvalidSender.selector);
-        harness.checkpoint(
-            manager, sigMgr, oracle, makeAddr("notAdvancer"), commitId, positionId, _makeSignal(mmOwner, advancer)
-        );
-    }
-
     function test_checkpoint_zeroIssuedValue_zerosDeficitAndReturns() public {
         // Make issuedUsd == 0 by setting liquidity to 0.
         PositionId pid = _generatePositionId(DEFAULT_OWNER, TL, TU, bytes32(uint256(123)));
@@ -401,7 +406,7 @@ contract VTSCommitLibTest is VTSLibTestBase {
         harness.setPositionCommitmentDeficit(pid, 123, 456);
         oracle.setTotalValue(0);
 
-        harness.checkpoint(manager, sigMgr, oracle, advancer, commitId, pid, _makeSignal(mmOwner, advancer));
+        harness.checkpoint(manager, oracle, commitId, pid);
 
         (uint256 d0, uint256 d1) = harness.getPositionCommitmentDeficit(pid);
         assertEq(d0, 0, "deficit0 should be cleared");
@@ -421,7 +426,7 @@ contract VTSCommitLibTest is VTSLibTestBase {
         // backingUsd = signalUsd + settledUsd. Here: settledUsd = 0, so signalUsd sets surplus.
         oracle.setTotalValue(issuedUsd + deficitUsd);
 
-        harness.checkpoint(manager, sigMgr, oracle, advancer, commitId, positionId, _makeSignal(mmOwner, advancer));
+        harness.checkpoint(manager, oracle, commitId, positionId);
 
         (uint256 d0, uint256 d1) = harness.getPositionCommitmentDeficit(positionId);
         assertEq(d0, 0, "deficit0 should be cleared");
@@ -440,7 +445,7 @@ contract VTSCommitLibTest is VTSLibTestBase {
         uint256 surplusUsd = 5e18;
         oracle.setTotalValue(issuedUsd + surplusUsd);
 
-        harness.checkpoint(manager, sigMgr, oracle, advancer, commitId, positionId, _makeSignal(mmOwner, advancer));
+        harness.checkpoint(manager, oracle, commitId, positionId);
 
         (uint256 d0, uint256 d1) = harness.getPositionCommitmentDeficit(positionId);
         uint256 currentDeficitUsd = deficit0 + deficit1; // prices are 1e18 in mock
@@ -456,7 +461,7 @@ contract VTSCommitLibTest is VTSLibTestBase {
         harness.setPositionCommitmentDeficit(positionId, 0, 0);
         oracle.setTotalValue(0);
 
-        harness.checkpoint(manager, sigMgr, oracle, advancer, commitId, positionId, _makeSignal(mmOwner, advancer));
+        harness.checkpoint(manager, oracle, commitId, positionId);
 
         (uint256 d0, uint256 d1) = harness.getPositionCommitmentDeficit(positionId);
         (uint160 sqrtPriceX96, int24 currentTick,,) = _getSlot0(poolId);
@@ -466,16 +471,26 @@ contract VTSCommitLibTest is VTSLibTestBase {
         assertEq(d1, eff1, "deficit1 should equal effective token1 when backing=0");
     }
 
-    function test_checkpoint_updatesCommitStateAndExpiry() public {
-        address adv2 = makeAddr("adv2");
-        sigMgr.setExpirySeconds(777);
-        oracle.setTotalValue(1_000_000e18); // ensure we don't take the insufficient-backing path
+    function test_checkpoint_expiredSignal_treatsSignalUsdAsZero() public {
+        // Make the stored signal expire quickly, but set oracle signal value high; checkpoint should still treat it as 0.
+        harness.setPositionSettled(positionId, 0, 0);
+        harness.setPositionCommitmentDeficit(positionId, 0, 0);
 
-        uint256 ts = block.timestamp;
-        harness.checkpoint(manager, sigMgr, oracle, adv2, commitId, positionId, _makeSignal(mmOwner, adv2));
+        sigMgr.setExpirySeconds(1);
+        // Renew updates expiresAt; sender must equal advancer in the signal.
+        harness.renewSignal(sigMgr, commitId, _makeSignal(mmOwner, address(this)));
 
-        assertEq(harness.getCommitAdvancer(commitId), adv2, "commit advancer should be updated");
-        assertEq(harness.getCommitExpiresAt(commitId), ts + 777, "commit expiry should be updated");
+        vm.warp(block.timestamp + 2);
+
+        oracle.setTotalValue(1_000_000e18);
+        harness.checkpoint(manager, oracle, commitId, positionId);
+
+        (uint256 d0, uint256 d1) = harness.getPositionCommitmentDeficit(positionId);
+        (uint160 sqrtPriceX96, int24 currentTick,,) = _getSlot0(poolId);
+        (uint256 eff0, uint256 eff1) =
+            LiquidityUtils.calculateEffectiveTokenAmounts(sqrtPriceX96, currentTick, TL, TU, int256(uint256(LIQ)));
+        assertEq(d0, eff0, "expired signal should contribute 0 backing");
+        assertEq(d1, eff1, "expired signal should contribute 0 backing");
     }
 
     /**
@@ -495,7 +510,7 @@ contract VTSCommitLibTest is VTSLibTestBase {
         // Ensure issuedUsd > 0 and backing is sufficient.
         oracle.setTotalValue(1_000_000e18);
 
-        harness.checkpoint(manager, sigMgr, oracle, advancer, commitId, positionId, _makeSignal(mmOwner, advancer));
+        harness.checkpoint(manager, oracle, commitId, positionId);
 
         (uint256 d0, uint256 d1) = harness.getPositionCommitmentDeficit(positionId);
         assertEq(d0, 0, "deficit0 should be cleared when its USD value is zero");

@@ -43,21 +43,13 @@ contract VTSCommitLibHarness {
     }
 
     function renewSignal(IVRLSignalManager mgr, uint256 commitId, bytes memory sig) external {
-        VTSCommitLib.renewSignal(s, mgr, commitId, sig);
+        VTSCommitLib.renewSignal(s, mgr, msg.sender, commitId, sig);
     }
 
-    function checkpoint(
-        IPoolManager poolManager,
-        IVRLSignalManager signalManager,
-        IOracleHelper oracleHelper,
-        address sender,
-        uint256 commitId,
-        PositionId positionId,
-        bytes memory liquiditySignal
-    ) external {
-        VTSCommitLib.checkpointWithCommitment(
-            s, poolManager, signalManager, oracleHelper, sender, commitId, positionId, liquiditySignal
-        );
+    function checkpoint(IPoolManager poolManager, IOracleHelper oracleHelper, uint256 commitId, PositionId positionId)
+        external
+    {
+        VTSCommitLib.checkpointWithCommitment(s, poolManager, oracleHelper, commitId, positionId);
     }
 
     // ============ Storage Setters (for test setup) ============
