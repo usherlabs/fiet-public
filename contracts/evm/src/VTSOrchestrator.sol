@@ -234,7 +234,7 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
 
         // Only check expiry if requireLiveSignal is true
         if (requireLiveSignal) {
-            bool isExpired = commit.expiresAt < block.timestamp;
+            bool isExpired = block.timestamp >= commit.expiresAt;
             if (isExpired) {
                 return false;
             }
@@ -707,32 +707,31 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
     }
 
     /// @notice Renew a liquidity signal for an existing commit
-    /// @dev Updates the signal for a commit and validates it via SignalManager and OracleHelper
+    /// @dev Intended for router-style callers (e.g. MMPositionManager) where msg.sender is a forwarding contract.
+    /// @param sender The effective caller (locker) used for advancer validation
     /// @param commitId The commit identifier to renew
     /// @param liquiditySignal The new liquidity signal
-    function renewSignal(uint256 commitId, bytes memory liquiditySignal)
+    function renewSignal(address sender, uint256 commitId, bytes memory liquiditySignal)
         external
         onlyIfPoolManagerUnlocked
         nonReentrant
     {
         // Validate commit exists (but don't require live signal - expired signals can be seized)
         _assertSignalValid(commitId, false);
-        VTSCommitLib.renewSignal(s, signalManager, commitId, liquiditySignal);
+        VTSCommitLib.renewSignal(s, signalManager, sender, commitId, liquiditySignal);
     }
 
     /// @notice Checkpoint a position and optionally run commitment backing checks
     /// @dev Marks an RFS checkpoint for the position. If withCommitment is true, also validates
     ///      commitment backing and updates position deficits.
-    /// @param sender The caller address (used for advancer validation when withCommitment is true)
+    /// @param sender The caller address (locker / effective sender)
     /// @param commitId The commit identifier
     /// @param positionIndex The position index within the commit
-    /// @param liquiditySignal The liquidity signal (required when withCommitment is true)
     /// @param withCommitment Whether to run commitment backing checks and update position deficits
     function checkpoint(
         address sender,
         uint256 commitId,
         uint256 positionIndex,
-        bytes memory liquiditySignal,
         bool withCommitment
     ) external nonReentrant {
         // Validate commit exists (but don't require live signal - expired signals can be seized)
@@ -749,8 +748,8 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
         if (!withCommitment) {
             return;
         }
-        VTSCommitLib.checkpointWithCommitment(
-            s, poolManager, signalManager, oracleHelper, sender, commitId, positionId, liquiditySignal
-        );
+        // Commitment backing checks use the stored commit signal state. If the signal is expired, it is treated as 0.
+        // Callers should renew first if needed.
+        VTSCommitLib.checkpointWithCommitment(s, poolManager, oracleHelper, commitId, positionId);
     }
 }

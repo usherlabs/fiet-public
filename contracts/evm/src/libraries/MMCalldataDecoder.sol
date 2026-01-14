@@ -393,32 +393,28 @@ library MMCalldataDecoder {
         data = params.toBytes(1);
     }
 
-    /// @dev CHECKPOINT: (uint256, uint256, bytes, bool)
+    /// @dev CHECKPOINT: (uint256, uint256, bool)
     /// @param params The calldata bytes to decode
     /// @return tokenId The commitment NFT token ID
     /// @return positionIndex The index of the position within the commitment
-    /// @return data The liquidity signal bytes
     /// @return withCommitment Whether to run commitment backing checks
     function decodeCheckpointParams(bytes calldata params)
         internal
         pure
-        returns (uint256 tokenId, uint256 positionIndex, bytes calldata data, bool withCommitment)
+        returns (uint256 tokenId, uint256 positionIndex, bool withCommitment)
     {
         assembly ("memory-safe") {
-            // ABI encoding: (uint256 tokenId, uint256 positionIndex, bytes data, bool withCommitment)
-            // Minimum length for empty bytes is head (4 words = 0x80) + tail length word (0x20) = 0xa0
-            if lt(params.length, 0xa0) {
+            // ABI encoding: (uint256 tokenId, uint256 positionIndex, bool withCommitment)
+            // Minimum length: 3 words = 0x60
+            if lt(params.length, 0x60) {
                 mstore(0, SLICE_ERROR_SELECTOR)
                 revert(0x1c, 4)
             }
             tokenId := calldataload(params.offset)
             positionIndex := calldataload(add(params.offset, 0x20))
-            // ABI encoding: (uint256 tokenId, uint256 positionIndex, bytes data, bool withCommitment)
-            // Head layout: tokenId @ 0x00, positionIndex @ 0x20, dataOffset @ 0x40, withCommitment @ 0x60
-            withCommitment := calldataload(add(params.offset, 0x60))
+            // Head layout: tokenId @ 0x00, positionIndex @ 0x20, withCommitment @ 0x40
+            withCommitment := calldataload(add(params.offset, 0x40))
         }
-        // Use CalldataDecoder.toBytes for dynamic bytes (index 2 = 3rd argument)
-        data = params.toBytes(2);
     }
 
     // ═══════════════════════════════════════════════════════════════════════════════════════════

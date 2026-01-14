@@ -20,6 +20,7 @@ import {RFSCheckpoint} from "../src/types/Checkpoint.sol";
 import {IMarketVault} from "../src/interfaces/IMarketVault.sol";
 import {IOracleHelper} from "../src/interfaces/IOracleHelper.sol";
 import {IVRLSettlementObserver} from "../src/interfaces/IVRLSettlementObserver.sol";
+import {LiquiditySignal} from "../src/types/Commit.sol";
 import {PoolSwapTest} from "@uniswap/v4-core/src/test/PoolSwapTest.sol";
 import {MMActionAdapter as MMA} from "./utils/MMActionAdapter.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -187,7 +188,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
 
         // Now try to renew when locked
         vm.expectRevert(Errors.PoolManagerMustBeUnlocked.selector);
-        vtsOrchestrator.renewSignal(1, signalBytes);
+        vtsOrchestrator.renewSignal(address(this), 1, signalBytes);
     }
 
     function test_revert_extendGracePeriod_whenPoolManagerLocked() public {
@@ -453,7 +454,10 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         bytes memory signalBytes = abi.encode(liquiditySignal);
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidSignal.selector, uint256(0)));
         unlockCaller.run(
-            address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.renewSignal.selector, 0, signalBytes)
+            address(vtsOrchestrator),
+            abi.encodeWithSelector(
+                bytes4(keccak256("renewSignal(address,uint256,bytes)")), address(this), 0, signalBytes
+            )
         );
     }
 
@@ -462,7 +466,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
 
         vm.mockCall(
             address(signalManager),
-            abi.encodeWithSelector(bytes4(keccak256("verifyLiquiditySignal(bytes)")), signalBytes),
+            abi.encodeWithSelector(bytes4(keccak256("verifyLiquiditySignal(bytes,bool)")), signalBytes, true),
             abi.encode(true, 3600)
         );
 
@@ -476,16 +480,24 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         // Warp forward
         vm.warp(block.timestamp + 1000);
 
-        bytes memory renewSignalBytes = abi.encode(renewSignal);
+        // Renewal must preserve commit ownership.
+        LiquiditySignal memory sameOwnerRenew = liquiditySignal;
+        sameOwnerRenew.nonce += 1;
+        bytes memory renewSignalBytes = abi.encode(sameOwnerRenew);
         vm.mockCall(
             address(signalManager),
-            abi.encodeWithSelector(bytes4(keccak256("verifyLiquiditySignal(bytes)")), renewSignalBytes),
+            abi.encodeWithSelector(bytes4(keccak256("verifyLiquiditySignal(bytes,bool)")), renewSignalBytes, true),
             abi.encode(true, 3600)
         );
 
         unlockCaller.run(
             address(vtsOrchestrator),
-            abi.encodeWithSelector(VTSOrchestrator.renewSignal.selector, commitId, renewSignalBytes)
+            abi.encodeWithSelector(
+                bytes4(keccak256("renewSignal(address,uint256,bytes)")),
+                liquiditySignal.mmState.advancer,
+                commitId,
+                renewSignalBytes
+            )
         );
 
         (, uint256 expiresAtAfter,,) = vtsOrchestrator.getCommit(commitId);
@@ -779,11 +791,10 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
     }
 
     function test_revert_checkpoint_whenCommitInvalid_insideUnlock() public {
-        bytes memory emptySignal;
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidSignal.selector, uint256(0)));
         unlockCaller.run(
             address(vtsOrchestrator),
-            abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, address(this), 0, 0, emptySignal, false)
+            abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, address(this), 0, 0, false)
         );
     }
 
@@ -795,14 +806,13 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
 
         // Set the block timestamp
         vm.warp(block.timestamp + 10000000);
-        bytes memory emptySignal;
 
         vm.expectEmit(false, false, false, false, address(vtsOrchestrator));
         emit Checkpointed(tokenId, 0, RFSCheckpoint(0, false, 0, 0), false);
 
         unlockCaller.run(
             address(vtsOrchestrator),
-            abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, address(this), tokenId, 0, emptySignal, false)
+            abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, address(this), tokenId, 0, false)
         );
 
         RFSCheckpoint memory checkpointAfter = vtsOrchestrator.positionToCheckpoint(positionId);
@@ -900,7 +910,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         vm.prank(advancer);
         unlockCaller.run(
             address(vtsOrchestrator),
-            abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, advancer, tokenId, 0, signalBytes, true)
+            abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, advancer, tokenId, 0, true)
         );
 
         // Partial settlement to keep the RFS likely open.
@@ -953,7 +963,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         unlockCaller.run(
             address(vtsOrchestrator),
             abi.encodeWithSelector(
-                VTSOrchestrator.checkpoint.selector, advancer, tokenId, 0, unbackedLiquiditySignal, true
+                VTSOrchestrator.checkpoint.selector, advancer, tokenId, 0, true
             )
         );
 
@@ -986,7 +996,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         vm.prank(advancer);
         unlockCaller.run(
             address(vtsOrchestrator),
-            abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, advancer, tokenId, 0, signalBytes, true)
+            abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, advancer, tokenId, 0, true)
         );
 
         (uint256 cd0, uint256 cd1) = _commitmentDeficit(positionId);
@@ -1021,7 +1031,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         vm.prank(advancer);
         unlockCaller.run(
             address(vtsOrchestrator),
-            abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, advancer, tokenId, 0, signalBytes, true)
+            abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, advancer, tokenId, 0, true)
         );
 
         (uint256 cd0Before, uint256 cd1Before) = _commitmentDeficit(positionId);
@@ -1077,7 +1087,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         vm.prank(advancer);
         unlockCaller.run(
             address(vtsOrchestrator),
-            abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, advancer, tokenId, 0, signalBytes, true)
+            abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, advancer, tokenId, 0, true)
         );
 
         (uint256 cd0Before, uint256 cd1Before) = _commitmentDeficit(positionId);
@@ -1089,7 +1099,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         vm.prank(advancer);
         unlockCaller.run(
             address(vtsOrchestrator),
-            abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, advancer, tokenId, 0, signalBytes, true)
+            abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, advancer, tokenId, 0, true)
         );
 
         (uint256 cd0After, uint256 cd1After) = _commitmentDeficit(positionId);
@@ -1119,7 +1129,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         vm.prank(advancer);
         unlockCaller.run(
             address(vtsOrchestrator),
-            abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, advancer, tokenId, 0, signalBytes, true)
+            abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, advancer, tokenId, 0, true)
         );
 
         (uint256 cd0Before, uint256 cd1Before) = _commitmentDeficit(positionId);

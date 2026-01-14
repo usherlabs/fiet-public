@@ -199,6 +199,7 @@ library VTSCommitLib {
     function renewSignal(
         VTSStorage storage s,
         IVRLSignalManager signalManager,
+        address sender,
         uint256 commitId,
         bytes memory liquiditySignal
     ) external {
@@ -212,49 +213,28 @@ library VTSCommitLib {
 
         // Persist signal state (only state and expiresAt)
         Commit storage commit = s.commits[commitId];
+
+        // Invariants:
+        // - Commit ownership must be immutable across renewals (prevents commitId hijack)
+        // - Only the designated advancer may renew on-chain (reduces mempool proof sniping)
+        if (signal.mmState.owner != commit.mmState.owner || sender != signal.mmState.advancer) {
+            revert Errors.InvalidSender();
+        }
+
         MarketMaker.save(commit.mmState, signal.mmState);
         commit.expiresAt = block.timestamp + expirySeconds;
     }
 
     /// @notice Checkpoint with commitment backing checks (single linked-library call)
-    /// @dev Verifies signal, updates commit state/expiry, and sets position commitment deficit.
+    /// @dev Reads stored commit signal state and sets position commitment deficit.
     //#olympix-ignore-reentrancy
     function checkpointWithCommitment(
         VTSStorage storage s,
         IPoolManager poolManager,
-        IVRLSignalManager signalManager,
         IOracleHelper oracleHelper,
-        address sender,
         uint256 commitId,
-        PositionId positionId,
-        bytes memory liquiditySignal
+        PositionId positionId
     ) external {
-        if (liquiditySignal.length == 0) {
-            revert Errors.InvalidLiquiditySignal(0, 0, 0);
-        }
-
-        // Verify signal and update commit in scoped block
-        uint256 expirySeconds;
-        LiquiditySignal memory newSignal;
-        {
-            (, expirySeconds) = signalManager.verifyLiquiditySignal(liquiditySignal, true);
-            newSignal = abi.decode(liquiditySignal, (LiquiditySignal));
-
-            Commit storage commit = s.commits[commitId];
-            MarketMaker.State memory oldMmState = commit.mmState;
-
-            if (
-                newSignal.mmState.owner != oldMmState.owner || sender != newSignal.mmState.advancer
-                    || newSignal.mmState.advancer == newSignal.mmState.owner
-            ) {
-                revert Errors.InvalidSender();
-            }
-
-            // Update commit state/expiry using verified signal
-            MarketMaker.save(commit.mmState, newSignal.mmState);
-            commit.expiresAt = block.timestamp + expirySeconds;
-        }
-
         // Build checkpoint context in scoped block
         CheckpointContext memory ctx;
         Position memory pos = s.positions[positionId];
@@ -282,7 +262,14 @@ library VTSCommitLib {
                 Currency.unwrap(ctx.currency1),
                 pa.settled.token1
             );
-            ctx.signalUsd = _signalValue(newSignal.mmState, oracleHelper);
+            // If the stored signal has expired, treat it as having zero backing.
+            // This ensures renewal is paramount: expired signals are not recognised as backing.
+            Commit storage commit = s.commits[commitId];
+            if (block.timestamp >= commit.expiresAt) {
+                ctx.signalUsd = 0;
+            } else {
+                ctx.signalUsd = _signalValueForCommit(s, oracleHelper, commitId);
+            }
         }
 
         if (ctx.issuedUsd == 0) {
