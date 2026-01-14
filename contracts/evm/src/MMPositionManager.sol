@@ -257,12 +257,7 @@ contract MMPositionManager is
     /// @param tokenId The commitment NFT token ID
     /// @param positionIndex The position index within the commitment
     /// @param withCommitment Whether to run commitment backing checks and update deficits
-    function _checkpoint(
-        address sender,
-        uint256 tokenId,
-        uint256 positionIndex,
-        bool withCommitment
-    ) internal {
+    function _checkpoint(address sender, uint256 tokenId, uint256 positionIndex, bool withCommitment) internal {
         vtsOrchestrator.checkpoint(sender, tokenId, positionIndex, withCommitment);
     }
 
@@ -503,10 +498,7 @@ contract MMPositionManager is
     /// @param tokenId The ERC721 token id (commitment NFT id)
     /// @param positionIndex The index of the position within the commitment
     /// @param withCommitment Whether to run commitment backing checks and update deficits
-    function checkpoint(uint256 tokenId, uint256 positionIndex, bool withCommitment)
-        external
-        onlyIfPoolManagerLocked
-    {
+    function checkpoint(uint256 tokenId, uint256 positionIndex, bool withCommitment) external onlyIfPoolManagerLocked {
         _checkpoint(msg.sender, tokenId, positionIndex, withCommitment);
     }
 }

@@ -225,7 +225,9 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidPosition.selector, 0, 0, positionId));
         unlockCaller.run(
             address(vtsOrchestrator),
-            abi.encodeWithSelector(VTSOrchestrator.extendGracePeriod.selector, poolKeyA, tokenId, 0, 0, 0, settlementProof)
+            abi.encodeWithSelector(
+                VTSOrchestrator.extendGracePeriod.selector, poolKeyA, tokenId, 0, 0, 0, settlementProof
+            )
         );
     }
 
@@ -846,9 +848,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidPosition.selector, 0, 0, PositionId.wrap(bytes32(0))));
         unlockCaller.run(
             address(vtsOrchestrator),
-            abi.encodeWithSelector(
-                VTSOrchestrator.checkpoint.selector, address(this), tokenId, badIndex, false
-            )
+            abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, address(this), tokenId, badIndex, false)
         );
     }
 
@@ -1016,9 +1016,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         vm.prank(advancer);
         unlockCaller.run(
             address(vtsOrchestrator),
-            abi.encodeWithSelector(
-                VTSOrchestrator.checkpoint.selector, advancer, tokenId, 0, true
-            )
+            abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, advancer, tokenId, 0, true)
         );
 
         // Should not revert

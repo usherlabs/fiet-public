@@ -46,12 +46,9 @@ contract VTSCommitLibHarness {
         VTSCommitLib.renewSignal(s, mgr, msg.sender, commitId, sig);
     }
 
-    function checkpoint(
-        IPoolManager poolManager,
-        IOracleHelper oracleHelper,
-        uint256 commitId,
-        PositionId positionId
-    ) external {
+    function checkpoint(IPoolManager poolManager, IOracleHelper oracleHelper, uint256 commitId, PositionId positionId)
+        external
+    {
         VTSCommitLib.checkpointWithCommitment(s, poolManager, oracleHelper, commitId, positionId);
     }
 
