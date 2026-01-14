@@ -8,6 +8,7 @@
     "lib/oracle"
   ],
   "scripts": {
+    "preinstall": "node ./scripts/fix-oracle-postinstall.cjs",
     "lint": "solhint 'src/**/*.sol'",
     "lint:fix": "solhint 'src/**/*.sol' --fix",
     "format": "forge fmt",

@@ -180,11 +180,8 @@ contract ReentrantSignalManager {
         if (k == 6) {
             // Re-enter checkpoint in "no commitment checks" mode to avoid requiring any additional proof validation.
             // Note: checkpoint's `sender` argument is not coupled to msg.sender, and is unused when withCommitment=false.
-            return target.call(
-                abi.encodeWithSelector(
-                    VTSOrchestrator.checkpoint.selector, address(0xBEEF), commitId, positionIndex, false
-                )
-            );
+            return
+                target.call(abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, commitId, positionIndex, false));
         }
         return (false, bytes(""));
     }
