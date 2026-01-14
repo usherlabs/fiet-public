@@ -93,21 +93,13 @@ contract CheckpointHarness {
     function extendGracePeriod(
         IVRLSettlementObserver settlementObserver,
         PoolKey memory poolKey,
-        uint256 commitId,
-        uint256 positionIndex,
+        PositionId positionId,
         uint8 settlementTokenIndex,
         uint32 verifierIndex,
         bytes memory settlementProof
     ) external {
         CheckpointLibrary.extendGracePeriod(
-            s,
-            settlementObserver,
-            poolKey,
-            commitId,
-            positionIndex,
-            settlementTokenIndex,
-            verifierIndex,
-            settlementProof
+            s, settlementObserver, poolKey, positionId, settlementTokenIndex, verifierIndex, settlementProof
         );
     }
 
@@ -243,7 +235,7 @@ contract CheckpointLibraryTest is Test {
     function test_extendGracePeriod_revertsOnInvalidTokenIndex() public {
         PoolKey memory key = _defaultPoolKey();
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidTokenIndex.selector, uint8(2)));
-        h.extendGracePeriod(observer, key, COMMIT_ID, POSITION_INDEX, 2, 0, hex"");
+        h.extendGracePeriod(observer, key, PID, 2, 0, hex"");
     }
 
     function test_extendGracePeriod_extendsToken0Grace_andCapsAtMaxMinusGrace() public {
@@ -258,11 +250,11 @@ contract CheckpointLibraryTest is Test {
         observer.setValidity(true);
 
         // 1st extension => +100
-        h.extendGracePeriod(observer, key, COMMIT_ID, POSITION_INDEX, 0, 7, hex"abcd");
+        h.extendGracePeriod(observer, key, PID, 0, 7, hex"abcd");
         assertEq(h.get(PID).gracePeriodExtension0, 100);
 
         // 2nd extension would make 200, but cap at 150.
-        h.extendGracePeriod(observer, key, COMMIT_ID, POSITION_INDEX, 0, 7, hex"abcd");
+        h.extendGracePeriod(observer, key, PID, 0, 7, hex"abcd");
         assertEq(h.get(PID).gracePeriodExtension0, 150);
     }
 
@@ -276,7 +268,7 @@ contract CheckpointLibraryTest is Test {
 
         observer.setValidity(true);
 
-        h.extendGracePeriod(observer, key, COMMIT_ID, POSITION_INDEX, 1, 9, hex"beef");
+        h.extendGracePeriod(observer, key, PID, 1, 9, hex"beef");
         assertEq(h.get(PID).gracePeriodExtension1, 60);
     }
 }

@@ -187,6 +187,10 @@ library Errors {
     /// @notice Thrown when an invalid token index is provided
     error InvalidTokenIndex(uint8 tokenIndex);
 
+    /// @notice Thrown when VTS configuration is invalid
+    /// @dev Invariant: maxGracePeriodTime must be >= gracePeriodTime
+    error InvalidVTSConfiguration(uint256 gracePeriodTime, uint256 maxGracePeriodTime);
+
     // ============ FACTORY & CREATION ERRORS ============
     // Errors related to factory operations and token creation
 

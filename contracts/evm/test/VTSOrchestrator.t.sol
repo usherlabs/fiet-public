@@ -798,6 +798,20 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         );
     }
 
+    function test_revert_checkpoint_whenPositionIndexInvalid_insideUnlock() public {
+        (uint256 tokenId,,,) = _createCommittedPosition();
+        uint256 badIndex = 12345;
+
+        // Unset mapping index yields PositionId(0), which must fail position validity.
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidPosition.selector, 0, 0, PositionId.wrap(bytes32(0))));
+        unlockCaller.run(
+            address(vtsOrchestrator),
+            abi.encodeWithSelector(
+                VTSOrchestrator.checkpoint.selector, address(this), tokenId, badIndex, false
+            )
+        );
+    }
+
     function test_checkpoint_marksCheckpoint() public {
         (uint256 tokenId,,,) = _createCommittedPosition();
         PositionId positionId = vtsOrchestrator.getPositionId(tokenId, 0);
@@ -1194,6 +1208,19 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         uint256 baseRateAfter = configAfter.token0.baseVTSRate;
 
         assertEq(baseRateAfter, baseRateBefore + 1, "token0.baseVTSRate should update");
+    }
+
+    function test_revert_setMarketVTSConfiguration_whenInvalidGracePeriodConfig() public {
+        PoolId pid = corePoolKey.toId();
+        MarketVTSConfiguration memory cfg = vtsOrchestrator.getMarketVTSConfiguration(pid);
+
+        // Invalidate token0: maxGracePeriodTime < gracePeriodTime
+        cfg.token0.gracePeriodTime = 10;
+        cfg.token0.maxGracePeriodTime = 9;
+
+        vm.prank(vtsOrchestrator.owner());
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidVTSConfiguration.selector, 10, 9));
+        vtsOrchestrator.setMarketVTSConfiguration(pid, cfg);
     }
 
     function test_getPool_returnsPoolInfo() public view {
