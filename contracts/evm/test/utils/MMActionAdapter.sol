@@ -275,9 +275,25 @@ library MMActionAdapter {
         pure
         returns (PreparedAction memory)
     {
+        // liquiditySignal is intentionally ignored by the protocol now; commitment-checkpointing reads stored state.
         return PreparedAction({
             action: bytes1(uint8(MMActions.CHECKPOINT)),
-            params: abi.encode(tokenId, positionIndex, liquiditySignal, liquiditySignal.length > 0)
+            params: abi.encode(tokenId, positionIndex, liquiditySignal.length > 0)
+        });
+    }
+
+    /**
+     * @notice Prepares a CHECKPOINT action with an explicit withCommitment flag.
+     * @dev This decouples the commitment-checkpoint path from passing a non-empty liquiditySignal.
+     */
+    function prepareCheckpoint(uint256 tokenId, uint256 positionIndex, bool withCommitment)
+        internal
+        pure
+        returns (PreparedAction memory)
+    {
+        return PreparedAction({
+            action: bytes1(uint8(MMActions.CHECKPOINT)),
+            params: abi.encode(tokenId, positionIndex, withCommitment)
         });
     }
 

@@ -271,22 +271,22 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta {
     /// @param positionIndex The position index within the commit
     function onSeize(uint256 commitId, uint256 positionIndex) external;
 
-    /// @notice Renew a liquidity signal for an existing commit
+    /// @notice Renew a liquidity signal for an existing commit, using an explicit sender for advancer validation
+    /// @dev Useful for router-style callers where msg.sender is a forwarding contract
+    /// @param sender The effective caller (locker) used for advancer validation
     /// @param commitId The commit identifier to renew
     /// @param liquiditySignal The new liquidity signal
-    function renewSignal(uint256 commitId, bytes memory liquiditySignal) external;
+    function renewSignal(address sender, uint256 commitId, bytes memory liquiditySignal) external;
 
     /// @notice Checkpoint a position and optionally run commitment backing checks
-    /// @param sender The caller address (used for advancer validation when withCommitment is true)
+    /// @param sender The caller address (locker / effective sender)
     /// @param commitId The commit identifier
     /// @param positionIndex The position index within the commit
-    /// @param liquiditySignal The liquidity signal (required when withCommitment is true)
     /// @param withCommitment Whether to run commitment backing checks and update position deficits
     function checkpoint(
         address sender,
         uint256 commitId,
         uint256 positionIndex,
-        bytes memory liquiditySignal,
         bool withCommitment
     ) external;
 

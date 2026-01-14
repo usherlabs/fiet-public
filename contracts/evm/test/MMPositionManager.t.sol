@@ -158,7 +158,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
     /// @dev Verifies the expiry is correctly extended by the new signal.
     function test_canRenewSignal() public {
         // get the default market confiration so we can tweak it
-        bytes memory liquiditySignal = abi.encode(liquiditySignal);
+        bytes memory liquiditySignalBytes = abi.encode(liquiditySignal);
         ModifyLiquidityParams memory liquidityParams =
             ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e10, salt: bytes32(0)});
 
@@ -166,7 +166,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         (uint256 tokenId,,,) = _setupCommittedPosition(
             positionManager,
             corePoolKey,
-            liquiditySignal,
+            liquiditySignalBytes,
             liquidityParams,
             marketVTSConfiguration,
             address(lcc0),
@@ -178,7 +178,12 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         // renew the signal
         uint256 newTimestamp = 1000;
         vm.warp(newTimestamp);
-        MMA.renew(positionManager, tokenId, abi.encode(renewSignal));
+        // Renewal requires sender == mmState.advancer, and owner must remain immutable.
+        LiquiditySignal memory sameOwnerRenew = liquiditySignal;
+        sameOwnerRenew.nonce += 1;
+        address advancer = sameOwnerRenew.mmState.advancer;
+        vm.prank(advancer);
+        MMA.renew(positionManager, tokenId, abi.encode(sameOwnerRenew));
 
         (, uint256 expiresAtAfter,,) = vtsOrchestrator.getCommit(tokenId);
 
@@ -492,16 +497,16 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         uint256 positionIndex = 0;
         address advancer = renewSignal.mmState.advancer;
 
-        // checkpoint with commitment backing check
+        // Renew then checkpoint with commitment backing check.
+        // Note: checkpoint-with-commitment reads stored signal state; the signal bytes are no longer required.
         bytes memory unbackedLiquiditySignal = abi.encode(renewSignal);
-
         vm.mockCall(
             address(signalManager),
-            abi.encodeWithSelector(
-                bytes4(keccak256("verifyLiquiditySignal(bytes,bool)")), unbackedLiquiditySignal, true
-            ),
+            abi.encodeWithSelector(bytes4(keccak256("verifyLiquiditySignal(bytes,bool)")), unbackedLiquiditySignal, true),
             abi.encode(true, 10)
         );
+        vm.prank(advancer);
+        MMA.renew(positionManager, tokenId, unbackedLiquiditySignal);
 
         // get liquidity in position 0
         (Position memory positionBeforeCheckpoint,) = vtsOrchestrator.getPosition(tokenId, positionIndex);
@@ -514,10 +519,9 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             abi.encode(50000000000, 50000000000)
         );
 
-        // Checkpoint with commitment backing check (liquiditySignal provided means withCommitment = true)
-        // Call directly through CheckpointEntrypoints which uses msg.sender for validation
+        // Checkpoint with commitment backing check
         vm.prank(advancer);
-        positionManager.checkpoint(tokenId, positionIndex, unbackedLiquiditySignal);
+        positionManager.checkpoint(tokenId, positionIndex, true);
 
         // get liquidity in position 0
         (Position memory positionAfterCheckpoint,) = vtsOrchestrator.getPosition(tokenId, positionIndex);
@@ -559,7 +563,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         vm.expectCall(
             address(vtsOrchestrator),
             abi.encodeWithSignature(
-                "checkpoint(address,uint256,uint256,bytes,bool)", address(this), tokenId, 0, bytes(""), false
+                "checkpoint(address,uint256,uint256,bool)", address(this), tokenId, 0, false
             )
         );
         MMA.execute(positionManager, prepared);
@@ -1316,7 +1320,7 @@ contract UnlockCaller {
 
     function unlockCallback(bytes calldata) external returns (bytes memory) {
         if (doCheckpoint) {
-            targetMmpm.checkpoint(tokenId, positionIndex);
+            targetMmpm.checkpoint(tokenId, positionIndex, false);
         }
         if (doTransferFrom) {
             targetMmpm.transferFrom(transferFromFrom, transferFromTo, tokenId);
