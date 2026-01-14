@@ -39,13 +39,8 @@ import {IV4Router} from "v4-periphery/src/interfaces/IV4Router.sol";
 
 import {CurrencySortHelper} from "../../libraries/CurrencySortHelper.sol";
 
-import {LiquiditySignal} from "src/types/Commit.sol";
-import {MarketMaker} from "src/libraries/MarketMaker.sol";
-import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
-
 abstract contract E2EBase is DeployFullStackBase {
     using StateLibrary for IPoolManager;
-    using MarketMaker for MarketMaker.State;
 
     struct CoreDeployment {
         FullStack stack;
@@ -186,12 +181,10 @@ abstract contract E2EBase is DeployFullStackBase {
     {
         lcc0 = _wrapAndMintLcc(hub, m.marketId, m.underlying0, to, amount);
         lcc1 = _wrapAndMintLcc(hub, m.marketId, m.underlying1, to, amount);
-        console.log("lcc0:", lcc0);
-        console.log("lcc1:", lcc1);
     }
 
     /// @dev Core pool is LCC/LCC, tickSpacing=60, hooks=CoreHook (matches `_createMarket`).
-    function _corePoolKey(StandaloneMarket memory m) internal view returns (PoolKey memory key) {
+    function _corePoolKey(StandaloneMarket memory m) internal pure returns (PoolKey memory key) {
         (Currency c0, Currency c1) = CurrencySortHelper.sortAddresses(m.lcc0, m.lcc1);
         key = PoolKey({
             currency0: c0,
@@ -393,68 +386,6 @@ abstract contract E2EBase is DeployFullStackBase {
 
         spent = inBefore - inAfter;
         received = outAfter - outBefore;
-    }
-
-    // ============================================================
-    // Generic utilities (used across E2E scripts)
-    // ============================================================
-
-    function _packSig(uint8 v, bytes32 r, bytes32 s) internal pure returns (bytes memory) {
-        return abi.encodePacked(r, s, v);
-    }
-
-    function _signEthMessage(uint256 pk, bytes32 messageHash) internal returns (bytes memory sig) {
-        bytes32 ethSigned = MessageHashUtils.toEthSignedMessageHash(messageHash);
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(pk, ethSigned);
-        sig = _packSig(v, r, s);
-    }
-
-    /// @dev Rounds down to nearest multiple of `tickSpacing` (handles negative ticks).
-    function _floorTick(int24 tick, int24 tickSpacing) internal pure returns (int24 rounded) {
-        int24 compressed = tick / tickSpacing;
-        if (tick < 0 && (tick % tickSpacing) != 0) compressed -= 1;
-        rounded = compressed * tickSpacing;
-    }
-
-    /// @dev Builds a single-leaf LiquiditySignal:
-    ///      - rootHash == leafHash
-    ///      - merkleProof == []
-    ///      - mmSignature signed by the MM (required because verifier sees msg.sender = VRLSignalManager)
-    ///      - rootHashSignature signed by deployer (the E2E verifier's `publicKeyAddress`)
-    function _buildSingleLeafLiquiditySignal(uint256 mmPk, uint256 nonce) internal returns (bytes memory signalBytes) {
-        address mm = vm.addr(mmPk);
-
-        MarketMaker.State memory st;
-        st.owner = mm;
-        st.sourceState = "e2e.sourceState";
-        st.prover = "e2e.prover";
-        st.nonce = "e2e.nonce";
-        st.advancer = address(0);
-        st.reserves = new MarketMaker.Reserve[](2);
-        st.reserves[0] = MarketMaker.Reserve({asset: "BTC", amount: 1e20});
-        st.reserves[1] = MarketMaker.Reserve({asset: "USDT", amount: 5e18});
-
-        bytes32 leafHash = st.toLeafHash();
-        bytes32 rootHash = leafHash;
-
-        // MM authorizes the signal by signing the leafHash (verifier checks recovered == mmState.owner).
-        bytes memory mmSig = _signEthMessage(mmPk, leafHash);
-
-        // Canister (in E2E: deployer EOA) signs (nonce, rootHash).
-        bytes32 rootMsg = keccak256(abi.encodePacked(nonce, rootHash));
-        bytes memory rootSig = _signEthMessage(_getDeployerPrivateKey(), rootMsg);
-
-        bytes32[] memory proof = new bytes32[](0);
-        LiquiditySignal memory sig = LiquiditySignal({
-            nonce: nonce,
-            rootHash: rootHash,
-            rootHashSignature: rootSig,
-            merkleProof: proof,
-            mmState: st,
-            mmSignature: mmSig
-        });
-
-        signalBytes = abi.encode(sig);
     }
 
     function _deployQuoter() internal returns (IV4Quoter quoter) {

@@ -102,9 +102,6 @@ help:
 # Complete development setup (setup create3, deploy tokens, contracts, create market)
 dev: setup-create3 deploy-tokenA deploy-tokenB deploy create-market
 
-# E2E flow: deploy everything and test swap
-# Note: Make sure fork is running and wallet has ETH, WETH, and USDC
-e2e: deploy-tokenA deploy-tokenB deploy create-market add-liquidity swap
 
 # === Build ===
 
@@ -198,6 +195,8 @@ deploy-contracts:
         {{ broadcast_flag }} -vvv
 
 # === E2E ===
+# Note: Make sure fork is running
+e2e: e2e-deploy e2e-normal-lp e2e-swap e2e-market-maker e2e-mm-coverage
 
 # E2E: Deploy full stack only (standalone) and print MarketFactory.
 e2e-deploy:
@@ -217,11 +216,19 @@ e2e-swap:
         --rpc-url {{ rpc_url }} \
         {{ broadcast_flag }} -vvv
 
-# E2E: Full MMPositionManager journey (commit+mint+settle, tick move via swaps, reposition, checkpoint+take fees).
-e2e-mm-journey:
-    FOUNDRY_PROFILE=deploy forge script {{ script_dir }}/e2e/MMJourney.s.sol:MMJourneyE2E \
+# E2E: MarketMaker (single-MM journey: commit+mint+settle, swaps, poke, close RFS, burn/decommit, unwrap).
+e2e-market-maker:
+    FOUNDRY_PROFILE=deploy forge script {{ script_dir }}/e2e/MarketMaker.s.sol:MarketMakerE2E \
         --rpc-url {{ rpc_url }} \
         {{ broadcast_flag }} -vvv
+
+# E2E: MMCoverage (two-MMs coverage + fee realisation exploration).
+e2e-mm-coverage:
+    FOUNDRY_PROFILE=deploy forge script {{ script_dir }}/e2e/MMCoverage.s.sol:MMCoverageE2E \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+# === E2E ===
 
 # Deploy oracle contracts via Hardhat
 deploy-oracle:
