@@ -471,6 +471,31 @@ contract VTSCommitLibTest is VTSLibTestBase {
         assertEq(d1, eff1, "deficit1 should equal effective token1 when backing=0");
     }
 
+    function test_checkpoint_partialBacking_setsDeficitFromBps() public {
+        // Partial backing (signal only), still insufficient: deficit should be proportional.
+        harness.setPositionSettled(positionId, 0, 0);
+        harness.setPositionCommitmentDeficit(positionId, 0, 0);
+
+        uint256 issuedUsd = _computeIssuedUsd();
+        uint256 backingUsd = issuedUsd / 2;
+        oracle.setTotalValue(backingUsd);
+
+        harness.checkpoint(manager, oracle, commitId, positionId);
+
+        (uint256 d0, uint256 d1) = harness.getPositionCommitmentDeficit(positionId);
+        (uint160 sqrtPriceX96, int24 currentTick,,) = _getSlot0(poolId);
+        (uint256 eff0, uint256 eff1) =
+            LiquidityUtils.calculateEffectiveTokenAmounts(sqrtPriceX96, currentTick, TL, TU, int256(uint256(LIQ)));
+
+        uint256 deficitUsd = issuedUsd - backingUsd;
+        uint256 deficitBps = FullMath.mulDiv(deficitUsd, LiquidityUtils.BPS_DENOMINATOR, issuedUsd);
+        uint256 exp0 = FullMath.mulDiv(eff0, deficitBps, LiquidityUtils.BPS_DENOMINATOR);
+        uint256 exp1 = FullMath.mulDiv(eff1, deficitBps, LiquidityUtils.BPS_DENOMINATOR);
+
+        assertEq(d0, exp0, "deficit0 should match proportional deficit bps");
+        assertEq(d1, exp1, "deficit1 should match proportional deficit bps");
+    }
+
     function test_checkpoint_expiredSignal_treatsSignalUsdAsZero() public {
         // Make the stored signal expire quickly, but set oracle signal value high; checkpoint should still treat it as 0.
         harness.setPositionSettled(positionId, 0, 0);
