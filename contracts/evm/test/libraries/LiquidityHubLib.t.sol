@@ -723,5 +723,182 @@ contract LiquidityHubLibTest is LiquidityHubTestBase {
         // User keeps the un-settled LCC balance.
         assertEq(ILCC(lccToken1).balanceOf(user1), shortfall, "residual LCC balance should equal shortfall");
     }
+
+    // ============================================================
+    // Mutation hardening: kill Step 0 arithmetic mutant (Line 146)
+    // _netAgainstTargetQueue: `remaining = netTarget - consumeMarket` → `+`
+    // ============================================================
+
+    /// @notice Kills Line 146 mutant: `netTarget - consumeMarket` → `netTarget + consumeMarket`
+    /// @dev When user has mixed balance (market-derived + wrapped), Step 0 should:
+    ///      1. Consume market-derived first up to netTarget
+    ///      2. Calculate remaining = netTarget - consumeMarket
+    ///      3. Consume wrapped for the remaining
+    ///      Under the mutant, remaining would be netTarget + consumeMarket (too large),
+    ///      causing excess wrapped consumption.
+    function test_wrapWith_step0_remainingMinusConsumeMarket_drivesStep1Conversion_andPreventsQueueing() public {
+        (address targetLcc,) = _createSecondLCCPair();
+        address withLcc = lccToken1;
+
+        // Make Step 0 net only a portion of `amount` (amount > targetQueue),
+        // so incorrect wrapped consumption becomes observable in downstream state.
+        uint256 netTarget = 50;
+        uint256 amount = 100;
+
+        // Target queue netting: Hub queue for targetLcc = 50.
+        _createSettlementQueueEntry(targetLcc, address(liquidityHub), netTarget);
+
+        // User has mixed backing balance: 30 market-derived + 70 wrapped.
+        uint256 marketAmount = 30;
+        uint256 wrappedAmount = amount - marketAmount; // 70
+        _wrapMarketDerivedLCC(user1, withLcc, marketAmount);
+        _wrapDirectLCC(user1, withLcc, wrappedAmount);
+
+        // Verify user balance composition.
+        (uint256 wrappedBal, uint256 marketBal) = ILCC(withLcc).balancesOf(user1);
+        assertEq(wrappedBal, wrappedAmount, "precondition: wrapped balance");
+        assertEq(marketBal, marketAmount, "precondition: market balance");
+
+        // Enable Step 1 direct conversion, but cap directSupply so the correct code converts
+        // exactly the wrapped remainder left after Step 0 (50), while the mutant converts 0.
+        uint256 directSupplyAvail = 50;
+        _setDirectSupply(withLcc, directSupplyAvail);
+
+        // If any market liquidity is used, the test should fail; the correct path should not call it here.
+        vm.mockCallRevert(
+            factory,
+            abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector),
+            abi.encodeWithSignature("Error(string)", "useMarketLiquidity called")
+        );
+
+        _mockAddressAsProtocolBound(address(liquidityHub), true);
+
+        uint256 targetDirectBefore = liquidityHub.directSupply(targetLcc);
+        uint256 withDirectBefore = liquidityHub.directSupply(withLcc);
+        uint256 withQueueBefore = liquidityHub.settleQueue(withLcc, address(liquidityHub));
+
+        vm.startPrank(user1);
+        ILCC(withLcc).approve(address(liquidityHub), amount);
+        liquidityHub.wrapWith(targetLcc, withLcc, amount);
+        vm.stopPrank();
+
+        // Correct code:
+        // - Step 0 consumes 30 market + 20 wrapped, leaving 50 wrapped for Step 1
+        // - Step 1 converts 50 directSupply from withLcc -> targetLcc
+        // - remainder becomes 0, so no settlement is queued on withLcc
+        //
+        // Mutant:
+        // - Step 0 consumes all 70 wrapped, leaving 0 for Step 1
+        // - Step 1 converts 0, remainder becomes 50 and is queued
+        assertEq(
+            liquidityHub.directSupply(targetLcc),
+            targetDirectBefore + directSupplyAvail,
+            "target directSupply should increase by Step 1 conversion"
+        );
+        assertEq(
+            liquidityHub.directSupply(withLcc),
+            withDirectBefore - directSupplyAvail,
+            "withLcc directSupply should decrease by Step 1 conversion"
+        );
+        assertEq(
+            liquidityHub.settleQueue(withLcc, address(liquidityHub)),
+            withQueueBefore,
+            "withLcc queue should remain unchanged when remainder is fully flattened"
+        );
+    }
+
+    // ============================================================
+    // Mutation hardening: kill Step 2 arithmetic mutant (Line 220)
+    // _netMarketDerived: `effectiveQueue = hubQueueForWith - claimed` → `+`
+    // ============================================================
+
+    /// @notice Kills Line 220 mutant: `hubQueueForWith - claimed` → `hubQueueForWith + claimed`
+    /// @dev When there's a pre-existing lazy-claimed amount (netted), the effective queue
+    ///      should be total queue minus claimed, not plus.
+    function test_wrapWith_step2_effectiveQueue_isHubQueueMinusClaimed_andQueuesResidual() public {
+        (address targetLcc,) = _createSecondLCCPair();
+        address withLcc = lccToken1;
+
+        // Setup: Hub queue for withLcc = 80, already claimed (netted) = 50.
+        // Effective queue = 30.
+        uint256 hubQueue = 80;
+        uint256 claimed = 50;
+        uint256 effectiveQueue = hubQueue - claimed; // 30
+
+        _createSettlementQueueEntry(withLcc, address(liquidityHub), hubQueue);
+        _setNetted(withLcc, claimed);
+
+        // User has market-derived balance > effectiveQueue so Step 2 must clamp.
+        uint256 marketAmount = 60;
+        _wrapMarketDerivedLCC(user1, withLcc, marketAmount);
+
+        // Verify preconditions.
+        assertEq(_getNetted(withLcc), claimed, "precondition: netted should be claimed");
+        assertEq(liquidityHub.settleQueue(withLcc, address(liquidityHub)), hubQueue, "precondition: hub queue");
+
+        _mockAddressAsProtocolBound(address(liquidityHub), true);
+
+        // Disable Step 1 direct conversion.
+        _setDirectSupply(withLcc, 0);
+
+        // Block market liquidity so any residual must queue.
+        vm.mockCall(factory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0)));
+
+        uint256 queueBefore = liquidityHub.settleQueue(withLcc, address(liquidityHub));
+
+        vm.startPrank(user1);
+        ILCC(withLcc).approve(address(liquidityHub), marketAmount);
+        liquidityHub.wrapWith(targetLcc, withLcc, marketAmount);
+        vm.stopPrank();
+
+        // Correct: Step 2 nets only `effectiveQueue` and leaves `marketAmount - effectiveQueue` to be queued.
+        // Mutant (+): Step 2 over-nets, leaving nothing to queue (observable).
+        assertEq(_getNetted(withLcc), claimed + effectiveQueue, "netted should increase by effective queue only");
+
+        uint256 residual = marketAmount - effectiveQueue;
+        assertEq(
+            liquidityHub.settleQueue(withLcc, address(liquidityHub)),
+            queueBefore + residual,
+            "residual should be queued when market liquidity is unavailable"
+        );
+    }
+
+    // ============================================================
+    // Mutation hardening: kill Step 3 arithmetic mutants (Lines 260, 270, 272)
+    // ============================================================
+
+    /// @notice Kills Line 260 arithmetic mutant by inducing an overflow in the mutant expression.
+    /// @dev In `_unwrapResidual`, when `residualWrappedForUnwrap > ctx.directToMint`, the correct code computes:
+    ///      `residualWrappedForUnwrap - ctx.directToMint`.
+    ///      The mutant changes this to `+`, which can overflow under large enough values.
+    function test_wrapWith_step3_residualWrappedForUnwrap_minusDoesNotOverflow_plusWouldOverflow() public {
+        (address targetLcc,) = _createSecondLCCPair();
+        address withLcc = lccToken1;
+
+        // Choose values so that:
+        // - fromWrappedAmount = amount is very large
+        // - directToMint = directSupplyAvail is slightly smaller (so the `>` branch is taken)
+        // - correct residual = 1
+        // - mutant (`+`) overflows
+        uint256 amount = type(uint256).max - 1;
+        uint256 directSupplyAvail = type(uint256).max - 2;
+
+        _wrapDirectLCC(user1, withLcc, amount); // user has wrapped balance == amount
+        _setDirectSupply(withLcc, directSupplyAvail); // force partial direct conversion (directAvail < wrapped)
+
+        // Prevent any external market liquidity effects.
+        vm.mockCall(factory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0)));
+
+        _mockAddressAsProtocolBound(address(liquidityHub), true);
+
+        vm.startPrank(user1);
+        ILCC(withLcc).approve(address(liquidityHub), amount);
+        liquidityHub.wrapWith(targetLcc, withLcc, amount);
+        vm.stopPrank();
+
+        // Sanity: the call succeeded under correct code (i.e. no overflow in residual calc).
+        // Any revert here under mutation run indicates the mutant was killed.
+        assertTrue(true);
+    }
 }
 

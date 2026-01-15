@@ -29,7 +29,7 @@ import {IMarketVault} from "../../src/interfaces/IMarketVault.sol";
 import {ILiquidityHub} from "../../src/interfaces/ILiquidityHub.sol";
 import {IOracleHelper} from "../../src/interfaces/IOracleHelper.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
-import {PositionContext, TouchPositionParams} from "../../src/types/VTS.sol";
+import {PositionContext, TouchPositionParams, TouchPositionResult} from "../../src/types/VTS.sol";
 import {PositionModificationHookDataLib} from "../../src/types/Position.sol";
 
 /// @notice Mutation-focused unit tests for VTSPositionLib that do NOT depend on MarketTestBase/_setupMarket.
@@ -1046,6 +1046,214 @@ contract VTSPositionLibMutationUnitTest is Test {
         uint256 expDelta = FullMath.mulDiv(residual, FixedPoint128.Q128, principal);
         assertEq(idxAfter, 11 + expDelta, "DICE index should advance by residual/principal");
         assertEq(residualAfter, 0, "DICE residual should clear after flush");
+    }
+
+    // ============================================================
+    // _touchExistingIncrease MM path: kill Line 1134 mutant (base - s1 → base + s1)
+    // Also kills Lines 1133 (excess0 arithmetic) indirectly.
+    // ============================================================
+
+    /// @notice Kills mutant at VTSPositionLib.sol:1134 where `baseAmountToSettle1 - s1` is mutated to `+ s1`.
+    /// @dev This test verifies that when doing an MM increase with non-zero settled amounts, the
+    ///      requiredSettlementDelta is computed as (baseAmountToSettle - settled), not (base + settled).
+    ///      Under the mutant, the settlement delta would be far too large.
+    function test_touchPosition_mmIncrease_requiredSettlementDelta_isBaseMinusSettled() public {
+        PositionId id;
+
+        {
+            // 1) Set up a poolKey and derive PoolId from it (touchPosition uses poolKey.toId() for PM reads).
+            MockLCC lcc0 = new MockLCC(address(0xB0));
+            MockLCC lcc1 = new MockLCC(address(0xB1));
+            address lcc0Addr = address(lcc0);
+            address lcc1Addr = address(lcc1);
+            PoolKey memory key = PoolKey({
+                currency0: Currency.wrap(lcc0Addr),
+                currency1: Currency.wrap(lcc1Addr),
+                fee: 0,
+                tickSpacing: 60,
+                hooks: IHooks(address(0))
+            });
+            PoolId pId = key.toId();
+            harness.setupPool(pId, _defaultCfg());
+
+            // 2) Register an existing position (MM position).
+            ModifyLiquidityParams memory reg = ModifyLiquidityParams({
+                tickLower: TICK_LOWER,
+                tickUpper: TICK_UPPER,
+                liquidityDelta: int256(uint256(1000)),
+                salt: bytes32(uint256(40))
+            });
+            harness.registerPosition(owner, pId, reg);
+            id = PositionLibrary.generateId(owner, reg);
+
+            // 3) Set non-zero settled amounts so the delta arithmetic is observable.
+            //    commitmentMax = 100e18, settled = 2e18 for both tokens.
+            //    With baseVTSRate = 500 (5%), baseAmountToSettle = 100e18 * 0.05 = 5e18.
+            //    Expected excess0 = 5e18 - 2e18 = 3e18, excess1 = 5e18 - 2e18 = 3e18.
+            //    Under mutant: excess1 = 5e18 + 2e18 = 7e18 (wrong).
+            harness.setCommitmentMax(id, 100e18, 100e18);
+            harness.setSettled(id, 2e18, 2e18);
+            harness.setPoolTotalSettled(pId, 2e18, 2e18);
+            harness.setCumulativeDeficit(id, 0, 0);
+            harness.setCommitmentDeficit(id, 0, 0);
+
+            // 4) Set up PoolManager mock state.
+            _pmSetSlot0Tick(pId, 0);
+            _pmSetPositionLiquidity(pId, PositionId.unwrap(id), 1000);
+            _pmSetFeeGrowthGlobals(pId, 0, 0);
+            _pmSetTickFeeGrowthOutside(pId, TICK_LOWER, 0, 0);
+            _pmSetTickFeeGrowthOutside(pId, TICK_UPPER, 0, 0);
+
+            // 5) Make it an MM position.
+            uint256 commitId = 1;
+            harness.setPositionCommitId(id, commitId);
+            harness.setCommitActivePositionCount(commitId, 1);
+
+            // 7) Create a minimal PositionContext with mock LiquidityHub that will capture issue() calls.
+            //    For MM increase, LCC issuance happens first, then settlement delta is accounted.
+            MockLiquidityHubRecorder hub = new MockLiquidityHubRecorder(lcc0Addr, lcc1Addr);
+            MockMarketVaultPassthrough vault = new MockMarketVaultPassthrough();
+
+            PositionContext memory ctx = PositionContext({
+                poolManager: IPoolManager(address(pm)),
+                liquidityHub: ILiquidityHub(address(hub)),
+                oracleHelper: IOracleHelper(address(0)),
+                marketVault: IMarketVault(address(vault))
+            });
+
+            // 8) Build touchPosition params for a small liquidity increase (MM operation).
+            //    liquidityDelta > 0 routes through _touchExistingIncrease.
+            TouchPositionParams memory tp = TouchPositionParams({
+                owner: owner,
+                poolKey: key,
+                params: ModifyLiquidityParams({
+                    tickLower: reg.tickLower,
+                    tickUpper: reg.tickUpper,
+                    liquidityDelta: int256(uint256(100)),
+                    salt: reg.salt
+                }),
+                callerDelta: toBalanceDelta(0, 0),
+                feesAccrued: toBalanceDelta(0, 0),
+                hookData: PositionModificationHookDataLib.encode(commitId, 0, owner)
+            });
+
+            // 9) Execute touchPosition and assert liquidity updated.
+            TouchPositionResult memory result = harness.touchPosition(ctx, tp);
+            // Started at 1000, added 100 => expected 1100.
+            assertEq(result.pos.liquidity, 1100, "liquidity should increase by liqAdded");
+        }
+
+        // Assert on the *underlying* settlement deltas that were accounted for this MM op.
+        // `touchPosition` records the settlement delta via `DynamicCurrencyDelta.accountUnderlyingSettlementDelta`,
+        // which maps each LCC currency to its underlying currency (here: 0xB0 and 0xB1).
+        //
+        // IMPORTANT: `touchPosition` calls `_trackCommitment(...)` on increase, so commitmentMax (and therefore base)
+        // can change slightly due to tick math + mulDivRoundingUp. We therefore compute expected excess using the
+        // *post-touch* stored commitmentMax and settled amounts, to avoid brittle off-by-one failures.
+        //
+        // Under correct code: excess1 == baseAmountToSettle1 - s1.
+        // Under the mutant at VTSPositionLib.sol:1134: excess1 == baseAmountToSettle1 + s1 (far larger),
+        // so the underlying delta for token1 is wrong and this assertion fails (killing the mutant).
+        (uint256 cm0, uint256 cm1, uint256 s0, uint256 s1,,) = harness.getPositionAccounting(id);
+        (uint256 base0, uint256 base1) =
+            LiquidityUtils.getBaseSettlementAmounts(cm0, cm1, DEFAULT_BASE_VTS_RATE, DEFAULT_BASE_VTS_RATE);
+        uint256 expectedExcess0 = base0 > s0 ? base0 - s0 : 0;
+        uint256 expectedExcess1 = base1 > s1 ? base1 - s1 : 0;
+
+        // requiredSettlementDelta is constructed with `isNegative0=true,isNegative1=true`, so the underlying deltas
+        // are negative (debt / amount-to-deposit).
+        assertEq(
+            harness.getUnderlyingDelta(Currency.wrap(address(0xB0)), owner),
+            -int256(expectedExcess0),
+            "underlying delta0 should equal (base - settled)"
+        );
+        assertEq(
+            harness.getUnderlyingDelta(Currency.wrap(address(0xB1)), owner),
+            -int256(expectedExcess1),
+            "underlying delta1 should equal (base - settled)"
+        );
+    }
+
+    // ============================================================
+    // _touchExistingIncrease non-MM path: kill Lines 1137-1138 mutants (commitmentMax - s → + s)
+    // ============================================================
+
+    /// @notice Kills mutants at VTSPositionLib.sol:1137-1138 where `commitmentMaxima.tokenX - s{X}` is mutated to `+ s{X}`.
+    /// @dev For non-MM increase, the settlement is applied directly via _sUpdateSettlement.
+    ///      The delta passed should be (commitmentMax - settled), not (commitmentMax + settled).
+    ///      Under the mutant, settled would overshoot commitmentMax.
+    function test_touchPosition_nonMMIncrease_settledIsCommitmentMax() public {
+        // 1) Set up a poolKey.
+        MockLCC lcc0 = new MockLCC(address(0xC0C0));
+        MockLCC lcc1 = new MockLCC(address(0xC1C1));
+        PoolKey memory key = PoolKey({
+            currency0: Currency.wrap(address(lcc0)),
+            currency1: Currency.wrap(address(lcc1)),
+            fee: 0,
+            tickSpacing: 60,
+            hooks: IHooks(address(0))
+        });
+        PoolId pId = key.toId();
+        harness.setupPool(pId, _defaultCfg());
+
+        // 2) Register position.
+        ModifyLiquidityParams memory reg = ModifyLiquidityParams({
+            tickLower: TICK_LOWER,
+            tickUpper: TICK_UPPER,
+            liquidityDelta: int256(uint256(1000)),
+            salt: bytes32(uint256(41))
+        });
+        harness.registerPosition(owner, pId, reg);
+        PositionId id = PositionLibrary.generateId(owner, reg);
+
+        // 3) Set initial state: commitmentMax = 10e18, settled = 3e18.
+        //    On increase, new commitmentMax will grow, and settled should reach new commitmentMax.
+        harness.setCommitmentMax(id, 10e18, 10e18);
+        harness.setSettled(id, 3e18, 3e18);
+        harness.setPoolTotalSettled(pId, 3e18, 3e18);
+        harness.setCumulativeDeficit(id, 0, 0);
+        harness.setCommitmentDeficit(id, 0, 0);
+
+        // 4) Set up PoolManager mock.
+        _pmSetSlot0Tick(pId, 0);
+        _pmSetPositionLiquidity(pId, PositionId.unwrap(id), 1000);
+        _pmSetFeeGrowthGlobals(pId, 0, 0);
+        _pmSetTickFeeGrowthOutside(pId, TICK_LOWER, 0, 0);
+        _pmSetTickFeeGrowthOutside(pId, TICK_UPPER, 0, 0);
+
+        // 5) Create context (non-MM operation, so no MM hooks used).
+        PositionContext memory ctx = PositionContext({
+            poolManager: IPoolManager(address(pm)),
+            liquidityHub: ILiquidityHub(address(0)),
+            oracleHelper: IOracleHelper(address(0)),
+            marketVault: IMarketVault(address(0))
+        });
+
+        // 6) Build touchPosition params (non-MM: empty hookData).
+        uint128 liqAdded = 200;
+        TouchPositionParams memory tp = TouchPositionParams({
+            owner: owner,
+            poolKey: key,
+            params: ModifyLiquidityParams({
+                tickLower: reg.tickLower,
+                tickUpper: reg.tickUpper,
+                liquidityDelta: int256(uint256(liqAdded)),
+                salt: reg.salt
+            }),
+            callerDelta: toBalanceDelta(0, 0),
+            feesAccrued: toBalanceDelta(0, 0),
+            hookData: "" // non-MM
+        });
+
+        // 7) Execute.
+        harness.touchPosition(ctx, tp);
+
+        // 8) Assert using only contract-derived state:
+        // For non-MM increases, the library settles the position up to its *new* `commitmentMax` in storage.
+        (uint256 cm0, uint256 cm1, uint256 s0, uint256 s1,,) = harness.getPositionAccounting(id);
+        assertEq(s0, cm0, "token0 settled should equal commitmentMax after non-MM increase");
+        assertEq(s1, cm1, "token1 settled should equal commitmentMax after non-MM increase");
+        _assertPoolTotalSettled(pId, cm0, cm1);
     }
 }
 
