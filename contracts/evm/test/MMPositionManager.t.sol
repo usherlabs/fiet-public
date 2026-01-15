@@ -754,6 +754,24 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         assertEq(user.balance, ethBefore + 1 ether);
     }
 
+    function test_unwrapNative_fromDeltas_amountLtAvailable_unwrapsExactAmount_andLeavesRemainder() public {
+        address ethRecipient = makeAddr("ethRecipient");
+        address wethRecipient = makeAddr("wethRecipient");
+
+        // Create WETH delta credit, then unwrap only part of it.
+        MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](4);
+        prepared[0] = MMA.prepareWrapNative(1 ether);
+        prepared[1] = MMA.prepareUnwrapNative(0.4 ether, false); // unwrap partial from delta
+        prepared[2] = MMA.prepareTake(CurrencyLibrary.ADDRESS_ZERO, ethRecipient, 0); // take unwrapped ETH
+        prepared[3] = MMA.prepareTake(Currency.wrap(address(weth9)), wethRecipient, 0); // take remaining WETH
+
+        uint256 ethBefore = ethRecipient.balance;
+        MMA.execute(positionManager, prepared, 1 ether);
+
+        assertEq(ethRecipient.balance - ethBefore, 0.4 ether, "should unwrap only requested ETH");
+        assertEq(weth9.balanceOf(wethRecipient), 0.6 ether, "should retain remaining WETH credit");
+    }
+
     function test_unwrapNative_fromDeltas_amountGtAvailableCredit_revertsInsufficientBalance() public {
         MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](2);
         prepared[0] = MMA.prepareWrapNative(0.5 ether);
