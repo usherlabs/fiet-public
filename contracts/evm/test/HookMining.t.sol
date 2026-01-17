@@ -122,7 +122,7 @@ contract HookTest is Test, Deployers {
     }
 
     function testActivate() public view {
-        // Activation is called in initialise; test if hooks have factory set or something
+        // This test only checks hook wiring; it does not exercise MarketFactory.initialise() or market creation.
         assertEq(address(coreHook.marketFactory()), address(factory));
         assertEq(address(proxyHook.marketFactory()), address(factory));
     }

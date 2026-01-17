@@ -298,11 +298,9 @@ contract DeployContracts is CREATE3Script, NetworkConfig {
     /**
      * @dev Deploys MarketFactory with LiquidityHub and VTSOrchestrator
      * @return The deployed MarketFactory address
-     * @notice MMPositionManager is included in initialBounds since it's deployed before MarketFactory
+     * @notice Initial protocol bounds are registered during `_initialiseFactory()`, not in the constructor.
      */
     function _deployMarketFactory() internal returns (address) {
-        // Initial bounds array includes MMPositionManager (deployed before MarketFactory)
-        // Note: LiquidityHub is automatically added to bounds in MarketFactory constructor
         // Pass globalConfig as initialOwner (required for CREATE3 compatibility)
         bytes memory constructorArgs =
             abi.encode(config.poolManager, liquidityHub, oracleHelper, vtsOrchestrator, globalConfig);
@@ -311,8 +309,6 @@ contract DeployContracts is CREATE3Script, NetworkConfig {
         address deployed = _deployCreate3(MARKET_FACTORY, creationCode);
         console.log("MarketFactory deployed at:", deployed);
         console.log("MarketFactory owner:", globalConfig);
-        console.log("MMPositionManager added to bounds:", mmPositionManager);
-        // console.log("DirectLPDeltaResolver added to bounds:", directLPDeltaResolver);
         return deployed;
     }
 

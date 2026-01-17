@@ -10,7 +10,7 @@ import {ILiquidityHub} from "./ILiquidityHub.sol";
 /**
  * @title IMarketFactory
  * @notice Interface for MarketFactory contract
- * @dev Provides functions for fetching bounds and managing LCC tokens
+ * @dev MarketFactory is not the canonical emitter for hub-level events; LiquidityHub is.
  */
 interface IMarketFactory {
     // ============ EVENTS ============
@@ -25,9 +25,6 @@ interface IMarketFactory {
         address coreHook,
         address proxyHook
     );
-
-    event LCCCreated(address indexed underlyingAsset, address indexed lccToken);
-    event BoundsUpdated(address[] bounds, bool added);
 
     // ============ VIEW FUNCTIONS ============
     /**
