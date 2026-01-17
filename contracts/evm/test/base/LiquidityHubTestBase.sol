@@ -9,6 +9,7 @@ import {IMarketFactory} from "../../src/interfaces/IMarketFactory.sol";
 import {ILCC} from "../../src/interfaces/ILCC.sol";
 import {MockERC20} from "../_mocks/MockERC20.sol";
 import {Errors} from "../../src/libraries/Errors.sol";
+import {Bounds} from "../../src/libraries/Bounds.sol";
 
 /**
  * @title LiquidityHubTestBase
@@ -31,6 +32,8 @@ abstract contract LiquidityHubTestBase is Test {
     address public user2 = address(0x2);
     address public user3 = address(0x3);
     address public factory;
+    address public vtsOrchestrator;
+    address public proxyHook;
 
     bytes32 public marketId1 = bytes32("market1");
     bytes32 public marketId2 = bytes32("market2");
@@ -38,6 +41,8 @@ abstract contract LiquidityHubTestBase is Test {
     function setUp() public virtual {
         // Set factory address
         factory = makeAddr("FACTORY");
+        vtsOrchestrator = makeAddr("VTS_ORCHESTRATOR");
+        proxyHook = makeAddr("PROXY_HOOK");
 
         // Deploy mock oracle
         resilientOracle = IResilientOracle(makeAddr("ResilientOracle"));
@@ -64,8 +69,9 @@ abstract contract LiquidityHubTestBase is Test {
 
         // Create LCC tokens via factory
         vm.startPrank(factory);
-        address[] memory issuers = new address[](1);
-        issuers[0] = address(factory); // arbitrary issuer address. in production it's the VTSOrchestrator.
+        address[] memory issuers = new address[](2);
+        issuers[0] = vtsOrchestrator;
+        issuers[1] = proxyHook;
         (lccToken1, lccToken2) = liquidityHub.createLCCPair(
             abi.encodePacked(address(0x1234)), // marketRef
             address(underlyingAsset1),
@@ -79,17 +85,10 @@ abstract contract LiquidityHubTestBase is Test {
 
         vm.stopPrank();
 
-        // Mock the bounds method to ensure that the factory and liquidity hub are protocol-bound
-        vm.mockCall(
-            factory,
-            abi.encodeWithSelector(IMarketFactory.bounds.selector),
-            abi.encode(false) // ensures that by default all addresses are not protocol-bound
-        );
-        vm.mockCall(
-            factory,
-            abi.encodeWithSelector(IMarketFactory.bounds.selector, address(factory)),
-            abi.encode(true) // ensures that the factory address is protocol-bound (override the above mock for the factory address)
-        );
+        // Register protocol-bound endpoints for tests.
+        vm.startPrank(factory);
+        liquidityHub.setBoundLevel(factory, Bounds.BOUND_ENDPOINT);
+        vm.stopPrank();
     }
 
     // ============ HELPER FUNCTIONS ============
@@ -182,11 +181,10 @@ abstract contract LiquidityHubTestBase is Test {
 
     /// @notice Mock an address as protocol-bound
     function _mockAddressAsProtocolBound(address contractAddress, bool isProtocolBound) public {
-        vm.mockCall(
-            factory,
-            abi.encodeWithSelector(IMarketFactory.bounds.selector, contractAddress),
-            abi.encode(isProtocolBound)
-        );
+        uint8 level = isProtocolBound ? Bounds.BOUND_ENDPOINT : Bounds.BOUND_NONE;
+        vm.startPrank(factory);
+        liquidityHub.setBoundLevel(contractAddress, level);
+        vm.stopPrank();
     }
 }
 
