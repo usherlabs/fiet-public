@@ -177,85 +177,93 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
         bool fromProtocol = Bounds.isEndpoint(fromLevel);
         bool toProtocol = Bounds.isEndpoint(toLevel);
         bool isProtocolTransfer = _isProtocolTransfer(from, to, fromProtocol, toProtocol);
-        bool fromExempt = Bounds.isExempt(fromLevel);
-        bool toExempt = Bounds.isExempt(toLevel);
 
         if (!isProtocolTransfer) {
             revert Errors.TransferNotAllowed();
         }
 
-        // For non-protocol -> protocol transfers, annul settlement before adjusting balances
         if (!fromProtocol && toProtocol) {
-            uint256 totalBalance = marketDerivedBalances[from] + wrappedBalances[from];
-            if (totalBalance < amount) {
-                // This should never happen, as balanceOf from ERC20 will throw first.
-                revert Errors.InsufficientBalance(totalBalance, amount);
-            }
-            // Before adjusting local buckets, annul any portion that bleeds into queued settlements
-            hub.annulSettlementBeforeTransfer(from, wrappedBalances[from], marketDerivedBalances[from], amount);
-        }
-
-        // Update balance buckets before transfer
-        if (!fromProtocol && toProtocol) {
-            // Non-protocol -> Protocol: decrement sender balances (market-derived first, then wrapped).
-            uint256 fromMarketDerived = Math.min(marketDerivedBalances[from], amount);
-            uint256 remaining = amount - fromMarketDerived;
-            uint256 fromWrapped = Math.min(wrappedBalances[from], remaining);
-            marketDerivedBalances[from] -= fromMarketDerived;
-            wrappedBalances[from] -= fromWrapped;
-
-            // Protocol accrues buckets only if it is bucket-tracked.
-            if (!toExempt) {
-                marketDerivedBalances[to] += fromMarketDerived;
-                wrappedBalances[to] += fromWrapped;
-            }
+            _handleNonProtocolToProtocol(from, to, amount, toLevel);
             return;
         }
 
         if (fromProtocol && !toProtocol) {
-            if (fromExempt) {
-                // Bucket-exempt protocol -> non-protocol: credit as market-derived (legacy behaviour).
-                marketDerivedBalances[to] += amount;
-                return;
-            }
-
-            uint256 totalBalance = marketDerivedBalances[from] + wrappedBalances[from];
-            if (totalBalance < amount) {
-                revert Errors.InsufficientBalance(totalBalance, amount);
-            }
-            uint256 fromMarketDerived = Math.min(marketDerivedBalances[from], amount);
-            uint256 remaining = amount - fromMarketDerived;
-            uint256 fromWrapped = Math.min(wrappedBalances[from], remaining);
-            marketDerivedBalances[from] -= fromMarketDerived;
-            wrappedBalances[from] -= fromWrapped;
-            marketDerivedBalances[to] += fromMarketDerived;
-            wrappedBalances[to] += fromWrapped;
+            _handleProtocolToNonProtocol(from, to, amount, fromLevel);
             return;
         }
 
         if (fromProtocol && toProtocol) {
-            if (fromExempt) {
-                // Bucket-exempt -> protocol: only credit bucket-tracked recipients.
-                if (!toExempt) {
-                    marketDerivedBalances[to] += amount;
-                }
-                return;
-            }
-
-            uint256 totalBalance = marketDerivedBalances[from] + wrappedBalances[from];
-            if (totalBalance < amount) {
-                revert Errors.InsufficientBalance(totalBalance, amount);
-            }
-            uint256 fromMarketDerived = Math.min(marketDerivedBalances[from], amount);
-            uint256 fromWrapped = Math.min(wrappedBalances[from], amount - fromMarketDerived);
-            marketDerivedBalances[from] -= fromMarketDerived;
-            wrappedBalances[from] -= fromWrapped;
-            if (!toExempt) {
-                marketDerivedBalances[to] += fromMarketDerived;
-                wrappedBalances[to] += fromWrapped;
-            }
+            _handleProtocolToProtocol(from, to, amount, fromLevel, toLevel);
         }
         // Non-protocol -> Non-protocol: blocked above, shouldn't reach here
+    }
+
+    function _handleNonProtocolToProtocol(address from, address to, uint256 amount, uint8 toLevel) internal {
+        uint256 totalBalance = marketDerivedBalances[from] + wrappedBalances[from];
+        if (totalBalance < amount) {
+            // This should never happen, as balanceOf from ERC20 will throw first.
+            revert Errors.InsufficientBalance(totalBalance, amount);
+        }
+        // Before adjusting local buckets, annul any portion that bleeds into queued settlements.
+        hub.annulSettlementBeforeTransfer(from, wrappedBalances[from], marketDerivedBalances[from], amount);
+
+        // Non-protocol -> Protocol: decrement sender balances (market-derived first, then wrapped).
+        uint256 fromMarketDerived = Math.min(marketDerivedBalances[from], amount);
+        uint256 remaining = amount - fromMarketDerived;
+        uint256 fromWrapped = Math.min(wrappedBalances[from], remaining);
+        marketDerivedBalances[from] -= fromMarketDerived;
+        wrappedBalances[from] -= fromWrapped;
+
+        // Protocol accrues buckets only if it is bucket-tracked.
+        if (!Bounds.isExempt(toLevel)) {
+            marketDerivedBalances[to] += fromMarketDerived;
+            wrappedBalances[to] += fromWrapped;
+        }
+    }
+
+    function _handleProtocolToNonProtocol(address from, address to, uint256 amount, uint8 fromLevel) internal {
+        if (Bounds.isExempt(fromLevel)) {
+            // Bucket-exempt protocol -> non-protocol: credit as market-derived (legacy behaviour).
+            marketDerivedBalances[to] += amount;
+            return;
+        }
+
+        uint256 totalBalance = marketDerivedBalances[from] + wrappedBalances[from];
+        if (totalBalance < amount) {
+            revert Errors.InsufficientBalance(totalBalance, amount);
+        }
+        uint256 fromMarketDerived = Math.min(marketDerivedBalances[from], amount);
+        uint256 remaining = amount - fromMarketDerived;
+        uint256 fromWrapped = Math.min(wrappedBalances[from], remaining);
+        marketDerivedBalances[from] -= fromMarketDerived;
+        wrappedBalances[from] -= fromWrapped;
+        marketDerivedBalances[to] += fromMarketDerived;
+        wrappedBalances[to] += fromWrapped;
+    }
+
+    function _handleProtocolToProtocol(address from, address to, uint256 amount, uint8 fromLevel, uint8 toLevel)
+        internal
+    {
+        if (Bounds.isExempt(fromLevel)) {
+            // Bucket-exempt -> protocol: only credit bucket-tracked recipients.
+            if (!Bounds.isExempt(toLevel)) {
+                marketDerivedBalances[to] += amount;
+            }
+            return;
+        }
+
+        uint256 totalBalance = marketDerivedBalances[from] + wrappedBalances[from];
+        if (totalBalance < amount) {
+            revert Errors.InsufficientBalance(totalBalance, amount);
+        }
+        uint256 fromMarketDerived = Math.min(marketDerivedBalances[from], amount);
+        uint256 fromWrapped = Math.min(wrappedBalances[from], amount - fromMarketDerived);
+        marketDerivedBalances[from] -= fromMarketDerived;
+        wrappedBalances[from] -= fromWrapped;
+        if (!Bounds.isExempt(toLevel)) {
+            marketDerivedBalances[to] += fromMarketDerived;
+            wrappedBalances[to] += fromWrapped;
+        }
     }
 
     /**
