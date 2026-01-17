@@ -225,28 +225,14 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
 
         // Deploy MarketFactory (after MMPositionManager so it can be included as an initial protocol bound)
         // Mirrors production deployment (see DeployContracts.s.sol): MMPositionManager is protocol-bound.
-        address[] memory initialBounds = new address[](1);
-        initialBounds[0] = mmPositionManager;
         marketFactory = address(
             new MarketFactory(
-                address(manager),
-                address(liquidityHub),
-                address(oracleHelper),
-                address(vtsOrchestrator),
-                initialBounds,
-                testOwner
+                address(manager), address(liquidityHub), address(oracleHelper), address(vtsOrchestrator), testOwner
             )
         );
 
         // After market factory is deployed, set the factory in the liquidity hub
         LiquidityHub(payable(liquidityHub)).setFactory(marketFactory, true);
-
-        // Add DirectLPDeltaResolver to bounds so it can call afterModifyLiquidity during unlock callbacks.
-        {
-            address[] memory boundsToAdd = new address[](1);
-            boundsToAdd[0] = address(directLPDeltaResolver);
-            MarketFactory(marketFactory).addBounds(boundsToAdd);
-        }
     }
 
     // Mine the corehook address and Deploy the core hook
@@ -261,8 +247,11 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
             new CoreHook{salt: coreSalt}(address(manager), address(marketFactory), address(vtsOrchestrator));
         require(address(coreDeployed) == coreHookAddress, "CoreHook deployed at unexpected address");
 
-        //set hooks on the market factory after deployment
-        MarketFactory(marketFactory).setHooks(coreHookAddress);
+        // Initialise market factory after core hook deployment
+        address[] memory initialBounds = new address[](2);
+        initialBounds[0] = mmPositionManager;
+        initialBounds[1] = address(directLPDeltaResolver);
+        MarketFactory(marketFactory).initialise(coreHookAddress, initialBounds);
     }
 
     // Create and initialize the market i.e deploy core and proxy pools using the market factory
@@ -291,8 +280,7 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
                 tickSpacing,
                 initialSqrtPriceX96,
                 proxySalt,
-                VTSConfigs.getDefaultConfig(),
-                new address[](0) // No additional issuers for tests
+                VTSConfigs.getDefaultConfig()
             );
 
         // set the deployed proxy hook address

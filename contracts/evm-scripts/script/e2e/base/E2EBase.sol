@@ -76,7 +76,6 @@ abstract contract E2EBase is DeployFullStackBase {
         _configureMockOracle(m.stack.contracts.resilientOracle, m.stack.contracts.mainOracle, m.underlying1);
 
         MarketVTSConfiguration memory cfg = VTSConfigs.getDefaultConfig();
-        address[] memory issuers = new address[](0);
         // IMPORTANT: ProxyHook is deployed via CREATE2 from `MarketVaultDeployer`.
         // BaseHook validates the deployed hook address encodes the expected hook flags, so we must mine a salt.
         address marketVaultDeployer = MarketFactory(m.stack.contracts.marketFactory).marketVaultDeployer();
@@ -100,8 +99,7 @@ abstract contract E2EBase is DeployFullStackBase {
                     int24(60), // tickSpacing
                     initialSqrtPriceX96,
                     salt,
-                    cfg,
-                    issuers
+                    cfg
                 )
             );
 

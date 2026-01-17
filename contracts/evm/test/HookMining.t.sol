@@ -30,8 +30,6 @@ contract HookTest is Test, Deployers {
 
     function setUp() public {
         poolManager = IPoolManager(makeAddr("poolManager"));
-        address[] memory bounds = new address[](0);
-
         // Deploy VRLSettlementObserver
         vm.prank(owner);
         IVRLSettlementObserver settlementObserver = new VRLSettlementObserver(owner);
@@ -53,7 +51,6 @@ contract HookTest is Test, Deployers {
             address(makeAddr("liquidityHub")),
             address(makeAddr("OracleHelper")),
             address(vtsOrchestrator),
-            bounds,
             owner
         );
         IWETH9 weth9 = IWETH9(address(new WETH()));
@@ -125,7 +122,7 @@ contract HookTest is Test, Deployers {
     }
 
     function testActivate() public view {
-        // Activation is called in setHooks, test if hooks have factory set or something
+        // Activation is called in initialise; test if hooks have factory set or something
         assertEq(address(coreHook.marketFactory()), address(factory));
         assertEq(address(proxyHook.marketFactory()), address(factory));
     }

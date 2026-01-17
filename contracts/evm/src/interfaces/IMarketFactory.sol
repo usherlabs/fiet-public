@@ -80,7 +80,6 @@ interface IMarketFactory {
      * @param initialSqrtPriceX96 Initial sqrt price for core pool
      * @param salt Salt for the proxy hook
      * @param vtsConfiguration VTS configuration
-     * @param issuers Additional issuer addresses to add to the LCC tokens (vtsOrchestrator and proxyHook are always included)
      * @return corePoolId The ID of the created core pool
      * @return proxyPoolId The ID of the created proxy pool
      */
@@ -91,8 +90,7 @@ interface IMarketFactory {
         int24 tickSpacing,
         uint160 initialSqrtPriceX96,
         bytes32 salt,
-        MarketVTSConfiguration calldata vtsConfiguration,
-        address[] calldata issuers
+        MarketVTSConfiguration calldata vtsConfiguration
     ) external returns (PoolId corePoolId, PoolId proxyPoolId);
 
     /**
@@ -108,10 +106,16 @@ interface IMarketFactory {
     function removeBounds(address[] calldata bounds) external;
 
     /**
-     * @notice Sets the core hook address (can only be set once)
-     * @param _coreHook The core hook address to set
+     * @notice Explicitly initialises the MarketFactory and registers initial bounds.
+     * @param _coreHook The core hook address to bind to this factory
+     * @param initialBounds Additional protocol-bound endpoints to register
      */
-    function setHooks(address _coreHook) external;
+    function initialise(address _coreHook, address[] calldata initialBounds) external;
+
+    /**
+     * @notice Returns whether the factory has been initialised.
+     */
+    function isInitialised() external view returns (bool);
 
     /**
      * @notice Gets the proxy hook address for a given proxy pool ID

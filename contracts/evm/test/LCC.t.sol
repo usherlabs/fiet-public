@@ -7,27 +7,14 @@ import {LiquidityCommitmentCertificate} from "../src/LCC.sol";
 import {Errors} from "../src/libraries/Errors.sol";
 import {OracleUtils} from "../src/libraries/OracleUtils.sol";
 
-contract MockMarketFactoryBounds {
-    mapping(address => bool) public bounds;
-
-    function setBounds(address who, bool isBound) external {
-        bounds[who] = isBound;
-    }
-}
-
 contract LiquidityCommitmentCertificateExposed is LiquidityCommitmentCertificate {
     constructor(
-        address _marketFactory,
         address _underlyingAsset,
         string memory name,
         string memory symbol,
         uint8 __decimals,
         address _resilientOracleAddress
-    )
-        LiquidityCommitmentCertificate(
-            _marketFactory, _underlyingAsset, name, symbol, __decimals, _resilientOracleAddress
-        )
-    {}
+    ) LiquidityCommitmentCertificate(_underlyingAsset, name, symbol, __decimals, _resilientOracleAddress) {}
 
     function exposed_isProtocolTransfer(address from, address to, bool fromProtocol, bool toProtocol)
         external
@@ -43,11 +30,15 @@ contract LiquidityCommitmentCertificateExposed is LiquidityCommitmentCertificate
  * @notice Unit tests for `src/LCC.sol` (LiquidityCommitmentCertificate).
  */
 contract LiquidityCommitmentCertificateTest is Test {
-    MockMarketFactoryBounds internal marketFactory;
-
     LiquidityCommitmentCertificate internal lcc;
     LiquidityCommitmentCertificate internal lccNative;
     LiquidityCommitmentCertificateExposed internal lccExposed;
+
+    uint8 internal constant BOUND_NONE = 0;
+    uint8 internal constant BOUND_ENDPOINT = 1;
+    uint8 internal constant BOUND_EXEMPT = 2;
+
+    mapping(address => mapping(address => uint8)) internal boundLevelMap;
 
     address internal alice = makeAddr("alice");
     address internal bob = makeAddr("bob");
@@ -69,17 +60,13 @@ contract LiquidityCommitmentCertificateTest is Test {
     address internal factoryForThis = makeAddr("factory");
 
     function setUp() public {
-        marketFactory = new MockMarketFactoryBounds();
-
         // Mark a protocol-bound address for transfer tests.
-        marketFactory.setBounds(protocol, true);
+        _setBoundLevel(protocol, BOUND_EXEMPT);
 
         // Deploy with hub == address(this) so we can observe callbacks.
-        lcc = new LiquidityCommitmentCertificate(address(marketFactory), address(0xBEEF), "LCC", "LCC", 18, oracle);
-        lccNative = new LiquidityCommitmentCertificate(address(marketFactory), address(0), "LCCN", "LCCN", 18, oracle);
-        lccExposed = new LiquidityCommitmentCertificateExposed(
-            address(marketFactory), address(0xBEEF), "LCCX", "LCCX", 18, oracle
-        );
+        lcc = new LiquidityCommitmentCertificate(address(0xBEEF), "LCC", "LCC", 18, oracle);
+        lccNative = new LiquidityCommitmentCertificate(address(0), "LCCN", "LCCN", 18, oracle);
+        lccExposed = new LiquidityCommitmentCertificateExposed(address(0xBEEF), "LCCX", "LCCX", 18, oracle);
     }
 
     // -------------------------
@@ -88,6 +75,22 @@ contract LiquidityCommitmentCertificateTest is Test {
 
     function lccToMarket(address) external view returns (bytes32, address) {
         return (marketIdForThis, factoryForThis);
+    }
+
+    function boundLevel(address factory, address who) external view returns (uint8) {
+        return boundLevelMap[factory][who];
+    }
+
+    function boundLevels(address factory, address a, address b) external view returns (uint8, uint8) {
+        return (boundLevelMap[factory][a], boundLevelMap[factory][b]);
+    }
+
+    function boundLevelOfLcc(address, address who) external view returns (uint8) {
+        return boundLevelMap[factoryForThis][who];
+    }
+
+    function boundLevelsOfLcc(address, address a, address b) external view returns (uint8, uint8) {
+        return (boundLevelMap[factoryForThis][a], boundLevelMap[factoryForThis][b]);
     }
 
     function executePlannedCancel(address sender, address cancelFromRecipient) external {
@@ -109,6 +112,10 @@ contract LiquidityCommitmentCertificateTest is Test {
         lastAnnulAmount = amountToTransfer;
     }
 
+    function _setBoundLevel(address who, uint8 level) internal {
+        boundLevelMap[factoryForThis][who] = level;
+    }
+
     // -------------------------
     // Tests
     // -------------------------
@@ -126,7 +133,7 @@ contract LiquidityCommitmentCertificateTest is Test {
 
     function test_decimals_returnsConstructorValue() public {
         LiquidityCommitmentCertificate lcc6 =
-            new LiquidityCommitmentCertificate(address(marketFactory), address(0xBEEF), "LCC6", "LCC6", 6, oracle);
+            new LiquidityCommitmentCertificate(address(0xBEEF), "LCC6", "LCC6", 6, oracle);
         assertEq(lcc6.decimals(), 6);
     }
 
@@ -211,7 +218,7 @@ contract LiquidityCommitmentCertificateTest is Test {
         assertEq(wrappedBal, 10);
         assertEq(marketBal, 0);
 
-        // Non-issued burn should still skip buckets because marketFactory.bounds(protocol) == true.
+        // Non-issued burn should still skip buckets because protocol is bucket-exempt.
         lcc.burn(protocol, 0, 4, false);
         (wrappedBal, marketBal) = lcc.balancesOf(protocol);
         assertEq(lcc.balanceOf(protocol), 6);
@@ -253,7 +260,7 @@ contract LiquidityCommitmentCertificateTest is Test {
 
     function test_transfer_protocolToProtocol_doesNotAnnul_andBucketsRemainUntracked() public {
         address protocol2 = makeAddr("protocol2");
-        marketFactory.setBounds(protocol2, true);
+        _setBoundLevel(protocol2, BOUND_EXEMPT);
 
         // Give protocol address tokens without populating buckets (issued path).
         lcc.mint(protocol, 0, 9, true);
@@ -279,8 +286,8 @@ contract LiquidityCommitmentCertificateTest is Test {
         public
     {
         // Make sure recipient is protocol-bound; sender is not.
-        assertTrue(marketFactory.bounds(protocol));
-        assertFalse(marketFactory.bounds(alice));
+        assertEq(boundLevelMap[factoryForThis][protocol], BOUND_EXEMPT);
+        assertEq(boundLevelMap[factoryForThis][alice], BOUND_NONE);
 
         // Mint ERC20 balance to alice while skipping bucket bookkeeping.
         lcc.mint(alice, 7, 0, true);
@@ -296,7 +303,7 @@ contract LiquidityCommitmentCertificateTest is Test {
         public
     {
         // Target is protocol-bound.
-        marketFactory.setBounds(address(this), true);
+        _setBoundLevel(address(this), BOUND_EXEMPT);
 
         // Alice has mixed buckets.
         lcc.mint(alice, 4, 6, false);
@@ -321,6 +328,80 @@ contract LiquidityCommitmentCertificateTest is Test {
         assertEq(plannedCancelCalls, 1);
         assertEq(lastCancelSender, alice);
         assertEq(lastCancelRecipient, address(this));
+    }
+
+    function test_transfer_nonProtocolToBucketTrackedEndpoint_preservesSplit() public {
+        address mmpm = makeAddr("mmpm");
+        _setBoundLevel(mmpm, BOUND_ENDPOINT);
+
+        lcc.mint(alice, 20, 80, false);
+
+        vm.prank(alice);
+        lcc.transfer(mmpm, 100);
+
+        (uint256 wrappedBal, uint256 marketBal) = lcc.balancesOf(mmpm);
+        assertEq(wrappedBal, 20);
+        assertEq(marketBal, 80);
+    }
+
+    function test_transfer_bucketTrackedEndpointToNonProtocol_carriesSplit() public {
+        address mmpm = makeAddr("mmpm");
+        _setBoundLevel(mmpm, BOUND_ENDPOINT);
+
+        lcc.mint(alice, 20, 80, false);
+        vm.prank(alice);
+        lcc.transfer(mmpm, 100);
+
+        vm.prank(mmpm);
+        lcc.transfer(bob, 50);
+
+        (uint256 wrappedBalBob, uint256 marketBalBob) = lcc.balancesOf(bob);
+        assertEq(wrappedBalBob, 0);
+        assertEq(marketBalBob, 50);
+
+        (uint256 wrappedBalMmpm, uint256 marketBalMmpm) = lcc.balancesOf(mmpm);
+        assertEq(wrappedBalMmpm, 20);
+        assertEq(marketBalMmpm, 30);
+    }
+
+    function test_transfer_bucketExemptEndpointToBucketTrackedEndpoint_creditsMarketDerivedOnly() public {
+        address mmpm = makeAddr("mmpm");
+        _setBoundLevel(mmpm, BOUND_ENDPOINT);
+
+        lcc.mint(protocol, 0, 12, true);
+
+        vm.prank(protocol);
+        lcc.transfer(mmpm, 7);
+
+        (uint256 wrappedBal, uint256 marketBal) = lcc.balancesOf(mmpm);
+        assertEq(wrappedBal, 0);
+        assertEq(marketBal, 7);
+
+        assertEq(annulCalls, 0);
+        assertEq(plannedCancelCalls, 1);
+        assertEq(lastCancelSender, protocol);
+        assertEq(lastCancelRecipient, mmpm);
+    }
+
+    function test_transfer_bucketTrackedEndpointToBucketExemptEndpoint_doesNotCreditRecipientBuckets() public {
+        address mmpm = makeAddr("mmpm");
+        _setBoundLevel(mmpm, BOUND_ENDPOINT);
+
+        lcc.mint(alice, 20, 80, false);
+        vm.prank(alice);
+        lcc.transfer(mmpm, 100);
+
+        vm.prank(mmpm);
+        lcc.transfer(protocol, 60);
+
+        assertEq(lcc.balanceOf(protocol), 60);
+        (uint256 wrappedBalProtocol, uint256 marketBalProtocol) = lcc.balancesOf(protocol);
+        assertEq(wrappedBalProtocol, 60);
+        assertEq(marketBalProtocol, 0);
+
+        (uint256 wrappedBalMmpm, uint256 marketBalMmpm) = lcc.balancesOf(mmpm);
+        assertEq(wrappedBalMmpm, 20);
+        assertEq(marketBalMmpm, 20);
     }
 
     function test_transfer_nonProtocolToProtocol_consumesMarketThenWrapped_partial() public {

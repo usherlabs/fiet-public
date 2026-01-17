@@ -249,9 +249,6 @@ abstract contract DeployFullStackBase is CREATE3Script, NetworkConfig {
         );
 
         // 10) MarketFactory (owned by GlobalConfig)
-        address[] memory initialBounds = new address[](2);
-        initialBounds[0] = out.contracts.mmPositionManager;
-        initialBounds[1] = out.contracts.directLPDeltaResolver;
         out.contracts.marketFactory = _deployCreate3(
             MARKET_FACTORY,
             abi.encodePacked(
@@ -261,7 +258,6 @@ abstract contract DeployFullStackBase is CREATE3Script, NetworkConfig {
                     out.contracts.liquidityHub,
                     out.contracts.oracleHelper,
                     out.contracts.vtsOrchestrator,
-                    initialBounds,
                     out.contracts.globalConfig
                 )
             )
@@ -284,11 +280,14 @@ abstract contract DeployFullStackBase is CREATE3Script, NetworkConfig {
         require(address(deployedHook) == hookAddress, "CoreHook: address mismatch");
         out.contracts.coreHook = hookAddress;
 
-        // 13) Set hooks in MarketFactory (via GlobalConfig)
+        // 13) Initialise MarketFactory (via GlobalConfig)
+        address[] memory initialBounds = new address[](2);
+        initialBounds[0] = out.contracts.mmPositionManager;
+        initialBounds[1] = out.contracts.directLPDeltaResolver;
         GlobalConfig(out.contracts.globalConfig)
             .proxyCall(
                 out.contracts.marketFactory,
-                abi.encodeWithSelector(MarketFactory.setHooks.selector, out.contracts.coreHook)
+                abi.encodeWithSelector(MarketFactory.initialise.selector, out.contracts.coreHook, initialBounds)
             );
 
         vm.stopBroadcast();

@@ -5,16 +5,19 @@ This directory contains deployment scripts for the Fiet Protocol contracts.
 ## Scripts Overview
 
 ### 1. `deploy/DeployContracts.s.sol` - Main Deployment Script
+
 The comprehensive deployment script that deploys all contracts in the correct order:
 
 1. **MarketFactory** - Deployed first (without hooks)
 2. **CoreHook** - Deployed with proper HookMiner logic and MarketFactory address
 3. **ProxyHook** - Deployed with proper HookMiner logic and MarketFactory address
-4. **Set Hooks** - Calls `setHooks()` to configure hooks in MarketFactory
+4. **Initialise MarketFactory** - Calls `initialise()` to configure hooks in MarketFactory
 5. **Hook Activation** - Verifies cross-references between hooks and factory
 
 ### 2. `TestDeploy.s.sol` - Test Script
+
 A test script to verify deployment logic without actual deployment. Tests:
+
 - HookMiner logic for both hooks
 - Hook permissions verification
 - MarketFactory deployment logic
@@ -22,22 +25,25 @@ A test script to verify deployment logic without actual deployment. Tests:
 ## Usage
 
 ### Prerequisites
+
 1. Set your private key as an environment variable:
+
 ```bash
 export PRIVATE_KEY=your_private_key_here
 ```
 
-2. Ensure you have sufficient funds in your wallet for deployment
+1. Ensure you have sufficient funds in your wallet for deployment
 
-3. To run a local fork, start an Anvil fork:
+2. To run a local fork, start an Anvil fork:
    - From `contracts/evm-scripts/`: `NETWORK=sepolia just fork` (requires the `just` CLI), or
    - run `anvil --fork-url <RPC_URL> --port 8545` directly
 
-4. Ensure the main EVM project dependencies (including the oracle submodule) are installed
+3. Ensure the main EVM project dependencies (including the oracle submodule) are installed
    - From `contracts/evm/`, run `forge install` to initialise/update submodules
    - Then run `yarn install` from `contracts/evm/` (this installs Node deps including `lib/oracle`)
 
 ### CREATE3 Factory Requirement
+
 These scripts depend on the **CREATE3 factory** being deployed at the canonical address used by `CREATE3Script`:
 
 - `contracts/evm-scripts/script/base/CREATE3Script.sol` (lines 51–52) hardcodes:
@@ -50,31 +56,36 @@ If you run against an RPC/network where there is **no contract code at that addr
 
 ### Running the Deployment
 
-#### Deploy the oracle:
+#### Deploy the oracle
+
 ```bash
 # From contracts/evm-scripts/
 MODE=LIVE NETWORK=sepolia BROADCAST=true just deploy-oracle
 ```
 
-#### Deploy the linked libraries:
+#### Deploy the linked libraries
+
 ```bash
 # From contracts/evm-scripts/
 MODE=LIVE NETWORK=sepolia BROADCAST=true just deploy-libraries
 ```
 
-#### Deploy the contracts:
+#### Deploy the contracts
+
 ```bash
 # From contracts/evm-scripts/
 MODE=LIVE NETWORK=sepolia BROADCAST=true just deploy-contracts
 ```
 
 #### Full deployment of core contract
+
 ```bash
 # From contracts/evm-scripts/
 MODE=LIVE NETWORK=sepolia BROADCAST=true just deploy
 ```
 
 ### Deploying a market
+
 #### Configuring the oracle
 
 Before creating a market, the oracle must be configured for the **two underlying assets** (otherwise `create-market` will revert with `MarketOraclesNotConfigured()`).
@@ -87,13 +98,14 @@ MODE=LIVE NETWORK=sepolia BROADCAST=true just configure-oracle
 ```
 
 Required env vars (recommended to put these in `contracts/evm-scripts/.env`):
+
 - **`RESILIENT_ORACLE_ADDRESS`**: Deployed ResilientOracle proxy address (written by `just deploy-oracle`).
 - **`UNDERLYING_ASSET_0`**: First underlying token address. If none exists, you can deploy one using `just deploy-tokenA`.
 - **`UNDERLYING_ASSET_1`**: Second underlying token address. If none exists, you can deploy one using `just deploy-tokenB`.
 
 Optional env vars (`*`):
-- **`MAIN_ORACLE_ADDRESS`***: MAIN oracle address used by ResilientOracle (LOCAL/dev: typically `ChainlinkOracle_Proxy`). Defaults to latest deployment.
 
+- **`MAIN_ORACLE_ADDRESS`***: MAIN oracle address used by ResilientOracle (LOCAL/dev: typically `ChainlinkOracle_Proxy`). Defaults to latest deployment.
 
 #### Deploying the market
 
@@ -115,11 +127,13 @@ forge script script/deploy/DeployContracts.s.sol:DeployContracts --sig "verifyDe
 The deployment uses specific hook flags to ensure proper functionality:
 
 ### CoreHook Flags
+
 - `BEFORE_INITIALIZE_FLAG` - Validates pool initialization
 - `AFTER_ADD_LIQUIDITY_FLAG` - Intercepts liquidity additions
 - `AFTER_REMOVE_LIQUIDITY_FLAG` - Intercepts liquidity removals
 
 ### ProxyHook Flags
+
 - `BEFORE_INITIALIZE_FLAG` - Validates pool initialization
 - `BEFORE_ADD_LIQUIDITY_FLAG` - Blocks normal liquidity additions
 - `BEFORE_SWAP_FLAG` - Overrides swap functionality
@@ -141,9 +155,9 @@ The deployment follows a specific order to ensure proper contract relationships:
    - Uses HookMiner to find address with correct flags
    - Deployed with actual MarketFactory address in constructor
 
-4. **Set Hooks in MarketFactory**
-   - Calls `setHooks()` function to configure hooks
-   - Automatically calls `activate()` on both hooks during setHooks()
+4. **Initialise MarketFactory**
+   - Calls `initialise()` function to configure hooks
+   - Automatically calls `activate()` on both hooks during initialisation
 
 5. **Hook Activation Verification**
    - Verifies cross-references are set correctly
@@ -161,6 +175,7 @@ MarketFactory
 ## Address Management
 
 The deployment script automatically:
+
 - Mines correct addresses for hooks using HookMiner
 - Writes deployed addresses to JSON file for future reference
 - Verifies all contract relationships are correct
@@ -168,6 +183,7 @@ The deployment script automatically:
 ### JSON-based Address Management
 
 The deployment uses `ScriptHelper.s.sol` to manage addresses in JSON format:
+
 - **Write addresses**: `writeAddress(name, address)` - Writes address to JSON file
 - **Read addresses**: `readAddress(name)` - Reads address from JSON file
 - **Write strings**: `writeString(name, value)` - Writes string metadata to JSON file
@@ -194,9 +210,11 @@ contract MyScript is ScriptHelper {
 ## Files Generated
 
 After deployment, the following files are created:
+
 - `deployments/deployments.json` - All deployment addresses and metadata in JSON format
 
 The JSON file contains:
+
 ```json
 {
   "coreHook": "0x...",
@@ -211,6 +229,7 @@ The JSON file contains:
 ## Error Handling
 
 The deployment script includes comprehensive error handling:
+
 - Validates hook flags match expected permissions
 - Verifies contract constructor parameters
 - Checks cross-references between contracts
@@ -235,17 +254,18 @@ The deployment script includes comprehensive error handling:
    - Check MarketFactory constructor parameters (now only poolManager and bounds)
    - Verify LCC constructor parameters
 
-3. **setHooks() Failures**
-   - Ensure hooks are properly deployed before calling setHooks()
-   - Check that MarketFactory owner is calling setHooks()
+3. **initialise() Failures**
+   - Ensure hooks are properly deployed before calling initialise()
+   - Check that MarketFactory owner is calling initialise()
 
 4. **Activation Failures**
    - Ensure hooks are properly deployed
-   - Check that setHooks() was called successfully
+   - Check that initialise() was called successfully
 
 ### Debug Commands
 
 Test individual components:
+
 ```bash
 # Test hook permissions
 forge script script/TestDeploy.s.sol:TestDeployScript --sig "testHookPermissions()"

@@ -15,13 +15,15 @@ import {Errors} from "./libraries/Errors.sol";
 import {IMarketVault} from "./interfaces/IMarketVault.sol";
 import {TransientSlots} from "./libraries/TransientSlots.sol";
 import {ILiquidityHub} from "./interfaces/ILiquidityHub.sol";
+import {BoundRegistry} from "./modules/BoundRegistry.sol";
+import {Bounds} from "./libraries/Bounds.sol";
 
 /**
  * @title LiquidityHub
  * @notice Factory contract for creating Fiet protocol markets with LCC tokens and pool management
  * @dev Manages LCC token creation, pool deployment, and protocol bounds administration
  */
-contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
+contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
     using CurrencyTransfer for Currency;
 
     // ============ UNIFIED STATE ============
@@ -73,6 +75,24 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
     function _onlyFactory() internal view {
         if (!isFactory[_msgSender()]) {
             revert Errors.InvalidSender();
+        }
+    }
+
+    /// Override from BoundRegistry
+    function _lccMarket(address lcc) internal view override returns (bytes32 id, address factory) {
+        Market memory market = s.lccToMarket[lcc];
+        return (market.id, market.factory);
+    }
+
+    /// Override from BoundRegistry
+    function setBoundLevel(address who, uint8 level) external override onlyFactory {
+        _setBoundLevel(msg.sender, who, level);
+    }
+
+    /// Override from BoundRegistry
+    function setBoundLevels(address[] calldata who, uint8 level) external override onlyFactory {
+        for (uint256 i = 0; i < who.length; i++) {
+            _setBoundLevel(msg.sender, who[i], level);
         }
     }
 
@@ -129,7 +149,7 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
      * @return The Market struct containing factory, id, ref, and refIsValidIssuer
      */
     function lccToMarket(address lcc) external view returns (bytes32, address) {
-        return (s.lccToMarket[lcc].id, s.lccToMarket[lcc].factory);
+        return _lccMarket(lcc);
     }
 
     /**
@@ -250,11 +270,14 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
         string memory marketName,
         address[] memory initialIssuers
     ) external onlyFactory returns (address lccToken0, address lccToken1) {
+        address resilientOracleAddress = oracleHelper.oracle();
         address[2] memory underlyingPair = [underlyingAsset0, underlyingAsset1];
-        lccToken0 =
-            LCCFactoryLinkedLib.createLCC(s, _msgSender(), marketRef, underlyingPair, 0, marketName, initialIssuers);
-        lccToken1 =
-            LCCFactoryLinkedLib.createLCC(s, _msgSender(), marketRef, underlyingPair, 1, marketName, initialIssuers);
+        lccToken0 = LCCFactoryLinkedLib.createLCC(
+            s, marketRef, underlyingPair, 0, marketName, initialIssuers, resilientOracleAddress
+        );
+        lccToken1 = LCCFactoryLinkedLib.createLCC(
+            s, marketRef, underlyingPair, 1, marketName, initialIssuers, resilientOracleAddress
+        );
 
         // Emit events for LCC creation
         emit LCCCreated(underlyingAsset0, lccToken0, s.lccToMarket[lccToken0].id);
@@ -779,7 +802,7 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
     // LCC triggered functions
     // -----------------------------------
 
-    /// @inheritdoc ILiquidityHub
+    /// @notice Called by LCC on transfer to execute any planned cancellations
     function executePlannedCancel(address sender, address cancelFromRecipient) external onlyValidLcc(_msgSender()) {
         address lcc = _msgSender();
 
@@ -801,7 +824,7 @@ contract LiquidityHub is ILiquidityHub, Ownable, ReentrancyGuardTransient {
         }
     }
 
-    /// @inheritdoc ILiquidityHub
+    /// @notice Annuls queued settlement before a protocol-bound transfer
     function annulSettlementBeforeTransfer(
         address from,
         uint256 wrappedBalance,

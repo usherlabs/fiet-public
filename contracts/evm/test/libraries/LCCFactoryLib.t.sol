@@ -8,7 +8,6 @@ import {LCCFactoryLib} from "../../src/libraries/LCCFactoryLib.sol";
 import {LCCMetadataLib} from "../../src/libraries/LCCMetadataLib.sol";
 import {OracleUtils} from "../../src/libraries/OracleUtils.sol";
 import {LiquidityHubStorage, Market} from "../../src/types/Liquidity.sol";
-import {IOracleHelper} from "../../src/interfaces/IOracleHelper.sol";
 
 interface IERC20MetadataLike {
     function name() external view returns (string memory);
@@ -44,68 +43,6 @@ contract ERC20MetadataMock {
     }
 }
 
-contract OracleHelperMock is IOracleHelper {
-    address internal _oracle;
-
-    constructor(address oracle_) {
-        _oracle = oracle_;
-    }
-
-    function oracle() external view returns (address) {
-        return _oracle;
-    }
-
-    // ---- unused interface methods (not exercised in these unit tests) ----
-    function tickerHashToAsset(bytes32) external pure returns (address) {
-        return address(0);
-    }
-
-    function registerTicker(string calldata, address) external pure {}
-
-    function getAssetByTicker(string calldata) external pure returns (address) {
-        return address(0);
-    }
-
-    function getPriceByTicker(string calldata) external pure returns (uint256) {
-        return 0;
-    }
-
-    function validateMarketOracles(address, address) external pure {}
-
-    function getTotalValue(string[] memory, uint256[] memory) external pure returns (uint256) {
-        return 0;
-    }
-
-    function getPriceForLcc(address) external pure returns (uint256 price) {
-        return price;
-    }
-
-    function getPricesForLccPair(address, address) external pure returns (uint256 price0, uint256 price1) {
-        return (price0, price1);
-    }
-}
-
-contract MarketFactoryMock {
-    IOracleHelper internal _oracleHelper;
-    mapping(address => bool) internal _bounds;
-
-    constructor(IOracleHelper oracleHelper_) {
-        _oracleHelper = oracleHelper_;
-    }
-
-    function oracleHelper() external view returns (IOracleHelper) {
-        return _oracleHelper;
-    }
-
-    function bounds(address a) external view returns (bool) {
-        return _bounds[a];
-    }
-
-    function setBound(address a, bool isBound) external {
-        _bounds[a] = isBound;
-    }
-}
-
 contract LCCFactoryLibHarness {
     LiquidityHubStorage internal s;
 
@@ -138,15 +75,15 @@ contract LCCFactoryLibHarness {
     // ---- LCC creation / market init ----
 
     function createLCC(
-        address marketFactoryAddress,
         bytes memory marketRef,
         address[2] memory underlyingPair,
         uint8 index,
         string memory marketName,
-        address[] memory initialIssuers
+        address[] memory initialIssuers,
+        address resilientOracleAddress
     ) external returns (address) {
         return LCCFactoryLib.createLCC(
-            s, marketFactoryAddress, marketRef, underlyingPair, index, marketName, initialIssuers
+            s, marketRef, underlyingPair, index, marketName, initialIssuers, resilientOracleAddress
         );
     }
 
@@ -217,14 +154,12 @@ contract LCCFactoryLibHarness {
 
 contract LCCFactoryLibTest is Test {
     LCCFactoryLibHarness internal h;
-    MarketFactoryMock internal mf;
+    address internal oracle;
 
     function setUp() public {
         h = new LCCFactoryLibHarness();
         h.initNative("Ether", "ETH", 18);
-
-        OracleHelperMock oracleHelper = new OracleHelperMock(address(0xB0B));
-        mf = new MarketFactoryMock(oracleHelper);
+        oracle = address(0xB0B);
     }
 
     function _bytesPrefix(bytes memory b, uint256 n) internal pure returns (bytes memory out) {
@@ -266,7 +201,7 @@ contract LCCFactoryLibTest is Test {
         issuers[0] = address(0xCAFE);
         issuers[1] = address(0xBEEF);
 
-        address lcc = h.createLCC(address(mf), marketRef, pair, 0, "My Market", issuers);
+        address lcc = h.createLCC(marketRef, pair, 0, "My Market", issuers, oracle);
 
         assertTrue(lcc != address(0));
         assertEq(h.getUnderlying(lcc), address(t));
@@ -288,7 +223,7 @@ contract LCCFactoryLibTest is Test {
         address[2] memory pair = [address(t), address(0)];
         bytes memory marketRef = hex"01020304"; // min length => should succeed at 4
 
-        address lcc = h.createLCC(address(mf), marketRef, pair, 0, "My Market", new address[](0));
+        address lcc = h.createLCC(marketRef, pair, 0, "My Market", new address[](0), oracle);
 
         // Expected metadata: symbol is built from underlying symbol + truncated marketRef string
         (, string memory truncStr) = LCCMetadataLib.truncateMarketRef(marketRef, 4);
@@ -311,7 +246,7 @@ contract LCCFactoryLibTest is Test {
         // Force a collision at length 4 with an unrelated pair so we must go to length 5
         h.setTruncPair(trunc4, [address(0x1111), address(0x2222)]);
 
-        address lcc = h.createLCC(address(mf), marketRef, pair, 0, "My Market", new address[](0));
+        address lcc = h.createLCC(marketRef, pair, 0, "My Market", new address[](0), oracle);
 
         (, string memory truncStr5) = LCCMetadataLib.truncateMarketRef(marketRef, 5);
         string memory expectedSymbol5 =
@@ -327,7 +262,7 @@ contract LCCFactoryLibTest is Test {
         bytes memory marketRef = hex"01020304";
 
         // Create LCC for index 0 => underlying = address(0)
-        address lcc = h.createLCC(address(mf), marketRef, pair, 0, "Market", new address[](0));
+        address lcc = h.createLCC(marketRef, pair, 0, "Market", new address[](0), oracle);
 
         // Oracle address is configured to 0xB0B in setUp() via OracleHelperMock.
         vm.prank(address(0xB0B));
@@ -343,14 +278,14 @@ contract LCCFactoryLibTest is Test {
         bytes memory marketRef = hex"01020304";
 
         // First createLCC establishes the trunc(4) mapping.
-        h.createLCC(address(mf), marketRef, pair, 0, "Market", new address[](0));
+        h.createLCC(marketRef, pair, 0, "Market", new address[](0), oracle);
 
         bytes memory trunc4 = _bytesPrefix(marketRef, 4);
         (bytes32 slot0, bytes32 slot1) = _truncMappingSlots(trunc4);
 
         // Second createLCC with same marketRef + same pair should NOT write those mapping value slots again.
         vm.record();
-        h.createLCC(address(mf), marketRef, pair, 0, "Market", new address[](0));
+        h.createLCC(marketRef, pair, 0, "Market", new address[](0), oracle);
         (, bytes32[] memory writes) = vm.accesses(address(h));
 
         assertFalse(_containsSlot(writes, slot0));
@@ -368,7 +303,7 @@ contract LCCFactoryLibTest is Test {
         // Force a collision at length 4 with an unrelated pair
         h.setTruncPair(trunc4, [address(0x1111), address(0x2222)]);
 
-        address lcc = h.createLCC(address(mf), marketRef, pair, 0, "My Market", new address[](0));
+        address lcc = h.createLCC(marketRef, pair, 0, "My Market", new address[](0), oracle);
         assertTrue(lcc != address(0));
 
         address[2] memory stored4 = h.getTruncPair(trunc4);
@@ -385,7 +320,7 @@ contract LCCFactoryLibTest is Test {
         address[2] memory pair = [address(t), address(0)];
 
         vm.expectRevert(Errors.UnableToGenerateUniqueSymbol.selector);
-        h.createLCC(address(mf), hex"010203", pair, 0, "My Market", new address[](0));
+        h.createLCC(hex"010203", pair, 0, "My Market", new address[](0), oracle);
     }
 
     function test_initialize_setsMarketMappings_and_validationHelpersWork() public {
@@ -395,8 +330,8 @@ contract LCCFactoryLibTest is Test {
         address[2] memory pair = [address(t0), address(t1)];
         bytes memory marketRef = hex"01020304";
 
-        address lcc0 = h.createLCC(address(mf), marketRef, pair, 0, "Market", new address[](0));
-        address lcc1 = h.createLCC(address(mf), marketRef, pair, 1, "Market", new address[](0));
+        address lcc0 = h.createLCC(marketRef, pair, 0, "Market", new address[](0), oracle);
+        address lcc1 = h.createLCC(marketRef, pair, 1, "Market", new address[](0), oracle);
 
         bytes32 marketId = keccak256("market-id");
         bytes memory ref = hex"aa11bb22";
@@ -432,8 +367,8 @@ contract LCCFactoryLibTest is Test {
         address[] memory issuers = new address[](1);
         issuers[0] = address(0xCAFE);
 
-        address lcc0 = h.createLCC(address(mf), marketRef, pair, 0, "Market", issuers);
-        address lcc1 = h.createLCC(address(mf), marketRef, pair, 1, "Market", new address[](0));
+        address lcc0 = h.createLCC(marketRef, pair, 0, "Market", issuers, oracle);
+        address lcc1 = h.createLCC(marketRef, pair, 1, "Market", new address[](0), oracle);
 
         // Pre-init: issuer semantics are mapping-only.
         assertEq(h.isCallerIssuer(lcc0, address(0xCAFE)), h.issuerFlag(lcc0, address(0xCAFE)));
@@ -450,7 +385,7 @@ contract LCCFactoryLibTest is Test {
         address[2] memory pair = [address(t), address(0)];
         bytes memory marketRef = hex"01020304";
 
-        address lcc = h.createLCC(address(mf), marketRef, pair, 0, "Market", new address[](0));
+        address lcc = h.createLCC(marketRef, pair, 0, "Market", new address[](0), oracle);
         assertFalse(h.isValidLcc(lcc));
 
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidLcc.selector, lcc));
@@ -492,8 +427,8 @@ contract LCCFactoryLibTest is Test {
 
         address[] memory issuers = new address[](1);
         issuers[0] = address(0xCAFE);
-        address lcc0 = h.createLCC(address(mf), marketRef, pair, 0, "Market", issuers);
-        address lcc1 = h.createLCC(address(mf), marketRef, pair, 1, "Market", new address[](0));
+        address lcc0 = h.createLCC(marketRef, pair, 0, "Market", issuers, oracle);
+        address lcc1 = h.createLCC(marketRef, pair, 1, "Market", new address[](0), oracle);
 
         // Non-issuer before market init
         assertFalse(h.isCallerIssuer(lcc0, address(0xBEEF)));
@@ -520,7 +455,7 @@ contract LCCFactoryLibTest is Test {
 
         // createLCC should succeed at length 4 but must not rewrite mapping slots (isNew=false).
         vm.record();
-        h.createLCC(address(mf), marketRef, pair, 0, "Market", new address[](0));
+        h.createLCC(marketRef, pair, 0, "Market", new address[](0), oracle);
         (, bytes32[] memory writes) = vm.accesses(address(h));
 
         assertFalse(_containsSlot(writes, slot0));
@@ -531,7 +466,7 @@ contract LCCFactoryLibTest is Test {
         ERC20MetadataMock t = new ERC20MetadataMock("Token", "TKN", 6);
         address[2] memory pair = [address(t), address(0)];
         bytes memory marketRef = hex"01020304";
-        address lcc = h.createLCC(address(mf), marketRef, pair, 0, "Market", new address[](0));
+        address lcc = h.createLCC(marketRef, pair, 0, "Market", new address[](0), oracle);
 
         h.setIssuer(lcc, address(0x1234), true);
         assertTrue(h.isCallerIssuer(lcc, address(0x1234)));
@@ -544,7 +479,7 @@ contract LCCFactoryLibTest is Test {
         ERC20MetadataMock t = new ERC20MetadataMock("Token", "TKN", 6);
         address[2] memory pair = [address(t), address(0)];
         bytes memory marketRef = hex"01020304";
-        address lcc = h.createLCC(address(mf), marketRef, pair, 0, "Market", new address[](0));
+        address lcc = h.createLCC(marketRef, pair, 0, "Market", new address[](0), oracle);
 
         address alice = address(0xA11CE);
 
