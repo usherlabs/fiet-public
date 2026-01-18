@@ -9,9 +9,9 @@ import {LiquidityHubStorage, Market} from "../types/Liquidity.sol";
 
 /// @notice Interface for LCC admin functions
 interface ILCCAdmin {
-    function mint(address to, uint256 directAmount, uint256 marketAmount, bool issued) external;
-    function burn(address from, uint256 directAmount, uint256 marketAmount, bool issued) external;
-    function burnAndMint(address from, address to, uint256 directAmount, uint256 marketAmount, bool issued) external;
+    function mint(address to, uint256 directAmount, uint256 marketAmount) external;
+    function burn(address from, uint256 directAmount, uint256 marketAmount) external;
+    function burnAndMint(address from, address to, uint256 directAmount, uint256 marketAmount) external;
 }
 
 /// @title LCCFactoryLib
@@ -231,13 +231,13 @@ library LCCFactoryLib {
     // ============ LCC OPERATIONS ============
 
     /// @notice Mints LCC tokens
-    function mint(address lccToken, address to, uint256 directAmount, uint256 marketAmount, bool issued) internal {
-        ILCCAdmin(lccToken).mint(to, directAmount, marketAmount, issued);
+    function mint(address lccToken, address to, uint256 directAmount, uint256 marketAmount) internal {
+        ILCCAdmin(lccToken).mint(to, directAmount, marketAmount);
     }
 
     /// @notice Burns LCC tokens
-    function burn(address lccToken, address from, uint256 directAmount, uint256 marketAmount, bool issued) internal {
-        ILCCAdmin(lccToken).burn(from, directAmount, marketAmount, issued);
+    function burn(address lccToken, address from, uint256 directAmount, uint256 marketAmount) internal {
+        ILCCAdmin(lccToken).burn(from, directAmount, marketAmount);
     }
 
     /// @notice Gets balance of LCC tokens for an account

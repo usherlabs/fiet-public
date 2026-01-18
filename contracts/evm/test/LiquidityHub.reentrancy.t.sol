@@ -117,7 +117,7 @@ contract ReentrantLccAdmin {
         reentry = ReentryKind.PlanCancelWithQueue;
     }
 
-    function mint(address, uint256, uint256, bool) external {
+    function mint(address, uint256, uint256) external {
         if (reentry == ReentryKind.Issue) {
             reentry = ReentryKind.None;
             LiquidityHub(payable(hub)).issue(lcc, address(this), 1);
@@ -130,7 +130,7 @@ contract ReentrantLccAdmin {
         }
     }
 
-    function burn(address, uint256, uint256, bool) external {
+    function burn(address, uint256, uint256) external {
         if (reentry == ReentryKind.Cancel) {
             reentry = ReentryKind.None;
             LiquidityHub(payable(hub)).cancel(lcc, address(this), 1);

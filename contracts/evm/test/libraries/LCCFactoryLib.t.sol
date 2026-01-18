@@ -121,12 +121,12 @@ contract LCCFactoryLibHarness {
 
     // ---- LCC admin passthrough ----
 
-    function mint(address lccToken, address to, uint256 directAmount, uint256 marketAmount, bool issued) external {
-        LCCFactoryLib.mint(lccToken, to, directAmount, marketAmount, issued);
+    function mint(address lccToken, address to, uint256 directAmount, uint256 marketAmount) external {
+        LCCFactoryLib.mint(lccToken, to, directAmount, marketAmount);
     }
 
-    function burn(address lccToken, address from, uint256 directAmount, uint256 marketAmount, bool issued) external {
-        LCCFactoryLib.burn(lccToken, from, directAmount, marketAmount, issued);
+    function burn(address lccToken, address from, uint256 directAmount, uint256 marketAmount) external {
+        LCCFactoryLib.burn(lccToken, from, directAmount, marketAmount);
     }
 
     // ---- views ----
@@ -536,13 +536,13 @@ contract LCCFactoryLibTest is Test {
 
         address alice = address(0xA11CE);
 
-        h.mint(lcc, alice, 3, 7, false);
+        h.mint(lcc, alice, 3, 7);
         assertEq(h.balanceOf(lcc, alice), 10);
         (uint256 wrapped, uint256 marketDerived) = h.balancesOf(lcc, alice);
         assertEq(wrapped, 3);
         assertEq(marketDerived, 7);
 
-        h.burn(lcc, alice, 3, 7, false);
+        h.burn(lcc, alice, 3, 7);
         assertEq(h.balanceOf(lcc, alice), 0);
     }
 }

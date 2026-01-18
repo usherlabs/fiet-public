@@ -325,10 +325,9 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
      * @param to The address to mint tokens to
      * @param directAmount The amount to mint as direct supply
      * @param marketAmount The amount to mint as market-derived supply
-     * @param issued Whether this is an issuer-initiated mint
      */
-    function _mint(address lccToken, address to, uint256 directAmount, uint256 marketAmount, bool issued) internal {
-        LCCFactoryLib.mint(lccToken, to, directAmount, marketAmount, issued);
+    function _mint(address lccToken, address to, uint256 directAmount, uint256 marketAmount) internal {
+        LCCFactoryLib.mint(lccToken, to, directAmount, marketAmount);
     }
 
     /**
@@ -337,10 +336,9 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
      * @param from The address to burn tokens from
      * @param directAmount The amount to burn from direct supply
      * @param marketAmount The amount to burn from market-derived supply
-     * @param issued Whether this is an issuer-initiated burn
      */
-    function _burn(address lccToken, address from, uint256 directAmount, uint256 marketAmount, bool issued) internal {
-        LCCFactoryLib.burn(lccToken, from, directAmount, marketAmount, issued);
+    function _burn(address lccToken, address from, uint256 directAmount, uint256 marketAmount) internal {
+        LCCFactoryLib.burn(lccToken, from, directAmount, marketAmount);
     }
 
     /**
@@ -395,7 +393,7 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
         s.reserveOfUnderlying[underlying] += amount;
 
         // mint some tokens
-        _mint(lcc, to, amount, 0, LCCFactoryLib.isCallerIssuer(s, lcc, msg.sender));
+        _mint(lcc, to, amount, 0);
 
         emit LccWrapped(lcc, from, to, amount);
     }
@@ -457,7 +455,7 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
         uint256 marketToMint = ctx.marketToMint;
 
         // Final mint: mint target LCC with appropriate direct/market-derived split
-        LCCFactoryLib.mint(lcc, to, directToMint, marketToMint, false);
+        LCCFactoryLib.mint(lcc, to, directToMint, marketToMint);
 
         emit LccWrappedWith(lcc, withLCC, from, to, amount);
     }
@@ -607,7 +605,7 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
      */
     function issue(address lcc, address to, uint256 amount) external onlyIssuer(lcc) nonReentrant {
         // Note: LCC mint path reverts on zero (direct+market) amount.
-        _mint(lcc, to, 0, amount, true);
+        _mint(lcc, to, 0, amount);
     }
 
     /**
@@ -618,7 +616,7 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
      */
     function cancel(address lcc, address from, uint256 amount) external onlyIssuer(lcc) nonReentrant {
         // Note: LCC burn path reverts on zero (direct+market) amount.
-        _burn(lcc, from, 0, amount, true);
+        _burn(lcc, from, 0, amount);
     }
 
     /**
@@ -683,7 +681,7 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
         if (amount == 0) return;
 
         if (Bounds.isExempt(boundLevelOfLcc(lcc, from))) {
-            _burn(lcc, from, 0, amount, true);
+            _burn(lcc, from, 0, amount);
             return;
         }
 
@@ -700,14 +698,14 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
         }
 
         if (!hasBuckets) {
-            _burn(lcc, from, 0, amount, true);
+            _burn(lcc, from, 0, amount);
             return;
         }
 
         uint256 burnMarket = Math.min(marketBal, amount);
         uint256 remaining = amount - burnMarket;
         uint256 burnDirect = Math.min(wrappedBal, remaining);
-        _burn(lcc, from, burnDirect, burnMarket, true);
+        _burn(lcc, from, burnDirect, burnMarket);
     }
 
     /**
@@ -833,7 +831,7 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
      * @param maxAmount The maximum amount to settle
      */
     function _processSettlementFor(address lcc, address recipient, uint256 maxAmount) internal {
-        LiquidityHubLib.processSettlementLogic(s, lcc, recipient, maxAmount, _msgSender());
+        LiquidityHubLib.processSettlementLogic(s, lcc, recipient, maxAmount);
     }
 
     // -----------------------------------
@@ -900,7 +898,7 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
      * @param fromMarket The amount of LCC to burn from market-derived supply
      */
     function _pay(address lcc, address owner, address to, uint256 fromDirect, uint256 fromMarket) internal {
-        LiquidityHubLib.pay(s, lcc, owner, to, fromDirect, fromMarket, msg.sender);
+        LiquidityHubLib.pay(s, lcc, owner, to, fromDirect, fromMarket);
     }
 
     /**

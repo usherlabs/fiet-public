@@ -140,16 +140,16 @@ contract LiquidityCommitmentCertificateTest is Test {
     function test_mint_revertsWhenNotHub() public {
         vm.prank(alice);
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidSender.selector));
-        lcc.mint(alice, 1, 0, false);
+        lcc.mint(alice, 1, 0);
     }
 
     function test_mint_revertsWhenAmountIsZero() public {
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAmount.selector, uint256(0), uint256(0)));
-        lcc.mint(alice, 0, 0, false);
+        lcc.mint(alice, 0, 0);
     }
 
     function test_mint_updatesBucketsWhenNotIssued() public {
-        lcc.mint(alice, 3, 5, false);
+        lcc.mint(alice, 3, 5);
 
         (uint256 wrappedBal, uint256 marketBal) = lcc.balancesOf(alice);
         assertEq(lcc.balanceOf(alice), 8);
@@ -158,7 +158,7 @@ contract LiquidityCommitmentCertificateTest is Test {
     }
 
     function test_mint_issuedTreatsAllAsWrappedViaBalancesOfFallback() public {
-        lcc.mint(alice, 0, 7, true);
+        lcc.mint(alice, 0, 7);
 
         // Issued mints must still populate buckets for non-exempt recipients.
         (uint256 wrappedBal, uint256 marketBal) = lcc.balancesOf(alice);
@@ -169,40 +169,40 @@ contract LiquidityCommitmentCertificateTest is Test {
 
     function test_burn_revertsWhenAmountIsZero() public {
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAmount.selector, uint256(0), uint256(0)));
-        lcc.burn(alice, 0, 0, false);
+        lcc.burn(alice, 0, 0);
     }
 
     function test_burn_revertsWhenNotHub() public {
         // Seed a burnable balance (hub mints).
-        lcc.mint(alice, 5, 0, false);
+        lcc.mint(alice, 5, 0);
 
         vm.prank(alice);
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidSender.selector));
-        lcc.burn(alice, 1, 0, false);
+        lcc.burn(alice, 1, 0);
     }
 
     /// @dev Mutation-hardening: pairs a successful hub burn with an unauthorised burn attempt so
     ///      mutation runners attribute the access-control kill to burn() even under test selection.
     function test_burn_onlyHub_enforced() public {
-        lcc.mint(alice, 5, 0, false);
+        lcc.mint(alice, 5, 0);
 
         // Happy path: hub burns successfully.
-        lcc.burn(alice, 1, 0, false);
+        lcc.burn(alice, 1, 0);
         assertEq(lcc.balanceOf(alice), 4);
 
         // Unauthorised path: alice cannot burn.
         vm.prank(alice);
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidSender.selector));
-        lcc.burn(alice, 1, 0, false);
+        lcc.burn(alice, 1, 0);
     }
 
     function test_burn_nonProtocol_decrementsMarketDerivedBucket() public {
-        lcc.mint(alice, 0, 10, false);
+        lcc.mint(alice, 0, 10);
         (uint256 wrappedBalBefore, uint256 marketBalBefore) = lcc.balancesOf(alice);
         assertEq(wrappedBalBefore, 0);
         assertEq(marketBalBefore, 10);
 
-        lcc.burn(alice, 0, 4, false);
+        lcc.burn(alice, 0, 4);
 
         (uint256 wrappedBalAfter, uint256 marketBalAfter) = lcc.balancesOf(alice);
         assertEq(lcc.balanceOf(alice), 6);
@@ -212,14 +212,14 @@ contract LiquidityCommitmentCertificateTest is Test {
 
     function test_burn_protocolBoundSkipsBucketAccounting() public {
         // Give protocol address tokens without populating buckets (issued path).
-        lcc.mint(protocol, 0, 10, true);
+        lcc.mint(protocol, 0, 10);
 
         (uint256 wrappedBal, uint256 marketBal) = lcc.balancesOf(protocol);
         assertEq(wrappedBal, 10);
         assertEq(marketBal, 0);
 
         // Non-issued burn should still skip buckets because protocol is bucket-exempt.
-        lcc.burn(protocol, 0, 4, false);
+        lcc.burn(protocol, 0, 4);
         (wrappedBal, marketBal) = lcc.balancesOf(protocol);
         assertEq(lcc.balanceOf(protocol), 6);
         assertEq(wrappedBal, 6);
@@ -227,7 +227,7 @@ contract LiquidityCommitmentCertificateTest is Test {
     }
 
     function test_transfer_revertsForNonProtocolToNonProtocol() public {
-        lcc.mint(alice, 5, 0, false);
+        lcc.mint(alice, 5, 0);
 
         vm.prank(alice);
         vm.expectRevert(abi.encodeWithSelector(Errors.TransferNotAllowed.selector));
@@ -241,7 +241,7 @@ contract LiquidityCommitmentCertificateTest is Test {
 
     function test_transfer_protocolToNonProtocolAccruesMarketDerivedOnRecipient_andExecutesPlannedCancelHook() public {
         // Protocol-bound sender can transfer to non-protocol receiver.
-        lcc.mint(protocol, 0, 5, true);
+        lcc.mint(protocol, 0, 5);
 
         vm.prank(protocol);
         lcc.transfer(alice, 3);
@@ -263,7 +263,7 @@ contract LiquidityCommitmentCertificateTest is Test {
         _setBoundLevel(protocol2, BOUND_EXEMPT);
 
         // Give protocol address tokens without populating buckets (issued path).
-        lcc.mint(protocol, 0, 9, true);
+        lcc.mint(protocol, 0, 9);
 
         vm.prank(protocol);
         lcc.transfer(protocol2, 4);
@@ -288,7 +288,7 @@ contract LiquidityCommitmentCertificateTest is Test {
         assertEq(boundLevelMap[factoryForThis][alice], BOUND_NONE);
 
         // Issued mint to a non-exempt recipient should still create bucket state.
-        lcc.mint(alice, 7, 0, true);
+        lcc.mint(alice, 7, 0);
         (uint256 wrappedBal, uint256 marketBal) = lcc.balancesOf(alice);
         assertEq(wrappedBal, 7);
         assertEq(marketBal, 0);
@@ -307,7 +307,7 @@ contract LiquidityCommitmentCertificateTest is Test {
         _setBoundLevel(address(this), BOUND_EXEMPT);
 
         // Alice has mixed buckets.
-        lcc.mint(alice, 4, 6, false);
+        lcc.mint(alice, 4, 6);
         (uint256 wrappedBalBefore, uint256 marketBalBefore) = lcc.balancesOf(alice);
         assertEq(wrappedBalBefore, 4);
         assertEq(marketBalBefore, 6);
@@ -335,7 +335,7 @@ contract LiquidityCommitmentCertificateTest is Test {
         address mmpm = makeAddr("mmpm");
         _setBoundLevel(mmpm, BOUND_ENDPOINT);
 
-        lcc.mint(alice, 20, 80, false);
+        lcc.mint(alice, 20, 80);
 
         vm.prank(alice);
         lcc.transfer(mmpm, 100);
@@ -345,11 +345,28 @@ contract LiquidityCommitmentCertificateTest is Test {
         assertEq(marketBal, 80);
     }
 
+    /// @notice Regression: non-protocol -> bucket-tracked endpoint must preserve market-derived balance (not trigger fallback).
+    function test_transfer_nonProtocolToBucketTrackedEndpoint_marketDerivedOnly_staysMarketDerived() public {
+        address mmpm = makeAddr("mmpm");
+        _setBoundLevel(mmpm, BOUND_ENDPOINT);
+
+        lcc.mint(alice, 0, 100);
+
+        vm.prank(alice);
+        lcc.transfer(mmpm, 100);
+
+        assertEq(lcc.balanceOf(mmpm), 100);
+        (uint256 wrappedBal, uint256 marketBal) = lcc.balancesOf(mmpm);
+        assertEq(wrappedBal, 0);
+        assertEq(marketBal, 100);
+        assertEq(wrappedBal + marketBal, lcc.balanceOf(mmpm), "bucket sum must match ERC20 balance for endpoint");
+    }
+
     function test_transfer_bucketTrackedEndpointToNonProtocol_carriesSplit() public {
         address mmpm = makeAddr("mmpm");
         _setBoundLevel(mmpm, BOUND_ENDPOINT);
 
-        lcc.mint(alice, 20, 80, false);
+        lcc.mint(alice, 20, 80);
         vm.prank(alice);
         lcc.transfer(mmpm, 100);
 
@@ -369,7 +386,7 @@ contract LiquidityCommitmentCertificateTest is Test {
         address mmpm = makeAddr("mmpm");
         _setBoundLevel(mmpm, BOUND_ENDPOINT);
 
-        lcc.mint(protocol, 0, 12, true);
+        lcc.mint(protocol, 0, 12);
 
         vm.prank(protocol);
         lcc.transfer(mmpm, 7);
@@ -388,7 +405,7 @@ contract LiquidityCommitmentCertificateTest is Test {
         address mmpm = makeAddr("mmpm");
         _setBoundLevel(mmpm, BOUND_ENDPOINT);
 
-        lcc.mint(alice, 20, 80, false);
+        lcc.mint(alice, 20, 80);
         vm.prank(alice);
         lcc.transfer(mmpm, 100);
 
@@ -406,7 +423,7 @@ contract LiquidityCommitmentCertificateTest is Test {
     }
 
     function test_transfer_nonProtocolToProtocol_consumesMarketThenWrapped_partial() public {
-        lcc.mint(alice, 4, 6, false);
+        lcc.mint(alice, 4, 6);
 
         // Transfer 8 to protocol (consumes 6 market + 2 wrapped).
         vm.prank(alice);
@@ -419,7 +436,7 @@ contract LiquidityCommitmentCertificateTest is Test {
 
     function test_transfer_nonProtocolToProtocol_whenMarketCoversAmount_doesNotConsumeWrapped() public {
         // Alice has both buckets, but market-derived fully covers the transfer amount.
-        lcc.mint(alice, 5, 10, false);
+        lcc.mint(alice, 5, 10);
         (uint256 wrappedBalBefore, uint256 marketBalBefore) = lcc.balancesOf(alice);
         assertEq(wrappedBalBefore, 5);
         assertEq(marketBalBefore, 10);

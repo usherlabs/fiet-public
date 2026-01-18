@@ -110,7 +110,6 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
         uint256 balanceSum = wrappedBalances[account] + marketDerivedBalances[account];
         uint256 fullBalance = balanceOf(account);
         if ((balanceSum == 0 && fullBalance > 0) || Bounds.isExempt(hub.boundLevelOfLcc(address(this), account))) {
-            // If issued, but caller is not Bucket Exempt, OR
             // Bucket-exempt protocol address holding tokens: treat all balance as wrapped
             return (fullBalance, 0);
         }
@@ -122,16 +121,15 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
      * @param to The address to mint tokens to
      * @param directAmount The amount to issue to direct balance
      * @param marketAmount The amount to issue to market-derived balance
-     * @param issued Whether the tokens are issued
      */
-    function mint(address to, uint256 directAmount, uint256 marketAmount, bool issued) external onlyHub {
+    function mint(address to, uint256 directAmount, uint256 marketAmount) external onlyHub {
         uint256 amount = directAmount + marketAmount;
         if (amount == 0) {
             revert Errors.InvalidAmount(0, 0);
         }
         _mint(to, amount);
         // Bucket bookkeeping is skipped only for bucket-exempt protocol endpoints.
-        // Even "issued" mints must populate bucket maps for bucket-tracked endpoints and users; otherwise
+        // Bucket-tracked endpoints and users must populate bucket maps; otherwise
         // the recipient becomes "bucketless with nonzero ERC20 balance" and cannot correctly transfer/unwrap.
         // In standard MarketFactory, only VTSO and ProxyHook/MarketVault are issuers. VTSO mints to MMPM for new positions, where PoolManager is exempt, and triggers burn on PoolManager -> MMPM (after) transfer
         if (Bounds.isExempt(hub.boundLevelOfLcc(address(this), to))) return;
@@ -148,16 +146,15 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
      * @param from The address to burn tokens from
      * @param directAmount The amount to cancel from direct balance
      * @param marketAmount The amount to cancel from market-derived balance
-     * @param issued Whether the tokens are issued
      */
-    function burn(address from, uint256 directAmount, uint256 marketAmount, bool issued) external onlyHub {
+    function burn(address from, uint256 directAmount, uint256 marketAmount) external onlyHub {
         uint256 amount = directAmount + marketAmount;
         if (amount == 0) {
             revert Errors.InvalidAmount(0, 0);
         }
         _burn(from, amount);
         // Bucket bookkeeping is skipped only for bucket-exempt protocol endpoints.
-        // Even "issued" burns must decrement bucket maps for bucket-tracked endpoints and users.
+        // Bucket-tracked endpoints and users must decrement bucket maps.
         if (Bounds.isExempt(hub.boundLevelOfLcc(address(this), from))) return;
         if (marketAmount > 0) {
             marketDerivedBalances[from] -= marketAmount;

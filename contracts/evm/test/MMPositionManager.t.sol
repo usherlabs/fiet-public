@@ -1126,6 +1126,166 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         assertEq(underlying.balanceOf(recipient), amount, "should unwrap market-derived via market liquidity");
     }
 
+    /// @notice Regression: if a user transfers market-derived LCC into a bucket-tracked MMPM, the MMPM must retain
+    ///         market-derived bucket accounting (not become "bucketless => all wrapped") so Hub unwrap uses market liquidity.
+    /// @dev This directly reproduces the historical failure mode: Hub unwrap reads balances from `msg.sender` (the MMPM).
+    function test_unwrap_directFromMmpm_userToMmpm_marketDerived_preservesBuckets_andUsesMarketLiquidity_whenDirectSupplyZero()
+        public
+    {
+        address user = makeAddr("user");
+        address recipient = makeAddr("recipient");
+
+        address lccAddr = address(lcc0);
+        MockERC20 underlying = MockERC20(lcc0.underlying());
+        uint256 amount = 321;
+        bytes32 marketId = PoolId.unwrap(corePoolKey.toId());
+
+        // Ensure MMPM is bucket-tracked (level 1), matching production when it should accrue buckets.
+        vm.prank(marketFactory);
+        ILiquidityHub(liquidityHub).setBoundLevel(address(positionManager), Bounds.BOUND_ENDPOINT);
+
+        // Fund Hub reserve so `_pay()` can transfer underlying.
+        underlying.mint(address(liquidityHub), amount);
+        vm.prank(address(vtsOrchestrator)); // any issuer
+        ILiquidityHub(liquidityHub).confirmTake(lccAddr, amount, false);
+
+        // Force direct unwrapping to be impossible (must use market liquidity, not directSupply).
+        _setDirectSupply(lccAddr, 0);
+
+        // Give user market-derived LCC via protocol-exempt sender (liquidityHub).
+        lcc0.transfer(liquidityHub, amount);
+        vm.prank(liquidityHub);
+        lcc0.transfer(user, amount);
+
+        // User transfers market-derived LCC to bucket-tracked MMPM.
+        vm.prank(user);
+        lcc0.transfer(address(positionManager), amount);
+
+        // Critical invariant: MMPM must NOT be bucketless; it must reflect market-derived buckets.
+        assertEq(lcc0.balanceOf(address(positionManager)), amount, "precondition: MMPM should hold LCC principal");
+        (uint256 wrappedBal, uint256 marketBal) = lcc0.balancesOf(address(positionManager));
+        assertEq(
+            wrappedBal, 0, "precondition: market-derived transfer should not become wrapped on bucket-tracked MMPM"
+        );
+        assertEq(marketBal, amount, "precondition: MMPM should hold market-derived bucket balance");
+
+        // Market liquidity must be used.
+        vm.mockCall(
+            marketFactory,
+            abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector, address(underlying), marketId, amount),
+            abi.encode(amount)
+        );
+        vm.expectCall(
+            marketFactory,
+            abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector, address(underlying), marketId, amount)
+        );
+
+        uint256 recipientUnderlyingBefore = underlying.balanceOf(recipient);
+
+        // Call Hub unwrap as-if from the MMPM (this is where the bug historically manifested).
+        vm.prank(address(positionManager));
+        ILiquidityHub(liquidityHub).unwrapTo(lccAddr, recipient, user, amount);
+
+        assertEq(
+            underlying.balanceOf(recipient) - recipientUnderlyingBefore,
+            amount,
+            "should pay underlying via market liquidity"
+        );
+        assertEq(ILiquidityHub(liquidityHub).settleQueue(lccAddr, user), 0, "should not queue when liquidity is used");
+        assertEq(lcc0.balanceOf(address(positionManager)), 0, "MMPM should burn all LCC it unwrapped");
+    }
+
+    /// @notice Regression: if directSupply is constrained, unwrap must use market liquidity up to the market-derived bucket
+    ///         and queue the remainder, without misclassifying bucket balances.
+    function test_unwrap_directFromMmpm_mixedBuckets_constrainedDirectSupply_usesMarketThenQueuesRemainder() public {
+        address user = makeAddr("user");
+        address recipient = makeAddr("recipient");
+
+        MockERC20 underlying = MockERC20(lcc0.underlying());
+        uint256 wrappedAmount = 200;
+        uint256 marketAmount = 300;
+        uint256 totalAmount = wrappedAmount + marketAmount;
+        uint256 constrainedDirectSupply = 50;
+
+        // Ensure MMPM is bucket-tracked (level 1).
+        vm.prank(marketFactory);
+        ILiquidityHub(liquidityHub).setBoundLevel(address(positionManager), Bounds.BOUND_ENDPOINT);
+
+        // Fund Hub reserve for the market-derived portion so `_pay()` can transfer it.
+        underlying.mint(address(liquidityHub), marketAmount);
+        vm.prank(address(vtsOrchestrator));
+        ILiquidityHub(liquidityHub).confirmTake(address(lcc0), marketAmount, false);
+
+        // Give user wrapped LCC via standard wrap.
+        underlying.mint(user, wrappedAmount);
+        vm.startPrank(user);
+        underlying.approve(address(liquidityHub), wrappedAmount);
+        ILiquidityHub(liquidityHub).wrap(address(lcc0), wrappedAmount);
+        vm.stopPrank();
+
+        // Give user market-derived LCC via protocol-exempt sender (liquidityHub).
+        lcc0.transfer(liquidityHub, marketAmount);
+        vm.prank(liquidityHub);
+        lcc0.transfer(user, marketAmount);
+
+        // Transfer full mixed balance to MMPM.
+        vm.prank(user);
+        lcc0.transfer(address(positionManager), totalAmount);
+
+        {
+            (uint256 pmWrappedBefore, uint256 pmMarketBefore) = lcc0.balancesOf(address(positionManager));
+            assertEq(pmWrappedBefore, wrappedAmount, "precondition: MMPM should hold wrapped bucket balance");
+            assertEq(pmMarketBefore, marketAmount, "precondition: MMPM should hold market-derived bucket balance");
+        }
+
+        // Constrain directSupply so unwrap cannot fully satisfy the wrapped portion.
+        _setDirectSupply(address(lcc0), constrainedDirectSupply);
+
+        // Market liquidity should be used only up to market-derived bucket balance.
+        {
+            bytes32 marketId = PoolId.unwrap(corePoolKey.toId());
+            vm.mockCall(
+                marketFactory,
+                abi.encodeWithSelector(
+                    IMarketFactory.useMarketLiquidity.selector, address(underlying), marketId, marketAmount
+                ),
+                abi.encode(marketAmount)
+            );
+            vm.expectCall(
+                marketFactory,
+                abi.encodeWithSelector(
+                    IMarketFactory.useMarketLiquidity.selector, address(underlying), marketId, marketAmount
+                )
+            );
+        }
+
+        uint256 recipientUnderlyingBefore = underlying.balanceOf(recipient);
+
+        // Call Hub unwrap as-if from the MMPM; queue is attributed to the user.
+        vm.prank(address(positionManager));
+        ILiquidityHub(liquidityHub).unwrapTo(address(lcc0), recipient, user, totalAmount);
+
+        // Direct portion (constrained) + market portion should be paid immediately.
+        assertEq(
+            underlying.balanceOf(recipient) - recipientUnderlyingBefore,
+            constrainedDirectSupply + marketAmount,
+            "should pay constrained direct + full market-derived via liquidity"
+        );
+
+        // Remainder is queued to the user and remains as LCC principal held by MMPM.
+        uint256 queued = totalAmount - (constrainedDirectSupply + marketAmount);
+        assertEq(
+            ILiquidityHub(liquidityHub).settleQueue(address(lcc0), user), queued, "should queue the shortfall to user"
+        );
+        assertEq(lcc0.balanceOf(address(positionManager)), queued, "MMPM should retain queued principal as LCC");
+
+        {
+            (uint256 pmWrappedAfter, uint256 pmMarketAfter) = lcc0.balancesOf(address(positionManager));
+            assertEq(pmWrappedAfter, queued, "remaining principal should be tracked as wrapped bucket");
+            assertEq(pmMarketAfter, 0, "market-derived bucket should be fully consumed");
+        }
+    }
+
     /// @notice Ensures payer-is-user unwrap works with a mixed balance (wrapped + market-derived).
     /// @dev Wrapped portion is unwrapped from directSupply, market-derived portion uses market liquidity.
     function test_unwrapLcc_payerIsUser_mixedBuckets_usesDirectAndMarketLiquidity() public {
