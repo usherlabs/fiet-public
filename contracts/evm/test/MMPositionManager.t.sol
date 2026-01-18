@@ -1139,6 +1139,11 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         uint256 totalAmount = wrappedAmount + marketAmount;
         bytes32 marketId = PoolId.unwrap(corePoolKey.toId());
 
+        // Ensure MMPM is bucket-tracked (level 1) so it preserves mixed buckets on transfer-in.
+        // (MarketTestBase defaults it to BUCKET-EXEMPT to support issuer-minted LCC flows elsewhere.)
+        vm.prank(marketFactory);
+        ILiquidityHub(liquidityHub).setBoundLevel(address(positionManager), Bounds.BOUND_ENDPOINT);
+
         // Ensure user is treated as non-protocol.
         vm.mockCall(marketFactory, abi.encodeWithSelector(IMarketFactory.bounds.selector, user), abi.encode(false));
 
@@ -1209,22 +1214,13 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         address lccAddr = address(lcc0);
         MockERC20 underlying = MockERC20(lcc0.underlying());
 
-        // Key objective: ensure the unwrap MUST queue (no direct/wrapped balance available).
-        // Use a fresh `user` address (no wrapped/direct LCC) and give it ONLY market-derived LCC.
-        // Treat MarketFactory as protocol-bound so transfers from it mint market-derived bucket to `user`.
-        vm.mockCall(
-            marketFactory,
-            abi.encodeWithSelector(IMarketFactory.bounds.selector, address(marketFactory)),
-            abi.encode(true)
-        );
-
-        // Give MMPositionManager LCC by transferring from a protocol-bound address.
+        // Setup:
+        // - Seed MMPositionManager with MARKET-DERIVED LCC (so later it can transfer market-derived to `user`)
+        // - Create a queued settlement entry for `user` (via planned cancel with full queue)
         uint256 amount = 250;
-        underlying.mint(address(marketFactory), amount);
-        vm.startPrank(address(marketFactory));
-        underlying.approve(address(liquidityHub), amount);
+        underlying.mint(address(liquidityHub), amount);
+        vm.prank(address(liquidityHub));
         ILiquidityHub(liquidityHub).wrap(lccAddr, amount);
-        vm.stopPrank();
 
         // Force unwrap to queue (no market liquidity available).
         vm.mockCall(
@@ -1233,9 +1229,10 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         vm.prank(address(vtsOrchestrator));
         ILiquidityHub(liquidityHub)
-            .planCancelWithQueue(lccAddr, address(marketFactory), address(positionManager), amount, amount, user);
+            .planCancelWithQueue(lccAddr, address(liquidityHub), address(positionManager), amount, amount, user);
 
-        vm.prank(address(marketFactory));
+        // Transfer from a bucket-exempt endpoint (Hub) to a bucket-tracked endpoint (MMPM) so MMPM accrues market-derived.
+        vm.prank(address(liquidityHub));
         ILCC(lccAddr).transfer(address(positionManager), amount);
 
         // Create a queue entry for `user` - using planCancelWithQueue.

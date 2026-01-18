@@ -130,10 +130,13 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
         initialised = true;
 
         // Bucket-exempt endpoints.
-        liquidityHub.setBoundLevel(address(liquidityHub), Bounds.BOUND_EXEMPT);
         liquidityHub.setBoundLevel(address(poolManager), Bounds.BOUND_EXEMPT);
+        // LiquidityHub is a bucket-exempt endpoint as it handles special case where processSettlementFor isForHub, and also derived from caller balance buckets during wrapWith.
+        liquidityHub.setBoundLevel(address(liquidityHub), Bounds.BOUND_EXEMPT);
 
         // Transfer endpoints (bucket-tracked).
+        // // LiquidityHub performs unwraps within wrapWith functions, and therefore must be BOUND_ENDPOINT to preserve bucket accounting from users.
+        // liquidityHub.setBoundLevel(address(liquidityHub), Bounds.BOUND_ENDPOINT);
         liquidityHub.setBoundLevel(address(this), Bounds.BOUND_ENDPOINT);
         if (initialBounds.length > 0) {
             liquidityHub.setBoundLevels(initialBounds, Bounds.BOUND_ENDPOINT);
@@ -205,7 +208,8 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
             [Currency.unwrap(corePoolKey.currency0), Currency.unwrap(corePoolKey.currency1)];
 
         // For swap deficits overflow, and LCC transfer to recipient the proxy hook must be within protocol bounds.
-        liquidityHub.setBoundLevel(ctx.proxyHookAddress, Bounds.BOUND_ENDPOINT);
+        // Use BOUND_EXEMPT as LCCs are issued from ProxyHook, are never unwrapped/wrapped, and sent always as market-derived.
+        liquidityHub.setBoundLevel(ctx.proxyHookAddress, Bounds.BOUND_EXEMPT);
 
         // Activate proxy hook and initialize
         {

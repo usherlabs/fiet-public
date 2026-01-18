@@ -48,6 +48,7 @@ import {IPositionDescriptor} from "v4-periphery/src/interfaces/IPositionDescript
 import {DirectLPDeltaResolver} from "../../src/DirectLPDeltaResolver.sol";
 import {IPositionManager} from "v4-periphery/src/interfaces/IPositionManager.sol";
 import {MockPositionDescriptor} from "../_mocks/MockPositionDescriptor.sol";
+import {Bounds} from "../../src/libraries/Bounds.sol";
 
 abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
     using PoolIdLibrary for PoolId;
@@ -288,6 +289,12 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
         // set the market vault is the proxy hook address
         mv = IMarketVault(address(proxyHook));
 
+        // ProxyHook participates in settlement flows where it may temporarily hold "issued" LCC
+        // (issuer-minted, bucketless) and transfer it to protocol-exempt endpoints (e.g. PoolManager).
+        // Mark it as BUCKET-EXEMPT so LCC transfer hooks don't require bucket maps on the sender.
+        vm.prank(marketFactory);
+        LiquidityHub(payable(liquidityHub)).setBoundLevel(address(proxyHook), Bounds.BOUND_EXEMPT);
+
         // set the lcc currencies
         address[2] memory lccPair = MarketFactory(marketFactory).corePoolToCurrencyPair(_corePoolId);
         (_currency2, _currency3) = CurrencySortHelper.sortAddresses(lccPair[0], lccPair[1]);
@@ -320,6 +327,13 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
         _deployUnderlyingCurrencies();
         // create and initialize the market i.e deploy core and proxy pools using the market factory
         _createAndInitializeMarket(3000, 60, SQRT_PRICE_1_1);
+
+        // ---- Bound-level alignment for tests (post-upgrade) ----
+        // Some protocol flows mint "issued" LCC (issuer path) to protocol contracts like MMPositionManager,
+        // and then transfer those LCCs to other protocol endpoints (e.g. PoolManager). Issued mints do not
+        // populate bucket maps, so the sender must be BUCKET-EXEMPT to avoid InsufficientBalance in LCC transfer hooks.
+        vm.prank(marketFactory);
+        LiquidityHub(payable(liquidityHub)).setBoundLevel(mmPositionManager, Bounds.BOUND_ENDPOINT);
 
         /**
          * Wrap enough lcc tokens by providing the underlying asset to the hub (initialLiquidity)

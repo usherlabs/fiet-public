@@ -1425,8 +1425,10 @@ contract DifferentTokenDecimalsProxyHookTest is MarketTestBase {
 
         bytes memory marketRef = abi.encodePacked(address(proxyHook));
         string memory marketName = "Test Market";
-        address[] memory initialIssuers = new address[](1);
+        // Production wiring: vtsOrchestrator + proxyHook are issuers (MarketFactory does this).
+        address[] memory initialIssuers = new address[](2);
         initialIssuers[0] = address(vtsOrchestrator);
+        initialIssuers[1] = address(proxyHook);
 
         vm.prank(marketFactory);
         (address _lcc0, address _lcc1) = LiquidityHub(payable(liquidityHub))

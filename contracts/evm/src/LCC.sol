@@ -130,9 +130,11 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
             revert Errors.InvalidAmount(0, 0);
         }
         _mint(to, amount);
-        if (issued || Bounds.isExempt(hub.boundLevelOfLcc(address(this), to))) {
-            return;
-        }
+        // Bucket bookkeeping is skipped only for bucket-exempt protocol endpoints.
+        // Even "issued" mints must populate bucket maps for bucket-tracked endpoints and users; otherwise
+        // the recipient becomes "bucketless with nonzero ERC20 balance" and cannot correctly transfer/unwrap.
+        // In standard MarketFactory, only VTSO and ProxyHook/MarketVault are issuers. VTSO mints to MMPM for new positions, where PoolManager is exempt, and triggers burn on PoolManager -> MMPM (after) transfer
+        if (Bounds.isExempt(hub.boundLevelOfLcc(address(this), to))) return;
         if (marketAmount > 0) {
             marketDerivedBalances[to] += marketAmount;
         }
@@ -154,11 +156,9 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
             revert Errors.InvalidAmount(0, 0);
         }
         _burn(from, amount);
-        // If burning from a protocol-bound address, bucket accounting is skipped.
-        // Protocol addresses are intentionally not tracked in bucket maps.
-        if (issued || Bounds.isExempt(hub.boundLevelOfLcc(address(this), from))) {
-            return;
-        }
+        // Bucket bookkeeping is skipped only for bucket-exempt protocol endpoints.
+        // Even "issued" burns must decrement bucket maps for bucket-tracked endpoints and users.
+        if (Bounds.isExempt(hub.boundLevelOfLcc(address(this), from))) return;
         if (marketAmount > 0) {
             marketDerivedBalances[from] -= marketAmount;
         }

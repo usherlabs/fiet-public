@@ -139,6 +139,59 @@ contract LCCFactoryLibHarness {
         return LCCFactoryLib.balancesOf(lccToken, account);
     }
 
+    // ---- Minimal ILiquidityHub surface for LCC ----
+    // LCC stores `hub = ILiquidityHub(_msgSender())` in its constructor (i.e. this harness),
+    // and calls back into the hub for bounds + planned-cancel hooks.
+    //
+    // These unit tests only need mint/burn + balancesOf to work, so we provide no-op / zero-bound
+    // implementations sufficient for bucket accounting.
+
+    function boundLevelOfLcc(
+        address,
+        /* lcc */
+        address /* who */
+    )
+        external
+        pure
+        returns (uint8)
+    {
+        return 0; // Bounds.BOUND_NONE
+    }
+
+    function boundLevelsOfLcc(
+        address,
+        /* lcc */
+        address,
+        /* from */
+        address /* to */
+    )
+        external
+        pure
+        returns (uint8, uint8)
+    {
+        return (0, 0); // Bounds.BOUND_NONE, Bounds.BOUND_NONE
+    }
+
+    function annulSettlementBeforeTransfer(
+        address,
+        /* from */
+        uint256,
+        /* fromWrappedBalance */
+        uint256,
+        /* fromMarketDerivedBalance */
+        uint256 /* amountToTransfer */
+    )
+        external
+        pure {}
+
+    function executePlannedCancel(
+        address,
+        /* from */
+        address /* to */
+    )
+        external
+        pure {}
+
     function getLCC(bytes32 marketId, address underlying) external view returns (address) {
         return LCCFactoryLib.getLCC(s, marketId, underlying);
     }

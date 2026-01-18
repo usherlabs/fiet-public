@@ -244,7 +244,7 @@ contract LiquidityHubLibTest is LiquidityHubTestBase {
 
         // Fund reserve AFTER queue creation (confirmTake will greedily process Hub queue if it exists).
         underlyingAsset1.mint(address(liquidityHub), queued);
-        vm.prank(factory);
+        vm.prank(proxyHook);
         liquidityHub.confirmTake(lccToken1, queued, false);
 
         // Process Hub settlement.
@@ -282,8 +282,7 @@ contract LiquidityHubLibTest is LiquidityHubTestBase {
         uint256 amount = 30;
         _wrapMarketDerivedLCC(user1, lccToken1, amount);
 
-        // Ensure Hub can pull LCC from user.
-        _mockAddressAsProtocolBound(address(liquidityHub), true);
+        // Hub is already protocol-bound (bucket-exempt) in test setup.
 
         uint256 nettedBefore = _getNetted(lccToken1);
         assertEq(nettedBefore, 0, "precondition: netted should start at 0");
@@ -339,8 +338,6 @@ contract LiquidityHubLibTest is LiquidityHubTestBase {
             abi.encodeWithSignature("Error(string)", "useMarketLiquidity called")
         );
 
-        _mockAddressAsProtocolBound(address(liquidityHub), true);
-
         uint256 queueBefore = liquidityHub.settleQueue(lccToken1, address(liquidityHub));
         uint256 totalQueuedBefore = liquidityHub.totalQueued(lccToken1);
 
@@ -375,7 +372,7 @@ contract LiquidityHubLibTest is LiquidityHubTestBase {
         _setNetted(withLcc, claimed);
 
         _wrapMarketDerivedLCC(user1, withLcc, amount);
-        _mockAddressAsProtocolBound(address(liquidityHub), true);
+        // Hub is already protocol-bound (bucket-exempt) in test setup.
 
         uint256 nettedBefore = _getNetted(withLcc);
         assertEq(nettedBefore, claimed, "precondition: netted should be claimed");
@@ -444,7 +441,6 @@ contract LiquidityHubLibTest is LiquidityHubTestBase {
             abi.encodeWithSignature("Error(string)", "useMarketLiquidity called")
         );
 
-        _mockAddressAsProtocolBound(address(liquidityHub), true);
         assertEq(_getNetted(withLcc), 0, "precondition: netted starts at 0");
 
         vm.startPrank(user1);
@@ -499,7 +495,7 @@ contract LiquidityHubLibTest is LiquidityHubTestBase {
         // Prevent Step 1 direct conversion.
         _setDirectSupply(withLcc, 0);
 
-        _mockAddressAsProtocolBound(address(liquidityHub), true);
+        // Hub is already protocol-bound (bucket-exempt) in test setup.
 
         uint256 queueBefore = liquidityHub.settleQueue(withLcc, address(liquidityHub));
         uint256 totalQueuedBefore = liquidityHub.totalQueued(withLcc);
@@ -530,8 +526,8 @@ contract LiquidityHubLibTest is LiquidityHubTestBase {
         uint256 amount = wrappedAmount + marketAmount;
 
         _wrapDirectLCC(user1, withLcc, wrappedAmount);
-        _wrapDirectLCC(factory, withLcc, marketAmount);
-        vm.prank(factory);
+        _wrapDirectLCC(proxyHook, withLcc, marketAmount);
+        vm.prank(proxyHook);
         ILCC(withLcc).transfer(user1, marketAmount);
 
         (uint256 wrappedBal, uint256 marketBal) = ILCC(withLcc).balancesOf(user1);
@@ -544,7 +540,7 @@ contract LiquidityHubLibTest is LiquidityHubTestBase {
         // No market liquidity; all remaining amount should queue.
         vm.mockCall(factory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0)));
 
-        _mockAddressAsProtocolBound(address(liquidityHub), true);
+        // Hub is already protocol-bound (bucket-exempt) in test setup.
 
         uint256 queueBefore = liquidityHub.settleQueue(withLcc, address(liquidityHub));
         uint256 totalQueuedBefore = liquidityHub.totalQueued(withLcc);
@@ -591,7 +587,7 @@ contract LiquidityHubLibTest is LiquidityHubTestBase {
         // Force Step 3 to queue market-derived remainder.
         vm.mockCall(factory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0)));
 
-        _mockAddressAsProtocolBound(address(liquidityHub), true);
+        // Hub is already protocol-bound (bucket-exempt) in test setup.
 
         uint256 queueBefore = liquidityHub.settleQueue(withLcc, address(liquidityHub));
         uint256 totalQueuedBefore = liquidityHub.totalQueued(withLcc);
@@ -682,8 +678,7 @@ contract LiquidityHubLibTest is LiquidityHubTestBase {
 
         (address lccToken3,) = _createSecondLCCPair();
 
-        // Ensure hub is protocol-bound so it can facilitate wrapWith transfers.
-        _mockAddressAsProtocolBound(address(liquidityHub), true);
+        // Hub is already protocol-bound (bucket-exempt) in test setup.
 
         // Provide minimal backing LCC to user and perform wrapWith to trigger `_finaliseBurns`.
         _wrapDirectLCC(user1, lccToken1, 1);
@@ -771,7 +766,7 @@ contract LiquidityHubLibTest is LiquidityHubTestBase {
             abi.encodeWithSignature("Error(string)", "useMarketLiquidity called")
         );
 
-        _mockAddressAsProtocolBound(address(liquidityHub), true);
+        // Hub is already protocol-bound (bucket-exempt) in test setup.
 
         uint256 targetDirectBefore = liquidityHub.directSupply(targetLcc);
         uint256 withDirectBefore = liquidityHub.directSupply(withLcc);
@@ -836,7 +831,7 @@ contract LiquidityHubLibTest is LiquidityHubTestBase {
         assertEq(_getNetted(withLcc), claimed, "precondition: netted should be claimed");
         assertEq(liquidityHub.settleQueue(withLcc, address(liquidityHub)), hubQueue, "precondition: hub queue");
 
-        _mockAddressAsProtocolBound(address(liquidityHub), true);
+        // Hub is already protocol-bound (bucket-exempt) in test setup.
 
         // Disable Step 1 direct conversion.
         _setDirectSupply(withLcc, 0);
@@ -889,7 +884,7 @@ contract LiquidityHubLibTest is LiquidityHubTestBase {
         // Prevent any external market liquidity effects.
         vm.mockCall(factory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0)));
 
-        _mockAddressAsProtocolBound(address(liquidityHub), true);
+        // Hub is already protocol-bound (bucket-exempt) in test setup.
 
         vm.startPrank(user1);
         ILCC(withLcc).approve(address(liquidityHub), amount);

@@ -239,7 +239,6 @@ contract LiquidityHubMutationHardeningTest is LiquidityHubTestBase {
         uint256 amount = 11;
 
         _wrapDirectLCC(user1, lccToken1, amount);
-        _mockAddressAsProtocolBound(address(liquidityHub), true);
 
         vm.recordLogs();
         vm.startPrank(user1);

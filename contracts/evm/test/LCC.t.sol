@@ -160,11 +160,11 @@ contract LiquidityCommitmentCertificateTest is Test {
     function test_mint_issuedTreatsAllAsWrappedViaBalancesOfFallback() public {
         lcc.mint(alice, 0, 7, true);
 
-        // issued=true skips bucket updates; balancesOf should treat ERC20 balance as wrapped.
+        // Issued mints must still populate buckets for non-exempt recipients.
         (uint256 wrappedBal, uint256 marketBal) = lcc.balancesOf(alice);
         assertEq(lcc.balanceOf(alice), 7);
-        assertEq(wrappedBal, 7);
-        assertEq(marketBal, 0);
+        assertEq(wrappedBal, 0);
+        assertEq(marketBal, 7);
     }
 
     function test_burn_revertsWhenAmountIsZero() public {
@@ -282,21 +282,22 @@ contract LiquidityCommitmentCertificateTest is Test {
         assertEq(lastCancelRecipient, protocol2);
     }
 
-    function test_transfer_nonProtocolToProtocol_revertsInsufficientBalance_whenBucketsZeroButERC20BalanceNonZero()
-        public
-    {
+    function test_transfer_nonProtocolToProtocol_doesNotRevert_whenIssuedMintPopulatesBuckets() public {
         // Make sure recipient is protocol-bound; sender is not.
         assertEq(boundLevelMap[factoryForThis][protocol], BOUND_EXEMPT);
         assertEq(boundLevelMap[factoryForThis][alice], BOUND_NONE);
 
-        // Mint ERC20 balance to alice while skipping bucket bookkeeping.
+        // Issued mint to a non-exempt recipient should still create bucket state.
         lcc.mint(alice, 7, 0, true);
-        assertEq(lcc.balanceOf(alice), 7);
+        (uint256 wrappedBal, uint256 marketBal) = lcc.balancesOf(alice);
+        assertEq(wrappedBal, 7);
+        assertEq(marketBal, 0);
 
-        // Attempt a non-protocol -> protocol transfer; bucket sums are 0, so LCC's internal check must revert.
+        // Non-protocol -> protocol transfer should succeed (transfers are allowed when either side is protocol-bound).
         vm.prank(alice);
-        vm.expectRevert(abi.encodeWithSelector(Errors.InsufficientBalance.selector, uint256(0), uint256(1)));
         lcc.transfer(protocol, 1);
+
+        assertEq(lcc.balanceOf(protocol), 1);
     }
 
     function test_transfer_nonProtocolToProtocolAnnulsSettlementAndConsumesMarketFirstThenWrapped_andExecutesPlannedCancel()
