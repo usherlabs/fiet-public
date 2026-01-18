@@ -52,13 +52,13 @@ contract LiquidityHubMutationHardeningTest is LiquidityHubTestBase {
     }
 
     function test_issue_revertsWithZeroAmount() public {
-        vm.prank(factory);
+        vm.prank(vtsOrchestrator);
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAmount.selector, uint256(0), uint256(0)));
         liquidityHub.issue(lccToken1, user1, 0);
     }
 
     function test_cancel_revertsWithZeroAmount() public {
-        vm.prank(factory);
+        vm.prank(vtsOrchestrator);
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAmount.selector, uint256(0), uint256(0)));
         liquidityHub.cancel(lccToken1, user1, 0);
     }
@@ -267,7 +267,7 @@ contract LiquidityHubMutationHardeningTest is LiquidityHubTestBase {
         _wrapMarketDerivedLCC(user1, lccToken1, 10);
 
         vm.recordLogs();
-        vm.prank(factory);
+        vm.prank(vtsOrchestrator);
         liquidityHub.cancelWithQueue(lccToken1, user1, 5, 3, user2);
 
         Vm.Log[] memory entries = vm.getRecordedLogs();
@@ -351,7 +351,7 @@ contract LiquidityHubMutationHardeningTest is LiquidityHubTestBase {
 
         // Provide underlying reserve so pay() can transfer out immediately.
         underlyingAsset1.mint(address(liquidityHub), amount);
-        vm.prank(factory);
+        vm.prank(vtsOrchestrator);
         liquidityHub.confirmTake(lccToken1, amount, false);
 
         // Make the market liquidity call succeed fully.

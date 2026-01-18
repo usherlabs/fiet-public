@@ -88,6 +88,7 @@ abstract contract LiquidityHubTestBase is Test {
         // Register protocol-bound endpoints for tests.
         vm.startPrank(factory);
         liquidityHub.setBoundLevel(factory, Bounds.BOUND_ENDPOINT);
+        liquidityHub.setBoundLevel(proxyHook, Bounds.BOUND_EXEMPT);
         vm.stopPrank();
     }
 
@@ -109,11 +110,11 @@ abstract contract LiquidityHubTestBase is Test {
 
     /// @notice Helper function to wrap market-derived LCC for a user
     function _wrapMarketDerivedLCC(address user, address lccToken, uint256 amount) public {
-        // mint lcc to the factory
-        _wrapDirectLCC(factory, lccToken, amount);
+        // mint lcc to a bucket-exempt protocol address to create market-derived balance on transfer
+        _wrapDirectLCC(proxyHook, lccToken, amount);
 
         // mock the factory and send to user so that the user has a market balance
-        vm.prank(factory);
+        vm.prank(proxyHook);
         ILCC(lccToken).transfer(user, amount);
 
         (uint256 wrappedBal, uint256 marketBal) = ILCC(lccToken).balancesOf(user);
@@ -126,13 +127,11 @@ abstract contract LiquidityHubTestBase is Test {
     function _createSettlementQueueEntry(address lccTokenAddress, address recipient, uint256 amount) public {
         _mockAddressAsProtocolBound(recipient, false);
 
-        // Mint some LCC tokens to the factory, so it can send to a recipient
-        // and since the factory is a protocol-bound address, it will be able to send the LCC tokens to the recipient
-        // which will then constitute a market balance for the recipient
-        _wrapDirectLCC(factory, lccTokenAddress, amount);
+        // Mint some LCC tokens to a bucket-exempt protocol address so a transfer yields market-derived balance.
+        _wrapDirectLCC(proxyHook, lccTokenAddress, amount);
 
         // transfer to a user and then validate that the user has the corresponding market balance
-        vm.startPrank(factory);
+        vm.startPrank(proxyHook);
         ILCC lcc = ILCC(lccTokenAddress);
         lcc.transfer(recipient, amount);
         vm.stopPrank();
@@ -182,6 +181,10 @@ abstract contract LiquidityHubTestBase is Test {
     /// @notice Mock an address as protocol-bound
     function _mockAddressAsProtocolBound(address contractAddress, bool isProtocolBound) public {
         uint8 level = isProtocolBound ? Bounds.BOUND_ENDPOINT : Bounds.BOUND_NONE;
+        _setBoundLevel(contractAddress, level);
+    }
+
+    function _setBoundLevel(address contractAddress, uint8 level) public {
         vm.startPrank(factory);
         liquidityHub.setBoundLevel(contractAddress, level);
         vm.stopPrank();

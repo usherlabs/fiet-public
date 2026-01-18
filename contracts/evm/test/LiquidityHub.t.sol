@@ -156,13 +156,13 @@ contract LiquidityHubTest is LiquidityHubTestBase {
     }
 
     function test_prepareSettle_revertsWithZeroAmount() public {
-        vm.prank(factory);
+        vm.prank(proxyHook);
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAmount.selector, uint256(0), uint256(0)));
         liquidityHub.prepareSettle(lccToken1, 0);
     }
 
     function test_prepareSettle_revertsWhenReserveInsufficient() public {
-        vm.prank(factory);
+        vm.prank(proxyHook);
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAmount.selector, uint256(1), uint256(0)));
         liquidityHub.prepareSettle(lccToken1, 1);
     }
@@ -174,11 +174,11 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         uint256 reserveBefore = liquidityHub.reserveOfUnderlying(lccToken1);
         assertEq(reserveBefore, amount);
 
-        vm.prank(factory);
+        vm.prank(proxyHook);
         liquidityHub.prepareSettle(lccToken1, 3 ether);
 
         assertEq(liquidityHub.reserveOfUnderlying(lccToken1), reserveBefore - 3 ether);
-        assertEq(underlyingAsset1.allowance(address(liquidityHub), factory), 3 ether);
+        assertEq(underlyingAsset1.allowance(address(liquidityHub), proxyHook), 3 ether);
     }
 
     function test_prepareSettle_transfersNativeEthAndDecrementsReserve() public {
@@ -187,7 +187,7 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         address lccErc20;
         vm.startPrank(factory);
         address[] memory issuers = new address[](1);
-        issuers[0] = factory;
+        issuers[0] = proxyHook;
         (lccNative, lccErc20) = liquidityHub.createLCCPair(
             abi.encodePacked(address(0xCAFE)), address(0), address(underlyingAsset1), "Native Market", issuers
         );
@@ -196,17 +196,17 @@ contract LiquidityHubTest is LiquidityHubTestBase {
 
         // Wrap native ETH into the hub to create reserve.
         uint256 amount = 1 ether;
-        uint256 factoryEthBefore = factory.balance;
-        vm.deal(factory, factoryEthBefore + amount);
-        vm.prank(factory);
+        uint256 proxyHookEthBefore = proxyHook.balance;
+        vm.deal(proxyHook, proxyHookEthBefore + amount);
+        vm.prank(proxyHook);
         liquidityHub.wrap{value: amount}(lccNative, amount);
         assertEq(liquidityHub.reserveOfUnderlying(lccNative), amount);
 
         // prepareSettle should transfer ETH to the issuer (caller) and decrement reserves.
-        vm.prank(factory);
+        vm.prank(proxyHook);
         liquidityHub.prepareSettle(lccNative, 0.4 ether);
         assertEq(liquidityHub.reserveOfUnderlying(lccNative), amount - 0.4 ether);
-        assertEq(factory.balance, factoryEthBefore + 0.4 ether);
+        assertEq(proxyHook.balance, proxyHookEthBefore + 0.4 ether);
     }
 
     function test_receive_revertsFromEoaSender() public {
@@ -341,17 +341,17 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         uint256 amount = 100;
 
         // issue: issuer (factory) can mint market-derived (issued=true).
-        vm.prank(factory);
+        vm.prank(proxyHook);
         liquidityHub.issue(lccToken1, user1, amount);
         assertEq(ILCC(lccToken1).balanceOf(user1), amount);
 
         // cancel: issuer can burn market-derived (issued=true in LCC burn path).
-        vm.prank(factory);
+        vm.prank(proxyHook);
         liquidityHub.cancel(lccToken1, user1, 40);
         assertEq(ILCC(lccToken1).balanceOf(user1), 60);
 
         // cancelWithQueue: burn a portion now and queue the remainder for settlement.
-        vm.prank(factory);
+        vm.prank(proxyHook);
         liquidityHub.cancelWithQueue(lccToken1, user1, 60, 25, user3);
         // 35 burned, 25 queued.
         assertEq(ILCC(lccToken1).balanceOf(user1), 25);
@@ -359,7 +359,7 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         assertEq(liquidityHub.totalQueued(lccToken1), 25);
 
         // queue-only branch (principal == queue): no burn, only queue.
-        vm.prank(factory);
+        vm.prank(proxyHook);
         liquidityHub.cancelWithQueue(lccToken1, user1, 25, 25, user2);
         assertEq(ILCC(lccToken1).balanceOf(user1), 25);
         assertEq(liquidityHub.settleQueue(lccToken1, user2), 25);
@@ -367,13 +367,13 @@ contract LiquidityHubTest is LiquidityHubTestBase {
     }
 
     function test_cancelWithQueue_revertsWhenPrincipalIsZero() public {
-        vm.prank(factory);
+        vm.prank(proxyHook);
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAmount.selector, uint256(0), uint256(0)));
         liquidityHub.cancelWithQueue(lccToken1, user1, 0, 0, user2);
     }
 
     function test_cancelWithQueue_revertsWhenQueueExceedsPrincipal() public {
-        vm.prank(factory);
+        vm.prank(proxyHook);
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAmount.selector, uint256(2), uint256(1)));
         liquidityHub.cancelWithQueue(lccToken1, user1, 1, 2, user2);
     }
@@ -383,7 +383,7 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         _wrapMarketDerivedLCC(user1, lccToken1, 10);
 
         vm.recordLogs();
-        vm.prank(factory);
+        vm.prank(proxyHook);
         liquidityHub.cancelWithQueue(lccToken1, user1, 5, 0, user2);
 
         Vm.Log[] memory entries = vm.getRecordedLogs();
@@ -447,7 +447,7 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         vm.expectEmit(true, false, false, true, address(liquidityHub));
         emit LiquidityAvailable(lccToken1, address(underlyingAsset1), amount, marketId1);
 
-        vm.prank(factory);
+        vm.prank(proxyHook);
         liquidityHub.confirmTake(lccToken1, amount, true);
     }
 
@@ -455,7 +455,7 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         uint256 amount = 10;
 
         vm.recordLogs();
-        vm.prank(factory);
+        vm.prank(proxyHook);
         liquidityHub.confirmTake(lccToken1, amount, false);
 
         Vm.Log[] memory entries = vm.getRecordedLogs();
@@ -473,7 +473,7 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         _createSettlementQueueEntry(lccToken1, address(liquidityHub), hubQueue);
 
         // If this emitted, the test would fail; keep it silent.
-        vm.prank(factory);
+        vm.prank(proxyHook);
         liquidityHub.confirmTake(lccToken1, hubQueue, true);
     }
 
@@ -489,7 +489,7 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         assertEq(hubLccBefore, queued, "Hub should hold queued LCC for hub-settlement path");
 
         // confirmTake should increase reserves and then best-effort settle the Hub's own queue.
-        vm.prank(factory);
+        vm.prank(proxyHook);
         liquidityHub.confirmTake(lccToken1, incoming, false);
 
         assertEq(liquidityHub.settleQueue(lccToken1, address(liquidityHub)), 0, "Hub queue should be cleared");

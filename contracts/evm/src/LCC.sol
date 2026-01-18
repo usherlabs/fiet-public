@@ -109,7 +109,8 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
         // If balance buckets are 0 but ERC20 balance exists, treat all as wrapped balance
         uint256 balanceSum = wrappedBalances[account] + marketDerivedBalances[account];
         uint256 fullBalance = balanceOf(account);
-        if (balanceSum == 0 && fullBalance > 0 && Bounds.isExempt(hub.boundLevelOfLcc(address(this), account))) {
+        if ((balanceSum == 0 && fullBalance > 0) || Bounds.isExempt(hub.boundLevelOfLcc(address(this), account))) {
+            // If issued, but caller is not Bucket Exempt, OR
             // Bucket-exempt protocol address holding tokens: treat all balance as wrapped
             return (fullBalance, 0);
         }

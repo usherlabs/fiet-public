@@ -18,11 +18,8 @@ contract LiquidityHubWrapTest is LiquidityHubTestBase {
     /// @notice Tests O(1) flattening: wrapping withLCC into lcc immediately flattens withLCC
     function testWrapWithFlattensImmediately() public {
         // Setup: Create two LCC tokens with same underlying
-        // ensures that the liquidity hub address is protocol-bound
-        // so that it can facilitate transfers
-        vm.mockCall(
-            factory, abi.encodeWithSelector(IMarketFactory.bounds.selector, address(liquidityHub)), abi.encode(true)
-        );
+        // ensure the liquidity hub address is protocol-bound so it can facilitate transfers
+        _mockAddressAsProtocolBound(address(liquidityHub), true);
 
         (address lccToken3,) = _createSecondLCCPair();
 
@@ -222,7 +219,7 @@ contract LiquidityHubWrapTest is LiquidityHubTestBase {
 
         // Provide underlying reserve so pay() can transfer out immediately.
         underlyingAsset1.mint(address(liquidityHub), amount);
-        vm.prank(factory);
+        vm.prank(proxyHook);
         liquidityHub.confirmTake(lccToken1, amount, false);
 
         // Make the market liquidity call succeed fully so marketUnwrapped > 0 and directUnwrapped == 0.
@@ -396,8 +393,8 @@ contract LiquidityHubWrapTest is LiquidityHubTestBase {
         _wrapDirectLCC(user1, lccToken1, directAmount);
 
         // Then add market-derived balance manually (don't use helper as it has assertions that conflict)
-        _wrapDirectLCC(factory, lccToken1, marketAmount);
-        vm.prank(factory);
+        _wrapDirectLCC(proxyHook, lccToken1, marketAmount);
+        vm.prank(proxyHook);
         ILCC(lccToken1).transfer(user1, marketAmount);
 
         // Verify user has both balances
@@ -469,8 +466,8 @@ contract LiquidityHubWrapTest is LiquidityHubTestBase {
         _wrapDirectLCC(user1, lccToken1, directAmount);
 
         // Then add market-derived balance manually (don't use helper as it has assertions that conflict)
-        _wrapDirectLCC(factory, lccToken1, marketAmount);
-        vm.prank(factory);
+        _wrapDirectLCC(proxyHook, lccToken1, marketAmount);
+        vm.prank(proxyHook);
         ILCC(lccToken1).transfer(user1, marketAmount);
 
         // Verify user has both balances

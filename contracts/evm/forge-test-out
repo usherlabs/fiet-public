@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Usage:
+#   ./forge-test-out [output_file] [forge test args...]
+#
+# Examples:
+#   ./forge-test-out
+#   ./forge-test-out forge-test-out_failures.log --match-path "test/LiquidityHub.t.sol"
+
+output_file="${OUT_FILE:-${script_dir}/forge-test-out_failures.log}"
+#
+# If the first arg looks like a flag (e.g. --match-path), treat it as a forge arg
+# and keep using the default output file.
+if [[ $# -gt 0 && "${1:-}" != "-"* ]]; then
+  output_file="$1"
+  shift
+fi
+
+tmp_log="$(mktemp)"
+cleanup() {
+  rm -f "$tmp_log"
+}
+trap cleanup EXIT
+
+set +e
+FOUNDRY_PROFILE=mutation forge test -vvvv "$@" | tee "$tmp_log"
+test_rc=${PIPESTATUS[0]}
+set -e
+
+# Extract failure blocks (header + trace) from the output.
+awk '
+  BEGIN { in_block = 0; wrote = 0 }
+  /^\[FAIL/ {
+    if (wrote) { print ""; }
+    in_block = 1;
+    wrote = 1;
+    print $0;
+    next;
+  }
+  in_block == 1 {
+    # NOTE: keep this portable across awk implementations (no \b word boundaries).
+    if (/^\[(PASS|SKIP)\]/ || /^Test result:/ || /^Suite result:/ || /^Failing tests:/ || /^Ran [0-9]+ tests?/) {
+      in_block = 0;
+      next;
+    }
+    print $0;
+    next;
+  }
+' "$tmp_log" > "$output_file"
+
+if [[ ! -s "$output_file" ]]; then
+  echo "No failed test stack traces detected." > "$output_file"
+fi
+
+exit "$test_rc"
