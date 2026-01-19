@@ -73,6 +73,7 @@ contract LiquidityHubTest is LiquidityHubTestBase {
     event FactorySet(address indexed factory, bool enabled);
     event LiquidityAvailable(address indexed lcc, address underlyingAsset, uint256 amount, bytes32 marketId);
     event SettlementQueued(address indexed lcc, address indexed recipient, uint256 amount);
+    event BoundLevelSet(address indexed factory, address indexed who, uint8 level);
 
     function test_setFactory_revertsWhenNotOwner() public {
         vm.prank(makeAddr("notOwner"));
@@ -88,6 +89,35 @@ contract LiquidityHubTest is LiquidityHubTestBase {
 
         liquidityHub.setFactory(f, true);
         assertTrue(liquidityHub.isFactory(f));
+    }
+
+    function test_setBoundLevel_revertsWhenNotFactory() public {
+        vm.prank(user1);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidSender.selector));
+        liquidityHub.setBoundLevel(makeAddr("who"), 1);
+    }
+
+    function test_setBoundLevels_revertsWhenNotFactory() public {
+        address[] memory who = new address[](2);
+        who[0] = makeAddr("who0");
+        who[1] = makeAddr("who1");
+
+        vm.prank(user1);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidSender.selector));
+        liquidityHub.setBoundLevels(who, 1);
+    }
+
+    function test_setBoundLevel_setsLevelInCallerFactoryNamespace_andEmitsEvent() public {
+        address who = makeAddr("newEndpoint");
+        uint8 level = 1;
+
+        vm.expectEmit(true, true, false, true);
+        emit BoundLevelSet(factory, who, level);
+
+        vm.prank(factory);
+        liquidityHub.setBoundLevel(who, level);
+
+        assertEq(liquidityHub.boundLevel(factory, who), level);
     }
 
     function test_setFactory_canDisableFactory() public {
@@ -364,6 +394,32 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         assertEq(ILCC(lccToken1).balanceOf(user1), 25);
         assertEq(liquidityHub.settleQueue(lccToken1, user2), 25);
         assertEq(liquidityHub.totalQueued(lccToken1), 50);
+    }
+
+    /// @dev Mutation-hardening: ensures `_safeBurn` correctly computes `remaining = amount - burnMarket`
+    ///      by burning across mixed bucket balances (market-derived first, then wrapped).
+    function test_cancelWithQueue_burnsMarketFirstThenWrapped_forMixedBucketHolder() public {
+        // Give user1 wrapped balance via direct wrap.
+        _wrapDirectLCC(user1, lccToken1, 40);
+
+        // Create market-derived balance for user1 by transferring from a bucket-exempt endpoint (proxyHook).
+        _wrapDirectLCC(proxyHook, lccToken1, 60);
+        vm.prank(proxyHook);
+        ILCC(lccToken1).transfer(user1, 60);
+
+        (uint256 wrappedBefore, uint256 marketBefore) = ILCC(lccToken1).balancesOf(user1);
+        assertEq(wrappedBefore, 40);
+        assertEq(marketBefore, 60);
+        assertEq(ILCC(lccToken1).balanceOf(user1), 100);
+
+        // Burn 70 (queue 0): should consume 60 market + 10 wrapped, leaving 30 wrapped.
+        vm.prank(proxyHook);
+        liquidityHub.cancelWithQueue(lccToken1, user1, 70, 0, user2);
+
+        (uint256 wrappedAfter, uint256 marketAfter) = ILCC(lccToken1).balancesOf(user1);
+        assertEq(ILCC(lccToken1).balanceOf(user1), 30);
+        assertEq(wrappedAfter, 30);
+        assertEq(marketAfter, 0);
     }
 
     function test_cancelWithQueue_revertsWhenPrincipalIsZero() public {

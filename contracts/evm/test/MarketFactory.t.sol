@@ -34,11 +34,14 @@ import {MarketVTSConfiguration} from "../src/types/VTS.sol";
 import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {ICoreHook} from "../src/interfaces/ICoreHook.sol";
 import {Lock} from "@uniswap/v4-core/src/libraries/Lock.sol";
+import {StdStorage, stdStorage} from "forge-std/StdStorage.sol";
 
 contract MarketFactoryTest is Test, Deployers {
     using PoolIdLibrary for PoolKey;
+    using stdStorage for StdStorage;
 
     bytes32 salt;
+    StdStorage internal _store;
     MarketFactory factory;
     MMPositionManager positionManager;
     IPoolManager poolManager;
@@ -151,6 +154,31 @@ contract MarketFactoryTest is Test, Deployers {
             abi.encodeWithSelector(IOracleHelper.validateMarketOracles.selector),
             abi.encode() // Empty return (function is view, returns nothing)
         );
+    }
+
+    /// @dev Mutation-hardening: ensure the `coreHook != _coreHook` sub-condition in initialise() is killable by
+    ///      simulating corrupted storage (coreHook set while initialised is false).
+    function test_initialise_allowsSameCoreHookIfAlreadyPresentAndNotInitialised() public {
+        _store.target(address(factory)).sig("isInitialised()").checked_write(false);
+        _store.target(address(factory)).sig("coreHook()").checked_write(coreHookAddr);
+
+        vm.prank(owner);
+        factory.initialise(coreHookAddr, new address[](0));
+
+        assertTrue(factory.isInitialised());
+        assertEq(factory.coreHook(), coreHookAddr);
+    }
+
+    /// @dev Mutation-hardening: if coreHook is already set (non-zero) but initialised is false, a mismatched
+    ///      _coreHook must revert. This kills mutants that remove/flip the mismatch check.
+    function test_initialise_revertsWhenCoreHookAlreadySetToDifferentAddress_evenIfNotInitialised() public {
+        _store.target(address(factory)).sig("isInitialised()").checked_write(false);
+        _store.target(address(factory)).sig("coreHook()").checked_write(coreHookAddr);
+
+        address other = makeAddr("otherCoreHook");
+        vm.prank(owner);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, other));
+        factory.initialise(other, new address[](0));
     }
 
     function testCreateMarket() public {

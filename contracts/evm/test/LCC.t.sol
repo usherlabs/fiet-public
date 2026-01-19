@@ -167,6 +167,24 @@ contract LiquidityCommitmentCertificateTest is Test {
         assertEq(marketBal, 7);
     }
 
+    /// @dev Mutation-hardening: balancesOf() must fall back to `(fullBalance, 0)` even if the account is not exempt,
+    ///      when buckets are empty but ERC20 balance is non-zero. This kills the `||` -> `&&` mutant.
+    function test_balancesOf_bucketlessNonExempt_fallsBackToFullBalanceWrapped() public {
+        address bucketless = makeAddr("bucketless");
+
+        // Make the account exempt for mint so bucket maps remain empty.
+        _setBoundLevel(bucketless, BOUND_EXEMPT);
+        lcc.mint(bucketless, 0, 10);
+        assertEq(lcc.balanceOf(bucketless), 10);
+
+        // Now make it non-exempt while keeping bucket maps empty.
+        _setBoundLevel(bucketless, BOUND_ENDPOINT);
+
+        (uint256 wrappedBal, uint256 marketBal) = lcc.balancesOf(bucketless);
+        assertEq(wrappedBal, 10);
+        assertEq(marketBal, 0);
+    }
+
     function test_burn_revertsWhenAmountIsZero() public {
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAmount.selector, uint256(0), uint256(0)));
         lcc.burn(alice, 0, 0);
@@ -459,6 +477,67 @@ contract LiquidityCommitmentCertificateTest is Test {
         assertEq(plannedCancelCalls, 1);
         assertEq(lastCancelSender, alice);
         assertEq(lastCancelRecipient, protocol);
+    }
+
+    /// @dev Mutation-hardening: bucket-tracked protocol -> protocol transfer must:
+    ///      - not revert on correct total balance arithmetic (kills `+` -> `-` mutant)
+    ///      - debit sender buckets (kills `-=` -> `+=` mutants)
+    ///      - credit recipient buckets (kills `+=` -> `-=` and gating mutants)
+    function test_transfer_bucketTrackedProtocolToBucketTrackedProtocol_debitsAndCreditsBuckets() public {
+        address from = makeAddr("fromEndpoint");
+        address to = makeAddr("toEndpoint");
+        _setBoundLevel(from, BOUND_ENDPOINT);
+        _setBoundLevel(to, BOUND_ENDPOINT);
+
+        // Give `from` a mixed bucket split by transferring from a non-protocol holder.
+        lcc.mint(alice, 40, 60);
+        vm.prank(alice);
+        lcc.transfer(from, 100);
+
+        (uint256 fromWrappedBefore, uint256 fromMarketBefore) = lcc.balancesOf(from);
+        assertEq(fromWrappedBefore, 40);
+        assertEq(fromMarketBefore, 60);
+
+        vm.prank(from);
+        lcc.transfer(to, 70); // consumes 60 market + 10 wrapped
+
+        (uint256 fromWrappedAfter, uint256 fromMarketAfter) = lcc.balancesOf(from);
+        assertEq(fromWrappedAfter, 30);
+        assertEq(fromMarketAfter, 0);
+
+        (uint256 toWrapped, uint256 toMarket) = lcc.balancesOf(to);
+        assertEq(toWrapped, 10);
+        assertEq(toMarket, 60);
+        assertEq(toWrapped + toMarket, lcc.balanceOf(to));
+    }
+
+    /// @dev Mutation-hardening: bucket-tracked protocol -> bucket-exempt protocol must NOT credit bucket maps
+    ///      while exempt. We flip the recipient to non-exempt afterwards to make bucket pollution observable.
+    function test_transfer_bucketTrackedEndpointToBucketExemptEndpoint_doesNotCreditBucketsWhileExempt_evenAfterFlip()
+        public
+    {
+        address mmpm = makeAddr("mmpmFlip");
+        _setBoundLevel(mmpm, BOUND_ENDPOINT);
+
+        // protocol is bound + exempt by default in setUp().
+        assertEq(boundLevelMap[factoryForThis][protocol], BOUND_EXEMPT);
+
+        // Seed mmpm with mixed buckets.
+        lcc.mint(alice, 40, 60);
+        vm.prank(alice);
+        lcc.transfer(mmpm, 100);
+
+        // Transfer to exempt protocol.
+        vm.prank(mmpm);
+        lcc.transfer(protocol, 70);
+
+        // Flip recipient to non-exempt; if any buckets were incorrectly credited while exempt,
+        // balancesOf will return the bucket split rather than `(fullBalance, 0)`.
+        _setBoundLevel(protocol, BOUND_ENDPOINT);
+
+        (uint256 wrappedBal, uint256 marketBal) = lcc.balancesOf(protocol);
+        assertEq(wrappedBal, 70);
+        assertEq(marketBal, 0);
     }
 }
 
