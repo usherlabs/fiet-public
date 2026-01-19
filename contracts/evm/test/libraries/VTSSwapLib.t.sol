@@ -52,7 +52,7 @@ contract VTSSwapLibTest is VTSLibTestBase {
         g.inflow1 = s.poolAccounting[poolId].inflowGrowthGlobal.token1;
     }
 
-    // TODO: May we wiser to try use native Uniswap v4 libs where this logic derives to harness... as this is a reimplementation of core/source logic.
+    // Note: This harness intentionally mirrors Uniswap v4-style logic to exercise VTSSwapLib branches.
 
     struct SimState {
         uint160 sqrtCurrent;

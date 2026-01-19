@@ -117,7 +117,7 @@ contract ReentrantLccAdmin {
         reentry = ReentryKind.PlanCancelWithQueue;
     }
 
-    function mint(address, uint256, uint256, bool) external {
+    function mint(address, uint256, uint256) external {
         if (reentry == ReentryKind.Issue) {
             reentry = ReentryKind.None;
             LiquidityHub(payable(hub)).issue(lcc, address(this), 1);
@@ -130,7 +130,7 @@ contract ReentrantLccAdmin {
         }
     }
 
-    function burn(address, uint256, uint256, bool) external {
+    function burn(address, uint256, uint256) external {
         if (reentry == ReentryKind.Cancel) {
             reentry = ReentryKind.None;
             LiquidityHub(payable(hub)).cancel(lcc, address(this), 1);
@@ -149,7 +149,9 @@ contract ReentrantMarketFactory {
     address public immutable hub;
     address public immutable oracleHelper;
 
-    mapping(address => bool) public bounds;
+    uint8 internal constant BOUND_NONE = 0;
+    uint8 internal constant BOUND_ENDPOINT = 1;
+    uint8 internal constant BOUND_EXEMPT = 2;
 
     bool internal armed;
     address internal lccToReenter;
@@ -160,7 +162,8 @@ contract ReentrantMarketFactory {
     }
 
     function setBound(address who, bool isBound) external {
-        bounds[who] = isBound;
+        // Using BOUND_EXEMPT here is OK - as this unit test is dedicated to testing reentrancy.
+        LiquidityHub(payable(hub)).setBoundLevel(who, isBound ? BOUND_EXEMPT : BOUND_NONE);
     }
 
     function armReenterOnUseMarketLiquidity(address lcc_) external {
@@ -669,7 +672,7 @@ contract LiquidityHubReentrancyTest is LiquidityHubTestBase {
         ReentrantLccAdmin evil = _configureReentrantLcc(lcc);
         evil.armIssueReentry();
 
-        vm.prank(factory);
+        vm.prank(vtsOrchestrator);
         vm.expectRevert(abi.encodeWithSignature("ReentrancyGuardReentrantCall()"));
         liquidityHub.issue(lcc, user1, 1);
     }
@@ -679,7 +682,7 @@ contract LiquidityHubReentrancyTest is LiquidityHubTestBase {
         ReentrantLccAdmin evil = _configureReentrantLcc(lcc);
         evil.armCancelReentry();
 
-        vm.prank(factory);
+        vm.prank(vtsOrchestrator);
         vm.expectRevert(abi.encodeWithSignature("ReentrancyGuardReentrantCall()"));
         liquidityHub.cancel(lcc, user1, 1);
     }
@@ -689,7 +692,7 @@ contract LiquidityHubReentrancyTest is LiquidityHubTestBase {
         ReentrantLccAdmin evil = _configureReentrantLcc(lcc);
         evil.armCancelWithQueueReentry();
 
-        vm.prank(factory);
+        vm.prank(vtsOrchestrator);
         vm.expectRevert(abi.encodeWithSignature("ReentrancyGuardReentrantCall()"));
         liquidityHub.cancelWithQueue(lcc, user1, 2, 1, user2);
     }
@@ -699,7 +702,7 @@ contract LiquidityHubReentrancyTest is LiquidityHubTestBase {
         ReentrantLccAdmin evil = _configureReentrantLcc(lcc);
         evil.armPlanCancelReentry();
 
-        vm.prank(factory);
+        vm.prank(vtsOrchestrator);
         vm.expectRevert(abi.encodeWithSignature("ReentrancyGuardReentrantCall()"));
         liquidityHub.issue(lcc, user1, 1);
     }
@@ -709,7 +712,7 @@ contract LiquidityHubReentrancyTest is LiquidityHubTestBase {
         ReentrantLccAdmin evil = _configureReentrantLcc(lcc);
         evil.armPlanCancelWithQueueReentry();
 
-        vm.prank(factory);
+        vm.prank(vtsOrchestrator);
         vm.expectRevert(abi.encodeWithSignature("ReentrancyGuardReentrantCall()"));
         liquidityHub.issue(lcc, user1, 1);
     }

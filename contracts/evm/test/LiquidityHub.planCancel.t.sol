@@ -25,7 +25,7 @@ contract LiquidityHubPlanCancelTest is LiquidityHubTestBase {
 
     /// @notice Tests that planCancel reverts with zero amount
     function testPlanCancelRevertsWithZeroAmount() public {
-        vm.prank(factory);
+        vm.prank(vtsOrchestrator);
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAmount.selector, uint256(0), uint256(0)));
         liquidityHub.planCancel(lccToken1, factory, user1, 0);
     }
@@ -38,7 +38,7 @@ contract LiquidityHubPlanCancelTest is LiquidityHubTestBase {
         _wrapDirectLCC(factory, lccToken1, amount);
 
         // Factory plans a cancel for when it transfers to user1
-        vm.prank(factory);
+        vm.prank(vtsOrchestrator);
         liquidityHub.planCancel(lccToken1, factory, user1, amount);
 
         // Before transfer: user1 has no LCC
@@ -66,7 +66,7 @@ contract LiquidityHubPlanCancelTest is LiquidityHubTestBase {
         _wrapDirectLCC(factory, lccToken1, amount);
 
         // Factory plans a cancel for when it transfers to user2 (not user1)
-        vm.prank(factory);
+        vm.prank(vtsOrchestrator);
         liquidityHub.planCancel(lccToken1, factory, user2, amount);
 
         // Mock user1 as non-protocol
@@ -94,7 +94,7 @@ contract LiquidityHubPlanCancelTest is LiquidityHubTestBase {
 
     /// @notice Tests that planCancelWithQueue reverts with zero principal amount
     function testPlanCancelWithQueueRevertsWithZeroPrincipal() public {
-        vm.prank(factory);
+        vm.prank(vtsOrchestrator);
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAmount.selector, uint256(0), uint256(0)));
         liquidityHub.planCancelWithQueue(lccToken1, factory, user1, 0, 0, user2);
     }
@@ -104,7 +104,7 @@ contract LiquidityHubPlanCancelTest is LiquidityHubTestBase {
         uint256 principalAmount = 100;
         uint256 queueAmount = 150; // exceeds principal
 
-        vm.prank(factory);
+        vm.prank(vtsOrchestrator);
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAmount.selector, queueAmount, principalAmount));
         liquidityHub.planCancelWithQueue(lccToken1, factory, user1, principalAmount, queueAmount, user2);
     }
@@ -119,7 +119,7 @@ contract LiquidityHubPlanCancelTest is LiquidityHubTestBase {
 
         // Factory plans a cancel with queue for when it transfers to user1
         // Settlement queue recipient is user2
-        vm.prank(factory);
+        vm.prank(vtsOrchestrator);
         liquidityHub.planCancelWithQueue(lccToken1, factory, user1, principalAmount, queueAmount, user2);
 
         // Mock user1 as non-protocol
@@ -154,7 +154,7 @@ contract LiquidityHubPlanCancelTest is LiquidityHubTestBase {
         _wrapDirectLCC(factory, lccToken1, principalAmount);
 
         // Factory plans a cancel with queue where everything is queued
-        vm.prank(factory);
+        vm.prank(vtsOrchestrator);
         liquidityHub.planCancelWithQueue(lccToken1, factory, user1, principalAmount, queueAmount, user3);
 
         // Mock user1 as non-protocol
@@ -180,7 +180,7 @@ contract LiquidityHubPlanCancelTest is LiquidityHubTestBase {
         _wrapDirectLCC(factory, lccToken1, principalAmount);
 
         // Factory plans a cancel with zero queue
-        vm.prank(factory);
+        vm.prank(vtsOrchestrator);
         liquidityHub.planCancelWithQueue(lccToken1, factory, user1, principalAmount, queueAmount, user2);
 
         // Mock user1 as non-protocol
@@ -206,7 +206,7 @@ contract LiquidityHubPlanCancelTest is LiquidityHubTestBase {
         _wrapDirectLCC(factory, lccToken1, amount);
 
         // Factory plans a cancel in first transaction
-        vm.prank(factory);
+        vm.prank(vtsOrchestrator);
         liquidityHub.planCancel(lccToken1, factory, user1, amount);
 
         // Simulate new transaction by rolling to next block
@@ -236,11 +236,11 @@ contract LiquidityHubPlanCancelTest is LiquidityHubTestBase {
         _wrapDirectLCC(factory, lccToken1, amount2);
 
         // First plan
-        vm.prank(factory);
+        vm.prank(vtsOrchestrator);
         liquidityHub.planCancel(lccToken1, factory, user1, amount1);
 
         // Second plan for same path (should overwrite)
-        vm.prank(factory);
+        vm.prank(vtsOrchestrator);
         liquidityHub.planCancel(lccToken1, factory, user1, amount2);
 
         // Mock user1 as non-protocol
@@ -264,11 +264,11 @@ contract LiquidityHubPlanCancelTest is LiquidityHubTestBase {
         _wrapDirectLCC(factory, lccToken1, principalAmount);
 
         // First: plan a simple cancel
-        vm.prank(factory);
+        vm.prank(vtsOrchestrator);
         liquidityHub.planCancel(lccToken1, factory, user1, simpleAmount);
 
         // Second: plan a cancel with queue for same path
-        vm.prank(factory);
+        vm.prank(vtsOrchestrator);
         liquidityHub.planCancelWithQueue(lccToken1, factory, user1, principalAmount, queueAmount, user2);
 
         // Mock user1 as non-protocol

@@ -18,12 +18,7 @@ contract LiquidityHubWrapTest is LiquidityHubTestBase {
     /// @notice Tests O(1) flattening: wrapping withLCC into lcc immediately flattens withLCC
     function testWrapWithFlattensImmediately() public {
         // Setup: Create two LCC tokens with same underlying
-        // ensures that the liquidity hub address is protocol-bound
-        // so that it can facilitate transfers
-        vm.mockCall(
-            factory, abi.encodeWithSelector(IMarketFactory.bounds.selector, address(liquidityHub)), abi.encode(true)
-        );
-
+        // ensure the liquidity hub address is protocol-bound so it can facilitate transfers
         (address lccToken3,) = _createSecondLCCPair();
 
         // Wrap some LCC for user1
@@ -73,7 +68,6 @@ contract LiquidityHubWrapTest is LiquidityHubTestBase {
         _wrapDirectLCC(user1, address(lcc2), wrapAmount1);
 
         // First wrap: lcc1 using lccToken3 (this will flatten lccToken3)
-        _mockAddressAsProtocolBound(address(liquidityHub), true);
         vm.startPrank(user1);
         lcc2.approve(address(liquidityHub), wrapAmount1);
         liquidityHub.wrapWith(address(lcc1), address(lcc2), wrapAmount1);
@@ -111,7 +105,6 @@ contract LiquidityHubWrapTest is LiquidityHubTestBase {
         assertEq(queueBefore, queueAmount, "Queue should be equal to the queue amount");
         assertEq(totalQueuedBefore, queueAmount, "totalQueued should equal queue amount before netting");
 
-        _mockAddressAsProtocolBound(address(liquidityHub), true);
         vm.startPrank(user1);
         lcc2.approve(address(liquidityHub), wrapAmount2);
         liquidityHub.wrapWith(address(lcc1), address(lcc2), wrapAmount2);
@@ -159,7 +152,6 @@ contract LiquidityHubWrapTest is LiquidityHubTestBase {
         assertEq(liquidityHub.settleQueue(address(wrapWithLCC), address(liquidityHub)), claimAmount);
 
         // Wrap lcc1 using the wrapWithLCC (should net against the queue entry)
-        _mockAddressAsProtocolBound(address(liquidityHub), true);
         vm.startPrank(user1);
         wrapWithLCC.approve(address(liquidityHub), claimAmount);
         liquidityHub.wrapWith(address(lcc2), address(wrapWithLCC), claimAmount);
@@ -204,7 +196,6 @@ contract LiquidityHubWrapTest is LiquidityHubTestBase {
         vm.mockCall(factory, abi.encodeWithSelector(IMarketFactory.marketLiquidity.selector), abi.encode(uint256(0)));
         vm.mockCall(factory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(uint256(0)));
 
-        _mockAddressAsProtocolBound(address(liquidityHub), true);
         vm.startPrank(user1);
         withLCC.approve(address(liquidityHub), wrapAmount);
         liquidityHub.wrapWith(address(lcc2), address(withLCC), wrapAmount);
@@ -222,7 +213,7 @@ contract LiquidityHubWrapTest is LiquidityHubTestBase {
 
         // Provide underlying reserve so pay() can transfer out immediately.
         underlyingAsset1.mint(address(liquidityHub), amount);
-        vm.prank(factory);
+        vm.prank(proxyHook);
         liquidityHub.confirmTake(lccToken1, amount, false);
 
         // Make the market liquidity call succeed fully so marketUnwrapped > 0 and directUnwrapped == 0.
@@ -280,7 +271,6 @@ contract LiquidityHubWrapTest is LiquidityHubTestBase {
         _wrapDirectLCC(user1, lccToken1, amount);
 
         // Try to wrap lccToken3 (different underlying) with lccToken1
-        _mockAddressAsProtocolBound(address(liquidityHub), true);
         vm.startPrank(user1);
         ILCC(lccToken1).approve(address(liquidityHub), amount);
         vm.expectRevert(
@@ -297,8 +287,6 @@ contract LiquidityHubWrapTest is LiquidityHubTestBase {
         (address lccToken3,) = _createSecondLCCPair();
         uint256 wrapAmount = 100;
         _wrapDirectLCC(user1, lccToken1, wrapAmount);
-
-        _mockAddressAsProtocolBound(address(liquidityHub), true);
 
         vm.startPrank(user1);
         ILCC(lccToken1).approve(address(liquidityHub), wrapAmount + 1);
@@ -337,8 +325,6 @@ contract LiquidityHubWrapTest is LiquidityHubTestBase {
         uint256 wrapAmount = 100;
         _wrapDirectLCC(user1, lccToken1, wrapAmount);
 
-        _mockAddressAsProtocolBound(address(liquidityHub), true);
-
         vm.startPrank(user1);
         ILCC(lccToken1).approve(address(liquidityHub), wrapAmount);
         liquidityHub.wrapWithTo(lccToken3, lccToken1, user2, wrapAmount);
@@ -374,8 +360,6 @@ contract LiquidityHubWrapTest is LiquidityHubTestBase {
         // Mock market liquidity for unwrap
         vm.mockCall(factory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(wrapAmount));
 
-        _mockAddressAsProtocolBound(address(liquidityHub), true);
-
         vm.startPrank(user1);
         ILCC(lccToken1).approve(address(liquidityHub), wrapAmount);
         liquidityHub.wrapWith(lccToken3, lccToken1, wrapAmount);
@@ -396,8 +380,8 @@ contract LiquidityHubWrapTest is LiquidityHubTestBase {
         _wrapDirectLCC(user1, lccToken1, directAmount);
 
         // Then add market-derived balance manually (don't use helper as it has assertions that conflict)
-        _wrapDirectLCC(factory, lccToken1, marketAmount);
-        vm.prank(factory);
+        _wrapDirectLCC(proxyHook, lccToken1, marketAmount);
+        vm.prank(proxyHook);
         ILCC(lccToken1).transfer(user1, marketAmount);
 
         // Verify user has both balances
@@ -414,8 +398,6 @@ contract LiquidityHubWrapTest is LiquidityHubTestBase {
         vm.mockCall(
             factory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(marketAmount)
         );
-
-        _mockAddressAsProtocolBound(address(liquidityHub), true);
 
         vm.startPrank(user1);
         ILCC(lccToken1).approve(address(liquidityHub), totalAmount);
@@ -446,8 +428,6 @@ contract LiquidityHubWrapTest is LiquidityHubTestBase {
         // Mock market liquidity
         vm.mockCall(factory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(wrapAmount));
 
-        _mockAddressAsProtocolBound(address(liquidityHub), true);
-
         vm.startPrank(user1);
         ILCC(lccToken1).approve(address(liquidityHub), wrapAmount);
         liquidityHub.wrapWith(lccToken3, lccToken1, wrapAmount);
@@ -469,8 +449,8 @@ contract LiquidityHubWrapTest is LiquidityHubTestBase {
         _wrapDirectLCC(user1, lccToken1, directAmount);
 
         // Then add market-derived balance manually (don't use helper as it has assertions that conflict)
-        _wrapDirectLCC(factory, lccToken1, marketAmount);
-        vm.prank(factory);
+        _wrapDirectLCC(proxyHook, lccToken1, marketAmount);
+        vm.prank(proxyHook);
         ILCC(lccToken1).transfer(user1, marketAmount);
 
         // Verify user has both balances
@@ -485,8 +465,6 @@ contract LiquidityHubWrapTest is LiquidityHubTestBase {
         vm.mockCall(
             factory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector), abi.encode(wrapWithAmount)
         );
-
-        _mockAddressAsProtocolBound(address(liquidityHub), true);
 
         // Wrap partial amount
         vm.startPrank(user1);

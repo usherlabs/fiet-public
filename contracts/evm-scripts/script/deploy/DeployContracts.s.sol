@@ -41,7 +41,7 @@ import {DirectLPDeltaResolver} from "src/DirectLPDeltaResolver.sol";
  * 7. Deploy MarketFactory (with GlobalConfig as initialOwner)
  * 8. Enable MarketFactory in LiquidityHub
  * 9. Deploy CoreHook (with proper flags and MarketFactory address) - uses CREATE2 for hook flags
- * 10. Set hooks in MarketFactory using setHooks()
+ * 10. Initialise MarketFactory (set hooks + bounds)
  * 11. Verify hooks (set cross-references)
  *
  * @notice Most contracts use CREATE3 for deterministic addresses across chains.
@@ -187,9 +187,9 @@ contract DeployContracts is CREATE3Script, NetworkConfig {
         coreHook = _deployCoreHook();
         console.log("CoreHook deployed at:", coreHook);
 
-        // Step 11: Set hooks in MarketFactory
-        console.log("\n=== Step 11: Setting Hooks in MarketFactory ===");
-        _setHooksInFactory();
+        // Step 11: Initialise MarketFactory
+        console.log("\n=== Step 11: Initialising MarketFactory ===");
+        _initialiseFactory();
 
         // Step 12: Verify hooks addresses across the contracts
         console.log("\n=== Step 12: Verifying Hooks ===");
@@ -298,27 +298,17 @@ contract DeployContracts is CREATE3Script, NetworkConfig {
     /**
      * @dev Deploys MarketFactory with LiquidityHub and VTSOrchestrator
      * @return The deployed MarketFactory address
-     * @notice MMPositionManager is included in initialBounds since it's deployed before MarketFactory
+     * @notice Initial protocol bounds are registered during `_initialiseFactory()`, not in the constructor.
      */
     function _deployMarketFactory() internal returns (address) {
-        // Initial bounds array includes MMPositionManager (deployed before MarketFactory)
-        // Note: LiquidityHub is automatically added to bounds in MarketFactory constructor
-        address[] memory initialBounds = new address[](2);
-
-        // for market specific MMPM, we can set as issuer on market creation.
-        initialBounds[0] = mmPositionManager;
-        initialBounds[1] = directLPDeltaResolver; // required as DirectLPDeltaResolver calls MarketFactory.afterModifyLiquidity()
-
         // Pass globalConfig as initialOwner (required for CREATE3 compatibility)
         bytes memory constructorArgs =
-            abi.encode(config.poolManager, liquidityHub, oracleHelper, vtsOrchestrator, initialBounds, globalConfig);
+            abi.encode(config.poolManager, liquidityHub, oracleHelper, vtsOrchestrator, globalConfig);
         bytes memory creationCode = abi.encodePacked(type(MarketFactory).creationCode, constructorArgs);
 
         address deployed = _deployCreate3(MARKET_FACTORY, creationCode);
         console.log("MarketFactory deployed at:", deployed);
         console.log("MarketFactory owner:", globalConfig);
-        console.log("MMPositionManager added to bounds:", mmPositionManager);
-        // console.log("DirectLPDeltaResolver added to bounds:", directLPDeltaResolver);
         return deployed;
     }
 
@@ -419,23 +409,26 @@ contract DeployContracts is CREATE3Script, NetworkConfig {
     }
 
     /**
-     * @dev Sets hooks in MarketFactory using the setHooks() function
-     * This is called after MarketFactory deployment to establish the relationship
+     * @dev Initialises MarketFactory with core hook and initial bounds
+     * This is called after CoreHook deployment to establish the relationship
      * @notice Since MarketFactory is owned by GlobalConfig, we must use proxyCall
      */
-    function _setHooksInFactory() internal {
-        bytes memory callData = abi.encodeWithSelector(MarketFactory.setHooks.selector, coreHook);
+    function _initialiseFactory() internal {
+        address[] memory initialBounds = new address[](2);
+        initialBounds[0] = mmPositionManager;
+        initialBounds[1] = directLPDeltaResolver;
+        bytes memory callData = abi.encodeWithSelector(MarketFactory.initialise.selector, coreHook, initialBounds);
         GlobalConfig(globalConfig).proxyCall(marketFactory, callData);
 
-        console.log("Hooks set in MarketFactory successfully (via GlobalConfig.proxyCall)");
+        console.log("MarketFactory initialised successfully (via GlobalConfig.proxyCall)");
     }
 
     /**
      * @dev Verifies hooks by checking cross-references
-     * This is called after hooks are set in MarketFactory to verify the relationship
+     * This is called after MarketFactory initialisation to verify the relationship
      */
     function _verifyHooks() internal view {
-        // Verify the cross-references are set correctly after setHooks() call
+        // Verify the cross-references are set correctly after initialisation
 
         CoreHook coreHookInstance = CoreHook(coreHook);
         MarketFactory factoryInstance = MarketFactory(marketFactory);
@@ -490,6 +483,7 @@ contract DeployContracts is CREATE3Script, NetworkConfig {
         MarketFactory factory = MarketFactory(marketFactory);
         require(address(factory.poolManager()) == config.poolManager, "MarketFactory: wrong poolManager");
         require(factory.coreHook() == coreHook, "MarketFactory: wrong coreHook");
+        require(factory.isInitialised(), "MarketFactory: not initialised");
 
         console.log("MarketFactory configuration verified");
 

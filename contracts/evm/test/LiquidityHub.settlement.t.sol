@@ -149,7 +149,7 @@ contract LiquidityHubSettlementTest is LiquidityHubTestBase {
 
         // Create underlying reserve in the Hub
         underlyingAsset1.mint(address(liquidityHub), availableReserve);
-        vm.prank(factory);
+        vm.prank(proxyHook);
         liquidityHub.confirmTake(lccToken1, availableReserve, false);
 
         // Create a settlement queue entry for the Hub itself (not an external user)
@@ -203,7 +203,7 @@ contract LiquidityHubSettlementTest is LiquidityHubTestBase {
         // Step 2: Add underlying liquidity to reserveOfUnderlying
         // (confirmTake simulates liquidity arriving from market operations)
         underlyingAsset1.mint(address(liquidityHub), availableReserve);
-        vm.prank(factory);
+        vm.prank(proxyHook);
         liquidityHub.confirmTake(lccToken1, availableReserve, false);
 
         // Record state before settlement
