@@ -13,8 +13,6 @@ abstract contract BoundRegistry is IBoundRegistry {
     // Bound levels: _boundLevel[factory][who] -> 0 = none, 1 = transfer endpoint, 2 = bucket-exempt endpoint.
     mapping(address => mapping(address => uint8)) internal _boundLevel;
 
-    event BoundLevelUpdated(address indexed factory, address indexed who, uint8 level);
-
     /// @notice Resolve the market id + factory for a given LCC (implemented by child).
     function _lccMarket(address lcc) internal view virtual returns (bytes32 id, address factory);
 
@@ -50,7 +48,7 @@ abstract contract BoundRegistry is IBoundRegistry {
             revert Errors.InvalidAmount(level, Bounds.BOUND_EXEMPT);
         }
         _boundLevel[factory][who] = level;
-        emit BoundLevelUpdated(factory, who, level);
+        emit BoundLevelSet(factory, who, level);
     }
 
     /// @notice External setter (authorisation enforced by implementing contract).

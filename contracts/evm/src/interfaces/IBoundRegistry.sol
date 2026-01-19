@@ -6,6 +6,8 @@ pragma solidity ^0.8.26;
  * @notice Interface for per-factory protocol-bound registry.
  */
 interface IBoundRegistry {
+    event BoundLevelSet(address indexed factory, address indexed who, uint8 level);
+
     /**
      * @notice Returns the bound level for an address within a factory namespace.
      * @dev 0 = not an endpoint, 1 = transfer endpoint, 2 = bucket-exempt endpoint.

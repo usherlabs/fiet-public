@@ -6,6 +6,7 @@ import "forge-std/Test.sol";
 import {BoundRegistry} from "../../src/modules/BoundRegistry.sol";
 import {Bounds} from "../../src/libraries/Bounds.sol";
 import {Errors} from "../../src/libraries/Errors.sol";
+import {IBoundRegistry} from "../../src/interfaces/IBoundRegistry.sol";
 
 contract BoundRegistryHarness is BoundRegistry {
     struct Market {
@@ -47,7 +48,7 @@ contract BoundsRegistryTest is Test {
         address who = makeAddr("who");
 
         vm.expectEmit(true, true, false, true, address(registry));
-        emit BoundRegistry.BoundLevelUpdated(factory, who, Bounds.BOUND_ENDPOINT);
+        emit IBoundRegistry.BoundLevelSet(factory, who, Bounds.BOUND_ENDPOINT);
 
         vm.prank(factory);
         registry.setBoundLevel(who, Bounds.BOUND_ENDPOINT);
@@ -65,9 +66,9 @@ contract BoundsRegistryTest is Test {
         who[1] = b;
 
         vm.expectEmit(true, true, false, true, address(registry));
-        emit BoundRegistry.BoundLevelUpdated(factory, a, Bounds.BOUND_EXEMPT);
+        emit IBoundRegistry.BoundLevelSet(factory, a, Bounds.BOUND_EXEMPT);
         vm.expectEmit(true, true, false, true, address(registry));
-        emit BoundRegistry.BoundLevelUpdated(factory, b, Bounds.BOUND_EXEMPT);
+        emit IBoundRegistry.BoundLevelSet(factory, b, Bounds.BOUND_EXEMPT);
 
         vm.prank(factory);
         registry.setBoundLevels(who, Bounds.BOUND_EXEMPT);
