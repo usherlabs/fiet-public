@@ -1,0 +1,26 @@
+#!/bin/sh
+
+# Run Foundry formatting for staged Solidity changes under contracts/evm.
+set -eu
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+staged_sol="$(git diff --cached --name-only --diff-filter=ACM | grep '^contracts/evm/.*\.sol$' || true)"
+if [ -z "$staged_sol" ]; then
+  exit 0
+fi
+
+if ! command -v forge >/dev/null 2>&1; then
+  echo "forge is not installed or not on PATH. Install Foundry (see contracts/evm/README.md)." >&2
+  exit 1
+fi
+
+cd "$repo_root/contracts/evm"
+
+relative_paths="$(printf '%s\n' "$staged_sol" | sed 's#^contracts/evm/##')"
+# Note: paths are split on whitespace; Solidity file paths in this repo are expected to not contain spaces.
+forge fmt $relative_paths
+
+cd "$repo_root"
+git add -- $staged_sol

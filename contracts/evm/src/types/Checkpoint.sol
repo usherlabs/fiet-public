@@ -42,15 +42,20 @@ library RFSCheckpointLibrary {
         TokenConfiguration memory tokenConfiguration,
         uint8 tokenIndex
     ) internal {
+        // Defensive: avoid underflow if configuration is invalid (max < grace).
+        // In that case, the extension is effectively disabled (caps to 0) rather than reverting.
+        uint256 maxGracePeriodExtension = 0;
+        if (tokenConfiguration.maxGracePeriodTime > tokenConfiguration.gracePeriodTime) {
+            maxGracePeriodExtension = tokenConfiguration.maxGracePeriodTime - tokenConfiguration.gracePeriodTime;
+        }
+
         if (tokenIndex == 0) {
             self.gracePeriodExtension0 += tokenConfiguration.gracePeriodTime;
-            uint256 maxGracePeriodExtension = tokenConfiguration.maxGracePeriodTime - tokenConfiguration.gracePeriodTime;
             if (self.gracePeriodExtension0 > maxGracePeriodExtension) {
                 self.gracePeriodExtension0 = maxGracePeriodExtension;
             }
         } else if (tokenIndex == 1) {
             self.gracePeriodExtension1 += tokenConfiguration.gracePeriodTime;
-            uint256 maxGracePeriodExtension = tokenConfiguration.maxGracePeriodTime - tokenConfiguration.gracePeriodTime;
             if (self.gracePeriodExtension1 > maxGracePeriodExtension) {
                 self.gracePeriodExtension1 = maxGracePeriodExtension;
             }

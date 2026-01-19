@@ -95,10 +95,9 @@ library LiquidityHubLib {
      * @param to The address to mint tokens to
      * @param directAmount The amount to mint as direct supply
      * @param marketAmount The amount to mint as market-derived supply
-     * @param issued Whether this is an issuer-initiated mint
      */
-    function mint(address lccToken, address to, uint256 directAmount, uint256 marketAmount, bool issued) internal {
-        LCCFactoryLib.mint(lccToken, to, directAmount, marketAmount, issued);
+    function mint(address lccToken, address to, uint256 directAmount, uint256 marketAmount) internal {
+        LCCFactoryLib.mint(lccToken, to, directAmount, marketAmount);
     }
 
     /**
@@ -109,10 +108,9 @@ library LiquidityHubLib {
      * @param from The address to burn tokens from
      * @param directAmount The amount to burn from direct supply
      * @param marketAmount The amount to burn from market-derived supply
-     * @param issued Whether this is an issuer-initiated burn
      */
-    function burn(address lccToken, address from, uint256 directAmount, uint256 marketAmount, bool issued) internal {
-        LCCFactoryLib.burn(lccToken, from, directAmount, marketAmount, issued);
+    function burn(address lccToken, address from, uint256 directAmount, uint256 marketAmount) internal {
+        LCCFactoryLib.burn(lccToken, from, directAmount, marketAmount);
     }
 
     // ============ WRAP-WITH HELPER FUNCTIONS (Stack Depth Optimisation) ============
@@ -300,10 +298,10 @@ library LiquidityHubLib {
 
         // Execute burns (protocol-bound burns, skip bucket maps)
         if (targetToBurn > 0) {
-            burn(lcc, address(this), 0, targetToBurn, true);
+            burn(lcc, address(this), 0, targetToBurn);
         }
         if (backingToBurn > 0) {
-            burn(withLCC, address(this), 0, backingToBurn, true);
+            burn(withLCC, address(this), 0, backingToBurn);
         }
 
         // Ensure lazy-claimed never exceeds current queue (invariant check)
@@ -359,7 +357,7 @@ library LiquidityHubLib {
             // Priority-based: use market-derived balance first, then direct (wrapped) as remainder
             // This optimises gas by preferring market-derived (no directSupply manipulation)
             ctx.fromMarketDerivedAmount = Math.min(amount, marketDerived);
-            ctx.fromWrappedAmount = amount - ctx.fromMarketDerivedAmount;
+            ctx.fromWrappedAmount = Math.min(wrapped, amount - ctx.fromMarketDerivedAmount); // similar pattern as LCC onTransfer bucket accounting
         }
 
         // Expects caller to securely transfer funds from (the caller) to (this) Hub
@@ -489,14 +487,9 @@ library LiquidityHubLib {
     /// @param lcc The LCC token address
     /// @param recipient The recipient address to settle for (address(this) for Hub's own queue)
     /// @param maxAmount The maximum amount to settle (caller can limit to avoid large gas costs)
-    /// @param caller The address of the caller (for issuer check)
-    function processSettlementLogic(
-        LiquidityHubStorage storage s,
-        address lcc,
-        address recipient,
-        uint256 maxAmount,
-        address caller
-    ) internal {
+    function processSettlementLogic(LiquidityHubStorage storage s, address lcc, address recipient, uint256 maxAmount)
+        internal
+    {
         bool isForHub = recipient == address(this);
         uint256 queued = s.settleQueue[lcc][recipient];
         if (queued == 0) revert Errors.InvalidAmount(0, 0);
@@ -553,11 +546,11 @@ library LiquidityHubLib {
 
             if (effectiveToBurn > 0) {
                 // Burn Hub-held LCC; protocol-bound burn, skip bucket maps
-                burn(lcc, recipient, 0, effectiveToBurn, true);
+                burn(lcc, recipient, 0, effectiveToBurn);
             }
         } else {
             // Standard path: burn user's LCC and transfer underlying
-            pay(s, lcc, recipient, recipient, 0, toSettle, caller);
+            pay(s, lcc, recipient, recipient, 0, toSettle);
         }
     }
 
@@ -585,18 +578,15 @@ library LiquidityHubLib {
     /// @param to The recipient of the underlying assets
     /// @param fromDirect The amount of LCC to burn from direct supply
     /// @param fromMarket The amount of LCC to burn from market-derived supply
-    /// @param caller The caller address (for issuer check)
     function pay(
         LiquidityHubStorage storage s,
         address lcc,
         address owner,
         address to,
         uint256 fromDirect,
-        uint256 fromMarket,
-        address caller
+        uint256 fromMarket
     ) internal {
-        bool isIssuer = LCCFactoryLib.isCallerIssuer(s, lcc, caller);
-        burn(lcc, owner, fromDirect, fromMarket, isIssuer);
+        burn(lcc, owner, fromDirect, fromMarket);
         transferUnderlying(s, s.lccToUnderlying[lcc], to, fromDirect + fromMarket);
     }
 }

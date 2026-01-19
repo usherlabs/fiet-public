@@ -3,16 +3,15 @@ pragma solidity ^0.8.26;
 
 import {LiquidityCommitmentCertificate} from "../LCC.sol";
 import {ILCC} from "../interfaces/ILCC.sol";
-import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
 import {Errors} from "./Errors.sol";
 import {LCCMetadataLib} from "./LCCMetadataLib.sol";
 import {LiquidityHubStorage, Market} from "../types/Liquidity.sol";
 
 /// @notice Interface for LCC admin functions
 interface ILCCAdmin {
-    function mint(address to, uint256 directAmount, uint256 marketAmount, bool issued) external;
-    function burn(address from, uint256 directAmount, uint256 marketAmount, bool issued) external;
-    function burnAndMint(address from, address to, uint256 directAmount, uint256 marketAmount, bool issued) external;
+    function mint(address to, uint256 directAmount, uint256 marketAmount) external;
+    function burn(address from, uint256 directAmount, uint256 marketAmount) external;
+    function burnAndMint(address from, address to, uint256 directAmount, uint256 marketAmount) external;
 }
 
 /// @title LCCFactoryLib
@@ -24,7 +23,6 @@ library LCCFactoryLib {
         string name;
         string symbol;
         uint8 decimals;
-        address oracle;
     }
 
     // ============ INITIALISATION ============
@@ -50,7 +48,6 @@ library LCCFactoryLib {
     /// @dev Builds LCC parameters to reduce stack depth in createLCC
     function _buildLCCParams(
         LiquidityHubStorage storage s,
-        address marketFactoryAddress,
         address underlying,
         string memory marketName,
         string memory symbol,
@@ -60,26 +57,25 @@ library LCCFactoryLib {
         params.name =
             LCCMetadataLib.buildNameFromAsset(underlying, s.nativeAssetName, marketName, truncatedMarketRefStr);
         params.decimals = LCCMetadataLib.getAssetDecimals(underlying, s.nativeAssetDecimals);
-        params.oracle = address(IMarketFactory(marketFactoryAddress).oracleHelper().oracle());
     }
 
     /// @notice Creates an LCC token for the given underlying asset
     /// @param s The LCC factory state or LiquidityHubStorage
-    /// @param marketFactoryAddress The market factory address associated to the market-specific LCCs
     /// @param marketRef The market reference (bytes from proxyHookAddress)
     /// @param underlyingPair The underlying pair [asset0, asset1] for this market
     /// @param index The index in the underlying pair (0 or 1)
     /// @param marketName The market name (can be empty string)
     /// @param initialIssuers Array of addresses to set as issuers for this LCC token
+    /// @param resilientOracleAddress The oracle address for LCC metadata resolution
     /// @return lccToken The LCC token address
     function createLCC(
         LiquidityHubStorage storage s,
-        address marketFactoryAddress,
         bytes memory marketRef,
         address[2] memory underlyingPair,
         uint8 index,
         string memory marketName,
-        address[] memory initialIssuers
+        address[] memory initialIssuers,
+        address resilientOracleAddress
     ) internal returns (address lccToken) {
         address underlying = underlyingPair[index];
 
@@ -88,13 +84,12 @@ library LCCFactoryLib {
             _getSymbol(s, underlying, marketRef, underlyingPair);
 
         // Build params in helper to reduce stack depth
-        LCCParams memory params =
-            _buildLCCParams(s, marketFactoryAddress, underlying, marketName, symbol, truncatedMarketRefStr);
+        LCCParams memory params = _buildLCCParams(s, underlying, marketName, symbol, truncatedMarketRefStr);
 
         // Create LCC token
         lccToken = address(
             new LiquidityCommitmentCertificate(
-                marketFactoryAddress, underlying, params.name, params.symbol, params.decimals, params.oracle
+                underlying, params.name, params.symbol, params.decimals, resilientOracleAddress
             )
         );
 
@@ -236,13 +231,13 @@ library LCCFactoryLib {
     // ============ LCC OPERATIONS ============
 
     /// @notice Mints LCC tokens
-    function mint(address lccToken, address to, uint256 directAmount, uint256 marketAmount, bool issued) internal {
-        ILCCAdmin(lccToken).mint(to, directAmount, marketAmount, issued);
+    function mint(address lccToken, address to, uint256 directAmount, uint256 marketAmount) internal {
+        ILCCAdmin(lccToken).mint(to, directAmount, marketAmount);
     }
 
     /// @notice Burns LCC tokens
-    function burn(address lccToken, address from, uint256 directAmount, uint256 marketAmount, bool issued) internal {
-        ILCCAdmin(lccToken).burn(from, directAmount, marketAmount, issued);
+    function burn(address lccToken, address from, uint256 directAmount, uint256 marketAmount) internal {
+        ILCCAdmin(lccToken).burn(from, directAmount, marketAmount);
     }
 
     /// @notice Gets balance of LCC tokens for an account
@@ -289,24 +284,24 @@ library LCCFactoryLinkedLib {
 
     /// @notice Creates an LCC token for the given underlying asset
     /// @param s The LCC factory state
-    /// @param marketFactoryAddress The market factory address associated to the market-specific LCCs
     /// @param marketRef The market reference (bytes from proxyHookAddress)
     /// @param underlyingPair The underlying pair [asset0, asset1] for this market
     /// @param index The index in the underlying pair (0 or 1)
     /// @param marketName The market name (can be empty string)
     /// @param initialIssuers Array of addresses to set as issuers for this LCC token
+    /// @param resilientOracleAddress The oracle address for LCC metadata resolution
     /// @return lccToken The LCC token address
     function createLCC(
         LiquidityHubStorage storage s,
-        address marketFactoryAddress,
         bytes memory marketRef,
         address[2] memory underlyingPair,
         uint8 index,
         string memory marketName,
-        address[] memory initialIssuers
+        address[] memory initialIssuers,
+        address resilientOracleAddress
     ) external returns (address lccToken) {
         return LCCFactoryLib.createLCC(
-            s, marketFactoryAddress, marketRef, underlyingPair, index, marketName, initialIssuers
+            s, marketRef, underlyingPair, index, marketName, initialIssuers, resilientOracleAddress
         );
     }
 }

@@ -9,6 +9,7 @@ import {IMarketFactory} from "../../src/interfaces/IMarketFactory.sol";
 import {ILCC} from "../../src/interfaces/ILCC.sol";
 import {MockERC20} from "../_mocks/MockERC20.sol";
 import {Errors} from "../../src/libraries/Errors.sol";
+import {Bounds} from "../../src/libraries/Bounds.sol";
 
 /**
  * @title LiquidityHubTestBase
@@ -31,6 +32,8 @@ abstract contract LiquidityHubTestBase is Test {
     address public user2 = address(0x2);
     address public user3 = address(0x3);
     address public factory;
+    address public vtsOrchestrator;
+    address public proxyHook;
 
     bytes32 public marketId1 = bytes32("market1");
     bytes32 public marketId2 = bytes32("market2");
@@ -38,6 +41,8 @@ abstract contract LiquidityHubTestBase is Test {
     function setUp() public virtual {
         // Set factory address
         factory = makeAddr("FACTORY");
+        vtsOrchestrator = makeAddr("VTS_ORCHESTRATOR");
+        proxyHook = makeAddr("PROXY_HOOK");
 
         // Deploy mock oracle
         resilientOracle = IResilientOracle(makeAddr("ResilientOracle"));
@@ -64,8 +69,9 @@ abstract contract LiquidityHubTestBase is Test {
 
         // Create LCC tokens via factory
         vm.startPrank(factory);
-        address[] memory issuers = new address[](1);
-        issuers[0] = address(factory); // arbitrary issuer address. in production it's the VTSOrchestrator.
+        address[] memory issuers = new address[](2);
+        issuers[0] = vtsOrchestrator;
+        issuers[1] = proxyHook;
         (lccToken1, lccToken2) = liquidityHub.createLCCPair(
             abi.encodePacked(address(0x1234)), // marketRef
             address(underlyingAsset1),
@@ -79,17 +85,16 @@ abstract contract LiquidityHubTestBase is Test {
 
         vm.stopPrank();
 
-        // Mock the bounds method to ensure that the factory and liquidity hub are protocol-bound
-        vm.mockCall(
-            factory,
-            abi.encodeWithSelector(IMarketFactory.bounds.selector),
-            abi.encode(false) // ensures that by default all addresses are not protocol-bound
-        );
-        vm.mockCall(
-            factory,
-            abi.encodeWithSelector(IMarketFactory.bounds.selector, address(factory)),
-            abi.encode(true) // ensures that the factory address is protocol-bound (override the above mock for the factory address)
-        );
+        // Register protocol-bound endpoints for tests.
+        vm.startPrank(factory);
+        // Match production-like defaults (see MarketFactory):
+        // - hub is protocol-bound + bucket-exempt (bucketless holder)
+        // - factory is a bucket-tracked endpoint
+        // - proxyHook is protocol-bound + bucket-exempt
+        liquidityHub.setBoundLevel(address(liquidityHub), Bounds.BOUND_EXEMPT);
+        liquidityHub.setBoundLevel(factory, Bounds.BOUND_ENDPOINT);
+        liquidityHub.setBoundLevel(proxyHook, Bounds.BOUND_EXEMPT);
+        vm.stopPrank();
     }
 
     // ============ HELPER FUNCTIONS ============
@@ -110,11 +115,11 @@ abstract contract LiquidityHubTestBase is Test {
 
     /// @notice Helper function to wrap market-derived LCC for a user
     function _wrapMarketDerivedLCC(address user, address lccToken, uint256 amount) public {
-        // mint lcc to the factory
-        _wrapDirectLCC(factory, lccToken, amount);
+        // mint lcc to a bucket-exempt protocol address to create market-derived balance on transfer
+        _wrapDirectLCC(proxyHook, lccToken, amount);
 
         // mock the factory and send to user so that the user has a market balance
-        vm.prank(factory);
+        vm.prank(proxyHook);
         ILCC(lccToken).transfer(user, amount);
 
         (uint256 wrappedBal, uint256 marketBal) = ILCC(lccToken).balancesOf(user);
@@ -125,22 +130,58 @@ abstract contract LiquidityHubTestBase is Test {
 
     /// @notice Helper function to create a settlement queue entry
     function _createSettlementQueueEntry(address lccTokenAddress, address recipient, uint256 amount) public {
-        _mockAddressAsProtocolBound(recipient, false);
-
-        // Mint some LCC tokens to the factory, so it can send to a recipient
-        // and since the factory is a protocol-bound address, it will be able to send the LCC tokens to the recipient
-        // which will then constitute a market balance for the recipient
-        _wrapDirectLCC(factory, lccTokenAddress, amount);
-
-        // transfer to a user and then validate that the user has the corresponding market balance
-        vm.startPrank(factory);
+        // This helper is used to manufacture a queued settlement deterministically by:
+        // - ensuring the holder has MARKET-DERIVED balance (wrapped=0)
+        // - forcing market liquidity usage to return 0 so the entire amount is queued
+        //
+        // For normal recipients, we can mint market-derived LCC directly via `issue(...)` (does not depend on transfers).
+        // For the Hub itself (bucket-exempt in production), `issue(...)` intentionally skips bucket maps, so we instead
+        // create a Hub-owned queue via `wrapWith(...)` (which queues to `address(this)`).
         ILCC lcc = ILCC(lccTokenAddress);
-        lcc.transfer(recipient, amount);
-        vm.stopPrank();
+
+        // Pick an issuer that is actually configured for this LCC (tests create ad-hoc LCCs with custom issuers).
+        address issuer = vtsOrchestrator;
+        if (!liquidityHub.issuers(lccTokenAddress, issuer)) {
+            issuer = proxyHook;
+        }
+        if (!liquidityHub.issuers(lccTokenAddress, issuer)) {
+            issuer = factory;
+        }
+
+        if (recipient == address(liquidityHub)) {
+            // Create a target LCC with the same underlying so wrapWith is valid.
+            (address lccToken3, address lccToken4) = _createSecondLCCPair();
+            address target = lcc.underlying() == ILCC(lccToken3).underlying() ? lccToken3 : lccToken4;
+
+            // Mint market-derived balance to a user, then wrapWith into the target while forcing market liquidity to 0.
+            vm.prank(issuer);
+            liquidityHub.issue(lccTokenAddress, user1, amount);
+
+            // Seed some reserve for this LCC before the Hub queue is created (confirmTake is greedy).
+            MockERC20(lcc.underlying()).mint(address(liquidityHub), amount);
+            vm.prank(issuer);
+            liquidityHub.confirmTake(lccTokenAddress, amount, false);
+
+            vm.mockCall(
+                factory,
+                abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector),
+                abi.encode(uint256(0)) // used = 0 (no liquidity available)
+            );
+
+            vm.startPrank(user1);
+            lcc.approve(address(liquidityHub), amount);
+            liquidityHub.wrapWith(target, lccTokenAddress, amount);
+            vm.stopPrank();
+
+            assertEq(liquidityHub.settleQueue(lccTokenAddress, address(liquidityHub)), amount);
+            return;
+        }
+
+        // Mint market-derived LCC directly to the recipient (issuer path) so wrapped=0, market=amount.
+        vm.prank(issuer);
+        liquidityHub.issue(lccTokenAddress, recipient, amount);
 
         (uint256 wrappedBal, uint256 marketBal) = lcc.balancesOf(recipient);
-
-        // validate lcc balance and market balance of the recipient
         assertEq(lcc.balanceOf(recipient), amount);
         assertEq(wrappedBal, 0);
         assertEq(marketBal, amount);
@@ -165,12 +206,15 @@ abstract contract LiquidityHubTestBase is Test {
     function _createSecondLCCPair() public returns (address, address) {
         // Create a second LCC pair
         vm.startPrank(factory);
+        address[] memory issuers = new address[](2);
+        issuers[0] = vtsOrchestrator;
+        issuers[1] = proxyHook;
         (address lccToken3, address lccToken4) = liquidityHub.createLCCPair(
             abi.encodePacked(address(0x5678)),
             address(underlyingAsset1),
             address(underlyingAsset2),
             "Test Market 2",
-            new address[](0)
+            issuers
         );
 
         // Initialize second market
@@ -182,11 +226,14 @@ abstract contract LiquidityHubTestBase is Test {
 
     /// @notice Mock an address as protocol-bound
     function _mockAddressAsProtocolBound(address contractAddress, bool isProtocolBound) public {
-        vm.mockCall(
-            factory,
-            abi.encodeWithSelector(IMarketFactory.bounds.selector, contractAddress),
-            abi.encode(isProtocolBound)
-        );
+        uint8 level = isProtocolBound ? Bounds.BOUND_ENDPOINT : Bounds.BOUND_NONE;
+        _setBoundLevel(contractAddress, level);
+    }
+
+    function _setBoundLevel(address contractAddress, uint8 level) public {
+        vm.startPrank(factory);
+        liquidityHub.setBoundLevel(contractAddress, level);
+        vm.stopPrank();
     }
 }
 

@@ -29,7 +29,7 @@ contract LiquidityHubAccessorTest is LiquidityHubTestBase {
         assertEq(factory1, factory);
 
         // issuers
-        assertTrue(liquidityHub.issuers(lccToken1, factory));
+        assertTrue(liquidityHub.issuers(lccToken1, vtsOrchestrator));
 
         // getLCC/getUnderlying/isLCC
         assertEq(liquidityHub.getLCC(marketId1, address(underlyingAsset1)), lccToken1);

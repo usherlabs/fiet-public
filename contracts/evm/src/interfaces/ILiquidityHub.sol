@@ -2,12 +2,13 @@
 pragma solidity ^0.8.26;
 
 import {IMarketFactory} from "./IMarketFactory.sol";
+import {IBoundRegistry} from "./IBoundRegistry.sol";
 
 /**
  * @title ILiquidityHub
  * @notice Interface for LiquidityHub contract that manages LCC token creation
  */
-interface ILiquidityHub {
+interface ILiquidityHub is IBoundRegistry {
     // ============ LCC Factory ============
 
     /**

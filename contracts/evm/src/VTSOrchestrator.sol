@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 // This contract is the central state management layer and orchestrator for VTS logic
-// Adopts Bunni-style pattern: state in storage struct, logic delegated to linked libraries
+// Adopts Bunni-style pattern: state in storage struct, logic delegated to linked libraries.
 pragma solidity ^0.8.26;
 
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
@@ -58,6 +58,7 @@ import {toBalanceDelta} from "v4-periphery/lib/v4-core/src/types/BalanceDelta.so
 import {TransientSlots} from "./libraries/TransientSlots.sol";
 import {PoolAccounting} from "./types/VTS.sol";
 import {ReentrancyGuardTransient} from "openzeppelin-contracts/contracts/utils/ReentrancyGuardTransient.sol";
+import {TokenConfiguration} from "./types/VTS.sol";
 
 /// @title VTSOrchestrator
 /// @notice Central state management layer and orchestrator for VTS logic
@@ -180,6 +181,17 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
     // Access Control Helpers
     // --------------------------------------------------
 
+    function _assertValidTokenConfiguration(TokenConfiguration memory cfg) internal pure {
+        if (cfg.maxGracePeriodTime < cfg.gracePeriodTime) {
+            revert Errors.InvalidVTSConfiguration(cfg.gracePeriodTime, cfg.maxGracePeriodTime);
+        }
+    }
+
+    function _assertValidMarketVTSConfiguration(MarketVTSConfiguration memory cfg) internal pure {
+        _assertValidTokenConfiguration(cfg.token0);
+        _assertValidTokenConfiguration(cfg.token1);
+    }
+
     /// @notice Check if a position is valid
     /// @param id The position id
     /// @param requireActive Whether the position must be active
@@ -202,6 +214,21 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
     function _assertPositionValid(PositionId id, bool requireActive) internal view returns (bool isValid) {
         isValid = isPositionValid(id, requireActive);
         if (!isValid) {
+            revert Errors.InvalidPosition(0, 0, id);
+        }
+    }
+
+    function _assertPositionValid(PositionId id, bool requireActive, PoolId poolId)
+        internal
+        view
+        returns (bool isValid)
+    {
+        isValid = isPositionValid(id, requireActive);
+        if (!isValid) {
+            revert Errors.InvalidPosition(0, 0, id);
+        }
+        Position memory pos = s.positions[id];
+        if (PoolId.unwrap(pos.poolId) != PoolId.unwrap(poolId)) {
             revert Errors.InvalidPosition(0, 0, id);
         }
     }
@@ -234,7 +261,7 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
 
         // Only check expiry if requireLiveSignal is true
         if (requireLiveSignal) {
-            bool isExpired = commit.expiresAt < block.timestamp;
+            bool isExpired = block.timestamp >= commit.expiresAt;
             if (isExpired) {
                 return false;
             }
@@ -270,6 +297,7 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
         external
         onlyOwner
     {
+        _assertValidMarketVTSConfiguration(vtsConfiguration);
         s.pools[corePoolId].vtsConfig = vtsConfiguration;
         emit VTSConfigSet(PoolId.unwrap(corePoolId), vtsConfiguration);
     }
@@ -436,6 +464,7 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
     /// @param corePoolKey The core pool key
     /// @param vtsConfiguration The VTS configuration
     function initPool(PoolKey memory corePoolKey, MarketVTSConfiguration memory vtsConfiguration) external onlyFactory {
+        _assertValidMarketVTSConfiguration(vtsConfiguration);
         // Initialize the market details in the VTS state
         s.pools[corePoolKey.toId()] = Pool({
             currency0: corePoolKey.currency0,
@@ -524,6 +553,14 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
         BalanceDelta feesAccrued,
         bytes calldata hookData
     ) private returns (Position memory pos, PositionId id, BalanceDelta feeAdj) {
+        // If the position already exists, enforce pool membership from the provided PoolKey.
+        // This prevents poolKey/position mismatches for PoolKey-based entrypoints.
+        PositionId expectedId = PositionLibrary.generateId(owner, params);
+        if (s.positions[expectedId].owner != address(0)) {
+            // We allow inactive positions here (reactivation path), so requireActive=false.
+            _assertPositionValid(expectedId, false, poolKey.toId());
+        }
+
         // Build context in scoped block
         PositionContext memory ctx;
         {
@@ -607,18 +644,11 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
         _assertSignalValid(commitId, true);
         // Validate position exists
         PositionId positionId = getPositionId(commitId, positionIndex);
-        _assertPositionValid(positionId, true);
+        _assertPositionValid(positionId, true, poolKey.toId());
 
         // Use the RFSCheckpoint module to extend the grace period
         CheckpointLibrary.extendGracePeriod(
-            s,
-            settlementObserver,
-            poolKey,
-            commitId,
-            positionIndex,
-            settlementTokenIndex,
-            verifierIndex,
-            settlementProof
+            s, settlementObserver, poolKey, positionId, settlementTokenIndex, verifierIndex, settlementProof
         );
 
         // Emit event to notify the market maker that the grace period has been extended
@@ -707,38 +737,32 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
     }
 
     /// @notice Renew a liquidity signal for an existing commit
-    /// @dev Updates the signal for a commit and validates it via SignalManager and OracleHelper
+    /// @dev Intended for router-style callers (e.g. MMPositionManager) where msg.sender is a forwarding contract.
+    /// @param sender The effective caller (locker) used for advancer validation
     /// @param commitId The commit identifier to renew
     /// @param liquiditySignal The new liquidity signal
-    function renewSignal(uint256 commitId, bytes memory liquiditySignal)
+    function renewSignal(address sender, uint256 commitId, bytes memory liquiditySignal)
         external
         onlyIfPoolManagerUnlocked
         nonReentrant
     {
         // Validate commit exists (but don't require live signal - expired signals can be seized)
         _assertSignalValid(commitId, false);
-        VTSCommitLib.renewSignal(s, signalManager, commitId, liquiditySignal);
+        VTSCommitLib.renewSignal(s, signalManager, sender, commitId, liquiditySignal);
     }
 
     /// @notice Checkpoint a position and optionally run commitment backing checks
     /// @dev Marks an RFS checkpoint for the position. If withCommitment is true, also validates
     ///      commitment backing and updates position deficits.
-    /// @param sender The caller address (used for advancer validation when withCommitment is true)
     /// @param commitId The commit identifier
     /// @param positionIndex The position index within the commit
-    /// @param liquiditySignal The liquidity signal (required when withCommitment is true)
     /// @param withCommitment Whether to run commitment backing checks and update position deficits
-    function checkpoint(
-        address sender,
-        uint256 commitId,
-        uint256 positionIndex,
-        bytes memory liquiditySignal,
-        bool withCommitment
-    ) external nonReentrant {
+    function checkpoint(uint256 commitId, uint256 positionIndex, bool withCommitment) external nonReentrant {
         // Validate commit exists (but don't require live signal - expired signals can be seized)
         _assertSignalValid(commitId, false);
 
         PositionId positionId = getPositionId(commitId, positionIndex);
+        _assertPositionValid(positionId, true);
 
         // Mark the RFS checkpoint for the position
         (bool rfsOpen,) = VTSPositionLib.calcRFS(s, poolManager, positionId, false);
@@ -749,8 +773,8 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
         if (!withCommitment) {
             return;
         }
-        VTSCommitLib.checkpointWithCommitment(
-            s, poolManager, signalManager, oracleHelper, sender, commitId, positionId, liquiditySignal
-        );
+        // Commitment backing checks use the stored commit signal state. If the signal is expired, it is treated as 0.
+        // Callers should renew first if needed.
+        VTSCommitLib.checkpointWithCommitment(s, poolManager, oracleHelper, commitId, positionId);
     }
 }

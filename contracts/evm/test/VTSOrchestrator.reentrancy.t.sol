@@ -166,16 +166,22 @@ contract ReentrantSignalManager {
             return target.call(abi.encodeWithSelector(VTSOrchestrator.onSeize.selector, commitId, positionIndex));
         }
         if (k == 5) {
-            return target.call(abi.encodeWithSelector(VTSOrchestrator.renewSignal.selector, commitId, liquiditySignal));
+            // Re-enter renewSignal itself.
+            LiquiditySignal memory sig = abi.decode(liquiditySignal, (LiquiditySignal));
+            return target.call(
+                abi.encodeWithSelector(
+                    bytes4(keccak256("renewSignal(address,uint256,bytes)")),
+                    sig.mmState.advancer,
+                    commitId,
+                    liquiditySignal
+                )
+            );
         }
         if (k == 6) {
             // Re-enter checkpoint in "no commitment checks" mode to avoid requiring any additional proof validation.
             // Note: checkpoint's `sender` argument is not coupled to msg.sender, and is unused when withCommitment=false.
-            return target.call(
-                abi.encodeWithSelector(
-                    VTSOrchestrator.checkpoint.selector, address(0xBEEF), commitId, positionIndex, bytes(""), false
-                )
-            );
+            return
+                target.call(abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, commitId, positionIndex, false));
         }
         return (false, bytes(""));
     }
@@ -250,7 +256,12 @@ contract VTSOrchestratorReentrancyTest is VTSOrchestratorFixture {
         // Renew should succeed under correct nonReentrant behaviour.
         unlockCaller.run(
             address(vtsOrchestrator),
-            abi.encodeWithSelector(VTSOrchestrator.renewSignal.selector, commitId, signalBytes)
+            abi.encodeWithSelector(
+                bytes4(keccak256("renewSignal(address,uint256,bytes)")),
+                liquiditySignal.mmState.advancer,
+                commitId,
+                signalBytes
+            )
         );
     }
 
@@ -260,9 +271,8 @@ contract VTSOrchestratorReentrancyTest is VTSOrchestratorFixture {
         // Create a committed position (commitId + position 0) without arming re-entry.
         (uint256 commitId,,,) = _createCommittedPosition();
 
-        // withCommitment=true triggers signal verification (external call) inside checkpointWithCommitment.
+        // withCommitment=true triggers backing checks inside checkpointWithCommitment.
         address advancer = liquiditySignal.mmState.advancer;
-        bytes memory signalBytes = abi.encode(liquiditySignal);
 
         // Re-enter `checkpoint` itself in the simplest mode (withCommitment=false) to deterministically kill
         // the `checkpoint` nonReentrant removal mutant without relying on any other entrypoint behaviour.
@@ -270,8 +280,7 @@ contract VTSOrchestratorReentrancyTest is VTSOrchestratorFixture {
 
         vm.prank(advancer);
         unlockCaller.run(
-            address(vtsOrchestrator),
-            abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, advancer, commitId, 0, signalBytes, true)
+            address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, commitId, 0, true)
         );
     }
 
@@ -294,7 +303,12 @@ contract VTSOrchestratorReentrancyTest is VTSOrchestratorFixture {
         bytes memory signalBytes = abi.encode(liquiditySignal);
         unlockCaller.run(
             address(vtsOrchestrator),
-            abi.encodeWithSelector(VTSOrchestrator.renewSignal.selector, commitId, signalBytes)
+            abi.encodeWithSelector(
+                bytes4(keccak256("renewSignal(address,uint256,bytes)")),
+                liquiditySignal.mmState.advancer,
+                commitId,
+                signalBytes
+            )
         );
     }
 
@@ -310,7 +324,12 @@ contract VTSOrchestratorReentrancyTest is VTSOrchestratorFixture {
         bytes memory signalBytes = abi.encode(liquiditySignal);
         unlockCaller.run(
             address(vtsOrchestrator),
-            abi.encodeWithSelector(VTSOrchestrator.renewSignal.selector, commitId, signalBytes)
+            abi.encodeWithSelector(
+                bytes4(keccak256("renewSignal(address,uint256,bytes)")),
+                liquiditySignal.mmState.advancer,
+                commitId,
+                signalBytes
+            )
         );
     }
 
@@ -333,15 +352,19 @@ contract VTSOrchestratorReentrancyTest is VTSOrchestratorFixture {
         address advancer = liquiditySignal.mmState.advancer;
         vm.prank(advancer);
         unlockCaller.run(
-            address(vtsOrchestrator),
-            abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, advancer, commitId, 0, signalBytes, true)
+            address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, commitId, 0, true)
         );
 
         _s().armOnSeize(commitId, 0);
 
         unlockCaller.run(
             address(vtsOrchestrator),
-            abi.encodeWithSelector(VTSOrchestrator.renewSignal.selector, commitId, signalBytes)
+            abi.encodeWithSelector(
+                bytes4(keccak256("renewSignal(address,uint256,bytes)")),
+                liquiditySignal.mmState.advancer,
+                commitId,
+                signalBytes
+            )
         );
     }
 }
