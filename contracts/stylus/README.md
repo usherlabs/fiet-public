@@ -1,66 +1,89 @@
-## Foundry
+## Stylus (Nitro) E2E bootstrap
 
-**Foundry is a blazing fast, portable and modular toolkit for Ethereum application development written in Rust.**
+This directory contains the tooling to:
 
-Foundry consists of:
+- deploy a minimal EVM “infra” on a fresh Nitro devnet for the Stylus policy to `staticcall` during validation
+- deploy the Stylus intent policy
+- write `e2e/.env` and run the Bun E2E harness against your local Nitro node
 
-- **Forge**: Ethereum testing framework (like Truffle, Hardhat and DappTools).
-- **Cast**: Swiss army knife for interacting with EVM smart contracts, sending transactions and getting chain data.
-- **Anvil**: Local Ethereum node, akin to Ganache, Hardhat Network.
-- **Chisel**: Fast, utilitarian, and verbose solidity REPL.
+All orchestration is in `justfile`.
 
-## Documentation
+## Prerequisites
 
-https://book.getfoundry.sh/
+- **Nitro** devnet running with Stylus enabled (run this in a separate process/terminal)
+- **Foundry** (`forge`, `cast`)
+- **just**
+- **jq**
+- **Rust** + `cargo-stylus` (for policy deployment via `tools/deployer`)
+- **Bun** (for `e2e/`)
 
-## Usage
+## Bootstrap a new Nitro node (high level)
 
-### Build
+1. Start your Nitro node in a separate terminal (your local Nitro setup dictates the exact command and ports).
+2. Export the required environment variables (see below).
+3. From `protocol/contracts/stylus/`, run `just bootstrap`.
+4. Run E2E tests with `just e2e_test`.
 
-```shell
-$ forge build
+## Required environment variables
+
+- **`RPC_URL`**: Nitro RPC (eg `http://127.0.0.1:8547`)
+- **`CHAIN_ID`**: Nitro chain id (string). Defaults to `421614` if unset.
+- **`PRIVATE_KEY`**: deployer key for Foundry scripts (expected as bytes32 hex)
+- **`OWNER_PRIVATE_KEY`**: key used by the Bun E2E harness
+- **`PERMISSION_ID`**: bytes32 permission id used by the PermissionValidator config
+- **`PRIV_KEY_PATH` or `PKEY`**: deployer key for Stylus policy deploy (`cargo stylus deploy`), provide exactly one
+
+## Command reference (`justfile`)
+
+From `protocol/contracts/stylus/`:
+
+```bash
+# List all commands
+just
+
+# Help/summary
+just help
+
+# Wait for Nitro RPC to become available
+just nitro_wait
+
+# Deploy Nitro E2E infra mocks (StateView/VTSOrchestrator/LiquidityHub + CREATE3Factory + placeholders)
+just infra_deploy
+
+# Deploy Kernel contracts (devnet)
+just kernel_deploy
+
+# Deploy & activate the Stylus intent policy (writes deployments.stylus.nitro.json)
+just stylus_deploy_policy
+
+# Write e2e/.env from the deployed addresses
+just e2e_write_env
+
+# Full bootstrap: infra + kernel + policy + e2e env
+just bootstrap
+
+# Run Bun E2E tests
+just e2e_test
 ```
 
-### Test
+## Quick start
 
-```shell
-$ forge test
+```bash
+export RPC_URL="http://127.0.0.1:8547"
+export CHAIN_ID="..."
+export PRIVATE_KEY="0x..."
+export OWNER_PRIVATE_KEY="0x..."
+export PERMISSION_ID="0x..."
+
+# Provide ONE of these for Stylus deploy:
+export PRIV_KEY_PATH="/path/to/keyfile"
+# export PKEY="0x..."
+
+just bootstrap
+just e2e_test
 ```
 
-### Format
+## Notes
 
-```shell
-$ forge fmt
-```
-
-### Gas Snapshots
-
-```shell
-$ forge snapshot
-```
-
-### Anvil
-
-```shell
-$ anvil
-```
-
-### Deploy
-
-```shell
-$ forge script script/Counter.s.sol:CounterScript --rpc-url <your_rpc_url> --private-key <your_private_key>
-```
-
-### Cast
-
-```shell
-$ cast <subcommand>
-```
-
-### Help
-
-```shell
-$ forge --help
-$ anvil --help
-$ cast --help
-```
+- The infra deployed by `just infra_deploy` is intentionally minimal and purpose-built for Stylus policy validation.
+- If you want to deploy the full Fiet protocol stack on Nitro (instead of mocks), that’s a separate workflow.

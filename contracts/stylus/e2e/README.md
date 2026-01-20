@@ -44,7 +44,7 @@ export PERMISSION_ID="0x..."          # bytes32 permission id for PermissionVali
 just bootstrap
 
 # 3) Run tests
-just e2e:test
+just e2e_test
 ```
 
 ## Typecheck
