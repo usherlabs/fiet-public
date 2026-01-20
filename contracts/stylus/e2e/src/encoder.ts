@@ -1,4 +1,5 @@
 import {
+  Address,
   Hex,
   hexToBytes,
   keccak256,
@@ -39,6 +40,10 @@ function writeB32(hex: Hex): Uint8Array {
 function writeSelector(sel: Hex): Uint8Array {
   const padded = pad(sel, { size: 8 });
   return hexToBytes(padded).slice(28);
+}
+
+function keccakBytes(bytes: Uint8Array): Hex {
+  return keccak256(bytes);
 }
 
 export function encodeProgram(checks: Check[]): Uint8Array {
@@ -163,7 +168,9 @@ export function encodeProgram(checks: Check[]): Uint8Array {
 // - bytes32 callBundleHash
 // - u32 programLen
 // - bytes programBytes
-export function encodeEnvelope(envelope: IntentEnvelope): Hex {
+// - u16 sigLen (must be 65)
+// - bytes signature (r||s||v)
+export function encodeEnvelope(envelope: IntentEnvelope, signature: Uint8Array): Hex {
   const parts: Uint8Array[] = [];
   parts.push(beU16(envelope.version));
   parts.push(beBytes(envelope.nonce, 32));
@@ -171,8 +178,59 @@ export function encodeEnvelope(envelope: IntentEnvelope): Hex {
   parts.push(writeB32(envelope.callBundleHash));
   parts.push(beU32(envelope.programBytes.length));
   parts.push(envelope.programBytes);
+  parts.push(beU16(signature.length));
+  parts.push(signature);
 
   return toHex(concatUint8(parts));
+}
+
+/**
+ * Sign the policy envelope using EIP-712 typed data.
+ *
+ * Purpose: the policy payload is passed in a "policy-local signature slice" by Kernel's permission pipeline.
+ * That slice is not automatically bound to the account signature, so we must explicitly sign the envelope
+ * to prevent payload tampering (e.g. swapping `programBytes` to a trivially passing program).
+ */
+export async function signEnvelope(params: {
+  chainId: bigint;
+  verifyingContract: Address; // intent policy contract address
+  wallet: Address; // smart account address (msg.sender in policy check)
+  permissionId: Hex; // bytes32 permission id
+  envelope: IntentEnvelope;
+  signTypedData: (args: any) => Promise<Hex>;
+}): Promise<Uint8Array> {
+  const { chainId, verifyingContract, wallet, permissionId, envelope, signTypedData } = params;
+  const programHash = keccakBytes(envelope.programBytes);
+
+  const signatureHex = await signTypedData({
+    domain: {
+      name: "Fiet Maker Intent Policy",
+      version: "1",
+      chainId,
+      verifyingContract,
+    },
+    types: {
+      IntentPolicyEnvelope: [
+        { name: "wallet", type: "address" },
+        { name: "permissionId", type: "bytes32" },
+        { name: "nonce", type: "uint256" },
+        { name: "deadline", type: "uint64" },
+        { name: "callBundleHash", type: "bytes32" },
+        { name: "programHash", type: "bytes32" },
+      ],
+    },
+    primaryType: "IntentPolicyEnvelope",
+    message: {
+      wallet,
+      permissionId,
+      nonce: envelope.nonce,
+      deadline: envelope.deadline,
+      callBundleHash: envelope.callBundleHash,
+      programHash,
+    },
+  });
+
+  return hexToBytes(signatureHex);
 }
 
 export function concatUint8(chunks: Uint8Array[]): Uint8Array {

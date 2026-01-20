@@ -30,7 +30,7 @@ See [contracts/evm/README.md](contracts/evm/README.md) for comprehensive Solidit
 
 ### For Rust (Arbitrum Stylus) Development  
 
-See [contracts/stylus/README.md](contracts/stylus/README.md) for comprehensive Stylus development documentation, including deployment, testing, and local development setup.
+See [contracts/stylus/README.md](contracts/stylus/README.md) for comprehensive Stylus development documentation, including deployment, testing, and local development setup. This includes the Kernel-compatible **Intent Policy** (ERC-7579 module type 5) used with PermissionValidator policies such as CallPolicy.
 
 ## Documentation
 

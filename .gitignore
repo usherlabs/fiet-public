@@ -14,3 +14,5 @@ contracts/evm-scripts/out/
 contracts/evm-scripts/deployments/
 contracts/evm-scripts/broadcast/
 .env
+
+node_modules/
