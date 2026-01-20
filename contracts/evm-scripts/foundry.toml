@@ -25,6 +25,8 @@ bytecode_hash = "none"
 fs_permissions = [
   { access = "read-write", path = "../evm/deployments" },
   { access = "read-write", path = "./deployments" },
+  # Allow Nitro/Stylus E2E infra scripts to write outputs for the Stylus harness.
+  { access = "read-write", path = "../stylus" },
   { access = "read-write", path = ".forge-snapshots/" },
   { access = "read", path = "out/" },
   { access = "read", path = "../evm/out/" },

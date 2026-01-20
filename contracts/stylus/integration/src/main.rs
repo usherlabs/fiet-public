@@ -7,22 +7,21 @@ use ethers::{
     middleware::SignerMiddleware,
     providers::{Http, Middleware, Provider},
     signers::{LocalWallet, Signer},
-    types::{Address, U256},
+    types::{Address, H256, U256},
 };
 use serde_json::Value;
 
 abigen!(
-    IntentValidator,
+    IntentPolicy,
     r#"[
         function onInstall(bytes data) external payable
         function onUninstall(bytes data) external payable
         function isModuleType(uint256 moduleTypeId) external view returns (bool)
         function isInitialized(address smartAccount) external view returns (bool)
-        function isValidSignatureWithSender(address sender, bytes32 hash, bytes data) external view returns (bytes4)
     ]"#
 );
 
-/// Minimal integration harness for the Stylus validator.
+/// Minimal integration harness for the Stylus policy.
 ///
 /// This runner assumes the contract is already deployed (eg via `tools/deployer`) and that the
 /// RPC has funds for the given private key.
@@ -38,7 +37,7 @@ struct Cli {
     deployments_path: PathBuf,
 
     /// Key under `deployments` to look up.
-    #[arg(long, default_value = "intent-validator")]
+    #[arg(long, default_value = "intent-policy")]
     contract_key: String,
 
     /// Deployer/test private key (0x...).
@@ -55,7 +54,11 @@ struct Cli {
     #[arg(long)]
     smart_account: Option<String>,
 
-    /// Authorised signer address to install (packed into the first 20 bytes for onInstall).
+    /// Permission id (bytes32 hex) used to scope policy state.
+    #[arg(long, env = "PERMISSION_ID")]
+    permission_id: String,
+
+    /// Authorised envelope signer address to install (packed into the init payload for onInstall).
     ///
     /// If omitted, uses the signer address.
     #[arg(long)]
@@ -97,6 +100,9 @@ async fn main() -> Result<()> {
         None => signer_addr,
     };
 
+    let permission_id =
+        H256::from_str(cli.permission_id.as_str()).context("invalid --permission-id (expected 0x + 64 hex chars)")?;
+
     let state_view = Address::from_str(cli.state_view.as_str()).context("invalid --state-view address")?;
     let vts_orchestrator =
         Address::from_str(cli.vts_orchestrator.as_str()).context("invalid --vts-orchestrator address")?;
@@ -104,19 +110,16 @@ async fn main() -> Result<()> {
         Address::from_str(cli.liquidity_hub.as_str()).context("invalid --liquidity-hub address")?;
 
     let client = Arc::new(SignerMiddleware::new(provider, wallet));
-    let contract = IntentValidator::new(contract_address, client.clone());
+    let contract = IntentPolicy::new(contract_address, client.clone());
 
     // Sanity: module types.
+    let is_policy = contract.is_module_type(U256::from(5u64)).call().await?;
     let is_validator = contract.is_module_type(U256::from(1u64)).call().await?;
-    let is_hook = contract.is_module_type(U256::from(2u64)).call().await?;
-    let is_other = contract.is_module_type(U256::from(3u64)).call().await?;
-
-    if !is_validator || is_hook || is_other {
+    if !is_policy || is_validator {
         return Err(anyhow!(
-            "unexpected module-type detection: validator={}, hook={}, other={}",
-            is_validator,
-            is_hook,
-            is_other
+            "unexpected module-type detection: policy={}, validator={}",
+            is_policy,
+            is_validator
         ));
     }
 
@@ -127,8 +130,10 @@ async fn main() -> Result<()> {
     // Install + check.
     if !before {
         // onInstall expects:
-        // uint8 version=1 || bytes20 signer || bytes20 stateView || bytes20 vtsOrchestrator || bytes20 liquidityHub
-        let mut install_data = Vec::with_capacity(81);
+        // bytes data = bytes32(permissionId) || initData
+        // initData = uint8 version=1 || bytes20 signer || bytes20 stateView || bytes20 vtsOrchestrator || bytes20 liquidityHub
+        let mut install_data = Vec::with_capacity(32 + 81);
+        install_data.extend_from_slice(permission_id.as_bytes());
         install_data.push(1u8);
         install_data.extend_from_slice(authorised_signer.as_bytes());
         install_data.extend_from_slice(state_view.as_bytes());
@@ -147,7 +152,10 @@ async fn main() -> Result<()> {
     }
 
     // Uninstall + check.
-    let call = contract.on_uninstall(Vec::new().into()).value(0u64);
+    // onUninstall expects at minimum the bytes32(permissionId) prefix.
+    let mut uninstall_data = Vec::with_capacity(32);
+    uninstall_data.extend_from_slice(permission_id.as_bytes());
+    let call = contract.on_uninstall(uninstall_data.into()).value(0u64);
     let pending = call.send().await?;
     let receipt = pending.await?.ok_or_else(|| anyhow!("onUninstall tx dropped"))?;
     println!("onUninstall tx: {:?}", receipt.transaction_hash);

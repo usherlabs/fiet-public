@@ -1,6 +1,6 @@
 # Stylus integration runner (what it actually checks)
 
-This directory contains a **minimal on-chain sanity-check harness** for the Stylus validator program described in `protocol/contracts/stylus/README.md` (see the “Integration runner (devnet / testnet)” section).
+This directory contains a **minimal on-chain sanity-check harness** for the Stylus policy program described in `protocol/contracts/stylus/README.md` (see the “Integration runner (devnet / testnet)” section).
 
 It is not a full ERC-4337 / Kernel end-to-end test. Instead, it performs a small set of direct contract calls/transactions against an **already deployed** Stylus program address, to confirm:
 
@@ -19,10 +19,11 @@ The runner accepts:
 
 - **`--rpc-url`** (or `RPC_URL`): HTTP RPC endpoint.
 - **`--deployments-path`** (or `DEPLOYMENTS`, default `deployments.devnet.json`): JSON file written by `tools/deployer`.
-- **`--contract-key`** (default `intent-validator`): key under `deployments.<contract-key>.address`.
+- **`--contract-key`** (default `intent-policy`): key under `deployments.<contract-key>.address`.
 - **`--private-key`** (or `PKEY`) **or** **`--private-key-path`** (or `PRIV_KEY_PATH`): signer used to send transactions.
 - **`--smart-account`** (optional): address passed to `isInitialized(address)` view calls.
-- **`--authorised-signer`** (optional): address packed into the first 20 bytes passed to `onInstall(bytes)`.
+- **`--permission-id`** (or `PERMISSION_ID`): bytes32 permission id used to scope policy install state.
+- **`--authorised-signer`** (optional): address stored as the policy envelope signer in `onInstall(bytes)`.
 
 Defaults that matter:
 
@@ -68,15 +69,14 @@ It wraps the provider with `SignerMiddleware` so it can send transactions.
 
 The first behavioural check is:
 
-- call `isModuleType(1)` and require **true** (validator)
-- call `isModuleType(2)` and require **true** (hook)
-- call `isModuleType(3)` and require **false** (anything else)
+- call `isModuleType(5)` and require **true** (policy)
+- call `isModuleType(1)` and require **false** (validator)
 
 If any of these expectations fail, the runner exits with an error:
 
 - “unexpected module-type detection …”
 
-This is aligned with the parent README’s claim that the program is exposed as a **Kernel-compatible `IValidator` (and optional `IHook`)** module.
+This is aligned with the parent README’s claim that the program is exposed as a **Kernel-compatible `IPolicy`** module.
 
 ### 5) Check initialisation state before install
 
@@ -96,7 +96,8 @@ If `isInitialized(smart_account)` was **false**, the runner sends an install tra
 
 - **Calldata**: `onInstall(install_data)`
 - **Value**: 0
-- **`install_data`**: exactly 20 bytes — the raw address bytes of `authorised_signer` (`abi.encodePacked(authorisedSigner)` in Solidity terms)
+- **`install_data`**: `bytes32(permissionId) || initData`
+- **`initData`**: `uint8 version || bytes20 authorisedSigner || bytes20 stateView || bytes20 vtsOrchestrator || bytes20 liquidityHub`
 
 It waits for the transaction receipt and prints:
 
@@ -129,7 +130,7 @@ Finally, the runner sends an uninstall transaction:
 
 - **Calldata**: `onUninstall(bytes)`
 - **Value**: 0
-- **Data**: empty bytes (`0x`)
+- **Data**: `bytes32(permissionId)` (prefix required by the policy)
 
 It waits for the receipt and prints:
 
@@ -176,7 +177,7 @@ cargo run --manifest-path integration/Cargo.toml -- \
   --rpc-url "$RPC_URL" \
   --private-key-path "$PRIV_KEY_PATH" \
   --deployments-path deployments.devnet.json \
-  --contract-key intent-validator
+  --contract-key intent-policy
 ```
 
 If you want to override the defaults:

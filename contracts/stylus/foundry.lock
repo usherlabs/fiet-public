@@ -1,0 +1,32 @@
+{
+  "../evm/lib/forge-std": {
+    "rev": "77041d2ce690e692d6e03cc812b57d1ddaa4d505"
+  },
+  "../evm/lib/openzeppelin-contracts": {
+    "rev": "f9f7db03f3df020aace3958b8fb7de8891d133e5"
+  },
+  "../evm/lib/oracle": {
+    "rev": "2c8947220fc616e0370e51fd323f89ba985655ba"
+  },
+  "../evm/lib/permit2": {
+    "rev": "cc56ad0f3439c502c246fc5cfcc3db92bb8b7219"
+  },
+  "../evm/lib/solady": {
+    "rev": "acd959aa4bd04720d640bf4e6a5c71037510cc4b"
+  },
+  "../evm/lib/v4-periphery": {
+    "rev": "ad04c9f24a170accf5ea1b2836bbafd514537ca6"
+  },
+  "lib/forge-std": {
+    "tag": {
+      "name": "v1.14.0",
+      "rev": "1801b0541f4fda118a10798fd3486bb7051c5dd6"
+    }
+  },
+  "lib/kernel": {
+    "tag": {
+      "name": "v1.0.1",
+      "rev": "e2041f376c970fd451a8ad8177268f106a7faca2"
+    }
+  }
+}

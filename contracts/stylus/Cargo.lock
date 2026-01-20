@@ -733,7 +733,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "fiet-maker-intent-validator"
+name = "fiet-maker-policy"
 version = "0.0.1"
 dependencies = [
  "alloy-primitives",
@@ -743,7 +743,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "fiet-maker-intent-validator-encoder"
+name = "fiet-maker-policy-encoder"
 version = "0.1.0"
 dependencies = [
  "alloy-primitives",

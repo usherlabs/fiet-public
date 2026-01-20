@@ -1,5 +1,9 @@
 [workspace]
-members = ["fiet-maker-intent-validator", "tools/deployer", "off-chain/fiet-maker-intent-validator-encoder"]
+members = [
+  "fiet-maker-policy",
+  "tools/deployer",
+  "off-chain/fiet-maker-policy-encoder",
+]
 resolver = "2"
 
 [workspace.dependencies]
