@@ -2,3 +2,5 @@
 .env
 deployments.*.json
 **/target/
+/wasm/*.wasm
+/wasm/*.wat
