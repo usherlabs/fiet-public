@@ -126,8 +126,12 @@ contract CoreHook is BaseHook, Exttload, ImmutableMarketState, ImmutableVTSState
         override
         returns (bytes4, int128)
     {
+        // Read swap snapshot from transient storage then clear immediately to avoid any same-tx "ghost state"
+        // interactions if future refactors introduce nested/interleaved swaps.
         uint160 sqrtPBefore = uint160(TransientSlot.asUint256(TransientSlots.SQRTP_BEFORE_SLOT).tload());
         uint128 liqBefore = uint128(TransientSlot.asUint256(TransientSlots.LIQ_BEFORE_SLOT).tload());
+        TransientSlot.asUint256(TransientSlots.SQRTP_BEFORE_SLOT).tstore(0);
+        TransientSlot.asUint256(TransientSlots.LIQ_BEFORE_SLOT).tstore(0);
         vtsOrchestrator.afterCoreSwap(key, params, delta, sqrtPBefore, liqBefore);
 
         // Check if this is a direct core pool swap, and if it is, call the proxy hook

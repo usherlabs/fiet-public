@@ -7,6 +7,8 @@ import {CoreHook} from "../src/CoreHook.sol";
 import {Errors} from "../src/libraries/Errors.sol";
 import {LiquidityUtils} from "../src/libraries/LiquidityUtils.sol";
 import {HookFlags} from "../src/libraries/HookFlags.sol";
+import {TransientSlots} from "../src/libraries/TransientSlots.sol";
+import {TransientSlot} from "openzeppelin-contracts/contracts/utils/TransientSlot.sol";
 
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
@@ -16,6 +18,7 @@ import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/Pool
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 
 import {PositionId, Position} from "../src/types/Position.sol";
+import {RFSCheckpoint} from "../src/types/Checkpoint.sol";
 import {HookMiner} from "v4-periphery/src/utils/HookMiner.sol";
 
 /**
@@ -194,6 +197,22 @@ contract CoreHookTest is Test {
         assertEq(spy.swapCalls(), 0, "should not notify proxy hook during proxy-initiated swaps");
     }
 
+    function test_afterSwap_clearsTransientSwapSnapshotSlots() public {
+        // Ensure CoreHook clears transient scratch slots after consuming them to avoid same-tx ghost state.
+        uint160 sqrtPBefore = 123;
+        uint128 liqBefore = 456;
+        SwapParams memory sp = SwapParams({zeroForOne: true, amountSpecified: int256(1), sqrtPriceLimitX96: 0});
+
+        (uint256 sqrtAfter, uint256 liqAfter) = hook.exposed_afterSwap_withPresetSnapshot(
+            key, sp, toBalanceDelta(int128(-1), int128(1)), sqrtPBefore, liqBefore, bytes("")
+        );
+
+        assertEq(vts.lastSqrtPBefore(), sqrtPBefore, "VTS should receive sqrtPBefore");
+        assertEq(vts.lastLiqBefore(), liqBefore, "VTS should receive liqBefore");
+        assertEq(sqrtAfter, 0, "SQRTP_BEFORE_SLOT should be cleared");
+        assertEq(liqAfter, 0, "LIQ_BEFORE_SLOT should be cleared");
+    }
+
     // ------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------
@@ -208,6 +227,8 @@ contract CoreHookTest is Test {
 // ------------------------------------------------------------
 
 contract CoreHookHarness is CoreHook {
+    using TransientSlot for *;
+
     constructor(address _poolManager, address _marketFactory, address _vtsOrchestrator)
         CoreHook(_poolManager, _marketFactory, _vtsOrchestrator)
     {}
@@ -250,6 +271,24 @@ contract CoreHookHarness is CoreHook {
         bytes calldata hookData
     ) external returns (bytes4, int128) {
         return _afterSwap(sender, k, params, delta, hookData);
+    }
+
+    function exposed_afterSwap_withPresetSnapshot(
+        PoolKey calldata k,
+        SwapParams calldata params,
+        BalanceDelta delta,
+        uint160 sqrtPBefore,
+        uint128 liqBefore,
+        bytes calldata hookData
+    ) external returns (uint256 sqrtAfter, uint256 liqAfter) {
+        // Pre-seed transient slots to emulate the beforeSwap->afterSwap same-tx lifecycle.
+        TransientSlot.asUint256(TransientSlots.SQRTP_BEFORE_SLOT).tstore(uint256(sqrtPBefore));
+        TransientSlot.asUint256(TransientSlots.LIQ_BEFORE_SLOT).tstore(uint256(liqBefore));
+
+        _afterSwap(address(this), k, params, delta, hookData);
+
+        sqrtAfter = TransientSlot.asUint256(TransientSlots.SQRTP_BEFORE_SLOT).tload();
+        liqAfter = TransientSlot.asUint256(TransientSlots.LIQ_BEFORE_SLOT).tload();
     }
 }
 
@@ -329,6 +368,9 @@ contract MockVTSOrchestrator {
     BalanceDelta internal _feeAdj;
     bool internal _isMM;
 
+    uint160 internal _lastSqrtPBefore;
+    uint128 internal _lastLiqBefore;
+
     function setReturn(BalanceDelta feeAdj, bool isMMPosition) external {
         _feeAdj = feeAdj;
         _isMM = isMMPosition;
@@ -341,13 +383,39 @@ contract MockVTSOrchestrator {
         BalanceDelta,
         BalanceDelta,
         bytes calldata
-    ) external view returns (Position memory, /* pos */ PositionId id, BalanceDelta feeAdj, bool isMMPosition) {
+    ) external view returns (Position memory pos, PositionId id, BalanceDelta feeAdj, bool isMMPosition) {
+        pos = Position({
+            owner: address(0),
+            poolId: PoolId.wrap(bytes32(0)),
+            commitId: 0,
+            tickLower: 0,
+            tickUpper: 0,
+            liquidity: 0,
+            isActive: false,
+            salt: bytes32(0),
+            checkpoint: RFSCheckpoint({
+                timeOfLastTransition: 0, isOpen: false, gracePeriodExtension0: 0, gracePeriodExtension1: 0
+            })
+        });
         id = PositionId.wrap(bytes32(0));
         feeAdj = _feeAdj;
         isMMPosition = _isMM;
     }
 
-    function afterCoreSwap(PoolKey calldata, SwapParams calldata, BalanceDelta, uint160, uint128) external {}
+    function afterCoreSwap(PoolKey calldata, SwapParams calldata, BalanceDelta, uint160 sqrtPBefore, uint128 liqBefore)
+        external
+    {
+        _lastSqrtPBefore = sqrtPBefore;
+        _lastLiqBefore = liqBefore;
+    }
+
+    function lastSqrtPBefore() external view returns (uint160) {
+        return _lastSqrtPBefore;
+    }
+
+    function lastLiqBefore() external view returns (uint128) {
+        return _lastLiqBefore;
+    }
 }
 
 contract MockPoolManager {

@@ -546,6 +546,66 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         }
     }
 
+    function test_seizeContext_clearedAfterBatch_preventsCrossBatchApprovalBypass() public {
+        // Objective:
+        // - Ensure the transient SEIZED_POSITION_ID context is cleared at the end of a batch.
+        //
+        // Risk surface:
+        // - If SEIZED_POSITION_ID_SLOT leaks into subsequent batches within the same tx,
+        //   a non-approved caller could perform follow-on position actions and bypass NotApproved.
+        uint256 tokenId = 1;
+        uint256 positionIndex = 0;
+
+        _setupCommittedPosition(
+            positionManager,
+            corePoolKey,
+            abi.encode(liquiditySignal),
+            defaultlLiquidityParams,
+            marketVTSConfiguration,
+            address(lcc0),
+            address(lcc1)
+        );
+
+        // Open RFS by creating a deficit via swap, then warp past grace.
+        swapRouter.swap(
+            proxyPoolKey,
+            SwapParams({zeroForOne: true, amountSpecified: -1e18, sqrtPriceLimitX96: ZERO_FOR_ONE_LIMIT}),
+            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false}),
+            ZERO_BYTES
+        );
+        vm.warp(block.timestamp + 300000 + 1);
+
+        uint256 seizeSettle0 = 5_999_709_018_652_707;
+        uint256 seizeSettle1 = 5_999_709_018_652_707;
+        IERC20(lcc0.underlying()).transfer(guarantor, seizeSettle0);
+        IERC20(lcc1.underlying()).transfer(guarantor, seizeSettle1);
+
+        vm.startPrank(guarantor);
+        IERC20(lcc0.underlying()).approve(address(positionManager), type(uint256).max);
+        IERC20(lcc1.underlying()).approve(address(positionManager), type(uint256).max);
+
+        // First batch: perform seizure flow and drain deltas so the batch completes.
+        {
+            MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](4);
+            actions[0] = MMA.prepareSeize(corePoolKey, tokenId, positionIndex, seizeSettle0, seizeSettle1, false);
+            actions[1] = MMA.prepareSettleFromDeltas(corePoolKey, tokenId, positionIndex, true, true);
+            actions[2] = MMA.prepareTake(Currency.wrap(address(lcc0)), address(guarantor), 0);
+            actions[3] = MMA.prepareTake(Currency.wrap(address(lcc1)), address(guarantor), 0);
+            MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+        }
+
+        // Second batch (same tx): attempt an unapproved SETTLE (deposit) on the seized position.
+        // This must revert NotApproved, proving the seizure context was cleared after the first batch.
+        {
+            MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](1);
+            actions[0] = MMA.prepareSettle(corePoolKey, tokenId, positionIndex, -int128(1), -int128(1), false);
+            vm.expectRevert(abi.encodeWithSelector(Errors.NotApproved.selector, guarantor));
+            MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+        }
+
+        vm.stopPrank();
+    }
+
     function testCanDecreaseMintNewPositionFromDeltasAndBurnInitialPosition() public {
         // Objective:
         // - Prove a user can decrease liquidity, mint a new position using deltas, settle it, then burn the original.

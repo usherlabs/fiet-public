@@ -72,7 +72,7 @@ contract PositionManagerEntrypointHarness is PositionManagerEntrypoint {
         _beforeBatch();
     }
 
-    function exposeAfterBatch() external view {
+    function exposeAfterBatch() external {
         _afterBatch();
     }
 

@@ -51,7 +51,10 @@ abstract contract PositionManagerEntrypoint is PositionManagerBase {
 
     /// @notice Hook called after batch execution
     /// @dev Asserts that deltas are non-zero after batch execution
-    function _afterBatch() internal view {
+    function _afterBatch() internal {
+        // Clear any per-batch transient context to avoid same-tx leakage into subsequent batches.
+        TransientSlots.clearSeizedPositionId();
+        // Assert that deltas are non-zero after batch execution
         vtsOrchestrator.assertNonZeroDeltas();
     }
 
