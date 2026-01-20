@@ -12,16 +12,14 @@
     "bun": ">=1.0.0"
   },
   "dependencies": {
-    "@zerodev/sdk": "^5.3.0",
-    "@zerodev/permissions": "^1.0.0",
-    "@zerodev/ecdsa-validator": "^5.3.0",
-    "viem": "^2.9.0",
-    "dotenv": "^16.3.1"
+    "@zerodev/permissions": "^5.6.3",
+    "@zerodev/sdk": "^5.5.7",
+    "dotenv": "^17.2.3",
+    "viem": "^2.44.4"
   },
   "devDependencies": {
-    "typescript": "^5.4.0",
-    "vitest": "^1.2.0",
-    "@types/node": "^20.11.0"
+    "@types/node": "^25.0.9",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.17"
   }
 }
-

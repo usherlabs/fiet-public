@@ -19,8 +19,8 @@ use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 struct Cli {
     /// Directory containing the Stylus contract crate (where `cargo stylus deploy` should be run).
     ///
-    /// In this repo, the contract crate lives at `fiet-maker-intent-validator/`.
-    #[arg(long, default_value = "fiet-maker-intent-validator")]
+    /// In this repo, the contract crate lives at `fiet-maker-policy/`.
+    #[arg(long, default_value = "fiet-maker-policy")]
     contract_dir: PathBuf,
 
     /// RPC URL used by `cargo stylus deploy`.
@@ -39,8 +39,8 @@ struct Cli {
     #[arg(long, default_value = "deployments.devnet.json")]
     deployments_path: PathBuf,
 
-    /// Key under `deployments` to store this contract (eg, intent-validator).
-    #[arg(long, default_value = "intent-validator")]
+    /// Key under `deployments` to store this contract (eg, intent-policy).
+    #[arg(long, default_value = "intent-policy")]
     contract_key: String,
 
     /// Optional network name (eg, devnet, arb-sepolia).

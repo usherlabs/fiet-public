@@ -1,0 +1,160 @@
+set dotenv-load
+set export
+
+# Stylus / Nitro bootstrap orchestration.
+#
+# This Justfile assumes your Nitro node is running in a separate process.
+# It focuses on:
+# - deploying Nitro-specific EVM mocks for the Stylus policy's fact reads
+# - deploying the Stylus intent policy (cargo-stylus)
+# - writing `contracts/stylus/e2e/.env` for the Bun E2E harness
+
+rpc_url := env_var("RPC_URL")
+chain_id := env_var_or_default("CHAIN_ID", "421614")
+
+# EVM deploy key (Foundry expects bytes32 in PRIVATE_KEY env var)
+private_key := env_var("PRIVATE_KEY")
+
+# Stylus deploy key (cargo-stylus)
+priv_key_path := env_var_or_default("PRIV_KEY_PATH", "")
+pkey := env_var_or_default("PKEY", "")
+
+permission_id := env_var_or_default("PERMISSION_ID", "")
+owner_private_key := env_var_or_default("OWNER_PRIVATE_KEY", "")
+
+infra_deployments := "deployments.infra.nitro.json"
+stylus_deployments := "deployments.stylus.nitro.json"
+kernel_deployments := "deployments.kernel.nitro.json"
+e2e_env_path := "e2e/.env"
+
+[private]
+default:
+  @just --list --unsorted
+
+help:
+  @echo "Stylus / Nitro E2E bootstrap"
+  @echo ""
+  @echo "Required env:"
+  @echo "  RPC_URL            - Nitro RPC (eg http://127.0.0.1:8547)"
+  @echo "  PRIVATE_KEY        - hex bytes32 for Foundry deployments"
+  @echo "  OWNER_PRIVATE_KEY  - hex key used by E2E harness"
+  @echo "  PERMISSION_ID      - bytes32 permission id (matches your PermissionValidator config)"
+  @echo ""
+  @echo "For Stylus deploy, provide ONE of:"
+  @echo "  PRIV_KEY_PATH      - path to private key file"
+  @echo "  PKEY              - raw hex private key"
+  @echo ""
+  @echo "Main recipes:"
+  @echo "  just nitro:wait"
+  @echo "  just infra:deploy"
+  @echo "  just kernel:deploy"
+  @echo "  just stylus:deploy-policy"
+  @echo "  just e2e:write-env"
+  @echo "  just bootstrap"
+
+# --- Nitro ---
+
+nitro:wait:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  echo "Waiting for Nitro RPC at ${RPC_URL} ..."
+  until cast chain-id --rpc-url "${RPC_URL}" >/dev/null 2>&1; do
+    sleep 1
+  done
+  echo "Nitro RPC is up. chainId=$(cast chain-id --rpc-url "${RPC_URL}")"
+
+# --- EVM infra (mocks) ---
+
+infra:deploy: nitro:wait
+  #!/usr/bin/env bash
+  set -euo pipefail
+  echo "Deploying Nitro E2E infra mocks -> {{infra_deployments}}"
+  DEPLOYMENTS_PATH="{{infra_deployments}}" \
+  forge script script/DeployStylusE2EInfra.s.sol:DeployStylusE2EInfra \
+    --rpc-url "{{rpc_url}}" \
+    --broadcast -vvv
+  echo "Wrote {{infra_deployments}}"
+
+# --- Kernel (devnet) ---
+
+kernel:deploy: nitro:wait
+  #!/usr/bin/env bash
+  set -euo pipefail
+  echo "Deploying Kernel (devnet) -> {{kernel_deployments}}"
+  DEPLOYMENTS_PATH="{{kernel_deployments}}" \
+  forge script script/DeployDevnet.s.sol:DeployDevnet \
+    --rpc-url "{{rpc_url}}" \
+    --broadcast -vvv
+  echo "Wrote {{kernel_deployments}}"
+
+# --- Stylus policy ---
+
+stylus:deploy-policy: nitro:wait
+  #!/usr/bin/env bash
+  set -euo pipefail
+  if [ -z "{{priv_key_path}}" ] && [ -z "{{pkey}}" ]; then
+    echo "Missing PRIV_KEY_PATH or PKEY for Stylus deployment"
+    exit 1
+  fi
+  echo "Deploying Stylus policy -> {{stylus_deployments}}"
+  ARGS=()
+  if [ -n "{{priv_key_path}}" ]; then
+    ARGS+=(--private-key-path "{{priv_key_path}}")
+  else
+    ARGS+=(--private-key "{{pkey}}")
+  fi
+  cargo run --manifest-path tools/deployer/Cargo.toml -- \
+    --rpc-url "{{rpc_url}}" \
+    "${ARGS[@]}" \
+    --deployments-path "{{stylus_deployments}}" \
+    --contract-key intent-policy \
+    --network nitro
+
+stylus:policy-address:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  jq -r '.deployments["intent-policy"].address' "{{stylus_deployments}}"
+
+# --- E2E env wiring ---
+
+e2e:write-env:
+  #!/usr/bin/env bash
+  set -euo pipefail
+
+  if [ -z "{{permission_id}}" ]; then
+    echo "Missing PERMISSION_ID"
+    exit 1
+  fi
+  if [ -z "{{owner_private_key}}" ]; then
+    echo "Missing OWNER_PRIVATE_KEY"
+    exit 1
+  fi
+
+  INTENT_POLICY_ADDRESS="$(jq -r '.deployments["intent-policy"].address' "{{stylus_deployments}}")"
+  STATE_VIEW_ADDRESS="$(jq -r '.addrs.STATE_VIEW_ADDRESS' "{{infra_deployments}}")"
+  VTS_ORCHESTRATOR_ADDRESS="$(jq -r '.addrs.VTS_ORCHESTRATOR_ADDRESS' "{{infra_deployments}}")"
+  LIQUIDITY_HUB_ADDRESS="$(jq -r '.addrs.LIQUIDITY_HUB_ADDRESS' "{{infra_deployments}}")"
+  MM_POSITION_MANAGER_ADDRESS="$(jq -r '.addrs.MM_POSITION_MANAGER_ADDRESS' "{{infra_deployments}}")"
+  POSITION_MANAGER_ADDRESS="$(jq -r '.addrs.POSITION_MANAGER_ADDRESS' "{{infra_deployments}}")"
+
+  cat > "{{e2e_env_path}}" <<EOF
+RPC_URL={{rpc_url}}
+CHAIN_ID={{chain_id}}
+OWNER_PRIVATE_KEY={{owner_private_key}}
+PERMISSION_ID={{permission_id}}
+INTENT_POLICY_ADDRESS=${INTENT_POLICY_ADDRESS}
+STATE_VIEW_ADDRESS=${STATE_VIEW_ADDRESS}
+VTS_ORCHESTRATOR_ADDRESS=${VTS_ORCHESTRATOR_ADDRESS}
+LIQUIDITY_HUB_ADDRESS=${LIQUIDITY_HUB_ADDRESS}
+MM_POSITION_MANAGER_ADDRESS=${MM_POSITION_MANAGER_ADDRESS}
+POSITION_MANAGER_ADDRESS=${POSITION_MANAGER_ADDRESS}
+EOF
+
+  echo "Wrote {{e2e_env_path}}"
+
+e2e:test:
+  cd e2e && bun test
+
+bootstrap: infra:deploy kernel:deploy stylus:deploy-policy e2e:write-env
+  @echo "Bootstrap complete. Next: just e2e:test"
+

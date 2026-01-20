@@ -1,26 +1,23 @@
-import "dotenv/config";
+import { toPermissionValidator } from "@zerodev/permissions";
 import {
   createKernelAccount,
-  createKernelAccountClient,
-  createZeroDevPaymasterClient,
-  getEntryPoint,
 } from "@zerodev/sdk";
-import { toPermissionValidator } from "@zerodev/permissions";
-import { createPublicClient, createWalletClient, http, Hex, PrivateKeyAccount, pad, hexToBytes, toHex } from "viem";
+import "dotenv/config";
+import { Address, Hex, PrivateKeyAccount, createPublicClient, createWalletClient, hexToBytes, http, pad, toHex } from "viem";
+import { entryPoint06Address, entryPoint07Address } from "viem/account-abstraction";
 import { privateKeyToAccount } from "viem/accounts";
-import { arbitrumSepolia } from "viem/chains";
+import { encodeEnvelope, encodeProgram, signEnvelope } from "./encoder.js";
 import { buildCallPolicy } from "./policies.js";
-import { encodeEnvelope, encodeProgram } from "./encoder.js";
 import { Check, IntentEnvelope } from "./types.js";
 
 export interface TestEnv {
   rpcUrl: string;
-  bundlerUrl: string;
   chainId: bigint;
   entryPointVersion: "0.7" | "0.6";
   kernelVersion: string;
   owner: PrivateKeyAccount;
   intentPolicy: Hex;
+  permissionId: Hex;
   stateView: Hex;
   vtsOrchestrator: Hex;
   liquidityHub: Hex;
@@ -30,9 +27,10 @@ export interface TestEnv {
 
 export function loadEnv(): TestEnv {
   const required = [
-    "ZERODEV_RPC",
+    "RPC_URL",
     "OWNER_PRIVATE_KEY",
     "INTENT_POLICY_ADDRESS",
+    "PERMISSION_ID",
     "STATE_VIEW_ADDRESS",
     "VTS_ORCHESTRATOR_ADDRESS",
     "LIQUIDITY_HUB_ADDRESS",
@@ -47,15 +45,19 @@ export function loadEnv(): TestEnv {
 
   const chainId = BigInt(process.env.CHAIN_ID ?? "421614"); // default Arbitrum Sepolia
   const entryPointVersion = (process.env.ENTRYPOINT_VERSION ?? "0.7") as "0.7" | "0.6";
+  const rpcUrl = process.env.RPC_URL ?? process.env.ZERODEV_RPC;
+  if (!rpcUrl) {
+    throw new Error("Missing env RPC_URL (or legacy ZERODEV_RPC)");
+  }
 
   return {
-    rpcUrl: process.env.ZERODEV_RPC!,
-    bundlerUrl: process.env.ZERODEV_RPC!,
+    rpcUrl,
     chainId,
     entryPointVersion,
     kernelVersion: process.env.KERNEL_VERSION ?? "3.3",
     owner: privateKeyToAccount(process.env.OWNER_PRIVATE_KEY! as Hex),
     intentPolicy: process.env.INTENT_POLICY_ADDRESS! as Hex,
+    permissionId: process.env.PERMISSION_ID! as Hex,
     stateView: process.env.STATE_VIEW_ADDRESS! as Hex,
     vtsOrchestrator: process.env.VTS_ORCHESTRATOR_ADDRESS! as Hex,
     liquidityHub: process.env.LIQUIDITY_HUB_ADDRESS! as Hex,
@@ -65,17 +67,17 @@ export function loadEnv(): TestEnv {
 }
 
 export async function buildKernelClient(env: TestEnv) {
-  const chain = arbitrumSepolia; // override id matches env.chainId
-  const entryPoint = getEntryPoint(env.entryPointVersion);
+  const entryPoint =
+    env.entryPointVersion === "0.6"
+      ? { address: entryPoint06Address, version: "0.6" as const }
+      : { address: entryPoint07Address, version: "0.7" as const };
 
   const publicClient = createPublicClient({
-    chain,
     transport: http(env.rpcUrl),
   });
 
   const walletClient = createWalletClient({
     account: env.owner,
-    chain,
     transport: http(env.rpcUrl),
   });
 
@@ -90,6 +92,7 @@ export async function buildKernelClient(env: TestEnv) {
   // permission config; this harness scaffolds the init bytes, but the exact SDK wiring
   // for custom policies depends on your ZeroDev SDK version.
   const intentPolicyInitData = buildIntentPolicyInitData({
+    signer: env.owner.address,
     stateView: env.stateView,
     vtsOrchestrator: env.vtsOrchestrator,
     liquidityHub: env.liquidityHub,
@@ -98,8 +101,8 @@ export async function buildKernelClient(env: TestEnv) {
   // Permission validator combining signer + policies
   const permissionValidator = await toPermissionValidator(publicClient, {
     entryPoint,
-    signer: env.owner,
-    kernelVersion: env.kernelVersion,
+    signer: env.owner as any,
+    kernelVersion: env.kernelVersion as any,
     // Include CallPolicy plus our custom IntentPolicy.
     //
     // If your SDK supports custom policies directly, replace this `as any` shape with
@@ -115,39 +118,37 @@ export async function buildKernelClient(env: TestEnv) {
 
   const account = await createKernelAccount(publicClient, {
     entryPoint,
-    kernelVersion: env.kernelVersion,
+    kernelVersion: env.kernelVersion as any,
     plugins: {
       sudo: permissionValidator, // Kernel expects sudo validator; our intent validator is at execution path
     },
     address: undefined, // allow computed
   });
 
-  const paymaster = createZeroDevPaymasterClient({
-    chain,
-    transport: http(env.bundlerUrl),
-  });
-
-  const kernelClient = createKernelAccountClient({
-    account,
-    chain,
-    bundlerTransport: http(env.bundlerUrl),
-    client: publicClient,
-    paymaster,
-  });
-
-  return { publicClient, walletClient, kernelClient, account, entryPoint };
+  // NOTE: For a pure 7702/no-bundler flow, we deliberately do not construct a bundler/paymaster client.
+  // Use `publicClient` + `walletClient` directly for transactions/calls, and use `account` for Kernel
+  // address derivation and plugin configuration.
+  return { publicClient, walletClient, account, entryPoint };
 }
 
 function buildIntentPolicyInitData(params: {
+  signer: Address;
   stateView: Hex;
   vtsOrchestrator: Hex;
   liquidityHub: Hex;
 }): Hex {
-  const data = new Uint8Array(1 + 20 + 20 + 20);
+  // Layout matches the on-chain policy:
+  // - uint8 version
+  // - bytes20 signer (authorised envelope signer)
+  // - bytes20 stateView
+  // - bytes20 vtsOrchestrator
+  // - bytes20 liquidityHub
+  const data = new Uint8Array(1 + 20 + 20 + 20 + 20);
   data[0] = 1; // version
-  data.set(hexToBytes(pad(params.stateView, { size: 40 })), 1);
-  data.set(hexToBytes(pad(params.vtsOrchestrator, { size: 40 })), 21);
-  data.set(hexToBytes(pad(params.liquidityHub, { size: 40 })), 41);
+  data.set(hexToBytes(pad(params.signer, { size: 40 })), 1);
+  data.set(hexToBytes(pad(params.stateView, { size: 40 })), 21);
+  data.set(hexToBytes(pad(params.vtsOrchestrator, { size: 40 })), 41);
+  data.set(hexToBytes(pad(params.liquidityHub, { size: 40 })), 61);
   return toHex(data);
 }
 
@@ -169,6 +170,15 @@ export async function buildSignedEnvelope(opts: {
     programBytes,
   };
 
-  return encodeEnvelope(envelope);
+  const signature = await signEnvelope({
+    chainId: opts.env.chainId,
+    verifyingContract: opts.env.intentPolicy as Address,
+    wallet: opts.smartAccount,
+    permissionId: opts.env.permissionId,
+    envelope,
+    signTypedData: (args) => opts.env.owner.signTypedData(args),
+  });
+
+  return encodeEnvelope(envelope, signature);
 }
 
