@@ -45,16 +45,16 @@ help:
   @echo "  PKEY              - raw hex private key"
   @echo ""
   @echo "Main recipes:"
-  @echo "  just nitro:wait"
-  @echo "  just infra:deploy"
-  @echo "  just kernel:deploy"
-  @echo "  just stylus:deploy-policy"
-  @echo "  just e2e:write-env"
+  @echo "  just nitro_wait"
+  @echo "  just infra_deploy"
+  @echo "  just kernel_deploy"
+  @echo "  just stylus_deploy_policy"
+  @echo "  just e2e_write_env"
   @echo "  just bootstrap"
 
 # --- Nitro ---
 
-nitro:wait:
+nitro_wait:
   #!/usr/bin/env bash
   set -euo pipefail
   echo "Waiting for Nitro RPC at ${RPC_URL} ..."
@@ -65,7 +65,7 @@ nitro:wait:
 
 # --- EVM infra (mocks) ---
 
-infra:deploy: nitro:wait
+infra_deploy: nitro_wait
   #!/usr/bin/env bash
   set -euo pipefail
   echo "Deploying Nitro E2E infra mocks -> {{infra_deployments}}"
@@ -77,7 +77,7 @@ infra:deploy: nitro:wait
 
 # --- Kernel (devnet) ---
 
-kernel:deploy: nitro:wait
+kernel_deploy: nitro_wait
   #!/usr/bin/env bash
   set -euo pipefail
   echo "Deploying Kernel (devnet) -> {{kernel_deployments}}"
@@ -89,7 +89,7 @@ kernel:deploy: nitro:wait
 
 # --- Stylus policy ---
 
-stylus:deploy-policy: nitro:wait
+stylus_deploy_policy: nitro_wait
   #!/usr/bin/env bash
   set -euo pipefail
   if [ -z "{{priv_key_path}}" ] && [ -z "{{pkey}}" ]; then
@@ -110,14 +110,14 @@ stylus:deploy-policy: nitro:wait
     --contract-key intent-policy \
     --network nitro
 
-stylus:policy-address:
+stylus_policy_address:
   #!/usr/bin/env bash
   set -euo pipefail
   jq -r '.deployments["intent-policy"].address' "{{stylus_deployments}}"
 
 # --- E2E env wiring ---
 
-e2e:write-env:
+e2e_write_env:
   #!/usr/bin/env bash
   set -euo pipefail
 
@@ -137,24 +137,22 @@ e2e:write-env:
   MM_POSITION_MANAGER_ADDRESS="$(jq -r '.addrs.MM_POSITION_MANAGER_ADDRESS' "{{infra_deployments}}")"
   POSITION_MANAGER_ADDRESS="$(jq -r '.addrs.POSITION_MANAGER_ADDRESS' "{{infra_deployments}}")"
 
-  cat > "{{e2e_env_path}}" <<EOF
-RPC_URL={{rpc_url}}
-CHAIN_ID={{chain_id}}
-OWNER_PRIVATE_KEY={{owner_private_key}}
-PERMISSION_ID={{permission_id}}
-INTENT_POLICY_ADDRESS=${INTENT_POLICY_ADDRESS}
-STATE_VIEW_ADDRESS=${STATE_VIEW_ADDRESS}
-VTS_ORCHESTRATOR_ADDRESS=${VTS_ORCHESTRATOR_ADDRESS}
-LIQUIDITY_HUB_ADDRESS=${LIQUIDITY_HUB_ADDRESS}
-MM_POSITION_MANAGER_ADDRESS=${MM_POSITION_MANAGER_ADDRESS}
-POSITION_MANAGER_ADDRESS=${POSITION_MANAGER_ADDRESS}
-EOF
+  printf "RPC_URL=%s\n" "{{rpc_url}}" > "{{e2e_env_path}}"
+  printf "CHAIN_ID=%s\n" "{{chain_id}}" >> "{{e2e_env_path}}"
+  printf "OWNER_PRIVATE_KEY=%s\n" "{{owner_private_key}}" >> "{{e2e_env_path}}"
+  printf "PERMISSION_ID=%s\n" "{{permission_id}}" >> "{{e2e_env_path}}"
+  printf "INTENT_POLICY_ADDRESS=%s\n" "${INTENT_POLICY_ADDRESS}" >> "{{e2e_env_path}}"
+  printf "STATE_VIEW_ADDRESS=%s\n" "${STATE_VIEW_ADDRESS}" >> "{{e2e_env_path}}"
+  printf "VTS_ORCHESTRATOR_ADDRESS=%s\n" "${VTS_ORCHESTRATOR_ADDRESS}" >> "{{e2e_env_path}}"
+  printf "LIQUIDITY_HUB_ADDRESS=%s\n" "${LIQUIDITY_HUB_ADDRESS}" >> "{{e2e_env_path}}"
+  printf "MM_POSITION_MANAGER_ADDRESS=%s\n" "${MM_POSITION_MANAGER_ADDRESS}" >> "{{e2e_env_path}}"
+  printf "POSITION_MANAGER_ADDRESS=%s\n" "${POSITION_MANAGER_ADDRESS}" >> "{{e2e_env_path}}"
 
   echo "Wrote {{e2e_env_path}}"
 
-e2e:test:
+e2e_test:
   cd e2e && bun test
 
-bootstrap: infra:deploy kernel:deploy stylus:deploy-policy e2e:write-env
-  @echo "Bootstrap complete. Next: just e2e:test"
+bootstrap: infra_deploy kernel_deploy stylus_deploy_policy e2e_write_env
+  @echo "Bootstrap complete. Next: just e2e_test"
 
