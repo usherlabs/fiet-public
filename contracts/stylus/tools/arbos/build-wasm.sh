@@ -89,9 +89,16 @@ if command -v wasm-opt >/dev/null 2>&1; then
   echo "Optimising WASM via wasm-opt (aggressive, strip debug/producers)..."
   # Inspired by renegade-stylus-contracts/scripts/src/utils.rs::build_stylus_contract (wasm-opt post-pass).
   # We prioritise size and remove custom debug sections, which can reduce incompatibilities.
-  # NOTE: Rust-to-WASM output commonly uses bulk memory ops; enable bulk-memory for validation.
-  # Avoid `--all-features` as it can introduce tail-call ops (`return_call`) which Stylus validation rejects.
-  wasm-opt --enable-bulk-memory -Oz --strip-dwarf --strip-producers -o "${WASM_OUT}" "${WASM_OUT}"
+  # ArbOs Foundry's embedded WASM parser/executor is stricter than general-purpose runtimes.
+  # In particular, it currently rejects the DataCount section (bulk-memory), and rejects tail-calls.
+  # We therefore lower to MVP-compatible features here.
+  wasm-opt \
+    --mvp-features \
+    --disable-bulk-memory \
+    --disable-bulk-memory-opt \
+    --disable-tail-call \
+    -Oz --strip-dwarf --strip-producers \
+    -o "${WASM_OUT}" "${WASM_OUT}"
 else
   echo "wasm-opt not found; skipping additional optimisation."
 fi
