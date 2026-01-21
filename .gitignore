@@ -8,6 +8,7 @@ forge.lock
 !contracts/**/foundry.lock
 !contracts/**/broadcast/
 contracts/**/deployments/
+contracts/**/deployments/.keep
 contracts/**/out/
 contracts/**/cache/
 reports

@@ -1,9 +1,5 @@
 [workspace]
-members = [
-  "fiet-maker-policy",
-  "tools/deployer",
-  "off-chain/fiet-maker-policy-encoder",
-]
+members = ["tools/deployer", "off-chain/fiet-maker-policy-encoder"]
 resolver = "2"
 
 [workspace.dependencies]
