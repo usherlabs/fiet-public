@@ -44,25 +44,60 @@ interface DeployStylusCodeCheatcodes {
     ) external returns (address deployedAddress);
 }
 
+struct PackedUserOperation {
+    address sender;
+    uint256 nonce;
+    bytes initCode;
+    bytes callData;
+    bytes32 accountGasLimits;
+    uint256 preVerificationGas;
+    bytes32 gasFees;
+    bytes paymasterAndData;
+    bytes signature;
+}
+
 interface IIntentPolicy {
     function onInstall(bytes calldata data) external payable;
     function onUninstall(bytes calldata data) external payable;
     function isModuleType(uint256 moduleTypeId) external view returns (bool);
     function isInitialized(address smartAccount) external view returns (bool);
+    function checkUserOpPolicy(
+        bytes32 id,
+        PackedUserOperation calldata userOp
+    ) external payable returns (uint256);
+    function checkSignaturePolicy(
+        bytes32 id,
+        address sender,
+        bytes32 hash,
+        bytes calldata sig
+    ) external view returns (uint256);
 }
 
 contract IntentPolicyTest is Test {
-    string internal constant WASM_PATH = "wasm/intent-policy.wasm";
-    string internal constant WASM_PATH_RAW = "wasm/intent-policy.raw.wasm";
-    string internal constant WASM_PATH_BR = "wasm/intent-policy.wasm.br";
+    string internal constant WASM_FIXTURE_PATH =
+        "fixtures/fiet_maker_policy.wasm";
 
     uint256 internal constant MODULE_TYPE_POLICY = 5;
+    uint256 internal constant POLICY_SUCCESS_UINT = 0;
+    uint256 internal constant POLICY_FAILED_UINT = 1;
 
     // Errors defined by the Stylus policy (mirrors `error AlreadyInitialized(address)` / `error NotInitialized(address)`).
     bytes4 internal constant ALREADY_INITIALIZED_SELECTOR =
         bytes4(keccak256("AlreadyInitialized(address)"));
     bytes4 internal constant NOT_INITIALIZED_SELECTOR =
         bytes4(keccak256("NotInitialized(address)"));
+
+    bytes32 internal constant DOMAIN_TYPEHASH =
+        keccak256(
+            "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
+        );
+    bytes32 internal constant DOMAIN_NAME_HASH =
+        keccak256("Fiet Maker Intent Policy");
+    bytes32 internal constant DOMAIN_VERSION_HASH = keccak256("1");
+    bytes32 internal constant ENVELOPE_TYPEHASH =
+        keccak256(
+            "IntentPolicyEnvelope(address wallet,bytes32 permissionId,uint256 nonce,uint64 deadline,bytes32 callBundleHash,bytes32 programHash)"
+        );
 
     function _deployPolicy(
         string memory wasmPath
@@ -73,28 +108,126 @@ contract IntentPolicyTest is Test {
     }
 
     function _deployPolicy() internal returns (IIntentPolicy) {
-        // Prefer the pre-compressed artefact for arbos-forge deployments. This avoids any
-        // size-based auto-compression behaviour and ensures the runtime sees a brotli payload.
-        return _deployPolicy(WASM_PATH_BR);
+        return _deployPolicy(WASM_FIXTURE_PATH);
     }
 
     function _installData(
         bytes32 permissionId,
+        address signer,
         address stateView,
         address vtsOrchestrator,
         address liquidityHub
     ) internal pure returns (bytes memory) {
         // Layout matches the on-chain policy:
         //   bytes data = bytes32 permissionId || initData
-        //   initData = uint8 version (=1) || bytes20 stateView || bytes20 vtsOrchestrator || bytes20 liquidityHub
+        //   initData = uint8 version (=1) || bytes20 signer || bytes20 stateView || bytes20 vtsOrchestrator || bytes20 liquidityHub
         return
             abi.encodePacked(
                 permissionId,
                 uint8(1),
+                signer,
                 stateView,
                 vtsOrchestrator,
                 liquidityHub
             );
+    }
+
+    function _defaultFactSources()
+        internal
+        pure
+        returns (
+            address stateView,
+            address vtsOrchestrator,
+            address liquidityHub
+        )
+    {
+        stateView = address(0x1111111111111111111111111111111111111111);
+        vtsOrchestrator = address(0x2222222222222222222222222222222222222222);
+        liquidityHub = address(0x3333333333333333333333333333333333333333);
+    }
+
+    function _policyDigest(
+        address policy,
+        address wallet,
+        bytes32 permissionId,
+        uint256 nonce,
+        uint64 deadline,
+        bytes32 callBundleHash,
+        bytes memory programBytes
+    ) internal view returns (bytes32) {
+        bytes32 domainSeparator = keccak256(
+            abi.encode(
+                DOMAIN_TYPEHASH,
+                DOMAIN_NAME_HASH,
+                DOMAIN_VERSION_HASH,
+                block.chainid,
+                policy
+            )
+        );
+        bytes32 programHash = keccak256(programBytes);
+        bytes32 structHash = keccak256(
+            abi.encode(
+                ENVELOPE_TYPEHASH,
+                wallet,
+                permissionId,
+                nonce,
+                deadline,
+                callBundleHash,
+                programHash
+            )
+        );
+        return
+            keccak256(
+                abi.encodePacked("\x19\x01", domainSeparator, structHash)
+            );
+    }
+
+    function _encodeEnvelope(
+        uint16 version,
+        uint256 nonce,
+        uint64 deadline,
+        bytes32 callBundleHash,
+        bytes memory programBytes,
+        bytes memory signature
+    ) internal pure returns (bytes memory) {
+        return
+            abi.encodePacked(
+                version,
+                nonce,
+                deadline,
+                callBundleHash,
+                uint32(programBytes.length),
+                programBytes,
+                uint16(signature.length),
+                signature
+            );
+    }
+
+    function _signDigest(
+        uint256 privateKey,
+        bytes32 digest
+    ) internal pure returns (bytes memory) {
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, digest);
+        return abi.encodePacked(r, s, v);
+    }
+
+    function _userOp(
+        address sender,
+        bytes memory callData,
+        bytes memory signature
+    ) internal pure returns (PackedUserOperation memory) {
+        return
+            PackedUserOperation({
+                sender: sender,
+                nonce: 0,
+                initCode: "",
+                callData: callData,
+                accountGasLimits: bytes32(0),
+                preVerificationGas: 0,
+                gasFees: bytes32(0),
+                paymasterAndData: "",
+                signature: signature
+            });
     }
 
     function test_isModuleType_policyOnly() public {
@@ -113,21 +246,25 @@ contract IntentPolicyTest is Test {
 
         address wallet = makeAddr("kernel-wallet");
         bytes32 permissionId = keccak256("permission-id-1");
+        address signer = makeAddr("policy-signer");
 
-        // Non-zero placeholder fact source addresses.
-        address stateView = address(0x1111111111111111111111111111111111111111);
-        address vtsOrchestrator = address(
-            0x2222222222222222222222222222222222222222
-        );
-        address liquidityHub = address(
-            0x3333333333333333333333333333333333333333
-        );
+        (
+            address stateView,
+            address vtsOrchestrator,
+            address liquidityHub
+        ) = _defaultFactSources();
 
         assertFalse(policy.isInitialized(wallet));
 
         vm.prank(wallet);
         policy.onInstall(
-            _installData(permissionId, stateView, vtsOrchestrator, liquidityHub)
+            _installData(
+                permissionId,
+                signer,
+                stateView,
+                vtsOrchestrator,
+                liquidityHub
+            )
         );
 
         assertTrue(policy.isInitialized(wallet));
@@ -143,18 +280,23 @@ contract IntentPolicyTest is Test {
 
         address wallet = makeAddr("kernel-wallet");
         bytes32 permissionId = keccak256("permission-id-1");
+        address signer = makeAddr("policy-signer");
 
-        address stateView = address(0x1111111111111111111111111111111111111111);
-        address vtsOrchestrator = address(
-            0x2222222222222222222222222222222222222222
-        );
-        address liquidityHub = address(
-            0x3333333333333333333333333333333333333333
-        );
+        (
+            address stateView,
+            address vtsOrchestrator,
+            address liquidityHub
+        ) = _defaultFactSources();
 
         vm.prank(wallet);
         policy.onInstall(
-            _installData(permissionId, stateView, vtsOrchestrator, liquidityHub)
+            _installData(
+                permissionId,
+                signer,
+                stateView,
+                vtsOrchestrator,
+                liquidityHub
+            )
         );
 
         vm.prank(wallet);
@@ -162,7 +304,13 @@ contract IntentPolicyTest is Test {
             abi.encodeWithSelector(ALREADY_INITIALIZED_SELECTOR, wallet)
         );
         policy.onInstall(
-            _installData(permissionId, stateView, vtsOrchestrator, liquidityHub)
+            _installData(
+                permissionId,
+                signer,
+                stateView,
+                vtsOrchestrator,
+                liquidityHub
+            )
         );
     }
 
@@ -185,14 +333,13 @@ contract IntentPolicyTest is Test {
         address wallet = makeAddr("kernel-wallet");
         bytes32 permissionIdA = keccak256("permission-id-A");
         bytes32 permissionIdB = keccak256("permission-id-B");
+        address signer = makeAddr("policy-signer");
 
-        address stateView = address(0x1111111111111111111111111111111111111111);
-        address vtsOrchestrator = address(
-            0x2222222222222222222222222222222222222222
-        );
-        address liquidityHub = address(
-            0x3333333333333333333333333333333333333333
-        );
+        (
+            address stateView,
+            address vtsOrchestrator,
+            address liquidityHub
+        ) = _defaultFactSources();
 
         assertFalse(policy.isInitialized(wallet));
 
@@ -200,6 +347,7 @@ contract IntentPolicyTest is Test {
         policy.onInstall(
             _installData(
                 permissionIdA,
+                signer,
                 stateView,
                 vtsOrchestrator,
                 liquidityHub
@@ -211,6 +359,7 @@ contract IntentPolicyTest is Test {
         policy.onInstall(
             _installData(
                 permissionIdB,
+                signer,
                 stateView,
                 vtsOrchestrator,
                 liquidityHub
@@ -229,42 +378,408 @@ contract IntentPolicyTest is Test {
         assertFalse(policy.isInitialized(wallet));
     }
 
-    /// Debug: mirror ArbOs Foundry's own DeployStylusCode.t.sol expectations:
-    /// deployed bytecode should be `0xeff00000 || wasmFile`.
-    /// Ref: https://raw.githubusercontent.com/iosiro/arbos-foundry/9952b9626f56141e5feb2eeee7de51b438545d94/testdata/default/cheats/DeployStylusCode.t.sol
-    function test_debug_deployStylusCode_codeShape_stripped() public {
-        bytes memory file = vm.readFileBinary(WASM_PATH);
-        // WASM magic: 0x00 0x61 0x73 0x6d
-        assertTrue(bytes4(file) == 0x0061736d);
+    function test_install_reverts_invalidInitDataLength() public {
+        IIntentPolicy policy = _deployPolicy();
+        address wallet = makeAddr("kernel-wallet");
+        bytes32 permissionId = keccak256("permission-id-1");
+        address signer = makeAddr("policy-signer");
 
-        address deployed = DeployStylusCodeCheatcodes(address(vm))
-            .deployStylusCode(WASM_PATH);
-
-        // At minimum, the deployed runtime code should begin with the Stylus discriminant prefix.
-        // NOTE: Some arbos-forge builds may compress/transform the payload; we log hashes/lengths for debugging.
-        assertTrue(bytes4(deployed.code) == 0xeff00000);
-
-        emit log_uint(file.length);
-        emit log_uint(deployed.code.length);
-        emit log_bytes32(keccak256(file));
-        emit log_bytes32(keccak256(deployed.code));
-
-        // Full equality (0xeff00000 || wasm) is asserted against arbos-foundry fixtures in ArbosStylusSanityTest.
+        vm.prank(wallet);
+        vm.expectRevert(bytes("Invalid init data length"));
+        policy.onInstall(abi.encodePacked(permissionId, uint8(1), signer));
     }
 
-    function test_debug_deployStylusCode_codeShape_raw() public {
-        bytes memory file = vm.readFileBinary(WASM_PATH_RAW);
-        assertTrue(bytes4(file) == 0x0061736d);
+    function test_install_reverts_wrongVersion() public {
+        IIntentPolicy policy = _deployPolicy();
+        address wallet = makeAddr("kernel-wallet");
+        bytes32 permissionId = keccak256("permission-id-1");
+        address signer = makeAddr("policy-signer");
+        (
+            address stateView,
+            address vtsOrchestrator,
+            address liquidityHub
+        ) = _defaultFactSources();
 
-        address deployed = DeployStylusCodeCheatcodes(address(vm))
-            .deployStylusCode(WASM_PATH_RAW);
-        assertTrue(bytes4(deployed.code) == 0xeff00000);
+        vm.prank(wallet);
+        vm.expectRevert(bytes("Unsupported init version"));
+        policy.onInstall(
+            abi.encodePacked(
+                permissionId,
+                uint8(2),
+                signer,
+                stateView,
+                vtsOrchestrator,
+                liquidityHub
+            )
+        );
+    }
 
-        emit log_uint(file.length);
-        emit log_uint(deployed.code.length);
-        emit log_bytes32(keccak256(file));
-        emit log_bytes32(keccak256(deployed.code));
+    function test_install_reverts_zeroSigner() public {
+        IIntentPolicy policy = _deployPolicy();
+        address wallet = makeAddr("kernel-wallet");
+        bytes32 permissionId = keccak256("permission-id-1");
+        (
+            address stateView,
+            address vtsOrchestrator,
+            address liquidityHub
+        ) = _defaultFactSources();
 
-        // Full equality is asserted in ArbosStylusSanityTest.
+        vm.prank(wallet);
+        vm.expectRevert(bytes("Invalid signer"));
+        policy.onInstall(
+            _installData(
+                permissionId,
+                address(0),
+                stateView,
+                vtsOrchestrator,
+                liquidityHub
+            )
+        );
+    }
+
+    function test_install_reverts_zeroFactSources() public {
+        IIntentPolicy policy = _deployPolicy();
+        address wallet = makeAddr("kernel-wallet");
+        bytes32 permissionId = keccak256("permission-id-1");
+        address signer = makeAddr("policy-signer");
+
+        vm.prank(wallet);
+        vm.expectRevert(bytes("Invalid fact sources"));
+        policy.onInstall(
+            _installData(
+                permissionId,
+                signer,
+                address(0),
+                address(0x2222222222222222222222222222222222222222),
+                address(0x3333333333333333333333333333333333333333)
+            )
+        );
+    }
+
+    function test_checkUserOpPolicy_failsWhenNotInstalled() public {
+        IIntentPolicy policy = _deployPolicy();
+        address wallet = makeAddr("kernel-wallet");
+        bytes32 permissionId = keccak256("permission-id-1");
+
+        bytes memory callData = hex"1234";
+        bytes memory envelope = _encodeEnvelope(
+            1,
+            0,
+            uint64(block.timestamp + 1),
+            keccak256(callData),
+            "",
+            hex""
+        );
+
+        vm.prank(wallet);
+        uint256 result = policy.checkUserOpPolicy(
+            permissionId,
+            _userOp(wallet, callData, envelope)
+        );
+        assertEq(result, POLICY_FAILED_UINT);
+    }
+
+    function test_checkUserOpPolicy_rejectsExpiredDeadline() public {
+        IIntentPolicy policy = _deployPolicy();
+        address wallet = makeAddr("kernel-wallet");
+        bytes32 permissionId = keccak256("permission-id-1");
+        uint256 signerKey = 0xA11CE;
+        address signer = vm.addr(signerKey);
+        (
+            address stateView,
+            address vtsOrchestrator,
+            address liquidityHub
+        ) = _defaultFactSources();
+
+        vm.prank(wallet);
+        policy.onInstall(
+            _installData(
+                permissionId,
+                signer,
+                stateView,
+                vtsOrchestrator,
+                liquidityHub
+            )
+        );
+
+        bytes memory callData = hex"1234";
+        uint64 deadline = uint64(block.timestamp - 1);
+        bytes32 digest = _policyDigest(
+            address(policy),
+            wallet,
+            permissionId,
+            0,
+            deadline,
+            keccak256(callData),
+            ""
+        );
+        bytes memory signature = _signDigest(signerKey, digest);
+        bytes memory envelope = _encodeEnvelope(
+            1,
+            0,
+            deadline,
+            keccak256(callData),
+            "",
+            signature
+        );
+
+        vm.prank(wallet);
+        uint256 result = policy.checkUserOpPolicy(
+            permissionId,
+            _userOp(wallet, callData, envelope)
+        );
+        assertEq(result, POLICY_FAILED_UINT);
+    }
+
+    function test_checkUserOpPolicy_rejectsBundleMismatch() public {
+        IIntentPolicy policy = _deployPolicy();
+        address wallet = makeAddr("kernel-wallet");
+        bytes32 permissionId = keccak256("permission-id-1");
+        uint256 signerKey = 0xA11CE;
+        address signer = vm.addr(signerKey);
+        (
+            address stateView,
+            address vtsOrchestrator,
+            address liquidityHub
+        ) = _defaultFactSources();
+
+        vm.prank(wallet);
+        policy.onInstall(
+            _installData(
+                permissionId,
+                signer,
+                stateView,
+                vtsOrchestrator,
+                liquidityHub
+            )
+        );
+
+        bytes memory callData = hex"1234";
+        bytes32 digest = _policyDigest(
+            address(policy),
+            wallet,
+            permissionId,
+            0,
+            uint64(block.timestamp + 1),
+            keccak256(hex"deadbeef"),
+            ""
+        );
+        bytes memory signature = _signDigest(signerKey, digest);
+        bytes memory envelope = _encodeEnvelope(
+            1,
+            0,
+            uint64(block.timestamp + 1),
+            keccak256(hex"deadbeef"),
+            "",
+            signature
+        );
+
+        vm.prank(wallet);
+        uint256 result = policy.checkUserOpPolicy(
+            permissionId,
+            _userOp(wallet, callData, envelope)
+        );
+        assertEq(result, POLICY_FAILED_UINT);
+    }
+
+    function test_checkUserOpPolicy_rejectsNonceMismatch() public {
+        IIntentPolicy policy = _deployPolicy();
+        address wallet = makeAddr("kernel-wallet");
+        bytes32 permissionId = keccak256("permission-id-1");
+        uint256 signerKey = 0xA11CE;
+        address signer = vm.addr(signerKey);
+        (
+            address stateView,
+            address vtsOrchestrator,
+            address liquidityHub
+        ) = _defaultFactSources();
+
+        vm.prank(wallet);
+        policy.onInstall(
+            _installData(
+                permissionId,
+                signer,
+                stateView,
+                vtsOrchestrator,
+                liquidityHub
+            )
+        );
+
+        bytes memory callData = hex"1234";
+        bytes32 digest = _policyDigest(
+            address(policy),
+            wallet,
+            permissionId,
+            1,
+            uint64(block.timestamp + 1),
+            keccak256(callData),
+            ""
+        );
+        bytes memory signature = _signDigest(signerKey, digest);
+        bytes memory envelope = _encodeEnvelope(
+            1,
+            1,
+            uint64(block.timestamp + 1),
+            keccak256(callData),
+            "",
+            signature
+        );
+
+        vm.prank(wallet);
+        uint256 result = policy.checkUserOpPolicy(
+            permissionId,
+            _userOp(wallet, callData, envelope)
+        );
+        assertEq(result, POLICY_FAILED_UINT);
+    }
+
+    function test_checkUserOpPolicy_rejectsInvalidSignature() public {
+        IIntentPolicy policy = _deployPolicy();
+        address wallet = makeAddr("kernel-wallet");
+        bytes32 permissionId = keccak256("permission-id-1");
+        uint256 signerKey = 0xA11CE;
+        address signer = vm.addr(signerKey);
+        (
+            address stateView,
+            address vtsOrchestrator,
+            address liquidityHub
+        ) = _defaultFactSources();
+
+        vm.prank(wallet);
+        policy.onInstall(
+            _installData(
+                permissionId,
+                signer,
+                stateView,
+                vtsOrchestrator,
+                liquidityHub
+            )
+        );
+
+        bytes memory callData = hex"1234";
+        bytes32 digest = _policyDigest(
+            address(policy),
+            wallet,
+            permissionId,
+            0,
+            uint64(block.timestamp + 1),
+            keccak256(callData),
+            ""
+        );
+        bytes memory signature = _signDigest(0xB0B, digest);
+        bytes memory envelope = _encodeEnvelope(
+            1,
+            0,
+            uint64(block.timestamp + 1),
+            keccak256(callData),
+            "",
+            signature
+        );
+
+        vm.prank(wallet);
+        uint256 result = policy.checkUserOpPolicy(
+            permissionId,
+            _userOp(wallet, callData, envelope)
+        );
+        assertEq(result, POLICY_FAILED_UINT);
+    }
+
+    function test_checkUserOpPolicy_consumesNonce() public {
+        IIntentPolicy policy = _deployPolicy();
+        address wallet = makeAddr("kernel-wallet");
+        bytes32 permissionId = keccak256("permission-id-1");
+        uint256 signerKey = 0xA11CE;
+        address signer = vm.addr(signerKey);
+        (
+            address stateView,
+            address vtsOrchestrator,
+            address liquidityHub
+        ) = _defaultFactSources();
+
+        vm.prank(wallet);
+        policy.onInstall(
+            _installData(
+                permissionId,
+                signer,
+                stateView,
+                vtsOrchestrator,
+                liquidityHub
+            )
+        );
+
+        bytes memory callData = hex"1234";
+        uint64 deadline = uint64(block.timestamp + 1);
+        bytes32 callBundleHash = keccak256(callData);
+
+        bytes32 digest0 = _policyDigest(
+            address(policy),
+            wallet,
+            permissionId,
+            0,
+            deadline,
+            callBundleHash,
+            ""
+        );
+        bytes memory signature0 = _signDigest(signerKey, digest0);
+        bytes memory envelope0 = _encodeEnvelope(
+            1,
+            0,
+            deadline,
+            callBundleHash,
+            "",
+            signature0
+        );
+
+        vm.prank(wallet);
+        uint256 first = policy.checkUserOpPolicy(
+            permissionId,
+            _userOp(wallet, callData, envelope0)
+        );
+        assertEq(first, POLICY_SUCCESS_UINT);
+
+        vm.prank(wallet);
+        uint256 second = policy.checkUserOpPolicy(
+            permissionId,
+            _userOp(wallet, callData, envelope0)
+        );
+        assertEq(second, POLICY_FAILED_UINT);
+
+        bytes32 digest1 = _policyDigest(
+            address(policy),
+            wallet,
+            permissionId,
+            1,
+            deadline,
+            callBundleHash,
+            ""
+        );
+        bytes memory signature1 = _signDigest(signerKey, digest1);
+        bytes memory envelope1 = _encodeEnvelope(
+            1,
+            1,
+            deadline,
+            callBundleHash,
+            "",
+            signature1
+        );
+
+        vm.prank(wallet);
+        uint256 third = policy.checkUserOpPolicy(
+            permissionId,
+            _userOp(wallet, callData, envelope1)
+        );
+        assertEq(third, POLICY_SUCCESS_UINT);
+    }
+
+    function test_checkSignaturePolicy_alwaysPasses() public {
+        IIntentPolicy policy = _deployPolicy();
+        bytes32 permissionId = keccak256("permission-id-1");
+        uint256 result = policy.checkSignaturePolicy(
+            permissionId,
+            address(this),
+            keccak256("hash"),
+            hex""
+        );
+        assertEq(result, POLICY_SUCCESS_UINT);
     }
 }
