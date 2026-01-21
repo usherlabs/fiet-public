@@ -9,6 +9,10 @@ via_ir = true
 
 # ArbOs Foundry deployStylusCode reads a compiled WASM artefact from disk.
 # Allow reading our generated WASM under ./wasm/.
-fs_permissions = [{ access = "read", path = "./wasm" }]
+fs_permissions = [
+  { access = "read", path = "./wasm" },
+  { access = "read", path = "./fixtures" },
+  { access = "read-write", path = "./deployments" },
+]
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
