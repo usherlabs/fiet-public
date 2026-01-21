@@ -1,6 +1,10 @@
 /target
 .env
-deployments.*.json
 **/target/
-/wasm/*.wasm
-/wasm/*.wat
+wasm/*.wasm
+wasm/*.wat
+wasm/*.wasm.br
+deployments.*.json
+!deployments/.keep
+deployments/*.json
+broadcast/

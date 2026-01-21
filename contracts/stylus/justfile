@@ -22,9 +22,9 @@ pkey := env_var_or_default("PKEY", "")
 permission_id := env_var_or_default("PERMISSION_ID", "")
 owner_private_key := env_var_or_default("OWNER_PRIVATE_KEY", "")
 
-infra_deployments := "deployments.infra.nitro.json"
-stylus_deployments := "deployments.stylus.nitro.json"
-kernel_deployments := "deployments.kernel.nitro.json"
+infra_deployments := "deployments/infra.nitro.json"
+stylus_deployments := "deployments/stylus.nitro.json"
+kernel_deployments := "deployments/kernel.nitro.json"
 e2e_env_path := "e2e/.env"
 
 [private]
