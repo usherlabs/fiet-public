@@ -121,7 +121,7 @@ abstract contract MME2EBase is E2EBase {
         console.log("zeroForOne:", zeroForOne);
         console.log("amountIn:", swapAmount);
         console.log("amountOut:", amountOut);
-        _logTick("tick (before swap)", _corePoolKey(m));
+        _logTick("tick (after swap)", _corePoolKey(m));
     }
 
     /// @dev Fund a taker with underlying, wrap -> LCC, then swap in both directions.

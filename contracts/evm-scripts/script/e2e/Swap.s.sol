@@ -34,6 +34,7 @@ contract SwapE2E is E2EBase {
     bool internal constant ZERO_FOR_ONE = true; // swap direction: currency0 -> currency1
 
     function run() external {
+        console.log("=== E2E: Swap (Exact Output) ===");
         // Initialize network configuration.
         _initNetwork();
 

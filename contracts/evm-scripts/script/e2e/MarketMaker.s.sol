@@ -37,6 +37,7 @@ contract MarketMakerE2E is MME2EBase {
     uint128 internal constant BIG_SWAP_AMOUNT_IN = 5_000e18;
 
     function run() external {
+        console.log("=== E2E: MarketMaker ===");
         _initNetwork();
 
         uint256 mmPk = uint256(vm.envBytes32("LP_PRIVATE_KEY"));

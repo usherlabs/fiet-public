@@ -124,6 +124,7 @@ contract MMCoverageE2E is MME2EBase {
     }
 
     function run() external {
+        console.log("=== E2E: MMCoverage ===");
         _initNetwork();
         // --- Get all the private keys and addresses of all the market makers and swapper
         uint256 mm1Pk = uint256(vm.envBytes32("LP_PRIVATE_KEY"));
