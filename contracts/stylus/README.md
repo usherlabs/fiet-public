@@ -26,6 +26,22 @@ Requires a build from source:
 2. `cd arbos-foundry`
 3. `cargo install --path ./crates/forge --profile release --force --locked --bin arbos-forge`
 
+### Stylus fixture workflow (arbos-forge)
+
+The Stylus tests load the policy WASM from `fixtures/fiet_maker_policy.wasm`.
+
+To refresh the fixture:
+
+1. From `contracts/fiet-maker-policy/` run `cargo stylus check`.
+2. Copy `target/wasm32-unknown-unknown/release/fiet_maker_policy.wasm` to
+   `contracts/stylus/fixtures/fiet_maker_policy.wasm`.
+
+You can sanity-check the fixture contains no DataCount section (bulk-memory) with:
+
+```bash
+arbos-forge test --match-path test/WasmFixtureSanity.t.sol -vv
+```
+
 ## Stylus (Nitro) E2E bootstrap
 
 This directory contains the tooling to:
