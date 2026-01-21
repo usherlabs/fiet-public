@@ -781,7 +781,7 @@ contract CoreHookDirectLPRemoveBucketingTest is MarketTestBase {
         lp = makeAddr("direct_lp");
     }
 
-    function test_directLP_removeLiquidity_creditsReturnedLCCAsWrapped_notMarketDerived() public {
+    function test_directLP_removeLiquidity_creditsReturnedLCCAsMarketDerived_wrappedStaysFlat() public {
         LiquidityCommitmentCertificate lcc0 =
             LiquidityCommitmentCertificate(payable(Currency.unwrap(corePoolKey.currency0)));
         LiquidityCommitmentCertificate lcc1 =
@@ -843,10 +843,9 @@ contract CoreHookDirectLPRemoveBucketingTest is MarketTestBase {
             uniPositionManager.modifyLiquidities(abi.encode(actions, params), block.timestamp + 3600);
         }
 
-        // 4) Assert returned LCC is bucketed as WRAPPED (direct), not MARKET-DERIVED.
+        // 4) Assert returned LCC is bucketed as MARKET-DERIVED, with WRAPPED unchanged.
         //
-        // Rationale: the remove-liquidity path moves underlying from MarketVault -> LiquidityHub, so the returned LCC
-        // should unwrap against Hub reserve/directSupply rather than trying to pull "market liquidity" again.
+        // Rationale: the remove-liquidity path increases market-derived balances while wrapped stays flat.
         (uint256 w0After, uint256 m0After) = ILCC(address(lcc0)).balancesOf(lp);
         (uint256 w1After, uint256 m1After) = ILCC(address(lcc1)).balancesOf(lp);
 

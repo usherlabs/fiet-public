@@ -496,6 +496,9 @@ abstract contract MarketVault is IMarketVault, ImmutableState, ImmutableMarketSt
         nonReentrant
         returns (BalanceDelta)
     {
+        if (recipient == address(0)) {
+            revert Errors.InvalidAddress(recipient);
+        }
         (Currency currency0, Currency currency1) = _underlying();
 
         BalanceDelta usedDelta = dryModifyLiquidities(balanceDelta);

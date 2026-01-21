@@ -204,7 +204,7 @@ contract ProxyHookTest is MarketVaultBase {
         console.log("swap delta 0:", delta.amount0());
         console.log("swap delta 1:", delta.amount1());
 
-        assertEq(selfBalanceOfTokenABefore - selfBalanceOfTokenAAfter, swapAmount);
+        assertEq(selfBalanceOfTokenABefore, selfBalanceOfTokenAAfter + swapAmount);
         assertGt(selfBalanceOfTokenBAfter, selfBalanceOfTokenBBefore);
     }
 
@@ -230,7 +230,7 @@ contract ProxyHookTest is MarketVaultBase {
         uint256 selfBalanceOfTokenAAfter = proxyPoolKey.currency0.balanceOfSelf();
         uint256 selfBalanceOfTokenBAfter = proxyPoolKey.currency1.balanceOfSelf();
 
-        assertEq(selfBalanceOfTokenBBefore - selfBalanceOfTokenBAfter, swapAmount);
+        assertEq(selfBalanceOfTokenBBefore, selfBalanceOfTokenBAfter + swapAmount);
         assertGt(selfBalanceOfTokenAAfter, selfBalanceOfTokenABefore);
     }
 
@@ -328,15 +328,15 @@ contract ProxyHookTest is MarketVaultBase {
 
         // validate liquidity of token-in(token0) in the lcc token is lower after the swap
         // because liquidity will move 'from lcc' token 'to pool-manager' as it enters the pool during a zero for one swap
-        assertEq(preBalanceOfToken0UnderlyingAssetInLCC - postBalanceOfToken0UnderlyingAssetInLCC, deltaAmount0);
+        assertEq(preBalanceOfToken0UnderlyingAssetInLCC, postBalanceOfToken0UnderlyingAssetInLCC + deltaAmount0);
         // validate liquidity of token-in(token0) in the pool manager is higher after the swap
         // becase liquidity of the underlying tokens will be moved from lcc token to pool manager
         // so the pool manager's underlying balance should increase by the amount of token-in(token0) swapped into the pool
-        assertEq(postBalanceOfToken0UnderlyingAssetInPM - preBalanceOfToken0UnderlyingAssetInPM, deltaAmount0);
+        assertEq(postBalanceOfToken0UnderlyingAssetInPM, preBalanceOfToken0UnderlyingAssetInPM + deltaAmount0);
         // Token OUT underlying is NOT moved here. It is sourced on unwrap via market liquidity.
         // Therefore, neither the Hub nor PoolManager underlying balances should change for token-out during the swap.
-        assertEq(postBalanceOfToken1UnderlyingAssetInLCC - preBalanceOfToken1UnderlyingAssetInLCC, 0);
-        assertEq(preBalanceOfToken1UnderlyingAssetInPM - postBalanceOfToken1UnderlyingAssetInPM, 0);
+        assertEq(postBalanceOfToken1UnderlyingAssetInLCC, preBalanceOfToken1UnderlyingAssetInLCC);
+        assertEq(preBalanceOfToken1UnderlyingAssetInPM, postBalanceOfToken1UnderlyingAssetInPM);
     }
 
     // Tests that after a direct swap on the underlying liquidity of the lcc tokens are moved accordingly
@@ -393,15 +393,15 @@ contract ProxyHookTest is MarketVaultBase {
 
         // Token OUT underlying is NOT moved here. It is sourced on unwrap via market liquidity.
         // Therefore, neither the Hub nor PoolManager underlying balances should change for token-out during the swap.
-        assertEq(postBalanceOfToken0UnderlyingAssetInLCC - preBalanceOfToken0UnderlyingAssetInLCC, 0);
-        assertEq(preBalanceOfToken0UnderlyingAssetInPM - postBalanceOfToken0UnderlyingAssetInPM, 0);
+        assertEq(postBalanceOfToken0UnderlyingAssetInLCC, preBalanceOfToken0UnderlyingAssetInLCC);
+        assertEq(preBalanceOfToken0UnderlyingAssetInPM, postBalanceOfToken0UnderlyingAssetInPM);
         // validate liquidity of token-in(token1) in the lcc token is lower after the swap
         // because liquidity will move 'from lcc' tokens 'to pool-manager' as it enters the pool during a one for zero swap
-        assertEq(preBalanceOfToken1UnderlyingAssetInLCC - postBalanceOfToken1UnderlyingAssetInLCC, deltaAmount1);
+        assertEq(preBalanceOfToken1UnderlyingAssetInLCC, postBalanceOfToken1UnderlyingAssetInLCC + deltaAmount1);
         // validate liquidity of token-in(token1) in the pool manager is higher after the swap
         // because liquidity of the underlying tokens will be moved from LCC token to pool-manager
         // so the pool manager's underlying balance should increase by the amount of token-in(token1) swapped into of the pool
-        assertEq(postBalanceOfToken1UnderlyingAssetInPM - preBalanceOfToken1UnderlyingAssetInPM, deltaAmount1);
+        assertEq(postBalanceOfToken1UnderlyingAssetInPM, preBalanceOfToken1UnderlyingAssetInPM + deltaAmount1);
     }
 
     // Test that a swap with limited liquidity on the proxy pool works as expected
@@ -1358,7 +1358,7 @@ contract DifferentTokenDecimalsProxyHookTest is MarketTestBase {
         console.log("swap delta 0:", delta.amount0());
         console.log("swap delta 1:", delta.amount1());
 
-        assertEq(selfBalanceOfTokenABefore - selfBalanceOfTokenAAfter, swapAmount);
+        assertEq(selfBalanceOfTokenABefore, selfBalanceOfTokenAAfter + swapAmount);
         assertGt(selfBalanceOfTokenBAfter, selfBalanceOfTokenBBefore);
     }
 
@@ -1413,14 +1413,14 @@ contract DifferentTokenDecimalsProxyHookTest is MarketTestBase {
 
         // validate liquidity of token-in(token0) in the lcc token is lower after the swap
         // because liquidity will move 'from lcc' token 'to pool-manager' as it enters the pool during a zero for one swap
-        assertEq(preBalanceOfToken0UnderlyingAssetInHub - postBalanceOfToken0UnderlyingAssetInHub, deltaAmount0);
+        assertEq(preBalanceOfToken0UnderlyingAssetInHub, postBalanceOfToken0UnderlyingAssetInHub + deltaAmount0);
         // validate liquidity of token-in(token0) in the pool manager is higher after the swap
         // becase liquidity of the underlying tokens will be moved from lcc token to pool manager
         // so the pool manager's underlying balance should increase by the amount of token-in(token0) swapped into the pool
-        assertEq(postBalanceOfToken0UnderlyingAssetInPM - preBalanceOfToken0UnderlyingAssetInPM, deltaAmount0);
+        assertEq(postBalanceOfToken0UnderlyingAssetInPM, preBalanceOfToken0UnderlyingAssetInPM + deltaAmount0);
         // Token OUT underlying is NOT moved here. It is sourced on unwrap via market liquidity.
         // Therefore, neither the Hub nor PoolManager underlying balances should change for token-out during the swap.
-        assertEq(postBalanceOfToken1UnderlyingAssetInHub - preBalanceOfToken1UnderlyingAssetInHub, 0);
-        assertEq(preBalanceOfToken1UnderlyingAssetInPM - postBalanceOfToken1UnderlyingAssetInPM, 0);
+        assertEq(postBalanceOfToken1UnderlyingAssetInHub, preBalanceOfToken1UnderlyingAssetInHub);
+        assertEq(preBalanceOfToken1UnderlyingAssetInPM, postBalanceOfToken1UnderlyingAssetInPM);
     }
 }
