@@ -32,6 +32,16 @@ interface IMarketVault {
     function tryModifyLiquidities(BalanceDelta balanceDelta) external returns (BalanceDelta);
 
     /**
+     * @notice Try to modify vault liquidity with a custom recipient for withdrawals
+     * @param balanceDelta The desired balance delta to apply
+     * @param recipient The recipient for withdrawals (positive deltas)
+     * @return The actual balance delta that was applied (may be less than requested for withdrawals)
+     */
+    function tryModifyLiquiditiesWithRecipient(BalanceDelta balanceDelta, address recipient)
+        external
+        returns (BalanceDelta);
+
+    /**
      * @notice Dry run to modify vault liquidity, handling partial withdrawals gracefully
      * @param balanceDelta The desired balance delta to apply
      * @return The actual balance delta that was applied (may be less than requested for withdrawals)

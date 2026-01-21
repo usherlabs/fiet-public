@@ -15,7 +15,6 @@ import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {Exttload} from "v4-periphery/lib/v4-core/src/Exttload.sol";
 import {TransientSlots} from "./libraries/TransientSlots.sol";
 import {TransientSlot} from "openzeppelin-contracts/contracts/utils/TransientSlot.sol";
-import {LiquidityUtils} from "./libraries/LiquidityUtils.sol";
 import {PositionLibrary} from "./types/Position.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
@@ -170,7 +169,7 @@ contract CoreHook is BaseHook, Exttload, ImmutableMarketState, ImmutableVTSState
         if (!isMMPosition) {
             // Forward effective caller delta including fee adjustment (Uniswap will apply callerDelta - hookDelta)
             BalanceDelta effective = delta - feeAdj; //  equivalent to doing (delta1.amount0 + delta2.amount0, delta1.amount1 + delta2.amount1)
-            ProxyHook(payable(_getProxyHook(key))).onDirectLP(effective, LiquidityUtils.ActionType.DirectLPAddLiquidity); // Fetching ProxyHook by corePoolKey, therefore no need to pass again.
+            ProxyHook(payable(_getProxyHook(key))).onDirectLP(effective); // Only direct-LP adds require vault settlement.
         }
 
         return (this.afterAddLiquidity.selector, feeAdj);
@@ -196,16 +195,10 @@ contract CoreHook is BaseHook, Exttload, ImmutableMarketState, ImmutableVTSState
     ) internal virtual override returns (bytes4, BalanceDelta) {
         // Update VTS position state with registration/update based on actual pool id
         // Pass callerDelta and feesAccrued for consolidated delta management
-        (,, BalanceDelta feeAdj, bool isMMPosition) =
-            vtsOrchestrator.processPosition(sender, key, params, delta, feesAccrued, hookData);
+        (,, BalanceDelta feeAdj,) = vtsOrchestrator.processPosition(sender, key, params, delta, feesAccrued, hookData);
 
-        // only remove direct liquidity if this is not an MM position operation
-        if (!isMMPosition) {
-            // Forward effective caller delta including fee adjustment (Uniswap will apply callerDelta - hookDelta)
-            BalanceDelta effective = delta - feeAdj;
-            ProxyHook(payable(_getProxyHook(key)))
-                .onDirectLP(effective, LiquidityUtils.ActionType.DirectLPRemoveLiquidity);
-        }
+        // NOTE: We deliberately do NOT notify ProxyHook on direct-LP removals.
+        // Underlying liquidity is sourced during unwrap via market liquidity, keeping a single settlement conduit.
 
         return (this.afterRemoveLiquidity.selector, feeAdj);
     }

@@ -6,6 +6,7 @@ import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
 import {LiquidityHub} from "../src/LiquidityHub.sol";
 import {ILCC} from "../src/interfaces/ILCC.sol";
 import {MockERC20} from "./_mocks/MockERC20.sol";
+import {Errors} from "../src/libraries/Errors.sol";
 import {CustomRevert} from "v4-periphery/lib/v4-core/src/libraries/CustomRevert.sol";
 import {StdStorage, stdStorage} from "forge-std/StdStorage.sol";
 
@@ -180,8 +181,9 @@ contract ReentrantMarketFactory {
     function useMarketLiquidity(address, bytes32, uint256) external returns (uint256) {
         if (armed) {
             armed = false;
-            // Re-enter a `nonReentrant` function without needing any token balances/approvals.
-            // If `nonReentrant` is removed from the outer call, this will succeed and the test will fail.
+            // Intentionally attempt to fabricate reserves via a re-entrant `confirmTake`.
+            // Production flows allow vault -> hub `confirmTake` callbacks without `nonReentrant`,
+            // but `confirmTake` must remain balance-backed and revert if unbacked.
             LiquidityHub(payable(hub)).confirmTake(lccToReenter, 1, false);
         }
         return 0;
@@ -565,7 +567,9 @@ contract LiquidityHubReentrancyTest is LiquidityHubTestBase {
 
         vm.startPrank(user1);
         ILCC(lccB0).approve(address(liquidityHub), amount);
-        vm.expectRevert(abi.encodeWithSignature("ReentrancyGuardReentrantCall()"));
+        // `confirmTake` is intentionally callable during nested flows, but it must be balance-backed.
+        // This malicious factory attempts an unbacked `confirmTake`, which must revert.
+        vm.expectRevert(abi.encodeWithSelector(Errors.InsufficientBalance.selector, 5, 6));
         liquidityHub.wrapWith(lccA0, lccB0, amount);
         vm.stopPrank();
     }
@@ -602,7 +606,7 @@ contract LiquidityHubReentrancyTest is LiquidityHubTestBase {
 
         vm.startPrank(user1);
         ILCC(lccB0).approve(address(liquidityHub), amount);
-        vm.expectRevert(abi.encodeWithSignature("ReentrancyGuardReentrantCall()"));
+        vm.expectRevert(abi.encodeWithSelector(Errors.InsufficientBalance.selector, 5, 6));
         liquidityHub.wrapWithTo(lccA0, lccB0, user2, amount);
         vm.stopPrank();
     }

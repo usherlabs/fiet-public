@@ -187,22 +187,8 @@ contract MarketVaultUnitHarness is MarketVault {
         _takeUnderlyingFromVaultToRecipient(c, recipient, amount);
     }
 
-    function exposed_tryTakeUnderlyingFromVaultToRecipient(Currency c, address recipient, uint256 amount)
-        external
-        returns (uint256)
-    {
-        return _tryTakeUnderlyingFromVaultToRecipient(c, recipient, amount);
-    }
-
     function exposed_takeUnderlyingFromVaultToHub(ILCC lcc, uint256 amount, bool shouldEmit) external {
         _takeUnderlyingFromVaultToHub(lcc, amount, shouldEmit);
-    }
-
-    function exposed_tryTakeUnderlyingFromVaultToHub(ILCC lcc, uint256 amount, bool shouldEmit)
-        external
-        returns (uint256)
-    {
-        return _tryTakeUnderlyingFromVaultToHub(lcc, amount, shouldEmit);
     }
 
     function exposed_settleUnderlyingToVaultFromSender(Currency c, address sender, uint256 amount) external {
@@ -304,17 +290,6 @@ contract MarketVaultUnitTest is Test {
         assertEq(pm.balanceOf(address(vault), c.toId()), 0);
     }
 
-    function test_tryTakeUnderlyingFromVaultToRecipient_returnsZeroWhenNoLiquidity() public {
-        MockLiquidityHub_Min hub = new MockLiquidityHub_Min();
-        (MarketVaultUnitHarness vault, MockPoolManager_Min pm,,,, MockERC20 ua) = _deployVaultWithHub(address(hub));
-
-        Currency c = Currency.wrap(address(ua));
-        pm.setClaimBalance(address(vault), c, 0);
-
-        uint256 taken = vault.exposed_tryTakeUnderlyingFromVaultToRecipient(c, makeAddr("recipient"), 123);
-        assertEq(taken, 0);
-    }
-
     function test_takeUnderlyingFromVaultToHub_revertsWhenAmountIsZero() public {
         MockLiquidityHub_Min hub = new MockLiquidityHub_Min();
         (MarketVaultUnitHarness vault,,,, MockLCC lccNative,) = _deployVaultWithHub(address(hub));
@@ -354,20 +329,6 @@ contract MarketVaultUnitTest is Test {
             abi.encodeWithSelector(Errors.InvariantViolated.selector, "Native transfer to LiquidityHub failed")
         );
         vault.exposed_takeUnderlyingFromVaultToHub(ILCC(address(lccNative)), amount, true);
-    }
-
-    function test_tryTakeUnderlyingFromVaultToHub_doesNotConfirmWhenAmountTakenIsZero() public {
-        MockLiquidityHub_Min hub = new MockLiquidityHub_Min();
-        (MarketVaultUnitHarness vault, MockPoolManager_Min pm,, MockLCC lccErc20,, MockERC20 ua) =
-            _deployVaultWithHub(address(hub));
-
-        Currency c = Currency.wrap(address(ua));
-        pm.setClaimBalance(address(vault), c, 0);
-
-        uint256 amountTaken = vault.exposed_tryTakeUnderlyingFromVaultToHub(ILCC(address(lccErc20)), 100, true);
-
-        assertEq(amountTaken, 0);
-        assertEq(hub.confirmCalls(), 0);
     }
 
     function test_settleUnderlyingToVaultFromSender_revertsWhenSenderBalanceInsufficient() public {

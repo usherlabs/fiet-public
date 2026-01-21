@@ -28,15 +28,6 @@ import {MarketHandlerLib} from "./libraries/MarketHandlerLib.sol";
 contract ProxyHook is BaseHook, MarketVault, Exttload {
     using CurrencySettler for Currency;
 
-    struct LiquidityCallbackData {
-        uint256 amount0;
-        uint256 amount1;
-        Currency currency0;
-        Currency currency1;
-        address poolManager;
-        LiquidityUtils.ActionType actionType;
-    }
-
     /// @dev Context for proxy swap operations to reduce stack depth
     struct ProxySwapContext {
         bool coreZeroForOne;
@@ -156,50 +147,30 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         revert Errors.AddLiquidityThroughHookNotAllowed();
     }
 
-    // Method called by the Core Hook notifying that Direct Liquidity Provision occurred.
-    // Liquidity is managed by the Proxy Hook here to ensure PM credits the Proxy Hook (msg.sender) with relevant Currency Delta.
-    // THIS IS ALREADY UNLOCKED FOR DIRECT LP ON CORE POOL.
-    function onDirectLP(BalanceDelta delta, LiquidityUtils.ActionType actionType) external virtual onlyCoreHook {
+    /**
+     * @notice Called by `CoreHook` after direct liquidity is added to the CORE pool.
+     * @dev This is only required for DIRECT-LP ADDS (not removes). We settle underlying from Hub -> Vault so that
+     *      subsequent proxy-pool swaps can source underlying at a 1:1 against LCC.
+     *      Direct-LP REMOVES are handled via the unwrap pathway (market-derived LCC unwrap calls market liquidity).
+     */
+    function onDirectLP(BalanceDelta delta) external virtual onlyCoreHook {
         ILCC lccToken0 = ILCC(Currency.unwrap(corePoolKey.currency0));
         ILCC lccToken1 = ILCC(Currency.unwrap(corePoolKey.currency1));
 
         uint256 amount0 = LiquidityUtils.safeInt128ToUint256(delta.amount0());
         uint256 amount1 = LiquidityUtils.safeInt128ToUint256(delta.amount1());
 
-        if (actionType == LiquidityUtils.ActionType.DirectLPAddLiquidity) {
-            // Add liquidity to the core pool
-            // Since we didn't go through the regular "modify liquidity" flow,
-            // the PM just has a debit of `amount` of each currency from us
-            // We can, in exchange, get back ERC-6909 claim tokens for `amount`
-            // to create a credit of `amount` of each currency to us that balances out the debit
-
-            // We will store those claim tokens with the hook, so when swaps take place
-            // liquidity from our CSMM can be used by minting/burning claim tokens the hook owns
-
-            // Settle underlying liquidity to the vault from the LCCs that were acquired.
-            if (amount0 > 0) {
-                _settleUnderlyingToVaultFromHub(lccToken0, amount0);
-            }
-            if (amount1 > 0) {
-                _settleUnderlyingToVaultFromHub(lccToken1, amount1);
-            }
-
-            // Then we take what is available within the total settlement deficit amount from the vault to LCCs.
-            // This fulfils some accounting mechanics when DirectLPs add liquidity.
-            _settleObligations(corePoolKey);
-        } else if (actionType == LiquidityUtils.ActionType.DirectLPRemoveLiquidity) {
-            // 1. Remove LCCs from the Core Pool
-            // 2. Move the underlying tokens from the vault to the LCCs
-            // 3. Notify the LCCs about the new balance
-
-            // Try take from vault to LCCs. If there's a deficit, it will surface in settlement queue to the DirectLP on LCC unwrap.
-            if (amount0 > 0) {
-                _tryTakeUnderlyingFromVaultToHub(lccToken0, amount0, false);
-            }
-            if (amount1 > 0) {
-                _tryTakeUnderlyingFromVaultToHub(lccToken1, amount1, false);
-            }
+        // Settle underlying liquidity to the vault from the LCCs that were acquired.
+        if (amount0 > 0) {
+            _settleUnderlyingToVaultFromHub(lccToken0, amount0);
         }
+        if (amount1 > 0) {
+            _settleUnderlyingToVaultFromHub(lccToken1, amount1);
+        }
+
+        // Best-effort: take what is available within the total settlement deficit amount from the vault to LiquidityHub.
+        // This fulfils some accounting mechanics when DirectLPs add liquidity.
+        _settleObligations(corePoolKey);
     }
 
     /**
@@ -208,27 +179,12 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
      * @param delta The delta of the swap
      */
     function onCorePoolDirectSwap(BalanceDelta delta) external virtual onlyCoreHook {
-        // if this flag is not set, then it means that this is a direct swap
+        // If this flag is set, then the swap was initiated by ProxyHook (proxy-pool swap),
+        // and CoreHook's afterSwap notification must not recurse into this handler.
         bool isDirectSwap = ProxySwapFlag.isDirectSwap();
-        // if this is not a direct swap, then we need to return because we dont want to touch swaps initiated by the proxy hook
-        // ? the way the flag is set up, every swap is a direct swap by default, unless the ProxySwapFlag flag is set by the proxy hook to indicate it has an ongoing swap
-        // ? it is currently set in the _beforeSwap function of the proxy hook making sure it is set and cleared during a swap initiated by the proxy hook
         if (!isDirectSwap) {
             return;
         }
-
-        // if this is a direct swap, then we need to run the direct swap logic
-        // this is a direct swap logic
-        // 1. take the underlying tokens from the pool manager
-        // 2. mint the lcc tokens for the input amount (this is the input amount)
-        // 3. settle the lcc tokens to the pool manager
-        // 4. take the lcc tokens of the output amount from the pool manager
-        // 5. cancel the lcc tokens of the output amount
-        // 6. settle the output token to the pool manager
-        // 7. return the output token to the user
-        // Handle LCC underlying liquidity management for direct swaps
-        // LCC underlying liquidity for Token IN is moved "in-market" — to the PoolManager via Proxy Hook
-        // LCC underlying liquidity for Token OUT attempts to move from "in-market" into relevant LCC
 
         // Check if this is a zero one swap or one for zero swap
         bool isZeroForOne = delta.amount0() < 0;
@@ -241,19 +197,12 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         ILCC lccToken0 = ILCC(Currency.unwrap(corePoolKey.currency0));
         ILCC lccToken1 = ILCC(Currency.unwrap(corePoolKey.currency1));
 
-        // Handle Token IN liquidity (move to PoolManager from lcc token)
+        // Handle Token IN liquidity (move underlying from Hub -> Vault/PoolManager).
         ILCC lccTokenIn = isZeroForOne ? lccToken0 : lccToken1;
-        // Get the amount of the token that is being swapped in based on if this is a zero one swap or one for zero swap
         uint256 amountIn = isZeroForOne ? amount0 : amount1;
-        // Deposit underlying liquidity to pool manager from lcc token
         _settleUnderlyingToVaultFromHub(lccTokenIn, amountIn);
 
-        // Handle Token OUT liquidity (move from PoolManager into LCC token)
-        ILCC lccTokenOut = isZeroForOne ? lccToken1 : lccToken0;
-        // Get the amount of the token that is being swapped in based on if this is a zero one swap or one for zero swap
-        uint256 amountOut = isZeroForOne ? amount1 : amount0;
-
-        _tryTakeUnderlyingFromVaultToHub(lccTokenOut, amountOut, false); // funds going out are an attempt to deliver on the trade.
+        // Underlying liquidity for token-out is sourced on unwrap via market liquidity.
 
         // New liquidity in pool, so we try and settle the outstanding obligations, if any
         _settleObligationsForLCC(lccTokenIn);

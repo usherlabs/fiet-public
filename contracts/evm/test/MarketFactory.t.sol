@@ -514,6 +514,12 @@ contract MockProxyHookVault_MarketFactory {
         return toBalanceDelta(a0, a1);
     }
 
+    /// @dev Newer MarketFactory paths withdraw via `tryModifyLiquiditiesWithRecipient`.
+    ///      For unit testing, recipient does not affect the delta result, so we ignore it.
+    function tryModifyLiquiditiesWithRecipient(BalanceDelta requested, address) external view returns (BalanceDelta) {
+        return this.tryModifyLiquidities(requested);
+    }
+
     function dryModifyLiquidities(BalanceDelta requested) external view returns (BalanceDelta) {
         return this.tryModifyLiquidities(requested);
     }

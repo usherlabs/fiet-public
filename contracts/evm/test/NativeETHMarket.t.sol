@@ -253,13 +253,10 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
         // becase liquidity of the underlying tokens will be moved from lcc token to pool manager
         // so the pool manager's underlying balance should increase by the amount of token-in(token0) swapped into the pool
         assertEq(postBalanceOfToken0UnderlyingAssetInPM - preBalanceOfToken0UnderlyingAssetInPM, deltaAmount0);
-        // validate liquidity of token-out(token1) in the lcc token is higher after the swap
-        // because liquidity will move 'from pool-manager' token 'to lcc' token as it exits the pool during a zero for one swap
-        assertEq(postBalanceOfToken1UnderlyingAssetInHub - preBalanceOfToken1UnderlyingAssetInHub, deltaAmount1);
-        // validate liquidity of token-out(token1) in the pool manager is lower after the swap
-        // because liquidity of the underlying tokens will be moved from lcc token to pool manager
-        // so the pool manager's underlying balance should decrease by the amount of token-out(token1) swapped out of the pool
-        assertEq(preBalanceOfToken1UnderlyingAssetInPM - postBalanceOfToken1UnderlyingAssetInPM, deltaAmount1);
+        // token-out is delivered as LCC (a claim), not as underlying.
+        // Underlying token1 therefore does NOT move between LiquidityHub and PoolManager in this pathway.
+        assertEq(postBalanceOfToken1UnderlyingAssetInHub - preBalanceOfToken1UnderlyingAssetInHub, 0);
+        assertEq(preBalanceOfToken1UnderlyingAssetInPM - postBalanceOfToken1UnderlyingAssetInPM, 0);
     }
 
     function test_swapWithNativeAsUnderlyingAsset_oneForZeroOnCore() public {
@@ -313,13 +310,10 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
         console.log("postBalanceOfToken0UnderlyingAssetInHub", postBalanceOfToken0UnderlyingAssetInHub);
         console.log("postBalanceOfToken1UnderlyingAssetInHub", postBalanceOfToken1UnderlyingAssetInHub);
 
-        // validate liquidity of token-out(token0) in the lcc token is higher after the swap
-        // because liquidity will move 'from pool-manager' token 'to LCC' token as it exits the pool during a one for zero swap
-        assertEq(postBalanceOfToken0UnderlyingAssetInHub - preBalanceOfToken0UnderlyingAssetInHub, deltaAmount0);
-        // validate liquidity of token-out(token0) in the pool manager is lower after the swap
-        // becase liquidity of the underlying tokens will be moved from the pool-manager to LCC token
-        // so the pool manager's underlying balance should decrease by the amount of token-out(token0) swapped out of the pool
-        assertEq(preBalanceOfToken0UnderlyingAssetInPM - postBalanceOfToken0UnderlyingAssetInPM, deltaAmount0);
+        // token-out is delivered as LCC (a claim), not as underlying.
+        // Underlying token0 therefore does NOT move between LiquidityHub and PoolManager in this pathway.
+        assertEq(postBalanceOfToken0UnderlyingAssetInHub - preBalanceOfToken0UnderlyingAssetInHub, 0);
+        assertEq(preBalanceOfToken0UnderlyingAssetInPM - postBalanceOfToken0UnderlyingAssetInPM, 0);
         // validate liquidity of token-in(token1) in the lcc token is lower after the swap
         // because liquidity will move 'from lcc' tokens 'to pool-manager' as it enters the pool during a one for zero swap
         assertEq(preBalanceOfToken1UnderlyingAssetInHub - postBalanceOfToken1UnderlyingAssetInHub, deltaAmount1);

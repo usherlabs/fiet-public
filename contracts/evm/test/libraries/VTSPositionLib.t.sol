@@ -52,6 +52,10 @@ contract VTSPositionLibTest_VaultNoop is IMarketVault {
         return d;
     }
 
+    function tryModifyLiquiditiesWithRecipient(BalanceDelta d, address) external pure returns (BalanceDelta) {
+        return d;
+    }
+
     function dryModifyLiquidities(BalanceDelta d) external pure returns (BalanceDelta) {
         return d;
     }
@@ -78,6 +82,10 @@ contract VTSPositionLibTest_VaultClamp is IMarketVault {
     function modifyLiquidities(BalanceDelta) external pure {}
 
     function tryModifyLiquidities(BalanceDelta d) external pure returns (BalanceDelta) {
+        return d;
+    }
+
+    function tryModifyLiquiditiesWithRecipient(BalanceDelta d, address) external pure returns (BalanceDelta) {
         return d;
     }
 
@@ -112,6 +120,10 @@ contract VTSPositionLibTest_VaultOverAvailable is IMarketVault {
     function modifyLiquidities(BalanceDelta) external pure {}
 
     function tryModifyLiquidities(BalanceDelta d) external pure returns (BalanceDelta) {
+        return d;
+    }
+
+    function tryModifyLiquiditiesWithRecipient(BalanceDelta d, address) external pure returns (BalanceDelta) {
         return d;
     }
 
