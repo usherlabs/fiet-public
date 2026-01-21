@@ -764,9 +764,17 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
      * @param amount The amount of underlying liquidity taken
      * @param shouldEmit Whether to emit LiquidityAvailable event
      */
-    function confirmTake(address lcc, uint256 amount, bool shouldEmit) external onlyIssuer(lcc) nonReentrant {
-        // Track total underlying asset supply
-        s.reserveOfUnderlying[s.lccToUnderlying[lcc]] += amount;
+    function confirmTake(address lcc, uint256 amount, bool shouldEmit) external onlyIssuer(lcc) {
+        // INTENT:
+        // `confirmTake()` must be callable from within higher-level flows that themselves may be `nonReentrant`
+        // (e.g. `useMarketLiquidity()` eventually triggering a vault -> hub callback).
+        // We therefore DO NOT apply `nonReentrant` here; instead, we enforce a strict balance-backed invariant
+        // so callers cannot "fabricate" reserves via re-entrancy.
+
+        address underlying = s.lccToUnderlying[lcc];
+
+        // Track total underlying asset supply (must remain <= actual underlying balance held by this hub).
+        s.reserveOfUnderlying[underlying] += amount;
 
         // Best-effort: settle Hub queue up to the newly available amount
         uint256 hubQueue = s.settleQueue[lcc][address(this)];
@@ -776,8 +784,15 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
 
         if (shouldEmit && hubQueue < amount) {
             // Only emit if there is new liquidity available and not consumed greedily by the Hub
-            emit LiquidityAvailable(lcc, s.lccToUnderlying[lcc], amount, s.lccToMarket[lcc].id);
+            emit LiquidityAvailable(lcc, underlying, amount, s.lccToMarket[lcc].id);
         }
+
+        // Balance-backed invariant: reserve accounting must never exceed actual hub holdings.
+        // This protects against re-entrancy and any accidental/malicious unbacked `confirmTake` calls.
+        uint256 reserve = s.reserveOfUnderlying[underlying];
+        uint256 actualBalance =
+            underlying == address(0) ? address(this).balance : Currency.wrap(underlying).balanceOf(address(this));
+        if (reserve > actualBalance) revert Errors.InsufficientBalance(actualBalance, reserve);
     }
 
     /**

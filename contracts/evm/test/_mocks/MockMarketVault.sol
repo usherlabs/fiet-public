@@ -32,6 +32,15 @@ contract MockMarketVault is IMarketVault {
         return dryModifyLiquidities(balanceDelta);
     }
 
+    function tryModifyLiquiditiesWithRecipient(BalanceDelta balanceDelta, address)
+        external
+        view
+        override
+        returns (BalanceDelta)
+    {
+        return dryModifyLiquidities(balanceDelta);
+    }
+
     function inMarketBalanceOf(Currency currency) external view override returns (uint256) {
         return balances[currency];
     }

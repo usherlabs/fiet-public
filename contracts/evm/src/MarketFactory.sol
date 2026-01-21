@@ -379,7 +379,9 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
             revert Errors.InvalidAddress(underlyingAsset);
         }
         BalanceDelta usedDelta = IMarketVault(proxyHook)
-            .tryModifyLiquidities(LiquidityUtils.safeToBalanceDelta(amount0, amount1, false, false)); // positive delta indicating withdrawal from market
+            .tryModifyLiquiditiesWithRecipient(
+                LiquidityUtils.safeToBalanceDelta(amount0, amount1, false, false), address(liquidityHub)
+            ); // positive delta indicating withdrawal from market
         vtsOrchestrator.incrementCoverage(
             pId,
             LiquidityUtils.safeInt128ToUint256(usedDelta.amount0()),

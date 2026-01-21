@@ -1411,6 +1411,10 @@ contract MockMarketVaultNoop {
         return d;
     }
 
+    function tryModifyLiquiditiesWithRecipient(BalanceDelta d, address) external pure returns (BalanceDelta) {
+        return d;
+    }
+
     function dryModifyLiquidities(BalanceDelta d) external pure returns (BalanceDelta) {
         return d;
     }
@@ -1428,6 +1432,10 @@ contract MockMarketVaultPassthrough is IMarketVault {
     function modifyLiquidities(BalanceDelta) external pure {}
 
     function tryModifyLiquidities(BalanceDelta d) external pure returns (BalanceDelta) {
+        return d;
+    }
+
+    function tryModifyLiquiditiesWithRecipient(BalanceDelta d, address) external pure returns (BalanceDelta) {
         return d;
     }
 

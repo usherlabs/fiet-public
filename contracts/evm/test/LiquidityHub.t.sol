@@ -500,6 +500,12 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         // Create a queue entry for the Hub itself.
         _createSettlementQueueEntry(lccToken1, address(liquidityHub), hubQueue);
 
+        // `confirmTake` is balance-backed: the Hub must actually hold underlying for the reserve increment.
+        uint256 reserveBefore = liquidityHub.reserveOfUnderlying(lccToken1);
+        uint256 needed = reserveBefore + amount;
+        uint256 bal = underlyingAsset1.balanceOf(address(liquidityHub));
+        if (bal < needed) underlyingAsset1.mint(address(liquidityHub), needed - bal);
+
         vm.expectEmit(true, false, false, true, address(liquidityHub));
         emit LiquidityAvailable(lccToken1, address(underlyingAsset1), amount, marketId1);
 
@@ -509,6 +515,12 @@ contract LiquidityHubTest is LiquidityHubTestBase {
 
     function test_confirmTake_doesNotEmitWhenShouldEmitFalse() public {
         uint256 amount = 10;
+
+        // `confirmTake` is balance-backed: the Hub must actually hold underlying for the reserve increment.
+        uint256 reserveBefore = liquidityHub.reserveOfUnderlying(lccToken1);
+        uint256 needed = reserveBefore + amount;
+        uint256 bal = underlyingAsset1.balanceOf(address(liquidityHub));
+        if (bal < needed) underlyingAsset1.mint(address(liquidityHub), needed - bal);
 
         vm.recordLogs();
         vm.prank(proxyHook);
@@ -528,6 +540,12 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         uint256 hubQueue = 10;
         _createSettlementQueueEntry(lccToken1, address(liquidityHub), hubQueue);
 
+        // `confirmTake` is balance-backed: the Hub must actually hold underlying for the reserve increment.
+        uint256 reserveBefore = liquidityHub.reserveOfUnderlying(lccToken1);
+        uint256 needed = reserveBefore + hubQueue;
+        uint256 bal = underlyingAsset1.balanceOf(address(liquidityHub));
+        if (bal < needed) underlyingAsset1.mint(address(liquidityHub), needed - bal);
+
         // If this emitted, the test would fail; keep it silent.
         vm.prank(proxyHook);
         liquidityHub.confirmTake(lccToken1, hubQueue, true);
@@ -543,6 +561,12 @@ contract LiquidityHubTest is LiquidityHubTestBase {
 
         uint256 hubLccBefore = ILCC(lccToken1).balanceOf(address(liquidityHub));
         assertEq(hubLccBefore, queued, "Hub should hold queued LCC for hub-settlement path");
+
+        // `confirmTake` is balance-backed: the Hub must actually hold underlying for the reserve increment.
+        uint256 reserveBefore = liquidityHub.reserveOfUnderlying(lccToken1);
+        uint256 needed = reserveBefore + incoming;
+        uint256 bal = underlyingAsset1.balanceOf(address(liquidityHub));
+        if (bal < needed) underlyingAsset1.mint(address(liquidityHub), needed - bal);
 
         // confirmTake should increase reserves and then best-effort settle the Hub's own queue.
         vm.prank(proxyHook);
