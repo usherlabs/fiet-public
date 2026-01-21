@@ -53,6 +53,8 @@ interface IIntentPolicy {
 
 contract IntentPolicyTest is Test {
     string internal constant WASM_PATH = "wasm/intent-policy.wasm";
+    string internal constant WASM_PATH_RAW = "wasm/intent-policy.raw.wasm";
+    string internal constant WASM_PATH_BR = "wasm/intent-policy.wasm.br";
 
     uint256 internal constant MODULE_TYPE_POLICY = 5;
 
@@ -62,10 +64,18 @@ contract IntentPolicyTest is Test {
     bytes4 internal constant NOT_INITIALIZED_SELECTOR =
         bytes4(keccak256("NotInitialized(address)"));
 
-    function _deployPolicy() internal returns (IIntentPolicy) {
+    function _deployPolicy(
+        string memory wasmPath
+    ) internal returns (IIntentPolicy) {
         address deployed = DeployStylusCodeCheatcodes(address(vm))
-            .deployStylusCode(WASM_PATH);
+            .deployStylusCode(wasmPath);
         return IIntentPolicy(deployed);
+    }
+
+    function _deployPolicy() internal returns (IIntentPolicy) {
+        // Prefer the pre-compressed artefact for arbos-forge deployments. This avoids any
+        // size-based auto-compression behaviour and ensures the runtime sees a brotli payload.
+        return _deployPolicy(WASM_PATH_BR);
     }
 
     function _installData(
@@ -217,5 +227,44 @@ contract IntentPolicyTest is Test {
         vm.prank(wallet);
         policy.onUninstall(abi.encodePacked(permissionIdB));
         assertFalse(policy.isInitialized(wallet));
+    }
+
+    /// Debug: mirror ArbOs Foundry's own DeployStylusCode.t.sol expectations:
+    /// deployed bytecode should be `0xeff00000 || wasmFile`.
+    /// Ref: https://raw.githubusercontent.com/iosiro/arbos-foundry/9952b9626f56141e5feb2eeee7de51b438545d94/testdata/default/cheats/DeployStylusCode.t.sol
+    function test_debug_deployStylusCode_codeShape_stripped() public {
+        bytes memory file = vm.readFileBinary(WASM_PATH);
+        // WASM magic: 0x00 0x61 0x73 0x6d
+        assertTrue(bytes4(file) == 0x0061736d);
+
+        address deployed = DeployStylusCodeCheatcodes(address(vm))
+            .deployStylusCode(WASM_PATH);
+
+        // At minimum, the deployed runtime code should begin with the Stylus discriminant prefix.
+        // NOTE: Some arbos-forge builds may compress/transform the payload; we log hashes/lengths for debugging.
+        assertTrue(bytes4(deployed.code) == 0xeff00000);
+
+        emit log_uint(file.length);
+        emit log_uint(deployed.code.length);
+        emit log_bytes32(keccak256(file));
+        emit log_bytes32(keccak256(deployed.code));
+
+        // Full equality (0xeff00000 || wasm) is asserted against arbos-foundry fixtures in ArbosStylusSanityTest.
+    }
+
+    function test_debug_deployStylusCode_codeShape_raw() public {
+        bytes memory file = vm.readFileBinary(WASM_PATH_RAW);
+        assertTrue(bytes4(file) == 0x0061736d);
+
+        address deployed = DeployStylusCodeCheatcodes(address(vm))
+            .deployStylusCode(WASM_PATH_RAW);
+        assertTrue(bytes4(deployed.code) == 0xeff00000);
+
+        emit log_uint(file.length);
+        emit log_uint(deployed.code.length);
+        emit log_bytes32(keccak256(file));
+        emit log_bytes32(keccak256(deployed.code));
+
+        // Full equality is asserted in ArbosStylusSanityTest.
     }
 }

@@ -1,3 +1,31 @@
+# WIP: (Experimental) Fiet Maker Kernel Policy
+
+> **Warning**  
+> This folder contains **experimental code** for demonstration and research purposes only.  
+> Not ready for **use in production or mainnet** yet.  
+> Use at your own risk.  
+
+Arbitrum Stylus program written in Rust using the [stylus-sdk](https://github.com/OffchainLabs/stylus-sdk-rs).
+
+This workspace hosts the on-chain **“Atomic Revalidation” intent policy** described in `PROPOSAL.md`, exposed as a **Kernel-compatible** ERC-7579 `IPolicy` module (**module type 5**) intended to be used in the **Kernel permissions** pipeline (for example, alongside a PermissionValidator signer).
+
+The core contract crate is `fiet-maker-policy/`. The policy is designed to **fail closed**: if envelope parsing, signature checks, replay protection, program decoding, or on-chain fact acquisition fails, the policy returns a failure code and the UserOperation should not proceed.
+
+- **On-chain policy entrypoint**: `fiet-maker-policy/src/intent_policy.rs`
+- **Envelope hashing/signing**: `fiet-maker-policy/src/utils/policy_envelope.rs`
+- **Off-chain encoder / shared types**: `off-chain/fiet-maker-policy-encoder/`
+- **E2E harness (Bun)**: `e2e/`
+
+## Unit Testing
+
+### Prerequisite: ArbOS Foundry
+
+Requires a build from source:
+
+1. `git clone https://github.com/iosiro/arbos-foundry`
+2. `cd arbos-foundry`
+3. `cargo install --path ./crates/forge --profile release --force --locked --bin arbos-forge`
+
 ## Stylus (Nitro) E2E bootstrap
 
 This directory contains the tooling to:
@@ -59,6 +87,13 @@ just stylus_deploy_policy
 # Write e2e/.env from the deployed addresses
 just e2e_write_env
 
+# Run Bun E2E tests
+just e2e_test
+```
+
+OR use `just bootstrap`
+
+```bash
 # Full bootstrap: infra + kernel + policy + e2e env
 just bootstrap
 
