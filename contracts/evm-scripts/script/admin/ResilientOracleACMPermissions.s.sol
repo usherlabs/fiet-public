@@ -2,7 +2,7 @@
 pragma solidity ^0.8.26;
 
 /**
- * Admin: Give Venus AccessControlManager call permission for ResilientOracle
+ * Admin: Give Venus AccessControlManager call permission for target contract
  *
  * Venus `ResilientOracle` gates most admin operations via `_checkAccessAllowed("<sig>")`,
  * which is enforced by the Venus `AccessControlManager` (ACM). Making `GlobalConfig` the
@@ -23,7 +23,8 @@ pragma solidity ^0.8.26;
  *
  * Env:
  * - PRIVATE_KEY: the admin EOA (must be allowed to administer ACM, OR be the owner of GlobalConfig if proxying)
- * - RESILIENT_ORACLE_ADDRESS: ResilientOracle proxy address (the contract guarded by ACM)
+ * - RESILIENT_ORACLE_ADDRESS: ResilientOracle proxy address (used to resolve ACM)
+ * - TARGET_ADDRESS: contract to permit (e.g. MainOracle, BoundValidator, ResilientOracle)
  *
  * - FUNCTION_SIG: the exact signature string used by `_checkAccessAllowed`, e.g. "pause()"
  * - ACCOUNT_TO_PERMIT: the account that should be allowed to call that signature
@@ -73,6 +74,7 @@ contract ResilientOracleACMGiveCallPermissionScript is ResilientOracleACMBase {
     function run() external {
         uint256 pk = uint256(vm.envBytes32("PRIVATE_KEY"));
         address oracle = vm.envAddress("RESILIENT_ORACLE_ADDRESS");
+        address target = vm.envAddress("TARGET_ADDRESS");
         string memory functionSig = vm.envString("FUNCTION_SIG");
         address account = vm.envAddress("ACCOUNT_TO_PERMIT");
 
@@ -82,12 +84,13 @@ contract ResilientOracleACMGiveCallPermissionScript is ResilientOracleACMBase {
 
         console.log("NETWORK:", networkName);
         console.log("ResilientOracle:", oracle);
+        console.log("Target:", target);
         console.log("AccessControlManager:", acm);
         console.log("FUNCTION_SIG:", functionSig);
         console.log("ACCOUNT_TO_PERMIT:", account);
 
         vm.startBroadcast(pk);
-        _giveCallPermission(acm, oracle, functionSig, account);
+        _giveCallPermission(acm, target, functionSig, account);
         vm.stopBroadcast();
     }
 }

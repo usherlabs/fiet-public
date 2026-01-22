@@ -258,32 +258,104 @@ deploy-oracle:
     cp ../evm/oracle/hardhat.custom.config.ts ../evm/lib/oracle/hardhat.fiet.config.ts
     cd ../evm/lib/oracle && npx --yes hardhat --config ./hardhat.fiet.config.ts deploy --network "$ORACLE_NETWORK_ARG" --tags deploy --reset
 
-    # read from stored file and persist RESILIENT_ORACLE_ADDRESS for subsequent Foundry scripts.
+    # Read from stored files and persist env vars for subsequent Foundry scripts.
     # Hardhat writes deployments to `../evm/deployments/oracle_deployments` (see `contracts/evm/oracle/hardhat.custom.config.ts`).
-    ORACLE_JSON="${ROOT_DIR}/../evm/deployments/oracle_deployments/${ORACLE_NETWORK_ARG}/ResilientOracle_Proxy.json"
-    if [ ! -f "$ORACLE_JSON" ]; then
-        echo "Expected oracle deployment file not found: $ORACLE_JSON"
+    ORACLE_DIR="${ROOT_DIR}/../evm/deployments/oracle_deployments/${ORACLE_NETWORK_ARG}"
+    RESILIENT_ORACLE_JSON="${ORACLE_DIR}/ResilientOracle_Proxy.json"
+    ACM_JSON="${ORACLE_DIR}/AccessControlManager.json"
+
+    if [ ! -f "$RESILIENT_ORACLE_JSON" ]; then
+        echo "Expected oracle deployment file not found: $RESILIENT_ORACLE_JSON"
+        exit 1
+    fi
+    if [ ! -f "$ACM_JSON" ]; then
+        echo "Expected ACM deployment file not found: $ACM_JSON"
         exit 1
     fi
 
-    RESILIENT_ORACLE_ADDRESS="$(jq -r '.address' "$ORACLE_JSON")"
+    RESILIENT_ORACLE_ADDRESS="$(jq -r '.address' "$RESILIENT_ORACLE_JSON")"
     if [ -z "$RESILIENT_ORACLE_ADDRESS" ] || [ "$RESILIENT_ORACLE_ADDRESS" = "null" ]; then
-        echo "Failed to read .address from $ORACLE_JSON"
+        echo "Failed to read .address from $RESILIENT_ORACLE_JSON"
+        exit 1
+    fi
+
+    ACCESS_CONTROL_MANAGER="$(jq -r '.address' "$ACM_JSON")"
+    if [ -z "$ACCESS_CONTROL_MANAGER" ] || [ "$ACCESS_CONTROL_MANAGER" = "null" ]; then
+        echo "Failed to read .address from $ACM_JSON"
         exit 1
     fi
 
     ENV_FILE="${ROOT_DIR}/.env"
-    KEY="RESILIENT_ORACLE_ADDRESS"
-    if [ -f "$ENV_FILE" ] && grep -q "^${KEY}=" "$ENV_FILE"; then
-        perl -pi -e "s/^${KEY}=.*/${KEY}=${RESILIENT_ORACLE_ADDRESS}/" "$ENV_FILE"
-    else
-        echo "${KEY}=${RESILIENT_ORACLE_ADDRESS}" >> "$ENV_FILE"
-    fi
-    echo "Wrote ${KEY}=${RESILIENT_ORACLE_ADDRESS} to ${ENV_FILE}"
+    upsert_env() {
+        local key="$1"
+        local val="$2"
+        # Ensure the key exists exactly once (dotenv loaders can behave unexpectedly with duplicates).
+        # Remove any existing lines like:
+        # - KEY=...
+        # - export KEY=...
+        # - KEY = ...
+        if [ -f "$ENV_FILE" ]; then
+            tmp="${ENV_FILE}.tmp"
+            perl -ne "print unless /^\\s*(?:export\\s+)?\\Q${key}\\E\\s*=/;" "$ENV_FILE" > "$tmp"
+            mv "$tmp" "$ENV_FILE"
+        fi
+        echo "${key}=${val}" >> "$ENV_FILE"
+    }
+
+    upsert_env "RESILIENT_ORACLE_ADDRESS" "$RESILIENT_ORACLE_ADDRESS"
+    upsert_env "ACCESS_CONTROL_MANAGER" "$ACCESS_CONTROL_MANAGER"
+    echo "Wrote RESILIENT_ORACLE_ADDRESS=${RESILIENT_ORACLE_ADDRESS} to ${ENV_FILE}"
+    echo "Wrote ACCESS_CONTROL_MANAGER=${ACCESS_CONTROL_MANAGER} to ${ENV_FILE}"
 
     # Keep a local copy under `./deployments/` for convenience/debugging (overwrites any stale file).
-    mkdir -p "${ROOT_DIR}/deployments/oracle_deployments/${ORACLE_NETWORK_ARG}"
-    cp "$ORACLE_JSON" "${ROOT_DIR}/deployments/oracle_deployments/${ORACLE_NETWORK_ARG}/ResilientOracle_Proxy.json"
+    OUT_DIR="${ROOT_DIR}/deployments/oracle_deployments/${ORACLE_NETWORK_ARG}"
+    mkdir -p "$OUT_DIR"
+
+    # Copy per-contract deployment files (useful for deeper debugging).
+    for f in \
+      AccessControlManager.json \
+      VAI.json \
+      DefaultProxyAdmin.json \
+      BoundValidator_Implementation.json \
+      BoundValidator_Proxy.json \
+      ResilientOracle_Implementation.json \
+      ResilientOracle_Proxy.json \
+      ChainlinkOracle_Implementation.json \
+      ChainlinkOracle_Proxy.json; do
+        if [ -f "${ORACLE_DIR}/${f}" ]; then
+            cp "${ORACLE_DIR}/${f}" "${OUT_DIR}/${f}"
+        fi
+    done
+
+    # Write a single address-book JSON for scripts/tools.
+    jq -n \
+      --arg AccessControlManager "$(jq -r '.address' "${ORACLE_DIR}/AccessControlManager.json")" \
+      --arg VAI "$(jq -r '.address' "${ORACLE_DIR}/VAI.json")" \
+      --arg DefaultProxyAdmin "$(jq -r '.address' "${ORACLE_DIR}/DefaultProxyAdmin.json")" \
+      --arg BoundValidator_Implementation "$(jq -r '.address' "${ORACLE_DIR}/BoundValidator_Implementation.json")" \
+      --arg BoundValidator_Proxy "$(jq -r '.address' "${ORACLE_DIR}/BoundValidator_Proxy.json")" \
+      --arg ResilientOracle_Implementation "$(jq -r '.address' "${ORACLE_DIR}/ResilientOracle_Implementation.json")" \
+      --arg ResilientOracle_Proxy "$(jq -r '.address' "${ORACLE_DIR}/ResilientOracle_Proxy.json")" \
+      --arg ChainlinkOracle_Implementation "$(jq -r '.address' "${ORACLE_DIR}/ChainlinkOracle_Implementation.json")" \
+      --arg ChainlinkOracle_Proxy "$(jq -r '.address' "${ORACLE_DIR}/ChainlinkOracle_Proxy.json")" \
+      '{
+        AccessControlManager: $AccessControlManager,
+        VAI: $VAI,
+        DefaultProxyAdmin: $DefaultProxyAdmin,
+        BoundValidator_Implementation: $BoundValidator_Implementation,
+        BoundValidator_Proxy: $BoundValidator_Proxy,
+        ResilientOracle_Implementation: $ResilientOracle_Implementation,
+        ResilientOracle_Proxy: $ResilientOracle_Proxy,
+        ChainlinkOracle_Implementation: $ChainlinkOracle_Implementation,
+        ChainlinkOracle_Proxy: $ChainlinkOracle_Proxy
+      }' > "${OUT_DIR}/addresses.json"
+
+    echo "Wrote oracle address book to ${OUT_DIR}/addresses.json"
+
+    # Also write DefaultProxyAdmin "public key" (address) as a simple text file.
+    DEFAULT_PROXY_ADMIN="$(jq -r '.address' "${ORACLE_DIR}/DefaultProxyAdmin.json")"
+    echo "${DEFAULT_PROXY_ADMIN}" > "${OUT_DIR}/DefaultProxyAdmin.address"
+    echo "Wrote DefaultProxyAdmin address to ${OUT_DIR}/DefaultProxyAdmin.address"
 
 # Configure the local resilient oracle (enables MAIN oracle + sets mock prices for default CreateMarket pair)
 configure-oracle:
@@ -371,8 +443,8 @@ admin-vts-set-global-pause:
         --rpc-url {{ rpc_url }} \
         {{ broadcast_flag }} -vvv
 
-admin-vts-set-market-config-default:
-    forge script {{ script_dir }}/admin/VTSOrchestratorAdmin.s.sol:VTSSetMarketConfigDefaultScript \
+admin-vts-set-market-config:
+    forge script {{ script_dir }}/admin/VTSOrchestratorAdmin.s.sol:VTSSetMarketConfigScript \
         --rpc-url {{ rpc_url }} \
         {{ broadcast_flag }} -vvv
 
@@ -418,6 +490,11 @@ admin-oracle-acm-give-call-permission:
 
 admin-acm-transfer-admin-to-globalconfig:
     forge script {{ script_dir }}/admin/AccessControlManagerAdmin.s.sol:AccessControlManagerTransferAdminToGlobalConfigScript \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+admin-oracle-configure-assets:
+    forge script {{ script_dir }}/admin/OracleConfigureAssets.s.sol:OracleConfigureAssetsScript \
         --rpc-url {{ rpc_url }} \
         {{ broadcast_flag }} -vvv
 

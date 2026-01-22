@@ -1,0 +1,34 @@
+{
+  "contracts": {
+    "resilientOracle": "0x731c8103f5e39e7241f6833F68617c4da4ec31Cb",
+    "mainOracle": "0xc1ec8B65bb137602963f88eb063fa7236f4744f2",
+    "boundValidator": "0xf5dC296F38B10cF65E2702a69E1d56d55d520e91",
+    "pivotOracle": "0x0000000000000000000000000000000000000000",
+    "fallbackOracle": "0x0000000000000000000000000000000000000000"
+  },
+  "defaults": {
+    "cachingEnabled": false,
+    "enableMain": true,
+    "enablePivot": true,
+    "enableFallback": false
+  },
+  "assets": [
+    {
+      "ticker": "ETH",
+      "asset": "0x0000000000000000000000000000000000000001",
+      "feed": "0x0000000000000000000000000000000000000001",
+      "maxStalePeriod": 3600,
+      "cachingEnabled": true,
+      "enableMain": true,
+      "enablePivot": false,
+      "enableFallback": false,
+      "pivotOracle": "0x0000000000000000000000000000000000000000",
+      "fallbackOracle": "0x0000000000000000000000000000000000000000",
+      "bounds": {
+        "upperBoundRatio": "1050000000000000000",
+        "lowerBoundRatio": "950000000000000000"
+      }
+    }
+  ]
+}
+

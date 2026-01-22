@@ -84,12 +84,12 @@ That means **the transaction signer must be the `GlobalConfig` owner** for most 
 - **Env**:
   - `PAUSED`: `0|1`
 
-### `just admin-vts-set-market-config-default`
+### `just admin-vts-set-market-config`
 
 - **What it does**: sets the VTS config for a given core pool id (defaults, or optional file override).
 - **On-chain call**: `VTSOrchestrator.setMarketVTSConfiguration(corePoolId, defaultCfg)`
   - if `VTSOrchestrator.owner() == GlobalConfig`, this is routed via `GlobalConfig.proxyCall`
-- **Script**: `VTSOrchestratorAdmin.s.sol:VTSSetMarketConfigDefaultScript`
+- **Script**: `VTSOrchestratorAdmin.s.sol:VTSSetMarketConfigScript`
 - **Env**:
   - `CORE_POOL_ID`: `bytes32`
   - `VTS_CONFIG_FILE_PATH` (optional): path to a JSON or TOML file to override the default config
@@ -174,7 +174,8 @@ That means **the transaction signer must be the `GlobalConfig` owner** for most 
   - then checks `AccessControlManager.hasPermission(ACCOUNT_TO_PERMIT, oracle, FUNCTION_SIG) == true`
 - **Script**: `ResilientOracleACMPermissions.s.sol:ResilientOracleACMGiveCallPermissionScript`
 - **Env**:
-  - `RESILIENT_ORACLE_ADDRESS`: address
+  - `RESILIENT_ORACLE_ADDRESS`: address (used to resolve ACM)
+  - `TARGET_ADDRESS`: address to permit (e.g. MainOracle, BoundValidator, ResilientOracle)
   - `FUNCTION_SIG`: string (e.g. `pause()`, `setOracle(address,address,uint8)`)
   - `ACCOUNT_TO_PERMIT`: address
 
@@ -187,7 +188,16 @@ That means **the transaction signer must be the `GlobalConfig` owner** for most 
 - **Script**: `AccessControlManagerAdmin.s.sol:AccessControlManagerTransferAdminToGlobalConfigScript`
 - **Env**:
   - `ACCESS_CONTROL_MANAGER`: address
+    - If you ran `just deploy-oracle`, this is auto-populated into `.env` for you.
   - `OLD_ADMIN` (optional): address
+
+### `just admin-oracle-configure-assets`
+
+- **What it does**: configures per-asset oracle feeds (ChainlinkOracle), per-asset bounds (BoundValidator), and per-asset ResilientOracle token configs, all routed via `GlobalConfig.proxyCall`.
+- **Script**: `OracleConfigureAssets.s.sol:OracleConfigureAssetsScript`
+- **Env**:
+  - `ORACLE_CONFIG_FILE` (optional): filename under `config/oracle/` (default: `example.json`)
+- **Docs**: see `script/admin/ORACLE.md` for the end-to-end flow (including required ACM permissions).
 
 ## Oracle admin model (Venus `lib/oracle`)
 

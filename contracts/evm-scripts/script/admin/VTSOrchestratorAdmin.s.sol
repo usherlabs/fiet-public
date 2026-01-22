@@ -11,7 +11,7 @@ pragma solidity ^0.8.26;
  *
  * Run:
  * - `just admin-vts-set-global-pause`
- * - `just admin-vts-set-market-config-default`
+ * - `just admin-vts-set-market-config`
  *
  * Env:
  * - PRIVATE_KEY
@@ -73,7 +73,7 @@ contract VTSSetGlobalPauseScript is AdminBase {
     }
 }
 
-contract VTSSetMarketConfigDefaultScript is AdminBase, VTSConfigFileBase {
+contract VTSSetMarketConfigScript is AdminBase, VTSConfigFileBase {
     function run() external {
         uint256 pk = uint256(vm.envBytes32("PRIVATE_KEY"));
         PoolId corePoolId = PoolId.wrap(vm.envBytes32("CORE_POOL_ID"));
