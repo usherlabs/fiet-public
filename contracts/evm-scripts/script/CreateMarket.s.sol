@@ -269,8 +269,7 @@ contract CreateMarketScript is NetworkConfig {
         address deployer = MarketFactory(marketFactory).marketVaultDeployer();
         if (!factory.isInitialised()) {
             address[] memory initialBounds = new address[](0);
-            bytes memory initCall =
-                abi.encodeWithSelector(MarketFactory.initialise.selector, coreHook, initialBounds);
+            bytes memory initCall = abi.encodeWithSelector(MarketFactory.initialise.selector, coreHook, initialBounds);
             GlobalConfig(globalConfig).proxyCall(marketFactory, initCall);
         }
 

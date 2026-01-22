@@ -99,8 +99,8 @@ help:
 
 # === Development Workflows ===
 
-# Complete development setup (setup create3, deploy tokens, contracts, create market)
-dev: setup-create3 deploy-tokenA deploy-tokenB deploy create-market
+# Complete development setup (setup create3, deploy tokens, configure underlyings, deploy contracts, configure oracle, create market)
+dev: setup-create3 deploy-tokenA deploy-tokenB set-underlyings deploy configure-oracle create-market
 
 
 # === Build ===
@@ -157,6 +157,39 @@ deploy-tokenB:
     forge script {{ script_dir }}/setup/MockERC20.s.sol:TokenScriptUSDC \
         --rpc-url {{ rpc_url }} \
         {{ broadcast_flag }} {{ verify_flags }} -vvv
+
+# Persist UNDERLYING_ASSET_0/1 based on mock deployments
+set-underlyings:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    DEPLOYMENTS_FILE="deployments/local_sepolia_deployments.json"
+    if [ ! -f "$DEPLOYMENTS_FILE" ]; then
+        echo "Expected $DEPLOYMENTS_FILE not found. Run \`just deploy-tokenA\` and \`just deploy-tokenB\` first."
+        exit 1
+    fi
+    UA0="$(jq -r '.usdtToken' "$DEPLOYMENTS_FILE")"
+    UA1="$(jq -r '.usdcToken' "$DEPLOYMENTS_FILE")"
+    if [ -z "$UA0" ] || [ "$UA0" = "null" ]; then
+        echo "Missing .usdtToken in $DEPLOYMENTS_FILE"
+        exit 1
+    fi
+    if [ -z "$UA1" ] || [ "$UA1" = "null" ]; then
+        echo "Missing .usdcToken in $DEPLOYMENTS_FILE"
+        exit 1
+    fi
+    ENV_FILE=".env"
+    upsert_env() {
+        local key="$1"
+        local val="$2"
+        if [ -f "$ENV_FILE" ] && grep -q "^${key}=" "$ENV_FILE"; then
+            perl -pi -e "s/^${key}=.*/${key}=${val}/" "$ENV_FILE"
+        else
+            echo "${key}=${val}" >> "$ENV_FILE"
+        fi
+    }
+    upsert_env "UNDERLYING_ASSET_0" "$UA0"
+    upsert_env "UNDERLYING_ASSET_1" "$UA1"
+    echo "Wrote UNDERLYING_ASSET_0/1 to ${ENV_FILE}"
 
 # Mint/transfer mock tokens to the LP
 mint-mock-tokens:
