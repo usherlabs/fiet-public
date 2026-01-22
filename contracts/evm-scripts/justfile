@@ -99,12 +99,9 @@ help:
 
 # === Development Workflows ===
 
-# Complete development setup (setup create3, deploy tokens, contracts, create market)
-dev: setup-create3 deploy-tokenA deploy-tokenB deploy create-market
+# Complete development setup (setup create3, deploy tokens, configure underlyings, deploy contracts, configure oracle, create market)
+dev: setup-create3 deploy-tokenA deploy-tokenB set-underlyings deploy configure-oracle create-market
 
-# E2E flow: deploy everything and test swap
-# Note: Make sure fork is running and wallet has ETH, WETH, and USDC
-e2e: deploy-tokenA deploy-tokenB deploy create-market add-liquidity swap
 
 # === Build ===
 
@@ -161,6 +158,39 @@ deploy-tokenB:
         --rpc-url {{ rpc_url }} \
         {{ broadcast_flag }} {{ verify_flags }} -vvv
 
+# Persist UNDERLYING_ASSET_0/1 based on mock deployments
+set-underlyings:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    DEPLOYMENTS_FILE="deployments/local_sepolia_deployments.json"
+    if [ ! -f "$DEPLOYMENTS_FILE" ]; then
+        echo "Expected $DEPLOYMENTS_FILE not found. Run \`just deploy-tokenA\` and \`just deploy-tokenB\` first."
+        exit 1
+    fi
+    UA0="$(jq -r '.usdtToken' "$DEPLOYMENTS_FILE")"
+    UA1="$(jq -r '.usdcToken' "$DEPLOYMENTS_FILE")"
+    if [ -z "$UA0" ] || [ "$UA0" = "null" ]; then
+        echo "Missing .usdtToken in $DEPLOYMENTS_FILE"
+        exit 1
+    fi
+    if [ -z "$UA1" ] || [ "$UA1" = "null" ]; then
+        echo "Missing .usdcToken in $DEPLOYMENTS_FILE"
+        exit 1
+    fi
+    ENV_FILE=".env"
+    upsert_env() {
+        local key="$1"
+        local val="$2"
+        if [ -f "$ENV_FILE" ] && grep -q "^${key}=" "$ENV_FILE"; then
+            perl -pi -e "s/^${key}=.*/${key}=${val}/" "$ENV_FILE"
+        else
+            echo "${key}=${val}" >> "$ENV_FILE"
+        fi
+    }
+    upsert_env "UNDERLYING_ASSET_0" "$UA0"
+    upsert_env "UNDERLYING_ASSET_1" "$UA1"
+    echo "Wrote UNDERLYING_ASSET_0/1 to ${ENV_FILE}"
+
 # Mint/transfer mock tokens to the LP
 mint-mock-tokens:
     forge script {{ script_dir }}/setup/MintMockERC20.s.sol:MintMockERC20Script \
@@ -198,6 +228,8 @@ deploy-contracts:
         {{ broadcast_flag }} -vvv
 
 # === E2E ===
+# Note: Make sure fork is running
+e2e: e2e-deploy e2e-normal-lp e2e-swap e2e-market-maker e2e-mm-coverage
 
 # E2E: Deploy full stack only (standalone) and print MarketFactory.
 e2e-deploy:
@@ -210,6 +242,26 @@ e2e-normal-lp:
     FOUNDRY_PROFILE=deploy forge script {{ script_dir }}/e2e/LiquidityProvision.s.sol:LiquidityProvisionE2E \
         --rpc-url {{ rpc_url }} \
         {{ broadcast_flag }} -vvv
+
+# E2E: Exact-output swap flow (quotes expected input and asserts exact output received).
+e2e-swap:
+    FOUNDRY_PROFILE=deploy forge script {{ script_dir }}/e2e/Swap.s.sol:SwapE2E \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+# E2E: MarketMaker (single-MM journey: commit+mint+settle, swaps, poke, close RFS, burn/decommit, unwrap).
+e2e-market-maker:
+    FOUNDRY_PROFILE=deploy forge script {{ script_dir }}/e2e/MarketMaker.s.sol:MarketMakerE2E \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+# E2E: MMCoverage (two-MMs coverage + fee realisation exploration).
+e2e-mm-coverage:
+    FOUNDRY_PROFILE=deploy forge script {{ script_dir }}/e2e/MMCoverage.s.sol:MMCoverageE2E \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+# === E2E ===
 
 # Deploy oracle contracts via Hardhat
 deploy-oracle:

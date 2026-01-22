@@ -52,7 +52,8 @@ interface IOracleMockPrice {
  * - If `MODE=LOCAL`:
  *   - `just deploy-oracle` deploys the Venus oracle stack using Hardhat `--network development`, which sets `live=false`.
  *   - As a result, `ChainlinkOracle_Proxy` is a proxy to the dev `MockChainlinkOracle` implementation.
- *   - We can configure prices directly on that MAIN oracle via `setPrice(asset, price)` (this script sets `1e18`).
+ *   - You still need to run `just configure-oracle` to enable MAIN in `ResilientOracle` and set mock prices
+ *     via `setPrice(asset, price)` (this script sets `1e18`).
  *
  * - If `MODE!=LOCAL` (i.e. non-dev / live-like environments):
  *   - The MAIN oracle is expected to be a real feed-backed oracle (e.g. Venus `ChainlinkOracle` /
@@ -87,6 +88,8 @@ contract ConfigureOracleScript is NetworkConfig {
             if (keccak256(bytes(mode)) != keccak256(bytes("LOCAL"))) {
                 revert("ConfigureOracle: set MAIN_ORACLE_ADDRESS for non-LOCAL mode");
             }
+            // ChainlinkOracle_Proxy is deployed by Hardhat (oracle submodule), and the implementation it points to is MockChainlinkOracle in contracts/evm/lib/oracle/contracts/oracles/mocks/MockChainlinkOracle.sol.
+            // The implementation metadata for that address is the mock oracle contract: contracts/evm/deployments/oracle_deployments/development/ChainlinkOracle_Implementation.json
             string memory chainlinkJson = "../evm/deployments/oracle_deployments/development/ChainlinkOracle_Proxy.json";
             mainOracle = vm.parseJsonAddress(vm.readFile(chainlinkJson), ".address");
         }
