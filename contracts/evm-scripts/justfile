@@ -227,42 +227,6 @@ deploy-contracts:
         --rpc-url {{ rpc_url }} \
         {{ broadcast_flag }} -vvv
 
-# === E2E ===
-# Note: Make sure fork is running
-e2e: e2e-deploy e2e-normal-lp e2e-swap e2e-market-maker e2e-mm-coverage
-
-# E2E: Deploy full stack only (standalone) and print MarketFactory.
-e2e-deploy:
-    FOUNDRY_PROFILE=deploy forge script {{ script_dir }}/e2e/Deploy.s.sol:DeployE2E \
-        --rpc-url {{ rpc_url }} \
-        {{ broadcast_flag }} -vvv
-
-# E2E: Normal LP flow (LiquidityProvision scenario).
-e2e-normal-lp:
-    FOUNDRY_PROFILE=deploy forge script {{ script_dir }}/e2e/LiquidityProvision.s.sol:LiquidityProvisionE2E \
-        --rpc-url {{ rpc_url }} \
-        {{ broadcast_flag }} -vvv
-
-# E2E: Exact-output swap flow (quotes expected input and asserts exact output received).
-e2e-swap:
-    FOUNDRY_PROFILE=deploy forge script {{ script_dir }}/e2e/Swap.s.sol:SwapE2E \
-        --rpc-url {{ rpc_url }} \
-        {{ broadcast_flag }} -vvv
-
-# E2E: MarketMaker (single-MM journey: commit+mint+settle, swaps, poke, close RFS, burn/decommit, unwrap).
-e2e-market-maker:
-    FOUNDRY_PROFILE=deploy forge script {{ script_dir }}/e2e/MarketMaker.s.sol:MarketMakerE2E \
-        --rpc-url {{ rpc_url }} \
-        {{ broadcast_flag }} -vvv
-
-# E2E: MMCoverage (two-MMs coverage + fee realisation exploration).
-e2e-mm-coverage:
-    FOUNDRY_PROFILE=deploy forge script {{ script_dir }}/e2e/MMCoverage.s.sol:MMCoverageE2E \
-        --rpc-url {{ rpc_url }} \
-        {{ broadcast_flag }} -vvv
-
-# === E2E ===
-
 # Deploy oracle contracts via Hardhat
 deploy-oracle:
     #!/usr/bin/env bash
@@ -322,6 +286,130 @@ read-deployment:
     forge script {{ script_dir }}/ReadDeployment.s.sol \
         --rpc-url {{ rpc_url }} \
         {{ broadcast_flag }} {{ verify_flags }} -vvv
+
+# === E2E ===
+# Note: Make sure fork is running
+e2e: e2e-deploy e2e-normal-lp e2e-swap e2e-market-maker e2e-mm-coverage
+
+# E2E: Deploy full stack only (standalone) and print MarketFactory.
+e2e-deploy:
+    FOUNDRY_PROFILE=deploy forge script {{ script_dir }}/e2e/Deploy.s.sol:DeployE2E \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+# E2E: Normal LP flow (LiquidityProvision scenario).
+e2e-normal-lp:
+    FOUNDRY_PROFILE=deploy forge script {{ script_dir }}/e2e/LiquidityProvision.s.sol:LiquidityProvisionE2E \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+# E2E: Exact-output swap flow (quotes expected input and asserts exact output received).
+e2e-swap:
+    FOUNDRY_PROFILE=deploy forge script {{ script_dir }}/e2e/Swap.s.sol:SwapE2E \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+# E2E: MarketMaker (single-MM journey: commit+mint+settle, swaps, poke, close RFS, burn/decommit, unwrap).
+e2e-market-maker:
+    FOUNDRY_PROFILE=deploy forge script {{ script_dir }}/e2e/MarketMaker.s.sol:MarketMakerE2E \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+# E2E: MMCoverage (two-MMs coverage + fee realisation exploration).
+e2e-mm-coverage:
+    FOUNDRY_PROFILE=deploy forge script {{ script_dir }}/e2e/MMCoverage.s.sol:MMCoverageE2E \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+# === Admin ===
+#
+# All admin scripts are under `script/admin/` and are intended to call `onlyOwner` functions.
+# Most of these route through `GlobalConfig.proxyCall` (so PRIVATE_KEY must be GlobalConfig owner).
+
+admin-proxy-call:
+    forge script {{ script_dir }}/admin/AdminProxyCall.s.sol:AdminProxyCallScript \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+admin-marketfactory-set-hooks:
+    forge script {{ script_dir }}/admin/MarketFactorySetHooks.s.sol:MarketFactorySetHooksScript \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+admin-marketfactory-add-bounds:
+    forge script {{ script_dir }}/admin/MarketFactoryBounds.s.sol:MarketFactoryAddBoundsScript \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+admin-marketfactory-remove-bounds:
+    forge script {{ script_dir }}/admin/MarketFactoryBounds.s.sol:MarketFactoryRemoveBoundsScript \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+admin-liquidityhub-set-factory:
+    forge script {{ script_dir }}/admin/LiquidityHubSetFactory.s.sol:LiquidityHubSetFactoryScript \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+admin-oraclehelper-register-ticker:
+    forge script {{ script_dir }}/admin/OracleHelperRegisterTicker.s.sol:OracleHelperRegisterTickerScript \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+admin-vts-set-global-pause:
+    forge script {{ script_dir }}/admin/VTSOrchestratorAdmin.s.sol:VTSSetGlobalPauseScript \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+admin-vts-set-market-config-default:
+    forge script {{ script_dir }}/admin/VTSOrchestratorAdmin.s.sol:VTSSetMarketConfigDefaultScript \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+admin-vrl-signal-set-verifier:
+    forge script {{ script_dir }}/admin/VRLSignalManagerAdmin.s.sol:VRLSignalManagerSetVerifierScript \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+admin-vrl-signal-set-expiry:
+    forge script {{ script_dir }}/admin/VRLSignalManagerAdmin.s.sol:VRLSignalManagerSetExpiryScript \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+admin-vrl-settlement-add-verifier:
+    forge script {{ script_dir }}/admin/VRLSettlementObserverAdmin.s.sol:VRLSettlementAddVerifierScript \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+admin-vrl-settlement-nullify-verifier:
+    forge script {{ script_dir }}/admin/VRLSettlementObserverAdmin.s.sol:VRLSettlementNullifyVerifierScript \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+admin-vrl-settlement-allow-verifier-for-tokens:
+    forge script {{ script_dir }}/admin/VRLSettlementObserverAdmin.s.sol:VRLSettlementAllowVerifierForTokensScript \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+admin-vrl-settlement-disallow-verifier-for-tokens:
+    forge script {{ script_dir }}/admin/VRLSettlementObserverAdmin.s.sol:VRLSettlementDisallowVerifierForTokensScript \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+admin-oracle-transfer-to-globalconfig:
+    forge script {{ script_dir }}/admin/ResilientOracleOwnership.s.sol:ResilientOracleTransferToGlobalConfigScript \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+admin-oracle-acm-give-call-permission:
+    forge script {{ script_dir }}/admin/ResilientOracleACMPermissions.s.sol:ResilientOracleACMGiveCallPermissionScript \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+admin-acm-transfer-admin-to-globalconfig:
+    forge script {{ script_dir }}/admin/AccessControlManagerAdmin.s.sol:AccessControlManagerTransferAdminToGlobalConfigScript \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
 
 # === Market Operations ===
 
