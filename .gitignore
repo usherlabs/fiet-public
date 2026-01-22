@@ -19,4 +19,4 @@ contracts/evm-scripts/deployments/local_*.json
 !contracts/evm-scripts/deployments/.gitkeep
 
 # Oracle local deployments
-contracts/evm/deployments/oracle_deployments/development/
+contracts/evm-scripts/deployments/oracle_deployments/development
