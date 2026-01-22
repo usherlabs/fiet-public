@@ -7,7 +7,7 @@ pragma solidity ^0.8.26;
  * Includes:
  * - pausePool/unpausePool (already exist via PauseMarketScript; included here for completeness)
  * - setGlobalPause
- * - setMarketVTSConfiguration (default config)
+ * - setMarketVTSConfiguration (default config, or optional override file)
  *
  * Run:
  * - `just admin-vts-set-global-pause`
@@ -18,13 +18,19 @@ pragma solidity ^0.8.26;
  * - NETWORK
  * - CORE_POOL_ID: bytes32 (for per-pool operations)
  * - PAUSED: 0|1 (for setGlobalPause)
+ *
+ * Optional VTS config input:
+ * - VTS_CONFIG_FILE_PATH: path to a JSON or TOML file containing VTS config fields.
+ *   - JSON keys should match the struct field names (e.g. `.token0.gracePeriodTime`).
+ *   - TOML keys should match the struct field names (e.g. `token0.gracePeriodTime`).
+ *   - Any missing fields will fall back to `VTSConfigs.getDefaultConfig()`.
  */
 
 import {console} from "forge-std/Script.sol";
 import {AdminBase} from "./AdminBase.sol";
+import {VTSConfigFileBase} from "../base/VTSConfigFileBase.sol";
 
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
-import {VTSConfigs} from "src/libraries/VTSConfigs.sol";
 import {MarketVTSConfiguration} from "src/types/VTS.sol";
 
 interface IOwnableView {
@@ -67,7 +73,7 @@ contract VTSSetGlobalPauseScript is AdminBase {
     }
 }
 
-contract VTSSetMarketConfigDefaultScript is AdminBase {
+contract VTSSetMarketConfigDefaultScript is AdminBase, VTSConfigFileBase {
     function run() external {
         uint256 pk = uint256(vm.envBytes32("PRIVATE_KEY"));
         PoolId corePoolId = PoolId.wrap(vm.envBytes32("CORE_POOL_ID"));
@@ -75,13 +81,14 @@ contract VTSSetMarketConfigDefaultScript is AdminBase {
         _loadAdminAddresses();
 
         address owner = IOwnableView(vtsOrchestrator).owner();
-        MarketVTSConfiguration memory cfg = VTSConfigs.getDefaultConfig();
+        (MarketVTSConfiguration memory cfg, string memory cfgSource) = _loadVTSConfig();
 
         console.log("NETWORK:", networkName);
         console.log("VTSOrchestrator:", vtsOrchestrator);
         console.log("owner:", owner);
         console.log("GlobalConfig:", globalConfig);
         console.log("CORE_POOL_ID:", vm.toString(PoolId.unwrap(corePoolId)));
+        console.log("VTS_CONFIG_SOURCE:", cfgSource);
 
         vm.startBroadcast(pk);
         if (owner == globalConfig) {
@@ -91,7 +98,7 @@ contract VTSSetMarketConfigDefaultScript is AdminBase {
         }
         vm.stopBroadcast();
 
-        console.log("OK: setMarketVTSConfiguration (default)");
+        console.log("OK: setMarketVTSConfiguration");
     }
 }
 

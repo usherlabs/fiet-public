@@ -29,6 +29,7 @@ fs_permissions = [
   { access = "read-write", path = ".forge-snapshots/" },
   { access = "read", path = "out/" },
   { access = "read", path = "../evm/out/" },
+  { access = "read", path = "./config" },
 ]
 
 remappings = [

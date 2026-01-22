@@ -177,15 +177,25 @@ set-underlyings:
         echo "Missing .usdcToken in $DEPLOYMENTS_FILE"
         exit 1
     fi
+    if [ "$UA0" = "$UA1" ]; then
+        echo "Refusing to write identical underlyings (both=$UA0). Check $DEPLOYMENTS_FILE"
+        exit 1
+    fi
     ENV_FILE=".env"
     upsert_env() {
         local key="$1"
         local val="$2"
-        if [ -f "$ENV_FILE" ] && grep -q "^${key}=" "$ENV_FILE"; then
-            perl -pi -e "s/^${key}=.*/${key}=${val}/" "$ENV_FILE"
-        else
-            echo "${key}=${val}" >> "$ENV_FILE"
+        # Ensure the key exists exactly once (dotenv loaders can behave unexpectedly with duplicates).
+        # Remove any existing lines like:
+        # - KEY=...
+        # - export KEY=...
+        # - KEY = ...
+        if [ -f "$ENV_FILE" ]; then
+            tmp="${ENV_FILE}.tmp"
+            perl -ne "print unless /^\\s*(?:export\\s+)?\\Q${key}\\E\\s*=/;" "$ENV_FILE" > "$tmp"
+            mv "$tmp" "$ENV_FILE"
         fi
+        echo "${key}=${val}" >> "$ENV_FILE"
     }
     upsert_env "UNDERLYING_ASSET_0" "$UA0"
     upsert_env "UNDERLYING_ASSET_1" "$UA1"

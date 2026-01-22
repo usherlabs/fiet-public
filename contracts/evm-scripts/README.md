@@ -10,20 +10,20 @@ This directory contains deployment scripts for the Fiet Protocol contracts.
 export PRIVATE_KEY=your_private_key_here
 ```
 
-2. Ensure you have sufficient funds in your wallet for deployment
+1. Ensure you have sufficient funds in your wallet for deployment
 
-3. To run a local fork, start an Anvil fork:
+2. To run a local fork, start an Anvil fork:
    - From `contracts/evm-scripts/`: `NETWORK=sepolia just fork` (requires the `just` CLI), or
    - run `anvil --fork-url <RPC_URL> --port 8545` directly
 
-4. Ensure the main EVM project dependencies (including the oracle submodule) are installed
+3. Ensure the main EVM project dependencies (including the oracle submodule) are installed
    - From `contracts/evm/`, run `forge install` to initialise/update submodules
    - Then run `yarn install` from `contracts/evm/` (this installs Node deps including `lib/oracle`)
 
-5. For a fresh deployment, make sure `RESILIENT_ORACLE_ADDRESS` is not present so that a fresh copy can be deployed
+4. For a fresh deployment, make sure `RESILIENT_ORACLE_ADDRESS` is not present so that a fresh copy can be deployed
    
-
 ## E2E Scripts/Tests Overview
+
 End-to-end (E2E) tests are comprehensive integration tests that validate the full protocol flow. All E2E test scripts are located in the `script/e2e/` folder.
 
 The following E2E test scripts are available:
@@ -49,7 +49,6 @@ The following E2E test scripts are available:
    - **Required:** `PRIVATE_KEY`, `LP_PRIVATE_KEY`, `LP2_PRIVATE_KEY`
 
 **Run all E2E tests:** `just e2e` (requires fork to be running)
-
 
 ## Deployment and configuration scripts overview
 
@@ -93,6 +92,11 @@ The comprehensive deployment script that deploys all contracts in the correct or
    - Creates a new market with configured assets
    - **Required:** `PRIVATE_KEY`, `UNDERLYING_ASSET_0`, `UNDERLYING_ASSET_1`
    - **Optional:** `CORE_POOL_FEE` (default: `0`), `TICK_SPACING` (default: `60`), `INITIAL_SQRT_PRICE_X96` (auto-calculated if not set), `REFERENCE_POOL_ID`, `ASSET0_PRICE`, `ASSET1_PRICE`, `PRICE_DECIMALS` (default: `6`)
+   - **Optional (VTS config):** `VTS_CONFIG_FILE_PATH` (can be configured in `.env`)
+     - If unset, the on-chain defaults are used (`VTSConfigs.getDefaultConfig()`).
+     - If set, it should point to a JSON or TOML file matching the VTS config struct shape:
+       - JSON keys: `.token0.gracePeriodTime` etc
+       - TOML keys: `token0.gracePeriodTime` etc
    - **Output:** Writes `CORE_POOL_ID` and `PROXY_POOL_ID` to `deployments/{NETWORK}_markets.json`. Use `just read-deployment` to retrieve these values.
 
 6. **Add liquidity** - `just add-liquidity`
@@ -106,6 +110,7 @@ The comprehensive deployment script that deploys all contracts in the correct or
 ## Additional Utility Scripts
 
 ### Market Operations
+
 - **`SwapV4.s.sol`** - Execute swaps on the proxy pool
   - **Required:** `PRIVATE_KEY`, `LP_PRIVATE_KEY`, `CORE_POOL_ID`
   - **Optional:** `SWAP_TYPE`, `AMOUNT`, `EAMOUNT`
@@ -122,6 +127,7 @@ The comprehensive deployment script that deploys all contracts in the correct or
   - **Required:** `PRIVATE_KEY`, `NEW_OWNER`, `NETWORK`
 
 ### View Scripts
+
 - **`view/GetCurrentSqrtPrice.s.sol`** - Get current sqrt price from a pool
   - **Required:** `CORE_POOL_ID` or `TOKEN_A`/`TOKEN_B`
 
@@ -130,10 +136,10 @@ The comprehensive deployment script that deploys all contracts in the correct or
   - **Optional:** `TOKEN_A`, `TOKEN_B`, `QUOTE_DECIMALS`
 
 ### Reading Deployment Data
+
 - **`ReadDeployment.s.sol`** - Read deployment addresses and market data from JSON files
   - Run with: `just read-deployment`
   - Reads from `deployments/{NETWORK}_deployments.json` and `deployments/{NETWORK}_markets.json`
-
 
 ### CREATE3 Factory Requirement
 
@@ -146,7 +152,6 @@ If you run against an RPC/network where there is **no contract code at that addr
 
 - **Remote networks**: use an RPC for a network where that CREATE3 factory is already deployed at `0x9fBB...`.
 - **Local Anvil fork**: from `contracts/evm-scripts/`, run `MODE=LOCAL just setup-create3` (or the equivalent `anvil_setCode` flow) to install the factory bytecode at `0x9fBB...` before running deploy scripts.
-
 
 ## Verification
 

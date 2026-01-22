@@ -108,6 +108,7 @@ contract ConfigureOracleScript is NetworkConfig {
         if (asset0 == address(0) || asset1 == address(0)) {
             revert("ConfigureOracle: set UNDERLYING_ASSET_0 and UNDERLYING_ASSET_1");
         }
+        require(asset0 != asset1, "ConfigureOracle: UNDERLYING_ASSET_0/1 must differ");
 
         console.log("Configuring oracle for MODE:", mode);
         console.log("ResilientOracle:", resilientOracle);

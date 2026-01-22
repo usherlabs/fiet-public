@@ -86,12 +86,16 @@ That means **the transaction signer must be the `GlobalConfig` owner** for most 
 
 ### `just admin-vts-set-market-config-default`
 
-- **What it does**: sets the default VTS config for a given core pool id.
+- **What it does**: sets the VTS config for a given core pool id (defaults, or optional file override).
 - **On-chain call**: `VTSOrchestrator.setMarketVTSConfiguration(corePoolId, defaultCfg)`
   - if `VTSOrchestrator.owner() == GlobalConfig`, this is routed via `GlobalConfig.proxyCall`
 - **Script**: `VTSOrchestratorAdmin.s.sol:VTSSetMarketConfigDefaultScript`
 - **Env**:
   - `CORE_POOL_ID`: `bytes32`
+  - `VTS_CONFIG_FILE_PATH` (optional): path to a JSON or TOML file to override the default config
+    - JSON keys: `.token0.gracePeriodTime` etc
+    - TOML keys: `token0.gracePeriodTime` etc
+    - You can set this in your `.env` file for repeatable runs.
 
 ### `just admin-vrl-signal-set-verifier`
 
@@ -185,3 +189,16 @@ That means **the transaction signer must be the `GlobalConfig` owner** for most 
   - `ACCESS_CONTROL_MANAGER`: address
   - `OLD_ADMIN` (optional): address
 
+## Oracle admin model (Venus `lib/oracle`)
+
+The Venus oracle stack under `contracts/evm/lib/oracle/` has **two separate admin surfaces**:
+
+- **Ownership** (typically `Ownable2Step`): who can transfer/accept ownership, etc.
+- **AccessControlManager (ACM) permissions**: many `ResilientOracle` admin functions are gated by ACM checks (ownership alone does not automatically grant ACM permissions).
+
+If your goal is **GlobalConfig as the single admin** for *all* administrative operations in `lib/oracle`, you generally need **both**:
+
+- **`ResilientOracleOwnership.s.sol`** (`just admin-oracle-transfer-to-globalconfig`): makes `GlobalConfig` the `ResilientOracle` owner (and, as part of that flow, also transfers the ACM `DEFAULT_ADMIN_ROLE` to `GlobalConfig` and revokes it from the deployer).
+- **`ResilientOracleACMPermissions.s.sol`** (`just admin-oracle-acm-give-call-permission`): grants ACM call permissions for whichever `ResilientOracle` function signatures you intend to run via `GlobalConfig` (and you should ensure no other accounts retain those permissions).
+
+`AccessControlManagerAdmin.s.sol` (`just admin-acm-transfer-admin-to-globalconfig`) is **not sufficient on its own**: it only transfers the ACM `DEFAULT_ADMIN_ROLE` to `GlobalConfig`. You still need the ownership handover (and, depending on which oracle admin functions you want to exercise, the ACM call permissions as well).
