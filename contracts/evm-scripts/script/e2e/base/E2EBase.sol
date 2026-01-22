@@ -56,6 +56,14 @@ abstract contract E2EBase is DeployFullStackBase {
         address lcc1;
     }
 
+    function _requireEnvBytes32(string memory key, string memory err) internal view returns (bytes32) {
+        try vm.envBytes32(key) returns (bytes32 v) {
+            return v;
+        } catch {
+            revert(err);
+        }
+    }
+
     function _sort(address a, address b) internal pure returns (address lo, address hi) {
         return a < b ? (a, b) : (b, a);
     }

@@ -127,9 +127,15 @@ contract MMCoverageE2E is MME2EBase {
         console.log("=== E2E: MMCoverage ===");
         _initNetwork();
         // --- Get all the private keys and addresses of all the market makers and swapper
-        uint256 mm1Pk = uint256(vm.envBytes32("LP_PRIVATE_KEY"));
-        uint256 mm2Pk = uint256(vm.envBytes32("LP2_PRIVATE_KEY"));
-        uint256 mm3Pk = uint256(vm.envBytes32("LP3_PRIVATE_KEY"));
+        uint256 mm1Pk = uint256(
+            _requireEnvBytes32("LP_PRIVATE_KEY", "Missing LP_PRIVATE_KEY env var (anvil keys can be used directly)")
+        );
+        uint256 mm2Pk = uint256(
+            _requireEnvBytes32("LP2_PRIVATE_KEY", "Missing LP2_PRIVATE_KEY env var (anvil keys can be used directly)")
+        );
+        uint256 mm3Pk = uint256(
+            _requireEnvBytes32("LP3_PRIVATE_KEY", "Missing LP3_PRIVATE_KEY env var (anvil keys can be used directly)")
+        );
         uint256 takerPk = _getDeployerPrivateKey();
 
         address mm1 = vm.addr(mm1Pk);

@@ -40,7 +40,9 @@ contract MarketMakerE2E is MME2EBase {
         console.log("=== E2E: MarketMaker ===");
         _initNetwork();
 
-        uint256 mmPk = uint256(vm.envBytes32("LP_PRIVATE_KEY"));
+        uint256 mmPk = uint256(
+            _requireEnvBytes32("LP_PRIVATE_KEY", "Missing LP_PRIVATE_KEY env var (anvil keys can be used directly)")
+        );
         address mm = vm.addr(mmPk);
 
         CoreDeployment memory d = _deployCoreContracts();

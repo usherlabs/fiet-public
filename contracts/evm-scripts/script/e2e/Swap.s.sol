@@ -39,7 +39,9 @@ contract SwapE2E is E2EBase {
         _initNetwork();
 
         // Single actor for simplicity: provides liquidity and performs the swap.
-        uint256 lpPk = uint256(vm.envBytes32("LP_PRIVATE_KEY"));
+        uint256 lpPk = uint256(
+            _requireEnvBytes32("LP_PRIVATE_KEY", "Missing LP_PRIVATE_KEY env var (anvil keys can be used directly)")
+        );
         address lp = vm.addr(lpPk);
 
         // Deploy full stack.

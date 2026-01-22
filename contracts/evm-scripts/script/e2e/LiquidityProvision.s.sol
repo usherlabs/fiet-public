@@ -68,7 +68,9 @@ contract LiquidityProvisionE2E is E2EBase {
     function run() external {
         console.log("=== E2E: LiquidityProvision ===");
         // Load LP signer.
-        uint256 lpPk = uint256(vm.envBytes32("LP_PRIVATE_KEY"));
+        uint256 lpPk = uint256(
+            _requireEnvBytes32("LP_PRIVATE_KEY", "Missing LP_PRIVATE_KEY env var (anvil keys can be used directly)")
+        );
         address lp = vm.addr(lpPk);
 
         // Deploy full stack.
