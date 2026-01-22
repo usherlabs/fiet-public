@@ -11,6 +11,12 @@ forge.lock
 reports
 contracts/evm-scripts/cache/
 contracts/evm-scripts/out/
-contracts/evm-scripts/deployments/
 contracts/evm-scripts/broadcast/
 .env
+
+# Deployment artifacts
+contracts/evm-scripts/deployments/local_*.json
+!contracts/evm-scripts/deployments/.gitkeep
+
+# Oracle local deployments
+contracts/evm/deployments/oracle_deployments/development/
