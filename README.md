@@ -16,6 +16,24 @@ fiet-protocol/
 └── docs/                      # Protocol documentation
 ```
 
+## Embedded Wiki
+
+### Core
+
+- [contracts/evm/README.md](contracts/evm/README.md) — Solidity contracts and development notes
+- [contracts/evm/INVARIANTS.md](contracts/evm/INVARIANTS.md) — Invariants and protocol assumptions
+- [contracts/evm/oracle/README.md](contracts/evm/oracle/README.md) — Oracle contracts and setup
+
+### Admin
+
+- [contracts/evm-scripts/README.md](contracts/evm-scripts/README.md) — EVM scripts and tooling
+- [contracts/evm-scripts/script/admin/README.md](contracts/evm-scripts/script/admin/README.md) — Admin script usage
+- [contracts/evm-scripts/script/admin/ORACLE.md](contracts/evm-scripts/script/admin/ORACLE.md) — Oracle admin guide
+
+### Periphery
+
+- [contracts/stylus/README.md](contracts/stylus/README.md) — Stylus contracts and development notes
+
 ## Getting Started
 
 ### For Solidity Development
