@@ -13,6 +13,7 @@ import {CurrencyTransfer} from "../src/libraries/CurrencyTransfer.sol";
 import {MarketVault} from "../src/modules/MarketVault.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 
 /**
  * @title MarketVaultTest
@@ -191,5 +192,58 @@ contract MarketVaultTest is MarketVaultBase {
             -int256(swapAmount),
             abi.encode(recipient)
         );
+    }
+
+    function test_unwrap_marketDerived_usesMarketLiquidity_andPaysRecipient() public {
+        LiquidityCommitmentCertificate lccToken0 =
+            LiquidityCommitmentCertificate(payable(Currency.unwrap(corePoolKey.currency0)));
+        address underlying0 = lccToken0.underlying();
+
+        uint256 amount = 1e9;
+        UnwrapInUnlockRunner runner = new UnwrapInUnlockRunner(manager, liquidityHub);
+
+        // Create market-derived LCC for the runner via protocol transfer (proxyHook is bucket-exempt).
+        IERC20(underlying0).transfer(address(proxyHook), amount);
+        vm.startPrank(address(proxyHook));
+        IERC20(underlying0).approve(liquidityHub, amount);
+        LiquidityHub(payable(liquidityHub)).wrap(address(lccToken0), amount);
+        lccToken0.transfer(address(runner), amount);
+        vm.stopPrank();
+
+        (uint256 wrappedBal, uint256 marketBal) = lccToken0.balancesOf(address(runner));
+        assertEq(wrappedBal, 0);
+        assertEq(marketBal, amount);
+
+        uint256 userUnderlyingBefore = IERC20(underlying0).balanceOf(address(runner));
+        uint256 factoryUnderlyingBefore = IERC20(underlying0).balanceOf(marketFactory);
+
+        runner.run(address(lccToken0), amount);
+
+        assertEq(IERC20(underlying0).balanceOf(address(runner)), userUnderlyingBefore + amount);
+        assertEq(LiquidityHub(payable(liquidityHub)).settleQueue(address(lccToken0), address(runner)), 0);
+        assertEq(IERC20(underlying0).balanceOf(marketFactory), factoryUnderlyingBefore);
+    }
+}
+
+contract UnwrapInUnlockRunner {
+    IPoolManager internal immutable pm;
+    address internal immutable hub;
+    address internal lcc;
+    uint256 internal amt;
+
+    constructor(IPoolManager pm_, address hub_) {
+        pm = pm_;
+        hub = hub_;
+    }
+
+    function run(address lcc_, uint256 amt_) external {
+        lcc = lcc_;
+        amt = amt_;
+        pm.unlock(bytes(""));
+    }
+
+    function unlockCallback(bytes calldata) external returns (bytes memory) {
+        LiquidityHub(payable(hub)).unwrap(lcc, amt);
+        return bytes("");
     }
 }

@@ -226,7 +226,7 @@ contract MarketHandlerLibTest is Test {
         assertFalse(got2);
     }
 
-    function test_validateToken_returnsIndex0And1() public {
+    function test_validateToken_returnsIndex0And1() public view {
         address[2] memory currencies = [address(1), address(2)];
         uint8 idx0 = h.validateToken(address(1), currencies);
         uint8 idx1 = h.validateToken(address(2), currencies);

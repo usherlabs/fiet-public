@@ -60,7 +60,7 @@ contract ProxyHookTest is MarketVaultBase {
         ProxyHookHarness fresh = new ProxyHookHarness(address(manager), address(marketFactory));
 
         vm.expectRevert(Errors.InvalidSender.selector);
-        fresh.onDirectLP(toBalanceDelta(int128(1), int128(0)), LiquidityUtils.ActionType.DirectLPAddLiquidity);
+        fresh.onDirectLP(toBalanceDelta(int128(1), int128(0)));
     }
 
     function test_onCorePoolDirectSwap_revertsIfNotCoreHook() public {
@@ -112,12 +112,11 @@ contract ProxyHookTest is MarketVaultBase {
         BalanceDelta d = toBalanceDelta(int128(0), int128(0));
 
         vm.prank(attacker);
-        (bool ok,) = address(fresh)
-            .call(abi.encodeCall(ProxyHook.onDirectLP, (d, LiquidityUtils.ActionType.DirectLPRemoveLiquidity)));
+        (bool ok,) = address(fresh).call(abi.encodeCall(ProxyHook.onDirectLP, (d)));
         assertFalse(ok, "onDirectLP should be gated by onlyCoreHook");
 
         vm.prank(coreHookAddress);
-        fresh.onDirectLP(d, LiquidityUtils.ActionType.DirectLPRemoveLiquidity);
+        fresh.onDirectLP(d);
     }
 
     function test_onCorePoolDirectSwap_onlyCoreHook_gate_isObservableOnEarlyReturnPath() public {
@@ -205,7 +204,7 @@ contract ProxyHookTest is MarketVaultBase {
         console.log("swap delta 0:", delta.amount0());
         console.log("swap delta 1:", delta.amount1());
 
-        assertEq(selfBalanceOfTokenABefore - selfBalanceOfTokenAAfter, swapAmount);
+        assertEq(selfBalanceOfTokenABefore, selfBalanceOfTokenAAfter + swapAmount);
         assertGt(selfBalanceOfTokenBAfter, selfBalanceOfTokenBBefore);
     }
 
@@ -231,7 +230,7 @@ contract ProxyHookTest is MarketVaultBase {
         uint256 selfBalanceOfTokenAAfter = proxyPoolKey.currency0.balanceOfSelf();
         uint256 selfBalanceOfTokenBAfter = proxyPoolKey.currency1.balanceOfSelf();
 
-        assertEq(selfBalanceOfTokenBBefore - selfBalanceOfTokenBAfter, swapAmount);
+        assertEq(selfBalanceOfTokenBBefore, selfBalanceOfTokenBAfter + swapAmount);
         assertGt(selfBalanceOfTokenAAfter, selfBalanceOfTokenABefore);
     }
 
@@ -312,7 +311,6 @@ contract ProxyHookTest is MarketVaultBase {
         );
 
         uint256 deltaAmount0 = LiquidityUtils.safeInt128ToUint256(delta.amount0());
-        uint256 deltaAmount1 = LiquidityUtils.safeInt128ToUint256(delta.amount1());
 
         console.log("delta 0:", delta.amount0());
         console.log("delta 1:", delta.amount1());
@@ -330,18 +328,15 @@ contract ProxyHookTest is MarketVaultBase {
 
         // validate liquidity of token-in(token0) in the lcc token is lower after the swap
         // because liquidity will move 'from lcc' token 'to pool-manager' as it enters the pool during a zero for one swap
-        assertEq(preBalanceOfToken0UnderlyingAssetInLCC - postBalanceOfToken0UnderlyingAssetInLCC, deltaAmount0);
+        assertEq(preBalanceOfToken0UnderlyingAssetInLCC, postBalanceOfToken0UnderlyingAssetInLCC + deltaAmount0);
         // validate liquidity of token-in(token0) in the pool manager is higher after the swap
         // becase liquidity of the underlying tokens will be moved from lcc token to pool manager
         // so the pool manager's underlying balance should increase by the amount of token-in(token0) swapped into the pool
-        assertEq(postBalanceOfToken0UnderlyingAssetInPM - preBalanceOfToken0UnderlyingAssetInPM, deltaAmount0);
-        // validate liquidity of token-out(token1) in the lcc token is higher after the swap
-        // because liquidity will move 'from pool-manager' token 'to lcc' token as it exits the pool during a zero for one swap
-        assertEq(postBalanceOfToken1UnderlyingAssetInLCC - preBalanceOfToken1UnderlyingAssetInLCC, deltaAmount1);
-        // validate liquidity of token-out(token1) in the pool manager is lower after the swap
-        // because liquidity of the underlying tokens will be moved from lcc token to pool manager
-        // so the pool manager's underlying balance should decrease by the amount of token-out(token1) swapped out of the pool
-        assertEq(preBalanceOfToken1UnderlyingAssetInPM - postBalanceOfToken1UnderlyingAssetInPM, deltaAmount1);
+        assertEq(postBalanceOfToken0UnderlyingAssetInPM, preBalanceOfToken0UnderlyingAssetInPM + deltaAmount0);
+        // Token OUT underlying is NOT moved here. It is sourced on unwrap via market liquidity.
+        // Therefore, neither the Hub nor PoolManager underlying balances should change for token-out during the swap.
+        assertEq(postBalanceOfToken1UnderlyingAssetInLCC, preBalanceOfToken1UnderlyingAssetInLCC);
+        assertEq(preBalanceOfToken1UnderlyingAssetInPM, postBalanceOfToken1UnderlyingAssetInPM);
     }
 
     // Tests that after a direct swap on the underlying liquidity of the lcc tokens are moved accordingly
@@ -380,7 +375,6 @@ contract ProxyHookTest is MarketVaultBase {
             ZERO_BYTES
         );
 
-        uint256 deltaAmount0 = LiquidityUtils.safeInt128ToUint256(delta.amount0());
         uint256 deltaAmount1 = LiquidityUtils.safeInt128ToUint256(delta.amount1());
 
         console.log("swap delta 0:", delta.amount0());
@@ -397,20 +391,17 @@ contract ProxyHookTest is MarketVaultBase {
         console.log("postBalanceOfToken0UnderlyingAssetInLCC", postBalanceOfToken0UnderlyingAssetInLCC);
         console.log("postBalanceOfToken1UnderlyingAssetInLCC", postBalanceOfToken1UnderlyingAssetInLCC);
 
-        // validate liquidity of token-out(token0) in the lcc token is higher after the swap
-        // because liquidity will move 'from pool-manager' token 'to LCC' token as it exits the pool during a one for zero swap
-        assertEq(postBalanceOfToken0UnderlyingAssetInLCC - preBalanceOfToken0UnderlyingAssetInLCC, deltaAmount0);
-        // validate liquidity of token-out(token0) in the pool manager is lower after the swap
-        // becase liquidity of the underlying tokens will be moved from the pool-manager to LCC token
-        // so the pool manager's underlying balance should decrease by the amount of token-out(token0) swapped out of the pool
-        assertEq(preBalanceOfToken0UnderlyingAssetInPM - postBalanceOfToken0UnderlyingAssetInPM, deltaAmount0);
+        // Token OUT underlying is NOT moved here. It is sourced on unwrap via market liquidity.
+        // Therefore, neither the Hub nor PoolManager underlying balances should change for token-out during the swap.
+        assertEq(postBalanceOfToken0UnderlyingAssetInLCC, preBalanceOfToken0UnderlyingAssetInLCC);
+        assertEq(preBalanceOfToken0UnderlyingAssetInPM, postBalanceOfToken0UnderlyingAssetInPM);
         // validate liquidity of token-in(token1) in the lcc token is lower after the swap
         // because liquidity will move 'from lcc' tokens 'to pool-manager' as it enters the pool during a one for zero swap
-        assertEq(preBalanceOfToken1UnderlyingAssetInLCC - postBalanceOfToken1UnderlyingAssetInLCC, deltaAmount1);
+        assertEq(preBalanceOfToken1UnderlyingAssetInLCC, postBalanceOfToken1UnderlyingAssetInLCC + deltaAmount1);
         // validate liquidity of token-in(token1) in the pool manager is higher after the swap
         // because liquidity of the underlying tokens will be moved from LCC token to pool-manager
         // so the pool manager's underlying balance should increase by the amount of token-in(token1) swapped into of the pool
-        assertEq(postBalanceOfToken1UnderlyingAssetInPM - preBalanceOfToken1UnderlyingAssetInPM, deltaAmount1);
+        assertEq(postBalanceOfToken1UnderlyingAssetInPM, preBalanceOfToken1UnderlyingAssetInPM + deltaAmount1);
     }
 
     // Test that a swap with limited liquidity on the proxy pool works as expected
@@ -866,125 +857,13 @@ contract ProxyHookTest is MarketVaultBase {
         vm.clearMockedCalls();
     }
 
-    function test_directLP_removeLiquidity_triggersProxyHook_removePath() public {
-        // Exercise CoreHook -> ProxyHook.onDirectLP(remove) path.
-        // We don't assert a specific settlement outcome here; the aim is to cover the remove-liquidity branch safely.
+    function test_directLP_removeLiquidity_doesNotRevert() public {
+        // Direct-LP removals should not revert (even though ProxyHook is no longer notified).
         modifyLiquidityRouter.modifyLiquidity(
             corePoolKey,
             ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: -int256(1e18), salt: bytes32(0)}),
             ZERO_BYTES
         );
-    }
-
-    function test_onDirectLP_removeLiquidity_callsConfirmTake_forToken0_whenAmount0NonZero() public {
-        uint256 amount = 123;
-
-        // Make MarketVault believe it has sufficient claim-token balance…
-        Currency ua0 = Currency.wrap(lcc0.underlying());
-        _mockLimitedLiquidity(ua0, amount);
-
-        // …and bypass PoolManager ERC-6909 burn / underlying take mechanics (this test cares about confirmTake).
-        vm.mockCall(
-            address(manager),
-            abi.encodeWithSelector(IPoolManager.burn.selector, address(proxyHook), ua0.toId(), amount),
-            abi.encode()
-        );
-        vm.mockCall(
-            address(manager),
-            abi.encodeWithSelector(IPoolManager.take.selector, ua0, address(liquidityHub), amount),
-            abi.encode()
-        );
-
-        vm.expectCall(
-            address(liquidityHub),
-            abi.encodeWithSignature("confirmTake(address,uint256,bool)", address(lcc0), amount, false)
-        );
-
-        vm.prank(coreHookAddress);
-        proxyHook.onDirectLP(
-            toBalanceDelta(int128(int256(amount)), int128(0)), LiquidityUtils.ActionType.DirectLPRemoveLiquidity
-        );
-
-        vm.clearMockedCalls();
-    }
-
-    function test_onDirectLP_removeLiquidity_callsConfirmTake_forToken1_whenAmount1NonZero() public {
-        uint256 amount = 234;
-
-        Currency ua1 = Currency.wrap(lcc1.underlying());
-        _mockLimitedLiquidity(ua1, amount);
-
-        vm.mockCall(
-            address(manager),
-            abi.encodeWithSelector(IPoolManager.burn.selector, address(proxyHook), ua1.toId(), amount),
-            abi.encode()
-        );
-        vm.mockCall(
-            address(manager),
-            abi.encodeWithSelector(IPoolManager.take.selector, ua1, address(liquidityHub), amount),
-            abi.encode()
-        );
-
-        vm.expectCall(
-            address(liquidityHub),
-            abi.encodeWithSignature("confirmTake(address,uint256,bool)", address(lcc1), amount, false)
-        );
-
-        vm.prank(coreHookAddress);
-        proxyHook.onDirectLP(
-            toBalanceDelta(int128(0), int128(int256(amount))), LiquidityUtils.ActionType.DirectLPRemoveLiquidity
-        );
-
-        vm.clearMockedCalls();
-    }
-
-    function test_onDirectLP_removeLiquidity_callsConfirmTake_forBothTokens_whenBothNonZero() public {
-        uint256 amount0 = 111;
-        uint256 amount1 = 222;
-
-        Currency ua0 = Currency.wrap(lcc0.underlying());
-        Currency ua1 = Currency.wrap(lcc1.underlying());
-
-        _mockLimitedLiquidity(ua0, amount0);
-        _mockLimitedLiquidity(ua1, amount1);
-
-        vm.mockCall(
-            address(manager),
-            abi.encodeWithSelector(IPoolManager.burn.selector, address(proxyHook), ua0.toId(), amount0),
-            abi.encode()
-        );
-        vm.mockCall(
-            address(manager),
-            abi.encodeWithSelector(IPoolManager.take.selector, ua0, address(liquidityHub), amount0),
-            abi.encode()
-        );
-        vm.mockCall(
-            address(manager),
-            abi.encodeWithSelector(IPoolManager.burn.selector, address(proxyHook), ua1.toId(), amount1),
-            abi.encode()
-        );
-        vm.mockCall(
-            address(manager),
-            abi.encodeWithSelector(IPoolManager.take.selector, ua1, address(liquidityHub), amount1),
-            abi.encode()
-        );
-
-        vm.expectCall(
-            address(liquidityHub),
-            abi.encodeWithSignature("confirmTake(address,uint256,bool)", address(lcc0), amount0, false)
-        );
-        vm.expectCall(
-            address(liquidityHub),
-            abi.encodeWithSignature("confirmTake(address,uint256,bool)", address(lcc1), amount1, false)
-        );
-
-        vm.prank(coreHookAddress);
-        proxyHook.onDirectLP(
-            toBalanceDelta(int128(int256(amount0)), int128(int256(amount1))),
-            LiquidityUtils.ActionType.DirectLPRemoveLiquidity
-        );
-
-        vm.clearMockedCalls();
     }
 
     function test_activate_setsCoreHook_onFreshProxyHook() public {
@@ -1425,8 +1304,10 @@ contract DifferentTokenDecimalsProxyHookTest is MarketTestBase {
 
         bytes memory marketRef = abi.encodePacked(address(proxyHook));
         string memory marketName = "Test Market";
-        address[] memory initialIssuers = new address[](1);
+        // Production wiring: vtsOrchestrator + proxyHook are issuers (MarketFactory does this).
+        address[] memory initialIssuers = new address[](2);
         initialIssuers[0] = address(vtsOrchestrator);
+        initialIssuers[1] = address(proxyHook);
 
         vm.prank(marketFactory);
         (address _lcc0, address _lcc1) = LiquidityHub(payable(liquidityHub))
@@ -1477,7 +1358,7 @@ contract DifferentTokenDecimalsProxyHookTest is MarketTestBase {
         console.log("swap delta 0:", delta.amount0());
         console.log("swap delta 1:", delta.amount1());
 
-        assertEq(selfBalanceOfTokenABefore - selfBalanceOfTokenAAfter, swapAmount);
+        assertEq(selfBalanceOfTokenABefore, selfBalanceOfTokenAAfter + swapAmount);
         assertGt(selfBalanceOfTokenBAfter, selfBalanceOfTokenBBefore);
     }
 
@@ -1515,7 +1396,6 @@ contract DifferentTokenDecimalsProxyHookTest is MarketTestBase {
         );
 
         uint256 deltaAmount0 = LiquidityUtils.safeInt128ToUint256(delta.amount0());
-        uint256 deltaAmount1 = LiquidityUtils.safeInt128ToUint256(delta.amount1());
 
         console.log("delta 0:", delta.amount0());
         console.log("delta 1:", delta.amount1());
@@ -1533,17 +1413,14 @@ contract DifferentTokenDecimalsProxyHookTest is MarketTestBase {
 
         // validate liquidity of token-in(token0) in the lcc token is lower after the swap
         // because liquidity will move 'from lcc' token 'to pool-manager' as it enters the pool during a zero for one swap
-        assertEq(preBalanceOfToken0UnderlyingAssetInHub - postBalanceOfToken0UnderlyingAssetInHub, deltaAmount0);
+        assertEq(preBalanceOfToken0UnderlyingAssetInHub, postBalanceOfToken0UnderlyingAssetInHub + deltaAmount0);
         // validate liquidity of token-in(token0) in the pool manager is higher after the swap
         // becase liquidity of the underlying tokens will be moved from lcc token to pool manager
         // so the pool manager's underlying balance should increase by the amount of token-in(token0) swapped into the pool
-        assertEq(postBalanceOfToken0UnderlyingAssetInPM - preBalanceOfToken0UnderlyingAssetInPM, deltaAmount0);
-        // validate liquidity of token-out(token1) in the lcc token is higher after the swap
-        // because liquidity will move 'from pool-manager' token 'to lcc' token as it exits the pool during a zero for one swap
-        assertEq(postBalanceOfToken1UnderlyingAssetInHub - preBalanceOfToken1UnderlyingAssetInHub, deltaAmount1);
-        // validate liquidity of token-out(token1) in the pool manager is lower after the swap
-        // because liquidity of the underlying tokens will be moved from lcc token to pool manager
-        // so the pool manager's underlying balance should decrease by the amount of token-out(token1) swapped out of the pool
-        assertEq(preBalanceOfToken1UnderlyingAssetInPM - postBalanceOfToken1UnderlyingAssetInPM, deltaAmount1);
+        assertEq(postBalanceOfToken0UnderlyingAssetInPM, preBalanceOfToken0UnderlyingAssetInPM + deltaAmount0);
+        // Token OUT underlying is NOT moved here. It is sourced on unwrap via market liquidity.
+        // Therefore, neither the Hub nor PoolManager underlying balances should change for token-out during the swap.
+        assertEq(postBalanceOfToken1UnderlyingAssetInHub, preBalanceOfToken1UnderlyingAssetInHub);
+        assertEq(preBalanceOfToken1UnderlyingAssetInPM, postBalanceOfToken1UnderlyingAssetInPM);
     }
 }

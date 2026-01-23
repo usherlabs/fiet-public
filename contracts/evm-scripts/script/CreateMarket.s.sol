@@ -17,10 +17,11 @@ import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {BitMath} from "@uniswap/v4-core/src/libraries/BitMath.sol";
 import {HookMiner} from "v4-periphery/src/utils/HookMiner.sol";
 import {ProxyHook} from "src/ProxyHook.sol";
-import {VTSConfigs} from "src/libraries/VTSConfigs.sol";
 import {HookFlags} from "src/libraries/HookFlags.sol";
 import {ILiquidityHub} from "src/interfaces/ILiquidityHub.sol";
 import {GlobalConfig} from "src/GlobalConfig.sol";
+import {MarketVTSConfiguration} from "src/types/VTS.sol";
+import {VTSConfigFileBase} from "./base/VTSConfigFileBase.sol";
 
 /**
  * @title CreateMarketScript
@@ -33,7 +34,7 @@ import {GlobalConfig} from "src/GlobalConfig.sol";
  * 3. Create market with core and proxy pools
  * 4. Log market details and pool IDs
  */
-contract CreateMarketScript is NetworkConfig {
+contract CreateMarketScript is NetworkConfig, VTSConfigFileBase {
     using PoolIdLibrary for PoolId;
     using StateLibrary for IPoolManager;
 
@@ -49,6 +50,7 @@ contract CreateMarketScript is NetworkConfig {
     // Deployed contract addresses
     address public marketFactory;
     address public globalConfig;
+    address public coreHook;
 
     // Created market details
     PoolId public corePoolId;
@@ -73,6 +75,7 @@ contract CreateMarketScript is NetworkConfig {
         console.log("\n=== Market Creation Parameters ===");
         console.log("GlobalConfig:", globalConfig);
         console.log("Market Factory:", marketFactory);
+        console.log("CoreHook:", coreHook);
         console.log("Underlying Asset 0:", underlyingAsset0);
         console.log("Underlying Asset 1:", underlyingAsset1);
         console.log("Core Pool Fee:", corePoolFee);
@@ -82,9 +85,12 @@ contract CreateMarketScript is NetworkConfig {
         // Validate parameters
         _validateParameters();
 
+        (MarketVTSConfiguration memory vtsCfg, string memory vtsCfgSource) = _loadVTSConfig();
+        console.log("VTS_CONFIG_SOURCE:", vtsCfgSource);
+
         // Create the market
         console.log("\n=== Creating Market ===");
-        _createMarket();
+        _createMarket(vtsCfg);
 
         vm.stopBroadcast();
 
@@ -103,6 +109,7 @@ contract CreateMarketScript is NetworkConfig {
     function _loadDeploymentAddresses() internal {
         marketFactory = readAddress("marketFactory");
         globalConfig = readAddress("globalConfig");
+        coreHook = readAddress("coreHook");
         console.log("MarketFactory address loaded:", marketFactory);
         console.log("PoolManager address loaded:", config.poolManager);
     }
@@ -247,6 +254,7 @@ contract CreateMarketScript is NetworkConfig {
     function _validateParameters() internal view {
         require(marketFactory != address(0), "MarketFactory address is zero");
         require(globalConfig != address(0), "GlobalConfig address is zero");
+        require(coreHook != address(0), "CoreHook address is zero");
         require(underlyingAsset0 != address(0), "Underlying asset 0 is zero");
         require(underlyingAsset1 != address(0), "Underlying asset 1 is zero");
         require(underlyingAsset0 != underlyingAsset1, "Assets must be different");
@@ -260,9 +268,10 @@ contract CreateMarketScript is NetworkConfig {
     /**
      * @dev Creates the market via MarketFactory
      */
-    function _createMarket() internal {
+    function _createMarket(MarketVTSConfiguration memory vtsCfg) internal {
         MarketFactory factory = MarketFactory(marketFactory);
         address deployer = MarketFactory(marketFactory).marketVaultDeployer();
+        require(factory.isInitialised(), "MarketFactory not initialised; deploy with bounds first");
 
         bytes memory constructorArgs = abi.encode(config.poolManager, marketFactory);
 
@@ -282,8 +291,7 @@ contract CreateMarketScript is NetworkConfig {
                         tickSpacing,
                         initialSqrtPriceX96,
                         salt,
-                        VTSConfigs.getDefaultConfig(),
-                        new address[](0) // No additional issuers by default
+                        vtsCfg
                     )
                 )
             );
@@ -438,7 +446,8 @@ contract CreateMarketScript is NetworkConfig {
         vm.startBroadcast(deployerPrivateKey);
 
         // Create the market
-        _createMarket();
+        (MarketVTSConfiguration memory vtsCfg,) = _loadVTSConfig();
+        _createMarket(vtsCfg);
 
         vm.stopBroadcast();
 

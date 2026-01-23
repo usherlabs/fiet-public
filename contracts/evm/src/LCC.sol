@@ -3,10 +3,10 @@ pragma solidity ^0.8.26;
 
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {ILCC} from "./interfaces/ILCC.sol";
 import {ILiquidityHub} from "./interfaces/ILiquidityHub.sol";
+import {Bounds} from "./libraries/Bounds.sol";
 import {OracleUtils} from "./libraries/OracleUtils.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Errors} from "./libraries/Errors.sol";
@@ -14,7 +14,6 @@ import {Errors} from "./libraries/Errors.sol";
 contract LiquidityCommitmentCertificate is ERC20, ILCC {
     uint8 private immutable _decimals;
     address private immutable underlyingAsset;
-    IMarketFactory private immutable marketFactory;
     address private immutable marketVaultAddress; // ie. the uniswap v4 pool manager
     address private immutable resilientOracleAddress;
     ILiquidityHub private immutable hub;
@@ -30,7 +29,6 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
      * @param _resilientOracleAddress The address of the resilient oracle
      */
     constructor(
-        address _marketFactory,
         address _underlyingAsset,
         string memory name,
         string memory symbol,
@@ -40,10 +38,9 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
         _decimals = __decimals;
         underlyingAsset = _underlyingAsset;
         resilientOracleAddress = _resilientOracleAddress;
-        marketFactory = IMarketFactory(_marketFactory);
         hub = ILiquidityHub(_msgSender());
 
-        // Note: bounds are managed by the MarketFactory, not set in constructor
+        // Note: bounds are managed by the LiquidityHub, not set in constructor
     }
 
     modifier onlyHub() {
@@ -112,8 +109,8 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
         // If balance buckets are 0 but ERC20 balance exists, treat all as wrapped balance
         uint256 balanceSum = wrappedBalances[account] + marketDerivedBalances[account];
         uint256 fullBalance = balanceOf(account);
-        if (balanceSum == 0 && fullBalance > 0) {
-            // Protocol address holding tokens: treat all balance as wrapped
+        if ((balanceSum == 0 && fullBalance > 0) || Bounds.isExempt(hub.boundLevelOfLcc(address(this), account))) {
+            // Bucket-exempt protocol address holding tokens: treat all balance as wrapped
             return (fullBalance, 0);
         }
         return (wrappedBalances[account], marketDerivedBalances[account]);
@@ -124,17 +121,18 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
      * @param to The address to mint tokens to
      * @param directAmount The amount to issue to direct balance
      * @param marketAmount The amount to issue to market-derived balance
-     * @param issued Whether the tokens are issued
      */
-    function mint(address to, uint256 directAmount, uint256 marketAmount, bool issued) external onlyHub {
+    function mint(address to, uint256 directAmount, uint256 marketAmount) external onlyHub {
         uint256 amount = directAmount + marketAmount;
         if (amount == 0) {
             revert Errors.InvalidAmount(0, 0);
         }
         _mint(to, amount);
-        if (issued || marketFactory.bounds(to)) {
-            return;
-        }
+        // Bucket bookkeeping is skipped only for bucket-exempt protocol endpoints.
+        // Bucket-tracked endpoints and users must populate bucket maps; otherwise
+        // the recipient becomes "bucketless with nonzero ERC20 balance" and cannot correctly transfer/unwrap.
+        // In standard MarketFactory, only VTSO and ProxyHook/MarketVault are issuers. VTSO mints to MMPM for new positions, where PoolManager is exempt, and triggers burn on PoolManager -> MMPM (after) transfer
+        if (Bounds.isExempt(hub.boundLevelOfLcc(address(this), to))) return;
         if (marketAmount > 0) {
             marketDerivedBalances[to] += marketAmount;
         }
@@ -148,19 +146,16 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
      * @param from The address to burn tokens from
      * @param directAmount The amount to cancel from direct balance
      * @param marketAmount The amount to cancel from market-derived balance
-     * @param issued Whether the tokens are issued
      */
-    function burn(address from, uint256 directAmount, uint256 marketAmount, bool issued) external onlyHub {
+    function burn(address from, uint256 directAmount, uint256 marketAmount) external onlyHub {
         uint256 amount = directAmount + marketAmount;
         if (amount == 0) {
             revert Errors.InvalidAmount(0, 0);
         }
         _burn(from, amount);
-        // If burning from a protocol-bound address, bucket accounting is skipped.
-        // Protocol addresses are intentionally not tracked in bucket maps.
-        if (issued || marketFactory.bounds(from)) {
-            return;
-        }
+        // Bucket bookkeeping is skipped only for bucket-exempt protocol endpoints.
+        // Bucket-tracked endpoints and users must decrement bucket maps.
+        if (Bounds.isExempt(hub.boundLevelOfLcc(address(this), from))) return;
         if (marketAmount > 0) {
             marketDerivedBalances[from] -= marketAmount;
         }
@@ -176,44 +171,97 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
      * @param amount The transfer amount
      */
     function _beforeTransfer(address from, address to, uint256 amount) internal {
-        bool fromProtocol = marketFactory.bounds(from);
-        bool toProtocol = marketFactory.bounds(to);
+        (uint8 fromLevel, uint8 toLevel) = hub.boundLevelsOfLcc(address(this), from, to);
+        bool fromProtocol = Bounds.isEndpoint(fromLevel);
+        bool toProtocol = Bounds.isEndpoint(toLevel);
         bool isProtocolTransfer = _isProtocolTransfer(from, to, fromProtocol, toProtocol);
 
         if (!isProtocolTransfer) {
             revert Errors.TransferNotAllowed();
         }
 
-        // For non-protocol -> protocol transfers, annul settlement before adjusting balances
         if (!fromProtocol && toProtocol) {
-            uint256 totalBalance = marketDerivedBalances[from] + wrappedBalances[from];
-            if (totalBalance < amount) {
-                // This should never happen, as balanceOf from ERC20 will throw first.
-                revert Errors.InsufficientBalance(totalBalance, amount);
-            }
-            // Before adjusting local buckets, annul any portion that bleeds into queued settlements
-            hub.annulSettlementBeforeTransfer(from, wrappedBalances[from], marketDerivedBalances[from], amount);
+            _handleNonProtocolToProtocol(from, to, amount, toLevel);
+            return;
         }
 
-        // Update balance buckets before transfer
-        if (fromProtocol && toProtocol) {
-            // Protocol -> Protocol: do not accrue buckets to protocol addresses
+        if (fromProtocol && !toProtocol) {
+            _handleProtocolToNonProtocol(from, to, amount, fromLevel);
             return;
-        } else if (fromProtocol && !toProtocol) {
-            // Protocol -> Non-protocol: receiver accrues market-derived balance; protocol buckets remain untouched
-            marketDerivedBalances[to] += amount;
-        } else if (!fromProtocol && toProtocol) {
-            // Non-protocol -> Protocol: decrement sender balances (market-derived first, then wrapped). Protocol accrues nothing
-            uint256 fromMarketDerived = Math.min(marketDerivedBalances[from], amount);
-            marketDerivedBalances[from] -= fromMarketDerived;
-            uint256 remaining = amount - fromMarketDerived;
-            if (remaining > 0) {
-                uint256 fromWrapped = Math.min(wrappedBalances[from], remaining);
-                wrappedBalances[from] -= fromWrapped;
-            }
-            // Protocol should not accrue bucket balances
+        }
+
+        if (fromProtocol && toProtocol) {
+            _handleProtocolToProtocol(from, to, amount, fromLevel, toLevel);
         }
         // Non-protocol -> Non-protocol: blocked above, shouldn't reach here
+    }
+
+    function _handleNonProtocolToProtocol(address from, address to, uint256 amount, uint8 toLevel) internal {
+        uint256 totalBalance = marketDerivedBalances[from] + wrappedBalances[from];
+        if (totalBalance < amount) {
+            // This should never happen, as balanceOf from ERC20 will throw first.
+            revert Errors.InsufficientBalance(totalBalance, amount);
+        }
+        // Before adjusting local buckets, annul any portion that bleeds into queued settlements.
+        hub.annulSettlementBeforeTransfer(from, wrappedBalances[from], marketDerivedBalances[from], amount);
+
+        // Non-protocol -> Protocol: decrement sender balances (market-derived first, then wrapped).
+        uint256 fromMarketDerived = Math.min(marketDerivedBalances[from], amount);
+        uint256 remaining = amount - fromMarketDerived;
+        uint256 fromWrapped = Math.min(wrappedBalances[from], remaining);
+        marketDerivedBalances[from] -= fromMarketDerived;
+        wrappedBalances[from] -= fromWrapped;
+
+        // Protocol accrues buckets only if it is bucket-tracked.
+        if (!Bounds.isExempt(toLevel)) {
+            marketDerivedBalances[to] += fromMarketDerived;
+            wrappedBalances[to] += fromWrapped;
+        }
+    }
+
+    function _handleProtocolToNonProtocol(address from, address to, uint256 amount, uint8 fromLevel) internal {
+        if (Bounds.isExempt(fromLevel)) {
+            // Bucket-exempt protocol -> non-protocol: credit as market-derived (legacy behaviour).
+            marketDerivedBalances[to] += amount;
+            return;
+        }
+
+        uint256 totalBalance = marketDerivedBalances[from] + wrappedBalances[from];
+        if (totalBalance < amount) {
+            revert Errors.InsufficientBalance(totalBalance, amount);
+        }
+        uint256 fromMarketDerived = Math.min(marketDerivedBalances[from], amount);
+        uint256 remaining = amount - fromMarketDerived;
+        uint256 fromWrapped = Math.min(wrappedBalances[from], remaining);
+        marketDerivedBalances[from] -= fromMarketDerived;
+        wrappedBalances[from] -= fromWrapped;
+        marketDerivedBalances[to] += fromMarketDerived;
+        wrappedBalances[to] += fromWrapped;
+    }
+
+    function _handleProtocolToProtocol(address from, address to, uint256 amount, uint8 fromLevel, uint8 toLevel)
+        internal
+    {
+        if (Bounds.isExempt(fromLevel)) {
+            // Bucket-exempt -> protocol: only credit bucket-tracked recipients.
+            if (!Bounds.isExempt(toLevel)) {
+                marketDerivedBalances[to] += amount;
+            }
+            return;
+        }
+
+        uint256 totalBalance = marketDerivedBalances[from] + wrappedBalances[from];
+        if (totalBalance < amount) {
+            revert Errors.InsufficientBalance(totalBalance, amount);
+        }
+        uint256 fromMarketDerived = Math.min(marketDerivedBalances[from], amount);
+        uint256 fromWrapped = Math.min(wrappedBalances[from], amount - fromMarketDerived);
+        marketDerivedBalances[from] -= fromMarketDerived;
+        wrappedBalances[from] -= fromWrapped;
+        if (!Bounds.isExempt(toLevel)) {
+            marketDerivedBalances[to] += fromMarketDerived;
+            wrappedBalances[to] += fromWrapped;
+        }
     }
 
     /**

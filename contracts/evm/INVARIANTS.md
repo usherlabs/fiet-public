@@ -120,6 +120,19 @@ being an informal “should”.
 - **Statement**: Operations that treat an LCC pair as a market must ensure both LCCs belong to the same factory.
 - **Enforced by**: `src/LiquidityHub.sol::getFactory` reverts `Errors.InvariantViolated("LCCs are not from the same market")`.
 
+### HUB-05: `confirmTake` is balance-backed (reserves cannot be fabricated)
+
+- **Statement**: `LiquidityHub.confirmTake(lcc, amount, ...)` must never increase
+  `reserveOfUnderlying(underlying(lcc))` beyond the Hub’s **actual underlying balance**.
+  This invariant must hold even if `confirmTake` is reached during nested call flows (including callback-style paths).
+- **Enforced by**:
+  - `src/LiquidityHub.sol::confirmTake` reverts `Errors.InsufficientBalance(actualBalance, reserveAfter)` if
+    `reserveOfUnderlying[underlying] > actualUnderlyingBalanceHeldByHub`.
+- **Why**:
+  - `confirmTake` is intentionally *not* guarded by `nonReentrant` so that future flows can safely allow
+    `useMarketLiquidity → ... → confirmTake()` callback patterns.
+  - The balance-backed check ensures this flexibility cannot be abused to “mint” reserves via re-entrancy.
+
 ## Swap attribution and growth accounting (economic correctness)
 
 ### VTS-01: “Settle growths before modify liquidity” (no retroactive accrual capture)
@@ -214,6 +227,33 @@ being an informal “should”.
   - If `totalSettled > 0`, increment CISE index; else accrue to residual.
 - **Enforced by**: `src/libraries/VTSCommitLib.sol::incrementCoverage`.
 - **Practical implication**: Tests should not assume “arbitrary coverage” will always produce burns or index movement.
+
+### FEE-01: Queued slashes vs materialised slashed pot
+
+- **Statement**:
+  - `protocolFeeAccrued` represents **queued** fee-pot accounting (used for bonus allocation maths).
+  - `slashedPot` represents **materialised** pot balance (used for actually paying bonuses during fee finalisation).
+  - Therefore, `protocolFeeAccrued` may increase after growth settlement / coverage settlement, while `slashedPot`
+    remains unchanged until the relevant position is fee-processed (“touched”).
+- **Enforced by**:
+  - `src/libraries/VTSFeeLib.sol::_queueBonusForToken` allocates bonuses against `protocolFeeAccrued` and queues
+    `pendingFeeAdj` (it does not mint/burn the slashed pot).
+  - `src/libraries/VTSFeeLib.sol::_finaliseFeeAdjustment` is the materialisation point:
+    - **positive** `pendingFeeAdj` funds `slashedPot` (`_fundFeePot`)
+    - **negative** `pendingFeeAdj` drains `slashedPot` up to availability (`_drainFeePot`)
+  - `src/libraries/VTSFeeLib.sol::_processPositionFees` calls `_finaliseFeeAdjustment` during touch.
+
+### FEE-02: New positions must not receive fee-sharing bonuses on creation
+
+- **Statement**: A newly registered position (MM or DirectLP) must not immediately allocate/receive fee-sharing bonuses
+  at the moment it is created, even if the pool has already accumulated `protocolFeeAccrued` or a funded `slashedPot`.
+  Bonus allocation is only possible after the position has accrued non-dust eligibility (CISE exposure) and is later
+  fee-processed.
+- **Enforced by**:
+  - `src/libraries/VTSFeeLib.sol::_queueBonusForToken` requires `ciseExposure > 0` and `ciseExposure >= 1e6`
+    (dust guard). New positions start with `ciseExposureSinceLastMod == 0`.
+  - CISE exposure accrues only when coverage is incremented (`VTSCommitLib.incrementCoverage`) **after** the position
+    exists; it is then realised/consumed on subsequent fee-processing touches.
 
 ## Settlement, RFS, and seizure safety
 

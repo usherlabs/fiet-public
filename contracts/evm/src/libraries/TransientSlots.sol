@@ -43,6 +43,11 @@ library TransientSlots {
         return PositionId.wrap(raw);
     }
 
+    /// @dev Clears the seizure context slot to avoid within-tx ambient-authority leakage.
+    function clearSeizedPositionId() internal {
+        TransientSlot.asBytes32(TransientSlots.SEIZED_POSITION_ID_SLOT).tstore(bytes32(0));
+    }
+
     // ------------------------------
     // Planned Cancel helpers
     // ------------------------------

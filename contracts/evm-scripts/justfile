@@ -99,12 +99,9 @@ help:
 
 # === Development Workflows ===
 
-# Complete development setup (setup create3, deploy tokens, contracts, create market)
-dev: setup-create3 deploy-tokenA deploy-tokenB deploy create-market
+# Complete development setup (setup create3, deploy tokens, configure underlyings, deploy contracts, configure oracle, create market)
+dev: setup-create3 deploy-tokenA deploy-tokenB set-underlyings deploy allow-oracle-configure configure-oracle create-market
 
-# E2E flow: deploy everything and test swap
-# Note: Make sure fork is running and wallet has ETH, WETH, and USDC
-e2e: deploy-tokenA deploy-tokenB deploy create-market add-liquidity swap
 
 # === Build ===
 
@@ -161,6 +158,84 @@ deploy-tokenB:
         --rpc-url {{ rpc_url }} \
         {{ broadcast_flag }} {{ verify_flags }} -vvv
 
+# Persist UNDERLYING_ASSET_0/1 based on mock deployments
+set-underlyings:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ "{{ mode }}" != "LOCAL" ]; then
+        echo "set-underlyings is intended for MODE=LOCAL. Skipping."
+        exit 0
+    fi
+    DEPLOYMENTS_FILE="deployments/local_sepolia_deployments.json"
+    if [ ! -f "$DEPLOYMENTS_FILE" ]; then
+        echo "Expected $DEPLOYMENTS_FILE not found. Run \`just deploy-tokenA\` and \`just deploy-tokenB\` first."
+        exit 1
+    fi
+    UA0="$(jq -r '.usdtToken' "$DEPLOYMENTS_FILE")"
+    UA1="$(jq -r '.usdcToken' "$DEPLOYMENTS_FILE")"
+    if [ -z "$UA0" ] || [ "$UA0" = "null" ]; then
+        echo "Missing .usdtToken in $DEPLOYMENTS_FILE"
+        exit 1
+    fi
+    if [ -z "$UA1" ] || [ "$UA1" = "null" ]; then
+        echo "Missing .usdcToken in $DEPLOYMENTS_FILE"
+        exit 1
+    fi
+    if [ "$UA0" = "$UA1" ]; then
+        echo "Refusing to write identical underlyings (both=$UA0). Check $DEPLOYMENTS_FILE"
+        exit 1
+    fi
+    ENV_FILE=".env"
+    upsert_env() {
+        local key="$1"
+        local val="$2"
+        # Ensure the key exists exactly once (dotenv loaders can behave unexpectedly with duplicates).
+        # Remove any existing lines like:
+        # - KEY=...
+        # - export KEY=...
+        # - KEY = ...
+        if [ -f "$ENV_FILE" ]; then
+            tmp="${ENV_FILE}.tmp"
+            perl -ne "print unless /^\\s*(?:export\\s+)?\\Q${key}\\E\\s*=/;" "$ENV_FILE" > "$tmp"
+            mv "$tmp" "$ENV_FILE"
+        fi
+        echo "${key}=${val}" >> "$ENV_FILE"
+    }
+    upsert_env "UNDERLYING_ASSET_0" "$UA0"
+    upsert_env "UNDERLYING_ASSET_1" "$UA1"
+    echo "Wrote UNDERLYING_ASSET_0/1 to ${ENV_FILE}"
+
+# Grant ACM permission for ConfigureOracle (LOCAL/dev)
+allow-oracle-configure:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ "{{ mode }}" != "LOCAL" ]; then
+        echo "allow-oracle-configure is intended for MODE=LOCAL. Skipping."
+        exit 0
+    fi
+    if [ -z "${PRIVATE_KEY:-}" ]; then
+        echo "Missing PRIVATE_KEY (required to derive ACCOUNT_TO_PERMIT)"
+        exit 1
+    fi
+    ORACLE_ADDR_FILE="deployments/oracle_deployments/development/addresses.json"
+    if [ ! -f "$ORACLE_ADDR_FILE" ]; then
+        echo "Missing $ORACLE_ADDR_FILE (run \`just deploy-oracle\` first)"
+        exit 1
+    fi
+    RESILIENT_ORACLE_ADDRESS="$(jq -r '.ResilientOracle_Proxy' "$ORACLE_ADDR_FILE")"
+    if [ -z "$RESILIENT_ORACLE_ADDRESS" ] || [ "$RESILIENT_ORACLE_ADDRESS" = "null" ]; then
+        echo "Failed to read ResilientOracle_Proxy from $ORACLE_ADDR_FILE"
+        exit 1
+    fi
+    ACCOUNT_TO_PERMIT="$(cast wallet address --private-key "$PRIVATE_KEY")"
+    TARGET_ADDRESS="$RESILIENT_ORACLE_ADDRESS"
+    FUNCTION_SIG="setTokenConfig(TokenConfig)"
+    echo "Granting ACM permission for $ACCOUNT_TO_PERMIT -> $FUNCTION_SIG on $TARGET_ADDRESS"
+    TARGET_ADDRESS="$TARGET_ADDRESS" FUNCTION_SIG="$FUNCTION_SIG" ACCOUNT_TO_PERMIT="$ACCOUNT_TO_PERMIT" \
+        forge script {{ script_dir }}/admin/ResilientOracleACMPermissions.s.sol:ResilientOracleACMGiveCallPermissionScript \
+            --rpc-url {{ rpc_url }} \
+            {{ broadcast_flag }} -vvv
+
 # Mint/transfer mock tokens to the LP
 mint-mock-tokens:
     forge script {{ script_dir }}/setup/MintMockERC20.s.sol:MintMockERC20Script \
@@ -197,20 +272,6 @@ deploy-contracts:
         --rpc-url {{ rpc_url }} \
         {{ broadcast_flag }} -vvv
 
-# === E2E ===
-
-# E2E: Deploy full stack only (standalone) and print MarketFactory.
-e2e-deploy:
-    FOUNDRY_PROFILE=deploy forge script {{ script_dir }}/e2e/Deploy.s.sol:DeployE2E \
-        --rpc-url {{ rpc_url }} \
-        {{ broadcast_flag }} -vvv
-
-# E2E: Normal LP flow (LiquidityProvision scenario).
-e2e-normal-lp:
-    FOUNDRY_PROFILE=deploy forge script {{ script_dir }}/e2e/LiquidityProvision.s.sol:LiquidityProvisionE2E \
-        --rpc-url {{ rpc_url }} \
-        {{ broadcast_flag }} -vvv
-
 # Deploy oracle contracts via Hardhat
 deploy-oracle:
     #!/usr/bin/env bash
@@ -232,32 +293,104 @@ deploy-oracle:
     cp ../evm/oracle/hardhat.custom.config.ts ../evm/lib/oracle/hardhat.fiet.config.ts
     cd ../evm/lib/oracle && npx --yes hardhat --config ./hardhat.fiet.config.ts deploy --network "$ORACLE_NETWORK_ARG" --tags deploy --reset
 
-    # read from stored file and persist RESILIENT_ORACLE_ADDRESS for subsequent Foundry scripts.
+    # Read from stored files and persist env vars for subsequent Foundry scripts.
     # Hardhat writes deployments to `../evm/deployments/oracle_deployments` (see `contracts/evm/oracle/hardhat.custom.config.ts`).
-    ORACLE_JSON="${ROOT_DIR}/../evm/deployments/oracle_deployments/${ORACLE_NETWORK_ARG}/ResilientOracle_Proxy.json"
-    if [ ! -f "$ORACLE_JSON" ]; then
-        echo "Expected oracle deployment file not found: $ORACLE_JSON"
+    ORACLE_DIR="${ROOT_DIR}/../evm/deployments/oracle_deployments/${ORACLE_NETWORK_ARG}"
+    RESILIENT_ORACLE_JSON="${ORACLE_DIR}/ResilientOracle_Proxy.json"
+    ACM_JSON="${ORACLE_DIR}/AccessControlManager.json"
+
+    if [ ! -f "$RESILIENT_ORACLE_JSON" ]; then
+        echo "Expected oracle deployment file not found: $RESILIENT_ORACLE_JSON"
+        exit 1
+    fi
+    if [ ! -f "$ACM_JSON" ]; then
+        echo "Expected ACM deployment file not found: $ACM_JSON"
         exit 1
     fi
 
-    RESILIENT_ORACLE_ADDRESS="$(jq -r '.address' "$ORACLE_JSON")"
+    RESILIENT_ORACLE_ADDRESS="$(jq -r '.address' "$RESILIENT_ORACLE_JSON")"
     if [ -z "$RESILIENT_ORACLE_ADDRESS" ] || [ "$RESILIENT_ORACLE_ADDRESS" = "null" ]; then
-        echo "Failed to read .address from $ORACLE_JSON"
+        echo "Failed to read .address from $RESILIENT_ORACLE_JSON"
+        exit 1
+    fi
+
+    ACCESS_CONTROL_MANAGER="$(jq -r '.address' "$ACM_JSON")"
+    if [ -z "$ACCESS_CONTROL_MANAGER" ] || [ "$ACCESS_CONTROL_MANAGER" = "null" ]; then
+        echo "Failed to read .address from $ACM_JSON"
         exit 1
     fi
 
     ENV_FILE="${ROOT_DIR}/.env"
-    KEY="RESILIENT_ORACLE_ADDRESS"
-    if [ -f "$ENV_FILE" ] && grep -q "^${KEY}=" "$ENV_FILE"; then
-        perl -pi -e "s/^${KEY}=.*/${KEY}=${RESILIENT_ORACLE_ADDRESS}/" "$ENV_FILE"
-    else
-        echo "${KEY}=${RESILIENT_ORACLE_ADDRESS}" >> "$ENV_FILE"
-    fi
-    echo "Wrote ${KEY}=${RESILIENT_ORACLE_ADDRESS} to ${ENV_FILE}"
+    upsert_env() {
+        local key="$1"
+        local val="$2"
+        # Ensure the key exists exactly once (dotenv loaders can behave unexpectedly with duplicates).
+        # Remove any existing lines like:
+        # - KEY=...
+        # - export KEY=...
+        # - KEY = ...
+        if [ -f "$ENV_FILE" ]; then
+            tmp="${ENV_FILE}.tmp"
+            perl -ne "print unless /^\\s*(?:export\\s+)?\\Q${key}\\E\\s*=/;" "$ENV_FILE" > "$tmp"
+            mv "$tmp" "$ENV_FILE"
+        fi
+        echo "${key}=${val}" >> "$ENV_FILE"
+    }
+
+    upsert_env "RESILIENT_ORACLE_ADDRESS" "$RESILIENT_ORACLE_ADDRESS"
+    upsert_env "ACCESS_CONTROL_MANAGER" "$ACCESS_CONTROL_MANAGER"
+    echo "Wrote RESILIENT_ORACLE_ADDRESS=${RESILIENT_ORACLE_ADDRESS} to ${ENV_FILE}"
+    echo "Wrote ACCESS_CONTROL_MANAGER=${ACCESS_CONTROL_MANAGER} to ${ENV_FILE}"
 
     # Keep a local copy under `./deployments/` for convenience/debugging (overwrites any stale file).
-    mkdir -p "${ROOT_DIR}/deployments/oracle_deployments/${ORACLE_NETWORK_ARG}"
-    cp "$ORACLE_JSON" "${ROOT_DIR}/deployments/oracle_deployments/${ORACLE_NETWORK_ARG}/ResilientOracle_Proxy.json"
+    OUT_DIR="${ROOT_DIR}/deployments/oracle_deployments/${ORACLE_NETWORK_ARG}"
+    mkdir -p "$OUT_DIR"
+
+    # Copy per-contract deployment files (useful for deeper debugging).
+    for f in \
+      AccessControlManager.json \
+      VAI.json \
+      DefaultProxyAdmin.json \
+      BoundValidator_Implementation.json \
+      BoundValidator_Proxy.json \
+      ResilientOracle_Implementation.json \
+      ResilientOracle_Proxy.json \
+      ChainlinkOracle_Implementation.json \
+      ChainlinkOracle_Proxy.json; do
+        if [ -f "${ORACLE_DIR}/${f}" ]; then
+            cp "${ORACLE_DIR}/${f}" "${OUT_DIR}/${f}"
+        fi
+    done
+
+    # Write a single address-book JSON for scripts/tools.
+    jq -n \
+      --arg AccessControlManager "$(jq -r '.address' "${ORACLE_DIR}/AccessControlManager.json")" \
+      --arg VAI "$(jq -r '.address' "${ORACLE_DIR}/VAI.json")" \
+      --arg DefaultProxyAdmin "$(jq -r '.address' "${ORACLE_DIR}/DefaultProxyAdmin.json")" \
+      --arg BoundValidator_Implementation "$(jq -r '.address' "${ORACLE_DIR}/BoundValidator_Implementation.json")" \
+      --arg BoundValidator_Proxy "$(jq -r '.address' "${ORACLE_DIR}/BoundValidator_Proxy.json")" \
+      --arg ResilientOracle_Implementation "$(jq -r '.address' "${ORACLE_DIR}/ResilientOracle_Implementation.json")" \
+      --arg ResilientOracle_Proxy "$(jq -r '.address' "${ORACLE_DIR}/ResilientOracle_Proxy.json")" \
+      --arg ChainlinkOracle_Implementation "$(jq -r '.address' "${ORACLE_DIR}/ChainlinkOracle_Implementation.json")" \
+      --arg ChainlinkOracle_Proxy "$(jq -r '.address' "${ORACLE_DIR}/ChainlinkOracle_Proxy.json")" \
+      '{
+        AccessControlManager: $AccessControlManager,
+        VAI: $VAI,
+        DefaultProxyAdmin: $DefaultProxyAdmin,
+        BoundValidator_Implementation: $BoundValidator_Implementation,
+        BoundValidator_Proxy: $BoundValidator_Proxy,
+        ResilientOracle_Implementation: $ResilientOracle_Implementation,
+        ResilientOracle_Proxy: $ResilientOracle_Proxy,
+        ChainlinkOracle_Implementation: $ChainlinkOracle_Implementation,
+        ChainlinkOracle_Proxy: $ChainlinkOracle_Proxy
+      }' > "${OUT_DIR}/addresses.json"
+
+    echo "Wrote oracle address book to ${OUT_DIR}/addresses.json"
+
+    # Also write DefaultProxyAdmin "public key" (address) as a simple text file.
+    DEFAULT_PROXY_ADMIN="$(jq -r '.address' "${ORACLE_DIR}/DefaultProxyAdmin.json")"
+    echo "${DEFAULT_PROXY_ADMIN}" > "${OUT_DIR}/DefaultProxyAdmin.address"
+    echo "Wrote DefaultProxyAdmin address to ${OUT_DIR}/DefaultProxyAdmin.address"
 
 # Configure the local resilient oracle (enables MAIN oracle + sets mock prices for default CreateMarket pair)
 configure-oracle:
@@ -270,6 +403,129 @@ read-deployment:
     forge script {{ script_dir }}/ReadDeployment.s.sol \
         --rpc-url {{ rpc_url }} \
         {{ broadcast_flag }} {{ verify_flags }} -vvv
+
+# === E2E ===
+# Note: Make sure fork is running
+e2e: e2e-deploy e2e-normal-lp e2e-swap e2e-market-maker e2e-mm-coverage
+
+# E2E: Deploy full stack only (standalone) and print MarketFactory.
+e2e-deploy:
+    FOUNDRY_PROFILE=deploy forge script {{ script_dir }}/e2e/Deploy.s.sol:DeployE2E \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+# E2E: Normal LP flow (LiquidityProvision scenario).
+e2e-normal-lp:
+    FOUNDRY_PROFILE=deploy forge script {{ script_dir }}/e2e/LiquidityProvision.s.sol:LiquidityProvisionE2E \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+# E2E: Exact-output swap flow (quotes expected input and asserts exact output received).
+e2e-swap:
+    FOUNDRY_PROFILE=deploy forge script {{ script_dir }}/e2e/Swap.s.sol:SwapE2E \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+# E2E: MarketMaker (single-MM journey: commit+mint+settle, swaps, poke, close RFS, burn/decommit, unwrap).
+e2e-market-maker:
+    FOUNDRY_PROFILE=deploy forge script {{ script_dir }}/e2e/MarketMaker.s.sol:MarketMakerE2E \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+# E2E: MMCoverage (two-MMs coverage + fee realisation exploration).
+e2e-mm-coverage:
+    FOUNDRY_PROFILE=deploy forge script {{ script_dir }}/e2e/MMCoverage.s.sol:MMCoverageE2E \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+# === Admin ===
+#
+# All admin scripts are under `script/admin/` and are intended to call `onlyOwner` functions.
+# Most of these route through `GlobalConfig.proxyCall` (so PRIVATE_KEY must be GlobalConfig owner).
+
+admin-proxy-call:
+    forge script {{ script_dir }}/admin/AdminProxyCall.s.sol:AdminProxyCallScript \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+admin-marketfactory-add-bounds:
+    forge script {{ script_dir }}/admin/MarketFactoryBounds.s.sol:MarketFactoryAddBoundsScript \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+admin-marketfactory-remove-bounds:
+    forge script {{ script_dir }}/admin/MarketFactoryBounds.s.sol:MarketFactoryRemoveBoundsScript \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+admin-liquidityhub-set-factory:
+    forge script {{ script_dir }}/admin/LiquidityHubSetFactory.s.sol:LiquidityHubSetFactoryScript \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+admin-oraclehelper-register-ticker:
+    forge script {{ script_dir }}/admin/OracleHelperRegisterTicker.s.sol:OracleHelperRegisterTickerScript \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+admin-vts-set-global-pause:
+    forge script {{ script_dir }}/admin/VTSOrchestratorAdmin.s.sol:VTSSetGlobalPauseScript \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+admin-vts-set-market-config:
+    forge script {{ script_dir }}/admin/VTSOrchestratorAdmin.s.sol:VTSSetMarketConfigScript \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+admin-vrl-signal-set-verifier:
+    forge script {{ script_dir }}/admin/VRLSignalManagerAdmin.s.sol:VRLSignalManagerSetVerifierScript \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+admin-vrl-signal-set-expiry:
+    forge script {{ script_dir }}/admin/VRLSignalManagerAdmin.s.sol:VRLSignalManagerSetExpiryScript \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+admin-vrl-settlement-add-verifier:
+    forge script {{ script_dir }}/admin/VRLSettlementObserverAdmin.s.sol:VRLSettlementAddVerifierScript \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+admin-vrl-settlement-nullify-verifier:
+    forge script {{ script_dir }}/admin/VRLSettlementObserverAdmin.s.sol:VRLSettlementNullifyVerifierScript \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+admin-vrl-settlement-allow-verifier-for-tokens:
+    forge script {{ script_dir }}/admin/VRLSettlementObserverAdmin.s.sol:VRLSettlementAllowVerifierForTokensScript \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+admin-vrl-settlement-disallow-verifier-for-tokens:
+    forge script {{ script_dir }}/admin/VRLSettlementObserverAdmin.s.sol:VRLSettlementDisallowVerifierForTokensScript \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+admin-oracle-transfer-to-globalconfig:
+    forge script {{ script_dir }}/admin/ResilientOracleOwnership.s.sol:ResilientOracleTransferToGlobalConfigScript \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+admin-oracle-acm-give-call-permission:
+    forge script {{ script_dir }}/admin/ResilientOracleACMPermissions.s.sol:ResilientOracleACMGiveCallPermissionScript \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+admin-acm-transfer-admin-to-globalconfig:
+    forge script {{ script_dir }}/admin/AccessControlManagerAdmin.s.sol:AccessControlManagerTransferAdminToGlobalConfigScript \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+admin-oracle-configure-assets:
+    forge script {{ script_dir }}/admin/OracleConfigureAssets.s.sol:OracleConfigureAssetsScript \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
 
 # === Market Operations ===
 
