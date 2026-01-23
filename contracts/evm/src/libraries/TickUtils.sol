@@ -10,7 +10,14 @@ import {BitMath} from "@uniswap/v4-core/src/libraries/BitMath.sol";
 /// @title TickUtils
 /// @notice Utility functions for tick calculations and validation
 library TickUtils {
-    // Reference: https://github.com/Uniswap/v4-core/blob/cd989b470f1e3cb89d07da428e3785dd00b32a32/src/libraries/TickBitmap.sol#L85
+    // Vendor-derived glue:
+    // - This is effectively Uniswap v4-core TickBitmap.nextInitializedTickWithinOneWord(), adapted to read the
+    //   tick bitmap word via PoolManager state (`StateLibrary.getTickBitmap`) instead of `self[wordPos]`.
+    // - There are no intended semantic changes to the scan/mask maths; we keep this wrapper to avoid duplicating
+    //   bitmap access patterns throughout our swap attribution code.
+    //
+    // Canonical reference:
+    // https://github.com/Uniswap/v4-core/blob/cd989b470f1e3cb89d07da428e3785dd00b32a32/src/libraries/TickBitmap.sol#L85
     /**
      * @notice Finds the next initialized tick within one word of the tick bitmap
      * @param poolManager The PoolManager contract

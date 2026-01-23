@@ -4,7 +4,8 @@ src = "../evm/src"
 script = "script"
 out = "out"
 libs = ["../evm/lib"]
-allow_paths = ["../evm/src"]
+# Allow E2E scripts to temporarily reuse pure Solidity utilities from evm unit tests (no forge-std/Test, no vm cheatcodes).
+allow_paths = ["../evm/src", "../evm/test"]
 
 ignored_error_codes = [
   2394,
@@ -30,10 +31,12 @@ fs_permissions = [
   { access = "read-write", path = ".forge-snapshots/" },
   { access = "read", path = "out/" },
   { access = "read", path = "../evm/out/" },
+  { access = "read", path = "./config" },
 ]
 
 remappings = [
   "src/=../evm/src/",
+  "evm-test/=../evm/test/",
   "@openzeppelin/=../evm/lib/openzeppelin-contracts/",
   "openzeppelin-contracts/=../evm/lib/openzeppelin-contracts/",
   "v4-periphery/=../evm/lib/v4-periphery/",

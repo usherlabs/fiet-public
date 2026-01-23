@@ -17,10 +17,11 @@ import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {BitMath} from "@uniswap/v4-core/src/libraries/BitMath.sol";
 import {HookMiner} from "v4-periphery/src/utils/HookMiner.sol";
 import {ProxyHook} from "src/ProxyHook.sol";
-import {VTSConfigs} from "src/libraries/VTSConfigs.sol";
 import {HookFlags} from "src/libraries/HookFlags.sol";
 import {ILiquidityHub} from "src/interfaces/ILiquidityHub.sol";
 import {GlobalConfig} from "src/GlobalConfig.sol";
+import {MarketVTSConfiguration} from "src/types/VTS.sol";
+import {VTSConfigFileBase} from "./base/VTSConfigFileBase.sol";
 
 /**
  * @title CreateMarketScript
@@ -33,7 +34,7 @@ import {GlobalConfig} from "src/GlobalConfig.sol";
  * 3. Create market with core and proxy pools
  * 4. Log market details and pool IDs
  */
-contract CreateMarketScript is NetworkConfig {
+contract CreateMarketScript is NetworkConfig, VTSConfigFileBase {
     using PoolIdLibrary for PoolId;
     using StateLibrary for IPoolManager;
 
@@ -84,9 +85,12 @@ contract CreateMarketScript is NetworkConfig {
         // Validate parameters
         _validateParameters();
 
+        (MarketVTSConfiguration memory vtsCfg, string memory vtsCfgSource) = _loadVTSConfig();
+        console.log("VTS_CONFIG_SOURCE:", vtsCfgSource);
+
         // Create the market
         console.log("\n=== Creating Market ===");
-        _createMarket();
+        _createMarket(vtsCfg);
 
         vm.stopBroadcast();
 
@@ -264,15 +268,10 @@ contract CreateMarketScript is NetworkConfig {
     /**
      * @dev Creates the market via MarketFactory
      */
-    function _createMarket() internal {
+    function _createMarket(MarketVTSConfiguration memory vtsCfg) internal {
         MarketFactory factory = MarketFactory(marketFactory);
         address deployer = MarketFactory(marketFactory).marketVaultDeployer();
-        if (!factory.isInitialised()) {
-            address[] memory initialBounds = new address[](0);
-            bytes memory initCall =
-                abi.encodeWithSelector(MarketFactory.initialise.selector, coreHook, initialBounds);
-            GlobalConfig(globalConfig).proxyCall(marketFactory, initCall);
-        }
+        require(factory.isInitialised(), "MarketFactory not initialised; deploy with bounds first");
 
         bytes memory constructorArgs = abi.encode(config.poolManager, marketFactory);
 
@@ -292,7 +291,7 @@ contract CreateMarketScript is NetworkConfig {
                         tickSpacing,
                         initialSqrtPriceX96,
                         salt,
-                        VTSConfigs.getDefaultConfig()
+                        vtsCfg
                     )
                 )
             );
@@ -447,7 +446,8 @@ contract CreateMarketScript is NetworkConfig {
         vm.startBroadcast(deployerPrivateKey);
 
         // Create the market
-        _createMarket();
+        (MarketVTSConfiguration memory vtsCfg,) = _loadVTSConfig();
+        _createMarket(vtsCfg);
 
         vm.stopBroadcast();
 

@@ -532,26 +532,74 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
     ///      Expected:
     ///      - Fee pot should be funded after swap + coverage
     ///      - Out-of-range DirectLP can be added without errors
+    ///      - Newly created DirectLP must NOT accrue any fees/bonuses on creation (new-position gate)
     /// @dev Note: Verifying that DirectLP receives bonuses would require separate position
     ///      modification with proper delta settlement (via modifyLiquidityRouter).
     ///      Out-of-range positions don't contribute to coverage attribution, so they're never slashed,
     ///      but they can still benefit from bonuses if they've contributed settled liquidity.
     function test_directLP_outOfRange_canBeAdded_withFundedPot() public {
-        (uint256 tokenId,) = _commitAndMintFirstMM(); // idx0
+        (uint256 tokenId, PositionId positionId) = _commitAndMintFirstMM(); // idx0
 
-        uint256 potBefore = _slashedPot0();
+        // NOTE:
+        // `slashedPot` is only FUNDED when a slashed position is fee-processed (e.g. via `_pokeMM` / touch).
+        // Since bonus allocation depends on pot availability, we must ensure the pot is funded
+        // before a new DirectLP joins. The DirectLP must still NOT accrue any bonus on *join*;
+        // it only accrues on subsequent participation/touches.
+        (, uint256 feeAccrued1Before) = _protocolFeeAccrued(corePoolKey.toId());
+        uint256 pot1Before = _slashedPot1();
 
-        // Fee pot should be funded on swap + coverage, not on position modification
+        // Queue a slash via swap + coverage (materialised on `settlePositionGrowths`)
         _swapCore(false, -int256(6e18));
-        vm.prank(marketFactory);
-        vtsOrchestrator.incrementCoverage(corePoolKey.toId(), 3e18, 0);
 
-        uint256 potFunded = _slashedPot0();
-        assertGe(potFunded, potBefore, "Expected pot to be funded after swap + coverage");
+        vtsOrchestrator.settlePositionGrowths(positionId); // settle deficit
+        vm.prank(marketFactory);
+        vtsOrchestrator.incrementCoverage(corePoolKey.toId(), 3e18, 0); // increment coverage
+
+        vtsOrchestrator.settlePositionGrowths(positionId); // settle coverage over deficit.
+
+        (, uint256 feeAccrued1After) = _protocolFeeAccrued(corePoolKey.toId());
+        assertGt(feeAccrued1After, feeAccrued1Before, "Expected queued slashes to increase protocolFeeAccrued1");
+
+        // Fund slashed fee pot (token1) by fee-processing the slashed MM position.
+        // This finalises its positive pending fee adjustment into slashedPot1.
+        _pokeMM(tokenId, 0);
+        uint256 pot1After = _slashedPot1();
+        assertGt(pot1After, pot1Before, "Expected slashed fee pot to be funded before DirectLP joins");
+
+        // Fund LCC0 reserves before adding an out-of-range (token0-only) DirectLP.
+        // This ensures `ProxyHook.onDirectLP()` can settle underlying from the Hub to the vault.
+        _mintLccTo(address(this), lccCurrency0, 1e18);
 
         // Add an out-of-range direct LP position
         // Use far out-of-range ticks so it doesn't contribute to coverage attribution
-        _addDirectLP(600, 1200, int256(1e18));
+        int24 directTickLower = 600;
+        int24 directTickUpper = 1200;
+        uint256 directLiquidity = 1e18;
+        _addDirectLP(directTickLower, directTickUpper, int256(directLiquidity));
+
+        // Compute DirectLP PositionId (owner = modifyLiquidityRouter, salt = 0).
+        ModifyLiquidityParams memory directParams = ModifyLiquidityParams({
+            tickLower: directTickLower,
+            tickUpper: directTickUpper,
+            liquidityDelta: int256(directLiquidity),
+            salt: bytes32(0)
+        });
+        PositionId directPosId = PositionLibrary.generateId(address(modifyLiquidityRouter), directParams);
+        assertTrue(vtsOrchestrator.isPositionValid(directPosId, true), "DirectLP should be registered");
+
+        // New-position gate: even if protocolFeeAccrued is already > 0, a freshly created DirectLP must not
+        // immediately accrue/allocate any fee-sharing bonuses.
+        (uint256 feesShared0, uint256 feesShared1, int256 pending0, int256 pending1) =
+            vtsOrchestrator.getPositionFeeAccounting(directPosId);
+        assertEq(feesShared0, 0, "New DirectLP must not accrue feesShared0 on creation");
+        assertEq(feesShared1, 0, "New DirectLP must not accrue feesShared1 on creation");
+        assertEq(pending0, 0, "New DirectLP must not queue pendingFeeAdj0 on creation");
+        assertEq(pending1, 0, "New DirectLP must not queue pendingFeeAdj1 on creation");
+        {
+            (uint256 ciseExp0, uint256 ciseExp1) = _testableOrchestrator().getPositionBonusWeights(directPosId);
+            assertEq(ciseExp0, 0, "New DirectLP must not have CISE exposure on creation");
+            assertEq(ciseExp1, 0, "New DirectLP must not have CISE exposure on creation");
+        }
 
         // Suppress unused variable warning
         tokenId;
@@ -1205,6 +1253,10 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
             // Use an in-range DirectLP so it can accrue native fees (feeWeight) from swaps.
             int24 dlTickLower = -960;
             int24 dlTickUpper = 960;
+
+            // Fund reserves for both legs up-front so `ProxyHook.onDirectLP()` can settle underlying from the Hub.
+            _mintLccTo(address(this), lccCurrency0, 1e18);
+            _mintLccTo(address(this), lccCurrency1, 1e18);
 
             // Mint a Uniswap v4 PositionManager position, settle the pair, and subscribe it to DirectLPDeltaResolver.
             // This ensures CoreHook's hook deltas (feeAdj) are cleared during the same unlock session.
