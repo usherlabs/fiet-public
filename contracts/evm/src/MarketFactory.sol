@@ -111,10 +111,19 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
         if (!poolManager.isUnlocked()) revert Errors.PoolManagerMustBeUnlocked();
     }
 
+    /**
+     * @notice Returns true if the factory has been initialised
+     * @return True once `initialise` has completed
+     */
     function isInitialised() external view returns (bool) {
         return initialised;
     }
 
+    /**
+     * @notice Sets the core hook and initial bounds, then marks the factory as initialised
+     * @param _coreHook Core hook address used for core pools
+     * @param initialBounds Addresses to set as bound endpoints
+     */
     function initialise(address _coreHook, address[] calldata initialBounds) external onlyOwner {
         if (initialised) return;
 
@@ -403,6 +412,11 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
 
     // ============ VIEW FUNCTIONS ============
 
+    /**
+     * @notice Returns true if an address is bound-enabled in LiquidityHub
+     * @param bound Address to check for bound endpoint status
+     * @return True if the address is bound-enabled
+     */
     function bounds(address bound) external view returns (bool) {
         return Bounds.isEndpoint(liquidityHub.boundLevel(address(this), bound));
     }

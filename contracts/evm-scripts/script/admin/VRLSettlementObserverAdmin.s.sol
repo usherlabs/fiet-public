@@ -77,7 +77,9 @@ contract VRLSettlementAddVerifierScript is AdminBase {
 contract VRLSettlementNullifyVerifierScript is AdminBase {
     function run() external {
         uint256 pk = uint256(vm.envBytes32("PRIVATE_KEY"));
-        uint32 idx = uint32(vm.envUint("VERIFIER_INDEX"));
+        uint256 idxRaw = vm.envUint("VERIFIER_INDEX");
+        require(idxRaw <= type(uint32).max, "verifier index: uint32 overflow");
+        uint32 idx = uint32(idxRaw);
 
         _loadAdminAddresses();
 
@@ -96,7 +98,9 @@ contract VRLSettlementNullifyVerifierScript is AdminBase {
 contract VRLSettlementAllowVerifierForTokensScript is TokensJsonBase {
     function run() external {
         uint256 pk = uint256(vm.envBytes32("PRIVATE_KEY"));
-        uint32 idx = uint32(vm.envUint("VERIFIER_INDEX"));
+        uint256 idxRaw = vm.envUint("VERIFIER_INDEX");
+        require(idxRaw <= type(uint32).max, "verifier index: uint32 overflow");
+        uint32 idx = uint32(idxRaw);
 
         _loadAdminAddresses();
         address[] memory tokens = _loadTokens();
@@ -119,7 +123,9 @@ contract VRLSettlementAllowVerifierForTokensScript is TokensJsonBase {
 contract VRLSettlementDisallowVerifierForTokensScript is TokensJsonBase {
     function run() external {
         uint256 pk = uint256(vm.envBytes32("PRIVATE_KEY"));
-        uint32 idx = uint32(vm.envUint("VERIFIER_INDEX"));
+        uint256 idxRaw = vm.envUint("VERIFIER_INDEX");
+        require(idxRaw <= type(uint32).max, "verifier index: uint32 overflow");
+        uint32 idx = uint32(idxRaw);
 
         _loadAdminAddresses();
         address[] memory tokens = _loadTokens();

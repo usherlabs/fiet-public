@@ -131,9 +131,19 @@ abstract contract MME2EBase is E2EBase {
         internal
         returns (uint256 amountOut0, uint256 amountOut1)
     {
-        // One swap in each direction. We only need to fund+wrap once.
-        amountOut1 = _mintAndSwap(m, takerPk, wrapAmount, true, swapAmount); // 0 -> 1
-        amountOut0 = _mintAndSwap(m, takerPk, wrapAmount, false, swapAmount); // 1 -> 0
+        // One swap in each direction. Fund+wrap both currencies once for symmetric inputs.
+        if (wrapAmount > 0) {
+            address taker = vm.addr(takerPk);
+            ILiquidityHub hub = ILiquidityHub(m.stack.contracts.liquidityHub);
+            vm.startBroadcast(takerPk);
+            Token(m.underlying0).mint(taker, wrapAmount);
+            Token(m.underlying1).mint(taker, wrapAmount);
+            _wrapAndMintLccPair(hub, m, taker, wrapAmount);
+            vm.stopBroadcast();
+        }
+
+        amountOut1 = _mintAndSwap(m, takerPk, 0, true, swapAmount); // 0 -> 1
+        amountOut0 = _mintAndSwap(m, takerPk, 0, false, swapAmount); // 1 -> 0
         console.log("OK: swap both directions complete");
     }
 
