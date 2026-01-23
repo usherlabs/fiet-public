@@ -271,11 +271,7 @@ contract CreateMarketScript is NetworkConfig, VTSConfigFileBase {
     function _createMarket(MarketVTSConfiguration memory vtsCfg) internal {
         MarketFactory factory = MarketFactory(marketFactory);
         address deployer = MarketFactory(marketFactory).marketVaultDeployer();
-        if (!factory.isInitialised()) {
-            address[] memory initialBounds = new address[](0);
-            bytes memory initCall = abi.encodeWithSelector(MarketFactory.initialise.selector, coreHook, initialBounds);
-            GlobalConfig(globalConfig).proxyCall(marketFactory, initCall);
-        }
+        require(factory.isInitialised(), "MarketFactory not initialised; deploy with bounds first");
 
         bytes memory constructorArgs = abi.encode(config.poolManager, marketFactory);
 

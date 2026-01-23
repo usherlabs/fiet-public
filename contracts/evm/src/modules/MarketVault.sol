@@ -460,7 +460,7 @@ abstract contract MarketVault is IMarketVault, ImmutableState, ImmutableMarketSt
     function modifyLiquidities(BalanceDelta balanceDelta) external onlyProtocolBounds nonReentrant {
         (Currency currency0, Currency currency1) = _underlying();
         _modifyVaultLiquidity(currency0, currency1, balanceDelta);
-        _finaliseModifyLiquidities(balanceDelta, balanceDelta, address(0));
+        _finaliseModifyLiquidities(balanceDelta, balanceDelta, msg.sender);
     }
 
     /**
@@ -477,9 +477,8 @@ abstract contract MarketVault is IMarketVault, ImmutableState, ImmutableMarketSt
         (Currency currency0, Currency currency1) = _underlying();
 
         BalanceDelta usedDelta = dryModifyLiquidities(balanceDelta);
-        // if caller is vtsorchstrator then do not unl
         _modifyVaultLiquidity(currency0, currency1, usedDelta);
-        _finaliseModifyLiquidities(balanceDelta, usedDelta, address(0));
+        _finaliseModifyLiquidities(balanceDelta, usedDelta, msg.sender);
 
         return usedDelta;
     }

@@ -12,7 +12,7 @@ That means **the transaction signer must be the `GlobalConfig` owner** for most 
 
 - **Required (almost all scripts)**:
   - `PRIVATE_KEY`: the EOA private key (as `bytes32`) used to broadcast
-  - `NETWORK`: selects the deployments file used by `AdminBase` (loads `globalConfig`, `marketFactory`, etc)
+  - `NETWORK`: selects the deployments file used by `AdminBase` (loads `globalConfig`, `marketFactory`, etc.)
 
 - **Loaded automatically by `AdminBase`**:
   - `globalConfig` (used for `proxyCall`)
@@ -29,15 +29,6 @@ That means **the transaction signer must be the `GlobalConfig` owner** for most 
 - **Env**:
   - `TARGET`: address
   - `CALLDATA`: ABI-encoded calldata bytes (`0x...`)
-
-### `just admin-marketfactory-set-hooks`
-
-- **What it does**: sets the core hook used by `MarketFactory`.
-- **On-chain call**: `MarketFactory.setHooks(coreHook)`
-  - routed via `GlobalConfig.proxyCall(MarketFactory, abi.encodeCall(setHooks,...))`
-- **Script**: `MarketFactorySetHooks.s.sol:MarketFactorySetHooksScript`
-- **Env**:
-  - `CORE_HOOK` (optional): core hook address (defaults to deployments key `coreHook`)
 
 ### `just admin-marketfactory-add-bounds`
 
@@ -93,8 +84,8 @@ That means **the transaction signer must be the `GlobalConfig` owner** for most 
 - **Env**:
   - `CORE_POOL_ID`: `bytes32`
   - `VTS_CONFIG_FILE_PATH` (optional): path to a JSON or TOML file to override the default config
-    - JSON keys: `.token0.gracePeriodTime` etc
-    - TOML keys: `token0.gracePeriodTime` etc
+    - JSON keys: `.token0.gracePeriodTime` etc.
+    - TOML keys: `token0.gracePeriodTime` etc.
     - You can set this in your `.env` file for repeatable runs.
 
 ### `just admin-vrl-signal-set-verifier`

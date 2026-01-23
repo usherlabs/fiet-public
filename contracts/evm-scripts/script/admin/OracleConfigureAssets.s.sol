@@ -113,10 +113,12 @@ contract OracleConfigureAssetsScript is AdminBase {
         console.log("ResilientOracle:", resilientOracle);
         console.log("MainOracle:", mainOracle);
         console.log("BoundValidator:", boundValidator);
+        console.log("OracleHelper:", oracleHelper);
 
         require(resilientOracle != address(0), "oracle cfg: resilientOracle=0");
         require(mainOracle != address(0), "oracle cfg: mainOracle=0");
         require(boundValidator != address(0), "oracle cfg: boundValidator=0");
+        require(oracleHelper != address(0), "oracle cfg: oracleHelper=0");
 
         vm.startBroadcast(pk);
 
