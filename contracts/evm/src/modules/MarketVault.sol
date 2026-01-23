@@ -351,8 +351,8 @@ abstract contract MarketVault is IMarketVault, ImmutableState, ImmutableMarketSt
         address recipient
     ) internal {
         // Extract the balance deltas for both currencies
-        // Negative values indicate tokens need to be taken from the vault
-        // Positive values indicate tokens need to be settled to the vault
+        // Positive values indicate tokens need to be taken from the vault
+        // Negative values indicate tokens need to be settled to the vault
         (int128 amount0, int128 amount1) = (balanceDelta.amount0(), balanceDelta.amount1());
 
         // Handle positive delta for currency0: take underlying tokens from vault to recipient
