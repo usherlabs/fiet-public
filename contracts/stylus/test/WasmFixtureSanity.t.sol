@@ -4,7 +4,8 @@ pragma solidity ^0.8.23;
 import "forge-std/Test.sol";
 
 contract WasmFixtureSanityTest is Test {
-    string internal constant FIXTURE = "fixtures/fiet_maker_policy.wasm";
+    string internal constant FIXTURE =
+        "src/fiet-maker-policy/target/wasm32-unknown-unknown/release/fiet_maker_policy.wasm";
 
     function test_fixture_has_no_datacount_section() public {
         bytes memory wasm = vm.readFileBinary(FIXTURE);

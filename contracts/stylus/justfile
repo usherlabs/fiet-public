@@ -105,6 +105,7 @@ stylus_deploy_policy: nitro_wait
   fi
   cargo run --manifest-path tools/deployer/Cargo.toml -- \
     --rpc-url "{{rpc_url}}" \
+    --contract-dir "src/fiet-maker-policy" \
     "${ARGS[@]}" \
     --deployments-path "{{stylus_deployments}}" \
     --contract-key intent-policy \

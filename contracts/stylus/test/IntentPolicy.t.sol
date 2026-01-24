@@ -75,7 +75,7 @@ interface IIntentPolicy {
 
 contract IntentPolicyTest is Test {
     string internal constant WASM_FIXTURE_PATH =
-        "fixtures/fiet_maker_policy.wasm";
+        "src/fiet-maker-policy/target/wasm32-unknown-unknown/release/fiet_maker_policy.wasm";
 
     uint256 internal constant MODULE_TYPE_POLICY = 5;
     uint256 internal constant POLICY_SUCCESS_UINT = 0;

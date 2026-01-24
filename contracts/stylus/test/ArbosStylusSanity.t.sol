@@ -27,7 +27,7 @@ contract ArbosStylusSanityTest is Test {
     // These are copied from arbos-foundry's test fixtures:
     // /Users/ryansoury/dev/arbos-foundry/testdata/fixtures/Stylus/...
     string internal constant FIXTURE_DEFAULT =
-        "fixtures/fiet_maker_policy.wasm";
+        "src/fiet-maker-policy/target/wasm32-unknown-unknown/release/fiet_maker_policy.wasm";
 
     function _bytes4At(
         bytes memory data,
