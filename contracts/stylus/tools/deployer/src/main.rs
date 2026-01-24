@@ -19,8 +19,8 @@ use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 struct Cli {
     /// Directory containing the Stylus contract crate (where `cargo stylus deploy` should be run).
     ///
-    /// In this repo, the contract crate lives at `fiet-maker-policy/`.
-    #[arg(long, default_value = "fiet-maker-policy")]
+    /// In this repo, the contract crate lives under `src/` (eg `src/fiet-maker-policy/`).
+    #[arg(long, default_value = "src/fiet-maker-policy")]
     contract_dir: PathBuf,
 
     /// RPC URL used by `cargo stylus deploy`.
