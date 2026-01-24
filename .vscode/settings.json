@@ -65,9 +65,13 @@
     "security.olympix.detectors.blockRandomness": true,
     "security.olympix.project.includePath": "/contracts",
     "rust-analyzer.showUnlinkedFileNotification": false,
+    "rust-analyzer.workspace.discover": "never",
     "rust-analyzer.linkedProjects": [
+        "contracts/stylus/src/fiet-maker-policy/Cargo.toml",
+        "contracts/stylus/shared/fiet-maker-policy-types/Cargo.toml",
         "contracts/stylus/tools/Cargo.toml",
-        "contracts/stylus/src/fiet-maker-policy/Cargo.toml"
+        "contracts/stylus/tools/deployer/Cargo.toml",
+        "contracts/stylus/tools/fiet-maker-policy-encoder/Cargo.toml"
     ],
     "rust-analyzer.check.command": "clippy",
     "rust-analyzer.check.extraArgs": [
