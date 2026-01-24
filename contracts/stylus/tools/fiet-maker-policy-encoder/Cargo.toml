@@ -1,0 +1,13 @@
+[package]
+name = "fiet-maker-policy-encoder"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+alloy-primitives = { version = "0.8.20" }
+fiet-maker-policy-types = { path = "../../shared/fiet-maker-policy-types" }
+k256 = { version = "0.13", features = ["ecdsa", "sha256"] }
+sha3 = { version = "0.10" }
+
+[dev-dependencies]
+

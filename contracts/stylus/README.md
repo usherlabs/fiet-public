@@ -9,11 +9,11 @@ Arbitrum Stylus program written in Rust using the [stylus-sdk](https://github.co
 
 This workspace hosts the on-chain **“Atomic Revalidation” intent policy** described in `PROPOSAL.md`, exposed as a **Kernel-compatible** ERC-7579 `IPolicy` module (**module type 5**) intended to be used in the **Kernel permissions** pipeline (for example, alongside a PermissionValidator signer).
 
-The core contract crate is `fiet-maker-policy/`. The policy is designed to **fail closed**: if envelope parsing, signature checks, replay protection, program decoding, or on-chain fact acquisition fails, the policy returns a failure code and the UserOperation should not proceed.
+The core contract crate is `src/fiet-maker-policy/`. The policy is designed to **fail closed**: if envelope parsing, signature checks, replay protection, program decoding, or on-chain fact acquisition fails, the policy returns a failure code and the UserOperation should not proceed.
 
-- **On-chain policy entrypoint**: `fiet-maker-policy/src/intent_policy.rs`
-- **Envelope hashing/signing**: `fiet-maker-policy/src/utils/policy_envelope.rs`
-- **Off-chain encoder / shared types**: `off-chain/fiet-maker-policy-encoder/`
+- **On-chain policy entrypoint**: `src/fiet-maker-policy/src/intent_policy.rs`
+- **Envelope hashing/signing**: `src/fiet-maker-policy/src/utils/policy_envelope.rs`
+- **Off-chain encoder / shared types**: `tools/fiet-maker-policy-encoder/`
 - **E2E harness (Bun)**: `e2e/`
 
 ## Unit Testing
@@ -26,15 +26,14 @@ Requires a build from source:
 2. `cd arbos-foundry`
 3. `cargo install --path ./crates/forge --profile release --force --locked --bin arbos-forge`
 
-### Stylus fixture workflow (arbos-forge)
+### Stylus workflow (`arbos-forge`)
 
-The Stylus tests load the policy WASM from `fixtures/fiet_maker_policy.wasm`.
+The Stylus tests load the policy WASM from
+`src/fiet-maker-policy/target/wasm32-unknown-unknown/release/fiet_maker_policy.wasm`.
 
-To refresh the fixture:
+To refresh the WASM artefact:
 
-1. From `contracts/fiet-maker-policy/` run `cargo stylus check`.
-2. Copy `target/wasm32-unknown-unknown/release/fiet_maker_policy.wasm` to
-   `contracts/stylus/fixtures/fiet_maker_policy.wasm`.
+1. From `contracts/stylus/src/fiet-maker-policy/` run `cargo stylus check`.
 
 You can sanity-check the fixture contains no DataCount section (bulk-memory) with:
 
