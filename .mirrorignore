@@ -8,6 +8,9 @@ contracts/evm-scripts
 agents
 foundry.lock
 INTERNAL-README.md
+!contracts/evm/lib
+!contracts/evm/foundry.lock
+!contracts/evm/foundry.toml
 !contracts/evm/src/interfaces/IMMPositionManager
 !contracts/evm/src/interfaces/ILCC
 !contracts/evm/src/interfaces/ICommitmentDescriptor
