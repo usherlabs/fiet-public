@@ -10,6 +10,7 @@ import {
   installIntentPolicy,
   makeClients,
   makeCallData,
+  makeBytes32Id,
   makePermissionId,
   simulateCheckUserOpPolicy,
 } from "./testUtils.js";
@@ -19,7 +20,7 @@ describeE2E("tick bounds validation (e2e)", () => {
     const env = loadEnv();
     const permissionId = makePermissionId("tick-bounds");
     const callData = makeCallData("tick-bounds");
-    const poolId = makePermissionId("pool:tick-bounds") as Hex;
+    const poolId = makeBytes32Id("pool:tick-bounds") as Hex;
 
     await installIntentPolicy({ env, permissionId });
 

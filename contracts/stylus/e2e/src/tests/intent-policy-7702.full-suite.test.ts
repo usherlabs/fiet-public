@@ -9,6 +9,7 @@ import {
   installIntentPolicy,
   makeCallData,
   makePackedUserOp,
+  makeBytes32Id,
   makePermissionId,
   makeClients,
   simulateCheckUserOpPolicy,
@@ -123,7 +124,7 @@ describeE2E("7702 Intent Policy — full-suite (policy-level E2E)", () => {
 
     await installIntentPolicy({ env, permissionId });
 
-    const { publicClient, walletClient } = await makeClients(env);
+    const { publicClient, walletClient, chainId } = await makeClients(env);
     const block = await publicClient.getBlock();
     const deadline = block.timestamp + 3600n;
 
@@ -145,7 +146,7 @@ describeE2E("7702 Intent Policy — full-suite (policy-level E2E)", () => {
     // the policy's storage behaviour. In production, this state change happens during EntryPoint
     // validation when Kernel runs the permission pipeline.
     const envelope0 = await buildSignedEnvelope({
-      env,
+      env: { ...env, chainId },
       smartAccount: env.owner.address,
       permissionId,
       checks: [],
@@ -222,7 +223,7 @@ describeE2E("7702 Intent Policy — full-suite (policy-level E2E)", () => {
     ] as const;
 
     const { walletClient } = await makeClients(env);
-    const poolId = makePermissionId("pool:tick-bounds") as Hex;
+    const poolId = makeBytes32Id("pool:tick-bounds") as Hex;
 
     // Arrange: set the pool tick inside bounds.
     await walletClient.writeContract({

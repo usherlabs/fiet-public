@@ -10,6 +10,7 @@ import {
   installIntentPolicy,
   makeClients,
   makeCallData,
+  makeBytes32Id,
   makePermissionId,
   simulateCheckUserOpPolicy,
 } from "./testUtils.js";
@@ -19,7 +20,7 @@ describeE2E("RfS closed validation (e2e)", () => {
     const env = loadEnv();
     const permissionId = makePermissionId("rfs-closed");
     const callData = makeCallData("rfs-closed");
-    const positionId = makePermissionId("position:rfs-closed") as Hex;
+    const positionId = makeBytes32Id("position:rfs-closed") as Hex;
 
     await installIntentPolicy({ env, permissionId });
 
