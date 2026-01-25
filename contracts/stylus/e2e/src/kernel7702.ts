@@ -13,7 +13,7 @@ import {
 
 import { TestEnv, buildIntentPolicyInitData, buildSignedEnvelope } from "./setup.js";
 import { Check } from "./types.js";
-import { buildFietCallPolicyInitData } from "./policies.js";
+import { buildCallPolicyInitData } from "./policies.js";
 
 // --- Minimal ABIs ---
 
@@ -196,7 +196,7 @@ function encodePermissionEnableData(params: {
 }): Hex {
   const { env, permissionId32 } = params;
 
-  const callPolicyInit = buildFietCallPolicyInitData({
+  const callPolicyInit = buildCallPolicyInitData({
     mmPositionManager: env.mmPositionManager as Address,
     positionManager: env.positionManager as Address,
   });
@@ -211,7 +211,7 @@ function encodePermissionEnableData(params: {
   const callPolicyData = encodePolicyDataBytes22({
     skipUserOp: false,
     skipSignature: false,
-    module: env.fietCallPolicy as Address,
+    module: env.callPolicy as Address,
   });
   const intentPolicyData = encodePolicyDataBytes22({
     skipUserOp: false,

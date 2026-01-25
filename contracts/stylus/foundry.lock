@@ -35,6 +35,9 @@
   "contracts/evm/lib/v4-periphery": {
     "rev": "ad04c9f24a170accf5ea1b2836bbafd514537ca6"
   },
+  "contracts/stylus/lib/kernel": {
+    "rev": "6a098bc8f9a7001fe7ae801368e96a5ee635ddb1"
+  },
   "lib/forge-std": {
     "tag": {
       "name": "v1.14.0",

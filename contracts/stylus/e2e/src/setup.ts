@@ -27,7 +27,7 @@ export interface TestEnv {
   entryPoint: Hex;
   kernelImplementation: Hex;
   multichainSigner: Hex;
-  fietCallPolicy: Hex;
+  callPolicy: Hex;
 }
 
 export function loadEnv(): TestEnv {
@@ -44,7 +44,7 @@ export function loadEnv(): TestEnv {
     "ENTRYPOINT_ADDRESS",
     "KERNEL_IMPLEMENTATION_ADDRESS",
     "MULTICHAIN_SIGNER_ADDRESS",
-    "FIET_CALL_POLICY_ADDRESS",
+    "CALL_POLICY_ADDRESS",
   ] as const;
   for (const key of required) {
     const v = process.env[key];
@@ -79,7 +79,7 @@ export function loadEnv(): TestEnv {
   const entryPoint = process.env.ENTRYPOINT_ADDRESS! as Hex;
   const kernelImplementation = process.env.KERNEL_IMPLEMENTATION_ADDRESS! as Hex;
   const multichainSigner = process.env.MULTICHAIN_SIGNER_ADDRESS! as Hex;
-  const fietCallPolicy = process.env.FIET_CALL_POLICY_ADDRESS! as Hex;
+  const callPolicy = process.env.CALL_POLICY_ADDRESS! as Hex;
 
   const addrVars: Array<[string, Hex]> = [
     ["INTENT_POLICY_ADDRESS", intentPolicy],
@@ -91,7 +91,7 @@ export function loadEnv(): TestEnv {
     ["ENTRYPOINT_ADDRESS", entryPoint],
     ["KERNEL_IMPLEMENTATION_ADDRESS", kernelImplementation],
     ["MULTICHAIN_SIGNER_ADDRESS", multichainSigner],
-    ["FIET_CALL_POLICY_ADDRESS", fietCallPolicy],
+    ["CALL_POLICY_ADDRESS", callPolicy],
   ];
   for (const [name, value] of addrVars) {
     if (!isAddress(value)) {
@@ -116,7 +116,7 @@ export function loadEnv(): TestEnv {
     entryPoint,
     kernelImplementation,
     multichainSigner,
-    fietCallPolicy,
+    callPolicy,
   };
 }
 
