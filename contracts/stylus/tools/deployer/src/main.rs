@@ -47,6 +47,10 @@ struct Cli {
     #[arg(long, default_value = "devnet")]
     network: String,
 
+    /// Print full `cargo stylus deploy` output for debugging.
+    #[arg(long, env = "STYLUS_DEPLOYER_VERBOSE")]
+    verbose: bool,
+
     /// Extra args to pass through to `cargo stylus deploy` (after `--`).
     ///
     /// Example:
@@ -69,8 +73,17 @@ fn run_cargo_stylus_deploy(cli: &Cli) -> Result<(String, Vec<String>, String)> {
     // Example output lines we parse (as shown in the repo README):
     //   Deploying program to address 0x...
     //   Confirmed tx 0x...
-    let re_address = Regex::new(r"Deploying program to address (0x[a-fA-F0-9]{40})")?;
-    let re_tx = Regex::new(r"Confirmed tx (0x[a-fA-F0-9]{64})")?;
+    //
+    // Newer cargo-stylus versions tweak wording, so accept common variants.
+    let re_address_primary = Regex::new(
+        r"(?i)(?:Deploying program to address|Deployed program to address|Deployed contract to address|Contract deployed at|Program deployed at|Deployed code at address)\s*:?\s*(0x[a-fA-F0-9]{40})",
+    )?;
+    // Fallback: look for "address: 0x..." in deploy output.
+    let re_address_fallback = Regex::new(r"(?i)address\s*:?\s*(0x[a-fA-F0-9]{40})")?;
+    let re_any_address = Regex::new(r"0x[a-fA-F0-9]{40}")?;
+    let re_tx = Regex::new(
+        r"(?i)(?:Confirmed tx|deployment tx hash|contract activated and ready onchain with tx hash|activated.*tx hash)\s*:?\s*(0x[a-fA-F0-9]{64})",
+    )?;
 
     let mut cmd = Command::new("cargo");
     cmd.current_dir(&cli.contract_dir);
@@ -103,6 +116,10 @@ fn run_cargo_stylus_deploy(cli: &Cli) -> Result<(String, Vec<String>, String)> {
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     let combined = format!("{stdout}\n{stderr}");
 
+    if cli.verbose {
+        eprintln!("--- cargo stylus deploy output ---\n{combined}\n--- end output ---");
+    }
+
     if !output.status.success() {
         return Err(anyhow!(
             "`cargo stylus deploy` failed (exit {}):\n{}",
@@ -111,12 +128,38 @@ fn run_cargo_stylus_deploy(cli: &Cli) -> Result<(String, Vec<String>, String)> {
         ));
     }
 
-    let address = re_address
-        .captures_iter(&combined)
-        .next()
-        .and_then(|c| c.get(1).map(|m| m.as_str().to_string()))
+    let address = [re_address_primary, re_address_fallback]
+        .iter()
+        .find_map(|re| {
+            re.captures_iter(&combined)
+                .next()
+                .and_then(|c| c.get(1).map(|m| m.as_str().to_string()))
+        })
+        .or_else(|| {
+            // As a last resort, find the first 0x40 in any line mentioning deploy/address.
+            combined.lines().find_map(|line| {
+                let lower = line.to_ascii_lowercase();
+                if lower.contains("deploy") && lower.contains("address") {
+                    re_any_address
+                        .find(line)
+                        .map(|m| m.as_str().to_string())
+                } else {
+                    None
+                }
+            })
+        })
         .ok_or_else(|| {
-            anyhow!("could not parse deployed address from `cargo stylus deploy` output")
+            let trimmed = combined.trim();
+            let max = 4000usize;
+            let snippet = if trimmed.len() > max {
+                &trimmed[..max]
+            } else {
+                trimmed
+            };
+            anyhow!(
+                "could not parse deployed address from `cargo stylus deploy` output. Output (truncated):\n{}",
+                snippet
+            )
         })?;
 
     let tx_hashes: Vec<String> = re_tx

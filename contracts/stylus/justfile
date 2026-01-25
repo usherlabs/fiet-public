@@ -20,7 +20,7 @@ priv_key_path := env_var_or_default("PRIV_KEY_PATH", "")
 pkey := env_var_or_default("PKEY", "")
 
 permission_id := env_var_or_default("PERMISSION_ID", "")
-owner_private_key := env_var_or_default("OWNER_PRIVATE_KEY", "")
+owner_private_key := env_var_or_default("OWNER_PRIVATE_KEY", private_key)
 
 infra_deployments := "deployments/infra.nitro.json"
 stylus_deployments := "deployments/stylus.nitro.json"
@@ -39,6 +39,9 @@ help:
   @echo "  PRIVATE_KEY        - hex bytes32 for Foundry deployments"
   @echo "  OWNER_PRIVATE_KEY  - hex key used by E2E harness"
   @echo "  PERMISSION_ID      - bytes32 permission id (matches your PermissionValidator config)"
+  @echo ""
+  @echo "Convenience:"
+  @echo "  just env_init_permission_id  # write PERMISSION_ID into .env (contracts/stylus/.env)"
   @echo ""
   @echo "For Stylus deploy, provide ONE of:"
   @echo "  PRIV_KEY_PATH      - path to private key file"
@@ -63,12 +66,43 @@ nitro_wait:
   done
   echo "Nitro RPC is up. chainId=$(cast chain-id --rpc-url "${RPC_URL}")"
 
+# --- Local env helpers ---
+
+env_init_permission_id:
+  #!/usr/bin/env bash
+  set -euo pipefail
+
+  ENV_PATH=".env"
+  EXAMPLE_PATH=".env.example"
+
+  if [ ! -f "${ENV_PATH}" ]; then
+    if [ -f "${EXAMPLE_PATH}" ]; then
+      cp "${EXAMPLE_PATH}" "${ENV_PATH}"
+    else
+      : > "${ENV_PATH}"
+    fi
+  fi
+
+  if grep -qE '^[[:space:]]*PERMISSION_ID=' "${ENV_PATH}"; then
+    echo "PERMISSION_ID already set in ${ENV_PATH}"
+    grep -E '^[[:space:]]*PERMISSION_ID=' "${ENV_PATH}" || true
+    exit 0
+  fi
+
+  # Deterministic default permission id (stable across runs). Unique per wallet.
+  PERMISSION_ID="$(cast keccak "fiet-permission-default")"
+
+  printf "\n# bytes32 permission id used by PermissionValidator config\nPERMISSION_ID=%s\n" "${PERMISSION_ID}" >> "${ENV_PATH}"
+  echo "Wrote PERMISSION_ID to ${ENV_PATH}"
+  echo "PERMISSION_ID=${PERMISSION_ID}"
+
 # --- EVM infra (mocks) ---
 
 infra_deploy: nitro_wait
   #!/usr/bin/env bash
   set -euo pipefail
   echo "Deploying Nitro E2E infra mocks -> {{infra_deployments}}"
+  mkdir -p "$(dirname "{{infra_deployments}}")"
   DEPLOYMENTS_PATH="{{infra_deployments}}" \
   forge script script/DeployStylusE2EInfra.s.sol:DeployStylusE2EInfra \
     --rpc-url "{{rpc_url}}" \
@@ -81,6 +115,7 @@ kernel_deploy: nitro_wait
   #!/usr/bin/env bash
   set -euo pipefail
   echo "Deploying Kernel (devnet) -> {{kernel_deployments}}"
+  mkdir -p "$(dirname "{{kernel_deployments}}")"
   DEPLOYMENTS_PATH="{{kernel_deployments}}" \
   forge script script/DeployDevnet.s.sol:DeployDevnet \
     --rpc-url "{{rpc_url}}" \
@@ -97,6 +132,7 @@ stylus_deploy_policy: nitro_wait
     exit 1
   fi
   echo "Deploying Stylus policy -> {{stylus_deployments}}"
+  mkdir -p "$(dirname "{{stylus_deployments}}")"
   ARGS=()
   if [ -n "{{priv_key_path}}" ]; then
     ARGS+=(--private-key-path "{{priv_key_path}}")
@@ -109,7 +145,9 @@ stylus_deploy_policy: nitro_wait
     "${ARGS[@]}" \
     --deployments-path "{{stylus_deployments}}" \
     --contract-key intent-policy \
-    --network nitro
+    --network nitro \
+    --verbose \
+    -- --no-verify
 
 stylus_policy_address:
   #!/usr/bin/env bash
@@ -127,8 +165,13 @@ e2e_write_env:
     exit 1
   fi
   if [ -z "{{owner_private_key}}" ]; then
-    echo "Missing OWNER_PRIVATE_KEY"
-    exit 1
+    if [ -z "{{private_key}}" ]; then
+      echo "Must have either OWNER_PRIVATE_KEY (prioritised in e2e) OR PRIVATE_KEY"
+      exit 1
+    fi
+    owner_private_key="{{owner_private_key}}"
+  else
+    owner_private_key="{{owner_private_key}}"
   fi
 
   INTENT_POLICY_ADDRESS="$(jq -r '.deployments["intent-policy"].address' "{{stylus_deployments}}")"
