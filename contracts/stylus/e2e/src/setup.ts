@@ -134,10 +134,12 @@ export function buildIntentPolicyInitData(params: {
   // - bytes20 liquidityHub
   const data = new Uint8Array(1 + 20 + 20 + 20 + 20);
   data[0] = 1; // version
-  data.set(hexToBytes(pad(params.signer, { size: 40 })), 1);
-  data.set(hexToBytes(pad(params.stateView, { size: 40 })), 21);
-  data.set(hexToBytes(pad(params.vtsOrchestrator, { size: 40 })), 41);
-  data.set(hexToBytes(pad(params.liquidityHub, { size: 40 })), 61);
+  // Note: viem `pad(..., { size })` uses **bytes** (not hex chars).
+  // Addresses are 20 bytes, so each field must be padded to size=20.
+  data.set(hexToBytes(pad(params.signer, { size: 20 })), 1);
+  data.set(hexToBytes(pad(params.stateView, { size: 20 })), 21);
+  data.set(hexToBytes(pad(params.vtsOrchestrator, { size: 20 })), 41);
+  data.set(hexToBytes(pad(params.liquidityHub, { size: 20 })), 61);
   return toHex(data);
 }
 
@@ -164,7 +166,8 @@ export function buildIntentPolicyInstallData(params: {
     liquidityHub: params.liquidityHub,
   });
 
-  const permissionBytes = hexToBytes(pad(params.permissionId, { size: 64 }));
+  // bytes32 permissionId prefix
+  const permissionBytes = hexToBytes(pad(params.permissionId, { size: 32 }));
   const initBytes = hexToBytes(initData);
 
   const out = new Uint8Array(permissionBytes.length + initBytes.length);

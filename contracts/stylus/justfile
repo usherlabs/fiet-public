@@ -192,16 +192,16 @@ e2e_write_env:
   fi
 
   INTENT_POLICY_ADDRESS="$(jq -r '.deployments["intent-policy"].address' "{{stylus_deployments}}")"
-  STATE_VIEW_ADDRESS="$(jq -r '.addrs.STATE_VIEW_ADDRESS' "{{infra_deployments}}")"
-  VTS_ORCHESTRATOR_ADDRESS="$(jq -r '.addrs.VTS_ORCHESTRATOR_ADDRESS' "{{infra_deployments}}")"
-  LIQUIDITY_HUB_ADDRESS="$(jq -r '.addrs.LIQUIDITY_HUB_ADDRESS' "{{infra_deployments}}")"
-  MM_POSITION_MANAGER_ADDRESS="$(jq -r '.addrs.MM_POSITION_MANAGER_ADDRESS' "{{infra_deployments}}")"
-  POSITION_MANAGER_ADDRESS="$(jq -r '.addrs.POSITION_MANAGER_ADDRESS' "{{infra_deployments}}")"
+  STATE_VIEW_ADDRESS="$(jq -r '.STATE_VIEW_ADDRESS' "{{infra_deployments}}")"
+  VTS_ORCHESTRATOR_ADDRESS="$(jq -r '.VTS_ORCHESTRATOR_ADDRESS' "{{infra_deployments}}")"
+  LIQUIDITY_HUB_ADDRESS="$(jq -r '.LIQUIDITY_HUB_ADDRESS' "{{infra_deployments}}")"
+  MM_POSITION_MANAGER_ADDRESS="$(jq -r '.MM_POSITION_MANAGER_ADDRESS' "{{infra_deployments}}")"
+  POSITION_MANAGER_ADDRESS="$(jq -r '.POSITION_MANAGER_ADDRESS' "{{infra_deployments}}")"
 
-  ENTRYPOINT_ADDRESS="$(jq -r '.kernel.ENTRYPOINT_ADDRESS' "{{kernel_deployments}}")"
-  KERNEL_IMPLEMENTATION_ADDRESS="$(jq -r '.kernel.KERNEL_IMPLEMENTATION_ADDRESS' "{{kernel_deployments}}")"
-  MULTICHAIN_SIGNER_ADDRESS="$(jq -r '.kernel.MULTICHAIN_SIGNER_ADDRESS' "{{kernel_deployments}}")"
-  CALL_POLICY_ADDRESS="$(jq -r '.kernel.CALL_POLICY_ADDRESS' "{{kernel_deployments}}")"
+  ENTRYPOINT_ADDRESS="$(jq -r '.ENTRYPOINT_ADDRESS' "{{kernel_deployments}}")"
+  KERNEL_IMPLEMENTATION_ADDRESS="$(jq -r '.KERNEL_IMPLEMENTATION_ADDRESS' "{{kernel_deployments}}")"
+  MULTICHAIN_SIGNER_ADDRESS="$(jq -r '.MULTICHAIN_SIGNER_ADDRESS' "{{kernel_deployments}}")"
+  CALL_POLICY_ADDRESS="$(jq -r '.CALL_POLICY_ADDRESS' "{{kernel_deployments}}")"
 
   printf "RPC_URL=%s\n" "{{rpc_url}}" > "{{e2e_env_path}}"
   printf "CHAIN_ID=%s\n" "{{chain_id}}" >> "{{e2e_env_path}}"
