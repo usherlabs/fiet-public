@@ -12,3 +12,4 @@ INTERNAL-README.md
 !contracts/evm/src/interfaces/ILCC
 !contracts/evm/src/interfaces/ICommitmentDescriptor
 !contracts/evm/src/interfaces/IMinimalLiquidityHub
+.mirrorignore
