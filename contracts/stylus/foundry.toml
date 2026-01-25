@@ -26,6 +26,8 @@ remappings = [
 fs_permissions = [
   { access = "read", path = "./wasm" },
   { access = "read", path = "./fixtures" },
+  { access = "read", path = "./fixture" },
+  { access = "read", path = "./src/fiet-maker-policy/target/wasm32-unknown-unknown/release" },
   { access = "read-write", path = "./deployments" },
 ]
 

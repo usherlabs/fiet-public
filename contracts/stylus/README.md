@@ -18,6 +18,11 @@ The core contract crate is `src/fiet-maker-policy/`. The policy is designed to *
 
 ## Unit Testing
 
+> **Note:**  
+> Unit tests in this policy suite may **fail** due to known pending issues with `arbos-forge` and ArbOS Stylus functionality (see details below).  
+> Some test failures may not reflect actual bugs in the policy code, but rather limitations or bugs in the harness or toolchain.  
+> Please refer to the “Important: `arbos-forge` FAILS - ‘pending/partial’ behaviour (known issue)” section below for guidance on distinguishing harness-level failures from code-level issues.
+
 ### Prerequisite: ArbOS Foundry
 
 Requires a build from source:
@@ -31,9 +36,31 @@ Requires a build from source:
 The Stylus tests load the policy WASM from
 `src/fiet-maker-policy/target/wasm32-unknown-unknown/release/fiet_maker_policy.wasm`.
 
-To refresh the WASM artefact:
+### Important: `arbos-forge` FAILS - “pending/partial” behaviour (known issue)
 
-1. From `contracts/stylus/src/fiet-maker-policy/` run `cargo stylus check`.
+`arbos-forge` (via ArbOS Foundry’s `deployStylusCode` cheatcode) is very useful for quick sanity checks, but it can fail in a way that looks like a _policy bug_ when it is actually a _harness limitation_.
+
+In particular, we have observed a “pending/partial” state where:
+
+- the WASM file on disk is valid (passes `WasmFixtureSanity.t.sol`)
+- deployment appears to succeed
+- but the **first attempted execution** triggers ArbOS validation and fails
+
+Common failure modes look like:
+
+- **Truncated / partial module**: `Validation error: unexpected end-of-file (at offset 0x...)`
+  - This typically indicates the runtime ended up validating a _shorter_ byte stream than the WASM file on disk (eg an embedded/truncated artefact).
+- **Invalid code shape if you manually etch code**: `failed to parse wasm ... reference-types not enabled ...`
+  - ArbOS expects the canonical Stylus program encoding. Naively doing `vm.etch(addr, 0xeff00000 || wasm_bytes)` can produce a byte layout that ArbOS treats as malformed.
+
+Because these failures happen at validation time, they can mask the real semantic errors the unit tests are trying to exercise (install/uninstall, envelope parsing, signature checks, nonce consumption).
+
+**Rule of thumb**: treat `arbos-forge` unit test failures with the above signatures as _harness-level_ until proven otherwise. The Nitro-based E2E suite (`just e2e_test`) is the source of truth for end-to-end Stylus behaviour.
+
+### Refresh the WASM artefact
+
+From `contracts/stylus/src/fiet-maker-policy/` run `cargo stylus check`.
+If you see `can't find crate for core` / target-not-installed errors, install the target once: `rustup target add wasm32-unknown-unknown`
 
 You can sanity-check the fixture contains no DataCount section (bulk-memory) with:
 

@@ -206,22 +206,7 @@ contract MockVTSOrchestrator {
         // Default grace periods (seconds)
         uint256 g0 = c.grace0 == 0 ? 3600 : c.grace0;
         uint256 g1 = c.grace1 == 0 ? 3600 : c.grace1;
-        return (
-            poolId,
-            address(0),
-            address(0),
-            g0,
-            0,
-            0,
-            g0,
-            g1,
-            0,
-            0,
-            g1,
-            0,
-            0,
-            c.isPaused
-        );
+        return (poolId, address(0), address(0), g0, 0, 0, g0, g1, 0, 0, g1, 0, 0, c.isPaused);
     }
 }
 
@@ -243,8 +228,9 @@ contract DeployStylusE2EInfra is Script {
 
         // PositionManager mock: only needs getters (WETH9 + permit2).
         // Use dummy non-zero addresses for return values.
-        MockPositionManager pm =
-            new MockPositionManager(address(0x1111111111111111111111111111111111111111), address(0x2222222222222222222222222222222222222222));
+        MockPositionManager pm = new MockPositionManager(
+            address(0x1111111111111111111111111111111111111111), address(0x2222222222222222222222222222222222222222)
+        );
 
         vm.stopBroadcast();
 

@@ -29,10 +29,7 @@ contract WasmFixtureSanityTest is Test {
         }
     }
 
-    function _readU32Leb(
-        bytes memory data,
-        uint256 offset
-    ) internal pure returns (uint32 value, uint256 next) {
+    function _readU32Leb(bytes memory data, uint256 offset) internal pure returns (uint32 value, uint256 next) {
         uint256 shift = 0;
         uint32 result = 0;
 
