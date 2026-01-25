@@ -99,6 +99,14 @@ interface ILiquidityHub is IBoundRegistry, IMinimalLiquidityHub {
     ) external;
 
     /**
+     * @notice Gets the Market factory for a given two LCC tokens
+     * @param lcc0 The first LCC token address
+     * @param lcc1 The second LCC token address
+     * @return The Market factory
+     */
+    function getFactory(address lcc0, address lcc1) external view returns (IMarketFactory);
+
+    /**
      * @notice Called by MarketVault after taking underlying liquidity from the market to LCC
      * @param lcc The LCC token address
      * @param amount The amount of underlying liquidity taken
@@ -152,4 +160,3 @@ interface ILiquidityHub is IBoundRegistry, IMinimalLiquidityHub {
      */
     function setFactory(address factory, bool enabled) external;
 }
-

@@ -2,7 +2,8 @@ name: Public Mirror
 on:
   push:
     branches:
-      - master
+      - main
+      - develop
 
 jobs:
   mirroring:

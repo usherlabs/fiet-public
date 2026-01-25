@@ -1,33 +1,21 @@
-import { toPermissionValidator } from "@zerodev/permissions";
-import { createKernelAccount } from "@zerodev/sdk";
 import "dotenv/config";
 import {
   Address,
   Hex,
   PrivateKeyAccount,
-  createPublicClient,
-  createWalletClient,
   hexToBytes,
-  http,
   isAddress,
   isHex,
   pad,
   toHex,
 } from "viem";
-import {
-  entryPoint06Address,
-  entryPoint07Address,
-} from "viem/account-abstraction";
 import { privateKeyToAccount } from "viem/accounts";
 import { encodeEnvelope, encodeProgram, signEnvelope } from "./encoder.js";
-import { buildCallPolicy } from "./policies.js";
 import { Check, IntentEnvelope } from "./types.js";
 
 export interface TestEnv {
   rpcUrl: string;
   chainId: bigint;
-  entryPointVersion: "0.7" | "0.6";
-  kernelVersion: string;
   owner: PrivateKeyAccount;
   intentPolicy: Hex;
   permissionId: Hex;
@@ -36,6 +24,10 @@ export interface TestEnv {
   liquidityHub: Hex;
   mmPositionManager: Hex;
   positionManager: Hex;
+  entryPoint: Hex;
+  kernelImplementation: Hex;
+  multichainSigner: Hex;
+  fietCallPolicy: Hex;
 }
 
 export function loadEnv(): TestEnv {
@@ -49,6 +41,10 @@ export function loadEnv(): TestEnv {
     "LIQUIDITY_HUB_ADDRESS",
     "MM_POSITION_MANAGER_ADDRESS",
     "POSITION_MANAGER_ADDRESS",
+    "ENTRYPOINT_ADDRESS",
+    "KERNEL_IMPLEMENTATION_ADDRESS",
+    "MULTICHAIN_SIGNER_ADDRESS",
+    "FIET_CALL_POLICY_ADDRESS",
   ] as const;
   for (const key of required) {
     const v = process.env[key];
@@ -60,17 +56,18 @@ export function loadEnv(): TestEnv {
   }
 
   const chainId = BigInt(process.env.CHAIN_ID ?? "421614"); // default Arbitrum Sepolia
-  const entryPointVersion = (process.env.ENTRYPOINT_VERSION ?? "0.7") as
-    | "0.7"
-    | "0.6";
-  const rpcUrl = process.env.RPC_URL ?? process.env.ZERODEV_RPC;
-  if (!rpcUrl) {
-    throw new Error("Missing env RPC_URL (or legacy ZERODEV_RPC)");
-  }
+  const rpcUrl = process.env.RPC_URL!;
 
   const permissionId = process.env.PERMISSION_ID! as Hex;
   if (!isHex(permissionId, { strict: true }) || permissionId.length !== 66) {
     throw new Error("Invalid env PERMISSION_ID (expected 0x-prefixed 32-byte hex)");
+  }
+  // Kernel v3.3 PermissionId is bytes4; we encode it as bytes32 (bytes4 left-aligned, rest zero).
+  const permissionTail = (`0x${permissionId.slice(10)}`) as Hex;
+  if (permissionTail !== (`0x${"00".repeat(28)}` as Hex)) {
+    throw new Error(
+      "Invalid env PERMISSION_ID (expected bytes4 left-aligned and 28 bytes zero-padded, e.g. 0xdeadbeef0000..00)",
+    );
   }
 
   const intentPolicy = process.env.INTENT_POLICY_ADDRESS! as Hex;
@@ -79,6 +76,10 @@ export function loadEnv(): TestEnv {
   const liquidityHub = process.env.LIQUIDITY_HUB_ADDRESS! as Hex;
   const mmPositionManager = process.env.MM_POSITION_MANAGER_ADDRESS! as Hex;
   const positionManager = process.env.POSITION_MANAGER_ADDRESS! as Hex;
+  const entryPoint = process.env.ENTRYPOINT_ADDRESS! as Hex;
+  const kernelImplementation = process.env.KERNEL_IMPLEMENTATION_ADDRESS! as Hex;
+  const multichainSigner = process.env.MULTICHAIN_SIGNER_ADDRESS! as Hex;
+  const fietCallPolicy = process.env.FIET_CALL_POLICY_ADDRESS! as Hex;
 
   const addrVars: Array<[string, Hex]> = [
     ["INTENT_POLICY_ADDRESS", intentPolicy],
@@ -87,6 +88,10 @@ export function loadEnv(): TestEnv {
     ["LIQUIDITY_HUB_ADDRESS", liquidityHub],
     ["MM_POSITION_MANAGER_ADDRESS", mmPositionManager],
     ["POSITION_MANAGER_ADDRESS", positionManager],
+    ["ENTRYPOINT_ADDRESS", entryPoint],
+    ["KERNEL_IMPLEMENTATION_ADDRESS", kernelImplementation],
+    ["MULTICHAIN_SIGNER_ADDRESS", multichainSigner],
+    ["FIET_CALL_POLICY_ADDRESS", fietCallPolicy],
   ];
   for (const [name, value] of addrVars) {
     if (!isAddress(value)) {
@@ -97,8 +102,6 @@ export function loadEnv(): TestEnv {
   return {
     rpcUrl,
     chainId,
-    entryPointVersion,
-    kernelVersion: process.env.KERNEL_VERSION ?? "3.3",
     owner: privateKeyToAccount(
       (process.env.OWNER_PRIVATE_KEY as Hex) ||
         (process.env.PRIVATE_KEY! as Hex),
@@ -110,74 +113,11 @@ export function loadEnv(): TestEnv {
     liquidityHub,
     mmPositionManager,
     positionManager,
+    entryPoint,
+    kernelImplementation,
+    multichainSigner,
+    fietCallPolicy,
   };
-}
-
-export async function buildKernelClient(env: TestEnv) {
-  const entryPoint =
-    env.entryPointVersion === "0.6"
-      ? { address: entryPoint06Address, version: "0.6" as const }
-      : { address: entryPoint07Address, version: "0.7" as const };
-
-  const publicClient = createPublicClient({
-    transport: http(env.rpcUrl),
-  });
-
-  const walletClient = createWalletClient({
-    account: env.owner,
-    transport: http(env.rpcUrl),
-  });
-
-  // Build CallPolicy restricting targets
-  const callPolicy = buildCallPolicy({
-    mmPositionManager: env.mmPositionManager as Hex,
-    positionManager: env.positionManager as Hex,
-  });
-
-  // Build IntentPolicy init data (version + fact sources).
-  // NOTE: installing this policy requires configuring it inside the PermissionValidator
-  // permission config; this harness scaffolds the init bytes, but the exact SDK wiring
-  // for custom policies depends on your ZeroDev SDK version.
-  const intentPolicyInitData = buildIntentPolicyInitData({
-    signer: env.owner.address,
-    stateView: env.stateView,
-    vtsOrchestrator: env.vtsOrchestrator,
-    liquidityHub: env.liquidityHub,
-  });
-
-  // Permission validator combining signer + policies
-  const permissionValidator = await toPermissionValidator(publicClient, {
-    entryPoint,
-    signer: env.owner as any,
-    kernelVersion: env.kernelVersion as any,
-    // CRITICAL: must match the permission id used by envelope signing and policy storage scoping.
-    permissionId: env.permissionId as any,
-    // Include CallPolicy plus our custom IntentPolicy.
-    //
-    // If your SDK supports custom policies directly, replace this `as any` shape with
-    // the proper helper for your version (e.g. `toCustomPolicy(...)`).
-    policies: [
-      callPolicy,
-      {
-        address: env.intentPolicy,
-        data: intentPolicyInitData,
-      } as any,
-    ],
-  });
-
-  const account = await createKernelAccount(publicClient, {
-    entryPoint,
-    kernelVersion: env.kernelVersion as any,
-    plugins: {
-      sudo: permissionValidator, // Kernel expects sudo validator; our intent validator is at execution path
-    },
-    address: undefined, // allow computed
-  });
-
-  // NOTE: For a pure 7702/no-bundler flow, we deliberately do not construct a bundler/paymaster client.
-  // Use `publicClient` + `walletClient` directly for transactions/calls, and use `account` for Kernel
-  // address derivation and plugin configuration.
-  return { publicClient, walletClient, account, entryPoint };
 }
 
 export function buildIntentPolicyInitData(params: {

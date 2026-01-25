@@ -42,9 +42,9 @@
     }
   },
   "lib/kernel": {
-    "tag": {
-      "name": "v1.0.1",
-      "rev": "e2041f376c970fd451a8ad8177268f106a7faca2"
+    "branch": {
+      "name": "dev",
+      "rev": "6a098bc8f9a7001fe7ae801368e96a5ee635ddb1"
     }
   }
 }

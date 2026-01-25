@@ -38,7 +38,7 @@ help:
   @echo "  RPC_URL            - Nitro RPC (eg http://127.0.0.1:8547)"
   @echo "  PRIVATE_KEY        - hex bytes32 for Foundry deployments"
   @echo "  OWNER_PRIVATE_KEY  - hex key used by E2E harness"
-  @echo "  PERMISSION_ID      - bytes32 permission id (matches your PermissionValidator config)"
+  @echo "  PERMISSION_ID      - bytes32 encoding of Kernel PermissionId (bytes4, left-aligned + zero-padded)"
   @echo ""
   @echo "Convenience:"
   @echo "  just env_init_permission_id  # write PERMISSION_ID into .env (contracts/stylus/.env)"
@@ -89,10 +89,15 @@ env_init_permission_id:
     exit 0
   fi
 
-  # Deterministic default permission id (stable across runs). Unique per wallet.
-  PERMISSION_ID="$(cast keccak "fiet-permission-default")"
+  # Deterministic default permission id (stable across runs).
+  #
+  # Kernel v3.3 PermissionId is bytes4. We encode it as a bytes32 with the bytes4 left-aligned,
+  # and the remaining 28 bytes zeroed, so it round-trips cleanly between Kernel (bytes4) and
+  # the Stylus policy (bytes32).
+  PID32="$(cast keccak "fiet-permission-default")"
+  PERMISSION_ID="${PID32:0:10}$(printf '0%.0s' {1..56})"
 
-  printf "\n# bytes32 permission id used by PermissionValidator config\nPERMISSION_ID=%s\n" "${PERMISSION_ID}" >> "${ENV_PATH}"
+  printf "\n# bytes32 encoding of Kernel PermissionId (bytes4, left-aligned + zero-padded)\nPERMISSION_ID=%s\n" "${PERMISSION_ID}" >> "${ENV_PATH}"
   echo "Wrote PERMISSION_ID to ${ENV_PATH}"
   echo "PERMISSION_ID=${PERMISSION_ID}"
 
@@ -181,6 +186,11 @@ e2e_write_env:
   MM_POSITION_MANAGER_ADDRESS="$(jq -r '.addrs.MM_POSITION_MANAGER_ADDRESS' "{{infra_deployments}}")"
   POSITION_MANAGER_ADDRESS="$(jq -r '.addrs.POSITION_MANAGER_ADDRESS' "{{infra_deployments}}")"
 
+  ENTRYPOINT_ADDRESS="$(jq -r '.kernel.ENTRYPOINT_ADDRESS' "{{kernel_deployments}}")"
+  KERNEL_IMPLEMENTATION_ADDRESS="$(jq -r '.kernel.KERNEL_IMPLEMENTATION_ADDRESS' "{{kernel_deployments}}")"
+  MULTICHAIN_SIGNER_ADDRESS="$(jq -r '.kernel.MULTICHAIN_SIGNER_ADDRESS' "{{kernel_deployments}}")"
+  FIET_CALL_POLICY_ADDRESS="$(jq -r '.kernel.FIET_CALL_POLICY_ADDRESS' "{{kernel_deployments}}")"
+
   printf "RPC_URL=%s\n" "{{rpc_url}}" > "{{e2e_env_path}}"
   printf "CHAIN_ID=%s\n" "{{chain_id}}" >> "{{e2e_env_path}}"
   printf "OWNER_PRIVATE_KEY=%s\n" "{{owner_private_key}}" >> "{{e2e_env_path}}"
@@ -191,6 +201,11 @@ e2e_write_env:
   printf "LIQUIDITY_HUB_ADDRESS=%s\n" "${LIQUIDITY_HUB_ADDRESS}" >> "{{e2e_env_path}}"
   printf "MM_POSITION_MANAGER_ADDRESS=%s\n" "${MM_POSITION_MANAGER_ADDRESS}" >> "{{e2e_env_path}}"
   printf "POSITION_MANAGER_ADDRESS=%s\n" "${POSITION_MANAGER_ADDRESS}" >> "{{e2e_env_path}}"
+
+  printf "ENTRYPOINT_ADDRESS=%s\n" "${ENTRYPOINT_ADDRESS}" >> "{{e2e_env_path}}"
+  printf "KERNEL_IMPLEMENTATION_ADDRESS=%s\n" "${KERNEL_IMPLEMENTATION_ADDRESS}" >> "{{e2e_env_path}}"
+  printf "MULTICHAIN_SIGNER_ADDRESS=%s\n" "${MULTICHAIN_SIGNER_ADDRESS}" >> "{{e2e_env_path}}"
+  printf "FIET_CALL_POLICY_ADDRESS=%s\n" "${FIET_CALL_POLICY_ADDRESS}" >> "{{e2e_env_path}}"
 
   echo "Wrote {{e2e_env_path}}"
 

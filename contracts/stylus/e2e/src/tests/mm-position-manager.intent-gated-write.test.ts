@@ -2,45 +2,45 @@ import { expect, it } from "vitest";
 import {
   Address,
   Hex,
-  concatHex,
   encodeAbiParameters,
   encodeFunctionData,
   keccak256,
 } from "viem";
-import { entryPoint07Abi, toPackedUserOperation } from "viem/account-abstraction";
 
-import { loadEnv, buildKernelClient, buildSignedEnvelope } from "../setup.js";
+import { loadEnv } from "../setup.js";
 import { Opcode } from "../types.js";
 import { describeE2E, makeClients } from "./testUtils.js";
 import { MMPositionManagerABI } from "../abi/mmpm.js";
+import {
+  buildKernelUserOpForTarget,
+  EntryPointV07ABI,
+  KernelViewABI,
+  permissionId32ToPermissionId4,
+  permissionValidationId,
+  signKernelDelegationAuthorization,
+} from "../kernel7702.js";
 
 describeE2E(
-  "MMPositionManager write is gated by Intent Policy (end-to-end UserOp)",
+  "MMPositionManager write is gated by Kernel policies (7702 EOA-as-account)",
   () => {
     it("reverts (no write) when atomic facts fail, succeeds when they pass", async () => {
       const env = loadEnv();
-      const { publicClient, walletClient, account, entryPoint } =
-        await buildKernelClient(env);
+      const { publicClient, walletClient } = await makeClients(env);
 
       /**
        * What this test is proving (end-to-end):
        *
-       * - The on-chain *transaction* we submit is to `EntryPoint.handleOps(...)`.
-       * - The on-chain *state change* we care about is inside `MMPositionManager.modifyLiquidities*`.
-       * - The Intent Policy contract is *not* an executor/routing contract. It is a validator:
-       *   during Kernel validation, PermissionValidator calls `IntentPolicy.checkUserOpPolicy(...)`.
+       * - We submit a tx to `EntryPoint.handleOps(...)`, and the *sender account* is an EOA that has
+       *   been upgraded via **EIP-7702 delegation** to run Kernel code.
+       * - Kernel runs its permission pipeline and aggregates multiple policies:
+       *   - CallPolicy (EVM): allowlist of (target, selector)
+       *   - IntentPolicy (Stylus): atomic facts + envelope replay protection
+       * - On success, the destination contract observes `msg.sender == EOA` (not a separate smart-account address).
        *
        * Why atomicity holds:
-       * - The Intent Policy binds its signed envelope to `keccak256(userOp.callData)` (the Kernel wallet callData).
+       * - The Intent Policy binds its signed envelope to `keccak256(userOp.callData)` (the Kernel `execute(...)` calldata).
        * - It then reads live chain state (via staticcalls) and evaluates the check programme.
        * - Only if those checks pass does EntryPoint proceed to execution.
-       *
-       * msg.sender expectations:
-       * - `EntryPoint.handleOps` is called by a bundler/EOA (tx.sender).
-       * - EntryPoint then calls the *Kernel wallet* to execute the UserOp.
-       * - The Kernel wallet calls `MMPositionManager`, so inside `MMPositionManager` we expect:
-       *     `msg.sender == <Kernel wallet address>`
-       *   (not EntryPoint, and not the Intent Policy).
        *
        * Uniswap v4 callback nuance (production note):
        * - Once MMPositionManager calls `poolManager.unlock`, the PoolManager calls back, so raw `msg.sender`
@@ -52,7 +52,7 @@ describeE2E(
       // This test is only meaningful if:
       // - EntryPoint exists on the chain (we submit handleOps).
       // - MMPositionManager is the infra mock with a `writes()` counter (or a real deployment exposing a similar signal).
-      const epCode = await publicClient.getCode({ address: entryPoint.address });
+      const epCode = await publicClient.getCode({ address: env.entryPoint as Address });
       if (!epCode || epCode === "0x") {
         return;
       }
@@ -62,6 +62,32 @@ describeE2E(
       });
       if (!mmpmCode || mmpmCode === "0x") {
         return;
+      }
+
+      // If the EOA has already been upgraded and permission enabled (eg on a persistent chain),
+      // we can skip enable-mode. For fresh devnets, enable-mode is required to install policies.
+      let enablePermission = true;
+      const eoaCode = await publicClient.getCode({ address: env.owner.address });
+      if (eoaCode && eoaCode !== "0x") {
+        try {
+          const permissionId4 = permissionId32ToPermissionId4(env.permissionId);
+          const vId = permissionValidationId(permissionId4);
+          const cfg = await publicClient.readContract({
+            address: env.owner.address,
+            abi: KernelViewABI,
+            functionName: "validationConfig",
+            args: [vId as any],
+          });
+          // hook address(0) means not installed.
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+          const hook = (cfg as any).hook as Address;
+          if (hook && hook !== "0x0000000000000000000000000000000000000000") {
+            enablePermission = false;
+          }
+        } catch {
+          // treat as not enabled (fresh EOA, or not yet delegated)
+          enablePermission = true;
+        }
       }
 
       const WritesABI = [
@@ -121,14 +147,7 @@ describeE2E(
         functionName: "modifyLiquiditiesWithoutUnlock",
         args: [actions, [...params]],
       });
-
-      // Kernel callData is what the policy binds to.
-      const kernelCallData = await account.encodeCalls([
-        { to: env.mmPositionManager as Address, value: 0n, data: targetCallData },
-      ]);
-
-      const sender = (await account.getAddress()) as Address;
-      const { factory, factoryData } = await account.getFactoryArgs();
+      const sender = env.owner.address as Address;
 
       // Snapshot writes before.
       const before = await publicClient.readContract({
@@ -157,63 +176,43 @@ describeE2E(
       const now = (await publicClient.getBlock()).timestamp;
       const deadline = now + 3600n;
 
-      const envelopeFail = await buildSignedEnvelope({
-        env,
-        smartAccount: sender,
-        checks: [
-          {
-            kind: Opcode.CheckSlot0TickBounds,
-            poolId,
-            min: -100,
-            max: 100,
-          },
-        ],
-        callBundleHash: keccak256(kernelCallData),
-        nonce: 0n,
-        deadline,
+      // Build and submit the failing op via 7702 + Kernel permission pipeline.
+      const { userOp: failOp } = await buildKernelUserOpForTarget({
+          env,
+          sender,
+          target: env.mmPositionManager as Address,
+          data: targetCallData,
+          intentChecks: [
+            {
+              kind: Opcode.CheckSlot0TickBounds,
+              poolId,
+              min: -100,
+              max: 100,
+            },
+          ],
+          intentNonce: 0n,
+          intentDeadline: deadline,
+          enablePermission,
+        });
+      const failAuth = await signKernelDelegationAuthorization({ env, walletClient });
+
+      const failTxData = encodeFunctionData({
+        abi: EntryPointV07ABI,
+        functionName: "handleOps",
+        args: [[failOp], env.owner.address],
       });
 
-      // Sign the UserOp with the PermissionValidator (sudo validator).
-      // Then append policy-local signature slices:
-      // - CallPolicy: no per-op signature, so empty bytes
-      // - IntentPolicy: the signed envelope (must match the policy's parser exactly)
-      //
-      // Note: this packing assumes the PermissionValidator expects `bytes[] policySigs` after the validator signature.
-      // If the upstream contract changes its signature layout, update this encoding accordingly.
-      const baseUserOp = {
-        sender,
-        nonce: await account.getNonce(),
-        callData: kernelCallData,
-        callGasLimit: 2_500_000n,
-        verificationGasLimit: 2_500_000n,
-        preVerificationGas: 150_000n,
-        maxFeePerGas: 1n,
-        maxPriorityFeePerGas: 1n,
-        factory: factory as Address,
-        factoryData: factoryData as Hex,
-        signature: "0x" as Hex,
-      } as const;
-
-      const baseSig = (await account.signUserOperation(baseUserOp as any)) as Hex;
-      const policySigs = encodeAbiParameters(
-        [{ name: "policySigs", type: "bytes[]" }],
-        [["0x", envelopeFail]],
-      ) as Hex;
-      const userOpFail = {
-        ...baseUserOp,
-        signature: concatHex([baseSig, policySigs]),
-      };
-
-      const packedFail = toPackedUserOperation(userOpFail as any);
-
-      await expect(
-        walletClient.writeContract({
-          address: entryPoint.address,
-          abi: entryPoint07Abi,
-          functionName: "handleOps",
-          args: [[packedFail as any], env.owner.address],
-        }),
-      ).rejects.toBeTruthy();
+      const failHash = await walletClient.sendTransaction({
+        to: env.entryPoint as Address,
+        data: failTxData,
+        value: 0n,
+        type: "eip7702",
+        authorizationList: [failAuth],
+      } as any);
+      const failReceipt = await publicClient.waitForTransactionReceipt({
+        hash: failHash,
+      });
+      expect(failReceipt.status).toBe("reverted");
 
       const afterFail = await publicClient.readContract({
         address: env.mmPositionManager as Address,
@@ -238,38 +237,43 @@ describeE2E(
         ],
       });
 
-      const envelopePass = await buildSignedEnvelope({
-        env,
-        smartAccount: sender,
-        checks: [
-          {
-            kind: Opcode.CheckSlot0TickBounds,
-            poolId,
-            min: -100,
-            max: 100,
-          },
-        ],
-        callBundleHash: keccak256(kernelCallData),
-        nonce: 0n,
-        deadline,
-      });
+      const { userOp: passOp } = await buildKernelUserOpForTarget({
+          env,
+          sender,
+          target: env.mmPositionManager as Address,
+          data: targetCallData,
+          intentChecks: [
+            {
+              kind: Opcode.CheckSlot0TickBounds,
+              poolId,
+              min: -100,
+              max: 100,
+            },
+          ],
+          intentNonce: 0n,
+          intentDeadline: deadline,
+          // If we successfully enabled above, we must not enable again.
+          enablePermission: false,
+        });
+      const passAuth = await signKernelDelegationAuthorization({ env, walletClient });
 
-      const policySigsPass = encodeAbiParameters(
-        [{ name: "policySigs", type: "bytes[]" }],
-        [["0x", envelopePass]],
-      ) as Hex;
-      const userOpPass = {
-        ...baseUserOp,
-        signature: concatHex([baseSig, policySigsPass]),
-      };
-      const packedPass = toPackedUserOperation(userOpPass as any);
-
-      await walletClient.writeContract({
-        address: entryPoint.address,
-        abi: entryPoint07Abi,
+      const passTxData = encodeFunctionData({
+        abi: EntryPointV07ABI,
         functionName: "handleOps",
-        args: [[packedPass as any], env.owner.address],
+        args: [[passOp], env.owner.address],
       });
+
+      const passHash = await walletClient.sendTransaction({
+        to: env.entryPoint as Address,
+        data: passTxData,
+        value: 0n,
+        type: "eip7702",
+        authorizationList: [passAuth],
+      } as any);
+      const passReceipt = await publicClient.waitForTransactionReceipt({
+        hash: passHash,
+      });
+      expect(passReceipt.status).toBe("success");
 
       const afterPass = await publicClient.readContract({
         address: env.mmPositionManager as Address,
@@ -278,14 +282,14 @@ describeE2E(
       });
       expect(afterPass).toBe(before + 1n);
 
-      // Explicitly assert the “caller identity” property: MMPositionManager observed the Kernel wallet
-      // as its caller when the write happened.
+      // Explicitly assert the “caller identity” property: MMPositionManager observed the EOA
+      // as its caller when the write happened (because the EOA is delegated to Kernel via 7702).
       const lastSender = await publicClient.readContract({
         address: env.mmPositionManager as Address,
         abi: LastSenderABI,
         functionName: "lastSender",
       });
-      expect(lastSender).toBe(sender);
+      expect(lastSender).toBe(env.owner.address);
     });
   },
 );
