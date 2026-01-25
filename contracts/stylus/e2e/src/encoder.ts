@@ -8,38 +8,82 @@ import {
 } from "viem";
 import { Check, CompOp, IntentEnvelope, Opcode } from "./types.js";
 
-// Helpers to write big-endian integers
-function beBytes(value: bigint, size: number): Uint8Array {
-  const hex = pad(toHex(value), { size });
-  return hexToBytes(hex);
-}
-
-function beU64(value: bigint): Uint8Array {
-  return beBytes(value, 32).slice(24); // take last 8 bytes
-}
-
-function beU32(value: number): Uint8Array {
-  const hex = pad(toHex(BigInt(value)), { size: 8 });
-  return hexToBytes(hex).slice(4);
+// Helpers to write big-endian integers.
+// These must exactly match the Rust decoder:
+// - u16: 2 bytes
+// - u64: 8 bytes
+// - i32: 4 bytes (two's complement)
+// - u128: 16 bytes
+// - u256 / b32: 32 bytes
+function beUnsigned(value: bigint, size: number): Uint8Array {
+  if (value < 0n) {
+    throw new Error(`beUnsigned: negative value ${value} (size=${size})`);
+  }
+  const max = 1n << BigInt(size * 8);
+  if (value >= max) {
+    throw new Error(`beUnsigned: value ${value} overflows ${size} bytes`);
+  }
+  const out = new Uint8Array(size);
+  let v = value;
+  for (let i = size - 1; i >= 0; i--) {
+    out[i] = Number(v & 0xffn);
+    v >>= 8n;
+  }
+  return out;
 }
 
 function beU16(value: number): Uint8Array {
-  const hex = pad(toHex(BigInt(value)), { size: 4 });
-  return hexToBytes(hex).slice(6);
+  if (!Number.isInteger(value) || value < 0 || value > 0xffff) {
+    throw new Error(`beU16: invalid u16 ${value}`);
+  }
+  return beUnsigned(BigInt(value), 2);
+}
+
+function beU32(value: number): Uint8Array {
+  if (!Number.isInteger(value) || value < 0 || value > 0xffff_ffff) {
+    throw new Error(`beU32: invalid u32 ${value}`);
+  }
+  return beUnsigned(BigInt(value), 4);
+}
+
+function beU64(value: bigint): Uint8Array {
+  return beUnsigned(value, 8);
+}
+
+function beI32(value: number): Uint8Array {
+  if (!Number.isInteger(value)) {
+    throw new Error(`beI32: non-integer ${value}`);
+  }
+  if (value < -0x8000_0000 || value > 0x7fff_ffff) {
+    throw new Error(`beI32: out of range i32 ${value}`);
+  }
+  const asU32 = value < 0 ? BigInt(value) + (1n << 32n) : BigInt(value);
+  return beUnsigned(asU32, 4);
+}
+
+function beU128(value: bigint): Uint8Array {
+  return beUnsigned(value, 16);
+}
+
+function beU256(value: bigint): Uint8Array {
+  return beUnsigned(value, 32);
 }
 
 function writeAddress(addr: Address): Uint8Array {
-  return hexToBytes(pad(addr, { size: 40 }));
+  // viem `pad(..., { size })` uses bytes.
+  return hexToBytes(pad(addr, { size: 20 }));
 }
 
 function writeB32(hex: Hex): Uint8Array {
-  const padded = pad(hex, { size: 64 });
+  // viem `pad(..., { size })` uses bytes.
+  const padded = pad(hex, { size: 32 });
   return hexToBytes(padded);
 }
 
 function writeSelector(sel: Hex): Uint8Array {
-  const padded = pad(sel, { size: 8 });
-  return hexToBytes(padded).slice(28);
+  // viem `pad(..., { size })` uses bytes.
+  const padded = pad(sel, { size: 4 });
+  return hexToBytes(padded);
 }
 
 function keccakBytes(bytes: Uint8Array): Hex {
@@ -58,7 +102,7 @@ export function encodeProgram(checks: Check[]): Uint8Array {
       }
       case Opcode.CheckNonce: {
         chunks.push(new Uint8Array([Opcode.CheckNonce]));
-        chunks.push(beBytes(c.expected, 32));
+        chunks.push(beU256(c.expected));
         break;
       }
       case Opcode.CheckCallBundleHash: {
@@ -69,31 +113,31 @@ export function encodeProgram(checks: Check[]): Uint8Array {
       case Opcode.CheckTokenAmountLte: {
         chunks.push(new Uint8Array([Opcode.CheckTokenAmountLte]));
         chunks.push(writeAddress(c.token));
-        chunks.push(beBytes(c.max, 32));
+        chunks.push(beU256(c.max));
         break;
       }
       case Opcode.CheckNativeValueLte: {
         chunks.push(new Uint8Array([Opcode.CheckNativeValueLte]));
-        chunks.push(beBytes(c.max, 32));
+        chunks.push(beU256(c.max));
         break;
       }
       case Opcode.CheckLiquidityDeltaLte: {
         chunks.push(new Uint8Array([Opcode.CheckLiquidityDeltaLte]));
-        chunks.push(beBytes(c.max, 16));
+        chunks.push(beU128(c.max));
         break;
       }
       case Opcode.CheckSlot0TickBounds: {
         chunks.push(new Uint8Array([Opcode.CheckSlot0TickBounds]));
         chunks.push(writeB32(c.poolId));
-        chunks.push(beBytes(BigInt(c.min), 4));
-        chunks.push(beBytes(BigInt(c.max), 4));
+        chunks.push(beI32(c.min));
+        chunks.push(beI32(c.max));
         break;
       }
       case Opcode.CheckSlot0SqrtPriceBounds: {
         chunks.push(new Uint8Array([Opcode.CheckSlot0SqrtPriceBounds]));
         chunks.push(writeB32(c.poolId));
-        chunks.push(beBytes(c.min, 32));
-        chunks.push(beBytes(c.max, 32));
+        chunks.push(beU256(c.min));
+        chunks.push(beU256(c.max));
         break;
       }
       case Opcode.CheckRfsClosed: {
@@ -105,27 +149,27 @@ export function encodeProgram(checks: Check[]): Uint8Array {
         chunks.push(new Uint8Array([Opcode.CheckQueueLte]));
         chunks.push(writeAddress(c.lcc));
         chunks.push(writeAddress(c.owner));
-        chunks.push(beBytes(c.max, 32));
+        chunks.push(beU256(c.max));
         break;
       }
       case Opcode.CheckReserveGte: {
         chunks.push(new Uint8Array([Opcode.CheckReserveGte]));
         chunks.push(writeAddress(c.lcc));
-        chunks.push(beBytes(c.min, 32));
+        chunks.push(beU256(c.min));
         break;
       }
       case Opcode.CheckSettledGte: {
         chunks.push(new Uint8Array([Opcode.CheckSettledGte]));
         chunks.push(writeB32(c.positionId));
-        chunks.push(beBytes(c.minAmount0, 32));
-        chunks.push(beBytes(c.minAmount1, 32));
+        chunks.push(beU256(c.minAmount0));
+        chunks.push(beU256(c.minAmount1));
         break;
       }
       case Opcode.CheckCommitmentDeficitLte: {
         chunks.push(new Uint8Array([Opcode.CheckCommitmentDeficitLte]));
         chunks.push(writeB32(c.positionId));
-        chunks.push(beBytes(c.maxDeficit0, 32));
-        chunks.push(beBytes(c.maxDeficit1, 32));
+        chunks.push(beU256(c.maxDeficit0));
+        chunks.push(beU256(c.maxDeficit1));
         break;
       }
       case Opcode.CheckGracePeriodGte: {
@@ -142,7 +186,7 @@ export function encodeProgram(checks: Check[]): Uint8Array {
         chunks.push(beU16(argBytes.length));
         chunks.push(argBytes);
         chunks.push(new Uint8Array([c.op]));
-        chunks.push(beBytes(c.rhs, 32));
+        chunks.push(beU256(c.rhs));
         break;
       }
       default:
@@ -173,7 +217,7 @@ export function encodeProgram(checks: Check[]): Uint8Array {
 export function encodeEnvelope(envelope: IntentEnvelope, signature: Uint8Array): Hex {
   const parts: Uint8Array[] = [];
   parts.push(beU16(envelope.version));
-  parts.push(beBytes(envelope.nonce, 32));
+  parts.push(beU256(envelope.nonce));
   parts.push(beU64(envelope.deadline));
   parts.push(writeB32(envelope.callBundleHash));
   parts.push(beU32(envelope.programBytes.length));

@@ -10,6 +10,7 @@ import {
   installIntentPolicy,
   makeClients,
   makeCallData,
+  makeBytes32Id,
   makePermissionId,
   simulateCheckUserOpPolicy,
 } from "./testUtils.js";
@@ -19,8 +20,8 @@ describeE2E("grace period remaining validation (e2e)", () => {
     const env = loadEnv();
     const permissionId = makePermissionId("grace-period");
     const callData = makeCallData("grace-period");
-    const positionId = makePermissionId("position:grace-period") as Hex;
-    const poolId = makePermissionId("pool:grace-period") as Hex;
+    const positionId = makeBytes32Id("position:grace-period") as Hex;
+    const poolId = makeBytes32Id("pool:grace-period") as Hex;
 
     await installIntentPolicy({ env, permissionId });
 

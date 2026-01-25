@@ -19,6 +19,18 @@ describeE2E("policy aggregation: CallPolicy can block even when IntentPolicy pas
 
     const epCode = await publicClient.getCode({ address: env.entryPoint as Address });
     if (!epCode || epCode === "0x") return;
+    // Some devnets may deploy a non-standard EntryPoint at `ENTRYPOINT_ADDRESS`.
+    // This E2E requires the v0.7 interface (at minimum `getNonce` + `handleOps`).
+    try {
+      await publicClient.readContract({
+        address: env.entryPoint as Address,
+        abi: EntryPointV07ABI,
+        functionName: "getNonce",
+        args: [env.owner.address, 0n],
+      });
+    } catch {
+      return;
+    }
     const svCode = await publicClient.getCode({ address: env.stateView as Address });
     if (!svCode || svCode === "0x") return;
 

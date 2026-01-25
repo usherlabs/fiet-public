@@ -56,6 +56,18 @@ describeE2E(
       if (!epCode || epCode === "0x") {
         return;
       }
+      // Some devnets may deploy a non-standard EntryPoint at `ENTRYPOINT_ADDRESS`.
+      // This E2E requires the v0.7 interface (at minimum `getNonce` + `handleOps`).
+      try {
+        await publicClient.readContract({
+          address: env.entryPoint as Address,
+          abi: EntryPointV07ABI,
+          functionName: "getNonce",
+          args: [env.owner.address, 0n],
+        });
+      } catch {
+        return;
+      }
 
       const mmpmCode = await publicClient.getCode({
         address: env.mmPositionManager as Address,

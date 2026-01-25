@@ -24,6 +24,26 @@ export const POLICY_FAILED = 1n;
 
 const ZERO_BYTES32 = (`0x${"00".repeat(32)}`) as Hex;
 
+const ALREADY_INITIALIZED_SELECTOR = "0x93360fbf";
+const NOT_INITIALIZED_SELECTOR = "0xf91bd6f1";
+
+function hexToU8Array(hex: Hex): number[] {
+  // Stylus ABI represents `Vec<u8>` as `uint8[]`.
+  return Array.from(toBytes(hex));
+}
+
+function hasRevertSelector(err: unknown, selector: string): boolean {
+  const e = err as any;
+  const sig: string | undefined =
+    e?.signature ??
+    e?.cause?.signature ??
+    (typeof e?.data === "string" ? e.data.slice(0, 10) : undefined) ??
+    (typeof e?.cause?.data === "string" ? e.cause.data.slice(0, 10) : undefined) ??
+    (typeof e?.raw === "string" ? e.raw.slice(0, 10) : undefined) ??
+    (typeof e?.cause?.raw === "string" ? e.cause.raw.slice(0, 10) : undefined);
+  return typeof sig === "string" && sig.toLowerCase() === selector.toLowerCase();
+}
+
 /**
  * Run an E2E suite only when the `.env` required by `loadEnv()` is present.
  *
@@ -41,9 +61,17 @@ export function describeE2E(name: string, fn: () => void) {
   }
 }
 
-export function makePermissionId(label: string): Hex {
+export function makeBytes32Id(label: string): Hex {
   // Deterministic bytes32 for reproducible tests.
   return keccak256(toBytes(`fiet-e2e:${label}`));
+}
+
+export function makePermissionId(label: string): Hex {
+  // Kernel v3.3 PermissionId is bytes4; we encode it as bytes32 (bytes4 left-aligned, rest zero).
+  // This matches the expectation enforced by `loadEnv()` (and by on-chain policy logic).
+  const full = makeBytes32Id(`permission:${label}`);
+  const bytes4 = full.slice(0, 10); // "0x" + 8 hex chars
+  return (`${bytes4}${"00".repeat(28)}`) as Hex;
 }
 
 export function makeCallData(label: string): Hex {
@@ -61,19 +89,28 @@ export function makePackedUserOp(params: {
   return {
     sender: params.sender,
     nonce: 0n,
-    initCode: "0x",
-    callData: params.callData,
+    initCode: [] as const,
+    callData: hexToU8Array(params.callData),
     accountGasLimits: ZERO_BYTES32,
     preVerificationGas: 0n,
     gasFees: ZERO_BYTES32,
-    paymasterAndData: "0x",
-    signature: params.signature,
+    paymasterAndData: [] as const,
+    signature: hexToU8Array(params.signature),
   } as const;
 }
 
 export async function makeClients(env: TestEnv) {
+  const transport = http(env.rpcUrl);
+
+  // Always resolve chain id from RPC to avoid stale/mismatched `.env` values.
+  // (EIP-712 signatures must match `chainid()` on-chain.)
+  const probeClient = createPublicClient({
+    transport,
+  });
+  const chainId = await probeClient.getChainId();
+
   const chain = {
-    id: Number(env.chainId),
+    id: Number(chainId),
     name: "fiet-e2e",
     nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
     rpcUrls: { default: { http: [env.rpcUrl] } },
@@ -81,14 +118,14 @@ export async function makeClients(env: TestEnv) {
 
   const publicClient = createPublicClient({
     chain,
-    transport: http(env.rpcUrl),
+    transport,
   });
   const walletClient = createWalletClient({
     account: env.owner,
     chain,
-    transport: http(env.rpcUrl),
+    transport,
   });
-  return { publicClient, walletClient };
+  return { publicClient, walletClient, chainId: BigInt(chainId) };
 }
 
 export async function installIntentPolicy(params: {
@@ -98,6 +135,26 @@ export async function installIntentPolicy(params: {
   const { env, permissionId } = params;
   const { walletClient } = await makeClients(env);
 
+  // Make installs idempotent across repeated local test runs on the same devnet.
+  // If the `(wallet, permissionId)` instance already exists, remove it first.
+  const uninstallData = buildIntentPolicyInstallData({
+    permissionId,
+    signer: env.owner.address,
+    stateView: env.stateView,
+    vtsOrchestrator: env.vtsOrchestrator,
+    liquidityHub: env.liquidityHub,
+  });
+  try {
+    await walletClient.writeContract({
+      address: env.intentPolicy,
+      abi: IntentPolicyABI,
+      functionName: "onUninstall",
+      args: [hexToU8Array(uninstallData)],
+    });
+  } catch (err) {
+    if (!hasRevertSelector(err, NOT_INITIALIZED_SELECTOR)) throw err;
+  }
+
   const data = buildIntentPolicyInstallData({
     permissionId,
     signer: env.owner.address,
@@ -106,12 +163,17 @@ export async function installIntentPolicy(params: {
     liquidityHub: env.liquidityHub,
   });
 
-  return walletClient.writeContract({
-    address: env.intentPolicy,
-    abi: IntentPolicyABI,
-    functionName: "onInstall",
-    args: [data],
-  });
+  try {
+    return await walletClient.writeContract({
+      address: env.intentPolicy,
+      abi: IntentPolicyABI,
+      functionName: "onInstall",
+      args: [hexToU8Array(data)],
+    });
+  } catch (err) {
+    if (hasRevertSelector(err, ALREADY_INITIALIZED_SELECTOR)) return "0x" as Hex;
+    throw err;
+  }
 }
 
 export async function uninstallIntentPolicy(params: {
@@ -135,7 +197,7 @@ export async function uninstallIntentPolicy(params: {
     address: env.intentPolicy,
     abi: IntentPolicyABI,
     functionName: "onUninstall",
-    args: [data],
+    args: [hexToU8Array(data)],
   });
 }
 
@@ -164,12 +226,13 @@ export async function simulateCheckUserOpPolicy(params: {
     callBundleHashOverride,
   } = params;
 
-  const { publicClient } = await makeClients(env);
+  const { publicClient, chainId } = await makeClients(env);
 
-  const signingEnv =
+  const signingEnvBase =
     envelopeSignerPrivateKey != null
       ? { ...env, owner: privateKeyToAccount(envelopeSignerPrivateKey) }
       : env;
+  const signingEnv = { ...signingEnvBase, chainId };
 
   const callBundleHash = (callBundleHashOverride ?? keccak256(callData)) as Hex;
 
