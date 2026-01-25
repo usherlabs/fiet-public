@@ -253,7 +253,7 @@ export async function simulateCheckUserOpPolicy(params: {
   });
 
   const sim = await publicClient.simulateContract({
-    account: env.owner, // msg.sender (the "wallet" in policy storage) for this eth_call context
+    account: wallet, // msg.sender should match the userOp sender in this simulation context
     address: env.intentPolicy,
     abi: IntentPolicyABI,
     functionName: "checkUserOpPolicy",
