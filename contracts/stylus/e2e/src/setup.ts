@@ -1,10 +1,21 @@
 import { toPermissionValidator } from "@zerodev/permissions";
-import {
-  createKernelAccount,
-} from "@zerodev/sdk";
+import { createKernelAccount } from "@zerodev/sdk";
 import "dotenv/config";
-import { Address, Hex, PrivateKeyAccount, createPublicClient, createWalletClient, hexToBytes, http, pad, toHex } from "viem";
-import { entryPoint06Address, entryPoint07Address } from "viem/account-abstraction";
+import {
+  Address,
+  Hex,
+  PrivateKeyAccount,
+  createPublicClient,
+  createWalletClient,
+  hexToBytes,
+  http,
+  pad,
+  toHex,
+} from "viem";
+import {
+  entryPoint06Address,
+  entryPoint07Address,
+} from "viem/account-abstraction";
 import { privateKeyToAccount } from "viem/accounts";
 import { encodeEnvelope, encodeProgram, signEnvelope } from "./encoder.js";
 import { buildCallPolicy } from "./policies.js";
@@ -44,7 +55,9 @@ export function loadEnv(): TestEnv {
   }
 
   const chainId = BigInt(process.env.CHAIN_ID ?? "421614"); // default Arbitrum Sepolia
-  const entryPointVersion = (process.env.ENTRYPOINT_VERSION ?? "0.7") as "0.7" | "0.6";
+  const entryPointVersion = (process.env.ENTRYPOINT_VERSION ?? "0.7") as
+    | "0.7"
+    | "0.6";
   const rpcUrl = process.env.RPC_URL ?? process.env.ZERODEV_RPC;
   if (!rpcUrl) {
     throw new Error("Missing env RPC_URL (or legacy ZERODEV_RPC)");
@@ -55,7 +68,10 @@ export function loadEnv(): TestEnv {
     chainId,
     entryPointVersion,
     kernelVersion: process.env.KERNEL_VERSION ?? "3.3",
-    owner: privateKeyToAccount(process.env.OWNER_PRIVATE_KEY! as Hex),
+    owner: privateKeyToAccount(
+      (process.env.OWNER_PRIVATE_KEY as Hex) ||
+        (process.env.PRIVATE_KEY! as Hex),
+    ),
     intentPolicy: process.env.INTENT_POLICY_ADDRESS! as Hex,
     permissionId: process.env.PERMISSION_ID! as Hex,
     stateView: process.env.STATE_VIEW_ADDRESS! as Hex,
@@ -181,4 +197,3 @@ export async function buildSignedEnvelope(opts: {
 
   return encodeEnvelope(envelope, signature);
 }
-
