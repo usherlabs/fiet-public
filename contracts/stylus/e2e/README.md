@@ -4,7 +4,9 @@ This package is intended to be run with **Bun**.
 
 ## Environment
 
-Create a `.env` file with:
+You usually do **not** need to hand-write this file: `just e2e_write_env` (or `just bootstrap`) generates `contracts/stylus/e2e/.env` from the deployment manifests under `contracts/stylus/deployments/`.
+
+If you _do_ want to create a `.env` manually, it must include:
 
 - `RPC_URL`
 - `OWNER_PRIVATE_KEY`
@@ -18,7 +20,7 @@ Create a `.env` file with:
 - `ENTRYPOINT_ADDRESS`
 - `KERNEL_IMPLEMENTATION_ADDRESS` (7702 delegation target)
 - `MULTICHAIN_SIGNER_ADDRESS`
-- `FIET_CALL_POLICY_ADDRESS`
+- `CALL_POLICY_ADDRESS` (audited Kernel CallPolicy)
 
 ## Install
 
@@ -50,6 +52,13 @@ just bootstrap
 # 3) Run tests
 just e2e_test
 ```
+
+## Arbitrum Sepolia (notes)
+
+- `EntryPoint v0.7` is typically available at the canonical address; when deploying Kernel modules for Sepolia, set `USE_CANONICAL_ENTRYPOINT=true`.
+- If you want separate deployment manifests per network, override the paths used by `just`:
+  - `KERNEL_DEPLOYMENTS_PATH=deployments/kernel.sepolia.json`
+  - `INFRA_DEPLOYMENTS_PATH=...` / `STYLUS_DEPLOYMENTS_PATH=...` as appropriate for your Sepolia setup
 
 ## Typecheck
 

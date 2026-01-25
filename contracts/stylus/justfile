@@ -22,10 +22,16 @@ pkey := env_var_or_default("PKEY", "")
 permission_id := env_var_or_default("PERMISSION_ID", "")
 owner_private_key := env_var_or_default("OWNER_PRIVATE_KEY", private_key)
 
-infra_deployments := "deployments/infra.nitro.json"
-stylus_deployments := "deployments/stylus.nitro.json"
-kernel_deployments := "deployments/kernel.nitro.json"
-e2e_env_path := "e2e/.env"
+# Deployment manifests (defaults are Nitro devnet).
+# Override via env when targeting other networks (eg Arbitrum Sepolia):
+# - INFRA_DEPLOYMENTS_PATH
+# - STYLUS_DEPLOYMENTS_PATH
+# - KERNEL_DEPLOYMENTS_PATH
+# - E2E_ENV_PATH
+infra_deployments := env_var_or_default("INFRA_DEPLOYMENTS_PATH", "deployments/infra.nitro.json")
+stylus_deployments := env_var_or_default("STYLUS_DEPLOYMENTS_PATH", "deployments/stylus.nitro.json")
+kernel_deployments := env_var_or_default("KERNEL_DEPLOYMENTS_PATH", "deployments/kernel.nitro.json")
+e2e_env_path := env_var_or_default("E2E_ENV_PATH", "e2e/.env")
 
 [private]
 default:
@@ -39,6 +45,12 @@ help:
   @echo "  PRIVATE_KEY        - hex bytes32 for Foundry deployments"
   @echo "  OWNER_PRIVATE_KEY  - hex key used by E2E harness"
   @echo "  PERMISSION_ID      - bytes32 encoding of Kernel PermissionId (bytes4, left-aligned + zero-padded)"
+  @echo ""
+  @echo "Optional env (override default deployment paths):"
+  @echo "  INFRA_DEPLOYMENTS_PATH   - defaults to deployments/infra.nitro.json"
+  @echo "  STYLUS_DEPLOYMENTS_PATH  - defaults to deployments/stylus.nitro.json"
+  @echo "  KERNEL_DEPLOYMENTS_PATH  - defaults to deployments/kernel.nitro.json"
+  @echo "  E2E_ENV_PATH             - defaults to e2e/.env"
   @echo ""
   @echo "Convenience:"
   @echo "  just env_init_permission_id  # write PERMISSION_ID into .env (contracts/stylus/.env)"
@@ -189,7 +201,7 @@ e2e_write_env:
   ENTRYPOINT_ADDRESS="$(jq -r '.kernel.ENTRYPOINT_ADDRESS' "{{kernel_deployments}}")"
   KERNEL_IMPLEMENTATION_ADDRESS="$(jq -r '.kernel.KERNEL_IMPLEMENTATION_ADDRESS' "{{kernel_deployments}}")"
   MULTICHAIN_SIGNER_ADDRESS="$(jq -r '.kernel.MULTICHAIN_SIGNER_ADDRESS' "{{kernel_deployments}}")"
-  FIET_CALL_POLICY_ADDRESS="$(jq -r '.kernel.FIET_CALL_POLICY_ADDRESS' "{{kernel_deployments}}")"
+  CALL_POLICY_ADDRESS="$(jq -r '.kernel.CALL_POLICY_ADDRESS' "{{kernel_deployments}}")"
 
   printf "RPC_URL=%s\n" "{{rpc_url}}" > "{{e2e_env_path}}"
   printf "CHAIN_ID=%s\n" "{{chain_id}}" >> "{{e2e_env_path}}"
@@ -205,7 +217,7 @@ e2e_write_env:
   printf "ENTRYPOINT_ADDRESS=%s\n" "${ENTRYPOINT_ADDRESS}" >> "{{e2e_env_path}}"
   printf "KERNEL_IMPLEMENTATION_ADDRESS=%s\n" "${KERNEL_IMPLEMENTATION_ADDRESS}" >> "{{e2e_env_path}}"
   printf "MULTICHAIN_SIGNER_ADDRESS=%s\n" "${MULTICHAIN_SIGNER_ADDRESS}" >> "{{e2e_env_path}}"
-  printf "FIET_CALL_POLICY_ADDRESS=%s\n" "${FIET_CALL_POLICY_ADDRESS}" >> "{{e2e_env_path}}"
+  printf "CALL_POLICY_ADDRESS=%s\n" "${CALL_POLICY_ADDRESS}" >> "{{e2e_env_path}}"
 
   echo "Wrote {{e2e_env_path}}"
 
