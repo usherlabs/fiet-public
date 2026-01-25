@@ -6,13 +6,10 @@ import "forge-std/Test.sol";
 /// Minimal interface for ArbOs Foundry's Stylus deploy cheatcode.
 /// Ref: https://github.com/iosiro/arbos-foundry
 interface DeployStylusCodeCheatcodes {
-    function deployStylusCode(
-        string calldata artifactPath
-    ) external returns (address deployedAddress);
-    function deployStylusCode(
-        string calldata artifactPath,
-        bytes calldata constructorArgs
-    ) external returns (address deployedAddress);
+    function deployStylusCode(string calldata artifactPath) external returns (address deployedAddress);
+    function deployStylusCode(string calldata artifactPath, bytes calldata constructorArgs)
+        external
+        returns (address deployedAddress);
 }
 
 interface TestContract {
@@ -29,10 +26,7 @@ contract ArbosStylusSanityTest is Test {
     string internal constant FIXTURE_DEFAULT =
         "src/fiet-maker-policy/target/wasm32-unknown-unknown/release/fiet_maker_policy.wasm";
 
-    function _bytes4At(
-        bytes memory data,
-        uint256 offset
-    ) internal pure returns (bytes4 out) {
+    function _bytes4At(bytes memory data, uint256 offset) internal pure returns (bytes4 out) {
         // Assumes `data.length >= offset + 4`.
         assembly ("memory-safe") {
             out := mload(add(add(data, 0x20), offset))
@@ -44,8 +38,7 @@ contract ArbosStylusSanityTest is Test {
         // WASM magic: 0x00 0x61 0x73 0x6d
         assertTrue(bytes4(wasm) == 0x0061736d);
 
-        address deployed = DeployStylusCodeCheatcodes(address(vm))
-            .deployStylusCode(FIXTURE_DEFAULT);
+        address deployed = DeployStylusCodeCheatcodes(address(vm)).deployStylusCode(FIXTURE_DEFAULT);
 
         // For arbos-foundry's own fixture programs, `deployStylusCode` results in:
         // `deployed.code == 0xeff00000 || vm.readFileBinary(path)`.

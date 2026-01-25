@@ -66,7 +66,10 @@ library EntryPointLib {
         // This avoids depending on the fixture's embedded initcode shape (which may be deployer-specific).
         uint256 runtimeStart = _indexOf(blob, hex"6080604052");
         uint256 tailStart = _lastIndexOf(blob, hex"60808060405234");
-        require(runtimeStart != type(uint256).max && tailStart != type(uint256).max && tailStart > runtimeStart, "bad entrypoint fixture");
+        require(
+            runtimeStart != type(uint256).max && tailStart != type(uint256).max && tailStart > runtimeStart,
+            "bad entrypoint fixture"
+        );
 
         bytes memory runtime = _slice(blob, runtimeStart, tailStart - runtimeStart);
         uint256 runtimeLen = runtime.length;
@@ -74,14 +77,8 @@ library EntryPointLib {
 
         // initcode = PUSH2(runtimeLen) PUSH1(0x0e) PUSH1(0) CODECOPY PUSH2(runtimeLen) PUSH1(0) RETURN + runtime
         // 0x0e is the prefix length in bytes.
-        bytes memory initCode = abi.encodePacked(
-            hex"61",
-            uint16(runtimeLen),
-            hex"600e60003961",
-            uint16(runtimeLen),
-            hex"6000f3",
-            runtime
-        );
+        bytes memory initCode =
+            abi.encodePacked(hex"61", uint16(runtimeLen), hex"600e60003961", uint16(runtimeLen), hex"6000f3", runtime);
 
         address deployed;
         assembly {
