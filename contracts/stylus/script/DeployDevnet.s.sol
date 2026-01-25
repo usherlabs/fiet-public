@@ -27,8 +27,8 @@ pragma solidity ^0.8.0;
  * - CALL_POLICY_ADDRESS (address, optional) override CallPolicy address (takes precedence over deploy)
  */
 
-import "lib/forge-std/src/Script.sol";
-import "lib/forge-std/src/console.sol";
+import "forge-std/Script.sol";
+import "forge-std/console.sol";
 
 import {Kernel} from "kernel/src/Kernel.sol";
 import {IEntryPoint} from "kernel/src/interfaces/IEntryPoint.sol";

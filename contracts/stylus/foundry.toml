@@ -12,6 +12,8 @@ allow_paths = [
   "lib/kernel",
   "lib/kernel/lib/account-abstraction",
   "lib/kernel/lib/openzeppelin-contracts",
+  "../evm/lib",
+  "../evm/lib/forge-std",
 ]
 
 remappings = [
@@ -19,6 +21,8 @@ remappings = [
   "account-abstraction/=lib/kernel/lib/account-abstraction/contracts/",
   "openzeppelin-contracts/=lib/kernel/lib/openzeppelin-contracts/",
   "@openzeppelin/contracts/=lib/kernel/lib/openzeppelin-contracts/contracts/",
+  "ds-test/=../evm/lib/forge-std/lib/ds-test/src/",
+  "forge-std/=../evm/lib/forge-std/src/",
 ]
 
 # ArbOs Foundry deployStylusCode reads a compiled WASM artefact from disk.

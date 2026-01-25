@@ -28,7 +28,7 @@ pragma solidity ^0.8.26;
  * - DEPLOYMENTS_PATH   (string)   e.g. "../stylus/deployments.infra.nitro.json"
  */
 
-import "lib/forge-std/src/Script.sol";
+import "forge-std/Script.sol";
 
 import {CREATE3Factory} from "./base/CREATE3Factory.sol";
 
