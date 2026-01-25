@@ -3,7 +3,7 @@
 > **Warning**  
 > This folder contains **experimental code** for demonstration and research purposes only.  
 > Not ready for **use in production or mainnet** yet.  
-> Use at your own risk.  
+> Use at your own risk.
 
 Arbitrum Stylus program written in Rust using the [stylus-sdk](https://github.com/OffchainLabs/stylus-sdk-rs).
 
@@ -75,6 +75,71 @@ All orchestration is in `justfile`.
 - **`OWNER_PRIVATE_KEY`**: key used by the Bun E2E harness
 - **`PERMISSION_ID`**: bytes32 permission id used by the PermissionValidator config
 - **`PRIV_KEY_PATH` or `PKEY`**: deployer key for Stylus policy deploy (`cargo stylus deploy`), provide exactly one
+
+## Permission IDs & “permission instances” (important)
+
+This project uses a **`PERMISSION_ID`** (a `bytes32`) to identify a specific **permission instance** for a given wallet.
+
+### What is a permission instance?
+
+A **permission instance** is the tuple:
+
+- **wallet**: the Kernel smart account address (the “sender”/account being validated)
+- **permission id**: a `bytes32` identifier for _one specific permission configuration_
+
+In other words: the same wallet can install/configure the same policy multiple times under different ids, and those installs are treated as separate “instances”.
+
+### What is isolated on-chain between instances?
+
+Inside the Stylus policy, configuration and replay-protection are **scoped by `(wallet, permissionId)`**.
+
+Concretely, the policy derives a composite storage key:
+
+- `key = keccak256(wallet || permissionId)`
+
+and stores per-instance state under that key, including:
+
+- **replay nonce**: each permission instance has its own nonce stream, so a replay in one instance does not affect another
+- **authorised envelope signer**: each permission instance can require a different envelope signer
+- **fact sources**: each permission instance can point at different fact source contracts (StateView / VTSOrchestrator / LiquidityHub)
+
+The only wallet-level state is `used_ids[wallet]`, which is used to answer `isInitialized(wallet)` when _any_ permission id is installed.
+
+### Why is `PERMISSION_ID` required by the E2E harness?
+
+`PERMISSION_ID` is not a secret. It’s a **namespace / handle** that must be consistent across:
+
+- **PermissionValidator configuration**: which permission instance is being used for the account’s validator/policy pipeline
+- **policy envelope signing**: the envelope includes `permissionId` in the signed EIP-712 payload to prevent cross-instance replay
+- **policy storage**: the policy reads/writes config + nonces under the composite `(wallet, permissionId)` key
+
+If the E2E harness doesn’t know the `PERMISSION_ID`, it can’t build the correct permission config nor sign envelopes that match that config.
+
+### What should I set `PERMISSION_ID` to?
+
+For devnets/tests, it can be **any 32-byte hex value**, as long as you use the **same value everywhere** (validator config + signing).
+
+Common options:
+
+- `just` use default per wallet.
+
+```bash
+# Optional: write a default PERMISSION_ID into `contracts/stylus/.env` if you don’t want to choose one manually
+# (only writes it if PERMISSION_ID is not already present in `.env`)
+just env_init_permission_id
+```
+
+- **hash a label** (recommended so it’s deterministic and readable):
+
+```bash
+export PERMISSION_ID="$(cast keccak "fiet-permission-devnet")"
+```
+
+- **use a fixed test constant**:
+
+```bash
+export PERMISSION_ID="0x0000000000000000000000000000000000000000000000000000000000000001"
+```
 
 ## Command reference (`justfile`)
 

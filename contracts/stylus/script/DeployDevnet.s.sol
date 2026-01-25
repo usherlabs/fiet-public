@@ -21,13 +21,12 @@ pragma solidity ^0.8.0;
 import "lib/forge-std/src/Script.sol";
 import "lib/forge-std/src/console.sol";
 
-import {Kernel} from "lib/kernel/src/Kernel.sol";
-import {KernelFactory} from "lib/kernel/src/KernelFactory.sol";
+import {Kernel} from "kernel/src/Kernel.sol";
+import {KernelFactory} from "kernel/src/KernelFactory.sol";
 import {IEntryPoint} from "account-abstraction/interfaces/IEntryPoint.sol";
 
 contract DeployDevnet is Script {
-    address internal constant ENTRYPOINT_0_7 =
-        0x0000000071727De22E5E9d8BAf0edAc6f37da032;
+    address internal constant ENTRYPOINT_0_7 = 0x0000000071727De22E5E9d8BAf0edAc6f37da032;
 
     function run() external {
         uint256 pk = uint256(vm.envBytes32("PRIVATE_KEY"));
@@ -53,11 +52,7 @@ contract DeployDevnet is Script {
             string memory ns = "kernel";
             vm.serializeAddress(ns, "KERNEL_TEMPLATE_ADDRESS", address(kernel));
             vm.serializeAddress(ns, "KERNEL_FACTORY_ADDRESS", address(factory));
-            string memory json = vm.serializeAddress(
-                ns,
-                "ENTRYPOINT_ADDRESS",
-                ep
-            );
+            string memory json = vm.serializeAddress(ns, "ENTRYPOINT_ADDRESS", ep);
             vm.writeJson(json, deploymentsPath);
             console.log("Wrote:", deploymentsPath);
         }

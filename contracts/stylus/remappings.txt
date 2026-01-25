@@ -1,0 +1,6 @@
+kernel/=lib/kernel/
+account-abstraction/=lib/kernel/lib/account-abstraction/contracts/
+openzeppelin-contracts/=lib/kernel/lib/openzeppelin-contracts/
+@openzeppelin/contracts/=lib/kernel/lib/openzeppelin-contracts/contracts/
+ds-test/=lib/kernel/lib/forge-std/lib/ds-test/src/
+forge-std/=lib/forge-std/src/
