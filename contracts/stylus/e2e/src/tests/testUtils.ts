@@ -58,25 +58,34 @@ export function makePackedUserOp(params: {
 }) {
   // Only `callData` and `signature` are read by the policy; everything else is ignored.
   // Keep the rest well-formed so the ABI encoding matches Kernel's PackedUserOperation tuple.
-  return [
-    params.sender, // sender
-    0n, // nonce
-    "0x", // initCode
-    params.callData, // callData
-    ZERO_BYTES32, // accountGasLimits
-    0n, // preVerificationGas
-    ZERO_BYTES32, // gasFees
-    "0x", // paymasterAndData
-    params.signature, // signature (policy-local envelope slice)
-  ] as const;
+  return {
+    sender: params.sender,
+    nonce: 0n,
+    initCode: "0x",
+    callData: params.callData,
+    accountGasLimits: ZERO_BYTES32,
+    preVerificationGas: 0n,
+    gasFees: ZERO_BYTES32,
+    paymasterAndData: "0x",
+    signature: params.signature,
+  } as const;
 }
 
 export async function makeClients(env: TestEnv) {
+  const chain = {
+    id: Number(env.chainId),
+    name: "fiet-e2e",
+    nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
+    rpcUrls: { default: { http: [env.rpcUrl] } },
+  } as const;
+
   const publicClient = createPublicClient({
+    chain,
     transport: http(env.rpcUrl),
   });
   const walletClient = createWalletClient({
     account: env.owner,
+    chain,
     transport: http(env.rpcUrl),
   });
   return { publicClient, walletClient };

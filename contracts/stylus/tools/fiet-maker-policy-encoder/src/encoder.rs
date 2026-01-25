@@ -173,8 +173,9 @@ pub fn sign_envelope(envelope: &mut IntentEnvelope, signing_key: &SigningKey) ->
     Ok(())
 }
 
-/// Encode a policy intent envelope into bytes for use in the policy signature slice
-/// (Kernel PermissionValidator will place this into `userOp.signature` when calling the policy).
+/// Encode a policy intent envelope into bytes for use in the policy signature slice.
+///
+/// Kernel places this into `userOp.signature` (per-policy signature slice) when calling the policy.
 pub fn encode_envelope(envelope: &IntentEnvelope) -> Vec<u8> {
     let mut buf = Vec::new();
     

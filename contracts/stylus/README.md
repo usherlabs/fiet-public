@@ -7,7 +7,7 @@
 
 Arbitrum Stylus program written in Rust using the [stylus-sdk](https://github.com/OffchainLabs/stylus-sdk-rs).
 
-This workspace hosts the on-chain **“Atomic Revalidation” intent policy** described in `PROPOSAL.md`, exposed as a **Kernel-compatible** ERC-7579 `IPolicy` module (**module type 5**) intended to be used in the **Kernel permissions** pipeline (for example, alongside a PermissionValidator signer).
+This workspace hosts the on-chain **“Atomic Revalidation” intent policy** described in `PROPOSAL.md`, exposed as a **Kernel-compatible** ERC-7579 `IPolicy` module (**module type 5**) intended to be used in the **Kernel permissions** pipeline (eg alongside CallPolicy and a signer module).
 
 The core contract crate is `src/fiet-maker-policy/`. The policy is designed to **fail closed**: if envelope parsing, signature checks, replay protection, program decoding, or on-chain fact acquisition fails, the policy returns a failure code and the UserOperation should not proceed.
 
@@ -73,7 +73,7 @@ All orchestration is in `justfile`.
 - **`CHAIN_ID`**: Nitro chain id (string). Defaults to `421614` if unset.
 - **`PRIVATE_KEY`**: deployer key for Foundry scripts (expected as bytes32 hex)
 - **`OWNER_PRIVATE_KEY`**: key used by the Bun E2E harness
-- **`PERMISSION_ID`**: bytes32 permission id used by the PermissionValidator config
+- **`PERMISSION_ID`**: bytes32 encoding of Kernel `PermissionId` (bytes4), left-aligned and zero-padded
 - **`PRIV_KEY_PATH` or `PKEY`**: deployer key for Stylus policy deploy (`cargo stylus deploy`), provide exactly one
 
 ## Permission IDs & “permission instances” (important)
@@ -84,7 +84,7 @@ This project uses a **`PERMISSION_ID`** (a `bytes32`) to identify a specific **p
 
 A **permission instance** is the tuple:
 
-- **wallet**: the Kernel smart account address (the “sender”/account being validated)
+- **wallet**: the account address being validated/executed. Under EIP-7702 this is the **EOA address** (delegated to Kernel implementation).
 - **permission id**: a `bytes32` identifier for _one specific permission configuration_
 
 In other words: the same wallet can install/configure the same policy multiple times under different ids, and those installs are treated as separate “instances”.
@@ -109,7 +109,7 @@ The only wallet-level state is `used_ids[wallet]`, which is used to answer `isIn
 
 `PERMISSION_ID` is not a secret. It’s a **namespace / handle** that must be consistent across:
 
-- **PermissionValidator configuration**: which permission instance is being used for the account’s validator/policy pipeline
+- **Kernel permission config**: which permission instance is installed for the account (policies + signer)
 - **policy envelope signing**: the envelope includes `permissionId` in the signed EIP-712 payload to prevent cross-instance replay
 - **policy storage**: the policy reads/writes config + nonces under the composite `(wallet, permissionId)` key
 
@@ -117,7 +117,7 @@ If the E2E harness doesn’t know the `PERMISSION_ID`, it can’t build the corr
 
 ### What should I set `PERMISSION_ID` to?
 
-For devnets/tests, it can be **any 32-byte hex value**, as long as you use the **same value everywhere** (validator config + signing).
+For devnets/tests, Kernel’s `PermissionId` is a **bytes4**. We encode it as a bytes32 for the Stylus policy and envelope signing by left-aligning the bytes4 and zero-padding the remaining 28 bytes (eg `0xdeadbeef` becomes `0xdeadbeef0000...00`).
 
 Common options:
 
@@ -132,13 +132,14 @@ just env_init_permission_id
 - **hash a label** (recommended so it’s deterministic and readable):
 
 ```bash
-export PERMISSION_ID="$(cast keccak "fiet-permission-devnet")"
+PID32="$(cast keccak "fiet-permission-devnet")"
+export PERMISSION_ID="${PID32:0:10}$(printf '0%.0s' {1..56})"
 ```
 
 - **use a fixed test constant**:
 
 ```bash
-export PERMISSION_ID="0x0000000000000000000000000000000000000000000000000000000000000001"
+export PERMISSION_ID="0x0000000100000000000000000000000000000000000000000000000000000000"
 ```
 
 ## Command reference (`justfile`)

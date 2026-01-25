@@ -4,7 +4,7 @@
 //! ABI surface as `IPolicy` (module type 5).
 //!
 //! Design notes:
-//! - The PermissionValidator’s signer remains the sole “who” (authorisation).
+//! - The permission pipeline’s signer module remains the sole “who” (authorisation).
 //! - This policy is purely “when”: it enforces an intent envelope over the UserOp’s call bundle
 //!   and evaluates a check-program over on-chain facts.
 //! - Kernel slices a per-policy signature blob into `userOp.signature` before calling

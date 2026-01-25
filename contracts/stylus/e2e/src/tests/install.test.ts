@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { loadEnv } from "../setup.js";
+import { IntentPolicyABI } from "../abi/intent-policy.js";
 import {
   describeE2E,
   installIntentPolicy,

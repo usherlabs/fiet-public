@@ -20,3 +20,5 @@
 [submodule "contracts/stylus/lib/kernel"]
 	path = contracts/stylus/lib/kernel
 	url = https://github.com/zerodevapp/kernel
+[submodule "lib/kernel"]
+	branch = dev
