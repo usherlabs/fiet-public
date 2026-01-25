@@ -69,7 +69,9 @@ contract MockMMPositionManager {
     function modifyLiquiditiesWithoutUnlock(bytes calldata actions, bytes[] calldata params) external payable {
         writes++;
         lastSender = msg.sender;
-        lastCallHash = keccak256(abi.encodePacked("modifyLiquiditiesWithoutUnlock", actions, params, msg.sender, msg.value));
+        // `abi.encodePacked` does not support `bytes[]` in packed mode.
+        // This is just an E2E mock signal, so `abi.encode` is sufficient.
+        lastCallHash = keccak256(abi.encode("modifyLiquiditiesWithoutUnlock", actions, params, msg.sender, msg.value));
     }
 }
 

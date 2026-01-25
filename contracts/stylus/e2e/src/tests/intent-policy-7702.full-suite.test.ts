@@ -96,7 +96,7 @@ describeE2E("7702 Intent Policy — full-suite (policy-level E2E)", () => {
 
     await installIntentPolicy({ env, permissionId });
 
-    // The policy-local envelope is *not* covered by the PermissionValidator's signer.
+    // The policy-local envelope is *not* covered by the permission pipeline's signer module.
     // If we didn't authenticate this envelope separately, an attacker could tamper with it
     // (eg, replace `programBytes` with an empty program) without invalidating the UserOp signature.
     //
