@@ -9,6 +9,8 @@ import {
   createWalletClient,
   hexToBytes,
   http,
+  isAddress,
+  isHex,
   pad,
   toHex,
 } from "viem";
@@ -49,7 +51,10 @@ export function loadEnv(): TestEnv {
     "POSITION_MANAGER_ADDRESS",
   ] as const;
   for (const key of required) {
-    if (!process.env[key]) {
+    const v = process.env[key];
+    // `just e2e_write_env` writes literal `null` when infra hasn't been deployed yet.
+    // Treat that the same as "missing" so we fail fast with a crisp error.
+    if (!v || v === "null" || v === "undefined") {
       throw new Error(`Missing env ${key}`);
     }
   }
@@ -63,6 +68,32 @@ export function loadEnv(): TestEnv {
     throw new Error("Missing env RPC_URL (or legacy ZERODEV_RPC)");
   }
 
+  const permissionId = process.env.PERMISSION_ID! as Hex;
+  if (!isHex(permissionId, { strict: true }) || permissionId.length !== 66) {
+    throw new Error("Invalid env PERMISSION_ID (expected 0x-prefixed 32-byte hex)");
+  }
+
+  const intentPolicy = process.env.INTENT_POLICY_ADDRESS! as Hex;
+  const stateView = process.env.STATE_VIEW_ADDRESS! as Hex;
+  const vtsOrchestrator = process.env.VTS_ORCHESTRATOR_ADDRESS! as Hex;
+  const liquidityHub = process.env.LIQUIDITY_HUB_ADDRESS! as Hex;
+  const mmPositionManager = process.env.MM_POSITION_MANAGER_ADDRESS! as Hex;
+  const positionManager = process.env.POSITION_MANAGER_ADDRESS! as Hex;
+
+  const addrVars: Array<[string, Hex]> = [
+    ["INTENT_POLICY_ADDRESS", intentPolicy],
+    ["STATE_VIEW_ADDRESS", stateView],
+    ["VTS_ORCHESTRATOR_ADDRESS", vtsOrchestrator],
+    ["LIQUIDITY_HUB_ADDRESS", liquidityHub],
+    ["MM_POSITION_MANAGER_ADDRESS", mmPositionManager],
+    ["POSITION_MANAGER_ADDRESS", positionManager],
+  ];
+  for (const [name, value] of addrVars) {
+    if (!isAddress(value)) {
+      throw new Error(`Invalid env ${name} (expected 0x-prefixed 20-byte address)`);
+    }
+  }
+
   return {
     rpcUrl,
     chainId,
@@ -72,13 +103,13 @@ export function loadEnv(): TestEnv {
       (process.env.OWNER_PRIVATE_KEY as Hex) ||
         (process.env.PRIVATE_KEY! as Hex),
     ),
-    intentPolicy: process.env.INTENT_POLICY_ADDRESS! as Hex,
-    permissionId: process.env.PERMISSION_ID! as Hex,
-    stateView: process.env.STATE_VIEW_ADDRESS! as Hex,
-    vtsOrchestrator: process.env.VTS_ORCHESTRATOR_ADDRESS! as Hex,
-    liquidityHub: process.env.LIQUIDITY_HUB_ADDRESS! as Hex,
-    mmPositionManager: process.env.MM_POSITION_MANAGER_ADDRESS! as Hex,
-    positionManager: process.env.POSITION_MANAGER_ADDRESS! as Hex,
+    intentPolicy,
+    permissionId,
+    stateView,
+    vtsOrchestrator,
+    liquidityHub,
+    mmPositionManager,
+    positionManager,
   };
 }
 
@@ -119,6 +150,8 @@ export async function buildKernelClient(env: TestEnv) {
     entryPoint,
     signer: env.owner as any,
     kernelVersion: env.kernelVersion as any,
+    // CRITICAL: must match the permission id used by envelope signing and policy storage scoping.
+    permissionId: env.permissionId as any,
     // Include CallPolicy plus our custom IntentPolicy.
     //
     // If your SDK supports custom policies directly, replace this `as any` shape with
@@ -147,7 +180,7 @@ export async function buildKernelClient(env: TestEnv) {
   return { publicClient, walletClient, account, entryPoint };
 }
 
-function buildIntentPolicyInitData(params: {
+export function buildIntentPolicyInitData(params: {
   signer: Address;
   stateView: Hex;
   vtsOrchestrator: Hex;
@@ -168,6 +201,38 @@ function buildIntentPolicyInitData(params: {
   return toHex(data);
 }
 
+/**
+ * Build the exact `bytes` payload expected by `IntentPolicy.onInstall`.
+ *
+ * The Stylus policy mirrors the Kernel packing:
+ * `bytes data = bytes32 permissionId || initData`.
+ *
+ * We keep this helper in TS so E2E tests can deterministically install/uninstall
+ * policy instances without duplicating byte-layout logic in multiple files.
+ */
+export function buildIntentPolicyInstallData(params: {
+  permissionId: Hex; // bytes32
+  signer: Address;
+  stateView: Hex;
+  vtsOrchestrator: Hex;
+  liquidityHub: Hex;
+}): Hex {
+  const initData = buildIntentPolicyInitData({
+    signer: params.signer,
+    stateView: params.stateView,
+    vtsOrchestrator: params.vtsOrchestrator,
+    liquidityHub: params.liquidityHub,
+  });
+
+  const permissionBytes = hexToBytes(pad(params.permissionId, { size: 64 }));
+  const initBytes = hexToBytes(initData);
+
+  const out = new Uint8Array(permissionBytes.length + initBytes.length);
+  out.set(permissionBytes, 0);
+  out.set(initBytes, permissionBytes.length);
+  return toHex(out);
+}
+
 // Utility to build and sign an intent envelope for tests
 export async function buildSignedEnvelope(opts: {
   env: TestEnv;
@@ -176,6 +241,7 @@ export async function buildSignedEnvelope(opts: {
   callBundleHash: Hex;
   nonce: bigint;
   deadline: bigint;
+  permissionId?: Hex;
 }) {
   const programBytes = encodeProgram(opts.checks);
   const envelope: IntentEnvelope = {
@@ -190,7 +256,7 @@ export async function buildSignedEnvelope(opts: {
     chainId: opts.env.chainId,
     verifyingContract: opts.env.intentPolicy as Address,
     wallet: opts.smartAccount,
-    permissionId: opts.env.permissionId,
+    permissionId: (opts.permissionId ?? opts.env.permissionId) as Hex,
     envelope,
     signTypedData: (args) => opts.env.owner.signTypedData(args),
   });
