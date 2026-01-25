@@ -195,7 +195,7 @@ e2e_write_env:
   echo "Wrote {{e2e_env_path}}"
 
 e2e_test:
-  cd e2e && bun test
+  cd e2e && bun install && bun test
 
 bootstrap: infra_deploy kernel_deploy stylus_deploy_policy e2e_write_env
   @echo "Bootstrap complete. Next: just e2e_test"

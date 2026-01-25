@@ -42,7 +42,36 @@ contract MockPositionManager {
     }
 }
 
-contract MockMMPositionManager {}
+contract MockMMPositionManager {
+    // Minimal stateful surface so E2E can assert “a write happened”.
+    //
+    // IMPORTANT CONTEXT (how this relates to Intent Policy):
+    // - In production, the state-changing call goes:
+    //   EntryPoint.handleOps -> Kernel wallet executes -> MMPositionManager.modifyLiquidities*
+    // - The Intent Policy contract is *not* the executor. It is called during validation to decide
+    //   whether the UserOp is allowed to execute.
+    // - Therefore, on successful execution, `msg.sender` observed by MMPositionManager should be
+    //   the Kernel wallet address (not EntryPoint, not the policy).
+    uint256 public writes;
+    address public lastSender;
+    bytes32 public lastCallHash;
+
+    /// @dev Mimics the production entrypoint name used by CallPolicy allowlists.
+    function modifyLiquidities(bytes calldata unlockData, uint256 deadline) external payable {
+        // We don't implement PoolManager unlock flows in infra mocks.
+        // For E2E, it's sufficient to have a state change that is gated by the Intent Policy.
+        writes++;
+        lastSender = msg.sender;
+        lastCallHash = keccak256(abi.encodePacked("modifyLiquidities", unlockData, deadline, msg.sender, msg.value));
+    }
+
+    /// @dev Mimics the production entrypoint name used by CallPolicy allowlists.
+    function modifyLiquiditiesWithoutUnlock(bytes calldata actions, bytes[] calldata params) external payable {
+        writes++;
+        lastSender = msg.sender;
+        lastCallHash = keccak256(abi.encodePacked("modifyLiquiditiesWithoutUnlock", actions, params, msg.sender, msg.value));
+    }
+}
 
 contract MockStateView {
     struct Slot0 {

@@ -1,0 +1,14 @@
+lib
+contracts/evm
+contracts/evm-scripts
+.husky
+.vscode
+.github
+.cursor
+agents
+foundry.lock
+INTERNAL-README.md
+!contracts/evm/src/interfaces/IMMPositionManager
+!contracts/evm/src/interfaces/ILCC
+!contracts/evm/src/interfaces/ICommitmentDescriptor
+!contracts/evm/src/interfaces/IMinimalLiquidityHub
