@@ -15,6 +15,7 @@
     "@zerodev/permissions": "^5.6.3",
     "@zerodev/sdk": "^5.5.7",
     "dotenv": "^17.2.3",
+    "tslib": "^2.8.1",
     "viem": "^2.44.4"
   },
   "devDependencies": {
