@@ -267,7 +267,9 @@ yarn run fuzz
 
 # Run a single harness
 yarn run echidna:lcc-backing-a
+yarn run echidna:lcc-01
 yarn run echidna:sig-backing-01
+yarn run echidna:commit-02
 ```
 
 Notes:

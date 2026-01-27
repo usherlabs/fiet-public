@@ -33,6 +33,8 @@ This is the canonical list of invariants currently covered by the harnesses in t
 
 - [x] **WRAPWITH-QUEUE-01 (Domain conversion)**: `wrapWith` with pre-existing Hub queues does not double-count (no double burn on subsequent settlement).
 
+- [x] **LCC-01 (Transfer gating)**: non-protocol ↔ non-protocol LCC transfers are disallowed unless one endpoint is protocol-bound.
+
 - [x] **LCC-02 (Transfer semantics)**: non-protocol → protocol transfers annul queued settlement before bucket decrement (no “bleeding” into the queue).
 
 - [x] **HUB-05 (Balance-backed reserves)**: `confirmTake` / reserve accounting must never exceed actual Hub underlying balance (no fabricated reserves).
@@ -58,3 +60,5 @@ This is the canonical list of invariants currently covered by the harnesses in t
 - [x] **COMMIT-01 / SIG-BACKING-01 (Domain C)**: MM issuance gate holds: \(issuedUsd \le settledUsd + signalUsd\).
   - Target: `VTSCommitLib.validateLiquidityDelta(...)` (called from `VTSPositionLib._handleLiquidityIncrease`)
 
+- [x] **COMMIT-02 (Domain C)**: checkpointing updates `commitmentDeficit` as the insolvency gate derived from backing shortfall.
+  - Target: `VTSCommitLib.checkpointWithCommitment(...)`
