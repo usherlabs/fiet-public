@@ -531,9 +531,14 @@ contract LiquidityHubLCCBackingEchidnaTest {
         return lccNative.balanceOf(address(this)) == (wrapped + marketDerived);
     }
 
-    /// @dev Domain A bookkeeping: hub-level directSupply must match holder's wrapped bucket (this harness only holds tokens).
+    /// @dev Domain A bookkeeping (single-holder regime): hub-level `directSupply` must match this holder's wrapped bucket.
+    ///      This can become a false positive once other addresses (e.g., the Hub via `wrapWith` or protocol transfers)
+    ///      hold balances, because `directSupply` is global while `balancesOf(this)` is per-holder.
     // forge-lint: disable-next-line(mixed-case-function)
     function echidna_directSupply_equals_wrapped_bucket() external view returns (bool) {
+        // Only assert this identity while the Hub is not holding any balance for this LCC.
+        // (Hub balances are BOUND_EXEMPT and do not participate in holder bucket accounting.)
+        if (lccNative.balanceOf(address(hub)) != 0) return true;
         (uint256 wrapped,) = lccNative.balancesOf(address(this));
         return hub.directSupply(address(lccNative)) == wrapped;
     }
@@ -619,6 +624,8 @@ contract LiquidityHubLCCBackingEchidnaTest {
 
 /// @dev Separate contract so we can make calls with a non-issuer `msg.sender`.
 contract LiquidityHubLCCBacking_NonIssuer {
+    /// @notice Attempt issuer-only mint from a non-issuer address.
+    /// @return ok True if the call unexpectedly succeeds.
     function tryIssue(address hub, address lcc, address to, uint256 amount) external returns (bool ok) {
         (ok,) = hub.call(abi.encodeWithSignature("issue(address,address,uint256)", lcc, to, amount));
     }
