@@ -257,6 +257,24 @@ forge test --match-contract MarketFactory
 forge test -vvv
 ```
 
+### Fuzzing (Echidna)
+
+Echidna harnesses live in `test/fuzz/`.
+
+```bash
+# Run all Echidna harnesses (recommended)
+yarn run fuzz
+
+# Run a single harness
+yarn run echidna:lcc-backing-a
+yarn run echidna:sig-backing-01
+```
+
+Notes:
+- The runner uses Docker + Crytic/Echidna. If you have a local `echidna` binary installed, `scripts/echidna.sh` will prefer it.
+- We use a dedicated Foundry profile `echidna` (see `foundry.toml`) and output to `out-echidna/` (ignored by git).
+- `echidna:sig-backing-01` runs with `--disable-slither` to avoid instability/OOM in the current toolbox environment.
+
 ### Mutation Testing (Gambit)
 
 This repo includes a lightweight mutation testing runner: `mutation_tests.sh`.

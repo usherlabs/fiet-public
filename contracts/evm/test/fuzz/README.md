@@ -1,6 +1,25 @@
-# Echidna Fuzzing Invariants Checklist
+# Echidna fuzz harnesses
 
-This checklist is the canonical list of invariants we intend to fuzz with Echidna in this repo.
+This folder contains **Echidna** fuzzing harnesses for protocol invariants.
+
+## Run
+
+From `contracts/evm/`:
+
+```bash
+# Run all fuzz harnesses
+yarn run fuzz
+
+# Run individual harnesses
+yarn run echidna:lcc-backing-a
+yarn run echidna:sig-backing-01
+```
+
+## Checklist
+
+This is the canonical list of invariants currently covered by the harnesses in this directory.
+
+## Echidna Fuzzing Invariants Checklist
 
 ## LiquidityHub / LCC Backing (Domain A/B + wrapWith + transfer semantics)
 
@@ -38,3 +57,4 @@ This checklist is the canonical list of invariants we intend to fuzz with Echidn
 
 - [x] **COMMIT-01 / SIG-BACKING-01 (Domain C)**: MM issuance gate holds: \(issuedUsd \le settledUsd + signalUsd\).
   - Target: `VTSCommitLib.validateLiquidityDelta(...)` (called from `VTSPositionLib._handleLiquidityIncrease`)
+
