@@ -11,6 +11,7 @@ import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager
 import {OracleUtils} from "../../src/libraries/OracleUtils.sol";
 import {LiquidityUtils} from "../../src/libraries/LiquidityUtils.sol";
 import {FullMath} from "v4-periphery/lib/v4-core/src/libraries/FullMath.sol";
+import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 
 /// @notice Echidna harness for COMMIT-02:
 ///         checkpointing updates `commitmentDeficit` as the insolvency gate derived from backing shortfall.
@@ -98,9 +99,13 @@ contract VTSCommit02CheckpointEchidnaTest {
     // Actions
     // -------------------------------------------------------------------------
 
+    /// @notice Set PoolManager slot0 inputs used for issued-value computation during checkpointing.
+    /// @dev Clamps to Uniswap bounds for fuzz stability.
     // forge-lint: disable-next-line(mixed-case-function)
     function action_set_slot0(uint160 sp, int24 tick) external {
         if (sp == 0) return;
+        if (sp <= TickMath.MIN_SQRT_PRICE) sp = TickMath.MIN_SQRT_PRICE + 1;
+        if (sp >= TickMath.MAX_SQRT_PRICE) sp = TickMath.MAX_SQRT_PRICE - 1;
         sqrtPriceX96 = sp;
         if (tick < -887272) tick = -887272;
         if (tick > 887272) tick = 887272;
@@ -108,6 +113,8 @@ contract VTSCommit02CheckpointEchidnaTest {
         poolManager.setSlot0(poolId, sqrtPriceX96, currentTick, 0, 0);
     }
 
+    /// @notice Set position tick range and liquidity used for checkpoint issued-value computation.
+    /// @dev Ticks are clamped to Uniswap min/max tick bounds.
     // forge-lint: disable-next-line(mixed-case-function)
     function action_set_position(int24 tl, int24 tu, uint128 liq) external {
         if (tl < -887272) tl = -887272;
@@ -119,6 +126,7 @@ contract VTSCommit02CheckpointEchidnaTest {
         commitHarness.setupPosition(positionId, poolId, COMMIT_ID, tickLower, tickUpper, liquidity);
     }
 
+    /// @notice Set the position's settled amounts (token units, 18 decimals).
     // forge-lint: disable-next-line(mixed-case-function)
     function action_set_settled(uint256 s0, uint256 s1) external {
         settled0 = s0 > 1e36 ? 1e36 : s0;
@@ -126,6 +134,7 @@ contract VTSCommit02CheckpointEchidnaTest {
         commitHarness.setPositionSettled(positionId, settled0, settled1);
     }
 
+    /// @notice Set the pre-existing `commitmentDeficit` (used to exercise deficit reduction logic when backing recovers).
     // forge-lint: disable-next-line(mixed-case-function)
     function action_set_prev_deficit(uint256 d0, uint256 d1) external {
         prevDeficit0 = d0 > 1e36 ? 1e36 : d0;
@@ -133,6 +142,8 @@ contract VTSCommit02CheckpointEchidnaTest {
         commitHarness.setPositionCommitmentDeficit(positionId, prevDeficit0, prevDeficit1);
     }
 
+    /// @notice Set the commit's signal backing (USD, 18 decimals) and whether the signal is live.
+    /// @dev If not live, `checkpointWithCommitment` treats signal backing as zero (expiry path).
     // forge-lint: disable-next-line(mixed-case-function)
     function action_set_signal(uint256 sig, bool live) external {
         signalUsd = sig > 1e36 ? 1e36 : sig;
