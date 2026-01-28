@@ -12,6 +12,7 @@ import {OracleUtils} from "../../src/libraries/OracleUtils.sol";
 import {LiquidityUtils} from "../../src/libraries/LiquidityUtils.sol";
 import {FullMath} from "v4-periphery/lib/v4-core/src/libraries/FullMath.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
+import {MockPoolManagerSlot0} from "./mocks/MockPoolManagerSlot0.sol";
 
 /// @notice Echidna harness for COMMIT-02:
 ///         checkpointing updates `commitmentDeficit` as the insolvency gate derived from backing shortfall.
@@ -240,30 +241,6 @@ contract VTSCommit02CheckpointEchidnaTest {
         uint256 deficitBps = FullMath.mulDiv(deficitUsd, LiquidityUtils.BPS_DENOMINATOR, issuedUsd);
         exp0 = FullMath.mulDiv(eff0, deficitBps, LiquidityUtils.BPS_DENOMINATOR);
         exp1 = FullMath.mulDiv(eff1, deficitBps, LiquidityUtils.BPS_DENOMINATOR);
-    }
-}
-
-/// @notice Minimal PoolManager stub for StateLibrary.getSlot0 via `extsload`.
-/// @dev We only implement `extsload(bytes32)` and store pre-packed slot0 words keyed by pool state slot.
-contract MockPoolManagerSlot0 {
-    // matches StateLibrary.POOLS_SLOT (uint256(6))
-    bytes32 internal constant POOLS_SLOT = bytes32(uint256(6));
-
-    mapping(bytes32 => bytes32) internal slot;
-
-    function setSlot0(PoolId poolId, uint160 sqrtPriceX96, int24 tick, uint24 protocolFee, uint24 lpFee) external {
-        bytes32 stateSlot = keccak256(abi.encodePacked(PoolId.unwrap(poolId), POOLS_SLOT));
-
-        uint256 t = uint256(uint24(tick));
-        uint256 data = uint256(lpFee);
-        data = (data << 24) | uint256(protocolFee);
-        data = (data << 24) | t;
-        data = (data << 160) | uint256(sqrtPriceX96);
-        slot[stateSlot] = bytes32(data);
-    }
-
-    function extsload(bytes32 s) external view returns (bytes32) {
-        return slot[s];
     }
 }
 
