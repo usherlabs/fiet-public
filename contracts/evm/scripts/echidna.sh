@@ -7,7 +7,7 @@ set -eu
 # Docker fallback is optional; set FORCE_DOCKER=1 to force Docker.
 #
 # Usage:
-#   yarn run echidna -- --file test/fuzz/MyHarness.sol --contract MyHarness
+#   just echidna file=test/fuzz/MyHarness.sol contract=MyHarness
 
 # Run from repo root or from contracts/evm/; normalize to contracts/evm.
 if [ -d "contracts/evm" ]; then
@@ -53,8 +53,17 @@ EXTRA_ARGS="$*"
 
 if [ -z "$FILE" ] || [ -z "$CONTRACT" ]; then
   echo "error: missing --file or --contract" 1>&2
-  echo "example: yarn run echidna -- --file test/fuzz/LiquidityHubLCCBackingEchidnaTest.sol --contract LiquidityHubLCCBackingEchidnaTest" 1>&2
+  echo "example: just echidna file=test/fuzz/LiquidityHubLCCBackingEchidnaTest.sol contract=LiquidityHubLCCBackingEchidnaTest" 1>&2
   exit 2
+fi
+
+# Compute default CryticCompile args so local and Docker runs behave the same.
+OUT_DIR="${FOUNDRY_OUT_DIR:-out}"
+if [ "$COMPILE_BACKEND" = "foundry" ]; then
+  # IMPORTANT: crytic-compile needs --foundry-out-directory to find build-info/artifacts if we use a non-default out dir.
+  CRYTIC_ARGS="${ECHIDNA_CRYTIC_ARGS:---compile-force-framework foundry --foundry-compile-all --foundry-out-directory $OUT_DIR}"
+else
+  CRYTIC_ARGS="${ECHIDNA_CRYTIC_ARGS:---compile-force-framework solc --solc-remaps @openzeppelin/=lib/openzeppelin-contracts/ --solc-remaps openzeppelin-contracts/=lib/openzeppelin-contracts/ --solc-remaps v4-periphery/=lib/v4-periphery/ --solc-remaps @uniswap/v4-core/=lib/v4-periphery/lib/v4-core/ --solc-remaps v4-core/=lib/v4-periphery/lib/v4-core/src/}"
 fi
 
 # CryticCompile's Foundry platform expects a *project directory* target, not a single Solidity file.
@@ -77,7 +86,9 @@ fi
 
 if [ -n "$ECHIDNA_BIN" ]; then
   # shellcheck disable=SC2086
-  "$ECHIDNA_BIN" "$ECHIDNA_TARGET" --contract "$CONTRACT" --config "$CONFIG" $EXTRA_ARGS
+  "$ECHIDNA_BIN" "$ECHIDNA_TARGET" --contract "$CONTRACT" --config "$CONFIG" \
+    --crytic-args "$CRYTIC_ARGS" \
+    $EXTRA_ARGS
   exit 0
 fi
 
@@ -89,12 +100,7 @@ if command -v docker >/dev/null 2>&1; then
     PLATFORM_ARG="--platform ${DOCKER_PLATFORM}"
   fi
 
-  OUT_DIR="${FOUNDRY_OUT_DIR:-out}"
-
-  if [ "$COMPILE_BACKEND" = "foundry" ]; then
-    # IMPORTANT: crytic-compile needs --foundry-out-directory to find build-info/artifacts if we use a non-default out dir.
-    CRYTIC_ARGS="${ECHIDNA_CRYTIC_ARGS:---compile-force-framework foundry --foundry-compile-all --foundry-out-directory $OUT_DIR}"
-  else
+  if [ "$COMPILE_BACKEND" != "foundry" ]; then
     # Note: the toolbox image uses solc-select shims and may not have a solc version installed.
     # In restricted environments this can fail; prefer ECHIDNA_COMPILE=foundry.
     CRYTIC_ARGS="${ECHIDNA_CRYTIC_ARGS:---compile-force-framework solc --solc /root/.crytic/bin/solc --solc-remaps @openzeppelin/=lib/openzeppelin-contracts/ --solc-remaps openzeppelin-contracts/=lib/openzeppelin-contracts/ --solc-remaps v4-periphery/=lib/v4-periphery/ --solc-remaps @uniswap/v4-core/=lib/v4-periphery/lib/v4-core/ --solc-remaps v4-core/=lib/v4-periphery/lib/v4-core/src/}"

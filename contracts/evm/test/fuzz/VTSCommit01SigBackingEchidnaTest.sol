@@ -6,6 +6,7 @@ import {PositionId} from "../../src/types/Position.sol";
 import {MockOracleHelper} from "./mocks/MockOracleHelper.sol";
 import {VTSCommitLibHarness} from "../libraries/harnesses/VTSCommitLibHarness.sol";
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
+import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 
 /// @notice Echidna harness for COMMIT-01 / SIG-BACKING-01 (Domain C):
 /// the gate `issuedUsd <= settledUsd + signalUsd` enforced by `VTSCommitLib.validateLiquidityDelta`.
@@ -35,6 +36,49 @@ contract VTSCommit01SigBackingEchidnaTest {
     bool internal checked;
     bool internal lastOk;
 
+    function _primeGate() internal {
+        // Prime COMMIT-01 once without calling external actions.
+        // Keep parameters small + valid to avoid unrelated maths reverts.
+        uint160 sp = uint160(1) << 96;
+        int24 ct = 0;
+        int24 tl = -60;
+        int24 tu = 60;
+        int256 ld = 1;
+
+        VTSCommitLib.LiquidityDeltaParams memory p = VTSCommitLib.LiquidityDeltaParams({
+            currency0: Currency.wrap(LCC0),
+            currency1: Currency.wrap(LCC1),
+            sqrtPriceX96: sp,
+            currentTick: ct,
+            tickLower: tl,
+            tickUpper: tu,
+            liquidityDelta: ld
+        });
+
+        bool success;
+        uint256 issuedUsd;
+        uint256 settledUsd;
+        uint256 signalUsd;
+
+        try commitHarness.validateLiquidityDelta(oracle, COMMIT_ID, positionId, p, false) returns (
+            bool sOk, uint256 iUsd, uint256 stUsd, uint256 siUsd
+        ) {
+            success = sOk;
+            issuedUsd = iUsd;
+            settledUsd = stUsd;
+            signalUsd = siUsd;
+        } catch {
+            // If this ever reverts, treat it as a harness failure.
+            checked = true;
+            lastOk = false;
+            return;
+        }
+
+        bool shouldPass = issuedUsd <= (settledUsd + signalUsd);
+        checked = true;
+        lastOk = (success == shouldPass);
+    }
+
     function _deployVTSCommitLib() internal {
         // Deploy VTSCommitLib via CREATE2 to the hard-linked address.
         bytes32 salt = keccak256("echidna.VTSCommitLib");
@@ -58,6 +102,8 @@ contract VTSCommit01SigBackingEchidnaTest {
         positionId = PositionId.wrap(keccak256("echidna.sig-backing-01"));
 
         commitHarness = new VTSCommitLibHarness();
+
+        _primeGate();
     }
 
     // ===== actions to mutate backing inputs =====
@@ -89,12 +135,14 @@ contract VTSCommit01SigBackingEchidnaTest {
         int24 tickUpper,
         int256 liquidityDelta
     ) external {
-        checked = false;
+        checked = true;
         lastOk = true;
 
-        if (liquidityDelta <= 0) return;
-        if (tickLower >= tickUpper) return;
-        if (sqrtPriceX96 == 0) return;
+        // Clamp inputs into a valid regime so we actually exercise the backing gate
+        // instead of bailing out on unrelated maths edge cases.
+        uint160 sp = sqrtPriceX96;
+        if (sp <= TickMath.MIN_SQRT_PRICE) sp = TickMath.MIN_SQRT_PRICE + 1;
+        if (sp >= TickMath.MAX_SQRT_PRICE) sp = TickMath.MAX_SQRT_PRICE - 1;
 
         // Clamp ticks to Uniswap bounds to avoid unrelated math edge reverts.
         int24 tl = tickLower;
@@ -104,16 +152,30 @@ contract VTSCommit01SigBackingEchidnaTest {
         if (tu > 887272) tu = 887272;
         if (ct < -887272) ct = -887272;
         if (ct > 887272) ct = 887272;
-        if (tl >= tu) return;
+        if (tl >= tu) {
+            // Provide a small-but-valid range instead of skipping.
+            tl = -60;
+            tu = 60;
+        }
+
+        // Force a positive, bounded liquidity delta (the production gate is only meaningful on increases).
+        uint256 absL;
+        if (liquidityDelta == type(int256).min) {
+            absL = 1;
+        } else {
+            int256 v = liquidityDelta < 0 ? -liquidityDelta : liquidityDelta;
+            absL = uint256(v);
+        }
+        int256 ld = int256((absL % 1e18) + 1);
 
         VTSCommitLib.LiquidityDeltaParams memory p = VTSCommitLib.LiquidityDeltaParams({
             currency0: Currency.wrap(LCC0),
             currency1: Currency.wrap(LCC1),
-            sqrtPriceX96: sqrtPriceX96,
+            sqrtPriceX96: sp,
             currentTick: ct,
             tickLower: tl,
             tickUpper: tu,
-            liquidityDelta: liquidityDelta
+            liquidityDelta: ld
         });
 
         bool success;
@@ -128,14 +190,17 @@ contract VTSCommit01SigBackingEchidnaTest {
             settledUsd = stUsd;
             signalUsd = siUsd;
         } catch {
-            return; // ignore unexpected non-backing revert paths
+            // In non-reverting mode (`revertIfInsufficientBacking=false`), a revert is unexpected and
+            // indicates a maths/edge-case bug (or a harness modelling issue). Treat it as a failure
+            // so we do not pass vacuously.
+            lastOk = false;
+            return;
         }
 
         // Basic self-consistency: library's success must match inequality.
         bool shouldPass = issuedUsd <= (settledUsd + signalUsd);
         bool ok = (success == shouldPass);
 
-        checked = true;
         lastOk = ok;
     }
 

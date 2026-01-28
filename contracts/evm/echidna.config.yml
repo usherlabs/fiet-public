@@ -7,7 +7,6 @@ format: "text"
 testMode: "property"
 prefix: "echidna_"
 
-checkAsserts: true
 coverage: false
 
 # Keep runs short-ish by default; bump for deeper campaigns.
