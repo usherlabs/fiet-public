@@ -1,0 +1,64 @@
+## Fiet Protocol (EVM) - developer commands
+#
+# This Justfile provides a stable entrypoint for running Echidna harnesses without
+# relying on Yarn argument forwarding behaviour.
+#
+# Usage:
+#   just --list
+#   just fuzz
+#   just echidna file=test/fuzz/LCC01TransferGatingEchidnaTest.sol contract=LCC01TransferGatingEchidnaTest
+#
+
+set export
+
+[private]
+default:
+  @just --list --unsorted
+
+# ----------------------------
+# Echidna (fuzzing) helpers
+# ----------------------------
+
+# Generic Echidna runner wrapper.
+# Pass through extra args via `--`, e.g.:
+#   just echidna file=... contract=... -- --test-limit 20000
+echidna file contract config="echidna.config.yml" *args:
+  FOUNDRY_PROFILE=echidna FOUNDRY_OUT_DIR=out-echidna ECHIDNA_COMPILE=foundry \
+    sh ./scripts/echidna.sh --file {{file}} --contract {{contract}} --config {{config}} {{args}}
+
+# Run all harnesses (default config: `echidna.config.yml`).
+fuzz:
+  @just echidna-lcc-backing-a
+  @just echidna-lcc-01
+  @just echidna-sig-backing-01
+  @just echidna-commit-02
+  @just echidna-wrapwith
+  @just echidna-confirmtake-callback
+
+# Longer campaigns (uses `echidna.deep.config.yml`).
+fuzz-deep:
+  @just echidna-lcc-backing-a echidna.deep.config.yml
+  @just echidna-lcc-01 echidna.deep.config.yml
+  @just echidna-sig-backing-01 echidna.deep.config.yml
+  @just echidna-commit-02 echidna.deep.config.yml
+  @just echidna-wrapwith echidna.deep.config.yml
+  @just echidna-confirmtake-callback echidna.deep.config.yml
+
+echidna-lcc-backing-a config="echidna.config.yml":
+  @just echidna test/fuzz/LiquidityHubLCCBackingEchidnaTest.sol LiquidityHubLCCBackingEchidnaTest {{config}}
+
+echidna-lcc-01 config="echidna.config.yml":
+  @just echidna test/fuzz/LCC01TransferGatingEchidnaTest.sol LCC01TransferGatingEchidnaTest {{config}}
+
+echidna-sig-backing-01 config="echidna.config.yml":
+  @just echidna test/fuzz/VTSCommit01SigBackingEchidnaTest.sol VTSCommit01SigBackingEchidnaTest {{config}} -- --disable-slither
+
+echidna-commit-02 config="echidna.config.yml":
+  @just echidna test/fuzz/VTSCommit02CheckpointEchidnaTest.sol VTSCommit02CheckpointEchidnaTest {{config}} -- --disable-slither
+
+echidna-wrapwith config="echidna.config.yml":
+  @just echidna test/fuzz/LiquidityHubWrapWithEchidnaTest.sol LiquidityHubWrapWithEchidnaTest {{config}}
+
+echidna-confirmtake-callback config="echidna.config.yml":
+  @just echidna test/fuzz/LiquidityHubConfirmTakeCallbackEchidnaTest.sol LiquidityHubConfirmTakeCallbackEchidnaTest {{config}}
+

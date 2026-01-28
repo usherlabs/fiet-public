@@ -91,6 +91,10 @@ contract VTSCommitLibHarness {
         s.positionAccounting[id].commitmentDeficit.token1 = deficit1;
     }
 
+    function setCommitExpiresAt(uint256 commitId, uint256 expiresAt) external {
+        s.commits[commitId].expiresAt = expiresAt;
+    }
+
     function setPoolTotalDeficitPrincipal(PoolId poolId, uint8 tokenIndex, uint256 v) external {
         if (tokenIndex == 0) s.poolAccounting[poolId].totalDeficitPrincipal.token0 = v;
         else s.poolAccounting[poolId].totalDeficitPrincipal.token1 = v;

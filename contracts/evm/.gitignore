@@ -198,3 +198,8 @@ gambit_out/
 .mutation-worktree/
 .gambit_conf.*
 .tmp*
+
+# Echidna
+crytic-export/
+out-echidna-min/
+out-echidna/
