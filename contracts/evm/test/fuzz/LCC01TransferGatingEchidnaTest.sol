@@ -26,6 +26,21 @@ contract LCC01TransferGatingEchidnaTest {
     bool internal checkedUserToProtocol;
     bool internal lastUserToProtocolOk;
 
+    function _primeChecks() internal {
+        // Prime both invariants once so the run cannot pass vacuously due to never
+        // exercising the relevant call surfaces.
+        //
+        // - user->user should be blocked (expect revert => ok=false)
+        // - user->protocol-bound should be allowed (expect success => ok=true)
+        bool okUserToUser = userA.tryTransfer(address(lccNative), address(userB), 1);
+        checkedUserToUser = true;
+        lastUserToUserOk = okUserToUser;
+
+        bool okUserToProtocol = userA.tryTransfer(address(lccNative), address(hub), 1);
+        checkedUserToProtocol = true;
+        lastUserToProtocolOk = okUserToProtocol;
+    }
+
     function _deployLinkedLib() internal {
         bytes32 salt = keccak256("echidna.LCCFactoryLinkedLib");
         bytes memory libInitCode = type(LCCFactoryLinkedLib).creationCode;
@@ -66,6 +81,8 @@ contract LCC01TransferGatingEchidnaTest {
 
         // Seed some balance so actions can run immediately.
         hub.issue(address(lccNative), address(userA), 1000);
+
+        _primeChecks();
     }
 
     // -------------------------------------------------------------------------

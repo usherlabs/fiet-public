@@ -108,9 +108,10 @@ contract VTSCommit02CheckpointEchidnaTest {
         if (sp <= TickMath.MIN_SQRT_PRICE) sp = TickMath.MIN_SQRT_PRICE + 1;
         if (sp >= TickMath.MAX_SQRT_PRICE) sp = TickMath.MAX_SQRT_PRICE - 1;
         sqrtPriceX96 = sp;
-        if (tick < -887272) tick = -887272;
-        if (tick > 887272) tick = 887272;
-        currentTick = tick;
+        // Keep tick consistent with sqrtPrice to avoid exploring impossible slot0 states that tend to revert.
+        // (Echidna can still explore extreme prices via `sp`.)
+        tick; // ignore fuzzed tick
+        currentTick = TickMath.getTickAtSqrtPrice(sqrtPriceX96);
         poolManager.setSlot0(poolId, sqrtPriceX96, currentTick, 0, 0);
     }
 
@@ -120,7 +121,10 @@ contract VTSCommit02CheckpointEchidnaTest {
     function action_set_position(int24 tl, int24 tu, uint128 liq) external {
         if (tl < -887272) tl = -887272;
         if (tu > 887272) tu = 887272;
-        if (tl >= tu) return;
+        if (tl >= tu) {
+            tl = -60;
+            tu = 60;
+        }
         tickLower = tl;
         tickUpper = tu;
         liquidity = liq;
@@ -159,8 +163,14 @@ contract VTSCommit02CheckpointEchidnaTest {
         checked = false;
         lastOk = true;
 
-        if (sqrtPriceX96 == 0) return;
-        if (tickLower >= tickUpper) return;
+        // Clamp into a valid regime so we don't skip checkpointing.
+        if (sqrtPriceX96 == 0) {
+            sqrtPriceX96 = uint160(1) << 96;
+        }
+        if (tickLower >= tickUpper) {
+            tickLower = -60;
+            tickUpper = 60;
+        }
 
         // Ensure the pool slot0 matches our cached state.
         poolManager.setSlot0(poolId, sqrtPriceX96, currentTick, 0, 0);
