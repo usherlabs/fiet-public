@@ -78,9 +78,95 @@ FOUNDRY_PROFILE=echidna FOUNDRY_OUT_DIR=out-echidna ECHIDNA_COMPILE=foundry \
 
 ## Checklist
 
-This is the canonical list of invariants currently covered by the harnesses in this directory.
+The **source of truth** for protocol invariants is `contracts/evm/INVARIANTS.md`.
 
-## Echidna Fuzzing Invariants Checklist
+This README is a **coverage tracker** for:
+
+- which `INVARIANTS.md` items are covered by Echidna harnesses in this directory, and
+- which invariants are still missing (and what the next priorities are).
+
+Important: some IDs in this README (e.g. `WRAPWITH-CONS-01`) are **test-check IDs** (micro-properties / decompositions)
+used by the harness authors. They are _not_ canonical protocol invariant IDs, and they should always map back to one or
+more `INVARIANTS.md` invariants.
+
+### Priority rubric (used below)
+
+We prioritise invariants that a human **cannot** reliably validate “by naked eye” across the full call surface.
+
+- **Priority 1 (math-heavy / economic bounds)**: invariants expressed as explicit maths bounds or accounting identities
+  whose correctness is brittle under edge cases (rounding, clamping, sign, partial settlement).
+- **Priority 2 (state-machine safety / settlement & seizure gates / Hub accounting)**: invariants that are primarily
+  about reachability and correct gating across many interleavings (queues, settlement, seize paths, issuer surfaces).
+- **Priority 3 (surface-area / authorisation / pause / sequencing)**: invariants that are mostly “must be applied
+  everywhere”, i.e. correctness relies on every entrypoint remaining guarded after refactors.
+
+## Protocol invariants coverage (from `INVARIANTS.md`)
+
+This table is keyed by **canonical** invariant IDs from `INVARIANTS.md`. It is the main “what’s done / what’s next”
+view.
+
+- **Needs property?**: “Yes” means we should prefer a property-based test (Echidna and/or invariant-style Foundry)
+  because manual inspection is unreliable.
+- **Status**: “Covered” means there is at least one non-trivial check; “Partial” means the invariant is exercised but
+  not comprehensively (or only in a narrow harness assumption).
+
+| Invariant (`INVARIANTS.md`) | Priority | Needs property? | Status                | Evidence (Echidna)                                                                                                                             | Notes                                                                                                     |
+| --------------------------- | -------- | --------------- | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| **COV-01**                  | **P1**   | Yes             | Not started           | —                                                                                                                                              | Add a focused harness for `_applyCoverageBurn` maths bounds.                                              |
+| **COV-02**                  | **P1**   | Yes             | Not started           | —                                                                                                                                              | Sequencing: coverage burns must be settled before modifies.                                               |
+| **COV-03**                  | **P1**   | Yes             | Not started           | —                                                                                                                                              | Conditional index increments; easy to get wrong under zero-principal cases.                               |
+| **FEE-01**                  | **P1**   | Yes             | Not started           | —                                                                                                                                              | Queue-vs-materialised fee pot is subtle and regression-prone.                                             |
+| **FEE-02**                  | **P1**   | Yes             | Not started           | —                                                                                                                                              | “New positions don’t get bonuses on creation” is a tricky edge case.                                      |
+| **VTS-02**                  | **P1**   | Yes             | Not started           | —                                                                                                                                              | Tick-cross flip identity; easy to regress with accounting refactors.                                      |
+| **VTS-03**                  | **P1**   | Yes             | Not started           | —                                                                                                                                              | Segment-based deficit/inflow growth accounting.                                                           |
+| **DELTA-01**                | **P1**   | Yes             | Not started           | —                                                                                                                                              | End-of-batch delta netting; very hard to eyeball across flows.                                            |
+| **HUB-01**                  | **P2**   | Yes             | **Covered (partial)** | `LiquidityHubLCCBackingEchidnaTest.sol` → `echidna_wrap_native_is_1_to_1`                                                                      | Currently covers native wrap invariants under harness assumptions.                                        |
+| **HUB-02**                  | **P2**   | Yes             | **Covered (partial)** | `LiquidityHubLCCBackingEchidnaTest.sol` → `echidna_unwrap_shortfall_is_queued`                                                                 | Exercises explicit queue semantics for unwrap shortfalls.                                                 |
+| **HUB-03**                  | **P2**   | Yes             | **Covered (partial)** | `LiquidityHubLCCBackingEchidnaTest.sol` → `echidna_issue_rejects_uninitialised_lcc`, `echidna_issue_rejects_invalid_lcc`                       | Maps to “issuer-only paths reject invalid/uninitialised LCCs”.                                            |
+| **HUB-04**                  | **P2**   | Yes             | Not started           | —                                                                                                                                              | “Same factory” constraint on pair-based operations.                                                       |
+| **HUB-05**                  | **P2**   | Yes             | **Covered**           | `LiquidityHubLCCBackingEchidnaTest.sol` / `LiquidityHubConfirmTakeCallbackEchidnaTest.sol` → `echidna_hub05_reserve_never_exceeds_hub_balance` | Includes callback-style reachability harness.                                                             |
+| **SETTLE-01**               | **P2**   | Yes             | Not started           | —                                                                                                                                              | Withdrawals must revert while RFS open (unless seizing).                                                  |
+| **SETTLE-02**               | **P2**   | Yes             | Not started           | —                                                                                                                                              | Seizure settlement clamps (deposit/withdraw bounds).                                                      |
+| **SEIZE-01**                | **P2**   | Yes             | Not started           | —                                                                                                                                              | Seizable predicate: commitment deficit OR (RFS open + grace).                                             |
+| **SEIZE-02**                | **P2**   | Yes             | Not started           | —                                                                                                                                              | Allowed verifier requirement for grace extensions.                                                        |
+| **SEIZE-03**                | **P2**   | Yes             | Not started           | —                                                                                                                                              | Seizure flows cannot issue LCC.                                                                           |
+| **SEIZE-04**                | **P2**   | Yes             | Not started           | —                                                                                                                                              | MM ops must not change commit identity.                                                                   |
+| **LCC-BACKING-01**          | **P2**   | Yes             | **Covered (partial)** | `LiquidityHubLCCBackingEchidnaTest.sol` → `echidna_no_free_mint`, `echidna_no_free_burn` (+ wrapWith checks)                                   | “No free mint/burn” is covered; domain accounting is partially covered via wrap/issue/wrapWith harnesses. |
+| **LCC-01**                  | **P2**   | Yes             | **Covered**           | `LCC01TransferGatingEchidnaTest.sol` → `echidna_lcc01_user_to_user_blocked`, `echidna_lcc01_user_to_protocol_allowed`                          | Transfer gating invariant.                                                                                |
+| **LCC-02**                  | **P2**   | Yes             | **Covered**           | `LiquidityHubLCCBackingEchidnaTest.sol` → `echidna_lcc02_annuls_queue_on_protocol_transfer`                                                    | Queue annul semantics on protocol transfer.                                                               |
+| **COMMIT-01**               | **P2**   | Yes             | **Covered**           | `VTSCommit01SigBackingEchidnaTest.sol` → `echidna_sig_backing_01_gate_correct`                                                                 | Issuance gate \(issuedUsd \le settledUsd + signalUsd\).                                                   |
+| **COMMIT-02**               | **P1**   | Yes             | **Covered**           | `VTSCommit02CheckpointEchidnaTest.sol` → `echidna_commit_02_checkpoint_deficit_math_correct`                                                   | Math-heavy; promoted to P1 given your rubric.                                                             |
+| **COMMIT-03**               | **P2**   | Yes             | Not started           | —                                                                                                                                              | “Advancer binding” correctness under checkpoint-with-commitment.                                          |
+| **PAUSE-01**                | **P3**   | Yes             | Not started           | —                                                                                                                                              | Guard application is broad and regression-prone.                                                          |
+| **SIG-01**                  | **P3**   | Yes             | Not started           | —                                                                                                                                              | Nonce monotonicity across state transitions.                                                              |
+| **SIG-02**                  | **P3**   | Yes             | Not started           | —                                                                                                                                              | “Revert-on-invalid” behaviour; correctness across call sites.                                             |
+| **VTS-01**                  | **P3**   | Yes             | Not started           | —                                                                                                                                              | Must always settle growths before liquidity modification.                                                 |
+| **AUTH-01**                 | **P3**   | Yes             | Not started           | —                                                                                                                                              | Hard to eyeball all surfaces; especially with seizure context exceptions.                                 |
+| **AUTH-02**                 | **P3**   | Yes             | Not started           | —                                                                                                                                              | “No mid-batch transfer” is a global property across unlock sessions.                                      |
+| **MKT-01**                  | P3       | No              | Not started           | —                                                                                                                                              | Mostly an explicit revert surface; lower risk than maths/state-machine items.                             |
+| **MKT-02**                  | P3       | No              | Not started           | —                                                                                                                                              | Write-once property; easy to review, still worth testing.                                                 |
+| **MKT-03**                  | P3       | No              | Not started           | —                                                                                                                                              | “Core pool cannot be created twice” is largely structural.                                                |
+| **MKT-04**                  | P3       | No              | Not started           | —                                                                                                                                              | Factory/issuer boundaries are structural; still good to keep coverage.                                    |
+
+### Recommended next Echidna harnesses (by priority)
+
+- **Priority 1**:
+  - `VTSCov01CoverageBurnEchidnaTest.sol` (COV-01, and ideally COV-03 edge cases)
+  - `VTSFeePotAccountingEchidnaTest.sol` (FEE-01, FEE-02)
+  - `VTSSwapGrowthAccountingEchidnaTest.sol` (VTS-02, VTS-03)
+  - `BatchDeltaNettingEchidnaTest.sol` (DELTA-01)
+- **Priority 2**:
+  - `VTSSettleAndSeizeEchidnaTest.sol` (SETTLE-01/02, SEIZE-01/03/04)
+  - `VRLSettlementVerifierEchidnaTest.sol` (SEIZE-02)
+  - `LiquidityHubFactoryPairEchidnaTest.sol` (HUB-04)
+  - `VTSCommit03AdvancerBindingEchidnaTest.sol` (COMMIT-03)
+- **Priority 3**:
+  - `VTSPauseableEchidnaTest.sol` (PAUSE-01)
+  - `VRLNonceMonotonicityEchidnaTest.sol` (SIG-01, SIG-02)
+  - `VTSSettleBeforeModifyEchidnaTest.sol` (VTS-01)
+  - `AuthorisationSurfaceEchidnaTest.sol` (AUTH-01/02)
+
+## Implemented Echidna checks (test-check IDs)
 
 ## LiquidityHub / LCC Backing (Domain A/B + wrapWith + transfer semantics)
 
