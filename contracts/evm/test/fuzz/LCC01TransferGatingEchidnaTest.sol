@@ -4,7 +4,7 @@ pragma solidity ^0.8.26;
 import {LiquidityHub} from "../../src/LiquidityHub.sol";
 import {LiquidityCommitmentCertificate} from "../../src/LCC.sol";
 import {MockOracleHelper} from "./mocks/MockOracleHelper.sol";
-import {MockERC20Metadata} from "./mocks/MockERC20Metadata.sol";
+import {MockERC20Transferable} from "./mocks/MockERC20Transferable.sol";
 import {Bounds} from "../../src/libraries/Bounds.sol";
 import {LCCFactoryLinkedLib} from "../../src/libraries/LCCFactoryLib.sol";
 
@@ -68,7 +68,7 @@ contract LCC01TransferGatingEchidnaTest {
         issuers[0] = address(this);
 
         // Create + initialize a market so the LCC is valid.
-        MockERC20Metadata other = new MockERC20Metadata();
+        MockERC20Transferable other = new MockERC20Transferable();
         bytes memory marketRef = abi.encodePacked(address(this));
         (address l0, address l1) = hub.createLCCPair(marketRef, address(0), address(other), "TEST", issuers);
         hub.initialize(l0, l1, bytes32(uint256(1)), marketRef);

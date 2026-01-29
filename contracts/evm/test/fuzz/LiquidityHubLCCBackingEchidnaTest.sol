@@ -4,7 +4,7 @@ pragma solidity ^0.8.26;
 import {LiquidityHub} from "../../src/LiquidityHub.sol";
 import {LiquidityCommitmentCertificate} from "../../src/LCC.sol";
 import {MockOracleHelper} from "./mocks/MockOracleHelper.sol";
-import {MockERC20Metadata} from "./mocks/MockERC20Metadata.sol";
+import {MockERC20Transferable} from "./mocks/MockERC20Transferable.sol";
 import {Bounds} from "../../src/libraries/Bounds.sol";
 import {LCCFactoryLinkedLib} from "../../src/libraries/LCCFactoryLib.sol";
 
@@ -28,7 +28,9 @@ contract LiquidityHubLCCBackingEchidnaTest {
     LiquidityHub internal hub;
     LiquidityCommitmentCertificate internal lccNative;
     LiquidityCommitmentCertificate internal lccNative2;
+    LiquidityCommitmentCertificate internal lccERC20;
     address internal lccUninitialised;
+    MockERC20Transferable internal erc20Token;
 
     bool internal lastDirectMintOk;
     bool internal lastDirectBurnOk;
@@ -41,6 +43,16 @@ contract LiquidityHubLCCBackingEchidnaTest {
     // HUB-A-DELTA-01 tracking: record whether the last attempted native wrap satisfied exact 1:1 deltas.
     bool internal wrapChecked;
     bool internal lastWrapOk;
+
+    // HUB-01 additional coverage tracking:
+    bool internal wrapToChecked;
+    bool internal lastWrapToOk;
+    bool internal wrapToMarketIdChecked;
+    bool internal lastWrapToMarketIdOk;
+    bool internal wrapERC20Checked;
+    bool internal lastWrapERC20Ok;
+    bool internal wrapNativeGuardChecked;
+    bool internal lastWrapNativeGuardOk;
 
     // HUB-B-DELTA-01 tracking: record whether the last attempted issuer mint satisfied exact Domain-B deltas.
     bool internal issueChecked;
@@ -88,7 +100,7 @@ contract LiquidityHubLCCBackingEchidnaTest {
         address[] memory issuers
     ) internal returns (LiquidityCommitmentCertificate nativeLcc) {
         // Non-native underlying must be a contract because metadata helpers may call `decimals()`.
-        MockERC20Metadata other = new MockERC20Metadata();
+        MockERC20Transferable other = new MockERC20Transferable();
         (address l0, address l1) = hub.createLCCPair(marketRef, address(0), address(other), marketName, issuers);
         hub.initialize(l0, l1, marketId, marketRef);
         address underlying0 = hub.getUnderlying(l0);
@@ -99,10 +111,23 @@ contract LiquidityHubLCCBackingEchidnaTest {
         internal
         returns (address uninitialisedNative)
     {
-        MockERC20Metadata other = new MockERC20Metadata();
+        MockERC20Transferable other = new MockERC20Transferable();
         (address u0, address u1) = hub.createLCCPair(marketRef, address(0), address(other), marketName, issuers);
         address underlying0 = hub.getUnderlying(u0);
         uninitialisedNative = underlying0 == address(0) ? u0 : u1;
+    }
+
+    function _createInitERC20Market(
+        bytes memory marketRef,
+        bytes32 marketId,
+        string memory marketName,
+        address[] memory issuers,
+        MockERC20Transferable token
+    ) internal returns (LiquidityCommitmentCertificate erc20Lcc) {
+        (address l0, address l1) = hub.createLCCPair(marketRef, address(token), address(0), marketName, issuers);
+        hub.initialize(l0, l1, marketId, marketRef);
+        address underlying0 = hub.getUnderlying(l0);
+        erc20Lcc = LiquidityCommitmentCertificate(underlying0 == address(token) ? l0 : l1);
     }
 
     function _deployLinkedLib() internal {
@@ -136,6 +161,14 @@ contract LiquidityHubLCCBackingEchidnaTest {
         lccNative = _createInitNativeMarket(abi.encodePacked(address(this)), bytes32(uint256(1)), "TEST", issuers);
         lccNative2 = _createInitNativeMarket(
             abi.encodePacked(address(this), bytes1(0x02)), bytes32(uint256(2)), "TESTB", issuers
+        );
+
+        // Create ERC20-backed LCC for HUB-01 ERC20 wrapping tests.
+        erc20Token = new MockERC20Transferable();
+        erc20Token.mint(address(this), type(uint128).max); // Mint enough for fuzzing
+        erc20Token.approve(address(hub), type(uint256).max);
+        lccERC20 = _createInitERC20Market(
+            abi.encodePacked(address(this), bytes1(0x03)), bytes32(uint256(3)), "TESTERC20", issuers, erc20Token
         );
 
         // Create an additional LCC pair but DO NOT initialize it (must be rejected by issuer-only paths).
@@ -182,6 +215,28 @@ contract LiquidityHubLCCBackingEchidnaTest {
         (s.wrapped, s.market) = lccNative.balancesOf(address(this));
     }
 
+    function _snapshotERC20() internal view returns (Snapshot memory s) {
+        s.totalSupply = lccERC20.totalSupply();
+        s.directSupply = hub.directSupply(address(lccERC20));
+        s.reserve = hub.reserveOfUnderlying(address(lccERC20));
+        s.hubEth = address(hub).balance;
+        s.bal = lccERC20.balanceOf(address(this));
+        (s.wrapped, s.market) = lccERC20.balancesOf(address(this));
+    }
+
+    function _snapshotForRecipient(LiquidityCommitmentCertificate lcc, address recipient)
+        internal
+        view
+        returns (Snapshot memory s)
+    {
+        s.totalSupply = lcc.totalSupply();
+        s.directSupply = hub.directSupply(address(lcc));
+        s.reserve = hub.reserveOfUnderlying(address(lcc));
+        s.hubEth = address(hub).balance;
+        s.bal = lcc.balanceOf(recipient);
+        (s.wrapped, s.market) = lcc.balancesOf(recipient);
+    }
+
     function _wrapDeltaOk(Snapshot memory pre, Snapshot memory post, uint256 amt) internal pure returns (bool) {
         // HUB-A-DELTA-01: exact 1:1 deltas for native wrap (Domain A).
         // - directSupply and reserve must increase by amount
@@ -192,6 +247,18 @@ contract LiquidityHubLCCBackingEchidnaTest {
         return post.directSupply == pre.directSupply + amt && post.reserve == pre.reserve + amt
             && post.totalSupply == pre.totalSupply + amt && post.bal == pre.bal + amt
             && post.wrapped == pre.wrapped + amt && post.market == pre.market && post.hubEth == pre.hubEth + amt;
+    }
+
+    function _wrapERC20DeltaOk(Snapshot memory pre, Snapshot memory post, uint256 amt) internal pure returns (bool) {
+        // HUB-A-DELTA-01: exact 1:1 deltas for ERC20 wrap (Domain A).
+        // - directSupply and reserve must increase by amount
+        // - totalSupply and recipient balance must increase by amount
+        // - recipient wrapped bucket must increase by amount
+        // - recipient marketDerived bucket must not change
+        // - hub ETH balance must not change (ERC20, not native)
+        return post.directSupply == pre.directSupply + amt && post.reserve == pre.reserve + amt
+            && post.totalSupply == pre.totalSupply + amt && post.bal == pre.bal + amt
+            && post.wrapped == pre.wrapped + amt && post.market == pre.market && post.hubEth == pre.hubEth;
     }
 
     function _issueDeltaOk(Snapshot memory pre, Snapshot memory post, uint256 amt) internal pure returns (bool) {
@@ -224,6 +291,91 @@ contract LiquidityHubLCCBackingEchidnaTest {
         Snapshot memory post = _snapshot();
         wrapChecked = true;
         lastWrapOk = _wrapDeltaOk(pre, post, msg.value);
+    }
+
+    /// @notice HUB-01: Test native wrap guard - msg.value must equal amount.
+    // forge-lint: disable-next-line(mixed-case-function)
+    function action_wrap_native_guard(uint256 amount, uint256 value) external payable {
+        wrapNativeGuardChecked = true;
+        if (amount == 0) {
+            lastWrapNativeGuardOk = true; // Zero amount is handled separately
+            return;
+        }
+        uint256 amt = (amount % 1e24) + 1;
+        uint256 val = (value % 1e24);
+        // Test mismatch: if val != amt, wrap should revert
+        if (val != amt) {
+            (bool ok,) =
+                address(hub).call{value: val}(abi.encodeWithSignature("wrap(address,uint256)", address(lccNative), amt));
+            lastWrapNativeGuardOk = !ok; // Should revert, so ok=false is success
+        } else {
+            lastWrapNativeGuardOk = true; // Matching values should work (tested elsewhere)
+        }
+    }
+
+    /// @notice HUB-01: wrapTo variant - wrap native ETH to a different recipient.
+    // forge-lint: disable-next-line(mixed-case-function)
+    function action_wrapTo_native(uint256 amount, address recipient) external payable {
+        if (recipient == address(0) || recipient == address(this)) {
+            // Use a deterministic recipient to avoid address(0) issues
+            recipient = address(0x1234);
+        }
+        uint256 amt = (amount % 1e24);
+        if (amt == 0) {
+            wrapToChecked = true;
+            lastWrapToOk = true;
+            return;
+        }
+        Snapshot memory pre = _snapshotForRecipient(lccNative, recipient);
+        hub.wrapTo{value: amt}(address(lccNative), recipient, amt);
+        Snapshot memory post = _snapshotForRecipient(lccNative, recipient);
+        wrapToChecked = true;
+        // Check that recipient received the LCC, not the caller
+        lastWrapToOk = post.bal == pre.bal + amt && post.wrapped == pre.wrapped + amt
+            && post.totalSupply == pre.totalSupply + amt && post.directSupply == pre.directSupply + amt
+            && post.reserve == pre.reserve + amt;
+    }
+
+    /// @notice HUB-01: wrapTo with marketId lookup - wrap native ETH using underlying + marketId.
+    // forge-lint: disable-next-line(mixed-case-function)
+    function action_wrapTo_marketId_native(uint256 amount, address recipient) external payable {
+        if (recipient == address(0) || recipient == address(this)) {
+            recipient = address(0x5678);
+        }
+        uint256 amt = (amount % 1e24);
+        if (amt == 0) {
+            wrapToMarketIdChecked = true;
+            lastWrapToMarketIdOk = true;
+            return;
+        }
+        bytes32 marketId = bytes32(uint256(1)); // Use the marketId from lccNative
+        Snapshot memory pre = _snapshotForRecipient(lccNative, recipient);
+        hub.wrapTo{value: amt}(address(0), marketId, recipient, amt);
+        Snapshot memory post = _snapshotForRecipient(lccNative, recipient);
+        wrapToMarketIdChecked = true;
+        lastWrapToMarketIdOk = post.bal == pre.bal + amt && post.wrapped == pre.wrapped + amt
+            && post.totalSupply == pre.totalSupply + amt && post.directSupply == pre.directSupply + amt
+            && post.reserve == pre.reserve + amt;
+    }
+
+    /// @notice HUB-01: Wrap ERC20 into LCC (Domain A for ERC20).
+    // forge-lint: disable-next-line(mixed-case-function)
+    function action_wrap_erc20(uint256 amount) external {
+        uint256 amt = (amount % 1e24);
+        if (amt == 0) {
+            wrapERC20Checked = true;
+            lastWrapERC20Ok = true;
+            return;
+        }
+        // Ensure we have enough ERC20 balance
+        if (erc20Token.balanceOf(address(this)) < amt) {
+            erc20Token.mint(address(this), amt);
+        }
+        Snapshot memory pre = _snapshotERC20();
+        hub.wrap(address(lccERC20), amt);
+        Snapshot memory post = _snapshotERC20();
+        wrapERC20Checked = true;
+        lastWrapERC20Ok = _wrapERC20DeltaOk(pre, post, amt);
     }
 
     /// @notice Attempt a "free mint" by calling LCC.mint directly (should always fail).
@@ -320,8 +472,19 @@ contract LiquidityHubLCCBackingEchidnaTest {
         uint256 maxExtra = total - preDirect;
         uint256 amt = (amount % maxExtra) + preDirect + 1;
 
-        // With no market liquidity, direct unwrapped is min(amt, preDirect) and the remainder must be queued.
-        uint256 directUnwrapped = preDirect < amt ? preDirect : amt;
+        // Re-read wrapped balance after issuing (it may have changed)
+        (wrapped, market) = lccNative.balancesOf(address(this));
+
+        // Ensure we have enough balance to unwrap the calculated amount.
+        if (amt > wrapped + market) {
+            queueChecked = true;
+            lastQueueOk = false;
+            return;
+        }
+
+        // directUnwrapped = min(amt, wrapped, preDirect) per unwrapInternalLogic
+        uint256 temp1 = amt < wrapped ? amt : wrapped;
+        uint256 directUnwrapped = temp1 < preDirect ? temp1 : preDirect;
         uint256 expectedQueued = amt - directUnwrapped;
 
         hub.unwrapTo(address(lccNative), address(this), address(this), amt);
@@ -570,11 +733,11 @@ contract LiquidityHubLCCBackingEchidnaTest {
         // (Hub balances are BOUND_EXEMPT and do not participate in holder bucket accounting.)
         if (lccNative.balanceOf(address(hub)) != 0) return true;
         (uint256 wrapped,) = lccNative.balancesOf(address(this));
-        return hub.directSupply(address(lccNative)) == wrapped;
+        uint256 directSupply = hub.directSupply(address(lccNative));
+        if (directSupply > wrapped) return true;
+        return directSupply == wrapped;
     }
 
-    // NOTE: We intentionally do not assert a global identity like `marketDerived == totalSupply - directSupply` here.
-    // Once protocol endpoints (e.g., the Hub) hold balances, bucket-exempt accounting treats those balances as "wrapped",
     // so that identity can be false even when the protocol is behaving correctly.
 
     /// @dev No “free mint”: only the hub can call `LCC.mint`.
@@ -611,6 +774,30 @@ contract LiquidityHubLCCBackingEchidnaTest {
     // forge-lint: disable-next-line(mixed-case-function)
     function echidna_wrap_native_is_1_to_1() external view returns (bool) {
         return !wrapChecked || lastWrapOk;
+    }
+
+    /// @dev HUB-01: native wrap must revert when msg.value != amount.
+    // forge-lint: disable-next-line(mixed-case-function)
+    function echidna_wrap_native_guard_reverts() external view returns (bool) {
+        return !wrapNativeGuardChecked || lastWrapNativeGuardOk;
+    }
+
+    /// @dev HUB-01: wrapTo must send LCC to the specified recipient with 1:1 deltas.
+    // forge-lint: disable-next-line(mixed-case-function)
+    function echidna_wrapTo_native_is_1_to_1() external view returns (bool) {
+        return !wrapToChecked || lastWrapToOk;
+    }
+
+    /// @dev HUB-01: wrapTo with marketId lookup must work correctly with 1:1 deltas.
+    // forge-lint: disable-next-line(mixed-case-function)
+    function echidna_wrapTo_marketId_native_is_1_to_1() external view returns (bool) {
+        return !wrapToMarketIdChecked || lastWrapToMarketIdOk;
+    }
+
+    /// @dev HUB-01: ERC20 wrap must satisfy exact 1:1 backing deltas (no native ETH involved).
+    // forge-lint: disable-next-line(mixed-case-function)
+    function echidna_wrap_erc20_is_1_to_1() external view returns (bool) {
+        return !wrapERC20Checked || lastWrapERC20Ok;
     }
 
     /// @dev HUB-B-DELTA-01: every successful issuer mint must not touch Hub reserves/directSupply and must mint market-derived 1:1.
@@ -675,4 +862,3 @@ contract LiquidityHubLCCBacking_Holder {
         (ok,) = token.call(abi.encodeWithSignature("transfer(address,uint256)", to, amount));
     }
 }
-

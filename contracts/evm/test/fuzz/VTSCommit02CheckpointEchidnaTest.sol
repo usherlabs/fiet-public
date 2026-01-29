@@ -12,14 +12,14 @@ import {OracleUtils} from "../../src/libraries/OracleUtils.sol";
 import {LiquidityUtils} from "../../src/libraries/LiquidityUtils.sol";
 import {FullMath} from "v4-periphery/lib/v4-core/src/libraries/FullMath.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
-import {MockPoolManagerSlot0} from "./mocks/MockPoolManagerSlot0.sol";
+import {MockPoolManager} from "./mocks/MockPoolManager.sol";
 
 /// @notice Echidna harness for COMMIT-02:
 ///         checkpointing updates `commitmentDeficit` as the insolvency gate derived from backing shortfall.
 contract VTSCommit02CheckpointEchidnaTest {
     MockOracleHelper internal oracle;
     VTSCommitLibHarness internal commitHarness;
-    MockPoolManagerSlot0 internal poolManager;
+    MockPoolManager internal poolManager;
 
     // Must match `foundry.toml` profile `echidna` hard-link for `VTSCommitLib`.
     address internal constant VTS_COMMIT_LIB = 0x08f6e330612797F445209Bfee166c949cfd0BF4F;
@@ -68,7 +68,7 @@ contract VTSCommit02CheckpointEchidnaTest {
         oracle.setTotalValue(0);
 
         commitHarness = new VTSCommitLibHarness();
-        poolManager = new MockPoolManagerSlot0();
+        poolManager = new MockPoolManager();
 
         poolId = PoolId.wrap(bytes32(uint256(1)));
         positionId = PositionId.wrap(keccak256("echidna.commit-02"));

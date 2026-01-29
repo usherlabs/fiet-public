@@ -32,6 +32,14 @@ fuzz:
   @just echidna-lcc-01
   @just echidna-sig-backing-01
   @just echidna-commit-02
+  @just echidna-cov-01
+  @just echidna-cov-02
+  @just echidna-cov-03
+  @just echidna-fee-01
+  @just echidna-fee-02
+  @just echidna-vts-02
+  @just echidna-vts-03
+  @just echidna-delta-01
   @just echidna-wrapwith
   @just echidna-confirmtake-callback
 
@@ -41,6 +49,14 @@ fuzz-deep:
   @just echidna-lcc-01 echidna.deep.config.yml
   @just echidna-sig-backing-01 echidna.deep.config.yml
   @just echidna-commit-02 echidna.deep.config.yml
+  @just echidna-cov-01 echidna.deep.config.yml
+  @just echidna-cov-02 echidna.deep.config.yml
+  @just echidna-cov-03 echidna.deep.config.yml
+  @just echidna-fee-01 echidna.deep.config.yml
+  @just echidna-fee-02 echidna.deep.config.yml
+  @just echidna-vts-02 echidna.deep.config.yml
+  @just echidna-vts-03 echidna.deep.config.yml
+  @just echidna-delta-01 echidna.deep.config.yml
   @just echidna-wrapwith echidna.deep.config.yml
   @just echidna-confirmtake-callback echidna.deep.config.yml
 
@@ -55,6 +71,30 @@ echidna-sig-backing-01 config="echidna.config.yml":
 
 echidna-commit-02 config="echidna.config.yml":
   @just echidna test/fuzz/VTSCommit02CheckpointEchidnaTest.sol VTSCommit02CheckpointEchidnaTest {{config}} -- --disable-slither
+
+echidna-cov-01 config="echidna.config.yml":
+  @just echidna test/fuzz/VTSCoverageBurnCOV01EchidnaTest.sol VTSCoverageBurnCOV01EchidnaTest {{config}} -- --disable-slither
+
+echidna-cov-02 config="echidna.config.yml":
+  @just echidna test/fuzz/VTSCoverageBurnCOV02EchidnaTest.sol VTSCoverageBurnCOV02EchidnaTest {{config}} -- --disable-slither
+
+echidna-cov-03 config="echidna.config.yml":
+  @just echidna test/fuzz/VTSCoverageBurnCOV03EchidnaTest.sol VTSCoverageBurnCOV03EchidnaTest {{config}} -- --disable-slither
+
+echidna-fee-01 config="echidna.config.yml":
+  @just echidna test/fuzz/VTSFee01QueueVsMaterialisedEchidnaTest.sol VTSFee01QueueVsMaterialisedEchidnaTest {{config}} -- --disable-slither
+
+echidna-fee-02 config="echidna.config.yml":
+  @just echidna test/fuzz/VTSFee02NoBonusOnCreationEchidnaTest.sol VTSFee02NoBonusOnCreationEchidnaTest {{config}} -- --disable-slither
+
+echidna-vts-02 config="echidna.config.yml":
+  @just echidna test/fuzz/VTSSwapVTS02FlipOutsideEchidnaTest.sol VTSSwapVTS02FlipOutsideEchidnaTest {{config}} -- --disable-slither
+
+echidna-vts-03 config="echidna.config.yml":
+  @just echidna test/fuzz/VTSSwapVTS03SegmentGrowthEchidnaTest.sol VTSSwapVTS03SegmentGrowthEchidnaTest {{config}} -- --disable-slither
+
+echidna-delta-01 config="echidna.config.yml":
+  @just echidna test/fuzz/VTSCurrencyDelta01EchidnaTest.sol VTSCurrencyDelta01EchidnaTest {{config}} -- --disable-slither
 
 echidna-wrapwith config="echidna.config.yml":
   @just echidna test/fuzz/LiquidityHubWrapWithEchidnaTest.sol LiquidityHubWrapWithEchidnaTest {{config}}

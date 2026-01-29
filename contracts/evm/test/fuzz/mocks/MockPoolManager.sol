@@ -3,13 +3,18 @@ pragma solidity ^0.8.26;
 
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 
-/// @notice Minimal PoolManager stub for `StateLibrary.getSlot0` via `extsload`.
-/// @dev Stores a pre-packed slot0 word at the pool's state slot (as computed by `StateLibrary`).
-contract MockPoolManagerSlot0 {
+/// @notice Minimal PoolManager stub for StateLibrary-backed reads via `extsload`.
+/// @dev Stores pre-packed pool state words at the slots computed by `StateLibrary`.
+contract MockPoolManager {
     // matches StateLibrary.POOLS_SLOT (uint256(6))
     bytes32 internal constant POOLS_SLOT = bytes32(uint256(6));
 
     mapping(bytes32 => bytes32) internal slot;
+
+    /// @notice Set an arbitrary storage slot (StateLibrary layout).
+    function setSlot(bytes32 s, bytes32 value) external {
+        slot[s] = value;
+    }
 
     /// @notice Set the slot0 word for a given pool id.
     function setSlot0(PoolId poolId, uint160 sqrtPriceX96, int24 tick, uint24 protocolFee, uint24 lpFee) external {
@@ -26,6 +31,14 @@ contract MockPoolManagerSlot0 {
     /// @notice Mimic `IPoolManager.extsload`.
     function extsload(bytes32 s) external view returns (bytes32) {
         return slot[s];
+    }
+
+    /// @notice Mimic `IPoolManager.extsload` for multi-slot reads.
+    function extsload(bytes32 s, uint256 nSlots) external view returns (bytes32[] memory data) {
+        data = new bytes32[](nSlots);
+        for (uint256 i = 0; i < nSlots; i++) {
+            data[i] = slot[bytes32(uint256(s) + i)];
+        }
     }
 }
 
