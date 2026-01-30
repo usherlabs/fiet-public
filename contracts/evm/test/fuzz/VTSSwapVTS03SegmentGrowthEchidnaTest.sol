@@ -8,8 +8,8 @@ import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {FullMath} from "v4-periphery/lib/v4-core/src/libraries/FullMath.sol";
 import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint128.sol";
 
-/// @notice Echidna harness for VTS-03:
-///         segment-based deficit/inflow growth must accrue to the correct token
+/// @notice Echidna harness for VTS-03: Swap outcomes must be reflected via segment-based deficit/inflow growth.
+///         Segment-based deficit/inflow growth must accrue to the correct token
 ///         based on swap direction and price segment boundaries.
 ///         This sets initial globals, accrues a single segment, and checks the
 ///         expected per-token growth deltas computed from the same swap math.

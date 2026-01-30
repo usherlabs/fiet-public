@@ -12,8 +12,8 @@ import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 
-/// @notice Echidna harness for COV-02:
-///         deploys a flags-compliant CoreHook, routes beforeAdd/RemoveLiquidity into a mock
+/// @notice Echidna harness for COV-02: Coverage is applied before position modification to preserve economic integrity.
+///         Deploys a flags-compliant CoreHook, routes beforeAdd/RemoveLiquidity into a mock
 ///         VTS orchestrator, and asserts the hook settles growths for the exact PositionId
 ///         derived from the modify params before any liquidity change occurs.
 contract VTSCoverageBurnCOV02EchidnaTest is HookMinerBase {

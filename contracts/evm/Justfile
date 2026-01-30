@@ -28,9 +28,9 @@ echidna file contract config="echidna.config.yml" *args:
 
 # Run all harnesses (default config: `echidna.config.yml`).
 fuzz:
-  @just echidna-lcc-backing-a
-  @just echidna-lcc-01
-  @just echidna-sig-backing-01
+  @just echidna-lcc-backing
+  @just echidna-lcc-transfer
+  @just echidna-commit-01
   @just echidna-commit-02
   @just echidna-cov-01
   @just echidna-cov-02
@@ -40,14 +40,15 @@ fuzz:
   @just echidna-vts-02
   @just echidna-vts-03
   @just echidna-delta-01
+  @just echidna-settle-01
   @just echidna-wrapwith
   @just echidna-confirmtake-callback
 
 # Longer campaigns (uses `echidna.deep.config.yml`).
 fuzz-deep:
-  @just echidna-lcc-backing-a echidna.deep.config.yml
-  @just echidna-lcc-01 echidna.deep.config.yml
-  @just echidna-sig-backing-01 echidna.deep.config.yml
+  @just echidna-lcc-backing echidna.deep.config.yml
+  @just echidna-lcc-transfer echidna.deep.config.yml
+  @just echidna-commit-01 echidna.deep.config.yml
   @just echidna-commit-02 echidna.deep.config.yml
   @just echidna-cov-01 echidna.deep.config.yml
   @just echidna-cov-02 echidna.deep.config.yml
@@ -57,16 +58,17 @@ fuzz-deep:
   @just echidna-vts-02 echidna.deep.config.yml
   @just echidna-vts-03 echidna.deep.config.yml
   @just echidna-delta-01 echidna.deep.config.yml
+  @just echidna-settle-01 echidna.deep.config.yml
   @just echidna-wrapwith echidna.deep.config.yml
   @just echidna-confirmtake-callback echidna.deep.config.yml
 
-echidna-lcc-backing-a config="echidna.config.yml":
-  @just echidna test/fuzz/LiquidityHubLCCBackingEchidnaTest.sol LiquidityHubLCCBackingEchidnaTest {{config}}
+echidna-lcc-backing config="echidna.config.yml":
+  @just echidna test/fuzz/LiquidityHubLCCBackingEchidnaTest.sol LiquidityHubLCCBackingEchidnaTest {{config}} -- --disable-slither
 
-echidna-lcc-01 config="echidna.config.yml":
-  @just echidna test/fuzz/LCC01TransferGatingEchidnaTest.sol LCC01TransferGatingEchidnaTest {{config}}
+echidna-lcc-transfer config="echidna.config.yml":
+  @just echidna test/fuzz/LCC01TransferGatingEchidnaTest.sol LCC01TransferGatingEchidnaTest {{config}} -- --disable-slither
 
-echidna-sig-backing-01 config="echidna.config.yml":
+echidna-commit-01 config="echidna.config.yml":
   @just echidna test/fuzz/VTSCommit01SigBackingEchidnaTest.sol VTSCommit01SigBackingEchidnaTest {{config}} -- --disable-slither
 
 echidna-commit-02 config="echidna.config.yml":
@@ -96,9 +98,12 @@ echidna-vts-03 config="echidna.config.yml":
 echidna-delta-01 config="echidna.config.yml":
   @just echidna test/fuzz/VTSCurrencyDelta01EchidnaTest.sol VTSCurrencyDelta01EchidnaTest {{config}} -- --disable-slither
 
+echidna-settle-01 config="echidna.config.yml":
+  @just echidna test/fuzz/VTSSettle01RFSOpenEchidnaTest.sol VTSSettle01RFSOpenEchidnaTest {{config}} -- --disable-slither
+
 echidna-wrapwith config="echidna.config.yml":
-  @just echidna test/fuzz/LiquidityHubWrapWithEchidnaTest.sol LiquidityHubWrapWithEchidnaTest {{config}}
+  @just echidna test/fuzz/LiquidityHubWrapWithEchidnaTest.sol LiquidityHubWrapWithEchidnaTest {{config}} -- --disable-slither
 
 echidna-confirmtake-callback config="echidna.config.yml":
-  @just echidna test/fuzz/LiquidityHubConfirmTakeCallbackEchidnaTest.sol LiquidityHubConfirmTakeCallbackEchidnaTest {{config}}
+  @just echidna test/fuzz/LiquidityHubConfirmTakeCallbackEchidnaTest.sol LiquidityHubConfirmTakeCallbackEchidnaTest {{config}} -- --disable-slither
 

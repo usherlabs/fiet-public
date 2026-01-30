@@ -14,8 +14,8 @@ import {FullMath} from "v4-periphery/lib/v4-core/src/libraries/FullMath.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {MockPoolManager} from "./mocks/MockPoolManager.sol";
 
-/// @notice Echidna harness for COMMIT-02:
-///         checkpointing updates `commitmentDeficit` as the insolvency gate derived from backing shortfall.
+/// @notice Echidna harness for COMMIT-02: Checkpointing with commitment updates `commitmentDeficit` as an insolvency gate.
+///         Checkpointing updates `commitmentDeficit` as the insolvency gate derived from backing shortfall.
 contract VTSCommit02CheckpointEchidnaTest {
     MockOracleHelper internal oracle;
     VTSCommitLibHarness internal commitHarness;

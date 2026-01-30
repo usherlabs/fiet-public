@@ -6,8 +6,8 @@ import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {PositionId} from "../../src/types/Position.sol";
 import {MarketVTSConfiguration, TokenConfiguration} from "../../src/types/VTS.sol";
 
-/// @notice Echidna harness for FEE-02:
-///         new positions (zero CISE exposure) must not receive bonuses on creation.
+/// @notice Echidna harness for FEE-02: New positions must not receive fee-sharing bonuses on creation.
+///         New positions (zero CISE exposure) must not receive bonuses on creation.
 ///         This checks that touching a fresh position cannot allocate bonuses or
 ///         mutate pot/protocolFee/pending state without prior exposure.
 contract VTSFee02NoBonusOnCreationEchidnaTest {

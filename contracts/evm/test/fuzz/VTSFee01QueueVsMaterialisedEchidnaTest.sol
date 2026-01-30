@@ -8,8 +8,8 @@ import {MarketVTSConfiguration, TokenConfiguration} from "../../src/types/VTS.so
 import {FullMath} from "v4-periphery/lib/v4-core/src/libraries/FullMath.sol";
 import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint128.sol";
 
-/// @notice Echidna harness for FEE-01:
-///         ensures queued fee accounting (protocolFeeAccrued/pending) is distinct from
+/// @notice Echidna harness for FEE-01: Queued slashes vs materialised slashed pot.
+///         Ensures queued fee accounting (protocolFeeAccrued/pending) is distinct from
 ///         materialised slashedPot, which only changes on finalisation.
 ///         This is split into two actions:
 ///         - queueBonus: moves protocolFeeAccrued/pending (queue) while pot stays fixed.

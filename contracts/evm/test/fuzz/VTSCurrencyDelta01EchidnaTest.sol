@@ -4,8 +4,8 @@ pragma solidity ^0.8.26;
 import {VTSCurrencyDeltaHarness} from "../libraries/harnesses/VTSCurrencyDeltaHarness.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 
-/// @notice Echidna harness for DELTA-01:
-///         any non-zero currency delta at end-of-batch must cause CurrencyNotSettled().
+/// @notice Echidna harness for DELTA-01: Deltas must net to zero per unlock/batch.
+///         Any non-zero currency delta at end-of-batch must cause CurrencyNotSettled().
 contract VTSCurrencyDelta01EchidnaTest {
     VTSCurrencyDeltaHarness internal deltaHarness;
 

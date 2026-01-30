@@ -4,8 +4,8 @@ pragma solidity ^0.8.26;
 import {VTSSwapLibHarness} from "../libraries/harnesses/VTSSwapLibHarness.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 
-/// @notice Echidna harness for VTS-02:
-///         on tick cross, outside growth must flip as outside := global - outside.
+/// @notice Echidna harness for VTS-02: Tick-cross "outside flip" must preserve inside-growth queryability.
+///         On tick cross, outside growth must flip as outside := global - outside.
 ///         This explicitly sets (global, outside), flips once, and asserts the identity.
 contract VTSSwapVTS02FlipOutsideEchidnaTest {
     VTSSwapLibHarness internal swapHarness;

@@ -7,8 +7,8 @@ import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {FullMath} from "v4-periphery/lib/v4-core/src/libraries/FullMath.sol";
 import {FixedPoint128} from "v4-periphery/lib/v4-core/src/libraries/FixedPoint128.sol";
 
-/// @notice Echidna harness for COV-03:
-///         exercises VTSCommitLib.incrementCoverage and asserts the conditional routing:
+/// @notice Echidna harness for COV-03: Coverage increments are meaningful only when there is principal/settled to index against.
+///         Exercises VTSCommitLib.incrementCoverage and asserts the conditional routing:
 ///         - DICE: if totalDeficitPrincipal > 0, bump coveragePerDeficitIndexX128; else add to coverageResidualDICE.
 ///         - CISE: if totalSettled > 0, bump coveragePerSettledIndexX128; else add to coverageResidualCISE.
 contract VTSCoverageBurnCOV03EchidnaTest {

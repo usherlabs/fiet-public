@@ -267,9 +267,9 @@ just fuzz
 just fuzz-deep
 
 # Run a single harness
-just echidna-lcc-backing-a
-just echidna-lcc-01
-just echidna-sig-backing-01
+just echidna-lcc-backing
+just echidna-lcc-transfer
+just echidna-commit-01
 just echidna-commit-02
 ```
 

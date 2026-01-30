@@ -19,8 +19,8 @@ interface IPoolManagerMockSlot0 {
     function extsload(bytes32 s, uint256 nSlots) external view returns (bytes32[] memory data);
 }
 
-/// @notice Echidna harness for COV-01:
-///         clamps inputs, seeds a deterministic fee-growth window, applies coverage burn,
+/// @notice Echidna harness for COV-01: Coverage burn is bounded by `(deficit + settled)`; fee burn is capped by deficit.
+///         Clamps inputs, seeds a deterministic fee-growth window, applies coverage burn,
 ///         then asserts the burn is bounded by min(cov, deficit + settled) and the outflow
 ///         snap/fee deltas advance exactly by the bounded burnBase on the correct token.
 contract VTSCoverageBurnCOV01EchidnaTest {
