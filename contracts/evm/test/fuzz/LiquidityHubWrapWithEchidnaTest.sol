@@ -4,7 +4,7 @@ pragma solidity ^0.8.26;
 import {LiquidityHub} from "../../src/LiquidityHub.sol";
 import {LiquidityCommitmentCertificate} from "../../src/LCC.sol";
 import {MockOracleHelper} from "./mocks/MockOracleHelper.sol";
-import {MockERC20Metadata} from "./mocks/MockERC20Metadata.sol";
+import {MockERC20Transferable} from "./mocks/MockERC20Transferable.sol";
 import {Bounds} from "../../src/libraries/Bounds.sol";
 import {LCCFactoryLinkedLib} from "../../src/libraries/LCCFactoryLib.sol";
 
@@ -47,7 +47,7 @@ contract LiquidityHubWrapWithEchidnaTest {
         address[] memory issuers
     ) internal returns (LiquidityCommitmentCertificate nativeLcc) {
         // Non-native underlying must be a contract because metadata helpers may call `decimals()`.
-        MockERC20Metadata other = new MockERC20Metadata();
+        MockERC20Transferable other = new MockERC20Transferable();
         (address l0, address l1) = hub.createLCCPair(marketRef, address(0), address(other), name, issuers);
         hub.initialize(l0, l1, marketId, marketRef);
         address underlying0 = hub.getUnderlying(l0);
