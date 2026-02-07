@@ -17,3 +17,12 @@
 [submodule "contracts/evm/lib/permit2"]
 	path = contracts/evm/lib/permit2
 	url = https://github.com/Uniswap/permit2
+[submodule "contracts/evm/lib/reactive-lib"]
+	path = contracts/evm/lib/reactive-lib
+	url = https://github.com/Reactive-Network/reactive-lib
+[submodule "contracts/reactive/lib/forge-std"]
+	path = contracts/reactive/lib/forge-std
+	url = https://github.com/foundry-rs/forge-std
+[submodule "contracts/reactive/lib/reactive-lib"]
+	path = contracts/reactive/lib/reactive-lib
+	url = https://github.com/Reactive-Network/reactive-lib

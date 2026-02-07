@@ -1,0 +1,14 @@
+{
+  "lib/forge-std": {
+    "tag": {
+      "name": "v1.14.0",
+      "rev": "1801b0541f4fda118a10798fd3486bb7051c5dd6"
+    }
+  },
+  "lib/reactive-lib": {
+    "tag": {
+      "name": "v0.2.0",
+      "rev": "d664678a7d86204c9391af4cedfd5ae0b0b904e4"
+    }
+  }
+}
