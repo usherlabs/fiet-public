@@ -109,21 +109,18 @@ contract VTSFee01QueueVsMaterialisedEchidnaTest {
         (uint256 pot0After, uint256 pot1After) = feeHarness.getSlashedPot(POOL_ID);
         (uint256 fee0After, uint256 fee1After) = feeHarness.getProtocolFeeAccrued(POOL_ID);
 
-        uint256 potBefore = tokenIndex == 0 ? pot0Before : pot1Before;
-        uint256 potAfter = tokenIndex == 0 ? pot0After : pot1After;
-        uint256 feeBefore = tokenIndex == 0 ? fee0Before : fee1Before;
-        uint256 feeAfter = tokenIndex == 0 ? fee0After : fee1After;
-
-        // Positive pending funds the pot; negative pending drains up to availability.
-        if (pending > 0) {
-            lastOkFinalise = potAfter == potBefore + uint256(pending) && feeAfter == feeBefore;
-        } else if (pending < 0) {
-            uint256 need = uint256(-pending);
-            uint256 pay = potBefore < need ? potBefore : need;
-            lastOkFinalise = potAfter == potBefore - pay && feeAfter == feeBefore;
-        } else {
-            lastOkFinalise = potAfter == potBefore && feeAfter == feeBefore;
-        }
+        lastOkFinalise = _checkFinalise(
+            tokenIndex,
+            pending,
+            pot0Before,
+            pot1Before,
+            pot0After,
+            pot1After,
+            fee0Before,
+            fee1Before,
+            fee0After,
+            fee1After
+        );
 
         checkedFinalise = true;
     }
@@ -142,6 +139,35 @@ contract VTSFee01QueueVsMaterialisedEchidnaTest {
     // forge-lint: disable-next-line(mixed-case-function)
     function echidna_fee_01_smoke() external pure returns (bool) {
         return true;
+    }
+
+    function _checkFinalise(
+        uint8 tokenIndex,
+        int256 pending,
+        uint256 pot0Before,
+        uint256 pot1Before,
+        uint256 pot0After,
+        uint256 pot1After,
+        uint256 fee0Before,
+        uint256 fee1Before,
+        uint256 fee0After,
+        uint256 fee1After
+    ) internal pure returns (bool) {
+        uint256 potBefore = tokenIndex == 0 ? pot0Before : pot1Before;
+        uint256 potAfter = tokenIndex == 0 ? pot0After : pot1After;
+        uint256 feeBefore = tokenIndex == 0 ? fee0Before : fee1Before;
+        uint256 feeAfter = tokenIndex == 0 ? fee0After : fee1After;
+
+        // Positive pending funds the pot; negative pending drains up to availability.
+        if (pending > 0) {
+            return potAfter == potBefore + uint256(pending) && feeAfter == feeBefore;
+        }
+        if (pending < 0) {
+            uint256 need = uint256(-pending);
+            uint256 pay = potBefore < need ? potBefore : need;
+            return potAfter == potBefore - pay && feeAfter == feeBefore;
+        }
+        return potAfter == potBefore && feeAfter == feeBefore;
     }
 
     function _cacheQueueInputs(
