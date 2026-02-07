@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: UNLICENSED
 
-pragma solidity >=0.8.0;
+pragma solidity ^0.8.26;
 
 import {AbstractReactive} from "reactive-lib/abstract-base/AbstractReactive.sol";
 import {IReactive} from "reactive-lib/interfaces/IReactive.sol";
@@ -30,6 +30,9 @@ contract SpokeRSC is AbstractReactive {
     /// @notice Recipient this Spoke is dedicated to.
     address public immutable recipient;
 
+    /// @notice Monotonic nonce for SettlementReported callbacks.
+    uint256 public nonce;
+
     event SubscriptionConfigured(uint256 indexed chainId, address indexed hub, address indexed recipient);
     event SettlementForwarded(address indexed recipient, address indexed lcc, uint256 amount, uint256 nonce);
 
@@ -42,8 +45,8 @@ contract SpokeRSC is AbstractReactive {
         address _recipient
     ) payable {
         if (
-            _originChainId == 0 || _liquidityHub == address(0) || _hubCallback == address(0) || _recipient == address(0)
-                || _service == address(0)
+            _originChainId == 0 || _destinationChainId == 0 || _liquidityHub == address(0) || _hubCallback == address(0)
+                || _recipient == address(0) || _service == address(0)
         ) {
             revert InvalidConfig();
         }
@@ -80,8 +83,10 @@ contract SpokeRSC is AbstractReactive {
         address lcc = address(uint160(log.topic_1));
         uint256 amount = abi.decode(log.data, (uint256));
 
+        nonce += 1;
+
         bytes memory payload =
-            abi.encodeWithSignature("recordSettlement(address,address,uint256)", lcc, recipient, amount);
+            abi.encodeWithSignature("recordSettlement(address,address,uint256,uint256)", lcc, recipient, amount, nonce);
 
         // Emit the callback to the HubCallback
         // This way the hubcallback contract can push the parameters to the HubRSC.
