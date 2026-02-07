@@ -7,8 +7,7 @@ import {SpokeRSC} from "reactive/SpokeRSC.sol";
 import {HubRSC} from "reactive/HubRSC.sol";
 
 contract HubSpokeRscTest is Test {
-    uint256 internal constant SETTLEMENT_QUEUED_TOPIC =
-        uint256(keccak256("SettlementQueued(address,address,uint256)"));
+    uint256 internal constant SETTLEMENT_QUEUED_TOPIC = uint256(keccak256("SettlementQueued(address,address,uint256)"));
     uint256 internal constant SETTLEMENT_REPORTED_TOPIC =
         uint256(keccak256("SettlementReported(address,address,address,uint256,uint256,address)"));
     uint256 internal constant LIQUIDITY_AVAILABLE_TOPIC =
@@ -21,14 +20,7 @@ contract HubSpokeRscTest is Test {
         address recipient = makeAddr("recipient");
         uint64 callbackGasLimit = 150_000;
 
-        SpokeRSC spoke = new SpokeRSC(
-            originChainId,
-            liquidityHub,
-            hubCallback,
-            recipient,
-            callbackGasLimit,
-            address(0)
-        );
+        SpokeRSC spoke = new SpokeRSC(originChainId, liquidityHub, hubCallback, recipient, callbackGasLimit, address(0));
 
         address lcc = makeAddr("lcc");
         uint256 amount = 123;
@@ -67,15 +59,7 @@ contract HubSpokeRscTest is Test {
 
     function test_hubIgnoresDuplicateNonce() public {
         HubRSC hub = new HubRSC(
-            1,
-            42161,
-            makeAddr("liquidityHub"),
-            makeAddr("hubCallback"),
-            makeAddr("receiver"),
-            200_000,
-            5,
-            5,
-            10
+            1, 42161, makeAddr("liquidityHub"), makeAddr("hubCallback"), makeAddr("receiver"), 200_000, 5, 5, 10
         );
 
         address spoke = makeAddr("spoke");
@@ -101,7 +85,7 @@ contract HubSpokeRscTest is Test {
         hub.react(log);
 
         bytes32 key = hub.pendingKey(lcc, recipient);
-        (, , uint256 amount, bool exists) = hub.pending(key);
+        (,, uint256 amount, bool exists) = hub.pending(key);
 
         assertTrue(exists);
         assertEq(amount, 10);
@@ -153,9 +137,9 @@ contract HubSpokeRscTest is Test {
         bytes32 key2 = hub.pendingKey(lcc, r2);
         bytes32 key3 = hub.pendingKey(lcc, r3);
 
-        (, , , bool e1) = hub.pending(key1);
-        (, , , bool e2) = hub.pending(key2);
-        (, , , bool e3) = hub.pending(key3);
+        (,,, bool e1) = hub.pending(key1);
+        (,,, bool e2) = hub.pending(key2);
+        (,,, bool e3) = hub.pending(key3);
 
         // Batch size is 2, so r1 & r2 are consumed, r3 remains.
         assertFalse(e1);
@@ -163,14 +147,11 @@ contract HubSpokeRscTest is Test {
         assertTrue(e3);
     }
 
-    function _settlementLog(
-        HubRSC hub,
-        address spoke,
-        address recipient,
-        address lcc,
-        uint256 amount,
-        uint256 nonce
-    ) internal view returns (IReactive.LogRecord memory) {
+    function _settlementLog(HubRSC hub, address spoke, address recipient, address lcc, uint256 amount, uint256 nonce)
+        internal
+        view
+        returns (IReactive.LogRecord memory)
+    {
         return IReactive.LogRecord({
             chain_id: 1,
             _contract: hub.hubCallback(),
