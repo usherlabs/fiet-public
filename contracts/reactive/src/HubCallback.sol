@@ -25,7 +25,7 @@ contract HubCallback is AbstractCallback, Ownable {
     /// @notice See: https://dev.reactive.network/origins-and-destinations#testnet-chains
     address public immutable callbackProxy;
 
-    /// @notice Last nonce accepted per Spoke.
+    /// @notice Tracks whether a recipient address is whitelisted.
     mapping(address => bool) public recipientIsWhitelisted;
 
     constructor(address _callbackProxy) payable AbstractCallback(_callbackProxy) Ownable(msg.sender) {
