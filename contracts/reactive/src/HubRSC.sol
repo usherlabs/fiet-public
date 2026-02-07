@@ -14,9 +14,9 @@ contract HubRSC is AbstractReactive {
     uint256 public constant LIQUIDITY_AVAILABLE_TOPIC =
         uint256(keccak256("LiquidityAvailable(address,address,uint256,bytes32)"));
 
-    /// @notice SettlementReported(address indexed recipient, address indexed lcc, uint256 amount).
+    /// @notice SettlementReported(address indexed recipient, address indexed lcc, uint256 amount, uint256 nonce).
     uint256 public constant SETTLEMENT_REPORTED_TOPIC =
-        uint256(keccak256("SettlementReported(address,address,uint256)"));
+        uint256(keccak256("SettlementReported(address,address,uint256,uint256)"));
 
     struct Pending {
         address lcc;
@@ -60,6 +60,9 @@ contract HubRSC is AbstractReactive {
 
     /// @notice Deduplicate SettlementReported logs.
     mapping(bytes32 => bool) public processedReport;
+
+    /// @notice Monotonic nonce per (lcc, recipient) for replay protection.
+    mapping(bytes32 => uint256) public lastNonce;
 
     /// @notice Ring buffer for pending keys.
     mapping(uint256 => bytes32) public queue;
@@ -144,7 +147,7 @@ contract HubRSC is AbstractReactive {
     function _handleSettlementReported(IReactive.LogRecord calldata log) internal {
         address recipient = address(uint160(log.topic_1));
         address lcc = address(uint160(log.topic_2));
-        uint256 amount = abi.decode(log.data, (uint256));
+        (uint256 amount, uint256 nonce) = abi.decode(log.data, (uint256, uint256));
 
         bytes32 reportId = keccak256(abi.encode(log.chain_id, log._contract, log.tx_hash, log.log_index));
         if (processedReport[reportId]) {
@@ -157,6 +160,11 @@ contract HubRSC is AbstractReactive {
         if (amount == 0) return;
 
         bytes32 key = pendingKey(lcc, recipient);
+        if (nonce <= lastNonce[key]) {
+            emit DuplicateLogIgnored(reportId);
+            return;
+        }
+        lastNonce[key] = nonce;
         Pending storage entry = pending[key];
 
         if (!entry.exists) {

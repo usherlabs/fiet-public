@@ -9,8 +9,12 @@ import {HubCallback} from "../src/HubCallback.sol";
 import {HubRSC} from "../src/HubRSC.sol";
 
 contract MockSystemContract {
+    /// @notice No-op subscription stub used in tests.
+    /// @dev Satisfies the system contract interface.
     function subscribe(uint256, address, uint256, uint256, uint256, uint256) external {}
 
+    /// @notice No-op unsubscription stub used in tests.
+    /// @dev Satisfies the system contract interface.
     function unsubscribe(uint256, address, uint256, uint256, uint256, uint256) external {}
 }
 
@@ -18,10 +22,27 @@ contract HubSpokeTest is Test {
     address private constant SYSTEM_CONTRACT = 0x0000000000000000000000000000000000fffFfF;
     uint256 private constant SETTLEMENT_QUEUED_TOPIC = uint256(keccak256("SettlementQueued(address,address,uint256)"));
     uint256 private constant SETTLEMENT_REPORTED_TOPIC =
-        uint256(keccak256("SettlementReported(address,address,uint256)"));
+        uint256(keccak256("SettlementReported(address,address,uint256,uint256)"));
     uint256 private constant LIQUIDITY_AVAILABLE_TOPIC =
         uint256(keccak256("LiquidityAvailable(address,address,uint256,bytes32)"));
     uint256 private constant MAX_BATCH_SIZE = 50;
+
+    address private service;
+    uint256 private originChainId;
+    uint256 private destinationChainId;
+    address private liquidityHub;
+    address private hubCallback;
+    address private destinationReceiverContract;
+
+    /// @notice Initializes common test fixtures.
+    function setUp() public {
+        service = makeAddr("service");
+        originChainId = 1;
+        destinationChainId = 2;
+        liquidityHub = makeAddr("liquidityHub");
+        hubCallback = makeAddr("hubCallback");
+        destinationReceiverContract = makeAddr("destinationReceiverContract");
+    }
 
     // Injects mock system-contract code at 0x...fffFfF to simulate RN context.
     function _etchSystemContract() internal {
@@ -42,12 +63,8 @@ contract HubSpokeTest is Test {
         return result;
     }
 
+    /// @notice Emits a callback when a matching SettlementQueued log is processed.
     function test_spokeReactEmitsCallback() public {
-        address service = makeAddr("service");
-        uint256 originChainId = 1;
-        uint256 destinationChainId = 2;
-        address liquidityHub = makeAddr("liquidityHub");
-        address hubCallback = makeAddr("hubCallback");
         address recipient = makeAddr("recipient");
 
         SpokeRSC spoke = new SpokeRSC(service, originChainId, destinationChainId, liquidityHub, hubCallback, recipient);
@@ -71,8 +88,8 @@ contract HubSpokeTest is Test {
         });
 
         bytes memory payload =
-            abi.encodeWithSignature("recordSettlement(address,address,uint256)", lcc, recipient, amount);
-        assertEq(payload.length, 100);
+            abi.encodeWithSignature("recordSettlement(address,address,uint256,uint256)", lcc, recipient, amount, 1);
+        assertEq(payload.length, 132);
 
         vm.expectEmit(true, true, true, true, address(spoke));
         emit IReactive.Callback(destinationChainId, hubCallback, 8000000, payload);
@@ -80,12 +97,8 @@ contract HubSpokeTest is Test {
         spoke.react(log);
     }
 
+    /// @notice Ignores logs where the recipient does not match the Spoke filter.
     function test_spokeIgnoresOtherRecipient() public {
-        address service = makeAddr("service");
-        uint256 originChainId = 1;
-        uint256 destinationChainId = 2;
-        address liquidityHub = makeAddr("liquidityHub");
-        address hubCallback = makeAddr("hubCallback");
         address recipient = makeAddr("recipient");
         address otherRecipient = makeAddr("otherRecipient");
 
@@ -119,6 +132,7 @@ contract HubSpokeTest is Test {
         }
     }
 
+    /// @notice Emits InvalidRecipient when the recipient is not whitelisted.
     function test_hubCallbackEmitsInvalidRecipient() public {
         address callbackProxy = makeAddr("callbackProxy");
         HubCallback callback = new HubCallback(callbackProxy);
@@ -130,14 +144,14 @@ contract HubSpokeTest is Test {
         vm.prank(callbackProxy);
         vm.expectEmit(true, true, false, true, address(callback));
         emit HubCallback.InvalidRecipient(recipient);
-        callback.recordSettlement(lcc, recipient, amount);
+        callback.recordSettlement(lcc, recipient, amount, 1);
     }
 
+    /// @notice Aggregates pending settlements from a SettlementReported log.
     function test_hubRscAggregatesPending() public {
         _clearSystemContract();
-        HubRSC hub = new HubRSC(
-            1, 2, makeAddr("liquidityHub"), makeAddr("hubCallback"), makeAddr("destinationReceiverContract")
-        );
+        HubRSC hub =
+            new HubRSC(originChainId, destinationChainId, liquidityHub, hubCallback, destinationReceiverContract);
 
         address recipient = makeAddr("recipient");
         address lcc = makeAddr("lcc");
@@ -150,7 +164,7 @@ contract HubSpokeTest is Test {
             topic_1: uint256(uint160(recipient)),
             topic_2: uint256(uint160(lcc)),
             topic_3: 0,
-            data: abi.encode(amount),
+            data: abi.encode(amount, uint256(1)),
             block_number: 0,
             op_code: 0,
             block_hash: 0,
@@ -166,11 +180,11 @@ contract HubSpokeTest is Test {
         assertEq(storedAmount, amount);
     }
 
+    /// @notice Ignores duplicate SettlementReported logs with the same tx/log identity.
     function test_hubRscIgnoresDuplicateLog() public {
         _clearSystemContract();
-        HubRSC hub = new HubRSC(
-            1, 2, makeAddr("liquidityHub"), makeAddr("hubCallback"), makeAddr("destinationReceiverContract")
-        );
+        HubRSC hub =
+            new HubRSC(originChainId, destinationChainId, liquidityHub, hubCallback, destinationReceiverContract);
 
         address recipient = makeAddr("recipient");
         address lcc = makeAddr("lcc");
@@ -183,7 +197,7 @@ contract HubSpokeTest is Test {
             topic_1: uint256(uint160(recipient)),
             topic_2: uint256(uint160(lcc)),
             topic_3: 0,
-            data: abi.encode(amount),
+            data: abi.encode(amount, uint256(1)),
             block_number: 0,
             op_code: 0,
             block_hash: 0,
@@ -200,11 +214,11 @@ contract HubSpokeTest is Test {
         assertEq(storedAmount, amount);
     }
 
+    /// @notice Dispatches a bounded batch when liquidity is available.
     function test_hubRscDispatchBoundedByBatchSize() public {
         _clearSystemContract();
-        HubRSC hub = new HubRSC(
-            1, 2, makeAddr("liquidityHub"), makeAddr("hubCallback"), makeAddr("destinationReceiverContract")
-        );
+        HubRSC hub =
+            new HubRSC(originChainId, destinationChainId, liquidityHub, hubCallback, destinationReceiverContract);
 
         address lcc = makeAddr("lcc");
         address recipient1 = makeAddr("recipient1");
@@ -265,7 +279,7 @@ contract HubSpokeTest is Test {
             topic_1: uint256(uint160(recipient)),
             topic_2: uint256(uint160(lcc)),
             topic_3: 0,
-            data: abi.encode(amount),
+            data: abi.encode(amount, nonce),
             block_number: 0,
             op_code: 0,
             block_hash: 0,
@@ -274,11 +288,11 @@ contract HubSpokeTest is Test {
         });
     }
 
+    /// @notice Creates a Spoke and stores it in the recipient mapping.
     function test_createSpokeSetsMapping() public {
         _etchSystemContract();
-        HubRSC hub = new HubRSC(
-            1, 2, makeAddr("liquidityHub"), makeAddr("hubCallback"), makeAddr("destinationReceiverContract")
-        );
+        HubRSC hub =
+            new HubRSC(originChainId, destinationChainId, liquidityHub, hubCallback, destinationReceiverContract);
 
         address recipient = makeAddr("recipient");
         address spoke = hub.createSpoke(recipient);
@@ -287,11 +301,11 @@ contract HubSpokeTest is Test {
         assertTrue(spoke != address(0));
     }
 
+    /// @notice Reverts when attempting to create a duplicate Spoke for a recipient.
     function test_createSpokeRevertsOnDuplicate() public {
         _etchSystemContract();
-        HubRSC hub = new HubRSC(
-            1, 2, makeAddr("liquidityHub"), makeAddr("hubCallback"), makeAddr("destinationReceiverContract")
-        );
+        HubRSC hub =
+            new HubRSC(originChainId, destinationChainId, liquidityHub, hubCallback, destinationReceiverContract);
 
         address recipient = makeAddr("recipient");
         hub.createSpoke(recipient);
@@ -300,11 +314,11 @@ contract HubSpokeTest is Test {
         hub.createSpoke(recipient);
     }
 
+    /// @notice Reverts when the recipient is the zero address.
     function test_createSpokeRevertsOnZeroRecipient() public {
         _etchSystemContract();
-        HubRSC hub = new HubRSC(
-            1, 2, makeAddr("liquidityHub"), makeAddr("hubCallback"), makeAddr("destinationReceiverContract")
-        );
+        HubRSC hub =
+            new HubRSC(originChainId, destinationChainId, liquidityHub, hubCallback, destinationReceiverContract);
 
         vm.expectRevert(abi.encodeWithSelector(HubRSC.InvalidConfig.selector));
         hub.createSpoke(address(0));
