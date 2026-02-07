@@ -47,9 +47,8 @@ contract HubCallback is AbstractCallback {
     function recordSettlement(address lcc, address recipient, uint256 amount) external authorizedSenderOnly {
         if (recipientIsWhitelisted[recipient] != true) {
             emit InvalidRecipient(recipient);
-        }else{
+        } else {
             emit SettlementReported(recipient, lcc, amount);
         }
-
     }
 }
