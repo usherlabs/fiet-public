@@ -37,7 +37,6 @@ contract SpokeRSC is AbstractReactive {
     event SettlementForwarded(address indexed recipient, address indexed lcc, uint256 amount, uint256 nonce);
 
     constructor(
-        address _service, // 0x0000000000000000000000000000000000fffFfF
         uint256 _originChainId,
         uint256 _destinationChainId,
         address _liquidityHub,
@@ -46,11 +45,10 @@ contract SpokeRSC is AbstractReactive {
     ) payable {
         if (
             _originChainId == 0 || _destinationChainId == 0 || _liquidityHub == address(0) || _hubCallback == address(0)
-                || _recipient == address(0) || _service == address(0)
+                || _recipient == address(0)
         ) {
             revert InvalidConfig();
         }
-        service = ISystemContract(payable(_service));
 
         originChainId = _originChainId;
         destinationChainId = _destinationChainId;
@@ -86,7 +84,7 @@ contract SpokeRSC is AbstractReactive {
         nonce += 1;
 
         bytes memory payload =
-            abi.encodeWithSignature("recordSettlement(address,address,uint256,uint256)", lcc, recipient, amount, nonce);
+            abi.encodeWithSignature("recordSettlement(address,address,address,uint256,uint256)", address(this), lcc, recipient, amount, nonce);
 
         // Emit the callback to the HubCallback
         // This way the hubcallback contract can push the parameters to the HubRSC.
