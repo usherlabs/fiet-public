@@ -1,0 +1,49 @@
+## Fiet Protocol (Reactive) - developer commands
+
+set dotenv-load
+set export
+
+reactive_rpc := env_var("REACTIVE_RPC")
+protocol_rpc := env_var("PROTOCOL_RPC")
+broadcast := env_var_or_default("BROADCAST", "false")
+broadcast_flag := if broadcast == "true" { "--broadcast" } else { "" }
+
+[private]
+default:
+  @just --list --unsorted
+
+# ----------------------------
+# Build & test
+# ----------------------------
+build:
+  forge build
+
+test:
+  forge test
+
+# ----------------------------
+# Deploy scripts
+# ----------------------------
+deploy-mock-liquidity-hub:
+  forge script scripts/_mocks/DeployMockLiquidityHub.s.sol:DeployMockLiquidityHub --rpc-url {{ protocol_rpc }} {{ broadcast_flag }}
+
+deploy-receiver:
+  forge script scripts/DeployReceiver.s.sol:DeployReceiver --rpc-url {{ protocol_rpc }} {{ broadcast_flag }}
+
+deploy-reactive-hub:
+  bash scripts/DeployReactiveHub.sh
+
+deploy-hub:
+  @just deploy-reactive-hub
+
+deploy-spoke recipient:
+  bash scripts/deployreactivespoke.sh {{ recipient }}
+
+e2e:
+  bash test/e2e.sh
+
+whitelistspokeforrecipient:
+  forge script scripts/WhitelistSpokeForRecipient.s.sol:WhitelistSpokeForRecipient --rpc-url {{ reactive_rpc }} {{ broadcast_flag }}
+
+fund-contract contract_addr amount_wei:
+  bash scripts/fundcontract.sh {{ contract_addr }} {{ amount_wei }}

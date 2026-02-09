@@ -6,8 +6,20 @@ remappings = [
   "reactive-lib/=lib/reactive-lib/src/",
   "openzeppelin-contracts/=../evm/lib/openzeppelin-contracts/",
   "@openzeppelin/=../evm/lib/openzeppelin-contracts/",
+  "evm/=../evm/src/",
+  "v4-periphery/=../evm/lib/v4-periphery/",
+  "@uniswap/v4-core/=../evm/lib/v4-periphery/lib/v4-core/",
+  "v4-core/=../evm/lib/v4-periphery/lib/v4-core/src/",
+  "solady/=../evm/lib/solady/src/",
 ]
 
-allow_paths = ["lib/reactive-lib/src", "../evm/lib/openzeppelin-contracts"]
+allow_paths = [
+  "lib/reactive-lib/src",
+  "../evm/lib/openzeppelin-contracts",
+  "../evm/lib/reactive-lib/src",
+  "../evm/lib/v4-periphery",
+  "../evm/lib/solady",
+  "../evm/src",
+]
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
