@@ -167,7 +167,7 @@ $$
 \text{rfsDelta}_A = \text{req}_A - \text{settled}_A(p)
 $$
 
-If \(\text{rfsDelta}_A > 0\) for either token, RfS is open and settlement is required. If \(\text{rfsDelta}_A < 0\), the magnitude represents withdrawable excess settlement (subject to additional clamping by available market liquidity).
+If \(\text{rfsDelta}\_A > 0\) for either token, RfS is open and settlement is required. If \(\text{rfsDelta}\_A < 0\), the magnitude represents withdrawable excess settlement (subject to additional clamping by available market liquidity).
 
 ### 2) Immediate seizure eligibility
 
@@ -339,3 +339,158 @@ The protocol’s current “unbacked commitment” handling is:
 - **Permissionless to materialise**: anyone can checkpoint and cause deficits to be computed.
 - **Hard to ignore**: deficits inflate RfS and enable immediate seizure.
 - **Compatible with multi-market leverage** under a single commit, provided market makers operate with strong signal renewal discipline, adequate reserve buffers, and careful settlement withdrawal policies.
+
+## Implementation specification
+
+### Design goal (O(1) intervention)
+
+The protocol deliberately avoids any “commit-wide iterate over all positions” mechanism. Instead:
+
+- **Checkpointing is position-specific** (constant work), and
+- insolvency is represented as a **position-level** `commitmentDeficit` in token units.
+
+This yields O(1) intervention costs per position, regardless of how many positions are linked to a commit.
+
+### Architecture overview
+
+At a high level, a checkpoint does two things:
+
+1. **RfS state tracking**: mark whether the position is currently open or closed for settlement (used for grace-period based seizure).
+2. **Commitment backing verification** (optional): if `withCommitment=true`, compute whether the position is backed by the commit’s signal plus its settled liquidity, and update `commitmentDeficit` accordingly.
+
+The logical call chain is:
+
+```text
+MMPositionManager / router
+  └─ VTSOrchestrator.checkpoint(commitId, positionIndex, withCommitment)
+       ├─ VTSPositionLib.calcRFS(...)              // computes RfS delta + rfsOpen
+       ├─ CheckpointLibrary.markCheckpoint(...)    // stores/open-closes RfS checkpoint
+       └─ if withCommitment:
+            └─ VTSCommitLib.checkpointWithCommitment(...)
+```
+
+### Core data structures
+
+#### RfS checkpoint (per position)
+
+Each position stores a checkpoint struct recording transitions into/out of RfS-open states and any grace period extensions.
+
+Conceptually:
+
+```solidity
+struct RFSCheckpoint {
+    uint256 timeOfLastTransition;
+    bool isOpen;
+    uint256 gracePeriodExtension0;
+    uint256 gracePeriodExtension1;
+}
+```
+
+#### Commitment deficit (per position)
+
+The insolvency gate is `PositionAccounting.commitmentDeficit`:
+
+```solidity
+struct PositionAccounting {
+    // ...
+    TokenPairUint commitmentDeficit; // token0/token1 deficit in raw token units
+}
+```
+
+### Checkpoint modes
+
+Checkpoint runs in two modes:
+
+- **Basic** (`withCommitment=false`): only updates RfS checkpoint state.
+- **Full** (`withCommitment=true`): updates RfS checkpoint state **and** updates `commitmentDeficit` via backing checks.
+
+### Commitment backing verification uses stored signal state
+
+Backing verification does **not** verify a fresh LiquiditySignal on every checkpoint. Instead:
+
+- `commitSignal` / `renewSignal` verify the signal and store `Commit.mmState` on-chain.
+- `checkpointWithCommitment` reads the stored `mmState` and computes \(\text{signalUsd}(c)\) from it.
+
+This keeps checkpointing permissionless and cheap, while making signal renewal cadence an explicit operational responsibility for market makers.
+
+### Effective issued exposure (issuedUsd)
+
+Issued amounts are computed from the position’s **effective token amounts** at the current price (not commitment maxima):
+
+```solidity
+(uint160 sqrtPriceX96, int24 currentTick,,) = poolManager.getSlot0(pos.poolId);
+(uint256 eff0, uint256 eff1) = LiquidityUtils.calculateEffectiveTokenAmounts(
+    sqrtPriceX96, currentTick, pos.tickLower, pos.tickUpper, int256(pos.liquidity)
+);
+uint256 issuedUsd = OracleUtils.lccPairValue(oracleHelper, currency0, eff0, currency1, eff1);
+```
+
+This ensures the backing check reflects the position’s live exposure at the current price.
+
+### Deficit calculation and update (two cases)
+
+Let:
+
+$$
+\text{backingUsd}(p) = \text{signalUsd}(c) + \text{settledUsd}(p)
+$$
+
+#### Case 1: sufficient backing (deficit clawback)
+
+If \(\text{issuedUsd}(p) \le \text{backingUsd}(p)\), backing is sufficient. If a deficit exists, it is reduced (or cleared) based on surplus:
+
+$$
+\text{surplusUsd}(p) = \text{backingUsd}(p) - \text{issuedUsd}(p)
+$$
+
+- If \(\text{surplusUsd} \ge \text{currentDeficitUsd}\): clear deficit.
+- Otherwise: reduce `commitmentDeficit0/1` proportionally to the surplus.
+
+This “clawback” behaviour allows recovery from temporary backing shortfalls without requiring the maker to eliminate the full deficit in a single action.
+
+#### Case 2: insufficient backing (set new deficit)
+
+If \(\text{issuedUsd}(p) > \text{backingUsd}(p)\), compute:
+
+$$
+\text{deficitUsd}(p) = \text{issuedUsd}(p) - \text{backingUsd}(p)
+$$
+
+$$
+\text{deficitBps}(p) = \left\lfloor \frac{\text{deficitUsd}(p) \cdot 10000}{\text{issuedUsd}(p)} \right\rfloor
+$$
+
+and set token-unit deficits proportionally to effective amounts:
+
+$$
+\text{commitmentDeficit0}(p) \approx \text{eff0}(p) \cdot \frac{\text{deficitBps}(p)}{10000}
+$$
+
+$$
+\text{commitmentDeficit1}(p) \approx \text{eff1}(p) \cdot \frac{\text{deficitBps}(p)}{10000}
+$$
+
+### Seizability determination (two paths)
+
+A position becomes seizable by either:
+
+1. **Immediate seizure via commitment deficit**: if `commitmentDeficit0 > 0 || commitmentDeficit1 > 0`, the position is immediately seizable (this is the insolvency gate).
+2. **Grace-period based seizure**: otherwise, if the RfS checkpoint is open and the grace period has elapsed.
+
+### Settlement and deficit consumption ordering
+
+When settlements are posted, the accounting nets in this order:
+
+1. net against swap-attributed cumulative deficits,
+2. net against `commitmentDeficit`, and only then
+3. increase the position’s settled amounts.
+
+This ensures settlements address insolvency pressure before creating “excess settlement” that could later be withdrawn.
+
+### Events (observability)
+
+Operationally relevant events include:
+
+- `Checkpointed(commitId, positionIndex, checkpoint, withCommitment)`
+- `GracePeriodExtended(...)`
+- `PositionSettled(...)`
