@@ -1,0 +1,89 @@
+---
+title: Core concepts
+description: Key concepts for integrating with quotes, swap instructions, payment plans, and Digital Collect.
+---
+
+## Non-custodial posture
+
+The Business API is **non-custodial infrastructure**:
+
+- It **does not** sign transactions
+- It **does not** broadcast transactions
+- It has **no access** to your keys or customer funds
+
+Instead, the API returns **derived data** (quotes) and **actionable outputs** (instructions and plans). You execute them using your own infrastructure (or the Client Node, coming soon).
+
+## Quote semantics
+
+`GET /v1/quote` returns a **derived** quote from current on-chain market state.
+
+- Quotes are **not persisted** as entities.
+- Responses include `asOf` provenance and an `expiresAt` time.
+- Amounts are expressed as **strings in smallest units** to avoid floating-point issues.
+
+Trade types:
+
+- `EXACT_IN`: you specify the input amount; the response gives the output amount.
+- `EXACT_OUT`: you specify the output amount; the response gives the required input amount.
+
+## The instruction model
+
+Swap and payment responses include ordered `instructions[]`. Each instruction represents an on-chain action to execute, including:
+
+- **where** to call (`to`)
+- **what** to call (`data`, calldata hex)
+- **how much value** to send (`value`, wei as a string)
+- **constraints** such as `notAfter` and `maxSlippageBps`
+
+You sign and submit these instructions on-chain.
+
+## Payment corridors
+
+A **corridor** identifies a supported route for moving value from a source to a target (for example, `usdc-eth->aud-bank`). Corridors let you:
+
+- validate what routes are available before creating a payment
+- select the appropriate route for a customer or region
+
+See [Markets](/business/endpoint/markets) for corridor discovery.
+
+## Payment plans and steps
+
+`POST /v1/payments` returns a **PaymentPlan**: an ordered list of steps with stable identifiers for reconciliation.
+
+Common step types include:
+
+- `AWAIT_DEPOSIT`
+- `EXECUTE_SWAP` (includes `instructions[]`)
+- `CUSTODIAN_PAYOUT` (includes a `custodianAction` envelope)
+- `SEND_DIGITAL_COLLECT`
+
+Each step has a lifecycle status such as `PENDING`, `READY`, `DONE`, or `FAILED`.
+
+The request includes a `clientReference` so you can correlate plans to internal ERP/payment records.
+
+## Digital Collect
+
+When `options.mode=DIGITAL_COLLECT`, the payment includes a recipient collection experience:
+
+- Your integration provides the recipient’s email address.
+- The recipient receives an email with a link to the **Fiet-hosted Digital Collect UI**.
+- In that UI, the recipient chooses how they want to receive funds, for example:
+  - an **EVM wallet** (connect or paste an address)
+  - a **bank account** (region-specific details)
+  - an **eMoney wallet** (provider-specific identifier)
+- Funds are delivered to the recipient’s selected destination.
+
+This means you do **not** need to build a recipient-facing wallet/bank detail capture UI for collect flows.
+
+## Error handling
+
+Where applicable, errors follow an RFC 7807-style `Problem` shape:
+
+```json
+{
+  "type": "string",
+  "title": "string",
+  "status": 400,
+  "detail": "string"
+}
+```

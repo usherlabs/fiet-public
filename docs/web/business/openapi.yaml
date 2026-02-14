@@ -1,0 +1,484 @@
+openapi: 3.1.0
+info:
+  title: Fiet Business API (Core)
+  version: 0.1.0
+  description: |
+    Hosted control-plane API for the Fiet Interface.
+
+    ## Non-custodial posture
+    - This service **does not** sign transactions.
+    - This service **does not** broadcast transactions.
+    - This service has **no access** to customer funds or keys.
+
+    ## Quote semantics
+    `GET /v1/quote` returns **derived** values from live chain state and indexed markets.
+    It does not create or persist a “quote entity”.
+
+servers:
+  - url: https://api.fiet.finance
+    description: Production (example)
+
+tags:
+  - name: Health
+  - name: Markets
+  - name: Quote
+  - name: Swap
+  - name: Payments
+
+components:
+  securitySchemes:
+    basicAuth:
+      type: http
+      scheme: basic
+      description: Basic Auth (assumed at gateway for MVP)
+
+  schemas:
+    Problem:
+      type: object
+      required: [type, title, status]
+      properties:
+        type: { type: string }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+
+    ChainId:
+      type: integer
+      format: uint64
+      examples: [1]
+
+    EvmAddress:
+      type: string
+      pattern: "^0x[a-fA-F0-9]{40}$"
+      examples: ["0x742d35Cc6634C0532925a3b844Bc9e7595f5fE4b"]
+
+    AsOf:
+      type: object
+      required: [timestamp]
+      properties:
+        blockNumber:
+          type: integer
+          format: uint64
+          description: Block number used for derivation (when available)
+          examples: [19500000]
+        timestamp:
+          type: string
+          format: date-time
+          description: Timestamp for the derived response
+
+    Quote:
+      type: object
+      required:
+        [
+          asOf,
+          expiresAt,
+          chainId,
+          tokenIn,
+          tokenOut,
+          tradeType,
+          amountIn,
+          amountOut,
+        ]
+      properties:
+        asOf: { $ref: "#/components/schemas/AsOf" }
+        expiresAt:
+          type: string
+          format: date-time
+        chainId: { $ref: "#/components/schemas/ChainId" }
+        tokenIn: { $ref: "#/components/schemas/EvmAddress" }
+        tokenOut: { $ref: "#/components/schemas/EvmAddress" }
+        tradeType:
+          type: string
+          enum: [EXACT_IN, EXACT_OUT]
+        amountIn:
+          type: string
+          description: Exact input amount (smallest units as a string)
+          examples: ["1000000"]
+        amountOut:
+          type: string
+          description: Exact output amount (smallest units as a string)
+          examples: ["999000"]
+        fees:
+          type: object
+          description: Fee breakdown (protocol, gas estimate, etc.)
+          additionalProperties: true
+        route:
+          type: object
+          description: Router/path details (implementation-defined)
+          additionalProperties: true
+
+    Instruction:
+      type: object
+      required: [kind, chainId, to, data, value, constraints]
+      properties:
+        kind:
+          type: string
+          enum: [EVM_CALL]
+        chainId: { $ref: "#/components/schemas/ChainId" }
+        to: { $ref: "#/components/schemas/EvmAddress" }
+        data:
+          type: string
+          description: Calldata hex
+          examples: ["0x"]
+        value:
+          type: string
+          description: Wei as a string
+          examples: ["0"]
+        constraints:
+          type: object
+          properties:
+            notAfter:
+              type: string
+              format: date-time
+            maxSlippageBps:
+              type: integer
+              minimum: 0
+              maximum: 5000
+              examples: [50]
+
+    SwapPlanRequest:
+      type: object
+      required: [chainId, tokenIn, tokenOut, tradeType, amount, slippageBps]
+      properties:
+        chainId: { $ref: "#/components/schemas/ChainId" }
+        tokenIn: { $ref: "#/components/schemas/EvmAddress" }
+        tokenOut: { $ref: "#/components/schemas/EvmAddress" }
+        tradeType:
+          type: string
+          enum: [EXACT_IN, EXACT_OUT]
+        amount:
+          type: string
+          description: Amount (smallest units as string). Interpretation depends on tradeType.
+          examples: ["1000000"]
+        slippageBps:
+          type: integer
+          minimum: 0
+          maximum: 5000
+          default: 50
+        recipient:
+          allOf:
+            - $ref: "#/components/schemas/EvmAddress"
+          description: Recipient address for swap outputs (when applicable)
+        deadline:
+          type: string
+          format: date-time
+
+    SwapPlan:
+      type: object
+      required: [quote]
+      properties:
+        quote: { $ref: "#/components/schemas/Quote" }
+        instructions:
+          type: array
+          description: |
+            Ordered list of on-chain instructions required to complete the plan.
+
+            Notes:
+            - For same-chain swaps, this will usually contain exactly 1 instruction.
+            - Future upgrades (e.g. approvals, multi-call routers, cross-chain) can return 2+ items.
+          items: { $ref: "#/components/schemas/Instruction" }
+
+    MarketChain:
+      type: object
+      required: [chainId, name]
+      properties:
+        chainId: { $ref: "#/components/schemas/ChainId" }
+        name: { type: string, examples: ["Ethereum Mainnet"] }
+
+    MarketToken:
+      type: object
+      required: [chainId, address, symbol, decimals]
+      properties:
+        chainId: { $ref: "#/components/schemas/ChainId" }
+        address: { $ref: "#/components/schemas/EvmAddress" }
+        symbol: { type: string, examples: ["USDC"] }
+        decimals: { type: integer, examples: [6] }
+
+    Corridor:
+      type: object
+      required: [id, source, target]
+      properties:
+        id: { type: string, examples: ["usdc-eth->aud-bank"] }
+        source:
+          type: object
+          additionalProperties: true
+        target:
+          type: object
+          additionalProperties: true
+        constraints:
+          type: object
+          additionalProperties: true
+
+    CreatePaymentRequest:
+      type: object
+      required: [clientReference, corridorId, amountIn, recipient]
+      properties:
+        clientReference:
+          type: string
+          maxLength: 128
+          examples: ["erp-payment-001"]
+        corridorId:
+          type: string
+          examples: ["usdc-eth->aud-bank"]
+        amountIn:
+          type: string
+          description: Input amount (smallest units) as string
+          examples: ["1000000"]
+        recipient:
+          type: object
+          description: Recipient details (bank recipient, or digital collect recipient, etc.)
+          additionalProperties: true
+        options:
+          type: object
+          properties:
+            mode:
+              type: string
+              enum: [STANDARD, DIGITAL_COLLECT]
+              default: STANDARD
+
+    PaymentPlanStep:
+      type: object
+      required: [stepId, type, status]
+      properties:
+        stepId: { type: string, examples: ["step-1"] }
+        type:
+          type: string
+          enum:
+            [
+              AWAIT_DEPOSIT,
+              EXECUTE_SWAP,
+              CUSTODIAN_PAYOUT,
+              SEND_DIGITAL_COLLECT,
+            ]
+        status:
+          type: string
+          enum: [PENDING, READY, DONE, FAILED]
+          default: PENDING
+        instructions:
+          type: array
+          description: Ordered list of on-chain instructions for this step (when applicable).
+          items: { $ref: "#/components/schemas/Instruction" }
+        custodianAction:
+          type: object
+          description: Action for regulated custodian/issuer integration (implementation-defined)
+          additionalProperties: true
+
+    PaymentPlan:
+      type: object
+      required: [planId, steps]
+      properties:
+        planId: { type: string, examples: ["plan_123"] }
+        steps:
+          type: array
+          items: { $ref: "#/components/schemas/PaymentPlanStep" }
+
+security:
+  - basicAuth: []
+
+paths:
+  /health:
+    get:
+      tags: [Health]
+      summary: Health check
+      x-mint:
+        content: |
+          <Note>
+          See the [Introduction](/business/introduction) for a quick overview of how the Business API fits into your integration.
+          </Note>
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: string
+                examples: ["healthy"]
+
+  /v1/markets/chains:
+    get:
+      tags: [Markets]
+      summary: List supported chains
+      x-mint:
+        content: |
+          <Note>
+          For the recommended discovery flow, see [Markets](/business/endpoint/markets).
+          </Note>
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/MarketChain" }
+
+  /v1/markets/tokens:
+    get:
+      tags: [Markets]
+      summary: List supported tokens
+      x-mint:
+        content: |
+          <Note>
+          For how to use tokens (including `decimals`), see [Markets](/business/endpoint/markets).
+          </Note>
+      parameters:
+        - name: chainId
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/ChainId" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/MarketToken" }
+
+  /v1/markets/corridors:
+    get:
+      tags: [Markets]
+      summary: List supported corridors
+      x-mint:
+        content: |
+          <Note>
+          Corridors define available routes (for example, which payout rails are supported). See [Markets](/business/endpoint/markets).
+          </Note>
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Corridor" }
+
+  /v1/quote:
+    get:
+      tags: [Quote]
+      summary: Get a live derived quote (not persisted)
+      x-mint:
+        content: |
+          <Note>
+          For a conceptual overview of quoting and trade types, see the [Quote guide](/business/endpoint/quote).
+          </Note>
+      parameters:
+        - name: chainId
+          in: query
+          required: true
+          schema: { $ref: "#/components/schemas/ChainId" }
+        - name: tokenIn
+          in: query
+          required: true
+          schema: { $ref: "#/components/schemas/EvmAddress" }
+        - name: tokenOut
+          in: query
+          required: true
+          schema: { $ref: "#/components/schemas/EvmAddress" }
+        - name: tradeType
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [EXACT_IN, EXACT_OUT]
+        - name: amount
+          in: query
+          required: true
+          schema:
+            type: string
+            description: Amount (smallest units) as string. Interpretation depends on tradeType.
+        - name: slippageBps
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 5000
+            default: 50
+      responses:
+        "200":
+          description: Quote
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Quote" }
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /v1/swap:
+    post:
+      tags: [Swap]
+      summary: Produce swap instruction (calldata) for client execution
+      x-mint:
+        content: |
+          <Note>
+          This endpoint returns swap instructions only. For execution options (direct vs Client Node), see the [Swap guide](/business/endpoint/swap).
+          </Note>
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SwapPlanRequest" }
+            examples:
+              sample:
+                value:
+                  chainId: 1
+                  tokenIn: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+                  tokenOut: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"
+                  tradeType: EXACT_IN
+                  amount: "1000000"
+                  slippageBps: 50
+      responses:
+        "200":
+          description: Swap plan
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SwapPlan" }
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /v1/payments:
+    post:
+      tags: [Payments]
+      summary: Produce a multi-step payment plan (no execution)
+      x-mint:
+        content: |
+          <Note>
+          For step types, lifecycle, and the Digital Collect recipient experience, see the [Payments guide](/business/endpoint/payments).
+          </Note>
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreatePaymentRequest" }
+            examples:
+              sample:
+                value:
+                  clientReference: "erp-payment-001"
+                  corridorId: "usdc-eth->aud-bank"
+                  amountIn: "1000000"
+                  recipient:
+                    type: "bank"
+                    name: "Acme Pty Ltd"
+                    country: "AU"
+                    account:
+                      bsb: "062000"
+                      accountNumber: "12345678"
+                  options:
+                    mode: STANDARD
+      responses:
+        "201":
+          description: Payment plan
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PaymentPlan" }
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Problem" }

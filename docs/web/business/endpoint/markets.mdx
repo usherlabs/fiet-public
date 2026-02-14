@@ -1,0 +1,49 @@
+---
+title: Markets
+description: Discover supported chains, tokens, and payment corridors before quoting or creating payments.
+---
+
+## Overview
+
+The Markets endpoints are read-only discovery tools. Use them to understand what the Business API supports before you request quotes or create payments.
+
+## Chains
+
+`GET /v1/markets/chains` returns supported EVM networks.
+
+Use cases:
+
+- populate a chain selector in your app
+- validate a chainId before quoting
+
+## Tokens
+
+`GET /v1/markets/tokens` returns supported tokens, optionally filtered by `chainId`.
+
+Each token includes:
+
+- `chainId`
+- token contract `address`
+- `symbol`
+- `decimals`
+
+Use cases:
+
+- populate token dropdowns
+- validate token pairs for quoting and swaps
+- display human-readable amounts (using `decimals`)
+
+## Corridors
+
+`GET /v1/markets/corridors` returns supported payment corridors (routes).
+
+Corridors are referenced by `id` (for example, `usdc-eth->aud-bank`) and may include constraints and metadata needed to select the right route.
+
+Use cases:
+
+- determine which payout routes are available for a customer/region
+- choose a corridorId when creating a payment plan
+
+## Next steps
+
+- Get a live derived quote: [Quote](/business/endpoint/quote)
