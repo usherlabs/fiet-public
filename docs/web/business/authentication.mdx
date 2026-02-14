@@ -1,0 +1,47 @@
+---
+title: Authentication
+description: How to authenticate requests to the Fiet Business API.
+---
+
+## Authentication method
+
+The Fiet Business API uses **HTTP Basic Authentication** (MVP). Credentials are issued per organisation and environment.
+
+Include an `Authorization` header on every request:
+
+- `Authorization: Basic <base64(username:password)>`
+
+## Environments
+
+| Environment | Base URL |
+|---|---|
+| Production (example) | `https://api.fiet.finance` |
+| Sandbox | Coming soon |
+
+## Example request
+
+```bash
+curl -sS \
+  -H "Authorization: Basic <base64(username:password)>" \
+  "https://api.fiet.finance/health"
+```
+
+## Error responses
+
+Common responses you should handle:
+
+- **401 Unauthorized**: missing or invalid credentials
+- **403 Forbidden**: credentials are valid, but access is not permitted
+- **400 Bad Request**: invalid parameters or request body (see `Problem` schema)
+
+Where applicable, error responses follow an RFC 7807-style shape:
+
+```json
+{
+  "type": "string",
+  "title": "string",
+  "status": 400,
+  "detail": "string"
+}
+```
+
