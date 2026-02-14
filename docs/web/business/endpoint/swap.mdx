@@ -1,0 +1,66 @@
+---
+title: Swap
+description: Generate swap instructions (calldata + constraints) for client-side execution.
+---
+
+## Overview
+
+`POST /v1/swap` returns a **SwapPlan**:
+
+- a fresh derived `quote`
+- an ordered list of `instructions[]` to execute on-chain
+
+The Business API produces instructions only. It does **not** sign or broadcast transactions.
+
+## Request parameters
+
+The request includes:
+
+- `chainId`, `tokenIn`, `tokenOut`
+- `tradeType` (`EXACT_IN` or `EXACT_OUT`)
+- `amount` (smallest units as a string)
+- `slippageBps` (basis points)
+
+Optional fields may include:
+
+- `recipient`: where swap outputs should be sent (if applicable)
+- `deadline`: a time-bound constraint for execution
+
+## Understanding the response
+
+`SwapPlan.instructions[]` is an ordered list of EVM calls. Each instruction includes:
+
+- `to`: contract address to call (typically a router)
+- `data`: calldata hex
+- `value`: wei to send (as a string)
+- `constraints`: execution constraints such as `notAfter` and `maxSlippageBps`
+
+In many same-chain swaps, `instructions[]` contains exactly one item. Future upgrades may return multiple instructions (for example, approval + swap).
+
+## Who executes?
+
+- **Direct integration (core):** you call the Business API and receive `instructions[]`. You sign and broadcast using your own wallet infrastructure.
+- **Client Node (coming soon):** you call your self-hosted Client Node with `executionMode=execute`. It fetches the swap plan from the Business API, then signs and broadcasts locally, returning execution receipts (such as `txHash`).
+
+See [Architecture and workflows](/business/architecture) for the end-to-end diagrams.
+
+## Example
+
+```bash
+curl -sS \
+  -H "Authorization: Basic <base64(username:password)>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "chainId": 1,
+    "tokenIn": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+    "tokenOut": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+    "tradeType": "EXACT_IN",
+    "amount": "1000000",
+    "slippageBps": 50
+  }' \
+  "https://api.fiet.finance/v1/swap"
+```
+
+## Next steps
+
+- Orchestrate a multi-step payout: [Payments](/business/endpoint/payments)

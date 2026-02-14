@@ -1,0 +1,74 @@
+---
+title: Fiet Business API
+description: Fiat-fiat, fiat-crypto and crypto-crypto Fiet markets in an API.
+---
+
+## What is the Fiet Business API?
+
+Discover markets, get live quotes, then obtain and execute on token swap or fiat payment instructions. Designed for fintechs and businesses integrating moving global currencies.
+
+<Note>
+  The Fiet Business API is **not yet publicly released**. Expect initial
+  availability in **Q2 2026**. <br />
+  **API design and documentation are subject to change.**
+</Note>
+
+The **Fiet Business API** gives businesses and fintechs a single hosted API surface for:
+
+- **Discovering supported markets** (chains, tokens, corridors)
+- **Fetching live derived quotes** from current on-chain state
+- **Generating swap instructions** (calldata + constraints) for you to execute
+- **Producing multi-step payment plans** for cross-border and off-ramp workflows
+- **Sending Digital Collect requests** where recipients complete a short, Fiet-hosted collection flow
+
+The Business API is **non-custodial infrastructure**:
+
+- It **does not** sign transactions
+- It **does not** broadcast transactions
+- It has **no access** to your keys or customer funds
+
+## What you can build
+
+<CardGroup cols={2}>
+  <Card title="Market discovery" href="/business/endpoint/markets">
+    Populate chain/token selectors and validate corridors before quoting or
+    payments.
+  </Card>
+  <Card title="Live quotes" href="/business/endpoint/quote">
+    Request derived pricing for swaps using `EXACT_IN` or `EXACT_OUT` semantics.
+  </Card>
+  <Card title="Stablecoin or Token swaps" href="/business/endpoint/swap">
+    Get calldata and constraints as ordered instructions for client-side
+    execution.
+  </Card>
+  <Card title="Cross-border payments" href="/business/endpoint/payments">
+    Orchestrate deposit, swap, and payout steps with stable references for
+    reconciliation.
+  </Card>
+</CardGroup>
+
+## Architecture at a glance
+
+Fiet provides the **planning** (quotes, instructions, plans). **You** control **execution** (signing and broadcasting), either with your own wallet infrastructure or via the **Client Node** (coming soon).
+
+For the full workflow diagrams (including Digital Collect recipient experience), see the Architecture page:
+
+- [Business API architecture](/business/architecture)
+
+## Quick links
+
+<CardGroup cols={2}>
+  <Card title="Architecture" href="/business/architecture">
+    Understand the end-to-end experience for swaps, payments, and Digital
+    Collect.
+  </Card>
+  <Card title="Authentication" href="/business/authentication">
+    How to authenticate requests and handle common errors.
+  </Card>
+  <Card title="Core concepts" href="/business/core-concepts">
+    Quotes, instructions, corridors, plans, and step lifecycles.
+  </Card>
+  <Card title="Your first quote" href="/business/endpoint/quote">
+    Make a derived quote request and interpret the response.
+  </Card>
+</CardGroup>

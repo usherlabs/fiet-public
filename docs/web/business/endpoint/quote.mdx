@@ -1,0 +1,40 @@
+---
+title: Quote
+description: Fetch live derived quotes for swaps using EXACT_IN or EXACT_OUT semantics.
+---
+
+## Overview
+
+A quote is a **derived** view of pricing based on current on-chain market state. Quotes are **ephemeral**:
+
+- `GET /v1/quote` does not create or persist a quote entity.
+- Responses include `asOf` provenance and an `expiresAt` timestamp.
+
+## Trade types
+
+- `**EXACT_IN**`: you specify the exact input amount; you receive the expected output amount.
+- `**EXACT_OUT**`: you specify the exact output amount; you receive the required input amount.
+
+Amounts are expressed as **strings in smallest units** (for example, USDC with 6 decimals).
+
+## Reading the response
+
+Key fields in the `Quote` response:
+
+- `asOf`: provenance for the derived response (block reference and timestamp when available)
+- `expiresAt`: how long the quote should be considered valid for planning
+- `amountIn` / `amountOut`: smallest units as strings
+- `fees`: breakdown (when available)
+- `route`: routing details (implementation-defined)
+
+## Example
+
+```bash
+curl -sS \
+  -H "Authorization: Basic <base64(username:password)>" \
+  "https://api.fiet.finance/v1/quote?chainId=1&tokenIn=0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48&tokenOut=0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2&tradeType=EXACT_IN&amount=1000000&slippageBps=50"
+```
+
+## Next steps
+
+- Generate swap instructions: [Swap](/business/endpoint/swap)

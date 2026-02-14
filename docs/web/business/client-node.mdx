@@ -1,0 +1,46 @@
+---
+title: Client Node (coming soon)
+description: Self-hosted execution-plane for signing and broadcasting transactions locally.
+---
+
+<Note>
+  The Client Node is an optional, self-hosted component. It is not part of the
+  initial core release.
+</Note>
+
+## What is the Client Node?
+
+The Client Node is a self-hosted service you run in your own infrastructure.
+
+It mirrors the Business API’s `/v1/*` surface but adds an `executionMode` parameter:
+
+- `executionMode=plan`: return instructions and plans only (no signing or broadcasting)
+- `executionMode=execute`: fetch a plan from the Business API, then **sign and broadcast locally**, returning execution receipts
+
+## Execution receipts
+
+In `execute` mode, responses can include execution receipts such as:
+
+- `status`
+- `relayTransactionId`
+- `txHash`
+
+## Relay operator surface
+
+The Client Node exposes `/relay/*` for operator-level operations such as:
+
+- transaction lifecycle monitoring
+- relayer management
+- gas configuration
+- message signing
+
+## Configuration
+
+The Client Node is designed as a single service with a single configuration file:
+
+- Business API base URL and credentials
+- local signing configuration and runtime settings
+
+## Architecture preview
+
+See [Architecture and workflows](/business/architecture) for how `plan` and `execute` modes fit into swap and payment flows.

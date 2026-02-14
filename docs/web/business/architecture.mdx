@@ -1,0 +1,175 @@
+---
+title: How it works
+description: What your integration experience looks like with swaps, payments, and Digital Collect.
+---
+
+## System overview (public view)
+
+The Business API is a single product surface. It provides quotes, instructions, and plans. **Execution** (signing and broadcasting) happens in your infrastructure.
+
+Digital Collect includes a **recipient-facing web experience**: recipients open an email link, choose where they want to receive funds, and provide the required details (wallet, bank, or eMoney).
+
+```mermaid
+graph TB
+    subgraph yourInfra["YourInfrastructure"]
+        App["YourApplicationOrERP"]
+        ClientNode["ClientNodeOptional"]
+    end
+
+    subgraph fietPlatform["FietPlatform"]
+        BusinessApi["FietBusinessAPI"]
+        DigitalCollectUi["DigitalCollectUI"]
+    end
+
+    subgraph external["External"]
+        Recipient["Recipient"]
+        Chain["EvmNetworks"]
+    end
+
+    App -->|"RESTAPI"| BusinessApi
+    App -->|"RESTAPI"| ClientNode
+    ClientNode -.->|"FetchPlans"| BusinessApi
+    ClientNode -->|"SignAndBroadcast"| Chain
+
+    BusinessApi -->|"CollectEmail"| Recipient
+    Recipient -->|"OpenLink"| DigitalCollectUi
+    DigitalCollectUi -->|"SubmitDestinationDetails"| BusinessApi
+    BusinessApi -->|"DeliverFunds"| Recipient
+```
+
+## Quotes and swaps (plan-only)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant App as YourApplication
+    participant BA as FietBusinessAPI
+
+    Note over App,BA: Market discovery (optional but recommended)
+    App->>BA: GET /v1/markets/chains
+    BA-->>App: 200 MarketChain[]
+    App->>BA: GET /v1/markets/tokens?chainId=1
+    BA-->>App: 200 MarketToken[]
+    App->>BA: GET /v1/markets/corridors
+    BA-->>App: 200 Corridor[]
+
+    Note over App,BA: Quote (derived, not persisted)
+    App->>BA: GET /v1/quote
+    BA-->>App: 200 Quote(asOf,expiresAt,amountIn,amountOut)
+
+    Note over App,BA: Swap plan (instructions only)
+    App->>BA: POST /v1/swap
+    BA-->>App: 200 SwapPlan(quote,instructions[])
+
+    Note over App: You now have unsigned calldata. You execute it.
+```
+
+## Swaps with the Client Node (coming soon)
+
+The Client Node is an optional, self-hosted component that can execute swap instructions locally.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant App as YourApplication
+    participant CN as ClientNode
+    participant BA as FietBusinessAPI
+    participant Chain as EvmNetwork
+
+    Note over App,CN: plan mode (instructions only)
+    App->>CN: POST /v1/swap?executionMode=plan
+    CN->>BA: POST /v1/swap
+    BA-->>CN: SwapPlan(quote,instructions[])
+    CN-->>App: SwapPlan(instructionsOnly)
+
+    Note over App,CN: execute mode (sign and broadcast locally)
+    App->>CN: POST /v1/swap?executionMode=execute
+    CN->>BA: POST /v1/swap
+    BA-->>CN: SwapPlan(quote,instructions[])
+    CN->>CN: SignLocally
+    CN->>Chain: BroadcastTransaction
+    Chain-->>CN: txHash
+    CN-->>App: SwapPlan(executionReceipts)
+```
+
+## Payments (standard)
+
+Payments return a **multi-step plan**. In standard mode, the plan typically includes: await deposit, execute swap, and coordinate payout.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant ERP as YourERP
+    participant CN as ClientNode
+    participant BA as FietBusinessAPI
+    participant Cust as CustodianOrIssuer
+    participant Chain as EvmNetwork
+
+    ERP->>CN: POST /v1/payments?executionMode=execute
+    CN->>BA: POST /v1/payments
+    BA-->>CN: PaymentPlan(steps[])
+
+    Note over CN,Chain: Step 1 - AWAIT_DEPOSIT
+    CN->>CN: MonitorDeposit
+    CN->>CN: step1Done
+
+    Note over CN,Chain: Step 2 - EXECUTE_SWAP
+    CN->>CN: SignLocally
+    CN->>Chain: BroadcastSwap
+    Chain-->>CN: txHash
+    CN->>CN: step2Done
+
+    Note over CN,Cust: Step 3 - CUSTODIAN_PAYOUT
+    CN->>Cust: InitiatePayout(custodianAction)
+    Cust-->>CN: payoutConfirmed(externalRef)
+    CN->>CN: step3Done
+
+    CN-->>ERP: PaymentPlan(completedWithReferences)
+```
+
+## Payments (Digital Collect)
+
+In Digital Collect mode, recipients complete a short web flow to choose how they want to receive funds.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant App as YourApplication
+    participant CN as ClientNode
+    participant BA as FietBusinessAPI
+    participant Email as RecipientEmail
+    participant Ui as DigitalCollectUI
+    participant Recip as Recipient
+    participant Chain as EvmNetwork
+
+    App->>CN: POST /v1/payments?executionMode=execute(mode=DIGITAL_COLLECT)
+    CN->>BA: POST /v1/payments
+    BA-->>CN: PaymentPlan(steps[])
+
+    Note over CN,Chain: Step 1 - AWAIT_DEPOSIT
+    CN->>CN: MonitorDeposit
+    CN->>CN: step1Done
+
+    Note over CN,Chain: Step 2 - EXECUTE_SWAP
+    CN->>CN: SignLocally
+    CN->>Chain: BroadcastSwap
+    Chain-->>CN: txHash
+    CN->>CN: step2Done
+
+    Note over BA,Email: Step 3 - SEND_DIGITAL_COLLECT
+    CN->>BA: TriggerCollectDelivery
+    BA->>Email: SendCollectEmail(link)
+
+    Note over Recip,Ui: Recipient experience
+    Recip->>Email: OpenEmail
+    Email->>Ui: OpenLink
+    Ui->>Recip: ChooseDestinationType
+    Recip-->>Ui: ProvideWalletOrBankOrEmoneyDetails
+    Ui->>BA: SubmitDestinationDetails
+    BA-->>Recip: ConfirmFundsOnTheWay
+```
+
+## Who executes?
+
+- **Direct integration:** you call the Business API and receive instructions and plans; you sign and broadcast using your own infrastructure.
+- **Client Node (coming soon):** you call your self-hosted Client Node; it fetches plans from the Business API and executes locally, returning receipts.
