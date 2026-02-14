@@ -6,7 +6,7 @@ import {PositionId, Position} from "../../../src/types/Position.sol";
 import {Pool} from "../../../src/types/Pool.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
-import {VTSFeeLib, VTSFeeLinkedLib} from "../../../src/libraries/VTSFeeLib.sol";
+import {VTSFeeLib} from "../../../src/libraries/VTSFeeLib.sol";
 import {RFSCheckpoint} from "../../../src/types/Checkpoint.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 
@@ -41,7 +41,7 @@ contract VTSFeeLibHarness {
 
     /// @notice Exposes processPositionFees via the linked library (accounting only, no PoolManager interaction)
     function afterTouchPosition(PositionId positionId) external returns (BalanceDelta adj) {
-        return VTSFeeLinkedLib.afterTouchPosition(s, positionId);
+        return VTSFeeLib._processPositionFees(s, positionId);
     }
 
     // ============ Internal Helper Exposers (for branch coverage) ============

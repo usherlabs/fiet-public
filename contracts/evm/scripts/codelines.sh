@@ -5,6 +5,7 @@ set -euo pipefail
 # Notes:
 # - Excludes interfaces and stubs (ABI/test scaffolding).
 # - Excludes small vendor-derived “glue” by default (e.g. TickUtils).
+# - Files not listed in FILES are intentionally omitted from the count.
 # - Optional flags allow you to include those if you prefer.
 
 usage() {

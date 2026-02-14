@@ -7,7 +7,7 @@ This directory contains the Solidity contracts for the Fiet Protocol, including 
 The Solidity contracts provide the automated market maker (AMM) functionality for the Fiet Protocol through Uniswap V4 hooks. The system consists of:
 
 - **CoreHook**: Manages core pool operations and liquidity commitments
-- **ProxyHook**: Handles user interactions and proxy pool operations  
+- **ProxyHook**: Handles user interactions and proxy pool operations
 - **MarketFactory**: Coordinates between hooks and manages market creation
 - **LiquidityCommitmentCertificate (LCC)**: Wrapped tokens representing liquidity commitments
 
@@ -139,7 +139,7 @@ MODE=LOCAL NETWORK=arbitrum BROADCAST=true just dev
 
 1. **MarketFactory** - Deployed first (without hooks)
 2. **CoreHook** - Deployed with proper HookMiner logic
-3. **ProxyHook** - Deployed with proper HookMiner logic  
+3. **ProxyHook** - Deployed with proper HookMiner logic
 4. **Set Hooks** - Configure hooks in MarketFactory
 5. **Hook Activation** - Verify cross-references
 
@@ -182,7 +182,7 @@ MODE=LIVE NETWORK=sepolia BROADCAST=true just create-market
 
 The protocol uses a dual-hook system:
 
-```
+```text
 MarketFactory
 ├── CoreHook (manages core pool operations)
 └── ProxyHook (manages proxy pool operations)
@@ -256,6 +256,29 @@ forge test --match-contract MarketFactory
 # Run with verbose output
 forge test -vvv
 ```
+
+### Fuzzing (Echidna)
+
+Echidna harnesses live in `test/fuzz/`.
+
+```bash
+# Run all Echidna harnesses (recommended)
+just fuzz
+just fuzz-deep
+
+# Run a single harness
+just echidna-lcc-backing
+just echidna-lcc-transfer
+just echidna-commit-01
+just echidna-commit-02
+```
+
+Notes:
+
+- The runner uses Docker + Crytic/Echidna. If you have a local `echidna` binary installed, `scripts/echidna.sh` will prefer it.
+- We use a dedicated Foundry profile `echidna` (see `foundry.toml`) and output to `out-echidna/` (ignored by git).
+- `echidna:sig-backing-01` runs with `--disable-slither` to avoid instability/OOM in the current toolbox environment.
+- The `Justfile` in `contracts/evm/` provides a stable entrypoint and consistent argument passthrough.
 
 ### Mutation Testing (Gambit)
 
@@ -341,6 +364,7 @@ This writes `./lcov.info` and prints a coverage summary to stdout.
    ```
 
 2. **Insufficient Funds**
+
    - Ensure deployer account has sufficient ETH for gas
    - Check token balances for liquidity operations
 
@@ -375,7 +399,7 @@ forge script script/deploy/DeployContracts.s.sol:DeployContracts --sig "verifyDe
 5. Run quality checks: `yarn run format:check && yarn run lint && yarn run security`
 6. Submit a pull request
 
-# README UPDATES
+## README updates
 
 MMPositionManager actions:
 

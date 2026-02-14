@@ -1,0 +1,97 @@
+---
+title: Payments
+description: Produce multi-step payment plans for cross-border and off-ramp workflows.
+---
+
+## Overview
+
+`POST /v1/payments` is the highest-level operation in the core Business API. It returns a **PaymentPlan**: an ordered set of steps that can combine on-chain actions (swap instructions) with off-chain coordination (for example, payouts).
+
+Like swaps, the Business API produces the plan but does **not** execute it.
+
+## Request parameters
+
+Key request fields:
+
+- `clientReference`: your stable reference (ERP/payment idempotency key)
+- `corridorId`: which route to use (discoverable via Markets corridors)
+- `amountIn`: input amount in smallest units (string)
+- `recipient`: flexible object for recipient details (bank, wallet, etc.)
+- `options.mode`: `STANDARD` or `DIGITAL_COLLECT`
+
+## Understanding the response
+
+The response contains:
+
+- `planId`: a unique plan identifier
+- `steps[]`: an ordered list of steps
+
+Each step has:
+
+- `stepId`
+- `type` (for example, `AWAIT_DEPOSIT`, `EXECUTE_SWAP`, `CUSTODIAN_PAYOUT`, `SEND_DIGITAL_COLLECT`)
+- `status` (`PENDING`, `READY`, `DONE`, `FAILED`)
+- optionally `instructions[]` (for on-chain execution)
+- optionally `custodianAction` (for off-chain coordination)
+
+## Payment lifecycle
+
+A typical lifecycle for an ERP or application integrating payments:
+
+1. **Create the plan** and store `planId` alongside your `clientReference`.
+2. **Await deposit**: you monitor for funds arriving (step transitions to `DONE`).
+3. **Execute swap**: you execute `instructions[]` on-chain (step transitions to `DONE`).
+4. **Complete payout or collect**: you coordinate the off-chain payout, or the recipient completes Digital Collect (step transitions to `DONE`).
+5. **Reconcile** using stable references:
+   - `clientReference` ↔ your internal record
+   - `planId` ↔ the plan returned by Fiet
+   - `txHash` (where applicable) ↔ on-chain settlement
+   - provider references (where applicable) ↔ off-chain payout records
+
+## Payment modes
+
+<Tabs>
+  <Tab title="Standard">
+    In standard mode, recipient details are provided upfront. A typical plan includes:
+
+    - `AWAIT_DEPOSIT`
+    - `EXECUTE_SWAP` (includes `instructions[]`)
+    - `CUSTODIAN_PAYOUT` (includes a `custodianAction` envelope)
+
+    Your integration executes the on-chain instructions and coordinates the payout with your custodian/issuer integration.
+
+  </Tab>
+  <Tab title="Digital Collect">
+    In Digital Collect mode, you provide the recipient’s email address. The plan typically includes:
+
+    - `AWAIT_DEPOSIT`
+    - `EXECUTE_SWAP` (includes `instructions[]`)
+    - `SEND_DIGITAL_COLLECT`
+
+    The recipient receives an email and opens the **Fiet-hosted Digital Collect UI**, where they choose how to receive funds (EVM wallet, bank account, or eMoney wallet) and provide the required details. You do not need to build a recipient-facing collection UI.
+
+  </Tab>
+</Tabs>
+
+For the full end-to-end sequence flows, see [Architecture and workflows](/business/architecture).
+
+## Example
+
+```bash
+curl -sS \
+  -H "Authorization: Basic <base64(username:password)>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "clientReference": "erp-payment-001",
+    "corridorId": "usdc-eth->aud-bank",
+    "amountIn": "1000000",
+    "recipient": {
+      "type": "bank",
+      "name": "Acme Pty Ltd",
+      "country": "AU",
+      "account": { "bsb": "062000", "accountNumber": "12345678" }
+    },
+    "options": { "mode": "STANDARD" }
+  }' \
+  "https://api.fiet.finance/v1/payments"
+```

@@ -1,0 +1,18 @@
+# Echidna configuration for this repo.
+# Used by `contracts/evm/scripts/echidna.sh` unless overridden via --config.
+
+format: "text"
+
+# We use boolean properties (`echidna_*() -> bool`) in our harnesses.
+testMode: "property"
+prefix: "echidna_"
+
+coverage: false
+
+# Keep runs short-ish by default; bump for deeper campaigns.
+testLimit: 200
+seqLen: 20
+
+# Allow fuzzing msg.value for payable flows (native wrap).
+maxValue: 100000000000000000000 # 100 ETH
+
