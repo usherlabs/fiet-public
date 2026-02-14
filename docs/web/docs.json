@@ -1,0 +1,141 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "Fiet Documentation",
+  "colors": {
+    "primary": "#11535b",
+    "light": "#2cd5c4",
+    "dark": "#040404"
+  },
+  "favicon": "/logo/icons/favicon.ico",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Business API",
+        "groups": [
+          {
+            "group": "API Documentation",
+            "pages": [
+              "business/introduction",
+              "business/architecture",
+              "business/authentication",
+              "business/core-concepts"
+            ]
+          },
+          {
+            "group": "Core Endpoints",
+            "pages": [
+              "business/endpoint/markets",
+              "business/endpoint/quote",
+              "business/endpoint/swap",
+              "business/endpoint/payments"
+            ]
+          },
+          {
+            "group": "API Reference",
+            "pages": [
+              "business/api-reference/market-chains",
+              "business/api-reference/market-tokens",
+              "business/api-reference/market-corridors",
+              "business/api-reference/quote",
+              "business/api-reference/swap",
+              "business/api-reference/payments"
+            ]
+          },
+          {
+            "group": "Coming Soon",
+            "pages": ["business/extended-functions", "business/client-node"]
+          }
+        ]
+      },
+      {
+        "tab": "Protocol Documentation",
+        "groups": [
+          {
+            "group": "Introduction",
+            "pages": ["overview", "use-cases", "roles"]
+          },
+          {
+            "group": "Concepts",
+            "pages": [
+              "concepts/markets",
+              "concepts/verified-reserve-liquidity",
+              "concepts/liquidity-commitment-certificates",
+              "concepts/value-to-signal",
+              "concepts/oracle",
+              "concepts/settlements",
+              "concepts/rewards"
+            ]
+          },
+          {
+            "group": "Resources",
+            "pages": [
+              "resources/diagrams",
+              "resources/technical-specification",
+              "resources/cryptography",
+              "resources/glossary"
+            ]
+          },
+          {
+            "group": "Legals",
+            "pages": ["legal/disclaimers"]
+          }
+        ]
+      }
+    ],
+    "global": {
+      "anchors": [
+        {
+          "anchor": "Back to Website",
+          "href": "https://fiet.finance",
+          "icon": "arrow-left"
+        },
+        {
+          "anchor": "Community",
+          "href": "https://go.usher.so/discord",
+          "icon": "discord"
+        },
+        {
+          "anchor": "Chat with AI Guide",
+          "href": "https://fiet.fi/ai-guide",
+          "icon": "comment"
+        }
+      ]
+    }
+  },
+  "logo": {
+    "light": "/logo/logo-color.svg",
+    "dark": "/logo/logo-white.svg"
+  },
+  "navbar": {
+    "links": [],
+    "primary": {
+      "type": "button",
+      "label": "Get Involved",
+      "href": "https://go.usher.so/discord"
+    }
+  },
+  "footer": {
+    "socials": {
+      "x": "https://x.com/usher_web3",
+      "github": "https://github.com/usherlabs",
+      "linkedin": "https://linkedin.com/company/usherlabs/",
+      "discord": "https://go.usher.so/discord"
+    }
+  },
+  "fonts": {
+    "heading": {
+      "family": "Objectivity",
+      "weight": 700,
+      "format": "woff2",
+      "source": "/fonts/objectivity/Objectivity-Bold.woff2"
+    },
+    "body": {
+      "family": "Geologica",
+      "weight": 400,
+      "format": "woff2",
+      "source": "/fonts/geologica/Geologica-Light.woff2"
+    }
+  },
+  "redirects": []
+}
