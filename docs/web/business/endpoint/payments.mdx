@@ -59,6 +59,7 @@ A typical lifecycle for an ERP or application integrating payments:
     - `CUSTODIAN_PAYOUT` (includes a `custodianAction` envelope)
 
     Your integration executes the on-chain instructions and coordinates the payout with your custodian/issuer integration.
+
   </Tab>
   <Tab title="Digital Collect">
     In Digital Collect mode, you provide the recipient’s email address. The plan typically includes:
@@ -68,10 +69,11 @@ A typical lifecycle for an ERP or application integrating payments:
     - `SEND_DIGITAL_COLLECT`
 
     The recipient receives an email and opens the **Fiet-hosted Digital Collect UI**, where they choose how to receive funds (EVM wallet, bank account, or eMoney wallet) and provide the required details. You do not need to build a recipient-facing collection UI.
+
   </Tab>
 </Tabs>
 
-For the full end-to-end sequence flows, see [Architecture and workflows](/business-api/architecture).
+For the full end-to-end sequence flows, see [Architecture and workflows](/business/architecture).
 
 ## Example
 
@@ -93,4 +95,3 @@ curl -sS \
   }' \
   "https://api.fiet.finance/v1/payments"
 ```
-
