@@ -83,8 +83,9 @@ contract SpokeRSC is AbstractReactive {
 
         nonce += 1;
 
-        bytes memory payload =
-            abi.encodeWithSignature("recordSettlement(address,address,address,uint256,uint256)", address(this), lcc, recipient, amount, nonce);
+        bytes memory payload = abi.encodeWithSignature(
+            "recordSettlement(address,address,address,uint256,uint256)", address(this), lcc, recipient, amount, nonce
+        );
 
         // Emit the callback to the HubCallback
         // This way the hubcallback contract can push the parameters to the HubRSC.

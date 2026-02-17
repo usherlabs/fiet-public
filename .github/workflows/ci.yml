@@ -193,3 +193,49 @@ jobs:
           echo "❌ Coverage is below the 90% threshold!"
           echo "Please improve test coverage before merging."
           exit 1
+
+  reactive:
+    name: Reactive Contracts Tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Restrict network egress
+        uses: bullfrogsec/bullfrog@1831f79cce8ad602eef14d2163873f27081ebfb3 # v0.8.4
+        if: ${{ !env.ACT }} # Skip when running locally with act
+        with:
+          egress-policy: block
+          allowed-domains: |
+            api.github.com
+            release-assets.githubusercontent.com
+            raw.githubusercontent.com
+            binaries.soliditylang.org
+
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: "v1.4.2"
+
+      - name: Show Forge version
+        run: forge --version
+        working-directory: contracts/reactive
+
+      - name: Run Forge fmt
+        run: forge fmt --check
+        working-directory: contracts/reactive
+        id: reactive_fmt
+
+      - name: Run Forge build
+        run: forge build --sizes --skip test --skip script
+        working-directory: contracts/reactive
+        id: reactive_build
+
+      - name: Run Forge tests
+        run: forge test -vvv
+        working-directory: contracts/reactive
+        id: reactive_test
