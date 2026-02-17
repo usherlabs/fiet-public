@@ -12,6 +12,7 @@
     "tabs": [
       {
         "tab": "Business API",
+        "icon": "money-bill-transfer",
         "groups": [
           {
             "group": "API Documentation",
@@ -50,6 +51,7 @@
       },
       {
         "tab": "Protocol Documentation",
+        "icon": "book",
         "groups": [
           {
             "group": "Introduction",
@@ -75,11 +77,16 @@
               "resources/cryptography",
               "resources/glossary"
             ]
-          },
-          {
-            "group": "Legals",
-            "pages": ["legal/disclaimers"]
           }
+        ]
+      },
+      {
+        "tab": "Legals",
+        "icon": "scale-balanced",
+        "pages": [
+          "legal/disclaimers",
+          "legal/terms-of-service",
+          "legal/privacy-policy"
         ]
       }
     ],
