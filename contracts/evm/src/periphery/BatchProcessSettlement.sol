@@ -22,7 +22,6 @@ contract BatchProcessSettlement is AbstractCallback {
     /// @notice LiquidityHub to call on the destination chain.
     ILiquidityHub public immutable liquidityHub;
 
-
     /// @param _callbackProxy Reactive callback proxy address for this chain.
     /// https://dev.reactive.network/origins-and-destinations#testnet-chains
     /// @param _liquidityHub LiquidityHub to call on the destination chain.
