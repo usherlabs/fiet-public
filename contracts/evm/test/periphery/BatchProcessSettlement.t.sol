@@ -4,15 +4,15 @@ pragma solidity ^0.8.26;
 import {Test} from "forge-std/Test.sol";
 import {Vm} from "forge-std/Vm.sol";
 import {BatchProcessSettlement} from "../../src/periphery/BatchProcessSettlement.sol";
-import {MockLiquidityHubSettlement} from "../_mocks/MockLiquidityHubSettlement.sol";
+import {MockLiquidityHub} from "../_mocks/MockLiquidityHub.sol";
 
 contract BatchProcessSettlementTest is Test {
-    MockLiquidityHubSettlement private mockHub;
+    MockLiquidityHub private mockHub;
     BatchProcessSettlement private receiver;
     address private callbackProxy;
 
     function setUp() public {
-        mockHub = new MockLiquidityHubSettlement();
+        mockHub = new MockLiquidityHub();
         callbackProxy = makeAddr("callbackProxy");
         receiver = new BatchProcessSettlement(callbackProxy, address(mockHub));
     }
@@ -25,7 +25,7 @@ contract BatchProcessSettlementTest is Test {
 
         vm.expectRevert(BatchProcessSettlement.InvalidArrayLengths.selector);
         vm.prank(callbackProxy);
-        receiver.processSettlements(lcc, recipient, maxAmount);
+        receiver.processSettlements(address(0), lcc, recipient, maxAmount);
     }
 
     /// @notice Reverts when batch size exceeds MAX_BATCH_SIZE.
@@ -38,7 +38,7 @@ contract BatchProcessSettlementTest is Test {
 
         vm.expectRevert(abi.encodeWithSelector(BatchProcessSettlement.BatchTooLarge.selector, len, maxBatch));
         vm.prank(callbackProxy);
-        receiver.processSettlements(lcc, recipient, maxAmount);
+        receiver.processSettlements(address(0), lcc, recipient, maxAmount);
     }
 
     /// @notice Continues on failure and emits per-item outcomes.
@@ -62,7 +62,7 @@ contract BatchProcessSettlementTest is Test {
 
         vm.recordLogs();
         vm.prank(callbackProxy);
-        receiver.processSettlements(lcc, recipients, maxAmount);
+        receiver.processSettlements(address(0), lcc, recipients, maxAmount);
         Vm.Log[] memory entries = vm.getRecordedLogs();
 
         bytes32 batchSig = keccak256("BatchReceived(uint256)");
