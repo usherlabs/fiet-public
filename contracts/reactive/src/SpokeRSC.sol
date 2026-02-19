@@ -24,7 +24,7 @@ contract SpokeRSC is AbstractReactive {
     /// @notice LiquidityHub on the origin chain.
     address public immutable liquidityHub;
 
-    /// @notice Hub callback contract on the origin chain.
+    /// @notice Hub callback contract on Reactive chain.
     address public immutable hubCallback;
 
     /// @notice Recipient this Spoke is dedicated to.

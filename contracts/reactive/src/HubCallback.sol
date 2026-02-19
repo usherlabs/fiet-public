@@ -38,11 +38,18 @@ contract HubCallback is AbstractCallback, Ownable {
         spokeForRecipient[recipient] = spoke;
     }
 
-    // @notice Get the total amount settled for a given lcc and recipient
+    /// @notice Returns the cumulative amount settled for an LCC and recipient pair.
+    /// @param lcc The LCC token address.
+    /// @param recipient The recipient address.
+    /// @return amountProcessed The total settled amount recorded for `lcc` and `recipient`.
     function getTotalAmountProcessed(address lcc, address recipient) public view returns (uint256) {
         return totalAmountProcessed[lcc][recipient];
     }
 
+    /// @notice Emits a liquidity-available signal from an authorised sender.
+    /// @param lcc The LCC token address with available liquidity.
+    /// @param amountAvailable The liquidity amount available for processing.
+    /// @dev Returns early when `amountAvailable` is zero.
     function triggerMoreLiquidityAvailable(address lcc, uint256 amountAvailable) external authorizedSenderOnly {
         if (amountAvailable == 0) {
             return;
@@ -86,10 +93,15 @@ contract HubCallback is AbstractCallback, Ownable {
         emit SettlementReported(recipient, lcc, amount, nonce);
     }
 
-    function triggerMoreLiquidityAvailable(address, address lcc, uint256 amountAvailable)
+    /// @notice Emits a liquidity-available signal from an authorised sender (compatibility overload).
+    /// @param source Unused source address kept for callback signature compatibility.
+    /// @param lcc The LCC token address with available liquidity.
+    /// @param amountAvailable The liquidity amount available for processing.
+    function triggerMoreLiquidityAvailable(address source, address lcc, uint256 amountAvailable)
         external
         authorizedSenderOnly
     {
+        source;
         emit MoreLiquidityAvailable(lcc, amountAvailable);
     }
 }
