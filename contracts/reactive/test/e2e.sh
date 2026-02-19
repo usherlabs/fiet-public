@@ -22,7 +22,8 @@ export BROADCAST=true
 : "${RECIPIENT:?RECIPIENT is required}"
 
 # Reactive VM id maps to the deployer address derived from the deployer private key.
-export RVM_ID="$(cast wallet address --private-key "$PRIVATE_KEY")"
+RVM_ID="$(cast wallet address --private-key "$PRIVATE_KEY")"
+export RVM_ID
 
 broadcast_flag=""
 if [ "$BROADCAST" = "true" ]; then
@@ -86,7 +87,7 @@ deploy() {
   export BATCH_RECEIVER
 
   # 3) Deploy reactive hub stack (HubCallback + HubRSC).
-  hub_out="$(run_and_print "Deploying reactive hub stack..." bash scripts/DeployReactiveHub.sh)"
+  hub_out="$(run_and_print "Deploying reactive hub stack..." bash scripts/deployreactivehub.sh)"
 
   HUB_CALLBACK="$(extract_labeled_address "HubCallback" "$hub_out")"
   HUB_RSC="$(extract_labeled_address "HubRSC" "$hub_out")"

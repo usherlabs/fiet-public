@@ -148,7 +148,7 @@ just deploy-spoke 0xb797466544DeB18F1e19185e85400A26FC5d3E95
 
 Optional override example:
 ```bash
-SPOKE_VALUE=1ether just deploy-spoke
+SPOKE_VALUE=1ether just deploy-spoke 0xb797466544DeB18F1e19185e85400A26FC5d3E95
 ```
 
 #### 5) Whitelist spoke for recipient on HubCallback

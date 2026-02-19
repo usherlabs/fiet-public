@@ -7,6 +7,10 @@ import {console2} from "forge-std/console2.sol";
 import {HubCallback} from "../src/HubCallback.sol";
 
 /// @notice Register a recipient -> spoke mapping on an already deployed HubCallback.
+/// @dev HubCallback is owner-administered: the owner receives the Spoke deployment
+/// address, performs validations, and sets it as the target Spoke for a recipient.
+/// Recipients are responsible for the events handled by Spokes, while the Hub admin
+/// is responsible for ensuring only valid Spokes are registered on the Hub.
 contract WhitelistSpokeForRecipient is Script {
     function run() external {
         uint256 deployerKey = vm.envUint("PRIVATE_KEY");
