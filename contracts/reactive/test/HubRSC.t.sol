@@ -208,6 +208,46 @@ contract HubRSCTest is Test {
         assertFalse(_pendingExists(hub, lcc, recipient3));
     }
 
+    /// @notice Multiple recipients on the same LCC are dispatched in FIFO queue order.
+    function test_dispatchesRecipientsInFifoOrderForSameLcc() public {
+        _clearSystemContract();
+        HubRSC hub =
+            new HubRSC(originChainId, destinationChainId, liquidityHub, hubCallback, destinationReceiverContract);
+
+        address lcc = makeAddr("lcc");
+        address recipient1 = makeAddr("recipient1");
+        address recipient2 = makeAddr("recipient2");
+        address recipient3 = makeAddr("recipient3");
+
+        hub.react(_settlementLog(hub, recipient1, lcc, 11, 1, 0x7001, 1));
+        hub.react(_settlementLog(hub, recipient2, lcc, 22, 2, 0x7002, 2));
+        hub.react(_settlementLog(hub, recipient3, lcc, 33, 3, 0x7003, 3));
+
+        vm.recordLogs();
+        hub.react(liquidityAvailableLog(hub.liquidityHub(), lcc, 10_000, bytes32("mkt"), 0x7004, 4));
+        Vm.Log[] memory entries = vm.getRecordedLogs();
+
+        (, address[] memory lccs, address[] memory recipients, uint256[] memory amounts) =
+            _decodeProcessSettlementsPayload(entries);
+
+        assertEq(lccs.length, 3);
+        assertEq(recipients.length, 3);
+        assertEq(amounts.length, 3);
+
+        // FIFO expectation from queue insertion order.
+        assertEq(recipients[0], recipient1);
+        assertEq(recipients[1], recipient2);
+        assertEq(recipients[2], recipient3);
+
+        assertEq(lccs[0], lcc);
+        assertEq(lccs[1], lcc);
+        assertEq(lccs[2], lcc);
+
+        assertEq(amounts[0], 11);
+        assertEq(amounts[1], 22);
+        assertEq(amounts[2], 33);
+    }
+
     function test_noopWhenLiquidityAvailableHasZeroAmount() public {
         _clearSystemContract();
         HubRSC hub =
@@ -351,6 +391,69 @@ contract HubRSCTest is Test {
         assertEq(receiver.calls(), 1);
         assertEq(liq.getTotalAmountSettled(lcc, recipientA), totalA);
         assertEq(liq.getTotalAmountSettled(lcc, recipientB), amountB);
+    }
+
+    /// @notice Single recipient/single LCC: settlement is queued first and processed once liquidity arrives later.
+    function test_singleRecipientSingleLccQueuedThenProcessedWhenLiquidityArrives() public {
+        _clearSystemContract();
+
+        MockLiquidityHub liq = new MockLiquidityHub();
+        MockSettlementReceiver receiver = new MockSettlementReceiver(address(liq));
+        HubRSC hub = new HubRSC(originChainId, destinationChainId, address(liq), hubCallback, address(receiver));
+
+        address lcc = makeAddr("lcc");
+        address recipient = makeAddr("recipient");
+        uint256 amount = 75;
+
+        // Queue settlement first.
+        hub.react(_settlementLog(hub, recipient, lcc, amount, 1, 0x8101, 1));
+        assertTrue(_pendingExists(hub, lcc, recipient));
+        assertEq(liq.getTotalAmountSettled(lcc, recipient), 0);
+
+        // Liquidity arrives later and triggers dispatch.
+        vm.recordLogs();
+        hub.react(liquidityAvailableLog(address(liq), lcc, 1_000, bytes32("mkt"), 0x8102, 2));
+        _decodeAndProcess(vm.getRecordedLogs(), receiver);
+
+        assertFalse(_pendingExists(hub, lcc, recipient));
+        assertEq(liq.getTotalAmountSettled(lcc, recipient), amount);
+    }
+
+    /// @notice Multiple LCCs: liquidity event for one LCC dispatches only that LCC; others remain pending.
+    function test_multiLccDispatchesOnlyTargetLccAndKeepsOthersPending() public {
+        _clearSystemContract();
+
+        MockLiquidityHub liq = new MockLiquidityHub();
+        MockSettlementReceiver receiver = new MockSettlementReceiver(address(liq));
+        HubRSC hub = new HubRSC(originChainId, destinationChainId, address(liq), hubCallback, address(receiver));
+
+        address lccA = makeAddr("lccA");
+        address lccB = makeAddr("lccB");
+        address recipientA1 = makeAddr("recipientA1");
+        address recipientA2 = makeAddr("recipientA2");
+        address recipientB = makeAddr("recipientB");
+
+        hub.react(_settlementLog(hub, recipientA1, lccA, 30, 1, 0x8201, 1));
+        hub.react(_settlementLog(hub, recipientA2, lccA, 20, 2, 0x8202, 2));
+        hub.react(_settlementLog(hub, recipientB, lccB, 40, 1, 0x8203, 3));
+
+        // Dispatch for lccA only.
+        vm.recordLogs();
+        hub.react(liquidityAvailableLog(address(liq), lccA, 1_000, bytes32("mkt"), 0x8204, 4));
+        _decodeAndProcess(vm.getRecordedLogs(), receiver);
+
+        assertEq(liq.getTotalAmountSettled(lccA, recipientA1), 30);
+        assertEq(liq.getTotalAmountSettled(lccA, recipientA2), 20);
+        assertEq(liq.getTotalAmountSettled(lccB, recipientB), 0);
+        assertTrue(_pendingExists(hub, lccB, recipientB));
+
+        // Dispatch remaining pending lccB.
+        vm.recordLogs();
+        hub.react(liquidityAvailableLog(address(liq), lccB, 1_000, bytes32("mkt"), 0x8205, 5));
+        _decodeAndProcess(vm.getRecordedLogs(), receiver);
+
+        assertEq(liq.getTotalAmountSettled(lccB, recipientB), 40);
+        assertFalse(_pendingExists(hub, lccB, recipientB));
     }
 
     function _settlementLog(
