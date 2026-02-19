@@ -8,6 +8,7 @@ import {HubCallback} from "../src/HubCallback.sol";
 
 contract HubCallbackTest is Test {
     address private callbackProxy;
+    address private hubRVMId;
     HubCallback private callback;
     address private spoke;
     address private lcc;
@@ -15,7 +16,8 @@ contract HubCallbackTest is Test {
 
     function setUp() public {
         callbackProxy = makeAddr("callbackProxy");
-        callback = new HubCallback(callbackProxy);
+        hubRVMId = makeAddr("hubRVMId");
+        callback = new HubCallback(callbackProxy, hubRVMId);
         spoke = makeAddr("spoke");
         lcc = makeAddr("lcc");
         recipient = makeAddr("recipient");
@@ -124,5 +126,24 @@ contract HubCallbackTest is Test {
         callback.recordSettlement(wrongSpoke, lcc, recipient, 100, 1);
 
         assertEq(callback.getTotalAmountProcessed(lcc, recipient), 0);
+    }
+
+    function test_triggerMoreLiquidityAvailableEmitsMoreLiquidityAvailableForValidCallerRVMId() public {
+        uint256 amountAvailable = 123;
+
+        vm.prank(callbackProxy);
+        vm.expectEmit(true, false, false, true, address(callback));
+        emit HubCallback.MoreLiquidityAvailable(lcc, amountAvailable);
+        callback.triggerMoreLiquidityAvailable(hubRVMId, lcc, amountAvailable);
+    }
+
+    function test_triggerMoreLiquidityAvailableEmitsInvalidCallbackSenderForWrongCallerRVMId() public {
+        address wrongCallerRVMId = makeAddr("wrongCallerRVMId");
+        uint256 amountAvailable = 123;
+
+        vm.prank(callbackProxy);
+        vm.expectEmit(true, false, false, true, address(callback));
+        emit HubCallback.InvalidCallbackSender(wrongCallerRVMId);
+        callback.triggerMoreLiquidityAvailable(wrongCallerRVMId, lcc, amountAvailable);
     }
 }
