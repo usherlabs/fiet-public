@@ -11,6 +11,8 @@ remappings = [
   "@uniswap/v4-core/=../evm/lib/v4-periphery/lib/v4-core/",
   "v4-core/=../evm/lib/v4-periphery/lib/v4-core/src/",
   "solady/=../evm/lib/solady/src/",
+  "ds-test/=../evm/lib/forge-std/lib/ds-test/src/",
+  "forge-std/=../evm/lib/forge-std/src/",
 ]
 
 allow_paths = [
@@ -20,6 +22,7 @@ allow_paths = [
   "../evm/lib/v4-periphery",
   "../evm/lib/solady",
   "../evm/src",
+  "../evm/lib/forge-std",
 ]
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options

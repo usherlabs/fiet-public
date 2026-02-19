@@ -37,6 +37,7 @@ issuedLCCs ≤ offChainReserves + onChainSettlements
 ```
 
 Where:
+
 - `issuedLCCs` = USD value of effective token amounts in the position at current price
 - `offChainReserves` = USD value of MM's verified signal reserves
 - `onChainSettlements` = USD value of native tokens settled in the position
@@ -129,10 +130,12 @@ if (pa.commitmentDeficit.token0 > 0 || pa.commitmentDeficit.token1 > 0) {
 #### Step 5: Recovery or Seizure
 
 **Recovery Path**: MM improves backing through signal renewal:
+
 - Deficit reduces proportionally to surplus
 - Full surplus clears deficit entirely
 
 **Intervention Path**: Third party seizes:
+
 - Posts settlements covering inflated RFS requirements
 - Receives seized position liquidity
 - Becomes new position owner
@@ -149,11 +152,13 @@ The checkpoint mechanism transforms a systemic risk into an economic opportunity
 ### Why Position-Specific, O(1) Design?
 
 **Previous Approach**: Commit-level iteration (O(n) positions)
+
 - Required visiting every position in a commitment
 - Gas costs scaled with position count
 - Complex state aggregation
 
 **New Approach**: Position-specific checkpointing (O(1))
+
 - Each position checkpointed independently
 - Constant gas costs regardless of commit size
 - Granular deficit tracking enables precise intervention
@@ -207,6 +212,7 @@ struct PositionAccounting {
 ```
 
 **Key Design Decision**: Deficits are stored at the position level, not the commit level. This enables:
+
 - O(1) checkpoint operations (no position iteration)
 - Granular deficit tracking per position
 - Independent deficit resolution per position
@@ -234,10 +240,10 @@ function checkpoint(
 
 The `checkpoint` function operates in two modes determined by the `withCommitment` boolean:
 
-| Mode | `withCommitment` | Signal Required | Actions |
-|------|------------------|-----------------|---------|
-| Basic | `false` | No | Marks RFS checkpoint only |
-| Full | `true` | Yes | Marks RFS checkpoint + validates backing + updates deficits |
+| Mode  | `withCommitment` | Signal Required | Actions                                                     |
+| ----- | ---------------- | --------------- | ----------------------------------------------------------- |
+| Basic | `false`          | No              | Marks RFS checkpoint only                                   |
+| Full  | `true`           | Yes             | Marks RFS checkpoint + validates backing + updates deficits |
 
 ### Flow Diagram
 
@@ -321,10 +327,10 @@ uint256 backingUsd = signalUsd + settledUsd;
 if (issuedUsd <= backingUsd) {
     // Backing sufficient - reduce/clear existing deficit if present
     uint256 currentDeficitUsd = OracleUtils.lccPairValue(..., pa.commitmentDeficit.token0, ..., pa.commitmentDeficit.token1);
-    
+
     if (currentDeficitUsd > 0) {
         uint256 surplusUsd = backingUsd - issuedUsd;
-        
+
         if (surplusUsd >= currentDeficitUsd) {
             // Full deficit clearance
             pa.commitmentDeficit.token0 = 0;
@@ -333,7 +339,7 @@ if (issuedUsd <= backingUsd) {
             // Proportional reduction
             uint256 reduce0 = FullMath.mulDiv(pa.commitmentDeficit.token0, surplusUsd, currentDeficitUsd);
             uint256 reduce1 = FullMath.mulDiv(pa.commitmentDeficit.token1, surplusUsd, currentDeficitUsd);
-            
+
             pa.commitmentDeficit.token0 -= reduce0;
             pa.commitmentDeficit.token1 -= reduce1;
         }
@@ -364,6 +370,7 @@ The deficit is expressed in token units proportional to the effective amounts, e
 ### Mathematical Properties
 
 **Deficit BPS Bounds:**
+
 $$
 0 \leq \text{deficitBps} \leq 10000
 $$
@@ -371,9 +378,11 @@ $$
 Since $\text{deficitUsd} \leq \text{issuedUsd}$, the deficit BPS cannot exceed 100%.
 
 **Deficit Unit Calculation:**
+
 $$
 \text{def}_0 = \text{eff}_0 \times \frac{\text{deficitBps}}{10000}
 $$
+
 $$
 \text{def}_1 = \text{eff}_1 \times \frac{\text{deficitBps}}{10000}
 $$
@@ -404,19 +413,19 @@ function isSeizable(VTSStorage storage s, uint256 commitId, uint256 positionInde
 {
     PositionId positionId = commit.positions[positionIndex];
     PositionAccounting storage pa = s.positionAccounting[positionId];
-    
+
     // Path 1: Immediate seizure via deficit
     if (pa.commitmentDeficit.token0 > 0 || pa.commitmentDeficit.token1 > 0) {
         return true;
     }
-    
+
     // Path 2: RFS grace period check
     RFSCheckpoint memory checkpoint = s.positions[positionId].checkpoint;
     if (!checkpoint.isOpen) {
         if (revertOnFalse) revert Errors.RFSNotOpenForPosition(positionId);
         return false;
     }
-    
+
     // Grace period calculations...
 }
 ```
@@ -445,15 +454,15 @@ Where signal represents off-chain reserves, and settled represents on-chain liqu
 
 ## Key Design Differences from Previous Implementation
 
-| Aspect | Previous | Current |
-|--------|----------|---------|
-| **Deficit Storage** | Commit-level `deficitBps` | Position-level `commitmentDeficit` (token units) |
-| **Position Iteration** | Required (O(n)) | Eliminated (O(1)) |
-| **Checkpoint Storage** | Separate `checkpoints` mapping | Embedded in `Position` struct |
-| **Function Consolidation** | Separate `markCheckpoint` and `declareUnbackedCommitment` | Unified `checkpoint` with `withCommitment` flag |
-| **Issued Value Calculation** | Commit-level aggregates from `commitmentMaxTotal` | Position-specific effective amounts at current price |
-| **Deficit Clearance** | Required signal renewal | Automatic clawback on backing improvement |
-| **Commit Struct** | Included `settled`, `commitmentMaxTotal`, `deficitBps` | Minimal: `mmState`, `expiresAt`, `positions`, `positionCount` |
+| Aspect                       | Previous                                                  | Current                                                       |
+| ---------------------------- | --------------------------------------------------------- | ------------------------------------------------------------- |
+| **Deficit Storage**          | Commit-level `deficitBps`                                 | Position-level `commitmentDeficit` (token units)              |
+| **Position Iteration**       | Required (O(n))                                           | Eliminated (O(1))                                             |
+| **Checkpoint Storage**       | Separate `checkpoints` mapping                            | Embedded in `Position` struct                                 |
+| **Function Consolidation**   | Separate `markCheckpoint` and `declareUnbackedCommitment` | Unified `checkpoint` with `withCommitment` flag               |
+| **Issued Value Calculation** | Commit-level aggregates from `commitmentMaxTotal`         | Position-specific effective amounts at current price          |
+| **Deficit Clearance**        | Required signal renewal                                   | Automatic clawback on backing improvement                     |
+| **Commit Struct**            | Included `settled`, `commitmentMaxTotal`, `deficitBps`    | Minimal: `mmState`, `expiresAt`, `positions`, `positionCount` |
 
 ## Events
 
@@ -549,6 +558,7 @@ bool canSeize = CheckpointLibrary.isSeizable(s, commitId, positionIndex, false);
 ### Self-Declaration Prevention
 
 The advancer authorisation requirements prevent MMs from declaring their own positions unbacked:
+
 - Caller must be the advancer specified in the signal
 - Advancer cannot equal the owner
 - Signal owner must match commit owner
@@ -556,6 +566,7 @@ The advancer authorisation requirements prevent MMs from declaring their own pos
 ### Oracle Dependency
 
 USD value calculations rely on oracle prices. Mitigations:
+
 - Signal proofs limit manipulation vectors
 - Competitive advancer market ensures accurate declarations
 - RFS and seizure mechanisms provide additional safety layers

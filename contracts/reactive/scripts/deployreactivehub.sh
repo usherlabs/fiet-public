@@ -28,6 +28,12 @@ DEPLOYER_PRIVATE_KEY="${PRIVATE_KEY:-}"
 : "${LIQUIDITY_HUB:?LIQUIDITY_HUB is required}"
 : "${PROTOCOL_RPC:?PROTOCOL_RPC is required}"
 : "${BATCH_RECEIVER:?BATCH_RECEIVER is required}"
+: "${REACTIVE_CALLBACK_PROXY:?REACTIVE_CALLBACK_PROXY is required}"
+
+# Hub RVM id is the deployer address for this deployment flow.
+DEPLOYER_ADDRESS="$(cast wallet address --private-key "$DEPLOYER_PRIVATE_KEY")"
+RVM_ID="$DEPLOYER_ADDRESS"
+export RVM_ID
 
 CALLBACK_PROXY="${REACTIVE_CALLBACK_PROXY}"
 
@@ -44,7 +50,7 @@ hub_callback_output="$(
     --private-key "$DEPLOYER_PRIVATE_KEY" \
     src/HubCallback.sol:HubCallback \
     --value "$HUB_CALLBACK_VALUE" \
-    --constructor-args "$CALLBACK_PROXY" 2>&1
+    --constructor-args "$CALLBACK_PROXY" "$RVM_ID" 2>&1
 )"
 echo "$hub_callback_output"
 
@@ -69,6 +75,7 @@ echo "  LIQUIDITY_HUB=$LIQUIDITY_HUB"
 echo "  HUB_CALLBACK=$HUB_CALLBACK"
 echo "  BATCH_RECEIVER=$BATCH_RECEIVER"
 echo "  HUB_RSC_VALUE=$HUB_RSC_VALUE"
+echo "  RVM_ID=$RVM_ID"
 
 hub_rsc_output="$(
   forge create "$BROADCAST_FLAG" \
@@ -98,5 +105,6 @@ fi
 # using the format contract_name:address
 # that way it can be parsed from the stdout of the script execution
 echo "========================================"
+echo "RVM_ID:     $RVM_ID"
 echo "HubCallback: $HUB_CALLBACK"
 echo "HubRSC:      $HUB_RSC"
