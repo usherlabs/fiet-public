@@ -65,7 +65,7 @@ contract SpokeRSCTest is Test {
         });
 
         bytes memory payload = abi.encodeWithSignature(
-            "recordSettlement(address,address,address,uint256,uint256)", address(spoke), lcc, recipient, amount, 1
+            "recordSettlement(address,address,address,uint256,uint256)", address(0), lcc, recipient, amount, 1
         );
 
         vm.expectEmit(true, true, true, true, address(spoke));
