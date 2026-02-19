@@ -62,8 +62,10 @@ contract HubRSC is AbstractReactive {
     /// @notice Deduplicate SettlementReported logs.
     mapping(bytes32 => bool) public processedReport;
 
-    /// @notice Linked-list queue state for pending keys.
+    /// @notice Global linked-list queue state for pending keys (compatibility/introspection).
     LinkedQueue.Data private queueData;
+    /// @notice Per-LCC linked-list queue state for targeted bounded dispatch.
+    mapping(address => LinkedQueue.Data) private queueDataByLcc;
 
     event SpokeCreated(address indexed recipient, address indexed spoke);
     event PendingAdded(address indexed lcc, address indexed recipient, uint256 amount);
@@ -167,6 +169,7 @@ contract HubRSC is AbstractReactive {
             entry.amount = amount;
             entry.exists = true;
             queueData.enqueue(key);
+            queueDataByLcc[lcc].enqueue(key);
             emit PendingAdded(lcc, recipient, amount);
         } else {
             // Accumulate additional queued amount for the same pair.
@@ -194,10 +197,12 @@ contract HubRSC is AbstractReactive {
     /// @notice Builds and dispatches a bounded settlement batch for a specific LCC.
     /// @dev Scans queue entries with MAX_DISPATCH_ITEMS limits and emits callbacks for settlement and leftovers.
     function _dispatchLiquidityForLcc(address lcc, uint256 available) internal {
-        // No liquidity or no pending work.
-        if (available == 0 || queueData.size == 0) return;
+        LinkedQueue.Data storage lccQueue = queueDataByLcc[lcc];
 
-        uint256 startSize = queueData.size;
+        // No liquidity or no pending work.
+        if (available == 0 || lccQueue.size == 0) return;
+
+        uint256 startSize = lccQueue.size;
         uint256 cap = startSize < MAX_DISPATCH_ITEMS ? startSize : MAX_DISPATCH_ITEMS;
 
         // Bounded batch payload buffers sized to current queue.
@@ -208,15 +213,16 @@ contract HubRSC is AbstractReactive {
         uint256 remainingLiquidity = available;
         uint256 batchCount = 0;
         uint256 scanned = 0;
-        bytes32 cursor = queueData.currentCursor();
+        bytes32 cursor = lccQueue.currentCursor();
 
         // Scan up to MAX_DISPATCH_ITEMS queue entries to build a batch for this lcc.
         while (scanned < cap && remainingLiquidity > 0) {
             bytes32 key = cursor;
-            cursor = queueData.nextOrHead(key);
+            cursor = lccQueue.nextOrHead(key);
             Pending storage entry = pending[key];
 
-            if (!queueData.inQueue[key] || !entry.exists || entry.amount == 0) {
+            if (!lccQueue.inQueue[key] || !entry.exists || entry.amount == 0) {
+                lccQueue.remove(key);
                 queueData.remove(key);
             } else if (entry.lcc == lcc) {
                 uint256 settleAmount = entry.amount <= remainingLiquidity ? entry.amount : remainingLiquidity;
@@ -231,13 +237,14 @@ contract HubRSC is AbstractReactive {
 
                 if (entry.amount == 0) {
                     entry.exists = false;
+                    lccQueue.remove(key);
                     queueData.remove(key);
                 }
             }
             scanned++;
         }
 
-        queueData.cursor = cursor;
+        lccQueue.cursor = cursor;
 
         if (batchCount == 0) return;
 
