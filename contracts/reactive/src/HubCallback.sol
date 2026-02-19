@@ -42,7 +42,7 @@ contract HubCallback is AbstractCallback, Ownable {
 
     /// @notice Register or update the spoke contract allowed to report for a recipient.
     /// @param recipient The recipient address to configure.
-    /// @param spokeRVMId The spoke contract address allowed to report for recipient.
+    /// @param spokeRVMId The spoke contract RVM id (deployer address) allowed to report for recipient.
     /// @dev Restricted to the contract owner.
     function setSpokeForRecipient(address recipient, address spokeRVMId) public onlyOwner {
         spokeForRecipient[recipient] = spokeRVMId;
