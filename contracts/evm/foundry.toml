@@ -29,13 +29,7 @@ fs_permissions = [
   { access = "read-write", path = "../../.cursor/" },
 ]
 
-remappings = [
-  "@openzeppelin/=lib/openzeppelin-contracts/",
-  "reactive/=../reactive/src/",
-  "reactive-lib/=lib/reactive-lib/src/",
-]
-
-allow_paths = ["../reactive/src", "lib/reactive-lib/src"]
+remappings = ["@openzeppelin/=lib/openzeppelin-contracts/"]
 
 # Foundry automatically instruments linked-libraries if library public/external functions are called.
 # Defaulting to predicted addresses via CREATE3Factory.
