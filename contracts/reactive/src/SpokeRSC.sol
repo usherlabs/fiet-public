@@ -32,6 +32,8 @@ contract SpokeRSC is AbstractReactive {
 
     /// @notice Monotonic nonce for SettlementReported callbacks.
     uint256 public nonce;
+    /// @notice Deduplicates SettlementQueued logs by log identity.
+    mapping(bytes32 => bool) public processedLog;
 
     event SubscriptionConfigured(uint256 indexed chainId, address indexed hub, address indexed recipient);
     event SettlementForwarded(address indexed recipient, address indexed lcc, uint256 amount, uint256 nonce);
@@ -77,6 +79,13 @@ contract SpokeRSC is AbstractReactive {
         if (log.topic_0 != SETTLEMENT_QUEUED_TOPIC) return;
         // make sure the log is for the recipient this Spoke is dedicated to.
         if (log.topic_2 != uint256(uint160(recipient))) return;
+
+        // includes tx_hash and log_index, so if LiquidityHub emits multiple separate SettlementQueued events (even with identical parameters),
+        // each would have a different tx_hash and/or log_index and therefore a different logId—they'd all be processed.
+        // The deduplication would only filter re-deliveries of the exact same on-chain log due to reorgs or retries.
+        bytes32 logId = keccak256(abi.encode(log.chain_id, log._contract, log.tx_hash, log.log_index));
+        if (processedLog[logId]) return;
+        processedLog[logId] = true;
 
         address lcc = address(uint160(log.topic_1));
         uint256 amount = abi.decode(log.data, (uint256));
