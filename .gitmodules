@@ -20,3 +20,8 @@
 [submodule "contracts/reactive/lib/reactive-lib"]
 	path = contracts/reactive/lib/reactive-lib
 	url = https://github.com/Reactive-Network/reactive-lib
+[submodule "contracts/stylus/lib/kernel"]
+	path = contracts/stylus/lib/kernel
+	url = https://github.com/zerodevapp/kernel
+[submodule "lib/kernel"]
+	branch = dev
