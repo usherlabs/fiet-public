@@ -31,7 +31,11 @@ contract HubCallback is AbstractCallback, Ownable {
     mapping(address => mapping(address => uint256)) public totalAmountProcessed;
     mapping(bytes32 => uint256) public lastNonce;
 
-    constructor(address _callbackProxy, address _hubRVMId) payable AbstractCallback(_callbackProxy) Ownable(msg.sender) {
+    constructor(address _callbackProxy, address _hubRVMId)
+        payable
+        AbstractCallback(_callbackProxy)
+        Ownable(msg.sender)
+    {
         callbackProxy = _callbackProxy;
         hubRVMId = _hubRVMId;
     }
@@ -51,7 +55,6 @@ contract HubCallback is AbstractCallback, Ownable {
     function getTotalAmountProcessed(address lcc, address recipient) public view returns (uint256) {
         return totalAmountProcessed[lcc][recipient];
     }
-
 
     /// @notice Record a settlement callback for a recipient and amount.
     /// @param spokeRVMId The RVM address of the spoke contract associated with this report.
@@ -103,7 +106,7 @@ contract HubCallback is AbstractCallback, Ownable {
             return;
         }
         // assert that only the hub RVMId can call this function
-        if (callerRVMId != hubRVMId){
+        if (callerRVMId != hubRVMId) {
             emit InvalidCallbackSender(callerRVMId);
             return;
         }
