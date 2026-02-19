@@ -48,12 +48,23 @@ contract CREATE3Factory is ICREATE3Factory {
 
 /// @dev Reference: https://github.com/Bunniapp/bunni-v2/blob/main/script/base/CREATE3Script.sol
 abstract contract CREATE3Script is Script {
-    CREATE3Factory internal constant create3 = CREATE3Factory(0x9fBB3DF7C40Da2e5A0dE984fFE2CCB7C47cd0ABf);
+    // Default (canonical) CREATE3 factory address used by upstream tooling.
+    // For fresh devnets (eg, Nitro), you may instead deploy a CREATE3Factory and set
+    // `CREATE3_FACTORY=<deployed address>` when running scripts.
+    address internal constant DEFAULT_CREATE3_FACTORY = 0x9fBB3DF7C40Da2e5A0dE984fFE2CCB7C47cd0ABf;
+    ICREATE3Factory internal create3;
 
     string internal version;
 
     constructor(string memory version_) {
         version = version_;
+        address factory;
+        try vm.envAddress("CREATE3_FACTORY") returns (address a) {
+            factory = a;
+        } catch {
+            factory = DEFAULT_CREATE3_FACTORY;
+        }
+        create3 = ICREATE3Factory(factory);
     }
 
     /// @dev Loads the deployer private key from the PRIVATE_KEY environment variable

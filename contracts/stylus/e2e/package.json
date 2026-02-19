@@ -1,0 +1,24 @@
+{
+  "name": "fiet-intent-validator-e2e",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "bunx vitest",
+    "test:watch": "bunx vitest --watch",
+    "lint": "bunx tsc --noEmit"
+  },
+  "engines": {
+    "bun": ">=1.0.0"
+  },
+  "dependencies": {
+    "dotenv": "^17.2.3",
+    "tslib": "^2.8.1",
+    "viem": "^2.44.4"
+  },
+  "devDependencies": {
+    "@types/node": "^25.0.9",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.17"
+  }
+}

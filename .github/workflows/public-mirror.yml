@@ -1,0 +1,22 @@
+name: Public Mirror
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - closed
+
+jobs:
+  mirroring:
+    if: ${{ github.event.pull_request.merged }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+      - uses: usherlabs/monorepo-package-mirror-action@main
+        with:
+          #          target_repo_url: https://github.com/outerlook/mirror-test-dest.git
+          target_repo_url: git@github.com:usherlabs/fiet-public.git
+          main_branch: main
+          ssh_private_key: ${{ secrets.SSH_MIRROR_PRIVATE_KEY }}
