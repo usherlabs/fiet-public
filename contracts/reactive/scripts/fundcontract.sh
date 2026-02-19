@@ -22,6 +22,17 @@ REACTIVE_PRIVATE_KEY="${PRIVATE_KEY:-}"
 : "${REACTIVE_RPC:?REACTIVE_RPC is required}"
 : "${REACTIVE_PRIVATE_KEY:?PRIVATE_KEY is required}"
 
+# Uses Python bigint arithmetic to avoid Bash 64-bit overflow.
+big_int_sub() {
+  python3 - "$1" "$2" <<'PY'
+import sys
+
+a = int(sys.argv[1], 10)
+b = int(sys.argv[2], 10)
+print(a - b)
+PY
+}
+
 echo "Funding reactive contract deposit"
 echo "  system contract: $SYSTEM_CONTRACT_ADDR"
 echo "  contract:        $CONTRACT_ADDR"
@@ -48,12 +59,12 @@ echo "  Funding of contract $CONTRACT_ADDR with $AMOUNT_WEI wei successfully."
 echo "  ================= reserves========================"
 echo  "  reserves before: $reserves_before wei"
 echo "  reserves after:  $reserves_after wei"
-echo "  reserves delta:  $((reserves_after - reserves_before)) wei"
+echo "  reserves delta:  $(big_int_sub "$reserves_after" "$reserves_before") wei"
 echo "  ================= contract balance ========================"
 echo "  contract balance before: $contract_balance_before wei"
 echo "  contract balance after:  $contract_balance_after wei"
-echo "  contract balance delta:  $((contract_balance_after - contract_balance_before)) wei"
+echo "  contract balance delta:  $(big_int_sub "$contract_balance_after" "$contract_balance_before") wei"
 echo "  ================= contract debt ========================"
 echo "  contract debt before:    $contract_debt_before wei"
 echo "  contract debt after:     $contract_debt_after wei"
-echo "  contract debt delta:     $((contract_debt_after - contract_debt_before)) wei"
+echo "  contract debt delta:     $(big_int_sub "$contract_debt_after" "$contract_debt_before") wei"

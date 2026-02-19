@@ -3,18 +3,39 @@ pragma solidity ^0.8.26;
 
 import {Test} from "forge-std/Test.sol";
 import {Vm} from "forge-std/Vm.sol";
-import {BatchProcessSettlement} from "../../src/periphery/BatchProcessSettlement.sol";
-import {MockLiquidityHub} from "../_mocks/MockLiquidityHub.sol";
+import {BatchProcessSettlement} from "../src/dest/BatchProcessSettlement.sol";
+import {AbstractBatchProcessSettlement} from "evm/periphery/BatchProcessSettlement.sol";
+
+contract MockLiquidityHubForBatch {
+    mapping(address => bool) public shouldRevertForLcc;
+
+    function setShouldRevert(address lcc, bool shouldRevert) external {
+        shouldRevertForLcc[lcc] = shouldRevert;
+    }
+
+    function processSettlementFor(address lcc, address, uint256) external view {
+        require(!shouldRevertForLcc[lcc], "mock-revert");
+    }
+}
 
 contract BatchProcessSettlementTest is Test {
-    MockLiquidityHub private mockHub;
+    MockLiquidityHubForBatch private mockHub;
     BatchProcessSettlement private receiver;
     address private callbackProxy;
 
     function setUp() public {
-        mockHub = new MockLiquidityHub();
+        mockHub = new MockLiquidityHubForBatch();
         callbackProxy = makeAddr("callbackProxy");
         receiver = new BatchProcessSettlement(callbackProxy, address(mockHub));
+    }
+
+    function test_processSettlements_revertsWhenNotAuthorisedSender() public {
+        address[] memory lcc = new address[](1);
+        address[] memory recipient = new address[](1);
+        uint256[] memory maxAmount = new uint256[](1);
+
+        vm.expectRevert("Authorized sender only");
+        receiver.processSettlements(address(0), lcc, recipient, maxAmount);
     }
 
     /// @notice Reverts when array lengths do not match.
@@ -23,7 +44,7 @@ contract BatchProcessSettlementTest is Test {
         address[] memory recipient = new address[](2);
         uint256[] memory maxAmount = new uint256[](1);
 
-        vm.expectRevert(BatchProcessSettlement.InvalidArrayLengths.selector);
+        vm.expectRevert(AbstractBatchProcessSettlement.InvalidArrayLengths.selector);
         vm.prank(callbackProxy);
         receiver.processSettlements(address(0), lcc, recipient, maxAmount);
     }
@@ -36,7 +57,7 @@ contract BatchProcessSettlementTest is Test {
         address[] memory recipient = new address[](len);
         uint256[] memory maxAmount = new uint256[](len);
 
-        vm.expectRevert(abi.encodeWithSelector(BatchProcessSettlement.BatchTooLarge.selector, len, maxBatch));
+        vm.expectRevert(abi.encodeWithSelector(AbstractBatchProcessSettlement.BatchTooLarge.selector, len, maxBatch));
         vm.prank(callbackProxy);
         receiver.processSettlements(address(0), lcc, recipient, maxAmount);
     }

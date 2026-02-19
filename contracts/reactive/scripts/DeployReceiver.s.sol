@@ -4,7 +4,7 @@ pragma solidity ^0.8.26;
 
 import {Script} from "forge-std/Script.sol";
 import {console2} from "forge-std/console2.sol";
-import {BatchProcessSettlement} from "evm/periphery/BatchProcessSettlement.sol";
+import {BatchProcessSettlement} from "src/dest/BatchProcessSettlement.sol";
 
 /// @notice Deploys the destination receiver (BatchProcessSettlement).
 contract DeployReceiver is Script {
