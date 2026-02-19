@@ -33,9 +33,4 @@ contract MockLiquidityHub {
     function getTotalAmountSettled(address lcc, address recipient) external view returns (uint256) {
         return totalAmountSettled[lcc][recipient];
     }
-
-    /// @notice Helper to emit Ping in order to simlulate the execution of a tx.
-    function ping() external {
-        emit Ping();
-    }
 }

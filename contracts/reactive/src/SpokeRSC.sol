@@ -16,10 +16,10 @@ contract SpokeRSC is AbstractReactive {
     uint64 private constant GAS_LIMIT = 8000000;
 
     /// @notice Origin chain that emits SettlementQueued.
-    uint256 public immutable originChainId;
+    uint256 public immutable protocolChainId;
 
     /// @notice Chain id where the hub for the spoke is located
-    uint256 public immutable destinationChainId;
+    uint256 public immutable reactChainId;
 
     /// @notice LiquidityHub on the origin chain.
     address public immutable liquidityHub;
@@ -39,28 +39,28 @@ contract SpokeRSC is AbstractReactive {
     event SettlementForwarded(address indexed recipient, address indexed lcc, uint256 amount, uint256 nonce);
 
     constructor(
-        uint256 _originChainId,
-        uint256 _destinationChainId,
+        uint256 _protocolChainId,
+        uint256 _reactChainId,
         address _liquidityHub,
         address _hubCallback,
         address _recipient
     ) payable {
         if (
-            _originChainId == 0 || _destinationChainId == 0 || _liquidityHub == address(0) || _hubCallback == address(0)
+            _protocolChainId == 0 || _reactChainId == 0 || _liquidityHub == address(0) || _hubCallback == address(0)
                 || _recipient == address(0)
         ) {
             revert InvalidConfig();
         }
 
-        originChainId = _originChainId;
-        destinationChainId = _destinationChainId;
+        protocolChainId = _protocolChainId;
+        reactChainId = _reactChainId;
         liquidityHub = _liquidityHub;
         hubCallback = _hubCallback;
         recipient = _recipient;
 
         if (!vm) {
             service.subscribe(
-                originChainId,
+                protocolChainId,
                 liquidityHub,
                 SETTLEMENT_QUEUED_TOPIC,
                 REACTIVE_IGNORE,
@@ -93,11 +93,11 @@ contract SpokeRSC is AbstractReactive {
         nonce += 1;
 
         bytes memory payload = abi.encodeWithSignature(
-            "recordSettlement(address,address,address,uint256,uint256)", address(this), lcc, recipient, amount, nonce
+            "recordSettlement(address,address,address,uint256,uint256)", address(0), lcc, recipient, amount, nonce
         );
 
         // Emit the callback to the HubCallback
         // This way the hubcallback contract can push the parameters to the HubRSC.
-        emit Callback(destinationChainId, hubCallback, GAS_LIMIT, payload);
+        emit Callback(reactChainId, hubCallback, GAS_LIMIT, payload);
     }
 }
