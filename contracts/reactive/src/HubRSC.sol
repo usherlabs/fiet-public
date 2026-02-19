@@ -92,7 +92,7 @@ contract HubRSC is AbstractReactive {
         destinationReceiverContract = _destinationReceiverContract;
 
         if (!vm) {
-            // check for the liquidity hub event
+            // subscribe to the liquidity hub event for when there is new liquidity available
             service.subscribe(
                 protocolChainId,
                 liquidityHub,
@@ -101,8 +101,7 @@ contract HubRSC is AbstractReactive {
                 REACTIVE_IGNORE,
                 REACTIVE_IGNORE
             );
-            // check for the settlement reported event from the hub callback
-            // this indicates that there is a new settlment added to the queue
+            // subscribe to the settlement reported event from the hub callback
             service.subscribe(
                 reactChainId, hubCallback, SETTLEMENT_REPORTED_TOPIC, REACTIVE_IGNORE, REACTIVE_IGNORE, REACTIVE_IGNORE
             );
@@ -248,7 +247,8 @@ contract HubRSC is AbstractReactive {
             mstore(recipients, batchCount)
             mstore(amounts, batchCount)
         }
-
+        // while the first parameter is set to address(0), it is automatically set on the receiving contract to the the RVM id of the calling contract
+        // i.e it is the rvm id of this contract, and it is derived as the address of the private key used to deploy the contract
         bytes memory payload = abi.encodeWithSignature(
             "processSettlements(address,address[],address[],uint256[])", address(0), lccs, recipients, amounts
         );
@@ -256,8 +256,10 @@ contract HubRSC is AbstractReactive {
         emit DispatchRequested(lcc, available, batchCount, remainingLiquidity);
         emit Callback(protocolChainId, destinationReceiverContract, CALLBACK_GAS_LIMIT, payload);
 
-        // if there is remaining liquidity, then we should call a method on the callback called trigger more liquidity available
+        // if there is remaining liquidity, then we should call a method on the callback called `triggerMoreLiquidityAvailable`
         if (remainingLiquidity > 0) {
+            // while the first parameter is set to address(0), it is automatically set on the receiving contract to the the RVM id of the calling contract
+            // i.e it is the rvm id of this contract, and it is derived as the address of the private key used to deploy the contract
             bytes memory liquidityPayload = abi.encodeWithSignature(
                 "triggerMoreLiquidityAvailable(address,address,uint256)", address(0), lcc, remainingLiquidity
             );

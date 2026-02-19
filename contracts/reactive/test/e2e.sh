@@ -125,6 +125,8 @@ deploy() {
   echo "SpokeRSC deployed to: $SPOKE_RSC"
   export SPOKE_RSC
 
+  sleep 10
+
   # 5) Register recipient -> spoke mapping on HubCallback.
   whitelist_out="$(run_and_print "Setting spoke for recipient..." forge script scripts/WhitelistSpokeForRecipient.s.sol:WhitelistSpokeForRecipient --rpc-url "$REACTIVE_RPC" $broadcast_flag)"
   echo "$whitelist_out"
@@ -162,7 +164,7 @@ integration() {
   local recipient_addr="$RECIPIENT"
   local lcc_addr="0x5FbDB2315678afecb367f032d93F642f64180aa3"
   local check_amount="100"
-  local sleep_seconds="${SLEEP_SECONDS:-60}"
+  local sleep_seconds="${SLEEP_SECONDS:-90}"
 
   echo "=================== RUNNING INTEGRATION TESTS ===================="
   echo "  RPC_URL=$rpc_url"
