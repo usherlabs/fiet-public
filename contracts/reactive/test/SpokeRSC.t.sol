@@ -21,6 +21,7 @@ contract SpokeRSCTest is Test {
         hubCallback = makeAddr("hubCallback");
     }
 
+    /// @notice Reverts deployment when any required constructor field is invalid.
     function test_constructorRevertsOnInvalidConfig() public {
         address recipient = makeAddr("recipient");
 
@@ -108,6 +109,7 @@ contract SpokeRSCTest is Test {
         }
     }
 
+    /// @notice Ignores logs emitted by contracts other than the configured LiquidityHub.
     function test_reactIgnoresWrongContract() public {
         address recipient = makeAddr("recipient");
         SpokeRSC spoke = new SpokeRSC(originChainId, destinationChainId, liquidityHub, hubCallback, recipient);
@@ -133,6 +135,7 @@ contract SpokeRSCTest is Test {
         assertEq(vm.getRecordedLogs().length, 0);
     }
 
+    /// @notice Ignores logs whose event signature is not SettlementQueued.
     function test_reactIgnoresWrongTopic() public {
         address recipient = makeAddr("recipient");
         SpokeRSC spoke = new SpokeRSC(originChainId, destinationChainId, liquidityHub, hubCallback, recipient);
@@ -158,12 +161,13 @@ contract SpokeRSCTest is Test {
         assertEq(vm.getRecordedLogs().length, 0);
     }
 
+    /// @notice Increments nonce once per distinct matching SettlementQueued log identity.
     function test_reactMonotonicNonceAcrossMultipleMatches() public {
         address recipient = makeAddr("recipient");
         SpokeRSC spoke = new SpokeRSC(originChainId, destinationChainId, liquidityHub, hubCallback, recipient);
         address lcc = makeAddr("lcc");
 
-        IReactive.LogRecord memory log = IReactive.LogRecord({
+        IReactive.LogRecord memory firstLog = IReactive.LogRecord({
             chain_id: originChainId,
             _contract: liquidityHub,
             topic_0: SETTLEMENT_QUEUED_TOPIC,
@@ -174,13 +178,68 @@ contract SpokeRSCTest is Test {
             block_number: 0,
             op_code: 0,
             block_hash: 0,
-            tx_hash: 0,
+            tx_hash: 1,
             log_index: 0
         });
 
-        spoke.react(log);
-        spoke.react(log);
+        IReactive.LogRecord memory secondLog = IReactive.LogRecord({
+            chain_id: originChainId,
+            _contract: liquidityHub,
+            topic_0: SETTLEMENT_QUEUED_TOPIC,
+            topic_1: uint256(uint160(lcc)),
+            topic_2: uint256(uint160(recipient)),
+            topic_3: 0,
+            data: abi.encode(uint256(2)),
+            block_number: 0,
+            op_code: 0,
+            block_hash: 0,
+            tx_hash: 2,
+            log_index: 1
+        });
+
+        spoke.react(firstLog);
+        spoke.react(secondLog);
 
         assertEq(spoke.nonce(), 2);
+    }
+
+    /// @notice Processes a duplicate delivery of the same event only once.
+    function test_reactDeduplicatesSameEventDeliveredTwice() public {
+        address recipient = makeAddr("recipient");
+        SpokeRSC spoke = new SpokeRSC(originChainId, destinationChainId, liquidityHub, hubCallback, recipient);
+        address lcc = makeAddr("lcc");
+        uint256 amount = 123;
+
+        IReactive.LogRecord memory log = IReactive.LogRecord({
+            chain_id: originChainId,
+            _contract: liquidityHub,
+            topic_0: SETTLEMENT_QUEUED_TOPIC,
+            topic_1: uint256(uint160(lcc)),
+            topic_2: uint256(uint160(recipient)),
+            topic_3: 0,
+            data: abi.encode(amount),
+            block_number: 0,
+            op_code: 0,
+            block_hash: 0,
+            tx_hash: 111,
+            log_index: 7
+        });
+
+        bytes32 logId = keccak256(abi.encode(log.chain_id, log._contract, log.tx_hash, log.log_index));
+
+        vm.recordLogs();
+        spoke.react(log);
+        spoke.react(log);
+        Vm.Log[] memory entries = vm.getRecordedLogs();
+
+        uint256 callbackCount;
+        bytes32 callbackSig = keccak256("Callback(uint256,address,uint64,bytes)");
+        for (uint256 i = 0; i < entries.length; i++) {
+            if (entries[i].topics[0] == callbackSig) callbackCount++;
+        }
+
+        assertEq(callbackCount, 1);
+        assertEq(spoke.nonce(), 1);
+        assertTrue(spoke.processedLog(logId));
     }
 }
