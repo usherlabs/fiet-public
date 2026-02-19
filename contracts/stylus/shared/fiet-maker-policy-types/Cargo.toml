@@ -1,0 +1,12 @@
+[package]
+name = "fiet-maker-policy-types"
+version = "0.1.0"
+edition = "2021"
+license = "BUSL-1.1"
+repository = "https://github.com/usherlabs/fiet-protocol"
+description = "Shared types for Fiet Maker Stylus policy (on-chain/off-chain)."
+
+[dependencies]
+# Pinned for ABI/type compatibility with the policy + tooling.
+alloy-primitives = { version = "=0.8.20", default-features = false }
+
