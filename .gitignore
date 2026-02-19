@@ -4,10 +4,13 @@ coverage-*.txt
 .solx
 forge.toml
 forge.lock
-!contracts/evm/foundry.toml
-!contracts/evm-scripts/foundry.toml
-!contracts/evm/foundry.lock
-!contracts/evm-scripts/foundry.lock
+!contracts/**/foundry.toml
+!contracts/**/foundry.lock
+!contracts/**/broadcast/
+contracts/**/deployments/
+contracts/**/deployments/.keep
+contracts/**/out/
+contracts/**/cache/
 reports
 contracts/evm-scripts/cache/
 contracts/evm-scripts/out/
@@ -20,3 +23,6 @@ contracts/evm-scripts/deployments/local_*.json
 
 # Oracle local deployments
 contracts/evm-scripts/deployments/oracle_deployments/development
+
+# Node.js
+node_modules/

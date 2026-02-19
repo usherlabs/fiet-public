@@ -1,0 +1,38 @@
+[profile.default]
+src = "src"
+script = "script"
+out = "out"
+libs = ["lib"]
+optimizer = true
+optimizer_runs = 200
+via_ir = true
+
+# Allow resolving Kernel + AA + OZ sources from local lib.
+allow_paths = [
+  "lib/kernel",
+  "lib/kernel/lib/account-abstraction",
+  "lib/kernel/lib/openzeppelin-contracts",
+  "../evm/lib",
+  "../evm/lib/forge-std",
+]
+
+remappings = [
+  "kernel/=lib/kernel/",
+  "account-abstraction/=lib/kernel/lib/account-abstraction/contracts/",
+  "openzeppelin-contracts/=lib/kernel/lib/openzeppelin-contracts/",
+  "@openzeppelin/contracts/=lib/kernel/lib/openzeppelin-contracts/contracts/",
+  "ds-test/=../evm/lib/forge-std/lib/ds-test/src/",
+  "forge-std/=../evm/lib/forge-std/src/",
+]
+
+# ArbOs Foundry deployStylusCode reads a compiled WASM artefact from disk.
+# Allow reading our generated WASM under ./wasm/.
+fs_permissions = [
+  { access = "read", path = "./wasm" },
+  { access = "read", path = "./fixtures" },
+  { access = "read", path = "./fixture" },
+  { access = "read", path = "./src/fiet-maker-policy/target/wasm32-unknown-unknown/release" },
+  { access = "read-write", path = "./deployments" },
+]
+
+# See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
