@@ -1,0 +1,229 @@
+set dotenv-load
+set export
+
+# Stylus / Nitro bootstrap orchestration.
+#
+# This Justfile assumes your Nitro node is running in a separate process.
+# It focuses on:
+# - deploying Nitro-specific EVM mocks for the Stylus policy's fact reads
+# - deploying the Stylus intent policy (cargo-stylus)
+# - writing `contracts/stylus/e2e/.env` for the Bun E2E harness
+
+rpc_url := env_var("RPC_URL")
+chain_id := env_var_or_default("CHAIN_ID", "421614")
+
+# EVM deploy key (Foundry expects bytes32 in PRIVATE_KEY env var)
+private_key := env_var("PRIVATE_KEY")
+
+# Stylus deploy key (cargo-stylus)
+priv_key_path := env_var_or_default("PRIV_KEY_PATH", "")
+pkey := env_var_or_default("PKEY", "")
+
+permission_id := env_var_or_default("PERMISSION_ID", "")
+owner_private_key := env_var_or_default("OWNER_PRIVATE_KEY", private_key)
+
+# Deployment manifests (defaults are Nitro devnet).
+# Override via env when targeting other networks (eg Arbitrum Sepolia):
+# - INFRA_DEPLOYMENTS_PATH
+# - STYLUS_DEPLOYMENTS_PATH
+# - KERNEL_DEPLOYMENTS_PATH
+# - E2E_ENV_PATH
+infra_deployments := env_var_or_default("INFRA_DEPLOYMENTS_PATH", "deployments/infra.nitro.json")
+stylus_deployments := env_var_or_default("STYLUS_DEPLOYMENTS_PATH", "deployments/stylus.nitro.json")
+kernel_deployments := env_var_or_default("KERNEL_DEPLOYMENTS_PATH", "deployments/kernel.nitro.json")
+e2e_env_path := env_var_or_default("E2E_ENV_PATH", "e2e/.env")
+
+[private]
+default:
+  @just --list --unsorted
+
+help:
+  @echo "Stylus / Nitro E2E bootstrap"
+  @echo ""
+  @echo "Required env:"
+  @echo "  RPC_URL            - Nitro RPC (eg http://127.0.0.1:8547)"
+  @echo "  PRIVATE_KEY        - hex bytes32 for Foundry deployments"
+  @echo "  OWNER_PRIVATE_KEY  - hex key used by E2E harness"
+  @echo "  PERMISSION_ID      - bytes32 encoding of Kernel PermissionId (bytes4, left-aligned + zero-padded)"
+  @echo ""
+  @echo "Optional env (override default deployment paths):"
+  @echo "  INFRA_DEPLOYMENTS_PATH   - defaults to deployments/infra.nitro.json"
+  @echo "  STYLUS_DEPLOYMENTS_PATH  - defaults to deployments/stylus.nitro.json"
+  @echo "  KERNEL_DEPLOYMENTS_PATH  - defaults to deployments/kernel.nitro.json"
+  @echo "  E2E_ENV_PATH             - defaults to e2e/.env"
+  @echo ""
+  @echo "Convenience:"
+  @echo "  just env_init_permission_id  # write PERMISSION_ID into .env (contracts/stylus/.env)"
+  @echo ""
+  @echo "For Stylus deploy, provide ONE of:"
+  @echo "  PRIV_KEY_PATH      - path to private key file"
+  @echo "  PKEY              - raw hex private key"
+  @echo ""
+  @echo "Main recipes:"
+  @echo "  just nitro_wait"
+  @echo "  just infra_deploy"
+  @echo "  just kernel_deploy"
+  @echo "  just stylus_deploy_policy"
+  @echo "  just e2e_write_env"
+  @echo "  just bootstrap"
+
+# --- Nitro ---
+
+nitro_wait:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  echo "Waiting for Nitro RPC at ${RPC_URL} ..."
+  until cast chain-id --rpc-url "${RPC_URL}" >/dev/null 2>&1; do
+    sleep 1
+  done
+  echo "Nitro RPC is up. chainId=$(cast chain-id --rpc-url "${RPC_URL}")"
+
+# --- Local env helpers ---
+
+env_init_permission_id:
+  #!/usr/bin/env bash
+  set -euo pipefail
+
+  ENV_PATH=".env"
+  EXAMPLE_PATH=".env.example"
+
+  if [ ! -f "${ENV_PATH}" ]; then
+    if [ -f "${EXAMPLE_PATH}" ]; then
+      cp "${EXAMPLE_PATH}" "${ENV_PATH}"
+    else
+      : > "${ENV_PATH}"
+    fi
+  fi
+
+  if grep -qE '^[[:space:]]*PERMISSION_ID=' "${ENV_PATH}"; then
+    echo "PERMISSION_ID already set in ${ENV_PATH}"
+    grep -E '^[[:space:]]*PERMISSION_ID=' "${ENV_PATH}" || true
+    exit 0
+  fi
+
+  # Deterministic default permission id (stable across runs).
+  #
+  # Kernel v3.3 PermissionId is bytes4. We encode it as a bytes32 with the bytes4 left-aligned,
+  # and the remaining 28 bytes zeroed, so it round-trips cleanly between Kernel (bytes4) and
+  # the Stylus policy (bytes32).
+  PID32="$(cast keccak "fiet-permission-default")"
+  PERMISSION_ID="${PID32:0:10}$(printf '0%.0s' {1..56})"
+
+  printf "\n# bytes32 encoding of Kernel PermissionId (bytes4, left-aligned + zero-padded)\nPERMISSION_ID=%s\n" "${PERMISSION_ID}" >> "${ENV_PATH}"
+  echo "Wrote PERMISSION_ID to ${ENV_PATH}"
+  echo "PERMISSION_ID=${PERMISSION_ID}"
+
+# --- EVM infra (mocks) ---
+
+infra_deploy: nitro_wait
+  #!/usr/bin/env bash
+  set -euo pipefail
+  echo "Deploying Nitro E2E infra mocks -> {{infra_deployments}}"
+  mkdir -p "$(dirname "{{infra_deployments}}")"
+  DEPLOYMENTS_PATH="{{infra_deployments}}" \
+  forge script script/DeployStylusE2EInfra.s.sol:DeployStylusE2EInfra \
+    --rpc-url "{{rpc_url}}" \
+    --broadcast -vvv
+  echo "Wrote {{infra_deployments}}"
+
+# --- Kernel (devnet) ---
+
+kernel_deploy: nitro_wait
+  #!/usr/bin/env bash
+  set -euo pipefail
+  echo "Deploying Kernel (devnet) -> {{kernel_deployments}}"
+  mkdir -p "$(dirname "{{kernel_deployments}}")"
+  DEPLOYMENTS_PATH="{{kernel_deployments}}" \
+  forge script script/DeployDevnet.s.sol:DeployDevnet \
+    --rpc-url "{{rpc_url}}" \
+    --broadcast -vvv
+  echo "Wrote {{kernel_deployments}}"
+
+# --- Stylus policy ---
+
+stylus_deploy_policy: nitro_wait
+  #!/usr/bin/env bash
+  set -euo pipefail
+  if [ -z "{{priv_key_path}}" ] && [ -z "{{pkey}}" ]; then
+    echo "Missing PRIV_KEY_PATH or PKEY for Stylus deployment"
+    exit 1
+  fi
+  echo "Deploying Stylus policy -> {{stylus_deployments}}"
+  mkdir -p "$(dirname "{{stylus_deployments}}")"
+  ARGS=()
+  if [ -n "{{priv_key_path}}" ]; then
+    ARGS+=(--private-key-path "{{priv_key_path}}")
+  else
+    ARGS+=(--private-key "{{pkey}}")
+  fi
+  cargo run --manifest-path tools/deployer/Cargo.toml -- \
+    --rpc-url "{{rpc_url}}" \
+    --contract-dir "src/fiet-maker-policy" \
+    "${ARGS[@]}" \
+    --deployments-path "{{stylus_deployments}}" \
+    --contract-key intent-policy \
+    --network nitro \
+    --verbose \
+    -- --no-verify
+
+stylus_policy_address:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  jq -r '.deployments["intent-policy"].address' "{{stylus_deployments}}"
+
+# --- E2E env wiring ---
+
+e2e_write_env:
+  #!/usr/bin/env bash
+  set -euo pipefail
+
+  if [ -z "{{permission_id}}" ]; then
+    echo "Missing PERMISSION_ID"
+    exit 1
+  fi
+  if [ -z "{{owner_private_key}}" ]; then
+    if [ -z "{{private_key}}" ]; then
+      echo "Must have either OWNER_PRIVATE_KEY (prioritised in e2e) OR PRIVATE_KEY"
+      exit 1
+    fi
+    owner_private_key="{{owner_private_key}}"
+  else
+    owner_private_key="{{owner_private_key}}"
+  fi
+
+  INTENT_POLICY_ADDRESS="$(jq -r '.deployments["intent-policy"].address' "{{stylus_deployments}}")"
+  STATE_VIEW_ADDRESS="$(jq -r '.STATE_VIEW_ADDRESS' "{{infra_deployments}}")"
+  VTS_ORCHESTRATOR_ADDRESS="$(jq -r '.VTS_ORCHESTRATOR_ADDRESS' "{{infra_deployments}}")"
+  LIQUIDITY_HUB_ADDRESS="$(jq -r '.LIQUIDITY_HUB_ADDRESS' "{{infra_deployments}}")"
+  MM_POSITION_MANAGER_ADDRESS="$(jq -r '.MM_POSITION_MANAGER_ADDRESS' "{{infra_deployments}}")"
+  POSITION_MANAGER_ADDRESS="$(jq -r '.POSITION_MANAGER_ADDRESS' "{{infra_deployments}}")"
+
+  ENTRYPOINT_ADDRESS="$(jq -r '.ENTRYPOINT_ADDRESS' "{{kernel_deployments}}")"
+  KERNEL_IMPLEMENTATION_ADDRESS="$(jq -r '.KERNEL_IMPLEMENTATION_ADDRESS' "{{kernel_deployments}}")"
+  MULTICHAIN_SIGNER_ADDRESS="$(jq -r '.MULTICHAIN_SIGNER_ADDRESS' "{{kernel_deployments}}")"
+  CALL_POLICY_ADDRESS="$(jq -r '.CALL_POLICY_ADDRESS' "{{kernel_deployments}}")"
+
+  printf "RPC_URL=%s\n" "{{rpc_url}}" > "{{e2e_env_path}}"
+  printf "CHAIN_ID=%s\n" "{{chain_id}}" >> "{{e2e_env_path}}"
+  printf "OWNER_PRIVATE_KEY=%s\n" "{{owner_private_key}}" >> "{{e2e_env_path}}"
+  printf "PERMISSION_ID=%s\n" "{{permission_id}}" >> "{{e2e_env_path}}"
+  printf "INTENT_POLICY_ADDRESS=%s\n" "${INTENT_POLICY_ADDRESS}" >> "{{e2e_env_path}}"
+  printf "STATE_VIEW_ADDRESS=%s\n" "${STATE_VIEW_ADDRESS}" >> "{{e2e_env_path}}"
+  printf "VTS_ORCHESTRATOR_ADDRESS=%s\n" "${VTS_ORCHESTRATOR_ADDRESS}" >> "{{e2e_env_path}}"
+  printf "LIQUIDITY_HUB_ADDRESS=%s\n" "${LIQUIDITY_HUB_ADDRESS}" >> "{{e2e_env_path}}"
+  printf "MM_POSITION_MANAGER_ADDRESS=%s\n" "${MM_POSITION_MANAGER_ADDRESS}" >> "{{e2e_env_path}}"
+  printf "POSITION_MANAGER_ADDRESS=%s\n" "${POSITION_MANAGER_ADDRESS}" >> "{{e2e_env_path}}"
+
+  printf "ENTRYPOINT_ADDRESS=%s\n" "${ENTRYPOINT_ADDRESS}" >> "{{e2e_env_path}}"
+  printf "KERNEL_IMPLEMENTATION_ADDRESS=%s\n" "${KERNEL_IMPLEMENTATION_ADDRESS}" >> "{{e2e_env_path}}"
+  printf "MULTICHAIN_SIGNER_ADDRESS=%s\n" "${MULTICHAIN_SIGNER_ADDRESS}" >> "{{e2e_env_path}}"
+  printf "CALL_POLICY_ADDRESS=%s\n" "${CALL_POLICY_ADDRESS}" >> "{{e2e_env_path}}"
+
+  echo "Wrote {{e2e_env_path}}"
+
+e2e_test:
+  cd e2e && bun install && bun test
+
+bootstrap: infra_deploy kernel_deploy stylus_deploy_policy e2e_write_env
+  @echo "Bootstrap complete. Next: just e2e_test"
+
