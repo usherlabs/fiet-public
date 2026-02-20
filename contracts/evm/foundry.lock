@@ -1,4 +1,10 @@
 {
+  "../reactive/lib/forge-std": {
+    "rev": "121b89cd2ccd2fe8c6841935ddb684135f08392a"
+  },
+  "../reactive/lib/reactive-lib": {
+    "rev": "f6990ce3526928d039fec78855b2004ff8d65c9f"
+  },
   "contracts/evm/lib/forge-std": {
     "rev": "77041d2ce690e692d6e03cc812b57d1ddaa4d505"
   },
@@ -17,6 +23,12 @@
   "contracts/evm/lib/v4-periphery": {
     "rev": "ad04c9f24a170accf5ea1b2836bbafd514537ca6"
   },
+  "contracts/reactive/lib/forge-std": {
+    "rev": "121b89cd2ccd2fe8c6841935ddb684135f08392a"
+  },
+  "contracts/reactive/lib/reactive-lib": {
+    "rev": "f6990ce3526928d039fec78855b2004ff8d65c9f"
+  },
   "lib/chainlink-brownie-contracts": {
     "rev": "5cb41fbc9b525338b6098da5ea7dd0b7e92f89e4"
   },
@@ -34,6 +46,9 @@
   },
   "lib/permit2": {
     "rev": "cc56ad0f3439c502c246fc5cfcc3db92bb8b7219"
+  },
+  "lib/reactive-lib": {
+    "rev": "f6990ce3526928d039fec78855b2004ff8d65c9f"
   },
   "lib/solady": {
     "tag": {
