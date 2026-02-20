@@ -266,7 +266,16 @@ library LiquidityHubLib {
         // Track burns and mints
         ctx.backingToBurn += directUnwrapped + marketUnwrapped;
         ctx.directToMint += directUnwrapped;
-        // Market-derived mint = remaining after direct unwrap (market liquidity was consumed)
+        // Market-derived mint = the portion of the requested conversion that is NOT backed by directSupply.
+        //
+        // IMPORTANT DESIGN NOTE:
+        // - We mint the target LCC 1:1 against the input `withLCC` amount (see `wrapWithPrepare` + caller transfer),
+        //   even if the backing cannot be fully redeemed (unwrapped) in this transaction.
+        // - `unwrapInternalLogic(...)` may redeem less market liquidity than requested; any shortfall is queued to the
+        //   Hub (`queueSettlement(..., address(this), ...)`) for later reconciliation when liquidity becomes available.
+        // - Therefore, `ctx.marketToMint` intentionally includes the queued/unredeemed remainder (i.e. it is "market-derived
+        //   exposure", not "market liquidity actually redeemed now"). By contrast, `ctx.backingToBurn` only burns what was
+        //   actually redeemed now (direct + market), and the queued portion is burned lazily during settlement processing.
         ctx.marketToMint += (remainingAfterNet - directUnwrapped);
 
         return ctx;
