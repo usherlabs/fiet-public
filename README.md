@@ -13,16 +13,13 @@ EVM interfaces for integration:
 - `contracts/evm/src/interfaces/ICommitmentDescriptor`
 - `contracts/evm/src/interfaces/IMinimalLiquidityHub`
 
-## Getting Started
-
-### For Rust (Arbitrum Stylus) Development
-
-See [contracts/stylus/README.md](contracts/stylus/README.md) for comprehensive Stylus development documentation, including deployment, testing, and local development setup. This includes the Kernel-compatible **Intent Policy** (ERC-7579 module type 5) used with PermissionValidator policies such as CallPolicy.
-
 ## Documentation
 
 - **Protocol Documentation**: [docs.fiet.finance](https://docs.fiet.finance)
-- **Stylus Contracts**: [contracts/stylus/README.md](contracts/stylus/README.md)
+- **Arbitrum Stylus Contracts**: [contracts/stylus/README.md](contracts/stylus/README.md).
+  - Kernel-compatible **Intent Policy** (ERC-7579 module type 5) used with PermissionValidator policies such as CallPolicy.
+- **Reactive Automation Contracts**: [contracts/reactive/README.md](contracts/reactive/README.md)
+  - Keeper automation for lazy liquidity: Async settlement queue clearance once liquidity becomes available .
 
 ## License
 
