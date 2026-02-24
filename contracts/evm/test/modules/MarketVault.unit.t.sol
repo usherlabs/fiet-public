@@ -430,6 +430,74 @@ contract MarketVaultUnitTest is Test {
         assertEq(pm.balanceOf(address(vault), Currency.wrap(address(ua)).toId()), 0);
     }
 
+    function test_modifyLiquiditiesCore_succeedsWithReversedLccOrdering() public {
+        MockLiquidityHub_Min hub = new MockLiquidityHub_Min();
+        MockPoolManager_Min pm = new MockPoolManager_Min();
+        MockMarketFactory_Min mf = new MockMarketFactory_Min(address(hub));
+        mf.setBound(address(pm), true);
+
+        MockERC20 uaA = new MockERC20("Underlying-A", "UA-A", 18);
+        MockERC20 uaB = new MockERC20("Underlying-B", "UA-B", 18);
+        MockLCC lccA = new MockLCC("LCC-A", "LCCA", 18, address(uaA));
+        MockLCC lccB = new MockLCC("LCC-B", "LCBB", 18, address(uaB));
+
+        (ILCC coreLcc0, ILCC coreLcc1) = address(lccA) < address(lccB)
+            ? (ILCC(address(lccA)), ILCC(address(lccB)))
+            : (ILCC(address(lccB)), ILCC(address(lccA)));
+        address coreUnderlying0 = coreLcc0.underlying();
+        address coreUnderlying1 = coreLcc1.underlying();
+
+        Currency proxyU0 = Currency.wrap(coreUnderlying1);
+        Currency proxyU1 = Currency.wrap(coreUnderlying0);
+
+        MarketVaultUnitHarness vault = new MarketVaultUnitHarness(
+            IPoolManager(address(pm)), address(mf), proxyU0, proxyU1, coreLcc0, coreLcc1, keccak256("reversed-market")
+        );
+
+        mf.setBound(address(this), true);
+        MockERC20(coreUnderlying0).mint(address(vault), 100);
+
+        vault.modifyLiquiditiesCore(toBalanceDelta(int128(-50), int128(0)));
+
+        assertEq(pm.balanceOf(address(vault), Currency.wrap(coreUnderlying0).toId()), 50);
+        assertEq(pm.balanceOf(address(vault), Currency.wrap(coreUnderlying1).toId()), 0);
+    }
+
+    function test_dryModifyLiquiditiesCore_usesCoreOrderingWhenReversed() public {
+        MockLiquidityHub_Min hub = new MockLiquidityHub_Min();
+        MockPoolManager_Min pm = new MockPoolManager_Min();
+        MockMarketFactory_Min mf = new MockMarketFactory_Min(address(hub));
+        mf.setBound(address(pm), true);
+
+        MockERC20 uaA = new MockERC20("Underlying-A", "UA-A", 18);
+        MockERC20 uaB = new MockERC20("Underlying-B", "UA-B", 18);
+        MockLCC lccA = new MockLCC("LCC-A", "LCCA", 18, address(uaA));
+        MockLCC lccB = new MockLCC("LCC-B", "LCBB", 18, address(uaB));
+
+        (ILCC coreLcc0, ILCC coreLcc1) = address(lccA) < address(lccB)
+            ? (ILCC(address(lccA)), ILCC(address(lccB)))
+            : (ILCC(address(lccB)), ILCC(address(lccA)));
+        address coreUnderlying0 = coreLcc0.underlying();
+        address coreUnderlying1 = coreLcc1.underlying();
+
+        MarketVaultUnitHarness vault = new MarketVaultUnitHarness(
+            IPoolManager(address(pm)),
+            address(mf),
+            Currency.wrap(coreUnderlying1),
+            Currency.wrap(coreUnderlying0),
+            coreLcc0,
+            coreLcc1,
+            keccak256("reversed-market-2")
+        );
+
+        pm.setClaimBalance(address(vault), Currency.wrap(coreUnderlying0), 7);
+        pm.setClaimBalance(address(vault), Currency.wrap(coreUnderlying1), 0);
+
+        BalanceDelta used = vault.dryModifyLiquiditiesCore(toBalanceDelta(int128(12), int128(0)));
+        assertEq(used.amount0(), int128(7));
+        assertEq(used.amount1(), int128(0));
+    }
+
     function test_settleObligationsForLCC_earlyReturnsWhenNothingQueued() public {
         MockLiquidityHub_Min hub = new MockLiquidityHub_Min();
         (MarketVaultUnitHarness vault,,,, MockLCC lccNative,) = _deployVaultWithHub(address(hub));
