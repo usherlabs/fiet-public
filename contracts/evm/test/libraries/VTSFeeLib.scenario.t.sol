@@ -497,6 +497,11 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
             abi.encodeWithSelector(IMarketVault.dryModifyLiquidities.selector),
             abi.encode(toBalanceDelta(int128(0), int128(0)))
         );
+        vm.mockCall(
+            address(proxyHook),
+            abi.encodeWithSelector(IMarketVault.dryModifyLiquiditiesCore.selector),
+            abi.encode(toBalanceDelta(int128(0), int128(0)))
+        );
 
         uint256 potBefore = _slashedPot0();
 

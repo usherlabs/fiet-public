@@ -113,6 +113,10 @@ MODE=LOCAL NETWORK=sepolia BROADCAST=true just e2e
 
 ## Deployment
 
+### Commands
+
+See [EVM Scripts Directory](../evm-scripts/)
+
 ### Multi-Network Support
 
 The deployment scripts support multiple networks:
@@ -216,13 +220,6 @@ MarketFactory
 ```bash
 forge build          # Build contracts
 forge clean          # Clean build artifacts
-```
-
-### Deployment Commands
-
-```bash
-just deploy         # Deploy all contracts (from contracts/evm-scripts/)
-just create-market  # Create market (from contracts/evm-scripts/)
 ```
 
 ### Development Commands

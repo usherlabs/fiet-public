@@ -408,14 +408,19 @@ abstract contract MarketVault is IMarketVault, ImmutableState, ImmutableMarketSt
         }
     }
 
-    /**
-     * @dev Dry run to modify vault liquidity, handling partial withdrawals gracefully
-     * @param balanceDelta The desired balance delta to apply
-     * @return The actual balance delta that was applied (may be less than requested for withdrawals)
-     */
-    function dryModifyLiquidities(BalanceDelta balanceDelta) public view returns (BalanceDelta) {
-        (Currency currency0, Currency currency1) = _underlying();
+    /// @dev Derives underlying currencies in core/LCC order.
+    function _coreUnderlying() internal view returns (Currency currency0, Currency currency1) {
+        (ILCC lcc0, ILCC lcc1) = _lccs();
+        currency0 = Currency.wrap(lcc0.underlying());
+        currency1 = Currency.wrap(lcc1.underlying());
+    }
 
+    /// @dev Shared clamp logic for dry modify using explicit currency ordering.
+    function _dryModifyLiquiditiesWithCurrencies(Currency currency0, Currency currency1, BalanceDelta balanceDelta)
+        internal
+        view
+        returns (BalanceDelta)
+    {
         int128 delta0 = balanceDelta.amount0();
         int128 delta1 = balanceDelta.amount1();
 
@@ -444,12 +449,23 @@ abstract contract MarketVault is IMarketVault, ImmutableState, ImmutableMarketSt
             }
         }
 
-        // Only proceed with modifyVaultLiquidity if:
-        // 1. We have deposits (positive deltas) - proceed normally
-        // 2. We have withdrawals but sufficient balance available - proceed with adjusted deltas
-        // 3. For withdrawals, if we don't have enough, we still proceed with what we can withdraw
-        BalanceDelta usedDelta = toBalanceDelta(actualDelta0, actualDelta1);
-        return usedDelta;
+        return toBalanceDelta(actualDelta0, actualDelta1);
+    }
+
+    /**
+     * @dev Dry run to modify vault liquidity, handling partial withdrawals gracefully
+     * @param balanceDelta The desired balance delta to apply
+     * @return The actual balance delta that was applied (may be less than requested for withdrawals)
+     */
+    function dryModifyLiquidities(BalanceDelta balanceDelta) public view returns (BalanceDelta) {
+        (Currency currency0, Currency currency1) = _underlying();
+        return _dryModifyLiquiditiesWithCurrencies(currency0, currency1, balanceDelta);
+    }
+
+    /// @inheritdoc IMarketVault
+    function dryModifyLiquiditiesCore(BalanceDelta balanceDelta) public view returns (BalanceDelta) {
+        (Currency currency0, Currency currency1) = _coreUnderlying();
+        return _dryModifyLiquiditiesWithCurrencies(currency0, currency1, balanceDelta);
     }
 
     /**
@@ -459,6 +475,13 @@ abstract contract MarketVault is IMarketVault, ImmutableState, ImmutableMarketSt
      */
     function modifyLiquidities(BalanceDelta balanceDelta) external onlyProtocolBounds nonReentrant {
         (Currency currency0, Currency currency1) = _underlying();
+        _modifyVaultLiquidity(currency0, currency1, balanceDelta);
+        _finaliseModifyLiquidities(balanceDelta, balanceDelta, msg.sender);
+    }
+
+    /// @inheritdoc IMarketVault
+    function modifyLiquiditiesCore(BalanceDelta balanceDelta) external onlyProtocolBounds nonReentrant {
+        (Currency currency0, Currency currency1) = _coreUnderlying();
         _modifyVaultLiquidity(currency0, currency1, balanceDelta);
         _finaliseModifyLiquidities(balanceDelta, balanceDelta, msg.sender);
     }
@@ -483,6 +506,22 @@ abstract contract MarketVault is IMarketVault, ImmutableState, ImmutableMarketSt
         return usedDelta;
     }
 
+    /// @inheritdoc IMarketVault
+    function tryModifyLiquiditiesCore(BalanceDelta balanceDelta)
+        external
+        onlyProtocolBounds
+        nonReentrant
+        returns (BalanceDelta)
+    {
+        (Currency currency0, Currency currency1) = _coreUnderlying();
+
+        BalanceDelta usedDelta = dryModifyLiquiditiesCore(balanceDelta);
+        _modifyVaultLiquidity(currency0, currency1, usedDelta);
+        _finaliseModifyLiquidities(balanceDelta, usedDelta, msg.sender);
+
+        return usedDelta;
+    }
+
     /**
      * @notice Try to modify vault liquidity with a custom recipient for withdrawals
      * @param balanceDelta The desired balance delta to apply
@@ -501,6 +540,25 @@ abstract contract MarketVault is IMarketVault, ImmutableState, ImmutableMarketSt
         (Currency currency0, Currency currency1) = _underlying();
 
         BalanceDelta usedDelta = dryModifyLiquidities(balanceDelta);
+        _modifyVaultLiquidityWithRecipient(currency0, currency1, usedDelta, recipient);
+        _finaliseModifyLiquidities(balanceDelta, usedDelta, recipient);
+
+        return usedDelta;
+    }
+
+    /// @inheritdoc IMarketVault
+    function tryModifyLiquiditiesCoreWithRecipient(BalanceDelta balanceDelta, address recipient)
+        external
+        onlyProtocolBounds
+        nonReentrant
+        returns (BalanceDelta)
+    {
+        if (recipient == address(0)) {
+            revert Errors.InvalidAddress(recipient);
+        }
+        (Currency currency0, Currency currency1) = _coreUnderlying();
+
+        BalanceDelta usedDelta = dryModifyLiquiditiesCore(balanceDelta);
         _modifyVaultLiquidityWithRecipient(currency0, currency1, usedDelta, recipient);
         _finaliseModifyLiquidities(balanceDelta, usedDelta, recipient);
 

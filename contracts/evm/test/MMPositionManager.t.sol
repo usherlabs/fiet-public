@@ -1474,6 +1474,11 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
                 abi.encodeWithSelector(IMarketVault.dryModifyLiquidities.selector),
                 abi.encode(toBalanceDelta(0, 0))
             );
+            vm.mockCall(
+                address(mv),
+                abi.encodeWithSelector(IMarketVault.dryModifyLiquiditiesCore.selector),
+                abi.encode(toBalanceDelta(0, 0))
+            );
 
             // Force "no market liquidity" to make behaviour deterministic (no direct settlement).
             vm.mockCall(
@@ -1721,6 +1726,11 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         vm.mockCall(
             address(mv),
             abi.encodeWithSelector(IMarketVault.dryModifyLiquidities.selector),
+            abi.encode(toBalanceDelta(0, 0))
+        );
+        vm.mockCall(
+            address(mv),
+            abi.encodeWithSelector(IMarketVault.dryModifyLiquiditiesCore.selector),
             abi.encode(toBalanceDelta(0, 0))
         );
 

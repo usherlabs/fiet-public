@@ -48,7 +48,13 @@ contract VTSPositionLibTest_VaultNoop is IMarketVault {
     }
     function modifyLiquidities(BalanceDelta) external pure {}
 
+    function modifyLiquiditiesCore(BalanceDelta) external pure {}
+
     function tryModifyLiquidities(BalanceDelta d) external pure returns (BalanceDelta) {
+        return d;
+    }
+
+    function tryModifyLiquiditiesCore(BalanceDelta d) external pure returns (BalanceDelta) {
         return d;
     }
 
@@ -56,7 +62,15 @@ contract VTSPositionLibTest_VaultNoop is IMarketVault {
         return d;
     }
 
+    function tryModifyLiquiditiesCoreWithRecipient(BalanceDelta d, address) external pure returns (BalanceDelta) {
+        return d;
+    }
+
     function dryModifyLiquidities(BalanceDelta d) external pure returns (BalanceDelta) {
+        return d;
+    }
+
+    function dryModifyLiquiditiesCore(BalanceDelta d) external pure returns (BalanceDelta) {
         return d;
     }
 }
@@ -81,11 +95,21 @@ contract VTSPositionLibTest_VaultClamp is IMarketVault {
 
     function modifyLiquidities(BalanceDelta) external pure {}
 
+    function modifyLiquiditiesCore(BalanceDelta) external pure {}
+
     function tryModifyLiquidities(BalanceDelta d) external pure returns (BalanceDelta) {
         return d;
     }
 
+    function tryModifyLiquiditiesCore(BalanceDelta d) external pure returns (BalanceDelta) {
+        return d;
+    }
+
     function tryModifyLiquiditiesWithRecipient(BalanceDelta d, address) external pure returns (BalanceDelta) {
+        return d;
+    }
+
+    function tryModifyLiquiditiesCoreWithRecipient(BalanceDelta d, address) external pure returns (BalanceDelta) {
         return d;
     }
 
@@ -96,6 +120,10 @@ contract VTSPositionLibTest_VaultClamp is IMarketVault {
         if (a0 > 0 && a0 > avail0) a0 = avail0;
         if (a1 > 0 && a1 > avail1) a1 = avail1;
         return toBalanceDelta(a0, a1);
+    }
+
+    function dryModifyLiquiditiesCore(BalanceDelta d) external view returns (BalanceDelta) {
+        return this.dryModifyLiquidities(d);
     }
 }
 
@@ -119,11 +147,21 @@ contract VTSPositionLibTest_VaultOverAvailable is IMarketVault {
 
     function modifyLiquidities(BalanceDelta) external pure {}
 
+    function modifyLiquiditiesCore(BalanceDelta) external pure {}
+
     function tryModifyLiquidities(BalanceDelta d) external pure returns (BalanceDelta) {
         return d;
     }
 
+    function tryModifyLiquiditiesCore(BalanceDelta d) external pure returns (BalanceDelta) {
+        return d;
+    }
+
     function tryModifyLiquiditiesWithRecipient(BalanceDelta d, address) external pure returns (BalanceDelta) {
+        return d;
+    }
+
+    function tryModifyLiquiditiesCoreWithRecipient(BalanceDelta d, address) external pure returns (BalanceDelta) {
         return d;
     }
 
@@ -134,6 +172,10 @@ contract VTSPositionLibTest_VaultOverAvailable is IMarketVault {
         if (a0 > 0) a0 += extra0;
         if (a1 > 0) a1 += extra1;
         return toBalanceDelta(a0, a1);
+    }
+
+    function dryModifyLiquiditiesCore(BalanceDelta d) external view virtual returns (BalanceDelta) {
+        return this.dryModifyLiquidities(d);
     }
 }
 

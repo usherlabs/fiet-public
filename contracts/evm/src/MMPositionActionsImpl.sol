@@ -303,7 +303,7 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
             }
         }
 
-        params.vault.modifyLiquidities(settlementDelta);
+        params.vault.modifyLiquiditiesCore(settlementDelta);
 
         // Process positive deltas (outflows from vault)
         if (params.usePositionManagerBalance) {
