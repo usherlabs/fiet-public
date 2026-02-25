@@ -71,7 +71,9 @@ contract VTSSettle01RFSOpenEchidnaTest {
             }),
             coverageFeeShare: 5000, // 50%
             minResidualUnits: 1000,
-            unbackedCommitmentGraceBypassBps: 500
+            unbackedCommitmentGraceBypassBps: 500,
+            unbackedCommitmentGraceBypassThreshold0: 0,
+            unbackedCommitmentGraceBypassThreshold1: 0
         });
         harness.setupPool(POOL_ID, config);
 

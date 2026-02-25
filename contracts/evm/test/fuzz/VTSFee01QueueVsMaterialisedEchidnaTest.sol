@@ -294,7 +294,9 @@ contract VTSFee01QueueVsMaterialisedEchidnaTest {
             token1: tc,
             coverageFeeShare: coverageFeeShare,
             minResidualUnits: 0,
-            unbackedCommitmentGraceBypassBps: 0
+            unbackedCommitmentGraceBypassBps: 0,
+            unbackedCommitmentGraceBypassThreshold0: 0,
+            unbackedCommitmentGraceBypassThreshold1: 0
         });
     }
 }

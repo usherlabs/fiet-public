@@ -37,6 +37,10 @@ struct MarketVTSConfiguration {
     uint256 minResidualUnits;
     // Commitment deficit severity threshold (bps) above which grace bypass is allowed
     uint16 unbackedCommitmentGraceBypassBps;
+    // Optional token0 deficit threshold used only when deficit bps is below bypass bps (0 disables)
+    uint256 unbackedCommitmentGraceBypassThreshold0;
+    // Optional token1 deficit threshold used only when deficit bps is below bypass bps (0 disables)
+    uint256 unbackedCommitmentGraceBypassThreshold1;
 }
 
 /// @notice Context struct for position processing dependencies

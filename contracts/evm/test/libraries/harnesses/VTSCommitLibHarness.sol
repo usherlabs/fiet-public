@@ -162,7 +162,13 @@ contract VTSCommitLibHarness {
         TokenConfiguration memory tc =
             TokenConfiguration({gracePeriodTime: 0, seizureUnlockTime: 0, baseVTSRate: 0, maxGracePeriodTime: 0});
         cfg = MarketVTSConfiguration({
-            token0: tc, token1: tc, coverageFeeShare: 0, minResidualUnits: 0, unbackedCommitmentGraceBypassBps: 0
+            token0: tc,
+            token1: tc,
+            coverageFeeShare: 0,
+            minResidualUnits: 0,
+            unbackedCommitmentGraceBypassBps: 0,
+            unbackedCommitmentGraceBypassThreshold0: 0,
+            unbackedCommitmentGraceBypassThreshold1: 0
         });
     }
 }

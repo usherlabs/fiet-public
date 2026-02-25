@@ -26,7 +26,9 @@ library CheckpointLibrary {
     /**
      * @notice Determines if a position is open for seizure
      * @dev Two paths to seizability:
-     *      1. Deficit path: position-level commitment deficit > 0 means immediately seizable (no grace period check)
+     *      1. Deficit path: position-level commitment deficit > 0 bypasses grace when configured gates pass:
+     *         - `commitmentDeficitBps >= unbackedCommitmentGraceBypassBps`, or
+     *         - optional token thresholds (when set > 0) are breached
      *      2. Normal RFS path: checkpoint isOpen AND grace period elapsed
      * @param s The VTS storage struct
      * @param commitId The token ID to check
@@ -49,6 +51,16 @@ library CheckpointLibrary {
             Position memory deficitPosition = s.positions[positionId];
             MarketVTSConfiguration memory deficitCfg = s.pools[deficitPosition.poolId].vtsConfig;
             if (pa.commitmentDeficitBps >= deficitCfg.unbackedCommitmentGraceBypassBps) {
+                return true;
+            }
+
+            // Optional absolute-deficit bypass (for large notional positions):
+            // only considered when the bps-based bypass did not trigger.
+            bool token0ThresholdTriggered = deficitCfg.unbackedCommitmentGraceBypassThreshold0 > 0
+                && pa.commitmentDeficit.token0 >= deficitCfg.unbackedCommitmentGraceBypassThreshold0;
+            bool token1ThresholdTriggered = deficitCfg.unbackedCommitmentGraceBypassThreshold1 > 0
+                && pa.commitmentDeficit.token1 >= deficitCfg.unbackedCommitmentGraceBypassThreshold1;
+            if (token0ThresholdTriggered || token1ThresholdTriggered) {
                 return true;
             }
         }

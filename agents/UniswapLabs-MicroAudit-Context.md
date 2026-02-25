@@ -128,6 +128,12 @@ For these reasons, we prefer threshold-gating the grace bypass (Option B + D): i
 - `CheckpointLibrary.isSeizable` now only bypasses grace on `commitmentDeficit` when:
   - `commitmentDeficit > 0` **and**
   - `commitmentDeficitBps >= unbackedCommitmentGraceBypassBps`.
+- Additional optional notional guardrails are now supported:
+  - `unbackedCommitmentGraceBypassThreshold0`
+  - `unbackedCommitmentGraceBypassThreshold1`
+  - These thresholds are only evaluated when `commitmentDeficitBps < unbackedCommitmentGraceBypassBps`.
+  - If either threshold is configured (`> 0`) and the matching token deficit meets/exceeds it, grace is bypassed.
+  - If unset (`0`), the threshold check is omitted entirely.
 - Result: dust/noise deficits can still open RFS, but must pass through existing grace unless severity crosses the configured bypass threshold.
 
 ### Checkpoint Ordering Adjustment (grace-timing consistency)
@@ -139,3 +145,78 @@ For these reasons, we prefer threshold-gating the grace bypass (Option B + D): i
   4. `CheckpointLibrary.markCheckpoint(...)`.
 - Rationale: this keeps commitment deficit updates and RFS/open-state transitions on the same state snapshot.
 - This avoids a delayed/fresh grace-period start that could otherwise occur if RFS were marked before commitment-derived unbacking was computed.
+
+## Finding: dual-pool architecture enables spot tick manipulation / “core ↔ proxy divergence”
+
+> The fourth finding shows that it is possible to manipulate the pool price via large swaps. This is because the protocol uses a dual-pool architecture (core pool with LCC tokens + proxy pool with underlying). The core pool uses standard v4 concentrated liquidity with its tick and sqrtPrice being used directly by VTS for RFS calculations, deficit/inflow growth accounting, and fee calculations. While the protocol uses an external oracle for commitment backing (which insulates commitmentDeficit from spot manipulation), the tick-based VTS accounting has no such protection. Additionally, the core and proxy pools can diverge after a direct swap on the core pool, which means (1) arbs see a risk-free profit in narrowing the divergence, (2) during the divergence window, any VTS operations execute at distorted prices, and (3) because the onCorePoolDirectSwap() callback occurs after the swap, there's a window during the swap execution itself where the tick is manipulated. By itself, this is a low severity issue, however it also carries a second-order effect of increasing the impact of MEV. Specifically, it distorts VTS accounting for every position touched by hooks during the manipulation window, which implies that a single sandwich can (1) push one or more positions into RFS, (2) increase deficit growth for multiple positions simultaneously, and (3) create price divergence that temporarily misprices the LCC relative to the underlying.
+
+### Clarification: the architecture does **not** create two independently tradeable AMM curves
+
+The finding’s “arb between core and proxy curves” narrative assumes there are two live, independently tradeable price curves: one for LCC↔LCC (core) and one for underlying↔underlying (proxy), both updating in response to swaps.
+
+That is **not** how swaps are implemented in the proxy pool:
+
+- **Proxy-pool swaps are explicitly routed to the core pool.**
+  - `ProxyHook._beforeSwap(...)` executes the swap directly on the core pool via `poolManager.swap(corePoolKey, ...)` (see `contracts/evm/src/ProxyHook.sol`, `_beforeSwap`, around the `poolManager.swap(corePoolKey, ...)` call).
+  - The proxy hook then performs the underlying/LCC settlement and returns a `BeforeSwapDelta` to the PoolManager (the proxy hook has `beforeSwapReturnDelta` enabled via `getHookPermissions()`).
+  - Practically, this means the proxy hook can reduce the proxy-pool swap’s `amountToSwap` (including to zero), so the proxy pool’s own `slot0`/tick is not the price source for execution.
+
+- **The proxy pool does not accept “normal” liquidity provision and is not intended to be a competing price source.**
+  - `ProxyHook._beforeAddLiquidity` reverts (`AddLiquidityThroughHookNotAllowed`), and the proxy hook’s purpose is settlement orchestration, not price discovery (see `contracts/evm/src/ProxyHook.sol`).
+
+Accordingly:
+
+- A “divergence” between proxy pool `slot0` and core pool `slot0` (tick/sqrtP) is possible in the _literal state_ sense, but it is **not** two competing tradeable curves.
+- Any putative “arb” would not be the standard “buy on proxy / sell on core” CLMM arb, because the protocol does not expose a second autonomous CLMM curve for swaps; proxy swaps are executed against the **core** curve.
+
+### Direct core swaps: what happens, and what does **not** happen
+
+We agree that a user can call `PoolManager.swap(corePoolKey, ...)` directly (i.e. “direct core swap”). This moves the **core** CLMM tick/sqrtP, because it is a real Uniswap v4 concentrated-liquidity pool.
+
+However, the “core↔proxy divergence” resulting from a direct core swap does not create a second tradeable curve:
+
+- After a core swap completes, `CoreHook._afterSwap(...)` performs VTS swap processing (`vtsOrchestrator.afterCoreSwap(...)`), and then (only for a direct core swap) notifies the proxy hook via `ProxyHook.onCorePoolDirectSwap(delta)` (see `contracts/evm/src/CoreHook.sol`, `_afterSwap`, and `contracts/evm/src/ProxyHook.sol`, `onCorePoolDirectSwap`).
+- For core swaps that are initiated by the proxy hook (i.e. proxy swaps routed into the core pool), `ProxyHook` sets a transient “proxy swap in progress” flag and `CoreHook` uses that flag to avoid treating the nested core swap as a “direct core swap” (and to avoid recursing into `onCorePoolDirectSwap`). See `contracts/evm/src/libraries/ProxySwapFlag.sol` and its use in `contracts/evm/src/CoreHook.sol` / `contracts/evm/src/ProxyHook.sol`.
+- `onCorePoolDirectSwap` is a _settlement-coherence_ callback: it ensures token-in underlying is moved Hub → Vault at a 1:1 with LCC for the inbound leg. It is not a “price sync” mechanism, because there is no separate proxy-pool price curve to sync.
+
+### Timing / execution window: VTS swap processing is invoked **post-swap**
+
+We agree with the general statement “tick can be manipulated via large swaps”, because this is a CLMM. But we want to correct the implied execution window:
+
+- `CoreHook` snapshots `sqrtPBefore`/`liqBefore` in `beforeSwap`, and then calls `vtsOrchestrator.afterCoreSwap(...)` from `CoreHook._afterSwap(...)` (see `contracts/evm/src/CoreHook.sol`).
+- Uniswap v4’s `PoolManager.swap(...)` executes the pool swap first, emits the `Swap` event, and only then calls the hook’s `afterSwap` (see `contracts/evm/lib/v4-periphery/lib/v4-core/src/PoolManager.sol`, `swap(...)`).
+- `VTSSwapLib.processSwap(...)` reads final post-swap `slot0` from the PoolManager and accrues growth across the segment(s) between `sqrtPBefore` and the final `sqrtPAfter` (see `contracts/evm/src/libraries/VTSSwapLib.sol`, `processSwap(...)`).
+
+Therefore, there is not an obvious intra-swap “mid-execution” window in which _third-party_ VTS operations can run “during the swap” while the tick is in a partially-manipulated transient state. The VTS swap processing is invoked as a normal v4 hook callback **after** the swap has been applied to pool state.
+
+The realistic adversarial model is the standard one: **sandwiching** (or otherwise ordering) discrete protocol interactions around a victim interaction (e.g. a liquidity modification, settlement, or another swap), not re-entering “mid swap step”.
+
+### Residual risk we acknowledge: VTS growth is spot-tick-derived by design
+
+We agree with the core technical premise that:
+
+- **Tick/sqrtP are spot values and can be moved by swaps**, and
+- **VTS swap accounting (deficit/inflow growth) is derived from the AMM’s realised price path**.
+
+This is an intentional coupling: VTS deficit/inflow growth is meant to track what the pool actually “experienced” in swap flow, not an oracle-smoothed price.
+
+What makes this acceptable in our design posture:
+
+- **Manipulation is not free**: moving the tick materially requires executing swaps against the core CLMM and paying LP/protocol fees and price impact. The resulting deficit/inflow accrual corresponds to actual executed swap flow on the core pool.
+- **The oracle-backed commitment path is insulated (and necessarily oracle-based)**: the high-signal insolvency gate (`commitmentDeficit`) is derived from oracle-priced backing rather than the core pool’s spot tick. This is a design requirement because commitment backing may rely on liquidity that is off-chain and/or not even tokenised; it cannot be proven purely from on-chain spot.
+  - The invariant \(issuedUsd \le settledUsd + signalUsd\) explicitly acknowledges the split between (i) on-chain settled value (`settledUsd`) and (ii) oracle-verified value (`signalUsd`).
+  - Where assets are tokenised/on-chain, `settledUsd` valuation routes through our oracle contracts and may be supported by an oracle provider that itself references on-chain spot markets (e.g. Uniswap DEX) as an input.
+- **Deployment environment reduces public-mempool MEV assumptions**: the protocol is not intended to be deployed on Ethereum L1 with a fully adversarial public mempool. This does not eliminate ordering risk entirely, but it changes the practical MEV surface relative to the audit’s implied environment.
+
+That said, we agree this is correctly categorised as (at most) a **low-severity** economic/mechanism observation: if an attacker can reliably obtain ordering around a victim action, they can move the core tick around that action and thereby affect spot-tick-based VTS calculations for positions touched in that window.
+
+### How we frame this to users/integrators (and potential mitigations)
+
+We treat the proxy pool’s `slot0` as **non-authoritative** for price. The authoritative price curve is the **core** pool, and all swap execution is routed there.
+
+If we ever need to further harden against spot-tick manipulation impacts on VTS accounting, the natural mitigations are:
+
+- using TWAP-style tick inputs for _specific_ risk triggers (not for all growth accounting), and/or
+- adding protocol-level constraints on when sensitive actions may be executed relative to swaps (e.g. action-specific sequencing, batching, or private orderflow requirements).
+
+We have not implemented these mitigations at this time because they materially change the mechanism and UX, and because the current deployment posture already assumes an execution environment where adversarial public-mempool sandwiching is not the baseline.

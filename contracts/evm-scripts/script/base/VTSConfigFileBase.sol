@@ -65,6 +65,10 @@ abstract contract VTSConfigFileBase is Script {
             ".unbackedCommitmentGraceBypassBps",
             _jsonUint16Or(json, ".commitmentDeficitBypassBps", cfg.unbackedCommitmentGraceBypassBps)
         );
+        cfg.unbackedCommitmentGraceBypassThreshold0 =
+            _jsonUintOr(json, ".unbackedCommitmentGraceBypassThreshold0", cfg.unbackedCommitmentGraceBypassThreshold0);
+        cfg.unbackedCommitmentGraceBypassThreshold1 =
+            _jsonUintOr(json, ".unbackedCommitmentGraceBypassThreshold1", cfg.unbackedCommitmentGraceBypassThreshold1);
 
         return cfg;
     }
@@ -99,6 +103,12 @@ abstract contract VTSConfigFileBase is Script {
             toml,
             "unbackedCommitmentGraceBypassBps",
             _tomlUint16Or(toml, "commitmentDeficitBypassBps", cfg.unbackedCommitmentGraceBypassBps)
+        );
+        cfg.unbackedCommitmentGraceBypassThreshold0 = _tomlUintOr(
+            toml, "unbackedCommitmentGraceBypassThreshold0", cfg.unbackedCommitmentGraceBypassThreshold0
+        );
+        cfg.unbackedCommitmentGraceBypassThreshold1 = _tomlUintOr(
+            toml, "unbackedCommitmentGraceBypassThreshold1", cfg.unbackedCommitmentGraceBypassThreshold1
         );
 
         return cfg;

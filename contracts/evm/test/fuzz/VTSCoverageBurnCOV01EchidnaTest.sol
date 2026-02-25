@@ -127,7 +127,9 @@ contract VTSCoverageBurnCOV01EchidnaTest {
             token1: tokenConfig,
             coverageFeeShare: coverageFeeShare,
             minResidualUnits: 1,
-            unbackedCommitmentGraceBypassBps: 0
+            unbackedCommitmentGraceBypassBps: 0,
+            unbackedCommitmentGraceBypassThreshold0: 0,
+            unbackedCommitmentGraceBypassThreshold1: 0
         });
     }
 
