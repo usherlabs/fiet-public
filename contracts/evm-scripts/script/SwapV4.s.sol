@@ -48,14 +48,6 @@ contract SwapV4 is NetworkConfig {
         // Initialise network configuration
         _initNetwork();
 
-        // Fetch the mode from the env to determine if we are running a local fork
-        string memory mode;
-        try vm.envString("MODE") returns (string memory envMode) {
-            mode = envMode;
-        } catch {
-            mode = "LOCAL";
-        }
-
         // Load deployment addresses
         address marketFactoryAddr = readAddress("marketFactory");
         address liquidityHubAddr = readAddress("liquidityHub");
@@ -94,12 +86,9 @@ contract SwapV4 is NetworkConfig {
         }
         int24 tickSpacing;
 
-        // Load market parameters from markets deployment file
-        bool isLocalSepolia = keccak256(bytes(networkName)) == keccak256(bytes("sepolia"))
-            && keccak256(bytes(mode)) == keccak256(bytes("LOCAL"));
-        string memory prefix = isLocalSepolia ? "local_" : "";
-        string memory filePath = string.concat("./deployments/", prefix, networkName, "_markets_deployments.json");
-        string memory json = vm.readFile(filePath);
+        // Load market parameters from markets deployment file.
+        _setFilenameWithSuffix(networkName, "_markets");
+        string memory json = vm.readFile(_getFilename());
 
         string memory keyToken0 = string.concat(".", corePoolId, "_underlyingAsset0");
         string memory keyToken1 = string.concat(".", corePoolId, "_underlyingAsset1");

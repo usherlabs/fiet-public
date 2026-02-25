@@ -166,7 +166,7 @@ set-underlyings:
         echo "set-underlyings is intended for MODE=LOCAL. Skipping."
         exit 0
     fi
-    DEPLOYMENTS_FILE="deployments/local_sepolia_deployments.json"
+    DEPLOYMENTS_FILE="deployments/local_{{ network }}_deployments.json"
     if [ ! -f "$DEPLOYMENTS_FILE" ]; then
         echo "Expected $DEPLOYMENTS_FILE not found. Run \`just deploy-tokenA\` and \`just deploy-tokenB\` first."
         exit 1
