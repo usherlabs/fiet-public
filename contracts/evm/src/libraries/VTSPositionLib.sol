@@ -1393,7 +1393,7 @@ library VTSPositionLib {
         // Calculate queued delta in scoped block
         BalanceDelta queuedDelta;
         {
-            BalanceDelta availableDelta = ctx.marketVault.dryModifyLiquiditiesCore(requiredSettlementDelta);
+            BalanceDelta availableDelta = ctx.marketVault.dryModifyLiquidities(requiredSettlementDelta);
             // 1. Determine what amount of available liquidity can be used to cover settlement.
             BalanceDelta rawQueued = requiredSettlementDelta - availableDelta;
             // 2. Clamp queuedDelta to non-negative values (negative values become 0)
@@ -1595,7 +1595,7 @@ library VTSPositionLib {
         if (result.settlementDelta.amount0() > 0 || result.settlementDelta.amount1() > 0) {
             // Get available liquidity from vault
             // This does not include deposits during seizing, as liquidity has not tranferred yet.
-            BalanceDelta availableDelta = p.vault.dryModifyLiquiditiesCore(result.settlementDelta);
+            BalanceDelta availableDelta = p.vault.dryModifyLiquidities(result.settlementDelta);
 
             // Scoped block for shortfall calculation
             {

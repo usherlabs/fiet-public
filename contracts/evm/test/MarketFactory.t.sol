@@ -376,8 +376,21 @@ contract MockOracleHelper_MarketFactory {
 }
 
 contract MockVTSOrchestrator_MarketFactory {
+    PoolId internal _lastCoveragePoolId;
+    uint256 internal _lastCoverage0;
+    uint256 internal _lastCoverage1;
+
     function initPool(PoolKey memory, MarketVTSConfiguration memory) external pure {}
-    function incrementCoverage(PoolId, uint256, uint256) external pure {}
+
+    function incrementCoverage(PoolId poolId, uint256 amount0, uint256 amount1) external {
+        _lastCoveragePoolId = poolId;
+        _lastCoverage0 = amount0;
+        _lastCoverage1 = amount1;
+    }
+
+    function lastCoverage() external view returns (PoolId poolId, uint256 amount0, uint256 amount1) {
+        return (_lastCoveragePoolId, _lastCoverage0, _lastCoverage1);
+    }
 }
 
 contract MockLiquidityHub_MarketFactory {
@@ -502,8 +515,6 @@ contract MockProxyHookVault_MarketFactory {
 
     function modifyLiquidities(BalanceDelta) external pure {}
 
-    function modifyLiquiditiesCore(BalanceDelta) external pure {}
-
     function tryModifyLiquidities(BalanceDelta requested) external view returns (BalanceDelta) {
         if (_forceReturn) return _forcedDelta;
         // Return min of requested and available for each token (and permit "unbounded" if available is zeroed).
@@ -516,29 +527,13 @@ contract MockProxyHookVault_MarketFactory {
         return toBalanceDelta(a0, a1);
     }
 
-    function tryModifyLiquiditiesCore(BalanceDelta requested) external view returns (BalanceDelta) {
-        return this.tryModifyLiquidities(requested);
-    }
-
     /// @dev Newer MarketFactory paths withdraw via `tryModifyLiquiditiesWithRecipient`.
     ///      For unit testing, recipient does not affect the delta result, so we ignore it.
     function tryModifyLiquiditiesWithRecipient(BalanceDelta requested, address) external view returns (BalanceDelta) {
         return this.tryModifyLiquidities(requested);
     }
 
-    function tryModifyLiquiditiesCoreWithRecipient(BalanceDelta requested, address)
-        external
-        view
-        returns (BalanceDelta)
-    {
-        return this.tryModifyLiquidities(requested);
-    }
-
     function dryModifyLiquidities(BalanceDelta requested) external view returns (BalanceDelta) {
-        return this.tryModifyLiquidities(requested);
-    }
-
-    function dryModifyLiquiditiesCore(BalanceDelta requested) external view returns (BalanceDelta) {
         return this.tryModifyLiquidities(requested);
     }
 }
@@ -857,7 +852,7 @@ contract MarketFactoryUnitTest is Test {
 
     function test_useMarketLiquidity_revertsWhenCallerNotLiquidityHub() public {
         vm.expectRevert(Errors.InvalidSender.selector);
-        factory.useMarketLiquidity(address(0x100), bytes32(uint256(1)), 1);
+        factory.useMarketLiquidity(address(0x3000), bytes32(uint256(1)), 1);
     }
 
     function test_useMarketLiquidity_usedIsSumOfDeltaAmounts() public {
@@ -867,32 +862,58 @@ contract MarketFactoryUnitTest is Test {
         // Force a delta with BOTH legs positive so (+) vs (-) mutations are observable.
         proxyHook.setForcedDelta(int128(10), int128(7));
 
+        address[2] memory corePair = factory.corePoolToCurrencyPair(coreId);
         vm.prank(address(liquidityHub));
-        uint256 used = factory.useMarketLiquidity(address(0x100), PoolId.unwrap(coreId), 10);
+        uint256 used = factory.useMarketLiquidity(corePair[0], PoolId.unwrap(coreId), 10);
         assertEq(used, 17);
     }
 
-    function test_useMarketLiquidity_withCurrency0AndCurrency1_andInvalidToken() public {
+    function test_useMarketLiquidity_withLcc0AndLcc1_andInvalidToken() public {
         uint160 initial = 79228162514264337593543950336;
         (PoolId coreId,) = _createMarket(address(0x100), address(0x200), initial);
 
-        // currency0 is the numerically smaller address
-        address currency0 = address(0x100);
-        address currency1 = address(0x200);
+        address[2] memory corePair = factory.corePoolToCurrencyPair(coreId);
+        address lcc0 = corePair[0];
+        address lcc1 = corePair[1];
 
         proxyHook.setAvailableLiquidity(int128(1000), int128(1000));
 
         vm.prank(address(liquidityHub));
-        uint256 used0 = factory.useMarketLiquidity(currency0, PoolId.unwrap(coreId), 10);
+        uint256 used0 = factory.useMarketLiquidity(lcc0, PoolId.unwrap(coreId), 10);
         assertEq(used0, 10);
 
         vm.prank(address(liquidityHub));
-        uint256 used1 = factory.useMarketLiquidity(currency1, PoolId.unwrap(coreId), 7);
+        uint256 used1 = factory.useMarketLiquidity(lcc1, PoolId.unwrap(coreId), 7);
         assertEq(used1, 7);
 
         vm.prank(address(liquidityHub));
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0xDEAD)));
         factory.useMarketLiquidity(address(0xDEAD), PoolId.unwrap(coreId), 1);
+    }
+
+    function test_useMarketLiquidity_usesCoreOrderingForDeltaAndCoverage() public {
+        uint160 initial = 79228162514264337593543950336;
+        (PoolId coreId,) = _createMarket(address(0x100), address(0x200), initial);
+        address[2] memory corePair = factory.corePoolToCurrencyPair(coreId);
+
+        // Distinct per-leg capacity lets us detect which leg the request hit.
+        proxyHook.setAvailableLiquidity(int128(3), int128(7));
+
+        vm.prank(address(liquidityHub));
+        uint256 used0 = factory.useMarketLiquidity(corePair[0], PoolId.unwrap(coreId), 10);
+        assertEq(used0, 3);
+        (PoolId gotPoolId0, uint256 cov00, uint256 cov01) = vts.lastCoverage();
+        assertEq(PoolId.unwrap(gotPoolId0), PoolId.unwrap(coreId));
+        assertEq(cov00, 3);
+        assertEq(cov01, 0);
+
+        vm.prank(address(liquidityHub));
+        uint256 used1 = factory.useMarketLiquidity(corePair[1], PoolId.unwrap(coreId), 10);
+        assertEq(used1, 7);
+        (PoolId gotPoolId1, uint256 cov10, uint256 cov11) = vts.lastCoverage();
+        assertEq(PoolId.unwrap(gotPoolId1), PoolId.unwrap(coreId));
+        assertEq(cov10, 0);
+        assertEq(cov11, 7);
     }
 
     function test_marketLiquidity_readsVaultBalance() public {

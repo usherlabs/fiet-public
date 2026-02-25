@@ -448,7 +448,7 @@ library LiquidityHubLib {
      */
     function useMarketLiquidity(LiquidityHubStorage storage s, address lcc, uint256 amount) internal returns (uint256) {
         Market memory market = s.lccToMarket[lcc];
-        return IMarketFactory(market.factory).useMarketLiquidity(s.lccToUnderlying[lcc], market.id, amount);
+        return IMarketFactory(market.factory).useMarketLiquidity(lcc, market.id, amount);
     }
 
     /**

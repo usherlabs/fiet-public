@@ -55,10 +55,10 @@ abstract contract MarketVaultBase is MarketTestBase {
      * @dev  Mock the user's balance in a given market.
      * @dev it can be used to simulate the amount of liquidity the caller has in the given market i.e it is caller specific
      */
-    function _mockLimitedMarketLiquidity(address underlyingAsset, bytes32 marketId, uint256 usedAmount) internal {
+    function _mockLimitedMarketLiquidity(address lcc, bytes32 marketId, uint256 usedAmount) internal {
         vm.mockCall(
             marketFactory,
-            abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector, underlyingAsset, marketId),
+            abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector, lcc, marketId),
             abi.encode(usedAmount)
         );
     }

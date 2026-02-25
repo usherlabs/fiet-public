@@ -389,6 +389,7 @@ abstract contract MarketVault is IMarketVault, ImmutableState, ImmutableMarketSt
         (ILCC lccToken0, ILCC lccToken1) = _lccs();
         // If there was an addition (deposit), then settle the obligations to the lcc tokens
         // ? caller context means negative delta liquidity leaving the caller, and entering the vault.
+
         if (balanceDelta.amount0() < 0) {
             _settleObligationsForLCC(lccToken0);
         }
@@ -458,12 +459,6 @@ abstract contract MarketVault is IMarketVault, ImmutableState, ImmutableMarketSt
      * @return The actual balance delta that was applied (may be less than requested for withdrawals)
      */
     function dryModifyLiquidities(BalanceDelta balanceDelta) public view returns (BalanceDelta) {
-        (Currency currency0, Currency currency1) = _underlying();
-        return _dryModifyLiquiditiesWithCurrencies(currency0, currency1, balanceDelta);
-    }
-
-    /// @inheritdoc IMarketVault
-    function dryModifyLiquiditiesCore(BalanceDelta balanceDelta) public view returns (BalanceDelta) {
         (Currency currency0, Currency currency1) = _coreUnderlying();
         return _dryModifyLiquiditiesWithCurrencies(currency0, currency1, balanceDelta);
     }
@@ -474,13 +469,6 @@ abstract contract MarketVault is IMarketVault, ImmutableState, ImmutableMarketSt
      * @notice Derive the ProxyHook address from the Pool Id, assumes the (LCC underlying) currencies for the Proxy Pool.
      */
     function modifyLiquidities(BalanceDelta balanceDelta) external onlyProtocolBounds nonReentrant {
-        (Currency currency0, Currency currency1) = _underlying();
-        _modifyVaultLiquidity(currency0, currency1, balanceDelta);
-        _finaliseModifyLiquidities(balanceDelta, balanceDelta, msg.sender);
-    }
-
-    /// @inheritdoc IMarketVault
-    function modifyLiquiditiesCore(BalanceDelta balanceDelta) external onlyProtocolBounds nonReentrant {
         (Currency currency0, Currency currency1) = _coreUnderlying();
         _modifyVaultLiquidity(currency0, currency1, balanceDelta);
         _finaliseModifyLiquidities(balanceDelta, balanceDelta, msg.sender);
@@ -497,25 +485,9 @@ abstract contract MarketVault is IMarketVault, ImmutableState, ImmutableMarketSt
         nonReentrant
         returns (BalanceDelta)
     {
-        (Currency currency0, Currency currency1) = _underlying();
-
-        BalanceDelta usedDelta = dryModifyLiquidities(balanceDelta);
-        _modifyVaultLiquidity(currency0, currency1, usedDelta);
-        _finaliseModifyLiquidities(balanceDelta, usedDelta, msg.sender);
-
-        return usedDelta;
-    }
-
-    /// @inheritdoc IMarketVault
-    function tryModifyLiquiditiesCore(BalanceDelta balanceDelta)
-        external
-        onlyProtocolBounds
-        nonReentrant
-        returns (BalanceDelta)
-    {
         (Currency currency0, Currency currency1) = _coreUnderlying();
 
-        BalanceDelta usedDelta = dryModifyLiquiditiesCore(balanceDelta);
+        BalanceDelta usedDelta = dryModifyLiquidities(balanceDelta);
         _modifyVaultLiquidity(currency0, currency1, usedDelta);
         _finaliseModifyLiquidities(balanceDelta, usedDelta, msg.sender);
 
@@ -537,28 +509,9 @@ abstract contract MarketVault is IMarketVault, ImmutableState, ImmutableMarketSt
         if (recipient == address(0)) {
             revert Errors.InvalidAddress(recipient);
         }
-        (Currency currency0, Currency currency1) = _underlying();
-
-        BalanceDelta usedDelta = dryModifyLiquidities(balanceDelta);
-        _modifyVaultLiquidityWithRecipient(currency0, currency1, usedDelta, recipient);
-        _finaliseModifyLiquidities(balanceDelta, usedDelta, recipient);
-
-        return usedDelta;
-    }
-
-    /// @inheritdoc IMarketVault
-    function tryModifyLiquiditiesCoreWithRecipient(BalanceDelta balanceDelta, address recipient)
-        external
-        onlyProtocolBounds
-        nonReentrant
-        returns (BalanceDelta)
-    {
-        if (recipient == address(0)) {
-            revert Errors.InvalidAddress(recipient);
-        }
         (Currency currency0, Currency currency1) = _coreUnderlying();
 
-        BalanceDelta usedDelta = dryModifyLiquiditiesCore(balanceDelta);
+        BalanceDelta usedDelta = dryModifyLiquidities(balanceDelta);
         _modifyVaultLiquidityWithRecipient(currency0, currency1, usedDelta, recipient);
         _finaliseModifyLiquidities(balanceDelta, usedDelta, recipient);
 
