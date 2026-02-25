@@ -12,6 +12,7 @@ import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {Errors} from "../src/libraries/Errors.sol";
 import {ISettlementVerifier} from "../src/interfaces/ISettlementVerifier.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {EfficientHashLib} from "solady/utils/EfficientHashLib.sol";
 
 contract FalseSettlementVerifier is ISettlementVerifier {
     function verifySettlementProof(bytes memory, bytes memory) external pure returns (bool) {
@@ -226,6 +227,33 @@ contract VRLSettlementObserverTest is Test {
         // Verify the proof (should succeed since stub verifier always returns true)
         bool isValid = observer.verifySettlementProof(poolKey, tokenIndex, verifierIndex, settlementProof, false);
         assertTrue(isValid);
+    }
+
+    function test_VerifySettlementProof_MarksProofHashUsed_AndRejectsReplay() public {
+        address token = makeAddr("token");
+        address[] memory tokens = new address[](1);
+        tokens[0] = token;
+
+        vm.prank(owner);
+        observer.allowVerifierForTokens(0, tokens);
+
+        PoolKey memory poolKey = PoolKey({
+            currency0: Currency.wrap(token),
+            currency1: Currency.wrap(makeAddr("token1")),
+            fee: 3000,
+            tickSpacing: 60,
+            hooks: IHooks(address(0))
+        });
+
+        bytes memory settlementProof = "proof";
+        bytes32 proofHash = EfficientHashLib.hash(settlementProof);
+
+        assertEq(observer.usedProofHashes(proofHash), false);
+        assertTrue(observer.verifySettlementProof(poolKey, 0, 0, settlementProof, true));
+        assertEq(observer.usedProofHashes(proofHash), true);
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidProof.selector));
+        observer.verifySettlementProof(poolKey, 0, 0, settlementProof, true);
     }
 
     function test_VerifySettlementProof_ValidProof_DoesNotRevert_WhenRevertOnInvalidTrue() public {

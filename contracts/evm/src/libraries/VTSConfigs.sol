@@ -20,7 +20,10 @@ library VTSConfigs {
                 baseVTSRate: 1000 // 10% (1000 bips)
             }),
             coverageFeeShare: 5000, // 50% (5000 bps)
-            minResidualUnits: 1 // minimum units of liquidity that will result in full seizure
+            minResidualUnits: 1, // minimum units of liquidity that will result in full seizure
+            unbackedCommitmentGraceBypassBps: 500, // 5% under-backing bypasses grace
+            unbackedCommitmentGraceBypassThreshold0: 0, // optional token0 amount threshold (disabled by default)
+            unbackedCommitmentGraceBypassThreshold1: 0 // optional token1 amount threshold (disabled by default)
         });
     }
 }

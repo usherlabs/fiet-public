@@ -190,6 +190,9 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
     function _assertValidMarketVTSConfiguration(MarketVTSConfiguration memory cfg) internal pure {
         _assertValidTokenConfiguration(cfg.token0);
         _assertValidTokenConfiguration(cfg.token1);
+        if (cfg.unbackedCommitmentGraceBypassBps > LiquidityUtils.BPS_DENOMINATOR) {
+            revert Errors.InvalidAmount(cfg.unbackedCommitmentGraceBypassBps, LiquidityUtils.BPS_DENOMINATOR);
+        }
     }
 
     /// @notice Check if a position is valid
@@ -752,8 +755,10 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
     }
 
     /// @notice Checkpoint a position and optionally run commitment backing checks
-    /// @dev Marks an RFS checkpoint for the position. If withCommitment is true, also validates
-    ///      commitment backing and updates position deficits.
+    /// @dev Settles growth once, optionally updates commitment deficit state, then computes/marks RFS
+    ///      from that same snapshot.
+    ///      Ordering matters: this prevents a fresh grace window from starting
+    ///      from a later checkpoint when commitment-derived unbacking was already revealed earlier.
     /// @param commitId The commit identifier
     /// @param positionIndex The position index within the commit
     /// @param withCommitment Whether to run commitment backing checks and update position deficits
@@ -764,17 +769,20 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
         PositionId positionId = getPositionId(commitId, positionIndex);
         _assertPositionValid(positionId, true);
 
-        // Mark the RFS checkpoint for the position
-        (bool rfsOpen,) = VTSPositionLib.calcRFS(s, poolManager, positionId, false);
-        CheckpointLibrary.markCheckpoint(s, positionId, rfsOpen);
-        emit Checkpointed(commitId, positionIndex, s.positions[positionId].checkpoint, withCommitment);
+        // Settle growths exactly once up-front so both commitment checks and RFS use the same state snapshot.
+        // We intentionally avoid `calcRFS` here because it settles growths internally.
+        VTSPositionLib.settlePositionGrowths(s, poolManager, positionId);
 
         // If commitment checks are requested, validate backing and update deficits
-        if (!withCommitment) {
-            return;
+        if (withCommitment) {
+            // Commitment backing checks use the stored commit signal state.
+            // If the signal is expired, it is treated as 0; callers should renew first if needed.
+            VTSCommitLib.checkpointWithCommitment(s, poolManager, oracleHelper, commitId, positionId);
         }
-        // Commitment backing checks use the stored commit signal state. If the signal is expired, it is treated as 0.
-        // Callers should renew first if needed.
-        VTSCommitLib.checkpointWithCommitment(s, poolManager, oracleHelper, commitId, positionId);
+
+        // Compute RFS without re-settling growths, then mark transition time from this unified snapshot.
+        (bool rfsOpen,) = VTSPositionLib.getRFS(s, positionId);
+        CheckpointLibrary.markCheckpoint(s, positionId, rfsOpen);
+        emit Checkpointed(commitId, positionIndex, s.positions[positionId].checkpoint, withCommitment);
     }
 }

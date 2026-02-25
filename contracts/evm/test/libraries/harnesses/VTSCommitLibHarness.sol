@@ -151,13 +151,25 @@ contract VTSCommitLibHarness {
         return (s.positionAccounting[id].commitmentDeficit.token0, s.positionAccounting[id].commitmentDeficit.token1);
     }
 
+    function getPositionCommitmentDeficitBps(PositionId id) external view returns (uint16) {
+        return s.positionAccounting[id].commitmentDeficitBps;
+    }
+
     // ============ Internal Helpers ============
 
     function _emptyConfig() internal pure returns (MarketVTSConfiguration memory cfg) {
         // Keep the harness independent from MarketTestBase defaults; commit lib doesn't read config.
         TokenConfiguration memory tc =
             TokenConfiguration({gracePeriodTime: 0, seizureUnlockTime: 0, baseVTSRate: 0, maxGracePeriodTime: 0});
-        cfg = MarketVTSConfiguration({token0: tc, token1: tc, coverageFeeShare: 0, minResidualUnits: 0});
+        cfg = MarketVTSConfiguration({
+            token0: tc,
+            token1: tc,
+            coverageFeeShare: 0,
+            minResidualUnits: 0,
+            unbackedCommitmentGraceBypassBps: 0,
+            unbackedCommitmentGraceBypassThreshold0: 0,
+            unbackedCommitmentGraceBypassThreshold1: 0
+        });
     }
 }
 

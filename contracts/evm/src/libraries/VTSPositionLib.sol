@@ -244,6 +244,13 @@ library VTSPositionLib {
                 }
             }
 
+            // If position-level commitment deficit is fully cured, clear any stored severity bps.
+            // TODO: What will happen is settlements will bring the pa.commitmentDeficit.token0/1 down to 0.
+            // TODO: If a new checkpoint occurs, and the deficit is now < unbackedCommitmentGraceBypassBps, then the grace period begins - despite the fact that it truly began earlier.
+            if (pa.commitmentDeficit.token0 == 0 && pa.commitmentDeficit.token1 == 0) {
+                pa.commitmentDeficitBps = 0;
+            }
+
             if (delta > 0) {
                 next = cur + uint256(delta);
                 if (next > c) {
