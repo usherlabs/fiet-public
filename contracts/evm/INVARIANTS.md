@@ -360,6 +360,49 @@ being an informal “should”.
   - `src/LiquidityHub.sol::issue`, `cancel`, `cancelWithQueue`, `planCancel*`, `confirmTake`, `prepareSettle` are issuer
     gated (revert `Errors.NotApproved(...)` via `_onlyIssuer`).
 
+### MKT-05: Proxy pool AMM price curve must never be utilised (core-curve-only execution)
+
+- **Statement**: A swap submitted against the **proxy pool** must never execute against the proxy pool’s own Uniswap v4
+  CLMM curve. The proxy pool’s `slot0` (`sqrtPriceX96`, `tick`) is **non-authoritative** and must be treated as an
+  implementation detail only.
+
+  Concretely:
+
+  - All economically meaningful swap execution must be routed through the **core pool** (LCC↔LCC pool).
+  - The proxy hook must ensure the underlying proxy-pool `PoolManager.swap(proxyPoolKey, ...)` is a **no-op** at the
+    Uniswap layer (i.e. the swap’s effective `amountToSwap` on the proxy pool is zero), so that the proxy pool’s AMM
+    state is not advanced by swaps.
+
+- **Purpose**:
+  - The protocol’s “single curve” is the **core** pool. Allowing the proxy pool to run its own AMM step(s) creates a
+    second mutable price path that is not meant to be consumed by VTS or integrators.
+  - Proxy-pool `slot0` drift is not merely cosmetic: it can become a denial-of-service vector. In particular, pushing
+    proxy `sqrtPriceX96` to an extreme can cause subsequent swaps to revert via Uniswap’s price-limit guards (e.g.
+    `PriceLimitAlreadyExceeded`), even though the protocol intends swaps to be routed to the core pool.
+
+- **Risks if violated (griefing / safety impact)**:
+  - **Directional swap DoS via price-limit poisoning**: If any swap leaves a non-zero residual `amountToSwap` and the
+    proxy pool’s `Pool.swap()` executes, the proxy pool may “walk” its `sqrtPriceX96` towards the swap limit despite
+    having no meaningful liquidity. Once proxy `slot0.sqrtPriceX96` is pushed to an extreme, subsequent swaps that use
+    standard “full-range” limits can revert with `PriceLimitAlreadyExceeded`, effectively disabling proxy-pool swaps for
+    that direction (and therefore disabling the protocol’s primary swap entrypoint for that market).
+  - **Gas griefing / execution amplification**: Executing the proxy pool swap path can force extra bitmap scanning and
+    swap-loop work that should not exist in the proxy architecture. Attackers can intentionally trigger the “residual
+    swap” path (e.g. by inducing liquidity-capped execution) to increase gas usage and reduce throughput.
+  - **State ambiguity / integration footguns**: A mutable proxy `slot0` creates a second on-chain price series that is
+    not economically meaningful for the protocol. This increases the risk of accidental consumption by indexers,
+    integrators, or future protocol modules (e.g. mistakenly using proxy `tick`/`sqrtPriceX96` as an oracle input).
+  - **Auditability regression**: The protocol’s security arguments rely on a single authoritative curve. Allowing the
+    proxy curve to execute complicates reasoning about “what price was used” and makes correctness harder to validate
+    across upgrades and refactors.
+
+- **Enforced by (required mechanism)**:
+  - `src/ProxyHook.sol::_beforeSwap` must guarantee that swaps against the proxy pool do not leave a residual
+    `amountToSwap` for the proxy pool’s own `Pool.swap` to execute.
+  - If the protocol elects to support “partial fills” / liquidity-capped swaps, it must do so without permitting the
+    proxy pool’s AMM state machine to advance (e.g. by reverting when a cap would otherwise leave non-zero residual, or
+    by redesigning the hook accounting so the proxy swap is always fully neutralised).
+
 ---
 
 ## Notes for test authors
