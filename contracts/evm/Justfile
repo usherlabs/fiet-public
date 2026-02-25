@@ -94,6 +94,9 @@ echidna-fee-01 config="echidna.config.yml":
 echidna-fee-02 config="echidna.config.yml":
   @just echidna test/fuzz/VTSFee02NoBonusOnCreationEchidnaTest.sol VTSFee02NoBonusOnCreationEchidnaTest {{config}} -- --disable-slither
 
+echidna-mkt-05 config="echidna.config.yml":
+  @just echidna test/fuzz/ProxySwapMKT05EchidnaTest.sol ProxySwapMKT05EchidnaTest {{config}} -- --disable-slither
+
 echidna-vts-02 config="echidna.config.yml":
   @just echidna test/fuzz/VTSSwapVTS02FlipOutsideEchidnaTest.sol VTSSwapVTS02FlipOutsideEchidnaTest {{config}} -- --disable-slither
 
