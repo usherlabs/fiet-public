@@ -129,3 +129,13 @@ For these reasons, we prefer threshold-gating the grace bypass (Option B + D): i
   - `commitmentDeficit > 0` **and**
   - `commitmentDeficitBps >= unbackedCommitmentGraceBypassBps`.
 - Result: dust/noise deficits can still open RFS, but must pass through existing grace unless severity crosses the configured bypass threshold.
+
+### Checkpoint Ordering Adjustment (grace-timing consistency)
+
+- `VTSOrchestrator.checkpoint` now uses this ordering:
+  1. `VTSPositionLib.settlePositionGrowths(...)` once,
+  2. optional `VTSCommitLib.checkpointWithCommitment(...)`,
+  3. `VTSPositionLib.getRFS(...)` (without re-settling growth),
+  4. `CheckpointLibrary.markCheckpoint(...)`.
+- Rationale: this keeps commitment deficit updates and RFS/open-state transitions on the same state snapshot.
+- This avoids a delayed/fresh grace-period start that could otherwise occur if RFS were marked before commitment-derived unbacking was computed.
