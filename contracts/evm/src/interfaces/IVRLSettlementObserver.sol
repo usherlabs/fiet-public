@@ -2,12 +2,16 @@
 pragma solidity ^0.8.26;
 
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 
 interface IVRLSettlementObserver {
     event VerifierAdded(address indexed verifier, uint256 indexed index);
     event VerifierRemoved(address indexed verifier, uint256 indexed removedIndex);
     event VerifierAllowed(address indexed token, uint32 indexed verifierIndex);
     event VerifierDisallowed(address indexed token, uint32 indexed verifierIndex);
+    event SettlementProofMarkedUsed(
+        bytes32 indexed proofHash, PoolId indexed poolId, uint32 verifierIndex, uint8 tokenIndex
+    );
 
     function addVerifier(address _verifier) external returns (uint32);
     function nullifyVerifier(uint32 index) external;
@@ -19,5 +23,5 @@ interface IVRLSettlementObserver {
         uint32 verifierIndex,
         bytes memory settlementProof,
         bool revertOnInvalid
-    ) external view returns (bool isProofValid);
+    ) external returns (bool isProofValid);
 }
