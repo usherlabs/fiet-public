@@ -21,12 +21,15 @@ import {MarketVault} from "./modules/MarketVault.sol";
 import {ProxySwapFlag} from "./libraries/ProxySwapFlag.sol";
 import {LiquidityUtils} from "../src/libraries/LiquidityUtils.sol";
 import {Exttload} from "v4-periphery/lib/v4-core/src/Exttload.sol";
+import {IMsgSender} from "v4-periphery/src/interfaces/IMsgSender.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {Errors} from "./libraries/Errors.sol";
 import {MarketHandlerLib} from "./libraries/MarketHandlerLib.sol";
 
 contract ProxyHook is BaseHook, MarketVault, Exttload {
     using CurrencySettler for Currency;
+    address internal constant RECIPIENT_LOCKER = address(1);
+    address internal constant RECIPIENT_ROUTER = address(2);
 
     /// @dev Context for proxy swap operations to reduce stack depth
     struct ProxySwapContext {
@@ -345,13 +348,13 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
     // TODO: INVARIANT MKT-05
     // TODO: Source locker as default LCC recipient, otherwise check if cap and if so revert.
     // https://github.com/Uniswap/universal-router/blob/main/contracts/base/Dispatcher.sol#L46C14-L46C23
-    function _beforeSwap(address, PoolKey calldata key, SwapParams calldata params, bytes calldata hookData)
+    function _beforeSwap(address sender, PoolKey calldata key, SwapParams calldata params, bytes calldata hookData)
         internal
         override
         withProxySwapFlag
         returns (bytes4, BeforeSwapDelta, uint24)
     {
-        address excessRecipient = _determineExcessRecipient(hookData);
+        (address excessRecipient, bool recipientResolved) = _determineExcessRecipient(sender, hookData);
 
         // Build swap context with LCC mappings
         ProxySwapContext memory ctx = _buildSwapContext(key, params.zeroForOne);
@@ -360,26 +363,31 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         ctx.sqrtPriceLimitX96Core =
             _calcCoreSqrtPriceLimit(params.sqrtPriceLimitX96, params.zeroForOne != ctx.coreZeroForOne);
 
-        // Build core swap params
-        SwapParams memory coreSwapParams = _buildCoreSwapParams(
-            ctx.coreZeroForOne,
-            params.amountSpecified,
-            ctx.sqrtPriceLimitX96Core,
-            inMarketBalanceOf(params.zeroForOne ? key.currency1 : key.currency0),
-            excessRecipient != address(0)
+        uint256 maxOutputAvailable = inMarketBalanceOf(params.zeroForOne ? key.currency1 : key.currency0);
+
+        // Option A default: execute full core swap (no capping / scaling).
+        SwapParams memory coreSwapParams = SwapParams({
+            zeroForOne: ctx.coreZeroForOne,
+            amountSpecified: params.amountSpecified,
+            sqrtPriceLimitX96: ctx.sqrtPriceLimitX96Core
+        });
+        _assertSwapCanSettle(
+            coreSwapParams, ctx.coreZeroForOne, recipientResolved, params.amountSpecified, maxOutputAvailable
         );
 
-        // Execute swap on core pool
-        BalanceDelta delta = poolManager.swap(corePoolKey, coreSwapParams, bytes(""));
-
-        // Extract amounts from delta
-        uint256 amountIn = LiquidityUtils.safeInt128ToUint256(ctx.coreZeroForOne ? delta.amount0() : delta.amount1());
-        uint256 amountOut = LiquidityUtils.safeInt128ToUint256(ctx.coreZeroForOne ? delta.amount1() : delta.amount0());
-
         // Handle LCC settlement based on direction
-        uint256 amountToSettle = params.zeroForOne
-            ? _settleZeroForOne(key, ctx, amountIn, amountOut, excessRecipient)
-            : _settleOneForZero(key, ctx, amountIn, amountOut, excessRecipient);
+        address deficitRecipient = recipientResolved ? excessRecipient : address(0);
+        (uint256 amountIn, uint256 amountToSettle) =
+            _executeCoreAndSettle(key, params.zeroForOne, coreSwapParams, ctx.coreZeroForOne, ctx, deficitRecipient);
+
+        // Enforce no residual proxy AMM swap path (`amountToSwap == 0` via specified-delta cancellation).
+        if (params.amountSpecified < 0) {
+            if (amountIn != uint256(-params.amountSpecified)) {
+                revert Errors.InvariantViolated("ProxyHook: exact-input core fill mismatch");
+            }
+        } else if (amountToSettle != uint256(params.amountSpecified)) {
+            revert Errors.InsufficientLiquidity(uint256(params.amountSpecified), amountToSettle);
+        }
 
         // Build return delta
         BeforeSwapDelta newDelta = (params.amountSpecified < 0)
@@ -387,6 +395,54 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
             : toBeforeSwapDelta(-SafeCast.toInt128(amountToSettle), SafeCast.toInt128(amountIn));
 
         return (this.beforeSwap.selector, newDelta, 0);
+    }
+
+    function _assertSwapCanSettle(
+        SwapParams memory coreSwapParams,
+        bool coreZeroForOne,
+        bool recipientResolved,
+        int256 amountSpecified,
+        uint256 maxOutputAvailable
+    ) private view {
+        // Strict exact-output behaviour: if underlying output cannot be delivered in full, revert.
+        if (amountSpecified > 0) {
+            uint256 requestedOutput = uint256(amountSpecified);
+            if (requestedOutput > maxOutputAvailable) {
+                revert Errors.InsufficientLiquidity(requestedOutput, maxOutputAvailable);
+            }
+            return;
+        }
+
+        (BalanceDelta simulated,,,) = SwapSimulator.simulateSwap(poolManager, corePoolKey, coreSwapParams);
+        uint256 expectedInput = _getExpectedInputFromDelta(simulated, coreZeroForOne);
+        if (expectedInput != uint256(-amountSpecified)) {
+            revert Errors.InvariantViolated("ProxyHook: exact-input core fill mismatch");
+        }
+
+        // If locker cannot be resolved, only allow swaps that can settle fully into underlying (no deficit path).
+        if (!recipientResolved) {
+            uint256 expectedOutput = _getExpectedOutputFromDelta(simulated, coreZeroForOne);
+            if (expectedOutput > maxOutputAvailable) {
+                revert Errors.InsufficientLiquidity(expectedOutput, maxOutputAvailable);
+            }
+        }
+    }
+
+    function _executeCoreAndSettle(
+        PoolKey calldata key,
+        bool paramsZeroForOne,
+        SwapParams memory coreSwapParams,
+        bool coreZeroForOne,
+        ProxySwapContext memory ctx,
+        address deficitRecipient
+    ) private returns (uint256 amountIn, uint256 amountToSettle) {
+        // Execute swap on core pool
+        BalanceDelta delta = poolManager.swap(corePoolKey, coreSwapParams, bytes(""));
+        amountIn = LiquidityUtils.safeInt128ToUint256(coreZeroForOne ? delta.amount0() : delta.amount1());
+        uint256 amountOut = LiquidityUtils.safeInt128ToUint256(coreZeroForOne ? delta.amount1() : delta.amount0());
+        amountToSettle = paramsZeroForOne
+            ? _settleZeroForOne(key, ctx, amountIn, amountOut, deficitRecipient)
+            : _settleOneForZero(key, ctx, amountIn, amountOut, deficitRecipient);
     }
 
     // Adjust the swap params to execute the swap to fully execute with the available liquidity
@@ -495,6 +551,18 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         }
     }
 
+    function _getExpectedInputFromDelta(BalanceDelta swapDelta, bool zeroForOne)
+        internal
+        pure
+        returns (uint256 expectedInput)
+    {
+        if (zeroForOne) {
+            expectedInput = LiquidityUtils.safeInt128ToUint256(-swapDelta.amount0());
+        } else {
+            expectedInput = LiquidityUtils.safeInt128ToUint256(-swapDelta.amount1());
+        }
+    }
+
     /**
      * @notice Calculates the input amount needed for a specific output amount
      * @param desiredOutput The desired output amount
@@ -521,22 +589,29 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         inputNeeded = LiquidityUtils.safeInt128ToUint256(zeroForOne ? -swapDelta.amount0() : -swapDelta.amount1());
     }
 
-    // Determine the excess recipient for a given swap with overflow
-    function _determineExcessRecipient(bytes calldata hookData) internal view returns (address) {
-        if (hookData.length == 0) {
-            return address(0); // Default to null address
-        }
+    // Determine the excess recipient for a given swap with overflow.
+    // Defaults to locker when hookData is empty or explicitly encodes address(0)/address(1).
+    function _determineExcessRecipient(address sender, bytes calldata hookData)
+        internal
+        view
+        returns (address recipient, bool resolved)
+    {
+        recipient = hookData.length == 0 ? RECIPIENT_LOCKER : abi.decode(hookData, (address));
 
-        address recipient = abi.decode(hookData, (address));
-
-        if (recipient == address(0)) {
-            return address(1); // Locker
-        } else if (recipient == address(1)) {
-            return address(1); // Locker
-        } else if (recipient == address(2)) {
-            return msg.sender; // Router
-        } else {
-            return recipient; // Custom recipient
+        if (recipient == address(0) || recipient == RECIPIENT_LOCKER) {
+            return _resolveLocker(sender);
         }
+        if (recipient == RECIPIENT_ROUTER) {
+            return (sender, sender != address(0));
+        }
+        return (recipient, true);
+    }
+
+    function _resolveLocker(address sender) internal view returns (address locker, bool resolved) {
+        if (sender == address(0)) return (address(0), false);
+        try IMsgSender(sender).msgSender() returns (address got) {
+            if (got != address(0)) return (got, true);
+        } catch {}
+        return (address(0), false);
     }
 }

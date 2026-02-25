@@ -152,28 +152,24 @@ For these reasons, we prefer threshold-gating the grace bypass (Option B + D): i
 
 ### Clarification: the architecture does **not** create two independently tradeable AMM curves
 
-The finding’s “arb between core and proxy curves” narrative assumes there are two live, independently tradeable price curves: one for LCC↔LCC (core) and one for underlying↔underlying (proxy), both updating in response to swaps.
+The finding’s “arb between core and proxy curves” narrative assumes there are two live, independently tradeable price curves that both update in response to swaps: one on the core pool (LCC↔LCC) and one on the proxy pool (underlying↔underlying).
 
-That is **not** how swaps are implemented in the proxy pool:
+That is not the intended (or now permitted) execution model.
 
-- **Proxy-pool swaps are explicitly routed to the core pool.**
-  - `ProxyHook._beforeSwap(...)` executes the swap directly on the core pool via `poolManager.swap(corePoolKey, ...)` (see `contracts/evm/src/ProxyHook.sol`, `_beforeSwap`, around the `poolManager.swap(corePoolKey, ...)` call).
-  - The proxy hook then performs the underlying/LCC settlement and returns a `BeforeSwapDelta` to the PoolManager (the proxy hook has `beforeSwapReturnDelta` enabled via `getHookPermissions()`).
-  - Practically, this means the proxy hook can reduce the proxy-pool swap’s `amountToSwap` (including to zero), so the proxy pool’s own `slot0`/tick is not the price source for execution.
+- **Proxy-pool swaps are executed against the core pool’s curve.**
+  - On a proxy swap, `ProxyHook._beforeSwap(...)` executes `PoolManager.swap(corePoolKey, ...)` (see `contracts/evm/src/ProxyHook.sol`, `_beforeSwap`) and then performs underlying↔LCC settlement.
+  - The proxy hook returns a `BeforeSwapDelta` (it has `beforeSwapReturnDelta` enabled via `getHookPermissions()`) such that the proxy pool’s Uniswap-layer swap is **cancelled** (`amountToSwap == 0`). Under this invariant, the proxy pool’s own `slot0`/tick is not an execution price source.
 
-- **The proxy pool does not accept “normal” liquidity provision and is not intended to be a competing price source.**
-  - `ProxyHook._beforeAddLiquidity` reverts (`AddLiquidityThroughHookNotAllowed`), and the proxy hook’s purpose is settlement orchestration, not price discovery (see `contracts/evm/src/ProxyHook.sol`).
+- **The proxy pool is not intended to be a competing price-discovery venue.**
+  - The proxy pool does not accept normal liquidity provision: `ProxyHook._beforeAddLiquidity` reverts (`AddLiquidityThroughHookNotAllowed`).
 
-Accordingly:
-
-- A “divergence” between proxy pool `slot0` and core pool `slot0` (tick/sqrtP) is possible in the _literal state_ sense, but it is **not** two competing tradeable curves.
-- Any putative “arb” would not be the standard “buy on proxy / sell on core” CLMM arb, because the protocol does not expose a second autonomous CLMM curve for swaps; proxy swaps are executed against the **core** curve.
+Accordingly, the protocol does not expose a standard “buy on proxy / sell on core” CLMM arbitrage surface, because proxy-originated swaps are executed on the **core** curve.
 
 ### Direct core swaps: what happens, and what does **not** happen
 
 We agree that a user can call `PoolManager.swap(corePoolKey, ...)` directly (i.e. “direct core swap”). This moves the **core** CLMM tick/sqrtP, because it is a real Uniswap v4 concentrated-liquidity pool.
 
-However, the “core↔proxy divergence” resulting from a direct core swap does not create a second tradeable curve:
+However, a direct core swap does not create a second tradeable curve:
 
 - After a core swap completes, `CoreHook._afterSwap(...)` performs VTS swap processing (`vtsOrchestrator.afterCoreSwap(...)`), and then (only for a direct core swap) notifies the proxy hook via `ProxyHook.onCorePoolDirectSwap(delta)` (see `contracts/evm/src/CoreHook.sol`, `_afterSwap`, and `contracts/evm/src/ProxyHook.sol`, `onCorePoolDirectSwap`).
 - For core swaps that are initiated by the proxy hook (i.e. proxy swaps routed into the core pool), `ProxyHook` sets a transient “proxy swap in progress” flag and `CoreHook` uses that flag to avoid treating the nested core swap as a “direct core swap” (and to avoid recursing into `onCorePoolDirectSwap`). See `contracts/evm/src/libraries/ProxySwapFlag.sol` and its use in `contracts/evm/src/CoreHook.sol` / `contracts/evm/src/ProxyHook.sol`.
@@ -181,10 +177,7 @@ However, the “core↔proxy divergence” resulting from a direct core swap doe
 
 ### Timing / execution window: VTS swap processing is invoked **post-swap**
 
-We agree with the general statement “tick can be manipulated via large swaps”, because this is a CLMM. But we want to correct the implied execution window:
-
-- `CoreHook` snapshots `sqrtPBefore`/`liqBefore` in `beforeSwap`, and then calls `vtsOrchestrator.afterCoreSwap(...)` from `CoreHook._afterSwap(...)` (see `contracts/evm/src/CoreHook.sol`).
-- Uniswap v4’s `PoolManager.swap(...)` executes the pool swap first, emits the `Swap` event, and only then calls the hook’s `afterSwap` (see `contracts/evm/lib/v4-periphery/lib/v4-core/src/PoolManager.sol`, `swap(...)`).
+We agree with the general statement “tick can be manipulated via large swaps”, because this is a CLMM. But we want to correct the implied “mid-swap” execution window:- Uniswap v4’s `PoolManager.swap(...)` executes the pool swap first, emits the `Swap` event, and only then calls the hook’s `afterSwap` (see `contracts/evm/lib/v4-periphery/lib/v4-core/src/PoolManager.sol`, `swap(...)`).
 - `VTSSwapLib.processSwap(...)` reads final post-swap `slot0` from the PoolManager and accrues growth across the segment(s) between `sqrtPBefore` and the final `sqrtPAfter` (see `contracts/evm/src/libraries/VTSSwapLib.sol`, `processSwap(...)`).
 
 Therefore, there is not an obvious intra-swap “mid-execution” window in which _third-party_ VTS operations can run “during the swap” while the tick is in a partially-manipulated transient state. The VTS swap processing is invoked as a normal v4 hook callback **after** the swap has been applied to pool state.
@@ -206,17 +199,68 @@ What makes this acceptable in our design posture:
 - **The oracle-backed commitment path is insulated (and necessarily oracle-based)**: the high-signal insolvency gate (`commitmentDeficit`) is derived from oracle-priced backing rather than the core pool’s spot tick. This is a design requirement because commitment backing may rely on liquidity that is off-chain and/or not even tokenised; it cannot be proven purely from on-chain spot.
   - The invariant \(issuedUsd \le settledUsd + signalUsd\) explicitly acknowledges the split between (i) on-chain settled value (`settledUsd`) and (ii) oracle-verified value (`signalUsd`).
   - Where assets are tokenised/on-chain, `settledUsd` valuation routes through our oracle contracts and may be supported by an oracle provider that itself references on-chain spot markets (e.g. Uniswap DEX) as an input.
-- **Deployment environment reduces public-mempool MEV assumptions**: the protocol is not intended to be deployed on Ethereum L1 with a fully adversarial public mempool. This does not eliminate ordering risk entirely, but it changes the practical MEV surface relative to the audit’s implied environment.
+- **Adversarial ordering is an execution-environment reality**: in any environment where transaction ordering is adversarial (e.g. a public mempool), an attacker can pay to move the core tick around a victim action and thereby influence spot-tick-derived VTS accounting for positions touched in that window. This is not unique to our design; it is the standard “spot price + hooks” surface.
 
 That said, we agree this is correctly categorised as (at most) a **low-severity** economic/mechanism observation: if an attacker can reliably obtain ordering around a victim action, they can move the core tick around that action and thereby affect spot-tick-based VTS calculations for positions touched in that window.
 
 ### How we frame this to users/integrators (and potential mitigations)
 
-We treat the proxy pool’s `slot0` as **non-authoritative** for price. The authoritative price curve is the **core** pool, and all swap execution is routed there.
+We treat the proxy pool’s `slot0` as **non-authoritative** for price. The authoritative execution curve is the **core** pool.
 
-If we ever need to further harden against spot-tick manipulation impacts on VTS accounting, the natural mitigations are:
+As a direct response to this finding, we hardened the proxy swap path ([see **MKT-05**](https://github.com/usherlabs/fiet-protocol/blob/develop/contracts/evm/INVARIANTS.md)) so proxy-originated swaps are **core-only** and the proxy pool’s AMM curve is mechanically neutralised (`amountToSwap == 0`).
 
-- using TWAP-style tick inputs for _specific_ risk triggers (not for all growth accounting), and/or
-- adding protocol-level constraints on when sensitive actions may be executed relative to swaps (e.g. action-specific sequencing, batching, or private orderflow requirements).
+The remaining spot-tick exposure is therefore limited to what is inherent in the core CLMM: if an attacker can obtain favourable ordering around a sensitive action, they can move the core tick around that action.
 
-We have not implemented these mitigations at this time because they materially change the mechanism and UX, and because the current deployment posture already assumes an execution environment where adversarial public-mempool sandwiching is not the baseline.
+If we ever need additional hardening against adverse ordering effects on specific VTS actions (beyond what is already enforced by core-only execution), the natural mitigations are:
+
+- using TWAP-style tick inputs for specific risk triggers (not for all growth accounting), and/or
+- protocol-level sequencing constraints for sensitive actions (batching, minimum-delay guards, or restricted execution windows), and/or
+- private orderflow / auction-style execution for actions where integrators require stronger sandwich resistance.
+
+We have not implemented these additional mitigations at this time because they materially change the mechanism and UX, and because the residual risk is bounded by real manipulation costs and limited to the core spot-tick surface.
+
+### What we discovered from this finding: proxy `slot0` drift is a real state-level risk if the proxy AMM is not mechanically neutralised
+
+The audit finding triggered a deeper semantic review of the proxy swap path. That review identified an important nuance:
+
+- Even though proxy swaps are conceptually “routed to core”, the proxy pool can still execute its internal AMM step if any residual `amountToSwap` at the Uniswap layer is left non-zero.
+- In that case, the proxy pool’s `slot0` can drift even when token IO is effectively sourced by core-routed settlement.
+- This creates an unintended “second curve” at the **state** level, even if it is not intended for price discovery or a competing execution venue.
+
+This is now treated as an explicit protocol invariant:
+
+- **MKT-05**: the proxy/native pool AMM curve must never be utilised for execution; proxy swaps must cancel to `amountToSwap == 0`, with the core pool as the sole authoritative execution curve.
+
+### Why this hardening matters
+
+If proxy-curve utilisation is allowed, risks include:
+
+- **Directional griefing / DoS**: a manipulator can push proxy `slot0` to boundaries that later cause user swaps with protective price limits to fail unexpectedly.
+- **Gas griefing amplification**: users pay for core routing plus redundant proxy AMM progression that should have been a no-op.
+- **State ambiguity for integrators**: indexers/UIs may read proxy `slot0` and infer a valid market price when that state is non-authoritative.
+- **Auditability regression**: “single authoritative curve” becomes harder to reason about if proxy internal state can drift.
+
+### Implemented response
+
+`ProxyHook` has been hardened so the invariant is mechanically enforced:
+
+- **Default**: proxy swaps execute fully on the **core** pool (no scaling/capping that could leave residual proxy execution). The full user intent is routed to core.
+- **Strict exact-output policy**: if requested output exceeds available underlying settlement capacity, revert (no partial fill). This mirrors normal Uniswap v4 CLMM pool dynamics: an exact-output swap (`amountSpecified > 0`) will revert if the pool cannot produce the requested output within the given `sqrtPriceLimitX96`
+- **Exact-input strictness for unresolved locker path**: if settlement would require deficit handling but locker resolution fails, revert; if no deficit would occur, proceed.
+- **Recipient resolution semantics**:
+  - default/no hook data resolves as locker sentinel,
+  - locker sentinel resolves via `IMsgSender(sender).msgSender()`,
+  - router sentinel (`address(2)`) resolves to `sender`.
+- **Proxy AMM no-op enforcement**: the returned `BeforeSwapDelta` cancels residual proxy swap execution (`amountToSwap == 0`), preserving core-only curve semantics.
+
+### Direct core swaps and remaining economic reality
+
+- Direct swaps on the core pool remain possible and do move core spot/tick (as expected for a CLMM).
+- `CoreHook` processes VTS in `afterSwap` and invokes proxy settlement callback paths for direct-core semantics.
+- Spot-tick-derived VTS growth remains economically influenceable by ordered flow (e.g. sandwiching around victim actions), but this is now disentangled from accidental proxy-curve drift semantics.
+
+### Current positioning
+
+- The protocol now enforces one execution curve for proxy-originated swaps: **core only**.
+- Proxy `slot0` is non-authoritative and, under MKT-05 hardening, should remain unchanged by proxy swaps.
+- The audit finding was validly useful in surfacing this semantic edge; the final implementation is stricter than the original design intent and removes reliance on proxy-AMM side effects.
