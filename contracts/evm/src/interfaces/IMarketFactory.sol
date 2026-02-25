@@ -144,12 +144,12 @@ interface IMarketFactory {
     function marketLiquidity(address underlyingAsset, bytes32 marketId) external view returns (uint256);
 
     /**
-     * @notice Uses market liquidity for a given underlying asset in a market
-     * @param underlyingAsset The underlying asset address
+     * @notice Uses market liquidity for a given LCC in a market
+     * @param lcc The LCC address (must be token0 or token1 of the core pool)
      * @param marketId The market ID
      * @param amount The amount to use
      */
-    function useMarketLiquidity(address underlyingAsset, bytes32 marketId, uint256 amount) external returns (uint256);
+    function useMarketLiquidity(address lcc, bytes32 marketId, uint256 amount) external returns (uint256);
 
     /**
      * @notice Called after modifyLiquidity to settle CoreHook's PoolManager deltas

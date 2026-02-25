@@ -518,7 +518,7 @@ contract ProxyHookTest is MarketVaultBase {
         {
             // mock the call to factory to use market liquidity, this would make sure that the market appears to have a liquidity of zero
             // this way unwrapps would be queued for settlement upon unwrap
-            _mockLimitedMarketLiquidity(address(lccOut.underlying()), marketId, 0);
+            _mockLimitedMarketLiquidity(address(lccOut), marketId, 0);
             // mock as the lcc recipient
             // unwrap the lcc tokens to get the underlying asset
             vm.prank(lcc_recipient);

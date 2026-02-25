@@ -992,12 +992,11 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         // Market liquidity should be used.
         vm.mockCall(
             marketFactory,
-            abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector, address(underlying), marketId, amount),
+            abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector, lccAddr, marketId, amount),
             abi.encode(amount)
         );
         vm.expectCall(
-            marketFactory,
-            abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector, address(underlying), marketId, amount)
+            marketFactory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector, lccAddr, marketId, amount)
         );
 
         // Sync LCC credit to locker and unwrap from deltas.
@@ -1109,12 +1108,11 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         // Market liquidity should be used to satisfy unwrap.
         vm.mockCall(
             marketFactory,
-            abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector, address(underlying), marketId, amount),
+            abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector, lccAddr, marketId, amount),
             abi.encode(amount)
         );
         vm.expectCall(
-            marketFactory,
-            abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector, address(underlying), marketId, amount)
+            marketFactory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector, lccAddr, marketId, amount)
         );
 
         // Approve and unwrap from user balance (payerIsUser=true).
@@ -1172,12 +1170,11 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         // Market liquidity must be used.
         vm.mockCall(
             marketFactory,
-            abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector, address(underlying), marketId, amount),
+            abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector, lccAddr, marketId, amount),
             abi.encode(amount)
         );
         vm.expectCall(
-            marketFactory,
-            abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector, address(underlying), marketId, amount)
+            marketFactory, abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector, lccAddr, marketId, amount)
         );
 
         uint256 recipientUnderlyingBefore = underlying.balanceOf(recipient);
@@ -1247,14 +1244,14 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             vm.mockCall(
                 marketFactory,
                 abi.encodeWithSelector(
-                    IMarketFactory.useMarketLiquidity.selector, address(underlying), marketId, marketAmount
+                    IMarketFactory.useMarketLiquidity.selector, address(lcc0), marketId, marketAmount
                 ),
                 abi.encode(marketAmount)
             );
             vm.expectCall(
                 marketFactory,
                 abi.encodeWithSelector(
-                    IMarketFactory.useMarketLiquidity.selector, address(underlying), marketId, marketAmount
+                    IMarketFactory.useMarketLiquidity.selector, address(lcc0), marketId, marketAmount
                 )
             );
         }
@@ -1331,16 +1328,12 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         // Market liquidity should be used for the market-derived portion.
         vm.mockCall(
             marketFactory,
-            abi.encodeWithSelector(
-                IMarketFactory.useMarketLiquidity.selector, address(underlying), marketId, marketAmount
-            ),
+            abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector, lccAddr, marketId, marketAmount),
             abi.encode(marketAmount)
         );
         vm.expectCall(
             marketFactory,
-            abi.encodeWithSelector(
-                IMarketFactory.useMarketLiquidity.selector, address(underlying), marketId, marketAmount
-            )
+            abi.encodeWithSelector(IMarketFactory.useMarketLiquidity.selector, lccAddr, marketId, marketAmount)
         );
 
         vm.startPrank(user);
@@ -1472,11 +1465,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
             vm.mockCall(
                 address(mv),
                 abi.encodeWithSelector(IMarketVault.dryModifyLiquidities.selector),
-                abi.encode(toBalanceDelta(0, 0))
-            );
-            vm.mockCall(
-                address(mv),
-                abi.encodeWithSelector(IMarketVault.dryModifyLiquiditiesCore.selector),
                 abi.encode(toBalanceDelta(0, 0))
             );
 
@@ -1726,11 +1714,6 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         vm.mockCall(
             address(mv),
             abi.encodeWithSelector(IMarketVault.dryModifyLiquidities.selector),
-            abi.encode(toBalanceDelta(0, 0))
-        );
-        vm.mockCall(
-            address(mv),
-            abi.encodeWithSelector(IMarketVault.dryModifyLiquiditiesCore.selector),
             abi.encode(toBalanceDelta(0, 0))
         );
 

@@ -50,7 +50,7 @@ contract MarketVaultTest is MarketVaultBase {
         // We need to mock the wrapped balance of the user to be 0 and then fail to unwrap from the market balance
         _mockLCCBalances(lccToken0, user, 0, initialLiquidity);
         // mock the amount used from the market to be 0
-        _mockLimitedMarketLiquidity(underlying0, PoolId.unwrap(corePoolKey.toId()), 0);
+        _mockLimitedMarketLiquidity(address(lccToken0), PoolId.unwrap(corePoolKey.toId()), 0);
 
         // Attempt to unwrap the LCC tokens
         vm.prank(user);
@@ -110,7 +110,7 @@ contract MarketVaultTest is MarketVaultBase {
         // We need to mock the wrapped balance of the user to be 0 and then fail to unwrap from the market balance
         _mockLCCBalances(lccToken0, user, 0, initialLiquidity);
         // mock the amount used from the market to be 0 i.e if nothing is used in the market liquidity then the unwrap is queued
-        _mockLimitedMarketLiquidity(underlying0, PoolId.unwrap(corePoolKey.toId()), 0);
+        _mockLimitedMarketLiquidity(address(lccToken0), PoolId.unwrap(corePoolKey.toId()), 0);
 
         // Attempt to unwrap the LCC tokens
         vm.prank(user);
@@ -120,7 +120,7 @@ contract MarketVaultTest is MarketVaultBase {
         assertGt(queuedBefore, 0, "Should have queued settlement");
 
         // set initial market liquidity
-        _mockLimitedMarketLiquidity(underlying0, PoolId.unwrap(corePoolKey.toId()), initialLiquidity);
+        _mockLimitedMarketLiquidity(address(lccToken0), PoolId.unwrap(corePoolKey.toId()), initialLiquidity);
 
         modifyLiquidityRouter.modifyLiquidity(
             corePoolKey,

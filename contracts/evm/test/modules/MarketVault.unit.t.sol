@@ -430,7 +430,7 @@ contract MarketVaultUnitTest is Test {
         assertEq(pm.balanceOf(address(vault), Currency.wrap(address(ua)).toId()), 0);
     }
 
-    function test_modifyLiquiditiesCore_succeedsWithReversedLccOrdering() public {
+    function test_modifyLiquidities_succeedsWithReversedLccOrdering() public {
         MockLiquidityHub_Min hub = new MockLiquidityHub_Min();
         MockPoolManager_Min pm = new MockPoolManager_Min();
         MockMarketFactory_Min mf = new MockMarketFactory_Min(address(hub));
@@ -457,13 +457,13 @@ contract MarketVaultUnitTest is Test {
         mf.setBound(address(this), true);
         MockERC20(coreUnderlying0).mint(address(vault), 100);
 
-        vault.modifyLiquiditiesCore(toBalanceDelta(int128(-50), int128(0)));
+        vault.modifyLiquidities(toBalanceDelta(int128(-50), int128(0)));
 
         assertEq(pm.balanceOf(address(vault), Currency.wrap(coreUnderlying0).toId()), 50);
         assertEq(pm.balanceOf(address(vault), Currency.wrap(coreUnderlying1).toId()), 0);
     }
 
-    function test_dryModifyLiquiditiesCore_usesCoreOrderingWhenReversed() public {
+    function test_dryModifyLiquidities_usesCoreOrderingWhenReversed() public {
         MockLiquidityHub_Min hub = new MockLiquidityHub_Min();
         MockPoolManager_Min pm = new MockPoolManager_Min();
         MockMarketFactory_Min mf = new MockMarketFactory_Min(address(hub));
@@ -493,7 +493,7 @@ contract MarketVaultUnitTest is Test {
         pm.setClaimBalance(address(vault), Currency.wrap(coreUnderlying0), 7);
         pm.setClaimBalance(address(vault), Currency.wrap(coreUnderlying1), 0);
 
-        BalanceDelta used = vault.dryModifyLiquiditiesCore(toBalanceDelta(int128(12), int128(0)));
+        BalanceDelta used = vault.dryModifyLiquidities(toBalanceDelta(int128(12), int128(0)));
         assertEq(used.amount0(), int128(7));
         assertEq(used.amount1(), int128(0));
     }

@@ -1407,13 +1407,7 @@ contract MockMarketVaultNoop {
     }
     function modifyLiquidities(BalanceDelta) external pure {}
 
-    function modifyLiquiditiesCore(BalanceDelta) external pure {}
-
     function tryModifyLiquidities(BalanceDelta d) external pure returns (BalanceDelta) {
-        return d;
-    }
-
-    function tryModifyLiquiditiesCore(BalanceDelta d) external pure returns (BalanceDelta) {
         return d;
     }
 
@@ -1421,15 +1415,7 @@ contract MockMarketVaultNoop {
         return d;
     }
 
-    function tryModifyLiquiditiesCoreWithRecipient(BalanceDelta d, address) external pure returns (BalanceDelta) {
-        return d;
-    }
-
     function dryModifyLiquidities(BalanceDelta d) external pure returns (BalanceDelta) {
-        return d;
-    }
-
-    function dryModifyLiquiditiesCore(BalanceDelta d) external pure returns (BalanceDelta) {
         return d;
     }
 }
@@ -1445,13 +1431,7 @@ contract MockMarketVaultPassthrough is IMarketVault {
     }
     function modifyLiquidities(BalanceDelta) external pure {}
 
-    function modifyLiquiditiesCore(BalanceDelta) external pure {}
-
     function tryModifyLiquidities(BalanceDelta d) external pure returns (BalanceDelta) {
-        return d;
-    }
-
-    function tryModifyLiquiditiesCore(BalanceDelta d) external pure returns (BalanceDelta) {
         return d;
     }
 
@@ -1459,15 +1439,7 @@ contract MockMarketVaultPassthrough is IMarketVault {
         return d;
     }
 
-    function tryModifyLiquiditiesCoreWithRecipient(BalanceDelta d, address) external pure returns (BalanceDelta) {
-        return d;
-    }
-
     function dryModifyLiquidities(BalanceDelta d) external pure returns (BalanceDelta) {
-        return d;
-    }
-
-    function dryModifyLiquiditiesCore(BalanceDelta d) external pure returns (BalanceDelta) {
         return d;
     }
 }

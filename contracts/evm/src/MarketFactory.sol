@@ -369,28 +369,30 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
 
     // ============ LIQUIDITY FUNCTIONS ============
 
-    function useMarketLiquidity(address underlyingAsset, bytes32 marketId, uint256 amount)
+    function useMarketLiquidity(address lcc, bytes32 marketId, uint256 amount)
         external
         onlyLiquidityHub
         returns (uint256 used)
     {
         PoolId pId = PoolId.wrap(marketId);
         address proxyHook = _proxyToHook[coreToProxy[pId]];
-        address currency0 = _proxyHookToCurrencyPair[proxyHook][0];
-        address currency1 = _proxyHookToCurrencyPair[proxyHook][1];
+        address currency0 = _corePoolToCurrencyPair[pId][0];
+        address currency1 = _corePoolToCurrencyPair[pId][1];
         uint256 amount0 = 0;
         uint256 amount1 = 0;
-        if (currency0 == underlyingAsset) {
+        if (currency0 == lcc) {
             amount0 = amount;
-        } else if (currency1 == underlyingAsset) {
+        } else if (currency1 == lcc) {
             amount1 = amount;
         } else {
-            revert Errors.InvalidAddress(underlyingAsset);
+            revert Errors.InvalidAddress(lcc);
         }
+
         BalanceDelta usedDelta = IMarketVault(proxyHook)
             .tryModifyLiquiditiesWithRecipient(
                 LiquidityUtils.safeToBalanceDelta(amount0, amount1, false, false), address(liquidityHub)
             ); // positive delta indicating withdrawal from market
+
         vtsOrchestrator.incrementCoverage(
             pId,
             LiquidityUtils.safeInt128ToUint256(usedDelta.amount0()),

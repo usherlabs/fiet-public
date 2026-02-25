@@ -25,24 +25,11 @@ interface IMarketVault {
     function modifyLiquidities(BalanceDelta balanceDelta) external;
 
     /**
-     * @notice Modify vault liquidity using core/LCC ordering for amount0 and amount1
-     * @param balanceDelta The desired balance delta to apply in core/LCC order
-     */
-    function modifyLiquiditiesCore(BalanceDelta balanceDelta) external;
-
-    /**
      * @notice Try to modify vault liquidity, handling partial withdrawals gracefully
      * @param balanceDelta The desired balance delta to apply
      * @return The actual balance delta that was applied (may be less than requested for withdrawals)
      */
     function tryModifyLiquidities(BalanceDelta balanceDelta) external returns (BalanceDelta);
-
-    /**
-     * @notice Try to modify vault liquidity using core/LCC ordering
-     * @param balanceDelta The desired balance delta to apply in core/LCC order
-     * @return The actual balance delta that was applied
-     */
-    function tryModifyLiquiditiesCore(BalanceDelta balanceDelta) external returns (BalanceDelta);
 
     /**
      * @notice Try to modify vault liquidity with a custom recipient for withdrawals
@@ -55,26 +42,9 @@ interface IMarketVault {
         returns (BalanceDelta);
 
     /**
-     * @notice Try to modify vault liquidity with recipient using core/LCC ordering
-     * @param balanceDelta The desired balance delta to apply in core/LCC order
-     * @param recipient The recipient for withdrawals (positive deltas)
-     * @return The actual balance delta that was applied
-     */
-    function tryModifyLiquiditiesCoreWithRecipient(BalanceDelta balanceDelta, address recipient)
-        external
-        returns (BalanceDelta);
-
-    /**
      * @notice Dry run to modify vault liquidity, handling partial withdrawals gracefully
      * @param balanceDelta The desired balance delta to apply
      * @return The actual balance delta that was applied (may be less than requested for withdrawals)
      */
     function dryModifyLiquidities(BalanceDelta balanceDelta) external view returns (BalanceDelta);
-
-    /**
-     * @notice Dry run using core/LCC ordering for amount0 and amount1
-     * @param balanceDelta The desired balance delta to apply in core/LCC order
-     * @return The actual balance delta that would be applied
-     */
-    function dryModifyLiquiditiesCore(BalanceDelta balanceDelta) external view returns (BalanceDelta);
 }

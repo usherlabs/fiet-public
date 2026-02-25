@@ -322,7 +322,7 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         assertEq(settled1, 140e18, "settled1 should decrease by the actual withdrawal (after add-back)");
     }
 
-    function test_onMMSettle_withdrawals_phase2UsesCoreDryModifyPath() public {
+    function test_onMMSettle_withdrawals_phase2UsesDryModifyPath() public {
         _initMarket();
         PositionId positionId = _registerActivePosition();
 
@@ -330,17 +330,15 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         harness.setSettled(positionId, 200e18, 200e18);
         harness.setPositionActive(positionId, true);
 
-        // Underlying-order dry path is unconstrained, core-order path is constrained.
-        mockVault.setAvailableLiquidity(type(int128).max, type(int128).max);
-        mockVault.setCoreAvailableLiquidity(100e18, 60e18);
+        mockVault.setAvailableLiquidity(100e18, 60e18);
 
         BalanceDelta delta = toBalanceDelta(100e18, 100e18);
         (BalanceDelta settlementDelta, bool rfsOpen,) =
             harness.onMMSettle(manager, mockVault, positionId, lccCurrency0, lccCurrency1, delta, false);
 
         assertFalse(rfsOpen, "RFS should be closed for withdrawals");
-        assertEq(settlementDelta.amount0(), 100e18, "token0 should use core-order dry cap");
-        assertEq(settlementDelta.amount1(), 60e18, "token1 should use core-order dry cap");
+        assertEq(settlementDelta.amount0(), 100e18, "token0 should use dry cap");
+        assertEq(settlementDelta.amount1(), 60e18, "token1 should use dry cap");
     }
 
     function test_onMMSettle_active_invalidCommitmentMax_reverts() public {
