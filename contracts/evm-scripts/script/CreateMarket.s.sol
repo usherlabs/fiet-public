@@ -311,22 +311,21 @@ contract CreateMarketScript is NetworkConfig, VTSConfigFileBase {
         console.log("Core Pool ID:", string.concat("", vm.toString(PoolId.unwrap(corePoolId))));
         console.log("Proxy Pool ID:", string.concat("", vm.toString(PoolId.unwrap(proxyPoolId))));
 
-        // Get LCC tokens from LiquidityHub via MarketFactory
+        // Canonical market LCC order is core pool key order (NOT the same as "of underlyingAsset0/1").
+        // If you need the LCC derived from a specific underlying, ask the Hub for it.
         MarketFactory factory = MarketFactory(marketFactory);
-        address[2] memory lccPair = factory.corePoolToCurrencyPair(corePoolId);
-        address lccTokenOfAsset0 = lccPair[0];
-        address lccTokenOfAsset1 = lccPair[1];
+        ILiquidityHub hub = factory.liquidityHub();
+        bytes32 marketId = PoolId.unwrap(corePoolId);
+        address lccOfUnderlying0 = hub.getLCC(marketId, underlyingAsset0);
+        address lccOfUnderlying1 = hub.getLCC(marketId, underlyingAsset1);
 
         console.log("Underlying Asset 0:", underlyingAsset0);
         console.log("Underlying Asset 1:", underlyingAsset1);
 
-        console.log("LCC Token of Asset 0:", lccTokenOfAsset0);
-        console.log("LCC Token of Asset 1:", lccTokenOfAsset1);
-        console.log("LCC Token of Asset 0 Symbol:", IERC20Metadata(lccTokenOfAsset0).symbol());
-        console.log("LCC Token of Asset 1 Symbol:", IERC20Metadata(lccTokenOfAsset1).symbol());
-
-        console.log("LCC Token of Asset 0 is Currency:", lccTokenOfAsset0 < lccTokenOfAsset1 ? "0" : "1");
-        console.log("LCC Token of Asset 1 is Currency:", lccTokenOfAsset0 < lccTokenOfAsset1 ? "1" : "0");
+        console.log("LCC of Underlying Asset 0:", lccOfUnderlying0);
+        console.log("LCC of Underlying Asset 1:", lccOfUnderlying1);
+        console.log("LCC of Underlying Asset 0 Symbol:", IERC20Metadata(lccOfUnderlying0).symbol());
+        console.log("LCC of Underlying Asset 1 Symbol:", IERC20Metadata(lccOfUnderlying1).symbol());
 
         // Verify pool relationships
         PoolId storedProxyId = factory.coreToProxy(corePoolId);
@@ -345,18 +344,24 @@ contract CreateMarketScript is NetworkConfig, VTSConfigFileBase {
         // Create a unique market identifier
         string memory marketId = vm.toString(PoolId.unwrap(corePoolId));
 
-        // Get LCC tokens from LiquidityHub via MarketFactory
+        // Store both:
+        // - core-ordered LCC pair (canonical market lanes)
+        // - underlying→LCC mapping for each underlying
         MarketFactory factoryInstance = MarketFactory(marketFactory);
-        address[2] memory lccPair = factoryInstance.corePoolToCurrencyPair(corePoolId);
-        address lccTokenOfAsset0 = lccPair[0];
-        address lccTokenOfAsset1 = lccPair[1];
+        address[2] memory coreLccPair = factoryInstance.corePoolToCurrencyPair(corePoolId);
+        ILiquidityHub hub = factoryInstance.liquidityHub();
+        bytes32 marketIdBytes = PoolId.unwrap(corePoolId);
+        address lccOfUnderlying0 = hub.getLCC(marketIdBytes, Currency.unwrap(underlyingCurrency0));
+        address lccOfUnderlying1 = hub.getLCC(marketIdBytes, Currency.unwrap(underlyingCurrency1));
 
         writeString(string.concat(marketId, "_corePoolId"), vm.toString(PoolId.unwrap(corePoolId)));
         writeString(string.concat(marketId, "_proxyPoolId"), vm.toString(PoolId.unwrap(proxyPoolId)));
         writeString(string.concat(marketId, "_underlyingAsset0"), vm.toString(Currency.unwrap(underlyingCurrency0)));
         writeString(string.concat(marketId, "_underlyingAsset1"), vm.toString(Currency.unwrap(underlyingCurrency1)));
-        writeString(string.concat(marketId, "_lcc0"), vm.toString(lccTokenOfAsset0));
-        writeString(string.concat(marketId, "_lcc1"), vm.toString(lccTokenOfAsset1));
+        writeString(string.concat(marketId, "_coreLcc0"), vm.toString(coreLccPair[0]));
+        writeString(string.concat(marketId, "_coreLcc1"), vm.toString(coreLccPair[1]));
+        writeString(string.concat(marketId, "_lccOfUnderlying0"), vm.toString(lccOfUnderlying0));
+        writeString(string.concat(marketId, "_lccOfUnderlying1"), vm.toString(lccOfUnderlying1));
         writeString(string.concat(marketId, "_corePoolFee"), vm.toString(corePoolFee));
         writeString(string.concat(marketId, "_tickSpacing"), vm.toString(tickSpacing));
         writeString(string.concat(marketId, "_initialSqrtPriceX96"), vm.toString(initialSqrtPriceX96));

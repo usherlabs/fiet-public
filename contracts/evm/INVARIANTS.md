@@ -30,27 +30,31 @@ being an informal “should”.
   Concretely, LCCs represent **claims on liquidity** in one of these domains:
 
   - **Domain A — Wrapped / out-of-market (Hub-reserved underlying)**:
+
     - LCC is minted **1:1** against underlying deposited into `LiquidityHub`.
     - This corresponds to the `directSupply` / `wrappedBalances` notion for non-protocol holders.
-    - The backing asset is *immediately* reflected in `LiquidityHub.reserveOfUnderlying(underlying)`.
+    - The backing asset is _immediately_ reflected in `LiquidityHub.reserveOfUnderlying(underlying)`.
 
   - **Domain B — In-market (market-derived liquidity claims, including queued settlement claims)**:
+
     - LCC is minted by an **issuer** (eg ProxyHook, VTSOrchestrator) to represent liquidity that exists (or is being
-      routed) *inside the market system* (PoolManager / MarketVault), rather than as Hub-held underlying reserves.
+      routed) _inside the market system_ (PoolManager / MarketVault), rather than as Hub-held underlying reserves.
     - Where immediate underlying is not available for redemption, the claim is represented explicitly via the
       `LiquidityHub` settlement queue (`settleQueue` / `totalQueued`) rather than by pretending Hub reserves back it.
 
   - **Domain C — Signal-materialised (VRL-backed MM issuance)**:
+
     - LCC is minted for MM position increases only when the position’s issued commitment value is backed by the sum of:
       - on-chain settled value, and
       - verified VRL signal value,
-      i.e. \(issuedUsd \le settledUsd + signalUsd\).
+        i.e. \(issuedUsd \le settledUsd + signalUsd\).
 
   - **Domain conversion — LCC↔LCC wrapWith (domain-preserving re-expression)**:
     - `wrapWith` must conserve value by converting one LCC claim into another without creating net backing; it may
       reclassify between “wrapped” and “market-derived” buckets, but must not mint value from nothing.
 
 - **Enforced by (authorised mint surfaces)**:
+
   - **Domain A**: `src/LiquidityHub.sol::_wrap` transfers underlying in, increments
     `directSupply[lcc]` and `reserveOfUnderlying[underlying]`, then mints LCC.
   - **Domain B**: `src/LiquidityHub.sol::issue` is `onlyIssuer(lcc)` and mints market-derived amount via the LCC hub
@@ -77,7 +81,7 @@ being an informal “should”.
   - `src/LCC.sol::_isProtocolTransfer` (logic)
   - `src/LCC.sol::_beforeTransfer` (reverts `Errors.TransferNotAllowed()` when neither endpoint is protocol-bound)
   - Protocol-bound endpoints are determined by `IMarketFactory.bounds(address)`.
-- **Why**: LCCs are *market compatibility primitives*, not freely transferable assets. This prevents bypassing
+- **Why**: LCCs are _market compatibility primitives_, not freely transferable assets. This prevents bypassing
   settlement/queue semantics and reduces misclassification risk for downstream integrations.
 
 ### LCC-02: LCC bucket accounting must remain consistent with transfer flow
@@ -129,7 +133,7 @@ being an informal “should”.
   - `src/LiquidityHub.sol::confirmTake` reverts `Errors.InsufficientBalance(actualBalance, reserveAfter)` if
     `reserveOfUnderlying[underlying] > actualUnderlyingBalanceHeldByHub`.
 - **Why**:
-  - `confirmTake` is intentionally *not* guarded by `nonReentrant` so that future flows can safely allow
+  - `confirmTake` is intentionally _not_ guarded by `nonReentrant` so that future flows can safely allow
     `useMarketLiquidity → ... → confirmTake()` callback patterns.
   - The balance-backed check ensures this flexibility cannot be abused to “mint” reserves via re-entrancy.
 
@@ -145,7 +149,7 @@ being an informal “should”.
   - `src/VTSPositionLib.sol::settlePositionGrowths` performs the settlement sequencing and explicitly notes this as a
     fairness requirement.
 - **Why**: Without this, new liquidity could capture historical growth by increasing the multiplier in
-  \((growthInsideNow - growthInsideLast) * liquidity\).
+  \((growthInsideNow - growthInsideLast) \* liquidity\).
 
 ### VTS-02: Tick-cross “outside flip” must preserve inside-growth queryability
 
@@ -208,8 +212,8 @@ being an informal “should”.
 ### COV-01: Coverage burn is bounded by `(deficit + settled)`; fee burn is capped by deficit
 
 - **Statement**:
-  - Effective coverage usage must satisfy \(cov_{eff} = \min(cov, deficit + settled)\).
-  - Burn base must satisfy \(burnBase = \min(cov_{eff}, deficit)\).
+  - Effective coverage usage must satisfy \(cov\_{eff} = \min(cov, deficit + settled)\).
+  - Burn base must satisfy \(burnBase = \min(cov\_{eff}, deficit)\).
 - **Enforced by**: `src/libraries/VTSPositionLib.sol::_applyCoverageBurn`.
 
 ### COV-02: Coverage is applied before position modification to preserve economic integrity
@@ -218,7 +222,7 @@ being an informal “should”.
   call” games.
 - **Enforced by**:
   - `src/libraries/VTSPositionLib.sol::settlePositionGrowths` calls `_settleDeficitIndexedCoverageUsage` after settling
-    deficit/inflow growths, and is invoked by `CoreHook` *before* modifies.
+    deficit/inflow growths, and is invoked by `CoreHook` _before_ modifies.
 
 ### COV-03: Coverage increments are meaningful only when there is principal/settled to index against
 
@@ -374,6 +378,7 @@ being an informal “should”.
     state is not advanced by swaps.
 
 - **Purpose**:
+
   - The protocol’s “single curve” is the **core** pool. Allowing the proxy pool to run its own AMM step(s) creates a
     second mutable price path that is not meant to be consumed by VTS or integrators.
   - Proxy-pool `slot0` drift is not merely cosmetic: it can become a denial-of-service vector. In particular, pushing
@@ -381,6 +386,7 @@ being an informal “should”.
     `PriceLimitAlreadyExceeded`), even though the protocol intends swaps to be routed to the core pool.
 
 - **Risks if violated (griefing / safety impact)**:
+
   - **Directional swap DoS via price-limit poisoning**: If any swap leaves a non-zero residual `amountToSwap` and the
     proxy pool’s `Pool.swap()` executes, the proxy pool may “walk” its `sqrtPriceX96` towards the swap limit despite
     having no meaningful liquidity. Once proxy `slot0.sqrtPriceX96` is pushed to an extreme, subsequent swaps that use
@@ -402,6 +408,28 @@ being an informal “should”.
   - If the protocol elects to support “partial fills” / liquidity-capped swaps, it must do so without permitting the
     proxy pool’s AMM state machine to advance (e.g. by reverting when a cap would otherwise leave non-zero residual, or
     by redesigning the hook accounting so the proxy swap is always fully neutralised).
+
+### MKT-06: Canonical market pair ordering is core/LCC order (and events must reflect it)
+
+- **Statement**: Any protocol surface that groups a market’s two tokens into `(0,1)` lanes must use **core pool / LCC**
+  ordering as the canonical order:
+  - `lcc0 = corePoolKey.currency0`
+  - `lcc1 = corePoolKey.currency1`
+  - `lcc0UnderlyingAsset = ILCC(lcc0).underlying()`
+  - `lcc1UnderlyingAsset = ILCC(lcc1).underlying()`
+
+  In particular, event emission must not independently sort underlyings and LCCs such that the implied pairing becomes
+  ambiguous.
+
+- **Enforced by**:
+  - `src/MarketFactory.sol::createMarket` emits `MarketCreated(corePoolId, proxyPoolId, lcc0, lcc1, lcc0UnderlyingAsset, lcc1UnderlyingAsset, ...)`
+    derived from `corePoolKey.currency0/1` plus the deterministic input mapping
+    `(underlyingAsset0 -> ctx.lccToken0, underlyingAsset1 -> ctx.lccToken1)`.
+  - `src/MarketFactory.sol::corePoolToCurrencyPair` stores `[corePoolKey.currency0, corePoolKey.currency1]` in core/LCC order.
+
+- **Non-canonical (allowed) ordering**:
+  - Proxy pool currencies are ordered by Uniswap’s proxy `PoolKey` sorting and may differ from core/LCC order.
+    Any mapping between proxy order and core order must be explicit (see `src/ProxyHook.sol` swap-context alignment).
 
 ---
 

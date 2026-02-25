@@ -74,6 +74,10 @@ library MarketHandlerLib {
     /// @param currencies The currency pair [token0, token1]
     /// @return The index of the token (0 or 1)
     function validateToken(address token, address[2] memory currencies) internal pure returns (uint8) {
+        // Order-sensitive helper:
+        // - If `currencies` are core/LCC-ordered, the result can safely be treated as a canonical `(0,1)` lane index.
+        // - If `currencies` are proxy/underlying-ordered, the result is only meaningful in that proxy context and MUST
+        //   not be used to index core-lane accounting (e.g. VTS `tokenIndex`).
         if (token == currencies[0]) {
             return 0;
         } else if (token == currencies[1]) {
@@ -89,6 +93,8 @@ library MarketHandlerLib {
     /// @param token The token address
     /// @return The token index (0 or 1)
     function getTokenIndex(IMarketFactory marketFactory, PoolId poolId, address token) internal view returns (uint8) {
+        // This helper is intentionally tied to the CORE pool ordering because it reads `corePoolToCurrencyPair`.
+        // It is currently unused in core protocol flows, but exists for future adoption (e.g. explicit lane selection).
         address[2] memory currencies = currenciesInMarket(marketFactory, poolId);
         return validateToken(token, currencies);
     }

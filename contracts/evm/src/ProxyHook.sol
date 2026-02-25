@@ -219,6 +219,9 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         ILCC coreLccToken1 = ILCC(Currency.unwrap(coreKey.currency1));
 
         // Determine if proxy direction matches core direction
+        // Safe because `key` is provided by PoolManager for *this* proxy pool, whose currencies are the two
+        // underlyings of the core LCC pair (sorted by Uniswap PoolKey rules). Therefore `key.currency0/1` must be
+        // either (u0,u1) or (u1,u0) for (coreLccToken0.underlying(), coreLccToken1.underlying()).
         ctx.coreZeroForOne = (Currency.unwrap(key.currency0) == coreLccToken0.underlying()
                     && Currency.unwrap(key.currency1) == coreLccToken1.underlying())
             ? paramsZeroForOne
@@ -338,6 +341,10 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
     // to ensure that the user gets a debit of amount specified
     // and we disable the core swap mechanism
     // and proxy the swap through the core pool
+
+    // TODO: INVARIANT MKT-05
+    // TODO: Source locker as default LCC recipient, otherwise check if cap and if so revert.
+    // https://github.com/Uniswap/universal-router/blob/main/contracts/base/Dispatcher.sol#L46C14-L46C23
     function _beforeSwap(address, PoolKey calldata key, SwapParams calldata params, bytes calldata hookData)
         internal
         override

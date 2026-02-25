@@ -271,6 +271,7 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
     /// @param params The transfer parameters bundled in a struct
     /// @param settlementDelta The settlement delta from VTS
     function _processSettlementTransfers(SettleTransferParams memory params, BalanceDelta settlementDelta) internal {
+        // Adheres to core/LCC pool token ordering.
         int128 delta0 = settlementDelta.amount0();
         int128 delta1 = settlementDelta.amount1();
 
