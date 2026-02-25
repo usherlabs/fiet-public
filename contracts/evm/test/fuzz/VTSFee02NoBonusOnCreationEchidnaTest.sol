@@ -78,6 +78,12 @@ contract VTSFee02NoBonusOnCreationEchidnaTest {
     function _config(uint16 coverageFeeShare) internal pure returns (MarketVTSConfiguration memory) {
         TokenConfiguration memory tc =
             TokenConfiguration({gracePeriodTime: 0, seizureUnlockTime: 0, baseVTSRate: 0, maxGracePeriodTime: 0});
-        return MarketVTSConfiguration({token0: tc, token1: tc, coverageFeeShare: coverageFeeShare, minResidualUnits: 0});
+        return MarketVTSConfiguration({
+            token0: tc,
+            token1: tc,
+            coverageFeeShare: coverageFeeShare,
+            minResidualUnits: 0,
+            unbackedCommitmentGraceBypassBps: 0
+        });
     }
 }

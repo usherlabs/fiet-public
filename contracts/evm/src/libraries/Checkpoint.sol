@@ -46,7 +46,11 @@ library CheckpointLibrary {
         // RfS amounts are inflated by these position-level commitment deficit amounts
         PositionAccounting storage pa = s.positionAccounting[positionId];
         if (pa.commitmentDeficit.token0 > 0 || pa.commitmentDeficit.token1 > 0) {
-            return true;
+            Position memory deficitPosition = s.positions[positionId];
+            MarketVTSConfiguration memory deficitCfg = s.pools[deficitPosition.poolId].vtsConfig;
+            if (pa.commitmentDeficitBps >= deficitCfg.unbackedCommitmentGraceBypassBps) {
+                return true;
+            }
         }
 
         // Normal RFS path: check checkpoint + grace period

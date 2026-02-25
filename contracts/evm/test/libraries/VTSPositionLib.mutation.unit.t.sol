@@ -101,7 +101,8 @@ contract VTSPositionLibMutationUnitTest is Test {
             token0: tokenCfg,
             token1: tokenCfg,
             coverageFeeShare: DEFAULT_COVERAGE_FEE_SHARE,
-            minResidualUnits: DEFAULT_MIN_RESIDUAL_UNITS
+            minResidualUnits: DEFAULT_MIN_RESIDUAL_UNITS,
+            unbackedCommitmentGraceBypassBps: 500
         });
     }
 

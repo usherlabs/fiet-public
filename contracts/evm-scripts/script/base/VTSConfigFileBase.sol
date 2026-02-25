@@ -60,6 +60,11 @@ abstract contract VTSConfigFileBase is Script {
         // top-level
         cfg.coverageFeeShare = _jsonUint16Or(json, ".coverageFeeShare", cfg.coverageFeeShare);
         cfg.minResidualUnits = _jsonUintOr(json, ".minResidualUnits", cfg.minResidualUnits);
+        cfg.unbackedCommitmentGraceBypassBps = _jsonUint16Or(
+            json,
+            ".unbackedCommitmentGraceBypassBps",
+            _jsonUint16Or(json, ".commitmentDeficitBypassBps", cfg.unbackedCommitmentGraceBypassBps)
+        );
 
         return cfg;
     }
@@ -90,6 +95,11 @@ abstract contract VTSConfigFileBase is Script {
         // top-level
         cfg.coverageFeeShare = _tomlUint16Or(toml, "coverageFeeShare", cfg.coverageFeeShare);
         cfg.minResidualUnits = _tomlUintOr(toml, "minResidualUnits", cfg.minResidualUnits);
+        cfg.unbackedCommitmentGraceBypassBps = _tomlUint16Or(
+            toml,
+            "unbackedCommitmentGraceBypassBps",
+            _tomlUint16Or(toml, "commitmentDeficitBypassBps", cfg.unbackedCommitmentGraceBypassBps)
+        );
 
         return cfg;
     }

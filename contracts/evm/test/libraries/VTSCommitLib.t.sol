@@ -411,6 +411,7 @@ contract VTSCommitLibTest is VTSLibTestBase {
         (uint256 d0, uint256 d1) = harness.getPositionCommitmentDeficit(pid);
         assertEq(d0, 0, "deficit0 should be cleared");
         assertEq(d1, 0, "deficit1 should be cleared");
+        assertEq(harness.getPositionCommitmentDeficitBps(pid), 0, "deficit bps should be zero when issued is zero");
     }
 
     function test_checkpoint_sufficientBacking_clearsDeficit_whenSurplusCovers() public {
@@ -431,6 +432,7 @@ contract VTSCommitLibTest is VTSLibTestBase {
         (uint256 d0, uint256 d1) = harness.getPositionCommitmentDeficit(positionId);
         assertEq(d0, 0, "deficit0 should be cleared");
         assertEq(d1, 0, "deficit1 should be cleared");
+        assertEq(harness.getPositionCommitmentDeficitBps(positionId), 0, "deficit bps should clear when fully backed");
     }
 
     function test_checkpoint_sufficientBacking_reducesDeficit_proRata_whenSurplusPartial() public {
@@ -453,6 +455,7 @@ contract VTSCommitLibTest is VTSLibTestBase {
         uint256 reduce1 = FullMath.mulDiv(deficit1, surplusUsd, currentDeficitUsd);
         assertEq(d0, deficit0 - reduce0, "deficit0 should reduce pro-rata");
         assertEq(d1, deficit1 - reduce1, "deficit1 should reduce pro-rata");
+        assertEq(harness.getPositionCommitmentDeficitBps(positionId), 0, "deficit bps should clear when fully backed");
     }
 
     function test_checkpoint_insufficientBacking_setsDeficitFromBps() public {
@@ -469,6 +472,11 @@ contract VTSCommitLibTest is VTSLibTestBase {
             LiquidityUtils.calculateEffectiveTokenAmounts(sqrtPriceX96, currentTick, TL, TU, int256(uint256(LIQ)));
         assertEq(d0, eff0, "deficit0 should equal effective token0 when backing=0");
         assertEq(d1, eff1, "deficit1 should equal effective token1 when backing=0");
+        assertEq(
+            harness.getPositionCommitmentDeficitBps(positionId),
+            LiquidityUtils.BPS_DENOMINATOR,
+            "deficit bps should be 100%"
+        );
     }
 
     function test_checkpoint_partialBacking_setsDeficitFromBps() public {
@@ -494,6 +502,11 @@ contract VTSCommitLibTest is VTSLibTestBase {
 
         assertEq(d0, exp0, "deficit0 should match proportional deficit bps");
         assertEq(d1, exp1, "deficit1 should match proportional deficit bps");
+        assertEq(
+            harness.getPositionCommitmentDeficitBps(positionId),
+            uint16(deficitBps),
+            "deficit bps should match computed bps"
+        );
     }
 
     function test_checkpoint_expiredSignal_treatsSignalUsdAsZero() public {
@@ -516,6 +529,11 @@ contract VTSCommitLibTest is VTSLibTestBase {
             LiquidityUtils.calculateEffectiveTokenAmounts(sqrtPriceX96, currentTick, TL, TU, int256(uint256(LIQ)));
         assertEq(d0, eff0, "expired signal should contribute 0 backing");
         assertEq(d1, eff1, "expired signal should contribute 0 backing");
+        assertEq(
+            harness.getPositionCommitmentDeficitBps(positionId),
+            LiquidityUtils.BPS_DENOMINATOR,
+            "expired signal path should yield 100% deficit bps"
+        );
     }
 
     /**
@@ -540,6 +558,9 @@ contract VTSCommitLibTest is VTSLibTestBase {
         (uint256 d0, uint256 d1) = harness.getPositionCommitmentDeficit(positionId);
         assertEq(d0, 0, "deficit0 should be cleared when its USD value is zero");
         assertEq(d1, 0, "deficit1 should be cleared");
+        assertEq(
+            harness.getPositionCommitmentDeficitBps(positionId), 0, "deficit bps should clear when sufficiently backed"
+        );
     }
 
     // ============================================================
