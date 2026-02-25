@@ -743,7 +743,7 @@ contract MarketFactoryUnitTest is Test {
     function test_createMarket_emitsMarketCreated() public {
         uint160 initial = 79228162514264337593543950336;
 
-        // Underlyings are sorted in the emitted event.
+        // Underlyings are emitted in core LCC order (lcc0.underlying, lcc1.underlying).
         (address ua0, address ua1) = _sortAddrs(address(0x100), address(0x200));
 
         // LCC pair is deterministically (0x3000, 0x4000) and already sorted.
@@ -770,7 +770,7 @@ contract MarketFactoryUnitTest is Test {
 
         vm.expectEmit(true, true, true, true, address(factory));
         emit IMarketFactory.MarketCreated(
-            expectedCoreId, expectedProxyId, ua0, ua1, lcc0, lcc1, address(coreHook), address(proxyHook)
+            expectedCoreId, expectedProxyId, lcc0, lcc1, ua0, ua1, address(coreHook), address(proxyHook)
         );
 
         _createMarket(address(0x100), address(0x200), initial);

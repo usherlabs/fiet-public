@@ -287,6 +287,8 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
 
     /**
      * @notice Initializes the mapping from LCC tokens to Market (with ID and Ref)
+     * @dev Order-insensitive: `lccToken0` and `lccToken1` are treated independently; no `(0,1)` lane semantics exist here.
+     *      Canonical market ordering (for pair lanes) is defined by the core pool key in `MarketFactory`, not by argument order.
      * @param lccToken0 The first LCC token address
      * @param lccToken1 The second LCC token address
      * @param marketId The market ID (corePoolKey -> PoolID -> unwrap() to bytes32)
