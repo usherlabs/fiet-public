@@ -103,7 +103,7 @@ This bps value is already computed inside `VTSCommitLib.checkpointWithCommitment
 Option E proposes sizing seizure strictly in proportion to the measured deficit magnitude (i.e. “only seize what is needed to cover the deficit”).
 While this is directionally intuitive, it breaks the keeper/incentive model that makes seizure a reliable enforcement mechanism:
 
-- **Intervention becomes uneconomic for small deficits**: in practice, a dust or low-bps deficit will often not cover gas + MEV opportunity costs, so rational third parties will not act.
+- **Intervention becomes uneconomic for small deficits**: in practice, a dust or low-bps deficit will often not cover gas + MEV opportunity costs (see [`agents/spec/MEV-and-Adversarial-Ordering.md`](spec/MEV-and-Adversarial-Ordering.md)), so rational third parties will not act.
 - **This creates a “wait until it’s bad enough” equilibrium**: if seizing is only profitable once the deficit crosses some implicit profitability threshold, then deficits will tend to accumulate (or persist) until they are large enough to justify intervention.
 - **Traders bear the externality**: allowing deficits to linger degrades the trading experience/guarantees during the interval where positions are under-backed but no-one is incentivised to seize.
 - **The protocol still needs teeth even when the deficit is small**: the goal is timely settlement and credible enforcement, not merely eventual deficit coverage. A purely proportional model weakens the deterrent for “small but persistent” delinquency.
@@ -177,12 +177,14 @@ However, a direct core swap does not create a second tradeable curve:
 
 ### Timing / execution window: VTS swap processing is invoked **post-swap**
 
-We agree with the general statement “tick can be manipulated via large swaps”, because this is a CLMM. But we want to correct the implied “mid-swap” execution window:- Uniswap v4’s `PoolManager.swap(...)` executes the pool swap first, emits the `Swap` event, and only then calls the hook’s `afterSwap` (see `contracts/evm/lib/v4-periphery/lib/v4-core/src/PoolManager.sol`, `swap(...)`).
+We agree with the general statement “tick can be manipulated via large swaps”, because this is a CLMM. But we want to correct the implied “mid-swap” execution window:
+
+- Uniswap v4’s `PoolManager.swap(...)` executes the pool swap first, emits the `Swap` event, and only then calls the hook’s `afterSwap` (see `contracts/evm/lib/v4-periphery/lib/v4-core/src/PoolManager.sol`, `swap(...)`).
 - `VTSSwapLib.processSwap(...)` reads final post-swap `slot0` from the PoolManager and accrues growth across the segment(s) between `sqrtPBefore` and the final `sqrtPAfter` (see `contracts/evm/src/libraries/VTSSwapLib.sol`, `processSwap(...)`).
 
 Therefore, there is not an obvious intra-swap “mid-execution” window in which _third-party_ VTS operations can run “during the swap” while the tick is in a partially-manipulated transient state. The VTS swap processing is invoked as a normal v4 hook callback **after** the swap has been applied to pool state.
 
-The realistic adversarial model is the standard one: **sandwiching** (or otherwise ordering) discrete protocol interactions around a victim interaction (e.g. a liquidity modification, settlement, or another swap), not re-entering “mid swap step”.
+The realistic adversarial model is the standard one: **sandwiching** (or otherwise ordering) discrete protocol interactions around a victim interaction (e.g. a liquidity modification, settlement, or another swap), not re-entering “mid swap step”. For a fuller discussion of MEV/adversarial ordering impacts and mitigations, see [`agents/spec/MEV-and-Adversarial-Ordering.md`](spec/MEV-and-Adversarial-Ordering.md).
 
 ### Residual risk we acknowledge: VTS growth is spot-tick-derived by design
 
@@ -199,27 +201,16 @@ What makes this acceptable in our design posture:
 - **The oracle-backed commitment path is insulated (and necessarily oracle-based)**: the high-signal insolvency gate (`commitmentDeficit`) is derived from oracle-priced backing rather than the core pool’s spot tick. This is a design requirement because commitment backing may rely on liquidity that is off-chain and/or not even tokenised; it cannot be proven purely from on-chain spot.
   - The invariant \(issuedUsd \le settledUsd + signalUsd\) explicitly acknowledges the split between (i) on-chain settled value (`settledUsd`) and (ii) oracle-verified value (`signalUsd`).
   - Where assets are tokenised/on-chain, `settledUsd` valuation routes through our oracle contracts and may be supported by an oracle provider that itself references on-chain spot markets (e.g. Uniswap DEX) as an input.
-- **Adversarial ordering is an execution-environment reality**: in any environment where transaction ordering is adversarial (e.g. a public mempool), an attacker can pay to move the core tick around a victim action and thereby influence spot-tick-derived VTS accounting for positions touched in that window. This is not unique to our design; it is the standard “spot price + hooks” surface.
+- **MEV/adversarial ordering is inherited from Uniswap-style AMMs**: because the core pool is a standard CLMM, the protocol inherits the usual public-mempool ordering (sandwich/backrun) surfaces. This version of the protocol does not include native MEV mitigation mechanics; see [`agents/spec/MEV-and-Adversarial-Ordering.md`](spec/MEV-and-Adversarial-Ordering.md).
 
 That said, we agree this is correctly categorised as (at most) a **low-severity** economic/mechanism observation: if an attacker can reliably obtain ordering around a victim action, they can move the core tick around that action and thereby affect spot-tick-based VTS calculations for positions touched in that window.
 
-### How we frame this to users/integrators (and potential mitigations)
+### How we frame this
 
 We treat the proxy pool’s `slot0` as **non-authoritative** for price. The authoritative execution curve is the **core** pool.
 
 As a direct response to this finding, we hardened the proxy swap path ([see **MKT-05**](https://github.com/usherlabs/fiet-protocol/blob/develop/contracts/evm/INVARIANTS.md)) so proxy-originated swaps are **core-only** and the proxy pool’s AMM curve is mechanically neutralised (`amountToSwap == 0`).
 
-The remaining spot-tick exposure is therefore limited to what is inherent in the core CLMM: if an attacker can obtain favourable ordering around a sensitive action, they can move the core tick around that action.
-
-If we ever need additional hardening against adverse ordering effects on specific VTS actions (beyond what is already enforced by core-only execution), the natural mitigations are:
-
-- using TWAP-style tick inputs for specific risk triggers (not for all growth accounting), and/or
-- protocol-level sequencing constraints for sensitive actions (batching, minimum-delay guards, or restricted execution windows), and/or
-- private orderflow / auction-style execution for actions where integrators require stronger sandwich resistance.
-
-We have not implemented these additional mitigations at this time because they materially change the mechanism and UX, and because the residual risk is bounded by real manipulation costs and limited to the core spot-tick surface.
-
-### What we discovered from this finding: proxy `slot0` drift is a real state-level risk if the proxy AMM is not mechanically neutralised
 
 The audit finding triggered a deeper semantic review of the proxy swap path. That review identified an important nuance:
 
