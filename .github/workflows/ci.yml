@@ -49,7 +49,7 @@ jobs:
         id: fmt
 
       - name: Run Forge build
-        run: FOUNDRY_PROFILE=prod forge build --sizes --skip test --skip script # size-check deployable contracts only
+        run: FOUNDRY_PROFILE=prod forge build --sizes ./src # size-check deployable contracts only
         working-directory: contracts/evm
         id: build
 
