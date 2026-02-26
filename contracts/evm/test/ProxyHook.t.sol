@@ -421,7 +421,7 @@ contract ProxyHookTest is MarketVaultBase {
 
     // Option A: no hook data defaults to locker. If the locker cannot be resolved, swaps may still proceed
     // as long as they can be fully settled into underlying (no deficit path required).
-    function test_swap_exactInput_oneForZeroOnProxy_withLimitedLiquidity_noHookData() public {
+    function test_swap_exactInput_zeroForOneOnProxy_withLimitedLiquidity_noHookData() public {
         uint256 mockAvailableLiquidity = 50;
         _mockLimitedLiquidity(_currency1, mockAvailableLiquidity);
 
@@ -432,6 +432,21 @@ contract ProxyHookTest is MarketVaultBase {
 
         BalanceDelta swapDelta = _executeSwap(proxyPoolKey, true, -int256(swapAmount), ZERO_BYTES);
         (uint256 actualInput, uint256 actualOutput) = _getSwapDeltas(swapDelta, true);
+        assertEq(actualInput, expectedInput, "Input should match full swap");
+        assertEq(actualOutput, expectedOutput, "Output should match simulation");
+    }
+
+    function test_swap_exactInput_oneForZeroOnProxy_withLimitedLiquidity_noHookData() public {
+        uint256 mockAvailableLiquidity = 50;
+        _mockLimitedLiquidity(_currency0, mockAvailableLiquidity);
+
+        uint256 swapAmount = 10;
+        (uint256 expectedInput, uint256 expectedOutput) = _simulateSwap(corePoolKey, false, -int256(swapAmount));
+        assertGt(expectedOutput, 0, "precondition: must produce non-zero output");
+        assertLe(expectedOutput, mockAvailableLiquidity, "precondition: must not require deficit");
+
+        BalanceDelta swapDelta = _executeSwap(proxyPoolKey, false, -int256(swapAmount), ZERO_BYTES);
+        (uint256 actualInput, uint256 actualOutput) = _getSwapDeltas(swapDelta, false);
         assertEq(actualInput, expectedInput, "Input should match full swap");
         assertEq(actualOutput, expectedOutput, "Output should match simulation");
     }
