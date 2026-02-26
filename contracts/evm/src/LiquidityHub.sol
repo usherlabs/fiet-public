@@ -647,6 +647,36 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
     }
 
     /**
+     * @notice Queues settlement for a recipient after issuer-side deficit transfer.
+     * @dev Security checks:
+     *      - recipient must be non-zero
+     *      - recipient must not be bucket-exempt (external settlement path requires market-derived balance accounting)
+     *      - recipient must hold sufficient market-derived LCC to back the queued amount
+     */
+    function queueForTransferRecipient(address lcc, address recipient, uint256 amount)
+        external
+        onlyIssuer(lcc)
+        nonReentrant
+    {
+        if (recipient == address(0)) {
+            revert Errors.InvalidAddress(recipient);
+        }
+        if (amount == 0) {
+            revert Errors.InvalidAmount(0, 0);
+        }
+        if (Bounds.isExempt(boundLevelOfLcc(lcc, recipient))) {
+            revert Errors.NotApproved(recipient);
+        }
+
+        (, uint256 marketDerivedBalance) = ILCC(lcc).balancesOf(recipient);
+        if (marketDerivedBalance < amount) {
+            revert Errors.InsufficientBalance(marketDerivedBalance, amount);
+        }
+
+        _queueSettlement(lcc, recipient, amount);
+    }
+
+    /**
      * @dev Internal implementation of cancelWithQueue without access control
      * @param lcc The LCC token address
      * @param from The address to cancel tokens from

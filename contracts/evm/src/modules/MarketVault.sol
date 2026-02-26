@@ -320,8 +320,10 @@ abstract contract MarketVault is IMarketVault, ImmutableState, ImmutableMarketSt
         liquidityHub.cancel(address(lccToken), address(this), amountToCancel); // we only cancel what native asset we distribute via the swap mechanism.
 
         if (deficitAmount > 0 && deficitRecipient != address(0)) {
-            // ? The MarketVault will have already taken the full LCC amount from the PoolManager.
+            // The MarketVault already took the full LCC amount from the PoolManager.
+            // Transfer deficit LCC first so queueing can assert recipient market-derived backing.
             Currency.wrap(address(lccToken)).transfer(deficitRecipient, deficitAmount);
+            liquidityHub.queueForTransferRecipient(address(lccToken), deficitRecipient, deficitAmount);
             emit SwapDeficit(poolId, address(lccToken), deficitRecipient, deficitAmount);
         }
         // Note: If deficit recipient is not specified, but a deficit > 0, then excess will accumulate.

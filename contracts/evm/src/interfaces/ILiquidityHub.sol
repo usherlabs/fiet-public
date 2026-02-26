@@ -72,6 +72,16 @@ interface ILiquidityHub is IBoundRegistry, IMinimalLiquidityHub {
     ) external;
 
     /**
+     * @notice Queues settlement for a recipient after issuer-side deficit transfer.
+     * @dev Intended for issuer flows where the recipient already received market-derived LCC and
+     *      queue ownership must match that recipient.
+     * @param lccToken The LCC token address
+     * @param recipient The queue owner / eventual settlement recipient
+     * @param amount The amount to queue
+     */
+    function queueForTransferRecipient(address lccToken, address recipient, uint256 amount) external;
+
+    /**
      * @notice Plans a cancel operation to be executed on a specific transfer path
      * @param lcc The LCC token address
      * @param awaitingLastOwner The expected sender of the transfer

@@ -72,6 +72,11 @@ contract MockLiquidityHub_Min {
     uint256 public lastCancelAmount;
     uint256 public cancelCalls;
 
+    address public lastQueueLcc;
+    address public lastQueueRecipient;
+    uint256 public lastQueueAmount;
+    uint256 public queueCalls;
+
     function setTotalQueued(address lcc, uint256 amount) external {
         _queued[lcc] = amount;
     }
@@ -92,6 +97,13 @@ contract MockLiquidityHub_Min {
         lastCancelFrom = from;
         lastCancelAmount = amount;
         cancelCalls++;
+    }
+
+    function queueForTransferRecipient(address lcc, address recipient, uint256 amount) external {
+        lastQueueLcc = lcc;
+        lastQueueRecipient = recipient;
+        lastQueueAmount = amount;
+        queueCalls++;
     }
 
     function prepareSettle(address, uint256) external {}
@@ -123,6 +135,8 @@ contract MockLiquidityHub_RejectEth {
     }
 
     function cancel(address, address, uint256) external {}
+
+    function queueForTransferRecipient(address, address, uint256) external {}
 
     function prepareSettle(address, uint256) external {}
 
@@ -546,6 +560,9 @@ contract MarketVaultUnitTest is Test {
         assertEq(hub.lastCancelLcc(), address(lccErc20));
         assertEq(hub.lastCancelFrom(), address(vault));
         assertEq(hub.lastCancelAmount(), 5);
+        assertEq(hub.lastQueueLcc(), address(lccErc20));
+        assertEq(hub.lastQueueRecipient(), deficitRecipient);
+        assertEq(hub.lastQueueAmount(), expectedDeficit);
         assertEq(lccErc20.balanceOf(deficitRecipient), expectedDeficit);
     }
 
@@ -564,5 +581,43 @@ contract MarketVaultUnitTest is Test {
         vault.exposed_cancelLCCWithDeficit(
             PoolId.wrap(keccak256("pid2")), ILCC(address(lccErc20)), requested, address(0)
         );
+    }
+
+    function test_cancelLCCWithDeficit_whenFullyAvailable_doesNotQueueOrTransferDeficit() public {
+        MockLiquidityHub_Min hub = new MockLiquidityHub_Min();
+        (MarketVaultUnitHarness vault, MockPoolManager_Min pm,, MockLCC lccErc20,, MockERC20 ua) =
+            _deployVaultWithHub(address(hub));
+
+        Currency uaC = Currency.wrap(address(ua));
+        uint256 requested = 5;
+        address recipient = makeAddr("no_deficit_recipient");
+        pm.setClaimBalance(address(vault), uaC, requested);
+
+        uint256 amountToCancel = vault.exposed_cancelLCCWithDeficit(
+            PoolId.wrap(keccak256("pid3")), ILCC(address(lccErc20)), requested, recipient
+        );
+
+        assertEq(amountToCancel, requested);
+        assertEq(hub.lastCancelAmount(), requested);
+        assertEq(hub.queueCalls(), 0);
+        assertEq(lccErc20.balanceOf(recipient), 0);
+    }
+
+    function test_cancelLCCWithDeficit_zeroRecipientAllowedWhenNoDeficit() public {
+        MockLiquidityHub_Min hub = new MockLiquidityHub_Min();
+        (MarketVaultUnitHarness vault, MockPoolManager_Min pm,, MockLCC lccErc20,, MockERC20 ua) =
+            _deployVaultWithHub(address(hub));
+
+        Currency uaC = Currency.wrap(address(ua));
+        uint256 requested = 3;
+        pm.setClaimBalance(address(vault), uaC, requested);
+
+        uint256 amountToCancel = vault.exposed_cancelLCCWithDeficit(
+            PoolId.wrap(keccak256("pid4")), ILCC(address(lccErc20)), requested, address(0)
+        );
+
+        assertEq(amountToCancel, requested);
+        assertEq(hub.lastCancelAmount(), requested);
+        assertEq(hub.queueCalls(), 0);
     }
 }

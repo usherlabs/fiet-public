@@ -5,6 +5,7 @@ import {LiquidityHubTestBase} from "./base/LiquidityHubTestBase.sol";
 import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
 import {ILCC} from "../src/interfaces/ILCC.sol";
 import {Errors} from "../src/libraries/Errors.sol";
+import {Bounds} from "../src/libraries/Bounds.sol";
 import {Vm} from "forge-std/Vm.sol";
 
 contract MockMarketVaultForEthReceive {
@@ -449,6 +450,102 @@ contract LiquidityHubTest is LiquidityHubTestBase {
                 require(entries[i].topics[0] != topic0, "unexpected SettlementQueued");
             }
         }
+    }
+
+    function test_queueForTransferRecipient_revertsWhenRecipientIsExempt() public {
+        uint256 amount = 10;
+        vm.prank(proxyHook);
+        liquidityHub.issue(lccToken1, proxyHook, amount);
+
+        vm.prank(proxyHook);
+        ILCC(lccToken1).transfer(user2, amount);
+        _setBoundLevel(user2, Bounds.BOUND_EXEMPT);
+
+        vm.prank(proxyHook);
+        vm.expectRevert(abi.encodeWithSelector(Errors.NotApproved.selector, user2));
+        liquidityHub.queueForTransferRecipient(lccToken1, user2, amount);
+    }
+
+    function test_queueForTransferRecipient_revertsWhenMarketDerivedIsInsufficient() public {
+        uint256 transferred = 5;
+        uint256 queued = 10;
+        vm.prank(proxyHook);
+        liquidityHub.issue(lccToken1, proxyHook, transferred);
+
+        vm.prank(proxyHook);
+        ILCC(lccToken1).transfer(user2, transferred);
+
+        vm.prank(proxyHook);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InsufficientBalance.selector, transferred, queued));
+        liquidityHub.queueForTransferRecipient(lccToken1, user2, queued);
+    }
+
+    function test_queueForTransferRecipient_queuesWhenRecipientBacked() public {
+        uint256 amount = 12;
+        vm.prank(proxyHook);
+        liquidityHub.issue(lccToken1, proxyHook, amount);
+
+        vm.prank(proxyHook);
+        ILCC(lccToken1).transfer(user2, amount);
+
+        vm.expectEmit(true, true, false, true, address(liquidityHub));
+        emit SettlementQueued(lccToken1, user2, amount);
+
+        vm.prank(proxyHook);
+        liquidityHub.queueForTransferRecipient(lccToken1, user2, amount);
+
+        assertEq(liquidityHub.settleQueue(lccToken1, user2), amount);
+        assertEq(liquidityHub.totalQueued(lccToken1), amount);
+    }
+
+    function test_queueForTransferRecipient_revertsWhenCallerIsNotIssuer() public {
+        vm.prank(user1);
+        vm.expectRevert(abi.encodeWithSelector(Errors.NotApproved.selector, user1));
+        liquidityHub.queueForTransferRecipient(lccToken1, user2, 1);
+    }
+
+    function test_queueForTransferRecipient_revertsWhenRecipientIsZero() public {
+        vm.prank(proxyHook);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
+        liquidityHub.queueForTransferRecipient(lccToken1, address(0), 1);
+    }
+
+    function test_queueForTransferRecipient_revertsWhenAmountIsZero() public {
+        vm.prank(proxyHook);
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAmount.selector, uint256(0), uint256(0)));
+        liquidityHub.queueForTransferRecipient(lccToken1, user2, 0);
+    }
+
+    function test_queueForTransferRecipient_queuesWhenRecipientIsBoundEndpoint() public {
+        uint256 amount = 9;
+        _setBoundLevel(user2, Bounds.BOUND_ENDPOINT);
+
+        vm.prank(proxyHook);
+        liquidityHub.issue(lccToken1, proxyHook, amount);
+        vm.prank(proxyHook);
+        ILCC(lccToken1).transfer(user2, amount);
+
+        vm.prank(proxyHook);
+        liquidityHub.queueForTransferRecipient(lccToken1, user2, amount);
+
+        assertEq(liquidityHub.settleQueue(lccToken1, user2), amount);
+        assertEq(liquidityHub.totalQueued(lccToken1), amount);
+    }
+
+    function test_queueForTransferRecipient_accumulatesQueueForSameRecipient() public {
+        uint256 amount1 = 4;
+        uint256 amount2 = 7;
+
+        vm.prank(proxyHook);
+        liquidityHub.issue(lccToken1, proxyHook, amount1 + amount2);
+        vm.startPrank(proxyHook);
+        ILCC(lccToken1).transfer(user2, amount1 + amount2);
+        liquidityHub.queueForTransferRecipient(lccToken1, user2, amount1);
+        liquidityHub.queueForTransferRecipient(lccToken1, user2, amount2);
+        vm.stopPrank();
+
+        assertEq(liquidityHub.settleQueue(lccToken1, user2), amount1 + amount2);
+        assertEq(liquidityHub.totalQueued(lccToken1), amount1 + amount2);
     }
 
     function test_annulSettlementBeforeTransfer_noOpBranchesAndBleedLogic() public {

@@ -26,6 +26,7 @@ import {MockERC20} from "@uniswap/v4-core/test/utils/Deployers.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {ProxyHook} from "../src/ProxyHook.sol";
 import {ProxySwapFlag} from "../src/libraries/ProxySwapFlag.sol";
+import {Bounds} from "../src/libraries/Bounds.sol";
 import {SwapSimulator} from "./utils/SwapSimulator.sol";
 import {BaseHook} from "v4-periphery/src/utils/BaseHook.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
@@ -473,7 +474,6 @@ contract ProxyHookTest is MarketVaultBase {
     // Test that a swap with limited liquidity on the proxy pool works as expected
     // when hookData with recipient IS provided, the swap should NOT be restricted and excess LCC should go to recipient
     function test_swap_exactInput_zeroForOneOnProxy_withLimitedLiquidity_withHookData() public {
-        bytes32 marketId = PoolId.unwrap(corePoolKey.toId());
         address lcc_recipient = makeAddr("lcc_recipient");
         _setupRecipient(lcc_recipient);
 
@@ -511,26 +511,12 @@ contract ProxyHookTest is MarketVaultBase {
             assertEq(marketDerivedBalance, deficit, "Recipient should receive LCC equal to deficit");
         }
 
-        // Unwrap in scoped block
-        {
-            // mock the call to factory to use market liquidity, this would make sure that the market appears to have a liquidity of zero
-            // this way unwrapps would be queued for settlement upon unwrap
-            _mockLimitedMarketLiquidity(address(lccOut), marketId, 0);
-            // mock as the lcc recipient
-            // unwrap the lcc tokens to get the underlying asset
-            vm.prank(lcc_recipient);
-            LiquidityHub(payable(liquidityHub)).unwrap(address(lccOut), deficit);
-            vm.stopPrank();
-        }
-
-        // get amount owed to this particular recipient from settlement queue
+        // Queue should be created immediately in the deficit flow.
         uint256 amountOwedToRecipient = LiquidityHub(payable(liquidityHub)).settleQueue(address(lccOut), lcc_recipient);
         console.log("amountOwedToRecipient:", amountOwedToRecipient);
 
-        // validate the amount owed to the recipient is the attempted unwrap amount
-        // and that the user still has their LCC tokens (or they were burned if unwrapped)
+        // validate queued deficit amount is attributed to the recipient
         assertEq(amountOwedToRecipient, deficit, "Amount owed should equal deficit");
-        // assertEq(lccOut.balanceOf(lcc_recipient), 0, "Recipient LCC tokens should be burned after unwrap");
 
         // add some liquidity to the core pool to attempt to clear pending settlements
         modifyLiquidityRouter.modifyLiquidity(
@@ -615,13 +601,12 @@ contract ProxyHookTest is MarketVaultBase {
         assertEq(recipientMarketBalance, deficit, "Recipient should receive LCC equal to deficit");
         assertEq(lccOut.balanceOf(recipient), deficit, "Recipient should hold LCC tokens");
 
-        // Verify market deficit is tracked via settlement queue (after unwrap attempt)
-        // Note: Settlement queue is only created when user tries to unwrap, not immediately on receipt
-        // So we check the total queued, which should be 0 until unwrap is attempted
+        // Verify market deficit is queued immediately to the recipient.
+        // The queue is backed by the market-derived LCC transferred in the same deficit flow.
         assertEq(
             LiquidityHub(payable(liquidityHub)).totalQueued(address(lccOut)),
-            0,
-            "Settlement queue should be empty until unwrap"
+            deficit,
+            "Settlement queue should equal deficit immediately"
         );
 
         vm.clearMockedCalls();
@@ -824,7 +809,90 @@ contract ProxyHookTest is MarketVaultBase {
             uint256 expectedDeficit = fullOutput - mockAvailableLiquidity;
             (, uint256 recipientMarketBalance) = lccOut.balancesOf(recipient);
             assertEq(recipientMarketBalance, expectedDeficit, "Recipient should receive deficit LCC");
+            assertEq(
+                LiquidityHub(payable(liquidityHub)).settleQueue(address(lccOut), recipient),
+                expectedDeficit,
+                "Deficit should be queued immediately"
+            );
         }
+
+        vm.clearMockedCalls();
+    }
+
+    function test_swap_exactInput_oneForZero_withRecipient_fullQueueSettlementLifecycle() public {
+        address recipient = makeAddr("oneForZero_settle_recipient");
+        _setupRecipient(recipient);
+
+        uint256 mockAvailableLiquidity = 50;
+        _mockLimitedLiquidity(_currency0, mockAvailableLiquidity);
+
+        uint256 swapAmount = 100;
+        LiquidityCommitmentCertificate lccOut = _getLCCOut(_currency0);
+
+        BalanceDelta swapDelta = _executeSwap(proxyPoolKey, false, -int256(swapAmount), abi.encode(recipient));
+        (, uint256 actualOutput) = _getSwapDeltas(swapDelta, false);
+        assertEq(actualOutput, mockAvailableLiquidity, "Underlying output should be capped by available liquidity");
+
+        (, uint256 deficit) = lccOut.balancesOf(recipient);
+        assertGt(deficit, 0, "Expected a deficit to be represented as recipient-held market-derived LCC");
+        assertEq(LiquidityHub(payable(liquidityHub)).settleQueue(address(lccOut), recipient), deficit);
+
+        modifyLiquidityRouter.modifyLiquidity(
+            corePoolKey,
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e18, salt: bytes32(0)}),
+            ZERO_BYTES
+        );
+
+        _mockLimitedLiquidity(_currency0, initialLiquidity);
+        LiquidityHub(payable(liquidityHub)).processSettlementFor(address(lccOut), recipient, deficit);
+
+        assertEq(LiquidityHub(payable(liquidityHub)).settleQueue(address(lccOut), recipient), 0);
+        assertEq(lccOut.balanceOf(recipient), 0, "Settled amount should burn recipient-held deficit LCC");
+        assertEq(_currency0.balanceOf(recipient), deficit, "Recipient should receive the settled underlying amount");
+
+        vm.clearMockedCalls();
+    }
+
+    function test_swap_exactInput_withExemptRecipient_revertsOnDeficitQueueSecurityCheck() public {
+        address recipient = makeAddr("exempt_recipient");
+        _setupRecipient(recipient);
+
+        vm.prank(marketFactory);
+        LiquidityHub(payable(liquidityHub)).setBoundLevel(recipient, Bounds.BOUND_EXEMPT);
+
+        _mockLimitedLiquidity(_currency1, 1);
+
+        vm.expectRevert();
+        _executeSwap(proxyPoolKey, true, -int256(100), abi.encode(recipient));
+    }
+
+    function test_swap_deficitQueue_isAnnulledWhenRecipientTransfersLccBeforeSettlement() public {
+        address recipient = makeAddr("annul_recipient");
+        _setupRecipient(recipient);
+
+        uint256 mockAvailableOutputLiquidity = 50;
+        _mockLimitedLiquidity(_currency1, mockAvailableOutputLiquidity);
+
+        uint256 swapAmount = 100;
+        LiquidityCommitmentCertificate lccOut = _getLCCOut(_currency1);
+
+        BalanceDelta swapDelta = _executeSwap(proxyPoolKey, true, -int256(swapAmount), abi.encode(recipient));
+        (, uint256 actualOutput) = _getSwapDeltas(swapDelta, true);
+        assertEq(actualOutput, mockAvailableOutputLiquidity);
+
+        (, uint256 queuedDeficit) = lccOut.balancesOf(recipient);
+        assertGt(queuedDeficit, 0, "Expected queued deficit");
+        assertEq(LiquidityHub(payable(liquidityHub)).settleQueue(address(lccOut), recipient), queuedDeficit);
+
+        vm.prank(recipient);
+        lccOut.transfer(address(manager), queuedDeficit);
+
+        assertEq(
+            LiquidityHub(payable(liquidityHub)).settleQueue(address(lccOut), recipient),
+            0,
+            "Queue should be annulled when recipient transfers queued-backed LCC away"
+        );
+        assertEq(lccOut.balanceOf(recipient), 0, "Recipient should no longer hold deficit LCC");
 
         vm.clearMockedCalls();
     }
