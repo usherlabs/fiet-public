@@ -558,11 +558,11 @@ contract MarketVaultUnitTest is Test {
         pm.setClaimBalance(address(vault), uaC, 2);
 
         uint256 requested = 5;
-        uint256 amountToCancel = vault.exposed_cancelLCCWithDeficit(
+        vm.expectRevert(
+            abi.encodeWithSelector(Errors.InvariantViolated.selector, "MarketVault: deficit requires recipient")
+        );
+        vault.exposed_cancelLCCWithDeficit(
             PoolId.wrap(keccak256("pid2")), ILCC(address(lccErc20)), requested, address(0)
         );
-
-        assertEq(amountToCancel, 2);
-        assertEq(hub.lastCancelAmount(), 2);
     }
 }

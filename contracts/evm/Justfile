@@ -38,6 +38,7 @@ fuzz:
   @just echidna-cov-03
   @just echidna-fee-01
   @just echidna-fee-02
+  @just echidna-mkt-05
   @just echidna-vts-02
   @just echidna-vts-03
   @just echidna-delta-01
@@ -57,6 +58,7 @@ fuzz-deep:
   @just echidna-cov-03 echidna.deep.config.yml
   @just echidna-fee-01 echidna.deep.config.yml
   @just echidna-fee-02 echidna.deep.config.yml
+  @just echidna-mkt-05 echidna.deep.config.yml
   @just echidna-vts-02 echidna.deep.config.yml
   @just echidna-vts-03 echidna.deep.config.yml
   @just echidna-delta-01 echidna.deep.config.yml
@@ -93,6 +95,12 @@ echidna-fee-01 config="echidna.config.yml":
 
 echidna-fee-02 config="echidna.config.yml":
   @just echidna test/fuzz/VTSFee02NoBonusOnCreationEchidnaTest.sol VTSFee02NoBonusOnCreationEchidnaTest {{config}} -- --disable-slither
+
+echidna-mkt-05 config="echidna.config.yml":
+  @just echidna test/fuzz/ProxySwapMKT05LiveEchidnaTest.sol ProxySwapMKT05LiveEchidnaTest {{config}} -- --disable-slither
+
+echidna-mkt-05-model config="echidna.config.yml":
+  @just echidna test/fuzz/ProxySwapMKT05EchidnaTest.sol ProxySwapMKT05EchidnaTest {{config}} -- --disable-slither
 
 echidna-vts-02 config="echidna.config.yml":
   @just echidna test/fuzz/VTSSwapVTS02FlipOutsideEchidnaTest.sol VTSSwapVTS02FlipOutsideEchidnaTest {{config}} -- --disable-slither

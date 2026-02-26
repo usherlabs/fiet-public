@@ -13,8 +13,8 @@ import {UnsafeMath} from "@uniswap/v4-core/src/libraries/UnsafeMath.sol";
 import {FixedPoint128} from "@uniswap/v4-core/src/libraries/FixedPoint128.sol";
 import {LiquidityMath} from "@uniswap/v4-core/src/libraries/LiquidityMath.sol";
 import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
-import {TickUtils} from "./TickUtils.sol";
-import {Errors} from "./Errors.sol";
+import {TickUtils} from "../../src/libraries/TickUtils.sol";
+import {Errors} from "../../src/libraries/Errors.sol";
 import {SafeCast as OZSafeCast} from "openzeppelin-contracts/contracts/utils/math/SafeCast.sol";
 
 /**

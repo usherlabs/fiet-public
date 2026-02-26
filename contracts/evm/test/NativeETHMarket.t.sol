@@ -145,6 +145,8 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
         uint256 selfBalanceOfTokenABefore = proxyPoolKey.currency0.balanceOfSelf();
         uint256 selfBalanceOfTokenBBefore = proxyPoolKey.currency1.balanceOfSelf();
 
+        (uint160 sqrtBefore, int24 tickBefore,,) = manager.getSlot0(proxyPoolKey.toId());
+
         uint256 swapAmount = 1e10;
         BalanceDelta delta = swapRouter.swap{
             value: swapAmount
@@ -154,6 +156,10 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
             settings,
             ZERO_BYTES
         );
+
+        (uint160 sqrtAfter, int24 tickAfter,,) = manager.getSlot0(proxyPoolKey.toId());
+        assertEq(sqrtAfter, sqrtBefore, "proxy slot0 sqrtPrice should not change");
+        assertEq(tickAfter, tickBefore, "proxy slot0 tick should not change");
 
         uint256 selfBalanceOfTokenAAfter = proxyPoolKey.currency0.balanceOfSelf();
         uint256 selfBalanceOfTokenBAfter = proxyPoolKey.currency1.balanceOfSelf();
@@ -181,6 +187,8 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
         console.log("balanceOfTokenA", balanceOfTokenA);
         console.log("balanceOfTokenB", balanceOfTokenB);
 
+        (uint160 sqrtBefore, int24 tickBefore,,) = manager.getSlot0(proxyPoolKey.toId());
+
         uint256 swapAmount = 100;
         swapRouter.swap(
             proxyPoolKey,
@@ -191,11 +199,39 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
             ZERO_BYTES
         );
 
+        (uint160 sqrtAfter, int24 tickAfter,,) = manager.getSlot0(proxyPoolKey.toId());
+        assertEq(sqrtAfter, sqrtBefore, "proxy slot0 sqrtPrice should not change");
+        assertEq(tickAfter, tickBefore, "proxy slot0 tick should not change");
+
         uint256 selfBalanceOfTokenAAfter = proxyPoolKey.currency0.balanceOfSelf();
         uint256 selfBalanceOfTokenBAfter = proxyPoolKey.currency1.balanceOfSelf();
 
         assertEq(selfBalanceOfTokenBBefore - selfBalanceOfTokenBAfter, swapAmount);
         assertGt(selfBalanceOfTokenAAfter, selfBalanceOfTokenABefore);
+    }
+
+    function test_swapWithNativeAsUnderlyingAsset_exactOutputOnProxyPool_revertsWhenInsufficientUnderlying() public {
+        PoolSwapTest.TestSettings memory settings =
+            PoolSwapTest.TestSettings({takeClaims: false, settleUsingBurn: false});
+
+        // For zeroForOne, the output currency is currency1; mock the vault's available claim-token balance to 0.
+        vm.mockCall(
+            address(manager),
+            abi.encodeWithSelector(
+                bytes4(keccak256("balanceOf(address,uint256)")), address(proxyHook), proxyPoolKey.currency1.toId()
+            ),
+            abi.encode(uint256(0))
+        );
+
+        vm.expectRevert();
+        swapRouter.swap{
+            value: 1 ether
+        }(
+            proxyPoolKey,
+            SwapParams({zeroForOne: true, amountSpecified: int256(1e10), sqrtPriceLimitX96: ZERO_FOR_ONE_LIMIT}),
+            settings,
+            ZERO_BYTES
+        );
     }
 
     function test_swapWithNativeAsUnderlyingAsset_zeroForOneOnCore() public {
@@ -230,7 +266,6 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
         );
 
         uint256 deltaAmount0 = LiquidityUtils.safeInt128ToUint256(delta.amount0());
-        uint256 deltaAmount1 = LiquidityUtils.safeInt128ToUint256(delta.amount1());
 
         console.log("delta 0:", delta.amount0());
         console.log("delta 1:", delta.amount1());
@@ -293,7 +328,6 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
             }
         }
 
-        uint256 deltaAmount0 = LiquidityUtils.safeInt128ToUint256(delta.amount0());
         uint256 deltaAmount1 = LiquidityUtils.safeInt128ToUint256(delta.amount1());
 
         console.log("swap delta 0:", delta.amount0());
