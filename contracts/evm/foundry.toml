@@ -34,30 +34,27 @@ optimizer_runs = 0
 libraries = []
 
 [profile.debug]
-via_ir = false
 optimizer_runs = 200
 fuzz.runs = 100
-
-[profile.solx]
-solc_version = '../../.solx/solx'
-auto_detect_solc = false
-via_ir = false
+optimizer = true
+ffi = true
 
 [profile.ci]
 # Disable via_ir to reduce memory usage in CI environments
 # This is sufficient for testing - production builds should use default profile
-via_ir = false
 optimizer_runs = 200
-fuzz.runs = 256
+fuzz.runs = 1000
+optimizer = true
+ffi = true
 
 [profile.echidna]
 # Dedicated profile for Echidna's Foundry backend:
 # - compile only the echidna harnesses under `test/fuzz` (avoids OOM / exit-137)
 # - output to a separate directory so crytic-compile can consume it deterministically
 # - hard-link `LCCFactoryLinkedLib` so HEVM doesn't reject unlinked placeholders
-via_ir = false
 optimizer = true
 optimizer_runs = 200
+ffi = true
 test = "test/fuzz"
 out = "out-echidna"
 libraries = [
