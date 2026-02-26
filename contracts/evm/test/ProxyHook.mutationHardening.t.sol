@@ -9,22 +9,65 @@ import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {BaseHook} from "v4-periphery/src/utils/BaseHook.sol";
 import {ProxyHook} from "../src/ProxyHook.sol";
 import {IMsgSender} from "v4-periphery/src/interfaces/IMsgSender.sol";
+import {Errors} from "../src/libraries/Errors.sol";
+import {CustomRevert} from "@uniswap/v4-core/src/libraries/CustomRevert.sol";
 
 /**
  * @notice Mutation hardening tests for ProxyHook under Option A + MKT-05 semantics.
  * @dev Focused checks that guard against regressions in strict revert policy and proxy no-op behaviour.
  */
 contract ProxyHookMutationHardeningTest is MarketVaultBase {
+    function _stripSelector(bytes memory revertData) internal pure returns (bytes memory tail) {
+        require(revertData.length >= 4, "missing revert selector");
+        tail = new bytes(revertData.length - 4);
+        for (uint256 i = 0; i < tail.length; i++) {
+            tail[i] = revertData[i + 4];
+        }
+    }
+
+    function _assertWrappedReason(bytes memory revertData, bytes memory expectedReason) internal pure {
+        bytes4 sel;
+        assembly ("memory-safe") {
+            sel := mload(add(revertData, 0x20))
+        }
+        assertEq(sel, CustomRevert.WrappedError.selector, "expected WrappedError selector");
+
+        (,, bytes memory reason,) = abi.decode(_stripSelector(revertData), (address, bytes4, bytes, bytes));
+        assertEq(keccak256(reason), keccak256(expectedReason), "unexpected wrapped revert reason");
+    }
+
     function test_proxySwap_exactOutput_revertsWhenInsufficientLiquidity_zeroForOne() public {
         _mockLimitedLiquidity(proxyPoolKey.currency1, 50);
-        vm.expectRevert();
-        _executeSwap(proxyPoolKey, true, int256(100), bytes(""));
+        bytes memory expectedReason =
+            abi.encodeWithSelector(Errors.InsufficientLiquidity.selector, uint256(100), uint256(50));
+
+        try swapRouter.swap(
+            proxyPoolKey,
+            SwapParams({zeroForOne: true, amountSpecified: int256(100), sqrtPriceLimitX96: ZERO_FOR_ONE_LIMIT}),
+            _getSwapSettings(),
+            bytes("")
+        ) {
+            fail();
+        } catch (bytes memory data) {
+            _assertWrappedReason(data, expectedReason);
+        }
     }
 
     function test_proxySwap_exactOutput_revertsWhenInsufficientLiquidity_oneForZero() public {
         _mockLimitedLiquidity(proxyPoolKey.currency0, 50);
-        vm.expectRevert();
-        _executeSwap(proxyPoolKey, false, int256(100), bytes(""));
+        bytes memory expectedReason =
+            abi.encodeWithSelector(Errors.InsufficientLiquidity.selector, uint256(100), uint256(50));
+
+        try swapRouter.swap(
+            proxyPoolKey,
+            SwapParams({zeroForOne: false, amountSpecified: int256(100), sqrtPriceLimitX96: ONE_FOR_ZERO_LIMIT}),
+            _getSwapSettings(),
+            bytes("")
+        ) {
+            fail();
+        } catch (bytes memory data) {
+            _assertWrappedReason(data, expectedReason);
+        }
     }
 
     function test_proxySwap_exactInput_revertsOnCoreFillMismatch_withTightPriceLimit() public {
@@ -38,13 +81,19 @@ contract ProxyHookMutationHardeningTest is MarketVaultBase {
             limit = TickMath.MIN_SQRT_PRICE + 1;
         }
 
-        vm.expectRevert();
-        swapRouter.swap(
+        bytes memory expectedReason =
+            abi.encodeWithSelector(Errors.InvariantViolated.selector, "ProxyHook: exact-input core fill mismatch");
+
+        try swapRouter.swap(
             proxyPoolKey,
             SwapParams({zeroForOne: true, amountSpecified: -int256(1e18), sqrtPriceLimitX96: limit}),
             _getSwapSettings(),
             bytes("")
-        );
+        ) {
+            fail();
+        } catch (bytes memory data) {
+            _assertWrappedReason(data, expectedReason);
+        }
     }
 
     function test_proxySwap_keepsProxySlot0Unchanged() public {

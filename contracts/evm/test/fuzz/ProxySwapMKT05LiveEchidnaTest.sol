@@ -86,8 +86,13 @@ contract ProxySwapMKT05LiveEchidnaTest is HookMinerBase {
 
     bool internal checked;
     bool internal lastOk;
+    bool internal allOk = true;
     int256 internal lastAmountSpecified;
     BeforeSwapDelta internal lastDelta;
+
+    uint256 internal attempts;
+    uint256 internal successes;
+    uint256 internal constant MAX_VACUOUS_ATTEMPTS = 10;
 
     constructor() {
         manager = new MockPoolManager();
@@ -140,6 +145,9 @@ contract ProxySwapMKT05LiveEchidnaTest is HookMinerBase {
 
     // forge-lint: disable-next-line(mixed-case-function)
     function action_proxy_beforeSwap_exactInput(bool zeroForOne, uint96 amountInRaw) external {
+        unchecked {
+            attempts++;
+        }
         checked = false;
         lastOk = true;
 
@@ -154,9 +162,13 @@ contract ProxySwapMKT05LiveEchidnaTest is HookMinerBase {
             lastAmountSpecified = params.amountSpecified;
             lastDelta = delta;
             checked = true;
+            unchecked {
+                successes++;
+            }
 
             int256 specifiedDelta = int256(BeforeSwapDeltaLibrary.getSpecifiedDelta(delta));
             lastOk = lastAmountSpecified + specifiedDelta == 0;
+            allOk = allOk && lastOk;
         } catch {
             // If the execution path reverts under a particular input, treat it as "not checked" for this action.
             checked = false;
@@ -165,6 +177,9 @@ contract ProxySwapMKT05LiveEchidnaTest is HookMinerBase {
 
     // forge-lint: disable-next-line(mixed-case-function)
     function action_proxy_beforeSwap_exactOutput(bool zeroForOne, uint96 amountOutRaw) external {
+        unchecked {
+            attempts++;
+        }
         checked = false;
         lastOk = true;
 
@@ -177,9 +192,13 @@ contract ProxySwapMKT05LiveEchidnaTest is HookMinerBase {
             lastAmountSpecified = params.amountSpecified;
             lastDelta = delta;
             checked = true;
+            unchecked {
+                successes++;
+            }
 
             int256 specifiedDelta = int256(BeforeSwapDeltaLibrary.getSpecifiedDelta(delta));
             lastOk = lastAmountSpecified + specifiedDelta == 0;
+            allOk = allOk && lastOk;
         } catch {
             checked = false;
         }
@@ -188,7 +207,12 @@ contract ProxySwapMKT05LiveEchidnaTest is HookMinerBase {
     /// @notice MKT-05 live-path property: ProxyHook returns a specified-delta that cancels `amountSpecified`.
     // forge-lint: disable-next-line(mixed-case-function)
     function echidna_mkt05_live_amountToSwap_is_zero() external view returns (bool) {
-        return !checked || lastOk;
+        // Prevent vacuous passes if all fuzzed actions keep reverting:
+        // after some attempts, we require at least one successful checked run.
+        if (successes == 0) {
+            return attempts < MAX_VACUOUS_ATTEMPTS;
+        }
+        return allOk;
     }
 
     // Keep a second trivial property to avoid rare Echidna instability with single-property targets.

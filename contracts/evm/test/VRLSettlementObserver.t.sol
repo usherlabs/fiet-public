@@ -342,7 +342,7 @@ contract VRLSettlementObserverTest is Test {
 
         bytes memory settlementProof = "proof";
         // tokenIndex must be 0 or 1
-        vm.expectRevert("Invalid token index");
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidTokenIndex.selector, uint8(2)));
         observer.verifySettlementProof(poolKey, 2, 0, settlementProof, false);
     }
 

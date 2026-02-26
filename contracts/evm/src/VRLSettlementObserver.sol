@@ -74,7 +74,9 @@ contract VRLSettlementObserver is Ownable, IVRLSettlementObserver {
         bytes memory settlementProof,
         bool revertOnInvalid
     ) public returns (bool isProofValid) {
-        require(tokenIndex == 0 || tokenIndex == 1, "Invalid token index");
+        if (tokenIndex != 0 && tokenIndex != 1) {
+            revert Errors.InvalidTokenIndex(tokenIndex);
+        }
         address token = tokenIndex == 0 ? Currency.unwrap(poolKey.currency0) : Currency.unwrap(poolKey.currency1);
 
         if (settlementProof.length == 0) {

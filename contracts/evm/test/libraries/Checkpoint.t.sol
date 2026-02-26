@@ -191,7 +191,7 @@ contract CheckpointLibraryTest is Test {
         h.setUnbackedCommitmentGraceBypassBps(poolId, 500);
         h.setCommitmentDeficit(PID, 1, 0);
         h.setCommitmentDeficitBps(PID, 499);
-        h.setCheckpoint(PID, block.timestamp, false, 0, 0);
+        h.setCheckpoint(PID, block.timestamp, true, 0, 0);
         assertFalse(h.isSeizable(COMMIT_ID, POSITION_INDEX, false));
     }
 
@@ -214,7 +214,7 @@ contract CheckpointLibraryTest is Test {
         h.setUnbackedCommitmentGraceBypassThresholds(poolId, 0, 0);
         h.setCommitmentDeficit(PID, 1_000_000, 0);
         h.setCommitmentDeficitBps(PID, 499);
-        h.setCheckpoint(PID, block.timestamp, false, 0, 0);
+        h.setCheckpoint(PID, block.timestamp, true, 0, 0);
         assertFalse(h.isSeizable(COMMIT_ID, POSITION_INDEX, false));
     }
 

@@ -27,6 +27,8 @@ import {CurrencyTransfer} from "../src/libraries/CurrencyTransfer.sol";
 import {Position} from "../src/types/Position.sol";
 import {MMActionAdapter as MMA} from "./utils/MMActionAdapter.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {Errors} from "../src/libraries/Errors.sol";
+import {CustomRevert} from "@uniswap/v4-core/src/libraries/CustomRevert.sol";
 
 contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
     using SafeCast for *;
@@ -223,15 +225,40 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
             abi.encode(uint256(0))
         );
 
-        vm.expectRevert();
-        swapRouter.swap{
+        bytes memory expectedReason =
+            abi.encodeWithSelector(Errors.InsufficientLiquidity.selector, uint256(1e10), uint256(0));
+
+        try swapRouter.swap{
             value: 1 ether
         }(
             proxyPoolKey,
             SwapParams({zeroForOne: true, amountSpecified: int256(1e10), sqrtPriceLimitX96: ZERO_FOR_ONE_LIMIT}),
             settings,
             ZERO_BYTES
-        );
+        ) {
+            fail();
+        } catch (bytes memory data) {
+            _assertWrappedReason(data, expectedReason);
+        }
+    }
+
+    function _stripSelector(bytes memory revertData) internal pure returns (bytes memory tail) {
+        require(revertData.length >= 4, "missing revert selector");
+        tail = new bytes(revertData.length - 4);
+        for (uint256 i = 0; i < tail.length; i++) {
+            tail[i] = revertData[i + 4];
+        }
+    }
+
+    function _assertWrappedReason(bytes memory revertData, bytes memory expectedReason) internal pure {
+        bytes4 sel;
+        assembly ("memory-safe") {
+            sel := mload(add(revertData, 0x20))
+        }
+        assertEq(sel, CustomRevert.WrappedError.selector, "expected WrappedError selector");
+
+        (,, bytes memory reason,) = abi.decode(_stripSelector(revertData), (address, bytes4, bytes, bytes));
+        assertEq(keccak256(reason), keccak256(expectedReason), "unexpected wrapped revert reason");
     }
 
     function test_swapWithNativeAsUnderlyingAsset_zeroForOneOnCore() public {
