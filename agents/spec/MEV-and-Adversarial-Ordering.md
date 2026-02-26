@@ -125,7 +125,7 @@ Our mitigation posture is to provide **ancillary tooling and execution-layer pro
 - **Solver/auction execution for sensitive actions** (optional).
   - Instead of submitting directly to a public mempool, MMs can route via an auction/solver layer that can batch execution and reduce toxic ordering.
 - **MEV-resistant AMM frameworks** (optional).
-  - On highly MEV-sensitive public-mempool chains (eg Ethereum L1), deployments can **eventually** adopt MEV-preventing AMM designs/frameworks such as **Angstrom** (or similar orderflow/auction-based systems) as an integration path for stronger execution guarantees.
+  - (HYPOTHETICAL) On highly MEV-sensitive public-mempool chains (eg Ethereum L1), deployments can **eventually** adopt MEV-preventing AMM designs/frameworks such as **Angstrom** (or similar orderflow/auction-based systems) as an integration path for stronger execution guarantees.
 
 These mitigations are external to the protocol but are the most direct way to address sandwiching in adversarial mempools.
 
@@ -154,7 +154,7 @@ On public-mempool chains:
 - submit sensitive MM actions via private/prioritised routing where possible,
 - treat grace extensions as an operational tool (especially if integrating attestation-based extensions),
 - do not assume `checkpoint()` deterministically flips RfS in a hostile ordering environment; treat it as “best effort based on the realised path up to that inclusion”.
-- Fiet to consider adopting MEV-resistant execution frameworks (eg **Angstrom**) on highly MEV-sensitive chains (eg Ethereum L1),
+- (HYPOTHETICAL) Fiet to consider adopting MEV-resistant execution frameworks (eg **Angstrom**) on highly MEV-sensitive chains (eg Ethereum L1),
 
 ## Appendix: glossary
 
