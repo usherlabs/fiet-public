@@ -26,7 +26,7 @@ import {MockERC20} from "@uniswap/v4-core/test/utils/Deployers.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {ProxyHook} from "../src/ProxyHook.sol";
 import {ProxySwapFlag} from "../src/libraries/ProxySwapFlag.sol";
-import {SwapSimulator} from "../src/libraries/SwapSimulator.sol";
+import {SwapSimulator} from "./utils/SwapSimulator.sol";
 import {BaseHook} from "v4-periphery/src/utils/BaseHook.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {IMsgSender} from "v4-periphery/src/interfaces/IMsgSender.sol";

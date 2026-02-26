@@ -9,7 +9,7 @@ import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {LiquidityCommitmentCertificate} from "../../src/LCC.sol";
 import {LiquidityUtils} from "../../src/libraries/LiquidityUtils.sol";
-import {SwapSimulator} from "../../src/libraries/SwapSimulator.sol";
+import {SwapSimulator} from "../utils/SwapSimulator.sol";
 import {IMarketFactory} from "../../src/interfaces/IMarketFactory.sol";
 import {ILCC} from "../../src/interfaces/ILCC.sol";
 
