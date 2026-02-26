@@ -74,9 +74,7 @@ libraries = [
 [profile.prod]
 # ! Production deployments will adopt the Profile in contracts/evm-scripts/foundry.toml
 # ! This profile is only used for production builds in local development, and testing.
-# fuzz_runs = 10_000
-# optimizer_runs = 20000
-optimizer_runs = 44444444
+optimizer_runs = 20000
 optimizer = true
 via_ir = true
 ffi = true
