@@ -16,7 +16,6 @@ globs:
 
 - Use Foundry Forge to Build (e.g., `forge build`).
 - Use Foundry Forge to Test (e.g., `forge test`).
-- For consistent unit-test behaviour inside Cursor, prefer running Foundry via `./contracts/evm/forge-debug ...` (defaults `FOUNDRY_PROFILE=debug`).
 - Utilize Foundry's cast for command-line interaction with contracts.
 - Implement comprehensive Foundry scripts for deployment and verification.
 - Use Foundry's script capabilities for complex deployment sequences.
@@ -140,7 +139,7 @@ cbor_metadata = false
 ## Conditional Rules
 
 - If: "working with contracts"
-Description: Guidelines for developing or modifying contracts.
+  Description: Guidelines for developing or modifying contracts.
 - Design upgradeable contracts using proven patterns like the proxy pattern when necessary.
 - Implement comprehensive events for all significant state changes.
 - Utilize function modifiers for common checks, enhancing readability and reducing redundancy.
@@ -150,13 +149,13 @@ Description: Guidelines for developing or modifying contracts.
 - Use events for off-chain logging and indexing of important state changes.
 
 - If: "auditing or scanning code"
-Description: Focus on vulnerabilities and quality checks.
+  Description: Focus on vulnerabilities and quality checks.
 - Check for reentrancy, unchecked external calls, and other common vulnerabilities.
 - Use static analysis tools like Slither and Mythril.
 - Ensure proper access control and error handling.
 
 - If: "creating a new contract"
-Description: Starting points for new files.
+  Description: Starting points for new files.
 - Start with a template if available (e.g., from @templates/solidity-base.sol).
 - Include a constructor for initialization.
 - Add NatSpec comments.
@@ -164,18 +163,18 @@ Description: Starting points for new files.
 - Use Solidity version ^0.8.20 or higher.
 
 - If: "optimizing code"
-Description: Apply gas and performance tweaks.
+  Description: Apply gas and performance tweaks.
 - Conduct thorough gas optimization.
 - Use assembly for gas-intensive operations, but document extensively and use with caution; prefer Solady implementations.
 - Optimize storage layout and use libraries.
 
 - If: "testing code"
-Description: Ensure robust testing.
+  Description: Ensure robust testing.
 - Write unit tests, integration tests, and use fuzzing.
 - Use cheatcodes and prank for access control.
 - Aim for high coverage on critical paths.
 
 - If: "documenting code"
-Description: Enhance readability and maintainability.
+  Description: Enhance readability and maintainability.
 - Focus on "why" in comments.
 - Update API docs and project architecture.
