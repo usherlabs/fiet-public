@@ -55,7 +55,7 @@ jobs:
         id: build
 
       - name: Run Forge tests
-        run: FOUNDRY_PROFILE=ci forge test -vvv
+        run: forge test -vvv
         working-directory: contracts/evm
         id: test
 
