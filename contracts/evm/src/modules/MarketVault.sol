@@ -313,6 +313,10 @@ abstract contract MarketVault is IMarketVault, ImmutableState, ImmutableMarketSt
             amountToCancel = amount;
         }
 
+        if (deficitAmount > 0 && deficitRecipient == address(0)) {
+            revert Errors.InvariantViolated("MarketVault: deficit requires recipient");
+        }
+
         liquidityHub.cancel(address(lccToken), address(this), amountToCancel); // we only cancel what native asset we distribute via the swap mechanism.
 
         if (deficitAmount > 0 && deficitRecipient != address(0)) {

@@ -228,7 +228,7 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
             value: 1 ether
         }(
             proxyPoolKey,
-            SwapParams({zeroForOne: true, amountSpecified: int256(1), sqrtPriceLimitX96: ZERO_FOR_ONE_LIMIT}),
+            SwapParams({zeroForOne: true, amountSpecified: int256(1e10), sqrtPriceLimitX96: ZERO_FOR_ONE_LIMIT}),
             settings,
             ZERO_BYTES
         );
@@ -266,7 +266,6 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
         );
 
         uint256 deltaAmount0 = LiquidityUtils.safeInt128ToUint256(delta.amount0());
-        uint256 deltaAmount1 = LiquidityUtils.safeInt128ToUint256(delta.amount1());
 
         console.log("delta 0:", delta.amount0());
         console.log("delta 1:", delta.amount1());
@@ -329,7 +328,6 @@ contract NativeETHMarket is MarketTestBase, MarketMakerTestBase {
             }
         }
 
-        uint256 deltaAmount0 = LiquidityUtils.safeInt128ToUint256(delta.amount0());
         uint256 deltaAmount1 = LiquidityUtils.safeInt128ToUint256(delta.amount1());
 
         console.log("swap delta 0:", delta.amount0());
