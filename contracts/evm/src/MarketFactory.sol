@@ -182,62 +182,81 @@ contract MarketFactory is IMarketFactory, Ownable, ImmutableState, ImmutableVTSS
             _deployProxyAndCreateLCCPair(underlyingAsset0, underlyingAsset1, salt);
 
         // Validate oracles and determine currency ordering
+        // Order-insensitive: oracle validation checks each LCC's underlying configuration independently.
+        // Canonical market ordering (token0/token1 lanes) is defined later by the core pool key.
         oracleHelper.validateMarketOracles(ctx.lccToken0, ctx.lccToken1);
         (ctx.underlyingCurr0, ctx.underlyingCurr1) = _sortCurrencies(underlyingAsset0, underlyingAsset1);
         (ctx.lccCurr0, ctx.lccCurr1) = _sortCurrencies(ctx.lccToken0, ctx.lccToken1);
 
-        // Calculate proxy initial price
-        uint160 proxyInitialPrice;
+        address lcc0;
+        address lcc1;
+
+        // Scope large locals (PoolKey structs, prices) so they're not live at the event emission site.
         {
-            bool ordersMatch = (underlyingAsset0 == Currency.unwrap(ctx.underlyingCurr0))
-                == (ctx.lccToken0 == Currency.unwrap(ctx.lccCurr0));
-            proxyInitialPrice = ordersMatch ? initialSqrtPriceX96 : uint160((uint256(1) << 192) / initialSqrtPriceX96);
+            PoolKey memory corePoolKey =
+                _createCorePool(ctx.lccToken0, ctx.lccToken1, corePoolFee, tickSpacing, initialSqrtPriceX96, coreHook);
+            corePoolId = corePoolKey.toId();
+
+            lcc0 = Currency.unwrap(corePoolKey.currency0);
+            lcc1 = Currency.unwrap(corePoolKey.currency1);
+
+            // For swap deficits overflow, and LCC transfer to recipient the proxy hook must be within protocol bounds.
+            // Use BOUND_EXEMPT as LCCs are issued from ProxyHook, are never unwrapped/wrapped, and sent always as market-derived.
+            liquidityHub.setBoundLevel(ctx.proxyHookAddress, Bounds.BOUND_EXEMPT);
+
+            // Activate proxy hook and initialise
+            ProxyHook(payable(ctx.proxyHookAddress)).setCorePoolKey(corePoolKey);
+            ProxyHook(payable(ctx.proxyHookAddress)).activate();
+
+            // Initialise liquidity hub and VTS
+            // Order-insensitive: Hub initialisation stores per-LCC market state and builds underlying→LCC mappings.
+            // Canonical market ordering (token0/token1 lanes) is defined by the core pool key, not by parameter position here.
+            liquidityHub.initialize(ctx.lccToken0, ctx.lccToken1, PoolId.unwrap(corePoolId), ctx.marketRef);
+            vtsOrchestrator.initPool(corePoolKey, vtsConfiguration);
         }
 
-        // Create pools and store mappings
-        PoolKey memory corePoolKey;
-        PoolKey memory proxyPoolKey;
+        uint160 proxyInitialPrice;
+        if (
+            (underlyingAsset0 == Currency.unwrap(ctx.underlyingCurr0))
+                == (ctx.lccToken0 == Currency.unwrap(ctx.lccCurr0))
+        ) {
+            proxyInitialPrice = initialSqrtPriceX96;
+        } else {
+            proxyInitialPrice = uint160((uint256(1) << 192) / initialSqrtPriceX96);
+        }
+
         {
-            corePoolKey =
-                _createCorePool(ctx.lccToken0, ctx.lccToken1, corePoolFee, tickSpacing, initialSqrtPriceX96, coreHook);
-            proxyPoolKey = _createProxyPool(
+            PoolKey memory proxyPoolKey = _createProxyPool(
                 underlyingAsset0, underlyingAsset1, tickSpacing, ctx.proxyHookAddress, proxyInitialPrice
             );
+            proxyPoolId = proxyPoolKey.toId();
+            _proxyHookToCurrencyPair[ctx.proxyHookAddress] =
+                [Currency.unwrap(proxyPoolKey.currency0), Currency.unwrap(proxyPoolKey.currency1)];
         }
-
-        corePoolId = corePoolKey.toId();
-        proxyPoolId = proxyPoolKey.toId();
 
         // Store pool relationships
         coreToProxy[corePoolId] = proxyPoolId;
         _proxyToHook[proxyPoolId] = ctx.proxyHookAddress;
-        _proxyHookToCurrencyPair[ctx.proxyHookAddress] =
-            [Currency.unwrap(proxyPoolKey.currency0), Currency.unwrap(proxyPoolKey.currency1)];
-        _corePoolToCurrencyPair[corePoolId] =
-            [Currency.unwrap(corePoolKey.currency0), Currency.unwrap(corePoolKey.currency1)];
+        _corePoolToCurrencyPair[corePoolId] = [lcc0, lcc1];
 
-        // For swap deficits overflow, and LCC transfer to recipient the proxy hook must be within protocol bounds.
-        // Use BOUND_EXEMPT as LCCs are issued from ProxyHook, are never unwrapped/wrapped, and sent always as market-derived.
-        liquidityHub.setBoundLevel(ctx.proxyHookAddress, Bounds.BOUND_EXEMPT);
-
-        // Activate proxy hook and initialize
-        {
-            ProxyHook proxyHookInstance = ProxyHook(payable(ctx.proxyHookAddress));
-            proxyHookInstance.setCorePoolKey(corePoolKey);
-            proxyHookInstance.activate();
+        // Emit event after large locals have gone out of scope.
+        address lcc0UnderlyingAsset;
+        address lcc1UnderlyingAsset;
+        if (lcc0 == ctx.lccToken0) {
+            lcc0UnderlyingAsset = underlyingAsset0;
+            lcc1UnderlyingAsset = underlyingAsset1;
+        } else {
+            lcc0UnderlyingAsset = underlyingAsset1;
+            lcc1UnderlyingAsset = underlyingAsset0;
         }
-
-        // Initialize liquidity hub and VTS
-        liquidityHub.initialize(ctx.lccToken0, ctx.lccToken1, PoolId.unwrap(corePoolId), ctx.marketRef);
-        vtsOrchestrator.initPool(corePoolKey, vtsConfiguration);
 
         emit MarketCreated(
             corePoolId,
             proxyPoolId,
-            Currency.unwrap(ctx.underlyingCurr0),
-            Currency.unwrap(ctx.underlyingCurr1),
-            Currency.unwrap(ctx.lccCurr0),
-            Currency.unwrap(ctx.lccCurr1),
+            lcc0,
+            lcc1,
+            lcc0UnderlyingAsset,
+            lcc1UnderlyingAsset,
             coreHook,
             ctx.proxyHookAddress
         );

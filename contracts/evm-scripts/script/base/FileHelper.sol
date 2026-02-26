@@ -10,7 +10,6 @@ abstract contract FileHelper is Script {
     string file = "";
 
     function _getPrefix(string memory name) internal view returns (string memory) {
-        // INSERT_YOUR_CODE
         string memory mode;
         try vm.envString("MODE") returns (string memory envMode) {
             mode = envMode;
@@ -18,14 +17,11 @@ abstract contract FileHelper is Script {
             mode = "LOCAL";
         }
 
-        bool isSepolia = keccak256(bytes(name)) == keccak256(bytes("sepolia"));
-        string memory prefix = "";
-        // Only for Local Sepolia, which is truly from scratch local deployment.
-        if (isSepolia && keccak256(bytes(mode)) == keccak256(bytes("LOCAL"))) {
-            prefix = "local_";
+        if (keccak256(bytes(mode)) == keccak256(bytes("LOCAL"))) {
+            return "local_";
         }
 
-        return prefix;
+        return "";
     }
 
     function _setFilename(string memory name) internal {

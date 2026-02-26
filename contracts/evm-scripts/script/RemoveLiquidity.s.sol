@@ -68,9 +68,9 @@ contract RemoveLiquidityScript is NetworkConfig {
         uint24 coreFee;
         int24 tickSpacingVal;
 
-        // Load market parameters from markets deployment file
-        string memory filePath = string.concat("./deployments/", networkName, "_markets_deployments.json");
-        string memory json = vm.readFile(filePath);
+        // Load market parameters from markets deployment file.
+        _setFilenameWithSuffix(networkName, "_markets");
+        string memory json = vm.readFile(_getFilename());
 
         string memory keyToken0 = string.concat(".", corePoolId, "_underlyingAsset0");
         string memory keyToken1 = string.concat(".", corePoolId, "_underlyingAsset1");

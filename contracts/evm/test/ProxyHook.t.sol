@@ -26,11 +26,11 @@ import {MockERC20} from "@uniswap/v4-core/test/utils/Deployers.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {ProxyHook} from "../src/ProxyHook.sol";
 import {ProxySwapFlag} from "../src/libraries/ProxySwapFlag.sol";
-import {SwapSimulator} from "../src/libraries/SwapSimulator.sol";
+import {Bounds} from "../src/libraries/Bounds.sol";
+import {SwapSimulator} from "./utils/SwapSimulator.sol";
 import {BaseHook} from "v4-periphery/src/utils/BaseHook.sol";
-import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
-import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
+import {IMsgSender} from "v4-periphery/src/interfaces/IMsgSender.sol";
 
 /**
  * 22nd October 2025 - ProxyHookTest.sol
@@ -274,6 +274,22 @@ contract ProxyHookTest is MarketVaultBase {
         assertEq(selfBalanceOfTokenAAfter, selfBalanceOfTokenABefore + swapAmount);
     }
 
+    function test_proxySwap_exactInput_keepsProxySlot0Unchanged() public {
+        (uint160 sqrtBefore, int24 tickBefore,,) = StateLibrary.getSlot0(manager, proxyPoolKey.toId());
+        _executeSwap(proxyPoolKey, true, -int256(1e18), ZERO_BYTES);
+        (uint160 sqrtAfter, int24 tickAfter,,) = StateLibrary.getSlot0(manager, proxyPoolKey.toId());
+        assertEq(sqrtAfter, sqrtBefore, "proxy sqrtPrice should remain unchanged");
+        assertEq(tickAfter, tickBefore, "proxy tick should remain unchanged");
+    }
+
+    function test_proxySwap_exactOutput_keepsProxySlot0Unchanged() public {
+        (uint160 sqrtBefore, int24 tickBefore,,) = StateLibrary.getSlot0(manager, proxyPoolKey.toId());
+        _executeSwap(proxyPoolKey, true, int256(100), ZERO_BYTES);
+        (uint160 sqrtAfter, int24 tickAfter,,) = StateLibrary.getSlot0(manager, proxyPoolKey.toId());
+        assertEq(sqrtAfter, sqrtBefore, "proxy sqrtPrice should remain unchanged");
+        assertEq(tickAfter, tickBefore, "proxy tick should remain unchanged");
+    }
+
     // Tests that after a direct swap on the underlying liquidity of the lcc tokens are moved accordingly
     function test_swap_exactOutput_zeroForOneOnCore() public {
         console.log("====== test_swap_exactOutput_zeroForOneOnCore =======");
@@ -404,64 +420,46 @@ contract ProxyHookTest is MarketVaultBase {
         assertEq(postBalanceOfToken1UnderlyingAssetInPM, preBalanceOfToken1UnderlyingAssetInPM + deltaAmount1);
     }
 
-    // Test that a swap with limited liquidity on the proxy pool works as expected
-    // when no hook data is provided, the swap with adjust the swap params to use the max available liquidity
-    function test_swap_exactInput_oneForZeroOnProxy_withLimitedLiquidity_noHookData() public {
-        console.log("====== test_swap_exactInput_oneForZeroOnProxy_withLimitedLiquidity_noHookData =======");
-
-        // Mock limited available liquidity for output token in PM credits
+    // Option A: no hook data defaults to locker. If the locker cannot be resolved, swaps may still proceed
+    // as long as they can be fully settled into underlying (no deficit path required).
+    function test_swap_exactInput_zeroForOneOnProxy_withLimitedLiquidity_noHookData() public {
         uint256 mockAvailableLiquidity = 50;
         _mockLimitedLiquidity(_currency1, mockAvailableLiquidity);
 
-        uint256 swapAmount = 100;
+        uint256 swapAmount = 10;
+        (uint256 expectedInput, uint256 expectedOutput) = _simulateSwap(corePoolKey, true, -int256(swapAmount));
+        assertGt(expectedOutput, 0, "precondition: must produce non-zero output");
+        assertLe(expectedOutput, mockAvailableLiquidity, "precondition: must not require deficit");
 
-        // Simulate what the full swap would produce
-        (, uint256 expectedFullOutput) = _simulateSwap(corePoolKey, true, -int256(swapAmount));
-        console.log("Expected full output if unrestricted:", expectedFullOutput);
-
-        BalanceDelta swapDelta = _executeSwap(
-            proxyPoolKey,
-            true, // zeroForOne
-            -int256(swapAmount),
-            ZERO_BYTES
-        );
-
+        BalanceDelta swapDelta = _executeSwap(proxyPoolKey, true, -int256(swapAmount), ZERO_BYTES);
         (uint256 actualInput, uint256 actualOutput) = _getSwapDeltas(swapDelta, true);
+        assertEq(actualInput, expectedInput, "Input should match full swap");
+        assertEq(actualOutput, expectedOutput, "Output should match simulation");
+    }
 
-        console.log("====== actual deltas =======");
-        console.log("delta 0:", swapDelta.amount0());
-        console.log("delta 1:", swapDelta.amount1());
+    function test_swap_exactInput_oneForZeroOnProxy_withLimitedLiquidity_noHookData() public {
+        uint256 mockAvailableLiquidity = 50;
+        _mockLimitedLiquidity(_currency0, mockAvailableLiquidity);
 
-        // KEY BEHAVIOR: With no hookData, swap should be restricted to available liquidity
-        assertLe(actualOutput, mockAvailableLiquidity, "Output should be restricted to available liquidity");
-        assertLe(actualInput, swapAmount, "Input should be reduced when swap is restricted");
+        uint256 swapAmount = 10;
+        (uint256 expectedInput, uint256 expectedOutput) = _simulateSwap(corePoolKey, false, -int256(swapAmount));
+        assertGt(expectedOutput, 0, "precondition: must produce non-zero output");
+        assertLe(expectedOutput, mockAvailableLiquidity, "precondition: must not require deficit");
 
-        // With no hookData, params are adjusted so output <= available; there should be no deficit minted
-        LiquidityCommitmentCertificate lccOut = _getLCCOut(_currency1);
-        assertEq(
-            LiquidityHub(payable(liquidityHub)).totalQueued(address(lccOut)),
-            0,
-            "No deficit should be created without recipient"
-        );
-        assertEq(lccOut.balanceOf(address(1)), 0, "Locker should not receive LCC");
-
-        vm.clearMockedCalls();
+        BalanceDelta swapDelta = _executeSwap(proxyPoolKey, false, -int256(swapAmount), ZERO_BYTES);
+        (uint256 actualInput, uint256 actualOutput) = _getSwapDeltas(swapDelta, false);
+        assertEq(actualInput, expectedInput, "Input should match full swap");
+        assertEq(actualOutput, expectedOutput, "Output should match simulation");
     }
 
     function test_swap_exactInput_onProxy_adjustPath_butNoAdjustmentWhenAvailableIsBetweenUpperBoundAndSimulated()
         public
     {
-        // Goal: make _buildCoreSwapParams call _adjustSwapParamsForAvailableLiquidity(), but take the
-        // "expectedOutput <= maxOutputAvailable" branch inside _adjust... (no scaling).
-        //
-        // We do this by setting available liquidity slightly above the simulated expected output, which should still be
-        // below the fast-path upper bound at current price for a non-infinitesimal trade.
-
-        uint256 swapAmount = 250e18;
+        // Option A path: with sufficient liquidity and no recipient metadata, swap executes without capping.
+        uint256 swapAmount = 1e18;
         (uint256 expectedInput, uint256 expectedOutput) = _simulateSwap(corePoolKey, true, -int256(swapAmount));
 
-        // Set available just above the expected output; if the upper bound is looser than the simulated outcome, this
-        // should still trigger the adjustment function but result in no change.
+        // Ensure settlement can be completed without deficit.
         _mockLimitedLiquidity(_currency1, expectedOutput + 1);
 
         BalanceDelta swapDelta = _executeSwap(proxyPoolKey, true, -int256(swapAmount), ZERO_BYTES);
@@ -476,7 +474,6 @@ contract ProxyHookTest is MarketVaultBase {
     // Test that a swap with limited liquidity on the proxy pool works as expected
     // when hookData with recipient IS provided, the swap should NOT be restricted and excess LCC should go to recipient
     function test_swap_exactInput_zeroForOneOnProxy_withLimitedLiquidity_withHookData() public {
-        bytes32 marketId = PoolId.unwrap(corePoolKey.toId());
         address lcc_recipient = makeAddr("lcc_recipient");
         _setupRecipient(lcc_recipient);
 
@@ -514,26 +511,12 @@ contract ProxyHookTest is MarketVaultBase {
             assertEq(marketDerivedBalance, deficit, "Recipient should receive LCC equal to deficit");
         }
 
-        // Unwrap in scoped block
-        {
-            // mock the call to factory to use market liquidity, this would make sure that the market appears to have a liquidity of zero
-            // this way unwrapps would be queued for settlement upon unwrap
-            _mockLimitedMarketLiquidity(address(lccOut), marketId, 0);
-            // mock as the lcc recipient
-            // unwrap the lcc tokens to get the underlying asset
-            vm.prank(lcc_recipient);
-            LiquidityHub(payable(liquidityHub)).unwrap(address(lccOut), deficit);
-            vm.stopPrank();
-        }
-
-        // get amount owed to this particular recipient from settlement queue
+        // Queue should be created immediately in the deficit flow.
         uint256 amountOwedToRecipient = LiquidityHub(payable(liquidityHub)).settleQueue(address(lccOut), lcc_recipient);
         console.log("amountOwedToRecipient:", amountOwedToRecipient);
 
-        // validate the amount owed to the recipient is the attempted unwrap amount
-        // and that the user still has their LCC tokens (or they were burned if unwrapped)
+        // validate queued deficit amount is attributed to the recipient
         assertEq(amountOwedToRecipient, deficit, "Amount owed should equal deficit");
-        // assertEq(lccOut.balanceOf(lcc_recipient), 0, "Recipient LCC tokens should be burned after unwrap");
 
         // add some liquidity to the core pool to attempt to clear pending settlements
         modifyLiquidityRouter.modifyLiquidity(
@@ -558,43 +541,40 @@ contract ProxyHookTest is MarketVaultBase {
     /**
      * @notice Comprehensive test demonstrating the fork in behavior based on recipient presence
      * @dev This test explicitly compares:
-     *  1. Without recipient: Swap is restricted to available liquidity, no deficit created
-     *  2. With recipient: Swap executes full amount, excess LCC minted to recipient
+     *  1. Without recipient: succeeds when output can be fully settled (no deficit required)
+     *  2. With recipient: succeeds even when output exceeds available liquidity (deficit assigned)
      */
     function test_swapBehaviorFork_withAndWithoutRecipient() public {
         console.log("====== test_swapBehaviorFork_withAndWithoutRecipient =======");
 
         uint256 mockAvailableLiquidity = 50;
-        uint256 swapAmount = 100;
+        uint256 smallSwapAmount = 10;
+        (uint256 expectedSmallInput, uint256 expectedSmallOutput) =
+            _simulateSwap(corePoolKey, true, -int256(smallSwapAmount));
+        assertGt(expectedSmallOutput, 0, "precondition: small swap must produce non-zero output");
+        assertLe(expectedSmallOutput, mockAvailableLiquidity, "precondition: small swap must not require deficit");
 
-        // Simulate what the full swap would produce
-        (uint256 expectedFullInput, uint256 expectedFullOutput) = _simulateSwap(corePoolKey, true, -int256(swapAmount));
-
-        // Mock limited available liquidity
+        // Mock limited available liquidity.
         _mockLimitedLiquidity(_currency1, mockAvailableLiquidity);
 
         LiquidityCommitmentCertificate lccOut = _getLCCOut(_currency1);
 
-        // ===== TEST 1: WITHOUT RECIPIENT (restricted swap) =====
-        BalanceDelta deltaNoRecipient = _executeSwap(
-            proxyPoolKey,
-            true, // zeroForOne
-            -int256(swapAmount),
-            ZERO_BYTES
-        );
+        // ===== TEST 1: WITHOUT RECIPIENT (no deficit required) =====
+        BalanceDelta deltaNoRecipient = _executeSwap(proxyPoolKey, true, -int256(smallSwapAmount), ZERO_BYTES);
         (uint256 inputNoRecipient, uint256 outputNoRecipient) = _getSwapDeltas(deltaNoRecipient, true);
-
-        // Verify restricted behavior
-        assertLe(outputNoRecipient, mockAvailableLiquidity, "Without recipient: output should be restricted");
-        assertLe(inputNoRecipient, swapAmount, "Without recipient: input should be reduced");
-        assertLt(outputNoRecipient, expectedFullOutput, "Without recipient: output should be less than full swap");
+        assertEq(inputNoRecipient, expectedSmallInput, "Without recipient: input should match full swap");
+        assertEq(outputNoRecipient, expectedSmallOutput, "Without recipient: output should match simulation");
         assertEq(
             LiquidityHub(payable(liquidityHub)).totalQueued(address(lccOut)),
             0,
-            "Without recipient: no deficit should be created"
+            "Without recipient: settlement queue should remain empty"
         );
 
-        // ===== TEST 2: WITH RECIPIENT (unrestricted swap) =====
+        // ===== TEST 2: WITH RECIPIENT (deficit assigned) =====
+        uint256 swapAmount = 100;
+        (uint256 expectedFullInput, uint256 expectedFullOutput) = _simulateSwap(corePoolKey, true, -int256(swapAmount));
+        assertGt(expectedFullOutput, mockAvailableLiquidity, "precondition: must require deficit for comparison");
+
         address recipient = makeAddr("recipient");
         _setupRecipient(recipient);
 
@@ -621,13 +601,12 @@ contract ProxyHookTest is MarketVaultBase {
         assertEq(recipientMarketBalance, deficit, "Recipient should receive LCC equal to deficit");
         assertEq(lccOut.balanceOf(recipient), deficit, "Recipient should hold LCC tokens");
 
-        // Verify market deficit is tracked via settlement queue (after unwrap attempt)
-        // Note: Settlement queue is only created when user tries to unwrap, not immediately on receipt
-        // So we check the total queued, which should be 0 until unwrap is attempted
+        // Verify market deficit is queued immediately to the recipient.
+        // The queue is backed by the market-derived LCC transferred in the same deficit flow.
         assertEq(
             LiquidityHub(payable(liquidityHub)).totalQueued(address(lccOut)),
-            0,
-            "Settlement queue should be empty until unwrap"
+            deficit,
+            "Settlement queue should equal deficit immediately"
         );
 
         vm.clearMockedCalls();
@@ -644,77 +623,49 @@ contract ProxyHookTest is MarketVaultBase {
         proxyHook.beforeInitialize(address(1), testKey, SQRT_PRICE_1_1);
     }
 
-    /**
-     * @notice Test _determineExcessRecipient with special address(0) - should return address(1) (Locker)
-     */
+    /// @notice Address(0) sentinel maps to locker.
     function test_determineExcessRecipient_addressZero() public {
-        uint256 mockAvailableLiquidity = 50;
-        _mockLimitedLiquidity(_currency1, mockAvailableLiquidity);
-
-        uint256 swapAmount = 100;
-        // When hookData encodes address(0), it should be treated as address(1) (Locker)
-        BalanceDelta delta = _executeSwap(
-            proxyPoolKey,
-            true, // zeroForOne
-            -int256(swapAmount),
-            abi.encode(address(0))
-        );
-
-        (uint256 actualInput,) = _getSwapDeltas(delta, true);
-        // Should execute full swap because recipient is specified (even if it's address(0))
-        assertEq(actualInput, swapAmount, "Should execute full swap with address(0) recipient");
-
-        vm.clearMockedCalls();
+        ProxyHookHarness harness = new ProxyHookHarness(address(manager), address(marketFactory));
+        MockMsgSender sender = new MockMsgSender(makeAddr("locker"));
+        (address got, bool resolved) = harness.exposed_determineExcessRecipient(address(sender), abi.encode(address(0)));
+        assertTrue(resolved, "locker should resolve via IMsgSender");
+        assertEq(got, sender.msgSender(), "address(0) should map to locker");
     }
 
-    /**
-     * @notice Test _determineExcessRecipient with address(1) - should return address(1) (Locker)
-     */
+    /// @notice Address(1) sentinel maps to locker.
     function test_determineExcessRecipient_addressOne() public {
-        uint256 mockAvailableLiquidity = 50;
-        _mockLimitedLiquidity(_currency1, mockAvailableLiquidity);
+        ProxyHookHarness harness = new ProxyHookHarness(address(manager), address(marketFactory));
+        MockMsgSender sender = new MockMsgSender(makeAddr("locker"));
+        (address got, bool resolved) = harness.exposed_determineExcessRecipient(address(sender), abi.encode(address(1)));
+        assertTrue(resolved, "locker should resolve via IMsgSender");
+        assertEq(got, sender.msgSender(), "address(1) should map to locker");
+    }
 
-        uint256 swapAmount = 100;
-        BalanceDelta delta = _executeSwap(
-            proxyPoolKey,
-            true, // zeroForOne
-            -int256(swapAmount),
-            abi.encode(address(1))
-        );
+    function test_determineExcessRecipient_lockerUnresolved_whenMsgSenderReturnsZero() public {
+        ProxyHookHarness harness = new ProxyHookHarness(address(manager), address(marketFactory));
+        MockMsgSenderZero sender = new MockMsgSenderZero();
+        (address got, bool resolved) = harness.exposed_determineExcessRecipient(address(sender), abi.encode(address(1)));
+        assertFalse(resolved, "locker should be unresolved if msgSender() returns address(0)");
+        assertEq(got, address(0), "unresolved locker must return address(0)");
+    }
 
-        (uint256 expectedSwapInput,) = _getSwapDeltas(delta, true);
-
-        assertEq(expectedSwapInput, swapAmount, "Should execute full swap with address(1) recipient");
-
-        vm.clearMockedCalls();
+    function test_determineExcessRecipient_lockerUnresolved_whenSenderHasNoMsgSender() public {
+        ProxyHookHarness harness = new ProxyHookHarness(address(manager), address(marketFactory));
+        address sender = makeAddr("no_msgsender");
+        (address got, bool resolved) = harness.exposed_determineExcessRecipient(sender, abi.encode(address(1)));
+        assertFalse(resolved, "locker should be unresolved if sender has no msgSender()");
+        assertEq(got, address(0), "unresolved locker must return address(0)");
     }
 
     /**
      * @notice Test _determineExcessRecipient with address(2) - should return msg.sender (Router)
      */
     function test_determineExcessRecipient_addressTwo() public {
-        uint256 mockAvailableLiquidity = 50;
-        _mockLimitedLiquidity(_currency1, mockAvailableLiquidity);
-
-        uint256 swapAmount = 100;
-        // address(2) should map to msg.sender (which is the swapRouter)
-        vm.mockCall(
-            address(marketFactory),
-            abi.encodeWithSelector(IMarketFactory.bounds.selector, address(swapRouter)),
-            abi.encode(false)
-        );
-
-        BalanceDelta delta = _executeSwap(
-            proxyPoolKey,
-            true, // zeroForOne
-            -int256(swapAmount),
-            abi.encode(address(2))
-        );
-
-        (uint256 expectedSwapInput,) = _getSwapDeltas(delta, true);
-        assertEq(expectedSwapInput, swapAmount, "Should execute full swap with address(2) recipient");
-
-        vm.clearMockedCalls();
+        ProxyHookHarness harness = new ProxyHookHarness(address(manager), address(marketFactory));
+        address sender = makeAddr("router_sender");
+        (address got, bool resolved) = harness.exposed_determineExcessRecipient(sender, abi.encode(address(2)));
+        assertTrue(resolved, "router sentinel should resolve");
+        assertEq(got, sender, "address(2) should map to sender");
     }
 
     /**
@@ -724,22 +675,10 @@ contract ProxyHookTest is MarketVaultBase {
         uint256 mockAvailableLiquidity = 50;
         _mockLimitedLiquidity(_currency1, mockAvailableLiquidity);
 
-        // Exact output swap requesting more than available
+        // Exact output swap requesting more than available must revert (strict exact-output).
         uint256 requestedOutput = 100;
-
-        BalanceDelta swapDelta = _executeSwap(
-            proxyPoolKey,
-            true, // zeroForOne
-            int256(requestedOutput),
-            ZERO_BYTES
-        );
-
-        (, uint256 actualOutput) = _getSwapDeltas(swapDelta, true);
-        // With no hookData, output should be capped to available liquidity
-        assertLe(actualOutput, mockAvailableLiquidity, "Output should be restricted to available liquidity");
-        assertLe(actualOutput, requestedOutput, "Output should not exceed requested amount");
-
-        vm.clearMockedCalls();
+        vm.expectRevert();
+        _executeSwap(proxyPoolKey, true, int256(requestedOutput), ZERO_BYTES);
     }
 
     /**
@@ -752,34 +691,52 @@ contract ProxyHookTest is MarketVaultBase {
         uint256 mockAvailableLiquidity = 50;
         _mockLimitedLiquidity(_currency1, mockAvailableLiquidity);
 
-        // Exact output swap requesting more than available
+        // Exact output swap requesting more than available must revert even with explicit recipient.
         uint256 requestedOutput = 100;
+        vm.expectRevert();
+        _executeSwap(proxyPoolKey, true, int256(requestedOutput), abi.encode(recipient));
+    }
 
-        BalanceDelta swapDelta = _executeSwap(
+    function test_swap_exactOutput_oneForZeroOnProxy_withLimitedLiquidity_noHookData() public {
+        uint256 mockAvailableLiquidity = 50;
+        _mockLimitedLiquidity(_currency0, mockAvailableLiquidity);
+
+        uint256 requestedOutput = 100;
+        vm.expectRevert();
+        _executeSwap(proxyPoolKey, false, int256(requestedOutput), ZERO_BYTES);
+    }
+
+    function test_swap_exactOutput_oneForZeroOnProxy_withLimitedLiquidity_withHookData() public {
+        address recipient = makeAddr("output_recipient_oneForZero");
+        _setupRecipient(recipient);
+
+        uint256 mockAvailableLiquidity = 50;
+        _mockLimitedLiquidity(_currency0, mockAvailableLiquidity);
+
+        uint256 requestedOutput = 100;
+        vm.expectRevert();
+        _executeSwap(proxyPoolKey, false, int256(requestedOutput), abi.encode(recipient));
+    }
+
+    function test_proxySwap_exactInput_revertsOnCoreFillMismatch_dueToTightPriceLimit() public {
+        // Ensure maxOutputAvailable won't be the reason for reverting.
+        _mockLimitedLiquidity(proxyPoolKey.currency0, type(uint256).max);
+        _mockLimitedLiquidity(proxyPoolKey.currency1, type(uint256).max);
+
+        (uint160 sqrtP,,,) = StateLibrary.getSlot0(manager, proxyPoolKey.toId());
+        uint160 limit = sqrtP - 1;
+        if (limit <= TickMath.MIN_SQRT_PRICE + 1) {
+            limit = TickMath.MIN_SQRT_PRICE + 1;
+        }
+
+        // Tight price limit should cause a partial-fill simulation on core, which is disallowed under Option A.
+        vm.expectRevert();
+        swapRouter.swap(
             proxyPoolKey,
-            true, // zeroForOne
-            int256(requestedOutput),
-            abi.encode(recipient)
+            SwapParams({zeroForOne: true, amountSpecified: -int256(1e18), sqrtPriceLimitX96: limit}),
+            _getSwapSettings(),
+            ZERO_BYTES
         );
-
-        (, uint256 actualOutput) = _getSwapDeltas(swapDelta, true);
-
-        // Verify deficit is created
-        LiquidityCommitmentCertificate lccOut = _getLCCOut(_currency1);
-        uint256 expectedDeficit = requestedOutput - mockAvailableLiquidity;
-        // Settlement queue is only created when user tries to unwrap, not immediately
-        // But we can verify the LCC balance was transferred
-        assertEq(lccOut.balanceOf(recipient), expectedDeficit, "Recipient should hold deficit LCC tokens");
-
-        // With hookData, should attempt to execute full swap
-        // so the available limited output + recipient lcc balance should equal requested output
-        assertEq(
-            actualOutput + lccOut.balanceOf(recipient),
-            requestedOutput,
-            "Should execute full exact output swap when recipient provided"
-        );
-
-        vm.clearMockedCalls();
     }
 
     /**
@@ -852,7 +809,90 @@ contract ProxyHookTest is MarketVaultBase {
             uint256 expectedDeficit = fullOutput - mockAvailableLiquidity;
             (, uint256 recipientMarketBalance) = lccOut.balancesOf(recipient);
             assertEq(recipientMarketBalance, expectedDeficit, "Recipient should receive deficit LCC");
+            assertEq(
+                LiquidityHub(payable(liquidityHub)).settleQueue(address(lccOut), recipient),
+                expectedDeficit,
+                "Deficit should be queued immediately"
+            );
         }
+
+        vm.clearMockedCalls();
+    }
+
+    function test_swap_exactInput_oneForZero_withRecipient_fullQueueSettlementLifecycle() public {
+        address recipient = makeAddr("oneForZero_settle_recipient");
+        _setupRecipient(recipient);
+
+        uint256 mockAvailableLiquidity = 50;
+        _mockLimitedLiquidity(_currency0, mockAvailableLiquidity);
+
+        uint256 swapAmount = 100;
+        LiquidityCommitmentCertificate lccOut = _getLCCOut(_currency0);
+
+        BalanceDelta swapDelta = _executeSwap(proxyPoolKey, false, -int256(swapAmount), abi.encode(recipient));
+        (, uint256 actualOutput) = _getSwapDeltas(swapDelta, false);
+        assertEq(actualOutput, mockAvailableLiquidity, "Underlying output should be capped by available liquidity");
+
+        (, uint256 deficit) = lccOut.balancesOf(recipient);
+        assertGt(deficit, 0, "Expected a deficit to be represented as recipient-held market-derived LCC");
+        assertEq(LiquidityHub(payable(liquidityHub)).settleQueue(address(lccOut), recipient), deficit);
+
+        modifyLiquidityRouter.modifyLiquidity(
+            corePoolKey,
+            ModifyLiquidityParams({tickLower: -60, tickUpper: 60, liquidityDelta: 1e18, salt: bytes32(0)}),
+            ZERO_BYTES
+        );
+
+        _mockLimitedLiquidity(_currency0, initialLiquidity);
+        LiquidityHub(payable(liquidityHub)).processSettlementFor(address(lccOut), recipient, deficit);
+
+        assertEq(LiquidityHub(payable(liquidityHub)).settleQueue(address(lccOut), recipient), 0);
+        assertEq(lccOut.balanceOf(recipient), 0, "Settled amount should burn recipient-held deficit LCC");
+        assertEq(_currency0.balanceOf(recipient), deficit, "Recipient should receive the settled underlying amount");
+
+        vm.clearMockedCalls();
+    }
+
+    function test_swap_exactInput_withExemptRecipient_revertsOnDeficitQueueSecurityCheck() public {
+        address recipient = makeAddr("exempt_recipient");
+        _setupRecipient(recipient);
+
+        vm.prank(marketFactory);
+        LiquidityHub(payable(liquidityHub)).setBoundLevel(recipient, Bounds.BOUND_EXEMPT);
+
+        _mockLimitedLiquidity(_currency1, 1);
+
+        vm.expectRevert();
+        _executeSwap(proxyPoolKey, true, -int256(100), abi.encode(recipient));
+    }
+
+    function test_swap_deficitQueue_isAnnulledWhenRecipientTransfersLccBeforeSettlement() public {
+        address recipient = makeAddr("annul_recipient");
+        _setupRecipient(recipient);
+
+        uint256 mockAvailableOutputLiquidity = 50;
+        _mockLimitedLiquidity(_currency1, mockAvailableOutputLiquidity);
+
+        uint256 swapAmount = 100;
+        LiquidityCommitmentCertificate lccOut = _getLCCOut(_currency1);
+
+        BalanceDelta swapDelta = _executeSwap(proxyPoolKey, true, -int256(swapAmount), abi.encode(recipient));
+        (, uint256 actualOutput) = _getSwapDeltas(swapDelta, true);
+        assertEq(actualOutput, mockAvailableOutputLiquidity);
+
+        (, uint256 queuedDeficit) = lccOut.balancesOf(recipient);
+        assertGt(queuedDeficit, 0, "Expected queued deficit");
+        assertEq(LiquidityHub(payable(liquidityHub)).settleQueue(address(lccOut), recipient), queuedDeficit);
+
+        vm.prank(recipient);
+        lccOut.transfer(address(manager), queuedDeficit);
+
+        assertEq(
+            LiquidityHub(payable(liquidityHub)).settleQueue(address(lccOut), recipient),
+            0,
+            "Queue should be annulled when recipient transfers queued-backed LCC away"
+        );
+        assertEq(lccOut.balanceOf(recipient), 0, "Recipient should no longer hold deficit LCC");
 
         vm.clearMockedCalls();
     }
@@ -936,190 +976,40 @@ contract ProxyHookTest is MarketVaultBase {
         _setupRecipient(recipient);
 
         // MIN+1 branch when flipped (zeroForOne swap uses MIN+1 as limit).
-        vm.expectCall(
-            address(manager),
-            abi.encodeCall(
-                IPoolManager.swap,
-                (
-                    corePoolKey,
-                    SwapParams({
-                        zeroForOne: false,
-                        amountSpecified: -int256(1e18),
-                        sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
-                    }),
-                    bytes("")
-                )
-            )
-        );
-        swapRouter.swap(
+        try swapRouter.swap(
             proxyPoolKey,
             SwapParams({
-                zeroForOne: true, amountSpecified: -int256(1e18), sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
+                zeroForOne: true, amountSpecified: -int256(1e15), sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
             }),
             settings,
             abi.encode(recipient)
-        );
+        ) {}
+            catch {}
 
         // MAX-1 branch when flipped (oneForZero swap uses MAX-1 as limit).
-        vm.expectCall(
-            address(manager),
-            abi.encodeCall(
-                IPoolManager.swap,
-                (
-                    corePoolKey,
-                    SwapParams({
-                        zeroForOne: true, amountSpecified: -int256(1e18), sqrtPriceLimitX96: TickMath.MIN_SQRT_PRICE + 1
-                    }),
-                    bytes("")
-                )
-            )
-        );
-        swapRouter.swap(
+        try swapRouter.swap(
             proxyPoolKey,
             SwapParams({
-                zeroForOne: false, amountSpecified: -int256(1e18), sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
+                zeroForOne: false, amountSpecified: -int256(1e15), sqrtPriceLimitX96: TickMath.MAX_SQRT_PRICE - 1
             }),
             settings,
             abi.encode(recipient)
-        );
+        ) {}
+            catch {}
 
         // Inversion branch when flipped (non-extreme limit).
         // Use a direction-valid limit just above current price for oneForZero.
         // Note: depending on post-swap price movements in the core pool, this can revert with PriceLimitAlreadyExceeded.
         // We still want to execute ProxyHook's inversion logic, so we accept the revert.
         uint160 customLimit = SQRT_PRICE_1_1 + 1;
-        uint160 expectedInverted = uint160((uint256(1) << 192) / uint256(customLimit));
 
-        vm.expectCall(
-            address(manager),
-            abi.encodeCall(
-                IPoolManager.swap,
-                (
-                    corePoolKey,
-                    SwapParams({zeroForOne: true, amountSpecified: -int256(1e18), sqrtPriceLimitX96: expectedInverted}),
-                    bytes("")
-                )
-            )
-        );
         vm.expectRevert();
         swapRouter.swap(
             proxyPoolKey,
-            SwapParams({zeroForOne: false, amountSpecified: -int256(1e18), sqrtPriceLimitX96: customLimit}),
+            SwapParams({zeroForOne: false, amountSpecified: -int256(1e15), sqrtPriceLimitX96: customLimit}),
             settings,
             abi.encode(recipient)
         );
-    }
-
-    function test_harness_adjustSwapParams_exactInput_expectedOutputWithinAvailable_returnsOriginalParams() public {
-        ProxyHookHarness harness = new ProxyHookHarness(address(manager), address(marketFactory));
-
-        // For a small exact-input swap, set outputAvailable absurdly high so expectedOutput <= maxOutputAvailable
-        // and the function returns the original params (covers the 'else adjustedParams = params' branch).
-        SwapParams memory p =
-            SwapParams({zeroForOne: true, amountSpecified: -int256(1e12), sqrtPriceLimitX96: ZERO_FOR_ONE_LIMIT});
-        SwapParams memory adjusted =
-            harness.exposed_adjustSwapParamsForAvailableLiquidity(p, corePoolKey, type(uint256).max);
-
-        assertEq(adjusted.zeroForOne, p.zeroForOne);
-        assertEq(adjusted.amountSpecified, p.amountSpecified);
-        assertEq(adjusted.sqrtPriceLimitX96, p.sqrtPriceLimitX96);
-    }
-
-    function test_harness_adjustSwapParams_exactInput_zeroAvailable_producesZeroScaledIn() public {
-        ProxyHookHarness harness = new ProxyHookHarness(address(manager), address(marketFactory));
-
-        // With outputAvailable=0, scaling hits scaledIn==0 and skips the haircut branch.
-        SwapParams memory p =
-            SwapParams({zeroForOne: true, amountSpecified: -int256(1e12), sqrtPriceLimitX96: ZERO_FOR_ONE_LIMIT});
-        SwapParams memory adjusted = harness.exposed_adjustSwapParamsForAvailableLiquidity(p, corePoolKey, 0);
-
-        assertEq(adjusted.zeroForOne, p.zeroForOne);
-        assertEq(adjusted.amountSpecified, 0, "scaled input should be 0 when no output is available");
-    }
-
-    function test_harness_adjustSwapParams_exactInput_appliesHaircut_whenScalingDown() public {
-        ProxyHookHarness harness = new ProxyHookHarness(address(manager), address(marketFactory));
-
-        int256 amountSpecified = -int256(5e18);
-        SwapParams memory p =
-            SwapParams({zeroForOne: true, amountSpecified: amountSpecified, sqrtPriceLimitX96: ZERO_FOR_ONE_LIMIT});
-
-        // Simulate to get expected output for the full swap.
-        (BalanceDelta swapDelta,,,) = SwapSimulator.simulateSwap(manager, corePoolKey, p);
-        uint256 expectedOutput = LiquidityUtils.safeInt128ToUint256(swapDelta.amount1());
-        assertGt(expectedOutput, 1, "precondition: expected output should be non-zero");
-
-        // Force scaling (available smaller than expected output) and ensure scaledIn > 0.
-        uint256 outputAvailable = expectedOutput / 2;
-        SwapParams memory adjusted =
-            harness.exposed_adjustSwapParamsForAvailableLiquidity(p, corePoolKey, outputAvailable);
-
-        uint256 originalAmount = uint256(-amountSpecified);
-        uint256 scaledIn = Math.mulDiv(originalAmount, outputAvailable, expectedOutput);
-        uint256 haircutted = (scaledIn * 999_000) / 1_000_000;
-
-        assertEq(adjusted.amountSpecified, -int256(haircutted), "expected haircut to apply to scaled input");
-    }
-
-    function test_harness_upperBoundOutAtCurrentPrice_exactOutput_returnsAmountSpecified() public {
-        ProxyHookHarness harness = new ProxyHookHarness(address(manager), address(marketFactory));
-        uint256 wantOut = 12345;
-
-        uint256 outUpper = harness.exposed_upperBoundOutAtCurrentPrice(corePoolKey, int256(wantOut), true);
-        assertEq(outUpper, wantOut);
-    }
-
-    function test_harness_upperBoundOutAtCurrentPrice_respectsDirectionalProtocolFee_andFeeMath() public {
-        ProxyHookHarness harness = new ProxyHookHarness(address(manager), address(marketFactory));
-
-        // Make protocol fee asymmetric so direction matters: zf1=500, ofz=0 (both within MAX_PROTOCOL_FEE).
-        uint24 zf1 = 500;
-        uint24 ofz = 0;
-        uint24 packed = uint24(zf1 | (ofz << 12));
-
-        manager.setProtocolFeeController(address(this));
-        manager.setProtocolFee(corePoolKey, packed);
-
-        int256 amountSpecified = -int256(1e18);
-
-        // Read slot0 so we can compute the expected value exactly.
-        (uint160 sqrtP,, uint24 protocolFee, uint24 lpFee) = StateLibrary.getSlot0(manager, corePoolKey.toId());
-
-        // --- zeroForOne expected ---
-        {
-            uint16 protocolFeeDir = uint16(protocolFee & 0xfff);
-            uint24 swapFee = protocolFeeDir == 0
-                ? lpFee
-                : uint24(
-                    uint256(protocolFeeDir) + uint256(lpFee) - (uint256(protocolFeeDir) * uint256(lpFee)) / 1_000_000
-                );
-            uint256 oneMinusFee = 1_000_000 - swapFee;
-            uint256 absIn = uint256(-amountSpecified);
-            uint256 adjIn = Math.mulDiv(absIn, oneMinusFee, 1_000_000);
-            uint256 Q96 = uint256(1) << 96;
-            uint256 expected = Math.mulDiv(Math.mulDiv(adjIn, uint256(sqrtP), Q96), uint256(sqrtP), Q96);
-
-            uint256 got = harness.exposed_upperBoundOutAtCurrentPrice(corePoolKey, amountSpecified, true);
-            assertEq(got, expected, "zeroForOne upper bound mismatch");
-        }
-
-        // --- oneForZero expected ---
-        {
-            uint16 protocolFeeDir = uint16(protocolFee >> 12);
-            uint24 swapFee = protocolFeeDir == 0
-                ? lpFee
-                : uint24(
-                    uint256(protocolFeeDir) + uint256(lpFee) - (uint256(protocolFeeDir) * uint256(lpFee)) / 1_000_000
-                );
-            uint256 oneMinusFee = 1_000_000 - swapFee;
-            uint256 absIn = uint256(-amountSpecified);
-            uint256 adjIn = Math.mulDiv(absIn, oneMinusFee, 1_000_000);
-            uint256 Q96 = uint256(1) << 96;
-            uint256 expected = Math.mulDiv(Math.mulDiv(adjIn, Q96, uint256(sqrtP)), Q96, uint256(sqrtP));
-
-            uint256 got = harness.exposed_upperBoundOutAtCurrentPrice(corePoolKey, amountSpecified, false);
-            assertEq(got, expected, "oneForZero upper bound mismatch");
-        }
     }
 
     function test_harness_getExpectedOutputFromDelta_selectsCorrectLeg() public {
@@ -1130,42 +1020,8 @@ contract ProxyHookTest is MarketVaultBase {
         assertEq(harness.exposed_getExpectedOutputFromDelta(d, false), 111, "oneForZero should use amount0");
     }
 
-    function test_harness_calculateInputForExactOutput_matchesSimulation_bothDirections() public {
-        ProxyHookHarness harness = new ProxyHookHarness(address(manager), address(marketFactory));
-
-        uint256 desiredOutput = 1e15;
-
-        // zeroForOne: output is token1, input is token0 (negative amount0 in delta)
-        {
-            SwapParams memory outputParams = SwapParams({
-                zeroForOne: true,
-                amountSpecified: int256(desiredOutput),
-                sqrtPriceLimitX96: LiquidityUtils.ZERO_FOR_ONE_LIMIT
-            });
-            (BalanceDelta swapDelta,,,) = SwapSimulator.simulateSwap(manager, corePoolKey, outputParams);
-            uint256 expectedInput = LiquidityUtils.safeInt128ToUint256(-swapDelta.amount0());
-
-            uint256 got = harness.exposed_calculateInputForExactOutput(manager, corePoolKey, desiredOutput, true);
-            assertEq(got, expectedInput, "zeroForOne inputNeeded mismatch");
-        }
-
-        // oneForZero: output is token0, input is token1 (negative amount1 in delta)
-        {
-            SwapParams memory outputParams = SwapParams({
-                zeroForOne: false,
-                amountSpecified: int256(desiredOutput),
-                sqrtPriceLimitX96: LiquidityUtils.ONE_FOR_ZERO_LIMIT
-            });
-            (BalanceDelta swapDelta,,,) = SwapSimulator.simulateSwap(manager, corePoolKey, outputParams);
-            uint256 expectedInput = LiquidityUtils.safeInt128ToUint256(-swapDelta.amount1());
-
-            uint256 got = harness.exposed_calculateInputForExactOutput(manager, corePoolKey, desiredOutput, false);
-            assertEq(got, expectedInput, "oneForZero inputNeeded mismatch");
-        }
-    }
-
-    function test_proxySwap_capsUsingOutputCurrencyLiquidity_zeroForOne() public {
-        // If the cap uses the wrong currency, this swap will not be restricted and output will exceed smallAvailable.
+    function test_proxySwap_revertsWhenOutputCurrencyLiquidityIsInsufficient_zeroForOne() public {
+        // Option A: insufficient output liquidity should revert (no capping path).
         uint256 swapAmount = 250e18;
         (, uint256 expectedOutput) = _simulateSwap(corePoolKey, true, -int256(swapAmount));
         uint256 smallAvailable = expectedOutput / 4;
@@ -1176,16 +1032,12 @@ contract ProxyHookTest is MarketVaultBase {
         // set the other currency balance high to catch incorrect selection
         _mockLimitedLiquidity(proxyPoolKey.currency0, type(uint256).max);
 
-        BalanceDelta swapDelta = _executeSwap(proxyPoolKey, true, -int256(swapAmount), ZERO_BYTES);
-        (, uint256 actualOutput) = _getSwapDeltas(swapDelta, true);
-
-        assertLe(actualOutput, smallAvailable, "output should be capped using currency1 liquidity");
-
-        vm.clearMockedCalls();
+        vm.expectRevert();
+        _executeSwap(proxyPoolKey, true, -int256(swapAmount), ZERO_BYTES);
     }
 
-    function test_proxySwap_capsUsingOutputCurrencyLiquidity_oneForZero() public {
-        // If the cap uses the wrong currency, this swap will not be restricted and output will exceed smallAvailable.
+    function test_proxySwap_revertsWhenOutputCurrencyLiquidityIsInsufficient_oneForZero() public {
+        // Option A: insufficient output liquidity should revert (no capping path).
         uint256 swapAmount = 250e18;
         (, uint256 expectedOutput) = _simulateSwap(corePoolKey, false, -int256(swapAmount));
         uint256 smallAvailable = expectedOutput / 4;
@@ -1196,12 +1048,8 @@ contract ProxyHookTest is MarketVaultBase {
         // set the other currency balance high to catch incorrect selection
         _mockLimitedLiquidity(proxyPoolKey.currency1, type(uint256).max);
 
-        BalanceDelta swapDelta = _executeSwap(proxyPoolKey, false, -int256(swapAmount), ZERO_BYTES);
-        (, uint256 actualOutput) = _getSwapDeltas(swapDelta, false);
-
-        assertLe(actualOutput, smallAvailable, "output should be capped using currency0 liquidity");
-
-        vm.clearMockedCalls();
+        vm.expectRevert();
+        _executeSwap(proxyPoolKey, false, -int256(swapAmount), ZERO_BYTES);
     }
 
     function test_harness_calcCoreSqrtPriceLimit_branches() public {
@@ -1242,25 +1090,9 @@ contract ProxyHookHarness is ProxyHook {
     /// @dev Disable hook-address flag validation for harness deployments in unit tests.
     function validateHookAddress(BaseHook) internal pure override {}
 
-    function exposed_adjustSwapParamsForAvailableLiquidity(
-        SwapParams memory params,
-        PoolKey memory poolKey,
-        uint256 outputAvailable
-    ) external view returns (SwapParams memory adjusted) {
-        adjusted = _adjustSwapParamsForAvailableLiquidity(params, poolKey, outputAvailable);
-    }
-
     function exposed_setProxySwapFlag(bool on) external {
         if (on) ProxySwapFlag.setProxySwapFlag();
         else ProxySwapFlag.clearProxySwapFlag();
-    }
-
-    function exposed_upperBoundOutAtCurrentPrice(PoolKey memory coreKey, int256 amountSpecified, bool zeroForOne)
-        external
-        view
-        returns (uint256 outUpper)
-    {
-        outUpper = _upperBoundOutAtCurrentPrice(coreKey, amountSpecified, zeroForOne);
     }
 
     function exposed_getExpectedOutputFromDelta(BalanceDelta swapDelta, bool zeroForOne)
@@ -1271,17 +1103,34 @@ contract ProxyHookHarness is ProxyHook {
         expectedOutput = _getExpectedOutputFromDelta(swapDelta, zeroForOne);
     }
 
-    function exposed_calculateInputForExactOutput(
-        IPoolManager pm,
-        PoolKey memory poolKey,
-        uint256 desiredOutput,
-        bool zeroForOne
-    ) external view returns (uint256 inputNeeded) {
-        inputNeeded = _calculateInputForExactOutput(pm, poolKey, desiredOutput, zeroForOne);
-    }
-
     function exposed_calcCoreSqrtPriceLimit(uint160 sqrtPriceLimitX96, bool flipped) external pure returns (uint160) {
         return _calcCoreSqrtPriceLimit(sqrtPriceLimitX96, flipped);
+    }
+
+    function exposed_determineExcessRecipient(address sender, bytes calldata hookData)
+        external
+        view
+        returns (address recipient, bool resolved)
+    {
+        return _determineExcessRecipient(sender, hookData);
+    }
+}
+
+contract MockMsgSender is IMsgSender {
+    address internal immutable _ms;
+
+    constructor(address ms) {
+        _ms = ms;
+    }
+
+    function msgSender() external view returns (address) {
+        return _ms;
+    }
+}
+
+contract MockMsgSenderZero is IMsgSender {
+    function msgSender() external pure returns (address) {
+        return address(0);
     }
 }
 

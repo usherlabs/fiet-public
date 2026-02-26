@@ -8,11 +8,13 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {Errors} from "./libraries/Errors.sol";
+import {EfficientHashLib} from "solady/utils/EfficientHashLib.sol";
 
 contract VRLSettlementObserver is Ownable, IVRLSettlementObserver {
     mapping(uint32 => address) public verifiers;
     uint32 public nextVerifierIndex;
     mapping(address => mapping(uint32 => bool)) public allowedVerifiersForToken;
+    mapping(bytes32 => bool) public usedProofHashes;
 
     constructor(address _initialOwner) Ownable(_initialOwner) {}
 
@@ -71,8 +73,10 @@ contract VRLSettlementObserver is Ownable, IVRLSettlementObserver {
         uint32 verifierIndex,
         bytes memory settlementProof,
         bool revertOnInvalid
-    ) public view returns (bool isProofValid) {
-        require(tokenIndex == 0 || tokenIndex == 1, "Invalid token index");
+    ) public returns (bool isProofValid) {
+        if (tokenIndex != 0 && tokenIndex != 1) {
+            revert Errors.InvalidTokenIndex(tokenIndex);
+        }
         address token = tokenIndex == 0 ? Currency.unwrap(poolKey.currency0) : Currency.unwrap(poolKey.currency1);
 
         if (settlementProof.length == 0) {
@@ -88,12 +92,22 @@ contract VRLSettlementObserver is Ownable, IVRLSettlementObserver {
             revert Errors.InvalidVerifier();
         }
 
+        bytes32 poolId = PoolId.unwrap(poolKey.toId());
+        bytes32 proofHash = EfficientHashLib.hash(settlementProof); // cannot replay settlement proof across market chain.
+        if (usedProofHashes[proofHash]) {
+            revert Errors.InvalidProof();
+        }
+
         // Verify the settlement proof
         ISettlementVerifier verifier = ISettlementVerifier(verifierAddress);
-        isProofValid =
-            verifier.verifySettlementProof(settlementProof, abi.encode(PoolId.unwrap(poolKey.toId()), tokenIndex));
+        isProofValid = verifier.verifySettlementProof(settlementProof, abi.encode(poolId, tokenIndex));
+
         if (revertOnInvalid && !isProofValid) {
             revert Errors.InvalidProof();
+        }
+        if (isProofValid) {
+            usedProofHashes[proofHash] = true;
+            emit SettlementProofMarkedUsed(proofHash, poolKey.toId(), verifierIndex, tokenIndex);
         }
     }
 }

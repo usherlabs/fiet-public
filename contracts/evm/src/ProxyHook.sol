@@ -14,19 +14,18 @@ import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/Pool
 import {ILCC} from "./interfaces/ILCC.sol";
 import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
-import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
-import {ProtocolFeeLibrary} from "@uniswap/v4-core/src/libraries/ProtocolFeeLibrary.sol";
-import {SwapSimulator} from "./libraries/SwapSimulator.sol";
 import {MarketVault} from "./modules/MarketVault.sol";
 import {ProxySwapFlag} from "./libraries/ProxySwapFlag.sol";
 import {LiquidityUtils} from "../src/libraries/LiquidityUtils.sol";
 import {Exttload} from "v4-periphery/lib/v4-core/src/Exttload.sol";
-import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
+import {IMsgSender} from "v4-periphery/src/interfaces/IMsgSender.sol";
 import {Errors} from "./libraries/Errors.sol";
 import {MarketHandlerLib} from "./libraries/MarketHandlerLib.sol";
 
 contract ProxyHook is BaseHook, MarketVault, Exttload {
     using CurrencySettler for Currency;
+    address internal constant RECIPIENT_LOCKER = address(1);
+    address internal constant RECIPIENT_ROUTER = address(2);
 
     /// @dev Context for proxy swap operations to reduce stack depth
     struct ProxySwapContext {
@@ -219,6 +218,9 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         ILCC coreLccToken1 = ILCC(Currency.unwrap(coreKey.currency1));
 
         // Determine if proxy direction matches core direction
+        // Safe because `key` is provided by PoolManager for *this* proxy pool, whose currencies are the two
+        // underlyings of the core LCC pair (sorted by Uniswap PoolKey rules). Therefore `key.currency0/1` must be
+        // either (u0,u1) or (u1,u0) for (coreLccToken0.underlying(), coreLccToken1.underlying()).
         ctx.coreZeroForOne = (Currency.unwrap(key.currency0) == coreLccToken0.underlying()
                     && Currency.unwrap(key.currency1) == coreLccToken1.underlying())
             ? paramsZeroForOne
@@ -245,37 +247,6 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         } else {
             return TickMath.MAX_SQRT_PRICE - 1;
         }
-    }
-
-    /// @dev Builds core swap params, adjusting for available liquidity if needed
-    function _buildCoreSwapParams(
-        bool coreZeroForOne,
-        int256 amountSpecified,
-        uint160 sqrtPriceLimitX96Core,
-        uint256 maxOutputAvailable,
-        bool hasExcessRecipient
-    ) private view returns (SwapParams memory) {
-        if (hasExcessRecipient) {
-            return SwapParams({
-                zeroForOne: coreZeroForOne, amountSpecified: amountSpecified, sqrtPriceLimitX96: sqrtPriceLimitX96Core
-            });
-        }
-
-        // Check if swap is within bounds without simulation
-        uint256 outUpper = _upperBoundOutAtCurrentPrice(corePoolKey, amountSpecified, coreZeroForOne);
-        if (outUpper <= maxOutputAvailable) {
-            return SwapParams({
-                zeroForOne: coreZeroForOne, amountSpecified: amountSpecified, sqrtPriceLimitX96: sqrtPriceLimitX96Core
-            });
-        }
-
-        return _adjustSwapParamsForAvailableLiquidity(
-            SwapParams({
-                zeroForOne: coreZeroForOne, amountSpecified: amountSpecified, sqrtPriceLimitX96: sqrtPriceLimitX96Core
-            }),
-            corePoolKey,
-            maxOutputAvailable
-        );
     }
 
     /// @dev Handles LCC settlement for zeroForOne swap direction
@@ -334,17 +305,15 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         _settleObligationsForLCC(ctx.lccTokenForCurrency1);
     }
 
-    // Before swap we make sure to provide enough delta
-    // to ensure that the user gets a debit of amount specified
-    // and we disable the core swap mechanism
-    // and proxy the swap through the core pool
-    function _beforeSwap(address, PoolKey calldata key, SwapParams calldata params, bytes calldata hookData)
+    // Proxy swaps route through the core pool and return a delta that cancels proxy `amountToSwap` to zero.
+    // This enforces the MKT-05 invariant that the proxy pool AMM curve is never executed.
+    function _beforeSwap(address sender, PoolKey calldata key, SwapParams calldata params, bytes calldata hookData)
         internal
         override
         withProxySwapFlag
         returns (bytes4, BeforeSwapDelta, uint24)
     {
-        address excessRecipient = _determineExcessRecipient(hookData);
+        (address excessRecipient, bool recipientResolved) = _determineExcessRecipient(sender, hookData);
 
         // Build swap context with LCC mappings
         ProxySwapContext memory ctx = _buildSwapContext(key, params.zeroForOne);
@@ -353,26 +322,10 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         ctx.sqrtPriceLimitX96Core =
             _calcCoreSqrtPriceLimit(params.sqrtPriceLimitX96, params.zeroForOne != ctx.coreZeroForOne);
 
-        // Build core swap params
-        SwapParams memory coreSwapParams = _buildCoreSwapParams(
-            ctx.coreZeroForOne,
-            params.amountSpecified,
-            ctx.sqrtPriceLimitX96Core,
-            inMarketBalanceOf(params.zeroForOne ? key.currency1 : key.currency0),
-            excessRecipient != address(0)
-        );
+        uint256 maxOutputAvailable = inMarketBalanceOf(params.zeroForOne ? key.currency1 : key.currency0);
 
-        // Execute swap on core pool
-        BalanceDelta delta = poolManager.swap(corePoolKey, coreSwapParams, bytes(""));
-
-        // Extract amounts from delta
-        uint256 amountIn = LiquidityUtils.safeInt128ToUint256(ctx.coreZeroForOne ? delta.amount0() : delta.amount1());
-        uint256 amountOut = LiquidityUtils.safeInt128ToUint256(ctx.coreZeroForOne ? delta.amount1() : delta.amount0());
-
-        // Handle LCC settlement based on direction
-        uint256 amountToSettle = params.zeroForOne
-            ? _settleZeroForOne(key, ctx, amountIn, amountOut, excessRecipient)
-            : _settleOneForZero(key, ctx, amountIn, amountOut, excessRecipient);
+        (uint256 amountIn, uint256 amountToSettle) =
+            _executeProxySwap(key, params, ctx, excessRecipient, recipientResolved, maxOutputAvailable);
 
         // Build return delta
         BeforeSwapDelta newDelta = (params.amountSpecified < 0)
@@ -382,90 +335,89 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         return (this.beforeSwap.selector, newDelta, 0);
     }
 
-    // Adjust the swap params to execute the swap to fully execute with the available liquidity
-    // get the max underlying liquidity available on the market(proxyhook) for both currencies
-    // simulate the swap and get the output and input from the returning deltas
-    // if it is an exact output swap, then we need to check if the expected output is greater than the max output available for the currency
-    // if it is an exact input swap, then we need to check if the expected output(from simulation) is greater than the max output available for the currency
-    // if it is then we need to calcualte the exact input amount that is needed to get the max output available for the currency
-    // then that would be the input amount for the swap to ensure we do not ever get more than the max liquidity available
-    function _adjustSwapParamsForAvailableLiquidity(
-        SwapParams memory params,
-        PoolKey memory poolKey,
-        uint256 outputAvailable
-    ) internal view returns (SwapParams memory adjustedParams) {
-        uint256 maxOutputAvailable = outputAvailable;
-        bool isExactInput = params.amountSpecified < 0;
-        uint256 originalAmount = uint256(params.amountSpecified < 0 ? -params.amountSpecified : params.amountSpecified);
+    function _executeProxySwap(
+        PoolKey calldata key,
+        SwapParams calldata params,
+        ProxySwapContext memory ctx,
+        address excessRecipient,
+        bool recipientResolved,
+        uint256 maxOutputAvailable
+    ) private returns (uint256 amountIn, uint256 amountToSettle) {
+        // Option A default: execute full core swap (no capping / scaling).
+        SwapParams memory coreSwapParams = SwapParams({
+            zeroForOne: ctx.coreZeroForOne,
+            amountSpecified: params.amountSpecified,
+            sqrtPriceLimitX96: ctx.sqrtPriceLimitX96Core
+        });
 
-        // Exact output: no simulation needed, cap directly to available liquidity
-        if (!isExactInput) {
-            uint256 cappedOutput = Math.min(originalAmount, maxOutputAvailable);
-            adjustedParams = SwapParams({
-                zeroForOne: params.zeroForOne,
-                amountSpecified: SafeCast.toInt256(cappedOutput),
-                sqrtPriceLimitX96: params.sqrtPriceLimitX96
-            });
-            return adjustedParams;
-        }
+        _assertExactOutputAvailable(params.amountSpecified, maxOutputAvailable);
 
-        // Exact input: single simulation to estimate output, then linear scale if needed
-        (BalanceDelta swapDelta,,,) = SwapSimulator.simulateSwap(poolManager, poolKey, params);
-        uint256 expectedOutput = _getExpectedOutputFromDelta(swapDelta, params.zeroForOne);
+        uint256 amountOut;
+        (amountIn, amountOut) = _executeCoreSwap(coreSwapParams, ctx.coreZeroForOne);
 
-        if (expectedOutput > maxOutputAvailable) {
-            uint256 scaledIn = Math.mulDiv(originalAmount, maxOutputAvailable, expectedOutput);
-            // Optional conservative haircut to ensure we stay under available even with non-linearity
-            if (scaledIn > 0) {
-                scaledIn = (scaledIn * 999_000) / 1_000_000;
-            }
-            adjustedParams = SwapParams({
-                zeroForOne: params.zeroForOne,
-                amountSpecified: -SafeCast.toInt256(scaledIn),
-                sqrtPriceLimitX96: params.sqrtPriceLimitX96
-            });
-        } else {
-            adjustedParams = params;
+        _assertExactInputAfterCoreSwap(
+            params.amountSpecified, recipientResolved, amountIn, amountOut, maxOutputAvailable
+        );
+
+        // Handle LCC settlement based on direction.
+        address deficitRecipient = recipientResolved ? excessRecipient : address(0);
+        amountToSettle = _settleFromCoreSwap(key, params.zeroForOne, ctx, amountIn, amountOut, deficitRecipient);
+
+        if (params.amountSpecified > 0 && amountToSettle != uint256(params.amountSpecified)) {
+            revert Errors.InsufficientLiquidity(uint256(params.amountSpecified), amountToSettle);
         }
     }
 
-    // Fast-path bound: upper bound on output at current price (ignoring tick crossing)
-    function _upperBoundOutAtCurrentPrice(PoolKey memory coreKey, int256 amountSpecified, bool zeroForOne)
-        internal
-        view
-        returns (uint256 outUpper)
-    {
-        // For exact output, the requested output itself is the bound
+    function _assertExactOutputAvailable(int256 amountSpecified, uint256 maxOutputAvailable) private pure {
+        // Strict exact-output behaviour: if underlying output cannot be delivered in full, revert.
         if (amountSpecified > 0) {
-            return uint256(amountSpecified);
+            uint256 requestedOutput = uint256(amountSpecified);
+            if (requestedOutput > maxOutputAvailable) {
+                revert Errors.InsufficientLiquidity(requestedOutput, maxOutputAvailable);
+            }
         }
+    }
 
-        (uint160 sqrtP,, uint24 protocolFee, uint24 lpFee) = StateLibrary.getSlot0(poolManager, coreKey.toId());
+    function _executeCoreSwap(SwapParams memory coreSwapParams, bool coreZeroForOne)
+        private
+        returns (uint256 amountIn, uint256 amountOut)
+    {
+        BalanceDelta delta = poolManager.swap(corePoolKey, coreSwapParams, bytes(""));
+        amountIn = LiquidityUtils.safeInt128ToUint256(coreZeroForOne ? delta.amount0() : delta.amount1());
+        amountOut = LiquidityUtils.safeInt128ToUint256(coreZeroForOne ? delta.amount1() : delta.amount0());
+    }
 
-        // `protocolFee` is a packed uint24 containing direction-specific 12-bit fees.
-        // We must use the correct direction when computing swapFee.
-        uint16 protocolFeeDir = zeroForOne
-            ? ProtocolFeeLibrary.getZeroForOneFee(protocolFee)
-            : ProtocolFeeLibrary.getOneForZeroFee(protocolFee);
+    function _assertExactInputAfterCoreSwap(
+        int256 amountSpecified,
+        bool recipientResolved,
+        uint256 amountIn,
+        uint256 amountOut,
+        uint256 maxOutputAvailable
+    ) private pure {
+        // Enforce no residual proxy AMM swap path (`amountToSwap == 0` via specified-delta cancellation).
+        if (amountSpecified < 0) {
+            if (amountIn != uint256(-amountSpecified)) {
+                revert Errors.InvariantViolated("ProxyHook: exact-input core fill mismatch");
+            }
 
-        uint24 swapFee = protocolFeeDir == 0 ? lpFee : ProtocolFeeLibrary.calculateSwapFee(protocolFeeDir, lpFee);
-        uint256 feeDenom = ProtocolFeeLibrary.PIPS_DENOMINATOR;
-        uint256 oneMinusFee = feeDenom - swapFee;
-        uint256 absIn = uint256(-amountSpecified);
-
-        // Start with fee-adjusted input
-        uint256 adjIn = Math.mulDiv(absIn, oneMinusFee, feeDenom);
-        uint256 Q96 = uint256(1) << 96;
-
-        if (zeroForOne) {
-            // out <= in * price => multiply by sqrtP twice, dividing by Q96 each time
-            outUpper = Math.mulDiv(adjIn, uint256(sqrtP), Q96);
-            outUpper = Math.mulDiv(outUpper, uint256(sqrtP), Q96);
-        } else {
-            // out <= in / price => divide by sqrtP twice, multiplying by Q96 each time
-            outUpper = Math.mulDiv(adjIn, Q96, uint256(sqrtP));
-            outUpper = Math.mulDiv(outUpper, Q96, uint256(sqrtP));
+            // If locker cannot be resolved, only allow swaps that can settle fully into underlying (no deficit path).
+            if (!recipientResolved && amountOut > maxOutputAvailable) {
+                revert Errors.InsufficientLiquidity(amountOut, maxOutputAvailable);
+            }
         }
+    }
+
+    function _settleFromCoreSwap(
+        PoolKey calldata key,
+        bool paramsZeroForOne,
+        ProxySwapContext memory ctx,
+        uint256 amountIn,
+        uint256 amountOut,
+        address deficitRecipient
+    ) private returns (uint256 amountToSettle) {
+        return paramsZeroForOne
+            ? _settleZeroForOne(key, ctx, amountIn, amountOut, deficitRecipient)
+            : _settleOneForZero(key, ctx, amountIn, amountOut, deficitRecipient);
     }
 
     /**
@@ -488,48 +440,42 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         }
     }
 
-    /**
-     * @notice Calculates the input amount needed for a specific output amount
-     * @param desiredOutput The desired output amount
-     * @param zeroForOne The swap direction
-     * @return inputNeeded The input amount needed as a positive number
-     */
-    function _calculateInputForExactOutput(
-        IPoolManager pm,
-        PoolKey memory poolKey,
-        uint256 desiredOutput,
-        bool zeroForOne
-    ) internal view returns (uint256 inputNeeded) {
-        // Create a swap simulation with the desired output
-        SwapParams memory outputParams = SwapParams({
-            zeroForOne: zeroForOne,
-            amountSpecified: SafeCast.toInt256(desiredOutput), // Positive for exact output
-            sqrtPriceLimitX96: zeroForOne ? LiquidityUtils.ZERO_FOR_ONE_LIMIT : LiquidityUtils.ONE_FOR_ZERO_LIMIT // No price limit for this calculation
-        });
-
-        // Simulate the swap to see how much input is needed
-        (BalanceDelta swapDelta,,,) = SwapSimulator.simulateSwap(pm, poolKey, outputParams);
-
-        // For Token0 -> Token1, input is amount0 (negative in delta)
-        inputNeeded = LiquidityUtils.safeInt128ToUint256(zeroForOne ? -swapDelta.amount0() : -swapDelta.amount1());
+    function _getExpectedInputFromDelta(BalanceDelta swapDelta, bool zeroForOne)
+        internal
+        pure
+        returns (uint256 expectedInput)
+    {
+        if (zeroForOne) {
+            expectedInput = LiquidityUtils.safeInt128ToUint256(-swapDelta.amount0());
+        } else {
+            expectedInput = LiquidityUtils.safeInt128ToUint256(-swapDelta.amount1());
+        }
     }
 
-    // Determine the excess recipient for a given swap with overflow
-    function _determineExcessRecipient(bytes calldata hookData) internal view returns (address) {
-        if (hookData.length == 0) {
-            return address(0); // Default to null address
-        }
+    // Determine the excess recipient for a given swap with overflow.
+    // Defaults to locker when hookData is empty or explicitly encodes address(0)/address(1).
+    function _determineExcessRecipient(address sender, bytes calldata hookData)
+        internal
+        view
+        returns (address recipient, bool resolved)
+    {
+        recipient = hookData.length == 0 ? RECIPIENT_LOCKER : abi.decode(hookData, (address));
 
-        address recipient = abi.decode(hookData, (address));
-
-        if (recipient == address(0)) {
-            return address(1); // Locker
-        } else if (recipient == address(1)) {
-            return address(1); // Locker
-        } else if (recipient == address(2)) {
-            return msg.sender; // Router
-        } else {
-            return recipient; // Custom recipient
+        if (recipient == address(0) || recipient == RECIPIENT_LOCKER) {
+            return _resolveLocker(sender);
         }
+        if (recipient == RECIPIENT_ROUTER) {
+            return (sender, sender != address(0));
+        }
+        return (recipient, true);
+    }
+
+    function _resolveLocker(address sender) internal view returns (address locker, bool resolved) {
+        if (sender == address(0)) return (address(0), false);
+        (bool ok, bytes memory data) = sender.staticcall(abi.encodeWithSelector(IMsgSender.msgSender.selector));
+        if (!ok || data.length < 32) return (address(0), false);
+        address got = abi.decode(data, (address));
+        if (got == address(0)) return (address(0), false);
+        return (got, true);
     }
 }

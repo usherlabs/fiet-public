@@ -101,7 +101,11 @@ abstract contract VTSOrchestratorFixture is MarketTestBase, MarketMakerTestBase 
         marketVTSConfiguration = vtsOrchestrator.getMarketVTSConfiguration(corePoolKey.toId());
 
         // Setup factory mocks for MMPositionManager
-        address[2] memory mockCurrencies = [address(lcc0.underlying()), address(lcc1.underlying())];
+        // NOTE: proxyHookToCurrencyPair is a proxy-pool surface and therefore must be in proxy PoolKey order
+        // (sorted underlyings), not core/LCC order.
+        address u0 = address(lcc0.underlying());
+        address u1 = address(lcc1.underlying());
+        address[2] memory mockCurrencies = u0 < u1 ? [u0, u1] : [u1, u0];
         // Correct mapping: MarketFactory.proxyHookToCurrencyPair(proxyHook/vault) => underlying pair
         vm.mockCall(
             marketFactory,

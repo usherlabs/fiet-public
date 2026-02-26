@@ -12,6 +12,9 @@
     "baseVTSRate": 100
   },
   "coverageFeeShare": 0,
-  "minResidualUnits": 1
+  "minResidualUnits": 1,
+  "unbackedCommitmentGraceBypassBps": 500,
+  "unbackedCommitmentGraceBypassThreshold0": 0,
+  "unbackedCommitmentGraceBypassThreshold1": 0
 }
 

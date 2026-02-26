@@ -14,6 +14,7 @@ jobs:
   solidity:
     name: Solidity Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     permissions:
       contents: read
       pull-requests: write
@@ -49,7 +50,7 @@ jobs:
         id: fmt
 
       - name: Run Forge build
-        run: forge build --sizes --skip test --skip script # size-check deployable contracts only
+        run: FOUNDRY_PROFILE=prod forge build --sizes ./src # size-check deployable contracts only
         working-directory: contracts/evm
         id: build
 
@@ -186,8 +187,7 @@ jobs:
           message-id: forge-coverage-report
 
       - name: Fail if coverage is below threshold
-        if:
-          github.event_name == 'pull_request' &&
+        if: github.event_name == 'pull_request' &&
           steps.coverage.outputs.coverage_failed == 'true'
         run: |
           echo "❌ Coverage is below the 90% threshold!"
@@ -197,6 +197,7 @@ jobs:
   reactive:
     name: Reactive Contracts Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     permissions:
       contents: read
     steps:
@@ -236,6 +237,6 @@ jobs:
         id: reactive_build
 
       - name: Run Forge tests
-        run: forge test -vvv
+        run: forge test -vvv --fuzz-runs 256 --fuzz-timeout 60
         working-directory: contracts/reactive
         id: reactive_test

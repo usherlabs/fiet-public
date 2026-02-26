@@ -18,10 +18,10 @@ interface IMarketFactory {
     event MarketCreated(
         PoolId indexed corePoolId,
         PoolId indexed proxyPoolId,
-        address indexed underlyingAsset0,
-        address underlyingAsset1,
-        address lccToken0,
-        address lccToken1,
+        address lcc0,
+        address lcc1,
+        address lcc0UnderlyingAsset,
+        address lcc1UnderlyingAsset,
         address coreHook,
         address proxyHook
     );

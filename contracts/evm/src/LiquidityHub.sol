@@ -287,6 +287,8 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
 
     /**
      * @notice Initializes the mapping from LCC tokens to Market (with ID and Ref)
+     * @dev Order-insensitive: `lccToken0` and `lccToken1` are treated independently; no `(0,1)` lane semantics exist here.
+     *      Canonical market ordering (for pair lanes) is defined by the core pool key in `MarketFactory`, not by argument order.
      * @param lccToken0 The first LCC token address
      * @param lccToken1 The second LCC token address
      * @param marketId The market ID (corePoolKey -> PoolID -> unwrap() to bytes32)
@@ -642,6 +644,36 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
             revert Errors.InvalidAmount(queueAmount, principalAmount);
         }
         _cancelWithQueue(lcc, from, principalAmount, queueAmount, recipient);
+    }
+
+    /**
+     * @notice Queues settlement for a recipient after issuer-side deficit transfer.
+     * @dev Security checks:
+     *      - recipient must be non-zero
+     *      - recipient must not be bucket-exempt (external settlement path requires market-derived balance accounting)
+     *      - recipient must hold sufficient market-derived LCC to back the queued amount
+     */
+    function queueForTransferRecipient(address lcc, address recipient, uint256 amount)
+        external
+        onlyIssuer(lcc)
+        nonReentrant
+    {
+        if (recipient == address(0)) {
+            revert Errors.InvalidAddress(recipient);
+        }
+        if (amount == 0) {
+            revert Errors.InvalidAmount(0, 0);
+        }
+        if (Bounds.isExempt(boundLevelOfLcc(lcc, recipient))) {
+            revert Errors.NotApproved(recipient);
+        }
+
+        (, uint256 marketDerivedBalance) = ILCC(lcc).balancesOf(recipient);
+        if (marketDerivedBalance < amount) {
+            revert Errors.InsufficientBalance(marketDerivedBalance, amount);
+        }
+
+        _queueSettlement(lcc, recipient, amount);
     }
 
     /**

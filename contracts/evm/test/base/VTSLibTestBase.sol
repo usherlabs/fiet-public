@@ -69,7 +69,10 @@ abstract contract VTSLibTestBase is MarketTestBase {
             token0: tokenConfig,
             token1: tokenConfig,
             coverageFeeShare: DEFAULT_COVERAGE_FEE_SHARE,
-            minResidualUnits: DEFAULT_MIN_RESIDUAL_UNITS
+            minResidualUnits: DEFAULT_MIN_RESIDUAL_UNITS,
+            unbackedCommitmentGraceBypassBps: 500,
+            unbackedCommitmentGraceBypassThreshold0: 0,
+            unbackedCommitmentGraceBypassThreshold1: 0
         });
     }
 

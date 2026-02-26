@@ -35,6 +35,12 @@ struct MarketVTSConfiguration {
     uint16 coverageFeeShare;
     // Minimum residual liquidity units threshold for full position closure during seizure
     uint256 minResidualUnits;
+    // Commitment deficit severity threshold (bps) above which grace bypass is allowed
+    uint16 unbackedCommitmentGraceBypassBps;
+    // Optional token0 deficit threshold used only when deficit bps is below bypass bps (0 disables)
+    uint256 unbackedCommitmentGraceBypassThreshold0;
+    // Optional token1 deficit threshold used only when deficit bps is below bypass bps (0 disables)
+    uint256 unbackedCommitmentGraceBypassThreshold1;
 }
 
 /// @notice Context struct for position processing dependencies
@@ -127,6 +133,8 @@ struct PositionAccounting {
     TokenPairUint outflowsAtFeeSnap;
     // Commitment-scoped deficit (insolvency gate) per token
     TokenPairUint commitmentDeficit;
+    // Commitment deficit severity in bps (0-10000), updated by commitment checkpoints
+    uint16 commitmentDeficitBps;
     // Fees shared by position per token
     TokenPairUint feesShared;
     // Pending fee adjustments per token: +slash (reduces payout), -bonus (increases payout)

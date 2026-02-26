@@ -70,7 +70,10 @@ contract VTSSettle01RFSOpenEchidnaTest {
                 maxGracePeriodTime: 30 days
             }),
             coverageFeeShare: 5000, // 50%
-            minResidualUnits: 1000
+            minResidualUnits: 1000,
+            unbackedCommitmentGraceBypassBps: 500,
+            unbackedCommitmentGraceBypassThreshold0: 0,
+            unbackedCommitmentGraceBypassThreshold1: 0
         });
         harness.setupPool(POOL_ID, config);
 

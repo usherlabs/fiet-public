@@ -24,7 +24,7 @@ import "forge-std/Test.sol";
  * - `SwapSimulator.integration.t.sol` for a “grounded” integration test that runs against a real v4 `PoolManager`
  *   via `Deployers` and cross-checks `simulateSwap` outputs against actual swaps.
  */
-import {SwapSimulator} from "../../src/libraries/SwapSimulator.sol";
+import {SwapSimulator} from "../utils/SwapSimulator.sol";
 import {Errors} from "../../src/libraries/Errors.sol";
 
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";

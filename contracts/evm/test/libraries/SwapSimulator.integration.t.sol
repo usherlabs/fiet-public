@@ -21,7 +21,7 @@ import "forge-std/Test.sol";
  * - This file is *not* responsible for full branch coverage.
  */
 
-import {SwapSimulator} from "../../src/libraries/SwapSimulator.sol";
+import {SwapSimulator} from "../utils/SwapSimulator.sol";
 
 import {Deployers} from "@uniswap/v4-core/test/utils/Deployers.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";

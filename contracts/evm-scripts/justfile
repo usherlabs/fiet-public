@@ -113,8 +113,14 @@ build:
 
 # Start Anvil fork for local development
 fork:
-    @echo "⛽ Starting anvil forked from Network: {{ network }}..."
-    anvil --fork-url {{ fork_source_rpc }} --port {{ anvil_port }}
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "⛽ Starting anvil forked from Network: {{ network }}..."
+    CHAIN_ID_ARG="${CHAIN_ID:-31337}"
+    # Defensive: support quoted dotenv values like CHAIN_ID="421614"
+    CHAIN_ID_ARG="${CHAIN_ID_ARG%\"}"
+    CHAIN_ID_ARG="${CHAIN_ID_ARG#\"}"
+    anvil --fork-url {{ fork_source_rpc }} --port {{ anvil_port }} --chain-id "$CHAIN_ID_ARG"
 
 # === Setup ===
 
@@ -166,7 +172,7 @@ set-underlyings:
         echo "set-underlyings is intended for MODE=LOCAL. Skipping."
         exit 0
     fi
-    DEPLOYMENTS_FILE="deployments/local_sepolia_deployments.json"
+    DEPLOYMENTS_FILE="deployments/local_{{ network }}_deployments.json"
     if [ ! -f "$DEPLOYMENTS_FILE" ]; then
         echo "Expected $DEPLOYMENTS_FILE not found. Run \`just deploy-tokenA\` and \`just deploy-tokenB\` first."
         exit 1
@@ -394,6 +400,66 @@ deploy-oracle:
 
 # Configure the local resilient oracle (enables MAIN oracle + sets mock prices for default CreateMarket pair)
 configure-oracle:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    # Reload dotenv at runtime (important when earlier recipes updated `.env` within the same `just dev` run).
+    if [ -f ".env" ]; then
+        set -a
+        # shellcheck disable=SC1091
+        source ".env"
+        set +a
+    fi
+
+    # In LOCAL mode, derive missing values from the deployment artefacts produced by earlier steps.
+    if [ "{{ mode }}" = "LOCAL" ]; then
+        ORACLE_ADDR_FILE="deployments/oracle_deployments/development/addresses.json"
+        if [ -f "$ORACLE_ADDR_FILE" ]; then
+            if [ -z "${RESILIENT_ORACLE_ADDRESS:-}" ] || [ "${RESILIENT_ORACLE_ADDRESS:-}" = "null" ]; then
+                export RESILIENT_ORACLE_ADDRESS
+                RESILIENT_ORACLE_ADDRESS="$(jq -r '.ResilientOracle_Proxy' "$ORACLE_ADDR_FILE")"
+            fi
+            if [ -z "${MAIN_ORACLE_ADDRESS:-}" ] || [ "${MAIN_ORACLE_ADDRESS:-}" = "null" ]; then
+                export MAIN_ORACLE_ADDRESS
+                MAIN_ORACLE_ADDRESS="$(jq -r '.ChainlinkOracle_Proxy' "$ORACLE_ADDR_FILE")"
+            fi
+        fi
+
+        DEPLOYMENTS_FILE="deployments/local_{{ network }}_deployments.json"
+        if [ -f "$DEPLOYMENTS_FILE" ]; then
+            if [ -z "${UNDERLYING_ASSET_0:-}" ] || [ "${UNDERLYING_ASSET_0:-}" = "null" ]; then
+                export UNDERLYING_ASSET_0
+                UNDERLYING_ASSET_0="$(jq -r '.usdtToken' "$DEPLOYMENTS_FILE")"
+            fi
+            if [ -z "${UNDERLYING_ASSET_1:-}" ] || [ "${UNDERLYING_ASSET_1:-}" = "null" ]; then
+                export UNDERLYING_ASSET_1
+                UNDERLYING_ASSET_1="$(jq -r '.usdcToken' "$DEPLOYMENTS_FILE")"
+            fi
+        fi
+    fi
+
+    if [ -z "${RESILIENT_ORACLE_ADDRESS:-}" ] || [ "$RESILIENT_ORACLE_ADDRESS" = "null" ]; then
+        echo "Missing RESILIENT_ORACLE_ADDRESS. Run \`just deploy-oracle\` first (it writes .env) or export RESILIENT_ORACLE_ADDRESS manually."
+        exit 1
+    fi
+
+    # Fail fast with a clear message if the address is stale (EOA/empty) on the current RPC.
+    RESILIENT_CODE="$(cast code "$RESILIENT_ORACLE_ADDRESS" --rpc-url {{ rpc_url }})"
+    if [ "$RESILIENT_CODE" = "0x" ]; then
+        echo "RESILIENT_ORACLE_ADDRESS has no code on {{ rpc_url }}: $RESILIENT_ORACLE_ADDRESS"
+        echo "This usually means a stale env var was used or Anvil was restarted. Re-run \`just deploy-oracle\` (or \`just dev\`) against the current Anvil."
+        exit 1
+    fi
+
+    if [ -n "${MAIN_ORACLE_ADDRESS:-}" ] && [ "${MAIN_ORACLE_ADDRESS:-}" != "null" ]; then
+        MAIN_CODE="$(cast code "$MAIN_ORACLE_ADDRESS" --rpc-url {{ rpc_url }})"
+        if [ "$MAIN_CODE" = "0x" ]; then
+            echo "MAIN_ORACLE_ADDRESS has no code on {{ rpc_url }}: $MAIN_ORACLE_ADDRESS"
+            echo "Re-run \`just deploy-oracle\` (or \`just dev\`) against the current Anvil, or export MAIN_ORACLE_ADDRESS to a deployed oracle."
+            exit 1
+        fi
+    fi
+
     forge script {{ script_dir }}/setup/ConfigureOracle.s.sol:ConfigureOracleScript \
         --rpc-url {{ rpc_url }} \
         {{ broadcast_flag }} -vvv
@@ -531,6 +597,32 @@ admin-oracle-configure-assets:
 
 # Create a new market
 create-market:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    # Reload dotenv at runtime (important when earlier recipes updated `.env` within the same `just dev` run).
+    if [ -f ".env" ]; then
+        set -a
+        # shellcheck disable=SC1091
+        source ".env"
+        set +a
+    fi
+
+    # In LOCAL mode, fall back to the token deployment artefact if underlyings are not set.
+    if [ "{{ mode }}" = "LOCAL" ]; then
+        DEPLOYMENTS_FILE="deployments/local_{{ network }}_deployments.json"
+        if [ -f "$DEPLOYMENTS_FILE" ]; then
+            if [ -z "${UNDERLYING_ASSET_0:-}" ] || [ "${UNDERLYING_ASSET_0:-}" = "null" ]; then
+                export UNDERLYING_ASSET_0
+                UNDERLYING_ASSET_0="$(jq -r '.usdtToken' "$DEPLOYMENTS_FILE")"
+            fi
+            if [ -z "${UNDERLYING_ASSET_1:-}" ] || [ "${UNDERLYING_ASSET_1:-}" = "null" ]; then
+                export UNDERLYING_ASSET_1
+                UNDERLYING_ASSET_1="$(jq -r '.usdcToken' "$DEPLOYMENTS_FILE")"
+            fi
+        fi
+    fi
+
     forge script {{ script_dir }}/CreateMarket.s.sol \
         --rpc-url {{ rpc_url }} \
         {{ broadcast_flag }} -vvv
