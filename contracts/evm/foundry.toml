@@ -12,12 +12,6 @@ ignored_error_codes = [
 solc_version = '0.8.26'
 evm_version = "cancun"   # hard fork that enabled EIP-1153
 gas_limit = "3000000000"
-# fuzz_runs = 10_000
-optimizer_runs = 20000
-# optimizer_runs = 44444444
-optimizer = true
-via_ir = true
-ffi = true
 
 bytecode_hash = "none"
 
@@ -31,43 +25,13 @@ fs_permissions = [
 
 remappings = ["@openzeppelin/=lib/openzeppelin-contracts/"]
 
-# Foundry automatically instruments linked-libraries if library public/external functions are called.
-# Defaulting to predicted addresses via CREATE3Factory.
-# TODO: Hard-linked libraries are causing tests to fail.
-# libraries = [
-#   "src/libraries/VTSPositionLib.sol:VTSPositionLib:0x2C95130C4DE0504c82f4688C657c9A4CC01761EF",
-#   "src/libraries/VTSSwapLib.sol:VTSSwapLib:0x8AF1433f3d2b0547A63f7004B9dA9C5953fD522D",
-#   "src/libraries/VTSCommitLib.sol:VTSCommitLib:0x6EBB20A904a9CA505e7d4A253c7FbF72DF5a777b",
-#   "src/libraries/LCCFactoryLib.sol:LCCFactoryLinkedLib:0x3209860215dB283218CBc8f0D5acf57Ae8874C85",
-#   "src/libraries/VTSFeeLib.sol:VTSFeeLinkedLib:0x0000000000000000000000000000000000000000",
-# ]
-
-
-# additional_compiler_profiles = [
-#   { name = "market", via_ir = true, optimizer_runs = 30000 },
-#   { name = "descriptor", via_ir = true, optimizer_runs = 1 },
-#   { name = "test", via_ir = false },
-# ]
-
-# compilation_restrictions = [
-#   { paths = "src/MMPositionManager.sol", optimizer_runs = 30000 },
-#   { paths = "src/MMPositionActionsImpl.sol", optimizer_runs = 30000 },
-#   { paths = "src/MarketVaultDeployer.sol", optimizer_runs = 30000 },
-#   { paths = "src/MMPCommitmentDescriptor.sol", optimizer_runs = 1 },
-#   { paths = "test/**", via_ir = false },
-# ]
-
-# The above compilation_restrictions and additional_compiler_profiles are not working as expected.
-# The real conflict is your Foundry “compilation restrictions” forcing different optimizer_runs for different source files that end up in the same compilation unit (your test imports them together).
-# TODO: MarketTestBase.sol import list includes both src/MMPositionManager.sol (30000 runs) and src/MMPCommitmentDescriptor.sol (1 run) (and MMPositionActionsImpl.sol at 30000), so Forge can’t compile that test in a single job
-# We must split this up. MarketFactory overhaul should resolve this.
-
-# [lint]
-# exclude_lints = [
-#   "screaming-snake-case-immutable",
-#   "mixed-case-variable",
-#   "mixed-case-function",
-# ]
+via_ir = false
+optimizer = false
+optimizer_runs = 0
+# Mutation / Debug builds often change inlining behaviour; if we keep hard-linked library addresses here,
+# calls can surface to addresses that have no code in the test VM (e.g. "delegatecall to non-contract").
+# For mutation runs, prefer Foundry's auto-deploy/auto-link behaviour.
+libraries = []
 
 [profile.debug]
 via_ir = false
@@ -107,14 +71,15 @@ libraries = [
   "src/libraries/VTSFeeLib.sol:VTSFeeLinkedLib:0x1111111111111111111111111111111111111111",
 ]
 
-[profile.mutation]
-via_ir = false
-optimizer = false
-optimizer_runs = 0
-# Mutation builds often change inlining behaviour; if we keep hard-linked library addresses here,
-# calls can surface to addresses that have no code in the test VM (e.g. "delegatecall to non-contract").
-# For mutation runs, prefer Foundry's auto-deploy/auto-link behaviour.
-libraries = []
+[profile.prod]
+# ! Production deployments will adopt the Profile in contracts/evm-scripts/foundry.toml
+# ! This profile is only used for production builds in local development, and testing.
+# fuzz_runs = 10_000
+# optimizer_runs = 20000
+optimizer_runs = 44444444
+optimizer = true
+via_ir = true
+ffi = true
 
 [rpc_endpoints]
 local = "${ANVIL_FORK_URL}"
