@@ -15,7 +15,7 @@ This document explains:
 - **what an adversary can and cannot do** to Fiet’s VTS mechanics via ordering,
 - **why “every swap runs accounting” is true but not sufficient** to eliminate ordering impacts,
 - practical **downside impacts for market makers (MMs)**, and
-- **mitigation approaches** ranging from “execution-layer” protections (private routing) to optional protocol-level dampeners (TWAP gating for specific triggers).
+- **mitigation approaches** focused on ancillary tooling and “execution-layer” protections (private routing), plus an attestation-based grace-extension channel.
 
 ## Threat model (what we assume)
 
@@ -44,7 +44,7 @@ This document explains:
   - `contracts/evm/src/VRLSettlementObserver.sol` (`verifySettlementProof`)
   - `contracts/evm/src/interfaces/ISettlementVerifier.sol` (verifier interface)
 
-### 1) Swap accounting is deterministic per swap, but *position state* is realised on “touch”
+### 1) Swap accounting is deterministic per swap, but _position state_ is realised on “touch”
 
 Every swap on the core pool triggers VTS swap processing (`CoreHook.afterSwap → VTSOrchestrator.afterCoreSwap → VTSSwapLib.processSwap`), accruing **global** deficit and inflow growth along the realised price path.
 
@@ -74,7 +74,7 @@ Key examples:
 
 - **`checkpoint()`**: settles growth then computes RfS state and marks the position’s checkpoint from that snapshot.
 - **MM settlement flows** (`onMMSettle` and related): settle growth, compute RfS clamps, then apply settlement deltas subject to position state and available liquidity.
-- **Liquidity modification**: by design, growth is checkpointed *before* liquidity changes so new liquidity cannot claim historical accrual. This is correct, but it also means “touch timing” matters.
+- **Liquidity modification**: by design, growth is checkpointed _before_ liquidity changes so new liquidity cannot claim historical accrual. This is correct, but it also means “touch timing” matters.
 
 ## Downside impacts for MMs (practical, not theoretical)
 
@@ -108,7 +108,7 @@ In short: “manipulation is not free” is correct, but “fees fully neutralis
 ## Current posture (this version)
 
 - **We inherit standard Uniswap-style MEV/adversarial ordering surfaces** (sandwiching around sensitive actions in a public mempool).
-- **We do not yet incorporate native MEV mitigation** (no in-protocol auction/batching, no enforced private routing, no protocol-level TWAP gating for RfS decisions).
+- **We do not incorporate native, in-protocol MEV mitigation in this version**, and we have no near-term intent to add such mechanisms.
 - We rely on:
   - real manipulation costs (fees + price impact),
   - operational grace windows, and
@@ -116,7 +116,7 @@ In short: “manipulation is not free” is correct, but “fees fully neutralis
 
 ## Mitigation approaches
 
-Mitigations fall into two categories: **execution-layer protections** (reduce adversarial ordering) and **protocol-level dampeners** (reduce sensitivity when adversarial ordering exists).
+Our mitigation posture is to provide **ancillary tooling and execution-layer protections** (rather than embedding MEV mitigation into protocol mechanics).
 
 ### A) Execution-layer protections (recommended on public mempools)
 
@@ -124,24 +124,12 @@ Mitigations fall into two categories: **execution-layer protections** (reduce ad
   - This reduces or removes the sandwich surface by eliminating public pre-trade visibility.
 - **Solver/auction execution for sensitive actions** (optional).
   - Instead of submitting directly to a public mempool, MMs can route via an auction/solver layer that can batch execution and reduce toxic ordering.
+- **MEV-resistant AMM frameworks** (optional).
+  - On highly MEV-sensitive public-mempool chains (eg Ethereum L1), deployments can **eventually** adopt MEV-preventing AMM designs/frameworks such as **Angstrom** (or similar orderflow/auction-based systems) as an integration path for stronger execution guarantees.
 
 These mitigations are external to the protocol but are the most direct way to address sandwiching in adversarial mempools.
 
-### B) Protocol-level dampeners (optional, with semantic/UX trade-offs)
-
-- **TWAP gating for specific triggers**:
-  - Keep realised-path growth accounting, but use TWAP-derived signals for specific risk gates (eg when opening/closing RfS, or when enabling certain sensitive flows).
-  - Trade-off: introduces lag and new parameters; can be gamed over longer windows.
-
-- **Sequencing constraints for sensitive actions**:
-  - Examples include minimum-delay guards, action-specific cool-downs, or restricting when checkpoints can be marked relative to swaps.
-  - Trade-off: reduces composability and can create “liveness” constraints.
-
-- **Bounded per-touch crystallisation** (advanced):
-  - Cap the amount of growth that can be realised into position state in a single touch.
-  - Trade-off: more complex accounting, potential new incentives, and “deferred” state that can surprise integrators.
-
-### C) Grace extension via externally verified attestations (settlement-proof channel)
+### B) Grace extension via externally verified attestations (settlement-proof channel)
 
 Fiet already supports grace extension via externally verified settlement proofs (see `CheckpointLibrary.extendGracePeriod` and `VRLSettlementObserver.verifySettlementProof`).
 
@@ -158,18 +146,18 @@ Important notes:
 - allowlisting and non-replay protection exist at the settlement observer layer; and
 - the condition should be narrowly specified to avoid abuse (eg rate limiting, scope binding to pool/token/position, and conservative extensions).
 
-## Recommended integrator guidance (short-form)
+## Conclusive outlook
 
 On public-mempool chains:
 
 - assume adversarial ordering exists,
-- submit sensitive MM actions via private routing where possible,
+- submit sensitive MM actions via private/prioritised routing where possible,
 - treat grace extensions as an operational tool (especially if integrating attestation-based extensions),
 - do not assume `checkpoint()` deterministically flips RfS in a hostile ordering environment; treat it as “best effort based on the realised path up to that inclusion”.
+- Fiet to consider adopting MEV-resistant execution frameworks (eg **Angstrom**) on highly MEV-sensitive chains (eg Ethereum L1),
 
 ## Appendix: glossary
 
 - **MEV**: Maximal/Maximum Extractable Value; profit from transaction ordering/manipulation.
 - **Sandwich**: attacker trades before and after a victim to move price and profit (or to induce a victim-side state change).
 - **Touch**: any protocol interaction that realises global growth into per-position state (eg settlement, checkpoint, liquidity modifications).
-
