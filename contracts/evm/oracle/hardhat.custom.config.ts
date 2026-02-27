@@ -40,9 +40,8 @@ extendConfig((config: HardhatConfig) => {
 // Override: set HARDHAT_HTTP_TIMEOUT_MS to customise.
 const httpTimeoutMs = process.env.HARDHAT_HTTP_TIMEOUT_MS ? Number(process.env.HARDHAT_HTTP_TIMEOUT_MS) : 120000;
 
-// NOTE: Avoid importing files that import `hardhat` from within config evaluation.
-// The MODE=LIVE ACM override is applied at runtime inside `lib/oracle/helpers/deploymentConfig.ts`
-// to avoid Hardhat config load error HH9.
+// NOTE: Keep this config self-contained. Deploy logic lives under `contracts/evm/oracle/deploy`
+// and is loaded via `paths.deploy` so we don't mutate vendored deployment scripts at runtime.
 
 
 
@@ -166,8 +165,9 @@ const config: HardhatUserConfig = {
     ],
   },
   paths: {
+    deploy: "../../oracle/deploy",
     tests: "./test",
-    deployments: "../../deployments/oracle_deployments",
+    deployments: "../../../evm-scripts/deployments/oracle_deployments",
   },
   dependencyCompiler: {
     paths: [

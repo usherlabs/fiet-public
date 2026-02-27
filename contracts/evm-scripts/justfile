@@ -52,6 +52,7 @@ help:
     @echo "  just build                  - Build all Solidity contracts"
     @echo "  just fork                   - Start Anvil fork for local development"
     @echo "  just setup-create3          - Setup CREATE3Factory for local development (etch at canonical address)"
+    @echo "  just predict-globalconfig   - Predict CREATE3 GlobalConfig address for current deployer"
     @echo ""
     @echo "🚀 Deployment Commands:"
     @echo "  just deploy-tokenA          - Deploy USDT mock token"
@@ -206,6 +207,32 @@ setup-create3:
     echo "Next:"
     echo "  export CREATE3_FACTORY=$DEPLOYED_ADDR"
     echo "  (or add it to your dotenv file for contracts/evm-scripts)"
+
+# Predict the deterministic CREATE3 GlobalConfig address (salt: keccak256("GlobalConfig-v1"))
+predict-globalconfig:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -z "${PRIVATE_KEY:-}" ]; then
+        echo "Missing PRIVATE_KEY (required to derive deployer namespace for CREATE3)"
+        exit 1
+    fi
+
+    if [ -n "${CREATE3_FACTORY:-}" ]; then
+        FACTORY="$CREATE3_FACTORY"
+    elif [ "{{ network }}" = "sepolia" ]; then
+        FACTORY="0x0EC3715467915Cbd7355A6B111510e4a09D9ccC0"
+    else
+        FACTORY="0x9fBB3DF7C40Da2e5A0dE984fFE2CCB7C47cd0ABf"
+    fi
+
+    DEPLOYER_ADDR="$(cast wallet address --private-key "$PRIVATE_KEY")"
+    SALT="$(cast keccak "GlobalConfig-v1")"
+    PREDICTED_ADDR="$(cast call "$FACTORY" "getDeployed(address,bytes32)(address)" "$DEPLOYER_ADDR" "$SALT" --rpc-url {{ rpc_url }} | tr -d '\n' | tr -d '\r')"
+
+    echo "CREATE3 factory: $FACTORY"
+    echo "Deployer:       $DEPLOYER_ADDR"
+    echo "Salt:           $SALT"
+    echo "GlobalConfig:   $PREDICTED_ADDR"
 
 # === Deployments ===
 
@@ -387,54 +414,13 @@ deploy-oracle:
 
     echo "Deploying oracle to network: $ORACLE_NETWORK_ARG (MODE=$MODE_NORM) {{ network }}"
     cp ../evm/oracle/hardhat.custom.config.ts ../evm/lib/oracle/hardhat.fiet.config.ts
-    LIVE_ACM_ADDRESS=""
 
-    # In MODE=LIVE, patch the oracle submodule after it is checked out.
-    # This appends a small snippet that allows `LIVE_ACM_ADDRESS` to override `ADDRESSES[network].acm`
-    # at runtime, without committing changes inside the submodule.
-    if [ "$MODE_NORM" = "LIVE" ]; then
-        ORACLE_DEPLOYMENT_CONFIG="${ROOT_DIR}/../evm/lib/oracle/helpers/deploymentConfig.ts"
-        ORACLE_DEPLOYMENT_CONFIG_PATCH="${ROOT_DIR}/../evm/oracle/patches/deploymentConfig.live-acm-override.append.ts"
-        PATCH_MARKER="FIET_PATCH_LIVE_ACM_OVERRIDE"
-        if [ ! -f "$ORACLE_DEPLOYMENT_CONFIG_PATCH" ]; then
-            echo "Missing oracle patch snippet: $ORACLE_DEPLOYMENT_CONFIG_PATCH"
-            exit 1
-        fi
-        if ! grep -q "$PATCH_MARKER" "$ORACLE_DEPLOYMENT_CONFIG" 2>/dev/null; then
-            echo "Patching oracle deploymentConfig.ts for MODE=LIVE ACM override"
-            cat "$ORACLE_DEPLOYMENT_CONFIG_PATCH" >> "$ORACLE_DEPLOYMENT_CONFIG"
-        fi
-    fi
-
-    if [ "$MODE_NORM" = "LIVE" ]; then
-        # In MODE=LIVE, deploy a fresh ACM first and keep its admin role with the deployer EOA.
-        # We inject this address into Hardhat config so the downstream oracle deploy uses it.
-        # Run the ACM deploy script from the Hardhat project directory (lib/oracle) while keeping the
-        # script source checked in under `contracts/evm/oracle/` for easier maintenance.
-        ACM_DEPLOY_OUTPUT="$(cd ../evm/lib/oracle && HARDHAT_NETWORK="$ORACLE_NETWORK_ARG" npx --yes hardhat --config ./hardhat.fiet.config.ts run --network "$ORACLE_NETWORK_ARG" ../../oracle/scripts/deploy-live-acm.cjs)"
-
-        LIVE_ACM_ADDRESS="$(printf '%s\n' "$ACM_DEPLOY_OUTPUT" | awk -F= '/^ACM_DEPLOYED_ADDRESS=/{print $2; exit}')"
-        if [ -z "$LIVE_ACM_ADDRESS" ]; then
-            echo "Failed to deploy LIVE ACM (address not found in hardhat output)"
-            echo "$ACM_DEPLOY_OUTPUT"
-            exit 1
-        fi
-
-        # Validate the deployed ACM actually exists on the target chain before deploying dependent contracts.
-        LIVE_ACM_CODE="$(cast code "$LIVE_ACM_ADDRESS" --rpc-url {{ rpc_url }})"
-        if [ "$LIVE_ACM_CODE" = "0x" ]; then
-            echo "LIVE ACM has no code at $LIVE_ACM_ADDRESS on {{ network }}"
-            exit 1
-        fi
-        echo "Using freshly deployed LIVE ACM: $LIVE_ACM_ADDRESS"
-    fi
-
-    cd ../evm/lib/oracle && HARDHAT_NETWORK="$ORACLE_NETWORK_ARG" MODE="$MODE_NORM" LIVE_ACM_ADDRESS="$LIVE_ACM_ADDRESS" \
+    cd ../evm/lib/oracle && HARDHAT_NETWORK="$ORACLE_NETWORK_ARG" MODE="$MODE_NORM" \
         npx --yes hardhat --config ./hardhat.fiet.config.ts deploy --network "$ORACLE_NETWORK_ARG" --tags deploy --reset
 
     # Read from stored files and persist env vars for subsequent Foundry scripts.
-    # Hardhat writes deployments to `../evm/deployments/oracle_deployments` (see `contracts/evm/oracle/hardhat.custom.config.ts`).
-    ORACLE_DIR="${ROOT_DIR}/../evm/deployments/oracle_deployments/${ORACLE_NETWORK_ARG}"
+    # Hardhat writes deployments to `./deployments/oracle_deployments` (see `contracts/evm/oracle/hardhat.custom.config.ts`).
+    ORACLE_DIR="${ROOT_DIR}/deployments/oracle_deployments/${ORACLE_NETWORK_ARG}"
     RESILIENT_ORACLE_JSON="${ORACLE_DIR}/ResilientOracle_Proxy.json"
     ACM_JSON="${ORACLE_DIR}/AccessControlManager.json"
 
@@ -454,13 +440,6 @@ deploy-oracle:
     MAIN_ORACLE_PROXY_FILE="${MAIN_ORACLE_CONTRACT}_Proxy.json"
     MAIN_ORACLE_IMPL_JSON="${ORACLE_DIR}/${MAIN_ORACLE_IMPL_FILE}"
     MAIN_ORACLE_PROXY_JSON="${ORACLE_DIR}/${MAIN_ORACLE_PROXY_FILE}"
-
-    # In MODE=LIVE, ACM is pre-deployed outside hardhat-deploy manifests.
-    # Write a minimal deployment JSON so existing parsing/export logic remains unchanged.
-    if [ "$MODE_NORM" = "LIVE" ] && [ ! -f "$ACM_JSON" ] && [ -n "$LIVE_ACM_ADDRESS" ]; then
-        mkdir -p "$ORACLE_DIR"
-        jq -n --arg address "$LIVE_ACM_ADDRESS" '{address: $address}' > "$ACM_JSON"
-    fi
 
     if [ ! -f "$RESILIENT_ORACLE_JSON" ]; then
         echo "Expected oracle deployment file not found: $RESILIENT_ORACLE_JSON"
@@ -497,23 +476,15 @@ deploy-oracle:
         echo "  AccessControlManager.json             = $ACCESS_CONTROL_MANAGER"
         exit 1
     fi
-    if [ "$MODE_NORM" = "LIVE" ] && [ -n "$LIVE_ACM_ADDRESS" ]; then
-        if [ "$(norm_addr "$LIVE_ACM_ADDRESS")" != "$(norm_addr "$ACCESS_CONTROL_MANAGER")" ]; then
-            echo "LIVE ACM mismatch:"
-            echo "  LIVE_ACM_ADDRESS                      = $LIVE_ACM_ADDRESS"
-            echo "  AccessControlManager.json             = $ACCESS_CONTROL_MANAGER"
+    # Deployer should initially hold ACM DEFAULT_ADMIN_ROLE before optional GlobalConfig handoff scripts.
+    if [ "$MODE_NORM" = "LIVE" ] && [ -n "${PRIVATE_KEY:-}" ]; then
+        DEPLOYER_ADDR="$(cast wallet address --private-key "$PRIVATE_KEY")"
+        HAS_ADMIN="$(cast call "$ACCESS_CONTROL_MANAGER" "hasRole(bytes32,address)(bool)" 0x0000000000000000000000000000000000000000000000000000000000000000 "$DEPLOYER_ADDR" --rpc-url {{ rpc_url }} | tr -d '\n' | tr -d '\r')"
+        if [ "$HAS_ADMIN" != "true" ]; then
+            echo "Expected deployer to have ACM DEFAULT_ADMIN_ROLE in MODE=LIVE, but hasRole returned: $HAS_ADMIN"
+            echo "  ACM:      $ACCESS_CONTROL_MANAGER"
+            echo "  deployer: $DEPLOYER_ADDR"
             exit 1
-        fi
-        # In MODE=LIVE, the deployer EOA should initially hold DEFAULT_ADMIN_ROLE on the freshly deployed ACM.
-        if [ -n "${PRIVATE_KEY:-}" ]; then
-            DEPLOYER_ADDR="$(cast wallet address --private-key "$PRIVATE_KEY")"
-            HAS_ADMIN="$(cast call "$ACCESS_CONTROL_MANAGER" "hasRole(bytes32,address)(bool)" 0x0000000000000000000000000000000000000000000000000000000000000000 "$DEPLOYER_ADDR" --rpc-url {{ rpc_url }} | tr -d '\n' | tr -d '\r')"
-            if [ "$HAS_ADMIN" != "true" ]; then
-                echo "Expected deployer to have ACM DEFAULT_ADMIN_ROLE in MODE=LIVE, but hasRole returned: $HAS_ADMIN"
-                echo "  ACM:     $ACCESS_CONTROL_MANAGER"
-                echo "  deployer: $DEPLOYER_ADDR"
-                exit 1
-            fi
         fi
     fi
 
@@ -543,26 +514,35 @@ deploy-oracle:
     OUT_DIR="${ROOT_DIR}/deployments/oracle_deployments/${ORACLE_NETWORK_ARG}"
     mkdir -p "$OUT_DIR"
 
-    # Copy per-contract deployment files (useful for deeper debugging).
-    for f in \
-      AccessControlManager.json \
-      VAI.json \
-      DefaultProxyAdmin.json \
-      BoundValidator_Implementation.json \
-      BoundValidator_Proxy.json \
-      ResilientOracle_Implementation.json \
-      ResilientOracle_Proxy.json \
-      "${MAIN_ORACLE_IMPL_FILE}" \
-      "${MAIN_ORACLE_PROXY_FILE}"; do
-        if [ -f "${ORACLE_DIR}/${f}" ]; then
-            cp "${ORACLE_DIR}/${f}" "${OUT_DIR}/${f}"
+    # Copy per-contract deployment files when source and destination differ.
+    if [ "$ORACLE_DIR" != "$OUT_DIR" ]; then
+        for f in \
+          AccessControlManager.json \
+          DefaultProxyAdmin.json \
+          BoundValidator_Implementation.json \
+          BoundValidator_Proxy.json \
+          ResilientOracle_Implementation.json \
+          ResilientOracle_Proxy.json \
+          "${MAIN_ORACLE_IMPL_FILE}" \
+          "${MAIN_ORACLE_PROXY_FILE}"; do
+            if [ -f "${ORACLE_DIR}/${f}" ]; then
+                cp "${ORACLE_DIR}/${f}" "${OUT_DIR}/${f}"
+            fi
+        done
+    fi
+
+    VAI_ADDRESS=""
+    if [ -f "${ORACLE_DIR}/VAI.json" ]; then
+        if [ "$ORACLE_DIR" != "$OUT_DIR" ]; then
+            cp "${ORACLE_DIR}/VAI.json" "${OUT_DIR}/VAI.json"
         fi
-    done
+        VAI_ADDRESS="$(jq -r '.address' "${ORACLE_DIR}/VAI.json")"
+    fi
 
     # Write a single address-book JSON for scripts/tools.
     jq -n \
       --arg AccessControlManager "$(jq -r '.address' "${ORACLE_DIR}/AccessControlManager.json")" \
-      --arg VAI "$(jq -r '.address' "${ORACLE_DIR}/VAI.json")" \
+      --arg VAI "${VAI_ADDRESS}" \
       --arg DefaultProxyAdmin "$(jq -r '.address' "${ORACLE_DIR}/DefaultProxyAdmin.json")" \
       --arg BoundValidator_Implementation "$(jq -r '.address' "${ORACLE_DIR}/BoundValidator_Implementation.json")" \
       --arg BoundValidator_Proxy "$(jq -r '.address' "${ORACLE_DIR}/BoundValidator_Proxy.json")" \
@@ -765,7 +745,12 @@ admin-vrl-settlement-disallow-verifier-for-tokens:
         {{ broadcast_flag }} -vvv
 
 admin-oracle-transfer-to-globalconfig:
-    forge script {{ script_dir }}/admin/ResilientOracleOwnership.s.sol:ResilientOracleTransferToGlobalConfigScript \
+    forge script {{ script_dir }}/admin/OracleStackOwnership.s.sol:OracleStackTransferToGlobalConfigScript \
+        --rpc-url {{ rpc_url }} \
+        {{ broadcast_flag }} -vvv
+
+admin-oracle-transfer-stack-to-globalconfig:
+    forge script {{ script_dir }}/admin/OracleStackOwnership.s.sol:OracleStackTransferToGlobalConfigScript \
         --rpc-url {{ rpc_url }} \
         {{ broadcast_flag }} -vvv
 
