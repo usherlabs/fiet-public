@@ -14,7 +14,13 @@ contracts/**/cache/
 reports
 contracts/evm-scripts/cache/
 contracts/evm-scripts/out/
-contracts/evm-scripts/broadcast/
+
+# Foundry broadcast artefacts (keep selected mainnet runs)
+contracts/evm-scripts/broadcast/**
+!contracts/evm-scripts/broadcast/
+!contracts/evm-scripts/broadcast/*/
+!contracts/evm-scripts/broadcast/*/42161/
+!contracts/evm-scripts/broadcast/*/42161/**
 .env
 
 # Deployment artifacts
