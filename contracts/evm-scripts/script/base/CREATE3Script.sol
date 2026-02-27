@@ -90,7 +90,7 @@ abstract contract CREATE3Script is Script {
     }
 
     function getCreate3ContractSalt(string memory name) internal view virtual returns (bytes32) {
-        return keccak256(bytes(string.concat(name, "-v", version)));
+        return keccak256(bytes(_buildCreate3SaltSeed(name, version)));
     }
 
     function getCreate3ContractSalt(string memory name, string memory _version)
@@ -99,7 +99,19 @@ abstract contract CREATE3Script is Script {
         virtual
         returns (bytes32)
     {
-        return keccak256(bytes(string.concat(name, "-v", _version)));
+        return keccak256(bytes(_buildCreate3SaltSeed(name, _version)));
+    }
+
+    /// @dev Builds the CREATE3 salt seed from contract name, version, and optional CREATE3_SALT env suffix.
+    ///      This preserves unique salts per contract name while allowing deterministic namespace rotation.
+    function _buildCreate3SaltSeed(string memory name, string memory _version) internal view returns (string memory) {
+        string memory baseSeed = string.concat(name, "-v", _version);
+        try vm.envString("CREATE3_SALT") returns (string memory envSaltSuffix) {
+            if (bytes(envSaltSuffix).length > 0) {
+                return string.concat(baseSeed, "-", envSaltSuffix);
+            }
+        } catch {}
+        return baseSeed;
     }
 
     function getCreate3SaltFromEnv(string memory name) internal view virtual returns (bytes32) {
