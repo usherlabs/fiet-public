@@ -104,6 +104,7 @@ dev: setup-create3 deploy-tokenA deploy-tokenB set-underlyings deploy allow-orac
 
 # Production Steps:
 # 1. deploy-oracle
+#    ! if deploying to many chains, cd contracts/evm/lib/oracle and run `npx hardhat clean && git stash`
 # 2. Simulate: deploy-libraries
 # 3. Deploy: deploy-libraries
 # 4. just deploy-contracts, IF ARB SEPOLIA prefix with FOUNDRY_PROFILE=deploy-arbitrum-sepolia
