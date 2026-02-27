@@ -1,0 +1,7 @@
+{
+  "vtsPositionLib": "0xc07478b5475c1C5ccd330c8c1B8A317cdD24622F",
+  "vtsSwapLib": "0x4B8C9DF02E1c0C554552d64bc867D9Be2E4a9780",
+  "vtsCommitLib": "0x09674841a09016a84676d4a040Eeca7aDbf31b3B",
+  "vtsFeeLinkedLib": "0xFe204493B9eA006e7907f1e8b80B6422D51130a9",
+  "lccFactoryLinkedLib": "0x00Da46d8c1Dd8c421d781f9983f6A6ec74c702A0"
+}

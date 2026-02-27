@@ -62,11 +62,11 @@ remappings = [
 [profile.deploy]
 # Libraries from main project (deterministic CREATE3 addresses)
 libraries = [
-  "src/libraries/VTSPositionLib.sol:VTSPositionLib:0x2C95130C4DE0504c82f4688C657c9A4CC01761EF",
-  "src/libraries/VTSSwapLib.sol:VTSSwapLib:0x8AF1433f3d2b0547A63f7004B9dA9C5953fD522D",
-  "src/libraries/VTSCommitLib.sol:VTSCommitLib:0x6EBB20A904a9CA505e7d4A253c7FbF72DF5a777b",
-  "src/libraries/VTSFeeLib.sol:VTSFeeLinkedLib:0xF99a25421b798087e7eE2E3fD78268CC961dEbf6",
-  "src/libraries/LCCFactoryLib.sol:LCCFactoryLinkedLib:0x3209860215dB283218CBc8f0D5acf57Ae8874C85",
+  "src/libraries/VTSPositionLib.sol:VTSPositionLib:0xc07478b5475c1C5ccd330c8c1B8A317cdD24622F",
+  "src/libraries/VTSSwapLib.sol:VTSSwapLib:0x4B8C9DF02E1c0C554552d64bc867D9Be2E4a9780",
+  "src/libraries/VTSCommitLib.sol:VTSCommitLib:0x09674841a09016a84676d4a040Eeca7aDbf31b3B",
+  "src/libraries/VTSFeeLib.sol:VTSFeeLinkedLib:0xFe204493B9eA006e7907f1e8b80B6422D51130a9",
+  "src/libraries/LCCFactoryLib.sol:LCCFactoryLinkedLib:0x00Da46d8c1Dd8c421d781f9983f6A6ec74c702A0",
 ]
 
 [profile.deploy-arbitrum-sepolia]
