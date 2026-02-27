@@ -134,14 +134,13 @@ fork:
 
 # === Setup ===
 
-# Setup CREATE3Factory for local development (persisted on Anvil via anvil_setCode)
+# Setup CREATE3Factory
+# - MODE=LOCAL: installs CREATE3Factory code at the canonical address via anvil_setCode
+# - MODE!=LOCAL: if the canonical factory is missing, deploys a non-canonical factory and
+#   writes its address to `deployments/create3_factory_${NETWORK}.address` (use CREATE3_FACTORY to override)
 setup-create3:
     #!/usr/bin/env bash
     set -euo pipefail
-    if [ "{{ mode }}" != "LOCAL" ]; then
-        echo "setup-create3 is intended for MODE=LOCAL (Anvil). Skipping."
-        exit 0
-    fi
     ADDR="0x9fBB3DF7C40Da2e5A0dE984fFE2CCB7C47cd0ABf"
     echo "Checking CREATE3Factory code at $ADDR via {{ rpc_url }} ..."
     EXISTING_CODE="$(cast code "$ADDR" --rpc-url {{ rpc_url }})"
@@ -149,16 +148,47 @@ setup-create3:
         echo "CREATE3Factory already present at $ADDR (codesize > 0)."
         exit 0
     fi
-    echo "CREATE3Factory not found. Installing bytecode with anvil_setCode..."
-    BYTECODE="$(forge inspect CREATE3Factory deployedBytecode)"
-    cast rpc anvil_setCode "$ADDR" "$BYTECODE" --rpc-url {{ rpc_url }}
-    # Verify
-    NEW_CODE="$(cast code "$ADDR" --rpc-url {{ rpc_url }})"
-    if [ "$NEW_CODE" = "0x" ]; then
-        echo "Failed to install CREATE3Factory bytecode at $ADDR"
+    if [ "{{ mode }}" = "LOCAL" ]; then
+        echo "CREATE3Factory not found. Installing bytecode with anvil_setCode..."
+        BYTECODE="$(forge inspect CREATE3Factory deployedBytecode)"
+        cast rpc anvil_setCode "$ADDR" "$BYTECODE" --rpc-url {{ rpc_url }}
+        # Verify
+        NEW_CODE="$(cast code "$ADDR" --rpc-url {{ rpc_url }})"
+        if [ "$NEW_CODE" = "0x" ]; then
+            echo "Failed to install CREATE3Factory bytecode at $ADDR"
+            exit 1
+        fi
+        echo "CREATE3Factory installed at $ADDR"
+        exit 0
+    fi
+
+    if [ "{{ broadcast }}" != "true" ]; then
+        echo "CREATE3Factory is missing at canonical address $ADDR on MODE={{ mode }}."
+        echo "Re-run with BROADCAST=true to deploy a CREATE3Factory and then set CREATE3_FACTORY for subsequent scripts."
         exit 1
     fi
-    echo "CREATE3Factory installed at $ADDR"
+
+    echo "CREATE3Factory missing at canonical address on MODE={{ mode }}."
+    echo "Deploying a CREATE3Factory and writing its address to deployments/create3_factory_{{ network }}.address ..."
+    forge script {{ script_dir }}/deploy/DeployCreate3Factory.s.sol:DeployCreate3Factory \
+        --rpc-url {{ rpc_url }} \
+        --broadcast -vvv
+
+    OUT_FILE="deployments/create3_factory_{{ network }}.address"
+    if [ ! -f "$OUT_FILE" ]; then
+        echo "Expected output file $OUT_FILE not found."
+        exit 1
+    fi
+    DEPLOYED_ADDR="$(cat "$OUT_FILE" | tr -d '\n' | tr -d '\r')"
+    if [ -z "$DEPLOYED_ADDR" ]; then
+        echo "Empty deployed address in $OUT_FILE"
+        exit 1
+    fi
+    echo "Deployed CREATE3Factory at: $DEPLOYED_ADDR"
+    echo ""
+    echo "Next:"
+    echo "  export CREATE3_FACTORY=$DEPLOYED_ADDR"
+    echo "  (or add it to your dotenv file for contracts/evm-scripts)"
 
 # === Deployments ===
 
