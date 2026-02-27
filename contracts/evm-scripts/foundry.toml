@@ -62,6 +62,15 @@ remappings = [
 [profile.deploy]
 # Libraries from main project (deterministic CREATE3 addresses)
 libraries = [
+  "src/libraries/VTSPositionLib.sol:VTSPositionLib:0x26e024F42D5F766b562fc35701f13B2d5e01A5C2",
+  "src/libraries/VTSSwapLib.sol:VTSSwapLib:0x62ef223B345cF2bCc9c9097F093202c5f8C88f31",
+  "src/libraries/VTSCommitLib.sol:VTSCommitLib:0x97D09b290896136360857499EA8f6d6F98c3Fb1B",
+  "src/libraries/VTSFeeLib.sol:VTSFeeLinkedLib:0x203f4945f3cf29f34743306d1A33366Da3771bD2",
+  "src/libraries/LCCFactoryLib.sol:LCCFactoryLinkedLib:0x42B8987753996202F071f1598Eef6B2a7F82299B",
+]
+
+[profile.deploy-eth-sepolia]
+libraries = [
   "src/libraries/VTSPositionLib.sol:VTSPositionLib:0xc07478b5475c1C5ccd330c8c1B8A317cdD24622F",
   "src/libraries/VTSSwapLib.sol:VTSSwapLib:0x4B8C9DF02E1c0C554552d64bc867D9Be2E4a9780",
   "src/libraries/VTSCommitLib.sol:VTSCommitLib:0x09674841a09016a84676d4a040Eeca7aDbf31b3B",

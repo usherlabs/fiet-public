@@ -1,0 +1,9 @@
+{
+  "coreHook": "0x6d4BA7C73dD03b139827d392e91d79B169BaeFc3",
+  "marketFactory": "0xcf15E980255cD5dA598036eFc55C69caD91b15f0",
+  "liquidityHub": "0xA421F272D13e96E3aB1e7fE8A5cbB30850dD9b51",
+  "positionManager": "0xeAdCEDAE6fda3DFdbcbe6906CAb4a8Cd4aD77DFA",
+  "directLPDeltaResolver": "0xF72B8D8521aD4d45C045dea6fa69E00BB105f39b",
+  "oracleHelper": "0x4fAF71d4498FD1fc54648C3A4F8ab6fE8bb5cF97",
+  "globalConfig": "0xcc83dEEd09e4C16a5bAd35f8A49Bd304D76E3aa3"
+}
