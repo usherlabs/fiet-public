@@ -106,12 +106,13 @@ dev: setup-create3 deploy-tokenA deploy-tokenB set-underlyings deploy allow-orac
 # 1. deploy-oracle
 # 2. Simulate: deploy-libraries
 # 3. Deploy: deploy-libraries
-# 4. FOUNDRY_PROFILE=deploy-arbitrum-sepolia just deploy-contracts
+# 4. just deploy-contracts, IF ARB SEPOLIA prefix with FOUNDRY_PROFILE=deploy-arbitrum-sepolia
 #
 # ACM
 # ~~5. just admin-acm-transfer-admin-to-globalconfig~~
 # 6. just admin-oracle-transfer-to-globalconfig
-# 7. TARGET_ADDRESS=ResilientOracle_Proxy FUNCTION_SIG="setTokenConfig(TokenConfig)" ACCOUNT_TO_PERMIT=GlobalConfig just admin-oracle-acm-give-call-permission
+# 7 ACM Call Permissions:
+# See examples in ORACLE.md
 #
 # Required ACM call permissions (methodSignature strings):
 # - ResilientOracle token config (what `just configure-oracle` does):
@@ -125,7 +126,7 @@ dev: setup-create3 deploy-tokenA deploy-tokenB set-underlyings deploy allow-orac
 #   - methodSignature: "setTokenConfig((address,address,uint256))"  # (asset, feed, maxStalePeriod)
 #
 # Market Creation
-# 8. configure-oracle
+# 8. ORACLE_CONFIG_FILE=ethsepolia.json just admin-oracle-configure-assets OR configure-oracle
 # 9. create-market
 
 # === Build ===

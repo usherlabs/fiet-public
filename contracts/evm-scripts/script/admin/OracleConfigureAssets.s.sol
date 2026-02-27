@@ -83,6 +83,9 @@ struct OracleAssetConfig {
 }
 
 contract OracleConfigureAssetsScript is AdminBase {
+    // Sentinel used by Venus ResilientOracle to denote native gas token (e.g. ETH).
+    address internal constant NATIVE_ASSET_SENTINEL = 0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB;
+
     function run() external {
         uint256 pk = uint256(vm.envBytes32("PRIVATE_KEY"));
 
@@ -95,6 +98,12 @@ contract OracleConfigureAssetsScript is AdminBase {
         // Used to fetch tx hashes after broadcast (Foundry tracks them by contract name).
         // Override if your broadcasts record under a different name (e.g. interface name).
         string memory broadcastContractName = vm.envOr("ORACLE_BROADCAST_CONTRACT_NAME", string("GlobalConfig"));
+
+        // Optional: limit which assets are configured. If unset/empty, we configure all assets from the config file.
+        // Format: comma-separated list of addresses, e.g.
+        // ORACLE_ASSET_FILTER="0xabc...,0xdef..."
+        string memory assetFilterCsv = vm.envOr("ORACLE_ASSET_FILTER", string(""));
+        address[] memory assetFilter = _parseAddressCsv(assetFilterCsv);
 
         address resilientOracle = vm.parseJsonAddress(json, ".contracts.resilientOracle");
         address mainOracle = vm.parseJsonAddress(json, ".contracts.mainOracle");
@@ -146,7 +155,22 @@ contract OracleConfigureAssetsScript is AdminBase {
                 }
             }
 
-            address asset = vm.parseJsonAddress(json, string.concat(base, ".asset"));
+            address configAsset = vm.parseJsonAddress(json, string.concat(base, ".asset"));
+            address asset = configAsset;
+
+            // Allow configs to specify native asset as `asset=0x0` by mapping to ResilientOracle sentinel.
+            if (asset == address(0)) {
+                asset = NATIVE_ASSET_SENTINEL;
+                console.log("NOTE: config asset=0x0 (native), using sentinel:", asset);
+            }
+
+            if (assetFilter.length > 0 && !_containsAddress(assetFilter, asset) && !_containsAddress(assetFilter, configAsset))
+            {
+                console.log("\nSKIP: filtered out");
+                console.log("asset:", asset);
+                continue;
+            }
+
             address feed = vm.parseJsonAddress(json, string.concat(base, ".feed"));
             uint256 maxStalePeriod = vm.parseJsonUint(json, string.concat(base, ".maxStalePeriod"));
 
@@ -252,6 +276,61 @@ contract OracleConfigureAssetsScript is AdminBase {
     {
         if (!vm.keyExistsJson(json, key)) return defaultValue;
         return vm.parseJsonAddress(json, key);
+    }
+
+    function _containsAddress(address[] memory xs, address x) private pure returns (bool) {
+        for (uint256 i = 0; i < xs.length; i++) {
+            if (xs[i] == x) return true;
+        }
+        return false;
+    }
+
+    function _parseAddressCsv(string memory csv) private pure returns (address[] memory out) {
+        bytes memory b = bytes(csv);
+        if (b.length == 0) return new address[](0);
+
+        uint256 count = 1;
+        for (uint256 i = 0; i < b.length; i++) {
+            if (b[i] == bytes1(",")) count++;
+        }
+
+        out = new address[](count);
+        uint256 outIdx = 0;
+        uint256 start = 0;
+
+        for (uint256 i = 0; i <= b.length; i++) {
+            if (i == b.length || b[i] == bytes1(",")) {
+                string memory token = _trim(_substring(b, start, i));
+                if (bytes(token).length == 0) revert("oracle cfg: empty ORACLE_ASSET_FILTER token");
+                out[outIdx++] = vm.parseAddress(token);
+                start = i + 1;
+            }
+        }
+
+        assembly ("memory-safe") {
+            mstore(out, outIdx)
+        }
+        return out;
+    }
+
+    function _trim(string memory s) private pure returns (string memory) {
+        bytes memory b = bytes(s);
+        uint256 i = 0;
+        uint256 j = b.length;
+
+        while (i < j && (b[i] == 0x20 || b[i] == 0x09 || b[i] == 0x0a || b[i] == 0x0d)) i++;
+        while (j > i && (b[j - 1] == 0x20 || b[j - 1] == 0x09 || b[j - 1] == 0x0a || b[j - 1] == 0x0d)) j--;
+
+        return _substring(b, i, j);
+    }
+
+    function _substring(bytes memory b, uint256 start, uint256 end) private pure returns (string memory) {
+        require(end >= start, "oracle cfg: bad substring");
+        bytes memory out = new bytes(end - start);
+        for (uint256 i = start; i < end; i++) {
+            out[i - start] = b[i];
+        }
+        return string(out);
     }
 
     function _tryGetLatestCallTxHash(string memory contractName) private view returns (bytes32 txHash) {
