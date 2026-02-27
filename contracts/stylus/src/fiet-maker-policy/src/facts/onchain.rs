@@ -242,19 +242,19 @@ impl FactsProvider for OnchainFactsProvider {
         // Fetch pool to get MarketVTSConfiguration.token{0,1}.gracePeriodTime
         // ABI layout (words):
         // w0 id, w1 currency0, w2 currency1,
-        // w3 token0.gracePeriodTime, w4 token0.seizureUnlockTime, w5 token0.baseVTSRate, w6 token0.maxGracePeriodTime,
-        // w7 token1.gracePeriodTime, w8 token1.seizureUnlockTime, w9 token1.baseVTSRate, w10 token1.maxGracePeriodTime,
-        // w11 coverageFeeShare, w12 minResidualUnits, w13 isPaused
+        // w3 token0.gracePeriodTime, w4 token0.baseVTSRate, w5 token0.maxGracePeriodTime,
+        // w6 token1.gracePeriodTime, w7 token1.baseVTSRate, w8 token1.maxGracePeriodTime,
+        // w9 coverageFeeShare, w10 minResidualUnits, w11 isPaused
         let pool_out = self.staticcall(
             self.sources.vts_orchestrator,
             selector("getPool(bytes32)"),
             pool_id.as_slice(),
         )?;
-        if pool_out.len() < 32 * 14 {
+        if pool_out.len() < 32 * 12 {
             return Err(FactsError::MalformedReturn);
         }
         let grace0 = U256::from_be_slice(&pool_out[32 * 3..32 * 4]);
-        let grace1 = U256::from_be_slice(&pool_out[32 * 7..32 * 8]);
+        let grace1 = U256::from_be_slice(&pool_out[32 * 6..32 * 7]);
 
         // Compute elapsed = now - timeOfLastTransition (clamp negative to 0).
         let now_u = U256::from(self.now);
