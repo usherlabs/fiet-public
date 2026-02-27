@@ -1,8 +1,8 @@
 {
   "contracts": {
-    "resilientOracle": "0x2be537317C3C744281F56Ed401F7825D04C02e27",
-    "mainOracle": "0x39af6Ff34089e225738BDd63F8AC9D3C669E3F18",
-    "boundValidator": "0x954760B72fDc94a899b67FB7A66c8EdCb22C74b8",
+    "resilientOracle": "0xee9F85a6128182D83d7f27492f515A89BEc0C13b",
+    "mainOracle": "0x34e24c8b1B5413A3031248Eb079a4b5DB353245b",
+    "boundValidator": "0x4535B26EeA5ec9aD573248c3A5c0abfF43078804",
     "pivotOracle": "0x0000000000000000000000000000000000000000",
     "fallbackOracle": "0x0000000000000000000000000000000000000000"
   },
@@ -47,4 +47,3 @@
     }
   ]
 }
-

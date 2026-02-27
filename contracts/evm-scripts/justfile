@@ -110,7 +110,7 @@ dev: setup-create3 deploy-tokenA deploy-tokenB set-underlyings deploy allow-orac
 # 4. just deploy-contracts, IF ARB SEPOLIA prefix with FOUNDRY_PROFILE=deploy-arbitrum-sepolia
 #
 # ACM
-# 5. just admin-oracle-transfer-to-globalconfig
+# 5. DEFAULT_PROXY_ADMIN_ADDRESS= BOUND_VALIDATOR_ADDRESS= MAIN_ORACLE_ADDRESS= RESILIENT_ORACLE_ADDRESS= just admin-oracle-transfer-to-globalconfig
 # 6 ACM Call Permissions:
 # See examples in ORACLE.md
 #
