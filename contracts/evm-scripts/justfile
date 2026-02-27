@@ -105,8 +105,8 @@ dev: setup-create3 deploy-tokenA deploy-tokenB set-underlyings deploy allow-orac
 # Production Steps:
 # 1. deploy-oracle
 # 2. Simulate: deploy-libraries
-# 3. Deploy: deploy-libraries with linked-libraries in Foundry
-# 4. deploy-contracts
+# 3. Deploy: deploy-libraries
+# 4. FOUNDRY_PROFILE=deploy-arbitrum-sepolia just deploy-contracts
 # 5. allow-oracle-configure
 
 # Market Creation
@@ -292,13 +292,36 @@ mint-mock-tokens:
 deploy: deploy-oracle deploy-libraries deploy-contracts
 
 deploy-libraries:
-    FOUNDRY_PROFILE=deploy forge script {{ script_dir }}/deploy/DeployLibraries.s.sol:DeployLibraries \
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    # Preserve any CLI-provided profile (e.g. `FOUNDRY_PROFILE=... just ...`).
+    CLI_FOUNDRY_PROFILE="${FOUNDRY_PROFILE-}"
+
+    # Load dotenv (if present) for local convenience, without overriding CLI values.
+    if [ -f ".env" ]; then
+        set -a
+        # shellcheck disable=SC1091
+        source ".env"
+        set +a
+    fi
+
+    if [ -n "${CLI_FOUNDRY_PROFILE:-}" ]; then
+        export FOUNDRY_PROFILE="$CLI_FOUNDRY_PROFILE"
+    fi
+
+    export FOUNDRY_PROFILE="${FOUNDRY_PROFILE:-deploy}"
+    echo "Using FOUNDRY_PROFILE=$FOUNDRY_PROFILE"
+
+    forge script {{ script_dir }}/deploy/DeployLibraries.s.sol:DeployLibraries \
         --rpc-url {{ rpc_url }} \
         {{ broadcast_flag }} -vvv
 
 deploy-contracts:
     #!/usr/bin/env bash
     set -euo pipefail
+    # Preserve any CLI-provided profile (e.g. `FOUNDRY_PROFILE=... just ...`).
+    CLI_FOUNDRY_PROFILE="${FOUNDRY_PROFILE-}"
     # Reload dotenv at runtime (important when `deploy-oracle` just generated/updated `.env` earlier in the same `just deploy` run).
     if [ -f ".env" ]; then
         set -a
@@ -307,6 +330,13 @@ deploy-contracts:
         set +a
     fi
 
+    if [ -n "${CLI_FOUNDRY_PROFILE:-}" ]; then
+        export FOUNDRY_PROFILE="$CLI_FOUNDRY_PROFILE"
+    fi
+
+    export FOUNDRY_PROFILE="${FOUNDRY_PROFILE:-deploy}"
+    echo "Using FOUNDRY_PROFILE=$FOUNDRY_PROFILE"
+
     # validate resilient oracle address is set
     if [ -z "${RESILIENT_ORACLE_ADDRESS:-}" ]; then
         echo "Missing RESILIENT_ORACLE_ADDRESS. Run \`just deploy-oracle\` first (it writes .env) or export RESILIENT_ORACLE_ADDRESS manually."
@@ -314,7 +344,7 @@ deploy-contracts:
     fi
 
     # deploy contracts
-    FOUNDRY_PROFILE=deploy forge script {{ script_dir }}/deploy/DeployContracts.s.sol:DeployContracts \
+    forge script {{ script_dir }}/deploy/DeployContracts.s.sol:DeployContracts \
         --rpc-url {{ rpc_url }} \
         {{ broadcast_flag }} -vvv
 

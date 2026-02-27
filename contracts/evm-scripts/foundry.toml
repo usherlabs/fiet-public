@@ -69,6 +69,15 @@ libraries = [
   "src/libraries/LCCFactoryLib.sol:LCCFactoryLinkedLib:0x3209860215dB283218CBc8f0D5acf57Ae8874C85",
 ]
 
+[profile.deploy-arbitrum-sepolia]
+libraries = [
+  "src/libraries/VTSPositionLib.sol:VTSPositionLib:0x13f707F2111e5219602a3f8C6418eF68cC357E6e",
+  "src/libraries/VTSSwapLib.sol:VTSSwapLib:0x6c7b64142A8f772dbAb7b18Fd16F870d60bdb02F",
+  "src/libraries/VTSCommitLib.sol:VTSCommitLib:0xB4298eE98002FB3a979475Ed2749b380Db65A5Cc",
+  "src/libraries/VTSFeeLib.sol:VTSFeeLinkedLib:0x08647D2342687FBbb36D3EdF9650457dceE81F21",
+  "src/libraries/LCCFactoryLib.sol:LCCFactoryLinkedLib:0xf03A5240059AF5e4B8B0935e45dF7f1a40be06b3",
+]
+
 [rpc_endpoints]
 local = "${ANVIL_FORK_URL}"
 sepolia = "${ARB_SEPOLIA_RPC_URL}"
