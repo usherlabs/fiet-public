@@ -438,6 +438,23 @@ deploy-oracle:
     RESILIENT_ORACLE_JSON="${ORACLE_DIR}/ResilientOracle_Proxy.json"
     ACM_JSON="${ORACLE_DIR}/AccessControlManager.json"
 
+    # Main oracle contract name differs by chain. On sequencer-based L2s (e.g. Arbitrum One),
+    # the oracle deploy uses Venus `SequencerChainlinkOracle` instead of `ChainlinkOracle`.
+    MAIN_ORACLE_CONTRACT="ChainlinkOracle"
+    if [ -f "${ORACLE_DIR}/SequencerChainlinkOracle_Proxy.json" ]; then
+        MAIN_ORACLE_CONTRACT="SequencerChainlinkOracle"
+    elif [ -f "${ORACLE_DIR}/ChainlinkOracle_Proxy.json" ]; then
+        MAIN_ORACLE_CONTRACT="ChainlinkOracle"
+    else
+        echo "Expected main oracle deployment file not found under: ${ORACLE_DIR}"
+        echo "Looked for: SequencerChainlinkOracle_Proxy.json or ChainlinkOracle_Proxy.json"
+        exit 1
+    fi
+    MAIN_ORACLE_IMPL_FILE="${MAIN_ORACLE_CONTRACT}_Implementation.json"
+    MAIN_ORACLE_PROXY_FILE="${MAIN_ORACLE_CONTRACT}_Proxy.json"
+    MAIN_ORACLE_IMPL_JSON="${ORACLE_DIR}/${MAIN_ORACLE_IMPL_FILE}"
+    MAIN_ORACLE_PROXY_JSON="${ORACLE_DIR}/${MAIN_ORACLE_PROXY_FILE}"
+
     # In MODE=LIVE, ACM is pre-deployed outside hardhat-deploy manifests.
     # Write a minimal deployment JSON so existing parsing/export logic remains unchanged.
     if [ "$MODE_NORM" = "LIVE" ] && [ ! -f "$ACM_JSON" ] && [ -n "$LIVE_ACM_ADDRESS" ]; then
@@ -535,8 +552,8 @@ deploy-oracle:
       BoundValidator_Proxy.json \
       ResilientOracle_Implementation.json \
       ResilientOracle_Proxy.json \
-      ChainlinkOracle_Implementation.json \
-      ChainlinkOracle_Proxy.json; do
+      "${MAIN_ORACLE_IMPL_FILE}" \
+      "${MAIN_ORACLE_PROXY_FILE}"; do
         if [ -f "${ORACLE_DIR}/${f}" ]; then
             cp "${ORACLE_DIR}/${f}" "${OUT_DIR}/${f}"
         fi
@@ -551,8 +568,8 @@ deploy-oracle:
       --arg BoundValidator_Proxy "$(jq -r '.address' "${ORACLE_DIR}/BoundValidator_Proxy.json")" \
       --arg ResilientOracle_Implementation "$(jq -r '.address' "${ORACLE_DIR}/ResilientOracle_Implementation.json")" \
       --arg ResilientOracle_Proxy "$(jq -r '.address' "${ORACLE_DIR}/ResilientOracle_Proxy.json")" \
-      --arg ChainlinkOracle_Implementation "$(jq -r '.address' "${ORACLE_DIR}/ChainlinkOracle_Implementation.json")" \
-      --arg ChainlinkOracle_Proxy "$(jq -r '.address' "${ORACLE_DIR}/ChainlinkOracle_Proxy.json")" \
+      --arg ChainlinkOracle_Implementation "$(jq -r '.address' "${MAIN_ORACLE_IMPL_JSON}")" \
+      --arg ChainlinkOracle_Proxy "$(jq -r '.address' "${MAIN_ORACLE_PROXY_JSON}")" \
       '{
         AccessControlManager: $AccessControlManager,
         VAI: $VAI,

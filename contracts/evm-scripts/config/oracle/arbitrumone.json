@@ -1,8 +1,8 @@
 {
   "contracts": {
-    "resilientOracle": "0x731c8103f5e39e7241f6833F68617c4da4ec31Cb",
-    "mainOracle": "0xc1ec8B65bb137602963f88eb063fa7236f4744f2",
-    "boundValidator": "0xf5dC296F38B10cF65E2702a69E1d56d55d520e91",
+    "resilientOracle": "0x2be537317C3C744281F56Ed401F7825D04C02e27",
+    "mainOracle": "0x39af6Ff34089e225738BDd63F8AC9D3C669E3F18",
+    "boundValidator": "0x954760B72fDc94a899b67FB7A66c8EdCb22C74b8",
     "pivotOracle": "0x0000000000000000000000000000000000000000",
     "fallbackOracle": "0x0000000000000000000000000000000000000000"
   },
@@ -28,7 +28,7 @@
         "upperBoundRatio": "0",
         "lowerBoundRatio": "0"
       }
-    }
+    },
     {
       "ticker": "ARB",
       "asset": "0x912ce59144191c1204e64559fe8253a0e49e6548",
