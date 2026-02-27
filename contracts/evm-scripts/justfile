@@ -105,15 +105,13 @@ dev: setup-create3 deploy-tokenA deploy-tokenB set-underlyings deploy allow-orac
 
 # Production Steps:
 # 1. deploy-oracle
-#    ! if deploying to many chains, cd contracts/evm/lib/oracle and run `npx hardhat clean && git stash`
 # 2. Simulate: deploy-libraries
 # 3. Deploy: deploy-libraries
 # 4. just deploy-contracts, IF ARB SEPOLIA prefix with FOUNDRY_PROFILE=deploy-arbitrum-sepolia
 #
 # ACM
-# ~~5. just admin-acm-transfer-admin-to-globalconfig~~
-# 6. just admin-oracle-transfer-to-globalconfig
-# 7 ACM Call Permissions:
+# 5. just admin-oracle-transfer-to-globalconfig
+# 6 ACM Call Permissions:
 # See examples in ORACLE.md
 #
 # Required ACM call permissions (methodSignature strings):
@@ -128,8 +126,8 @@ dev: setup-create3 deploy-tokenA deploy-tokenB set-underlyings deploy allow-orac
 #   - methodSignature: "setTokenConfig((address,address,uint256))"  # (asset, feed, maxStalePeriod)
 #
 # Market Creation
-# 8. ORACLE_CONFIG_FILE=ethsepolia.json just admin-oracle-configure-assets OR configure-oracle
-# 9. create-market
+# 7. ORACLE_CONFIG_FILE=ethsepolia.json just admin-oracle-configure-assets OR configure-oracle
+# 8. create-market
 
 # === Build ===
 
