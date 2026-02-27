@@ -20,6 +20,8 @@ contracts/evm-scripts/broadcast/
 # Deployment artifacts
 contracts/evm-scripts/deployments/local_*.json
 !contracts/evm-scripts/deployments/.gitkeep
+!contracts/evm-scripts/deployments/oracle_deployments/arbitrumone
+!contracts/evm-scripts/deployments/oracle_deployments/arbitrumsepolia
 
 # Oracle local deployments
 contracts/evm-scripts/deployments/oracle_deployments/development
