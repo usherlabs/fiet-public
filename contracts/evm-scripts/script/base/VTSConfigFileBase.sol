@@ -40,17 +40,13 @@ abstract contract VTSConfigFileBase is Script {
         returns (MarketVTSConfiguration memory)
     {
         // token0
-        cfg.token0.gracePeriodTime =
-            _jsonUintOr(json, ".token0.gracePeriodTime", cfg.token0.gracePeriodTime);
-        cfg.token0.maxGracePeriodTime =
-            _jsonUintOr(json, ".token0.maxGracePeriodTime", cfg.token0.maxGracePeriodTime);
+        cfg.token0.gracePeriodTime = _jsonUintOr(json, ".token0.gracePeriodTime", cfg.token0.gracePeriodTime);
+        cfg.token0.maxGracePeriodTime = _jsonUintOr(json, ".token0.maxGracePeriodTime", cfg.token0.maxGracePeriodTime);
         cfg.token0.baseVTSRate = _jsonUintOr(json, ".token0.baseVTSRate", cfg.token0.baseVTSRate);
 
         // token1
-        cfg.token1.gracePeriodTime =
-            _jsonUintOr(json, ".token1.gracePeriodTime", cfg.token1.gracePeriodTime);
-        cfg.token1.maxGracePeriodTime =
-            _jsonUintOr(json, ".token1.maxGracePeriodTime", cfg.token1.maxGracePeriodTime);
+        cfg.token1.gracePeriodTime = _jsonUintOr(json, ".token1.gracePeriodTime", cfg.token1.gracePeriodTime);
+        cfg.token1.maxGracePeriodTime = _jsonUintOr(json, ".token1.maxGracePeriodTime", cfg.token1.maxGracePeriodTime);
         cfg.token1.baseVTSRate = _jsonUintOr(json, ".token1.baseVTSRate", cfg.token1.baseVTSRate);
 
         // top-level
@@ -75,17 +71,13 @@ abstract contract VTSConfigFileBase is Script {
         returns (MarketVTSConfiguration memory)
     {
         // token0
-        cfg.token0.gracePeriodTime =
-            _tomlUintOr(toml, "token0.gracePeriodTime", cfg.token0.gracePeriodTime);
-        cfg.token0.maxGracePeriodTime =
-            _tomlUintOr(toml, "token0.maxGracePeriodTime", cfg.token0.maxGracePeriodTime);
+        cfg.token0.gracePeriodTime = _tomlUintOr(toml, "token0.gracePeriodTime", cfg.token0.gracePeriodTime);
+        cfg.token0.maxGracePeriodTime = _tomlUintOr(toml, "token0.maxGracePeriodTime", cfg.token0.maxGracePeriodTime);
         cfg.token0.baseVTSRate = _tomlUintOr(toml, "token0.baseVTSRate", cfg.token0.baseVTSRate);
 
         // token1
-        cfg.token1.gracePeriodTime =
-            _tomlUintOr(toml, "token1.gracePeriodTime", cfg.token1.gracePeriodTime);
-        cfg.token1.maxGracePeriodTime =
-            _tomlUintOr(toml, "token1.maxGracePeriodTime", cfg.token1.maxGracePeriodTime);
+        cfg.token1.gracePeriodTime = _tomlUintOr(toml, "token1.gracePeriodTime", cfg.token1.gracePeriodTime);
+        cfg.token1.maxGracePeriodTime = _tomlUintOr(toml, "token1.maxGracePeriodTime", cfg.token1.maxGracePeriodTime);
         cfg.token1.baseVTSRate = _tomlUintOr(toml, "token1.baseVTSRate", cfg.token1.baseVTSRate);
 
         // top-level
@@ -96,12 +88,10 @@ abstract contract VTSConfigFileBase is Script {
             "unbackedCommitmentGraceBypassBps",
             _tomlUint16Or(toml, "commitmentDeficitBypassBps", cfg.unbackedCommitmentGraceBypassBps)
         );
-        cfg.unbackedCommitmentGraceBypassThreshold0 = _tomlUintOr(
-            toml, "unbackedCommitmentGraceBypassThreshold0", cfg.unbackedCommitmentGraceBypassThreshold0
-        );
-        cfg.unbackedCommitmentGraceBypassThreshold1 = _tomlUintOr(
-            toml, "unbackedCommitmentGraceBypassThreshold1", cfg.unbackedCommitmentGraceBypassThreshold1
-        );
+        cfg.unbackedCommitmentGraceBypassThreshold0 =
+            _tomlUintOr(toml, "unbackedCommitmentGraceBypassThreshold0", cfg.unbackedCommitmentGraceBypassThreshold0);
+        cfg.unbackedCommitmentGraceBypassThreshold1 =
+            _tomlUintOr(toml, "unbackedCommitmentGraceBypassThreshold1", cfg.unbackedCommitmentGraceBypassThreshold1);
 
         return cfg;
     }

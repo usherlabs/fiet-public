@@ -284,15 +284,7 @@ contract CreateMarketScript is NetworkConfig, VTSConfigFileBase {
                 marketFactory,
                 abi.encodeCall(
                     MarketFactory.createMarket,
-                    (
-                        underlyingAsset0,
-                        underlyingAsset1,
-                        corePoolFee,
-                        tickSpacing,
-                        initialSqrtPriceX96,
-                        salt,
-                        vtsCfg
-                    )
+                    (underlyingAsset0, underlyingAsset1, corePoolFee, tickSpacing, initialSqrtPriceX96, salt, vtsCfg)
                 )
             );
 

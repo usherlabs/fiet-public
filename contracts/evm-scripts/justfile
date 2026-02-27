@@ -383,7 +383,7 @@ deploy-oracle:
         ORACLE_NETWORK_ARG="{{ network }}"
     fi
 
-    echo "Deploying oracle to network: $ORACLE_NETWORK_ARG"
+    echo "Deploying oracle to network: $ORACLE_NETWORK_ARG (MODE=$MODE_NORM) {{ network }}"
     cp ../evm/oracle/hardhat.custom.config.ts ../evm/lib/oracle/hardhat.fiet.config.ts
     LIVE_ACM_ADDRESS=""
 
@@ -409,7 +409,7 @@ deploy-oracle:
         # We inject this address into Hardhat config so the downstream oracle deploy uses it.
         # Run the ACM deploy script from the Hardhat project directory (lib/oracle) while keeping the
         # script source checked in under `contracts/evm/oracle/` for easier maintenance.
-        ACM_DEPLOY_OUTPUT="$(cd ../evm/lib/oracle && npx --yes hardhat --config ./hardhat.fiet.config.ts run --network "$ORACLE_NETWORK_ARG" ../../oracle/scripts/deploy-live-acm.cjs)"
+        ACM_DEPLOY_OUTPUT="$(cd ../evm/lib/oracle && HARDHAT_NETWORK="$ORACLE_NETWORK_ARG" npx --yes hardhat --config ./hardhat.fiet.config.ts run --network "$ORACLE_NETWORK_ARG" ../../oracle/scripts/deploy-live-acm.cjs)"
 
         LIVE_ACM_ADDRESS="$(printf '%s\n' "$ACM_DEPLOY_OUTPUT" | awk -F= '/^ACM_DEPLOYED_ADDRESS=/{print $2; exit}')"
         if [ -z "$LIVE_ACM_ADDRESS" ]; then
@@ -427,7 +427,7 @@ deploy-oracle:
         echo "Using freshly deployed LIVE ACM: $LIVE_ACM_ADDRESS"
     fi
 
-    cd ../evm/lib/oracle && MODE="$MODE_NORM" LIVE_ACM_ADDRESS="$LIVE_ACM_ADDRESS" \
+    cd ../evm/lib/oracle && HARDHAT_NETWORK="$ORACLE_NETWORK_ARG" MODE="$MODE_NORM" LIVE_ACM_ADDRESS="$LIVE_ACM_ADDRESS" \
         npx --yes hardhat --config ./hardhat.fiet.config.ts deploy --network "$ORACLE_NETWORK_ARG" --tags deploy --reset
 
     # Read from stored files and persist env vars for subsequent Foundry scripts.
