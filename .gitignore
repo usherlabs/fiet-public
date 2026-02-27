@@ -29,6 +29,8 @@ contracts/evm-scripts/deployments/local_*.json
 # Keep oracle deployments for Arbitrum networks
 !contracts/evm-scripts/deployments/
 contracts/evm-scripts/deployments/**
+!contracts/evm-scripts/deployments/sepolia*deployments**
+!contracts/evm-scripts/deployments/arbitrum*deployments**
 !contracts/evm-scripts/deployments/.gitkeep
 !contracts/evm-scripts/deployments/oracle_deployments/
 contracts/evm-scripts/deployments/oracle_deployments/**
