@@ -764,7 +764,12 @@ admin-acm-transfer-admin-to-globalconfig:
 admin-oracle-configure-assets:
     forge script {{ script_dir }}/admin/OracleConfigureAssets.s.sol:OracleConfigureAssetsScript \
         --rpc-url {{ rpc_url }} \
-        {{ broadcast_flag }} -vvv
+        {{ broadcast_flag }} \
+        {{ if env_var_or_default("SKIP_SIMULATION", if broadcast == "true" { "true" } else { "false" }) == "true" { "--skip-simulation" } else { "" } }} \
+        --timeout {{ env_var_or_default("ETH_TIMEOUT", "120") }} \
+        --fork-retries {{ env_var_or_default("FORK_RETRIES", "5") }} \
+        {{ if env_var_or_default("NO_RATE_LIMIT", "false") == "true" { "--no-rpc-rate-limit" } else { "" } }} \
+        -vvv
 
 # === Market Operations ===
 
