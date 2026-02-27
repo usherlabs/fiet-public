@@ -37,10 +37,7 @@ contract CheckpointTypeTest is Test {
         returns (TokenConfiguration memory)
     {
         return TokenConfiguration({
-            gracePeriodTime: gracePeriodTime,
-            seizureUnlockTime: 0,
-            baseVTSRate: 0,
-            maxGracePeriodTime: maxGracePeriodTime
+            gracePeriodTime: gracePeriodTime, baseVTSRate: 0, maxGracePeriodTime: maxGracePeriodTime
         });
     }
 

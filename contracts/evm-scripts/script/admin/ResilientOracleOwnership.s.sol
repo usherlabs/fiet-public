@@ -16,6 +16,10 @@ pragma solidity ^0.8.26;
  * - PRIVATE_KEY: admin EOA (must be current ResilientOracle owner AND GlobalConfig owner)
  * - NETWORK: deployments/<network>_deployments.json selector (for reading GlobalConfig)
  * - RESILIENT_ORACLE_ADDRESS: ResilientOracle proxy address
+ *
+ * Optional env:
+ * - SKIP_ACM_ADMIN_TRANSFER: set to "true" to skip Step 0 entirely
+ * - REQUIRE_ACM_ADMIN_TRANSFER: set to "true" to make Step 0 failures revert (default: best-effort)
  */
 
 import {console} from "forge-std/Script.sol";
@@ -71,24 +75,41 @@ contract ResilientOracleTransferToGlobalConfigScript is AdminBase {
 
         vm.startBroadcast(pk);
 
-        if (!IAccessControlLike(acm).hasRole(adminRole, globalConfig)) {
-            IAccessControlLike(acm).grantRole(adminRole, globalConfig);
-            console.log("OK: granted ACM DEFAULT_ADMIN_ROLE to GlobalConfig");
+        bool skipAcmTransfer = vm.envOr("SKIP_ACM_ADMIN_TRANSFER", false);
+        bool requireAcmTransfer = vm.envOr("REQUIRE_ACM_ADMIN_TRANSFER", false);
+        if (skipAcmTransfer) {
+            console.log("NOTE: skipping ACM admin transfer (SKIP_ACM_ADMIN_TRANSFER=true)");
         } else {
-            console.log("SKIP: GlobalConfig already has ACM DEFAULT_ADMIN_ROLE");
-        }
+            bool gcHasAdmin = IAccessControlLike(acm).hasRole(adminRole, globalConfig);
+            bool oldHasAdmin = oldAdmin != address(0) && IAccessControlLike(acm).hasRole(adminRole, oldAdmin);
+            console.log("ACM: GlobalConfig has DEFAULT_ADMIN_ROLE:", gcHasAdmin);
+            console.log("ACM: OLD_ADMIN has DEFAULT_ADMIN_ROLE:", oldHasAdmin);
 
-        // Safety: ensure we don't brick ACM governance by revoking the only admin.
-        require(IAccessControlLike(acm).hasRole(adminRole, globalConfig), "ACM: GlobalConfig not admin");
-        if (oldAdmin != address(0) && oldAdmin != globalConfig) {
-            if (IAccessControlLike(acm).hasRole(adminRole, oldAdmin)) {
-                IAccessControlLike(acm).revokeRole(adminRole, oldAdmin);
-                console.log("OK: revoked ACM DEFAULT_ADMIN_ROLE from OLD_ADMIN");
+            // If GlobalConfig isn't yet admin, the current tx sender must be an ACM admin to grant it.
+            if (!gcHasAdmin) {
+                if (oldHasAdmin) {
+                    IAccessControlLike(acm).grantRole(adminRole, globalConfig);
+                    console.log("OK: granted ACM DEFAULT_ADMIN_ROLE to GlobalConfig");
+                    gcHasAdmin = true;
+                } else {
+                    console.log("WARN: cannot grant ACM admin to GlobalConfig (sender is not ACM admin)");
+                    if (requireAcmTransfer) revert("ACM: cannot grant DEFAULT_ADMIN_ROLE to GlobalConfig");
+                }
             } else {
-                console.log("SKIP: OLD_ADMIN does not have ACM DEFAULT_ADMIN_ROLE");
+                console.log("SKIP: GlobalConfig already has ACM DEFAULT_ADMIN_ROLE");
             }
-        } else {
-            console.log("SKIP: OLD_ADMIN is zero or GlobalConfig");
+
+            // If GlobalConfig is admin, revoke OLD_ADMIN via GlobalConfig.proxyCall so we don't depend on the EOA retaining admin.
+            if (gcHasAdmin && oldAdmin != address(0) && oldAdmin != globalConfig) {
+                if (IAccessControlLike(acm).hasRole(adminRole, oldAdmin)) {
+                    _proxyCall(acm, abi.encodeWithSignature("revokeRole(bytes32,address)", adminRole, oldAdmin));
+                    console.log("OK: revoked ACM DEFAULT_ADMIN_ROLE from OLD_ADMIN (via GlobalConfig.proxyCall)");
+                } else {
+                    console.log("SKIP: OLD_ADMIN does not have ACM DEFAULT_ADMIN_ROLE");
+                }
+            } else if (gcHasAdmin) {
+                console.log("SKIP: OLD_ADMIN is zero or GlobalConfig");
+            }
         }
 
         // Step 1: initiate transfer (must be called by current oracle owner).

@@ -10,13 +10,11 @@ library VTSConfigs {
             token0: TokenConfiguration({
                 gracePeriodTime: 1800, // 30 minutes
                 maxGracePeriodTime: 3600, // 1 hours
-                seizureUnlockTime: 900, // 15 minutes
                 baseVTSRate: 1000 // 10% (1000 bips)
             }),
             token1: TokenConfiguration({
                 gracePeriodTime: 1800, // 30 minutes
                 maxGracePeriodTime: 36000, // 10 hours
-                seizureUnlockTime: 3600, // 1 hour
                 baseVTSRate: 1000 // 10% (1000 bips)
             }),
             coverageFeeShare: 5000, // 50% (5000 bps)

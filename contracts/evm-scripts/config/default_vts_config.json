@@ -2,13 +2,11 @@
   "token0": {
     "gracePeriodTime": 1800,
     "maxGracePeriodTime": 3600,
-    "seizureUnlockTime": 900,
     "baseVTSRate": 1000
   },
   "token1": {
     "gracePeriodTime": 1800,
     "maxGracePeriodTime": 36000,
-    "seizureUnlockTime": 3600,
     "baseVTSRate": 1000
   },
   "coverageFeeShare": 5000,

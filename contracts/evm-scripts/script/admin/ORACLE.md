@@ -15,7 +15,7 @@ When you run `just deploy-oracle`, it will:
 
 - Write `.env` entries:
   - `RESILIENT_ORACLE_ADDRESS`
-  - `ACCESS_CONTROL_MANAGER`
+  - `ACCESS_CONTROL_MANAGER` (also resolvable from `RESILIENT_ORACLE_ADDRESS`)
 - Copy the Hardhat deployment JSON files into:
   - `deployments/oracle_deployments/<oracle-network>/`
 - Write a single address book:

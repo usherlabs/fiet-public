@@ -24,6 +24,7 @@ pragma solidity ^0.8.26;
  */
 
 import {console} from "forge-std/Script.sol";
+import {Vm, VmSafe} from "forge-std/Vm.sol";
 
 import {AdminBase} from "./AdminBase.sol";
 
@@ -91,6 +92,10 @@ contract OracleConfigureAssetsScript is AdminBase {
         string memory path = string.concat("config/oracle/", cfgFile);
         string memory json = vm.readFile(path);
 
+        // Used to fetch tx hashes after broadcast (Foundry tracks them by contract name).
+        // Override if your broadcasts record under a different name (e.g. interface name).
+        string memory broadcastContractName = vm.envOr("ORACLE_BROADCAST_CONTRACT_NAME", string("GlobalConfig"));
+
         address resilientOracle = vm.parseJsonAddress(json, ".contracts.resilientOracle");
         address mainOracle = vm.parseJsonAddress(json, ".contracts.mainOracle");
         address boundValidator = vm.parseJsonAddress(json, ".contracts.boundValidator");
@@ -102,8 +107,11 @@ contract OracleConfigureAssetsScript is AdminBase {
         bool defaultEnablePivot = _jsonBoolOr(json, ".defaults.enablePivot", false);
         bool defaultEnableFallback = _jsonBoolOr(json, ".defaults.enableFallback", false);
 
-        OracleAssetConfig[] memory assetConfigs = abi.decode(vm.parseJson(json, ".assets"), (OracleAssetConfig[]));
-        uint256 n = assetConfigs.length;
+        // Determine assets.length without decoding a struct, so configs can safely include extra keys (e.g. `txId`).
+        uint256 n = 0;
+        while (vm.keyExistsJson(json, string.concat(".assets[", vm.toString(n), "].asset"))) {
+            n++;
+        }
         require(n > 0, "oracle cfg: assets empty");
 
         console.log("NETWORK:", networkName);
@@ -124,6 +132,19 @@ contract OracleConfigureAssetsScript is AdminBase {
 
         for (uint256 i = 0; i < n; i++) {
             string memory base = string.concat(".assets[", vm.toString(i), "]");
+
+            // If this asset config has already been applied (txId present), skip it.
+            string memory txKey = string.concat(base, ".txId");
+            if (vm.keyExistsJson(json, txKey)) {
+                string memory existingTxId = vm.parseJsonString(json, txKey);
+                if (bytes(existingTxId).length > 0) {
+                    address existingAsset = _jsonAddressOr(json, string.concat(base, ".asset"), address(0));
+                    console.log("\nSKIP: already configured (txId set)");
+                    console.log("asset:", existingAsset);
+                    console.log("txId:", existingTxId);
+                    continue;
+                }
+            }
 
             address asset = vm.parseJsonAddress(json, string.concat(base, ".asset"));
             address feed = vm.parseJsonAddress(json, string.concat(base, ".feed"));
@@ -189,12 +210,28 @@ contract OracleConfigureAssetsScript is AdminBase {
             _proxyCall(resilientOracle, abi.encodeCall(IResilientOracleAdmin.setTokenConfig, (rCfg)));
             console.log("OK: ResilientOracle.setTokenConfig");
 
+            // Capture the tx hash for the ResilientOracle configuration call.
+            // This is best-effort (only available when running with `--broadcast`).
+            bytes32 resilientTxHash = _tryGetLatestCallTxHash(broadcastContractName);
+
             // Optional: register ticker in OracleHelper (convenience mapping used elsewhere in protocol).
             if (vm.keyExistsJson(json, string.concat(base, ".ticker"))) {
                 string memory ticker = vm.parseJsonString(json, string.concat(base, ".ticker"));
                 require(bytes(ticker).length > 0, "oracle cfg: ticker empty");
                 _proxyCall(oracleHelper, abi.encodeCall(IOracleHelperAdmin.registerTicker, (ticker, asset)));
                 console.log("OK: OracleHelper.registerTicker");
+            }
+
+            // Mark this asset config as applied by writing the tx id back into the config file.
+            if (resilientTxHash != bytes32(0)) {
+                string memory txId = vm.toString(resilientTxHash);
+                try vm.writeJson(txId, path, txKey) {
+                    console.log("WROTE: txId:", txId);
+                } catch {
+                    console.log("WARN: failed to write txId to config (path/key may be invalid)");
+                }
+            } else {
+                console.log("WARN: could not determine txId (run with --broadcast to persist txIds)");
             }
         }
 
@@ -215,6 +252,16 @@ contract OracleConfigureAssetsScript is AdminBase {
     {
         if (!vm.keyExistsJson(json, key)) return defaultValue;
         return vm.parseJsonAddress(json, key);
+    }
+
+    function _tryGetLatestCallTxHash(string memory contractName) private view returns (bytes32 txHash) {
+        try vm.getBroadcast(contractName, uint64(block.chainid), VmSafe.BroadcastTxType.Call) returns (
+            VmSafe.BroadcastTxSummary memory s
+        ) {
+            return s.txHash;
+        } catch {
+            return bytes32(0);
+        }
     }
 }
 

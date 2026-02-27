@@ -48,7 +48,6 @@ contract VTSPositionLibMutationUnitTest is Test {
 
     // Default VTS configuration (mirrors VTSLibTestBase defaults, but without inheriting it)
     uint256 internal constant DEFAULT_GRACE_PERIOD = 1 hours;
-    uint256 internal constant DEFAULT_SEIZURE_UNLOCK = 24 hours;
     uint256 internal constant DEFAULT_BASE_VTS_RATE = 500; // 5% in bps
     uint256 internal constant DEFAULT_MAX_GRACE_PERIOD = 7 days;
     uint16 internal constant DEFAULT_COVERAGE_FEE_SHARE = 1000; // 10% in bps
@@ -93,7 +92,6 @@ contract VTSPositionLibMutationUnitTest is Test {
     function _defaultCfg() internal pure returns (MarketVTSConfiguration memory) {
         TokenConfiguration memory tokenCfg = TokenConfiguration({
             gracePeriodTime: DEFAULT_GRACE_PERIOD,
-            seizureUnlockTime: DEFAULT_SEIZURE_UNLOCK,
             baseVTSRate: DEFAULT_BASE_VTS_RATE,
             maxGracePeriodTime: DEFAULT_MAX_GRACE_PERIOD
         });

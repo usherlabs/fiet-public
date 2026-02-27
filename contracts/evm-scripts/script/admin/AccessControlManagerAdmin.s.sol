@@ -17,6 +17,9 @@ pragma solidity ^0.8.26;
  * Env:
  * - PRIVATE_KEY: current ACM admin (must have DEFAULT_ADMIN_ROLE)
  * - ACCESS_CONTROL_MANAGER: ACM contract address
+ *   - If not set, you may instead provide RESILIENT_ORACLE_ADDRESS and this script will resolve the ACM via
+ *     `ResilientOracle.accessControlManager()`.
+ * - RESILIENT_ORACLE_ADDRESS: (optional) ResilientOracle proxy address (used only to resolve ACM)
  * - OLD_ADMIN: (optional) address to revoke DEFAULT_ADMIN_ROLE from (e.g. deployer EOA)
  */
 
@@ -30,10 +33,28 @@ interface IAccessControlLike {
     function revokeRole(bytes32 role, address account) external;
 }
 
+interface IResilientOracleACMView {
+    function accessControlManager() external view returns (address);
+}
+
 contract AccessControlManagerTransferAdminToGlobalConfigScript is AdminBase {
     function run() external {
         uint256 pk = uint256(vm.envBytes32("PRIVATE_KEY"));
-        address acm = vm.envAddress("ACCESS_CONTROL_MANAGER");
+        address acm;
+        // Prefer resolving the ACM from the ResilientOracle to avoid acting on a stale/mismatched ACM address.
+        if (vm.envExists("RESILIENT_ORACLE_ADDRESS")) {
+            address oracle = vm.envAddress("RESILIENT_ORACLE_ADDRESS");
+            address acmFromOracle = IResilientOracleACMView(oracle).accessControlManager();
+            if (vm.envExists("ACCESS_CONTROL_MANAGER")) {
+                address acmFromEnv = vm.envAddress("ACCESS_CONTROL_MANAGER");
+                require(acmFromEnv == acmFromOracle, "ACM: ACCESS_CONTROL_MANAGER != oracle.accessControlManager()");
+            }
+            acm = acmFromOracle;
+        } else if (vm.envExists("ACCESS_CONTROL_MANAGER")) {
+            acm = vm.envAddress("ACCESS_CONTROL_MANAGER");
+        } else {
+            revert("ACM: set RESILIENT_ORACLE_ADDRESS (preferred) or ACCESS_CONTROL_MANAGER");
+        }
 
         _loadAdminAddresses();
 

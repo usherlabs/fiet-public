@@ -178,8 +178,10 @@ That means **the transaction signer must be the `GlobalConfig` owner** for most 
   - (optional) `AccessControlManager.revokeRole(DEFAULT_ADMIN_ROLE, OLD_ADMIN)`
 - **Script**: `AccessControlManagerAdmin.s.sol:AccessControlManagerTransferAdminToGlobalConfigScript`
 - **Env**:
-  - `ACCESS_CONTROL_MANAGER`: address
+  - `ACCESS_CONTROL_MANAGER`: (optional) address
     - If you ran `just deploy-oracle`, this is auto-populated into `.env` for you.
+    - If omitted, you may provide `RESILIENT_ORACLE_ADDRESS` and the ACM will be resolved from it.
+  - `RESILIENT_ORACLE_ADDRESS`: (optional) address (used only to resolve the ACM)
   - `OLD_ADMIN` (optional): address
 
 ### `just admin-oracle-configure-assets`

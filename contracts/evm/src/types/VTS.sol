@@ -17,8 +17,6 @@ import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 struct TokenConfiguration {
     // Grace period time
     uint256 gracePeriodTime;
-    // Seizure unlock time
-    uint256 seizureUnlockTime;
     // Base VTS Rate in bps (basis points)
     uint256 baseVTSRate;
     // Max grace period time

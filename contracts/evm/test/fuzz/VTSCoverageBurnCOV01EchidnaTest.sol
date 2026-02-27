@@ -118,9 +118,8 @@ contract VTSCoverageBurnCOV01EchidnaTest {
     // -------------------------------------------------------------------------
 
     function _config(uint16 coverageFeeShare) internal pure returns (MarketVTSConfiguration memory) {
-        TokenConfiguration memory tokenConfig = TokenConfiguration({
-            gracePeriodTime: 1 hours, seizureUnlockTime: 1 hours, baseVTSRate: 0, maxGracePeriodTime: 7 days
-        });
+        TokenConfiguration memory tokenConfig =
+            TokenConfiguration({gracePeriodTime: 1 hours, baseVTSRate: 0, maxGracePeriodTime: 7 days});
 
         return MarketVTSConfiguration({
             token0: tokenConfig,

@@ -159,8 +159,7 @@ contract VTSCommitLibHarness {
 
     function _emptyConfig() internal pure returns (MarketVTSConfiguration memory cfg) {
         // Keep the harness independent from MarketTestBase defaults; commit lib doesn't read config.
-        TokenConfiguration memory tc =
-            TokenConfiguration({gracePeriodTime: 0, seizureUnlockTime: 0, baseVTSRate: 0, maxGracePeriodTime: 0});
+        TokenConfiguration memory tc = TokenConfiguration({gracePeriodTime: 0, baseVTSRate: 0, maxGracePeriodTime: 0});
         cfg = MarketVTSConfiguration({
             token0: tc,
             token1: tc,

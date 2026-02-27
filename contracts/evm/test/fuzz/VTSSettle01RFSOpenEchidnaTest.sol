@@ -59,13 +59,11 @@ contract VTSSettle01RFSOpenEchidnaTest {
         MarketVTSConfiguration memory config = MarketVTSConfiguration({
             token0: TokenConfiguration({
                 gracePeriodTime: 7 days,
-                seizureUnlockTime: 30 days,
                 baseVTSRate: 1000, // 10% in bps
                 maxGracePeriodTime: 30 days
             }),
             token1: TokenConfiguration({
                 gracePeriodTime: 7 days,
-                seizureUnlockTime: 30 days,
                 baseVTSRate: 1000, // 10% in bps
                 maxGracePeriodTime: 30 days
             }),

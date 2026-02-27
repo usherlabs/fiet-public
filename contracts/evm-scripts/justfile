@@ -107,11 +107,26 @@ dev: setup-create3 deploy-tokenA deploy-tokenB set-underlyings deploy allow-orac
 # 2. Simulate: deploy-libraries
 # 3. Deploy: deploy-libraries
 # 4. FOUNDRY_PROFILE=deploy-arbitrum-sepolia just deploy-contracts
-# 5. allow-oracle-configure
-
+#
+# ACM
+# ~~5. just admin-acm-transfer-admin-to-globalconfig~~
+# 6. just admin-oracle-transfer-to-globalconfig
+# 7. TARGET_ADDRESS=ResilientOracle_Proxy FUNCTION_SIG="setTokenConfig(TokenConfig)" ACCOUNT_TO_PERMIT=GlobalConfig just admin-oracle-acm-give-call-permission
+#
+# Required ACM call permissions (methodSignature strings):
+# - ResilientOracle token config (what `just configure-oracle` does):
+#   - target: `ResilientOracle_Proxy`
+#   - methodSignature: "setTokenConfig(TokenConfig)"
+#   - accountToPermit: the EOA running `just configure-oracle` (derived from `PRIVATE_KEY`), OR `GlobalConfig`
+#     if you execute config via `GlobalConfig.proxyCall(...)`.
+#
+# - MAIN oracle feed wiring (needed for MODE!=LOCAL before enabling MAIN in ResilientOracle):
+#   - target: `ChainlinkOracle_Proxy` (or whichever MAIN oracle you are using)
+#   - methodSignature: "setTokenConfig((address,address,uint256))"  # (asset, feed, maxStalePeriod)
+#
 # Market Creation
-# 6. configure-oracle
-# 7. create-market
+# 8. configure-oracle
+# 9. create-market
 
 # === Build ===
 
@@ -447,6 +462,40 @@ deploy-oracle:
     if [ -z "$ACCESS_CONTROL_MANAGER" ] || [ "$ACCESS_CONTROL_MANAGER" = "null" ]; then
         echo "Failed to read .address from $ACM_JSON"
         exit 1
+    fi
+
+    # Safety: ensure the ResilientOracle we deployed is wired to the ACM we think it is.
+    # This prevents "two ACMs" confusion from stale env vars / mixed deployment artefacts.
+    norm_addr() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -d '\n' | tr -d '\r'; }
+    ONCHAIN_ACM="$(cast call "$RESILIENT_ORACLE_ADDRESS" "accessControlManager()(address)" --rpc-url {{ rpc_url }} | tr -d '\n' | tr -d '\r')"
+    if [ -z "$ONCHAIN_ACM" ]; then
+        echo "Failed to resolve on-chain ACM from ResilientOracle at $RESILIENT_ORACLE_ADDRESS"
+        exit 1
+    fi
+    if [ "$(norm_addr "$ONCHAIN_ACM")" != "$(norm_addr "$ACCESS_CONTROL_MANAGER")" ]; then
+        echo "ACM mismatch:"
+        echo "  ResilientOracle.accessControlManager() = $ONCHAIN_ACM"
+        echo "  AccessControlManager.json             = $ACCESS_CONTROL_MANAGER"
+        exit 1
+    fi
+    if [ "$MODE_NORM" = "LIVE" ] && [ -n "$LIVE_ACM_ADDRESS" ]; then
+        if [ "$(norm_addr "$LIVE_ACM_ADDRESS")" != "$(norm_addr "$ACCESS_CONTROL_MANAGER")" ]; then
+            echo "LIVE ACM mismatch:"
+            echo "  LIVE_ACM_ADDRESS                      = $LIVE_ACM_ADDRESS"
+            echo "  AccessControlManager.json             = $ACCESS_CONTROL_MANAGER"
+            exit 1
+        fi
+        # In MODE=LIVE, the deployer EOA should initially hold DEFAULT_ADMIN_ROLE on the freshly deployed ACM.
+        if [ -n "${PRIVATE_KEY:-}" ]; then
+            DEPLOYER_ADDR="$(cast wallet address --private-key "$PRIVATE_KEY")"
+            HAS_ADMIN="$(cast call "$ACCESS_CONTROL_MANAGER" "hasRole(bytes32,address)(bool)" 0x0000000000000000000000000000000000000000000000000000000000000000 "$DEPLOYER_ADDR" --rpc-url {{ rpc_url }} | tr -d '\n' | tr -d '\r')"
+            if [ "$HAS_ADMIN" != "true" ]; then
+                echo "Expected deployer to have ACM DEFAULT_ADMIN_ROLE in MODE=LIVE, but hasRole returned: $HAS_ADMIN"
+                echo "  ACM:     $ACCESS_CONTROL_MANAGER"
+                echo "  deployer: $DEPLOYER_ADDR"
+                exit 1
+            fi
+        fi
     fi
 
     ENV_FILE="${ROOT_DIR}/.env"

@@ -44,8 +44,6 @@ abstract contract VTSConfigFileBase is Script {
             _jsonUintOr(json, ".token0.gracePeriodTime", cfg.token0.gracePeriodTime);
         cfg.token0.maxGracePeriodTime =
             _jsonUintOr(json, ".token0.maxGracePeriodTime", cfg.token0.maxGracePeriodTime);
-        cfg.token0.seizureUnlockTime =
-            _jsonUintOr(json, ".token0.seizureUnlockTime", cfg.token0.seizureUnlockTime);
         cfg.token0.baseVTSRate = _jsonUintOr(json, ".token0.baseVTSRate", cfg.token0.baseVTSRate);
 
         // token1
@@ -53,8 +51,6 @@ abstract contract VTSConfigFileBase is Script {
             _jsonUintOr(json, ".token1.gracePeriodTime", cfg.token1.gracePeriodTime);
         cfg.token1.maxGracePeriodTime =
             _jsonUintOr(json, ".token1.maxGracePeriodTime", cfg.token1.maxGracePeriodTime);
-        cfg.token1.seizureUnlockTime =
-            _jsonUintOr(json, ".token1.seizureUnlockTime", cfg.token1.seizureUnlockTime);
         cfg.token1.baseVTSRate = _jsonUintOr(json, ".token1.baseVTSRate", cfg.token1.baseVTSRate);
 
         // top-level
@@ -83,8 +79,6 @@ abstract contract VTSConfigFileBase is Script {
             _tomlUintOr(toml, "token0.gracePeriodTime", cfg.token0.gracePeriodTime);
         cfg.token0.maxGracePeriodTime =
             _tomlUintOr(toml, "token0.maxGracePeriodTime", cfg.token0.maxGracePeriodTime);
-        cfg.token0.seizureUnlockTime =
-            _tomlUintOr(toml, "token0.seizureUnlockTime", cfg.token0.seizureUnlockTime);
         cfg.token0.baseVTSRate = _tomlUintOr(toml, "token0.baseVTSRate", cfg.token0.baseVTSRate);
 
         // token1
@@ -92,8 +86,6 @@ abstract contract VTSConfigFileBase is Script {
             _tomlUintOr(toml, "token1.gracePeriodTime", cfg.token1.gracePeriodTime);
         cfg.token1.maxGracePeriodTime =
             _tomlUintOr(toml, "token1.maxGracePeriodTime", cfg.token1.maxGracePeriodTime);
-        cfg.token1.seizureUnlockTime =
-            _tomlUintOr(toml, "token1.seizureUnlockTime", cfg.token1.seizureUnlockTime);
         cfg.token1.baseVTSRate = _tomlUintOr(toml, "token1.baseVTSRate", cfg.token1.baseVTSRate);
 
         // top-level
