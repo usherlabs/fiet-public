@@ -18,6 +18,7 @@ contract HubRSC is AbstractReactive {
         uint256(keccak256("LiquidityAvailable(address,address,uint256,bytes32)"));
 
     /// @notice SettlementReported(address indexed recipient, address indexed lcc, uint256 amount, uint256 nonce).
+    // Indicates that a SettlementQueue event from protocol chain is reported.
     uint256 public constant SETTLEMENT_REPORTED_TOPIC =
         uint256(keccak256("SettlementReported(address,address,uint256,uint256)"));
 
