@@ -108,6 +108,10 @@ contract MockSignalManager is IVRLSignalManager {
         return 0;
     }
 
+    function submitAuthNonce(address) external pure returns (uint256) {
+        return 0;
+    }
+
     function setVerifier(address) external pure {
         revert("MockSignalManager: not implemented");
     }
@@ -120,19 +124,15 @@ contract MockSignalManager is IVRLSignalManager {
         revert("MockSignalManager: not implemented");
     }
 
-    function verifyLiquiditySignal(LiquiditySignal memory) external view returns (bool, uint256) {
-        return (true, _expirySeconds);
-    }
-
-    function verifyLiquiditySignal(bytes memory) external view returns (bool, uint256) {
-        return (true, _expirySeconds);
-    }
-
-    function verifyLiquiditySignal(bytes memory, bool) external view returns (bool, uint256) {
-        return (true, _expirySeconds);
-    }
-
     function verifyLiquiditySignal(address, bytes memory, bool) external view returns (bool, uint256) {
+        return (true, _expirySeconds);
+    }
+
+    function verifyLiquiditySignalRelayed(address, bytes memory, uint256, uint256, bytes memory, bool)
+        external
+        view
+        returns (bool, uint256)
+    {
         return (true, _expirySeconds);
     }
 }

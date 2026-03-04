@@ -185,21 +185,28 @@ library VTSCommitLib {
             revert Errors.InvalidLiquiditySignal(0, 0, 0);
         }
 
-        LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
-        // Only the owner or designated advancer may claim a new commit id.
-        if (sender != signal.mmState.advancer && sender != signal.mmState.owner) {
-            revert Errors.InvalidSender();
-        }
         // verify the proofs associated with the state
         (, uint256 expirySeconds) = signalManager.verifyLiquiditySignal(sender, liquiditySignal, true);
+        commitId = _commitSignalInternal(s, liquiditySignal, expirySeconds);
+    }
 
-        // get the commit id
-        // increment first then assign because nextCommitId starts at 0 and we want to start at 1
-        commitId = ++s.nextCommitId;
+    /// @notice Commits a liquidity signal using sender-signed EIP-712 relayer auth (linked-library entry)
+    function commitSignalRelayed(
+        VTSStorage storage s,
+        address sender,
+        IVRLSignalManager signalManager,
+        bytes memory liquiditySignal,
+        uint256 deadline,
+        uint256 authNonce,
+        bytes memory authSig
+    ) external returns (uint256 commitId) {
+        if (liquiditySignal.length == 0) {
+            revert Errors.InvalidLiquiditySignal(0, 0, 0);
+        }
 
-        // store the signal state (only state and expiresAt are relevant) and bind commit to pool
-        MarketMaker.save(s.commits[commitId].mmState, signal.mmState);
-        s.commits[commitId].expiresAt = block.timestamp + expirySeconds;
+        (, uint256 expirySeconds) =
+            signalManager.verifyLiquiditySignalRelayed(sender, liquiditySignal, deadline, authNonce, authSig, true);
+        commitId = _commitSignalInternal(s, liquiditySignal, expirySeconds);
     }
 
     /// @notice Renews a liquidity signal for a commit (linked-library entry)
@@ -215,20 +222,57 @@ library VTSCommitLib {
             revert Errors.InvalidLiquiditySignal(0, 0, 0);
         }
 
-        // Verify new signal once (nonce bump) and decode
         (, uint256 expirySeconds) = signalManager.verifyLiquiditySignal(sender, liquiditySignal, true);
+        _renewSignalInternal(s, sender, commitId, liquiditySignal, expirySeconds);
+    }
+
+    /// @notice Renews a liquidity signal using sender-signed EIP-712 relayer auth (linked-library entry)
+    function renewSignalRelayed(
+        VTSStorage storage s,
+        address sender,
+        IVRLSignalManager signalManager,
+        uint256 commitId,
+        bytes memory liquiditySignal,
+        uint256 deadline,
+        uint256 authNonce,
+        bytes memory authSig
+    ) external {
+        if (liquiditySignal.length == 0) {
+            revert Errors.InvalidLiquiditySignal(0, 0, 0);
+        }
+
+        (, uint256 expirySeconds) =
+            signalManager.verifyLiquiditySignalRelayed(sender, liquiditySignal, deadline, authNonce, authSig, true);
+        _renewSignalInternal(s, sender, commitId, liquiditySignal, expirySeconds);
+    }
+
+    function _commitSignalInternal(VTSStorage storage s, bytes memory liquiditySignal, uint256 expirySeconds)
+        internal
+        returns (uint256 commitId)
+    {
         LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
+        // increment first then assign because nextCommitId starts at 0 and we want to start at 1
+        commitId = ++s.nextCommitId;
+        // store the signal state (only state and expiresAt are relevant) and bind commit to pool
+        MarketMaker.save(s.commits[commitId].mmState, signal.mmState);
+        s.commits[commitId].expiresAt = block.timestamp + expirySeconds;
+    }
 
-        // Persist signal state (only state and expiresAt)
+    function _renewSignalInternal(
+        VTSStorage storage s,
+        address sender,
+        uint256 commitId,
+        bytes memory liquiditySignal,
+        uint256 expirySeconds
+    ) internal {
+        LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
         Commit storage commit = s.commits[commitId];
-
         // Invariants:
         // - Commit ownership must be immutable across renewals (prevents commitId hijack)
         // - Only the designated advancer may renew on-chain (reduces mempool proof sniping)
         if (signal.mmState.owner != commit.mmState.owner || sender != signal.mmState.advancer) {
             revert Errors.InvalidSender();
         }
-
         MarketMaker.save(commit.mmState, signal.mmState);
         commit.expiresAt = block.timestamp + expirySeconds;
     }

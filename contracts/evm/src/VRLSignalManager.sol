@@ -7,12 +7,16 @@ pragma solidity ^0.8.26;
 import {MarketMaker} from "./libraries/MarketMaker.sol";
 import {ISignalVerifier} from "./interfaces/ISignalVerifier.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
+import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import {EfficientHashLib} from "solady/utils/EfficientHashLib.sol";
 import {LiquiditySignal} from "./types/Commit.sol";
 import {Errors} from "./libraries/Errors.sol";
 import {IVRLSignalManager} from "./interfaces/IVRLSignalManager.sol";
 
-contract VRLSignalManager is Ownable, IVRLSignalManager {
+contract VRLSignalManager is Ownable, EIP712, IVRLSignalManager {
     using MarketMaker for MarketMaker.State;
+    using ECDSA for bytes32;
 
     ISignalVerifier internal verifier;
 
@@ -34,10 +38,17 @@ contract VRLSignalManager is Ownable, IVRLSignalManager {
      * nonce 5, but MM A cannot submit nonce 4 if they've already submitted nonce 5.
      */
     mapping(address => uint256) public mmNonce;
+    mapping(address => uint256) public submitAuthNonce;
     uint256 public signalExpiryInSeconds;
     mapping(address => bool) public trustedCallers;
+    bytes32 internal constant SUBMIT_AUTH_TYPEHASH = keccak256(
+        "SubmitAuth(address sender,address submitter,bytes32 liquiditySignalHash,uint256 deadline,uint256 nonce)"
+    );
 
-    constructor(address _verifier, uint256 _signalExpiryInSeconds, address _initialOwner) Ownable(_initialOwner) {
+    constructor(address _verifier, uint256 _signalExpiryInSeconds, address _initialOwner)
+        Ownable(_initialOwner)
+        EIP712("VRLSignalManager", "1")
+    {
         verifier = ISignalVerifier(_verifier);
         signalExpiryInSeconds = _signalExpiryInSeconds;
     }
@@ -82,12 +93,18 @@ contract VRLSignalManager is Ownable, IVRLSignalManager {
         emit TrustedCallerSet(caller, allowed);
     }
 
+    function _assertSenderAuthorised(LiquiditySignal memory signal, address sender) internal pure {
+        if (sender != signal.mmState.owner && sender != signal.mmState.advancer) {
+            revert Errors.InvalidSender();
+        }
+    }
+
     /**
      * @dev This function is used to verify the liquidity signal and return the tickers and amounts of the assets
      * @param signal The liquidity signal to verify
      * @return isProofValid Whether the proof is valid
      */
-    function _verifyLiquiditySignalInternal(LiquiditySignal memory signal, address sender)
+    function _verifyLiquiditySignalInternal(LiquiditySignal memory signal)
         internal
         returns (bool isProofValid, uint256 _signalExpiryInSeconds)
     {
@@ -99,13 +116,7 @@ contract VRLSignalManager is Ownable, IVRLSignalManager {
 
         // verify the proofs associated with the state
         isProofValid = verifier.verifyProof(
-            sender,
-            signal.nonce,
-            signal.rootHash,
-            signal.rootHashSignature,
-            signal.mmSignature,
-            signal.mmState,
-            signal.merkleProof
+            signal.nonce, signal.rootHash, signal.rootHashSignature, signal.mmState, signal.merkleProof
         );
 
         if (isProofValid) {
@@ -118,44 +129,45 @@ contract VRLSignalManager is Ownable, IVRLSignalManager {
         _signalExpiryInSeconds = signalExpiryInSeconds;
     }
 
-    function verifyLiquiditySignal(LiquiditySignal memory signal)
-        public
-        onlyTrustedCaller
-        returns (bool isProofValid, uint256 _signalExpiryInSeconds)
-    {
-        return _verifyLiquiditySignalInternal(signal, msg.sender);
-    }
-
-    // bytes overload to match interface (non-reverting version)
-    function verifyLiquiditySignal(bytes memory liquiditySignal)
-        external
-        onlyTrustedCaller
-        returns (bool ok, uint256 _signalExpiryInSeconds)
-    {
-        LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
-        // TODO: Adjust the msg.sender here, so that it's passed from caller, rather the being msg.sender.
-        (ok, _signalExpiryInSeconds) = _verifyLiquiditySignalInternal(signal, msg.sender);
-    }
-
-    // removed: checkSignalBacking (documentation cleaned up)
-
-    function verifyLiquiditySignal(bytes memory liquiditySignal, bool revertOnInvalid)
-        external
-        onlyTrustedCaller
-        returns (bool ok, uint256 _signalExpiryInSeconds)
-    {
-        LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
-        (ok, _signalExpiryInSeconds) = _verifyLiquiditySignalInternal(signal, msg.sender);
-        if (revertOnInvalid && !ok) revert Errors.InvalidProof();
-    }
-
     function verifyLiquiditySignal(address sender, bytes memory liquiditySignal, bool revertOnInvalid)
         external
         onlyTrustedCaller
         returns (bool ok, uint256 _signalExpiryInSeconds)
     {
         LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
-        (ok, _signalExpiryInSeconds) = _verifyLiquiditySignalInternal(signal, sender);
+        _assertSenderAuthorised(signal, sender);
+        (ok, _signalExpiryInSeconds) = _verifyLiquiditySignalInternal(signal);
         if (revertOnInvalid && !ok) revert Errors.InvalidProof();
+    }
+
+    function verifyLiquiditySignalRelayed(
+        address sender,
+        bytes memory liquiditySignal,
+        uint256 deadline,
+        uint256 authNonce,
+        bytes memory authSig,
+        bool revertOnInvalid
+    ) external onlyTrustedCaller returns (bool ok, uint256 _signalExpiryInSeconds) {
+        if (block.timestamp > deadline) revert Errors.DeadlinePassed(deadline);
+        if (authNonce != submitAuthNonce[sender]) {
+            revert Errors.InvalidNonce(authNonce, submitAuthNonce[sender]);
+        }
+
+        LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
+        _assertSenderAuthorised(signal, sender);
+
+        bytes32 structHash = EfficientHashLib.hash(
+            abi.encode(SUBMIT_AUTH_TYPEHASH, sender, msg.sender, keccak256(liquiditySignal), deadline, authNonce)
+        );
+
+        if (_hashTypedDataV4(structHash).recover(authSig) != sender) {
+            revert Errors.InvalidSender();
+        }
+
+        (ok, _signalExpiryInSeconds) = _verifyLiquiditySignalInternal(signal);
+        if (revertOnInvalid && !ok) revert Errors.InvalidProof();
+        if (ok) {
+            submitAuthNonce[sender] = authNonce + 1;
+        }
     }
 }

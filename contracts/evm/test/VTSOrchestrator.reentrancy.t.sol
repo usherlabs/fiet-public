@@ -206,14 +206,6 @@ contract ReentrantSignalManager {
     function setVerifier(address) external {}
     function setSignalExpiryInSeconds(uint256) external {}
     function setTrustedCaller(address, bool) external {}
-
-    function verifyLiquiditySignal(bytes memory) external pure returns (bool, uint256) {
-        return (true, 3600);
-    }
-
-    function verifyLiquiditySignal(LiquiditySignal memory) external pure returns (bool, uint256) {
-        return (true, 3600);
-    }
 }
 
 contract VTSOrchestratorReentrancyTest is VTSOrchestratorFixture {

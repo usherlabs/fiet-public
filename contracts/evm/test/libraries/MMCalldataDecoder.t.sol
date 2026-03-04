@@ -162,17 +162,25 @@ contract MMCalldataDecoderHarness {
     function decodeCommitSignalParams(bytes calldata params)
         external
         pure
-        returns (bytes memory liquiditySignal, address owner)
+        returns (bytes memory liquiditySignal, address owner, bytes memory relayParams)
     {
         bytes calldata sig;
-        (sig, owner) = params.decodeCommitSignalParams();
+        bytes calldata relay;
+        (sig, owner, relay) = params.decodeCommitSignalParams();
         liquiditySignal = sig;
+        relayParams = relay;
     }
 
-    function decodeTokenIdAndBytes(bytes calldata params) external pure returns (uint256 tokenId, bytes memory data) {
+    function decodeTokenIdAndBytes(bytes calldata params)
+        external
+        pure
+        returns (uint256 tokenId, bytes memory data, bytes memory relayParams)
+    {
         bytes calldata cd;
-        (tokenId, cd) = params.decodeTokenIdAndBytes();
+        bytes calldata relay;
+        (tokenId, cd, relay) = params.decodeTokenIdAndBytes();
         data = cd;
+        relayParams = relay;
     }
 
     function decodeCheckpointParams(bytes calldata params)
@@ -367,18 +375,22 @@ contract MMCalldataDecoderTest is Test {
     function test_decodeCommitSignalParams_ok() public view {
         bytes memory sig = hex"deadbeef";
         address owner = address(0xBEEF);
-        bytes memory params = abi.encode(sig, owner);
-        (bytes memory outSig, address outOwner) = h.decodeCommitSignalParams(params);
+        bytes memory relay = abi.encode(uint256(123), uint256(1), bytes("auth"));
+        bytes memory params = abi.encode(sig, owner, relay);
+        (bytes memory outSig, address outOwner, bytes memory outRelay) = h.decodeCommitSignalParams(params);
         assertEq(outOwner, owner);
         assertEq(keccak256(outSig), keccak256(sig));
+        assertEq(keccak256(outRelay), keccak256(relay));
     }
 
     function test_decodeTokenIdAndBytes_ok() public view {
         bytes memory data = "hello";
-        bytes memory params = abi.encode(uint256(55), data);
-        (uint256 tokenId, bytes memory out) = h.decodeTokenIdAndBytes(params);
+        bytes memory relay = abi.encode(uint256(456), uint256(2), bytes("sig"));
+        bytes memory params = abi.encode(uint256(55), data, relay);
+        (uint256 tokenId, bytes memory out, bytes memory outRelay) = h.decodeTokenIdAndBytes(params);
         assertEq(tokenId, 55);
         assertEq(keccak256(out), keccak256(data));
+        assertEq(keccak256(outRelay), keccak256(relay));
     }
 
     function test_decodeCheckpointParams_ok() public view {
@@ -521,8 +533,8 @@ contract MMCalldataDecoderTest is Test {
 
     function test_decodeCommitSignalParams_revertsOnTruncatedHead() public {
         // Prior to the fix, a truncated head/tail could silently default `owner = address(0)` and decode an empty bytes.
-        // The minimum valid length (even for empty bytes) is 0x60.
-        bytes memory truncated = new bytes(0x40);
+        // The minimum valid length (even for empty bytes fields) is 0xa0.
+        bytes memory truncated = new bytes(0x60);
         vm.expectRevert(MMCalldataDecoder.SliceOutOfBounds.selector);
         h.decodeCommitSignalParams(truncated);
     }

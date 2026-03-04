@@ -28,11 +28,9 @@ contract MarketMakerTest is MarketMakerTestBase {
     function test_marketMaker_canECDSASignatureSignalVerifierVerifyProof() public view {
         // Verify the signatures and merkle proof
         bool success = verifier.verifyProof(
-            liquiditySignal.mmState.owner,
             liquiditySignal.nonce,
             liquiditySignal.rootHash,
             liquiditySignal.rootHashSignature,
-            liquiditySignal.mmSignature,
             liquiditySignal.mmState,
             liquiditySignal.merkleProof
         );

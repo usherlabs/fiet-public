@@ -645,6 +645,19 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
         commitId = VTSCommitLib.commitSignal(s, sender, signalManager, liquiditySignal);
     }
 
+    /// @notice Commit a liquidity signal using sender-signed EIP-712 relayer authorisation
+    function commitSignalRelayed(
+        address sender,
+        bytes memory liquiditySignal,
+        uint256 deadline,
+        uint256 authNonce,
+        bytes memory authSig
+    ) external onlyIfPoolManagerUnlocked nonReentrant returns (uint256 commitId) {
+        commitId = VTSCommitLib.commitSignalRelayed(
+            s, sender, signalManager, liquiditySignal, deadline, authNonce, authSig
+        );
+    }
+
     /// @notice Extend the grace period for a position
     /// @dev Uses the RFSCheckpoint module to extend the grace period after validating the settlement proof
     /// @param poolKey The pool key for the position
@@ -769,6 +782,21 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
         // Validate commit exists (but don't require live signal - expired signals can be seized)
         _assertSignalValid(commitId, false);
         VTSCommitLib.renewSignal(s, sender, signalManager, commitId, liquiditySignal);
+    }
+
+    /// @notice Renew a liquidity signal using sender-signed EIP-712 relayer authorisation
+    function renewSignalRelayed(
+        address sender,
+        uint256 commitId,
+        bytes memory liquiditySignal,
+        uint256 deadline,
+        uint256 authNonce,
+        bytes memory authSig
+    ) external onlyIfPoolManagerUnlocked nonReentrant {
+        _assertSignalValid(commitId, false);
+        VTSCommitLib.renewSignalRelayed(
+            s, sender, signalManager, commitId, liquiditySignal, deadline, authNonce, authSig
+        );
     }
 
     /// @notice Checkpoint a position and optionally run commitment backing checks

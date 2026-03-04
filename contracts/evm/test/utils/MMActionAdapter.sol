@@ -85,7 +85,7 @@ library MMActionAdapter {
     function prepareCommit(bytes memory liquiditySignal) internal pure returns (PreparedAction memory) {
         return PreparedAction({
             action: bytes1(uint8(MMActions.COMMIT_SIGNAL)),
-            params: abi.encode(liquiditySignal, ActionConstants.MSG_SENDER)
+            params: abi.encode(liquiditySignal, ActionConstants.MSG_SENDER, bytes(""))
         });
     }
 
@@ -99,7 +99,20 @@ library MMActionAdapter {
         returns (PreparedAction memory)
     {
         return PreparedAction({
-            action: bytes1(uint8(MMActions.COMMIT_SIGNAL)), params: abi.encode(liquiditySignal, owner)
+            action: bytes1(uint8(MMActions.COMMIT_SIGNAL)), params: abi.encode(liquiditySignal, owner, bytes(""))
+        });
+    }
+
+    function prepareCommitRelayed(
+        bytes memory liquiditySignal,
+        address owner,
+        uint256 deadline,
+        uint256 authNonce,
+        bytes memory authSig
+    ) internal pure returns (PreparedAction memory) {
+        bytes memory relayParams = abi.encode(deadline, authNonce, authSig);
+        return PreparedAction({
+            action: bytes1(uint8(MMActions.COMMIT_SIGNAL)), params: abi.encode(liquiditySignal, owner, relayParams)
         });
     }
 
@@ -201,10 +214,26 @@ library MMActionAdapter {
      * @notice Prepares a RENEW_SIGNAL action
      */
     function prepareRenew(uint256 tokenId, bytes memory liquiditySignal) internal pure returns (PreparedAction memory) {
-        return
-            PreparedAction({
-                action: bytes1(uint8(MMActions.RENEW_SIGNAL)), params: abi.encode(tokenId, liquiditySignal)
-            });
+        return PreparedAction({
+            action: bytes1(uint8(MMActions.RENEW_SIGNAL)), params: abi.encode(tokenId, liquiditySignal, bytes(""))
+        });
+    }
+
+    /**
+     * @notice Prepares a relayed RENEW_SIGNAL action
+     * @dev Encodes relayParams=(deadline,authNonce,authSig) into the existing RENEW_SIGNAL payload.
+     */
+    function prepareRenewRelayed(
+        uint256 tokenId,
+        bytes memory liquiditySignal,
+        uint256 deadline,
+        uint256 authNonce,
+        bytes memory authSig
+    ) internal pure returns (PreparedAction memory) {
+        bytes memory relayParams = abi.encode(deadline, authNonce, authSig);
+        return PreparedAction({
+            action: bytes1(uint8(MMActions.RENEW_SIGNAL)), params: abi.encode(tokenId, liquiditySignal, relayParams)
+        });
     }
 
     /**

@@ -187,13 +187,15 @@ contract MMPositionManager is
     /// @param params The encoded parameters for the action
     function _handleCommitmentAction(uint256 action, bytes calldata params) internal {
         if (action == MMActions.COMMIT_SIGNAL) {
-            (bytes calldata liquiditySignal, address owner) = params.decodeCommitSignalParams();
-            _commitSignal(liquiditySignal, _mapRecipient(owner));
+            (bytes calldata liquiditySignal, address owner, bytes calldata relayParams) =
+                params.decodeCommitSignalParams();
+            _commitSignal(liquiditySignal, _mapRecipient(owner), relayParams);
             return;
         }
         if (action == MMActions.RENEW_SIGNAL) {
-            (uint256 tokenId, bytes calldata liquiditySignal) = params.decodeTokenIdAndBytes();
-            _renewSignal(tokenId, liquiditySignal);
+            (uint256 tokenId, bytes calldata liquiditySignal, bytes calldata relayParams) =
+                params.decodeTokenIdAndBytes();
+            _renewSignal(tokenId, liquiditySignal, relayParams);
             return;
         }
         if (action == MMActions.DECOMMIT_SIGNAL) {
@@ -225,8 +227,17 @@ contract MMPositionManager is
     /// @param liquiditySignal The ABI-encoded LiquiditySignal to verify and record
     /// @param owner The address to receive the commitment NFT
     /// @return tokenId The commitment NFT id created
-    function _commitSignal(bytes calldata liquiditySignal, address owner) internal returns (uint256 tokenId) {
-        tokenId = vtsOrchestrator.commitSignal(msgSender(), liquiditySignal);
+    function _commitSignal(bytes calldata liquiditySignal, address owner, bytes calldata relayParams)
+        internal
+        returns (uint256 tokenId)
+    {
+        if (relayParams.length == 0) {
+            tokenId = vtsOrchestrator.commitSignal(msgSender(), liquiditySignal);
+        } else {
+            (uint256 deadline, uint256 authNonce, bytes memory authSig) =
+                abi.decode(relayParams, (uint256, uint256, bytes));
+            tokenId = vtsOrchestrator.commitSignalRelayed(msgSender(), liquiditySignal, deadline, authNonce, authSig);
+        }
         _mint(owner, tokenId);
         emit SignalCommitted(tokenId);
     }
@@ -234,8 +245,14 @@ contract MMPositionManager is
     /// @notice Renews an existing signal with new parameters
     /// @param tokenId The commitment NFT token ID
     /// @param liquiditySignal The new liquidity signal
-    function _renewSignal(uint256 tokenId, bytes calldata liquiditySignal) internal {
-        vtsOrchestrator.renewSignal(msgSender(), tokenId, liquiditySignal);
+    function _renewSignal(uint256 tokenId, bytes calldata liquiditySignal, bytes calldata relayParams) internal {
+        if (relayParams.length == 0) {
+            vtsOrchestrator.renewSignal(msgSender(), tokenId, liquiditySignal);
+        } else {
+            (uint256 deadline, uint256 authNonce, bytes memory authSig) =
+                abi.decode(relayParams, (uint256, uint256, bytes));
+            vtsOrchestrator.renewSignalRelayed(msgSender(), tokenId, liquiditySignal, deadline, authNonce, authSig);
+        }
     }
 
     /// @notice Decommits a signal and burns the commitment NFT

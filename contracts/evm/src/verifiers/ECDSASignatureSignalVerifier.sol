@@ -25,35 +25,17 @@ contract ECDSASignatureSignalVerifier is ISignalVerifier {
      * @param nonce The nonce of the market maker
      * @param rootStateHash The root state hash of the market maker
      * @param rootStateHashSignature The signature of the root state hash
-     * @param mmStateHashSignature The signature of the market maker state
      * @param mmStateData The market maker state data
      * @param merkleProof The merkle proof of the market maker state
      * @return True if the proof is valid, false otherwise
      */
     function verifyProof(
-        address sender,
         uint256 nonce,
         bytes32 rootStateHash,
         bytes calldata rootStateHashSignature,
-        bytes calldata mmStateHashSignature,
         MarketMaker.State calldata mmStateData,
         bytes32[] calldata merkleProof
     ) external view returns (bool) {
-        // if signature is provided, validate it against mmstate 'owner' field
-        // if it is not, verify the msg.sender is the mmstate 'owner' field i.e owner is caller
-        if (mmStateHashSignature.length == 0) {
-            if (sender != mmStateData.owner) {
-                return false;
-            }
-        } else {
-            if (
-                MessageHashUtils.toEthSignedMessageHash(mmStateData.toLeafHash()).recover(mmStateHashSignature)
-                    != mmStateData.owner
-            ) {
-                return false;
-            }
-        }
-
         // verify the merkle proof
         if (!MerkleProofLib.verify(merkleProof, rootStateHash, mmStateData.toLeafHash())) {
             return false;

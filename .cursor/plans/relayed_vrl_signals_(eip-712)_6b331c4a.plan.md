@@ -4,16 +4,16 @@ overview: Implement Option 3 relayed liquidity-signal submission using an EIP-71
 todos:
   - id: api-relayed-endpoint
     content: Add `verifyLiquiditySignalRelayed(...)` to `IVRLSignalManager` and implement in `VRLSignalManager` with EIP-712 auth + replay protection.
-    status: pending
+    status: completed
   - id: centralise-sender-binding
     content: Enforce `sender == owner || sender == advancer` inside `VRLSignalManager` and remove the duplicate check from `VTSCommitLib.commitSignal`.
-    status: pending
+    status: completed
   - id: deprecate-mmSignature
     content: Adjust `ECDSASignatureSignalVerifier` to stop gating validity on `mmStateHashSignature`/`mmSignature` and rely on merkle + root signature.
-    status: pending
+    status: completed
   - id: update-call-sites-tests
     content: Update protocol call sites to use the relayed endpoint when needed; add/adjust Foundry tests for relayed flows and replay protection.
-    status: pending
+    status: completed
 isProject: false
 ---
 
@@ -88,4 +88,3 @@ isProject: false
 
 - If you keep `mmSignature` in the `LiquiditySignal` struct for backwards compatibility, document it as deprecated.
 - Ensure `VRLSignalManager.setTrustedCaller(...)` is configured so that the relayed verification endpoint is reachable only via intended protocol routers/orchestrators.
-

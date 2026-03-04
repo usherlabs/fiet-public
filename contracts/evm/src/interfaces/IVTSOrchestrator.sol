@@ -229,6 +229,14 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta {
     /// @param liquiditySignal The liquidity signal to commit
     /// @return commitId The commit identifier for the committed signal
     function commitSignal(address sender, bytes memory liquiditySignal) external returns (uint256 commitId);
+    /// @notice Commit a liquidity signal using sender-signed EIP-712 relayer authorisation
+    function commitSignalRelayed(
+        address sender,
+        bytes memory liquiditySignal,
+        uint256 deadline,
+        uint256 authNonce,
+        bytes memory authSig
+    ) external returns (uint256 commitId);
     /// @notice Extend the grace period for a position
     /// @param poolKey The pool key for the position
     /// @param commitId The commit identifier
@@ -278,6 +286,15 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta {
     /// @param commitId The commit identifier to renew
     /// @param liquiditySignal The new liquidity signal
     function renewSignal(address sender, uint256 commitId, bytes memory liquiditySignal) external;
+    /// @notice Renew a liquidity signal using sender-signed EIP-712 relayer authorisation
+    function renewSignalRelayed(
+        address sender,
+        uint256 commitId,
+        bytes memory liquiditySignal,
+        uint256 deadline,
+        uint256 authNonce,
+        bytes memory authSig
+    ) external;
 
     /// @notice Checkpoint a position and optionally run commitment backing checks
     /// @param commitId The commit identifier

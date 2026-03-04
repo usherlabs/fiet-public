@@ -87,14 +87,6 @@ contract ReentrantSignalManagerForMutation {
 
     function setVerifier(address) external {}
     function setSignalExpiryInSeconds(uint256) external {}
-
-    function verifyLiquiditySignal(bytes memory) external pure returns (bool, uint256) {
-        return (true, 3600);
-    }
-
-    function verifyLiquiditySignal(LiquiditySignal memory) external pure returns (bool, uint256) {
-        return (true, 3600);
-    }
 }
 
 /**

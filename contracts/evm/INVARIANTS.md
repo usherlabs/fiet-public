@@ -179,7 +179,7 @@ being an informal “should”.
 ### SIG-02: Signal verification must succeed (or revert when requested)
 
 - **Statement**: When a call requests revert-on-invalid, an invalid proof must revert.
-- **Enforced by**: `src/VRLSignalManager.sol::verifyLiquiditySignal(bytes,bool)` reverts `Errors.InvalidProof()` when
+- **Enforced by**: `src/VRLSignalManager.sol::verifyLiquiditySignal(address,bytes,bool)` reverts `Errors.InvalidProof()` when
   `revertOnInvalid && !ok`.
 
 ### COMMIT-01: Commitment backing must satisfy `issuedUsd <= settledUsd + signalUsd` (per-position, per-commit)
