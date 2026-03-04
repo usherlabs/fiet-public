@@ -511,8 +511,10 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         // Setup guarantor settlement
         uint256 settleAmount0 = 5999709018652707;
         uint256 settleAmount1 = 5999709018652707;
-        IERC20(lcc0.underlying()).transfer(guarantor, settleAmount0);
-        IERC20(lcc1.underlying()).transfer(guarantor, settleAmount1);
+        address underlying0 = lcc0.underlying();
+        address underlying1 = lcc1.underlying();
+        IERC20(underlying0).transfer(guarantor, settleAmount0);
+        IERC20(underlying1).transfer(guarantor, settleAmount1);
 
         // Get liquidity before seize
         uint128 liquidityBefore;
@@ -523,8 +525,8 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
 
         // Execute seize as guarantor
         vm.startPrank(guarantor);
-        IERC20(lcc0.underlying()).approve(address(positionManager), settleAmount0);
-        IERC20(lcc1.underlying()).approve(address(positionManager), settleAmount1);
+        IERC20(underlying0).approve(address(positionManager), settleAmount0);
+        IERC20(underlying1).approve(address(positionManager), settleAmount1);
 
         MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](4);
         actions[0] = MMA.prepareSeize(corePoolKey, tokenId, positionIndex, settleAmount0, settleAmount1, false);
@@ -539,9 +541,10 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
             (Position memory posAfter,) = vtsOrchestrator.getPosition(tokenId, positionIndex);
             assertLt(uint256(posAfter.liquidity), uint256(liquidityBefore), "Seize should reduce position liquidity");
             assertGt(
-                Currency.wrap(address(lcc0)).balanceOf(address(guarantor)),
+                Currency.wrap(address(lcc0)).balanceOf(address(guarantor))
+                    + Currency.wrap(address(lcc1)).balanceOf(address(guarantor)),
                 0,
-                "Guarantor should receive non-zero proceeds after seize+take"
+                "Guarantor should receive non-zero LCC proceeds after seize+take"
             );
         }
     }

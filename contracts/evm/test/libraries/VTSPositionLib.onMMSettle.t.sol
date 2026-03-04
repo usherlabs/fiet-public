@@ -12,6 +12,7 @@ import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.so
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {LiquidityUtils} from "../../src/libraries/LiquidityUtils.sol";
 import {DynamicCurrencyDelta} from "../../src/libraries/DynamicCurrencyDelta.sol";
+import {ILCC} from "../../src/interfaces/ILCC.sol";
 
 contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
     VTSPositionLibHarness harness;
@@ -41,9 +42,10 @@ contract VTSPositionLibOnMMSettleTest is VTSLibTestBase {
         lccCurrency0 = _currency2;
         lccCurrency1 = _currency3;
 
-        // Get underlying currencies (_currency0 and _currency1 are underlying)
-        underlyingCurrency0 = _currency0;
-        underlyingCurrency1 = _currency1;
+        // Derive underlying currencies directly from the sorted LCC pair used in settlement.
+        // This avoids relying on deployment-address ordering between underlying and LCC tokens.
+        underlyingCurrency0 = Currency.wrap(ILCC(Currency.unwrap(lccCurrency0)).underlying());
+        underlyingCurrency1 = Currency.wrap(ILCC(Currency.unwrap(lccCurrency1)).underlying());
     }
 
     // ============================================================
