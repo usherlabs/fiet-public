@@ -17,14 +17,9 @@ contract VRLSettlementObserver is Ownable, IVRLSettlementObserver {
     mapping(bytes32 => bool) public usedProofHashes;
     address public immutable submitter;
 
-    constructor(address _submitter, bytes32[] memory _baselineUsedProofHashes, address _initialOwner)
-        Ownable(_initialOwner)
-    {
+    constructor(address _submitter, address _initialOwner) Ownable(_initialOwner) {
         if (_submitter == address(0)) revert Errors.InvalidAddress(_submitter);
         submitter = _submitter;
-        for (uint256 i = 0; i < _baselineUsedProofHashes.length; i++) {
-            usedProofHashes[_baselineUsedProofHashes[i]] = true;
-        }
     }
 
     modifier onlySubmitter() {

@@ -97,7 +97,7 @@ contract MarketFactoryTest is Test, Deployers {
 
         // Deploy VRLSettlementObserver
         vm.prank(owner);
-        new VRLSettlementObserver(address(vtsOrchestrator), new bytes32[](0), owner);
+        new VRLSettlementObserver(address(vtsOrchestrator), owner);
 
         IAllowanceTransfer permit2 = IAllowanceTransfer(makeAddr("permit2"));
 

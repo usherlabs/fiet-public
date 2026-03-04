@@ -44,16 +44,7 @@ contract VRLSignalManagerTest is MarketMakerTestBase {
         // Create and fill in the test state
         _setUpMM();
         address verifier = address(new ECDSASignatureSignalVerifier(signatureVerifier));
-        signalManager = new VRLSignalManager(
-            verifier,
-            3600,
-            address(this),
-            new address[](0),
-            new uint256[](0),
-            new address[](0),
-            new uint256[](0),
-            address(this)
-        );
+        signalManager = new VRLSignalManager(verifier, 3600, address(this), address(this));
     }
 
     function test_canSetAndGetVerifier() public {

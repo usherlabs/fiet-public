@@ -37,7 +37,7 @@ contract HookTest is Test, Deployers {
 
         // Deploy VRLSettlementObserver
         vm.prank(owner);
-        new VRLSettlementObserver(address(vtsOrchestrator), new bytes32[](0), owner);
+        new VRLSettlementObserver(address(vtsOrchestrator), owner);
 
         vm.prank(owner);
         factory = new MarketFactory(

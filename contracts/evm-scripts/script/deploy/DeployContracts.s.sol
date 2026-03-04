@@ -35,14 +35,15 @@ import {DirectLPDeltaResolver} from "src/DirectLPDeltaResolver.sol";
  * 1. Deploy GlobalConfig FIRST (used as initialOwner for all Ownable contracts via CREATE3)
  * 2. Deploy OracleHelper (with GlobalConfig as initialOwner)
  * 3. Deploy LiquidityHub (with GlobalConfig as initialOwner)
- * 4. Deploy Verifiers (VTSO dependencies, with GlobalConfig as initialOwner)
- * 5. Deploy VTSOrchestrator (with GlobalConfig as initialOwner)
- * 6. Deploy MMPositionManager (must be before MarketFactory for bounds)
- * 7. Deploy MarketFactory (with GlobalConfig as initialOwner)
- * 8. Enable MarketFactory in LiquidityHub
- * 9. Deploy CoreHook (with proper flags and MarketFactory address) - uses CREATE2 for hook flags
- * 10. Initialise MarketFactory (set hooks + bounds)
- * 11. Verify hooks (set cross-references)
+ * 4. Deploy VTSOrchestrator (with GlobalConfig as initialOwner)
+ * 5. Deploy Verifiers (submitter-bound to VTSOrchestrator, with GlobalConfig as initialOwner)
+ * 6. Register VRL proof handlers in VTSOrchestrator
+ * 7. Deploy MMPositionManager (must be before MarketFactory for bounds)
+ * 8. Deploy MarketFactory (with GlobalConfig as initialOwner)
+ * 9. Enable MarketFactory in LiquidityHub
+ * 10. Deploy CoreHook (with proper flags and MarketFactory address) - uses CREATE2 for hook flags
+ * 11. Initialise MarketFactory (set hooks + bounds)
+ * 12. Verify hooks (set cross-references)
  *
  * @notice Most contracts use CREATE3 for deterministic addresses across chains.
  *         CoreHook uses CREATE2 with HookMiner to ensure correct hook flags.
@@ -152,47 +153,51 @@ contract DeployContracts is CREATE3Script, NetworkConfig {
         liquidityHub = _deployLiquidityHub();
         console.log("LiquidityHub deployed at:", liquidityHub);
 
-        // Step 4: Deploy Verifiers (VTSO dependencies, with GlobalConfig as initialOwner)
-        console.log("\n=== Step 4: Deploying Verifiers (VTSO Dependencies) ===");
+        // Step 4: Deploy VTSOrchestrator (with GlobalConfig as initialOwner)
+        console.log("\n=== Step 4: Deploying VTSOrchestrator ===");
+        vtsOrchestrator = _deployVTSOrchestrator();
+        console.log("VTSOrchestrator deployed at:", vtsOrchestrator);
+
+        // Step 5: Deploy Verifiers (VTSO dependencies, with GlobalConfig as initialOwner)
+        console.log("\n=== Step 5: Deploying Verifiers (VTSO Dependencies) ===");
         _deployVerifiers();
         console.log("SignalManager deployed at:", signalManager);
         console.log("SettlementObserver deployed at:", settlementObserver);
 
-        // Step 5: Deploy VTSOrchestrator (with GlobalConfig as initialOwner)
-        console.log("\n=== Step 5: Deploying VTSOrchestrator ===");
-        vtsOrchestrator = _deployVTSOrchestrator();
-        console.log("VTSOrchestrator deployed at:", vtsOrchestrator);
+        // Step 6: Register VRL proof handlers
+        console.log("\n=== Step 6: Registering VRL Proof Handlers ===");
+        _registerVRLProofHandlers();
 
-        // Step 6: Deploy MMPositionManager (must be before MarketFactory for bounds)
-        console.log("\n=== Step 6: Deploying MMPositionManager ===");
+        // Step 7: Deploy MMPositionManager (must be before MarketFactory for bounds)
+        console.log("\n=== Step 7: Deploying MMPositionManager ===");
         mmPositionManager = _deployMMPositionManager();
         console.log("MMPositionManager deployed at:", mmPositionManager);
 
-        // Step 7: Deploy DirectLPDeltaResolver (must be protocol-bound for afterModifyLiquidity)
-        console.log("\n=== Step 7: Deploying DirectLPDeltaResolver ===");
+        // Step 8: Deploy DirectLPDeltaResolver (must be protocol-bound for afterModifyLiquidity)
+        console.log("\n=== Step 8: Deploying DirectLPDeltaResolver ===");
         directLPDeltaResolver = _deployDirectLPDeltaResolver();
         console.log("DirectLPDeltaResolver deployed at:", directLPDeltaResolver);
 
-        // Step 8: Deploy MarketFactory (with GlobalConfig as initialOwner)
-        console.log("\n=== Step 8: Deploying MarketFactory ===");
+        // Step 9: Deploy MarketFactory (with GlobalConfig as initialOwner)
+        console.log("\n=== Step 9: Deploying MarketFactory ===");
         marketFactory = _deployMarketFactory();
         console.log("MarketFactory deployed at:", marketFactory);
 
-        // Step 9: Enable MarketFactory in LiquidityHub
-        console.log("\n=== Step 9: Enabling MarketFactory in LiquidityHub ===");
+        // Step 10: Enable MarketFactory in LiquidityHub
+        console.log("\n=== Step 10: Enabling MarketFactory in LiquidityHub ===");
         _enableFactoryInLiquidityHub();
 
-        // Step 10: Deploy CoreHook
-        console.log("\n=== Step 10: Deploying CoreHook ===");
+        // Step 11: Deploy CoreHook
+        console.log("\n=== Step 11: Deploying CoreHook ===");
         coreHook = _deployCoreHook();
         console.log("CoreHook deployed at:", coreHook);
 
-        // Step 11: Initialise MarketFactory
-        console.log("\n=== Step 11: Initialising MarketFactory ===");
+        // Step 12: Initialise MarketFactory
+        console.log("\n=== Step 12: Initialising MarketFactory ===");
         _initialiseFactory();
 
-        // Step 12: Verify hooks addresses across the contracts
-        console.log("\n=== Step 12: Verifying Hooks ===");
+        // Step 13: Verify hooks addresses across the contracts
+        console.log("\n=== Step 13: Verifying Hooks ===");
         _verifyHooks();
 
         vm.stopBroadcast();
@@ -337,7 +342,8 @@ contract DeployContracts is CREATE3Script, NetworkConfig {
         console.log("ECDSASignatureSignalVerifier deployed at:", signalVerifier);
 
         // Pass globalConfig as initialOwner (required for CREATE3 compatibility)
-        bytes memory signalManagerConstructorArgs = abi.encode(signalVerifier, signalExpiryInSeconds, globalConfig);
+        bytes memory signalManagerConstructorArgs =
+            abi.encode(signalVerifier, signalExpiryInSeconds, vtsOrchestrator, globalConfig);
         bytes memory signalManagerCreationCode =
             abi.encodePacked(type(VRLSignalManager).creationCode, signalManagerConstructorArgs);
         signalManager = _deployCreate3(SIGNAL_MANAGER, signalManagerCreationCode);
@@ -345,7 +351,7 @@ contract DeployContracts is CREATE3Script, NetworkConfig {
         console.log("SignalManager owner:", globalConfig);
 
         // Pass globalConfig as initialOwner (required for CREATE3 compatibility)
-        bytes memory observerConstructorArgs = abi.encode(globalConfig);
+        bytes memory observerConstructorArgs = abi.encode(vtsOrchestrator, globalConfig);
         bytes memory observerCreationCode =
             abi.encodePacked(type(VRLSettlementObserver).creationCode, observerConstructorArgs);
         settlementObserver = _deployCreate3(SETTLEMENT_OBSERVER, observerCreationCode);
@@ -359,14 +365,21 @@ contract DeployContracts is CREATE3Script, NetworkConfig {
      */
     function _deployVTSOrchestrator() internal returns (address) {
         // Pass globalConfig as initialOwner (required for CREATE3 compatibility)
-        bytes memory constructorArgs =
-            abi.encode(config.poolManager, signalManager, oracleHelper, liquidityHub, settlementObserver, globalConfig);
+        bytes memory constructorArgs = abi.encode(config.poolManager, oracleHelper, liquidityHub, globalConfig);
         bytes memory creationCode = abi.encodePacked(type(VTSOrchestrator).creationCode, constructorArgs);
 
         address deployed = _deployCreate3(VTS_ORCHESTRATOR, creationCode);
         console.log("VTSOrchestrator deployed at:", deployed);
         console.log("VTSOrchestrator owner:", globalConfig);
         return deployed;
+    }
+
+    function _registerVRLProofHandlers() internal {
+        bytes memory callData = abi.encodeWithSelector(
+            VTSOrchestrator.registerVRLProofHandlers.selector, signalManager, settlementObserver
+        );
+        GlobalConfig(globalConfig).proxyCall(vtsOrchestrator, callData);
+        console.log("VRL proof handlers registered in VTSOrchestrator (via GlobalConfig.proxyCall)");
     }
 
     /**

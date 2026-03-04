@@ -18,7 +18,7 @@ This spec documents how to produce the **off-chain** EIP-712 signature required 
 Relaying allows a third-party submitter (e.g. a router) to submit a `liquiditySignal` **on behalf of** a declared `sender` (either `mmState.owner` or `mmState.advancer`) while still binding:
 
 - **who is authorised**: `sender` must sign the EIP-712 message
-- **who may submit**: the message is bound to `submitter == msg.sender` at `VRLSignalManager`
+- **who may submit**: the caller is enforced on-chain by `onlySubmitter` (constructor-set submitter)
 - **what may be submitted**: the message is bound to the exact `liquiditySignal` bytes
 - **replay protection**: `submitAuthNonce[sender]` is consumed on success
 - **expiry**: `deadline`
@@ -39,21 +39,21 @@ Domain fields:
 Type string (must match on-chain `SUBMIT_AUTH_TYPEHASH`):
 
 ```text
-SubmitAuth(address sender,address submitter,bytes32 liquiditySignalHash,uint256 deadline,uint256 nonce)
+SubmitAuth(address sender,bytes32 liquiditySignalHash,uint256 deadline,uint256 nonce)
 ```
 
 Fields:
 
 - **sender**: the effective actor (must equal either `mmState.owner` or `mmState.advancer` in the decoded signal)
-- **submitter**: the address that will call `VRLSignalManager` (must equal `msg.sender` at verification time)
 - **liquiditySignalHash**: `keccak256(liquiditySignal)` where `liquiditySignal` is the ABI-encoded `LiquiditySignal` bytes blob
 - **deadline**: unix timestamp; verification reverts if `block.timestamp > deadline`
 - **nonce**: must equal `VRLSignalManager.submitAuthNonce(sender)` at submission time
 
 Important:
 
-- When you submit **via `MMPositionManager` → `VTSOrchestrator` → `VRLSignalManager`**, the `submitter` to sign is **the `VTSOrchestrator` contract address**, because `VTSOrchestrator` is the contract that calls `VRLSignalManager.verifyLiquiditySignalRelayed(...)`.
-- If you submit through a different trusted caller, sign that trusted caller’s address as `submitter`.
+- The submitter is no longer signed in typed data.
+- `VRLSignalManager` enforces `msg.sender == submitter` via `onlySubmitter`.
+- When deployed for protocol flows, `submitter` should be the `VTSOrchestrator` contract address.
 
 ## How to sign (ethers.js example)
 
@@ -64,7 +64,6 @@ import { ethers } from "ethers";
 
 type SubmitAuth = {
   sender: string;
-  submitter: string;
   liquiditySignalHash: string; // bytes32
   deadline: bigint;
   nonce: bigint;
@@ -80,7 +79,6 @@ const domain = {
 const types = {
   SubmitAuth: [
     { name: "sender", type: "address" },
-    { name: "submitter", type: "address" },
     { name: "liquiditySignalHash", type: "bytes32" },
     { name: "deadline", type: "uint256" },
     { name: "nonce", type: "uint256" },
@@ -93,7 +91,6 @@ const liquiditySignalHash = ethers.keccak256(liquiditySignal);
 
 const value: SubmitAuth = {
   sender: "0xSender",       // must be owner or advancer from mmState
-  submitter: "0xSubmitter", // the trusted caller that will call VRLSignalManager (often VTSOrchestrator)
   liquiditySignalHash,
   deadline: 1710000000n,    // replace
   nonce: 0n,                // VRLSignalManager.submitAuthNonce(sender)
@@ -106,7 +103,7 @@ const authSig = await wallet.signTypedData(domain, types, value);
 Notes:
 
 - `authSig` must be a standard 65-byte ECDSA signature (ethers returns `0x`-prefixed hex).
-- Make sure the `submitter` you sign is the *actual* `msg.sender` that reaches `VRLSignalManager` (i.e. the trusted contract address making the call, not necessarily the original EOA).
+- Make sure the call path reaches `VRLSignalManager` from the configured submitter contract (typically `VTSOrchestrator`).
 
 ## How to call on-chain (direct relayed entrypoint)
 
@@ -119,7 +116,6 @@ Call `VRLSignalManager.verifyLiquiditySignalRelayed(...)` from a **trusted calle
 The function will:
 
 - validate `nonce == submitAuthNonce[sender]`
-- validate `submitter == msg.sender`
 - validate `keccak256(liquiditySignal)` matches
 - recover `authSig` and require recovered signer equals `sender`
 - verify the signal’s merkle inclusion + root signature
@@ -164,8 +160,7 @@ Behaviour:
 - **Before signing**:
   - Read `authNonce = VRLSignalManager.submitAuthNonce(sender)`.
   - Choose a short-lived `deadline`.
-  - Ensure the `submitter` is the *actual contract address* that will call `VRLSignalManager`.
 - **Before submitting**:
-  - Ensure the caller is configured as a `trustedCaller` in `VRLSignalManager`.
+  - Ensure the call reaches `VRLSignalManager` from the configured `submitter`.
 - **On failure**:
-  - A wrong `submitter`, mismatched signal bytes, expired deadline, or nonce mismatch will revert.
+  - A wrong submitter caller, mismatched signal bytes, expired deadline, or nonce mismatch will revert.

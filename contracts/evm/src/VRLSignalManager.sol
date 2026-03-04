@@ -44,39 +44,15 @@ contract VRLSignalManager is Ownable, EIP712, IVRLSignalManager {
     bytes32 internal constant SUBMIT_AUTH_TYPEHASH =
         keccak256("SubmitAuth(address sender,bytes32 liquiditySignalHash,uint256 deadline,uint256 nonce)");
 
-    constructor(
-        address _verifier,
-        uint256 _signalExpiryInSeconds,
-        address _submitter,
-        address[] memory _baselineMmOwners,
-        uint256[] memory _baselineMmNonces,
-        address[] memory _baselineAuthSenders,
-        uint256[] memory _baselineAuthNonces,
-        address _initialOwner
-    ) Ownable(_initialOwner) EIP712("VRLSignalManager", "1") {
+    constructor(address _verifier, uint256 _signalExpiryInSeconds, address _submitter, address _initialOwner)
+        Ownable(_initialOwner)
+        EIP712("VRLSignalManager", "1")
+    {
         if (_submitter == address(0)) revert Errors.InvalidAddress(_submitter);
-        if (_baselineMmOwners.length != _baselineMmNonces.length) {
-            revert Errors.InvalidAmount(_baselineMmOwners.length, _baselineMmNonces.length);
-        }
-        if (_baselineAuthSenders.length != _baselineAuthNonces.length) {
-            revert Errors.InvalidAmount(_baselineAuthSenders.length, _baselineAuthNonces.length);
-        }
 
         verifier = ISignalVerifier(_verifier);
         signalExpiryInSeconds = _signalExpiryInSeconds;
         submitter = _submitter;
-
-        for (uint256 i = 0; i < _baselineMmOwners.length; i++) {
-            address owner = _baselineMmOwners[i];
-            if (owner == address(0)) revert Errors.InvalidAddress(owner);
-            mmNonce[owner] = _baselineMmNonces[i];
-        }
-
-        for (uint256 i = 0; i < _baselineAuthSenders.length; i++) {
-            address sender = _baselineAuthSenders[i];
-            if (sender == address(0)) revert Errors.InvalidAddress(sender);
-            submitAuthNonce[sender] = _baselineAuthNonces[i];
-        }
     }
 
     modifier onlySubmitter() {

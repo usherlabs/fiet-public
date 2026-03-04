@@ -183,23 +183,12 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
         vtsOrchestrator =
             _deployVTSOrchestrator(address(manager), address(oracleHelper), address(liquidityHub), testOwner);
 
-        address[] memory emptyAddresses = new address[](0);
-        uint256[] memory emptyNonces = new uint256[](0);
-        bytes32[] memory emptyProofHashes = new bytes32[](0);
-
         signalManager = new VRLSignalManager(
-            address(stubSignalVerifier),
-            signalExpiryInSeconds,
-            address(vtsOrchestrator),
-            emptyAddresses,
-            emptyNonces,
-            emptyAddresses,
-            emptyNonces,
-            testOwner
+            address(stubSignalVerifier), signalExpiryInSeconds, address(vtsOrchestrator), testOwner
         );
 
         // deploy the settlement observer
-        settlementObserver = new VRLSettlementObserver(address(vtsOrchestrator), emptyProofHashes, testOwner);
+        settlementObserver = new VRLSettlementObserver(address(vtsOrchestrator), testOwner);
         settlementObserver.addVerifier(address(new StubSettlementVerifier()));
         vtsOrchestrator.registerVRLProofHandlers(address(signalManager), address(settlementObserver));
 
