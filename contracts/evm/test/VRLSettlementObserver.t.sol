@@ -54,7 +54,7 @@ contract VRLSettlementObserverTest is Test {
     function setUp() public {
         // Deploy as owner so owner is set correctly
         vm.prank(owner);
-        observer = new VRLSettlementObserver(owner);
+        observer = new VRLSettlementObserver(address(this), new bytes32[](0), owner);
 
         // Deploy stub verifiers for testing
         stubVerifier = new StubSettlementVerifier();
@@ -68,8 +68,6 @@ contract VRLSettlementObserverTest is Test {
         // Add initial verifier
         vm.prank(owner);
         observer.addVerifier(verifier1);
-        vm.prank(owner);
-        observer.setTrustedCaller(address(this), true);
     }
 
     function test_AddVerifier() public {

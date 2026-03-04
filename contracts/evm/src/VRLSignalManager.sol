@@ -40,23 +40,52 @@ contract VRLSignalManager is Ownable, EIP712, IVRLSignalManager {
     mapping(address => uint256) public mmNonce;
     mapping(address => uint256) public submitAuthNonce;
     uint256 public signalExpiryInSeconds;
-    mapping(address => bool) public trustedCallers;
-    bytes32 internal constant SUBMIT_AUTH_TYPEHASH = keccak256(
-        "SubmitAuth(address sender,address submitter,bytes32 liquiditySignalHash,uint256 deadline,uint256 nonce)"
-    );
+    address public immutable submitter;
+    bytes32 internal constant SUBMIT_AUTH_TYPEHASH =
+        keccak256("SubmitAuth(address sender,bytes32 liquiditySignalHash,uint256 deadline,uint256 nonce)");
 
-    constructor(address _verifier, uint256 _signalExpiryInSeconds, address _initialOwner)
-        Ownable(_initialOwner)
-        EIP712("VRLSignalManager", "1")
-    {
+    constructor(
+        address _verifier,
+        uint256 _signalExpiryInSeconds,
+        address _submitter,
+        address[] memory _baselineMmOwners,
+        uint256[] memory _baselineMmNonces,
+        address[] memory _baselineAuthSenders,
+        uint256[] memory _baselineAuthNonces,
+        address _initialOwner
+    ) Ownable(_initialOwner) EIP712("VRLSignalManager", "1") {
+        if (_submitter == address(0)) revert Errors.InvalidAddress(_submitter);
+        if (_baselineMmOwners.length != _baselineMmNonces.length) {
+            revert Errors.InvalidAmount(_baselineMmOwners.length, _baselineMmNonces.length);
+        }
+        if (_baselineAuthSenders.length != _baselineAuthNonces.length) {
+            revert Errors.InvalidAmount(_baselineAuthSenders.length, _baselineAuthNonces.length);
+        }
+
         verifier = ISignalVerifier(_verifier);
         signalExpiryInSeconds = _signalExpiryInSeconds;
+        submitter = _submitter;
+
+        for (uint256 i = 0; i < _baselineMmOwners.length; i++) {
+            address owner = _baselineMmOwners[i];
+            if (owner == address(0)) revert Errors.InvalidAddress(owner);
+            mmNonce[owner] = _baselineMmNonces[i];
+        }
+
+        for (uint256 i = 0; i < _baselineAuthSenders.length; i++) {
+            address sender = _baselineAuthSenders[i];
+            if (sender == address(0)) revert Errors.InvalidAddress(sender);
+            submitAuthNonce[sender] = _baselineAuthNonces[i];
+        }
     }
 
-    modifier onlyTrustedCaller() {
-        // TODO: Split into _onlyTrustedCaller()
-        if (!trustedCallers[msg.sender]) revert Errors.InvalidSender();
+    modifier onlySubmitter() {
+        _onlySubmitter();
         _;
+    }
+
+    function _onlySubmitter() internal view {
+        if (msg.sender != submitter) revert Errors.InvalidSender();
     }
 
     /**
@@ -86,11 +115,6 @@ contract VRLSignalManager is Ownable, EIP712, IVRLSignalManager {
         uint256 _oldSignalExpiryInSeconds = signalExpiryInSeconds;
         signalExpiryInSeconds = _signalExpiryInSeconds;
         emit SignalExpiryInSecondsChanged(_oldSignalExpiryInSeconds, _signalExpiryInSeconds);
-    }
-
-    function setTrustedCaller(address caller, bool allowed) external onlyOwner {
-        trustedCallers[caller] = allowed;
-        emit TrustedCallerSet(caller, allowed);
     }
 
     function _assertSenderAuthorised(LiquiditySignal memory signal, address sender) internal pure {
@@ -131,7 +155,7 @@ contract VRLSignalManager is Ownable, EIP712, IVRLSignalManager {
 
     function verifyLiquiditySignal(address sender, bytes memory liquiditySignal, bool revertOnInvalid)
         external
-        onlyTrustedCaller
+        onlySubmitter
         returns (bool ok, uint256 _signalExpiryInSeconds)
     {
         LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
@@ -147,7 +171,7 @@ contract VRLSignalManager is Ownable, EIP712, IVRLSignalManager {
         uint256 authNonce,
         bytes memory authSig,
         bool revertOnInvalid
-    ) external onlyTrustedCaller returns (bool ok, uint256 _signalExpiryInSeconds) {
+    ) external onlySubmitter returns (bool ok, uint256 _signalExpiryInSeconds) {
         if (block.timestamp > deadline) revert Errors.DeadlinePassed(deadline);
         if (authNonce != submitAuthNonce[sender]) {
             revert Errors.InvalidNonce(authNonce, submitAuthNonce[sender]);
@@ -157,7 +181,7 @@ contract VRLSignalManager is Ownable, EIP712, IVRLSignalManager {
         _assertSenderAuthorised(signal, sender);
 
         bytes32 structHash = EfficientHashLib.hash(
-            abi.encode(SUBMIT_AUTH_TYPEHASH, sender, msg.sender, keccak256(liquiditySignal), deadline, authNonce)
+            abi.encode(SUBMIT_AUTH_TYPEHASH, sender, keccak256(liquiditySignal), deadline, authNonce)
         );
 
         if (_hashTypedDataV4(structHash).recover(authSig) != sender) {

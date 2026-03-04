@@ -112,15 +112,15 @@ contract MockSignalManager is IVRLSignalManager {
         return 0;
     }
 
+    function submitter() external pure returns (address) {
+        return address(0xBEEF);
+    }
+
     function setVerifier(address) external pure {
         revert("MockSignalManager: not implemented");
     }
 
     function setSignalExpiryInSeconds(uint256) external pure {
-        revert("MockSignalManager: not implemented");
-    }
-
-    function setTrustedCaller(address, bool) external pure {
         revert("MockSignalManager: not implemented");
     }
 

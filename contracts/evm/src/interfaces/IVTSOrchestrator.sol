@@ -12,13 +12,13 @@ import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/Pool
 import {RFSCheckpoint} from "../types/Checkpoint.sol";
 import {IPausableVTS} from "./IPausableVTS.sol";
 import {IVTSCurrencyDelta} from "./IVTSCurrencyDelta.sol";
+import {IVTSAdmin} from "./IVTSAdmin.sol";
 import {IMarketVault} from "./IMarketVault.sol";
 
-interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta {
+interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin {
     // Events
     event Checkpointed(uint256 commitId, uint256 positionIndex, RFSCheckpoint checkpoint, bool withCommitment);
     event GracePeriodExtended(uint256 commitId, uint256 positionIndex, uint8 tokenIndex, RFSCheckpoint checkpoint);
-    event VTSConfigSet(bytes32 indexed marketId, MarketVTSConfiguration newConfig);
     event PositionSettled(
         uint256 indexed commitId,
         uint256 indexed positionIndex,
@@ -133,11 +133,6 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta {
     /// @param corePoolKey The core pool key
     /// @param vtsConfiguration The VTS configuration
     function initPool(PoolKey memory corePoolKey, MarketVTSConfiguration memory vtsConfiguration) external;
-
-    /// @notice Set the market VTS configuration
-    /// @param corePoolId The core pool ID
-    /// @param vtsConfiguration The VTS configuration to set
-    function setMarketVTSConfiguration(PoolId corePoolId, MarketVTSConfiguration memory vtsConfiguration) external;
 
     /// @notice Get the market VTS configuration
     /// @param corePoolId The core pool ID

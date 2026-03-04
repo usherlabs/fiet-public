@@ -17,7 +17,6 @@ import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
 import {IAllowanceTransfer} from "permit2/src/interfaces/IAllowanceTransfer.sol";
 import {VTSOrchestrator} from "../src/VTSOrchestrator.sol";
 import {VRLSettlementObserver} from "../src/VRLSettlementObserver.sol";
-import {IVRLSettlementObserver} from "../src/interfaces/IVRLSettlementObserver.sol";
 
 contract HookTest is Test, Deployers {
     IPoolManager poolManager;
@@ -30,20 +29,15 @@ contract HookTest is Test, Deployers {
 
     function setUp() public {
         poolManager = IPoolManager(makeAddr("poolManager"));
-        // Deploy VRLSettlementObserver
-        vm.prank(owner);
-        IVRLSettlementObserver settlementObserver = new VRLSettlementObserver(owner);
-
         // Deploy VTSOrchestrator
         vm.prank(owner);
         vtsOrchestrator = new VTSOrchestrator(
-            address(poolManager),
-            makeAddr("signalManager"),
-            address(makeAddr("OracleHelper")),
-            address(makeAddr("liquidityHub")),
-            address(settlementObserver),
-            owner
+            address(poolManager), address(makeAddr("OracleHelper")), address(makeAddr("liquidityHub")), owner
         );
+
+        // Deploy VRLSettlementObserver
+        vm.prank(owner);
+        new VRLSettlementObserver(address(vtsOrchestrator), new bytes32[](0), owner);
 
         vm.prank(owner);
         factory = new MarketFactory(

@@ -14,14 +14,9 @@ import {PositionId} from "../../src/types/Position.sol";
 /// @notice Extends VTSOrchestrator with debug view functions for testing
 /// @dev Only used in test files - keeps production VTSOrchestrator clean
 contract VTSOrchestratorTestable is VTSOrchestrator {
-    constructor(
-        address _poolManager,
-        address _signalManager,
-        address _oracleHelper,
-        address _liquidityHub,
-        address _settlementObserver,
-        address _owner
-    ) VTSOrchestrator(_poolManager, _signalManager, _oracleHelper, _liquidityHub, _settlementObserver, _owner) {}
+    constructor(address _poolManager, address _oracleHelper, address _liquidityHub, address _owner)
+        VTSOrchestrator(_poolManager, _oracleHelper, _liquidityHub, _owner)
+    {}
 
     /// @notice Get position accounting details for debugging
     /// @param positionId The position identifier

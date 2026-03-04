@@ -19,6 +19,7 @@ import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 contract VRLSettlementObserverMock is IVRLSettlementObserver {
     bool internal _isValid;
     bool internal _revertOnInvalid;
+    address internal constant _SUBMITTER = address(0xBEEF);
 
     function setValidity(bool isValid) external {
         _isValid = isValid;
@@ -36,7 +37,10 @@ contract VRLSettlementObserverMock is IVRLSettlementObserver {
     function nullifyVerifier(uint32) external pure {}
     function allowVerifierForTokens(uint32, address[] memory) external pure {}
     function disallowVerifierForTokens(uint32, address[] memory) external pure {}
-    function setTrustedCaller(address, bool) external pure {}
+
+    function submitter() external pure returns (address) {
+        return _SUBMITTER;
+    }
 
     function verifySettlementProof(PoolKey memory, uint8, uint32, bytes memory, bool revertOnInvalid)
         external

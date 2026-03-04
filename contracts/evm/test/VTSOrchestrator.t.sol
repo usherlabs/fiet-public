@@ -73,17 +73,12 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
     // ============================================================
 
     /// @notice Override to deploy VTSOrchestratorTestable with debug view functions
-    function _deployVTSOrchestrator(
-        address _poolManager,
-        address _signalManager,
-        address _oracleHelper,
-        address _liquidityHub,
-        address _settlementObserver,
-        address _owner
-    ) internal override returns (VTSOrchestrator) {
-        return new VTSOrchestratorTestable(
-            _poolManager, _signalManager, _oracleHelper, _liquidityHub, _settlementObserver, _owner
-        );
+    function _deployVTSOrchestrator(address _poolManager, address _oracleHelper, address _liquidityHub, address _owner)
+        internal
+        override
+        returns (VTSOrchestrator)
+    {
+        return new VTSOrchestratorTestable(_poolManager, _oracleHelper, _liquidityHub, _owner);
     }
 
     /// @notice Helper to access testable VTSOrchestrator with debug functions
@@ -95,52 +90,14 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
     // Constructor Guard Tests
     // ============================================================
 
-    function test_constructor_revert_whenSignalManagerZero() public {
-        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
-        new VTSOrchestratorTestable(
-            address(manager),
-            address(0),
-            address(oracleHelper),
-            address(liquidityHub),
-            address(settlementObserver),
-            address(this)
-        );
-    }
-
     function test_constructor_revert_whenOracleHelperZero() public {
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
-        new VTSOrchestratorTestable(
-            address(manager),
-            address(signalManager),
-            address(0),
-            address(liquidityHub),
-            address(settlementObserver),
-            address(this)
-        );
+        new VTSOrchestratorTestable(address(manager), address(0), address(liquidityHub), address(this));
     }
 
     function test_constructor_revert_whenLiquidityHubZero() public {
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
-        new VTSOrchestratorTestable(
-            address(manager),
-            address(signalManager),
-            address(oracleHelper),
-            address(0),
-            address(settlementObserver),
-            address(this)
-        );
-    }
-
-    function test_constructor_revert_whenSettlementObserverZero() public {
-        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
-        new VTSOrchestratorTestable(
-            address(manager),
-            address(signalManager),
-            address(oracleHelper),
-            address(liquidityHub),
-            address(0),
-            address(this)
-        );
+        new VTSOrchestratorTestable(address(manager), address(oracleHelper), address(0), address(this));
     }
 
     // ============================================================
@@ -384,14 +341,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
 
     function test_constructor_revert_whenPoolManagerZero() public {
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
-        new VTSOrchestratorTestable(
-            address(0),
-            address(signalManager),
-            address(oracleHelper),
-            address(liquidityHub),
-            address(settlementObserver),
-            address(this)
-        );
+        new VTSOrchestratorTestable(address(0), address(oracleHelper), address(liquidityHub), address(this));
     }
 
     // ============================================================

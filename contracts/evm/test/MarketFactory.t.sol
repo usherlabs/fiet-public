@@ -91,20 +91,13 @@ contract MarketFactoryTest is Test, Deployers {
             abi.encode(liquidityHubAddress)
         );
 
-        // Deploy VRLSettlementObserver
-        vm.prank(owner);
-        IVRLSettlementObserver settlementObserver = new VRLSettlementObserver(owner);
-
         // Deploy VTSOrchestrator
         vm.prank(owner);
-        vtsOrchestrator = new VTSOrchestrator(
-            address(poolManager),
-            makeAddr("signalManager"),
-            oracleHelperAddress,
-            liquidityHubAddress,
-            address(settlementObserver),
-            owner
-        );
+        vtsOrchestrator = new VTSOrchestrator(address(poolManager), oracleHelperAddress, liquidityHubAddress, owner);
+
+        // Deploy VRLSettlementObserver
+        vm.prank(owner);
+        new VRLSettlementObserver(address(vtsOrchestrator), new bytes32[](0), owner);
 
         IAllowanceTransfer permit2 = IAllowanceTransfer(makeAddr("permit2"));
 

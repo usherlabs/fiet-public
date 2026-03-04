@@ -34,7 +34,6 @@ import {VTSSwapLib} from "./libraries/VTSSwapLib.sol";
 import {VTSCommitLib} from "./libraries/VTSCommitLib.sol";
 import {Errors} from "./libraries/Errors.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
-import {IVRLSignalManager} from "./interfaces/IVRLSignalManager.sol";
 import {ModifyLiquidityParams} from "v4-periphery/lib/v4-core/src/types/PoolOperation.sol";
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
 import {TransientStateLibrary} from "v4-periphery/lib/v4-core/src/libraries/TransientStateLibrary.sol";
@@ -43,7 +42,6 @@ import {ImmutableState} from "v4-periphery/src/base/ImmutableState.sol";
 import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
 import {ILiquidityHub} from "./interfaces/ILiquidityHub.sol";
 import {CheckpointLibrary} from "./libraries/Checkpoint.sol";
-import {IVRLSettlementObserver} from "./interfaces/IVRLSettlementObserver.sol";
 import {RFSCheckpoint} from "./types/Checkpoint.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {MarketHandlerLib} from "./libraries/MarketHandlerLib.sol";
@@ -59,12 +57,20 @@ import {TransientSlots} from "./libraries/TransientSlots.sol";
 import {PoolAccounting} from "./types/VTS.sol";
 import {ReentrancyGuardTransient} from "openzeppelin-contracts/contracts/utils/ReentrancyGuardTransient.sol";
 import {TokenConfiguration} from "./types/VTS.sol";
+import {VTSAdmin} from "./modules/VTSAdmin.sol";
 
 /// @title VTSOrchestrator
 /// @notice Central state management layer and orchestrator for VTS logic
 /// @dev Adopts Bunni-style pattern: state managed in VTSStorage struct, complex logic delegated to linked libraries
 /// @author Fiet Protocol
-contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSOrchestrator, ReentrancyGuardTransient {
+contract VTSOrchestrator is
+    PausableVTS,
+    VTSAdmin,
+    VTSCurrencyDelta,
+    ImmutableState,
+    IVTSOrchestrator,
+    ReentrancyGuardTransient
+{
     using StateLibrary for IPoolManager;
     using TransientStateLibrary for IPoolManager;
     using SafeCast for uint256;
@@ -78,12 +84,6 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
 
     /// @notice LiquidityHub contract for liquidity management
     ILiquidityHub internal immutable liquidityHub;
-
-    /// @notice Settlement observer for VRL settlement validation
-    IVRLSettlementObserver public immutable settlementObserver;
-
-    /// @notice VRL Signal Manager for liquidity signal validation
-    IVRLSignalManager public immutable signalManager;
 
     // --------------------------------------------------
     // Mutation testing note
@@ -99,24 +99,15 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
 
     /// @notice Constructor
     /// @param _poolManager The Uniswap V4 PoolManager address
-    /// @param _signalManager The VRL Signal Manager address
     /// @param _oracleHelper The OracleHelper address
     /// @param _liquidityHub The LiquidityHub address
-    /// @param _settlementObserver The VRL Settlement Observer address
     /// @param _initialOwner The initial owner of the contract
-    constructor(
-        address _poolManager,
-        address _signalManager,
-        address _oracleHelper,
-        address _liquidityHub,
-        address _settlementObserver,
-        address _initialOwner
-    ) Ownable(_initialOwner) ImmutableState(IPoolManager(_poolManager)) {
+    constructor(address _poolManager, address _oracleHelper, address _liquidityHub, address _initialOwner)
+        Ownable(_initialOwner)
+        ImmutableState(IPoolManager(_poolManager))
+    {
         if (_poolManager == address(0)) {
             revert Errors.InvalidAddress(_poolManager);
-        }
-        if (_signalManager == address(0)) {
-            revert Errors.InvalidAddress(_signalManager);
         }
         if (_oracleHelper == address(0)) {
             revert Errors.InvalidAddress(_oracleHelper);
@@ -124,13 +115,8 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
         if (_liquidityHub == address(0)) {
             revert Errors.InvalidAddress(_liquidityHub);
         }
-        if (_settlementObserver == address(0)) {
-            revert Errors.InvalidAddress(_settlementObserver);
-        }
         oracleHelper = IOracleHelper(_oracleHelper);
-        signalManager = IVRLSignalManager(_signalManager);
         liquidityHub = ILiquidityHub(_liquidityHub);
-        settlementObserver = IVRLSettlementObserver(_settlementObserver);
     }
 
     /// @notice Modifier to check if position is valid
@@ -172,8 +158,17 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
         MarketHandlerLib.assertCoreHook(factory, _msgSender());
     }
 
+    function _checkOwner() internal view override(Ownable, VTSAdmin) {
+        super._checkOwner();
+    }
+
     /// @inheritdoc PausableVTS
-    function _vtsStorage() internal view override(PausableVTS, VTSCurrencyDelta) returns (VTSStorage storage) {
+    function _vtsStorage()
+        internal
+        view
+        override(PausableVTS, VTSCurrencyDelta, VTSAdmin)
+        returns (VTSStorage storage)
+    {
         return s;
     }
 
@@ -187,7 +182,7 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
         }
     }
 
-    function _assertValidMarketVTSConfiguration(MarketVTSConfiguration memory cfg) internal pure {
+    function _assertValidMarketVTSConfiguration(MarketVTSConfiguration memory cfg) internal pure override {
         _assertValidTokenConfiguration(cfg.token0);
         _assertValidTokenConfiguration(cfg.token1);
         if (cfg.unbackedCommitmentGraceBypassBps > LiquidityUtils.BPS_DENOMINATOR) {
@@ -287,22 +282,6 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
         IMarketFactory factory =
             liquidityHub.getFactory(Currency.unwrap(poolKey.currency0), Currency.unwrap(poolKey.currency1));
         return MarketHandlerLib.getVault(factory, poolKey.toId());
-    }
-
-    // --------------------------------------------------
-    // Admin Helpers
-    // --------------------------------------------------
-
-    /// @notice Set the market VTS configuration
-    /// @param corePoolId The core pool ID
-    /// @param vtsConfiguration The VTS configuration to set
-    function setMarketVTSConfiguration(PoolId corePoolId, MarketVTSConfiguration memory vtsConfiguration)
-        external
-        onlyOwner
-    {
-        _assertValidMarketVTSConfiguration(vtsConfiguration);
-        s.pools[corePoolId].vtsConfig = vtsConfiguration;
-        emit VTSConfigSet(PoolId.unwrap(corePoolId), vtsConfiguration);
     }
 
     // --------------------------------------------------
@@ -639,6 +618,7 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
     function commitSignal(address sender, bytes memory liquiditySignal)
         external
         onlyIfPoolManagerUnlocked
+        onlyIfVRLHandlersRegistered
         nonReentrant
         returns (uint256 commitId)
     {
@@ -652,10 +632,9 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
         uint256 deadline,
         uint256 authNonce,
         bytes memory authSig
-    ) external onlyIfPoolManagerUnlocked nonReentrant returns (uint256 commitId) {
-        commitId = VTSCommitLib.commitSignalRelayed(
-            s, sender, signalManager, liquiditySignal, deadline, authNonce, authSig
-        );
+    ) external onlyIfPoolManagerUnlocked onlyIfVRLHandlersRegistered nonReentrant returns (uint256 commitId) {
+        commitId =
+            VTSCommitLib.commitSignalRelayed(s, sender, signalManager, liquiditySignal, deadline, authNonce, authSig);
     }
 
     /// @notice Extend the grace period for a position
@@ -673,7 +652,7 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
         uint8 settlementTokenIndex,
         uint32 verifierIndex,
         bytes memory settlementProof
-    ) external onlyIfPoolManagerUnlocked nonReentrant {
+    ) external onlyIfPoolManagerUnlocked onlyIfVRLHandlersRegistered nonReentrant {
         _assertSignalValid(commitId, true);
         // Validate position exists
         PositionId positionId = getPositionId(commitId, positionIndex);
@@ -777,6 +756,7 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
     function renewSignal(address sender, uint256 commitId, bytes memory liquiditySignal)
         external
         onlyIfPoolManagerUnlocked
+        onlyIfVRLHandlersRegistered
         nonReentrant
     {
         // Validate commit exists (but don't require live signal - expired signals can be seized)
@@ -792,7 +772,7 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
         uint256 deadline,
         uint256 authNonce,
         bytes memory authSig
-    ) external onlyIfPoolManagerUnlocked nonReentrant {
+    ) external onlyIfPoolManagerUnlocked onlyIfVRLHandlersRegistered nonReentrant {
         _assertSignalValid(commitId, false);
         VTSCommitLib.renewSignalRelayed(
             s, sender, signalManager, commitId, liquiditySignal, deadline, authNonce, authSig

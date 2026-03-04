@@ -172,11 +172,6 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
         // Deploy verifies and the signal manager which will use the verifiers to verify the signals
         icVerifier = new ECDSASignatureSignalVerifier(makeAddr("signatureVerifier"));
         stubSignalVerifier = new StubSignalVerifier();
-        signalManager = new VRLSignalManager(address(stubSignalVerifier), signalExpiryInSeconds, testOwner);
-
-        // deploy the settlement observer
-        settlementObserver = new VRLSettlementObserver(testOwner);
-        settlementObserver.addVerifier(address(new StubSettlementVerifier()));
 
         // deploy commitment descriptor
         address commitmentDescriptor = address(new MMPCommitmentDescriptor());
@@ -185,16 +180,28 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
         liquidityHub = payable(address(new LiquidityHub(address(oracleHelper), "Ether", "ETH", 18, testOwner)));
 
         // Deploy VTSOrchestrator (virtual to allow test overrides)
-        vtsOrchestrator = _deployVTSOrchestrator(
-            address(manager),
-            address(signalManager),
-            address(oracleHelper),
-            address(liquidityHub),
-            address(settlementObserver),
+        vtsOrchestrator =
+            _deployVTSOrchestrator(address(manager), address(oracleHelper), address(liquidityHub), testOwner);
+
+        address[] memory emptyAddresses = new address[](0);
+        uint256[] memory emptyNonces = new uint256[](0);
+        bytes32[] memory emptyProofHashes = new bytes32[](0);
+
+        signalManager = new VRLSignalManager(
+            address(stubSignalVerifier),
+            signalExpiryInSeconds,
+            address(vtsOrchestrator),
+            emptyAddresses,
+            emptyNonces,
+            emptyAddresses,
+            emptyNonces,
             testOwner
         );
-        signalManager.setTrustedCaller(address(vtsOrchestrator), true);
-        settlementObserver.setTrustedCaller(address(vtsOrchestrator), true);
+
+        // deploy the settlement observer
+        settlementObserver = new VRLSettlementObserver(address(vtsOrchestrator), emptyProofHashes, testOwner);
+        settlementObserver.addVerifier(address(new StubSettlementVerifier()));
+        vtsOrchestrator.registerVRLProofHandlers(address(signalManager), address(settlementObserver));
 
         // Deploy Permit2 at the canonical address using vm.etch()
         // This deploys the bytecode at 0x000000000022D473030F116dDEE9F6B43aC78BA3
@@ -397,16 +404,11 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
 
     /// @notice Deploy VTSOrchestrator - virtual to allow test overrides for testable versions
     /// @dev Override this in test contracts to deploy a VTSOrchestratorTestable with debug view functions
-    function _deployVTSOrchestrator(
-        address _poolManager,
-        address _signalManager,
-        address _oracleHelper,
-        address _liquidityHub,
-        address _settlementObserver,
-        address _owner
-    ) internal virtual returns (VTSOrchestrator) {
-        return new VTSOrchestrator(
-            _poolManager, _signalManager, _oracleHelper, _liquidityHub, _settlementObserver, _owner
-        );
+    function _deployVTSOrchestrator(address _poolManager, address _oracleHelper, address _liquidityHub, address _owner)
+        internal
+        virtual
+        returns (VTSOrchestrator)
+    {
+        return new VTSOrchestrator(_poolManager, _oracleHelper, _liquidityHub, _owner);
     }
 }

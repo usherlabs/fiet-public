@@ -203,9 +203,16 @@ contract ReentrantSignalManager {
         return 0;
     }
 
+    function submitAuthNonce(address) external pure returns (uint256) {
+        return 0;
+    }
+
+    function submitter() external pure returns (address) {
+        return address(0xBEEF);
+    }
+
     function setVerifier(address) external {}
     function setSignalExpiryInSeconds(uint256) external {}
-    function setTrustedCaller(address, bool) external {}
 }
 
 contract VTSOrchestratorReentrancyTest is VTSOrchestratorFixture {

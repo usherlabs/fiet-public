@@ -15,13 +15,25 @@ contract VRLSettlementObserver is Ownable, IVRLSettlementObserver {
     uint32 public nextVerifierIndex;
     mapping(address => mapping(uint32 => bool)) public allowedVerifiersForToken;
     mapping(bytes32 => bool) public usedProofHashes;
-    mapping(address => bool) public trustedCallers;
+    address public immutable submitter;
 
-    constructor(address _initialOwner) Ownable(_initialOwner) {}
+    constructor(address _submitter, bytes32[] memory _baselineUsedProofHashes, address _initialOwner)
+        Ownable(_initialOwner)
+    {
+        if (_submitter == address(0)) revert Errors.InvalidAddress(_submitter);
+        submitter = _submitter;
+        for (uint256 i = 0; i < _baselineUsedProofHashes.length; i++) {
+            usedProofHashes[_baselineUsedProofHashes[i]] = true;
+        }
+    }
 
-    modifier onlyTrustedCaller() {
-        if (!trustedCallers[msg.sender]) revert Errors.InvalidSender();
+    modifier onlySubmitter() {
+        _onlySubmitter();
         _;
+    }
+
+    function _onlySubmitter() internal view {
+        if (msg.sender != submitter) revert Errors.InvalidSender();
     }
 
     // New function to add a verifier
@@ -64,11 +76,6 @@ contract VRLSettlementObserver is Ownable, IVRLSettlementObserver {
         }
     }
 
-    function setTrustedCaller(address caller, bool allowed) external onlyOwner {
-        trustedCallers[caller] = allowed;
-        emit TrustedCallerSet(caller, allowed);
-    }
-
     /**
      * @dev This function is used to verify the settlement proof and return the grace period extension
      * @param poolKey The pool key of the pool to verify the settlement proof for
@@ -84,7 +91,7 @@ contract VRLSettlementObserver is Ownable, IVRLSettlementObserver {
         uint32 verifierIndex,
         bytes memory settlementProof,
         bool revertOnInvalid
-    ) public onlyTrustedCaller returns (bool isProofValid) {
+    ) public onlySubmitter returns (bool isProofValid) {
         if (tokenIndex != 0 && tokenIndex != 1) {
             revert Errors.InvalidTokenIndex(tokenIndex);
         }

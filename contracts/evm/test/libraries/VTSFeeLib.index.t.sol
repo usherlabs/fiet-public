@@ -48,17 +48,12 @@ contract VTSFeeLibIndexTest is VTSOrchestratorFixture {
     }
 
     /// @notice Override to deploy VTSOrchestratorTestable with debug view functions
-    function _deployVTSOrchestrator(
-        address _poolManager,
-        address _signalManager,
-        address _oracleHelper,
-        address _liquidityHub,
-        address _settlementObserver,
-        address _owner
-    ) internal override returns (VTSOrchestrator) {
-        return new VTSOrchestratorTestable(
-            _poolManager, _signalManager, _oracleHelper, _liquidityHub, _settlementObserver, _owner
-        );
+    function _deployVTSOrchestrator(address _poolManager, address _oracleHelper, address _liquidityHub, address _owner)
+        internal
+        override
+        returns (VTSOrchestrator)
+    {
+        return new VTSOrchestratorTestable(_poolManager, _oracleHelper, _liquidityHub, _owner);
     }
 
     /// @notice Helper to access testable VTSOrchestrator with debug functions
