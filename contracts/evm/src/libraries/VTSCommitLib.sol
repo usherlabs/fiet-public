@@ -174,18 +174,24 @@ library VTSCommitLib {
     /// @notice Commits a liquidity signal to the VTS state (linked-library entry)
     /// @dev Intentionally keeps all commitment logic in the linked library to reduce VTSOrchestrator bytecode size.
     //#olympix-ignore-reentrancy
-    function commitSignal(VTSStorage storage s, IVRLSignalManager signalManager, bytes memory liquiditySignal)
-        external
-        returns (uint256 commitId)
-    {
+    function commitSignal(
+        VTSStorage storage s,
+        address sender,
+        IVRLSignalManager signalManager,
+        bytes memory liquiditySignal
+    ) external returns (uint256 commitId) {
         // validate the liquidity signal was actually provided
         if (liquiditySignal.length == 0) {
             revert Errors.InvalidLiquiditySignal(0, 0, 0);
         }
 
-        // verify the proofs associated with the state
-        (, uint256 expirySeconds) = signalManager.verifyLiquiditySignal(liquiditySignal, true);
         LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
+        // Only the owner or designated advancer may claim a new commit id.
+        if (sender != signal.mmState.advancer && sender != signal.mmState.owner) {
+            revert Errors.InvalidSender();
+        }
+        // verify the proofs associated with the state
+        (, uint256 expirySeconds) = signalManager.verifyLiquiditySignal(sender, liquiditySignal, true);
 
         // get the commit id
         // increment first then assign because nextCommitId starts at 0 and we want to start at 1
@@ -200,8 +206,8 @@ library VTSCommitLib {
     //#olympix-ignore-reentrancy
     function renewSignal(
         VTSStorage storage s,
-        IVRLSignalManager signalManager,
         address sender,
+        IVRLSignalManager signalManager,
         uint256 commitId,
         bytes memory liquiditySignal
     ) external {
@@ -210,7 +216,7 @@ library VTSCommitLib {
         }
 
         // Verify new signal once (nonce bump) and decode
-        (, uint256 expirySeconds) = signalManager.verifyLiquiditySignal(liquiditySignal, true);
+        (, uint256 expirySeconds) = signalManager.verifyLiquiditySignal(sender, liquiditySignal, true);
         LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
 
         // Persist signal state (only state and expiresAt)

@@ -178,14 +178,15 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
     function test_revert_commitSignal_whenPoolManagerLocked() public {
         bytes memory signalBytes = abi.encode(liquiditySignal);
         vm.expectRevert(Errors.PoolManagerMustBeUnlocked.selector);
-        vtsOrchestrator.commitSignal(signalBytes);
+        vtsOrchestrator.commitSignal(liquiditySignal.mmState.owner, signalBytes);
     }
 
     function test_revert_renewSignal_whenPoolManagerLocked() public {
         // First create a commit
         bytes memory signalBytes = abi.encode(liquiditySignal);
         unlockCaller.run(
-            address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.commitSignal.selector, signalBytes)
+            address(vtsOrchestrator),
+            abi.encodeWithSelector(VTSOrchestrator.commitSignal.selector, liquiditySignal.mmState.owner, signalBytes)
         );
 
         // Now try to renew when locked
@@ -450,12 +451,18 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         // Mock signal verification
         vm.mockCall(
             address(signalManager),
-            abi.encodeWithSelector(bytes4(keccak256("verifyLiquiditySignal(bytes)")), signalBytes),
+            abi.encodeWithSelector(
+                bytes4(keccak256("verifyLiquiditySignal(address,bytes,bool)")),
+                liquiditySignal.mmState.owner,
+                signalBytes,
+                true
+            ),
             abi.encode(true, 3600)
         );
 
         bytes memory result = unlockCaller.run(
-            address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.commitSignal.selector, signalBytes)
+            address(vtsOrchestrator),
+            abi.encodeWithSelector(VTSOrchestrator.commitSignal.selector, liquiditySignal.mmState.owner, signalBytes)
         );
         uint256 commitId = abi.decode(result, (uint256));
 
@@ -468,12 +475,18 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
 
         vm.mockCall(
             address(signalManager),
-            abi.encodeWithSelector(bytes4(keccak256("verifyLiquiditySignal(bytes)")), signalBytes),
+            abi.encodeWithSelector(
+                bytes4(keccak256("verifyLiquiditySignal(address,bytes,bool)")),
+                liquiditySignal.mmState.owner,
+                signalBytes,
+                true
+            ),
             abi.encode(true, 3600)
         );
 
         bytes memory result = unlockCaller.run(
-            address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.commitSignal.selector, signalBytes)
+            address(vtsOrchestrator),
+            abi.encodeWithSelector(VTSOrchestrator.commitSignal.selector, liquiditySignal.mmState.owner, signalBytes)
         );
         uint256 commitId = abi.decode(result, (uint256));
 
@@ -508,12 +521,18 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
 
         vm.mockCall(
             address(signalManager),
-            abi.encodeWithSelector(bytes4(keccak256("verifyLiquiditySignal(bytes,bool)")), signalBytes, true),
+            abi.encodeWithSelector(
+                bytes4(keccak256("verifyLiquiditySignal(address,bytes,bool)")),
+                liquiditySignal.mmState.owner,
+                signalBytes,
+                true
+            ),
             abi.encode(true, 3600)
         );
 
         bytes memory result = unlockCaller.run(
-            address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.commitSignal.selector, signalBytes)
+            address(vtsOrchestrator),
+            abi.encodeWithSelector(VTSOrchestrator.commitSignal.selector, liquiditySignal.mmState.owner, signalBytes)
         );
         uint256 commitId = abi.decode(result, (uint256));
 
@@ -528,7 +547,12 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         bytes memory renewSignalBytes = abi.encode(sameOwnerRenew);
         vm.mockCall(
             address(signalManager),
-            abi.encodeWithSelector(bytes4(keccak256("verifyLiquiditySignal(bytes,bool)")), renewSignalBytes, true),
+            abi.encodeWithSelector(
+                bytes4(keccak256("verifyLiquiditySignal(address,bytes,bool)")),
+                liquiditySignal.mmState.advancer,
+                renewSignalBytes,
+                true
+            ),
             abi.encode(true, 3600)
         );
 
@@ -953,7 +977,12 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         bytes memory signalBytes = abi.encode(liquiditySignal);
         vm.mockCall(
             address(signalManager),
-            abi.encodeWithSelector(bytes4(keccak256("verifyLiquiditySignal(bytes,bool)")), signalBytes, true),
+            abi.encodeWithSelector(
+                bytes4(keccak256("verifyLiquiditySignal(address,bytes,bool)")),
+                liquiditySignal.mmState.owner,
+                signalBytes,
+                true
+            ),
             abi.encode(true, 10)
         );
         _mockLccPrices(1e18, 1e18);
@@ -999,7 +1028,10 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         vm.mockCall(
             address(signalManager),
             abi.encodeWithSelector(
-                bytes4(keccak256("verifyLiquiditySignal(bytes,bool)")), unbackedLiquiditySignal, true
+                bytes4(keccak256("verifyLiquiditySignal(address,bytes,bool)")),
+                liquiditySignal.mmState.owner,
+                unbackedLiquiditySignal,
+                true
             ),
             abi.encode(true, 10)
         );
@@ -1032,7 +1064,12 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         bytes memory signalBytes = abi.encode(liquiditySignal);
         vm.mockCall(
             address(signalManager),
-            abi.encodeWithSelector(bytes4(keccak256("verifyLiquiditySignal(bytes,bool)")), signalBytes, true),
+            abi.encodeWithSelector(
+                bytes4(keccak256("verifyLiquiditySignal(address,bytes,bool)")),
+                liquiditySignal.mmState.owner,
+                signalBytes,
+                true
+            ),
             abi.encode(true, 10)
         );
 
@@ -1070,7 +1107,12 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         bytes memory signalBytes = abi.encode(liquiditySignal);
         vm.mockCall(
             address(signalManager),
-            abi.encodeWithSelector(bytes4(keccak256("verifyLiquiditySignal(bytes,bool)")), signalBytes, true),
+            abi.encodeWithSelector(
+                bytes4(keccak256("verifyLiquiditySignal(address,bytes,bool)")),
+                liquiditySignal.mmState.owner,
+                signalBytes,
+                true
+            ),
             abi.encode(true, 10)
         );
         _mockLccPrices(1e18, 1e18);
@@ -1123,7 +1165,12 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         bytes memory signalBytes = abi.encode(liquiditySignal);
         vm.mockCall(
             address(signalManager),
-            abi.encodeWithSelector(bytes4(keccak256("verifyLiquiditySignal(bytes,bool)")), signalBytes, true),
+            abi.encodeWithSelector(
+                bytes4(keccak256("verifyLiquiditySignal(address,bytes,bool)")),
+                liquiditySignal.mmState.owner,
+                signalBytes,
+                true
+            ),
             abi.encode(true, 10)
         );
 
@@ -1165,7 +1212,12 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         bytes memory signalBytes = abi.encode(liquiditySignal);
         vm.mockCall(
             address(signalManager),
-            abi.encodeWithSelector(bytes4(keccak256("verifyLiquiditySignal(bytes,bool)")), signalBytes, true),
+            abi.encodeWithSelector(
+                bytes4(keccak256("verifyLiquiditySignal(address,bytes,bool)")),
+                liquiditySignal.mmState.owner,
+                signalBytes,
+                true
+            ),
             abi.encode(true, 10)
         );
         _mockLccPrices(1e18, 1e18);

@@ -15,8 +15,14 @@ contract VRLSettlementObserver is Ownable, IVRLSettlementObserver {
     uint32 public nextVerifierIndex;
     mapping(address => mapping(uint32 => bool)) public allowedVerifiersForToken;
     mapping(bytes32 => bool) public usedProofHashes;
+    mapping(address => bool) public trustedCallers;
 
     constructor(address _initialOwner) Ownable(_initialOwner) {}
+
+    modifier onlyTrustedCaller() {
+        if (!trustedCallers[msg.sender]) revert Errors.InvalidSender();
+        _;
+    }
 
     // New function to add a verifier
     function addVerifier(address _verifier) external onlyOwner returns (uint32) {
@@ -58,6 +64,11 @@ contract VRLSettlementObserver is Ownable, IVRLSettlementObserver {
         }
     }
 
+    function setTrustedCaller(address caller, bool allowed) external onlyOwner {
+        trustedCallers[caller] = allowed;
+        emit TrustedCallerSet(caller, allowed);
+    }
+
     /**
      * @dev This function is used to verify the settlement proof and return the grace period extension
      * @param poolKey The pool key of the pool to verify the settlement proof for
@@ -73,7 +84,7 @@ contract VRLSettlementObserver is Ownable, IVRLSettlementObserver {
         uint32 verifierIndex,
         bytes memory settlementProof,
         bool revertOnInvalid
-    ) public returns (bool isProofValid) {
+    ) public onlyTrustedCaller returns (bool isProofValid) {
         if (tokenIndex != 0 && tokenIndex != 1) {
             revert Errors.InvalidTokenIndex(tokenIndex);
         }

@@ -36,6 +36,7 @@ contract VRLSettlementObserverMock is IVRLSettlementObserver {
     function nullifyVerifier(uint32) external pure {}
     function allowVerifierForTokens(uint32, address[] memory) external pure {}
     function disallowVerifierForTokens(uint32, address[] memory) external pure {}
+    function setTrustedCaller(address, bool) external pure {}
 
     function verifySettlementProof(PoolKey memory, uint8, uint32, bytes memory, bool revertOnInvalid)
         external

@@ -35,10 +35,17 @@ contract VRLSignalManager is Ownable, IVRLSignalManager {
      */
     mapping(address => uint256) public mmNonce;
     uint256 public signalExpiryInSeconds;
+    mapping(address => bool) public trustedCallers;
 
     constructor(address _verifier, uint256 _signalExpiryInSeconds, address _initialOwner) Ownable(_initialOwner) {
         verifier = ISignalVerifier(_verifier);
         signalExpiryInSeconds = _signalExpiryInSeconds;
+    }
+
+    modifier onlyTrustedCaller() {
+        // TODO: Split into _onlyTrustedCaller()
+        if (!trustedCallers[msg.sender]) revert Errors.InvalidSender();
+        _;
     }
 
     /**
@@ -70,12 +77,17 @@ contract VRLSignalManager is Ownable, IVRLSignalManager {
         emit SignalExpiryInSecondsChanged(_oldSignalExpiryInSeconds, _signalExpiryInSeconds);
     }
 
+    function setTrustedCaller(address caller, bool allowed) external onlyOwner {
+        trustedCallers[caller] = allowed;
+        emit TrustedCallerSet(caller, allowed);
+    }
+
     /**
      * @dev This function is used to verify the liquidity signal and return the tickers and amounts of the assets
      * @param signal The liquidity signal to verify
      * @return isProofValid Whether the proof is valid
      */
-    function _verifyLiquiditySignalInternal(LiquiditySignal memory signal)
+    function _verifyLiquiditySignalInternal(LiquiditySignal memory signal, address sender)
         internal
         returns (bool isProofValid, uint256 _signalExpiryInSeconds)
     {
@@ -87,6 +99,7 @@ contract VRLSignalManager is Ownable, IVRLSignalManager {
 
         // verify the proofs associated with the state
         isProofValid = verifier.verifyProof(
+            sender,
             signal.nonce,
             signal.rootHash,
             signal.rootHashSignature,
@@ -107,28 +120,42 @@ contract VRLSignalManager is Ownable, IVRLSignalManager {
 
     function verifyLiquiditySignal(LiquiditySignal memory signal)
         public
+        onlyTrustedCaller
         returns (bool isProofValid, uint256 _signalExpiryInSeconds)
     {
-        return _verifyLiquiditySignalInternal(signal);
+        return _verifyLiquiditySignalInternal(signal, msg.sender);
     }
 
     // bytes overload to match interface (non-reverting version)
     function verifyLiquiditySignal(bytes memory liquiditySignal)
         external
+        onlyTrustedCaller
         returns (bool ok, uint256 _signalExpiryInSeconds)
     {
         LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
-        (ok, _signalExpiryInSeconds) = _verifyLiquiditySignalInternal(signal);
+        // TODO: Adjust the msg.sender here, so that it's passed from caller, rather the being msg.sender.
+        (ok, _signalExpiryInSeconds) = _verifyLiquiditySignalInternal(signal, msg.sender);
     }
 
     // removed: checkSignalBacking (documentation cleaned up)
 
     function verifyLiquiditySignal(bytes memory liquiditySignal, bool revertOnInvalid)
         external
+        onlyTrustedCaller
         returns (bool ok, uint256 _signalExpiryInSeconds)
     {
         LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
-        (ok, _signalExpiryInSeconds) = _verifyLiquiditySignalInternal(signal);
+        (ok, _signalExpiryInSeconds) = _verifyLiquiditySignalInternal(signal, msg.sender);
+        if (revertOnInvalid && !ok) revert Errors.InvalidProof();
+    }
+
+    function verifyLiquiditySignal(address sender, bytes memory liquiditySignal, bool revertOnInvalid)
+        external
+        onlyTrustedCaller
+        returns (bool ok, uint256 _signalExpiryInSeconds)
+    {
+        LiquiditySignal memory signal = abi.decode(liquiditySignal, (LiquiditySignal));
+        (ok, _signalExpiryInSeconds) = _verifyLiquiditySignalInternal(signal, sender);
         if (revertOnInvalid && !ok) revert Errors.InvalidProof();
     }
 }

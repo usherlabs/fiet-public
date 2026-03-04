@@ -12,11 +12,13 @@ interface IVRLSettlementObserver {
     event SettlementProofMarkedUsed(
         bytes32 indexed proofHash, PoolId indexed poolId, uint32 verifierIndex, uint8 tokenIndex
     );
+    event TrustedCallerSet(address indexed caller, bool allowed);
 
     function addVerifier(address _verifier) external returns (uint32);
     function nullifyVerifier(uint32 index) external;
     function allowVerifierForTokens(uint32 verifierIndex, address[] memory tokens) external;
     function disallowVerifierForTokens(uint32 verifierIndex, address[] memory tokens) external;
+    function setTrustedCaller(address caller, bool allowed) external;
     function verifySettlementProof(
         PoolKey memory poolKey,
         uint8 tokenIndex,

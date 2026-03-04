@@ -226,7 +226,7 @@ contract MMPositionManager is
     /// @param owner The address to receive the commitment NFT
     /// @return tokenId The commitment NFT id created
     function _commitSignal(bytes calldata liquiditySignal, address owner) internal returns (uint256 tokenId) {
-        tokenId = vtsOrchestrator.commitSignal(liquiditySignal);
+        tokenId = vtsOrchestrator.commitSignal(msgSender(), liquiditySignal);
         _mint(owner, tokenId);
         emit SignalCommitted(tokenId);
     }

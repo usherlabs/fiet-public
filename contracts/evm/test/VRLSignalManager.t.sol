@@ -13,6 +13,7 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
 contract AlwaysTrueSignalVerifier is ISignalVerifier {
     function verifyProof(
+        address,
         uint256,
         bytes32,
         bytes calldata,
@@ -26,6 +27,7 @@ contract AlwaysTrueSignalVerifier is ISignalVerifier {
 
 contract AlwaysFalseSignalVerifier is ISignalVerifier {
     function verifyProof(
+        address,
         uint256,
         bytes32,
         bytes calldata,
@@ -47,6 +49,7 @@ contract VRLSignalManagerTest is MarketMakerTestBase {
         _setUpMM();
         address verifier = address(new ECDSASignatureSignalVerifier(signatureVerifier));
         signalManager = new VRLSignalManager(verifier, 3600, address(this));
+        signalManager.setTrustedCaller(address(this), true);
     }
 
     function test_canSetAndGetVerifier() public {

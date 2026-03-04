@@ -10,6 +10,7 @@ import {ISignalVerifier} from "../interfaces/ISignalVerifier.sol";
 
 contract StubSignalVerifier is ISignalVerifier {
     function verifyProof(
+        address,
         uint256,
         bytes32,
         bytes calldata,

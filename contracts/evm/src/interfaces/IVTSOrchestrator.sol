@@ -225,9 +225,10 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta {
 
     // MMPositionManager Functions
     /// @notice Commit a liquidity signal to the VTS state
+    /// @param sender The effective caller (locker) for commit authorisation
     /// @param liquiditySignal The liquidity signal to commit
     /// @return commitId The commit identifier for the committed signal
-    function commitSignal(bytes memory liquiditySignal) external returns (uint256 commitId);
+    function commitSignal(address sender, bytes memory liquiditySignal) external returns (uint256 commitId);
     /// @notice Extend the grace period for a position
     /// @param poolKey The pool key for the position
     /// @param commitId The commit identifier

@@ -41,6 +41,7 @@ contract ReentrantSignalManagerForMutation {
     }
 
     function verifyLiquiditySignal(
+        address,
         bytes memory liquiditySignal,
         bool /*revertOnInvalid*/
     )

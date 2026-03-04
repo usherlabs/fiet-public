@@ -68,6 +68,8 @@ contract VRLSettlementObserverTest is Test {
         // Add initial verifier
         vm.prank(owner);
         observer.addVerifier(verifier1);
+        vm.prank(owner);
+        observer.setTrustedCaller(address(this), true);
     }
 
     function test_AddVerifier() public {

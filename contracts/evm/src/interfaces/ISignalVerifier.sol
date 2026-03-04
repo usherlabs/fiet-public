@@ -5,6 +5,7 @@ import {MarketMaker} from "../libraries/MarketMaker.sol";
 
 interface ISignalVerifier {
     function verifyProof(
+        address sender,
         uint256 nonce,
         bytes32 rootStateHash,
         bytes calldata rootStateHashSignature,

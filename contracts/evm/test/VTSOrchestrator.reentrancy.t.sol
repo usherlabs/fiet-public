@@ -22,7 +22,7 @@ import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
  *
  * Reentrancy premise:
  * - `VTSCommitLib.commitSignal` / `renewSignal` / `checkpointWithCommitment` all call
- *     `signalManager.verifyLiquiditySignal(bytes,bool)`
+ *     `signalManager.verifyLiquiditySignal(address,bytes,bool)`
  * - We re-enter various `VTSOrchestrator` entrypoints during that external call.
  * - If the target entrypoint’s `nonReentrant` is removed by mutation, the re-entry succeeds and we revert with
  *   `Reentered()` to kill the mutant deterministically.
@@ -113,8 +113,9 @@ contract ReentrantSignalManager {
         lccCurrency1 = _lccCurrency1;
     }
 
-    // bytes overload (reverting version) used by VTSCommitLib
+    // sender-bound bytes overload (reverting version) used by VTSCommitLib
     function verifyLiquiditySignal(
+        address,
         bytes memory liquiditySignal,
         bool /*revertOnInvalid*/
     )
@@ -132,7 +133,10 @@ contract ReentrantSignalManager {
 
     function _reenter(uint8 k, bytes memory liquiditySignal) internal returns (bool ok, bytes memory data) {
         if (k == 1) {
-            return target.call(abi.encodeWithSelector(VTSOrchestrator.commitSignal.selector, liquiditySignal));
+            LiquiditySignal memory sig = abi.decode(liquiditySignal, (LiquiditySignal));
+            return target.call(
+                abi.encodeWithSelector(VTSOrchestrator.commitSignal.selector, sig.mmState.owner, liquiditySignal)
+            );
         }
         if (k == 2) {
             return target.call(
@@ -201,6 +205,7 @@ contract ReentrantSignalManager {
 
     function setVerifier(address) external {}
     function setSignalExpiryInSeconds(uint256) external {}
+    function setTrustedCaller(address, bool) external {}
 
     function verifyLiquiditySignal(bytes memory) external pure returns (bool, uint256) {
         return (true, 3600);
@@ -229,7 +234,8 @@ contract VTSOrchestratorReentrancyTest is VTSOrchestratorFixture {
 
         // Must run inside unlock context for commitSignal (onlyIfPoolManagerUnlocked).
         bytes memory out = unlockCaller.run(
-            address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.commitSignal.selector, signalBytes)
+            address(vtsOrchestrator),
+            abi.encodeWithSelector(VTSOrchestrator.commitSignal.selector, liquiditySignal.mmState.owner, signalBytes)
         );
         uint256 commitId = abi.decode(out, (uint256));
         assertEq(commitId, 1, "outer commitSignal should still succeed and return first commitId");
@@ -243,7 +249,10 @@ contract VTSOrchestratorReentrancyTest is VTSOrchestratorFixture {
         // Create a commit without arming re-entry.
         uint256 commitId = abi.decode(
             unlockCaller.run(
-                address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.commitSignal.selector, signalBytes)
+                address(vtsOrchestrator),
+                abi.encodeWithSelector(
+                    VTSOrchestrator.commitSignal.selector, liquiditySignal.mmState.owner, signalBytes
+                )
             ),
             (uint256)
         );

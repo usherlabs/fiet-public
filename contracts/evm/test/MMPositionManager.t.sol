@@ -76,6 +76,10 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
     function setUp() public {
         _setupMarket();
         _setUpMM();
+        // Commit creation now requires sender == owner || advancer.
+        // MMPositionManager actions in this suite are initiated by this test contract locker.
+        liquiditySignal.mmState.advancer = address(this);
+        renewSignal.mmState.advancer = address(this);
 
         console.log("setUP() mmPositionManager", address(mmPositionManager));
 
@@ -540,7 +544,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         vm.mockCall(
             address(signalManager),
             abi.encodeWithSelector(
-                bytes4(keccak256("verifyLiquiditySignal(bytes,bool)")), unbackedLiquiditySignal, true
+                bytes4(keccak256("verifyLiquiditySignal(address,bytes,bool)")), advancer, unbackedLiquiditySignal, true
             ),
             abi.encode(true, 10)
         );
@@ -1418,7 +1422,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
     /// @notice Mutation-killer: when `recipient == address(this)`, COLLECT_AVAILABLE_LIQUIDITY must sync underlying credit.
     /// @dev Practical tip: verify the sync by immediately doing a `TAKE(underlying)` to an external recipient.
     function test_collectAvailableLiquidity_noSwap() public {
-        address recipient = makeAddr("recipient");
+        address recipient = liquiditySignal.mmState.advancer;
         address lcc0Addr = address(lcc0);
         MockERC20 underlying0 = MockERC20(lcc0.underlying());
 
@@ -1537,7 +1541,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
     /// @notice Control case (no swap / no fees): queued principal is consumed by collect and there are no fee LCCs to take.
     function test_collectAvailableLiquidity_afterSwap() public {
-        address recipient = makeAddr("recipient");
+        address recipient = liquiditySignal.mmState.advancer;
         address lcc0Addr = address(lcc0);
         address lcc1Addr = address(lcc1);
         MockERC20 underlying0 = MockERC20(lcc0.underlying());

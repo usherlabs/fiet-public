@@ -38,12 +38,12 @@ contract VTSCommitLibHarness {
         VTSCommitLib.incrementCoverage(s, poolId, tokenIndex, coveredAmount);
     }
 
-    function commitSignal(IVRLSignalManager mgr, bytes memory sig) external returns (uint256) {
-        return VTSCommitLib.commitSignal(s, mgr, sig);
+    function commitSignal(IVRLSignalManager mgr, address sender, bytes memory sig) external returns (uint256) {
+        return VTSCommitLib.commitSignal(s, sender, mgr, sig);
     }
 
     function renewSignal(IVRLSignalManager mgr, uint256 commitId, bytes memory sig) external {
-        VTSCommitLib.renewSignal(s, mgr, msg.sender, commitId, sig);
+        VTSCommitLib.renewSignal(s, msg.sender, mgr, commitId, sig);
     }
 
     function checkpoint(IPoolManager poolManager, IOracleHelper oracleHelper, uint256 commitId, PositionId positionId)

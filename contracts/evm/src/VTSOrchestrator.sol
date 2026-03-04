@@ -533,15 +533,31 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
         notPoolPaused(poolKey.toId())
         returns (Position memory pos, PositionId id, BalanceDelta feeAdj, bool isMMPosition)
     {
-        isMMPosition = _validateMMOperation(hookData);
+        isMMPosition = _validateMMOperation(owner, poolKey.currency0, poolKey.currency1, hookData);
         (pos, id, feeAdj) = _executeProcessPosition(owner, poolKey, params, callerDelta, feesAccrued, hookData);
     }
 
     /// @dev Validate MM operation from hook data (helper to reduce stack depth)
-    function _validateMMOperation(bytes calldata hookData) private view returns (bool isMMPosition) {
+    function _validateMMOperation(address owner, Currency currency0, Currency currency1, bytes calldata hookData)
+        private
+        view
+        returns (bool isMMPosition)
+    {
         PositionModificationHookData memory mmData = PositionModificationHookDataLib.decodeCalldata(hookData);
         if (PositionModificationHookDataLib.isMMOperation(mmData)) {
             _assertSignalValid(mmData.commitId, !mmData.seizure.isSeizing);
+            IMarketFactory factory = liquidityHub.getFactory(Currency.unwrap(currency0), Currency.unwrap(currency1));
+            // MM operations may only be routed through protocol-bound endpoints.
+            if (!MarketHandlerLib.isBounds(factory, owner)) {
+                revert Errors.InvalidSender();
+            }
+            // For non-seizing MM operations, enforce designated advancer control.
+            if (!mmData.seizure.isSeizing) {
+                address locker = PositionModificationHookDataLib.getLocker(mmData, owner);
+                if (locker != s.commits[mmData.commitId].mmState.advancer) {
+                    revert Errors.InvalidSender();
+                }
+            }
             return true;
         }
         return false;
@@ -617,15 +633,16 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
 
     /// @notice Commit a liquidity signal to the VTS state
     /// @dev Verifies the signal via SignalManager and stores it in the VTS state
+    /// @param sender The effective caller (locker) for commit authorisation
     /// @param liquiditySignal The liquidity signal to commit
     /// @return commitId The commit identifier for the committed signal
-    function commitSignal(bytes memory liquiditySignal)
+    function commitSignal(address sender, bytes memory liquiditySignal)
         external
         onlyIfPoolManagerUnlocked
         nonReentrant
         returns (uint256 commitId)
     {
-        commitId = VTSCommitLib.commitSignal(s, signalManager, liquiditySignal);
+        commitId = VTSCommitLib.commitSignal(s, sender, signalManager, liquiditySignal);
     }
 
     /// @notice Extend the grace period for a position
@@ -751,7 +768,7 @@ contract VTSOrchestrator is PausableVTS, VTSCurrencyDelta, ImmutableState, IVTSO
     {
         // Validate commit exists (but don't require live signal - expired signals can be seized)
         _assertSignalValid(commitId, false);
-        VTSCommitLib.renewSignal(s, signalManager, sender, commitId, liquiditySignal);
+        VTSCommitLib.renewSignal(s, sender, signalManager, commitId, liquiditySignal);
     }
 
     /// @notice Checkpoint a position and optionally run commitment backing checks

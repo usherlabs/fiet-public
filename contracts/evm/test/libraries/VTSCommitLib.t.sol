@@ -116,6 +116,10 @@ contract MockSignalManager is IVRLSignalManager {
         revert("MockSignalManager: not implemented");
     }
 
+    function setTrustedCaller(address, bool) external pure {
+        revert("MockSignalManager: not implemented");
+    }
+
     function verifyLiquiditySignal(LiquiditySignal memory) external view returns (bool, uint256) {
         return (true, _expirySeconds);
     }
@@ -125,6 +129,10 @@ contract MockSignalManager is IVRLSignalManager {
     }
 
     function verifyLiquiditySignal(bytes memory, bool) external view returns (bool, uint256) {
+        return (true, _expirySeconds);
+    }
+
+    function verifyLiquiditySignal(address, bytes memory, bool) external view returns (bool, uint256) {
         return (true, _expirySeconds);
     }
 }
@@ -158,7 +166,7 @@ contract VTSCommitLibTest is VTSLibTestBase {
         mmOwner = makeAddr("mmOwner");
         advancer = makeAddr("advancer");
 
-        commitId = harness.commitSignal(sigMgr, _makeSignal(mmOwner, advancer));
+        commitId = harness.commitSignal(sigMgr, advancer, _makeSignal(mmOwner, advancer));
 
         positionId = _generatePositionId(DEFAULT_OWNER, TL, TU, DEFAULT_SALT);
         harness.setupPosition(positionId, poolId, commitId, TL, TU, LIQ);
@@ -173,7 +181,7 @@ contract VTSCommitLibTest is VTSLibTestBase {
 
     function test_commitSignal_revertsOnEmptySignal() public {
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidLiquiditySignal.selector, 0, 0, 0));
-        harness.commitSignal(IVRLSignalManager(makeAddr("signalManager")), "");
+        harness.commitSignal(IVRLSignalManager(makeAddr("signalManager")), address(this), "");
     }
 
     function test_commitSignal_incrementsAndStoresState() public {
@@ -183,7 +191,7 @@ contract VTSCommitLibTest is VTSLibTestBase {
         address adv2 = makeAddr("adv2");
         sigMgr.setExpirySeconds(1234);
 
-        uint256 newCommitId = harness.commitSignal(sigMgr, _makeSignal(owner2, adv2));
+        uint256 newCommitId = harness.commitSignal(sigMgr, owner2, _makeSignal(owner2, adv2));
 
         assertEq(newCommitId, beforeNext + 1, "commitId should increment");
         assertEq(harness.getNextCommitId(), newCommitId, "nextCommitId should match latest");

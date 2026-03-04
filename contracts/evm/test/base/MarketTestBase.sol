@@ -193,6 +193,8 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
             address(settlementObserver),
             testOwner
         );
+        signalManager.setTrustedCaller(address(vtsOrchestrator), true);
+        settlementObserver.setTrustedCaller(address(vtsOrchestrator), true);
 
         // Deploy Permit2 at the canonical address using vm.etch()
         // This deploys the bytecode at 0x000000000022D473030F116dDEE9F6B43aC78BA3

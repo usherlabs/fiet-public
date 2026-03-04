@@ -10,6 +10,7 @@ interface IVRLSignalManager {
         uint256 indexed oldSignalExpiryInSeconds, uint256 indexed newSignalExpiryInSeconds
     );
     event LiquiditySignalVerified(LiquiditySignal signal);
+    event TrustedCallerSet(address indexed caller, bool allowed);
 
     // View functions
     function getVerifier() external view returns (address);
@@ -28,4 +29,11 @@ interface IVRLSignalManager {
 
     // bytes overload to match interface (reverting version)
     function verifyLiquiditySignal(bytes memory liquiditySignal, bool revertOnInvalid) external returns (bool, uint256);
+
+    // sender-bound bytes overload (reverting version)
+    function verifyLiquiditySignal(address sender, bytes memory liquiditySignal, bool revertOnInvalid)
+        external
+        returns (bool, uint256);
+
+    function setTrustedCaller(address caller, bool allowed) external;
 }
