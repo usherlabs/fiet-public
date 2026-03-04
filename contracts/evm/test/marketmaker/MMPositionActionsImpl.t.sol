@@ -927,6 +927,32 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         assertGt(bal1After, bal1Before, "expected token1 TAKE after synced credit");
     }
 
+    function test_settle_usePositionManagerBalance_revertsWhenLockerCreditInsufficient_onNegativeDelta() public {
+        // Regression test for pooled-balance misallocation:
+        // with usePositionManagerBalance=true, a negative settle must consume locker credit first.
+        uint256 tokenId = 1;
+        uint256 positionIndex = 0;
+        uint256 depositAmount0 = 1e18;
+
+        createPosition(defaultlLiquidityParams, abi.encode(liquiditySignal), tokenId, positionIndex);
+
+        address underlying0 = lcc0.underlying();
+        // Seed MMPM with pooled balance without creating locker credit.
+        MockERC20(underlying0).mint(address(positionManager), depositAmount0);
+
+        // Precondition: locker has no takeable credit for underlying0.
+        assertEq(vtsOrchestrator.getFullCredit(Currency.wrap(underlying0), address(this)), 0);
+
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](1);
+        actions[0] = MMA.prepareSettle(corePoolKey, tokenId, positionIndex, -int128(int256(depositAmount0)), 0, true);
+
+        vm.expectPartialRevert(Errors.InsufficientBalance.selector);
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+
+        // Ensure pooled tokens remain on MMPM after revert.
+        assertEq(IERC20(underlying0).balanceOf(address(positionManager)), depositAmount0);
+    }
+
     function test_settleFromDeltas_withOneSidedProtocolCredit_token0Only() public {
         // Kills mutants around:
         // - (credit0 > 0 || credit1 > 0) -> (credit0 > 0 && credit1 > 0)

@@ -281,26 +281,27 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
         if (delta0 < 0) {
             uint256 amt0 = LiquidityUtils.safeInt128ToUint256(delta0);
             if (params.usePositionManagerBalance) {
-                // When flowing via the PositionManager balance, transfer directly (no allowance required).
+                // Ensure locker credit is fully consumed before moving pooled MMPM funds.
+                uint256 taken0 = vtsOrchestrator.take(params.underlying0, sender, amt0);
+                if (taken0 != amt0) {
+                    revert Errors.InsufficientBalance(taken0, amt0);
+                }
                 params.underlying0.transfer(address(params.vault), amt0);
             } else {
                 // Otherwise, pull only from the locker (msgSender()).
                 params.underlying0.transferFrom(sender, address(params.vault), amt0);
             }
-            if (params.usePositionManagerBalance) {
-                // take from the MMPM-held balance (locker delta) for settle to the vault.
-                vtsOrchestrator.take(params.underlying0, sender, amt0);
-            }
         }
         if (delta1 < 0) {
             uint256 amt1 = LiquidityUtils.safeInt128ToUint256(delta1);
             if (params.usePositionManagerBalance) {
+                uint256 taken1 = vtsOrchestrator.take(params.underlying1, sender, amt1);
+                if (taken1 != amt1) {
+                    revert Errors.InsufficientBalance(taken1, amt1);
+                }
                 params.underlying1.transfer(address(params.vault), amt1);
             } else {
                 params.underlying1.transferFrom(sender, address(params.vault), amt1);
-            }
-            if (params.usePositionManagerBalance) {
-                vtsOrchestrator.take(params.underlying1, sender, amt1);
             }
         }
 
