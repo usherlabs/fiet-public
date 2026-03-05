@@ -202,7 +202,7 @@ add-liquidity-mainnet:
     NETWORK=arbitrum \
     UNDERLYING_ASSET_0={{ arb_mainnet }} \
     UNDERLYING_ASSET_1={{ usdt_mainnet }} \
-    CORE_POOL_FEE=400 \
+    CORE_POOL_FEE=500 \
     TICK_SPACING=10 \
     RANGE_WIDTH=0 \
     UNDERLYING_ASSET_1_AMOUNT={{ usdt_amount }} \
