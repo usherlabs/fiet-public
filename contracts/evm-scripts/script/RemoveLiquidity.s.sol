@@ -19,6 +19,17 @@ import {IMarketFactory} from "src/interfaces/IMarketFactory.sol";
 import {ILiquidityHub} from "src/interfaces/ILiquidityHub.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
+/**
+ * @notice Burns an existing liquidity position NFT from the market’s **core** (LCC) pool.
+ *
+ * Env vars
+ * - REQUIRED:
+ *   - `LP_PRIVATE_KEY`: LP key that owns the position NFT
+ *   - `TOKEN_ID`: position NFT id (uint256)
+ *   - `CORE_POOL_ID`: core pool id as 32-byte hex string
+ * - OPTIONAL:
+ *   - `NETWORK`: e.g. `sepolia`, `arbitrum`, `ethsepolia` (defaults come from `NetworkConfig`)
+ */
 contract RemoveLiquidityScript is NetworkConfig {
     using StateLibrary for IPoolManager;
     using PoolIdLibrary for PoolKey;

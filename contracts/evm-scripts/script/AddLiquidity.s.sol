@@ -25,6 +25,28 @@ import {CurrencySortHelper} from "./libraries/CurrencySortHelper.sol";
 import {IMarketFactory} from "src/interfaces/IMarketFactory.sol";
 import {ILiquidityHub} from "src/interfaces/ILiquidityHub.sol";
 
+/**
+ * @notice Adds liquidity to an existing market’s **core** (LCC) pool via Uniswap v4 PositionManager.
+ *
+ * Env vars
+ * - REQUIRED:
+ *   - `PRIVATE_KEY`: Deployer key (used for local-only setup flows)
+ *   - `LP_PRIVATE_KEY`: LP key that will hold the position NFT and fund/approve tokens
+ *   - `CORE_POOL_ID`: Market core pool id (`bytes32`, as printed by `CreateMarketScript`)
+ * - OPTIONAL (network/market selection):
+ *   - `NETWORK`: e.g. `sepolia`, `arbitrum`, `ethsepolia` (defaults come from `NetworkConfig`)
+ *   - `MODE`: `LOCAL` enables local-fallback behaviour (default: treated as local if unset)
+ *   - `UNDERLYING_ASSET_0`, `UNDERLYING_ASSET_1`: underlying token addresses (required on non-local networks)
+ *   - `CORE_POOL_FEE`: default `0`
+ *   - `TICK_SPACING`: default `60`
+ * - OPTIONAL (amounts):
+ *   - Preferred: `UNDERLYING_ASSET_0_AMOUNT`, `UNDERLYING_ASSET_1_AMOUNT` (amounts in underlying token base units)
+ *   - Back-compat aliases: `UA_0_AMOUNT`, `UA_1_AMOUNT` (must match the preferred vars if both set)
+ *   - Core-lane mode (LCC units): `CORE_0_AMOUNT`/`CORE_1_AMOUNT` (aliases: `LCC_0_AMOUNT`/`LCC_1_AMOUNT`)
+ *   - Do not mix UNDERLYING/UA amounts with CORE/LCC amounts.
+ * - OPTIONAL (range):
+ *   - `RANGE_WIDTH`: `0` (default) = near full-range; `>0` = `currentTick ± RANGE_WIDTH`
+ */
 contract AddLiquidityScript is NetworkConfig {
     using StateLibrary for IPoolManager;
     using PoolIdLibrary for PoolKey;

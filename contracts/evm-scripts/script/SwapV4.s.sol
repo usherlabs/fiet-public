@@ -22,6 +22,20 @@ import {ILiquidityHub} from "src/interfaces/ILiquidityHub.sol";
 
 import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 
+/**
+ * @notice Executes a swap through the Uniswap Universal Router against the market’s **proxy** pool.
+ *
+ * Env vars
+ * - REQUIRED:
+ *   - `CORE_POOL_ID`: core pool id as 32-byte hex string (used to look up proxy pool + underlyings)
+ *   - `LP_PRIVATE_KEY`: trader key
+ * - OPTIONAL:
+ *   - `NETWORK`: e.g. `sepolia`, `arbitrum`, `ethsepolia` (defaults come from `NetworkConfig`)
+ *   - `CORE_POOL_FEE`: optional override; otherwise read from `deployments/{NETWORK}_markets_deployments.json`
+ *   - `SWAP_TYPE`: swap variant selector (see script for supported values)
+ *   - `AMOUNT`: amount in token base units (interpreted based on `SWAP_TYPE`)
+ *   - `EAMOUNT`: convenience alternative amount (used by some swap types)
+ */
 contract SwapV4 is NetworkConfig {
     using StateLibrary for IPoolManager;
 

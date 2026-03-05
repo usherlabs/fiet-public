@@ -28,6 +28,26 @@ import {VTSConfigFileBase} from "./base/VTSConfigFileBase.sol";
  * @notice Script to create a new market via the Market Factory
  * @dev Creates both core and proxy pools with LCC tokens and underlying assets
  *
+ * Env vars
+ * - REQUIRED:
+ *   - `PRIVATE_KEY`: Deployer key (must be authorised to call `MarketFactory.createMarket`)
+ * - OPTIONAL (network + assets):
+ *   - `NETWORK`: e.g. `sepolia`, `arbitrum`, `ethsepolia` (defaults come from `NetworkConfig`)
+ *   - `UNDERLYING_ASSET_0`, `UNDERLYING_ASSET_1`: underlying token addresses (some dev networks have fallbacks)
+ *   - `CORE_POOL_FEE`: default `0`
+ *   - `TICK_SPACING`: default `60`
+ * - OPTIONAL (initial price; pick one strategy):
+ *   - `INITIAL_SQRT_PRICE_X96`: exact uint160 sqrt price for the **core** pool
+ *   - `REFERENCE_POOL_ID`: bytes32 pool id to copy `sqrtPriceX96` from (with optional inversion controls below)
+ *   - `ASSET0_PRICE` + `ASSET1_PRICE`: integer prices for the two underlyings (see `PRICE_DECIMALS`)
+ *     - `PRICE_DECIMALS`: default `6`
+ * - OPTIONAL (reference pool inversion controls):
+ *   - `REFERENCE_POOL_CURRENCY0`, `REFERENCE_POOL_CURRENCY1`: explicit reference-pool token order; if swapped vs
+ *     `UNDERLYING_ASSET_0/1` the script will invert the reference `sqrtPriceX96`
+ *   - `REFERENCE_POOL_INVERT`: set to `1` to force inversion when you cannot (or do not want to) provide ref order
+ * - OPTIONAL (VTS configuration):
+ *   - `VTS_CONFIG_FILE_PATH`: JSON/TOML path to override defaults (otherwise defaults are used)
+ *
  * Market Creation Process:
  * 1. Read deployed MarketFactory address from deployment file
  * 2. Validate market parameters

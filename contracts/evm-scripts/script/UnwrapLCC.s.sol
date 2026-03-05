@@ -7,6 +7,16 @@ import {ILiquidityHub} from "src/interfaces/ILiquidityHub.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {FileHelper} from "./base/FileHelper.sol";
 
+/**
+ * @notice Unwraps the caller’s full LCC balance into the underlying via `LiquidityHub.unwrap`.
+ *
+ * Env vars
+ * - REQUIRED:
+ *   - `LP_PRIVATE_KEY`: key holding the LCC balance
+ *   - `LCC_ADDRESS`: LCC token to unwrap
+ * - OPTIONAL:
+ *   - `NETWORK`: deployment namespace (default: `sepolia`)
+ */
 contract UnwrapLCCScript is FileHelper {
     function run() external {
         uint256 privateKey = uint256(vm.envBytes32("LP_PRIVATE_KEY"));

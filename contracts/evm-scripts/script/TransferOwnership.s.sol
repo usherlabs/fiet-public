@@ -16,6 +16,15 @@ interface IOwnableAdmin {
     function owner() external view returns (address);
 }
 
+/**
+ * @notice Transfers `MarketFactory` ownership to `NEW_OWNER` (via `GlobalConfig.proxyCall` when applicable).
+ *
+ * Env vars
+ * - REQUIRED:
+ *   - `PRIVATE_KEY`: current owner/admin key
+ *   - `NETWORK`: deployment namespace (e.g. `sepolia`, `arbitrum`)
+ *   - `NEW_OWNER`: address that will become the new owner (must call `acceptOwnership()` afterwards)
+ */
 contract TransferOwnershipScript is FileHelper {
     string public networkName;
     address public marketFactory;
