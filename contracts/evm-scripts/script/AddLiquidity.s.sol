@@ -322,9 +322,11 @@ contract AddLiquidityScript is NetworkConfig {
             } else if (hasCore0) {
                 amount0Desired = core0Amt;
                 amount1Desired = _amount1FromAmount0(amount0Desired, sqrtPriceX96);
+                require(amount1Desired > 0, "Derived CORE_1 amount is 0; specify both CORE_0_AMOUNT and CORE_1_AMOUNT");
             } else if (hasCore1) {
                 amount1Desired = core1Amt;
                 amount0Desired = _amount0FromAmount1(amount1Desired, sqrtPriceX96);
+                require(amount0Desired > 0, "Derived CORE_0 amount is 0; specify both CORE_0_AMOUNT and CORE_1_AMOUNT");
             }
         } else if (usingUnderlyingAmounts) {
             if (hasUa0 && hasUa1) {
@@ -340,18 +342,34 @@ contract AddLiquidityScript is NetworkConfig {
                 if (underlying0IsCurrency0) {
                     amount0Desired = ua0Amt;
                     amount1Desired = _amount1FromAmount0(amount0Desired, sqrtPriceX96);
+                    require(
+                        amount1Desired > 0,
+                        "Derived amount is 0; specify both UNDERLYING_ASSET_0_AMOUNT and UNDERLYING_ASSET_1_AMOUNT"
+                    );
                 } else {
                     amount1Desired = ua0Amt;
                     amount0Desired = _amount0FromAmount1(amount1Desired, sqrtPriceX96);
+                    require(
+                        amount0Desired > 0,
+                        "Derived amount is 0; specify both UNDERLYING_ASSET_0_AMOUNT and UNDERLYING_ASSET_1_AMOUNT"
+                    );
                 }
             } else if (hasUa1) {
                 require(sqrtPriceX96 != 0, "Pool not initialized");
                 if (underlying1IsCurrency0) {
                     amount0Desired = ua1Amt;
                     amount1Desired = _amount1FromAmount0(amount0Desired, sqrtPriceX96);
+                    require(
+                        amount1Desired > 0,
+                        "Derived amount is 0; specify both UNDERLYING_ASSET_0_AMOUNT and UNDERLYING_ASSET_1_AMOUNT"
+                    );
                 } else {
                     amount1Desired = ua1Amt;
                     amount0Desired = _amount0FromAmount1(amount1Desired, sqrtPriceX96);
+                    require(
+                        amount0Desired > 0,
+                        "Derived amount is 0; specify both UNDERLYING_ASSET_0_AMOUNT and UNDERLYING_ASSET_1_AMOUNT"
+                    );
                 }
             }
         } else {
@@ -437,6 +455,10 @@ contract AddLiquidityScript is NetworkConfig {
             amount1Desired
         );
         console.log("liquidity: ", liquidity);
+        require(
+            liquidity > 0,
+            "Liquidity computed as 0 (empty position). Specify both amounts, or adjust range so price is outside the range."
+        );
 
         bytes memory actions = abi.encodePacked(uint8(Actions.MINT_POSITION), uint8(Actions.SETTLE_PAIR));
         bytes[] memory params = new bytes[](2);

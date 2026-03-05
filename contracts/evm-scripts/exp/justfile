@@ -184,9 +184,11 @@ create-market-mainnet:
     NETWORK=arbitrum \
     UNDERLYING_ASSET_0={{ arb_mainnet }} \
     UNDERLYING_ASSET_1={{ usdt_mainnet }} \
-    CORE_POOL_FEE=400 \
+    CORE_POOL_FEE=500 \
     TICK_SPACING=10 \
     REFERENCE_POOL_ID=0x90adeaeba1b0550987637183712c138484af473093e2006a0fecaad3241ddb1c \
+    REFERENCE_POOL_CURRENCY0={{ arb_mainnet }} \
+    REFERENCE_POOL_CURRENCY1={{ usdt_mainnet }} \
     forge script {{ script_dir }}/CreateMarket.s.sol:CreateMarketScript \
         --rpc-url $ARB_MAINNET_RPC_URL \
         -vvvv \
