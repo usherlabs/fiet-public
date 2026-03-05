@@ -102,7 +102,14 @@ The comprehensive deployment script that deploys all contracts in the correct or
 6. **Add liquidity** - `just add-liquidity`
    - Adds initial liquidity to the market
    - **Required:** `PRIVATE_KEY`, `LP_PRIVATE_KEY`, `CORE_POOL_ID`
-   - **Optional:** `UNDERLYING_ASSET_0`, `UNDERLYING_ASSET_1`, `UA_0_AMOUNT`, `UA_1_AMOUNT`, `RANGE_WIDTH`
+   - **Optional:** `UNDERLYING_ASSET_0`, `UNDERLYING_ASSET_1`, `UNDERLYING_ASSET_0_AMOUNT`, `UNDERLYING_ASSET_1_AMOUNT`, `UA_0_AMOUNT`, `UA_1_AMOUNT`, `CORE_0_AMOUNT`, `CORE_1_AMOUNT`, `LCC_0_AMOUNT`, `LCC_1_AMOUNT`, `RANGE_WIDTH`
+   - **Notes:**
+     - `UNDERLYING_ASSET_0_AMOUNT` / `UNDERLYING_ASSET_1_AMOUNT` (preferred) are interpreted as amounts for the addresses
+       in `UNDERLYING_ASSET_0` / `UNDERLYING_ASSET_1` respectively, regardless of core/LCC sorting.
+     - `UA_0_AMOUNT` / `UA_1_AMOUNT` remain supported for backwards compatibility and are treated as aliases of the above.
+       If both alias + preferred vars are set for the same lane and differ, the script will revert.
+     - If you want to specify amounts directly in **core pool currency0/1 lanes** (LCC tokens), use `CORE_0_AMOUNT` / `CORE_1_AMOUNT`
+       (or `LCC_0_AMOUNT` / `LCC_1_AMOUNT`). Do not mix CORE/LCC amount envs with UNDERLYING/UA amount envs.
 
 7. **Remove liquidity** (optional) - `just remove-liquidity`
    - **Required:** `PRIVATE_KEY`, `LP_PRIVATE_KEY`, `TOKEN_ID`, `CORE_POOL_ID`

@@ -19,6 +19,7 @@ import {IAllowanceTransfer} from "permit2/src/interfaces/IAllowanceTransfer.sol"
 import {VRLSignalManager} from "src/VRLSignalManager.sol";
 import {VRLSettlementObserver} from "src/VRLSettlementObserver.sol";
 import {VTSOrchestrator} from "src/VTSOrchestrator.sol";
+import {IVTSAdmin} from "src/interfaces/IVTSAdmin.sol";
 import {OracleHelper} from "src/OracleHelper.sol";
 import {MMPCommitmentDescriptor} from "src/MMPCommitmentDescriptor.sol";
 import {LiquidityHub} from "src/LiquidityHub.sol";
@@ -62,6 +63,7 @@ contract DeployContracts is CREATE3Script, NetworkConfig {
     address payable public liquidityHub;
     address public signalManager;
     address public settlementObserver;
+    address public signalVerifier;
     address public globalConfig;
     address public commitmentDescriptor;
     address public vtsOrchestrator;
@@ -338,7 +340,7 @@ contract DeployContracts is CREATE3Script, NetworkConfig {
         bytes memory verifierConstructorArgs = abi.encode(publicKeyAddress);
         bytes memory verifierCreationCode =
             abi.encodePacked(type(ECDSASignatureSignalVerifier).creationCode, verifierConstructorArgs);
-        address signalVerifier = _deployCreate3(SIGNAL_VERIFIER, verifierCreationCode);
+        signalVerifier = _deployCreate3(SIGNAL_VERIFIER, verifierCreationCode);
         console.log("ECDSASignatureSignalVerifier deployed at:", signalVerifier);
 
         // Pass globalConfig as initialOwner (required for CREATE3 compatibility)
@@ -376,7 +378,7 @@ contract DeployContracts is CREATE3Script, NetworkConfig {
 
     function _registerVRLProofHandlers() internal {
         bytes memory callData = abi.encodeWithSelector(
-            VTSOrchestrator.registerVRLProofHandlers.selector, signalManager, settlementObserver
+            IVTSAdmin.registerVRLProofHandlers.selector, signalManager, settlementObserver
         );
         GlobalConfig(globalConfig).proxyCall(vtsOrchestrator, callData);
         console.log("VRL proof handlers registered in VTSOrchestrator (via GlobalConfig.proxyCall)");
@@ -389,6 +391,7 @@ contract DeployContracts is CREATE3Script, NetworkConfig {
     function _deployCommitmentDescriptor() internal returns (address) {
         bytes memory creationCode = type(MMPCommitmentDescriptor).creationCode;
         address deployed = _deployCreate3(COMMITMENT_DESCRIPTOR, creationCode);
+        commitmentDescriptor = deployed;
         console.log("MMPCommitmentDescriptor deployed at:", deployed);
         return deployed;
     }
@@ -459,13 +462,29 @@ contract DeployContracts is CREATE3Script, NetworkConfig {
     function _writeDeploymentAddresses() internal {
         // Write addresses to JSON file using FileHelper
         _setFilename(networkName);
+        // NOTE: Some keys are duplicated for backwards compatibility with older scripts.
+        // Prefer the more explicit names when adding new scripts.
+
+        // Core protocol surfaces
         writeAddress("coreHook", coreHook);
+        writeAddress("proxyHook", proxyHook);
         writeAddress("marketFactory", marketFactory);
         writeAddress("liquidityHub", liquidityHub);
-        writeAddress("positionManager", mmPositionManager);
+        writeAddress("positionManager", mmPositionManager); // legacy key (actually MMPositionManager)
+        writeAddress("mmPositionManager", mmPositionManager);
         writeAddress("directLPDeltaResolver", directLPDeltaResolver);
         writeAddress("oracleHelper", oracleHelper);
         writeAddress("globalConfig", globalConfig);
+        writeAddress("vtsOrchestrator", vtsOrchestrator);
+
+        // VRL / verification stack
+        writeAddress("signalVerifier", signalVerifier);
+        writeAddress("signalManager", signalManager);
+        writeAddress("settlementObserver", settlementObserver);
+
+        // MM / market-maker stack
+        writeAddress("commitmentDescriptor", commitmentDescriptor);
+        writeAddress("actionsImpl", actionsImpl);
 
         console.log("Deployment addresses written to deployments/%s_deployments.json", networkName);
     }
