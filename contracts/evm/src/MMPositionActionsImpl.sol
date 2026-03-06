@@ -11,11 +11,14 @@ import {PositionId, PositionLibrary, PositionModificationHookDataLib} from "./ty
 import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
 import {IMarketVault} from "./interfaces/IMarketVault.sol";
+import {IMMQueueCustodian} from "./interfaces/IMMQueueCustodian.sol";
+import {IMMPositionManager} from "./interfaces/IMMPositionManager.sol";
 import {Errors} from "./libraries/Errors.sol";
 import {LiquidityUtils} from "./libraries/LiquidityUtils.sol";
 import {Position} from "./types/Position.sol";
 import {TransientSlots} from "./libraries/TransientSlots.sol";
 import {PositionManagerBase} from "./modules/PositionManagerBase.sol";
+import {PositionManagerQueueCustodian} from "./modules/PositionManagerQueueCustodian.sol";
 import {PositionManagerImpl} from "./modules/PositionManagerImpl.sol";
 import {CurrencyTransfer} from "./libraries/CurrencyTransfer.sol";
 import {MarketHandlerLib} from "./libraries/MarketHandlerLib.sol";
@@ -33,7 +36,12 @@ import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 /// @dev Called via delegatecall from MMPositionManager, shares storage context
 /// @dev Only handles position operations (actions <= SETTLE_POSITION_FROM_DELTAS)
 /// @dev ERC721 functions accessed via delegatecall context from MMPositionManager
-contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateCallGuard {
+contract MMPositionActionsImpl is
+    IMMActionsImpl,
+    PositionManagerQueueCustodian,
+    PositionManagerImpl,
+    DelegateCallGuard
+{
     using SafeCast for uint256;
     using PositionLibrary for PositionId;
     using StateLibrary for IPoolManager;
@@ -87,6 +95,24 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
     function msgSender() public view override returns (address) {
         // References locker from delegatecall context - MMPositionManager
         return Locker.get();
+    }
+
+    /// @inheritdoc PositionManagerQueueCustodian
+    function _queueCustodian() internal view override(PositionManagerQueueCustodian) returns (IMMQueueCustodian) {
+        return IMMPositionManager(address(this)).queueCustodian();
+    }
+
+    function _forwardQueuedLccToCustodian(Currency currency, uint256 tokenId, uint256 amount)
+        internal
+        override(PositionManagerImpl)
+    {
+        IMMQueueCustodian custodian = _queueCustodian();
+        if (address(custodian) != address(0) && address(custodian) != address(this)) {
+            currency.transfer(address(custodian), amount);
+            if (tokenId > 0) {
+                custodian.record(tokenId, Currency.unwrap(currency), amount);
+            }
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -242,7 +268,12 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
         );
 
         _decreaseInternal(
-            poolKey, position, PositionLibrary.generateSalt(tokenId, positionIndex), seizedLiquidityUnits, hookData
+            poolKey,
+            position,
+            PositionLibrary.generateSalt(tokenId, positionIndex),
+            tokenId,
+            seizedLiquidityUnits,
+            hookData
         );
     }
 
@@ -405,6 +436,7 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
             poolKey,
             position,
             PositionLibrary.generateSalt(tokenId, positionIndex),
+            tokenId,
             completeLiquidity,
             PositionModificationHookDataLib.encode(tokenId, positionIndex, msgSender())
         );
@@ -452,7 +484,7 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
 
         positionId = PositionLibrary.generateId(address(this), params);
         bytes memory hookData = PositionModificationHookDataLib.encode(tokenId, positionIndex, msgSender());
-        _modifySyntheticLiquidity(poolKey, params, hookData);
+        _modifySyntheticLiquidity(poolKey, params, tokenId, hookData);
     }
 
     /// @notice Increases liquidity using available delta credits
@@ -648,6 +680,7 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
         PoolKey calldata poolKey,
         Position memory position,
         bytes32 salt,
+        uint256 tokenId,
         uint256 amountToDecrease,
         bytes memory hookData
     ) internal {
@@ -667,7 +700,7 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
             salt: salt
         });
 
-        _modifySyntheticLiquidity(poolKey, params, hookData);
+        _modifySyntheticLiquidity(poolKey, params, tokenId, hookData);
     }
 
     /// @notice Decreases liquidity from an existing position
@@ -687,6 +720,7 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
             poolKey,
             position,
             PositionLibrary.generateSalt(tokenId, positionIndex),
+            tokenId,
             amountToDecrease,
             PositionModificationHookDataLib.encode(tokenId, positionIndex, msgSender())
         );
@@ -722,7 +756,7 @@ contract MMPositionActionsImpl is IMMActionsImpl, PositionManagerImpl, DelegateC
 
         positionId = PositionLibrary.generateId(address(this), params);
         bytes memory hookData = PositionModificationHookDataLib.encode(tokenId, positionIndex, msgSender());
-        _modifySyntheticLiquidity(poolKey, params, hookData);
+        _modifySyntheticLiquidity(poolKey, params, tokenId, hookData);
     }
 }
 

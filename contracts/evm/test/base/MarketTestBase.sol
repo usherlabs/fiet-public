@@ -22,6 +22,7 @@ import {LiquidityUtils} from "../../src/libraries/LiquidityUtils.sol";
 import {HookFlags} from "../../src/libraries/HookFlags.sol";
 import {HookMiner} from "v4-periphery/src/utils/HookMiner.sol";
 import {MMPositionManager} from "../../src/MMPositionManager.sol";
+import {MMQueueCustodian} from "../../src/MMQueueCustodian.sol";
 import {ECDSASignatureSignalVerifier} from "../../src/verifiers/ECDSASignatureSignalVerifier.sol";
 import {StubSignalVerifier} from "../../src/verifiers/StubSignalVerifier.sol";
 import {WETH} from "@uniswap/v4-core/lib/solmate/src/tokens/WETH.sol";
@@ -73,6 +74,7 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
     address marketFactory;
     address payable liquidityHub;
     address coreHookAddress;
+    address queueCustodian;
 
     address resilientOracle = makeAddr("ResilientOracleAddr");
     ECDSASignatureSignalVerifier icVerifier;
@@ -204,6 +206,7 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
         // Deploy MMPositionActionsImpl first
         MMPositionActionsImpl actionsImpl =
             new MMPositionActionsImpl(address(manager), address(liquidityHub), address(vtsOrchestrator));
+        queueCustodian = address(new MMQueueCustodian());
 
         // Deploy MMPositionManager
         mmPositionManager = address(
@@ -214,7 +217,8 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
                 commitmentDescriptor,
                 weth9,
                 permit2,
-                address(actionsImpl)
+                address(actionsImpl),
+                queueCustodian
             )
         );
 
@@ -247,9 +251,10 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
         require(address(coreDeployed) == coreHookAddress, "CoreHook deployed at unexpected address");
 
         // Initialise market factory after core hook deployment
-        address[] memory initialBounds = new address[](2);
+        address[] memory initialBounds = new address[](3);
         initialBounds[0] = mmPositionManager;
-        initialBounds[1] = address(directLPDeltaResolver);
+        initialBounds[1] = queueCustodian;
+        initialBounds[2] = address(directLPDeltaResolver);
         MarketFactory(marketFactory).initialise(coreHookAddress, initialBounds);
     }
 

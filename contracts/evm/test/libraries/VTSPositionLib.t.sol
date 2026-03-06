@@ -595,9 +595,9 @@ contract VTSPositionLibTest is VTSLibTestBase {
         if (!isMMOperation) return "";
         // MM-ness is encoded via commitId > 0.
         if (isSeizing) {
-            return PositionModificationHookDataLib.encodeSeizure(commitId, 0, address(0), 0, 0);
+            return PositionModificationHookDataLib.encodeSeizure(commitId, 0, address(2), 0, 0);
         }
-        return PositionModificationHookDataLib.encode(commitId, 0, address(0));
+        return PositionModificationHookDataLib.encode(commitId, 0, address(2));
     }
 
     function test_touchPosition_existingPosition_commitIdMismatch_reverts() public {

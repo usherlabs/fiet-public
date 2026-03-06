@@ -8,6 +8,7 @@ import {
     PositionModificationHookDataLib,
     PositionModificationHookData
 } from "../../src/types/Position.sol";
+import {Errors} from "../../src/libraries/Errors.sol";
 import {ModifyLiquidityParams} from "v4-periphery/lib/v4-core/src/types/PoolOperation.sol";
 import {PositionId} from "../../src/types/Position.sol";
 import {PositionLibHarness} from "../libraries/harnesses/PositionLibHarness.sol";
@@ -66,12 +67,17 @@ contract PositionTypeTest_Autocover is Test {
         assertTrue(h.isMMOperation(d1));
     }
 
-    function test_hookData_getLocker_fallsBackWhenUnset() public view {
+    function test_hookData_getLocker_revertsWhenUnset() public {
         PositionModificationHookData memory d = h.decodeHookData(h.encodeHookData(1, 2, address(0)));
-        assertEq(h.getLocker(d, address(123)), address(123));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                Errors.InvariantViolated.selector, "MM Operation: locker must be passed into hookdata"
+            )
+        );
+        h.getLocker(d);
 
         PositionModificationHookData memory d2 = h.decodeHookData(h.encodeHookData(1, 2, address(456)));
-        assertEq(h.getLocker(d2, address(123)), address(456));
+        assertEq(h.getLocker(d2), address(456));
     }
 
     function test_generateSalt_isDeterministic() public view {

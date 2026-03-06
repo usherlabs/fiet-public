@@ -18,6 +18,7 @@ import {IMMActionsImpl} from "./interfaces/IMMActionsImpl.sol";
 import {Errors} from "./libraries/Errors.sol";
 import {ILCC} from "./interfaces/ILCC.sol";
 import {PositionManagerBase} from "./modules/PositionManagerBase.sol";
+import {PositionManagerQueueCustodian} from "./modules/PositionManagerQueueCustodian.sol";
 import {PositionManagerEntrypoint} from "./modules/PositionManagerEntrypoint.sol";
 import {Permit2Forwarder} from "v4-periphery/src/base/Permit2Forwarder.sol";
 import {IAllowanceTransfer} from "permit2/src/interfaces/IAllowanceTransfer.sol";
@@ -29,6 +30,7 @@ import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
 import {TransientStateLibrary} from "v4-periphery/lib/v4-core/src/libraries/TransientStateLibrary.sol";
 import {CurrencyTransfer} from "./libraries/CurrencyTransfer.sol";
+import {IMMQueueCustodian} from "./interfaces/IMMQueueCustodian.sol";
 
 /// @title MMPositionManager
 /// @notice Entry point for VRL commitment position management
@@ -42,7 +44,8 @@ contract MMPositionManager is
     Permit2Forwarder,
     BaseActionsRouter,
     FietNativeWrapper,
-    PositionManagerEntrypoint
+    PositionManagerEntrypoint,
+    PositionManagerQueueCustodian
 {
     using MMCalldataDecoder for bytes;
     using CurrencyTransfer for Currency;
@@ -62,6 +65,8 @@ contract MMPositionManager is
 
     /// @notice The implementation contract for position operations
     address public immutable commitmentDescriptor;
+    /// @notice Shared custodian that holds queued MM-backed LCC by commit bucket
+    IMMQueueCustodian public immutable queueCustodian;
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Constructor
@@ -74,7 +79,8 @@ contract MMPositionManager is
         address _descriptor,
         IWETH9 _weth9,
         IAllowanceTransfer _permit2,
-        address _actionsImpl
+        address _actionsImpl,
+        address _queueCustodianAddr
     )
         ERC721Permit_v4("Fiet VRL Commitment Positions Manager", "FIET-VRL-MMP")
         BaseActionsRouter(IPoolManager(_manager))
@@ -82,7 +88,12 @@ contract MMPositionManager is
         FietNativeWrapper(_weth9)
         PositionManagerEntrypoint(_liquidityHub, _vtsOrchestrator, _actionsImpl)
     {
+        if (_queueCustodianAddr == address(0) || _queueCustodianAddr.code.length == 0) {
+            revert Errors.InvalidAddress(_queueCustodianAddr);
+        }
         commitmentDescriptor = _descriptor;
+        queueCustodian = IMMQueueCustodian(_queueCustodianAddr);
+        queueCustodian.setPositionManager(address(this));
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -115,6 +126,11 @@ contract MMPositionManager is
     /// @inheritdoc BaseActionsRouter
     function msgSender() public view override(BaseActionsRouter, PositionManagerBase) returns (address) {
         return _getLocker();
+    }
+
+    /// @inheritdoc PositionManagerQueueCustodian
+    function _queueCustodian() internal view override(PositionManagerQueueCustodian) returns (IMMQueueCustodian) {
+        return queueCustodian;
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -329,8 +345,8 @@ contract MMPositionManager is
             return;
         }
         if (action == MMActions.COLLECT_AVAILABLE_LIQUIDITY) {
-            (address lcc, uint256 maxAmount) = params.decodeCollectLiquidityParams();
-            _collectAvailableLiquidity(lcc, maxAmount);
+            (address lcc, uint256 tokenId, uint256 maxAmount) = params.decodeCollectLiquidityParams();
+            _collectAvailableLiquidity(lcc, tokenId, maxAmount);
             return;
         }
         if (action == MMActions.SYNC) {
@@ -389,18 +405,22 @@ contract MMPositionManager is
 
     /// @notice Collects available liquidity from settlement queue
     /// @param lcc The LCC token address
+    /// @param tokenId The commitment NFT token ID bucket to collect from
     /// @param maxAmount The maximum amount to collect
-    function _collectAvailableLiquidity(address lcc, uint256 maxAmount) internal {
-        address sender = msgSender();
-        uint256 queued = liquidityHub.settleQueue(lcc, sender);
+    function _collectAvailableLiquidity(address lcc, uint256 tokenId, uint256 maxAmount) internal {
+        address locker = msgSender();
+        uint256 queued = liquidityHub.settleQueue(lcc, locker);
 
         if (queued > 0) {
-            Currency lccCurrency = Currency.wrap(lcc);
             uint256 available = liquidityHub.reserveOfUnderlying(lcc);
-            uint256 toSettle = Math.min(queued, Math.min(maxAmount, available));
+            uint256 custodied = queueCustodian.queued(tokenId, lcc);
+            uint256 toSettle = Math.min(Math.min(queued, available), Math.min(maxAmount, custodied));
             if (toSettle > 0) {
-                lccCurrency.transfer(sender, toSettle); // transfer LCC to sender for burn/pay
-                liquidityHub.processSettlementFor(lcc, sender, toSettle);
+                uint256 released = queueCustodian.release(tokenId, lcc, locker, toSettle);
+                if (released > 0) {
+                    // LCC already released from custody to locker for burn/pay.
+                    liquidityHub.processSettlementFor(lcc, locker, released);
+                }
             }
         }
     }

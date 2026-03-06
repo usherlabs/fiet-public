@@ -456,13 +456,13 @@ _unwrapNative()
 
 ### COLLECT_AVAILABLE_LIQUIDITY (0x44)
 
-Collects available liquidity from the settlement queue for a specific LCC.
+Collects available liquidity from the settlement queue for a specific LCC and commitment bucket.
 
 **Parameters:**
 | Name | Type | Description |
 |------|------|-------------|
 | `lcc` | `address` | The LCC token address |
-| `recipient` | `address` | Recipient of the liquidity |
+| `tokenId` | `uint256` | Commitment token ID custody bucket to release from |
 | `maxAmount` | `uint256` | Maximum amount to collect |
 
 ---

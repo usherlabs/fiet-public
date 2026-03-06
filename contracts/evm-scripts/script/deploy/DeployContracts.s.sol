@@ -13,6 +13,7 @@ import {CREATE3Script} from "../base/CREATE3Script.sol";
 import {HookFlags} from "src/libraries/HookFlags.sol";
 import {MMPositionManager} from "src/MMPositionManager.sol";
 import {MMPositionActionsImpl} from "src/MMPositionActionsImpl.sol";
+import {MMQueueCustodian} from "src/MMQueueCustodian.sol";
 import {IWETH9} from "v4-periphery/src/interfaces/external/IWETH9.sol";
 import {PositionManager} from "v4-periphery/src/PositionManager.sol";
 import {IAllowanceTransfer} from "permit2/src/interfaces/IAllowanceTransfer.sol";
@@ -69,6 +70,7 @@ contract DeployContracts is CREATE3Script, NetworkConfig {
     address public vtsOrchestrator;
     address public actionsImpl;
     address public directLPDeltaResolver;
+    address public queueCustodian;
 
     // Contract names for CREATE3 salt generation
     string constant ORACLE_HELPER = "OracleHelper";
@@ -79,6 +81,7 @@ contract DeployContracts is CREATE3Script, NetworkConfig {
     string constant VTS_ORCHESTRATOR = "VTSOrchestrator";
     string constant COMMITMENT_DESCRIPTOR = "MMPCommitmentDescriptor";
     string constant ACTIONS_IMPL = "MMPositionActionsImpl";
+    string constant QUEUE_CUSTODIAN = "MMQueueCustodian";
     string constant MM_POSITION_MANAGER = "MMPositionManager";
     string constant DIRECT_LP_DELTA_RESOLVER = "DirectLPDeltaResolver";
     string constant MARKET_FACTORY = "MarketFactory";
@@ -114,6 +117,7 @@ contract DeployContracts is CREATE3Script, NetworkConfig {
         console.log("VTSOrchestrator:", getCreate3Contract(VTS_ORCHESTRATOR));
         console.log("MMPCommitmentDescriptor:", getCreate3Contract(COMMITMENT_DESCRIPTOR));
         console.log("MMPositionActionsImpl:", getCreate3Contract(ACTIONS_IMPL));
+        console.log("MMQueueCustodian:", getCreate3Contract(QUEUE_CUSTODIAN));
         console.log("MMPositionManager:", getCreate3Contract(MM_POSITION_MANAGER));
         console.log("DirectLPDeltaResolver:", getCreate3Contract(DIRECT_LP_DELTA_RESOLVER));
         console.log("MarketFactory:", getCreate3Contract(MARKET_FACTORY));
@@ -413,9 +417,20 @@ contract DeployContracts is CREATE3Script, NetworkConfig {
         actionsImpl = _deployCreate3(ACTIONS_IMPL, actionsImplCreationCode);
         console.log("MMPositionActionsImpl deployed at:", actionsImpl);
 
+        bytes memory queueCustodianCreationCode = type(MMQueueCustodian).creationCode;
+        queueCustodian = _deployCreate3(QUEUE_CUSTODIAN, queueCustodianCreationCode);
+        console.log("MMQueueCustodian deployed at:", queueCustodian);
+
         // Deploy MMPositionManager (requires poolManager, liquidityHub, vtsOrchestrator, descriptor, weth9, permit2, actionsImpl)
         bytes memory positionManagerConstructorArgs = abi.encode(
-            config.poolManager, liquidityHub, vtsOrchestrator, commitmentDescriptorAddr, weth9, permit2, actionsImpl
+            config.poolManager,
+            liquidityHub,
+            vtsOrchestrator,
+            commitmentDescriptorAddr,
+            weth9,
+            permit2,
+            actionsImpl,
+            queueCustodian
         );
         bytes memory positionManagerCreationCode =
             abi.encodePacked(type(MMPositionManager).creationCode, positionManagerConstructorArgs);
@@ -430,9 +445,10 @@ contract DeployContracts is CREATE3Script, NetworkConfig {
      * @notice Since MarketFactory is owned by GlobalConfig, we must use proxyCall
      */
     function _initialiseFactory() internal {
-        address[] memory initialBounds = new address[](2);
+        address[] memory initialBounds = new address[](3);
         initialBounds[0] = mmPositionManager;
-        initialBounds[1] = directLPDeltaResolver;
+        initialBounds[1] = queueCustodian;
+        initialBounds[2] = directLPDeltaResolver;
         bytes memory callData = abi.encodeWithSelector(MarketFactory.initialise.selector, coreHook, initialBounds);
         GlobalConfig(globalConfig).proxyCall(marketFactory, callData);
 
@@ -485,6 +501,7 @@ contract DeployContracts is CREATE3Script, NetworkConfig {
         // MM / market-maker stack
         writeAddress("commitmentDescriptor", commitmentDescriptor);
         writeAddress("actionsImpl", actionsImpl);
+        writeAddress("queueCustodian", queueCustodian);
 
         console.log("Deployment addresses written to deployments/%s_deployments.json", networkName);
     }

@@ -16,6 +16,7 @@ import {HookFlags} from "../src/libraries/HookFlags.sol";
 import {HookMiner} from "v4-periphery/src/utils/HookMiner.sol";
 import {MMPositionManager} from "../src/MMPositionManager.sol";
 import {MMPositionActionsImpl} from "../src/MMPositionActionsImpl.sol";
+import {MMQueueCustodian} from "../src/MMQueueCustodian.sol";
 import {VTSConfigs} from "../src/libraries/VTSConfigs.sol";
 import {IOracleHelper} from "../src/interfaces/IOracleHelper.sol";
 import {WETH} from "@uniswap/v4-core/lib/solmate/src/tokens/WETH.sol";
@@ -107,6 +108,7 @@ contract MarketFactoryTest is Test, Deployers {
         vm.prank(owner);
         MMPositionActionsImpl actionsImpl =
             new MMPositionActionsImpl(address(poolManager), tempFactoryAddr, address(vtsOrchestrator));
+        MMQueueCustodian queueCustodian = new MMQueueCustodian();
 
         vm.prank(owner);
         positionManager = new MMPositionManager(
@@ -116,7 +118,8 @@ contract MarketFactoryTest is Test, Deployers {
             commitmentDescriptor,
             weth9,
             permit2,
-            address(actionsImpl)
+            address(actionsImpl),
+            address(queueCustodian)
         );
 
         // Deploy MarketFactory with all required arguments

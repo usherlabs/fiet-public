@@ -245,8 +245,6 @@ library VTSPositionLib {
             }
 
             // If position-level commitment deficit is fully cured, clear any stored severity bps.
-            // TODO: What will happen is settlements will bring the pa.commitmentDeficit.token0/1 down to 0.
-            // TODO: If a new checkpoint occurs, and the deficit is now < unbackedCommitmentGraceBypassBps, then the grace period begins - despite the fact that it truly began earlier.
             if (pa.commitmentDeficit.token0 == 0 && pa.commitmentDeficit.token1 == 0) {
                 pa.commitmentDeficitBps = 0;
             }
@@ -1272,7 +1270,7 @@ library VTSPositionLib {
             address queueRecipient;
             {
                 PositionModificationHookData memory mmData = PositionModificationHookDataLib.decodeCalldata(p.hookData);
-                queueRecipient = PositionModificationHookDataLib.getLocker(mmData, p.owner);
+                queueRecipient = PositionModificationHookDataLib.getLocker(mmData);
             }
 
             // Only the immediately-settleable portion should be accounted as an underlying settlement delta.
@@ -1384,7 +1382,7 @@ library VTSPositionLib {
     /// @param poolKey The pool key
     /// @param principalDelta The principal delta after fee adjustments
     /// @param requiredSettlementDelta The required settlement delta from touchPosition
-    /// @param queueRecipient The recipient for settlement queue (locker or owner)
+    /// @param queueRecipient The recipient for settlement queue (locker)
     function _handleLiquidityDecrease(
         PositionContext memory ctx,
         address owner,
@@ -1414,11 +1412,12 @@ library VTSPositionLib {
         settleableDelta = requiredSettlementDelta - queuedDelta;
 
         // 3. Queue settlements via cancelWithQueue
-        // Burns LCCs from MMPM (ctx.mmpmAddress) and queues shortfall for queueRecipient (locker or MMPM)
+        // Burns LCCs on transfer from PoolManager to owner (MMPM) and queues shortfall for queueRecipient (locker).
         // Only cancel LCCs for tokens that have non-zero principal delta (tokens actually removed from liquidity)
         // Process token0 cancellation
         {
             uint256 principalAmount0 = LiquidityUtils.safeInt128ToUint256(principalDelta.amount0());
+            uint256 retainedPrincipal0 = LiquidityUtils.safeInt128ToUint256(queuedDelta.amount0());
             if (principalAmount0 > 0) {
                 ctx.liquidityHub
                     .planCancelWithQueue(
@@ -1426,7 +1425,7 @@ library VTSPositionLib {
                         address(ctx.poolManager),
                         owner,
                         principalAmount0,
-                        LiquidityUtils.safeInt128ToUint256(queuedDelta.amount0()),
+                        retainedPrincipal0,
                         queueRecipient
                     );
             }
@@ -1435,6 +1434,7 @@ library VTSPositionLib {
         // Process token1 cancellation
         {
             uint256 principalAmount1 = LiquidityUtils.safeInt128ToUint256(principalDelta.amount1());
+            uint256 retainedPrincipal1 = LiquidityUtils.safeInt128ToUint256(queuedDelta.amount1());
             if (principalAmount1 > 0) {
                 ctx.liquidityHub
                     .planCancelWithQueue(
@@ -1442,7 +1442,7 @@ library VTSPositionLib {
                         address(ctx.poolManager),
                         owner,
                         principalAmount1,
-                        LiquidityUtils.safeInt128ToUint256(queuedDelta.amount1()),
+                        retainedPrincipal1,
                         queueRecipient
                     );
             }

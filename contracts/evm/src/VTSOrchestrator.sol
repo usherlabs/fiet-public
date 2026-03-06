@@ -532,7 +532,7 @@ contract VTSOrchestrator is
             }
             // For non-seizing MM operations, enforce designated advancer control.
             if (!mmData.seizure.isSeizing) {
-                address locker = PositionModificationHookDataLib.getLocker(mmData, owner);
+                address locker = PositionModificationHookDataLib.getLocker(mmData);
                 if (locker != s.commits[mmData.commitId].mmState.advancer) {
                     revert Errors.InvalidSender();
                 }

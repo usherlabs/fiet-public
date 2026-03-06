@@ -455,22 +455,24 @@ library MMCalldataDecoder {
         }
     }
 
-    /// @dev COLLECT_AVAILABLE_LIQUIDITY: (address, uint256)
+    /// @dev COLLECT_AVAILABLE_LIQUIDITY: (address, uint256, uint256)
     /// @param params The calldata bytes to decode
     /// @return lcc The LCC token address
+    /// @return tokenId The commitment NFT token ID bucket to collect from
     /// @return maxAmount The maximum amount to collect
     function decodeCollectLiquidityParams(bytes calldata params)
         internal
         pure
-        returns (address lcc, uint256 maxAmount)
+        returns (address lcc, uint256 tokenId, uint256 maxAmount)
     {
         assembly ("memory-safe") {
-            if lt(params.length, 0x40) {
+            if lt(params.length, 0x60) {
                 mstore(0, SLICE_ERROR_SELECTOR)
                 revert(0x1c, 4)
             }
             lcc := calldataload(params.offset)
-            maxAmount := calldataload(add(params.offset, 0x20))
+            tokenId := calldataload(add(params.offset, 0x20))
+            maxAmount := calldataload(add(params.offset, 0x40))
         }
     }
 
