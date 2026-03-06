@@ -171,6 +171,32 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
             + IMMQueueCustodian(custodian).queued(tokenId, address(lcc1));
     }
 
+    function _walletLccSum(address account) internal view returns (uint256) {
+        return Currency.wrap(address(lcc0)).balanceOf(account) + Currency.wrap(address(lcc1)).balanceOf(account);
+    }
+
+    function _primePositionForQueuedDecrease(uint256 tokenId, uint256 positionIndex, uint256 liquidityToDecrease)
+        internal
+    {
+        (uint256 removedCommitment0, uint256 removedCommitment1) = LiquidityUtils.calculateCommitmentMaxima(
+            defaultlLiquidityParams.tickLower, defaultlLiquidityParams.tickUpper, uint128(liquidityToDecrease)
+        );
+
+        (, PositionId positionId) = vtsOrchestrator.getPosition(tokenId, positionIndex);
+        (uint256 settled0, uint256 settled1) = vtsOrchestrator.getPositionSettledAmounts(positionId);
+        (uint256 commitment0, uint256 commitment1) = vtsOrchestrator.getCommitmentMaxima(positionId);
+
+        // Leave a tiny excess after the decrease so we exercise the queued-retained path
+        // without exceeding the principal withdrawn by that decrease.
+        uint256 topUp0 =
+            commitment0 > settled0 + removedCommitment0 ? commitment0 - settled0 - removedCommitment0 + 1 : 0;
+        uint256 topUp1 =
+            commitment1 > settled1 + removedCommitment1 ? commitment1 - settled1 - removedCommitment1 + 1 : 0;
+        if (topUp0 > 0 || topUp1 > 0) {
+            approveAndSettleUnderlyingToPosition(tokenId, positionIndex, topUp0, topUp1);
+        }
+    }
+
     function testCanCommitMintAndSettlePosition() public {
         // Objective:
         // - Prove a user can commit, mint, and settle a single MM position via the position manager.
@@ -635,8 +661,10 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
             address(lcc1)
         );
 
-        // Create a deficit so decrease has retained principal to queue.
-        MMA.settle(positionManager, corePoolKey, tokenId, positionIndex, int128(1), int128(1));
+        uint256 liquidityToDecrease = 1000;
+
+        // Prime settled amounts so this specific decrease leaves a small queued remainder.
+        _primePositionForQueuedDecrease(tokenId, positionIndex, liquidityToDecrease);
 
         // Ensure decrease path queues retained principal with zero immediate availability.
         vm.mockCall(
@@ -645,27 +673,23 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
             abi.encode(toBalanceDelta(int128(0), int128(0)))
         );
 
-        uint256 liquidityToDecrease = 1000;
         address custodian = address(positionManager.queueCustodian());
         uint256 queueBeforeLocker = _queuedSumFor(address(this));
         uint256 queueBeforeCustodianOwner = _queuedSumFor(custodian);
         uint256 custodyBefore = _custodySumFor(tokenId, custodian);
-        uint256 creditBefore0 = vtsOrchestrator.getFullCredit(Currency.wrap(address(lcc0)), address(this));
-        uint256 creditBefore1 = vtsOrchestrator.getFullCredit(Currency.wrap(address(lcc1)), address(this));
+        uint256 walletLccBefore = _walletLccSum(address(this));
 
         MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](1);
         actions[0] = MMA.prepareDecrease(corePoolKey, tokenId, positionIndex, liquidityToDecrease);
         MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
 
         uint256 custodyDelta = _custodySumFor(tokenId, custodian) - custodyBefore;
-        uint256 creditDelta =
-            (vtsOrchestrator.getFullCredit(Currency.wrap(address(lcc0)), address(this)) - creditBefore0)
-                + (vtsOrchestrator.getFullCredit(Currency.wrap(address(lcc1)), address(this)) - creditBefore1);
+        uint256 walletLccAfter = _walletLccSum(address(this));
 
         assertGt(custodyDelta, 0, "Expected retained LCC to be recorded in shared custodian");
         assertEq(_queuedSumFor(custodian), queueBeforeCustodianOwner, "Custodian must not own queue entries");
         assertGe(_queuedSumFor(address(this)), queueBeforeLocker, "Locker queue ownership should never be redirected");
-        assertEq(creditDelta, 0, "Queued retained LCC must not be credited to locker");
+        assertEq(walletLccAfter, walletLccBefore, "Queued retained LCC must not be transferred to locker wallet");
     }
 
     function test_seize_routesQueueToLocker_butCustodiesQueuedLccByCommit() public {
