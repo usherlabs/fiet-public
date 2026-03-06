@@ -34,7 +34,9 @@ import {MarketVTSConfiguration} from "../src/types/VTS.sol";
 import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {ICoreHook} from "../src/interfaces/ICoreHook.sol";
 import {Lock} from "@uniswap/v4-core/src/libraries/Lock.sol";
+import {IUnlockCallback} from "@uniswap/v4-core/src/interfaces/callback/IUnlockCallback.sol";
 import {StdStorage, stdStorage} from "forge-std/StdStorage.sol";
+import {MarketLiquidityRouterLib} from "../src/libraries/MarketLiquidityRouterLib.sol";
 
 contract MarketFactoryTest is Test, Deployers {
     using PoolIdLibrary for PoolKey;
@@ -333,6 +335,8 @@ contract MockPoolManager_MarketFactory {
 
     InitCall[] internal _initCalls;
     mapping(bytes32 => bytes32) internal _exttload;
+    uint256 internal _unlockCalls;
+    bytes internal _lastUnlockData;
 
     function setExttload(bytes32 slot, bytes32 value) external {
         _exttload[slot] = value;
@@ -354,6 +358,14 @@ contract MockPoolManager_MarketFactory {
         return 0;
     }
 
+    function unlock(bytes calldata data) external returns (bytes memory result) {
+        _unlockCalls++;
+        _lastUnlockData = data;
+        _exttload[Lock.IS_UNLOCKED_SLOT] = bytes32(uint256(1));
+        result = IUnlockCallback(msg.sender).unlockCallback(data);
+        _exttload[Lock.IS_UNLOCKED_SLOT] = bytes32(0);
+    }
+
     function initCallsLength() external view returns (uint256) {
         return _initCalls.length;
     }
@@ -361,6 +373,14 @@ contract MockPoolManager_MarketFactory {
     function initCall(uint256 i) external view returns (PoolKey memory key, uint160 sqrtPriceX96) {
         InitCall storage c = _initCalls[i];
         return (c.key, c.sqrtPriceX96);
+    }
+
+    function unlockCalls() external view returns (uint256) {
+        return _unlockCalls;
+    }
+
+    function lastUnlockData() external view returns (bytes memory) {
+        return _lastUnlockData;
     }
 }
 
@@ -861,6 +881,39 @@ contract MarketFactoryUnitTest is Test {
         assertEq(used, 17);
     }
 
+    function test_useMarketLiquidity_whenLocked_opensUnlockAndUsesCallback() public {
+        uint160 initial = 79228162514264337593543950336;
+        (PoolId coreId,) = _createMarket(address(0x100), address(0x200), initial);
+        address[2] memory corePair = factory.corePoolToCurrencyPair(coreId);
+
+        // Locked path (default) should trigger poolManager.unlock -> factory.unlockCallback.
+        proxyHook.setForcedDelta(int128(4), int128(0));
+
+        vm.prank(address(liquidityHub));
+        uint256 used = factory.useMarketLiquidity(corePair[0], PoolId.unwrap(coreId), 9);
+        assertEq(used, 4);
+        assertEq(poolManager.unlockCalls(), 1);
+
+        MarketLiquidityRouterLib.UseMarketLiquidityUnlockData memory unlockData =
+            abi.decode(poolManager.lastUnlockData(), (MarketLiquidityRouterLib.UseMarketLiquidityUnlockData));
+        assertEq(unlockData.proxyHook, address(proxyHook));
+        assertEq(unlockData.recipient, address(liquidityHub));
+    }
+
+    function test_useMarketLiquidity_whenAlreadyUnlocked_skipsUnlock() public {
+        uint160 initial = 79228162514264337593543950336;
+        (PoolId coreId,) = _createMarket(address(0x100), address(0x200), initial);
+        address[2] memory corePair = factory.corePoolToCurrencyPair(coreId);
+
+        poolManager.setExttload(Lock.IS_UNLOCKED_SLOT, bytes32(uint256(1)));
+        proxyHook.setForcedDelta(int128(6), int128(0));
+
+        vm.prank(address(liquidityHub));
+        uint256 used = factory.useMarketLiquidity(corePair[0], PoolId.unwrap(coreId), 9);
+        assertEq(used, 6);
+        assertEq(poolManager.unlockCalls(), 0);
+    }
+
     function test_useMarketLiquidity_withLcc0AndLcc1_andInvalidToken() public {
         uint160 initial = 79228162514264337593543950336;
         (PoolId coreId,) = _createMarket(address(0x100), address(0x200), initial);
@@ -932,6 +985,35 @@ contract MarketFactoryUnitTest is Test {
         vm.prank(address(poolManager));
         vm.expectRevert(Errors.PoolManagerMustBeUnlocked.selector);
         factory.afterModifyLiquidity(key);
+    }
+
+    function test_unlockCallback_revertsWhenCallerIsNotPoolManager() public {
+        MarketLiquidityRouterLib.UseMarketLiquidityUnlockData memory unlockData =
+            MarketLiquidityRouterLib.UseMarketLiquidityUnlockData({
+                proxyHook: address(proxyHook), requestedDelta: 0, recipient: address(liquidityHub)
+            });
+
+        vm.expectRevert(Errors.InvalidSender.selector);
+        factory.unlockCallback(abi.encode(unlockData));
+    }
+
+    function test_unlockCallback_returnsEncodedUsedDelta() public {
+        proxyHook.setForcedDelta(int128(3), int128(5));
+        BalanceDelta requested = toBalanceDelta(int128(11), int128(0));
+        MarketLiquidityRouterLib.UseMarketLiquidityUnlockData memory unlockData =
+            MarketLiquidityRouterLib.UseMarketLiquidityUnlockData({
+                proxyHook: address(proxyHook),
+                requestedDelta: BalanceDelta.unwrap(requested),
+                recipient: address(liquidityHub)
+            });
+
+        vm.prank(address(poolManager));
+        bytes memory ret = factory.unlockCallback(abi.encode(unlockData));
+        int256 raw = abi.decode(ret, (int256));
+        BalanceDelta used = BalanceDelta.wrap(raw);
+
+        assertEq(used.amount0(), int128(3));
+        assertEq(used.amount1(), int128(5));
     }
 
     function test_afterModifyLiquidity_revertsWhenSenderNotBound() public {
