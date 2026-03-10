@@ -4,7 +4,7 @@
 # deterministic and align with the `ci` Foundry profile in `contracts/evm-scripts/foundry.toml`.
 #
 # Required secrets (Settings -> Secrets and variables -> Actions):
-#   - ETH_SEPOLIA_RPC_URL: RPC URL for Eth Sepolia fork (optional; falls back to public RPC)
+#   - ETH_SEPOLIA_RPC_URL: RPC URL for Eth Sepolia fork
 name: E2E
 
 on:
@@ -68,9 +68,19 @@ jobs:
         run: FOUNDRY_PROFILE=ci forge build
         working-directory: contracts/evm-scripts
 
+      - name: Validate fork RPC secret
+        env:
+          ETH_SEPOLIA_RPC_URL: ${{ secrets.ETH_SEPOLIA_RPC_URL }}
+        run: |
+          if [ -z "${ETH_SEPOLIA_RPC_URL:-}" ]; then
+            echo "Missing required GitHub Actions secret: ETH_SEPOLIA_RPC_URL"
+            echo "Set it under Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
+
       - name: Start Anvil fork
         env:
-          ETH_SEPOLIA_RPC_URL: ${{ secrets.ETH_SEPOLIA_RPC_URL || 'https://ethereum-sepolia.blockpi.network/v1/rpc/public' }}
+          ETH_SEPOLIA_RPC_URL: ${{ secrets.ETH_SEPOLIA_RPC_URL }}
         run: |
           BLOCK_NUMBER=8891589 just fork > /tmp/anvil.log 2>&1 &
           sleep 5
@@ -83,6 +93,6 @@ jobs:
 
       - name: Run E2E tests
         env:
-          ETH_SEPOLIA_RPC_URL: ${{ secrets.ETH_SEPOLIA_RPC_URL || 'https://ethereum-sepolia.blockpi.network/v1/rpc/public' }}
+          ETH_SEPOLIA_RPC_URL: ${{ secrets.ETH_SEPOLIA_RPC_URL }}
         run: just e2e
         working-directory: contracts/evm-scripts
