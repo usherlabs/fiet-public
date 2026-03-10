@@ -56,11 +56,9 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: "yarn"
-          cache-dependency-path: contracts/evm/yarn.lock
 
       - name: Install Yarn
-        run: corepack enable && corepack prepare yarn@stable --activate
+        run: corepack enable && corepack prepare yarn@3.2.0 --activate
 
       - name: Install EVM dependencies
         run: cd contracts/evm && node ./patch-oracle.cjs && yarn install
