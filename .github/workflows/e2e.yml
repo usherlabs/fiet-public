@@ -88,6 +88,8 @@ jobs:
         working-directory: contracts/evm-scripts
 
       - name: Setup CREATE3
+        env:
+          ETH_SEPOLIA_RPC_URL: ${{ secrets.ETH_SEPOLIA_RPC_URL }}
         run: just setup-create3
         working-directory: contracts/evm-scripts
 
