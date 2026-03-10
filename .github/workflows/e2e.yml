@@ -17,7 +17,8 @@ on:
 env:
   MODE: LOCAL
   NETWORK: ethsepolia
-  BROADCAST: "true"
+  # no need to broadcast or persist anything since each is an end to end deployment and config flow
+  BROADCAST: "false"
   FOUNDRY_PROFILE: "ci"
   RPC_URL: http://127.0.0.1:8545
   CHAIN_ID: "11155111"
