@@ -2,7 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-import {FileHelper} from "../base/FileHelper.sol";
+import {NetworkConfig} from "../base/NetworkConfig.sol";
 
 // ? This will default to 18 decimals, but we can override it for testing purposes when required.
 contract Token is ERC20 {
@@ -17,7 +17,7 @@ contract Token is ERC20 {
 }
 
 /// Deploying mock USDT / USDC token
-contract TokenScriptUSDT is FileHelper {
+contract TokenScriptUSDT is NetworkConfig {
     Token token;
 
     function run() external {
@@ -26,12 +26,12 @@ contract TokenScriptUSDT is FileHelper {
         token = new Token("Mock USDT", "USDT", 100000 ether); // initial supply = 100,000 ether
         vm.stopBroadcast();
 
-        _setFilename("sepolia");
+        _initNetwork();
         writeAddress("usdtToken", address(token));
     }
 }
 
-contract TokenScriptUSDC is FileHelper {
+contract TokenScriptUSDC is NetworkConfig {
     Token token;
 
     function run() external {
@@ -40,7 +40,7 @@ contract TokenScriptUSDC is FileHelper {
         token = new Token("Mock USDC", "USDC", 100000 ether); // initial supply = 100,000 ether
         vm.stopBroadcast();
 
-        _setFilename("sepolia");
+        _initNetwork();
         writeAddress("usdcToken", address(token));
     }
 }

@@ -1,0 +1,90 @@
+# E2E integration tests: deploy full stack on an Anvil fork and run `just e2e`.
+#
+# The workflow uses Anvil account 0 as the deployer, so CREATE3-linked addresses remain
+# deterministic and align with the `ci` Foundry profile in `contracts/evm-scripts/foundry.toml`.
+#
+# Required secrets (Settings -> Secrets and variables -> Actions):
+#   - ETH_SEPOLIA_RPC_URL: RPC URL for Eth Sepolia fork (optional; falls back to public RPC)
+name: E2E
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+
+env:
+  MODE: LOCAL
+  NETWORK: ethsepolia
+  BROADCAST: "true"
+  FOUNDRY_PROFILE: "ci"
+  RPC_URL: http://127.0.0.1:8545
+  CHAIN_ID: "11155111"
+  # Deployer is Anvil account 0 (0xf39F...), which is already funded on the fork.
+  PRIVATE_KEY: "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+  # LP/MM actors use Anvil keys 1–3 (have ETH on fork)
+  LP_PRIVATE_KEY: "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d"
+  LP2_PRIVATE_KEY: "0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a"
+  LP3_PRIVATE_KEY: "0x7c852118294e51e653712a81e05800f419141751be58f605c371e15141b007a6"
+  # use any random address as this is not covered in the scope of this e2e but required by the deployment
+  PUBLIC_KEY_SIGNAL_VERIFIER_ADDRESS: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
+
+jobs:
+  e2e:
+    name: E2E Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: "v1.4.2"
+
+      - name: Install Just
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to /usr/local/bin
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "yarn"
+          cache-dependency-path: contracts/evm/yarn.lock
+
+      - name: Install Yarn
+        run: corepack enable && corepack prepare yarn@stable --activate
+
+      - name: Install EVM dependencies
+        run: cd contracts/evm && node ./patch-oracle.cjs && yarn install
+        working-directory: .
+
+      - name: Run Forge build (evm-scripts)
+        run: FOUNDRY_PROFILE=ci forge build
+        working-directory: contracts/evm-scripts
+
+      - name: Start Anvil fork
+        env:
+          ETH_SEPOLIA_RPC_URL: ${{ secrets.ETH_SEPOLIA_RPC_URL || 'https://ethereum-sepolia.blockpi.network/v1/rpc/public' }}
+        run: |
+          BLOCK_NUMBER=8891589 just fork > /tmp/anvil.log 2>&1 &
+          sleep 5
+          cast block-number --rpc-url http://127.0.0.1:8545 || (cat /tmp/anvil.log && echo "Anvil failed to start"; exit 1)
+        working-directory: contracts/evm-scripts
+
+      - name: Setup CREATE3
+        run: just setup-create3
+        working-directory: contracts/evm-scripts
+
+      - name: Run E2E tests
+        env:
+          ETH_SEPOLIA_RPC_URL: ${{ secrets.ETH_SEPOLIA_RPC_URL || 'https://ethereum-sepolia.blockpi.network/v1/rpc/public' }}
+        run: just e2e
+        working-directory: contracts/evm-scripts
