@@ -61,7 +61,7 @@ jobs:
         run: corepack enable && corepack prepare yarn@3.2.0 --activate
 
       - name: Install EVM dependencies
-        run: cd contracts/evm && node ./patch-oracle.cjs && yarn install
+        run: cd contracts/evm && node ./patch-oracle.cjs && yarn install --immutable --mode=skip-build
         working-directory: .
 
       - name: Run Forge build (evm-scripts)
