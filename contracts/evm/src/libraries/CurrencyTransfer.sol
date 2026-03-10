@@ -3,6 +3,7 @@ pragma solidity ^0.8.26;
 
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {SafeTransferLib} from "solady/utils/SafeTransferLib.sol";
+import {Errors} from "./Errors.sol";
 
 /// @title CurrencyTransfer
 /// @notice Library for handling transfers of both native ETH and ERC-20 tokens
@@ -13,8 +14,8 @@ library CurrencyTransfer {
 
     /**
      * @notice Transfer currency from one address to another
-     * @dev If addressZero, then the transaction must include a transfer of ETH to address(this), allowing for forwarding to destination.
-     *     This emulates transferFrom. Native transferFrom does NOT include an initial inherited transfer for forwarding.
+     * @dev Native transferFrom is only supported when `from == address(this)` (self-funded forwarding).
+     *     For native ETH and non-self `from`, this function reverts because ETH has no pull-based transferFrom semantics.
      *     For ERC-20 tokens, uses Solady's safeTransferFrom2 which falls back to Permit2 if standard transferFrom fails.
      *     Optimised to use transfer instead of transferFrom when `from == address(this)` to avoid self-approval requirement.
      *
@@ -24,8 +25,14 @@ library CurrencyTransfer {
      * @param amount The amount to transfer
      */
     function transferFrom(Currency currency, address from, address to, uint256 amount) internal {
-        if (currency.isAddressZero() || from == address(this)) {
-            // When currency is native ETH OR When transferring from self, use native safe currency transfer directly to avoid self-approval requirement
+        if (currency.isAddressZero()) {
+            // Native ETH cannot be pulled from arbitrary wallets.
+            if (from != address(this)) {
+                revert Errors.NativeTransferFromUnsupported(from);
+            }
+            currency.transfer(to, amount);
+        } else if (from == address(this)) {
+            // When transferring ERC-20 from self, use direct transfer to avoid self-approval requirement.
             currency.transfer(to, amount);
         } else {
             // For ERC-20 tokens, use Solady's safeTransferFrom2 with Permit2 fallback

@@ -663,10 +663,10 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         // Also: DirectLP exists now, so it will accrue CISE exposure on token0 and can later allocate a token1 bonus.
         //
         // IMPORTANT:
-        // Bonus allocation is CISE-gated and has a dust guard (ciseExposure >= 1e6).
+        // Bonus allocation is CISE-gated, and tiny positive exposure only allocates once it yields a non-zero bonus.
         // CISE exposure realised for a position is approximately:
         //   exposure0 ~= coveredAmount0 * positionSettled0 / totalSettled0
-        // So we compute a coverage amount that guarantees non-dust exposure for this DirectLP.
+        // So we compute a coverage amount that guarantees a comfortably positive exposure for this DirectLP.
         (, uint256 protocolFeeAccrued1Before) = _protocolFeeAccrued(corePoolKey.toId());
         uint256 coverage0;
         {
@@ -675,7 +675,7 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
             assertGt(totalSettled0, 0, "Precondition: totalSettled0 must be > 0 for CISE indexing");
             assertGt(directSettled0, 0, "Precondition: DirectLP must have settled0 > 0 for CISE exposure");
 
-            uint256 targetExposure = 1e7; // comfortably above the 1e6 dust guard
+            uint256 targetExposure = 1e7; // comfortably positive exposure for deterministic bonus allocation
             coverage0 = (targetExposure * totalSettled0) / directSettled0 + 1;
             console.log("coverage0:", coverage0);
             console.log("totalSettled0:", totalSettled0);
@@ -699,12 +699,12 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         uint256 slashedPot1Funded = _slashedPot1();
         assertGt(slashedPot1Funded, slashedPot1Before, "Expected MM poke to fund slashedPot1");
 
-        // Step 6b (critical): Realise DirectLP CISE exposure now, and assert it is non-dust.
+        // Step 6b (critical): Realise DirectLP CISE exposure now, and assert it is positive.
         // This makes the subsequent poke expectation ("pot drains") robust and debuggable.
         vtsOrchestrator.settlePositionGrowths(directPosId);
         {
             (uint256 ciseExposure0,) = _testableOrchestrator().getPositionBonusWeights(directPosId);
-            assertGe(ciseExposure0, 1e6, "Precondition: DirectLP must have non-dust CISE exposure0 to allocate bonus");
+            assertGt(ciseExposure0, 0, "Precondition: DirectLP must have positive CISE exposure0 to allocate bonus");
         }
 
         // Step 7: Poke the out-of-range DirectLP. It should allocate a bonus (via CISE exposure0) and materialise it
@@ -781,14 +781,14 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
         }
 
         // 5) Exercise coverage for token0.
-        // We compute coverage0 to ensure DirectLP gets non-dust CISE exposure on token0, enabling a token1 bonus.
+        // We compute coverage0 to ensure DirectLP gets positive CISE exposure on token0, enabling a token1 bonus.
         {
             (,, uint256 directSettled0,,,) = _testableOrchestrator().getPositionAccounting(directPosId);
             (uint256 totalSettled0,,,,,,,) = _testableOrchestrator().getPoolCISEAccounting(corePoolKey.toId());
             assertGt(totalSettled0, 0, "Precondition: totalSettled0 must be > 0 for CISE indexing");
             assertGt(directSettled0, 0, "Precondition: DirectLP must have settled0 > 0 for CISE exposure");
 
-            uint256 targetExposure = 1e7; // comfortably above 1e6 dust guard
+            uint256 targetExposure = 1e7; // comfortably positive exposure for deterministic bonus allocation
             uint256 coverage0 = (targetExposure * totalSettled0) / directSettled0 + 1;
 
             vm.prank(marketFactory);
@@ -1043,7 +1043,7 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
     ///      - DICE: `settlePositionGrowths` after `incrementCoverage` queues a slash (+pendingFeeAdj) on the slasher and
     ///        increases `protocolFeeAccrued` (accounting pot), but does NOT yet fund `slashedPot`.
     ///      - CISE exposure accrues ONLY at `incrementCoverage` (not on swaps), so we must ensure a post-existence coverage
-    ///        event creates non-dust exposure for the beneficiary.
+    ///        event creates positive exposure for the beneficiary.
     ///      - CSI: bonus allocation can be QUEUED against `protocolFeeAccrued` (pendingFeeAdj < 0, spend index advances)
     ///        even while `slashedPot == 0` (materialisation is separate).
     ///      - Materialisation happens only after the slasher is fee-processed (e.g. `_pokeMM`) which funds `slashedPot`.
@@ -1086,14 +1086,14 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
 
             // Exercise coverage (token0), then settle again to queue coverage burn (slash) in fee token (token1)
             // IMPORTANT: CISE bonus eligibility is gated by exposure which accrues ONLY at incrementCoverage.
-            // Ensure the beneficiary accrues non-dust CISE exposure (> 1e6) so a bonus can be queued.
+            // Ensure the beneficiary accrues positive CISE exposure so a bonus can be queued.
             {
                 (,, uint256 beneficiarySettled0,,,) = _testableOrchestrator().getPositionAccounting(beneficiaryPosId);
                 (uint256 totalSettled0,,,,,,,) = _testableOrchestrator().getPoolCISEAccounting(corePoolKey.toId());
                 assertGt(totalSettled0, 0, "Precondition: totalSettled0 must be > 0 for CISE indexing");
                 assertGt(beneficiarySettled0, 0, "Precondition: beneficiary must have settled0 > 0 for CISE exposure");
 
-                uint256 targetExposure = 1e7; // comfortably above the 1e6 dust guard
+                uint256 targetExposure = 1e7; // comfortably positive exposure for deterministic bonus allocation
                 uint256 coverage0 = (targetExposure * totalSettled0) / beneficiarySettled0 + 1;
 
                 vm.prank(marketFactory);
@@ -1131,7 +1131,7 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
             assertLt(
                 feeAccruedAfterBeneficiary,
                 feeAccruedBefore,
-                "Beneficiary poke should reduce protocolFeeAccrued when potAvail>0 and CISE exposure is non-dust"
+                "Beneficiary poke should reduce protocolFeeAccrued when potAvail>0 and CISE exposure is positive"
             );
 
             (, uint256 slasherContrib,,) = _testableOrchestrator().getPositionFeeAccounting(slasherPosId);
@@ -1259,14 +1259,14 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
             _swapCore(false, -int256(2e18)); // accrue token1 fees for in-range positions
 
             // IMPORTANT: CISE exposure accrues ONLY at incrementCoverage (not on swaps).
-            // Ensure this DirectLP accrues non-dust exposure after creation so it can queue a bonus on touch.
+            // Ensure this DirectLP accrues positive exposure after creation so it can queue a bonus on touch.
             {
                 (,, uint256 dlSettled0,,,) = _testableOrchestrator().getPositionAccounting(directPosId);
                 (uint256 totalSettled0,,,,,,,) = _testableOrchestrator().getPoolCISEAccounting(corePoolKey.toId());
                 assertGt(totalSettled0, 0, "Precondition: totalSettled0 must be > 0 for CISE indexing");
                 assertGt(dlSettled0, 0, "Precondition: DirectLP must have settled0 > 0 for CISE exposure");
 
-                uint256 targetExposure = 1e7; // comfortably above the 1e6 dust guard
+                uint256 targetExposure = 1e7; // comfortably positive exposure for deterministic bonus allocation
                 uint256 coverage0 = (targetExposure * totalSettled0) / dlSettled0 + 1;
 
                 vm.prank(marketFactory);
@@ -1361,7 +1361,7 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
 
     /// @notice Edge Case 6b: An inactive (0-liquidity) MM position can collect dormant fees/bonuses once the pot is funded.
     /// @dev Correct sequencing under CSI/CISE/DICE (MMPositionManager pathway):
-    ///      - Beneficiary must have non-dust CISE exposure (requires `incrementCoverage` AFTER it exists).
+    ///      - Beneficiary must have positive CISE exposure (requires `incrementCoverage` AFTER it exists).
     ///      - Bonus is QUEUED on touch (pendingFeeAdj < 0), but cannot be paid until `slashedPot` is funded.
     ///      - After funding the pot (slasher fee-processing), even a 0-liquidity MM can "poke" to materialise pending bonuses,
     ///        provided the batch fully drains any delta credits (otherwise `CurrencyNotSettled` reverts).
@@ -1410,14 +1410,14 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
             // 3) Accrue native fees for the MM, create selfNet via settlement, and touch to queue a bonus
             _swapCore(false, -int256(2e18)); // accrue token1 fees for in-range positions
 
-            // Ensure non-dust CISE exposure after creation so it can queue a bonus on touch.
+            // Ensure positive CISE exposure after creation so it can queue a bonus on touch.
             {
                 (,, uint256 mmSettled0,,,) = _testableOrchestrator().getPositionAccounting(beneficiaryPosId);
                 (uint256 totalSettled0,,,,,,,) = _testableOrchestrator().getPoolCISEAccounting(corePoolKey.toId());
                 assertGt(totalSettled0, 0, "Precondition: totalSettled0 must be > 0 for CISE indexing");
                 assertGt(mmSettled0, 0, "Precondition: beneficiary MM must have settled0 > 0 for CISE exposure");
 
-                uint256 targetExposure = 1e7; // comfortably above the 1e6 dust guard
+                uint256 targetExposure = 1e7; // comfortably positive exposure for deterministic bonus allocation
                 uint256 coverage0 = (targetExposure * totalSettled0) / mmSettled0 + 1;
 
                 vm.prank(marketFactory);
@@ -1488,7 +1488,7 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
 
         // ══════════════════════════════════════════════════════════════════════════
         // 0) Precondition: Use the initial full-range DirectLP position created in setUp()
-        //    (it dominates totalSettled, so it will actually accrue non-dust CISE exposure)
+        //    (it dominates totalSettled, so it will actually accrue positive CISE exposure)
         // ══════════════════════════════════════════════════════════════════════════
         assertTrue(vtsOrchestrator.isPositionValid(directPosId, true), "Precondition: initial LP should exist");
 

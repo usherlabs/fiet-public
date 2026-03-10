@@ -1096,6 +1096,36 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
         assertEq(IERC20(underlying0).balanceOf(address(positionManager)), depositAmount0);
     }
 
+    function test_settle_usePositionManagerBalanceFalse_pullsErc20FromLocker_notPositionManager() public {
+        // Ensure the non-MMPM settle path keeps ERC20 behaviour and never spends pooled MMPM balances.
+        uint256 tokenId = 1;
+        uint256 positionIndex = 0;
+        uint256 depositAmount0 = 1e6;
+
+        createPosition(defaultlLiquidityParams, abi.encode(liquiditySignal), tokenId, positionIndex);
+
+        address underlying0 = lcc0.underlying();
+        address underlying1 = lcc1.underlying();
+
+        // Seed MMPM with pooled balance. This must not be consumed by usePositionManagerBalance=false settles.
+        MockERC20(underlying0).mint(address(positionManager), depositAmount0);
+
+        uint256 pmBalanceBefore = IERC20(underlying0).balanceOf(address(positionManager));
+        uint256 lockerBalanceBefore = IERC20(underlying0).balanceOf(address(this));
+
+        _approveTokenForPositionManager(underlying0, underlying1, address(positionManager), depositAmount0, 0);
+
+        MMA.PreparedAction[] memory actions = new MMA.PreparedAction[](1);
+        actions[0] = MMA.prepareSettle(corePoolKey, tokenId, positionIndex, -int128(int256(depositAmount0)), 0, false);
+        MMA.executeWithUnlock(positionManager, actions, block.timestamp + 3600);
+
+        uint256 pmBalanceAfter = IERC20(underlying0).balanceOf(address(positionManager));
+        uint256 lockerBalanceAfter = IERC20(underlying0).balanceOf(address(this));
+
+        assertEq(pmBalanceAfter, pmBalanceBefore, "pooled MMPM ERC20 balance must remain untouched");
+        assertEq(lockerBalanceAfter, lockerBalanceBefore - depositAmount0, "locker ERC20 must fund settle");
+    }
+
     function test_settleFromDeltas_withOneSidedProtocolCredit_token0Only() public {
         // Kills mutants around:
         // - (credit0 > 0 || credit1 > 0) -> (credit0 > 0 && credit1 > 0)

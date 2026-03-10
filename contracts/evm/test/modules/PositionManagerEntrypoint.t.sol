@@ -121,7 +121,12 @@ contract PositionManagerEntrypointTest is Test {
     }
 
     function test_beforeBatch_nonZeroValue_syncsNativeAsCredit() public {
-        vm.expectCall(orch, abi.encodeWithSignature("sync(address,address,address)", address(0), address(h), locker));
+        vm.mockCall(
+            orch,
+            abi.encodeWithSignature("creditExact(address,address,uint256)", address(0), locker, 1),
+            abi.encode(int128(1))
+        );
+        vm.expectCall(orch, abi.encodeWithSignature("creditExact(address,address,uint256)", address(0), locker, 1));
         h.exposeBeforeBatch{value: 1}();
     }
 

@@ -250,6 +250,11 @@ contract LiquidityHubTest is LiquidityHubTestBase {
     function test_receive_revertsWhenNoNativeLcc() public {
         MockMarketVaultForEthReceive vault = new MockMarketVaultForEthReceive(lccToken1, lccToken2);
         vm.deal(address(vault), 1 ether);
+        vm.mockCall(
+            factory,
+            abi.encodeWithSelector(IMarketFactory.isCanonicalVault.selector, marketId1, address(vault)),
+            abi.encode(true)
+        );
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidEthSender.selector));
         vault.sendEth(payable(address(liquidityHub)), 1);
     }
@@ -286,8 +291,42 @@ contract LiquidityHubTest is LiquidityHubTestBase {
         MockMarketVaultForEthReceive vault = new MockMarketVaultForEthReceive(lccNative, lccErc20);
         vm.deal(address(vault), 1 ether);
 
+        vm.mockCall(
+            factory,
+            abi.encodeWithSelector(IMarketFactory.isCanonicalVault.selector, bytes32("nativeMarket"), address(vault)),
+            abi.encode(true)
+        );
+
         // Should not revert.
         vault.sendEth(payable(address(liquidityHub)), 1);
+    }
+
+    function test_receive_revertsWhenSenderNotCanonicalVaultForMarket() public {
+        address lccNative;
+        address lccErc20;
+        vm.startPrank(factory);
+        address[] memory issuers = new address[](1);
+        issuers[0] = factory;
+        (lccNative, lccErc20) = liquidityHub.createLCCPair(
+            abi.encodePacked(address(0xBEEF)), address(0), address(underlyingAsset1), "Native Market", issuers
+        );
+        liquidityHub.initialize(
+            lccNative, lccErc20, bytes32("nativeMarketCanonical"), abi.encodePacked(address(0xBEEF))
+        );
+        vm.stopPrank();
+
+        MockMarketVaultForEthReceive spoofVault = new MockMarketVaultForEthReceive(lccNative, lccErc20);
+        vm.deal(address(spoofVault), 1 ether);
+        vm.mockCall(
+            factory,
+            abi.encodeWithSelector(
+                IMarketFactory.isCanonicalVault.selector, bytes32("nativeMarketCanonical"), address(spoofVault)
+            ),
+            abi.encode(false)
+        );
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidEthSender.selector));
+        spoofVault.sendEth(payable(address(liquidityHub)), 1);
     }
 
     function test_wrapTo_overloadByUnderlyingAndMarketId_works() public {

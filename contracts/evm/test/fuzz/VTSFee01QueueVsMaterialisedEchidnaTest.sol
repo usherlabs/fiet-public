@@ -230,7 +230,7 @@ contract VTSFee01QueueVsMaterialisedEchidnaTest {
         uint256 selfRemaining = sSelfRemaining;
         uint256 potAvail = pot > selfRemaining ? (pot - selfRemaining) : 0;
 
-        if (sExposure == 0 || sExposure < 1e6 || sTotalExposure == 0 || potAvail == 0) {
+        if (sExposure == 0 || sTotalExposure == 0 || potAvail == 0) {
             return (beforeQueue.protocolFee, beforeQueue.pending, beforeQueue.spendIndex, false);
         }
 

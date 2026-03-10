@@ -107,5 +107,10 @@ abstract contract VTSCurrencyDelta is IVTSCurrencyDelta {
         deltaChange0 = DynamicCurrencyDelta.syncBalanceAsCredit(currency0, owner, target);
         deltaChange1 = DynamicCurrencyDelta.syncBalanceAsCredit(currency1, owner, target);
     }
+
+    /// @inheritdoc IVTSCurrencyDelta
+    function creditExact(Currency currency, address target, uint256 amount) external returns (int128 deltaChange) {
+        deltaChange = DynamicCurrencyDelta.creditExact(currency, target, amount);
+    }
 }
 

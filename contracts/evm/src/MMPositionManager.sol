@@ -31,6 +31,7 @@ import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.
 import {TransientStateLibrary} from "v4-periphery/lib/v4-core/src/libraries/TransientStateLibrary.sol";
 import {CurrencyTransfer} from "./libraries/CurrencyTransfer.sol";
 import {IMMQueueCustodian} from "./interfaces/IMMQueueCustodian.sol";
+import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 
 /// @title MMPositionManager
 /// @notice Entry point for VRL commitment position management
@@ -131,6 +132,11 @@ contract MMPositionManager is
     /// @inheritdoc PositionManagerQueueCustodian
     function _queueCustodian() internal view override(PositionManagerQueueCustodian) returns (IMMQueueCustodian) {
         return queueCustodian;
+    }
+
+    /// @inheritdoc FietNativeWrapper
+    function _canonicalMarketFactory() internal view override returns (IMarketFactory) {
+        return marketFactory;
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -429,6 +435,10 @@ contract MMPositionManager is
     /// @param currency The currency to sync
     /// @dev owner is always address(this) (MMPM) and target is always msgSender() (locker)
     function _sync(Currency currency) internal {
+        // Native ETH sync must be source-aware (exact amount) and is handled by dedicated flows.
+        if (currency == CurrencyLibrary.ADDRESS_ZERO) {
+            revert Errors.InvalidAddress(address(0));
+        }
         vtsOrchestrator.sync(currency, address(this), msgSender());
     }
 
@@ -474,7 +484,7 @@ contract MMPositionManager is
             }
         }
         _unwrap(amount);
-        _syncBalanceAsCredit(CurrencyLibrary.ADDRESS_ZERO);
+        _creditExact(CurrencyLibrary.ADDRESS_ZERO, amount);
     }
 
     // ═══════════════════════════════════════════════════════════════════════════

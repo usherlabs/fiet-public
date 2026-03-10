@@ -734,6 +734,47 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         MMA.execute(positionManager, prepared);
     }
 
+    function test_modifyLiquiditiesWithoutUnlock_revertsWhenSyncNativeRequested() public {
+        MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](1);
+        prepared[0] = MMA.prepareSync(CurrencyLibrary.ADDRESS_ZERO);
+
+        vm.expectRevert(abi.encodeWithSelector(Errors.InvalidAddress.selector, address(0)));
+        MMA.execute(positionManager, prepared);
+    }
+
+    function test_wrapNative_ignoresAmbientEthBalance_andCreditsOnlyMsgValue() public {
+        // Seed ambient ETH that should not be auto-credited to the locker.
+        vm.deal(address(positionManager), 5 ether);
+
+        MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](2);
+        prepared[0] = MMA.prepareWrapNative(1 ether);
+        prepared[1] = MMA.prepareTake(Currency.wrap(address(weth9)), address(this), 0);
+
+        uint256 wethBefore = weth9.balanceOf(address(this));
+        MMA.execute(positionManager, prepared, 1 ether);
+        assertEq(weth9.balanceOf(address(this)) - wethBefore, 1 ether, "only msg.value should be credited");
+    }
+
+    function test_unwrapNative_ignoresAmbientEthBalance_andCreditsOnlyUnwrappedAmount() public {
+        address user = makeAddr("user");
+        vm.deal(address(positionManager), 3 ether); // ambient ETH should not be auto-credited
+
+        vm.deal(user, 2 ether);
+        vm.prank(user);
+        weth9.deposit{value: 1 ether}();
+        vm.prank(user);
+        weth9.approve(address(positionManager), type(uint256).max);
+
+        MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](2);
+        prepared[0] = MMA.prepareUnwrapNative(1 ether, true);
+        prepared[1] = MMA.prepareTake(CurrencyLibrary.ADDRESS_ZERO, user, 1 ether);
+
+        uint256 ethBefore = user.balance;
+        vm.prank(user);
+        MMA.execute(positionManager, prepared);
+        assertEq(user.balance - ethBefore, 1 ether, "only unwrapped amount should be credited");
+    }
+
     function test_wrapNative_amountGtAvailableCredit_revertsInsufficientBalance() public {
         // Create less native credit than requested by sending smaller msg.value.
         MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](1);

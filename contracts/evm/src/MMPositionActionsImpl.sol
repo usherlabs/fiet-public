@@ -5,7 +5,7 @@ import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {BalanceDelta, toBalanceDelta} from "v4-periphery/lib/v4-core/src/types/BalanceDelta.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
-import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
+import {Currency, CurrencyLibrary} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {CurrencySettler} from "v4-periphery/lib/v4-core/test/utils/CurrencySettler.sol";
 import {PositionId, PositionLibrary, PositionModificationHookDataLib} from "./types/Position.sol";
 import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
@@ -310,6 +310,10 @@ contract MMPositionActionsImpl is
                 }
                 params.underlying0.transfer(address(params.vault), amt0);
             } else {
+                // Settle IN (deposit) of native ETH MUST come from MMPM balance.
+                if (params.underlying0 == CurrencyLibrary.ADDRESS_ZERO) {
+                    revert Errors.NativeTransferFromUnsupported(sender);
+                }
                 // Otherwise, pull only from the locker (msgSender()).
                 params.underlying0.transferFrom(sender, address(params.vault), amt0);
             }
@@ -323,6 +327,9 @@ contract MMPositionActionsImpl is
                 }
                 params.underlying1.transfer(address(params.vault), amt1);
             } else {
+                if (params.underlying1 == CurrencyLibrary.ADDRESS_ZERO) {
+                    revert Errors.NativeTransferFromUnsupported(sender);
+                }
                 params.underlying1.transferFrom(sender, address(params.vault), amt1);
             }
         }
@@ -331,9 +338,22 @@ contract MMPositionActionsImpl is
 
         // Process positive deltas (outflows from vault)
         if (params.usePositionManagerBalance) {
-            // Either sync received amounts
-            if (delta0 > 0 || delta1 > 0) {
-                _syncPairBalanceAsCredit(params.underlying0, params.underlying1);
+            // Either sync received amounts (non-native) or credit exact known native deltas.
+            if (delta0 > 0) {
+                uint256 amt0Out = LiquidityUtils.safeInt128ToUint256(delta0);
+                if (params.underlying0 == CurrencyLibrary.ADDRESS_ZERO) {
+                    _creditExact(params.underlying0, amt0Out);
+                } else {
+                    _syncBalanceAsCredit(params.underlying0);
+                }
+            }
+            if (delta1 > 0) {
+                uint256 amt1Out = LiquidityUtils.safeInt128ToUint256(delta1);
+                if (params.underlying1 == CurrencyLibrary.ADDRESS_ZERO) {
+                    _creditExact(params.underlying1, amt1Out);
+                } else {
+                    _syncBalanceAsCredit(params.underlying1);
+                }
             }
         } else {
             // or forward to the locker.

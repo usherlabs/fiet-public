@@ -60,4 +60,11 @@ abstract contract PositionManagerBase is ImmutableVTSState {
         // target = msgSender() = locker (delta recipient)
         vtsOrchestrator.sync(currency, address(this), msgSender());
     }
+
+    /// @notice Credits an exact known amount to the locker's delta
+    /// @param currency The currency to credit
+    /// @param amount The exact amount to credit
+    function _creditExact(Currency currency, uint256 amount) internal {
+        vtsOrchestrator.creditExact(currency, msgSender(), amount);
+    }
 }

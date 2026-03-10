@@ -40,12 +40,12 @@ abstract contract PositionManagerEntrypoint is PositionManagerBase {
     // ------------------------------------------------------------------------------------------------
 
     /// @notice Hook called before batch execution
-    /// @dev Handles native value sent with the transaction and syncs as credit
+    /// @dev Handles native value sent with the transaction and credits the exact msg.value amount
     function _beforeBatch() internal {
-        // Handle native value
+        // Handle native value EXACTLY once per batch.
         uint256 amount = TransientSlots.readMsgValueOnce();
         if (amount > 0) {
-            _syncBalanceAsCredit(CurrencyLibrary.ADDRESS_ZERO);
+            _creditExact(CurrencyLibrary.ADDRESS_ZERO, amount);
         }
     }
 

@@ -963,11 +963,12 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
     // ============ INTERNAL FUNCTIONS ============
 
     /**
-     * @dev Validates that the sender is a valid MarketVault with at least one native asset LCC
-     * @dev Reverts if the sender is not a MarketVault or if neither LCC uses native ETH as underlying
+     * @dev Validates that the sender is the canonical vault for a native-backed market
+     * @dev Reverts if sender identity is not canonical for the market derived from returned LCCs
      */
     function _assertValidEthSender() internal view {
         address sender = _msgSender();
+        if (sender.code.length == 0) revert Errors.InvalidEthSender();
 
         address l0;
         address l1;
@@ -981,8 +982,24 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
 
         bool valid0 = LCCFactoryLib.isValidLcc(s, l0);
         bool valid1 = LCCFactoryLib.isValidLcc(s, l1);
-        // Revert if either asset is not an LCC OR at least one of the underlying assets is NOT native ETH
-        if (!valid0 || !valid1 || (s.lccToUnderlying[l0] != address(0) && s.lccToUnderlying[l1] != address(0))) {
+        if (!valid0 || !valid1) {
+            revert Errors.InvalidEthSender();
+        }
+
+        Market memory m0 = s.lccToMarket[l0];
+        Market memory m1 = s.lccToMarket[l1];
+        if (m0.id == bytes32(0) || m1.id == bytes32(0) || m0.id != m1.id || m0.factory != m1.factory) {
+            revert Errors.InvalidEthSender();
+        }
+        if (!isFactory[m0.factory]) {
+            revert Errors.InvalidEthSender();
+        }
+        if (!IMarketFactory(m0.factory).isCanonicalVault(m0.id, sender)) {
+            revert Errors.InvalidEthSender();
+        }
+
+        // Require a native-backed market.
+        if (s.lccToUnderlying[l0] != address(0) && s.lccToUnderlying[l1] != address(0)) {
             revert Errors.InvalidEthSender();
         }
     }

@@ -135,6 +135,9 @@ library Errors {
     /// @notice Thrown when a transfer is not allowed
     error TransferNotAllowed();
 
+    /// @notice Thrown when native ETH transferFrom is attempted from a non-self source
+    error NativeTransferFromUnsupported(address from);
+
     /// @notice Thrown when a deadline has passed
     error DeadlinePassed(uint256 deadline);
 
