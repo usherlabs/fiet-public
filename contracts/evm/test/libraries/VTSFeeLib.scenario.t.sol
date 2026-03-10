@@ -495,20 +495,8 @@ contract VTSFeeLibScenarioTest is VTSOrchestratorFixture {
 
         uint256 potBefore = _slashedPot0();
 
-        // Attempt a withdrawal via onMMSettle; it will be clamped to 0 by vault mock
-        unlockCaller.run(
-            address(vtsOrchestrator),
-            abi.encodeWithSelector(
-                VTSOrchestrator.onMMSettle.selector,
-                IMarketVault(address(proxyHook)),
-                tokenId,
-                0,
-                corePoolKey.currency0,
-                corePoolKey.currency1,
-                toBalanceDelta(int128(10), int128(0)),
-                false
-            )
-        );
+        // Attempt a withdrawal via the MM router path; it will be clamped to 0 by vault mock.
+        _mmSettle(tokenId, 0, int128(10), int128(0));
 
         uint256 potAfter = _slashedPot0();
         // Fee pot is affected on swap, not on position modification

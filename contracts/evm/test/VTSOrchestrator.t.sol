@@ -3,6 +3,7 @@ pragma solidity ^0.8.26;
 
 import "forge-std/Test.sol";
 import {VTSOrchestratorFixture} from "./base/VTSOrchestratorFixture.sol";
+import {UnlockCaller} from "./base/VTSOrchestratorFixture.sol";
 import {VTSOrchestratorTestable} from "./base/VTSOrchestratorTestable.sol";
 import {VTSOrchestrator} from "../src/VTSOrchestrator.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
@@ -18,8 +19,8 @@ import {Errors} from "../src/libraries/Errors.sol";
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
 import {IPoolManager} from "v4-periphery/lib/v4-core/src/interfaces/IPoolManager.sol";
 import {RFSCheckpoint} from "../src/types/Checkpoint.sol";
-import {IMarketVault} from "../src/interfaces/IMarketVault.sol";
 import {IMarketFactory} from "../src/interfaces/IMarketFactory.sol";
+import {MarketFactory} from "../src/MarketFactory.sol";
 import {IOracleHelper} from "../src/interfaces/IOracleHelper.sol";
 import {IVRLSettlementObserver} from "../src/interfaces/IVRLSettlementObserver.sol";
 import {LiquiditySignal} from "../src/types/Commit.sol";
@@ -111,6 +112,26 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
 
     function _cumulativeDeficit(PositionId positionId) internal view returns (uint256 def0, uint256 def1) {
         (def0, def1,,,,) = _testableOrchestrator().getPositionAccounting(positionId);
+    }
+
+    function _lastPositionSettledMeta()
+        internal
+        returns (uint256 commitId, uint256 positionIndex, bool isSeizing, bool rfsOpen)
+    {
+        Vm.Log[] memory entries = vm.getRecordedLogs();
+        bytes32 sig = keccak256("PositionSettled(uint256,uint256,int128,int128,uint256,uint256,bool,bool)");
+
+        for (uint256 i = entries.length; i > 0; i--) {
+            Vm.Log memory entry = entries[i - 1];
+            if (entry.emitter == address(vtsOrchestrator) && entry.topics.length == 3 && entry.topics[0] == sig) {
+                commitId = uint256(entry.topics[1]);
+                positionIndex = uint256(entry.topics[2]);
+                (,,,, isSeizing, rfsOpen) = abi.decode(entry.data, (int128, int128, uint256, uint256, bool, bool));
+                return (commitId, positionIndex, isSeizing, rfsOpen);
+            }
+        }
+
+        revert("PositionSettled log not found");
     }
 
     function _mockSignalUsd(uint256 signalUsd) internal {
@@ -256,15 +277,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         BalanceDelta amountDelta = toBalanceDelta(-100, -100);
 
         vm.expectRevert(Errors.PoolManagerMustBeUnlocked.selector);
-        vtsOrchestrator.onMMSettle(
-            IMarketVault(address(proxyHook)),
-            tokenId,
-            0,
-            corePoolKey.currency0,
-            corePoolKey.currency1,
-            amountDelta,
-            false
-        );
+        vtsOrchestrator.onMMSettle(IMarketFactory(marketFactory), tokenId, 0, amountDelta, false);
     }
 
     function test_revert_onSeize_whenPoolManagerLocked() public {
@@ -979,23 +992,28 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         unlockCaller.run(
             address(vtsOrchestrator),
             abi.encodeWithSelector(
-                VTSOrchestrator.onMMSettle.selector,
-                IMarketVault(address(proxyHook)),
-                0,
-                0,
-                corePoolKey.currency0,
-                corePoolKey.currency1,
-                amountDelta,
-                false
+                VTSOrchestrator.onMMSettle.selector, IMarketFactory(marketFactory), 0, 0, amountDelta, false
             )
         );
     }
 
-    function test_onMMSettle_returnsSeizedLiquidityUnitsZero_whenNotSeizing_andRfsOpenMatchesCalcRFS() public {
+    function test_revert_onMMSettle_whenCallerIsNotPositionOwner_insideUnlock() public {
+        (uint256 tokenId,,,) = _createCommittedPosition();
+        BalanceDelta depositDelta = toBalanceDelta(int128(-1), int128(-1));
+
+        vm.expectRevert(Errors.InvalidSender.selector);
+        unlockCaller.run(
+            address(vtsOrchestrator),
+            abi.encodeWithSelector(
+                VTSOrchestrator.onMMSettle.selector, IMarketFactory(marketFactory), tokenId, 0, depositDelta, false
+            )
+        );
+    }
+
+    function test_onMMSettle_viaMmpm_emitsNonSeizingSettlement_andRfsOpenMatchesCalcRFS() public {
         (uint256 tokenId, PositionId positionId,,) = _createCommittedPosition();
         address advancer = liquiditySignal.mmState.advancer;
 
-        // Create a backing deficit via withCommitment checkpoint so RFS is meaningfully open.
         bytes memory signalBytes = abi.encode(liquiditySignal);
         vm.mockCall(
             address(signalManager),
@@ -1015,28 +1033,17 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
             address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, tokenId, 0, true)
         );
 
-        // Partial settlement to keep the RFS likely open.
         (uint256 cd0, uint256 cd1) = _commitmentDeficit(positionId);
         int128 pay0 = _negInt128Capped(cd0 / 2);
         int128 pay1 = _negInt128Capped(cd1 / 2);
-        BalanceDelta depositDelta = toBalanceDelta(pay0, pay1);
 
-        bytes memory out = unlockCaller.run(
-            address(vtsOrchestrator),
-            abi.encodeWithSelector(
-                VTSOrchestrator.onMMSettle.selector,
-                IMarketVault(address(proxyHook)),
-                tokenId,
-                0,
-                corePoolKey.currency0,
-                corePoolKey.currency1,
-                depositDelta,
-                false
-            )
-        );
+        vm.recordLogs();
+        _mmSettle(tokenId, 0, pay0, pay1);
 
-        (, bool rfsOpen, uint256 seizedLiquidityUnits) = abi.decode(out, (BalanceDelta, bool, uint256));
-        assertEq(seizedLiquidityUnits, 0, "seizedLiquidityUnits must be zero when not seizing");
+        (uint256 loggedCommitId, uint256 loggedPositionIndex, bool isSeizing, bool rfsOpen) = _lastPositionSettledMeta();
+        assertEq(loggedCommitId, tokenId, "PositionSettled commitId should match");
+        assertEq(loggedPositionIndex, 0, "PositionSettled positionIndex should match");
+        assertFalse(isSeizing, "non-seizing MM settlement must emit isSeizing=false");
 
         (bool rfsOpenExpected,) = vtsOrchestrator.calcRFS(positionId, false);
         assertEq(rfsOpen, rfsOpenExpected, "rfsOpen should match calcRFS result");
@@ -1121,11 +1128,40 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         );
     }
 
-    function test_onMMSettle_netsBackingDeficit_inPositionAccounting() public {
+    function test_revert_onMMSettle_whenFactoryInvalid_insideUnlock() public {
+        (uint256 tokenId,,,) = _createCommittedPosition();
+        BalanceDelta depositDelta = toBalanceDelta(int128(-1), int128(-1));
+        IMarketFactory invalidFactory = IMarketFactory(address(0xBEEF));
+
+        vm.expectRevert(Errors.InvalidSender.selector);
+        unlockCaller.run(
+            address(vtsOrchestrator),
+            abi.encodeWithSelector(VTSOrchestrator.onMMSettle.selector, invalidFactory, tokenId, 0, depositDelta, false)
+        );
+    }
+
+    function test_revert_onMMSettle_whenCallerBoundButNotPositionOwner_insideUnlock() public {
+        (uint256 tokenId,,,) = _createCommittedPosition();
+        BalanceDelta depositDelta = toBalanceDelta(int128(-1), int128(-1));
+
+        UnlockCaller boundCaller = new UnlockCaller(manager);
+        address[] memory extraBounds = new address[](1);
+        extraBounds[0] = address(boundCaller);
+        MarketFactory(marketFactory).addBounds(extraBounds);
+
+        vm.expectRevert(Errors.InvalidSender.selector);
+        boundCaller.run(
+            address(vtsOrchestrator),
+            abi.encodeWithSelector(
+                VTSOrchestrator.onMMSettle.selector, IMarketFactory(marketFactory), tokenId, 0, depositDelta, false
+            )
+        );
+    }
+
+    function test_onMMSettle_viaMmpm_netsBackingDeficit_inPositionAccounting() public {
         (uint256 tokenId, PositionId positionId,,) = _createCommittedPosition();
         address advancer = liquiditySignal.mmState.advancer;
 
-        // Create a backing deficit via withCommitment checkpoint
         bytes memory signalBytes = abi.encode(liquiditySignal);
         vm.mockCall(
             address(signalManager),
@@ -1148,26 +1184,7 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         assertTrue(cd0Before > 0 || cd1Before > 0, "Expected non-zero backing deficit before settlement");
         (, BalanceDelta rfsBefore) = vtsOrchestrator.calcRFS(positionId, false);
 
-        // Deposit enough to cover the commitment deficit (deposit is negative in caller-context delta)
-        BalanceDelta depositDelta = toBalanceDelta(_negInt128Capped(cd0Before), _negInt128Capped(cd1Before));
-
-        // Event must be emitted; only indexed fields are asserted (data unchecked).
-        vm.expectEmit(true, true, false, false, address(vtsOrchestrator));
-        emit PositionSettled(tokenId, 0, 0, 0, 0, 0, false, false);
-
-        unlockCaller.run(
-            address(vtsOrchestrator),
-            abi.encodeWithSelector(
-                VTSOrchestrator.onMMSettle.selector,
-                IMarketVault(address(proxyHook)),
-                tokenId,
-                0,
-                corePoolKey.currency0,
-                corePoolKey.currency1,
-                depositDelta,
-                false
-            )
-        );
+        _mmSettle(tokenId, 0, _negInt128Capped(cd0Before), _negInt128Capped(cd1Before));
 
         (uint256 cd0After, uint256 cd1After) = _commitmentDeficit(positionId);
         assertEq(cd0After, 0, "Backing deficit should be netted to zero (token0)");
@@ -1226,11 +1243,10 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         );
     }
 
-    function test_onMMSettle_partialDeposit_reducesBackingDeficit_proRata() public {
+    function test_onMMSettle_viaMmpm_partialDeposit_reducesBackingDeficit_proRata() public {
         (uint256 tokenId, PositionId positionId,,) = _createCommittedPosition();
         address advancer = liquiditySignal.mmState.advancer;
 
-        // Create a backing deficit
         bytes memory signalBytes = abi.encode(liquiditySignal);
         vm.mockCall(
             address(signalManager),
@@ -1253,24 +1269,24 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         assertTrue(cd0Before > 1, "Need non-trivial token0 deficit for partial reduction test");
 
         uint256 half0 = cd0Before / 2;
-        BalanceDelta depositDelta = toBalanceDelta(_negInt128Capped(half0), int128(0));
-        unlockCaller.run(
-            address(vtsOrchestrator),
-            abi.encodeWithSelector(
-                VTSOrchestrator.onMMSettle.selector,
-                IMarketVault(address(proxyHook)),
-                tokenId,
-                0,
-                corePoolKey.currency0,
-                corePoolKey.currency1,
-                depositDelta,
-                false
-            )
-        );
+        _mmSettle(tokenId, 0, _negInt128Capped(half0), int128(0));
 
         (uint256 cd0After, uint256 cd1After) = _commitmentDeficit(positionId);
         assertEq(cd0After, cd0Before - half0, "Partial settlement should reduce token0 deficit by deposit");
         assertEq(cd1After, cd1Before, "Partial settlement should not affect token1 deficit");
+    }
+
+    function test_revert_onMMSettle_whenSeizingButCallerNotPositionOwner_insideUnlock() public {
+        (uint256 tokenId,,,) = _createCommittedPosition();
+        BalanceDelta depositDelta = toBalanceDelta(int128(-1), int128(-1));
+
+        vm.expectRevert(Errors.InvalidSender.selector);
+        unlockCaller.run(
+            address(vtsOrchestrator),
+            abi.encodeWithSelector(
+                VTSOrchestrator.onMMSettle.selector, IMarketFactory(marketFactory), tokenId, 0, depositDelta, true
+            )
+        );
     }
 
     // ============================================================

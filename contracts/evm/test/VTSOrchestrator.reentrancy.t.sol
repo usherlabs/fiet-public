@@ -6,7 +6,6 @@ import "forge-std/Test.sol";
 import {VTSOrchestratorFixture} from "./base/VTSOrchestratorFixture.sol";
 import {VTSOrchestrator} from "../src/VTSOrchestrator.sol";
 import {LiquiditySignal} from "../src/types/Commit.sol";
-import {IMarketVault} from "../src/interfaces/IMarketVault.sol";
 import {IOracleHelper} from "../src/interfaces/IOracleHelper.sol";
 import {IVRLSettlementObserver} from "../src/interfaces/IVRLSettlementObserver.sol";
 import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
@@ -159,14 +158,7 @@ contract ReentrantSignalManager {
             BalanceDelta amountDelta = toBalanceDelta(0, 0);
             return target.call(
                 abi.encodeWithSelector(
-                    VTSOrchestrator.onMMSettle.selector,
-                    IMarketVault(marketVault),
-                    commitId,
-                    positionIndex,
-                    lccCurrency0,
-                    lccCurrency1,
-                    amountDelta,
-                    false
+                    VTSOrchestrator.onMMSettle.selector, marketFactory, commitId, positionIndex, amountDelta, false
                 )
             );
         }

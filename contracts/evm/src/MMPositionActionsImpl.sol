@@ -11,6 +11,7 @@ import {PositionId, PositionLibrary, PositionModificationHookDataLib} from "./ty
 import {SafeCast} from "v4-periphery/lib/v4-core/src/libraries/SafeCast.sol";
 import {StateLibrary} from "v4-periphery/lib/v4-core/src/libraries/StateLibrary.sol";
 import {IMarketVault} from "./interfaces/IMarketVault.sol";
+import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 import {IMMQueueCustodian} from "./interfaces/IMMQueueCustodian.sol";
 import {IMMPositionManager} from "./interfaces/IMMPositionManager.sol";
 import {Errors} from "./libraries/Errors.sol";
@@ -66,10 +67,9 @@ contract MMPositionActionsImpl is
     /// @notice Groups onMMSettle call parameters
     struct SettleCallParams {
         IMarketVault vault;
+        IMarketFactory factory;
         uint256 tokenId;
         uint256 positionIndex;
-        Currency currency0;
-        Currency currency1;
         BalanceDelta requestedDelta;
         bool isSeizing;
     }
@@ -284,13 +284,7 @@ contract MMPositionActionsImpl is
         returns (BalanceDelta settlementDelta, uint256 seizedLiquidityUnits)
     {
         (settlementDelta,, seizedLiquidityUnits) = vtsOrchestrator.onMMSettle(
-            params.vault,
-            params.tokenId,
-            params.positionIndex,
-            params.currency0,
-            params.currency1,
-            params.requestedDelta,
-            params.isSeizing
+            params.factory, params.tokenId, params.positionIndex, params.requestedDelta, params.isSeizing
         );
     }
 
@@ -392,10 +386,9 @@ contract MMPositionActionsImpl is
 
             callParams = SettleCallParams({
                 vault: _getVault(poolKey),
+                factory: marketFactory,
                 tokenId: tokenId,
                 positionIndex: positionIndex,
-                currency0: poolKey.currency0,
-                currency1: poolKey.currency1,
                 requestedDelta: toBalanceDelta(amount0, amount1),
                 isSeizing: isSeizing
             });
@@ -514,10 +507,9 @@ contract MMPositionActionsImpl is
             _callOnMMSettle(
                 SettleCallParams({
                     vault: _getVault(poolKey),
+                    factory: marketFactory,
                     tokenId: tokenId,
                     positionIndex: positionIndex,
-                    currency0: poolKey.currency0,
-                    currency1: poolKey.currency1,
                     requestedDelta: LiquidityUtils.safeToBalanceDelta(credit0, credit1, true, true),
                     isSeizing: false
                 })
@@ -576,10 +568,9 @@ contract MMPositionActionsImpl is
             _callOnMMSettle(
                 SettleCallParams({
                     vault: _getVault(poolKey),
+                    factory: marketFactory,
                     tokenId: tokenId,
                     positionIndex: positionIndex,
-                    currency0: poolKey.currency0,
-                    currency1: poolKey.currency1,
                     requestedDelta: LiquidityUtils.safeToBalanceDelta(credit0, credit1, true, true),
                     isSeizing: false
                 })
@@ -649,10 +640,9 @@ contract MMPositionActionsImpl is
 
                     callParams = SettleCallParams({
                         vault: _getVault(poolKey),
+                        factory: marketFactory,
                         tokenId: tokenId,
                         positionIndex: positionIndex,
-                        currency0: poolKey.currency0,
-                        currency1: poolKey.currency1,
                         requestedDelta: LiquidityUtils.safeToBalanceDelta(credit0, credit1, true, true),
                         isSeizing: isSeizing
                     });

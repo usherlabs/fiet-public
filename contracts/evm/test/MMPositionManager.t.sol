@@ -120,6 +120,27 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         assertEq(positionManager.ownerOf(expectedTokenId), address(this), "commit should mint NFT to expected owner");
     }
 
+    function test_commitSignal_forwardsFactoryAndLockerToVtsOrchestrator() public {
+        bytes memory liquiditySignalBytes = abi.encode(liquiditySignal);
+        uint256 expectedTokenId = positionManager.nextTokenId();
+
+        vm.expectCall(
+            address(vtsOrchestrator),
+            abi.encodeWithSelector(
+                bytes4(keccak256("commitSignal(address,address,bytes)")),
+                IMarketFactory(marketFactory),
+                address(this),
+                liquiditySignalBytes
+            )
+        );
+
+        MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](1);
+        prepared[0] = MMA.prepareCommit(liquiditySignalBytes);
+        MMA.executeWithUnlock(positionManager, prepared, block.timestamp + 3600);
+
+        assertEq(positionManager.ownerOf(expectedTokenId), address(this), "commit should mint NFT to expected owner");
+    }
+
     /// @notice Mutation-killer: proves DECOMMIT_SIGNAL emits `SignalDecommitted(tokenId, positionCount)` and burns the NFT.
     /// @dev We commit without minting any positions, so `positionCount == 0` deterministically.
     function test_decommitSignal_emitsSignalDecommitted() public {
@@ -204,6 +225,31 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         // validate the expiry is updated
         assertEq(expiresAtAfter + 1, newTimestamp + expiresAtPrevious);
+    }
+
+    function test_renewSignal_forwardsFactoryAndLockerToVtsOrchestrator() public {
+        bytes memory liquiditySignalBytes = abi.encode(liquiditySignal);
+        uint256 tokenId = positionManager.nextTokenId();
+
+        MMA.PreparedAction[] memory prepared = new MMA.PreparedAction[](1);
+        prepared[0] = MMA.prepareCommit(liquiditySignalBytes);
+        MMA.executeWithUnlock(positionManager, prepared, block.timestamp + 3600);
+
+        LiquiditySignal memory sameOwnerRenew = liquiditySignal;
+        sameOwnerRenew.nonce += 1;
+        bytes memory renewBytes = abi.encode(sameOwnerRenew);
+
+        vm.expectCall(
+            address(vtsOrchestrator),
+            abi.encodeWithSelector(
+                bytes4(keccak256("renewSignal(address,address,uint256,bytes)")),
+                IMarketFactory(marketFactory),
+                address(this),
+                tokenId,
+                renewBytes
+            )
+        );
+        MMA.renew(positionManager, tokenId, renewBytes);
     }
 
     function testCanWrapAndUnwrapNativeAsset() public {

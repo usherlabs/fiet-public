@@ -1490,11 +1490,9 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
             address(vtsOrchestrator),
             abi.encodeWithSelector(
                 IVTSOrchestrator.onMMSettle.selector,
-                mv,
+                IMarketFactory(marketFactory),
                 tokenId,
                 positionIndex,
-                corePoolKey.currency0,
-                corePoolKey.currency1,
                 expectedDelta,
                 true
             )

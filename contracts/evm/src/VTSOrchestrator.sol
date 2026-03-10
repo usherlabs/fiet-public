@@ -165,6 +165,9 @@ contract VTSOrchestrator is
         view
         returns (address effectiveSender)
     {
+        // The factory argument is required because sender forwarding is only safe within a specific market's
+        // protocol-bound namespace. Without validating the factory and checking caller bounds against it,
+        // any contract inside PoolManager.unlock() could fabricate `sender = owner/advancer` and bump MM nonce.
         if (!liquidityHub.isFactory(address(factory))) revert Errors.InvalidSender();
         address caller = _msgSender();
         if (MarketHandlerLib.isBounds(factory, caller)) {
@@ -298,6 +301,31 @@ contract VTSOrchestrator is
         IMarketFactory factory =
             liquidityHub.getFactory(Currency.unwrap(poolKey.currency0), Currency.unwrap(poolKey.currency1));
         return MarketHandlerLib.getVault(factory, poolKey.toId());
+    }
+
+    /// @dev Build canonical MM settle parameters from stored position context.
+    function _buildMMSettleParams(
+        IMarketFactory factory,
+        PositionId positionId,
+        PoolId poolId,
+        BalanceDelta amountDelta,
+        bool isSeizing
+    ) internal view returns (SettleParams memory params) {
+        Pool memory pool = s.pools[poolId];
+        Currency currency0 = pool.currency0;
+        Currency currency1 = pool.currency1;
+        IMarketFactory canonicalFactory =
+            liquidityHub.getFactory(Currency.unwrap(currency0), Currency.unwrap(currency1));
+        if (address(canonicalFactory) != address(factory)) revert Errors.InvalidSender();
+
+        params = SettleParams({
+            vault: MarketHandlerLib.getVault(factory, poolId),
+            positionId: positionId,
+            lccCurrency0: currency0,
+            lccCurrency1: currency1,
+            delta: amountDelta,
+            isSeizing: isSeizing
+        });
     }
 
     // --------------------------------------------------
@@ -686,22 +714,18 @@ contract VTSOrchestrator is
     /// @notice Settle a market maker position
     /// @dev Called by MMPositionManager to settle a position, handling both normal settlement and seizure.
     ///      Position validation is performed inside VTSPositionLib.onMMSettle.
-    /// @param marketVault The market vault contract
+    /// @param factory The market factory namespace for caller-bound validation
     /// @param commitId The commit identifier
     /// @param positionIndex The position index within the commit
-    /// @param currency0 The currency0 token
-    /// @param currency1 The currency1 token
     /// @param amountDelta The amount delta for settlement
     /// @param isSeizing Whether the position is being seized
     /// @return settlementDelta The settlement balance delta
     /// @return rfsOpen Whether the RFS is open after settlement
     /// @return seizedLiquidityUnits The amount of liquidity units seized (0 if not seizing)
     function onMMSettle(
-        IMarketVault marketVault,
+        IMarketFactory factory,
         uint256 commitId,
         uint256 positionIndex,
-        Currency currency0,
-        Currency currency1,
         BalanceDelta amountDelta,
         bool isSeizing
     )
@@ -711,19 +735,20 @@ contract VTSOrchestrator is
         returns (BalanceDelta settlementDelta, bool rfsOpen, uint256 seizedLiquidityUnits)
     {
         _assertSignalValid(commitId, !isSeizing);
+        if (!liquidityHub.isFactory(address(factory))) revert Errors.InvalidSender();
 
-        // Build params in scoped block to free stack
-        SettleParams memory params;
-        {
-            params = SettleParams({
-                vault: marketVault,
-                positionId: getPositionId(commitId, positionIndex),
-                lccCurrency0: currency0,
-                lccCurrency1: currency1,
-                delta: amountDelta,
-                isSeizing: isSeizing
-            });
+        PositionId positionId = getPositionId(commitId, positionIndex);
+        _assertPositionValid(positionId, false);
+
+        Position memory pos = s.positions[positionId];
+        if (_msgSender() != pos.owner) revert Errors.InvalidSender();
+        if (!MarketHandlerLib.isBounds(factory, _msgSender())) revert Errors.InvalidSender();
+
+        if (isSeizing) {
+            CheckpointLibrary.isSeizable(s, commitId, positionIndex, true);
         }
+
+        SettleParams memory params = _buildMMSettleParams(factory, positionId, pos.poolId, amountDelta, isSeizing);
 
         // Execute settlement
         SettleResult memory result = VTSPositionLib.onMMSettle(s, poolManager, params);

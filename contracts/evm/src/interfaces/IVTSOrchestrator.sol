@@ -13,7 +13,6 @@ import {RFSCheckpoint} from "../types/Checkpoint.sol";
 import {IPausableVTS} from "./IPausableVTS.sol";
 import {IVTSCurrencyDelta} from "./IVTSCurrencyDelta.sol";
 import {IVTSAdmin} from "./IVTSAdmin.sol";
-import {IMarketVault} from "./IMarketVault.sol";
 import {IMarketFactory} from "./IMarketFactory.sol";
 
 interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin {
@@ -253,22 +252,18 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin {
 
     /// @notice Settle a market maker position
     /// @dev Called by MMPositionManager to settle a position, handling both normal settlement and seizure
-    /// @param marketVault The market vault contract
+    /// @param factory The market factory namespace for caller-bound validation
     /// @param commitId The commit identifier
     /// @param positionIndex The position index within the commit
-    /// @param currency0 The currency0 token
-    /// @param currency1 The currency1 token
     /// @param amountDelta The amount delta for settlement
     /// @param isSeizing Whether the position is being seized
     /// @return settlementDelta The settlement balance delta
     /// @return rfsOpen Whether the RFS is open after settlement
     /// @return seizedLiquidityUnits The amount of liquidity units seized (0 if not seizing)
     function onMMSettle(
-        IMarketVault marketVault,
+        IMarketFactory factory,
         uint256 commitId,
         uint256 positionIndex,
-        Currency currency0,
-        Currency currency1,
         BalanceDelta amountDelta,
         bool isSeizing
     ) external returns (BalanceDelta settlementDelta, bool rfsOpen, uint256 seizedLiquidityUnits);
