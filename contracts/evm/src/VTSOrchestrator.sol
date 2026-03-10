@@ -780,6 +780,21 @@ contract VTSOrchestrator is
         // Validate commit exists (but don't require live signal - expired signals can be seized)
         _assertSignalValid(commitId, false);
 
+        PositionId positionId = getPositionId(commitId, positionIndex);
+        _assertPositionValid(positionId, true);
+
+        // Hardening: do not trust previously stored commitment-deficit state on its
+        // own. If a deficit exists, recompute it from the latest backing snapshot
+        // before checking seizability so an attacker cannot create durable seize
+        // eligibility from a stale or transiently-manipulated checkpoint.
+        PositionAccounting storage pa = s.positionAccounting[positionId];
+        if (pa.commitmentDeficit.token0 > 0 || pa.commitmentDeficit.token1 > 0) {
+            // Settle growths first so the refreshed commitment check and the seize
+            // decision both use a coherent position snapshot.
+            VTSPositionLib.settlePositionGrowths(s, poolManager, positionId);
+            VTSCommitLib.checkpointWithCommitment(s, poolManager, oracleHelper, commitId, positionId);
+        }
+
         // Validate grace period has elapsed (reverts if not)
         CheckpointLibrary.isSeizable(
             s,

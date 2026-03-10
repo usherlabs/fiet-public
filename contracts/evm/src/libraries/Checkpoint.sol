@@ -27,8 +27,9 @@ library CheckpointLibrary {
      * @notice Determines if a position is open for seizure
      * @dev Two paths to seizability:
      *      1. Deficit path: position-level commitment deficit > 0 bypasses grace when configured gates pass:
+     *         - token-specific minimum deficit age is met, and
      *         - `commitmentDeficitBps >= unbackedCommitmentGraceBypassBps`, or
-     *         - optional token thresholds (when set > 0) are breached
+     *         - optional per-token thresholds (when set > 0) are breached
      *      2. Normal RFS path: checkpoint isOpen AND grace period elapsed
      * @param s The VTS storage struct
      * @param commitId The token ID to check
@@ -50,17 +51,37 @@ library CheckpointLibrary {
         if (pa.commitmentDeficit.token0 > 0 || pa.commitmentDeficit.token1 > 0) {
             Position memory deficitPosition = s.positions[positionId];
             MarketVTSConfiguration memory deficitCfg = s.pools[deficitPosition.poolId].vtsConfig;
-            if (pa.commitmentDeficitBps >= deficitCfg.unbackedCommitmentGraceBypassBps) {
-                return true;
-            }
+            bool bpsBypass = pa.commitmentDeficitBps >= deficitCfg.unbackedCommitmentGraceBypassBps;
 
-            // Optional absolute-deficit bypass (for large notional positions):
-            // only considered when the bps-based bypass did not trigger.
-            bool token0ThresholdTriggered = deficitCfg.unbackedCommitmentGraceBypassThreshold0 > 0
-                && pa.commitmentDeficit.token0 >= deficitCfg.unbackedCommitmentGraceBypassThreshold0;
-            bool token1ThresholdTriggered = deficitCfg.unbackedCommitmentGraceBypassThreshold1 > 0
-                && pa.commitmentDeficit.token1 >= deficitCfg.unbackedCommitmentGraceBypassThreshold1;
-            if (token0ThresholdTriggered || token1ThresholdTriggered) {
+            uint256 token0BypassTime = deficitCfg.token0.unbackedCommitmentGraceBypassTime;
+            uint256 token1BypassTime = deficitCfg.token1.unbackedCommitmentGraceBypassTime;
+            // Hardening: a commitment deficit must persist for a minimum time before
+            // it can bypass grace. This prevents a freshly-written checkpoint snapshot
+            // from being used as an instant seize trigger if it was created during a
+            // short-lived adverse price move.
+            bool token0AgeMet = token0BypassTime == 0
+                || (pa.commitmentDeficitSince.token0 > 0
+                    && pa.commitmentDeficitSince.token0 <= block.timestamp
+                    && (block.timestamp - pa.commitmentDeficitSince.token0) >= token0BypassTime);
+            bool token1AgeMet = token1BypassTime == 0
+                || (pa.commitmentDeficitSince.token1 > 0
+                    && pa.commitmentDeficitSince.token1 <= block.timestamp
+                    && (block.timestamp - pa.commitmentDeficitSince.token1) >= token1BypassTime);
+
+            bool token0ThresholdTriggered = deficitCfg.token0.unbackedCommitmentGraceBypassThreshold > 0
+                && pa.commitmentDeficit.token0 >= deficitCfg.token0.unbackedCommitmentGraceBypassThreshold;
+            bool token1ThresholdTriggered = deficitCfg.token1.unbackedCommitmentGraceBypassThreshold > 0
+                && pa.commitmentDeficit.token1 >= deficitCfg.token1.unbackedCommitmentGraceBypassThreshold;
+
+            // A token can only bypass grace once it is both severe enough and old
+            // enough. The shared bps threshold still captures overall under-backing
+            // severity, while the token-local threshold handles large single-token
+            // deficits without treating every fresh deficit as immediately seizable.
+            bool token0Bypass =
+                pa.commitmentDeficit.token0 > 0 && token0AgeMet && (bpsBypass || token0ThresholdTriggered);
+            bool token1Bypass =
+                pa.commitmentDeficit.token1 > 0 && token1AgeMet && (bpsBypass || token1ThresholdTriggered);
+            if (token0Bypass || token1Bypass) {
                 return true;
             }
         }

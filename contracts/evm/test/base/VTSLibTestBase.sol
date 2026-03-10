@@ -60,7 +60,9 @@ abstract contract VTSLibTestBase is MarketTestBase {
         TokenConfiguration memory tokenConfig = TokenConfiguration({
             gracePeriodTime: DEFAULT_GRACE_PERIOD,
             baseVTSRate: DEFAULT_BASE_VTS_RATE,
-            maxGracePeriodTime: DEFAULT_MAX_GRACE_PERIOD
+            maxGracePeriodTime: DEFAULT_MAX_GRACE_PERIOD,
+            unbackedCommitmentGraceBypassTime: 0,
+            unbackedCommitmentGraceBypassThreshold: 0
         });
 
         return MarketVTSConfiguration({
@@ -68,9 +70,7 @@ abstract contract VTSLibTestBase is MarketTestBase {
             token1: tokenConfig,
             coverageFeeShare: DEFAULT_COVERAGE_FEE_SHARE,
             minResidualUnits: DEFAULT_MIN_RESIDUAL_UNITS,
-            unbackedCommitmentGraceBypassBps: 500,
-            unbackedCommitmentGraceBypassThreshold0: 0,
-            unbackedCommitmentGraceBypassThreshold1: 0
+            unbackedCommitmentGraceBypassBps: 500
         });
     }
 

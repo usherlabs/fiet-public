@@ -891,6 +891,29 @@ contract VTSOrchestratorTest is VTSOrchestratorFixture {
         unlockCaller.run(address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.onSeize.selector, tokenId, 0));
     }
 
+    function test_onSeize_recomputesCommitmentDeficit_beforeBypass() public {
+        (uint256 tokenId, PositionId positionId,,) = _createCommittedPosition();
+        address advancer = liquiditySignal.mmState.advancer;
+
+        // Create a deficit snapshot first.
+        _mockLccPrices(1e18, 1e18);
+        _mockSignalUsd(0);
+        vm.prank(advancer);
+        unlockCaller.run(
+            address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.checkpoint.selector, tokenId, 0, true)
+        );
+
+        (uint256 cd0Before, uint256 cd1Before) = _commitmentDeficit(positionId);
+        assertTrue(cd0Before > 0 || cd1Before > 0, "expected non-zero commitment deficit before signal recovery");
+
+        // Recover backing without running another explicit checkpoint.
+        _mockSignalUsd(1e30);
+
+        // onSeize must recompute commitment deficit and reject stale bypass.
+        vm.expectRevert();
+        unlockCaller.run(address(vtsOrchestrator), abi.encodeWithSelector(VTSOrchestrator.onSeize.selector, tokenId, 0));
+    }
+
     function test_revert_checkpoint_whenCommitInvalid_insideUnlock() public {
         vm.expectRevert(abi.encodeWithSelector(Errors.InvalidSignal.selector, uint256(0)));
         unlockCaller.run(

@@ -30,6 +30,11 @@ library TransientSlots {
         }
     }
 
+    /// @dev Clears the native msg.value read guard to keep it scoped to a single batch.
+    function clearMsgValueRead() internal {
+        TransientSlot.asBoolean(TransientSlots.NATIVE_VALUE_READ_SLOT).tstore(false);
+    }
+
     // ------------------------------
     // Seizure helpers
     // ------------------------------

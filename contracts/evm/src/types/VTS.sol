@@ -21,6 +21,10 @@ struct TokenConfiguration {
     uint256 baseVTSRate;
     // Max grace period time
     uint256 maxGracePeriodTime;
+    // Minimum time a non-zero commitment deficit must persist before grace bypass is allowed (0 disables age gating)
+    uint256 unbackedCommitmentGraceBypassTime;
+    // Optional token deficit threshold used only when deficit bps is below bypass bps (0 disables)
+    uint256 unbackedCommitmentGraceBypassThreshold;
 }
 
 // forge-lint: disable-next-line(pascal-case-struct)
@@ -35,10 +39,6 @@ struct MarketVTSConfiguration {
     uint256 minResidualUnits;
     // Commitment deficit severity threshold (bps) above which grace bypass is allowed
     uint16 unbackedCommitmentGraceBypassBps;
-    // Optional token0 deficit threshold used only when deficit bps is below bypass bps (0 disables)
-    uint256 unbackedCommitmentGraceBypassThreshold0;
-    // Optional token1 deficit threshold used only when deficit bps is below bypass bps (0 disables)
-    uint256 unbackedCommitmentGraceBypassThreshold1;
 }
 
 /// @notice Context struct for position processing dependencies
@@ -133,6 +133,8 @@ struct PositionAccounting {
     TokenPairUint commitmentDeficit;
     // Commitment deficit severity in bps (0-10000), updated by commitment checkpoints
     uint16 commitmentDeficitBps;
+    // Timestamp at which commitment deficit became non-zero per token (0 when token deficit is zero)
+    TokenPairUint commitmentDeficitSince;
     // Fees shared by position per token
     TokenPairUint feesShared;
     // Pending fee adjustments per token: +slash (reduces payout), -bonus (increases payout)

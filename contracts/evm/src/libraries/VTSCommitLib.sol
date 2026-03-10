@@ -54,6 +54,18 @@ library VTSCommitLib {
         int256 liquidityDelta;
     }
 
+    function _writeCommitmentDeficitToken(PositionAccounting storage pa, uint8 tokenIndex, uint256 nextDeficit)
+        internal
+    {
+        uint256 prevDeficit = pa.commitmentDeficit.get(tokenIndex);
+        pa.commitmentDeficit.set(tokenIndex, nextDeficit);
+        if (nextDeficit == 0) {
+            pa.commitmentDeficitSince.set(tokenIndex, 0);
+        } else if (prevDeficit == 0) {
+            pa.commitmentDeficitSince.set(tokenIndex, block.timestamp);
+        }
+    }
+
     /// @notice Calculates the USD value of the position's issued commitment
     /// @param oracleHelper The oracle helper for USD price calculations
     /// @param currency0 The currency 0
@@ -325,8 +337,8 @@ library VTSCommitLib {
         }
 
         if (ctx.issuedUsd == 0) {
-            pa.commitmentDeficit.token0 = 0;
-            pa.commitmentDeficit.token1 = 0;
+            _writeCommitmentDeficitToken(pa, 0, 0);
+            _writeCommitmentDeficitToken(pa, 1, 0);
             pa.commitmentDeficitBps = 0;
             return;
         }
@@ -349,8 +361,8 @@ library VTSCommitLib {
                 uint256 surplusUsd = backingUsd - ctx.issuedUsd;
                 if (surplusUsd >= currentDeficitUsd) {
                     // Is the difference in value backing vs issued sufficient to cover the deficit?
-                    pa.commitmentDeficit.token0 = 0;
-                    pa.commitmentDeficit.token1 = 0;
+                    _writeCommitmentDeficitToken(pa, 0, 0);
+                    _writeCommitmentDeficitToken(pa, 1, 0);
                 } else {
                     // Reduce the deficit proportionally to the surplus.
                     uint256 reduce0 = FullMath.mulDiv(pa.commitmentDeficit.token0, surplusUsd, currentDeficitUsd);
@@ -359,13 +371,13 @@ library VTSCommitLib {
                     if (reduce0 > pa.commitmentDeficit.token0) reduce0 = pa.commitmentDeficit.token0;
                     if (reduce1 > pa.commitmentDeficit.token1) reduce1 = pa.commitmentDeficit.token1;
 
-                    pa.commitmentDeficit.token0 -= reduce0;
-                    pa.commitmentDeficit.token1 -= reduce1;
+                    _writeCommitmentDeficitToken(pa, 0, pa.commitmentDeficit.token0 - reduce0);
+                    _writeCommitmentDeficitToken(pa, 1, pa.commitmentDeficit.token1 - reduce1);
                 }
             } else {
                 // Zero out deficit if no value.
-                pa.commitmentDeficit.token0 = 0;
-                pa.commitmentDeficit.token1 = 0;
+                _writeCommitmentDeficitToken(pa, 0, 0);
+                _writeCommitmentDeficitToken(pa, 1, 0);
             }
 
             return;
@@ -376,8 +388,8 @@ library VTSCommitLib {
             uint256 deficitUsd = ctx.issuedUsd - backingUsd;
             uint256 deficitBps = FullMath.mulDiv(deficitUsd, LiquidityUtils.BPS_DENOMINATOR, ctx.issuedUsd);
             pa.commitmentDeficitBps = uint16(deficitBps);
-            pa.commitmentDeficit.token0 = FullMath.mulDiv(ctx.eff0, deficitBps, LiquidityUtils.BPS_DENOMINATOR);
-            pa.commitmentDeficit.token1 = FullMath.mulDiv(ctx.eff1, deficitBps, LiquidityUtils.BPS_DENOMINATOR);
+            _writeCommitmentDeficitToken(pa, 0, FullMath.mulDiv(ctx.eff0, deficitBps, LiquidityUtils.BPS_DENOMINATOR));
+            _writeCommitmentDeficitToken(pa, 1, FullMath.mulDiv(ctx.eff1, deficitBps, LiquidityUtils.BPS_DENOMINATOR));
         }
     }
 

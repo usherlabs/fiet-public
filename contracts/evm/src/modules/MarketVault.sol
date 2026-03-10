@@ -192,8 +192,10 @@ abstract contract MarketVault is IMarketVault, ImmutableState, ImmutableMarketSt
         liquidityHub.prepareSettle(address(lccToken), amount);
 
         Currency uaCurrency = Currency.wrap(lccToken.underlying());
-        // CurrencySettler handles transfer of native ETH from address(this), assuming LiquidityHub conducts native transfer to this first.
-        _settleUnderlyingToVaultFromSender(uaCurrency, address(liquidityHub), amount);
+        // For native ETH, LiquidityHub transfers ETH to this vault first, so settle from self.
+        // For ERC20, pull from LiquidityHub after prepareSettle approval.
+        address payer = uaCurrency.isAddressZero() ? address(this) : address(liquidityHub);
+        _settleUnderlyingToVaultFromSender(uaCurrency, payer, amount);
     }
 
     /**

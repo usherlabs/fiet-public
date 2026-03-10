@@ -60,6 +60,7 @@ contract MockPoolManager_Min {
 
 contract MockLiquidityHub_Min {
     mapping(address => uint256) internal _queued;
+    address internal _nativeSettleLcc;
 
     // observability
     address public lastConfirmLcc;
@@ -106,7 +107,16 @@ contract MockLiquidityHub_Min {
         queueCalls++;
     }
 
-    function prepareSettle(address, uint256) external {}
+    function setNativeSettleLcc(address lcc) external {
+        _nativeSettleLcc = lcc;
+    }
+
+    function prepareSettle(address lcc, uint256 amount) external {
+        if (lcc == _nativeSettleLcc) {
+            (bool ok,) = payable(msg.sender).call{value: amount}("");
+            require(ok, "native settle transfer failed");
+        }
+    }
 
     receive() external payable {}
 }
@@ -207,6 +217,10 @@ contract MarketVaultUnitHarness is MarketVault {
 
     function exposed_settleUnderlyingToVaultFromSender(Currency c, address sender, uint256 amount) external {
         _settleUnderlyingToVaultFromSender(c, sender, amount);
+    }
+
+    function exposed_settleUnderlyingToVaultFromHub(ILCC lcc, uint256 amount) external {
+        _settleUnderlyingToVaultFromHub(lcc, amount);
     }
 
     function exposed_settleObligationsForLCC(ILCC lcc) external {
@@ -369,6 +383,26 @@ contract MarketVaultUnitTest is Test {
 
         assertEq(pm.balanceOf(address(vault), c.toId()), amount);
         assertEq(ua.balanceOf(address(pm)), amount);
+    }
+
+    function test_settleUnderlyingToVaultFromHub_native_settlesFromVaultBalance() public {
+        MockLiquidityHub_Min hub = new MockLiquidityHub_Min();
+        (MarketVaultUnitHarness vault, MockPoolManager_Min pm, MockMarketFactory_Min mf,, MockLCC lccNative,) =
+            _deployVaultWithHub(address(hub));
+
+        uint256 amount = 5;
+        Currency nativeC = Currency.wrap(address(0));
+
+        // Hub must be protocol-bound so MarketVault.receive() accepts prepareSettle transfer.
+        mf.setBound(address(hub), true);
+        hub.setNativeSettleLcc(address(lccNative));
+        vm.deal(address(hub), amount);
+
+        vault.exposed_settleUnderlyingToVaultFromHub(ILCC(address(lccNative)), amount);
+
+        assertEq(pm.balanceOf(address(vault), nativeC.toId()), amount);
+        assertEq(address(pm).balance, amount);
+        assertEq(address(hub).balance, 0);
     }
 
     function test_dryModifyLiquidities_adjustsWithdrawalDownToAvailable() public {

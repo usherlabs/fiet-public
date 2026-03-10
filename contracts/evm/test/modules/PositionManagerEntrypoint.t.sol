@@ -83,9 +83,19 @@ contract PositionManagerEntrypointHarness is PositionManagerEntrypoint {
     }
 }
 
+contract BeforeAfterBatchCaller {
+    function callZeroThenOne(PositionManagerEntrypointHarness harness) external payable {
+        if (msg.value != 1) revert();
+        harness.exposeBeforeBatch{value: 0}();
+        harness.exposeAfterBatch();
+        harness.exposeBeforeBatch{value: 1}();
+    }
+}
+
 contract PositionManagerEntrypointTest is Test {
     PositionManagerEntrypointHarness internal h;
     DelegationImpl internal impl;
+    BeforeAfterBatchCaller internal caller;
 
     address internal hub;
     address internal factory;
@@ -103,6 +113,7 @@ contract PositionManagerEntrypointTest is Test {
         vm.etch(orch, hex"00");
         impl = new DelegationImpl();
         h = new PositionManagerEntrypointHarness(factory, orch, address(impl), locker);
+        caller = new BeforeAfterBatchCaller();
     }
 
     function test_delegateToImpl_success() public {
@@ -128,6 +139,16 @@ contract PositionManagerEntrypointTest is Test {
         );
         vm.expectCall(orch, abi.encodeWithSignature("creditExact(address,address,uint256)", address(0), locker, 1));
         h.exposeBeforeBatch{value: 1}();
+    }
+
+    function test_beforeBatch_zeroThenNonZero_afterBatchClearsReadGuard_andCreditsSecondCall() public {
+        vm.mockCall(
+            orch,
+            abi.encodeWithSignature("creditExact(address,address,uint256)", address(0), locker, 1),
+            abi.encode(int128(1))
+        );
+        vm.expectCall(orch, abi.encodeWithSignature("creditExact(address,address,uint256)", address(0), locker, 1));
+        caller.callZeroThenOne{value: 1}(h);
     }
 
     function test_afterBatch_callsAssertNonZeroDeltas() public {

@@ -54,6 +54,7 @@ abstract contract PositionManagerEntrypoint is PositionManagerBase {
     function _afterBatch() internal {
         // Clear any per-batch transient context to avoid same-tx leakage into subsequent batches.
         TransientSlots.clearSeizedPositionId();
+        TransientSlots.clearMsgValueRead();
         // Assert that deltas are non-zero after batch execution
         vtsOrchestrator.assertNonZeroDeltas();
     }

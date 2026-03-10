@@ -91,6 +91,11 @@ contract VTSCommitLibHarness {
         s.positionAccounting[id].commitmentDeficit.token1 = deficit1;
     }
 
+    function setPositionCommitmentDeficitSince(PositionId id, uint256 since0, uint256 since1) external {
+        s.positionAccounting[id].commitmentDeficitSince.token0 = since0;
+        s.positionAccounting[id].commitmentDeficitSince.token1 = since1;
+    }
+
     function setCommitExpiresAt(uint256 commitId, uint256 expiresAt) external {
         s.commits[commitId].expiresAt = expiresAt;
     }
@@ -155,19 +160,26 @@ contract VTSCommitLibHarness {
         return s.positionAccounting[id].commitmentDeficitBps;
     }
 
+    function getPositionCommitmentDeficitSince(PositionId id) external view returns (uint256 since0, uint256 since1) {
+        return (
+            s.positionAccounting[id].commitmentDeficitSince.token0,
+            s.positionAccounting[id].commitmentDeficitSince.token1
+        );
+    }
+
     // ============ Internal Helpers ============
 
     function _emptyConfig() internal pure returns (MarketVTSConfiguration memory cfg) {
         // Keep the harness independent from MarketTestBase defaults; commit lib doesn't read config.
-        TokenConfiguration memory tc = TokenConfiguration({gracePeriodTime: 0, baseVTSRate: 0, maxGracePeriodTime: 0});
+        TokenConfiguration memory tc = TokenConfiguration({
+            gracePeriodTime: 0,
+            baseVTSRate: 0,
+            maxGracePeriodTime: 0,
+            unbackedCommitmentGraceBypassTime: 0,
+            unbackedCommitmentGraceBypassThreshold: 0
+        });
         cfg = MarketVTSConfiguration({
-            token0: tc,
-            token1: tc,
-            coverageFeeShare: 0,
-            minResidualUnits: 0,
-            unbackedCommitmentGraceBypassBps: 0,
-            unbackedCommitmentGraceBypassThreshold0: 0,
-            unbackedCommitmentGraceBypassThreshold1: 0
+            token0: tc, token1: tc, coverageFeeShare: 0, minResidualUnits: 0, unbackedCommitmentGraceBypassBps: 0
         });
     }
 }

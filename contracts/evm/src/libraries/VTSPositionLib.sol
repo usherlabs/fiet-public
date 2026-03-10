@@ -237,7 +237,11 @@ library VTSPositionLib {
                 if (delta > 0 && cd > 0) {
                     uint256 coverCd = uint256(delta) > cd ? cd : uint256(delta);
                     if (coverCd > 0) {
-                        pa.commitmentDeficit.set(tokenIndex, cd - coverCd);
+                        uint256 nextCd = cd - coverCd;
+                        pa.commitmentDeficit.set(tokenIndex, nextCd);
+                        if (nextCd == 0) {
+                            pa.commitmentDeficitSince.set(tokenIndex, 0);
+                        }
                         delta -= int256(coverCd);
                         deficitCoverage += coverCd;
                     }

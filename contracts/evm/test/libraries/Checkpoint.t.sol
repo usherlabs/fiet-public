@@ -86,11 +86,17 @@ contract CheckpointHarness {
         s.pools[poolId].vtsConfig.unbackedCommitmentGraceBypassBps = bps;
     }
 
-    function setUnbackedCommitmentGraceBypassThresholds(PoolId poolId, uint256 threshold0, uint256 threshold1)
-        external
-    {
-        s.pools[poolId].vtsConfig.unbackedCommitmentGraceBypassThreshold0 = threshold0;
-        s.pools[poolId].vtsConfig.unbackedCommitmentGraceBypassThreshold1 = threshold1;
+    function setUnbackedCommitmentGraceBypassConfig(
+        PoolId poolId,
+        uint256 bypassTime0,
+        uint256 bypassTime1,
+        uint256 threshold0,
+        uint256 threshold1
+    ) external {
+        s.pools[poolId].vtsConfig.token0.unbackedCommitmentGraceBypassTime = bypassTime0;
+        s.pools[poolId].vtsConfig.token1.unbackedCommitmentGraceBypassTime = bypassTime1;
+        s.pools[poolId].vtsConfig.token0.unbackedCommitmentGraceBypassThreshold = threshold0;
+        s.pools[poolId].vtsConfig.token1.unbackedCommitmentGraceBypassThreshold = threshold1;
     }
 
     function setCommitPosition(uint256 commitId, uint256 positionIndex, PositionId positionId) external {
@@ -100,6 +106,11 @@ contract CheckpointHarness {
     function setCommitmentDeficit(PositionId positionId, uint256 deficit0, uint256 deficit1) external {
         s.positionAccounting[positionId].commitmentDeficit.token0 = deficit0;
         s.positionAccounting[positionId].commitmentDeficit.token1 = deficit1;
+    }
+
+    function setCommitmentDeficitSince(PositionId positionId, uint256 since0, uint256 since1) external {
+        s.positionAccounting[positionId].commitmentDeficitSince.token0 = since0;
+        s.positionAccounting[positionId].commitmentDeficitSince.token1 = since1;
     }
 
     function setCommitmentDeficitBps(PositionId positionId, uint16 bps) external {
@@ -216,7 +227,7 @@ contract CheckpointLibraryTest is Test {
         h.setPosition(PID, poolId);
         h.setGracePeriods(poolId, 100, 100, 1_000, 1_000);
         h.setUnbackedCommitmentGraceBypassBps(poolId, 500);
-        h.setUnbackedCommitmentGraceBypassThresholds(poolId, 0, 0);
+        h.setUnbackedCommitmentGraceBypassConfig(poolId, 0, 0, 0, 0);
         h.setCommitmentDeficit(PID, 1_000_000, 0);
         h.setCommitmentDeficitBps(PID, 499);
         h.setCheckpoint(PID, block.timestamp, true, 0, 0);
@@ -228,7 +239,7 @@ contract CheckpointLibraryTest is Test {
         PoolId poolId = key.toId();
         h.setPosition(PID, poolId);
         h.setUnbackedCommitmentGraceBypassBps(poolId, 500);
-        h.setUnbackedCommitmentGraceBypassThresholds(poolId, 1_000, 0);
+        h.setUnbackedCommitmentGraceBypassConfig(poolId, 0, 0, 1_000, 0);
         h.setCommitmentDeficit(PID, 1_000, 0);
         h.setCommitmentDeficitBps(PID, 499);
         assertTrue(h.isSeizable(COMMIT_ID, POSITION_INDEX, false));
@@ -239,7 +250,7 @@ contract CheckpointLibraryTest is Test {
         PoolId poolId = key.toId();
         h.setPosition(PID, poolId);
         h.setUnbackedCommitmentGraceBypassBps(poolId, 500);
-        h.setUnbackedCommitmentGraceBypassThresholds(poolId, 0, 2_000);
+        h.setUnbackedCommitmentGraceBypassConfig(poolId, 0, 0, 0, 2_000);
         h.setCommitmentDeficit(PID, 0, 2_000);
         h.setCommitmentDeficitBps(PID, 499);
         assertTrue(h.isSeizable(COMMIT_ID, POSITION_INDEX, false));
@@ -250,12 +261,40 @@ contract CheckpointLibraryTest is Test {
         PoolId poolId = key.toId();
         h.setPosition(PID, poolId);
         h.setUnbackedCommitmentGraceBypassBps(poolId, 500);
-        h.setUnbackedCommitmentGraceBypassThresholds(poolId, 1_000, 0);
+        h.setUnbackedCommitmentGraceBypassConfig(poolId, 0, 0, 1_000, 0);
         h.setCommitmentDeficit(PID, 999, 0);
         h.setCommitmentDeficitBps(PID, 499);
         assertFalse(h.isSeizable(COMMIT_ID, POSITION_INDEX, false));
 
         h.setCommitmentDeficit(PID, 1_000, 0);
+        assertTrue(h.isSeizable(COMMIT_ID, POSITION_INDEX, false));
+    }
+
+    function test_isSeizable_commitmentDeficitBypassTime_notElapsed_blocksBypass() public {
+        uint256 t0 = 1_000_000;
+        vm.warp(t0);
+        PoolKey memory key = _defaultPoolKey();
+        PoolId poolId = key.toId();
+        h.setPosition(PID, poolId);
+        h.setUnbackedCommitmentGraceBypassBps(poolId, 500);
+        h.setUnbackedCommitmentGraceBypassConfig(poolId, 100, 0, 0, 0);
+        h.setCommitmentDeficit(PID, 1, 0);
+        h.setCommitmentDeficitBps(PID, 600);
+        h.setCommitmentDeficitSince(PID, t0 - 99, 0);
+        assertFalse(h.isSeizable(COMMIT_ID, POSITION_INDEX, false));
+    }
+
+    function test_isSeizable_commitmentDeficitBypassTime_elapsed_allowsBypass() public {
+        uint256 t0 = 1_000_000;
+        vm.warp(t0);
+        PoolKey memory key = _defaultPoolKey();
+        PoolId poolId = key.toId();
+        h.setPosition(PID, poolId);
+        h.setUnbackedCommitmentGraceBypassBps(poolId, 500);
+        h.setUnbackedCommitmentGraceBypassConfig(poolId, 100, 0, 0, 0);
+        h.setCommitmentDeficit(PID, 1, 0);
+        h.setCommitmentDeficitBps(PID, 600);
+        h.setCommitmentDeficitSince(PID, t0 - 100, 0);
         assertTrue(h.isSeizable(COMMIT_ID, POSITION_INDEX, false));
     }
 
