@@ -30,11 +30,11 @@ contract HookTest is Test, Deployers {
 
     function setUp() public {
         poolManager = IPoolManager(makeAddr("poolManager"));
+        address liquidityHubAddr = makeAddr("liquidityHub");
+        address oracleHelperAddr = makeAddr("OracleHelper");
         // Deploy VTSOrchestrator
         vm.prank(owner);
-        vtsOrchestrator = new VTSOrchestrator(
-            address(poolManager), address(makeAddr("OracleHelper")), address(makeAddr("liquidityHub")), owner
-        );
+        vtsOrchestrator = new VTSOrchestrator(address(poolManager), oracleHelperAddr, liquidityHubAddr, owner);
 
         // Deploy VRLSettlementObserver
         vm.prank(owner);
@@ -42,11 +42,7 @@ contract HookTest is Test, Deployers {
 
         vm.prank(owner);
         factory = new MarketFactory(
-            address(poolManager),
-            address(makeAddr("liquidityHub")),
-            address(makeAddr("OracleHelper")),
-            address(vtsOrchestrator),
-            owner
+            address(poolManager), liquidityHubAddr, oracleHelperAddr, address(vtsOrchestrator), owner
         );
         IWETH9 weth9 = IWETH9(address(new WETH()));
         IAllowanceTransfer permit2 = IAllowanceTransfer(makeAddr("permit2"));

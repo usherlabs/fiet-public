@@ -203,16 +203,26 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
         uniPositionDescriptor = new MockPositionDescriptor(manager, address(weth9), bytes32("ETH"));
         uniPositionManager = new PositionManager(manager, permit2, 500_000, uniPositionDescriptor, weth9);
 
+        // Deploy MarketFactory before MM integrations so MMPM can be factory-bound.
+        marketFactory = address(
+            new MarketFactory(
+                address(manager), address(liquidityHub), address(oracleHelper), address(vtsOrchestrator), testOwner
+            )
+        );
+
+        // After market factory is deployed, set the factory in the liquidity hub
+        LiquidityHub(payable(liquidityHub)).setFactory(marketFactory, true);
+
         // Deploy MMPositionActionsImpl first
         MMPositionActionsImpl actionsImpl =
-            new MMPositionActionsImpl(address(manager), address(liquidityHub), address(vtsOrchestrator));
+            new MMPositionActionsImpl(address(manager), address(marketFactory), address(vtsOrchestrator));
         queueCustodian = address(new MMQueueCustodian());
 
         // Deploy MMPositionManager
         mmPositionManager = address(
             new MMPositionManager(
                 address(manager),
-                address(liquidityHub),
+                address(marketFactory),
                 address(vtsOrchestrator),
                 commitmentDescriptor,
                 weth9,
@@ -225,17 +235,6 @@ abstract contract MarketTestBase is Test, Deployers, DeployPermit2 {
         // Deploy DirectLP delta resolver subscriber (will be protocol-bound after MarketFactory deployment).
         directLPDeltaResolver =
             new DirectLPDeltaResolver(IPositionManager(address(uniPositionManager)), ILiquidityHub(liquidityHub));
-
-        // Deploy MarketFactory (after MMPositionManager so it can be included as an initial protocol bound)
-        // Mirrors production deployment (see DeployContracts.s.sol): MMPositionManager is protocol-bound.
-        marketFactory = address(
-            new MarketFactory(
-                address(manager), address(liquidityHub), address(oracleHelper), address(vtsOrchestrator), testOwner
-            )
-        );
-
-        // After market factory is deployed, set the factory in the liquidity hub
-        LiquidityHub(payable(liquidityHub)).setFactory(marketFactory, true);
     }
 
     // Mine the corehook address and Deploy the core hook

@@ -56,7 +56,9 @@ contract PositionManagerEntrypointHarness is PositionManagerEntrypoint {
     // Used to validate delegatecall writes to the caller's storage.
     uint256 public x;
 
-    constructor(address hub, address orch, address impl, address locker) PositionManagerEntrypoint(hub, orch, impl) {
+    constructor(address factory, address orch, address impl, address locker)
+        PositionManagerEntrypoint(factory, orch, impl)
+    {
         _locker = locker;
     }
 
@@ -86,17 +88,21 @@ contract PositionManagerEntrypointTest is Test {
     DelegationImpl internal impl;
 
     address internal hub;
+    address internal factory;
     address internal orch;
     address internal locker;
 
     function setUp() public {
         hub = makeAddr("hub");
+        factory = makeAddr("factory");
         orch = makeAddr("vtsOrchestrator");
         locker = makeAddr("locker");
         // Foundry reverts on interface calls to EOAs ("call to non-contract address").
+        vm.etch(factory, hex"00");
+        vm.mockCall(factory, abi.encodeWithSignature("liquidityHub()"), abi.encode(hub));
         vm.etch(orch, hex"00");
         impl = new DelegationImpl();
-        h = new PositionManagerEntrypointHarness(hub, orch, address(impl), locker);
+        h = new PositionManagerEntrypointHarness(factory, orch, address(impl), locker);
     }
 
     function test_delegateToImpl_success() public {

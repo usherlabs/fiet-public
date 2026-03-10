@@ -14,6 +14,7 @@ import {IPausableVTS} from "./IPausableVTS.sol";
 import {IVTSCurrencyDelta} from "./IVTSCurrencyDelta.sol";
 import {IVTSAdmin} from "./IVTSAdmin.sol";
 import {IMarketVault} from "./IMarketVault.sol";
+import {IMarketFactory} from "./IMarketFactory.sol";
 
 interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin {
     // Events
@@ -223,7 +224,9 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin {
     /// @param sender The effective caller (locker) for commit authorisation
     /// @param liquiditySignal The liquidity signal to commit
     /// @return commitId The commit identifier for the committed signal
-    function commitSignal(address sender, bytes memory liquiditySignal) external returns (uint256 commitId);
+    function commitSignal(IMarketFactory factory, address sender, bytes memory liquiditySignal)
+        external
+        returns (uint256 commitId);
     /// @notice Commit a liquidity signal using sender-signed EIP-712 relayer authorisation
     function commitSignalRelayed(
         address sender,
@@ -280,7 +283,8 @@ interface IVTSOrchestrator is IPausableVTS, IVTSCurrencyDelta, IVTSAdmin {
     /// @param sender The effective caller (locker) used for advancer validation
     /// @param commitId The commit identifier to renew
     /// @param liquiditySignal The new liquidity signal
-    function renewSignal(address sender, uint256 commitId, bytes memory liquiditySignal) external;
+    function renewSignal(IMarketFactory factory, address sender, uint256 commitId, bytes memory liquiditySignal)
+        external;
     /// @notice Renew a liquidity signal using sender-signed EIP-712 relayer authorisation
     function renewSignalRelayed(
         address sender,

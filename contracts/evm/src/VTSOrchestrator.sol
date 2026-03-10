@@ -158,6 +158,22 @@ contract VTSOrchestrator is
         MarketHandlerLib.assertCoreHook(factory, _msgSender());
     }
 
+    /// @dev Resolve effective sender for non-relayed signal actions.
+    ///      Forwarded sender is trusted only from protocol-bound endpoints in the provided factory namespace.
+    function _resolveSignalSender(IMarketFactory factory, address sender)
+        internal
+        view
+        returns (address effectiveSender)
+    {
+        if (!liquidityHub.isFactory(address(factory))) revert Errors.InvalidSender();
+        address caller = _msgSender();
+        if (MarketHandlerLib.isBounds(factory, caller)) {
+            return sender;
+        }
+        if (sender != caller) revert Errors.InvalidSender();
+        return caller;
+    }
+
     function _checkOwner() internal view override(Ownable, VTSAdmin) {
         super._checkOwner();
     }
@@ -615,14 +631,14 @@ contract VTSOrchestrator is
     /// @param sender The effective caller (locker) for commit authorisation
     /// @param liquiditySignal The liquidity signal to commit
     /// @return commitId The commit identifier for the committed signal
-    function commitSignal(address sender, bytes memory liquiditySignal)
+    function commitSignal(IMarketFactory factory, address sender, bytes memory liquiditySignal)
         external
         onlyIfPoolManagerUnlocked
         onlyIfVRLHandlersRegistered
         nonReentrant
         returns (uint256 commitId)
     {
-        commitId = VTSCommitLib.commitSignal(s, sender, signalManager, liquiditySignal);
+        commitId = VTSCommitLib.commitSignal(s, _resolveSignalSender(factory, sender), signalManager, liquiditySignal);
     }
 
     /// @notice Commit a liquidity signal using sender-signed EIP-712 relayer authorisation
@@ -753,7 +769,7 @@ contract VTSOrchestrator is
     /// @param sender The effective caller (locker) used for advancer validation
     /// @param commitId The commit identifier to renew
     /// @param liquiditySignal The new liquidity signal
-    function renewSignal(address sender, uint256 commitId, bytes memory liquiditySignal)
+    function renewSignal(IMarketFactory factory, address sender, uint256 commitId, bytes memory liquiditySignal)
         external
         onlyIfPoolManagerUnlocked
         onlyIfVRLHandlersRegistered
@@ -761,7 +777,7 @@ contract VTSOrchestrator is
     {
         // Validate commit exists (but don't require live signal - expired signals can be seized)
         _assertSignalValid(commitId, false);
-        VTSCommitLib.renewSignal(s, sender, signalManager, commitId, liquiditySignal);
+        VTSCommitLib.renewSignal(s, _resolveSignalSender(factory, sender), signalManager, commitId, liquiditySignal);
     }
 
     /// @notice Renew a liquidity signal using sender-signed EIP-712 relayer authorisation

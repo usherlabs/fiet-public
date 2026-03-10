@@ -94,6 +94,11 @@ abstract contract VTSOrchestratorFixture is MarketTestBase, MarketMakerTestBase 
 
         // Deploy unlock caller helper
         unlockCaller = new UnlockCaller(manager);
+        vm.mockCall(
+            marketFactory,
+            abi.encodeWithSelector(IMarketFactory.bounds.selector, address(unlockCaller)),
+            abi.encode(true)
+        );
 
         // Cache references
         positionManager = MMPositionManager(payable(mmPositionManager));

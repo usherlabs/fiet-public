@@ -38,6 +38,11 @@ contract MockERC20 {
 
 contract MockMarketFactory {
     event AfterModifyLiquidityCalled(bytes32 poolId);
+    address public liquidityHub;
+
+    function setLiquidityHub(address hub) external {
+        liquidityHub = hub;
+    }
 
     function afterModifyLiquidity(PoolKey memory key) external {
         emit AfterModifyLiquidityCalled(PoolId.unwrap(key.toId()));
@@ -176,7 +181,9 @@ contract MockPoolManager {
 contract PositionManagerImplHarness is PositionManagerQueueCustodian, PositionManagerImpl {
     address internal _locker;
 
-    constructor(IPoolManager pm, address hub, address orch, address locker) PositionManagerImpl(pm, hub, orch) {
+    constructor(IPoolManager pm, address marketFactory, address orch, address locker)
+        PositionManagerImpl(pm, marketFactory, orch)
+    {
         _locker = locker;
     }
 
@@ -252,6 +259,7 @@ contract PositionManagerImplTest is Test {
         poolManager = new MockPoolManager();
         hub = new MockLiquidityHub();
         factory = new MockMarketFactory();
+        factory.setLiquidityHub(address(hub));
         hub.setFactory(address(factory));
 
         orch = makeAddr("vtsOrchestrator");
@@ -269,7 +277,7 @@ contract PositionManagerImplTest is Test {
         vm.mockCall(lcc0, abi.encodeWithSignature("underlying()"), abi.encode(ua0));
         vm.mockCall(lcc1, abi.encodeWithSignature("underlying()"), abi.encode(ua1));
 
-        h = new PositionManagerImplHarness(IPoolManager(address(poolManager)), address(hub), orch, locker);
+        h = new PositionManagerImplHarness(IPoolManager(address(poolManager)), address(factory), orch, locker);
     }
 
     function _defaultKey() internal view returns (PoolKey memory) {

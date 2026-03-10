@@ -628,7 +628,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
         // This test is about `commitmentDescriptor`, not delegation.
         MMPositionManager broken = new MMPositionManager(
             address(manager),
-            address(liquidityHub),
+            address(marketFactory),
             address(vtsOrchestrator),
             address(0),
             weth9,
@@ -645,7 +645,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         MMPositionManager fresh = new MMPositionManager(
             address(manager),
-            address(liquidityHub),
+            address(marketFactory),
             address(vtsOrchestrator),
             address(desc),
             weth9,
@@ -662,7 +662,7 @@ contract MMPositionManagerTest is MarketTestBase, MarketMakerTestBase {
 
         MMPositionManager fresh = new MMPositionManager(
             address(manager),
-            address(liquidityHub),
+            address(marketFactory),
             address(vtsOrchestrator),
             address(desc),
             weth9,

@@ -74,7 +74,7 @@ contract MMPositionManager is
 
     constructor(
         address _manager,
-        address _liquidityHub,
+        address _marketFactory,
         address _vtsOrchestrator,
         address _descriptor,
         IWETH9 _weth9,
@@ -86,7 +86,7 @@ contract MMPositionManager is
         BaseActionsRouter(IPoolManager(_manager))
         Permit2Forwarder(_permit2)
         FietNativeWrapper(_weth9)
-        PositionManagerEntrypoint(_liquidityHub, _vtsOrchestrator, _actionsImpl)
+        PositionManagerEntrypoint(_marketFactory, _vtsOrchestrator, _actionsImpl)
     {
         if (_queueCustodianAddr == address(0) || _queueCustodianAddr.code.length == 0) {
             revert Errors.InvalidAddress(_queueCustodianAddr);
@@ -248,7 +248,7 @@ contract MMPositionManager is
         returns (uint256 tokenId)
     {
         if (relayParams.length == 0) {
-            tokenId = vtsOrchestrator.commitSignal(msgSender(), liquiditySignal);
+            tokenId = vtsOrchestrator.commitSignal(marketFactory, msgSender(), liquiditySignal);
         } else {
             (uint256 deadline, uint256 authNonce, bytes memory authSig) =
                 abi.decode(relayParams, (uint256, uint256, bytes));
@@ -263,7 +263,7 @@ contract MMPositionManager is
     /// @param liquiditySignal The new liquidity signal
     function _renewSignal(uint256 tokenId, bytes calldata liquiditySignal, bytes calldata relayParams) internal {
         if (relayParams.length == 0) {
-            vtsOrchestrator.renewSignal(msgSender(), tokenId, liquiditySignal);
+            vtsOrchestrator.renewSignal(marketFactory, msgSender(), tokenId, liquiditySignal);
         } else {
             (uint256 deadline, uint256 authNonce, bytes memory authSig) =
                 abi.decode(relayParams, (uint256, uint256, bytes));

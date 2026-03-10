@@ -16,8 +16,8 @@ import {Errors} from "../libraries/Errors.sol";
 abstract contract PositionManagerEntrypoint is PositionManagerBase {
     address public immutable actionsImpl;
 
-    constructor(address _liquidityHub, address _vtsOrchestrator, address _actionsImpl)
-        PositionManagerBase(_liquidityHub, _vtsOrchestrator)
+    constructor(address _marketFactory, address _vtsOrchestrator, address _actionsImpl)
+        PositionManagerBase(_marketFactory, _vtsOrchestrator)
     {
         if (_actionsImpl == address(0) || _actionsImpl.code.length == 0) {
             revert Errors.InvalidAddress(_actionsImpl);

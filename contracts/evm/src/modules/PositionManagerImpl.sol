@@ -31,9 +31,9 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
     using TransientStateLibrary for IPoolManager;
     using CurrencySettler for Currency;
 
-    constructor(IPoolManager _poolManager, address _liquidityHub, address _vtsOrchestrator)
+    constructor(IPoolManager _poolManager, address _marketFactory, address _vtsOrchestrator)
         ImmutableState(_poolManager)
-        PositionManagerBase(_liquidityHub, _vtsOrchestrator)
+        PositionManagerBase(_marketFactory, _vtsOrchestrator)
     {}
 
     // ------------------------------------------------------------------------------------------------
@@ -220,8 +220,7 @@ abstract contract PositionManagerImpl is PositionManagerBase, ImmutableState {
         // Settle CoreHook's PoolManager deltas (hook delta applied after hook returned)
         // This ensures feeAdj-based claims are minted/burned to/from the fee pot held by CoreHook
         // Must be called within PoolManager.unlockCallback, but outside of modifyLiquidity hook
-        IMarketFactory factory = liquidityHub.getFactory(Currency.unwrap(key.currency0), Currency.unwrap(key.currency1));
-        factory.afterModifyLiquidity(key);
+        marketFactory.afterModifyLiquidity(key);
     }
 
     /// @notice Modifies liquidity in a Uniswap V4 pool and immediately settles the deltas

@@ -5,6 +5,7 @@ import {ImmutableVTSState} from "./ImmutableVTSState.sol";
 import {Currency} from "v4-periphery/lib/v4-core/src/types/Currency.sol";
 import {ILCC} from "../interfaces/ILCC.sol";
 import {ILiquidityHub} from "../interfaces/ILiquidityHub.sol";
+import {IMarketFactory} from "../interfaces/IMarketFactory.sol";
 
 /**
  * @title PositionManagerBase
@@ -14,9 +15,11 @@ import {ILiquidityHub} from "../interfaces/ILiquidityHub.sol";
  */
 abstract contract PositionManagerBase is ImmutableVTSState {
     ILiquidityHub internal immutable liquidityHub;
+    IMarketFactory internal immutable marketFactory;
 
-    constructor(address _liquidityHub, address _vtsOrchestrator) ImmutableVTSState(_vtsOrchestrator) {
-        liquidityHub = ILiquidityHub(_liquidityHub);
+    constructor(address _marketFactory, address _vtsOrchestrator) ImmutableVTSState(_vtsOrchestrator) {
+        marketFactory = IMarketFactory(_marketFactory);
+        liquidityHub = marketFactory.liquidityHub();
     }
 
     // ------------------------------------------------------------------------------------------------

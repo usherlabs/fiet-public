@@ -29,7 +29,6 @@ import {MMCalldataDecoder} from "./libraries/MMCalldataDecoder.sol";
 import {MMHelpers} from "./libraries/MMHelpers.sol";
 import {Locker} from "v4-periphery/src/libraries/Locker.sol";
 import {DelegateCallGuard} from "./modules/DelegateCallGuard.sol";
-import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 
 /// @title MMPositionActionsImpl
 /// @notice Implementation contract for MMPositionManager position operations
@@ -83,8 +82,8 @@ contract MMPositionActionsImpl is
     // Constructor
     // ═══════════════════════════════════════════════════════════════════════════
 
-    constructor(address _manager, address _liquidityHub, address _vtsOrchestrator)
-        PositionManagerImpl(IPoolManager(_manager), _liquidityHub, _vtsOrchestrator)
+    constructor(address _manager, address _marketFactory, address _vtsOrchestrator)
+        PositionManagerImpl(IPoolManager(_manager), _marketFactory, _vtsOrchestrator)
     {}
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -223,8 +222,6 @@ contract MMPositionActionsImpl is
     /// @param poolKey The pool key
     /// @return The vault
     function _getVault(PoolKey calldata poolKey) internal view returns (IMarketVault) {
-        IMarketFactory marketFactory =
-            liquidityHub.getFactory(Currency.unwrap(poolKey.currency0), Currency.unwrap(poolKey.currency1));
         return MarketHandlerLib.getVault(marketFactory, poolKey.toId());
     }
 

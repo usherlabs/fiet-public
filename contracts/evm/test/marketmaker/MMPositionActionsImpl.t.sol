@@ -968,7 +968,7 @@ contract MMPositionManagerActionsTest is MarketTestBase, MarketMakerTestBase {
     function test_actionsImpl_handleAction_revertsWhenNotDelegatecall() public {
         // MMPositionActionsImpl is meant to be invoked via delegatecall from MMPositionManager.
         MMPositionActionsImpl impl =
-            new MMPositionActionsImpl(address(manager), address(liquidityHub), address(vtsOrchestrator));
+            new MMPositionActionsImpl(address(manager), address(marketFactory), address(vtsOrchestrator));
         // Provide well-formed params so that (if the guard were removed) we don't accidentally revert on ABI decoding.
         bytes memory params = abi.encode(corePoolKey, uint256(1), uint256(0), int128(1), int128(0), false);
         vm.expectRevert(DelegateCallGuard.OnlyDelegateCall.selector);
