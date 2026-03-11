@@ -193,12 +193,12 @@ contract CoreHookTest is Test {
     }
 
     // ------------------------------------------------------------
-    // Mutant: ProxySwapFlag.isDirectSwap(proxyHook) forced true in CoreHook._afterSwap
+    // Mutant: CoreActionFlag.isDirectCoreAction(proxyHook) forced true in CoreHook._afterSwap
     // ------------------------------------------------------------
 
-    function test_afterSwap_doesNotNotifyProxyHook_whenProxySwapFlagIsSet() public {
+    function test_afterSwap_doesNotNotifyProxyHook_whenNoCoreActionFlagIsSet() public {
         // Simulate proxy swap in progress: direct-swap detection must be false, so no notification.
-        spy.setProxySwapFlag(true);
+        spy.setNoCoreActionFlag(true);
 
         SwapParams memory sp = SwapParams({zeroForOne: true, amountSpecified: int256(1), sqrtPriceLimitX96: 0});
         hook.exposed_afterSwap(address(this), key, sp, toBalanceDelta(int128(-1), int128(1)), bytes(""));
@@ -318,36 +318,50 @@ contract MockMarketFactory {
     function proxyToHook(PoolId proxyPoolId) external view returns (address) {
         return _proxyToHook[PoolId.unwrap(proxyPoolId)];
     }
+
+    function sequenceDirectSwap(PoolKey calldata key, address lccTokenIn, uint256 amountIn) external {
+        address hook = _proxyToHook[PoolId.unwrap(key.toId())];
+        if (hook != address(0)) {
+            ProxyHookSpy(hook).handleSwap(lccTokenIn, amountIn);
+        }
+    }
+
+    function sequenceDirectAddLiquidity(PoolKey calldata key, uint256 amount0, uint256 amount1) external {
+        address hook = _proxyToHook[PoolId.unwrap(key.toId())];
+        if (hook != address(0)) {
+            ProxyHookSpy(hook).handleAddLiquidity(amount0, amount1);
+        }
+    }
 }
 
 contract ProxyHookSpy {
     uint256 internal _calls;
     BalanceDelta internal _lastDelta;
 
-    function onDirectLP(BalanceDelta delta) external {
+    function handleAddLiquidity(uint256 amount0, uint256 amount1) external {
         _calls++;
-        _lastDelta = delta;
+        _lastDelta = toBalanceDelta(int128(uint128(amount0)), int128(uint128(amount1)));
     }
 
-    // ---- direct swap spy + exttload hook for ProxySwapFlag.isDirectSwap(proxyHook) ----
+    // ---- direct swap spy + exttload hook for CoreActionFlag.isDirectCoreAction(proxyHook) ----
 
     uint256 internal _swapCalls;
     BalanceDelta internal _lastSwapDelta;
     bytes32 internal _proxySwapFlag;
 
-    function setProxySwapFlag(bool on) external {
+    function setNoCoreActionFlag(bool on) external {
         _proxySwapFlag = on ? bytes32(uint256(1)) : bytes32(0);
     }
 
     function exttload(bytes32) external view returns (bytes32) {
-        // CoreHook checks direct swaps via ProxySwapFlag.isDirectSwap(proxyHook),
+        // CoreHook checks direct swaps via CoreActionFlag.isDirectCoreAction(proxyHook),
         // which reads PROXY_SWAP_FLAG_SLOT from the proxy hook via IExttload.exttload.
         return _proxySwapFlag;
     }
 
-    function onCorePoolDirectSwap(BalanceDelta delta) external {
+    function handleSwap(address, uint256 wrappedAmountIn) external {
         _swapCalls++;
-        _lastSwapDelta = delta;
+        _lastSwapDelta = toBalanceDelta(int128(uint128(wrappedAmountIn)), int128(0));
     }
 
     function calls() external view returns (uint256) {

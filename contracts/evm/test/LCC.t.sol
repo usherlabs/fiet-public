@@ -13,8 +13,14 @@ contract LiquidityCommitmentCertificateExposed is LiquidityCommitmentCertificate
         string memory name,
         string memory symbol,
         uint8 __decimals,
-        address _resilientOracleAddress
-    ) LiquidityCommitmentCertificate(_underlyingAsset, name, symbol, __decimals, _resilientOracleAddress) {}
+        address _resilientOracleAddress,
+        address _hub,
+        address _factory
+    )
+        LiquidityCommitmentCertificate(
+            _underlyingAsset, name, symbol, __decimals, _resilientOracleAddress, _hub, _factory
+        )
+    {}
 
     function exposed_isProtocolTransfer(address from, address to, bool fromProtocol, bool toProtocol)
         external
@@ -57,16 +63,20 @@ contract LiquidityCommitmentCertificateTest is Test {
     uint256 internal lastAnnulAmount;
 
     bytes32 internal marketIdForThis = bytes32("market-id");
-    address internal factoryForThis = makeAddr("factory");
+    address internal factoryForThis = address(this);
 
     function setUp() public {
         // Mark a protocol-bound address for transfer tests.
         _setBoundLevel(protocol, BOUND_EXEMPT);
 
         // Deploy with hub == address(this) so we can observe callbacks.
-        lcc = new LiquidityCommitmentCertificate(address(0xBEEF), "LCC", "LCC", 18, oracle);
-        lccNative = new LiquidityCommitmentCertificate(address(0), "LCCN", "LCCN", 18, oracle);
-        lccExposed = new LiquidityCommitmentCertificateExposed(address(0xBEEF), "LCCX", "LCCX", 18, oracle);
+        lcc =
+            new LiquidityCommitmentCertificate(address(0xBEEF), "LCC", "LCC", 18, oracle, address(this), address(this));
+        lccNative =
+            new LiquidityCommitmentCertificate(address(0), "LCCN", "LCCN", 18, oracle, address(this), address(this));
+        lccExposed = new LiquidityCommitmentCertificateExposed(
+            address(0xBEEF), "LCCX", "LCCX", 18, oracle, address(this), address(this)
+        );
     }
 
     // -------------------------
@@ -132,10 +142,13 @@ contract LiquidityCommitmentCertificateTest is Test {
     }
 
     function test_decimals_returnsConstructorValue() public {
-        LiquidityCommitmentCertificate lcc6 =
-            new LiquidityCommitmentCertificate(address(0xBEEF), "LCC6", "LCC6", 6, oracle);
+        LiquidityCommitmentCertificate lcc6 = new LiquidityCommitmentCertificate(
+            address(0xBEEF), "LCC6", "LCC6", 6, oracle, address(this), address(this)
+        );
         assertEq(lcc6.decimals(), 6);
     }
+
+    function recordWrappedIngress(address, uint256, uint256) external {}
 
     function test_mint_revertsWhenNotHub() public {
         vm.prank(alice);

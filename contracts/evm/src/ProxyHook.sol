@@ -14,15 +14,15 @@ import {ModifyLiquidityParams, SwapParams} from "@uniswap/v4-core/src/types/Pool
 import {ILCC} from "./interfaces/ILCC.sol";
 import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
-import {MarketVault} from "./modules/MarketVault.sol";
-import {ProxySwapFlag} from "./libraries/ProxySwapFlag.sol";
+import {VaultCoreActionHandler} from "./modules/VaultCoreActionHandler.sol";
+import {CoreActionFlag} from "./libraries/CoreActionFlag.sol";
 import {LiquidityUtils} from "../src/libraries/LiquidityUtils.sol";
 import {Exttload} from "v4-periphery/lib/v4-core/src/Exttload.sol";
 import {IMsgSender} from "v4-periphery/src/interfaces/IMsgSender.sol";
 import {Errors} from "./libraries/Errors.sol";
 import {MarketHandlerLib} from "./libraries/MarketHandlerLib.sol";
 
-contract ProxyHook is BaseHook, MarketVault, Exttload {
+contract ProxyHook is BaseHook, VaultCoreActionHandler, Exttload {
     using CurrencySettler for Currency;
     address internal constant RECIPIENT_LOCKER = address(1);
     address internal constant RECIPIENT_ROUTER = address(2);
@@ -43,24 +43,19 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
 
     PoolKey public proxyPoolKey;
 
-    modifier onlyCoreHook() {
-        MarketHandlerLib.assertCoreHook(marketFactory, msg.sender);
-        _;
-    }
-
     /**
-     * @notice Modifier to automatically handle proxy swap flag management
-     * @dev Sets the flag at the start and clears it at the end of the function
+     * @notice Modifier to mark proxy-routed execution as "no direct core action".
+     * @dev Sets the transient guard at the start and clears it at the end of the function.
      */
-    modifier withProxySwapFlag() {
-        ProxySwapFlag.setProxySwapFlag();
+    modifier noCoreAction() {
+        CoreActionFlag.setNoCoreAction();
         _;
-        ProxySwapFlag.clearProxySwapFlag();
+        CoreActionFlag.clearNoCoreAction();
     }
 
     constructor(address _poolManager, address _marketFactory)
         BaseHook(IPoolManager(_poolManager))
-        MarketVault(_marketFactory)
+        VaultCoreActionHandler(_marketFactory)
     {}
 
     function _underlying() internal view override returns (Currency currency0, Currency currency1) {
@@ -75,6 +70,10 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         return PoolId.unwrap(corePoolKey.toId());
     }
 
+    function _corePoolKey() internal view override returns (PoolKey memory) {
+        return corePoolKey;
+    }
+
     function activate() external onlyFactory {
         if (coreHook == address(0)) {
             coreHook = MarketHandlerLib.getCoreHook(marketFactory);
@@ -83,15 +82,15 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
 
     /**
      * @dev Updates the core pool key with the actual core pool configuration
-     * @param _corePoolKey The actual core pool key to set
+     * @param newCorePoolKey The actual core pool key to set
      */
-    function setCorePoolKey(PoolKey calldata _corePoolKey) external onlyFactory {
+    function setCorePoolKey(PoolKey calldata newCorePoolKey) external onlyFactory {
         // An uninitialised PoolKey encodes to a non-zero id via keccak256,
         // so we must not use toId() to detect initialisation. Instead, rely on hooks address.
         if (address(corePoolKey.hooks) != address(0)) {
             revert Errors.CorePoolKeyAlreadySet();
         }
-        corePoolKey = _corePoolKey;
+        corePoolKey = newCorePoolKey;
     }
 
     /**
@@ -144,67 +143,6 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
         returns (bytes4)
     {
         revert Errors.AddLiquidityThroughHookNotAllowed();
-    }
-
-    /**
-     * @notice Called by `CoreHook` after direct liquidity is added to the CORE pool.
-     * @dev This is only required for DIRECT-LP ADDS (not removes). We settle underlying from Hub -> Vault so that
-     *      subsequent proxy-pool swaps can source underlying at a 1:1 against LCC.
-     *      Direct-LP REMOVES are handled via the unwrap pathway (market-derived LCC unwrap calls market liquidity).
-     */
-    function onDirectLP(BalanceDelta delta) external virtual onlyCoreHook {
-        ILCC lccToken0 = ILCC(Currency.unwrap(corePoolKey.currency0));
-        ILCC lccToken1 = ILCC(Currency.unwrap(corePoolKey.currency1));
-
-        uint256 amount0 = LiquidityUtils.safeInt128ToUint256(delta.amount0());
-        uint256 amount1 = LiquidityUtils.safeInt128ToUint256(delta.amount1());
-
-        // Settle underlying liquidity to the vault from the LCCs that were acquired.
-        if (amount0 > 0) {
-            _settleUnderlyingToVaultFromHub(lccToken0, amount0);
-        }
-        if (amount1 > 0) {
-            _settleUnderlyingToVaultFromHub(lccToken1, amount1);
-        }
-
-        // Best-effort: take what is available within the total settlement deficit amount from the vault to LiquidityHub.
-        // This fulfils some accounting mechanics when DirectLPs add liquidity.
-        _settleObligations(corePoolKey);
-    }
-
-    /**
-     * @dev This function is called by the CoreHook to handle a direct swap i.e a swap on the core pool that was not initiated from the proxy pool
-     *      This ensures that the underlying liquidity is moved from the LCC's to the proxy pool at a 1:1 ratio
-     * @param delta The delta of the swap
-     */
-    function onCorePoolDirectSwap(BalanceDelta delta) external virtual onlyCoreHook {
-        // If this flag is set, then the swap was initiated by ProxyHook (proxy-pool swap),
-        // and CoreHook's afterSwap notification must not recurse into this handler.
-        bool isDirectSwap = ProxySwapFlag.isDirectSwap();
-        if (!isDirectSwap) {
-            return;
-        }
-
-        // Check if this is a zero one swap or one for zero swap
-        bool isZeroForOne = delta.amount0() < 0;
-
-        // Get the amount of the token that is being swapped in based on if this is a zero one swap or one for zero swap
-        uint256 amount0 = LiquidityUtils.safeInt128ToUint256(delta.amount0());
-        uint256 amount1 = LiquidityUtils.safeInt128ToUint256(delta.amount1());
-
-        // Get the LCC tokens for the core pool
-        ILCC lccToken0 = ILCC(Currency.unwrap(corePoolKey.currency0));
-        ILCC lccToken1 = ILCC(Currency.unwrap(corePoolKey.currency1));
-
-        // Handle Token IN liquidity (move underlying from Hub -> Vault/PoolManager).
-        ILCC lccTokenIn = isZeroForOne ? lccToken0 : lccToken1;
-        uint256 amountIn = isZeroForOne ? amount0 : amount1;
-        _settleUnderlyingToVaultFromHub(lccTokenIn, amountIn);
-
-        // Underlying liquidity for token-out is sourced on unwrap via market liquidity.
-
-        // New liquidity in pool, so we try and settle the outstanding obligations, if any
-        _settleObligationsForLCC(lccTokenIn);
     }
 
     /// @dev Builds the proxy swap context (LCC mappings and direction)
@@ -310,7 +248,7 @@ contract ProxyHook is BaseHook, MarketVault, Exttload {
     function _beforeSwap(address sender, PoolKey calldata key, SwapParams calldata params, bytes calldata hookData)
         internal
         override
-        withProxySwapFlag
+        noCoreAction
         returns (bytes4, BeforeSwapDelta, uint24)
     {
         (address excessRecipient, bool recipientResolved) = _determineExcessRecipient(sender, hookData);

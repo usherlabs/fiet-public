@@ -6,6 +6,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 import {ILCC} from "./interfaces/ILCC.sol";
 import {ILiquidityHub} from "./interfaces/ILiquidityHub.sol";
+import {IMarketFactory} from "./interfaces/IMarketFactory.sol";
 import {Bounds} from "./libraries/Bounds.sol";
 import {OracleUtils} from "./libraries/OracleUtils.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -14,9 +15,9 @@ import {Errors} from "./libraries/Errors.sol";
 contract LiquidityCommitmentCertificate is ERC20, ILCC {
     uint8 private immutable _decimals;
     address private immutable underlyingAsset;
-    address private immutable marketVaultAddress; // ie. the uniswap v4 pool manager
     address private immutable resilientOracleAddress;
-    ILiquidityHub private immutable hub;
+    address public immutable factory;
+    address public immutable hub;
 
     mapping(address => uint256) private wrappedBalances;
     mapping(address => uint256) private marketDerivedBalances;
@@ -27,18 +28,23 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
      * @param symbol The token symbol
      * @param __decimals The token decimals
      * @param _resilientOracleAddress The address of the resilient oracle
+     * @param _hub The LiquidityHub authority for this LCC
+     * @param _factory The MarketFactory namespace for bound checks and sequencing
      */
     constructor(
         address _underlyingAsset,
         string memory name,
         string memory symbol,
         uint8 __decimals,
-        address _resilientOracleAddress
+        address _resilientOracleAddress,
+        address _hub,
+        address _factory
     ) ERC20(name, symbol) {
         _decimals = __decimals;
         underlyingAsset = _underlyingAsset;
         resilientOracleAddress = _resilientOracleAddress;
-        hub = ILiquidityHub(_msgSender());
+        hub = _hub;
+        factory = _factory;
 
         // Note: bounds are managed by the LiquidityHub, not set in constructor
     }
@@ -49,7 +55,7 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
     }
 
     function _onlyHub() internal view {
-        if (_msgSender() != address(hub)) {
+        if (_msgSender() != hub) {
             revert Errors.InvalidSender();
         }
     }
@@ -74,7 +80,7 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
      * @return The market ID of the LCC
      */
     function marketId() external view returns (bytes32) {
-        (bytes32 id,) = hub.lccToMarket(address(this));
+        (bytes32 id,) = ILiquidityHub(hub).lccToMarket(address(this));
         return id;
     }
 
@@ -109,7 +115,7 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
         // If balance buckets are 0 but ERC20 balance exists, treat all as wrapped balance
         uint256 balanceSum = wrappedBalances[account] + marketDerivedBalances[account];
         uint256 fullBalance = balanceOf(account);
-        if ((balanceSum == 0 && fullBalance > 0) || Bounds.isExempt(hub.boundLevelOfLcc(address(this), account))) {
+        if ((balanceSum == 0 && fullBalance > 0) || Bounds.isExempt(ILiquidityHub(hub).boundLevel(factory, account))) {
             // Bucket-exempt protocol address holding tokens: treat all balance as wrapped
             return (fullBalance, 0);
         }
@@ -132,7 +138,7 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
         // Bucket-tracked endpoints and users must populate bucket maps; otherwise
         // the recipient becomes "bucketless with nonzero ERC20 balance" and cannot correctly transfer/unwrap.
         // In standard MarketFactory, only VTSO and ProxyHook/MarketVault are issuers. VTSO mints to MMPM for new positions, where PoolManager is exempt, and triggers burn on PoolManager -> MMPM (after) transfer
-        if (Bounds.isExempt(hub.boundLevelOfLcc(address(this), to))) return;
+        if (Bounds.isExempt(ILiquidityHub(hub).boundLevel(factory, to))) return;
         if (marketAmount > 0) {
             marketDerivedBalances[to] += marketAmount;
         }
@@ -155,7 +161,7 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
         _burn(from, amount);
         // Bucket bookkeeping is skipped only for bucket-exempt protocol endpoints.
         // Bucket-tracked endpoints and users must decrement bucket maps.
-        if (Bounds.isExempt(hub.boundLevelOfLcc(address(this), from))) return;
+        if (Bounds.isExempt(ILiquidityHub(hub).boundLevel(factory, from))) return;
         if (marketAmount > 0) {
             marketDerivedBalances[from] -= marketAmount;
         }
@@ -171,7 +177,7 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
      * @param amount The transfer amount
      */
     function _beforeTransfer(address from, address to, uint256 amount) internal {
-        (uint8 fromLevel, uint8 toLevel) = hub.boundLevelsOfLcc(address(this), from, to);
+        (uint8 fromLevel, uint8 toLevel) = ILiquidityHub(hub).boundLevels(factory, from, to);
         bool fromProtocol = Bounds.isEndpoint(fromLevel);
         bool toProtocol = Bounds.isEndpoint(toLevel);
         bool isProtocolTransfer = _isProtocolTransfer(from, to, fromProtocol, toProtocol);
@@ -203,7 +209,8 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
             revert Errors.InsufficientBalance(totalBalance, amount);
         }
         // Before adjusting local buckets, annul any portion that bleeds into queued settlements.
-        hub.annulSettlementBeforeTransfer(from, wrappedBalances[from], marketDerivedBalances[from], amount);
+        ILiquidityHub(hub)
+            .annulSettlementBeforeTransfer(from, wrappedBalances[from], marketDerivedBalances[from], amount);
 
         // Non-protocol -> Protocol: decrement sender balances (market-derived first, then wrapped).
         uint256 fromMarketDerived = Math.min(marketDerivedBalances[from], amount);
@@ -216,6 +223,10 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
         if (!Bounds.isExempt(toLevel)) {
             marketDerivedBalances[to] += fromMarketDerived;
             wrappedBalances[to] += fromWrapped;
+        } else if (amount > 0) {
+            // Bucket-exempt sinks (e.g. PoolManager) are where CoreHook direct actions materialise.
+            // Report wrapped ingress as raw lane credit to MarketFactory for sequencing.
+            IMarketFactory(factory).recordWrappedIngress(address(this), amount, fromWrapped);
         }
     }
 
@@ -261,6 +272,10 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
         if (!Bounds.isExempt(toLevel)) {
             marketDerivedBalances[to] += fromMarketDerived;
             wrappedBalances[to] += fromWrapped;
+        } else if (amount > 0) {
+            // Protocol -> bucket-exempt transfers can source wrapped balance from non-exempt protocols.
+            // Report only wrapped movement; market-derived movement must not trigger Hub->vault settlement.
+            IMarketFactory(factory).recordWrappedIngress(address(this), amount, fromWrapped);
         }
     }
 
@@ -277,7 +292,7 @@ contract LiquidityCommitmentCertificate is ERC20, ILCC {
         internal
     {
         // Execute planned cancellations after transfer completes (tokens are now in recipient's balance)
-        hub.executePlannedCancel(from, to);
+        ILiquidityHub(hub).executePlannedCancel(from, to);
     }
 
     /**

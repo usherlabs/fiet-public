@@ -272,12 +272,13 @@ contract LiquidityHub is BoundRegistry, Ownable, ReentrancyGuardTransient {
         address[] memory initialIssuers
     ) external onlyFactory returns (address lccToken0, address lccToken1) {
         address resilientOracleAddress = oracleHelper.oracle();
+        address factory = _msgSender();
         address[2] memory underlyingPair = [underlyingAsset0, underlyingAsset1];
         lccToken0 = LCCFactoryLinkedLib.createLCC(
-            s, marketRef, underlyingPair, 0, marketName, initialIssuers, resilientOracleAddress
+            s, marketRef, underlyingPair, 0, marketName, initialIssuers, address(this), factory, resilientOracleAddress
         );
         lccToken1 = LCCFactoryLinkedLib.createLCC(
-            s, marketRef, underlyingPair, 1, marketName, initialIssuers, resilientOracleAddress
+            s, marketRef, underlyingPair, 1, marketName, initialIssuers, address(this), factory, resilientOracleAddress
         );
 
         // Emit events for LCC creation

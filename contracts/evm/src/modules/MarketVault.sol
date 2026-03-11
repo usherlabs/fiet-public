@@ -187,15 +187,23 @@ abstract contract MarketVault is IMarketVault, ImmutableState, ImmutableMarketSt
     /**
      * @dev Settle underlying asset to the vault from the Hub
      * @notice For ERC20: Hub approves MarketVault and we pull from Hub. For native: Hub transfers ETH to MarketVault and we settle from self.
+     *         This path is intentionally best-effort for direct-core reactions: reserve competition must not force swap/LP reverts.
+     *         Settlement is capped to currently available Hub reserve for this LCC's underlying.
      */
     function _settleUnderlyingToVaultFromHub(ILCC lccToken, uint256 amount) internal {
-        liquidityHub.prepareSettle(address(lccToken), amount);
+        uint256 available = liquidityHub.reserveOfUnderlying(address(lccToken));
+        uint256 toSettle = Math.min(amount, available);
+        if (toSettle == 0) {
+            return;
+        }
+
+        liquidityHub.prepareSettle(address(lccToken), toSettle);
 
         Currency uaCurrency = Currency.wrap(lccToken.underlying());
         // For native ETH, LiquidityHub transfers ETH to this vault first, so settle from self.
         // For ERC20, pull from LiquidityHub after prepareSettle approval.
         address payer = uaCurrency.isAddressZero() ? address(this) : address(liquidityHub);
-        _settleUnderlyingToVaultFromSender(uaCurrency, payer, amount);
+        _settleUnderlyingToVaultFromSender(uaCurrency, payer, toSettle);
     }
 
     /**

@@ -8,7 +8,6 @@ import {BaseHook} from "v4-periphery/src/utils/BaseHook.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {ModifyLiquidityParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 
-import {ProxyHook} from "./ProxyHook.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {CurrencySettler} from "@uniswap/v4-core/test/utils/CurrencySettler.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
@@ -19,7 +18,8 @@ import {PositionLibrary} from "./types/Position.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {BeforeSwapDelta, BeforeSwapDeltaLibrary} from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
 import {SafeCast} from "openzeppelin-contracts/contracts/utils/math/SafeCast.sol";
-import {ProxySwapFlag} from "./libraries/ProxySwapFlag.sol";
+import {CoreActionFlag} from "./libraries/CoreActionFlag.sol";
+import {LiquidityUtils} from "./libraries/LiquidityUtils.sol";
 import {ImmutableMarketState} from "./modules/ImmutableMarketState.sol";
 import {ImmutableVTSState} from "./modules/ImmutableVTSState.sol";
 import {MarketHandlerLib} from "./libraries/MarketHandlerLib.sol";
@@ -133,10 +133,10 @@ contract CoreHook is BaseHook, Exttload, ImmutableMarketState, ImmutableVTSState
         TransientSlot.asUint256(TransientSlots.LIQ_BEFORE_SLOT).tstore(0);
         vtsOrchestrator.afterCoreSwap(key, params, delta, sqrtPBefore, liqBefore);
 
-        // Check if this is a direct core pool swap, and if it is, call the proxy hook
+        // Check if this is a direct core pool swap, and if it is, submit a raw action fact to MarketFactory.
         address proxyHook = _getProxyHook(key);
-        if (ProxySwapFlag.isDirectSwap(proxyHook)) {
-            ProxyHook(payable(proxyHook)).onCorePoolDirectSwap(delta);
+        if (CoreActionFlag.isDirectCoreAction(proxyHook)) {
+            _sequenceDirectSwap(key, delta);
         }
 
         return (this.afterSwap.selector, 0);
@@ -169,7 +169,9 @@ contract CoreHook is BaseHook, Exttload, ImmutableMarketState, ImmutableVTSState
         if (!isMMPosition) {
             // Forward effective caller delta including fee adjustment (Uniswap will apply callerDelta - hookDelta)
             BalanceDelta effective = delta - feeAdj; //  equivalent to doing (delta1.amount0 + delta2.amount0, delta1.amount1 + delta2.amount1)
-            ProxyHook(payable(_getProxyHook(key))).onDirectLP(effective); // Only direct-LP adds require vault settlement.
+            uint256 amount0 = effective.amount0() > 0 ? LiquidityUtils.safeInt128ToUint256(effective.amount0()) : 0;
+            uint256 amount1 = effective.amount1() > 0 ? LiquidityUtils.safeInt128ToUint256(effective.amount1()) : 0;
+            marketFactory.sequenceDirectAddLiquidity(key, amount0, amount1);
         }
 
         return (this.afterAddLiquidity.selector, feeAdj);
@@ -206,6 +208,16 @@ contract CoreHook is BaseHook, Exttload, ImmutableMarketState, ImmutableVTSState
     // Helper function to get the proxy hook address from the core pool key
     function _getProxyHook(PoolKey calldata corePoolKey) internal view returns (address) {
         return MarketHandlerLib.getProxyHook(marketFactory, corePoolKey);
+    }
+
+    /// @dev Emits a direct-swap action fact to MarketFactory for sequencing reconciliation.
+    function _sequenceDirectSwap(PoolKey calldata key, BalanceDelta delta) internal {
+        bool isZeroForOne = delta.amount0() < 0;
+        uint256 amount0 = LiquidityUtils.safeInt128ToUint256(delta.amount0());
+        uint256 amount1 = LiquidityUtils.safeInt128ToUint256(delta.amount1());
+        address lccTokenIn = isZeroForOne ? Currency.unwrap(key.currency0) : Currency.unwrap(key.currency1);
+        uint256 amountIn = isZeroForOne ? amount0 : amount1;
+        marketFactory.sequenceDirectSwap(key, lccTokenIn, amountIn);
     }
 
     /// @notice Settle hook deltas to fee pot by minting/burning ERC6909 claims

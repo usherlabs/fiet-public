@@ -25,7 +25,8 @@ import {MarketTestBase} from "./base/MarketTestBase.sol";
 import {MockERC20} from "@uniswap/v4-core/test/utils/Deployers.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {ProxyHook} from "../src/ProxyHook.sol";
-import {ProxySwapFlag} from "../src/libraries/ProxySwapFlag.sol";
+import {IVaultCoreActionHandler} from "../src/interfaces/IVaultCoreActionHandler.sol";
+import {CoreActionFlag} from "../src/libraries/CoreActionFlag.sol";
 import {Bounds} from "../src/libraries/Bounds.sol";
 import {SwapSimulator} from "./utils/SwapSimulator.sol";
 import {BaseHook} from "v4-periphery/src/utils/BaseHook.sol";
@@ -56,18 +57,18 @@ contract ProxyHookTest is MarketVaultBase {
         fresh.setCorePoolKey(corePoolKey);
     }
 
-    function test_onDirectLP_revertsIfNotCoreHook() public {
+    function test_handleLiquidity_revertsIfNotFactory() public {
         ProxyHookHarness fresh = new ProxyHookHarness(address(manager), address(marketFactory));
 
         vm.expectRevert(Errors.InvalidSender.selector);
-        fresh.onDirectLP(toBalanceDelta(int128(1), int128(0)));
+        fresh.handleAddLiquidity(1, 0);
     }
 
-    function test_onCorePoolDirectSwap_revertsIfNotCoreHook() public {
+    function test_handleSwap_revertsIfNotFactory() public {
         ProxyHookHarness fresh = new ProxyHookHarness(address(manager), address(marketFactory));
 
         vm.expectRevert(Errors.InvalidSender.selector);
-        fresh.onCorePoolDirectSwap(toBalanceDelta(int128(-1), int128(1)));
+        fresh.handleSwap(address(0), 1);
     }
 
     function test_activate_onlyFactory_gate_isObservableViaLowLevelCall() public {
@@ -104,37 +105,33 @@ contract ProxyHookTest is MarketVaultBase {
         assertEq(PoolId.unwrap(fresh.getCorePoolId()), PoolId.unwrap(corePoolKey.toId()));
     }
 
-    function test_onDirectLP_onlyCoreHook_gate_isObservableWithNoopInputs() public {
+    function test_handleLiquidity_onlyFactory_gate_isObservableWithNoopInputs() public {
         ProxyHookHarness fresh = new ProxyHookHarness(address(manager), address(marketFactory));
-        address attacker = makeAddr("attacker_onDirectLP");
-
-        // Use a no-op delta so the body does no external work; the modifier should be the only reason to revert.
-        BalanceDelta d = toBalanceDelta(int128(0), int128(0));
-
-        vm.prank(attacker);
-        (bool ok,) = address(fresh).call(abi.encodeCall(ProxyHook.onDirectLP, (d)));
-        assertFalse(ok, "onDirectLP should be gated by onlyCoreHook");
-
-        vm.prank(coreHookAddress);
-        fresh.onDirectLP(d);
-    }
-
-    function test_onCorePoolDirectSwap_onlyCoreHook_gate_isObservableOnEarlyReturnPath() public {
-        ProxyHookHarness fresh = new ProxyHookHarness(address(manager), address(marketFactory));
-        address attacker = makeAddr("attacker_onCorePoolDirectSwap");
-
-        // Force early-return path (no downstream external calls).
-        fresh.exposed_setProxySwapFlag(true);
+        address attacker = makeAddr("attacker_handleLiquidity");
 
         vm.prank(attacker);
         (bool ok,) =
-            address(fresh).call(abi.encodeCall(ProxyHook.onCorePoolDirectSwap, (toBalanceDelta(int128(0), int128(0)))));
-        assertFalse(ok, "onCorePoolDirectSwap should be gated by onlyCoreHook");
+            address(fresh).call(abi.encodeCall(IVaultCoreActionHandler.handleAddLiquidity, (uint256(0), uint256(0))));
+        assertFalse(ok, "handleLiquidity should be gated by onlyFactory");
 
-        vm.prank(coreHookAddress);
-        fresh.onCorePoolDirectSwap(toBalanceDelta(int128(0), int128(0)));
+        vm.prank(marketFactory);
+        fresh.handleAddLiquidity(0, 0);
+    }
 
-        fresh.exposed_setProxySwapFlag(false);
+    function test_handleSwap_onlyFactory_gate_isObservableOnEarlyReturnPath() public {
+        ProxyHookHarness fresh = new ProxyHookHarness(address(manager), address(marketFactory));
+        address attacker = makeAddr("attacker_handleSwap");
+
+        vm.prank(marketFactory);
+        fresh.setCorePoolKey(corePoolKey);
+
+        vm.prank(attacker);
+        (bool ok,) = address(fresh)
+            .call(abi.encodeCall(IVaultCoreActionHandler.handleSwap, (Currency.unwrap(corePoolKey.currency0), 0)));
+        assertFalse(ok, "handleSwap should be gated by onlyFactory");
+
+        vm.prank(marketFactory);
+        fresh.handleSwap(Currency.unwrap(corePoolKey.currency0), 0);
     }
 
     function _isProxyKeyAlignedWithCoreLCCUnderlying() internal view returns (bool) {
@@ -941,13 +938,13 @@ contract ProxyHookTest is MarketVaultBase {
         assertEq(PoolId.unwrap(proxyHook.getCorePoolId()), PoolId.unwrap(corePoolKey.toId()));
     }
 
-    function test_onCorePoolDirectSwap_earlyReturns_whenProxySwapFlagIsSet() public {
-        // Use a harness to set ProxySwapFlag in transient storage, then call onCorePoolDirectSwap as CoreHook.
+    function test_handleSwap_noop_whenWrappedAmountIsZero() public {
         ProxyHookHarness harness = new ProxyHookHarness(address(manager), address(marketFactory));
-        harness.exposed_setProxySwapFlag(true);
+        vm.prank(marketFactory);
+        harness.setCorePoolKey(corePoolKey);
 
-        vm.prank(coreHookAddress);
-        harness.onCorePoolDirectSwap(toBalanceDelta(int128(-1), int128(1)));
+        vm.prank(marketFactory);
+        harness.handleSwap(Currency.unwrap(corePoolKey.currency0), 0);
     }
 
     function test_proxySwap_priceLimit_zero_executesCalc_thenReturnsNonZeroDelta() public {
@@ -1091,9 +1088,9 @@ contract ProxyHookHarness is ProxyHook {
     /// @dev Disable hook-address flag validation for harness deployments in unit tests.
     function validateHookAddress(BaseHook) internal pure override {}
 
-    function exposed_setProxySwapFlag(bool on) external {
-        if (on) ProxySwapFlag.setProxySwapFlag();
-        else ProxySwapFlag.clearProxySwapFlag();
+    function exposed_setNoCoreActionFlag(bool on) external {
+        if (on) CoreActionFlag.setNoCoreAction();
+        else CoreActionFlag.clearNoCoreAction();
     }
 
     function exposed_getExpectedOutputFromDelta(BalanceDelta swapDelta, bool zeroForOne)
